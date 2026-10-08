@@ -21,6 +21,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <cmath>
@@ -1351,7 +1352,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // there is no V entry, but the 3rd K^T slot still buys prefetch slack that hides the reader's
     // NoC latency tail — measured ~+3pt math util on the dv512 q32 shape vs double-buffering.
     uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : 2);
+    // LOCAL EXPERIMENT: G4X_RJ_KBUF=<n> sets the K CB depth (in K chunks) on dense calls.
+    if (const char* e = std::getenv("G4X_RJ_KBUF"); e != nullptr && !has_sliding_window) {
+        k_tiles = Sk_chunk_t * DHt * std::stoul(e);
+        log_warning(tt::LogOp, "G4X_RJ_KBUF: k_tiles={} (Sq={} Sk={} DHt={} vDHt={})", k_tiles, Sq_chunk_t, Sk_chunk_t, DHt, vDHt);
+    }
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
+    // LOCAL EXPERIMENT: G4X_RJ_VBUF=<n> sets the V CB depth (in K chunks) on dense calls.
+    if (const char* e = std::getenv("G4X_RJ_VBUF"); e != nullptr && !has_sliding_window) {
+        v_tiles = Sk_chunk_t * vDHt * std::stoul(e);
+    }
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
@@ -1374,6 +1384,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t qk_in0_block_w = DHt;
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
+    // LOCAL EXPERIMENT: G4X_RJ_QK_SBH=<h> forces the QK^T subblock height on dense (non-sliding) calls.
+    if (const char* e = std::getenv("G4X_RJ_QK_SBH"); e != nullptr && !has_sliding_window) {
+        const uint32_t h = std::stoul(e);
+        if (h > 0 && Sq_chunk_t % h == 0) {
+            const char* ew = std::getenv("G4X_RJ_QK_SBW");
+            auto [hh, ww] = detail::determine_largest_subblock_size(
+                Sq_chunk_t, Sk_chunk_t, dst_size, /*max_subblock_h=*/h, ew ? std::stoul(ew) : UINT32_MAX);
+            qk_out_subblock_h = hh;
+            qk_out_subblock_w = ww;
+            log_warning(tt::LogOp, "G4X_RJ_QK_SBH: Sq_chunk_t={} Sk_chunk_t={} qk subblock {}x{}", Sq_chunk_t, Sk_chunk_t, hh, ww);
+        }
+    }
 
     TT_FATAL(
         Sq_chunk_t % qk_out_subblock_h == 0,
@@ -1416,6 +1438,43 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                  uint32_t(grid_size.y) / ksplit_rows_per_split,
                  ring_joint::kKSplitMaxCount,
                  sliding_ksplit_cap}));
+    }
+    // LOCAL EXPERIMENT (G4X_RJ_LINEAR_BANDS): bands are runs of all_heads_num_q_chunks cores in row-major order, not
+    // whole grid rows, so a row can hold two bands; each band's part of a row gets its own K/V multicast.
+    bool ksplit_linear = ksplit_count > 1 && !has_sliding_window && std::getenv("G4X_RJ_LINEAR_BANDS") != nullptr;
+    // Rectangle bands: each band is one rectangle of cores fed by a single 2D K/V multicast. For 16 units on an
+    // 11 x 10 grid: five 8 x 2 blocks in columns 0-7 and one 2 x 8 block in columns 8-9.
+    struct BandRect {
+        uint32_t x0, y0, w, h;
+    };
+    std::vector<BandRect> band_rects;
+    std::vector<int32_t> rect_core_band(num_cores, -1), rect_core_unit(num_cores, -1);
+    if (ksplit_linear) {
+        const uint32_t units = all_heads_num_q_chunks;
+        if (units == 16 && grid_size.x >= 10 && grid_size.y >= 10) {
+            for (uint32_t b = 0; b < 5; ++b) {
+                band_rects.push_back({0, 2 * b, 8, 2});
+            }
+            band_rects.push_back({8, 0, 2, 8});
+        }
+        if (band_rects.empty()) {
+            ksplit_linear = false;  // no rectangle layout for this unit count: keep row bands
+        }
+    }
+    if (ksplit_linear) {
+        const uint32_t units = all_heads_num_q_chunks;
+        const uint32_t max_bands = std::min<uint32_t>(band_rects.size(), ring_joint::kKSplitMaxCount);
+        ksplit_count = std::max(1u, std::min({ksplit_requested, max_bands}));
+        band_rects.resize(ksplit_count);
+        for (uint32_t b = 0; b < band_rects.size(); ++b) {
+            const auto& r = band_rects[b];
+            for (uint32_t u = 0; u < r.w * r.h; ++u) {
+                const uint32_t ci = (r.y0 + u / r.w) * grid_size.x + r.x0 + u % r.w;
+                rect_core_band[ci] = b;
+                rect_core_unit[ci] = u;
+            }
+        }
+        log_warning(tt::LogOp, "G4X_RJ_LINEAR_BANDS: {} rectangle bands of {} units", ksplit_count, units);
     }
     // Sharded joint with a padded tail (logical_l < padded L) needs the reader to skip joint K chunks
     // beyond the real tail. That skip is mirrored only in the streaming compute path (sdpa_ring_v2);
@@ -1884,6 +1943,22 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (const char* sk = std::getenv("G4X_RJ_SKIPDM"); sk != nullptr && (!has_sliding_window || std::string(sk) == "2")) {
+        defines["SDPA_SKIP_KV_DM"] = "1";  // LOCAL EXPERIMENT: timing only, wrong output
+    }
+    if (std::getenv("G4X_RJ_MOP") != nullptr && !has_sliding_window) {
+        defines["SDPA_MM_MOP"] = "1";  // LOCAL EXPERIMENT
+    }
+    if (std::getenv("G4X_SLIDING_Q_FIRST") != nullptr) {
+        defines["SLIDING_Q_FIRST"] = "1";  // LOCAL EXPERIMENT
+    }
+    if (const char* z = std::getenv("G4X_RJ_ZONES"); z != nullptr) {  // LOCAL EXPERIMENT
+        if (!has_sliding_window) {
+            defines["SDPA_RING_ZONES"] = "1";
+        }
+        defines["SDPA_RING_DF_ZONES"] = "1";
+        defines["SDPA_RING_STEP_ZONES"] = "1";
+    }
     if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
         TT_FATAL(use_streaming_compute, "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
         defines["SDPA_MATMUL_FIDELITY"] =
@@ -1967,8 +2042,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         });
         return cb_index;
     };
+    static const bool g4x_cb_dump = std::getenv("G4X_RJ_CBDUMP") != nullptr;  // LOCAL EXPERIMENT
     const auto allocate_tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) -> uint32_t {
-        return allocate_cb(tile_size, num_tiles, data_format);
+        const uint32_t idx = allocate_cb(tile_size, num_tiles, data_format);
+        if (g4x_cb_dump && !has_sliding_window) {
+            log_warning(tt::LogOp, "G4X_RJ_CBDUMP cb{} tiles={} tile_size={} bytes={}", idx, num_tiles, tile_size, num_tiles * tile_size);
+        }
+        return idx;
     };
 
     const uint32_t cb_q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
@@ -2196,19 +2276,29 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // K split: core (x, y) is in band y / rows_per_split and owns unit (y % rows_per_split) * grid.x + x. Idle cores
     // of rows past the last band report band 0; they own no unit.
-    auto ksplit_band = [&](uint32_t core_idx) {
+    auto ksplit_band = [&](uint32_t core_idx) -> uint32_t {
+        if (ksplit_linear) {
+            return rect_core_band[core_idx] >= 0 ? uint32_t(rect_core_band[core_idx]) : 0u;
+        }
         const uint32_t band = core_idx / grid_size.x / ksplit_rows_per_split;
         return band < ksplit_count ? band : 0;
     };
-    auto ksplit_core = [&](uint32_t band, uint32_t core_idx) {
+    auto ksplit_core = [&](uint32_t band, uint32_t core_idx) -> uint32_t {
+        if (ksplit_linear) {
+            const auto& r = band_rects[band];
+            const uint32_t u = uint32_t(rect_core_unit[core_idx]);
+            return (r.y0 + u / r.w) * grid_size.x + r.x0 + u % r.w;
+        }
         const uint32_t local_row = core_idx / grid_size.x % ksplit_rows_per_split;
         return (band * ksplit_rows_per_split + local_row) * grid_size.x + core_idx % grid_size.x;
     };
     for (uint32_t i = 0; ksplit_count > 1 && i < num_cores; ++i) {
         const uint32_t x = i % grid_size.x;
         const uint32_t y = i / grid_size.x;
-        const uint32_t unit = (y % ksplit_rows_per_split) * grid_size.x + x;
-        const bool owns_unit = y / ksplit_rows_per_split < ksplit_count && unit < total_q_chunks;
+        const uint32_t unit = ksplit_linear ? uint32_t(std::max(rect_core_unit[i], 0))
+                                            : (y % ksplit_rows_per_split) * grid_size.x + x;
+        const bool owns_unit = ksplit_linear ? rect_core_band[i] >= 0
+                                             : y / ksplit_rows_per_split < ksplit_count && unit < total_q_chunks;
         auto& work = core_work.at(i);
         work.physical_core = device->worker_core_from_logical_core(CoreCoord{x, y});
         work.global_q_start = owns_unit ? unit : total_q_chunks;
@@ -2437,7 +2527,72 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             std::deque<uint32_t> recent_cols;  // FIFO of <= grid.x-1 most-recent claimed phys_x
             uint32_t gqa_mcast_rows = 0;
 
-            for (uint32_t row = 0; row < grid_size.y; ++row) {
+            // LOCAL EXPERIMENT (G4X_RJ_LINEAR_BANDS): one 2D multicast per rectangle band.
+            // G4X_RJ_RECT_ROWS=1: one multicast per row of each rectangle instead of one per rectangle.
+            const bool rect_rows = std::getenv("G4X_RJ_RECT_ROWS") != nullptr;
+            std::vector<BandRect> mcast_rects;
+            std::vector<uint32_t> mcast_band;
+            for (uint32_t band = 0; ksplit_linear && band < band_rects.size(); ++band) {
+                const auto& r = band_rects[band];
+                const char* sp = std::getenv("G4X_RJ_RECT_SPLIT");
+                const uint32_t split = sp ? std::stoul(sp) : 1;
+                if (!rect_rows && split > 1) {
+                    // Split the long side into `split` equal parts.
+                    for (uint32_t k = 0; k < split; ++k) {
+                        if (r.w >= r.h) {
+                            mcast_rects.push_back(BandRect{r.x0 + k * r.w / split, r.y0, r.w / split, r.h});
+                        } else {
+                            mcast_rects.push_back(BandRect{r.x0, r.y0 + k * r.h / split, r.w, r.h / split});
+                        }
+                        mcast_band.push_back(band);
+                    }
+                    continue;
+                }
+                for (uint32_t row = 0; row < (rect_rows ? r.h : 1u); ++row) {
+                    mcast_rects.push_back(rect_rows ? BandRect{r.x0, r.y0 + row, r.w, 1} : r);
+                    mcast_band.push_back(band);
+                }
+            }
+            for (uint32_t mi = 0; mi < mcast_rects.size(); ++mi) {
+                const auto& r = mcast_rects[mi];
+                const uint32_t band = mcast_band[mi];
+                // Spread injectors over physical columns (NoC diversity), as the row-wide selection does.
+                const uint32_t injector_idx = r.y0 * grid_size.x + r.x0 + (mi * 3) % r.w;
+                uint32_t max_q = 0;
+                const auto in_rect = [&](uint32_t ci) {
+                    const uint32_t x = ci % grid_size.x, y = ci / grid_size.x;
+                    return x >= r.x0 && x < r.x0 + r.w && y >= r.y0 && y < r.y0 + r.h;
+                };
+                for (uint32_t ci = 0; ci < num_cores; ++ci) {
+                    if (in_rect(ci)) {
+                        max_q = std::max(max_q, core_work[ci].global_q_count);
+                    }
+                }
+                const CoreCoord phys_start = device->worker_core_from_logical_core(CoreCoord{r.x0, r.y0});
+                const CoreCoord phys_end =
+                    device->worker_core_from_logical_core(CoreCoord{r.x0 + r.w - 1, r.y0 + r.h - 1});
+                (void)band;
+                for (uint32_t ci = 0; ci < num_cores; ++ci) {
+                    if (!in_rect(ci)) {
+                        continue;
+                    }
+                    auto& cfg = gqa_chain_configs[ci];
+                    cfg.participates = true;
+                    cfg.head = 0;
+                    cfg.prev_physical = CoreCoord{0, 0};
+                    cfg.next_physical = CoreCoord{0, 0};
+                    cfg.mcast_start = phys_start;
+                    cfg.mcast_end = phys_end;
+                    cfg.injector_physical = core_work[injector_idx].physical_core;
+                    cfg.is_injector = (ci == injector_idx);
+                    cfg.is_sink = !cfg.is_injector;
+                    cfg.mcast_num_dests = cfg.is_injector ? r.w * r.h - 1 : 0;
+                    cfg.next_core_q_chunks = cfg.is_injector ? max_q : 0;
+                    gqa_chain_max_q[ci] = max_q;
+                }
+                gqa_mcast_rows++;
+            }
+            for (uint32_t row = 0; !ksplit_linear && row < grid_size.y; ++row) {
                 const auto selection = select_row_wide_chain_mcast(row, recent_cols);
                 if (!selection.has_value()) {
                     continue;

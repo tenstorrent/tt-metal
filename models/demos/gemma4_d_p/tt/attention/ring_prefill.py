@@ -1,3 +1,4 @@
+import os
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -186,6 +187,18 @@ def global_ring_prefill_attention(
 ):
     """Attend over the packed cache: K is its first GLOBAL_HEAD_DIM columns and V its last GLOBAL_HEAD_DIM."""
     mesh_device = mesh_config.device
+    if os.environ.get("G4X_L1DUMP") and not getattr(global_ring_prefill_attention, "_dumped", False):  # LOCAL EXPERIMENT
+        global_ring_prefill_attention._dumped = True
+        dev = mesh_device.get_devices()[0] if hasattr(mesh_device, "get_devices") else mesh_device
+        try:
+            print("G4X_L1DUMP view", ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1), flush=True)
+        except Exception as e:
+            print("G4X_L1DUMP view err", e, flush=True)
+        try:
+            ttnn.dump_device_memory_state(mesh_device, prefix="g4x_l1dump_")
+            print("G4X_L1DUMP dumped", flush=True)
+        except Exception as e:
+            print("G4X_L1DUMP dump err", e, flush=True)
     if program_config is None:
         sdpa_grid = ccl_manager.compute_grid_size
         q_chunk, k_chunk, k_splits, segmented = ring_sdpa_chunk_sizes(
@@ -199,7 +212,7 @@ def global_ring_prefill_attention(
             k_chunk_size=k_chunk,
             max_k_splits=k_splits,
             # Global attention only: sliding attention gains nothing from LoFi, so it keeps HiFi2.
-            matmul_math_fidelity=ttnn.MathFidelity.LoFi,
+            matmul_math_fidelity=None if os.environ.get("G4X_GLOBAL_HIFI2") else ttnn.MathFidelity.LoFi,
             segmented_accumulation=segmented,
         )
     # Dense attention gathers each device's whole shard, so the buffer spans the full cache capacity. Sizing it to
@@ -272,6 +285,10 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, num_cores=110):
         q_chunk = 128
         k_splits = 3 if num_heads * -(-q_slab_tokens // q_chunk) * 3 <= num_cores else 1
         return q_chunk, 128, k_splits, False
+    # LOCAL EXPERIMENT: G4X_GLOBAL_QKS=q,k,splits[,seg] overrides the global choice.
+    if os.environ.get("G4X_GLOBAL_QKS"):
+        v = [int(x) for x in os.environ["G4X_GLOBAL_QKS"].split(",")]
+        return v[0], v[1], v[2], bool(v[3]) if len(v) > 3 else True
     # A 256-row slab (chunk 2048): two 4-tile Q chunks per head are 16 units, two grid rows per band, so five
     # bands fill 80 cores. Per Q row a 4-tile chunk does about 1.3x the work of a 2-tile one in the same time, which
     # beats q64's three bands over 96 cores once the prefix is long. It needs the bfp8 Q of global_query_dtype.
@@ -412,11 +429,15 @@ def sliding_ring_prefill_attention(
     k_chunk = program_config.k_chunk_size
     halo_tokens = -(-(sliding_window_size - 1) // k_chunk) * k_chunk
     gather_seq = max(halo_tokens, TILE_HEIGHT)
+    halo_mc_k, halo_mc_v = cache_k.memory_config(), cache_v.memory_config()
+    if os.environ.get("G4X_HALO_L1"):  # LOCAL EXPERIMENT: halo gather buffers in L1, two alternating pairs
+        halo_mc_k = halo_mc_v = ttnn.L1_MEMORY_CONFIG
+        gather_buffer_key = ("halo_l1", layer_idx % 2)
     buffer_k = ccl_manager.get_ring_gather_buffer(
-        (gather_buffer_key, "ring_k"), num_local_kv_heads, gather_seq, head_dim, cache_k.dtype, cache_k.memory_config()
+        (gather_buffer_key, "ring_k"), num_local_kv_heads, gather_seq, head_dim, cache_k.dtype, halo_mc_k
     )
     buffer_v = ccl_manager.get_ring_gather_buffer(
-        (gather_buffer_key, "ring_v"), num_local_kv_heads, gather_seq, head_dim, cache_v.dtype, cache_v.memory_config()
+        (gather_buffer_key, "ring_v"), num_local_kv_heads, gather_seq, head_dim, cache_v.dtype, halo_mc_v
     )
 
     out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
@@ -438,7 +459,8 @@ def sliding_ring_prefill_attention(
         num_links=ccl_manager.num_links,
         cluster_axis=mesh_config.cp_axis,
         mesh_device=mesh_device,
-        topology=ttnn.Topology.Linear,
+        # LOCAL EXPERIMENT: G4X_SLIDING_RING=1 sends the halo over the CP ring's wrap link.
+        topology=ttnn.Topology.Ring if os.environ.get("G4X_SLIDING_RING") else ttnn.Topology.Linear,
         ccl_core_grid_offset=ttnn.CoreCoord(*ccl_manager.ring_attention_ccl_core_grid_offset),
         use_column_major_ccl=True,
         is_causal=True,

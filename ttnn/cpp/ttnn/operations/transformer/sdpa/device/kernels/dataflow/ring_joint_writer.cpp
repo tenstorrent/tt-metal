@@ -5,6 +5,17 @@
 #include <type_traits>
 
 #include "api/dataflow/dataflow_api.h"
+
+// LOCAL EXPERIMENT: G4X_RJ_ZONES profiler zones.
+#ifndef SDPA_RING_DF_ZONES
+#define SDPA_RING_DF_ZONES 0
+#endif
+#if SDPA_RING_DF_ZONES
+#include "tools/profiler/kernel_profiler.hpp"
+#define RJZ(name) DeviceZoneScopedN(name)
+#else
+#define RJZ(name)
+#endif
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/circular_buffer.h"
@@ -1308,6 +1319,7 @@ void kernel_main() {
                 !ksplit_enabled || get_tile_size(cb_out_im_A) == get_tile_size(cb_prev_out),
                 "K split copies out tiles raw");
             UnicastEndpoint sender_l1;
+            RJZ("WR-KSPLIT-PULL");
             for (uint32_t sender = 0; sender + 1 < ksplit_count; ++sender) {
                 const uint32_t x = get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender);
                 const uint32_t y = get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender + 1);

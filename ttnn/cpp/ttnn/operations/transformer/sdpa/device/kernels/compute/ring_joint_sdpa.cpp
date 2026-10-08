@@ -792,6 +792,7 @@ void kernel_main() {
                 ASSERT(seen_active_iter);
                 constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
                 const AccumulatorHalf incoming = {ksplit_cb_sum_in, cb_max_in, cb_prev_out};
+                MaybeDeviceZoneScopedN((SDPA_RING_ZONES != 0), "KSPLIT-MERGE");
                 for (uint32_t sender = 0; sender + 1 < ksplit_count; ++sender) {
                     const bool sender_empty =
                         has_sliding_window

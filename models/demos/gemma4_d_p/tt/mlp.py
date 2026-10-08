@@ -3,6 +3,8 @@
 
 """Tensor-parallel dense MLP for Gemma4-31B prefill."""
 
+import os
+
 import ttnn
 from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
 from models.demos.gemma4_d_p.tt.ccl import ccl_reduce_scatter_rows
@@ -87,6 +89,10 @@ class MLP:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             **common,
         )
+        # LOCAL EXPERIMENT: G4X_FUSED_GATEUP=1 runs gate and up as one N=2*intermediate matmul.
+        self.gateup_proj = None
+        if os.environ.get("G4X_FUSED_GATEUP"):
+            self.gateup_proj = ttnn.concat([self.gate_proj, self.up_proj], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         self.down_proj = ttnn.as_tensor(
             down_proj_weight,
             mesh_mapper=row_mapper,
@@ -148,13 +154,25 @@ class MLP:
         short_m = is_short_m(hidden_states)
         x = to_l1_width_sharded(hidden_states) if short_m else hidden_states
         gate_up_mc = short_m_output_memcfg(x, self.gate_proj) if short_m else act_mc
-        gate = self._project(x, self.gate_proj, gate_up_mc, gelu=True)
-        up = self._project(x, self.up_proj, gate_up_mc)
-        # The MLP consumes its gathered input (and any sharded copy of it) before down.
-        hidden_states.deallocate(True)
-        if x is not hidden_states:
-            x.deallocate(True)
-        hidden = ttnn.mul(gate, up, memory_config=act_mc)
+        if self.gateup_proj is not None:
+            fused = self._project(x, self.gateup_proj, act_mc, per_core_n=4)
+            n = fused.padded_shape[-1] // 2
+            shape = tuple(fused.padded_shape)
+            gate = ttnn.slice(fused, (0, 0, 0, 0), shape[:-1] + (n,), memory_config=act_mc)
+            up = ttnn.slice(fused, (0, 0, 0, n), shape, memory_config=act_mc)
+            fused.deallocate(True)
+            hidden_states.deallocate(True)
+            if x is not hidden_states:
+                x.deallocate(True)
+            hidden = ttnn.mul(gate, up, input_tensor_a_activations=[_GATE_GELU], memory_config=act_mc)
+        else:
+            gate = self._project(x, self.gate_proj, gate_up_mc, gelu=True)
+            up = self._project(x, self.up_proj, gate_up_mc)
+            # The MLP consumes its gathered input (and any sharded copy of it) before down.
+            hidden_states.deallocate(True)
+            if x is not hidden_states:
+                x.deallocate(True)
+            hidden = ttnn.mul(gate, up, memory_config=act_mc)
         gate.deallocate(True)
         up.deallocate(True)
         # Short M: down runs 4 columns per core (the 1D config only applies there) and writes its output width-sharded

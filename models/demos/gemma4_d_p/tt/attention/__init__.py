@@ -3,6 +3,8 @@
 
 """Gemma4 context-parallel prefill attention with local and packed global ring caches."""
 
+import os
+
 import ttnn
 
 from models.demos.gemma4_d_p.tt.ccl import ccl_reduce_scatter_rows
@@ -45,7 +47,7 @@ class Gemma4AttentionConfig:
         if self.is_sliding:
             self.num_key_value_heads = hf_config.num_key_value_heads
             self.head_dim = hf_config.head_dim
-            self.sliding_window_size = hf_config.sliding_window
+            self.sliding_window_size = int(os.environ.get("G4X_SWA_OVERRIDE", hf_config.sliding_window))  # LOCAL EXPERIMENT
             self.rope_theta = hf_config.rope_theta
             self.partial_rotary_factor = 1.0
         else:

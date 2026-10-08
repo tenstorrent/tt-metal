@@ -7867,7 +7867,7 @@ def test_ring_joint_attention_gemma4_global_q128_ksplit5_accuracy():
         chunk_size=chunk_size,
         total_seq=5 * chunk_size,
         qk_configs=[(128, 256)],
-        max_k_splits=5,
+        max_k_splits=int(os.environ.get("G4X_TEST_KSPLITS", 5)),  # LOCAL EXPERIMENT
         use_ring_mla=True,
         matmul_math_fidelity=ttnn.MathFidelity.LoFi,
     )

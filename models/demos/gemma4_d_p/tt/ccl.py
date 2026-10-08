@@ -327,6 +327,12 @@ def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None
     """
     if mesh_config is None or mesh_config.tp_degree <= 1:
         return tensor
+    if memory_config is None and os.environ.get("G4X_RS_SHARDED"):  # LOCAL EXPERIMENT: land in the norm's layout
+        from models.demos.gemma4_d_p.tt.rms_norm import _block_shard_geometry, _block_sharded_memory_config
+
+        geometry = _block_shard_geometry(tensor.padded_shape[-2] // mesh_config.tp_degree, tensor.padded_shape[-1])
+        if geometry is not None:
+            memory_config = _block_sharded_memory_config(*geometry)
     if memory_config is None:
         # The norm after it reads the result straight from L1. Taller outputs stay in DRAM, where they cannot clash
         # with the next matmul's circular buffers.

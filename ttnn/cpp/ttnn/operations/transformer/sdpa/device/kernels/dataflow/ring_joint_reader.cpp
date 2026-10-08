@@ -4,6 +4,23 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+
+// LOCAL EXPERIMENT: G4X_RJ_ZONES profiler zones.
+#ifndef SDPA_SKIP_KV_DM
+#define SDPA_SKIP_KV_DM 0
+#endif
+#ifndef SLIDING_Q_FIRST
+#define SLIDING_Q_FIRST 0
+#endif
+#ifndef SDPA_RING_DF_ZONES
+#define SDPA_RING_DF_ZONES 0
+#endif
+#if SDPA_RING_DF_ZONES
+#include "tools/profiler/kernel_profiler.hpp"
+#define RJZ(name) DeviceZoneScopedN(name)
+#else
+#define RJZ(name)
+#endif
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
@@ -796,7 +813,7 @@ void kernel_main() {
     // cached program cannot observe the previous invocation's token.
     bool halo_synchronized = !has_sliding_window;
     auto synchronize_halo = [&]() {
-        if (halo_synchronized) {
+        if (halo_synchronized || SDPA_SKIP_KV_DM) {
             return;
         }
         halo_synchronized = true;
@@ -1045,6 +1062,46 @@ void kernel_main() {
             // anchoring Q to k_chunk == 0 would never push Q while compute still waits on it
             // (q_per_core > 1) -> deadlock. Reads Q exactly once per q_iter, so no extra work.
             bool first_k_for_q = true;
+            // LOCAL EXPERIMENT (SLIDING_Q_FIRST): Q is local, so a sliding core can read it while the halo is in flight.
+            const auto do_read_q = [&]() {
+                    const auto read_q = [&](const auto& q_gen) {
+                        if constexpr (use_q_subblock_push) {
+                            for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
+                                const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
+                                const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
+                                Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
+                                read_block(
+                                    q_gen,
+                                    q_sub_slice,
+                                    q_end_seq_tile,
+                                    cb_q_in,
+                                    q_tile_bytes,
+                                    false /*transpose*/,
+                                    q_barrier_threshold);
+                            }
+                        } else {
+                            read_block(
+                                q_gen,
+                                q_slice,
+                                q_end_seq_tile,
+                                cb_q_in,
+                                q_tile_bytes,
+                                false /*transpose*/,
+                                q_barrier_threshold);
+                        }
+                    };
+                    read_q_from_source<has_joint_q, joint_tensor_args_offset>(
+                        is_joint_q, joint_q_addr, q_generator, joint_q_input_tile_logical, read_q);
+            };
+            bool q_read_early = false;
+            if constexpr (has_sliding_window && SLIDING_Q_FIRST) {
+                if (first_k_for_q && need_q_read && sliding_band.begin < q_k_loop_count) {
+                    RJZ("RD-Q-EARLY");
+                    do_read_q();
+                    q_pushed = true;
+                    q_read_early = true;
+                }
+            }
             for (uint32_t k_chunk = has_sliding_window ? sliding_band.begin : 0; k_chunk < q_k_loop_count; ++k_chunk) {
                 const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
                 const uint32_t source_ring_id = has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id;
@@ -1114,7 +1171,10 @@ void kernel_main() {
                 } else {
                     uint32_t gathered_start_tile = source_ring_id * kv_local_padded_Nt + source_k_chunk * Sk_chunk_t;
                     if constexpr (has_sliding_window) {
-                        synchronize_halo();
+                        {
+                            RJZ("RD-HALO");
+                            synchronize_halo();
+                        }
                         gathered_start_tile = sliding_k_chunk.compact_k_chunk * Sk_chunk_t;
                     }
                     k_slice =
@@ -1166,17 +1226,19 @@ void kernel_main() {
                     const uint32_t reserve_tiles = is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
                     cb_k.reserve_back(reserve_tiles);
                 } else {
+                    RJZ("RD-KRSV");
                     cb_k.reserve_back(k_chunk_tiles);
                 }
                 uint32_t cb_k_start_address = cb_k.get_write_ptr();
                 bool received_k_from_chain = false;
                 if constexpr (!has_sliding_window) {
-                    if (k_chain.should_receive(k_chain_head)) {
+                    if (!SDPA_SKIP_KV_DM && k_chain.should_receive(k_chain_head)) {
                         k_chain.receive(noc);
                         received_k_from_chain = true;
                     }
                 }
-                if (!received_k_from_chain) {
+                if (!received_k_from_chain && !SDPA_SKIP_KV_DM) {
+                    RJZ("RD-K");
                     // Injector or non-participant: read K from DRAM. Dispatch directly so
                     // local and gathered tensors may use different accessor types.
                     const auto fetch_k = [&](const auto& k_gen) {
@@ -1206,7 +1268,7 @@ void kernel_main() {
 
                 // Forward K chunk via chain (uses K's data size explicitly)
                 if constexpr (!has_sliding_window) {
-                    if (k_chain.should_forward(k_chain_head, q_iter_local)) {
+                    if (!SDPA_SKIP_KV_DM && k_chain.should_forward(k_chain_head, q_iter_local)) {
                         k_chain.forward(noc, cb_k_start_address, k_chunk_tiles, k_tile_bytes);
                     }
                 }
@@ -1223,7 +1285,7 @@ void kernel_main() {
                         const uint32_t nv = nq / q_heads_per_v;
                         CircularBuffer cb_v(cb_v_in);
                         cb_v.reserve_back(2 * v_cb_entry_tiles);
-                        if (v_chain.should_receive(nv)) {
+                        if (!SDPA_SKIP_KV_DM && v_chain.should_receive(nv)) {
                             v_chain.receive(noc);
                         }
                     }
@@ -1238,35 +1300,9 @@ void kernel_main() {
                 // Push Q one subblock at a time so compute can start QK matmul incrementally.
                 // Placed after K forward so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
-                if (first_k_for_q && need_q_read) {
-                    const auto read_q = [&](const auto& q_gen) {
-                        if constexpr (use_q_subblock_push) {
-                            for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                                const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
-                                const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
-                                Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
-                                read_block(
-                                    q_gen,
-                                    q_sub_slice,
-                                    q_end_seq_tile,
-                                    cb_q_in,
-                                    q_tile_bytes,
-                                    false /*transpose*/,
-                                    q_barrier_threshold);
-                            }
-                        } else {
-                            read_block(
-                                q_gen,
-                                q_slice,
-                                q_end_seq_tile,
-                                cb_q_in,
-                                q_tile_bytes,
-                                false /*transpose*/,
-                                q_barrier_threshold);
-                        }
-                    };
-                    read_q_from_source<has_joint_q, joint_tensor_args_offset>(
-                        is_joint_q, joint_q_addr, q_generator, joint_q_input_tile_logical, read_q);
+                if (first_k_for_q && need_q_read && !q_read_early) {
+                    RJZ("RD-Q");
+                    do_read_q();
                     q_pushed = true;
                 }
                 first_k_for_q = false;
@@ -1312,16 +1348,20 @@ void kernel_main() {
                     const Slice v_slice(
                         k_slice.d0, nv, k_slice.d2_start, k_slice.d2_end, v_col_offset_t, v_col_offset_t + vDHt);
                     CircularBuffer cb_v(cb_v_in);
-                    cb_v.reserve_back(v_cb_entry_tiles);
+                    {
+                        RJZ("RD-VRSV");
+                        cb_v.reserve_back(v_cb_entry_tiles);
+                    }
                     uint32_t cb_v_start_address = cb_v.get_write_ptr();
                     bool received_v_from_chain = false;
                     if constexpr (!has_sliding_window) {
-                        if (v_chain.should_receive(nv)) {
+                        if (!SDPA_SKIP_KV_DM && v_chain.should_receive(nv)) {
                             v_chain.receive(noc);
                             received_v_from_chain = true;
                         }
                     }
-                    if (!received_v_from_chain) {
+                    if (!received_v_from_chain && !SDPA_SKIP_KV_DM) {
+                        RJZ("RD-V");
                         const auto fetch_v = [&](const auto& v_gen) {
                             fetch_block(
                                 v_gen,
@@ -1348,7 +1388,7 @@ void kernel_main() {
                     // Forward V to next core(s) before push_back — prevents compute from
                     // popping the buffer while the mcast is still reading from it.
                     if constexpr (!has_sliding_window) {
-                        if (v_chain.should_forward(nv, q_iter_local)) {
+                        if (!SDPA_SKIP_KV_DM && v_chain.should_forward(nv, q_iter_local)) {
                             v_chain.forward(noc, cb_v_start_address);
                         }
                     }
@@ -1374,5 +1414,8 @@ void kernel_main() {
             }
         }
     }
-    synchronize_halo();
+    {
+        RJZ("RD-HALO-END");
+        synchronize_halo();
+    }
 }

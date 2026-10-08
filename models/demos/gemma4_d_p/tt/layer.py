@@ -3,6 +3,8 @@
 
 """Gemma4-31B dense decoder layer: attention, MLP, residuals and layer scalar."""
 
+import os
+
 import ttnn
 from models.demos.gemma4_d_p.tt.attention import Gemma4Attention, Gemma4AttentionConfig
 from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
@@ -117,7 +119,12 @@ class Gemma4DecoderLayer:
         # hidden_states holds this TP device's 1/TP of the rows: gather the normed rows before each block, whose
         # closing reduce-scatter returns 1/TP again.
         residual = hidden_states
-        normed = self.input_layernorm.forward(hidden_states)
+        if os.environ.get("G4X_AG_SHARDED_IN"):  # LOCAL EXPERIMENT: gather straight from the norm's sharded output
+            normed = self.input_layernorm.forward(
+                hidden_states, memory_config=self.input_layernorm.shard_memory_config(hidden_states)
+            )
+        else:
+            normed = self.input_layernorm.forward(hidden_states)
         normed = self._gather_rows(normed)
         attn_output = self.self_attn(
             normed,
@@ -144,7 +151,12 @@ class Gemma4DecoderLayer:
 
         # 2. Dense MLP block
         residual = hidden_states
-        normed = self.pre_feedforward_layernorm.forward(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if os.environ.get("G4X_AG_SHARDED_IN"):  # LOCAL EXPERIMENT
+            normed = self.pre_feedforward_layernorm.forward(
+                hidden_states, memory_config=self.pre_feedforward_layernorm.shard_memory_config(hidden_states)
+            )
+        else:
+            normed = self.pre_feedforward_layernorm.forward(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         normed = self._gather_rows(normed)
         mlp_output = self.mlp(normed)
 

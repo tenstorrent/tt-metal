@@ -38,7 +38,7 @@ def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
 
 
 # Rows per device from which the projections are FPU-bound, so one fidelity pass saves time.
-_LOFI_PROJECTION_MIN_ROWS = 512
+_LOFI_PROJECTION_MIN_ROWS = int(os.environ.get("G4X_LOFI_PROJ_MIN_ROWS", 512))  # LOCAL EXPERIMENT knob
 
 
 def projection_math_fidelity(rows):

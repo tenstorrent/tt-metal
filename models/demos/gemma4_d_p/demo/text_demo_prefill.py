@@ -263,6 +263,26 @@ def _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, co
     _out_ring = _forward(cap_start)  # Keep the captured output alive for trace replay.
     ttnn.end_trace_capture(mesh_device, tid_ring, cq_id=0)
     ttnn.synchronize_device(mesh_device)
+    # LOCAL EXPERIMENT: G4X_TWO_TRACE=<n> replays a second trace, captured with G4X_EARLY_QKS (global q/k/bands),
+    # for chunks below n.
+    two_trace_switch = int(os.environ.get("G4X_TWO_TRACE", 0))
+    tid_early = None
+    if two_trace_switch:
+        saved = os.environ.get("G4X_GLOBAL_QKS")
+        os.environ["G4X_GLOBAL_QKS"] = os.environ.get("G4X_EARLY_QKS", "64,256,3")
+        early_out = _forward(_stage(0))
+        ttnn.synchronize_device(mesh_device)
+        early_out.deallocate(True)
+        cap_start = _stage(0)
+        tid_early = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        _out_early = _forward(cap_start)
+        ttnn.end_trace_capture(mesh_device, tid_early, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        if saved is None:
+            del os.environ["G4X_GLOBAL_QKS"]
+        else:
+            os.environ["G4X_GLOBAL_QKS"] = saved
+        logger.info(f"[traced] two traces: early ({os.environ.get('G4X_EARLY_QKS', '64,256,3')}) below chunk {two_trace_switch}")
     capture_s = time.time() - t0
     logger.info(f"[traced] compile={compile_s:.1f}s capture={capture_s:.1f}s for 1 trace")
 
@@ -276,7 +296,8 @@ def _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, co
             chunk_start = _stage(chunk_idx)
             stage_ms += (time.time() - t_stage) * 1000
             t_c = time.time()
-            ttnn.execute_trace(mesh_device, tid_ring, cq_id=0, blocking=False)
+            tid = tid_early if (tid_early is not None and chunk_idx < two_trace_switch) else tid_ring
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
             per_chunk_ms.append((time.time() - t_c) * 1000)
             cumulative_wall_ms.append((time.time() - t_run) * 1000)
@@ -289,6 +310,8 @@ def _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, co
         total_ms = (time.time() - t_run) * 1000
     finally:
         ttnn.release_trace(mesh_device, tid_ring)
+        if tid_early is not None:
+            ttnn.release_trace(mesh_device, tid_early)
 
     device_ms = sum(per_chunk_ms)
     # Separate device execution from host-side staging in the wall time.

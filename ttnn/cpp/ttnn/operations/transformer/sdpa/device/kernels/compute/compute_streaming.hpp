@@ -111,6 +111,15 @@ constexpr bool sliding_local_first = SLIDING_LOCAL_FIRST;
 constexpr bool sliding_local_first = false;
 #endif
 
+#ifndef SDPA_RING_ZONES
+#define SDPA_RING_ZONES 0
+#endif
+#ifndef SDPA_MM_MOP
+#define SDPA_MM_MOP 0
+#endif
+#ifndef SDPA_RING_STEP_ZONES
+#define SDPA_RING_STEP_ZONES 0
+#endif
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
 // When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
@@ -424,16 +433,29 @@ void blocked_matmul_and_pack(
     uint32_t inner_dim,
     uint32_t matmul_stride,
     bool skip_pack_configure = false) {
-    tile_regs_acquire();
+    {
+        MaybeDeviceZoneScopedN((SDPA_RING_ZONES != 0), "MM-ACQ");
+        tile_regs_acquire();
+    }
     uint32_t dst_index = 0;
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
+    MaybeDeviceZoneScopedN((SDPA_RING_ZONES != 0), "MM-LOOP");
+#if SDPA_MM_MOP  // LOCAL EXPERIMENT: the regular MOP matmul instead of the no-MOP replay
+    matmul_block_init(in0_cb, in1_cb, transpose, subblock_w, subblock_h, matmul_stride);
+    for (uint32_t inner = 0; inner < inner_dim; ++inner) {
+        matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
+        in0_index++;
+        in1_index += in1_stride;
+    }
+#else
     for (uint32_t inner = 0; inner < inner_dim; ++inner) {
         sdpa_matmul_block_no_mop(
             in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
         in0_index++;
         in1_index += in1_stride;
     }
+#endif
     tile_regs_commit();
 
     tile_regs_wait();
@@ -2982,8 +3004,9 @@ void sdpa_ring_v2(
             step_kv_pad_rotation.ring_id = source_ring_id;
             step_kv_pad_rotation.logical_tile_count = logical_nt;
 
+            MaybeDeviceZoneScopedN((SDPA_RING_STEP_ZONES != 0), "STEP");
             sdpa_inner_loop_step<
-                false,  // profiling_enabled
+                (SDPA_RING_ZONES != 0),  // profiling_enabled (LOCAL EXPERIMENT: G4X_RJ_ZONES)
                 Sq_chunk_t,
                 Sk_chunk_t,
                 Skt,
