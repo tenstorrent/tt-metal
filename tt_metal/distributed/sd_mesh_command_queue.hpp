@@ -45,7 +45,7 @@ public:
         uint32_t id,
         std::function<std::lock_guard<std::mutex>()> lock_api_function,
         std::shared_ptr<distributed::multihost::DistributedContext> distributed_context);
-    ~SDMeshCommandQueue() override = default;
+    ~SDMeshCommandQueue() override;
 
     std::optional<MeshTraceId> trace_id() const override;
 
