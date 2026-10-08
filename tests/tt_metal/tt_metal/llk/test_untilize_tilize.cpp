@@ -928,97 +928,102 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilize) {
     }
 }
 
-// tilizeA_B + eltwise add on narrow (32x16) tiles: each tile is two vertically stacked 16x16 faces. A is
-// row-major, B is all ones, so every output datum is the tilized A datum plus one. Small integer inputs keep
-// the bf16 sum exact.
+// tilizeA_B + eltwise add on narrow tiles: 32x16 (two vertically stacked 16x16 faces) and 16x16 (one face).
+// A is row-major, B is a constant, so every output datum is the tilized A datum plus that constant. Small
+// integer inputs keep the bf16 sum exact.
 TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilizeA_BNarrowTile) {
     if (MetalContext::instance().get_cluster().arch() != ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "only the Wormhole tilizeA_B has a narrow-tile path";
     }
-    constexpr std::uint32_t tile_h = 32;
     constexpr std::uint32_t tile_w = 16;
     constexpr std::uint32_t face_dim = 16;
-    const Tile tile({tile_h, tile_w});
-    const std::uint32_t tile_bytes = tile.get_tile_size(tt::DataFormat::Float16_b);
+    constexpr std::uint32_t dram_bank_id = 0;
+    constexpr float b_value = 1.0f;
 
-    for (const auto& [num_tiles_r, num_tiles_c] : {std::pair<std::uint32_t, std::uint32_t>{1, 1}, {2, 4}}) {
-        auto& mesh_device = *this->devices_.at(0);
-        auto& cq = mesh_device.mesh_command_queue();
-        Program program = CreateProgram();
-        const CoreCoord core = {0, 0};
-        const std::uint32_t num_tiles = num_tiles_r * num_tiles_c;
-        const std::uint32_t buffer_bytes = num_tiles * tile_bytes;
+    for (const std::uint32_t tile_h : {32u, 16u}) {
+        const Tile tile({tile_h, tile_w});
+        const std::uint32_t tile_bytes = tile.get_tile_size(tt::DataFormat::Float16_b);
+        for (const auto& [num_tiles_r, num_tiles_c] : {std::pair<std::uint32_t, std::uint32_t>{1, 1}, {2, 4}}) {
+            auto& mesh_device = *this->devices_.at(0);
+            auto& cq = mesh_device.mesh_command_queue();
+            Program program = CreateProgram();
+            const CoreCoord core = {0, 0};
+            const std::uint32_t num_tiles = num_tiles_r * num_tiles_c;
+            const std::uint32_t buffer_bytes = num_tiles * tile_bytes;
 
-        auto make_buffer = [&]() {
-            return distributed::MeshBuffer::create(
-                distributed::ReplicatedBufferConfig{.size = buffer_bytes},
-                {.page_size = buffer_bytes, .buffer_type = BufferType::DRAM},
-                &mesh_device);
-        };
-        auto src0 = make_buffer();
-        auto src1 = make_buffer();
-        auto dst = make_buffer();
-        for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16}) {
-            CircularBufferConfig config =
-                CircularBufferConfig(buffer_bytes, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, tile_bytes);
-            config.set_tile_dims(cb, tile);
-            CreateCircularBuffer(program, core, config);
-        }
-        auto reader = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
-            core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-        auto writer = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
-            core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/unpack_tilizeA_B.cpp",
-            core,
-            ComputeConfig{.compile_args = {num_tiles_r, num_tiles_c}});
+            auto make_buffer = [&]() {
+                return distributed::MeshBuffer::create(
+                    distributed::ReplicatedBufferConfig{.size = buffer_bytes},
+                    {.page_size = buffer_bytes, .buffer_type = BufferType::DRAM},
+                    &mesh_device);
+            };
+            auto src0 = make_buffer();
+            auto src1 = make_buffer();
+            auto dst = make_buffer();
+            for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16}) {
+                CircularBufferConfig config =
+                    CircularBufferConfig(buffer_bytes, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, tile_bytes);
+                config.set_tile_dims(cb, tile);
+                CreateCircularBuffer(program, core, config);
+            }
+            auto reader = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
+                core,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+            auto writer = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+                core,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/compute/unpack_tilizeA_B.cpp",
+                core,
+                ComputeConfig{.compile_args = {num_tiles_r, num_tiles_c}});
 
-        // A: row-major [num_tiles_r * 32, num_tiles_c * 16], small integers.
-        const std::uint32_t cols = num_tiles_c * tile_w;
-        const std::uint32_t rows = num_tiles_r * tile_h;
-        std::vector<bfloat16> a(rows * cols);
-        for (std::uint32_t i = 0; i < a.size(); i++) {
-            a[i] = bfloat16(static_cast<float>(static_cast<int>((i * 37) % 101) - 50));
-        }
-        const std::vector<bfloat16> ones(rows * cols, bfloat16(1.0f));
-        distributed::EnqueueWriteMeshBuffer(cq, src0, pack_vector<std::uint32_t, bfloat16>(a), /*blocking=*/true);
-        distributed::EnqueueWriteMeshBuffer(cq, src1, pack_vector<std::uint32_t, bfloat16>(ones), /*blocking=*/true);
-        SetRuntimeArgs(program, reader, core, {src0->address(), 0u, src1->address(), 0u, num_tiles});
-        SetRuntimeArgs(program, writer, core, {dst->address(), 0u, num_tiles});
-        LaunchProgram(mesh_device, std::move(program));
+            // A: row-major [num_tiles_r * 32, num_tiles_c * 16], small integers.
+            const std::uint32_t cols = num_tiles_c * tile_w;
+            const std::uint32_t rows = num_tiles_r * tile_h;
+            std::vector<bfloat16> a(rows * cols);
+            for (std::uint32_t i = 0; i < a.size(); i++) {
+                a[i] = bfloat16(static_cast<float>(static_cast<int>((i * 37) % 101) - 50));
+            }
+            const std::vector<bfloat16> b(rows * cols, bfloat16(b_value));
+            distributed::EnqueueWriteMeshBuffer(cq, src0, pack_vector<std::uint32_t, bfloat16>(a), /*blocking=*/true);
+            distributed::EnqueueWriteMeshBuffer(cq, src1, pack_vector<std::uint32_t, bfloat16>(b), /*blocking=*/true);
+            SetRuntimeArgs(
+                program, reader, core, {src0->address(), dram_bank_id, src1->address(), dram_bank_id, num_tiles});
+            SetRuntimeArgs(program, writer, core, {dst->address(), dram_bank_id, num_tiles});
+            LaunchProgram(mesh_device, std::move(program));
 
-        std::vector<std::uint32_t> result_packed;
-        distributed::EnqueueReadMeshBuffer(cq, result_packed, dst, /*blocking=*/true);
-        const auto result = unpack_vector<bfloat16, std::uint32_t>(result_packed);
+            std::vector<std::uint32_t> result_packed;
+            distributed::EnqueueReadMeshBuffer(cq, result_packed, dst, /*blocking=*/true);
+            const auto result = unpack_vector<bfloat16, std::uint32_t>(result_packed);
 
-        // Golden in output tile order: per tile, face 0 (rows 0-15) then face 1 (rows 16-31), each row-major.
-        std::vector<bfloat16> golden;
-        golden.reserve(a.size());
-        for (std::uint32_t tr = 0; tr < num_tiles_r; tr++) {
-            for (std::uint32_t tc = 0; tc < num_tiles_c; tc++) {
-                for (std::uint32_t face = 0; face < tile_h / face_dim; face++) {
-                    for (std::uint32_t r = 0; r < face_dim; r++) {
-                        for (std::uint32_t c = 0; c < face_dim; c++) {
-                            const std::uint32_t row = tr * tile_h + face * face_dim + r;
-                            golden.push_back(bfloat16(static_cast<float>(a[row * cols + tc * tile_w + c]) + 1.0f));
+            // Golden in output tile order: per tile, face 0 (rows 0-15) then face 1 (rows 16-31), each row-major.
+            std::vector<bfloat16> golden;
+            golden.reserve(a.size());
+            for (std::uint32_t tr = 0; tr < num_tiles_r; tr++) {
+                for (std::uint32_t tc = 0; tc < num_tiles_c; tc++) {
+                    for (std::uint32_t face = 0; face < tile_h / face_dim; face++) {
+                        for (std::uint32_t r = 0; r < face_dim; r++) {
+                            for (std::uint32_t c = 0; c < face_dim; c++) {
+                                const std::uint32_t row = tr * tile_h + face * face_dim + r;
+                                golden.push_back(
+                                    bfloat16(static_cast<float>(a[row * cols + tc * tile_w + c]) + b_value));
+                            }
                         }
                     }
                 }
             }
+            ASSERT_EQ(result.size(), golden.size());
+            std::uint32_t mismatches = 0;
+            for (std::uint32_t i = 0; i < golden.size(); i++) {
+                mismatches += static_cast<float>(result[i]) != static_cast<float>(golden[i]);
+            }
+            EXPECT_EQ(mismatches, 0u) << tile_h << "x" << tile_w << " tiles, " << num_tiles_r << "x" << num_tiles_c;
         }
-        ASSERT_EQ(result.size(), golden.size());
-        std::uint32_t mismatches = 0;
-        for (std::uint32_t i = 0; i < golden.size(); i++) {
-            mismatches += static_cast<float>(result[i]) != static_cast<float>(golden[i]);
-        }
-        EXPECT_EQ(mismatches, 0u) << "tiles " << num_tiles_r << "x" << num_tiles_c;
     }
 }
 
