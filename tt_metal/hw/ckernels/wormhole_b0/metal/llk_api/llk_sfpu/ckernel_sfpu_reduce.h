@@ -1193,8 +1193,8 @@ inline void init_reduce_max_min_int32_signed() {
  *        For MIN operations, inverts the swap direction by configuring the SFPU control register.
  *
  * @tparam INSTRUCTION_MODE The instruction mode for the float/unsigned formats that reach here: DEFAULT (FP32,
- * FP16B), LO16, or plain INT32 (UInt16). Int32 and UInt32 MAX/MIN use init_reduce_max_min_int32_signed
- * instead, so it does not go through this init.
+ * FP16B) or LO16. Int32 and UInt32 MAX/MIN use init_reduce_max_min_int32_signed, and UInt16 in a 32-bit Dest the manual
+ * column path, instead, so it does not go through this init.
  * @tparam pool_type The PoolType enum value (MAX or MIN). MIN inverts the swap direction for minimum reduction.
  * @param num_cols The number of columns to process (typically 32 for a single tile, or multiple of 32 for block
  * operations)
@@ -1531,8 +1531,8 @@ inline void calculate_reduce_max_min_int32_col() {
  * @tparam pool_type The PoolType enum value (MAX or MIN). MIN uses inverted swap direction for minimum reduction.
  * @tparam reduce_dim The reduction dimension: REDUCE_COL for column-wise, REDUCE_ROW for row-wise (MAX and MIN).
  * @tparam INSTRUCTION_MODE The instruction mode for the float/unsigned formats that reach here: DEFAULT (FP32,
- * FP16B), LO16, or plain INT32 (UInt16). Int32 and UInt32 MAX/MIN use the dedicated two's-complement path
- * (calculate_reduce_max_min_int32_col / perform_reduce_row_max_min_int32) instead.
+ * FP16B) or LO16. Int32 and UInt32 MAX/MIN use the dedicated two's-complement path, and UInt16 in a 32-bit Dest the
+ * manual column path (calculate_reduce_max_min_int32_col / perform_reduce_row_max_min_int32) instead.
  * @param block_ct_dim Number of tiles along x axis (column tiles, default 1).
  * @param block_rt_dim Number of tiles along y axis (row tiles, default 1).
  */

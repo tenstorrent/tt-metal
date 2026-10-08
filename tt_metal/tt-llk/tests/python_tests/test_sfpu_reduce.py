@@ -655,7 +655,7 @@ def test_uint32_reduce_max_min_bit31(mathop, dims, reduce_pool):
     """UInt32 MAX/MIN must order words with bit 31 set above the rest.
 
     SFPSWAP compares in sign-magnitude, which ranks a word with bit 31 set as negative. The tile mixes
-    values straddling 2^31 with small ones and the extremes 0, 0x7FFFFFFF, 0x80000000 and 0xFFFFFFFF, and
+    values straddling 2^31 with small ones, and plants lanes where 0 against 0x80000000 decides the result;
     every reduced lane is checked against an unsigned golden.
     """
     if reduce_pool == ReducePool.Min and TestConfig.WITH_COVERAGE:
@@ -668,12 +668,18 @@ def test_uint32_reduce_max_min_bit31(mathop, dims, reduce_pool):
     values[::3] = torch.randint(0, 1000, values[::3].shape, dtype=torch.int64)
     for i, extreme in enumerate([3, INT32_MAX, UINT32_BIT31 + 5]):
         values[(5 * i) % TILE_DIM, (7 * i + 1) % TILE_DIM] = extreme
-    # 0, 0x80000000 and UINT32_MAX in one row and one column, so they meet in a compare-and-swap
-    # (after the flip, 0 and 0x80000000 are the -0 / +0 pair).
-    meet = 20
-    values[meet, 0:3] = torch.tensor([0, UINT32_BIT31, UINT32_MAX])
-    values[21:23, meet] = torch.tensor([UINT32_BIT31, UINT32_MAX])
-    values[meet, meet] = 0
+    # Lanes where 0 vs 0x80000000 decides the result (after the flip they are the +0 / -0 pair): row and
+    # column 25 hold 0x80000000 with a lone 0 (MIN must find the 0), row and column 26 hold 0 with a lone
+    # 0x80000000 (MAX must find it).
+    values[25, :] = UINT32_BIT31
+    values[25, 10] = 0
+    values[26, :] = 0
+    values[26, 12] = UINT32_BIT31
+    values[:, 25] = UINT32_BIT31
+    values[7, 25] = 0
+    values[:, 26] = 0
+    values[9, 26] = UINT32_BIT31
+    values[3, 5] = UINT32_MAX
     reduce_axis = 0 if mathop == MathOperation.ReduceColumn else 1
     golden = (
         values.max(dim=reduce_axis).values
