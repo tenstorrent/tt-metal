@@ -178,6 +178,31 @@ def test_sampling_threshold_uniformity(device):
     assert emp[:, 19:].sum() == 0, "p=0.95: a token outside the nucleus was drawn"
 
 
+def test_sampling_low_digit_reaches_the_tail(device):
+    """Direct check of the threshold's low digit. Every user is the same two-token row with
+    P(second) just under 1/512, i.e. inside the last 1/256 of the mass: a threshold built from the
+    high digit alone (max 255/256) can never land there and draws the second token 0 times, and a
+    low digit that merely copies the high one lands there only when hi = 255 (1/256, twice the
+    expected rate). Only an independent 16-bit lattice gives the expected count, asserted within
+    4 sigma over USERS * N draws. (On Wormhole element 1 of this kernel's random tile is not a
+    draw, which is why the writer reads element 2.)"""
+    gap = 6.25  # bf16-exact; P(second) = 1 / (1 + e^6.25) = 0.00193
+    values = torch.full((1, 1, USERS, W), -30.0)
+    values[..., 0] = 0.0
+    values[..., 1] = -gap
+    emp = _draw(device, values, k=2, p=1.0, n=N)
+    expected = torch.softmax(values[0, 0, 0, :2].to(torch.bfloat16).float(), dim=-1)[1].item()
+    draws = USERS * N
+    hits = emp[:, 1].sum().item() * N
+    sigma = (draws * expected * (1 - expected)) ** 0.5
+    print(f"\nlow digit: P(second) expected {expected:.5f} -> {draws * expected:.0f} hits, device {hits:.0f}")
+    assert hits > 0, "the tail token was never drawn: the threshold's low digit is dead (hi / 256 lattice)"
+    assert (
+        abs(hits - draws * expected) <= 4 * sigma
+    ), f"{hits:.0f} hits vs {draws * expected:.0f} expected: the low digit is not independent of the high one"
+    assert emp[:, 2:].sum() == 0
+
+
 def test_sampling_softmax_gap(device):
     """Two-token rows with logit gap d: P(second) must be 1/(1+e^d). Reads out the kernel's
     softmax accuracy and the threshold resolution for small probabilities (the tail of a real
