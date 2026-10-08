@@ -1428,6 +1428,12 @@ class TestConfig:
             os.environ.get("LLK_ZONE_OLD") == "1"
         ):  # experiment: zone start record written inside the window
             OPTIONS_COMPILE += "-DLLK_ZONE_OLD "
+        if int(
+            os.environ.get("LLK_ZONE_RESERVE_NOPS", "0")
+        ):  # experiment: zone_reserve grows by N nops
+            OPTIONS_COMPILE += (
+                f"-DLLK_ZONE_RESERVE_NOPS={int(os.environ['LLK_ZONE_RESERVE_NOPS'])} "
+            )
         if os.environ.get("LLK_FN_NOPS_FIXED_HELPERS") == "1":  # experiment
             OPTIONS_COMPILE += "-DLLK_FN_NOPS_FIXED_HELPERS "
         # experiment: TRISC branch predictor disable mask, written every boot (default 0 = all on)
@@ -1507,7 +1513,12 @@ class TestConfig:
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
                     f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
                     f"{perf_cnt_flag}"
-                    f'-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} '
+                    + (  # experiment: LLK_BRISC_FN_NOPS=N moves every BRISC function by N never executed nops
+                        f"-fpatchable-function-entry={int(os.environ['LLK_BRISC_FN_NOPS'])},{int(os.environ['LLK_BRISC_FN_NOPS'])} "
+                        if int(os.environ.get("LLK_BRISC_FN_NOPS", "0"))
+                        else ""
+                    )
+                    + f'-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} '
                     f'-o {shared_elf_dir / "brisc.elf"} {TestConfig.RISCV_SOURCES / "brisc.cpp"}'
                 )
                 logger.trace(compile_command)
@@ -1925,7 +1936,16 @@ class TestConfig:
         key = sha256(runtime + self.current_run_type.name.encode()).hexdigest()[:16]
         choice = variant_dir / "layout" / f"{key}.json"
         try:
-            pads = json.loads(choice.read_text())
+            if os.environ.get(
+                "LLK_FORCE_PADS"
+            ):  # experiment: "math:P,Z;unpack:P,Z" replaces the modelled choice
+                pads = {t: (0, 0) for t in threads}
+                for item in os.environ["LLK_FORCE_PADS"].split(";"):
+                    t, pz = item.split(":")
+                    if t in threads:
+                        pads[t] = tuple(int(v) for v in pz.split(","))
+            else:
+                pads = json.loads(choice.read_text())
         except (
             OSError,
             ValueError,

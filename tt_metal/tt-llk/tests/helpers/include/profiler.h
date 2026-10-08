@@ -150,6 +150,8 @@ __attribute__((always_inline)) inline void write_data(std::uint64_t data)
     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(data);
 }
 
+#define LLK_ZR_STR_(x) #x
+#define LLK_ZR_STR(x)  LLK_ZR_STR_(x)
 #if defined(LLK_FN_NOPS_FIXED_HELPERS) // experiment: LLK_FN_NOPS leaves the zone helpers where they are
 #define LLK_ZONE_HELPER_ATTR __attribute__((patchable_function_entry(0, 0)))
 #else
@@ -161,6 +163,9 @@ __attribute__((always_inline)) inline void write_data(std::uint64_t data)
 LLK_ZONE_HELPER_ATTR __attribute__((noipa, section(".text.llk_zone.reserve"))) inline void zone_reserve()
 {
     reserved_words_count += ZONE_START_WORDS + ZONE_END_WORDS;
+#if defined(LLK_ZONE_RESERVE_NOPS) // experiment: a helper that grows by N instructions
+    asm volatile(".rept " LLK_ZR_STR(LLK_ZONE_RESERVE_NOPS) "\n\tnop\n\t.endr");
+#endif
 }
 
 LLK_ZONE_HELPER_ATTR __attribute__((noipa, section(".text.llk_zone.record"))) inline void zone_record(
