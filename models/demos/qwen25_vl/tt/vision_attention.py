@@ -185,7 +185,6 @@ class VisionAttention(LightweightModule):
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("wqkv_bias_prefill_bf16"),
             )
 
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
@@ -335,7 +334,6 @@ class VisionAttention(LightweightModule):
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("wo_bias_prefill_bf16"),
             )
 
         self.scale = self.head_dim**-0.5

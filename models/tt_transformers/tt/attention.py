@@ -197,7 +197,7 @@ class Attention(LightweightModule):
                 wq_bias, wk_bias, wv_bias = self._rearrange_qkv_1d(wq_bias, wk_bias, wv_bias)
 
             if configuration.subtract_k_bias_post_rope:
-                self._create_k_bias_shift(wk_bias, bias_num_devices, configuration, cache_name)
+                self._create_k_bias_shift(wk_bias, bias_num_devices, configuration)
 
             qkv_bias = torch.concat(
                 [
@@ -482,7 +482,7 @@ class Attention(LightweightModule):
         new_v = torch.cat([wv_bias[idx * hd : (idx + 1) * hd] for idx in kv_order])
         return new_q, new_k, new_v
 
-    def _create_k_bias_shift(self, wk_bias, bias_num_devices, configuration, cache_name):
+    def _create_k_bias_shift(self, wk_bias, bias_num_devices, configuration):
         """Device tensors holding this device's K-projection bias, one per KV head, in the
         same head layout as the keys written to the cache.
 
@@ -499,7 +499,7 @@ class Attention(LightweightModule):
         shift = wk_bias.reshape(bias_num_devices, self.n_local_kv_heads, self.head_dim)
         shift_decode = shift.reshape(1, 1, bias_num_devices * self.n_local_kv_heads, self.head_dim)  # [1,1,B*K,D]
         shift_prefill = shift.reshape(1, bias_num_devices * self.n_local_kv_heads, 1, self.head_dim)  # [1,B*K,1,D]
-        suffix = f"2d_{configuration.cluster_shape[1]}" if self.TG else "1d"
+        # Tiny tensors built straight from the bias: not written to the weight cache (CI caches are read-only)
         common = dict(
             device=self.mesh_device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
         )
@@ -510,13 +510,9 @@ class Attention(LightweightModule):
         else:
             mapper = lambda dim: ttnn.ShardTensorToMesh(self.mesh_device, dim=dim)
         # Broadcast over users (dim 1) against the [1, B, K, D] decode keys
-        self.k_bias_shift_decode = ttnn.as_tensor(
-            shift_decode, mesh_mapper=mapper(2), cache_file_name=cache_name(f"k_bias_shift_decode_{suffix}"), **common
-        )
+        self.k_bias_shift_decode = ttnn.as_tensor(shift_decode, mesh_mapper=mapper(2), **common)
         # Broadcast over the sequence (dim 2) against the [1, K, S, D] prefill keys
-        self.k_bias_shift_prefill = ttnn.as_tensor(
-            shift_prefill, mesh_mapper=mapper(1), cache_file_name=cache_name(f"k_bias_shift_prefill_{suffix}"), **common
-        )
+        self.k_bias_shift_prefill = ttnn.as_tensor(shift_prefill, mesh_mapper=mapper(1), **common)
 
     def _rearrange_qkv_2d(self, wq, wk, wv):
         """Rearrange 2D Q/K/V weight matrices [out_features, in_features] to preserve GQA mapping."""
