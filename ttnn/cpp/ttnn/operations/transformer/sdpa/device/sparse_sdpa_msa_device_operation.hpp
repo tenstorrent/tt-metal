@@ -182,8 +182,9 @@ struct SparseSDPAMsaOperation {
     static uint32_t message_page_bytes(uint32_t words);
 
     using KvCachePlan = operation_attributes_t::KvCachePlan;
-    // Resolves kv_cache_blocks against the current L1; sparse_sdpa_msa() calls it once per invocation.
-    static KvCachePlan resolve_kv_cache(const Geometry& g, const operation_attributes_t& attrs, const tensor_args_t& t);
+    // Resolves kv_cache_blocks against the current L1; sparse_sdpa_msa() calls it once per invocation. Off returns
+    // the zero plan without deriving the geometry.
+    static KvCachePlan resolve_kv_cache(const operation_attributes_t& attrs, const tensor_args_t& t);
 };
 
 Tensor sparse_sdpa_msa(

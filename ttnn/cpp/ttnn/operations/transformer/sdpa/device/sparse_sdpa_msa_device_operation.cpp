@@ -332,11 +332,15 @@ uint32_t SparseSDPAMsaOperation::message_page_bytes(uint32_t words) {
 }
 
 SparseSDPAMsaOperation::KvCachePlan SparseSDPAMsaOperation::resolve_kv_cache(
-    const Geometry& g, const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
+    const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
     KvCachePlan plan;
+    if (!attrs.kv_cache_blocks.has_value()) {  // off: zero slots, no geometry derived on the host path
+        return plan;
+    }
+    const Geometry g = derive_kernel_geometry(attrs, t);
     plan.block_bytes = g.k_tiles_per_block * g.k_tile_bytes + g.v_tiles_per_block * g.v_tile_bytes;
     // The hash runs before validation, so a not-yet-rejected block_size or d below a tile can give block_bytes == 0.
-    if (!attrs.kv_cache_blocks.has_value() || plan.block_bytes == 0) {
+    if (plan.block_bytes == 0) {
         return plan;
     }
     // Free L1 for the slots: [CB base, lowest live L1 buffer) minus the base CBs and the slot queue, each rounded up
@@ -598,8 +602,7 @@ Tensor sparse_sdpa_msa(
     };
     const OperationType::tensor_args_t tensors{.q = q, .k = k, .v = v, .indices = indices};
     // One resolution per call, against the L1 free now; the hash, the validation and the factory read this plan.
-    attrs.kv_cache_plan =
-        OperationType::resolve_kv_cache(OperationType::derive_kernel_geometry(attrs, tensors), attrs, tensors);
+    attrs.kv_cache_plan = OperationType::resolve_kv_cache(attrs, tensors);
     return ttnn::device_operation::launch<OperationType>(attrs, tensors);
 }
 
