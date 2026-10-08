@@ -1690,6 +1690,26 @@ inline void init_reduce_max_min_int32_signed() {
 }
 
 /**
+ * @brief XOR bit 31 of every datum in the first @p num_tiles 32x32 tiles at the current DEST base. This maps
+ *        UInt32 order onto two's-complement order and back, so UInt32 MAX/MIN can run on the signed Int32
+ *        path. Uses LREG0 and LREG7.
+ */
+inline void flip_sign_bits(const std::uint32_t num_tiles) {
+    constexpr std::uint32_t ODD_COLUMNS = 2;
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0x8000);  // 0x80000000
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++) {
+        for (std::uint32_t row = 0; row < ROWS_PER_TILE; row += ROWS_PER_LOAD) {
+            for (std::uint32_t column = 0; column <= ODD_COLUMNS; column += ODD_COLUMNS) {
+                const std::uint32_t addr = tile * ROWS_PER_TILE + row + column;
+                TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, addr);
+                TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+                TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, addr);
+            }
+        }
+    }
+}
+
+/**
  * @brief Column-wise MAX/MIN reduction for signed Int32, single 32x32 tile, correct over the full Int32
  *        range (including INT32_MIN). Same manual load/reduce/transpose structure as
  *        calculate_reduce_max_min_uint16, but loads plain INT32 (two's-complement bits preserved) and uses
@@ -1788,9 +1808,10 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
     // compare-and-swap, correct over the full Int32 range including INT32_MIN), so they do not use
     // INSTRUCTION_MODE here. init_reduce has no reduce_dim, so the column reduce consumes the LREG4-7 -> LREG4
     // replay buffer recorded by init_reduce_max_min_int32_signed; both calculates set their own SFPSWAP
-    // direction on entry.
+    // direction on entry. UInt32 MAX/MIN takes the same path: calculate_reduce flips bit 31 around it.
     constexpr bool int32_max_min =
-        (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN));
+        ((format == DataFormat::Int32 || format == DataFormat::UInt32) &&
+         (pool_type == PoolType::MAX || pool_type == PoolType::MIN));
     constexpr InstrModLoadStore INSTRUCTION_MODE = GetSfpLoadStoreInstrMod<format, is_fp32_dest_acc_en>();
 
     // Garbage high bits needs to be cleared when loading UInt16 data
@@ -1813,7 +1834,7 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
             // replay buffer (the body is format-agnostic); the calculate sets the swap direction itself.
             init_reduce_max_min_int32<INSTRUCTION_MODE, pool_type>();
         } else {
-            // Non-Int32 MAX/MIN (Float32, Float16_b, UInt32): the generic LOADMACRO-based init (or its
+            // Float32 / Float16_b MAX/MIN: the generic LOADMACRO-based init (or its
             // manual-swap fallback under DISABLE_SFPLOADMACRO). Int32 is fully handled by int32_max_min
             // above, for both column and row reduce.
             init_reduce_max_min<INSTRUCTION_MODE, pool_type, false>(block_ct_dim);
@@ -1878,8 +1899,13 @@ inline void calculate_reduce(
     //        column and row, so a multi-axis reduce (column-then-row over the same DEST) stays consistent.
     //   AVG (two's-complement): plain INT32, like SUM, so the column sum and perform_int_average's
     //        divide-by-32 see the word unchanged.
+    //   UInt32 MAX/MIN: the same signed path, with bit 31 of every datum flipped before and after, which maps
+    //        unsigned order onto two's-complement order (SFPSWAP's sign-magnitude order would rank words
+    //        with bit 31 set below the rest).
+    constexpr bool uint32_max_min =
+        (format == DataFormat::UInt32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN));
     constexpr bool int32_max_min =
-        (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN));
+        uint32_max_min || (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN));
     constexpr bool int32_max_min_col = int32_max_min && (reduce_dim == ReduceDim::REDUCE_COL);
     constexpr bool int32_max_min_row = int32_max_min && (reduce_dim == ReduceDim::REDUCE_ROW);
     constexpr InstrModLoadStore INSTRUCTION_MODE =
@@ -1907,11 +1933,23 @@ inline void calculate_reduce(
             // the single-tile contract loudly rather than silently dropping tiles.
             LLK_ASSERT(
                 block_ct_dim == 1 && block_rt_dim == 1,
-                "Int32 column MAX/MIN reduce only supports a single tile (block_ct_dim == block_rt_dim == 1)");
+                "Int32/UInt32 column MAX/MIN reduce only supports a single tile (block_ct_dim == block_rt_dim == 1)");
+            if constexpr (uint32_max_min) {
+                flip_sign_bits(1);
+            }
             calculate_reduce_max_min_int32_col<pool_type, reduce_dim>();
+            if constexpr (uint32_max_min) {
+                flip_sign_bits(1);
+            }
         } else if constexpr (int32_max_min_row) {
             // Signed Int32 row MAX/MIN: two's-complement compare-and-swap path (handles INT32_MIN).
+            if constexpr (uint32_max_min) {
+                flip_sign_bits(block_ct_dim * block_rt_dim);
+            }
             perform_reduce_row_max_min_int32<pool_type>(block_ct_dim, block_rt_dim);
+            if constexpr (uint32_max_min) {
+                flip_sign_bits(block_ct_dim * block_rt_dim);
+            }
         } else if constexpr (reduce_dim == ReduceDim::REDUCE_ROW) {
             static_assert(
                 INSTRUCTION_MODE == InstrModLoadStore::FP32 || INSTRUCTION_MODE == InstrModLoadStore::INT32 ||

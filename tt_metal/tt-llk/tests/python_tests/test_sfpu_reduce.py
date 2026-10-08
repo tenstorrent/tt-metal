@@ -140,12 +140,7 @@ def get_reduce_pad_value(reduce_pool: ReducePool, input_format: DataFormat):
         if input_format == DataFormat.Int32:
             return INT32_MAX
         if input_format == DataFormat.UInt32:
-            # SFPSWAP compares in sign-magnitude (tt-isa SFPSWAP.md), so it only orders UInt32 values
-            # with bit 31 clear, i.e. [0, 2^31). The usual MIN identity 0xFFFFFFFF has bit 31 set and
-            # reads as the most-negative sign-magnitude value, so it would wrongly win. INT32_MAX
-            # (0x7FFFFFFF) is the largest value the comparator ranks as maximal and never wins for
-            # stimuli in [0, 1000].
-            return INT32_MAX
+            return 0xFFFFFFFF  # UInt32 MAX/MIN orders the full unsigned range
         if input_format == DataFormat.UInt16:
             # 0xFFFF fits in the 31-bit sign-magnitude positive range the comparator orders.
             return UINT16_MAX
@@ -464,11 +459,20 @@ def test_sfpu_reduce(
     )
 
 
-def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range=(-1000, 1000)):
+def _run_int32_reduce(
+    mathop,
+    reduce_pool,
+    injected_value,
+    base_range=(-1000, 1000),
+    input_format=DataFormat.Int32,
+    tile=None,
+):
     """Build a single 32x32 Int32 tile, inject `injected_value` at a few scattered
     positions, run the SFPU reduce on device, and return (golden_slice, device_slice).
+
+    With ``tile`` (a 32x32 tensor) that tile is reduced as given instead, and the golden slice is None.
     """
-    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    formats = InputOutputFormat(input_format, input_format)
     dest_acc = DestAccumulation.Yes  # 32-bit formats require dest accumulation
     input_dimensions = [TILE_DIM, TILE_DIM]
     torch_format = format_dict[formats.input_format]
@@ -496,9 +500,10 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range=(-1000, 10
     # data. Positions taken on the 32x32 grid.
     grid = src_A.view(TILE_DIM, TILE_DIM)
     inject_positions = [(0, 0), (5, 7), (13, 3), (20, 20), (31, 31), (7, 15)]
-    for r, c in inject_positions:
-        grid[r, c] = injected_value
-    src_A = grid.flatten()
+    if tile is None:
+        for r, c in inject_positions:
+            grid[r, c] = injected_value
+    src_A = grid.flatten() if tile is None else tile.flatten().to(torch_format)
 
     dst_dim = (
         [32, tile_cnt * 32]
@@ -509,14 +514,18 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range=(-1000, 10
     src_A = tilize_block(src_A, dst_dim, stimuli_format=formats.input_format).flatten()
     src_A_untilized = untilize_block(src_A, formats.input_format, dst_dim)
 
-    golden_tensor = get_golden_generator(UnarySFPUGolden)(
-        mathop,
-        src_A_untilized,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        dst_dim,
-        reduce_pool=reduce_pool,
+    golden_tensor = (
+        get_golden_generator(UnarySFPUGolden)(
+            mathop,
+            src_A_untilized,
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            dst_dim,
+            reduce_pool=reduce_pool,
+        )
+        if tile is None
+        else None
     )
 
     src_B = torch.zeros_like(src_A)
@@ -556,6 +565,10 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range=(-1000, 10
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
 
+    if tile is not None:
+        return None, (
+            res_tensor[0] if mathop == MathOperation.ReduceColumn else res_tensor[:, 0]
+        )
     if mathop == MathOperation.ReduceColumn:
         return golden_tensor[0], res_tensor[0]
     return golden_tensor[:, 0], res_tensor[:, 0]
@@ -618,6 +631,50 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
     assert num_mismatch == 0, (
         f"{num_mismatch} mismatched reduction lanes for {reduce_pool} {mathop} "
         f"injected={int(injected_value)} (see stdout)"
+    )
+
+
+@pytest.mark.parametrize(
+    "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
+)
+@pytest.mark.parametrize("reduce_pool", [ReducePool.Min, ReducePool.Max])
+def test_uint32_reduce_max_min_bit31(mathop, reduce_pool):
+    """UInt32 MAX/MIN must order words with bit 31 set above the rest.
+
+    SFPSWAP compares in sign-magnitude, which ranks a word with bit 31 set as negative. The tile mixes
+    values straddling 2^31 with small ones and the extremes 0, 0x7FFFFFFF, 0x80000000 and 0xFFFFFFFF, and
+    every reduced lane is checked against an unsigned golden.
+    """
+    if reduce_pool == ReducePool.Min and TestConfig.WITH_COVERAGE:
+        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
+
+    torch.manual_seed(0)
+    values = torch.randint(
+        2**31 - 16, 2**31 + 16, (TILE_DIM, TILE_DIM), dtype=torch.int64
+    )
+    values[::3] = torch.randint(0, 1000, values[::3].shape, dtype=torch.int64)
+    for i, extreme in enumerate([0, 3, 0x7FFFFFFF, 0x80000000, 0x80000005, 0xFFFFFFFF]):
+        values[(5 * i) % TILE_DIM, (7 * i + 1) % TILE_DIM] = extreme
+    reduce_axis = 0 if mathop == MathOperation.ReduceColumn else 1
+    golden = (
+        values.max(dim=reduce_axis).values
+        if reduce_pool == ReducePool.Max
+        else values.min(dim=reduce_axis).values
+    )
+
+    _, res = _run_int32_reduce(
+        mathop,
+        reduce_pool,
+        injected_value=None,
+        input_format=DataFormat.UInt32,
+        tile=values,
+    )
+    res = res.to(torch.int64) & 0xFFFFFFFF
+
+    mismatch = (golden != res).nonzero().flatten().tolist()
+    assert not mismatch, (
+        f"{len(mismatch)} mismatched UInt32 {reduce_pool} {mathop} lanes, first at {mismatch[0]}: "
+        f"golden {int(golden[mismatch[0]]):#010x}, device {int(res[mismatch[0]]):#010x}"
     )
 
 
