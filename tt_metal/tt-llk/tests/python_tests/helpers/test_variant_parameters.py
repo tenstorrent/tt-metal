@@ -501,16 +501,23 @@ class CUSTOM_MM_CALLS(TemplateParameter):
     ``CUSTOM_MM_REARM``      compressed kernel only: leave a -inf SrcA clear value after every call,
                              as a max-reduce or top-k between calls would. It undoes the end-of-call
                              stall's clear to 0, which otherwise hides a both-bank clear in the execute.
+    ``CUSTOM_MM_BANKED``     custom_mm kernel only: the calls alternate the two configuration banks
+                             (bank init after the init, bank end after the last call).
+    ``CUSTOM_MM_BANK_SPLIT`` with banked: end the sequence after the first call and start another.
     """
 
     num_calls: int = 1
     rearm: bool = False
+    banked: bool = False
+    bank_split: bool = False
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
             [
                 f"constexpr std::uint32_t CUSTOM_MM_NUM_CALLS = {self.num_calls}u;",
                 f"constexpr bool CUSTOM_MM_REARM = {str(self.rearm).lower()};",
+                f"constexpr bool CUSTOM_MM_BANKED = {str(self.banked).lower()};",
+                f"constexpr bool CUSTOM_MM_BANK_SPLIT = {str(self.bank_split).lower()};",
             ]
         )
 

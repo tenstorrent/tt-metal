@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -302,6 +303,11 @@ inline void _llk_unpack_AB_custom_mm_run_(
  *
  * @tparam read_transposed: Walk the weight tiles column by column (ct_dim tiles with a stride of kt_dim, then the
  *                          next tile) instead of row by row, values = <true/false>
+ * @tparam banked: Alternate the two configuration banks across consecutive calls, so this call's configuration is
+ *                 written while the previous call runs, values = <true/false>. Needs
+ *                 @ref _llk_unpack_AB_custom_mm_bank_init_ before the sequence and @ref _llk_unpack_AB_custom_mm_bank_end_
+ *                 after it. Every call of a sequence uses the same weight tile size, since the increments it writes
+ *                 (SCRATCH_SEC0/1) are not banked; read_transposed is not supported.
  * @param base_address_a: L1 address of the weights (SrcA), in the 16-byte-word encoding of L1_ADDRESS().
  * @param base_address_b: L1 address of the activations (SrcB), in the same encoding.
  * @param tile_index_a: First weight tile to read.
@@ -313,7 +319,7 @@ inline void _llk_unpack_AB_custom_mm_run_(
  * @note Call @ref _llk_unpack_AB_custom_mm_init_ first.
  * @note On the math thread, pair with @ref _llk_math_custom_mm_.
  */
-template <bool read_transposed = false>
+template <bool read_transposed = false, bool banked = false>
 inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -332,9 +338,73 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a;
     const std::uint32_t address_b = base_address_b + tile_size_b * tile_index_b;
 
-    // Wait for all contexts to be free
-    wait_for_next_context(1);
+    if constexpr (banked)
+    {
+        // SCRATCH_SEC0/1 are global, not banked: the calls of a sequence must write the same increments
+        static_assert(!read_transposed, "banked custom_mm calls do not support read_transposed");
+        // The other bank was last read by the call before the one in flight: write it while that call runs
+        wait_for_next_context(2);
+        flip_cfg_state_id();
+        cfg = get_cfg_pointer();
+    }
+    else
+    {
+        // Wait for all contexts to be free
+        wait_for_next_context(1);
+    }
     reset_config_context();
 
     _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
+}
+
+// Key of the configuration the second bank holds; kernel data, so each kernel starts with none
+inline std::uint64_t custom_mm_bank_key = ~std::uint64_t {0};
+
+/**
+ * @brief Prepare the second configuration bank for @ref _llk_unpack_AB_custom_mm_ with banked = true.
+ *
+ * Copies the ALU format words and every unpacker word (address controls and the THCON registers of both unpackers)
+ * of the first bank into the second, unless the second already holds the configuration with this key.
+ *
+ * @param key: Identifies the configuration the init and the format configuration leave in the first bank: the two
+ *             operands' formats and face geometry and the transpose. Any value but ~0.
+ * @note Call after @ref _llk_unpack_AB_custom_mm_init_ and outside a banked sequence; it waits for every earlier
+ *       unpack call. No unpack LLK writes the second bank, so a copy serves every later banked sequence of the kernel
+ *       with the same key; the hardware cleanup (compute_kernel_hw_cleanup) rewrites both banks, so a kernel that runs it
+ *       must not run banked calls after it.
+ */
+inline void _llk_unpack_AB_custom_mm_bank_init_(const std::uint64_t key)
+{
+    LLK_ASSERT(ckernel::cfg_state_id == 0, "custom_mm bank init: call outside a banked sequence");
+    // The first call writes bank 1 and the global SCRATCH words: no earlier call may still run
+    wait_for_idle();
+    if (key == custom_mm_bank_key)
+    {
+        return;
+    }
+    custom_mm_bank_key = key;
+    // The first bank's words must have landed
+    tensix_sync();
+    volatile std::uint32_t* bank0 = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE);
+    volatile std::uint32_t* bank1 = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 16);
+    for (std::uint32_t i = ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32; i <= ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32 + 3; i++)
+    {
+        bank1[i] = bank0[i];
+    }
+    for (std::uint32_t i = UNP0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32; i <= THCON_SEC1_REG11_Metadata_cntxt_switch_unpacr_count_ADDR32; i++)
+    {
+        bank1[i] = bank0[i];
+    }
+}
+
+/**
+ * @brief Return the unpack thread to the first configuration bank after a sequence of banked calls.
+ * @note Call before any other unpack LLK or init.
+ */
+inline void _llk_unpack_AB_custom_mm_bank_end_()
+{
+    if (ckernel::cfg_state_id != 0)
+    {
+        flip_cfg_state_id();
+    }
 }

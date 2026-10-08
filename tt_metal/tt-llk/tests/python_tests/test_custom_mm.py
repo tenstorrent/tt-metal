@@ -418,15 +418,63 @@ MULTI_CALL_CASES = [
 
 
 @blackhole_only
+@pytest.mark.parametrize("banked", [False, True], ids=["one_bank", "banked"])
 @pytest.mark.parametrize(
     "M,kt,ct,num_calls,in1_format",
     [pytest.param(*case[1:], id=case[0]) for case in MULTI_CALL_CASES],
 )
-def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format):
-    """Back-to-back calls into one DEST, checked against the full-K golden."""
+def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format, banked):
+    """Back-to-back calls into one DEST, checked against the full-K golden; banked calls alternate the
+    configuration banks, so each call's configuration is written while the previous call runs.
+    """
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
     _run_custom_mm(
-        M, kt, ct, formats, DestAccumulation.No, CUSTOM_MM_CALLS(num_calls=num_calls)
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        CUSTOM_MM_CALLS(num_calls=num_calls, banked=banked),
+    )
+
+
+# The MoE SRAM expert loop: one split_acc call per expert into one DEST section, the finalize on the last. With banked
+# calls, each call's configuration goes into the other bank while the previous call runs.
+BANKED_SEQUENCE_CASES = [
+    # (id, M, kt, ct, calls, in1 format)
+    ("e4-ct1-kt28", 1, 112, 1, 4, DataFormat.Bfp4_b),
+    ("e8-ct1-kt28", 1, 224, 1, 8, DataFormat.Bfp4_b),
+    ("e4-ct2-kt8", 1, 32, 2, 4, DataFormat.Bfp4_b),
+    ("e8-ct2-kt8", 1, 64, 2, 8, DataFormat.Bfp4_b),
+    ("e3-ct4-kt4-m8", 8, 12, 4, 3, DataFormat.Bfp8_b),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "banked,bank_split",
+    [(False, False), (True, False), (True, True)],
+    ids=["one_bank", "banked", "banked_split"],
+)
+@pytest.mark.parametrize(
+    "M,kt,ct,num_calls,in1_format",
+    [pytest.param(*case[1:], id=case[0]) for case in BANKED_SEQUENCE_CASES],
+)
+def test_custom_mm_banked_sequence(
+    M, kt, ct, num_calls, in1_format, banked, bank_split
+):
+    """split_acc calls into one DEST section, the finalize on the last, checked against the full-K golden.
+    banked_split ends the banked sequence after the first call, on the second bank, and starts another.
+    """
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        CUSTOM_MM_CALLS(num_calls=num_calls, banked=banked, bank_split=bank_split),
+        split_acc=True,
     )
 
 

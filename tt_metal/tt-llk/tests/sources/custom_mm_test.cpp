@@ -108,6 +108,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // unpB_face_r_dim = in0 (SrcB) face rows in {1,2,4,8}; unpA_dst_format tunes the
     // instruction sequence (post1 only for Bfp4_b). transpose=false.
     _llk_unpack_AB_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM);
+    if constexpr (CUSTOM_MM_BANKED)
+    {
+        // One configuration per kernel, so any key
+        _llk_unpack_AB_custom_mm_bank_init_(0);
+    }
 
     // SrcA=buffer_B (B matrix, full tiles), SrcB=buffer_A (A matrix). Call c takes K tiles
     // [c * kt_per_call, (c + 1) * kt_per_call): B is k-major, so its tiles start at c * kt_per_call * ct,
@@ -115,7 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Within a call the SrcA walk covers its kt*ct grid via CFGSHIFTMASK, the SrcB walk covers kt via counters.
     for (std::uint32_t call = 0; call < num_calls; call++)
     {
-        _llk_unpack_AB_custom_mm_<false /* read_transposed */>(
+        _llk_unpack_AB_custom_mm_<false /* read_transposed */, CUSTOM_MM_BANKED>(
             L1_ADDRESS(params.buffer_B[0]),
             L1_ADDRESS(params.buffer_A[0]) + call * kt_per_call * 4 * params.in0_face_r_dim,
             call * kt_per_call * CT_DIM /* tile_index_a */,
@@ -124,6 +129,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
             params.TILE_SIZE_UNPACK_A,
             kt_per_call,
             CT_DIM);
+        if constexpr (CUSTOM_MM_BANK_SPLIT)
+        {
+            if (call == 0)
+            {
+                // End a sequence on the second bank and start another, whose init finds the bank prepared
+                _llk_unpack_AB_custom_mm_bank_end_();
+                _llk_unpack_AB_custom_mm_bank_init_(0);
+            }
+        }
+    }
+    if constexpr (CUSTOM_MM_BANKED)
+    {
+        _llk_unpack_AB_custom_mm_bank_end_();
     }
 }
 

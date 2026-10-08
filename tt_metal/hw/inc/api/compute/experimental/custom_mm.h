@@ -144,9 +144,14 @@ ALWI void custom_mm_block_init_short(
  * | dst_index       | The index of the tile in DST REG to which the result C will be written                                          | uint32_t | Must be less than the acquired size of DST REG   | True                  |
  * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Any integer from 1 to 256 (inclusive)            | True                  |
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16                                          | False (default 1)     |
+ *
+ * banked (template, default false): consecutive calls alternate the two configuration banks, so each call's unpacker
+ * configuration is written while the previous call runs. Call custom_mm_block_bank_init after the init and
+ * custom_mm_block_bank_end after each banked sequence; a banked sequence holds only custom_mm_block calls on weight CBs
+ * with the same page size, and read_transposed must be false.
  */
 // clang-format on
-template <bool finalize = true, bool read_transposed = false>
+template <bool finalize = true, bool read_transposed = false, bool banked = false>
 ALWI void custom_mm_block(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -155,7 +160,7 @@ ALWI void custom_mm_block(
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
-    UNPACK((llk_unpack_AB_custom_mm<read_transposed>(
+    UNPACK((llk_unpack_AB_custom_mm<read_transposed, banked>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim)));
     MATH((llk_math_custom_mm<finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
 }
@@ -238,6 +243,24 @@ ALWI void custom_mm_block_math(
     const std::uint32_t ct_dim = 1) {
     MATH((llk_math_custom_mm<finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
 }
+
+/**
+ * Prepares the second configuration bank for banked custom_mm_block calls on these CBs: copies the unpacker
+ * configuration that custom_mm_block_init(_short) and the format reconfiguration left in the first bank, unless the
+ * second already holds it for CBs with the same formats and face geometry. Call it after the init, with the init's CBs
+ * and transpose, outside a banked sequence; it waits for every earlier unpack call, and in a kernel that keeps one
+ * configuration it copies once. compute_kernel_hw_cleanup rewrites the second bank: no banked calls after it.
+ */
+template <bool transpose = false>
+ALWI void custom_mm_block_bank_init(const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id) {
+    UNPACK((llk_unpack_AB_custom_mm_bank_init<transpose>(in0_cb_id, in1_cb_id)));
+}
+
+/**
+ * Returns the unpack thread to the first configuration bank after a sequence of banked custom_mm_block calls. Call it
+ * before any other operation's unpack.
+ */
+ALWI void custom_mm_block_bank_end() { UNPACK((llk_unpack_AB_custom_mm_bank_end())); }
 
 // clang-format off
 /**
