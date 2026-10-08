@@ -4,24 +4,45 @@
 #pragma once
 
 #include <cstddef>
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_common.hpp"
+#include <type_traits>
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_protocol.hpp"
 #include "api/dataflow/noc_semaphore.h"
 
-namespace dataflow_kernel_lib::detail {
+namespace dataflow_kernel_lib {
 
-// Descriptor callers retain raw IDs. ProgramSpec callers pass generated binding tokens,
-// whose scope must reach Semaphore unchanged. nullptr represents an unused resource role.
-constexpr uint32_t mcast_semaphore_id(uint32_t id) { return id; }
-constexpr uint32_t mcast_semaphore_id(std::nullptr_t) { return UNUSED_SEM_ID; }
-constexpr uint32_t mcast_semaphore_id(SemaphoreBindingToken token) { return token.id; }
+// A structural compile-time value accepts legacy IDs and native binding tokens
+// without losing the host-selected scope. nullptr denotes an unused resource.
+struct McastSemaphoreBinding {
+    uint32_t id;
+    SemScope scope;
 
-template <auto BINDING>
-FORCE_INLINE auto make_mcast_semaphore() {
-    if constexpr (mcast_semaphore_id(BINDING) == UNUSED_SEM_ID) {
+    constexpr McastSemaphoreBinding(uint32_t id) : id(id), scope(SemScope::LOCAL_NONATOMIC) {}
+    constexpr McastSemaphoreBinding(std::nullptr_t) : McastSemaphoreBinding(UNUSED_SEM_ID) {}
+    constexpr McastSemaphoreBinding(SemaphoreBindingToken token) : id(token.id), scope(token.scope) {}
+};
+
+namespace detail {
+constexpr uint32_t mcast_semaphore_id(McastSemaphoreBinding binding) { return binding.id; }
+
+// Normalize values to token types for out-of-line pipe definitions: SFPI's
+// C++17 NTTP extension does not match class-valued parameters on those methods.
+template <McastSemaphoreBinding BINDING>
+struct McastSemaphoreToken {
+    constexpr operator McastSemaphoreBinding() const { return BINDING; }
+};
+
+template <McastSemaphoreBinding BINDING>
+using McastSemaphore =
+    std::conditional_t<BINDING.id == UNUSED_SEM_ID, std::nullptr_t, Semaphore<ProgrammableCoreType::TENSIX>>;
+
+template <McastSemaphoreBinding BINDING>
+FORCE_INLINE McastSemaphore<BINDING> make_mcast_semaphore() {
+    if constexpr (BINDING.id == UNUSED_SEM_ID) {
         return nullptr;
     } else {
-        return Semaphore(BINDING);
+        return McastSemaphore<BINDING>(SemaphoreBindingToken{BINDING.id, BINDING.scope});
     }
 }
 
-}  // namespace dataflow_kernel_lib::detail
+}  // namespace detail
+}  // namespace dataflow_kernel_lib

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Mcast1D/Mcast2D attachment, receiver routing and source/consumer ordering."""
+"""Device behavior for the positional McastArgs API."""
 
 import pytest
 import torch
@@ -10,9 +10,11 @@ from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import (
     KERNEL_DIR,
     TILE_BYTES,
     core_set,
+    inspect_mcast,
+    inspect_mcast_ct,
     make_cb,
     tile_pattern,
-    run_wrapper_case,
+    run_positional_mcast_case,
 )
 
 
@@ -29,7 +31,6 @@ def _run_transfer(
     caller_managed=False,
     control=False,
     control_value=0,
-    ack_subset=None,
 ):
     """Separate sender/receiver kernels, including receivers on the opposite NoC."""
     (x0, y0), (x1, y1) = recv_rect
@@ -38,19 +39,17 @@ def _run_transfer(
     if any(x >= size.x or y >= size.y for x, y in receivers + [sender_logical]):
         pytest.skip("requires a larger worker grid")
     assert sender_logical not in receivers
-    if ack_subset is not None:
-        assert handshake and not control and n_iters == 1 and 0 < ack_subset < len(receivers)
     signal = ttnn.McastDataReady.Counter if counter else ttnn.McastDataReady.Flag
-    helper = ttnn.Mcast2D(
+    helper = ttnn.Mcast(
         device,
-        core_set(receivers),
-        ttnn.Mcast2DFixedSenderConfig(ttnn.CoreCoord(*sender_logical)),
         ttnn.McastConfig(
             noc=ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0,
             handshake=handshake,
             data_ready=signal,
-            ack_count_override=ack_subset,
         ),
+        core_set(receivers),
+        len(receivers),
+        ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(*sender_logical)]),
     )
     payload = tile_pattern(payload_tiles).reshape(1, 1, 32, 32 * payload_tiles)
     input_tensor = ttnn.from_torch(payload, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -80,40 +79,23 @@ def _run_transfer(
         config=ttnn.WriterConfigDescriptor() if noc else ttnn.ReaderConfigDescriptor(),
     )
     kernels = [sender]
-    # A partial-ACK family owns the channel; passive receivers adopt only its data-ready ID.
-    batches = [receivers] if ack_subset is None else [receivers[:ack_subset], receivers[ack_subset:]]
-    for batch in batches:
-        args = ttnn.RuntimeArgs()
-        for x, y in batch:
-            args[x][y] = [output_tensor.buffer_address(), receivers.index((x, y)) * pages]
-        kernels.append(
-            ttnn.KernelDescriptor(
-                kernel_source=f"{KERNEL_DIR}/pipe_receiver.cpp",
-                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=core_set(batch),
-                compile_time_args=[1, pages, page_bytes, n_iters]
-                + list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()),
-                named_compile_time_args=named,
-                defines=defines,
-                runtime_args=args,
-                config=ttnn.ReaderConfigDescriptor() if noc else ttnn.WriterConfigDescriptor(),
-            )
+    args = ttnn.RuntimeArgs()
+    for x, y in receivers:
+        args[x][y] = [output_tensor.buffer_address(), receivers.index((x, y)) * pages]
+    kernels.append(
+        ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/pipe_receiver.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set(receivers),
+            compile_time_args=[1, pages, page_bytes, n_iters]
+            + list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()),
+            named_compile_time_args=named,
+            defines=defines,
+            runtime_args=args,
+            config=ttnn.ReaderConfigDescriptor() if noc else ttnn.WriterConfigDescriptor(),
         )
-    helper.attach(descriptor, "mcast", kernels[:2])
-    if ack_subset is not None:
-        offset = dict(sender.named_compile_time_args)["mcast_ct_offset"]
-        passive = ttnn.Mcast2D(
-            device,
-            core_set(receivers),
-            ttnn.Mcast2DFixedSenderConfig(ttnn.CoreCoord(*sender_logical)),
-            ttnn.McastConfig(
-                noc=ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0,
-                handshake=False,
-                data_ready=signal,
-                sem_ids=[sender.compile_time_args[offset + 2]],
-            ),
-        )
-        passive.attach(descriptor, "mcast", kernels[2:])
+    )
+    helper.attach(descriptor, "mcast", kernels, 0)
     descriptor.kernels = kernels
     actual = ttnn.to_torch(ttnn.generic_op([input_tensor, output_tensor], descriptor))
     if control:
@@ -142,11 +124,12 @@ def _run_sender_loopback(device, rect_len, payload_tiles, n_iters):
     full_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, R - 1))])
     sender_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
     has_receivers = R > 1
-    mc = ttnn.Mcast2D(
+    mc = ttnn.Mcast(
         device,
+        ttnn.McastConfig(handshake=False),
         full_crs,
-        ttnn.Mcast2DFixedSenderConfig(ttnn.CoreCoord(0, 0)),
-        ttnn.McastConfig(handshake=False, base_sem_id=0),
+        full_crs.num_cores(),
+        ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(0, 0)]),
     )
     cb_src, cb_dst, cb_result = (0, 1, 16)
     cbs = [
@@ -195,7 +178,7 @@ def _run_sender_loopback(device, rect_len, payload_tiles, n_iters):
         )
         kernels.append(recv_k)
     pd = ttnn.ProgramDescriptor(cbs=cbs)
-    mc.attach(pd, "mcast", [sender_k, recv_k] if has_receivers else [sender_k])
+    mc.attach(pd, "mcast", [sender_k, recv_k] if has_receivers else [sender_k], 0)
     pd.kernels = kernels
     output = ttnn.generic_op(io_tensors, pd)
     torch_out = ttnn.to_torch(output).reshape(R, 1, 32, 32 * payload_tiles)
@@ -230,25 +213,13 @@ def _run_rotating_line(
         ttnn.Shape(out_shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
     io_tensors = [input_tensor, output_tensor]
-    if sender_indices == list(range(span)) and receiver_span == span:
-        mc = ttnn.Mcast1D(
-            device,
-            receiver_grid,
-            ttnn.Mcast1DShape.PerRow,
-            ttnn.Mcast1DRotatingSenderConfig(),
-            ttnn.McastConfig(data_ready=data_ready_mode),
-        )
-    else:
-        sender_grid = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(sender, 0), ttnn.CoreCoord(sender, 0)) for sender in sender_indices]
-        )
-        mc = ttnn.Mcast1D(
-            device,
-            receiver_grid,
-            ttnn.Mcast1DShape.PerRow,
-            ttnn.Mcast1DRotatingSenderConfig(sender_grid=sender_grid),
-            ttnn.McastConfig(data_ready=data_ready_mode),
-        )
+    mc = ttnn.Mcast(
+        device,
+        ttnn.McastConfig(data_ready=data_ready_mode),
+        receiver_grid,
+        receiver_grid.num_cores(),
+        ttnn.McastRotatingSenderConfig(core_set([(sender, 0) for sender in sender_indices])),
+    )
     cb = 0
     cbs = [make_cb(cb, participant_grid, pages=payload_pages, page_bytes=page_bytes, dtype=ttnn.bfloat16)]
     ct = [cb] + [span, payload_pages, page_bytes]
@@ -271,8 +242,8 @@ def _run_rotating_line(
         config=ttnn.ReaderConfigDescriptor(),
     )
     pd = ttnn.ProgramDescriptor(cbs=cbs)
-    mc.attach(pd, "mcast", [k])
-    assert k.compile_time_args[dict(k.named_compile_time_args)["mcast_ct_offset"] + 6] == span
+    mc.attach(pd, "mcast", [k], 0)
+    assert inspect_mcast_ct(k)["span"] == span
     pd.kernels = [k]
     output = ttnn.generic_op(io_tensors, pd)
     torch_out = ttnn.to_torch(output).reshape(N * span, 1, 32, 32 * payload_tiles)
@@ -309,15 +280,15 @@ def _run_fixed_line(
         ttnn.Shape(out_shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
     io_tensors = [input_tensor, output_tensor]
-    mc = ttnn.Mcast1D(
+    mc = ttnn.Mcast(
         device,
-        grid,
-        ttnn.Mcast1DShape.PerRow,
-        ttnn.Mcast1DFixedSenderConfig(
-            starting_sender_index=starting_sender_index,
-            sender_placement=sender_placement if sender_placement is not None else ttnn.Mcast1DSenderPlacement.Uniform,
-        ),
         ttnn.McastConfig(),
+        grid,
+        GC,
+        ttnn.McastFixedSenderConfig(
+            sender_index=starting_sender_index,
+            placement=sender_placement if sender_placement is not None else ttnn.McastSenderPlacement.Uniform,
+        ),
     )
     cb = 0
     cbs = [make_cb(cb, grid, pages=payload_pages, page_bytes=page_bytes, dtype=ttnn.bfloat16)]
@@ -342,18 +313,13 @@ def _run_fixed_line(
         config=ttnn.ReaderConfigDescriptor(),
     )
     pd = ttnn.ProgramDescriptor(cbs=cbs)
-    mc.attach(pd, "mcast", [k])
-    assert (
-        k.compile_time_args[dict(k.named_compile_time_args)["mcast_ct_offset"] :][6] == 0
-    ), "fixed mode has no rotating span"
-    if sender_placement == ttnn.Mcast1DSenderPlacement.Diagonal:
+    mc.attach(pd, "mcast", [k], 0)
+    assert inspect_mcast_ct(k)["span"] == 0, "fixed mode has no rotating span"
+    if sender_placement == ttnn.McastSenderPlacement.Staggered:
         for Y in range(GR):
             expected_sender = ttnn.CoreCoord((starting_sender_index + Y) % GC, Y)
             assert (
-                k.runtime_args[expected_sender.x][expected_sender.y][
-                    dict(k.named_compile_time_args)["mcast_rt_offset"] :
-                ][-2]
-                & 1
+                inspect_mcast(k, expected_sender)["roles"] & 1
             ), f"row {Y}: expected diagonal sender {expected_sender}"
     pd.kernels = [k]
     output = ttnn.generic_op(io_tensors, pd)
@@ -407,15 +373,6 @@ def test_control_flag_value(device, control_value):
     _run_transfer(device, recv_rect=((0, 0), (0, 1)), control=True, handshake=True, control_value=control_value)
 
 
-@pytest.mark.parametrize("payload_tiles", [1, 4])
-def test_split_count(device, payload_tiles):
-    _run_transfer(device, recv_rect=((0, 0), (0, 3)), payload_tiles=payload_tiles, handshake=True, ack_subset=2)
-
-
-def test_split_count_across_bh_non_worker_columns(device):
-    _run_transfer(device, recv_rect=((0, 0), (8, 0)), handshake=True, ack_subset=2)
-
-
 @pytest.mark.parametrize("payload_tiles", [1, 4, 16])
 def test_sender_loopback(device, payload_tiles):
     _run_sender_loopback(device, rect_len=4, payload_tiles=payload_tiles, n_iters=32)
@@ -431,6 +388,40 @@ def test_rotating_line_smoke(device):
 
 def test_rotating_line_counter_smoke(device):
     _run_rotating_line(device, span=2, payload_tiles=1, data_ready_mode=ttnn.McastDataReady.Counter)
+
+
+@pytest.mark.parametrize("control", [False, True], ids=["payload", "signal"])
+def test_rotating_line_counter_without_handshake(device, control):
+    run_positional_mcast_case(
+        device,
+        width=8,
+        senders=list(range(8)),
+        rotating=True,
+        counter=True,
+        control=control,
+        alternating=False,
+        handshake=False,
+        rounds=128,
+        suppress_round_output=True,
+    )
+
+
+@pytest.mark.parametrize("control", [False, True], ids=["payload", "signal"])
+def test_rotating_line_flag_source_lifetime(device, control):
+    run_positional_mcast_case(
+        device,
+        width=8,
+        senders=list(range(8)),
+        rotating=True,
+        counter=False,
+        control=control,
+        alternating=False,
+        caller_managed=True,
+        handshake=True,
+        rounds=128,
+        suppress_round_output=True,
+        stress_flag_source_lifetime=True,
+    )
 
 
 def test_rotating_line_outside_sender(device):
@@ -449,7 +440,7 @@ def test_fixed_line_diagonal(device):
         num_blocks=3,
         payload_tiles=1,
         starting_sender_index=0,
-        sender_placement=ttnn.Mcast1DSenderPlacement.Diagonal,
+        sender_placement=ttnn.McastSenderPlacement.Staggered,
     )
 
 
@@ -461,7 +452,7 @@ def test_fixed_line_diagonal_wraparound(device):
         num_blocks=2,
         payload_tiles=1,
         starting_sender_index=5,
-        sender_placement=ttnn.Mcast1DSenderPlacement.Diagonal,
+        sender_placement=ttnn.McastSenderPlacement.Staggered,
     )
 
 
@@ -480,8 +471,10 @@ def test_fixed_line(device, cols, rows, blocks, pages):
 @pytest.mark.parametrize(
     "width,senders,rotating", [(1, [0], False), (2, [0], False), (2, [0, 2], True), (9, [0], False)]
 )
-def test_alternating_prepared_payload(device, noc, caller_managed, width, senders, rotating):
-    run_wrapper_case(device, width=width, senders=senders, rotating=rotating, noc=noc, caller_managed=caller_managed)
+def test_alternating_positional_payload(device, noc, caller_managed, width, senders, rotating):
+    run_positional_mcast_case(
+        device, width=width, senders=senders, rotating=rotating, noc=noc, caller_managed=caller_managed
+    )
 
 
 @pytest.mark.parametrize("noc", [0, 1])
@@ -495,8 +488,8 @@ def test_alternating_prepared_payload(device, noc, caller_managed, width, sender
         (2, [0, 2], True, True),
     ],
 )
-def test_prepared_control(device, noc, counter, width, senders, rotating, caller_managed):
-    run_wrapper_case(
+def test_positional_control(device, noc, counter, width, senders, rotating, caller_managed):
+    run_positional_mcast_case(
         device,
         width=width,
         senders=senders,
@@ -511,16 +504,34 @@ def test_prepared_control(device, noc, counter, width, senders, rotating, caller
 
 @pytest.mark.parametrize("noc", [0, 1])
 @pytest.mark.parametrize("counter", [False, True])
-def test_prepared_no_handshake(device, noc, counter):
-    run_wrapper_case(
+def test_positional_no_handshake(device, noc, counter):
+    run_positional_mcast_case(
         device, width=2, senders=[2], rotating=False, noc=noc, counter=counter, caller_managed=True, handshake=False
+    )
+
+
+@pytest.mark.parametrize("control", [False, True], ids=["payload", "signal"])
+def test_no_handshake_flag_survives_late_receiver_construction(device, control):
+    run_positional_mcast_case(
+        device,
+        width=2,
+        senders=[2],
+        rotating=False,
+        counter=False,
+        control=control,
+        alternating=False,
+        handshake=False,
+        rounds=1,
+        delay_receiver_construction=True,
     )
 
 
 @pytest.mark.parametrize("noc", [0, 1])
 @pytest.mark.parametrize("control", [False, True])
 def test_mixed_local_only_sender_turn(device, noc, control):
-    run_wrapper_case(device, width=1, senders=[0, 1], rotating=True, noc=noc, control=control, caller_managed=True)
+    run_positional_mcast_case(
+        device, width=1, senders=[0, 1], rotating=True, noc=noc, control=control, caller_managed=True
+    )
 
 
 @pytest.mark.parametrize("noc", [0, 1])
@@ -528,10 +539,12 @@ def test_mixed_local_only_sender_turn(device, noc, control):
 @pytest.mark.parametrize("control", [False, True])
 @pytest.mark.parametrize("width", [1, 2])
 def test_single_sender_rotating_config(device, noc, counter, control, width):
-    run_wrapper_case(device, width=width, senders=[0], rotating=True, noc=noc, counter=counter, control=control)
+    run_positional_mcast_case(
+        device, width=width, senders=[0], rotating=True, noc=noc, counter=counter, control=control
+    )
 
 
 @pytest.mark.parametrize("kind", ["row", "column"])
 @pytest.mark.parametrize("rotating", [False, True])
-def test_line_wrapper_shared_kernel(device, kind, rotating):
-    run_wrapper_case(device, width=2, senders=[0, 1] if rotating else [0], rotating=rotating, kind=kind)
+def test_line_topologies_share_positional_kernel(device, kind, rotating):
+    run_positional_mcast_case(device, width=2, senders=[0, 1] if rotating else [0], rotating=rotating, kind=kind)

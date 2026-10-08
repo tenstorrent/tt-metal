@@ -1,14 +1,19 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+// Attaches multicast semaphores and kernel arguments to ProgramDescriptor/KernelDescriptor objects.
+// Also appends arguments for Program-bound channels and marks absent descriptor channels.
+
+#include "ttnn/kernel_lib/mcast/host/mcast_impl.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <limits>
 #include <set>
+#include <string>
+#include <utility>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
-#include "tt_metal/impl/buffers/semaphore.hpp"
 
 namespace ttnn::kernel_lib::host {
 using namespace tt::tt_metal;
@@ -43,23 +48,30 @@ void append_offsets(KernelDescriptor& kernel, std::string_view prefix, uint32_t 
 
 }  // namespace
 
-void McastFamily::attach(
+void McastImpl::attach(
     ProgramDescriptor& descriptor,
     std::string_view prefix,
-    std::span<const std::reference_wrapper<KernelDescriptor>> targets) const {
-    require_arguments_prepared_();
+    std::span<const std::reference_wrapper<KernelDescriptor>> targets,
+    uint32_t first_semaphore_id) const {
+    prepare_arguments_();
     require_unbound_();
     TT_FATAL(!targets.empty(), "Multicast attachment requires at least one kernel");
 
     // Validate staged copies so a failure preserves both caller resources and kernels.
     auto semaphores = descriptor.semaphores;
-    const auto ids = resolve_semaphore_ids_(semaphores);
-    if (!cfg_.sem_ids) {
-        for (uint32_t role = 0; role < required_semaphores_(); ++role) {
-            semaphores.push_back({.id = ids[role], .core_ranges = participating_, .initial_value = 0});
-        }
+    std::array<uint32_t, 3> ids{UNUSED_SEM_ID, UNUSED_SEM_ID, UNUSED_SEM_ID};
+    const auto count = required_semaphores_();
+    TT_FATAL(
+        first_semaphore_id <= std::numeric_limits<uint32_t>::max() - count, "Multicast semaphore ID range overflows");
+    for (uint32_t role = 0; role < count; ++role) {
+        ids[role] = first_semaphore_id + role;
+        const bool collision = std::any_of(semaphores.begin(), semaphores.end(), [&](const auto& sem) {
+            return sem.core_type == tt::CoreType::WORKER && sem.id == ids[role] &&
+                   sem.core_ranges.intersects(participating_);
+        });
+        TT_FATAL(!collision, "Multicast semaphore ID collides with an existing resource");
+        semaphores.push_back({.id = ids[role], .core_ranges = participating_, .initial_value = 0});
     }
-    const auto ct = compile_time_args_(ids);
     const bool chain = wire::transfer_mode(layout_.flags) == TransferMode::ChainUnicast;
     std::set<const KernelDescriptor*> selected;
     std::vector<KernelDescriptor> kernels;
@@ -68,6 +80,8 @@ void McastFamily::attach(
         TT_FATAL(selected.insert(&target.get()).second, "Duplicate multicast attachment kernel");
         auto kernel = target.get();
         const auto noc = kernel_noc(kernel, prepared_arch_);
+        const auto metadata = argument_metadata_(&kernel.core_ranges);
+        const auto ct = compile_time_args_(ids, metadata);
         size_t rt_offset = 0;
         std::set<CoreCoord> runtime_cores;
         for (const auto& [core, args] : kernel.runtime_args) {
@@ -83,10 +97,10 @@ void McastFamily::attach(
             kernel, prefix, static_cast<uint32_t>(kernel.compile_time_args.size()), static_cast<uint32_t>(rt_offset));
         // Check against original prefixes, before padding could hide an invalid binding.
         for (const auto& binding : kernel.buffer_bindings) {
-            const auto entry =
-                std::find_if(kernel.runtime_args.begin(), kernel.runtime_args.end(), [&](const auto& item) {
-                    return item.first == binding.core;
-                });
+            const auto entry = std::find_if(
+                kernel.runtime_args.begin(),
+                kernel.runtime_args.end(),
+                [&](const KernelDescriptor::RuntimeArgs::value_type& item) { return item.first == binding.core; });
             TT_FATAL(
                 entry != kernel.runtime_args.end() && binding.arg_idx < entry->second.size(),
                 "Multicast attachment encountered an invalid buffer binding");
@@ -96,16 +110,18 @@ void McastFamily::attach(
                 const bool sender =
                     std::find(group->senders_.begin(), group->senders_.end(), core) != group->senders_.end();
                 TT_FATAL(
-                    !(sender || chain) || noc == cfg_.noc, "Multicast sender/forwarder NoC differs from its family");
+                    !(sender || chain) || noc == cfg_.noc,
+                    "Multicast sender/forwarder NoC differs from the configured multicast NoC");
             }
-            auto entry = std::find_if(kernel.runtime_args.begin(), kernel.runtime_args.end(), [&](const auto& item) {
-                return item.first == core;
-            });
+            auto entry = std::find_if(
+                kernel.runtime_args.begin(),
+                kernel.runtime_args.end(),
+                [&](const KernelDescriptor::RuntimeArgs::value_type& item) { return item.first == core; });
             if (entry == kernel.runtime_args.end()) {
                 kernel.runtime_args.emplace_back(core, std::vector<uint32_t>{});
                 entry = std::prev(kernel.runtime_args.end());
             }
-            const auto payload = runtime_args_(core);
+            const auto payload = runtime_args_(core, metadata);
             TT_FATAL(
                 rt_offset <= std::numeric_limits<uint32_t>::max() - payload.size(),
                 "Multicast runtime argument positions overflow");
@@ -120,31 +136,24 @@ void McastFamily::attach(
     for (size_t i = 0; i < targets.size(); ++i) {
         targets[i].get() = std::move(kernels[i]);
     }
+    descriptor_next_semaphore_id_ = first_semaphore_id + count;
 }
 
-void attach_absent(KernelDescriptor& kernel, std::string_view prefix) {
+uint32_t McastImpl::next_semaphore_id() const {
+    TT_FATAL(
+        descriptor_next_semaphore_id_.has_value(),
+        "next_semaphore_id() requires a successful ProgramDescriptor attachment");
+    return *descriptor_next_semaphore_id_;
+}
+
+void attach_absent_mcast(KernelDescriptor& kernel, std::string_view prefix) {
     TT_FATAL(
         !std::holds_alternative<ComputeConfigDescriptor>(kernel.config),
         "Multicast attachment requires a data-movement kernel");
     auto staged = kernel;
     append_offsets(staged, prefix, static_cast<uint32_t>(staged.compile_time_args.size()), 0);
-    const auto ct = detail::absent_mcast_compile_time_args();
-    staged.compile_time_args.insert(staged.compile_time_args.end(), ct.begin(), ct.end());
+    staged.compile_time_args.push_back(dataflow_kernel_lib::mcast_wire::ABSENT);
     kernel = std::move(staged);
-}
-
-void Mcast1D::attach(
-    ProgramDescriptor& descriptor,
-    std::string_view prefix,
-    std::span<const std::reference_wrapper<KernelDescriptor>> kernels) const {
-    family_->attach(descriptor, prefix, kernels);
-}
-
-void Mcast2D::attach(
-    ProgramDescriptor& descriptor,
-    std::string_view prefix,
-    std::span<const std::reference_wrapper<KernelDescriptor>> kernels) const {
-    family_->attach(descriptor, prefix, kernels);
 }
 
 }  // namespace ttnn::kernel_lib::host
