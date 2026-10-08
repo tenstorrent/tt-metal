@@ -1689,3 +1689,78 @@ def test_untilize_with_unpadding_docstring_supported_inputs(
     assert output.memory_config() == memory_config
     assert list(output.shape) == [end + 1 for end in output_tensor_end]
     assert_exact(expected, ttnn.to_torch(output), signed_zeros=dtype != ttnn.bfloat16)
+
+
+# Cropping a leading dim other than the outermost used to read the wrong input slabs on the block-interleaved
+# factory (taken for wide tensors), since it walked the input slabs as if the output's leading dims were the
+# input's.
+@pytest.mark.parametrize(
+    "shape, end",
+    [
+        ((2, 2, 64, 2048), [1, 0, 63, 2047]),  # x[:, :1]
+        ((3, 4, 32, 4096), [2, 1, 31, 4095]),  # x[:, :2]
+        ((2, 2, 64, 2048), [0, 0, 63, 2047]),  # x[:1, :1], already correct before
+        ((2, 2, 64, 2048), [0, 1, 63, 2047]),  # x[:1], already correct before
+        ((2, 2, 2, 64, 2048), [1, 1, 0, 63, 2047]),  # x[:, :, :1]
+        ((2, 3, 1, 32, 64), [0, 1, 0, 31, 63]),  # x[:1, :2] on 5D, expressible after folding, already correct before
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+def test_untilize_with_unpadding_crop_inner_leading_dim(device, shape, end, dtype):
+    torch.manual_seed(0)
+    if dtype == ttnn.int32:
+        torch_input = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    else:
+        torch_input = torch.randn(shape, dtype=TTNN_TO_TORCH_DTYPE[dtype])
+    tilized = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.untilize_with_unpadding(tilized, ttnn.Shape(end))
+
+    expected = torch_input[tuple(slice(0, e + 1) for e in end)]
+    assert_equal(expected, ttnn.to_torch(output))
+
+
+# The same crop on tensors too narrow for the block-interleaved factory, and on the single-core path. The row-interleaved
+# multicore factory and use_multicore=False already handled a crop of a leading dim; these cases keep it that way.
+@pytest.mark.parametrize("use_multicore", [True, False])
+@pytest.mark.parametrize(
+    "shape, end",
+    [
+        ((2, 2, 64, 64), [1, 0, 63, 63]),  # x[:, :1]
+        ((3, 4, 32, 64), [2, 1, 31, 63]),  # x[:, :2]
+        ((2, 2, 2, 32, 64), [1, 1, 0, 31, 63]),  # x[:, :, :1] on 5D
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_untilize_with_unpadding_crop_inner_leading_dim_narrow(device, shape, end, dtype, use_multicore):
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=TTNN_TO_TORCH_DTYPE[dtype])
+    tilized = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.untilize_with_unpadding(tilized, ttnn.Shape(end), use_multicore=use_multicore)
+
+    expected = torch_input[tuple(slice(0, e + 1) for e in end)]
+    assert_equal(expected, ttnn.to_torch(output))
+
+
+# Rank > 4 runs as 4D with the leading dims folded into one, so a crop of a folded dim is only expressible
+# when every outer folded dim ends at 0. Other crops used to return the wrong slabs silently.
+def test_untilize_with_unpadding_rank_5_inexpressible_crop_raises(device, expect_error):
+    tilized = ttnn.from_torch(
+        torch.rand((2, 3, 1, 32, 64), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    with expect_error(RuntimeError, "requires every outer leading dim to end at 0"):
+        ttnn.untilize_with_unpadding(tilized, ttnn.Shape([1, 0, 0, 31, 63]))
+
+
+# An empty rank > 4 crop selects no slabs, so it must still take the empty path instead of the folding check.
+def test_untilize_with_unpadding_rank_5_empty_crop_of_folded_dim(device):
+    tilized = ttnn.from_torch(
+        torch.rand((2, 3, 1, 0, 64), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    output = ttnn.untilize_with_unpadding(tilized, ttnn.Shape([1, 0, 0, 4294967295, 63]))
+
+    assert list(output.shape) == [2, 1, 1, 0, 64]
+    assert output.layout == ttnn.ROW_MAJOR_LAYOUT

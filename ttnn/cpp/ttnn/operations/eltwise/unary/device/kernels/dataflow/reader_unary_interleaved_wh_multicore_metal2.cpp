@@ -24,6 +24,10 @@ void kernel_main() {
     constexpr auto num_tiles_per_2d = get_arg(args::num_tiles_per_2d);
     constexpr auto third_dim = get_arg(args::third_dim);
     constexpr auto total_tiles_per_row = get_arg(args::total_tiles_per_row);
+    // Extent of dim -3 in the output and in the input. They differ when untilize_with_unpadding crops a
+    // leading dim; output slab (n, c) is then read from input slab n * in_dim_c + c.
+    constexpr auto out_dim_c = get_arg(args::out_dim_c);
+    constexpr auto in_dim_c = get_arg(args::in_dim_c);
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
@@ -37,9 +41,10 @@ void kernel_main() {
     const uint32_t tile_bytes = dfb.get_tile_size();
 
     for (uint32_t dim = 0; dim < third_dim; dim++) {
+        const uint32_t in_slab = (dim / out_dim_c) * in_dim_c + (dim % out_dim_c);
         for (uint32_t c = 0; c < single_block_size_col_arg; c++) {
             for (uint32_t r = 0; r < single_block_size_row_arg; r++) {
-                const uint32_t offset = dim * num_tiles_per_2d + c * total_tiles_per_row + r;
+                const uint32_t offset = in_slab * num_tiles_per_2d + c * total_tiles_per_row + r;
 #ifdef BACKWARDS
                 const uint32_t tile = start_id - offset;
 #else
