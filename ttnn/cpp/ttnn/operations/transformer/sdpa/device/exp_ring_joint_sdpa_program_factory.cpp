@@ -499,9 +499,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // Ring joint has no causal/mask/sink/sliding/chunked flags — gating is simpler.
     // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
     // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap.
-    const bool use_streaming_compute =
-        fixed_subblock_h || (!fp32_dest_acc_en && qk_out_subblock_h <= 2 &&
-                             Sk_chunk_t % (dst_size / qk_out_subblock_h) == 0 && qk_in0_num_subblocks > 1);
+    const bool use_streaming_compute = fixed_subblock_h || detail::exp_ring_streaming_compute_supported(
+                                                               Sq_chunk_t, Sk_chunk_t, dst_size, fp32_dest_acc_en);
 
     auto [out_out_subblock_h, out_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, DHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
