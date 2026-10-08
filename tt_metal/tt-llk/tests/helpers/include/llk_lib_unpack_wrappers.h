@@ -50,12 +50,6 @@ inline void _llk_unpack_tilize_wrapper_(
     _llk_unpack_tilize_(base_address, tile_index, unpack_src_format, unpack_dst_format, block_ct_dim, face_r_dim, num_faces, narrow_tile);
 }
 
-inline void _llk_unpack_tilize_uninit_wrapper_(
-    const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = FACE_R_DIM)
-{
-    _llk_unpack_tilize_uninit_(unpack_dst_format, ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces));
-}
-
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_init_wrapper_(
     const std::uint32_t unpack_src_format,
@@ -113,12 +107,6 @@ inline void _llk_unpack_tilize_wrapper_(
     _llk_unpack_tilize_(base_address, tile_index, unpack_src_format, unpack_dst_format, face_r_dim, num_faces, narrow_tile);
 }
 
-inline void _llk_unpack_tilize_uninit_wrapper_(
-    const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = ckernel::MAX_FACE_R_DIM)
-{
-    _llk_unpack_tilize_uninit_(unpack_dst_format, ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces));
-}
-
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_init_wrapper_(
     const std::uint32_t unpack_src_format,
@@ -141,6 +129,12 @@ inline void _llk_unpack_tilizeA_B_uninit_wrapper_(
 #else
 #error "Unsupported architecture for LLK unpack tilize wrappers"
 #endif
+
+inline void _llk_unpack_tilize_uninit_wrapper_(
+    const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = ckernel::MAX_FACE_R_DIM)
+{
+    _llk_unpack_tilize_uninit_(unpack_dst_format, ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces));
+}
 
 // Isolate handshake count shared by unpack and math. The two TRISC threads deadlock
 // if they disagree. Tilize posts architecture-specific dvalids (BH: 1/tile, WH: 1/face);

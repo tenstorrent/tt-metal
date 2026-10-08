@@ -127,11 +127,15 @@ def test_tilize_polluter_tiny_matmul(
     do_restore,
 ):
     if (
-        dest_acc == DestAccumulation.Yes
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and dest_acc == DestAccumulation.Yes
+        and formats.input_format.is_32_bit() != formats.output_format.is_32_bit()
     ):
-        # Hangs with do_restore=False too, so it is the tiny matmul itself, not the restore.
-        pytest.skip("Blackhole hangs on this tiny matmul with a 32-bit DEST")
+        # Hangs on Blackhole for these combinations even with do_restore=False, while the standalone
+        # tiny matmul (test_unpack_matmul) passes them, so the polluter sequence is implicated. Not root-caused.
+        pytest.skip(
+            "Blackhole hangs for a 32-bit DEST with mixed 16/32-bit input and output formats"
+        )
 
     tile_dims, face = _tiny_matmul_layout(in0_tile_r_dim)
     in0_dimensions = tile_dims.in0_dimensions
