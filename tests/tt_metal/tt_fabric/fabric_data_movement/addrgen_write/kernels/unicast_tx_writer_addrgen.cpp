@@ -75,11 +75,8 @@ void kernel_main() {
     // TEMP (2D API): manual packet header.
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
 
-    // Fabric route setup (temporary 2D API):
+    // Fabric route setup
     auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
-#if defined(DYNAMIC_ROUTING_ENABLED)
-    static_assert(false, "Dynamic routing is not supported");
-#endif
 
     // Route setup - required for Basic and WithState variants
     if constexpr (api_variant == ApiVariant::Basic || api_variant == ApiVariant::WithState) {
