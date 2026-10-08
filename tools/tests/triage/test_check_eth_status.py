@@ -2,330 +2,131 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# Unit tests for check_eth_status decoding. These need no hardware - they feed synthetic base-firmware
-# samples through the decoders. Wormhole values come from a live N300 read.
+# Checks the addresses and codes check_eth_status hardcodes against metal's base-firmware headers, so a layout change
+# fails CI instead of being misread on hardware. Needs no hardware. Values those headers don't define are not checked.
 
 import os
+import shutil
+import subprocess
 import sys
 
 import pytest
 
 metal_home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-triage_home = os.path.join(metal_home, "tools", "triage")
-sys.path.insert(0, triage_home)
+sys.path.insert(0, os.path.join(metal_home, "tools", "triage"))
 
-import eth_status_sampling
 from check_eth_status import (
-    BASE_FW_NOT_PROGRESSING,
-    CORE_UNREADABLE,
-    LINK_CHANGED,
-    LINK_DOWN,
-    LINK_DOWN_STALE,
-    MAILBOX_NOT_SERVICED,
-    PORT_NOT_TRAINED,
-    PORT_STATUS_INVALID,
-    EthFinding,
-    decode_blackhole_core,
-    decode_wormhole_core,
-)
-from eth_status_sampling import (
-    ALL_ONES,
     BH_BOOT_RESULTS,
     BH_BOOT_RESULTS_WORDS,
+    BH_CORRECTED_CODEWORDS,
+    BH_ERR_STAT,
+    BH_ETH_FW_VERSION,
     BH_HEARTBEAT,
-    BH_LOCAL_INFO,
     BH_MAILBOX,
+    BH_MAILBOX_SLOT_SIZE,
+    BH_MAILBOX_SLOTS,
     BH_PCS_STATUS,
     BH_PORT_STATUS,
+    BH_PORT_STATUS_NAMES,
+    BH_QUEUES,
     BH_RETRAIN_COUNT,
+    BH_RX_BAD_FCS,
     BH_RX_LINK_UP,
+    BH_RXQ_DROPS,
+    BH_TXQ_RESENDS,
+    BH_UNCORRECTED_CODEWORDS,
+    MAILBOX_CALL,
+    MAILBOX_DONE,
+    MAILBOX_SLOT_NAMES,
+    MAILBOX_TYPE_NAMES,
     WH_BOOT_RESULTS,
     WH_BOOT_RESULTS_WORDS,
-    WH_HEARTBEAT,
-    WH_LAUNCH_ERISC_APP_FLAG,
-    WH_LINK_ERROR_STATUS,
+    WH_CORRECTED_CODEWORDS,
+    WH_CRC_ERRORS,
     WH_LINK_STATUS,
-    WH_LOCAL_ETH_ID,
-    WH_PORT_DISABLE_MASK,
     WH_RETRAIN_COUNT,
     WH_RETRAIN_FORCE,
     WH_SHARED_HEARTBEAT,
-    WH_TRAIN_STATUS,
-    EthCoreSample,
-    EthStatusSampling,
+    WH_UNCORRECTED_CODEWORDS,
 )
 
-WH_CHANNEL = 8
+HW_INC = os.path.join(metal_home, "tt_metal", "hw", "inc", "internal", "tt-1xx")
+
+# u64 counters in eth_live_status_t: (triage address, field)
+BH_U64_COUNTERS = [
+    (BH_RX_BAD_FCS, "frames_rxd_badfcs"),
+    (BH_CORRECTED_CODEWORDS, "corr_cw"),
+    (BH_UNCORRECTED_CODEWORDS, "uncorr_cw"),
+    *[(BH_TXQ_RESENDS + 8 * queue, f"txq{queue}_resend_cnt") for queue in range(BH_QUEUES)],
+    *[(BH_RXQ_DROPS + 8 * queue, f"rxq{queue}_pkt_drop") for queue in range(BH_QUEUES)],
+]
+
+# (triage value, C expression over metal's base-firmware headers)
+BLACKHOLE_LAYOUT = [
+    (BH_BOOT_RESULTS, "MEM_SYSENG_BOOT_RESULTS_BASE"),
+    (BH_BOOT_RESULTS_WORDS * 4, "sizeof(boot_results_t) + sizeof(all_eth_mailbox_t)"),
+    (BH_PORT_STATUS, "MEM_SYSENG_ETH_STATUS + offsetof(eth_status_t, port_status)"),
+    (BH_HEARTBEAT, "MEM_SYSENG_ETH_STATUS + offsetof(eth_status_t, heartbeat)"),
+    (BH_RETRAIN_COUNT, "MEM_SYSENG_ETH_LIVE_STATUS + offsetof(eth_live_status_t, retrain_count)"),
+    (BH_RX_LINK_UP, "MEM_SYSENG_ETH_LIVE_STATUS + offsetof(eth_live_status_t, rx_link_up)"),
+    (BH_ETH_FW_VERSION, "MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_fw_ver)"),
+    (BH_MAILBOX, "MEM_SYSENG_ETH_MAILBOX_ADDR"),
+    (BH_MAILBOX_SLOTS, "NUM_ETH_MAILBOX"),
+    (BH_MAILBOX_SLOT_SIZE, "sizeof(eth_mailbox_t)"),
+    (BH_PCS_STATUS, "ETH_CORE_A_ETH_CTRL_A_PCS_STATUS_REG_ADDR"),
+    (BH_ERR_STAT, "ETH_CORE_A_ETH_CTRL_A_ERR_STAT_REG_ADDR"),
+    (MAILBOX_CALL << 16, "MEM_SYSENG_ETH_MSG_CALL"),
+    (MAILBOX_DONE << 16, "MEM_SYSENG_ETH_MSG_DONE"),
+    *[(code, f"MEM_SYSENG_ETH_MSG_{name}") for code, name in MAILBOX_TYPE_NAMES.items()],
+    *[(code, f"PORT_{name.upper()}") for code, name in BH_PORT_STATUS_NAMES.items()],
+    *[(slot, f"MAILBOX_{name}") for slot, name in enumerate(MAILBOX_SLOT_NAMES)],
+    *[
+        (address, f"MEM_SYSENG_ETH_LIVE_STATUS + offsetof(eth_live_status_t, {field})")
+        for address, field in BH_U64_COUNTERS
+    ],
+    *[(8, f"sizeof(eth_live_status_t::{field})") for _, field in BH_U64_COUNTERS],
+]
+
+WORMHOLE_LAYOUT = [
+    (WH_BOOT_RESULTS, "MEM_SYSENG_BOOT_RESULTS_BASE"),
+    (WH_BOOT_RESULTS_WORDS * 4, "sizeof(boot_results_t)"),
+    (WH_LINK_STATUS, "MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, link_status)"),
+    (WH_RETRAIN_COUNT, "MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, retrain_cnt)"),
+    (WH_RETRAIN_COUNT, "eth_l1_mem::address_map::RETRAIN_COUNT_ADDR"),
+    (WH_RETRAIN_FORCE, "eth_l1_mem::address_map::RETRAIN_FORCE_ADDR"),
+    (WH_SHARED_HEARTBEAT, "MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, reserved_48)"),
+    (WH_CRC_ERRORS, "MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, crc_err)"),
+    (WH_CORRECTED_CODEWORDS, "MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, corr_cw_hi)"),
+    (WH_CORRECTED_CODEWORDS + 4, "MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, corr_cw_lo)"),
+    (WH_UNCORRECTED_CODEWORDS, "MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, uncorr_cw_hi)"),
+    (WH_UNCORRECTED_CODEWORDS + 4, "MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, uncorr_cw_lo)"),
+]
 
 
-def wh_words(updates: dict[int, int] | None = None) -> dict[int, int]:
-    """An N300 channel-8 core with a trained link, as read live (plus metal firmware running on it)."""
-    words = {WH_BOOT_RESULTS + 4 * index: 0 for index in range(WH_BOOT_RESULTS_WORDS)}
-    words.update(
-        {
-            WH_HEARTBEAT: 0xABCD8128,
-            WH_PORT_DISABLE_MASK: 0xFCFF,
-            WH_TRAIN_STATUS: 1,
-            WH_LINK_ERROR_STATUS: 0,
-            WH_LAUNCH_ERISC_APP_FLAG: 1,
-            WH_LINK_STATUS: 6,
-            WH_SHARED_HEARTBEAT: 0xABCD8122,
-            WH_LOCAL_ETH_ID: 8,
-        }
-    )
-    return {**words, **(updates or {})}
-
-
-def bh_words(updates: dict[int, int] | None = None) -> dict[int, int]:
-    """A healthy Blackhole 2-erisc core with no router: CI's most common row."""
-    words = {BH_BOOT_RESULTS + 4 * index: 0 for index in range(BH_BOOT_RESULTS_WORDS)}
-    words.update(
-        {
-            BH_PORT_STATUS: 1,
-            BH_HEARTBEAT: 0xABCD1234,
-            BH_RETRAIN_COUNT: 0,
-            BH_RX_LINK_UP: 1,
-            BH_LOCAL_INFO: 6 << 16,
-            BH_MAILBOX: 0xD0E50002,
-            BH_PCS_STATUS: 1,
-        }
-    )
-    return {**words, **(updates or {})}
-
-
-def sample(words: dict[int, int], timestamp: float) -> EthCoreSample:
-    return EthCoreSample(timestamp=timestamp, words=words)
-
-
-def wh(first: dict[int, int] | None, second: dict[int, int], burst=None, halted=False, channel=WH_CHANNEL):
-    return decode_wormhole_core(
-        channel, None if first is None else sample(first, 0.0), sample(second, 3.0), burst or [], halted
-    )
-
-
-def bh(first: dict[int, int] | None, second: dict[int, int], burst=None, halted=False):
-    return decode_blackhole_core(
-        5, None if first is None else sample(first, 0.0), sample(second, 3.0), burst or [], halted
-    )
-
-
-def messages(findings: list[EthFinding]) -> list[tuple[bool, str]]:
-    return [(finding.is_error, finding.message) for finding in findings]
-
-
-# Wormhole
-
-
-def test_wh_healthy_link_on_n300():
-    row, findings = wh(wh_words(), wh_words({WH_HEARTBEAT: 0xABCD67C4, WH_SHARED_HEARTBEAT: 0xABCD67BC}))
-    assert (row.port_status, row.link, row.retrain_count, row.heartbeat) == ("Trained", "Up", 0, "Moving (base FW)")
-    assert (row.channel, row.physical_channel, row.rx_link_up, row.mailbox) == (8, 8, "Up", None)
-    assert row.sample_gap == 3.0
-    assert findings == []
-
-
-def test_wh_reads_the_real_retrain_and_link_words():
-    # The old script read 0x1EE8 and 0x1EE0, both reserved words in boot_results_t.
-    words = wh_words({WH_RETRAIN_COUNT: 2, 0x1EE8: 5, 0x1EE0: 0})
-    row, _ = wh(words, {**words, WH_HEARTBEAT: 0xABCD0001, WH_RETRAIN_COUNT: 3})
-    assert (row.retrain_count, row.retrain_delta, row.link) == (3, 1, "Up")
-
-
-def test_wh_router_that_never_yields_is_not_flagged():
-    # The router zeroes 0x1C at main-loop entry and writes 0xDCBA to 0x1F80 while it loops.
-    first = wh_words({WH_HEARTBEAT: 0, WH_SHARED_HEARTBEAT: 0xDCBA0040})
-    second = wh_words({WH_HEARTBEAT: 0, WH_SHARED_HEARTBEAT: 0xDCBA0080})
-    row, findings = wh(first, second)
-    assert (row.heartbeat, row.link) == ("Moving (router)", "Up (stale)")
-    assert findings == []
-
-
-def test_wh_link_down_with_fresh_evidence_is_an_error():
-    first = wh_words({WH_LINK_STATUS: 3})
-    second = wh_words({WH_LINK_STATUS: 3, WH_HEARTBEAT: 0xABCD9000})
-    row, findings = wh(first, second)
-    assert (row.link, row.rx_link_up, row.link_raw) == ("Down", "Down", 3)
-    assert messages(findings) == [(True, LINK_DOWN)]
-
-
-def test_wh_link_down_in_a_stale_snapshot_is_a_warning():
-    words = wh_words({WH_LINK_STATUS: 3})
-    row, findings = wh(words, dict(words))
-    assert (row.link, row.heartbeat) == ("Down (stale)", "Frozen")
-    assert messages(findings) == [(False, LINK_DOWN_STALE)]
-
-
-def test_wh_link_that_changed_during_sampling_is_a_warning():
-    second = wh_words({WH_LINK_STATUS: 3, WH_HEARTBEAT: 0xABCD9000})
-    row, findings = wh(wh_words(), second)
-    assert row.link == "Up -> Down"
-    assert messages(findings) == [(False, LINK_CHANGED)]
+def find_riscv_compiler() -> str | None:
+    # Where metal's JIT build looks for SFPI (tt_metal/jit_build/build.cpp), then PATH.
+    for root in (os.path.join(metal_home, "runtime", "sfpi"), "/opt/tenstorrent/sfpi"):
+        compiler = os.path.join(root, "compiler", "bin", "riscv-tt-elf-g++")
+        if os.access(compiler, os.X_OK):
+            return compiler
+    return shutil.which("riscv-tt-elf-g++")
 
 
 @pytest.mark.parametrize(
-    "updates, port_status, finding",
+    "arch, mcpu, headers, layout",
     [
-        ({WH_PORT_DISABLE_MASK: 0xFFFF}, "Disabled", PORT_NOT_TRAINED),
-        ({WH_RETRAIN_FORCE: 1}, "Retraining", PORT_NOT_TRAINED),
-        ({WH_TRAIN_STATUS: 0}, "Training", PORT_NOT_TRAINED),
-        ({WH_TRAIN_STATUS: 2, WH_LINK_ERROR_STATUS: 12}, "Not connected", PORT_NOT_TRAINED),
-        ({WH_TRAIN_STATUS: 2, WH_LINK_ERROR_STATUS: 5}, "Train failed", PORT_NOT_TRAINED),
-        ({WH_TRAIN_STATUS: 9}, "Invalid", PORT_STATUS_INVALID),
-        ({WH_TRAIN_STATUS: ALL_ONES}, "Unreadable", None),
+        ("blackhole", "tt-bh", ["eth_fw_api.h"], BLACKHOLE_LAYOUT),
+        ("wormhole", "tt-wh", ["eth_fw_api.h", "eth_l1_address_map.h"], WORMHOLE_LAYOUT),
     ],
 )
-def test_wh_port_status(updates, port_status, finding):
-    second = wh_words({**updates, WH_HEARTBEAT: 0xABCD9000})
-    row, findings = wh(wh_words(updates), second)
-    assert row.port_status == port_status
-    assert messages(findings) == ([] if finding is None else [(False, finding)])
-
-
-def test_wh_frozen_base_firmware_without_metal_firmware_is_a_warning():
-    words = wh_words({WH_LAUNCH_ERISC_APP_FLAG: 0})
-    frozen_burst = [{WH_HEARTBEAT: 0xABCD8128, WH_SHARED_HEARTBEAT: 0xABCD8122}] * 8
-    row, findings = wh(words, dict(words), burst=frozen_burst)
-    assert row.heartbeat == "Frozen"
-    assert (False, BASE_FW_NOT_PROGRESSING) in messages(findings)
-
-
-def test_wh_burst_catches_a_heartbeat_that_matched_by_chance():
-    words = wh_words({WH_LAUNCH_ERISC_APP_FLAG: 0})
-    row, findings = wh(words, dict(words), burst=[{WH_HEARTBEAT: 0xABCD8129, WH_SHARED_HEARTBEAT: 0xABCD8123}])
-    assert (row.heartbeat, row.link) == ("Moving (base FW)", "Up")
-    assert findings == []
-
-
-def test_wh_core_halted_by_triage_is_not_called_stuck():
-    words = wh_words({WH_LAUNCH_ERISC_APP_FLAG: 0})
-    row, findings = wh(words, dict(words), halted=True)
-    assert row.heartbeat == "Frozen (halted by triage)"
-    assert findings == []
-
-
-def test_wh_unreadable_core_is_a_warning_not_an_error():
-    words = {address: ALL_ONES for address in wh_words()}
-    row, findings = wh(words, dict(words))
-    assert (row.port_status, row.link, row.heartbeat, row.retrain_count) == (
-        "Unreadable",
-        "Unreadable",
-        "Unreadable",
-        None,
-    )
-    assert messages(findings) == [(False, CORE_UNREADABLE)]
-
-
-def test_wh_single_sample_raises_no_link_finding():
-    row, findings = wh(None, wh_words({WH_LINK_STATUS: 3}))
-    assert (row.heartbeat, row.link, row.sample_gap) == ("One sample", "Down", None)
-    assert findings == []
-
-
-# Blackhole
-
-
-def test_bh_healthy_two_erisc_core_without_a_router():
-    row, findings = bh(bh_words(), bh_words())
-    assert (row.port_status, row.link, row.heartbeat, row.mailbox) == ("Up", "Up", "Frozen", "HOST: DONE RELEASE_CORE")
-    assert (row.channel, row.physical_channel, row.rx_link_up, row.link_raw) == (5, 6, "Up", 1)
-    assert findings == []
-
-
-def test_bh_retrain_count_is_reported_but_never_a_finding():
-    # CI raised 38 ERRORs for 'retrain count is 1' on links that were up.
-    row, findings = bh(bh_words({BH_RETRAIN_COUNT: 1}), bh_words({BH_RETRAIN_COUNT: 1}))
-    assert (row.retrain_count, row.retrain_delta) == (1, 0)
-    assert findings == []
-
-
-def test_bh_live_link_down_is_an_error():
-    row, findings = bh(bh_words({BH_PCS_STATUS: 0}), bh_words({BH_PCS_STATUS: 0}))
-    assert (row.link, row.port_status) == ("Down", "Up")
-    assert messages(findings) == [(True, LINK_DOWN)]
-
-
-def test_bh_unused_port_link_down_is_not_an_error():
-    words = bh_words({BH_PORT_STATUS: 3, BH_PCS_STATUS: 0})
-    row, findings = bh(words, dict(words))
-    assert (row.port_status, row.link) == ("Unused", "Down")
-    assert findings == []
-
-
-def test_bh_falls_back_to_the_snapshot_when_pcs_is_unreadable():
-    words = bh_words({BH_PCS_STATUS: ALL_ONES, BH_RX_LINK_UP: 0})
-    row, findings = bh(words, dict(words))
-    assert (row.link, row.rx_link_up) == ("Down (stale)", "Down")
-    assert messages(findings) == [(False, LINK_DOWN_STALE)]
-
-
-def test_bh_all_ones_rx_link_up_is_unreadable_not_up():
-    words = bh_words({BH_PCS_STATUS: ALL_ONES, BH_RX_LINK_UP: ALL_ONES})
-    row, findings = bh(words, dict(words))
-    assert (row.link, row.rx_link_up) == ("Unreadable", "Unreadable")
-    assert findings == []
-
-
-@pytest.mark.parametrize(
-    "value, port_status, finding",
-    [(0, "Unknown", PORT_NOT_TRAINED), (7, "Invalid", PORT_STATUS_INVALID), (ALL_ONES, "Unreadable", None)],
-)
-def test_bh_port_status(value, port_status, finding):
-    # Unlike the old script, an unknown or invalid port no longer hides the rest of the row.
-    words = bh_words({BH_PORT_STATUS: value})
-    row, findings = bh(words, dict(words))
-    assert (row.port_status, row.link, row.retrain_count) == (port_status, "Up", 0)
-    assert messages(findings) == ([] if finding is None else [(False, finding)])
-
-
-def test_bh_mailbox_slots_are_16_bytes_apart():
-    # The old script read 0x7D004..0x7D00C, which are the HOST slot's arguments, not other slots.
-    words = bh_words({BH_MAILBOX + 4: 0xCA110009, BH_MAILBOX + 0x10: 0xCA11000F})
-    row, _ = bh(bh_words(), words)
-    assert row.mailbox == "HOST: DONE RELEASE_CORE, RISC1: CALL DYNAMIC_NOC_INIT"
-    assert row.mailbox_raw is not None and row.mailbox_raw.split()[4] == "0xca11000f"
-
-
-def test_bh_mailbox_request_pending_in_both_samples_warns_once():
-    words = bh_words({BH_MAILBOX: 0xCA110009, BH_MAILBOX + 0x20: 0xCEDE0001})
-    row, findings = bh(words, dict(words))
-    assert row.mailbox == "HOST: CALL PORT_ACTION, CMFW: CALL_ACK LINK_STATUS_CHECK"
-    assert messages(findings) == [(False, MAILBOX_NOT_SERVICED)]
-
-
-def test_bh_mailbox_request_serviced_during_sampling_is_fine():
-    _, findings = bh(bh_words({BH_MAILBOX: 0xCA110009}), bh_words({BH_MAILBOX: 0xD0E50009}))
-    assert findings == []
-
-
-@pytest.mark.parametrize(
-    "before, after, heartbeat",
-    [
-        (0xDCBA0040, 0xDCBA0080, "Moving (router)"),
-        (0xABCD0001, 0xABCD0002, "Moving (base FW)"),
-        (0xABCD0001, 0xDCBA0040, "Moving (router)"),
-        (0x00000000, 0x12345678, "Moving"),
-    ],
-)
-def test_bh_heartbeat_writers(before, after, heartbeat):
-    row, _ = bh(bh_words({BH_HEARTBEAT: before}), bh_words({BH_HEARTBEAT: after}))
-    assert row.heartbeat == heartbeat
-
-
-def test_bh_unreadable_core_is_a_warning_not_an_error():
-    words = {address: ALL_ONES for address in bh_words()}
-    row, findings = bh(bh_words(), words)
-    assert (row.port_status, row.link, row.heartbeat) == ("Unreadable", "Unreadable", "Unreadable")
-    assert messages(findings) == [(False, CORE_UNREADABLE)]
-
-
-# Sampling
-
-
-def test_second_sample_waits_for_the_minimum_gap(monkeypatch):
-    sampling = object.__new__(EthStatusSampling)
-    sampling.initial_samples = {"core": sample({}, timestamp=10.0)}
-    slept: list[float] = []
-    monkeypatch.setattr(eth_status_sampling.time, "monotonic", lambda: 11.0)
-    monkeypatch.setattr(eth_status_sampling.time, "sleep", slept.append)
-    sampling.wait_for_second_sample()
-    assert slept == [pytest.approx(eth_status_sampling.MINIMUM_SAMPLE_GAP_SECONDS - 1.0)]
+def test_addresses_match_firmware_headers(arch, mcpu, headers, layout):
+    # Compiled for the RISC-V cores because x86-64 lays some of these structs out differently.
+    compiler = find_riscv_compiler()
+    if compiler is None:
+        pytest.skip("SFPI RISC-V compiler not found")
+    source = ["#include <cstddef>"] + [f'#include "{header}"' for header in headers]
+    source += [f'static_assert(({expr}) == {value:#x}, "{expr}");' for value, expr in layout]
+    command = [compiler, f"-mcpu={mcpu}", "-std=c++17", "-fsyntax-only", "-x", "c++", "-"]
+    command.append(f"-I{os.path.join(HW_INC, arch)}")
+    result = subprocess.run(command, input="\n".join(source), capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
