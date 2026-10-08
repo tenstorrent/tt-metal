@@ -1,4 +1,4 @@
-# t-diffvae: LTX-2.5 NA DiffVAE decode under 1 s at 1080p 145f on 4x8 — plan (#210)
+# t-diffvae: LTX-2.5 NA DiffVAE decode under 1 s at 1080p 145f on 4x8 — plan (#210, re-planned #257)
 
 Date 2026-10-07. Base: origin/ttp/t48-ltx25-integrated @ 5e4e0cd643a. CPU-only planning task: no device jobs ran.
 
@@ -6,6 +6,93 @@ Goal (user #143): the real DiffVAE (`LTX25_DIFFVAE=1`, `diffvae_ltx*.py`) decode
 in < 1 s on a 4x8 BH galaxy. Today: 11.77 s in the pipeline (t20, blx03 job 874; first gen 17.8 s).
 Gate timer: the pipeline's `VAE decode (forward)` (`pipeline_ltx_distilled.py:2321`). It wraps
 `decode_latents`, so it **includes the pull of the pixels to host**.
+
+## 0. Roofline re-plan (#257, 2026-10-08) — read this first
+
+Base: t48 @ 946a37952bd (+ be5d1bc045a hash fix). CPU/notes only, no device jobs. Calculator:
+`tt-project/t-diffvae/roofline_calc.py` (assumptions at its top; rerun after changing them).
+
+**Where we are.** 16.5 s (#214 unoptimized) -> 3.378 s (#246). The last six levers (S5_2D, gather rephase,
+packed lanes, approx exp, ...) each bought 4-12%. Rejected, do not redo: query-chunk sizes, tracing and
+the overlapped uint8 pull (#241: device-bound), NA LoFi (#246), GNA stride (#216/#224), MLP LoFi (t11).
+
+**Measured split** (#253, blx01 job 912, deep tree 3820 ms, sync-inflated; real 3.379 s, so x0.885):
+| part | tree ms | notes |
+|---|---|---|
+| det stage 1 (dim 2048, 4 blocks, replicated on all 32 chips) | 607 | linear-order attention 288, qkv-to-volume 93, MLP 102, qkv-proj 40 |
+| det stage 2 (dim 1024, 6 blocks, W/8) | 235 | NA 41, halo+brick 51, head-unflatten 18, head-allgather 11 |
+| det stage 3 (dim 512, 4 blocks, W/8) | 147 | |
+| det stage 4 (dim 512, 2 blocks, W/8) + upsample 4 | 374 | head-unflatten 45, head-allgather 23, MLP 66, upsample 57 |
+| upload, ghost crop | 42 | |
+| stage 5 pre (context reshard, randn+embed, brick) | 64 | |
+| stage 5, 8 blocks x 277 | 2219 | **NA op 152.7**/block; halo+brick 42.8 (CCL 2x10.4, rebrick 2x3.2, 15.6 other); qkv-lanes 27.7; MLP 25.7; norm+mod 5.3; qkv-proj 5.7; context 4.9; out-proj 2.8; residual 2.8 |
+| stage 5 tail (pixel pull) | 99 | |
+
+### 0.1 Lower bounds per chip (BH: 130 cores x 1.35 GHz, HiFi2 ~360 TF/s; DRAM 512 GB/s spec)
+- **NA op.** Each chip reads **34.2 GB** of K/V per block for **0.81 GB** of unique K/V (halo included):
+  every brick is re-read **42x**, once per covering query chunk (the reader fetches each chunk's 112 key
+  bricks from DRAM; `neighborhood_sdpa_program_factory.cpp` gives each core a contiguous run of work items
+  but keeps nothing between them). 34.2 GB in 152.7 ms = 224 GB/s. That is not "Wormhole bandwidth" (#253
+  note is wrong); it is 44% of BH spec and near the **~270-290 GB/s chip-wide ceiling that tt-metal SDPA's
+  own K/V streaming hits on BH** (issue #56691, M. Vlahovic). So the op is DRAM-stream bound and read
+  tuning will not move it; only fewer reads will.
+  Compute: 2.19e12 FLOP performed (2.7x the exact 11^3 window, brick granularity; t213 found tile-level
+  narrowing removes only 1.03-1.19x of it) -> 6 ms of HiFi2 matmul, **~15 ms** with softmax at d64.
+  | NA K/V reuse scheme | bricks fetched / chunk | DRAM ms | NA ms/block (floor) |
+  |---|---|---|---|
+  | today | 112 | 122 at 280 GB/s (152.7 measured) | 152.7 |
+  | BF8 K/V only (#253 lever, A/B pending) | 112 | 61 | ~61-80 |
+  | 1-D ring: core walks a W row (15 chunks), keeps the 7x4x4-brick union in L1, adds one 7x4 column per step | 33.6 | 37 | ~37-45 |
+  | 1-D ring + BF8 | 33.6 | 18 | ~18-25 |
+  | 2-D group (4x15 chunks per core group, K/V multicast) | 14.7 | 16 | ~16-25 (compute) |
+- **Stage-5 rest.** Linears 1.24e12 FLOP = 3.5 ms HiFi2. One 256-ch tensor is 303 MB/chip, ~2 ms per
+  read+write pass at 280 GB/s. Unfused SwiGLU round-trips a 4.8 GB intermediate (~17 ms of the 25.7).
+  Halo is ~0.2 GB/chip/block. Floor ~10-15 ms/block; **124 ms today**.
+- **Det stages.** Full FLOPs at HiFi2 peak: stage 1 64 ms *replicated* (2 ms at 32-way), stage 2 12 ms at
+  8-way, stage 3 4, stage 4 15. Activations are smaller than stage 5. Floor ~30-60 ms total;
+  **1409 ms today**. They are bound by op count, glue (qkv-to-volume, head-unflatten, head-allgather,
+  linear-order gather) and replication, not by math or DRAM.
+- **Pixel pull.** 0.91 GB of uint8 RGB in 99 ms (~9 GB/s). Overlap gave nothing (#241); ~50-100 ms floor.
+
+**Floor:** det ~0.05 + stage 5 8 x (15-25 + 10-15) = 0.2-0.3 + pre/pull ~0.1 = **~0.35-0.45 s**.
+**< 1 s is reachable on paper, with about 2.5x slack over the floor.** It is not reachable by more
+4-7% knobs: it needs the three structural items below, each landing near its target.
+
+### 0.2 Ranked structural levers (real-time savings = tree x 0.885)
+| # | lever | target | saving (real) | risk | effort |
+|---|---|---|---|---|---|
+| R1 | **NA K/V reuse in `neighborhood_sdpa`** (reader keeps a sliding K/V ring in L1 across a core's W-adjacent chunks; same per-chunk key order, so bit-identical) | 152.7 -> ~45 ms/block (~25 with BF8) | **-0.76 s** (-0.9 s with BF8) | none (exact) | C++ kernel, 3-5 d |
+| R2 | **Det stages on 32 chips, glue removed**: stage 1 off replication (2-D split with NA halos like stage 5, or TP heads 8 x T 4); stages 2-4 on the stage-5 2-D split with all heads per chip (removes head-allgather, head-unflatten, the stage-4 -> 5 reshard and, if the head-allgather means only heads split on the 4-axis, 4x replicated MLP/norm work: verify first) | 1409 -> ~400-500 ms tree | **-0.8 to -0.9 s** | none (exact) | Python/ttnn, 1 wk |
+| R3 | **Fused stage-5 block**: K and V halo as one CCL started before the NA op and overlapped with interior chunks; SwiGLU with the intermediate in L1; qkv-proj epilogue does norm+rope; fold context/norm-mod/residual | 124 -> ~50 ms/block | **-0.5 s** | low | 1 wk |
+| R4 | BF8 K/V (#253) | NA -45% today; ~-20 ms/block after R1 | -0.5 s alone, ~-0.15 s after R1 | medium (t11 saw PCC 0.15; recheck) | A/B queued |
+| R5 | pre/tail: device randn + brick fused, pixel pull split per tray | 163 -> ~90 | -0.06 s | none | small |
+
+Projection: 3.38 -> R1 2.62 -> R2 ~1.8 -> R3 ~1.3 -> R4 ~1.15 -> R5 ~1.1 s. **Best realistic: ~1.0-1.2 s.**
+**< 1 s needs R1 as the 2-D/multicast form (NA at its ~20 ms compute floor) or R2/R3 beating their
+targets**: aggressive case 8 x (20 + 35) + 0.3 + 0.1 = **~0.85 s**. Decide after R1 + R2 are measured.
+
+**Stop lever-per-task iteration** for anything predicted under 5% of decode (~0.17 s): tile-level NA
+narrowing (t213: <=1.19x of NA, ~2% after R1), further chunk/brick shape sweeps, single elementwise
+folds (context/residual/norm-mod 1-2% each: bundle into R3), fidelity flips, tracing. Each costs
+$4-6 to A/B; they go into R1-R3 as sub-steps, not as tasks.
+
+Prior work to reuse: tt-metal SDPA K/V store-and-forward chains and multicast (PR #57395, issue #56691:
+chains are disabled for windowed/sliding-window SDPA because cores with different K ranges deadlock on
+lock-step forwarding; the issue proposes forwarding the union of K ranges and letting each core pop
+what it does not use, which is R1's 2-D form); tt-blaze Gemma-4 sliding-window SDPA keeps "an L1 ring
+buffer that holds exactly one window" (`gemma4_sliding_window_decoder_layer_stage/op.py`), the 1-D form;
+Confluence "SDPA and TopK on Blackhole: the performance counter investigation" (TA space, page 2887909469)
+for BH DRAM-read limits.
+
+### 0.3 Next tasks (run side by side; device A/Bs one at a time per box)
+1. **R1 NA K/V L1 ring** (code, C++). Spec in the hand-off of #257. Accept: output md5-identical to
+   default on host-noise seeds 0-1 (else PCC >= 0.9999 and PSNR within 0.1 dB of 55), NA op <= 60 ms/block
+   in the stage tree, decode <= 2.75 s. If L1 does not fit the 896 KB bf16 ring next to the CBs, do the ring
+   for K only or along H (4x7 column), or take it with BF8 if #253 passes.
+2. **R2 det stages 32-way** (code, Python). Accept: PCC >= 0.9999 vs #214 refs, PSNR within 0.5 dB,
+   det tree <= 600 ms, decode -0.7 s or better; 5-seed visuals if PSNR drops > 0.5 dB.
+3. **R3 fused stage-5 block** (code). Accept: non-NA stage-5 <= 70 ms/block, decode -0.4 s or better,
+   same quality gates. Can start now; rebase on R1 before its A/B if R1 lands first.
 
 ## 1. What we know
 
