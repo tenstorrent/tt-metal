@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
+#include "ttnn/operations/core/caller_owned_topology.hpp"
 #include <tt-metalium/work_split.hpp>
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
@@ -546,21 +547,55 @@ tt::tt_metal::TensorSpec LayerNormDeviceOperation::compute_output_specs(
         operation_attributes.program_config);
 }
 
-Tensor LayerNormDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+bool LayerNormDeviceOperation::is_inplace(const operation_attributes_t& operation_attributes) {
     return std::visit(
-        [&](const auto& program_config) -> tensor_return_value_t {
+        [&](const auto& program_config) -> bool {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
-                if (operation_attributes.distributed_norm_stage != DistributedLayerNormStage::PRE_ALL_GATHER &&
-                    program_config.inplace) {
-                    return tensor_args.input;
-                }
+                return operation_attributes.distributed_norm_stage != DistributedLayerNormStage::PRE_ALL_GATHER &&
+                       program_config.inplace;
+            } else {
+                return false;
             }
-            auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-            return create_device_tensor(output_spec, tensor_args.input.device());
         },
         operation_attributes.program_config);
+}
+
+Tensor LayerNormDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (is_inplace(operation_attributes)) {
+        return tensor_args.input;
+    }
+    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.input.device());
+}
+
+std::vector<tt::tt_metal::TensorTopology> LayerNormDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // In place, the returned tensor IS the caller's input. Its label stays while it still describes the data:
+    // with weight / bias / residual / stats that are replicated, or sharded only along axes the input is sharded
+    // along too, nothing diverges and the caller's label is kept. An operand sharded along an axis the input is
+    // replicated on makes every device compute a different result there, so the label must follow the data:
+    // the hook falls back to the framework union, which the aliased caller's handle then reads too. See
+    // caller_owned_topology.hpp.
+    if (is_inplace(operation_attributes)) {
+        const auto ptr = [](const std::optional<Tensor>& t) { return t.has_value() ? &*t : nullptr; };
+        if (const auto label = ttnn::operations::core::caller_owned_output_topology(
+                tensor_args.input,
+                {ptr(tensor_args.residual_input_tensor),
+                 ptr(tensor_args.weight),
+                 ptr(tensor_args.bias),
+                 ptr(tensor_args.stats),
+                 ptr(tensor_args.recip_tensor)},
+                "layer_norm (in place)")) {
+            return {*label};
+        }
+        return {};
+    }
+    // Out of place the output is a fresh tensor. norm(input + residual) with a sharded residual is a
+    // legitimate two-activation op whose output is per-device distinct, so the union of all inputs is the
+    // right label; an empty vector selects that framework default.
+    return {};
 }
 
 Tensor layer_norm(

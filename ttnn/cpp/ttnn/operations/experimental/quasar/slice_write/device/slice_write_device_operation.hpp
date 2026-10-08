@@ -5,6 +5,7 @@
 #pragma once
 
 #include <variant>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -33,6 +34,11 @@ struct SliceWriteDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
+
+    // The op writes a slice into the caller's output tensor and hands that tensor back, so it keeps the
+    // caller's topology instead of the framework's union with the (possibly differently distributed) input.
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::prim::qsr

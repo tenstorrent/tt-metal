@@ -12,6 +12,7 @@
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/caller_owned_topology.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
 
@@ -347,12 +348,16 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
         attributes.program_config);
 }
 
+bool SoftmaxDeviceOperation::is_inplace(const operation_attributes_t& attributes) {
+    return (attributes.softmax_type == SoftmaxOperationType::SoftmaxInPlace ||
+            attributes.softmax_type == SoftmaxOperationType::ScaleMaskSoftmaxInPlace ||
+            attributes.softmax_type == SoftmaxOperationType::ScaleCausalMaskHWSoftmaxInPlace) &&
+           attributes.inplace;
+}
+
 SoftmaxDeviceOperation::spec_return_value_t SoftmaxDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    if ((attributes.softmax_type == SoftmaxOperationType::SoftmaxInPlace ||
-         attributes.softmax_type == SoftmaxOperationType::ScaleMaskSoftmaxInPlace ||
-         attributes.softmax_type == SoftmaxOperationType::ScaleCausalMaskHWSoftmaxInPlace) &&
-        attributes.inplace) {
+    if (is_inplace(attributes)) {
         return tensor_args.input_tensor.tensor_spec();
     }
     return {tt::tt_metal::TensorSpec(
@@ -366,14 +371,32 @@ SoftmaxDeviceOperation::spec_return_value_t SoftmaxDeviceOperation::compute_outp
 SoftmaxDeviceOperation::tensor_return_value_t SoftmaxDeviceOperation::create_output_tensors(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Inplace config
-    if ((attributes.softmax_type == SoftmaxOperationType::SoftmaxInPlace ||
-         attributes.softmax_type == SoftmaxOperationType::ScaleMaskSoftmaxInPlace ||
-         attributes.softmax_type == SoftmaxOperationType::ScaleCausalMaskHWSoftmaxInPlace) &&
-        attributes.inplace) {
+    if (is_inplace(attributes)) {
         return tensor_args.input_tensor;
     }
     // Standard
     return {create_device_tensor(compute_output_specs(attributes, tensor_args), tensor_args.input_tensor.device())};
+}
+
+std::vector<tt::tt_metal::TensorTopology> SoftmaxDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // In place, the returned tensor IS the caller's input. Its label stays while it still describes the data:
+    // with a mask that is replicated, or sharded only along axes the input is sharded along too, nothing diverges
+    // and the caller's label is kept. A mask sharded along an axis the input is replicated on makes every device
+    // compute a different result there, so the label must follow the data: the hook falls back to the framework
+    // union (the mask's label), which the aliased caller's handle then reads too. See caller_owned_topology.hpp.
+    if (is_inplace(attributes)) {
+        const Tensor* mask = tensor_args.mask.has_value() ? &*tensor_args.mask : nullptr;
+        if (const auto label = ttnn::operations::core::caller_owned_output_topology(
+                tensor_args.input_tensor, {mask}, "softmax (in place)")) {
+            return {*label};
+        }
+        return {};
+    }
+    // Out of place the output is a fresh tensor. softmax(input * scale + mask) is a genuinely two-input op,
+    // so the union of input and mask is the right label (a sharded mask makes the output per-device
+    // distinct); an empty vector selects that framework default.
+    return {};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SoftmaxDeviceOperation::tensor_return_value_t>
@@ -391,7 +414,8 @@ SoftmaxDeviceOperation::create_op_performance_model(
 static DeviceComputeKernelConfig softmax_init_compute_kernel_config(
     tt::ARCH arch, const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config, bool is_fp32) {
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    const auto default_fidelity = (is_wormhole && is_fp32) ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+    const auto default_fidelity =
+        (is_wormhole && is_fp32) ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
     verify_numerical_configuration(arch, compute_kernel_config);
     return init_device_compute_kernel_config(arch, compute_kernel_config, default_fidelity, true, is_fp32, false);
 }
