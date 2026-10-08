@@ -418,6 +418,9 @@ def _pick(prob_sorted, u, normalise=True):
     return int(torch.searchsorted(cum, thr, right=True).clamp(max=prob_sorted.numel() - 1))
 
 
+VOCAB_FULL = 129280
+
+
 def sample_exact(vals, ids, sums, k, temperature, top_k, top_p, u, fetch_logits):
     """Exact temperature / top-k / top-p sample from the device's candidates and partition function. ``vals`` / ``ids`` [cols * k] (per-column top-k logits and global ids), ``sums`` [cols]
     (per column sum_v exp((l_v - column max) / T)), ``u`` a uniform draw in [0, 1) (the caller's generator: seeded requests stay deterministic), ``fetch_logits()`` the exact full logits
@@ -432,16 +435,22 @@ def sample_exact(vals, ids, sums, k, temperature, top_k, top_p, u, fetch_logits)
     inv = 1.0 / float(temperature)
     colmax = vals.reshape(cols, -1)[:, 0].double()
     Z = float((sums.double() * torch.exp((colmax - M) * inv)).sum())  # sum over the vocabulary of exp((l - M) / T)
-    pk = torch.exp((v[:k] - M) * inv) / Z  # exact probabilities of the global top-k
+    # guaranteed exact prefix: every vocabulary token outside the candidates is <= its column's k-th candidate, so the sorted candidates at or above the largest column cut-off are the global
+    # top-ng of the vocabulary (ng >= k when the columns are balanced, usually several times k: the nucleus of prose at T=1 rarely exceeds it)
+    thr = vals.reshape(cols, -1)[:, k - 1].max().double()
+    ng = int((v >= thr).sum())
+    pk = torch.exp((v[:ng] - M) * inv) / Z  # exact probabilities of the guaranteed top-ng
     tk = int(top_k) if top_k is not None and int(top_k) > 0 else 0
+    if tk >= VOCAB_FULL:  # the plugin normalises "no top-k" to top_k = vocab_size
+        tk = 0
     tp = float(top_p) if top_p is not None else 1.0
-    if tk and tk <= k:  # top-k inside the guaranteed prefix: renormalise over it, then the nucleus (if any) over that
+    if tk and tk <= ng:  # top-k inside the guaranteed prefix: renormalise over it, then the nucleus (if any) over that
         q = pk[:tk] / pk[:tk].sum()
         if tp < 1.0:
             q = q * ((q.cumsum(0) - q) < tp)
         return int(ix[_pick(q, u)]), False
     mass = float(pk.sum())
-    if not tk:
+    if not tk and ng:
         if tp < 1.0:
             if mass >= tp:  # the nucleus lies inside the top-k: smallest prefix whose probability reaches tp
                 q = pk * ((pk.cumsum(0) - pk) < tp)
