@@ -30,6 +30,52 @@ from models.demos.minimax_m3.utils.profiler_utils import zone
 
 from .operations import apply_qk_norm_per_head, apply_rope
 
+_MSA_CHECK_CALLS = [0]
+
+
+def _msa_packed_check(out, run_op, chunk_start_idx):
+    """M3_KA_MSA_CHECK=<min chunk_start>: re-run sparse_sdpa_msa with the legacy one-token kernels
+    (TT_MSA_PACKED_GROUP=0) on the same device inputs and log packed-vs-legacy agreement per call (all devices):
+    global rel-L2, min per-token PCC over (heads x d), tokens below 0.999. Debug only (host round trips)."""
+    import os
+
+    call = _MSA_CHECK_CALLS[0]
+    _MSA_CHECK_CALLS[0] += 1
+    if chunk_start_idx is None or chunk_start_idx < kagent_flags.MSA_CHECK_FROM:
+        return
+    prev = os.environ.get("TT_MSA_PACKED_GROUP")
+    os.environ["TT_MSA_PACKED_GROUP"] = "0"
+    try:
+        ref = run_op()
+    finally:
+        if prev is None:
+            os.environ.pop("TT_MSA_PACKED_GROUP", None)
+        else:
+            os.environ["TT_MSA_PACKED_GROUP"] = prev
+    worst = (2.0, -1, -1)
+    num = den = 0.0
+    low = 0
+    for d, (a, b) in enumerate(zip(ttnn.get_device_tensors(out), ttnn.get_device_tensors(ref))):
+        a = ttnn.to_torch(a).float()[0]  # [H, S, dv]
+        b = ttnn.to_torch(b).float()[0]
+        num += (a - b).pow(2).sum().item()
+        den += b.pow(2).sum().item()
+        x = a.permute(1, 0, 2).reshape(a.shape[1], -1)
+        y = b.permute(1, 0, 2).reshape(b.shape[1], -1)
+        x = x - x.mean(1, keepdim=True)
+        y = y - y.mean(1, keepdim=True)
+        p = (x * y).sum(1) / (x.norm(dim=1) * y.norm(dim=1)).clamp_min(1e-30)
+        low += int((p < 0.999).sum().item())
+        m, i = p.min(0)
+        if m.item() < worst[0]:
+            worst = (m.item(), d, int(i.item()))
+    print(
+        f"[msa-check] call {call} chunk_start {chunk_start_idx}: packed vs legacy rel_l2 {(num / max(den, 1e-30)) ** 0.5:.3e}"
+        f" min_token_pcc {worst[0]:.6f} (dev {worst[1]} row {worst[2]}) tokens<0.999: {low}",
+        flush=True,
+    )
+    ttnn.deallocate(ref)
+
 
 def _ensure_dram(t):
     """high_bw_all_gather streams its source from DRAM; move an L1-resident activation there first."""
@@ -190,18 +236,25 @@ def msa_indexer_sparse(
     # chunk_start_idx + cluster_axis drive the token-level diagonal-block causal mask with the per-device
     # SP start (chunk_start = chunk_start_idx + rank*Sq); q must be bf16 (the op rejects fp8 q under causal).
     with zone("sparse_sdpa"):
-        out = ttnn.transformer.sparse_sdpa_msa(
-            ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT),
-            k,
-            v,
-            block_ids,
-            scale=scale,
-            block_size=block_size,
-            chunk_start_idx=chunk_start_idx,
-            cluster_axis=cluster_axis,
-            block_cyclic_sp_axis=block_cyclic_sp_axis,
-            block_cyclic_chunk_local=block_cyclic_chunk_local,
-        )
+        q_rm = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
+
+        def run_op():
+            return ttnn.transformer.sparse_sdpa_msa(
+                q_rm,
+                k,
+                v,
+                block_ids,
+                scale=scale,
+                block_size=block_size,
+                chunk_start_idx=chunk_start_idx,
+                cluster_axis=cluster_axis,
+                block_cyclic_sp_axis=block_cyclic_sp_axis,
+                block_cyclic_chunk_local=block_cyclic_chunk_local,
+            )
+
+        out = run_op()
+        if kagent_flags.MSA_CHECK_FROM is not None:
+            _msa_packed_check(out, run_op, chunk_start_idx)
 
         # sparse_sdpa_msa returns ROW_MAJOR; the model's concat_heads (prefill.py) needs TILE — match the
         # dense (ring_joint) output so the shared post-attention path works for MSA layers too.
