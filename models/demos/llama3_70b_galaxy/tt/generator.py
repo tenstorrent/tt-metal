@@ -1639,6 +1639,10 @@ class Generator(WarmupForwardMixin):
                         is_page_table_sharded=is_page_table_sharded,
                         on_device_logits=mode,
                     )
+        # Warmup can create persistent L1 semaphore buffers on Blackhole. Let
+        # the GCB move until preparation ends, then preserve its addresses for
+        # every trace and subsequent mode switch.
+        self.model.prepare_decode_global_cb()
         self.model.switch_mode("prefill")
 
     def _prepare_trace_decode(

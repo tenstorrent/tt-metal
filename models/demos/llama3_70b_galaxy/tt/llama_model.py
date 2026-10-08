@@ -209,7 +209,7 @@ class TtTransformer(LightweightModule):
 
     def setup_prefill(self, mesh_sub_device_manager_id_prefill=None):
         if self.prefetcher_setup is not None:
-            self._global_cb_addresses = self.prefetcher_setup.release_global_cb()
+            self.prefetcher_setup.release_global_cb()
         # BH unfused-CCL path: prefill uses the fused all_gather_minimal_matmul + interleaved weights, never
         # the ring matmuls or the prefetcher global CB (those are decode-only). Run prefill exactly like the
         # no-prefetcher path (default sub-device, no custom manager). Loading the prefetcher's prefill
@@ -988,6 +988,12 @@ class TtTransformer(LightweightModule):
                 if not self.use_prefetcher:
                     # No-prefetcher path reuses the cached prefill CCL; clear its semaphore drift.
                     self.tt_ccl.reset_global_semaphores()
+
+    def prepare_decode_global_cb(self):
+        """Keep the prepared GCB addresses fixed before the first trace capture."""
+        if self.use_prefetcher and self._global_cb_addresses is None:
+            global_cb = self.prefetcher_setup.global_circular_buffer
+            self._global_cb_addresses = (global_cb.buffer_address(), global_cb.config_address())
 
     def forward(
         self,
