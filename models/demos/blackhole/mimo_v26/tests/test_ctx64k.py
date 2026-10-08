@@ -95,7 +95,9 @@ def test_ctx64k(mesh_device):
     model = MiMoModel(md, n_layers=48, layout=lay, log=lambda s: None)
     rec("build", s=round(time.time() - t0, 1), dram=dram(md), cache=model.wc.stats)
     pf = ChunkedPrefill(model, trace=True)
-    gen = ChunkedGenerator(model, max_pos, pf, trace=True, keep_logits=False)
+    gen = ChunkedGenerator(
+        model, max_pos, pf, trace=True, keep_logits=False, U=upr
+    )  # decode tensors sized for the users per row (the default U=32 runs a 32-slot decode graph at any B)
     texts = {}
     for isl in isls:
         if mode == "decode":
@@ -126,8 +128,11 @@ def test_ctx64k(mesh_device):
             prompts, meta = [prompts[i] for i in order], [meta[i] for i in order]
         cold = None
         if E("CTX_WARM", "0") == "1" and mode == "decode":
-            # warm-up generation (captures the prefill and decode traces); the measured generation below is a trace replay: prefill_s is then the WARM TTFT of the same run
-            cold = round(gen.generate(prompts, 2, S=isl)["prefill_s"], 3)
+            # warm-up prefill (captures the prefill trace); the measured generation below replays it: prefill_s is then the WARM TTFT of the same run
+            # PREFILL-ONLY warm-up: a prefill replay after a captured decode trace hangs the next decode replay (known), so no decode trace may exist before the measured prefill
+            t_w = time.time()
+            gen.prefill(prompts, isl)
+            cold = round(time.time() - t_w, 3)
         res = gen.generate(prompts, new, S=isl)
         times = res["times"]
         steady = sorted(times[5:])
