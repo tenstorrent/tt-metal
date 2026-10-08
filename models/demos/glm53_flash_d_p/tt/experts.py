@@ -17,7 +17,8 @@
 
 The routed scale (2.5) is already in the router weights. Counts / offsets are [1, 288] (global expert ids).
 Weights: fp8 e4m3 x 128x128 block scale dequantized on the host (reference/weights.py) one expert at a time, bfp8 on
-device (never bfp4), cached under generated/glm53_flash_d_p/tt_cache/experts.
+device by default (bfp4 when the spec sets device.experts_dtype, e.g. the whole model on a LoudBox), cached under
+generated/glm53_flash_d_p/tt_cache/experts (experts/<rows>x<cols> for meshes other than 2x2).
 Port of models/demos/mimo_v2_6_d_p_2x2/tt/experts.py:TtExperts.
 """
 
@@ -84,6 +85,13 @@ def _combine(m, buf, meta, counts, region_offsets, seq_len):
     )
 
 
+def expert_cache_dir(mesh) -> Path:
+    """Routed-expert tensorbins: each one stacks a local slot over the whole mesh, so a cache written for one mesh
+    shape is not valid for another. 2x2 keeps its original directory; any other shape gets experts/<rows>x<cols>."""
+    rows, cols = tuple(mesh.shape)
+    return CACHE_ROOT / "experts" if (rows, cols) == (2, 2) else CACHE_ROOT / "experts" / f"{rows}x{cols}"
+
+
 class LazyExpertWeights:
     """Sequence of {'gate_proj', 'up_proj', 'down_proj'} (HF (out, in) layout, global order), each expert
     dequantized from fp8 when indexed."""
@@ -122,7 +130,6 @@ class TtExperts:
         n = rows * cols
         E = num_experts
         assert rows > 1 and cols > 1 and E % n == 0, f"2D mesh expected, got {tuple(mesh.shape)}"
-        assert weights_dtype != ttnn.bfloat4_b, "owner rule: experts are bfp8 on device, never bfp4"
         assert mode in ("unified", "loop"), mode
         # ClampedSiluGlu bakes the DeepSeek-V4 limit 10 into the kernel.
         assert mode != "unified" or float(limit) == 10.0, f"ClampedSiluGlu is fixed at limit 10, got {limit}"
@@ -145,7 +152,7 @@ class TtExperts:
             dtype=ttnn.uint32,
         )
         gidx = ttnn.squeeze(ttnn.squeeze(gidx, 0), 0)
-        cache_path = CACHE_ROOT / "experts" if cache else None
+        cache_path = expert_cache_dir(mesh) if cache else None
         prefix = f"layer_{layer}.experts.{weights_dtype.name}" if cache else None
         if cache:
             from models.demos.deepseek_v3_d_p.utils import fast_cache_checker
@@ -368,8 +375,9 @@ class TtExperts:
         return out
 
 
-def build_experts(mesh, loader, cfg, layer: int, max_chunk: int) -> TtExperts:
-    """TtExperts for one MoE layer (72 experts per chip, bfp8). GLM_EXPERTS_MODE=loop selects the per-expert path."""
+def build_experts(mesh, loader, cfg, layer: int, max_chunk: int, weights_dtype=ttnn.bfloat8_b) -> TtExperts:
+    """TtExperts for one MoE layer (288 / chips experts per chip; bfp8 by default, bfp4 for the whole model on a
+    LoudBox). GLM_EXPERTS_MODE=loop selects the per-expert path."""
     return TtExperts(
         mesh,
         layer,
@@ -380,5 +388,7 @@ def build_experts(mesh, loader, cfg, layer: int, max_chunk: int) -> TtExperts:
         top_k=cfg.num_experts_per_tok,
         limit=cfg.swiglu_limit,
         max_seq_len=max_chunk,
+        weights_dtype=weights_dtype,
+        cache=os.environ.get("GLM_EXPERTS_CACHE", "1") != "0",  # 0: convert straight to the device, no tensorbins
         mode=os.environ.get("GLM_EXPERTS_MODE", "unified"),
     )

@@ -1,0 +1,92 @@
+# zai-org/GLM-5.3-Flash bring-up on mesh 2x4: breadcrumbs
+
+Prior bring-up: glm53_flash_d_p (layers 0-4, mesh 2x2); CPU reference and model code shared. This one runs ALL 45
+text layers on the 8x Blackhole p150b LoudBox. Append-only log, one section per task attempt: what was done,
+decisions and why, gotchas, the re-run command, the verdict.
+
+## Whole model on the LoudBox (2026-10-08)
+
+What was done:
+- Spec written by `new --prior glm53_flash_d_p --mesh 2,4`, then edited: layers 0-44, box 8x p150b, own golden dir
+  (`paths.golden`: the prior's s4096 golden only has layers 0-4), `device.experts_dtype: bfloat4_b`,
+  test_timeout_s 14400 (the first load converts the bfp4 expert cache, ~1 h). Hooks re-export the prior's hooks.
+- glm53_flash_d_p model code made mesh-generic (2x2 unchanged, bit for bit):
+  - tt/experts.py: the owner-rule assert against bfp4 removed; dtype passed in (build_experts weights_dtype, from the
+    spec via hooks.experts_dtype; default bfp8); expert tensorbin cache keyed by mesh shape for meshes other than 2x2
+    (experts/2x4/...: each tensorbin stacks one local slot over the whole mesh, so a 2x2 cache is wrong on 2x4).
+  - tt/mla_attention.py, tt/indexer.py: the 2x2 asserts removed; the per-chip query-row tables reshape to
+    (rows, cols, S / n, W) from mesh.shape instead of (2, 2, ...).
+  - tt/model.py: experts_dtype threaded through TtGlmModel -> TtGlmBlock -> build_experts.
+  Everything else already took its sizes from mesh.shape: KDA SP = rows (axis 0), TP = cols (axis 1, 16 heads per
+  chip on 2x4); dense MLP / shared expert TP = 8; experts EP = 8 (36 per chip, dispatch on axis 0, group size 2,
+  4 dispatch groups); the split residual (chip r C + c holds rows (r C + c) S/8 ..).
+
+Decisions:
+- Mesh 2x4 (the p150_x8 descriptor's native shape), not 4x2: KDA TP = 4 quarters the KDA weights (34 layers x
+  ~270 MB bf16); experts keep the 2x2 dispatch geometry (axis 0, group size 2).
+- bfp4 experts (owner): 4.08 GB per MoE layer / 8 chips = 0.51 GB per chip x 42 = 21.4 GB. bfp8 would be ~40 GB per
+  chip. Everything else is unchanged from 2x2 (bf16, replicated DSA weights and caches, replicated embedding).
+
+Results:
+- Layers 0-4, 2x4, bfp8 experts, against the prior's s4096 golden: worst layer 0.999963, worst state 0.999158 (2x2:
+  0.99995 / 0.99916). The generalised code is correct on 2x4.
+- Layers 0-4, 2x4, bfp4 experts: worst layer 0.997897 (layer 4), state 0.999158 (experts do not touch the state).
+- All 45 layers, 2x4, bfp4 experts, ladder s4096 (2 x 2048, golden from this spec, CPU top1 0.964 / 0.970): it fits
+  and runs. Chunks 4.18 s (first) / 2.92 s (warm), host transfers per layer 0. top1_match 0.9684, top5_overlap 1.0,
+  text_top5_acc_last_chunk 0.9985. Per-layer PCC: L0-2 1.0000, L3 0.9983, L4 0.9979, then a smooth drift
+  (~0.0005 per MoE layer, partial recoveries at 24 and 34) to L40 0.9742, L41 0.9695, L42 0.9651, L43 0.9600,
+  L44 0.9520; final hidden 0.9475; state min 0.9654 (kda_conv L44; kv_latent L43 0.9694). The gate FAILS on the
+  thresholds tuned for the bfp8 subset (layer / state 0.97, final_hidden 0.97): L41-44, final hidden, state.
+  The drift is gradual quantisation noise from bfp4 (L3 / L4 equal the 5-layer bfp4 run), not a mapping bug.
+- Load: 72 min the first time (bfp4 cache conversion ~70 s per MoE layer, 3.8 GB per layer on disk, 160 GB total
+  under generated/glm53_flash_d_p/tt_cache/experts/2x4).
+
+- Attribution (same code / mesh, only the expert dtype differs): layers 0-14 on 2x4 with bfp8 experts
+  (GLM_EXPERTS_CACHE=0: converted straight to the device, no 92 GB bfp8 cache) against this spec's full golden:
+  PASS, L3 0.99997, L7 0.99991, L11 0.99985, L14 0.99979, state min 0.99916 (bfp4 at the same layers: 0.9983,
+  0.9955, 0.9939, 0.9930). 12 MoE layers (3 of them DSA) lose 0.0002 at bfp8 vs 0.007 at bfp4 (~35x): the 2x4
+  mapping is correct, and the whole-model gate failure is bfp4 precision. Extrapolated, bfp8 would end near 0.999 at
+  L44, but bfp8 does not fit on 8 chips.
+- Device smoke (tests/test_smoke.py, all 45 layers, bfp4, greedy): 'What is the capital of France? Answer in one
+  word.' -> '</think>Paris' (the CPU reference's answer): PASS. With the expert cache built, load + smoke = 2 min 24 s.
+
+Gotchas:
+- KMD 2.9 on this box: uploading mmap-backed tensors (the ttnn tensorbin cache) spins forever in to_device. Always run
+  with TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0.
+- The up-front collect pass (default in run_safe_pytest.sh) loads the model twice and prints a fake "worst layer pcc
+  0.000000"; use --no-precompile.
+
+Re-run:
+  TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 PYTHONPATH=$PWD BRINGUP_SPEC=models/demos/glm53_flash_d_p_lb/bringup/spec.yaml \
+    BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+  (golden: python -m models.demos.common.bringup.reference.generate_golden --spec <spec> --rung s4096, 31 min, 30 GB)
+
+## Prefill performance, whole model (2026-10-08, tests/test_perf.py)
+
+Canonical prompt, 56320 tokens in 5120-token chunks, 2x4, bfp4 experts, eager (no trace), wall time with one sync
+per chunk (host dispatch included). Load from the cache 51 s.
+- Cold full prefill 44.3 s (first chunk 2.4 s, later chunks ~4 s each: new programs per chunk position).
+- Warm full prefill 17.77 s = 3170 tok/s; chunk 1521 ms at 0 rising to 1688 ms at 51200 (indexer scores grow
+  with the context).
+- Per-layer, synced, chunk at 51200 (1755 ms): dsa_moe 60.9 ms/layer (11 layers, 670 ms, 38%), kda_moe
+  32.4 ms/layer (31 layers, 1004 ms, 57%), kda_dense 19.1 ms/layer (3 layers, 57 ms).
+- Last chunk next-token vs the text: top1 0.659, top5 0.876 (the 4k golden's CPU top1 is 0.964; no 56k CPU
+  baseline yet, so not attributable).
+
+## Accuracy in depth (2026-10-08)
+
+Long context vs the text (tests/test_accuracy.py: LM head on the device, vocab-sharded, top-5 per chip merged on the
+host; agrees 100% with the host fp32 head on sampled rows). 56320 tokens in 5120 chunks, bfp4: top1 per chunk
+0.951, 0.929, 0.924, 0.920, 0.915, 0.903, 0.886, 0.863, 0.793, 0.751, 0.705 (all rows 0.867); top5 0.993 -> 0.898.
+CPU reference (s56320 golden, in progress) chunk 0: top1 0.967 / top5 0.994.
+Chunk-boundary check, 49152 tokens: 8192-token chunks top1 0.896, 2048-token chunks 0.891 (4x the boundaries,
+-0.5 pt): the decay with position is not state hand-off between chunks.
+DRAM after load: 29.04 GiB allocated, 2.79 GiB free per chip.
+
+Magnitude through the layers (tests/test_inflation.py, s4096 golden, every captured step vs the CPU boundary):
+no inflation. Residual norm ratio stays within 0.991-1.017 of the reference over all 45 layers; per-stream gains
+track. Gain <dev, ref>/<ref, ref> 1.00 +- 0.006 through L33, 0.944 at L44 with norm 0.991 and rel 0.31
+(gain^2 + rel^2 ~= norm^2: noise displacing signal under the norm-preserving RMSNorm / Sinkhorn, not a scale bias).
+Error source: at L3 ffn_in rel 0.008 -> experts_out rel 0.098 (gain 1.008), shared expert (bf16) 0.005: bfp4
+experts add ~10% unbiased relative error per MoE layer; residual rel 0.06 (L3) -> 0.10 (L10) -> 0.18 (L20) ->
+0.31 (L44), fastest in the last layers where the reference residual RMS grows 0.04 -> 1.04.

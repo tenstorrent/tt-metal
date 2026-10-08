@@ -124,7 +124,9 @@ class TtFinalNorm:
 class TtGlmBlock:
     """One decoder block: the validated step modules keyed by the reference block graph, run through run_block."""
 
-    def __init__(self, mesh, cfg, loader, layer: int, max_seq: int, chunks, layout: str = "replicated"):
+    def __init__(
+        self, mesh, cfg, loader, layer: int, max_seq: int, chunks, layout: str = "replicated", experts_dtype=None
+    ):
         from models.demos.glm53_flash_d_p.tt.collapse import build_collapse
         from models.demos.glm53_flash_d_p.tt.common import gather_half, gather_rows, local_rows
         from models.demos.glm53_flash_d_p.tt.mhc import build_hc
@@ -212,7 +214,9 @@ class TtGlmBlock:
             from models.demos.glm53_flash_d_p.tt.router import build_router
 
             self.router = build_router(mesh, loader, cfg, layer, max(chunks))
-            self.experts = build_experts(mesh, loader, cfg, layer, max(chunks))
+            self.experts = build_experts(
+                mesh, loader, cfg, layer, max(chunks), weights_dtype=experts_dtype or ttnn.bfloat8_b
+            )
             self.shared = build_mlp(mesh, loader, cfg, layer, name="mlp.shared_experts")
             add = build_moe_add(cfg)
 
@@ -340,7 +344,10 @@ class TtGlmModel:
     """Embedding + decoder blocks + final norm on the device. ``prefill_chunk`` runs one chunk (state in the blocks)
     and returns the last block's residual [1, 1, S, 4 H]."""
 
-    def __init__(self, mesh, model_path: str, max_seq: int, chunks, layers: list[int] | None = None):
+    def __init__(
+        self, mesh, model_path: str, max_seq: int, chunks, layers: list[int] | None = None, experts_dtype=None
+    ):
+        """experts_dtype: routed-expert weight dtype (default bfp8; bfp4 fits all 45 layers on a LoudBox)."""
         from models.demos.glm53_flash_d_p.reference.glm_ref import GlmConfig
         from models.demos.glm53_flash_d_p.reference.weights import WeightLoader
         from models.demos.glm53_flash_d_p.tt.common import residual_layout
@@ -354,7 +361,8 @@ class TtGlmModel:
         split = self.layout == "split"
         self.embed = TtEmbedding(mesh, loader.get(PREFIX + "embed_tokens.weight"), cfg.hc_mult, split=split)
         self.blocks = [
-            TtGlmBlock(mesh, cfg, loader, i, self.max_seq, self.chunks, layout=self.layout) for i in self.layer_ids
+            TtGlmBlock(mesh, cfg, loader, i, self.max_seq, self.chunks, layout=self.layout, experts_dtype=experts_dtype)
+            for i in self.layer_ids
         ]
         self.final_norm = TtFinalNorm(mesh, loader.get(PREFIX + "norm.weight"), cfg.hc_mult, cfg.rms_norm_eps)
 
