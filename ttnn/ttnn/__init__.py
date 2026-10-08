@@ -522,6 +522,7 @@ from ttnn.operations.losses import (
 
 from ttnn.operations.reduction import (
     ReduceType,
+    reduce_planner,
 )
 
 from ttnn.operations.ccl import (
