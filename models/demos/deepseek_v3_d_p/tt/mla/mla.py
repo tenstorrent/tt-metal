@@ -1243,8 +1243,8 @@ class ttMLA:
         the sharing stops here.
 
         An LRU cap is NOT the answer: offsets never repeat within a request, so every chunk would
-        miss and rebuild a 52 MB host tensor ([1, 8, 5120, 320] fp32), which measured 3x slower at
-        long context.
+        miss and rebuild a 21 MB host tensor ([1, 1, 5120, 1024] fp32; 52 MB in the Q-shaped layout
+        it was measured with), which measured 3x slower at long context.
 
         BUILDING THESE AT WARM-UP instead of lazily is the natural next step, and the transformer is
         already the owner that would do it. One entry costs 71.5 ms at 8x4 (11.3 ms host build +
