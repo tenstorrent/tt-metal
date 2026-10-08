@@ -191,7 +191,7 @@ targets:
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   falcon-40b:
-    aliases: ["falcon-40b"]
+    aliases: ["falcon-40b", "falcon-40b-instruct"]
     skus:
       wh_llmbox_perf:
         entries:
@@ -205,14 +205,38 @@ targets:
             accuracy: {}
             owner_id: U053W15B6JF # Djordje Ivanovic
             team: models
+          # e2e demo combo (b32, short prompt). Seeded report-only from run 37650523176, issue #58596.
+          - batch_size: 32
+            seq_len: null
+            status: active
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 4.4787
+              decode_t/s: 143.3182
+              prefill_decode_t/s/u: 1.7427
+              prefill_t/s: 365.1527
+              prefill_time_to_token: 0.3505
+              compile_decode: 28.4805
+              compile_prefill: 27.7995
+            accuracy: {}
+            owner_id: U053W15B6JF # Djordje Ivanovic
+            team: models
   falcon-7b:
     aliases: ["falcon-7b", "falcon-7b-instruct"]
     skus:
       wh_n150:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
             enforce_perf: false
-            perf: {}
+            perf:
+              decode_t/s/u: 12.2849
+              decode_t/s: 393.1159
+              prefill_decode_t/s/u: 0.1792
+              prefill_t/s: 5.8197
+              prefill_time_to_token: 5.4986
+              compile_decode: 122.6036
+              compile_prefill: 20.4288
             accuracy: {}
             owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
@@ -377,6 +401,19 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+          # e2e demo combo (b1, short prompt). Seeded report-only from run 37650523176, issue #58596.
+          - batch_size: 1
+            seq_len: null
+            status: active
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 15.337
+              decode_t/s: 15.337
+              prefill_t/s: 367.3639
+              prefill_time_to_token: 0.2259
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
   gemma-3-4b:
     aliases: ["gemma-3-4b", "google/gemma-3-4b-it", "gemma-3-4b-vision"]
     skus:
@@ -397,6 +434,19 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+          # e2e demo combo (b1, short prompt). Seeded report-only from run 37650523176, issue #58596.
+          - batch_size: 1
+            seq_len: null
+            status: active
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 33.9331
+              decode_t/s: 33.9331
+              prefill_t/s: 1207.1674
+              prefill_time_to_token: 0.0688
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
 
   paddleocr-vl-1.6:
     aliases: ["PaddleOCR-VL-1.6", "PaddlePaddle/PaddleOCR-VL-1.6"]
@@ -414,17 +464,33 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: null
             seq_len: null
             status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 14.4169
+              decode_t/s: 14.4169
+              prefill_t/s: 45.9117
+              prefill_time_to_token: 1.8949
+              compile_decode: 48.0716
+              compile_prefill: 59.2525
             accuracy: {}
       p300x2:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: 1
             seq_len: null
             status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 18.6301
+              decode_t/s: 18.6301
+              prefill_t/s: 40.7018
+              prefill_time_to_token: 2.1375
+              compile_decode: 18.5903
+              compile_prefill: 21.9563
             accuracy: {}
             owner_id: U08TJ70UFRT # Harry Andrews
             team: models
@@ -435,37 +501,69 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: 1
             seq_len: null
             status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 16.6298
+              decode_t/s: 16.6298
+              prefill_t/s: 526.8544
+              prefill_time_to_token: 0.1651
+              compile_decode: 33.7187
+              compile_prefill: 39.1526
             accuracy: {}
       p300x2:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: null
             seq_len: null
             status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 26.813
+              decode_t/s: 26.813
+              prefill_t/s: 936.1785
+              prefill_time_to_token: 0.0929
+              compile_decode: 14.0365
+              compile_prefill: 13.8983
             accuracy: {}
   gemma-4-e2b:
     aliases: ["gemma-4-e2b", "google/gemma-4-E2B-it", "gemma-4-e2b-it"]
     skus:
       wh_n150:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: 1
             seq_len: null
             status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 14.3033
+              decode_t/s: 14.3033
+              prefill_t/s: 634.6196
+              prefill_time_to_token: 0.1308
+              compile_decode: 38.62
+              compile_prefill: 42.7253
             accuracy: {}
             owner_id: U08TJ70UFRT # Harry Andrews
             team: models
             note: "TODO gap tracked from active models_e2e_tests.yaml combo"
       bh_p150:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: null
             seq_len: null
             status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 22.0947
+              decode_t/s: 22.0947
+              prefill_t/s: 725.3723
+              prefill_time_to_token: 0.1144
+              compile_decode: 29.8265
+              compile_prefill: 32.4955
             accuracy: {}
   gemma-4-e4b:
     aliases: ["gemma-4-e4b", "google/gemma-4-E4B-it", "gemma-4-e4b-it"]
@@ -479,17 +577,33 @@ targets:
             accuracy: {}
       bh_p300:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: null
             seq_len: null
             status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 16.8731
+              decode_t/s: 16.8731
+              prefill_t/s: 595.2168
+              prefill_time_to_token: 0.1394
+              compile_decode: 25.7224
+              compile_prefill: 28.4571
             accuracy: {}
       p300x2:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: null
             seq_len: null
             status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 27.4651
+              decode_t/s: 27.4651
+              prefill_t/s: 1037.137
+              prefill_time_to_token: 0.08
+              compile_decode: 15.2211
+              compile_prefill: 15.7088
             accuracy: {}
   gpt-oss-120b:
     aliases: ["gpt-oss-120b", "openai/gpt-oss-120b", "T3K_gpt-oss-120b", "GLX_gpt-oss-120b"]
@@ -564,6 +678,21 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+          # e2e demo combo (b1, short prompt). Seeded report-only from run 37650523176, issue #58596.
+          - batch_size: 1
+            seq_len: null
+            status: active
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 29.5194
+              decode_t/s: 29.5194
+              prefill_t/s: 130.0164
+              prefill_time_to_token: 0.5692
+              compile_decode: 0.034
+              compile_prefill: 68.1451
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
       bh_loudbox:
         entries:
           - batch_size: null
@@ -587,6 +716,21 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+          # e2e demo combo (b1, short prompt). Seeded report-only from run 37650523176, issue #58596.
+          - batch_size: 1
+            seq_len: null
+            status: active
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 54.4664
+              decode_t/s: 54.4664
+              prefill_t/s: 435.0536
+              prefill_time_to_token: 0.1701
+              compile_decode: 0.0213
+              compile_prefill: 47.0974
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
       wh_llmbox_perf:
         entries:
           - batch_size: 1
@@ -596,6 +740,21 @@ targets:
               prefill_time_to_first_token: 400
               decode_t/s/u: 12.0
               decode_t/s: 2200.0
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+          # e2e demo combo (b1, short prompt). Seeded report-only from run 37650523176, issue #58596.
+          - batch_size: 1
+            seq_len: null
+            status: active
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 32.384
+              decode_t/s: 32.384
+              prefill_t/s: 283.7325
+              prefill_time_to_token: 0.2608
+              compile_decode: 0.0337
+              compile_prefill: 147.9379
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
@@ -725,6 +884,19 @@ targets:
             accuracy:
               top1: 90
               top5: 98
+          # data-parallel P300 LFC e2e leg (b64) emits ml_model_name "llama-3.1-8b" -> resolve here.
+          # Seeded report-only from run 37650523176, issue #58596.
+          - batch_size: 64
+            seq_len: null
+            status: active
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 38.4782
+              decode_t/s: 2462.6055
+              prefill_t/s: 5015.9476
+              prefill_time_to_token: 0.0249
+              compile_prefill: 92.8422
+            accuracy: {}
       wh_llmbox_perf:
         entries:
           - batch_size: 1
@@ -740,6 +912,30 @@ targets:
             perf:
               decode_t/s/u: 64.0
               prefill_time_to_first_token: 40
+            accuracy: {}
+          # data-parallel e2e legs (b4/b8) emit ml_model_name "llama-3.1-8b" -> resolve here.
+          # Seeded report-only from run 37650523176, issue #58596.
+          - batch_size: 4
+            seq_len: null
+            status: active
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 21.1
+              decode_t/s: 84.4002
+              prefill_t/s: 4580.3959
+              prefill_time_to_token: 0.0251
+              compile_prefill: 163.0123
+            accuracy: {}
+          - batch_size: 8
+            seq_len: null
+            status: active
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 25.8738
+              decode_t/s: 206.9905
+              prefill_t/s: 6642.8391
+              prefill_time_to_token: 0.0173
+              compile_prefill: 82.3386
             accuracy: {}
       wh_galaxy_perf:
         entries:
@@ -851,6 +1047,43 @@ targets:
             accuracy:
               top1: 90
               top5: 98
+          # e2e demo perf combos (b1/b4/b32, vision prompts). Seeded report-only from run 37650523176, issue #58596.
+          - batch_size: 1
+            seq_len: null
+            status: active
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 30.4926
+              decode_t/s: 30.4926
+              prefill_t/s: 14.6461
+              prefill_time_to_token: 1.229
+              compile_decode: 46.5663
+              compile_prefill: 47.5856
+            accuracy: {}
+          - batch_size: 4
+            seq_len: null
+            status: active
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 28.4089
+              decode_t/s: 113.6354
+              prefill_t/s: 24.8101
+              prefill_time_to_token: 3.8089
+              compile_decode: 5.211
+              compile_prefill: 4.1318
+            accuracy: {}
+          - batch_size: 32
+            seq_len: null
+            status: active
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 21.8358
+              decode_t/s: 698.7447
+              prefill_t/s: 14.6152
+              prefill_time_to_token: 39.4111
+              compile_decode: 8.0576
+              compile_prefill: 32.0277
+            accuracy: {}
       wh_galaxy_perf:
         entries:
           - batch_size: 1
@@ -861,7 +1094,7 @@ targets:
               top1: 87
               top5: 97
   llama3.2-1b:
-    aliases: ["Llama-3.2-1B", "meta-llama/Llama-3.2-1B-Instruct"]
+    aliases: ["Llama-3.2-1B", "meta-llama/Llama-3.2-1B-Instruct", "llama-3.2-1b-instruct"]
     skus:
       wh_n150:
         entries:
@@ -900,7 +1133,7 @@ targets:
               top1: 77
               top5: 96
   llama3.2-3b:
-    aliases: ["Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct"]
+    aliases: ["Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct", "llama-3.2-3b-instruct"]
     skus:
       wh_n150:
         entries:
@@ -1020,6 +1253,19 @@ targets:
             accuracy:
               top1: 96
               top5: 100
+          # e2e demo perf combo (b1, vision prompt). Seeded report-only from run 37650523176, issue #58596.
+          - batch_size: 1
+            seq_len: null
+            status: active
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 9.1667
+              decode_t/s: 9.1667
+              prefill_t/s: 12.8039
+              prefill_time_to_token: 1.4058
+              compile_decode: 43.0013
+              compile_prefill: 51.7425
+            accuracy: {}
   mamba-2.8b:
     aliases: ["mamba-2.8b-slimpj", "state-spaces/mamba-2.8b-slimpj"]
     skus:
@@ -1053,9 +1299,17 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
             enforce_perf: false
-            perf: {}
+            perf:
+              decode_t/s/u: 6.2015
+              decode_t/s: 198.4482
+              prefill_decode_t/s/u: 0.0588
+              prefill_t/s: 346.2002
+              prefill_time_to_token: 0.0588
+              compile_decode: 15.8601
+              compile_prefill: 32.8236
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
@@ -1298,7 +1552,7 @@ targets:
             owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
   qwen2.5-7b:
-    aliases: ["Qwen2.5-7B", "Qwen/Qwen2.5-7B-Instruct"]
+    aliases: ["Qwen2.5-7B", "Qwen/Qwen2.5-7B-Instruct", "qwen2.5-7b-instruct"]
     skus:
       wh_n300:
         entries:
@@ -1310,7 +1564,7 @@ targets:
               top1: 84
               top5: 96
   qwen2.5-coder-32b:
-    aliases: ["Qwen2.5-Coder-32B", "Qwen/Qwen2.5-Coder-32B-Instruct"]
+    aliases: ["Qwen2.5-Coder-32B", "Qwen/Qwen2.5-Coder-32B-Instruct", "qwen2.5-coder-32b-instruct"]
     skus:
       wh_llmbox_perf:
         entries:
@@ -1660,21 +1914,39 @@ targets:
             accuracy:
               top1: 96
               top5: 100
+          # e2e demo perf combo (b32). Seeded report-only from run 37650523176, issue #58596.
+          - batch_size: 32
+            seq_len: null
+            status: active
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 25.2613
+              decode_t/s: 808.3601
+              prefill_t/s: 6990.3248
+              prefill_time_to_token: 0.0984
+              compile_decode: 0.0394
+              compile_prefill: 291.5327
+            accuracy: {}
   whisper:
-    aliases: ["whisper"]
+    # e2e demo emits ml_model_name "whisper-large-v3" and "distil-large-v3"; alias both so the
+    # leg resolves here (report-only) instead of hitting the enforced distil-whisper-large-v3
+    # targets. Activated (was TODO) for issue #58596; perf left empty (report-only on dashboard).
+    aliases: ["whisper", "whisper-large-v3", "distil-large-v3"]
     skus:
       wh_n150:
         entries:
           - batch_size: null
             seq_len: null
-            status: TODO
+            status: active
+            enforce_perf: false
             perf: {}
             accuracy: {}
       bh_p150:
         entries:
           - batch_size: null
             seq_len: null
-            status: TODO
+            status: active
+            enforce_perf: false
             perf: {}
             accuracy: {}
             owner_id: U0491KT8MNY # Mohamed Bahnas
@@ -1757,25 +2029,31 @@ targets:
             team: models
 
   vit:
-    aliases: ["ViT", "vit", "google/vit-base-patch16-224"]
+    # e2e demo emits ml_model_name "ttnn-vit-base-trace-2cq-batch-size-8"; alias so it resolves (issue #58596).
+    aliases: ["ViT", "vit", "google/vit-base-patch16-224", "ttnn-vit-base-trace-2cq-batch-size-8"]
     skus:
-      # samples/sec is reported as fps (report_vision_fps). No numeric target yet:
-      # the in-test band stays the gate until a CI baseline is copied here.
+      # samples/sec is reported as fps (report_vision_fps). Seeded report-only below.
       wh_n150:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: 8
             seq_len: null
             status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              fps: 1479.7557
             accuracy: {}
             owner_id: U088413NP0Q # Ashai Reddy Ginuga
             team: models
       wh_n300:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: 8
             seq_len: null
             status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              fps: 1359.9084
             accuracy: {}
             owner_id: U088413NP0Q # Ashai Reddy Ginuga
             team: models
@@ -1921,17 +2199,31 @@ targets:
     skus:
       wh_n150:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
             enforce_perf: false
-            perf: {}
+            perf:
+              decode_t/s/u: 21.4045
+              decode_t/s: 21.4045
+              prefill_t/s: 1221.8998
+              prefill_time_to_token: 0.072
+              compile_decode: 0.0856
+              compile_prefill: 130.9641
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
       bh_p150:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
             enforce_perf: false
-            perf: {}
+            perf:
+              decode_t/s/u: 158.1968
+              decode_t/s: 158.1968
+              prefill_t/s: 7138.801
+              prefill_time_to_token: 0.0123
+              compile_decode: 0.0079
+              compile_prefill: 120.3348
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
@@ -1940,17 +2232,31 @@ targets:
     skus:
       wh_n150:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
             enforce_perf: false
-            perf: {}
+            perf:
+              decode_t/s/u: 19.5842
+              decode_t/s: 19.5842
+              prefill_t/s: 1151.8325
+              prefill_time_to_token: 0.0764
+              compile_decode: 0.0896
+              compile_prefill: 135.4532
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
       bh_p150:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
             enforce_perf: false
-            perf: {}
+            perf:
+              decode_t/s/u: 102.8112
+              decode_t/s: 102.8112
+              prefill_t/s: 4809.2688
+              prefill_time_to_token: 0.0183
+              compile_decode: 0.0105
+              compile_prefill: 126.9007
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
@@ -1959,8 +2265,30 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
-          - status: active
-            perf: {}
+          # Seeded (report-only) from run 37650523176, issue #58596.
+          - batch_size: 32
+            seq_len: 2048
+            status: active
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 20.4788
+              decode_t/s: 655.321
+              prefill_t/s: 3118.0786
+              prefill_time_to_token: 0.6568
+              compile_decode: 0.0533
+            accuracy: {}
+            owner_id: U08H31YMN4Q # Sanjay Sanjay
+            team: models
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 23.3354
+              decode_t/s: 23.3354
+              prefill_t/s: 749.5988
+              prefill_time_to_token: 0.1708
+              compile_decode: 0.0452
             accuracy: {}
             owner_id: U08H31YMN4Q # Sanjay Sanjay
             team: models
@@ -1969,15 +2297,31 @@ targets:
     skus:
       bh_p150:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 16.9904
+              decode_t/s: 16.9904
+              prefill_t/s: 972.1757
+              prefill_time_to_token: 0.0895
+              compile_decode: 24.5857
+              compile_prefill: 27.0992
             accuracy: {}
             owner_id: U088413NP0Q # Ashai Reddy
             team: models
       bh_quietbox_2:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              decode_t/s/u: 39.8862
+              decode_t/s: 39.8862
+              prefill_t/s: 1672.9482
+              prefill_time_to_token: 0.052
+              compile_decode: 14.4349
+              compile_prefill: 14.163
             accuracy: {}
             owner_id: U088413NP0Q # Ashai Reddy
             team: models
@@ -1986,8 +2330,11 @@ targets:
     skus:
       bh_p150:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              fps: 3492.1357
             accuracy: {}
             owner_id: U088DBNUKGR # Evan Smal
             team: models
@@ -2036,7 +2383,9 @@ targets:
             owner_id: U07D5N7QL4U # Joseph Chu
             team: ttnn
   efficientdet-d0:
-    aliases: ["efficientdet-d0", "efficientdet_d0"]
+    # e2e demo emits ml_model_name "efficientdet-d0-notrace-1cq"; alias so it resolves (issue #58596).
+    # fps target left empty on purpose: host-bound, ~13% run-to-run variance (report-only).
+    aliases: ["efficientdet-d0", "efficientdet_d0", "efficientdet-d0-notrace-1cq"]
     skus:
       wh_n150:
         entries:
@@ -2051,9 +2400,11 @@ targets:
     skus:
       bh_p150b_civ2:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
             enforce_perf: false
-            perf: {}
+            perf:
+              rtf: 0.1323
             accuracy: {}
             owner_id: U087HGJ455E # Sudhanshu Singhal
             team: shield
@@ -2073,8 +2424,11 @@ targets:
     skus:
       bh_quietbox_2:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              fps: 0.0932
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
@@ -2083,8 +2437,11 @@ targets:
     skus:
       bh_quietbox_2:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              fps: 0.0933
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
@@ -2093,8 +2450,11 @@ targets:
     skus:
       bh_quietbox_2:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              fps: 0.0114
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
@@ -2110,8 +2470,11 @@ targets:
     skus:
       bh_quietbox_2:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              fps: 0.1983
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
@@ -2182,9 +2545,11 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
             enforce_perf: false
-            perf: {}
+            perf:
+              fps: 0.0895
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
@@ -2193,9 +2558,11 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
             enforce_perf: false
-            perf: {}
+            perf:
+              fps: 0.1773
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
@@ -2212,8 +2579,11 @@ targets:
     skus:
       bh_quietbox_2:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              fps: 0.0192
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
@@ -2222,8 +2592,11 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
+          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            perf: {}
+            enforce_perf: false
+            perf:
+              fps: 0.0735
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
