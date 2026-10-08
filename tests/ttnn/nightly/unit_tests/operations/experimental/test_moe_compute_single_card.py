@@ -1018,7 +1018,6 @@ def _clamp_boundary_weights(layers, experts, hidden, intermediate):
 def test_moe_compute_single_card_clamped_silu(mesh_device, mesh_shape, tokens, activation_limit):
     """CLAMPED_SILU in FullLocal with exact weights; the small limit clips both gate and up."""
     hidden_size = 4096
-    ring_n = effective_matmul_ring_size(mesh_device)
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -1028,7 +1027,7 @@ def test_moe_compute_single_card_clamped_silu(mesh_device, mesh_shape, tokens, a
         N=2048,
         hidden_size=hidden_size,
         output_height_shard_dim=4,
-        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.CLAMPED_SILU,
         activation_limit=activation_limit,
@@ -1090,7 +1089,7 @@ def test_moe_compute_clamped_silu_limit_is_program_cache_key(mesh_device, mesh_s
             N=max(256, 32 * ring_n),
             hidden_size=hidden_size,
             output_height_shard_dim=4,
-            output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+            output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
             dtype=ttnn.bfloat16,
             activation_type=MoEActivationFunction.CLAMPED_SILU,
             activation_limit=activation_limit,
@@ -1128,7 +1127,7 @@ def test_moe_compute_fp32_dest_activations(mesh_device, mesh_shape, tokens, acti
         N=max(384, 32 * ring_n),
         hidden_size=hidden_size,
         output_height_shard_dim=4,
-        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
         dtype=ttnn.bfloat16,
         activation_type=activation_type,
         activation_limit=10.0 if activation_type == MoEActivationFunction.CLAMPED_SILU else None,
@@ -1165,7 +1164,7 @@ def test_moe_compute_precision_is_program_cache_key(mesh_device, mesh_shape):
             N=max(384, 32 * ring_n),
             hidden_size=hidden_size,
             output_height_shard_dim=4,
-            output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+            output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
             dtype=ttnn.bfloat16,
             activation_type=MoEActivationFunction.CLAMPED_SILU,
             activation_limit=10.0,
