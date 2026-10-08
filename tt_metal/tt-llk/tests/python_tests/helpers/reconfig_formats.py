@@ -19,6 +19,10 @@ from helpers.test_config import TestConfig
 
 ReconfigFormats = tuple[DataFormat, DataFormat, DataFormat, DataFormat]
 
+# Must match NEXT_SIZE in tests/sources/state/reconfig/{pack,unpack,unpack_tile_shape}_reconfig_test.cpp
+# (the device tile size the reconfig tests assert lands in the tile-size GPRs).
+NEXT_TILE_SIZE = 16 * 16 * 4
+
 
 def _format_config_key(config: FormatConfig) -> Hashable:
     return tuple(sorted(vars(config).items()))

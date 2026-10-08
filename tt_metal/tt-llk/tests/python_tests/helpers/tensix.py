@@ -5,6 +5,7 @@
 import difflib
 import json
 from dataclasses import asdict
+from enum import IntEnum
 from typing import Any
 
 from helpers import device as device_module
@@ -18,21 +19,33 @@ from ttexalens.tt_exalens_lib import (
     get_tensix_state,
 )
 
+
+class TensixThread(IntEnum):
+    """Index of a Tensix thread in ``TensixState`` ``gpr`` lists and in the BRISC GPR dump."""
+
+    UNPACK = 0
+    MATH = 1
+    PACK = 2
+
+
 # Must match GPRS_PER_THREAD, TENSIX_THREADS and gpr_dump (mailboxes_arr - GPR_DUMP_WORDS)
 # in tests/helpers/src/brisc.cpp.
 GPRS_PER_THREAD = 64
-TENSIX_THREADS = 3
+TENSIX_THREADS = len(TensixThread)
 GPR_DUMP_WORDS = GPRS_PER_THREAD * TENSIX_THREADS
 GPR_BYTES = 4
 GPR_DUMP_BYTES = GPR_DUMP_WORDS * GPR_BYTES
 
-# Per thread (unpack, math, pack): GPRs ckernel_gpr_map.h designates as temporaries.
+# GPRs ckernel_gpr_map.h designates as temporaries.
 # They hold path-dependent intermediates, not configuration state.
-SCRATCH_GPRS = (
-    frozenset({12, 13, 18, 19}),  # TMP0, TMP1, TMP_LO, TMP_HI
-    frozenset({60}),  # TMP0
-    frozenset({20, 28, 29, 30, 31}),  # TEMP_TILE_OFFSET, TMP0, TMP1, TMP_LO, TMP_HI
-)
+SCRATCH_GPRS = {
+    # TMP0, TMP1, TMP_LO, TMP_HI
+    TensixThread.UNPACK: frozenset({12, 13, 18, 19}),
+    # TMP0
+    TensixThread.MATH: frozenset({60}),
+    # TEMP_TILE_OFFSET, TMP0, TMP1, TMP_LO, TMP_HI
+    TensixThread.PACK: frozenset({20, 28, 29, 30, 31}),
+}
 
 
 class TensixState:
@@ -59,7 +72,7 @@ class TensixState:
                 for index in range(GPRS_PER_THREAD)
                 if index not in SCRATCH_GPRS[thread]
             }
-            for thread in range(TENSIX_THREADS)
+            for thread in TensixThread
         ]
         return state
 
@@ -80,7 +93,7 @@ class TensixState:
                 ].lower()
         missing = [
             (thread, index)
-            for thread in range(TENSIX_THREADS)
+            for thread in TensixThread
             for index in range(GPRS_PER_THREAD)
             if (thread, index) not in names
         ]
@@ -103,7 +116,7 @@ class TensixState:
         )
         return {
             (thread, index): words[thread * GPRS_PER_THREAD + index]
-            for thread in range(TENSIX_THREADS)
+            for thread in TensixThread
             for index in range(GPRS_PER_THREAD)
         }
 

@@ -6,15 +6,13 @@ from helpers.llk_params import (
     DestAccumulation,
 )
 from helpers.param_config import parametrize
-from helpers.tensix import TensixState
+from helpers.reconfig_formats import NEXT_TILE_SIZE
+from helpers.tensix import TensixState, TensixThread
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import CONFIGURE_TEST_RUN_IDX, TO_FROM_INT8
 
 # These may vary run to run. Excluded so that tests don't fail spuriously.
 _IGNORED_GROUPS = ("address_counters", "register_window_counters")
-
-# NEXT_SIZE in unpack_reconfig_test.cpp; both paths store it in the unpack thread's tile-size GPRs.
-_NEXT_TILE_SIZE = 16 * 16 * 4
 
 FORMATS = [
     (
@@ -121,8 +119,9 @@ def test_unpack_reconfig(
     configuration.run()
     expected = TensixState.fetch(TestConfig.TENSIX_LOCATION)
     if TensixState.has_gprs(expected):
-        assert expected["gpr"][0]["tile_size_a"] == _NEXT_TILE_SIZE
-        assert expected["gpr"][0]["tile_size_b"] == _NEXT_TILE_SIZE
+        # Both reconfig paths store the tile size in the unpack thread's tile-size GPRs.
+        assert expected["gpr"][TensixThread.UNPACK]["tile_size_a"] == NEXT_TILE_SIZE
+        assert expected["gpr"][TensixThread.UNPACK]["tile_size_b"] == NEXT_TILE_SIZE
 
     # Only the runtime parameter changes between runs.
     configuration.runtimes = [CONFIGURE_TEST_RUN_IDX(1)]
