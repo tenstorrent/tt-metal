@@ -34,13 +34,15 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
 
     const uint32_t BH = attrs.batch_heads;
     const uint32_t Kt = attrs.key_dim / tt::constants::TILE_WIDTH;
-    const uint32_t Vt = attrs.value_dim / tt::constants::TILE_WIDTH;
+    const uint32_t Vt_full = attrs.value_dim / tt::constants::TILE_WIDTH;
 
-    // One core per head. Splitting a head's value columns across cores re-reads the whole A block per core
-    // (DRAM-bound at 4 blocks: 137 us vs 78 us at 1 block for Galaxy SP8xTP4); at 1 or 2 blocks the kernel is
-    // bound by the step-to-step dependency chain instead.
-    const auto grid = device.compute_with_storage_grid_size();
-    const auto dist = kda_factory_detail::distribute_prep(grid, BH, BH);
+    // Each step's update S = A S + B is independent per value column, so a head's columns are split across value
+    // block cores. A is value-independent: value block 0 reads it once per step and multicasts it to the head's
+    // other blocks, so DRAM traffic does not scale with the blocks (re-reading A per block was DRAM-bound).
+    const auto dist = kda_factory_detail::distribute_value_blocks(device.compute_with_storage_grid_size(), BH, Vt_full);
+    const uint32_t Vt = dist.value_tiles_per_core;
+    const uint32_t value_blocks = dist.value_blocks;
+    const bool mcast_shared = value_blocks > 1;
 
     const m2::KernelSpecName dataflow_kernel_name{"dataflow"};
     const m2::KernelSpecName compute_kernel_name{"compute"};
@@ -54,6 +56,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
     const m2::TensorParamName initial_state_name{"initial_state"};
     const m2::TensorParamName entry_state_name{"entry_state"};
     const m2::TensorParamName final_state_name{"final_state"};
+    const m2::SemaphoreSpecName ready_semaphore_name{"ready"};
+    const m2::SemaphoreSpecName valid_semaphore_name{"valid"};
 
     auto make_dfb = [](const m2::DFBSpecName& name, uint32_t tiles, tt::DataFormat format) {
         return m2::DataflowBufferSpec{
@@ -96,8 +100,14 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
                 m2::TensorBinding{entry_state_name, "entry_state"},
                 m2::TensorBinding{final_state_name, "final_state"},
             },
-        .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"BH", BH}},
-        .runtime_arg_schema = {.runtime_arg_names = {"head"}},
+        .compile_time_args =
+            {{"Kt", Kt},
+             {"Vt", Vt},
+             {"Vt_full", Vt_full},
+             {"BH", BH},
+             {"mcast_shared", static_cast<uint32_t>(mcast_shared)}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"head", "value_block", "peer_x0", "peer_y0", "peer_x1", "peer_y1", "receivers"}},
         // The kernel manages every DFB credit explicitly, including the 4-byte actual_start read.
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
@@ -128,15 +138,49 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
         .hw_config = std::move(compute_hw),
     };
 
+    dataflow.semaphore_bindings.push_back(m2::SemaphoreBinding{ready_semaphore_name, "ready"});
+    dataflow.semaphore_bindings.push_back(m2::SemaphoreBinding{valid_semaphore_name, "valid"});
+
     m2::KernelRunArgs dataflow_run{.kernel = dataflow_kernel_name};
-    for (uint32_t head = 0; head < BH; ++head) {
-        m2::AddRuntimeArgsForNode(dataflow_run.runtime_arg_values, dist.cores[head], {{"head", head}});
+    for (uint32_t index = 0; index < dist.cores.size(); ++index) {
+        const uint32_t value_block = dist.value_block[index];
+        // The sender (value block 0) addresses its siblings' row segment; receivers address the sender. The
+        // dataflow kernel runs on NoC 0, so the segment starts at its lowest coordinate.
+        uint32_t peer_x0 = 0;
+        uint32_t peer_y0 = 0;
+        uint32_t peer_x1 = 0;
+        uint32_t peer_y1 = 0;
+        if (mcast_shared) {
+            const uint32_t sender_index = index - value_block;
+            const auto first =
+                device.worker_core_from_logical_core(dist.cores[value_block == 0 ? sender_index + 1 : sender_index]);
+            const auto last = device.worker_core_from_logical_core(dist.cores[sender_index + value_blocks - 1]);
+            peer_x0 = first.x;
+            peer_y0 = first.y;
+            peer_x1 = last.x;
+            peer_y1 = last.y;
+        }
+        m2::AddRuntimeArgsForNode(
+            dataflow_run.runtime_arg_values,
+            dist.cores[index],
+            {{"head", dist.head[index]},
+             {"value_block", value_block},
+             {"peer_x0", peer_x0},
+             {"peer_y0", peer_y0},
+             {"peer_x1", peer_x1},
+             {"peer_y1", peer_y1},
+             {"receivers", value_blocks - 1}});
     }
     m2::KernelRunArgs compute_run{.kernel = compute_kernel_name};
 
     m2::ProgramSpec spec{
         .name = "chain_affine_transforms",
         .dataflow_buffers = std::move(dfbs),
+        .semaphores =
+            {
+                m2::SemaphoreSpec{.unique_id = ready_semaphore_name, .target_nodes = dist.core_set},
+                m2::SemaphoreSpec{.unique_id = valid_semaphore_name, .target_nodes = dist.core_set},
+            },
         .tensor_parameters =
             {
                 m2::TensorParameter{.unique_id = transforms_name, .spec = transforms.tensor_spec()},

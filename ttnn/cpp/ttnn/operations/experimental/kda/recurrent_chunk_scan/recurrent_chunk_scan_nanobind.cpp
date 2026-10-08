@@ -160,9 +160,16 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
                 Compute-kernel configuration.
 
+            packed_head (bool, optional): With one group per head, return only the head
+                transform as one ``[1,B*H,K,K+V]`` tensor whose rows are ``[A | B]``, the
+                layout the distributed prefix gathers. A rank with no head (empty, or split
+                at its first token) writes the identity ``(I, 0)``; the tail is not written.
+                Requires an interleaved ``memory_config``. Defaults to False.
+
         Returns:
             tuple[ttnn.Tensor, ...]: Four BFLOAT16 TILE tensors: head A/B followed by
-                tail A/B. A has shape ``[B*H*G,K,K]`` and B ``[B*H*G,K,V]``.
+                tail A/B. A has shape ``[B*H*G,K,K]`` and B ``[B*H*G,K,V]``. With
+                ``packed_head``, the single packed head transform.
 
         Note:
             Summaries accumulate in FLOAT32 and pack directly to BFLOAT16 for transport.
@@ -190,7 +197,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("actual_end") = nb::none());
+        nb::arg("actual_end") = nb::none(),
+        nb::arg("packed_head") = false);
 }
 
 }  // namespace ttnn::operations::experimental::kda::recurrent_chunk_scan::detail

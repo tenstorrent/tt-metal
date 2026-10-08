@@ -75,3 +75,51 @@ def test_padding_prefix_empty_and_partial_groups(mesh_device, width):
         ttnn.release_trace(mesh_device, trace)
         for tensor in (*outputs, a_tt, b_tt, initial_tt, start, end):
             ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "start,end",
+    [(0, None), (32, None), (64, None), (0, 64), (32, 64), (64, 96)],
+    ids=["full", "split", "boundary", "rank1-empty", "rank0-only-split", "rank1-only"],
+)
+def test_packed_head_summary_matches_reduced_and_packed_pair(mesh_device, start, end):
+    """The packed head summary must equal reduce_affine_transforms' pair packed as [A | B] in BF16, including the
+    identity a rank without a head contributes."""
+    from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
+        device_protocol,
+        host_protocol,
+    )
+    from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
+
+    batch_heads, num_chunks, dim = 4, 2, 32
+    local_rows = num_chunks * 32
+    protocol = device_protocol(host_protocol(batch_heads, num_chunks, dim, dim, seed=1907), mesh_device)
+    start_tt = make_actual_start(mesh_device, start)
+    end_tt = None if end is None else make_actual_start(mesh_device, end)
+    bounds = dict(actual_start=start_tt, actual_end=end_tt, sequence_parallel_axis=0)
+
+    head_a, head_b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(*protocol, **bounds)
+    reduced = ttnn.experimental.kda.reduce_affine_transforms(head_a, head_b, 1, local_rows=local_rows, **bounds)
+    expected = ttnn.typecast(
+        ttnn.concat(
+            [
+                ttnn.reshape(reduced[0], (1, batch_heads, dim, dim)),
+                ttnn.reshape(reduced[1], (1, batch_heads, dim, dim)),
+            ],
+            dim=3,
+        ),
+        ttnn.bfloat16,
+    )
+    (packed,) = ttnn.experimental.kda.summarize_chunk_recurrence(
+        *protocol, memory_config=ttnn.DRAM_MEMORY_CONFIG, packed_head=True, **bounds
+    )
+    assert tuple(packed.shape) == (1, batch_heads, dim, 2 * dim)
+    for device_index, (want, got) in enumerate(
+        zip(ttnn.get_device_tensors(expected), ttnn.get_device_tensors(packed), strict=True)
+    ):
+        assert_bit_identical(ttnn.to_torch(want), ttnn.to_torch(got), name=f"packed head on device {device_index}")
+    for tensor in (*protocol, head_a, head_b, tail_a, tail_b, *reduced, expected, packed, start_tt):
+        ttnn.deallocate(tensor)
+    if end_tt is not None:
+        ttnn.deallocate(end_tt)
