@@ -52,7 +52,10 @@ from models.demos.laguna.tt.generator import LagunaGenerator  # noqa: E402
 
 MODEL_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[4]
-REFERENCE_TOKENS = MODEL_DIR / "tests" / "reference_outputs" / "readiness_aime24_chat_s.refpt"
+REFERENCE_TOKENS = Path(
+    os.environ.get("LAGUNA_REFERENCE_TOKENS")
+    or MODEL_DIR / "tests" / "reference_outputs" / "readiness_aime24_chat_s.refpt"
+)
 REFERENCE_LOGITS = Path(
     os.environ.get("LAGUNA_REFERENCE_LOGITS")
     or REPO_ROOT / "generated" / "laguna_reference" / "Laguna-S-2.1-aime24-logits.pt"
@@ -134,4 +137,100 @@ def test_laguna_s_accuracy():
         flush=True,
     )
     failures = [f"{name} {result[name]:.4f} < {bar}" for name, bar in BARS.items() if result[name] < bar]
+    assert not failures, "; ".join(failures)
+
+
+BATCH = 32
+
+
+@pytest.mark.no_reset_default_device
+@pytest.mark.timeout(3600)
+def test_laguna_s_accuracy_batch32():
+    """The same comparison with 32 concurrent users (the most the server accepts): every user gets the AIME prompt
+    and the same 100 teacher-forced answer tokens, so all 32 rows of every decode step must match the reference.
+    Eager batch-32 decode is scored per user; the traced batch-32 decode (the server's path) is scored by top-1.
+    The bars apply to the worst user."""
+    if not REFERENCE_LOGITS.is_file():
+        pytest.fail(f"reference logits not found at {REFERENCE_LOGITS}; see test_laguna_s_accuracy for the command")
+    entry = load_reference(REFERENCE_TOKENS).entries[0]
+    prompt = entry.prompt_tokens[0].tolist()
+    answer = entry.generated_tokens[0].tolist()
+    reference = torch.load(REFERENCE_LOGITS)["logits"]
+    positions = len(answer)
+    P = len(prompt)
+    target = reference.argmax(dim=-1)
+
+    mesh = generator = None
+    try:
+        mesh = open_mesh(ttnn, resolve_profile("p150x4", trace_region_size=TRACE_REGION))
+        generator = LagunaGenerator.from_pretrained(mesh, max_seq_len=1024)
+        generator._ensure_cache(BATCH, P + positions + 1)
+
+        # Prefill all 32 users (one prefill per user into its own page-table row), then 99 batch-32 decode steps.
+        start = time.perf_counter()
+        first = generator.prefill_forward(torch.tensor([prompt] * BATCH), prompt_lens=[P] * BATCH)  # [B, 1, V]
+        logits = [[first[u].reshape(-1)] for u in range(BATCH)]
+        for i in range(positions - 1):
+            step = generator.decode_forward(
+                torch.tensor([[answer[i]]] * BATCH), torch.tensor([P + i] * BATCH), return_logits=True
+            )  # [B, V]
+            for u in range(BATCH):
+                logits[u].append(step[u].reshape(-1))
+        eager_seconds = time.perf_counter() - start
+
+        # Traced batch-32 decode with on-device greedy sampling. Every user is fed the same token and position, so the
+        # generator's one-value host staging helpers are widened to all 32 rows.
+        generator.reset()
+        generator.prefill_forward(torch.tensor([prompt] * BATCH), prompt_lens=[P] * BATCH)
+        host = generator._host
+        generator._host_rank4_tok = lambda t: host(torch.full((1, 1, 1, BATCH), int(t), dtype=torch.int32), ttnn.uint32)
+        generator._host_pos = lambda p: host(torch.full((BATCH,), int(p), dtype=torch.int32), ttnn.int32)
+        generator._host_ridx = lambda p: host(torch.full((1, BATCH), int(p), dtype=torch.int32), ttnn.uint32)
+        st = generator._decode_trace_state(BATCH, generator._page_table, P, answer[0])
+        ttnn.copy_host_to_device_tensor(generator._host_rank4_tok(answer[0]), st["tok"])
+        ttnn.copy_host_to_device_tensor(generator._host_pos(P), st["cur"])
+        ttnn.copy_host_to_device_tensor(generator._host_ridx(P), st["ridx"])
+        traced_hits = []  # per user: predictions for positions 1..99 (position 0 comes from prefill)
+        for i in range(positions - 1):
+            ttnn.execute_trace(mesh, st["tid"], cq_id=0, blocking=True)
+            preds = generator._read_token(st["tok"], BATCH)
+            traced_hits.append([int(p) == int(target[i + 1]) for p in preds])
+            ttnn.copy_host_to_device_tensor(generator._host_rank4_tok(answer[i + 1]), st["tok"])
+    finally:
+        if generator is not None:
+            generator.teardown()
+        if mesh is not None:
+            close_mesh(ttnn, mesh)
+
+    per_user = []
+    for u in range(BATCH):
+        rows = logits[u]
+        rank = [
+            int(found[0, 0]) if (found := (row.float().topk(100).indices == int(target[i])).nonzero()).numel() else 100
+            for i, row in enumerate(rows)
+        ]
+        pccs = [pcc(row, reference[i]) for i, row in enumerate(rows)]
+        first_hit = int(rows[0].float().argmax() == target[0])  # traced position 0 = the prefill prediction
+        per_user.append(
+            {
+                "top1": sum(r == 0 for r in rank) / positions,
+                "top5": sum(r < 5 for r in rank) / positions,
+                "top100": sum(r < 100 for r in rank) / positions,
+                "traced_top1": (first_hit + sum(step[u] for step in traced_hits)) / positions,
+                "pcc_mean": sum(pccs) / positions,
+                "pcc_worst": min(pccs),
+            }
+        )
+    worst = {name: min(user[name] for user in per_user) for name in per_user[0]}
+    mean = {name: sum(user[name] for user in per_user) / BATCH for name in per_user[0]}
+    print(
+        f"\nLaguna-S-2.1 accuracy vs fp32 Hugging Face, batch {BATCH}, {positions} positions per user "
+        f"({eager_seconds:.1f} s eager)\n"
+        f"  worst user: top-1 {worst['top1']:.2f}   top-5 {worst['top5']:.2f}   top-100 {worst['top100']:.2f}   "
+        f"traced top-1 {worst['traced_top1']:.2f}   PCC mean {worst['pcc_mean']:.4f}   PCC worst {worst['pcc_worst']:.4f}\n"
+        f"  mean user:  top-1 {mean['top1']:.2f}   top-5 {mean['top5']:.2f}   top-100 {mean['top100']:.2f}   "
+        f"traced top-1 {mean['traced_top1']:.2f}   PCC mean {mean['pcc_mean']:.4f}",
+        flush=True,
+    )
+    failures = [f"{name} {worst[name]:.4f} < {bar}" for name, bar in BARS.items() if worst[name] < bar]
     assert not failures, "; ".join(failures)
