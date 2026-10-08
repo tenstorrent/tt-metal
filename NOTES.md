@@ -11,3 +11,5 @@
   `ssh g15blx01 bash /var/tmp/fasth3/t277/drv/probe.sh`.
 - Expect: default ~2.48 s, NA ~94 ms/block; off ~2.71 s; md5 2797bc15ab69a49d945b26d85ff36675 both.
 - Then: on ttp/t277-land `ttp push --detach` (rebase onto latest t48; #276 touches the same reader).
+- 12:07 UTC: build ok (27 s incremental, transformer unity rebuilt). Broker job 043 submitted (-t 240).
+  First launch failed before submit (script name typo, no device work).
