@@ -103,6 +103,45 @@ ALWI void copy_tile_early_poll(uint32_t in_cb_id, uint32_t in_tile_index, uint32
         dst_tile_index, in_cb_id)));
 }
 #define BINARY_NG_COPY_TILE copy_tile_early_poll
+
+template <uint32_t cb>
+constexpr bool l1_format_is_32bit() {
+#if defined(UCK_CHLKC_PACK)
+    constexpr uint32_t format = pack_dst_format[cb];
+#else
+    constexpr uint32_t format = unpack_src_format[cb];
+#endif
+    return format == static_cast<uint32_t>(DataFormat::Float32) || format == static_cast<uint32_t>(DataFormat::Int32) ||
+           format == static_cast<uint32_t>(DataFormat::UInt32);
+}
+
+// The operands' copies can share one unpack-to-dest handshake: four-face 32-bit tiles of one format that the per tile
+// copy unpacks into a 32-bit DEST (unpack and math only).
+template <uint32_t cb_first, uint32_t... cbs>
+constexpr bool operands_to_dest() {
+#if defined(UCK_CHLKC_PACK)
+    return false;
+#else
+    constexpr uint32_t dst = unpack_dst_format[cb_first];
+    return DST_ACCUM_MODE && l1_format_is_32bit<cb_first>() &&
+           (dst == static_cast<uint32_t>(DataFormat::Float32) || dst == static_cast<uint32_t>(DataFormat::Int32) ||
+            dst == static_cast<uint32_t>(DataFormat::UInt32)) &&
+           unpack_tile_num_faces[cb_first] == 4 && (same_copy_init<cb_first, cbs>() && ...);
+#endif
+}
+
+// ntiles tiles of each operand, from its tile index on, into consecutive DEST slots from dst_tile_index on, operand by
+// operand, under one unpack-to-dest handshake (operands_to_dest, after copy_init of the first operand)
+template <uint32_t num_operands>
+ALWI void copy_operands_to_dest(
+    const uint32_t (&in_cb_ids)[num_operands],
+    const uint32_t (&in_tile_indices)[num_operands],
+    uint32_t dst_tile_index,
+    uint32_t ntiles) {
+    UNPACK((llk_unpack_A_operands_to_dest<num_operands>(in_cb_ids, in_tile_indices, ntiles)));
+    MATH((llk_math_eltwise_unary_datacopy_block<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+        dst_tile_index, num_operands * ntiles, in_cb_ids[0])));
+}
 #else
 #define BINARY_NG_COPY_TILE copy_tile
 #endif

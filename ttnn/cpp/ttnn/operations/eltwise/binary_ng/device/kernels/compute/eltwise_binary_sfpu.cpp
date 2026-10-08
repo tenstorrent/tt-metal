@@ -31,7 +31,7 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
-template <bool rhs_copy_init = true>
+template <bool rhs_copy_init = true, bool operand_pair = false>
 ALWI void process_tile(
     tt::CBIndex cb_pre_lhs_id,
     tt::CBIndex cb_post_lhs_id,
@@ -74,15 +74,26 @@ ALWI void process_tile(
         tile_regs_acquire();
         // Startup and preprocessing preserve the LHS-format SrcA invariant.
         copy_init(cb_post_lhs.get_cb_id());
-        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
+#if defined(ARCH_BLACKHOLE)
+        if constexpr (operand_pair) {
+            for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
+                copy_operands_to_dest<2>({cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id()}, {i, i}, i * 2, 1);
+            }
+        } else
+#endif
+        {
+            for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
+                copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
+            }
+            reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+            if constexpr (rhs_copy_init) {
+                copy_init(cb_post_rhs.get_cb_id());
+            }
         }
-        reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
-        if constexpr (rhs_copy_init) {
-            copy_init(cb_post_rhs.get_cb_id());
-        }
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_post_rhs.get_cb_id(), i, i * 2 + 1);
+            if constexpr (!operand_pair) {
+                copy_tile(cb_post_rhs.get_cb_id(), i, i * 2 + 1);
+            }
 
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT
@@ -134,6 +145,11 @@ void kernel_main() {
         "binary_ng: SFPU SrcA startup operand disagrees with the preprocessing restore reference");
     constexpr auto cb_post_rhs_id = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id;
     constexpr bool rhs_copy_init = !same_copy_init<cb_post_lhs_id, cb_post_rhs_id>();
+#if defined(ARCH_BLACKHOLE)
+    constexpr bool operand_pair = operands_to_dest<cb_post_lhs_id, cb_post_rhs_id>();
+#else
+    constexpr bool operand_pair = false;
+#endif
 
     compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
     copy_init(cb_post_lhs_id);
@@ -149,7 +165,7 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile<rhs_copy_init>(
+        process_tile<rhs_copy_init, operand_pair>(
             cb_pre_lhs_id,
             cb_post_lhs_id,
             cb_pre_rhs_id,
@@ -161,7 +177,7 @@ void kernel_main() {
     }
 
     if (remaining_iterations > 0) {
-        process_tile<rhs_copy_init>(
+        process_tile<rhs_copy_init, operand_pair>(
             cb_pre_lhs_id,
             cb_post_lhs_id,
             cb_pre_rhs_id,

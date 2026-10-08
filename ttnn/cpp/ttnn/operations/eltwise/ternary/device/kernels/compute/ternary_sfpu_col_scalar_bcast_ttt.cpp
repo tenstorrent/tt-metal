@@ -12,6 +12,7 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 
+template <bool operand_triple = false>
 ALWI void process_tile(
     uint32_t predicate_cb_id,
     uint32_t true_cb_id,
@@ -56,13 +57,20 @@ ALWI void process_tile(
 
         // Copy all 3 inputs to destination registers
         copy_init(predicate_dfb.get_id());
-        copy_tile(predicate_dfb.get_id(), 0, 0);  // predicate to reg 0, 3, 6, ...
+#if defined(ARCH_BLACKHOLE)
+        if constexpr (operand_triple) {
+            copy_operands_to_dest<3>({predicate_dfb.get_id(), true_dfb.get_id(), false_dfb.get_id()}, {0, 0, 0}, 0, 1);
+        } else
+#endif
+        {
+            copy_tile(predicate_dfb.get_id(), 0, 0);  // predicate to reg 0, 3, 6, ...
 
-        copy_init(true_dfb.get_id());
-        copy_tile(true_dfb.get_id(), 0, 1);  // true to reg 1, 4, 7, ...
+            copy_init(true_dfb.get_id());
+            copy_tile(true_dfb.get_id(), 0, 1);  // true to reg 1, 4, 7, ...
 
-        copy_init(false_dfb.get_id());
-        copy_tile(false_dfb.get_id(), 0, 2);  // false to reg 2, 5, 8, ...
+            copy_init(false_dfb.get_id());
+            copy_tile(false_dfb.get_id(), 0, 2);  // false to reg 2, 5, 8, ...
+        }
 
         // Perform the ternary operation
         TERNARY_SFPU_OP_INIT();
@@ -117,6 +125,12 @@ void kernel_main() {
     constexpr auto false_cb_id = tt::CBIndex::c_2;
     constexpr auto cb_out_id = tt::CBIndex::c_3;
 
+#if defined(ARCH_BLACKHOLE)
+    constexpr bool operand_triple = operands_to_dest<predicate_cb_id, true_cb_id, false_cb_id>();
+#else
+    constexpr bool operand_triple = false;
+#endif
+
     compute_kernel_hw_startup(predicate_cb_id, cb_out_id);
     copy_init(predicate_cb_id);
 
@@ -124,11 +138,12 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(predicate_cb_id, true_cb_id, false_cb_id, cb_out_id, tile_freq, tile_start, num_tiles_per_cycle);
+        process_tile<operand_triple>(
+            predicate_cb_id, true_cb_id, false_cb_id, cb_out_id, tile_freq, tile_start, num_tiles_per_cycle);
     }
 
     if (remaining_iterations > 0) {
-        process_tile(
+        process_tile<operand_triple>(
             predicate_cb_id, true_cb_id, false_cb_id, cb_out_id, remaining_iterations, tile_start, num_tiles_per_cycle);
     }
 }

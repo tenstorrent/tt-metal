@@ -29,7 +29,7 @@
 #include "eltwise_utils_sfpu.hpp"
 
 // Process n LHS tiles against a scalar tile at index 0 in cb_post_rhs
-template <bool rhs_copy_init = true>
+template <bool rhs_copy_init = true, bool operand_pair = false>
 FORCE_INLINE void process_sfpu_scalar_tiles(
     uint32_t n,
     uint32_t cb_pre_lhs_id,
@@ -52,15 +52,26 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
     tile_regs_acquire();
     // Startup and preprocessing preserve the LHS-format SrcA invariant.
     copy_init(cb_post_lhs.get_cb_id());
-    for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (operand_pair) {
+        for (uint32_t i = 0; i < n; ++i) {
+            copy_operands_to_dest<2>({cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id()}, {i, 0}, i * 2, 1);
+        }
+    } else
+#endif
+    {
+        for (uint32_t i = 0; i < n; ++i) {
+            copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
+        }
+        reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+        if constexpr (rhs_copy_init) {
+            copy_init(cb_post_rhs.get_cb_id());
+        }
     }
-    reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
-    if constexpr (rhs_copy_init) {
-        copy_init(cb_post_rhs.get_cb_id());
-    }
     for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(cb_post_rhs.get_cb_id(), 0, i * 2 + 1);  // Always use scalar at index 0
+        if constexpr (!operand_pair) {
+            copy_tile(cb_post_rhs.get_cb_id(), 0, i * 2 + 1);  // Always use scalar at index 0
+        }
 #if HAS_ACTIVATIONS(POST)
         BINARY_SFPU_INIT;
 #endif
@@ -109,6 +120,12 @@ void kernel_main() {
     CircularBuffer cb_post_rhs(HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id);
     constexpr bool rhs_copy_init =
         !same_copy_init<cb_post_lhs_id, (HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id)>();
+#if defined(ARCH_BLACKHOLE)
+    constexpr bool operand_pair =
+        operands_to_dest<cb_post_lhs_id, (HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id)>();
+#else
+    constexpr bool operand_pair = false;
+#endif
 
     compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
     copy_init(cb_post_lhs_id);
@@ -126,14 +143,14 @@ void kernel_main() {
     // Process full chunks
     uint32_t full_chunks = num_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < full_chunks; ++chunk) {
-        process_sfpu_scalar_tiles<rhs_copy_init>(
+        process_sfpu_scalar_tiles<rhs_copy_init, operand_pair>(
             num_tiles_per_cycle, cb_pre_lhs_id, cb_post_lhs_id, cb_post_rhs.get_cb_id(), cb_out_id ISCLOSE_RT_ARG_FWD);
     }
 
     // Process remainder
     uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
-        process_sfpu_scalar_tiles<rhs_copy_init>(
+        process_sfpu_scalar_tiles<rhs_copy_init, operand_pair>(
             remainder, cb_pre_lhs_id, cb_post_lhs_id, cb_post_rhs.get_cb_id(), cb_out_id ISCLOSE_RT_ARG_FWD);
     }
 

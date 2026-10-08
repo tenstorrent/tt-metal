@@ -210,6 +210,43 @@ inline void llk_unpack_A_block(
     }
 }
 
+// ntiles tiles of each operand, from its tile index on, into consecutive DEST slots with one unpack-to-dest handshake
+// (four-face 32-bit tiles of one format, a 32-bit DEST), operand by operand. The math thread takes them as one block.
+template <std::uint32_t num_operands, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+inline void llk_unpack_A_operands_to_dest(
+    const std::uint32_t (&operands)[num_operands],
+    const std::uint32_t (&tile_indices)[num_operands],
+    const std::uint32_t ntiles) {
+    const std::uint32_t first_id = get_operand_id(operands[0]);
+    std::uint32_t addresses[num_operands];
+    for (std::uint32_t k = 0; k < num_operands; ++k) {
+        const std::uint32_t operand_id = get_operand_id(operands[k]);
+        LLK_ASSERT(cb_access_within_bounds(operand_id, tile_indices[k], ntiles), "Block tile read exceeds CB boundary");
+        LLK_ASSERT(
+            unpack_src_format[operand_id] == unpack_src_format[first_id] &&
+                unpack_dst_format[operand_id] == unpack_dst_format[first_id],
+            "The operands share one format");
+        SAN_HOOK(execute<OperationUnpackUnary>(
+            StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BroadcastType::NONE)),
+            StateVal<OperationUnpackUnary::AccumulateToDest>(false),
+            StateVal<OperationUnpackUnary::BinaryReuseDest>(to_underlying(EltwiseBinaryReuseDestType::NONE)),
+            StateVal<OperationUnpackUnary::UnpackToDest>(true),
+            StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operand_id]),
+            StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id]),
+            StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operand_id)),
+            StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operand_id)),
+            StateDiscard<std::uint32_t>(tile_indices[k]),
+            StateDiscard<std::uint32_t>(ntiles)));
+        addresses[k] = get_local_cb_interface(operand_id).fifo_rd_ptr - 1 +
+                       tile_indices[k] * get_local_cb_interface(operand_id).fifo_page_size;
+    }
+
+    WAYPOINT("UPAW");
+    _llk_unpack_A_operands_to_dest_<is_fp32_dest_acc_en, num_operands>(
+        addresses, ntiles, unpack_src_format[first_id], unpack_dst_format[first_id]);
+    WAYPOINT("UPAD");
+}
+
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_A_uninit() {
     SAN_HOOK(uninit<OperationUnpackUnary>(StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BType))));

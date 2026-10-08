@@ -638,3 +638,70 @@ inline void _llk_unpack_A_block_(
     // Switch unpacker config context
     switch_config_context_from(context);
 }
+
+/**
+ * @brief Unpack num_tiles tiles of each of num_operands operands into consecutive DEST slots with one DEST slot handshake:
+ *        operand 0's tiles go to the slots from the math thread's start slot on, then operand 1's, and so on. Four-face
+ *        32-bit tiles into a 32-bit DEST, every operand in the same formats, each operand's tiles back to back in L1.
+ *
+ * @tparam is_fp32_dest_acc_en: DEST holds 32-bit datums; the math thread takes the num_operands * num_tiles tiles as one
+ *         block through @ref _llk_math_eltwise_unary_datacopy_block_.
+ * @tparam num_operands: Operands, at least 2.
+ * @param addresses: L1 address of each operand's first tile (16 B units).
+ * @param num_tiles: Tiles per operand, at least 1.
+ * @param unpack_src_format: Source data format of every operand in L1.
+ * @param unpack_dst_format: Destination data format of every operand.
+ * @note Call @ref _llk_unpack_A_init_ for unpack to dest with transpose_of_faces 0 before this function.
+ */
+template <bool is_fp32_dest_acc_en, std::uint32_t num_operands>
+inline void _llk_unpack_A_operands_to_dest_(
+    const std::uint32_t (&addresses)[num_operands], const std::uint32_t num_tiles, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format)
+{
+    static_assert(is_fp32_dest_acc_en, "The operands take a 32-bit DEST");
+    static_assert(num_operands >= 2, "At least two operands");
+    LLK_ASSERT(num_tiles > 0, "Each operand has at least one tile");
+    LLK_ASSERT(is_32bit_input(unpack_src_format, unpack_dst_format), "The operands are 32-bit tiles");
+
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // Clear z/w start counters
+    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+    LLK_ASSERT(is_valid_L1_address(addresses[0]), "L1 addresses must be in valid L1 memory region");
+    cfg[(unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = addresses[0];
+    semaphore_post(semaphore::UNPACK_SYNC);
+    set_dst_write_addr(unp_cfg_context);
+    wait_for_dest_available();
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+#pragma GCC unroll 0
+    for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
+    {
+        ckernel::ckernel_template::run();
+    }
+
+    for (std::uint32_t operand = 1; operand < num_operands; ++operand)
+    {
+        // The next base address through the stream behind the UNPACRs before it, the source Z restarted, the DEST Z walking on
+        LLK_ASSERT(is_valid_L1_address(addresses[operand]), "L1 addresses must be in valid L1 memory region");
+        TT_SETDMAREG(0, LOWER_HALFWORD(addresses[operand]), 0, LO_16(p_gpr_unpack::TMP0));
+        TT_SETDMAREG(0, UPPER_HALFWORD(addresses[operand]), 0, HI_16(p_gpr_unpack::TMP0));
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+        if (unp_cfg_context == 0)
+        {
+            TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG3_Base_address_ADDR32);
+        }
+        else
+        {
+            TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+        }
+        TTI_NOP;                                           // WRCFG takes 2 cycles
+        TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0001); // ch0_z = 0
+#pragma GCC unroll 0
+        for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
+        {
+            ckernel::ckernel_template::run();
+        }
+    }
+
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    unpack_to_dest_tile_done(unp_cfg_context);
+    switch_config_context(unp_cfg_context);
+}

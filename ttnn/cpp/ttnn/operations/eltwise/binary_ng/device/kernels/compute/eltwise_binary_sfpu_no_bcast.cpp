@@ -31,20 +31,7 @@
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
-#if defined(ARCH_BLACKHOLE)
-template <uint32_t cb>
-constexpr bool l1_format_is_32bit() {
-#if defined(UCK_CHLKC_PACK)
-    constexpr uint32_t format = pack_dst_format[cb];
-#else
-    constexpr uint32_t format = unpack_src_format[cb];
-#endif
-    return format == static_cast<uint32_t>(DataFormat::Float32) || format == static_cast<uint32_t>(DataFormat::Int32) ||
-           format == static_cast<uint32_t>(DataFormat::UInt32);
-}
-#endif
-
-template <bool operand_blocks = false, bool rhs_copy_init = true>
+template <bool operand_blocks = false, bool rhs_copy_init = true, bool operand_pair = false>
 FORCE_INLINE void process_sfpu_tiles(
     uint32_t n,
     uint32_t cb_pre_lhs_id,
@@ -73,11 +60,16 @@ FORCE_INLINE void process_sfpu_tiles(
     copy_init(cb_post_lhs.get_cb_id());
 #if defined(ARCH_BLACKHOLE)
     if constexpr (operand_blocks) {
-        // Each operand's tiles go to consecutive slots, one copy_block per operand (one unpack-to-dest handshake).
-        copy_block(cb_post_lhs.get_cb_id(), 0, 0, n);
-        reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
-        copy_init(cb_post_rhs.get_cb_id());
-        copy_block(cb_post_rhs.get_cb_id(), 0, n, n);
+        // Each operand's tiles go to consecutive slots, one copy_block per operand (one unpack-to-dest handshake),
+        // or both operands' tiles under one handshake when they share a format.
+        if constexpr (operand_pair) {
+            copy_operands_to_dest<2>({cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id()}, {0, 0}, 0, n);
+        } else {
+            copy_block(cb_post_lhs.get_cb_id(), 0, 0, n);
+            reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+            copy_init(cb_post_rhs.get_cb_id());
+            copy_block(cb_post_rhs.get_cb_id(), 0, n, n);
+        }
         for (uint32_t i = 0; i < n; ++i) {
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT;
@@ -156,8 +148,10 @@ void kernel_main() {
     // 32-bit operands into a 32-bit DEST: copy_block takes one unpack-to-dest handshake per operand
     constexpr bool operand_blocks =
         DST_ACCUM_MODE && l1_format_is_32bit<cb_post_lhs_id>() && l1_format_is_32bit<cb_post_rhs_id>();
+    constexpr bool operand_pair = operands_to_dest<cb_post_lhs_id, cb_post_rhs_id>();
 #else
     constexpr bool operand_blocks = false;
+    constexpr bool operand_pair = false;
 #endif
     constexpr bool rhs_copy_init = !same_copy_init<cb_post_lhs_id, cb_post_rhs_id>();
 
@@ -174,7 +168,7 @@ void kernel_main() {
     // Process full chunks
     uint32_t num_full_chunks = num_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
-        process_sfpu_tiles<operand_blocks, rhs_copy_init>(
+        process_sfpu_tiles<operand_blocks, rhs_copy_init, operand_pair>(
             num_tiles_per_cycle,
             cb_pre_lhs_id,
             cb_post_lhs_id,
@@ -186,7 +180,7 @@ void kernel_main() {
     // Process remainder
     uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
-        process_sfpu_tiles<operand_blocks, rhs_copy_init>(
+        process_sfpu_tiles<operand_blocks, rhs_copy_init, operand_pair>(
             remainder, cb_pre_lhs_id, cb_post_lhs_id, cb_pre_rhs_id, cb_post_rhs_id, cb_out_id ISCLOSE_RT_ARG_FWD);
     }
 }
