@@ -74,6 +74,9 @@ namespace ckernel
 
 constexpr std::uint32_t FAST_UNTILIZE_MOP_LAST_OUTER_CFG_INDEX = 7;
 
+// Chunk width the pack init was programmed for (0 after the uninit); written and read only under LLK asserts.
+inline std::uint32_t pack_fast_untilize_init_block_ct_dim = 0;
+
 template <bool is_strided_row>
 inline void _llk_pack_fast_untilize_configure_addrmod_()
 {
@@ -312,6 +315,7 @@ inline void _llk_pack_fast_untilize_init_(const std::uint32_t pack_src_format, c
     static_assert(
         (block_ct_dim >= 2 && block_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM) || block_ct_dim == FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST,
         "BH fast untilize supports block_ct_dim 2, 3, 4, or 8 (16-bit DEST)");
+    LLK_ASSERT_BLOCK(pack_fast_untilize_init_block_ct_dim = block_ct_dim);
 
     TTI_SETDMAREG(0, 0x000, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
     TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
@@ -388,6 +392,7 @@ inline void _llk_pack_fast_untilize_block_(const std::uint32_t address, const st
         (block_ct_dim >= 2 && block_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM) || block_ct_dim == FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST,
         "BH fast untilize supports block_ct_dim 2, 3, 4, or 8 (16-bit DEST)");
     LLK_ASSERT(unit_dim >= 2 && unit_dim <= block_ct_dim, "fast_untilize pack unit_dim must be in [2, block_ct_dim]");
+    LLK_ASSERT(block_ct_dim == pack_fast_untilize_init_block_ct_dim, "fast_untilize: the block's chunk width differs from the init's");
 
     program_packer_destination(address);
 
@@ -458,6 +463,7 @@ inline void _llk_pack_fast_untilize_block_strided_(
         "BH fast untilize strided path supports block_ct_dim 2, 3, 4, or 8 (16-bit DEST)");
     static_assert(full_ct_dim > block_ct_dim, "Use the contiguous fast_untilize block when the chunk is the full row");
     LLK_ASSERT(unit_dim >= 2 && unit_dim <= block_ct_dim, "fast_untilize pack unit_dim must be in [2, block_ct_dim]");
+    LLK_ASSERT(block_ct_dim == pack_fast_untilize_init_block_ct_dim, "fast_untilize: the block's chunk width differs from the init's");
 
     constexpr std::uint32_t MAX_CARRIED_OUTPUT_Y_ROW = 2 * FAST_UNTILIZE_PHASE_ROWS - 1;
 
@@ -509,6 +515,9 @@ inline void _llk_pack_fast_untilize_block_strided_(
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
 inline void _llk_pack_fast_untilize_uninit_(const std::uint32_t pack_src_format)
 {
+    // A mismatch would leave the init's channel 1 row stride programmed for the next op.
+    LLK_ASSERT(block_ct_dim == pack_fast_untilize_init_block_ct_dim, "fast_untilize: the uninit's chunk width differs from the init's");
+    LLK_ASSERT_BLOCK(pack_fast_untilize_init_block_ct_dim = 0);
     if constexpr (full_ct_dim > block_ct_dim)
     {
         _llk_pack_fast_untilize_clear_output_row_stride_();
