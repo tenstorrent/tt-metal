@@ -192,6 +192,18 @@ void kernel_main() {
     constexpr uint32_t full_N_tiles_bytes = N_block_tiles * in1_tile_size;
 
     bool k_forward = true;
+    // Within a K loop the next in1 block is requested before the current one is forwarded when its slot is already
+    // free, so its reads (or its upstream forward) overlap the forward. If compute still holds the slot, waiting for
+    // it would hold back the forward, so the next block is requested after the forward instead. A fused all-gather
+    // decides each K block's index only when its turn comes, so it requests every block in its own iteration.
+#ifdef FUSE_AG
+    constexpr bool prefetch_next_in1_block = false;
+#else
+    constexpr bool prefetch_next_in1_block = true;
+#endif
+    // Whether the current K iteration's in1 block was already requested, and its L1 address.
+    bool block_requested = false;
+    uint32_t block_address = 0;
 
     uint32_t defer_write_m_tile = 0;
     uint32_t defer_write_m_tile_end = 0;
@@ -302,34 +314,50 @@ void kernel_main() {
                 }
 
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
-                dfb_in1.reserve_back(in1_block_num_tiles);
-
-                uint32_t in1_start_address = dfb_in1.get_write_ptr();
-                if constexpr (is_injector_core) {
 #ifdef FUSE_AG
-                    if (is_injector_core) {
-                        k_block =
-                            fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
-                    }
+                if constexpr (is_injector_core) {
+                    k_block = fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
+                }
 #endif
-                    read_in1_block_sync<K_block_tiles, N_block_tiles>(
-                        in1_reader,
-                        in1_shape,
-                        dfb_in1,
-                        in1_tile_size,
-                        k_block * K_block_tiles,
-                        (k_block + 1) * K_block_tiles,
-                        n_tile,
-                        n_tile_end);
+                // Reserves an in1 slot and starts filling it: the injector reads the block from DRAM, a receiver asks
+                // its predecessor to forward it.
+                auto request_in1_block = [&](uint32_t requested_k_block) {
+                    dfb_in1.reserve_back(in1_block_num_tiles);
+                    block_address = dfb_in1.get_write_ptr();
+                    if constexpr (is_injector_core) {
+                        issue_in1_block_reads<K_block_tiles, N_block_tiles>(
+                            in1_reader,
+                            in1_shape,
+                            dfb_in1,
+                            in1_tile_size,
+                            requested_k_block * K_block_tiles,
+                            (requested_k_block + 1) * K_block_tiles,
+                            n_tile,
+                            n_tile_end);
+                    } else {
+                        in1_receiver_semaphore.set(INVALID);
+                        in1_sender_semaphore.up(noc, in1_sender_noc_x, in1_sender_noc_y, 1);
+                    }
+                };
+                if (!block_requested) {
+                    request_in1_block(k_block);
+                }
+                uint32_t in1_start_address = block_address;
+                if constexpr (is_injector_core) {
+                    noc.async_read_barrier();
                 } else {
-                    in1_receiver_semaphore.set(INVALID);
-                    in1_sender_semaphore.up(noc, in1_sender_noc_x, in1_sender_noc_y, 1);
                     in1_receiver_semaphore.wait(VALID);
                 }
-
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 dfb_in1.push_back(in1_block_num_tiles);
+
+                const bool has_next_block = prefetch_next_in1_block && k_block_iter + 1 < K_num_blocks;
+                const uint32_t next_k_block = k_forward ? k_block_iter + 1 : (K_num_blocks - 2) - k_block_iter;
+                block_requested = has_next_block && dfb_in1.pages_reservable_at_back(in1_block_num_tiles);
+                if (block_requested) {
+                    request_in1_block(next_k_block);
+                }
 
                 if (!is_sink_core) {
                     in1_sender_semaphore.wait(1);
@@ -355,6 +383,10 @@ void kernel_main() {
 #endif
 
                     in1_valid_semaphore.relay_unicast(noc, in1_receiver_semaphore, in1_dest_noc_x, in1_dest_noc_y);
+                }
+                if (has_next_block && !block_requested) {
+                    request_in1_block(next_k_block);
+                    block_requested = true;
                 }
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {
