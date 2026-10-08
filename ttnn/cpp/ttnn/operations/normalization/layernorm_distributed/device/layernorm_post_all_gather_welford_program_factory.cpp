@@ -388,6 +388,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
              {"beta_is_row_major", beta_is_row_major},
              {"dfb_length", cb_length},
              {"Wt", Wt},
+             {"row_stride", Wt},
              {"reduce_factor", reduce_factor}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
         .hw_config = ttnn::create_reader_datamovement_config(),

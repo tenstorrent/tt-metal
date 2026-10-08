@@ -57,7 +57,7 @@ constexpr const char* POST_READER_KERNEL =
     "reader_unary_interleaved_ln_rm_gb_post_allgather.cpp";
 constexpr const char* POST_WRITER_KERNEL =
     "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
-    "writer_unary_interleaved_start_id_blocked.cpp";
+    "writer_unary_interleaved_row_strided_blocked.cpp";
 
 }  // namespace
 
@@ -383,6 +383,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
              {"beta_is_row_major", beta_is_row_major},
              {"dfb_length", cb_length},
              {"Wt", tiles_per_core_y},
+             {"row_stride", Wt},
              {"reduce_factor", reduce_factor}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
@@ -406,8 +407,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
         .dfb_bindings = {m2::DFBBinding{
             .dfb_spec_name = POST_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = POST_OUTPUT_T, .accessor_name = "dst"}},
-        .compile_time_args = {{"blk", block_size}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
+        .compile_time_args = {{"blk", block_size}, {"row_tiles", tiles_per_core_y}, {"row_stride", Wt}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
@@ -534,8 +535,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
             for (uint32_t y = 0; y < cores_y; ++y) {
                 CoreCoord core = {x, y};
 
-                uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
-                uint32_t stats_offset = x * stats_tiles_cols;
+                uint32_t tile_offset = (x * tiles_per_core_x * Wt) + (y * tiles_per_core_y);
+                uint32_t stats_offset = x * tiles_per_core_x * stats_tiles_cols;
 
                 log_debug(
                     tt::LogOp,
@@ -555,7 +556,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
                 m2::AddRuntimeArgsForNode(
                     writer_run.runtime_arg_values,
                     core,
-                    {{"num_tiles", tiles_per_core_x * tiles_per_core_y}, {"tile_offset", tile_offset}});
+                    {{"num_rows", tiles_per_core_x}, {"tile_offset", tile_offset}});
             }
         }
     } else {
@@ -588,7 +589,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
             m2::AddRuntimeArgsForNode(
                 writer_run.runtime_arg_values,
                 core,
-                {{"num_tiles", num_tile_rows_per_core * Wt}, {"tile_offset", tile_offset}});
+                {{"num_rows", num_tile_rows_per_core}, {"tile_offset", tile_offset}});
             curr_row += num_tile_rows_per_core;
         }
     }

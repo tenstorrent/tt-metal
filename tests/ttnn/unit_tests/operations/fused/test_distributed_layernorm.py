@@ -283,3 +283,39 @@ def test_rms_norm_pre_all_gather_2d_grid_taller_than_wide(device):
     got = ttnn.to_torch(tt_stats).to(torch.float32)[..., 0:1]
     expected = (inp.to(torch.float32) ** 2).sum(dim=-1, keepdim=True)
     torch.testing.assert_close(got, expected, rtol=5e-2, atol=0)
+
+
+def _run_rms_norm_post_all_gather_2d(device, num_tile_rows):
+    torch.manual_seed(0)
+    epsilon = 1e-5
+    width = 2048
+    inp = torch.randn((1, 1, num_tile_rows * 32, width), dtype=torch.bfloat16)
+    gamma = torch.randn((width,), dtype=torch.bfloat16)
+    tt_inp = ttnn.from_torch(
+        inp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_gamma = ttnn.from_torch(
+        gamma.reshape(1, 1, -1, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    tt_stats = ttnn.rms_norm_pre_all_gather(tt_inp, dtype=ttnn.bfloat16)
+    tt_out = ttnn.rms_norm_post_all_gather(tt_inp, tt_stats, epsilon=epsilon, weight=tt_gamma, use_2d_core_grid=True)
+
+    expected = reference_layernorm(inp.to(torch.float32), gamma.to(torch.float32), None, epsilon, is_rmsnorm=True)
+    passing, pcc = check_with_pcc(expected, ttnn.to_torch(tt_out).to(torch.float32), 0.999)
+    assert passing, pcc
+
+
+# The 2D post-all-gather layout offset each core by one tile row per grid column and wrote its rows as one
+# contiguous run, so any core holding more than one tile row read and wrote the wrong tiles.
+def test_rms_norm_post_all_gather_2d_grid_multiple_rows_per_core(device):
+    _run_rms_norm_post_all_gather_2d(device, 2 * device.compute_with_storage_grid_size().x)
+
+
+# Only RMSNorm exposes use_2d_core_grid. With a grid taller than wide, num_tile_rows == grid.y used to place
+# cores past the last column.
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+def test_rms_norm_post_all_gather_2d_grid_taller_than_wide(device):
+    grid = device.compute_with_storage_grid_size()
+    if grid.y <= grid.x:
+        pytest.skip(f"needs a compute grid taller than wide, got {grid.x}x{grid.y}")
+    _run_rms_norm_post_all_gather_2d(device, grid.y)

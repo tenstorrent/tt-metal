@@ -7,6 +7,8 @@
 #include "device/softmax_operation_types.hpp"
 #include "device/softmax_device_operation.hpp"
 
+#include <algorithm>
+
 #include <tt_stl/assert.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -26,9 +28,12 @@ Tensor softmax(
     const auto mem_config = memory_config.value_or(input_tensor.memory_config());
     const auto& input_shape = input_tensor.logical_shape();
     const int rank = static_cast<int>(input_shape.size());
-    const int dim_calculated = dim < 0 ? rank + dim : dim;
-    if (rank > 0 && (dim_calculated < 0 || dim_calculated >= rank)) {
-        TT_THROW("Dimension out of range (expected to be in range of [{}, {}], but got {})", -rank, rank - 1, dim);
+    // A scalar has the single virtual axis 0 / -1, as in torch.
+    const int dim_rank = std::max(rank, 1);
+    const int dim_calculated = dim < 0 ? dim_rank + dim : dim;
+    if (dim_calculated < 0 || dim_calculated >= dim_rank) {
+        TT_THROW(
+            "Dimension out of range (expected to be in range of [{}, {}], but got {})", -dim_rank, dim_rank - 1, dim);
     }
 
     // Early exit for empty tensors
@@ -39,7 +44,7 @@ Tensor softmax(
             input_tensor.dtype(),
             input_tensor.layout(),
             *input_tensor.device(),
-            memory_config);
+            mem_config);
     }
 
     // Operation
@@ -95,9 +100,12 @@ Tensor softmax_in_place(
     // Constants
     const auto& input_shape = input_tensor.logical_shape();
     const int rank = static_cast<int>(input_shape.size());
-    const int dim_calculated = dim < 0 ? rank + dim : dim;
-    if (rank > 0 && (dim_calculated < 0 || dim_calculated >= rank)) {
-        TT_THROW("Dimension out of range (expected to be in range of [{}, {}], but got {})", -rank, rank - 1, dim);
+    // A scalar has the single virtual axis 0 / -1, as in torch.
+    const int dim_rank = std::max(rank, 1);
+    const int dim_calculated = dim < 0 ? dim_rank + dim : dim;
+    if (dim_calculated < 0 || dim_calculated >= dim_rank) {
+        TT_THROW(
+            "Dimension out of range (expected to be in range of [{}, {}], but got {})", -dim_rank, dim_rank - 1, dim);
     }
 
     // Early exit for empty tensors
