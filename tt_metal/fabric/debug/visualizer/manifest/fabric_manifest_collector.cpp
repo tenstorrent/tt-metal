@@ -194,6 +194,26 @@ std::optional<manifest::content::L1> ring_buffer(
     };
 }
 
+// The L1 from the end of the channel buffers to the end of all L1.
+std::optional<manifest::content::L1> collect_leftover_l1(
+    const ManifestRouterInputs& inputs, const FabricStaticSizedChannelsAllocator& allocator) {
+    const size_t start = allocator.get_channel_buffers_end_address();
+    const size_t end = inputs.erisc_builder.config.max_l1_loading_size;
+    TT_FATAL(
+        start <= end,
+        "Fabric manifest: the channel buffers end at {:#x}, past the end of loadable L1 at {:#x}",
+        start,
+        end);
+    if (start == end) {
+        return std::nullopt;
+    }
+    return manifest::content::L1{
+        .address = static_cast<uint32_t>(start),
+        .type = {.element = layout::element::Bytes{}, .size = static_cast<uint32_t>(end - start), .count = 0},
+        .cleared_by_host = is_cleared_by_host(inputs, start),
+    };
+}
+
 using manifest::FieldIndex;
 
 // `arg`'s name, with the channel's or edge's index in its {}.
@@ -207,9 +227,13 @@ std::string arg_name(const manifest::NamedArg& arg, const FieldIndex& index) {
     TT_THROW("Fabric manifest: unknown argument index {}", static_cast<int>(arg.index));
 }
 
-// `field`, with its content's address, stream id or value filled in from `arg`, the value of its source.
+// `field`, with its content's address, stream id or value filled in from `arg`, the value of its source. An L1 address
+// of 0 is a buffer the builder did not allocate (FabricRouterDiagnosticBufferMap::BufferRegion::is_enabled).
 manifest::Field make_field(const ManifestRouterInputs& inputs, const manifest::RouterField& field, uint32_t arg) {
     const std::string_view key = field.key.value;
+    if (std::holds_alternative<manifest::content::L1>(field.content.value) && arg == 0) {
+        return {.key = key, .category = field.category.value, .content = std::nullopt};
+    }
     manifest::Content content = field.content.value;
     std::visit(
         ttsl::overloaded{
@@ -241,6 +265,21 @@ manifest::Field make_field(const ManifestRouterInputs& inputs, const manifest::R
     };
 }
 
+// What decides whether the builder emits a named argument (Emitted), as the kernel is fed it.
+struct Emission {
+    bool is_2d_fabric = false;
+    bool channel_trimming_capture = false;
+};
+
+bool is_emitted(manifest::Emitted emitted, const Emission& emission) {
+    switch (emitted) {
+        case manifest::Emitted::ALWAYS: return true;
+        case manifest::Emitted::FABRIC_2D: return emission.is_2d_fabric;
+        case manifest::Emitted::CHANNEL_TRIMMING_CAPTURE: return emission.channel_trimming_capture;
+    }
+    TT_THROW("Fabric manifest: unknown emission {}", static_cast<int>(emitted));
+}
+
 // The fields in `table`, for the channel or edge at `index` when the table is per channel or per edge. `read_arg`
 // reads a named argument by its name.
 template <typename ReadArg>
@@ -248,14 +287,14 @@ std::vector<manifest::Field> collect_fields(
     const ManifestRouterInputs& inputs,
     std::span<const manifest::RouterField> table,
     const FieldIndex& index,
-    bool is_2d_fabric,
+    const Emission& emission,
     const ReadArg& read_arg) {
     std::vector<manifest::Field> fields;
     for (const auto& field : table) {
         const std::optional<uint32_t> value = std::visit(
             ttsl::overloaded{
                 [&](const manifest::NamedArg& arg) -> std::optional<uint32_t> {
-                    if (arg.emitted == manifest::Emitted::FABRIC_2D && !is_2d_fabric) {
+                    if (!is_emitted(arg.emitted, emission)) {
                         return std::nullopt;
                     }
                     return read_arg(arg_name(arg, index));
@@ -295,7 +334,7 @@ struct ChannelContext {
     const manifest::RouterShape& shape;
     const FabricStaticSizedChannelsAllocator& allocator;
     const builder::RouterProducerSlots producer_slots;
-    const bool is_2d_fabric;
+    const Emission emission;
     const bool speedy_vc0;
     // The router's VC0 senders other than the worker channel are carried by its tensix mux.
     const bool mux_mode;
@@ -427,7 +466,7 @@ manifest::SenderChannel collect_sender_channel(const ChannelContext& ctx, const 
         inputs,
         manifest::k_sender_channel_fields,
         {.compact = c, .fabric_position = index.fabric_position},
-        ctx.is_2d_fabric,
+        ctx.emission,
         [&](const std::string& name) { return emitted_value(args, name); });
     return sender;
 }
@@ -485,7 +524,7 @@ manifest::ReceiverChannel collect_receiver_channel(const ChannelContext& ctx, co
         ctx.allocator.get_receiver_channel_number_of_slots(index.vc, index.channel),
         ctx.channel_buffer_size);
     receiver.fields = collect_fields(
-        inputs, manifest::k_receiver_channel_fields, {.compact = c}, ctx.is_2d_fabric, [&](const std::string& name) {
+        inputs, manifest::k_receiver_channel_fields, {.compact = c}, ctx.emission, [&](const std::string& name) {
             return emitted_value(args, name);
         });
     return receiver;
@@ -502,7 +541,11 @@ ChannelContext make_channel_context(const ManifestRouterInputs& inputs, const ma
         .allocator = *allocator,
         .producer_slots = builder::RouterProducerSlots(
             builder::routing_direction_to_eth_direction(inputs.location.direction), shape.senders_per_vc),
-        .is_2d_fabric = emitted_flag(args, "IS_2D_FABRIC"),
+        .emission =
+            {
+                .is_2d_fabric = emitted_flag(args, "IS_2D_FABRIC"),
+                .channel_trimming_capture = emitted_flag(args, "ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE"),
+            },
         .speedy_vc0 = emitted_flag(args, "ENABLE_SPEEDY_VC0"),
         .mux_mode = emitted_flag(args, "FABRIC_TENSIX_EXTENSION_MUX_MODE"),
         .trimming = inputs.erisc_builder.get_channel_trimming_overrides(),
@@ -579,14 +622,15 @@ std::vector<manifest::DownstreamEdge> collect_downstream_edges(const ChannelCont
     std::vector<manifest::DownstreamEdge> edges;
     uint32_t mask = 0;
     for (const auto& [direction, core] : connections) {
-        const uint32_t slot = ctx.is_2d_fabric ? get_receiver_channel_compact_index(my_direction, direction) : 0;
+        const uint32_t slot =
+            ctx.emission.is_2d_fabric ? get_receiver_channel_compact_index(my_direction, direction) : 0;
         TT_FATAL((mask & (1u << slot)) == 0, "Fabric manifest: VC{} has two downstream edges in slot {}", vc, slot);
         mask |= 1u << slot;
         edges.push_back({
             .edge = slot + 1,
             .target = {.direction = direction},
             .landing_channel =
-                builder::get_downstream_sender_channel_for_vc(ctx.is_2d_fabric, vc, my_direction, direction),
+                builder::get_downstream_sender_channel_for_vc(ctx.emission.is_2d_fabric, vc, my_direction, direction),
             .core = core,
         });
     }
@@ -606,7 +650,7 @@ std::vector<manifest::DownstreamEdge> collect_downstream_edges(const ChannelCont
             inputs,
             manifest::k_downstream_edge_fields,
             {.vc = vc, .edge = edge.edge, .teardown = teardown_base + rank},
-            ctx.is_2d_fabric,
+            ctx.emission,
             [&](const std::string& name) { return emitted_value(args, name); });
     }
     return edges;
@@ -640,7 +684,7 @@ manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
     auto channels = collect_channels(ctx);
     auto edges = collect_router_edges(ctx);
 
-    auto fields = collect_fields(inputs, manifest::k_router_fields, {}, ctx.is_2d_fabric, [&](const std::string& name) {
+    auto fields = collect_fields(inputs, manifest::k_router_fields, {}, ctx.emission, [&](const std::string& name) {
         return emitted_value(args, name);
     });
     std::vector<manifest::Erisc> eriscs;
@@ -651,7 +695,7 @@ manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
                 inputs,
                 manifest::k_erisc_fields,
                 {},
-                ctx.is_2d_fabric,
+                ctx.emission,
                 [&](const std::string& name) { return get_named_arg(args[risc_id], name); }),
         });
     }
@@ -664,6 +708,7 @@ manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
         .intra_chip_downstream_edges = std::move(edges),
         .fields = std::move(fields),
         .eriscs = std::move(eriscs),
+        .leftover_l1 = collect_leftover_l1(inputs, ctx.allocator),
     };
 }
 

@@ -51,6 +51,8 @@ enum class Emitted : uint8_t {
     ALWAYS,
     // Only when 2D routing is on. On 1D the field is left out.
     FABRIC_2D,
+    // Only with the channel trimming capture on (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE).
+    CHANNEL_TRIMMING_CAPTURE,
 };
 
 // A named compile-time argument, e.g. "EDM_STATUS_PTR_ADDR", or "SENDER_CH_{}_IS_INJECTION" for each channel.
@@ -189,6 +191,14 @@ inline constexpr auto k_router_fields = [] {
             .description = "The register reserved for the VC2 receiver's free slots, or the unused id when the router "
                            "has no VC2. The router kernel declares it but does not read it.",
         },
+        RouterField{
+            .key = "notify_worker_src",
+            .source = "NOTIFY_WORKER_OF_READ_COUNTER_UPDATE_SRC_ADDR",
+            .category = FLOW_CONTROL,
+            .content = l1<uint32_t>(),
+            .description = "Where the router stages the source of the inline write that updates a producer's read "
+                           "counter. Allocated only on Blackhole.",
+        },
 
         // Kernel parameters. Under DEBUG_PRINT_ENABLED the kernel ignores the context switch interval and the
         // handshake context switch timeout, and uses its own.
@@ -285,6 +295,43 @@ inline constexpr auto k_router_fields = [] {
             .content = content::Number{},
             .description = "Speedy VC0 only: the receiver acks completions to the peer's sender in batches of at "
                            "least this many packets.",
+        },
+
+        // Diagnostics
+        RouterField{
+            .key = "perf_telemetry",
+            .source = "PERF_TELEMETRY_BUFFER_ADDR",
+            .category = DIAGNOSTICS,
+            .content =
+                content::L1{
+                    .type = {layout::element::Bytes{}, FabricEriscDatamoverConfig::perf_telemetry_buffer_size, 0}},
+            .description = "Where the router records its bandwidth telemetry, when bandwidth telemetry is on. "
+                           "Allocated only then, except on Blackhole, which always allocates it.",
+        },
+        RouterField{
+            .key = "code_profiling",
+            .source = "CODE_PROFILING_BUFFER_ADDR",
+            .category = DIAGNOSTICS,
+            .content = l1<CodeProfilingTimerResult[get_max_code_profiling_timer_types()]>(),
+            .description = "Where the router accumulates each code profiling timer's cycles and captures, one result "
+                           "per timer type. Allocated only with code profiling on.",
+        },
+        RouterField{
+            .key = "channel_trimming_capture_enabled",
+            .source = "ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE",
+            .category = DIAGNOSTICS,
+            .content = content::Flag{},
+            .description = "Whether the router records which of its channels carry traffic, for a later run to trim "
+                           "the unused ones.",
+        },
+        RouterField{
+            .key = "channel_trimming_capture",
+            .source =
+                NamedArg{"RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS", ArgIndex::NONE, Emitted::CHANNEL_TRIMMING_CAPTURE},
+            .category = DIAGNOSTICS,
+            .content = l1<ChannelTrimmingOverrides>(),
+            .description = "Where it records them: the packet sizes each sender channel saw, and which sender and "
+                           "receiver channels carried traffic.",
         },
     };
 }();
