@@ -75,6 +75,10 @@ TOKEN_DISPATCH_METADATA_LEN = 5
 # in L1. The largest footprint qualified on hardware is XS on one chip (256 x 32 x (1024 + 4096) x 2 B =
 # 83.9 MB); S on one chip (134.2 MB) clashes with the static circular buffers. Above this bound decode uses
 # DRAM instead. S on P150x4 needs 33.5 MB and keeps L1.
+# The routed-expert op picks a "short sequence" grid from the ALLOCATED rows per expert; token dispatch allocates the
+# whole sequence per expert (1K bucket = 32 tile rows) while each expert really gets ~2, so that layout lost ~110 ms
+# per 1K prefill. 0 keeps the general layout (with its two-NoC weight read) at every length.
+os.environ.setdefault("TT_ROUTED_EXPERT_SHORT_SEQ_MAX_M_TILES", "0")
 MOE_DECODE_L1_MAX_BYTES = 256 * TILE * (2 * 512 + 2 * 2048) * 2
 
 
