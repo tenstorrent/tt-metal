@@ -16,15 +16,38 @@ from pathlib import Path
 import pytest
 from helpers.ulp_budget_diff import (
     _MAX_ROWS,
+    KEY_FIELDS,
     _measured_cells,
     _nonfinite_cells,
+    _resolve,
     compare,
+    main,
     parse_table,
     recorded_max,
     recorded_nonfinite,
     render_budget_diff,
     render_headroom,
 )
+
+#: The tool's short key spelling -> the registry's BudgetKey field. Both of its copies
+#: of the key list are held to this one by test_the_key_dimensions_are_the_registrys.
+_BUDGET_KEY_ATTR = {
+    "in": "input_format",
+    "out": "output_format",
+    "approx": "approx_mode",
+    "dest": "dest_acc",
+    "arch": "arch",
+}
+
+
+def _pinned(key):
+    """A registry BudgetKey as the tool's ``((short, value), ...)`` key."""
+    return tuple(
+        (short, getattr(key, attr).name)
+        for short, attr in _BUDGET_KEY_ATTR.items()
+        if getattr(key, attr) is not None
+    )
+
 
 _HEADER = "Abs:  # measured by: sweep X, wormhole, 2026-01-01"
 _BASE_ROWS = (
@@ -99,11 +122,12 @@ def test_losing_the_gate_entirely_is_a_regression():
     assert _kinds(_BASE, head)[_BF16] == "ungated"
 
 
-def test_deleting_a_gated_row_is_a_regression_and_a_tolerance_row_is_not():
-    """A row that gated nothing cannot be a loss when it goes."""
-    kinds = _kinds(_BASE, _head(_BASE_ROWS[1], _BASE_ROWS[3]))
-    assert kinds[_BF16] == "removed"
-    assert (("in", "Bfp8_b"), ("out", "Bfp8_b")) not in kinds
+def test_deleting_a_gated_row_is_a_regression_and_a_figureless_tolerance_row_is_not():
+    """A row that held its cell to nothing -- no budget, no recorded figure, no declared
+    bound -- cannot be a loss when it goes."""
+    assert _kinds(_BASE, _head(*_BASE_ROWS[1:]))[_BF16] == "removed"
+    bare = "{in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # block-quantized"
+    assert _kinds(_head(_BASE_ROWS[0], bare), _head(_BASE_ROWS[0])) == {}
 
 
 def test_tightening_and_newly_gating_are_not_regressions():
@@ -150,6 +174,143 @@ def test_a_more_specific_row_that_loosens_a_cell_is_a_raise_not_an_addition():
     assert change.kind == "raised" and change.cell == ("Abs", (("in", "Float32"),))
     demoted = _head("{max_ulp: 2}  # exact", "{in: Float32, metric: tolerance}  # off")
     assert [c.kind for c in _changes(base, demoted)] == ["ungated"]
+
+
+def test_a_deleted_row_falling_back_to_an_untouched_one_is_not_a_re_measurement():
+    """The two rows a cell resolves to always carry different comments when a deletion
+    hands it to a broader row, so comparing those read every such loss as re-measured,
+    and the override report left it out of its "no fresh measurement" list. The deciding
+    row is the broad one, and its comment did not change."""
+    base = _head(
+        "{in: Float16_b, metric: tolerance}  # max 393 ULP, block-quantized",
+        "{in: Float16_b, out: Float16_b, max_ulp: 1}  # max 1 ULP",
+    )
+    head = _head("{in: Float16_b, metric: tolerance}  # max 393 ULP, block-quantized")
+    (change,) = _changes(base, head)
+    assert change.kind == "ungated" and not change.remeasured
+    report = render_budget_diff([change], "the-label")
+    assert "| **no** |" in report
+
+
+def test_a_tie_between_equally_specific_rows_is_refused_rather_than_ordered():
+    """``{in: Float16_b}`` and ``{out: Float16_b}`` both match a query naming both, and
+    the registry refuses that table; keeping whichever row came first made the guard's
+    verdict depend on the file's order, and passed a table that cannot load."""
+    table = parse_table(
+        _head(
+            "{in: Float16_b, max_ulp: 1}  # max 1 ULP",
+            "{out: Float16_b, max_ulp: 9}  # max 8 ULP",
+        )
+    )
+    with _refuses("equally specific"):
+        _resolve(table, "Abs", _BF16)
+    with _refuses("equally specific"):
+        compare(parse_table(_BASE), table)
+
+
+# ── Tolerance cells: what the nightly holds them to ───────────────────────────
+
+
+@pytest.mark.parametrize(
+    "head_row, kind",
+    [
+        (
+            "{in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # max 500 ULP",
+            "baseline_raised",
+        ),
+        (
+            "{in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # not measurable: 3 lane(s) "
+            "disagreeing with the golden about being finite (x); max 393 ULP over the "
+            "65000 measurable lanes",
+            "baseline_raised",
+        ),
+        (
+            "{in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # block-quantized",
+            "baseline_dropped",
+        ),
+        ("{in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # max 12 ULP", None),
+    ],
+    ids=["max-raised", "nonfinite-appears", "figure-deleted", "max-lowered"],
+)
+def test_a_tolerance_rows_recorded_measurement_is_a_baseline(head_row, kind):
+    """The headroom report fails the nightly on a tolerance cell past the "max N ULP" or
+    the non-finite count its row records, so raising either is loosening that check,
+    and dropping the figure stops it altogether. Lowering it is a re-measurement."""
+    changes = _changes(_BASE, _edited(2, head_row))
+    assert [c.kind for c in changes] == ([kind] if kind else [])
+    assert all(c.is_regression for c in changes)
+
+
+def test_deleting_a_tolerance_row_with_a_baseline_drops_it():
+    """Before, a vanished tolerance row was "no loss": it gated nothing. It did hold the
+    nightly's figure, and an op block on tolerance everywhere going away took every
+    cell's out of the headroom report without a line in this one."""
+    kinds = _kinds(_BASE, _head(_BASE_ROWS[0], _BASE_ROWS[1], _BASE_ROWS[3]))
+    assert kinds[(("in", "Bfp8_b"), ("out", "Bfp8_b"))] == "baseline_dropped"
+
+
+@pytest.mark.parametrize(
+    "base_row, head_row, kind",
+    [
+        (
+            "{metric: tolerance, atol: 0.13, rtol: 0.05}",
+            "{metric: tolerance, atol: 0.2, rtol: 0.05}",
+            "tolerance_widened",
+        ),
+        (
+            "{metric: tolerance, atol: 0.13, rtol: 0.05}",
+            "{metric: tolerance, atol: 0.13}",
+            "tolerance_widened",
+        ),
+        (
+            "{metric: tolerance, atol: 0.13, rtol: 0.05}",
+            "{metric: tolerance, atol: 0.1, rtol: 0.05}",
+            None,
+        ),
+    ],
+    ids=["atol-raised", "rtol-dropped", "atol-lowered"],
+)
+def test_a_declared_tolerance_that_loosens_is_a_regression(base_row, head_row, kind):
+    """The eltwise drivers still compare a tolerance cell against its row's atol/rtol,
+    so loosening one is loosening that compare. A bound that goes away leaves the cell
+    on a default this tool cannot see, so it reads as loosened too."""
+    changes = [c for c in _changes(_head(base_row), _head(head_row)) if c.cell[1] == ()]
+    assert [c.kind for c in changes] == ([kind] if kind else [])
+
+
+# ── The arch dimension ────────────────────────────────────────────────────────
+
+
+def test_an_unkeyed_budget_binds_only_on_the_measured_arch():
+    """``accuracy_contract`` hands any other arch the cell's tolerance unless the row
+    names that arch. A guard that treated every ULP row as gating everywhere reported
+    the loss of a Blackhole gate as a *tightening* (the unkeyed 3 under the BH 5), and
+    its addition as a raise rather than a new gate."""
+    unkeyed = "{in: Float16_b, out: Float16_b, max_ulp: 3}  # max 2 ULP, wormhole"
+    bh = "{in: Float16_b, out: Float16_b, arch: BLACKHOLE, max_ulp: 5}  # max 4 ULP, bh"
+    on_bh = _BF16 + (("arch", "BLACKHOLE"),)
+
+    (lost,) = _changes(_head(unkeyed, bh), _head(unkeyed))
+    assert (lost.kind, lost.cell[1]) == ("ungated", _BF16)
+    assert lost.before.key == on_bh
+    (added,) = _changes(_head(unkeyed), _head(unkeyed, bh))
+    assert (added.kind, added.cell[1]) == ("gated", on_bh)
+    # One change each way: on the measured arch the unkeyed row decides both tables.
+
+
+def test_an_arch_is_read_by_name_or_by_value():
+    """The registry accepts ``arch: wormhole`` and ``arch: WORMHOLE`` alike; the
+    measurement rows carry the enum name."""
+    by_value = parse_table("Abs:\n  - {arch: blackhole, max_ulp: 1}  # c\n")
+    by_name = parse_table("Abs:\n  - {arch: BLACKHOLE, max_ulp: 1}  # c\n")
+    assert set(by_value) == set(by_name) == {("Abs", (("arch", "BLACKHOLE"),))}
+
+
+def test_the_measured_arch_is_the_registrys():
+    from helpers import ulp_budget_diff
+    from helpers.sfpu_accuracy_budget import MEASURED_ARCH
+
+    assert ulp_budget_diff.MEASURED_ARCH == MEASURED_ARCH.name
 
 
 _FLOOR_CASES = [
@@ -399,7 +560,8 @@ def test_a_measurement_resolves_against_the_most_specific_row():
 
 def test_a_long_report_is_capped_and_says_how_many_it_withheld():
     """A PR comment has a size limit, and 2,000-odd gated cells could blow past it."""
-    n = _MAX_ROWS + 5
+    extra = 5
+    n = _MAX_ROWS + extra
     table = "Abs:\n" + "".join(
         f'  - {{in: Float16_b, out: Float16_b, dest: "{i}", max_ulp: 8}}\n'
         for i in range(n)
@@ -410,8 +572,20 @@ def test_a_long_report_is_capped_and_says_how_many_it_withheld():
     ]
     report, over = render_headroom(parse_table(table), _measured_cells(rows))
     assert over == n
-    assert "5 more" in report
+    # Delimited: a bare "5 more" is also in "45 more".
+    assert f"| _… {extra} more_ |" in report
     assert report.count("over budget |") == _MAX_ROWS
+
+
+def test_a_tolerance_cell_with_no_recorded_figure_is_counted_not_passed_silently():
+    """The clean summary says no judged tolerance cell regressed; a cell with nothing to
+    be judged against has to show up as such, or the summary reads as covering it."""
+    table = parse_table(
+        "Abs:\n  - {in: Float16, out: Float16_b, metric: tolerance}  # block-quantized\n"
+    )
+    report, over = render_headroom(table, _measured(("Float16", "Float16_b", 10**6)))
+    assert over == 0
+    assert "1 tolerance cell(s) measured but not judged" in report
 
 
 # ── The slim runner, and the tie-back to the real loader ──────────────────────
@@ -455,45 +629,77 @@ def test_the_workflow_invokes_the_tool_by_path_not_as_a_module():
     assert "-m helpers.ulp_budget_diff" not in body
 
 
+def test_the_key_dimensions_are_the_registrys():
+    """A new key dimension in the registry that the tool did not know would make every
+    row pinning it invisible to the guard, while each copy agreed with itself."""
+    from helpers.sfpu_accuracy_budget import _KEY_FIELDS
+
+    assert _BUDGET_KEY_ATTR == _KEY_FIELDS
+    assert KEY_FIELDS == tuple(_KEY_FIELDS)
+
+
+def test_the_guard_is_part_of_the_required_pr_gate():
+    """A red guard in a workflow of its own blocked nothing: no branch rule requires it,
+    and a path-filtered check cannot be required. It counts because PR Gate calls it and
+    "PR Gate Status" -- a required check -- fails when it fails."""
+    import yaml
+
+    repo = Path(__file__).resolve().parents[4]
+    gate = repo / ".github/workflows/pr-gate.yaml"
+    if not gate.exists():  # pragma: no cover - the guard ships with the workflow
+        pytest.skip("workflow not in this checkout")
+    jobs = yaml.safe_load(gate.read_text(encoding="utf-8"))["jobs"]
+    guard = jobs["llk-sfpu-ulp-budget-guard"]
+    assert guard["uses"] == "./.github/workflows/llk-sfpu-ulp-budget-guard.yaml"
+    status = jobs["workflow-status"]
+    assert "llk-sfpu-ulp-budget-guard" in status["needs"]
+    (check,) = [
+        step
+        for step in status["steps"]
+        if step.get("uses") == "./.github/actions/workflow-status"
+    ]
+    listed = check["with"]["required-jobs"] + "," + check["with"]["optional-jobs"]
+    assert "llk-sfpu-ulp-budget-guard" in {job.strip() for job in listed.split(",")}
+
+
 def test_this_parse_agrees_with_the_registry_loader_on_the_live_table():
     """This module reads the table a second way -- text, no torch -- so the CI check can
     run without the LLK environment and against an arbitrary base revision. Nothing
-    stops the two parses drifting except this. Compared as (op, key, budget), which is
-    exactly what a regression is defined over."""
+    stops the two parses drifting except this. Compared as (op, key, budget, floor,
+    atol, rtol): every number a regression is defined over."""
     from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET, _TABLE_PATH, Metric
 
     mine = {
-        (cell[0], cell[1], row.max_ulp)
+        (cell[0], cell[1], row.max_ulp, row.near_zero_atol, row.atol, row.rtol)
         for cell, row in parse_table(_TABLE_PATH.read_text(encoding="utf-8")).items()
     }
-    fields = (
-        ("in", "input_format"),
-        ("out", "output_format"),
-        ("approx", "approx_mode"),
-        ("dest", "dest_acc"),
-        ("arch", "arch"),
-    )
     theirs = set()
     for op, table in _SFPU_ACCURACY_BUDGET.items():
         for key, contract in table.items():
-            pinned = tuple(
-                (short, getattr(key, attr).name)
-                for short, attr in fields
-                if getattr(key, attr) is not None
+            ulp = contract.metric == Metric.ULP
+            theirs.add(
+                (
+                    op.name,
+                    _pinned(key),
+                    contract.max_ulp if ulp else None,
+                    contract.near_zero_atol,
+                    None if ulp else contract.atol,
+                    None if ulp else contract.rtol,
+                )
             )
-            budget = contract.max_ulp if contract.metric == Metric.ULP else None
-            theirs.add((op.name, pinned, budget))
     assert mine == theirs, (
-        f"only this parser sees: {sorted(mine - theirs)[:5]}\n"
-        f"only the loader sees: {sorted(theirs - mine)[:5]}"
+        f"only this parser sees: {sorted(mine - theirs, key=str)[:5]}\n"
+        f"only the loader sees: {sorted(theirs - mine, key=str)[:5]}"
     )
 
 
 def test_this_resolution_agrees_with_the_registry_on_every_swept_cell():
     """Agreeing on the rows is not agreeing on what a query resolves to, and a
-    regression is defined over the latter. Every cell the sweep drives, for every
-    enrolled unary op, must land on the same row through ``_resolve`` as through the
-    registry's ``_winner``."""
+    regression is defined over the latter. Every cell the sweep drives, for every op in
+    the registry, must land on the same row through ``_resolve`` as through the
+    registry's ``_winner``. The query is built the way the headroom report builds it,
+    from a measurement row, so a dimension the recorder does not write (``arch``, once)
+    shows up as a disagreement here instead of a cell headroom silently skips."""
     from helpers.sfpu_accuracy_budget import (
         _SFPU_ACCURACY_BUDGET,
         _TABLE_PATH,
@@ -501,13 +707,13 @@ def test_this_resolution_agrees_with_the_registry_on_every_swept_cell():
         BudgetKey,
         _winner,
     )
-    from helpers.ulp_budget_diff import _resolve
     from helpers.ulp_sweep import sweep_cells
 
     table = parse_table(_TABLE_PATH.read_text(encoding="utf-8"))
+    cells = sweep_cells()
     compared = 0
     for op, rows in _SFPU_ACCURACY_BUDGET.items():
-        for in_fmt, out_fmt, approx, dest in sweep_cells():
+        for in_fmt, out_fmt, approx, dest in cells:
             query = BudgetKey(
                 approx_mode=approx,
                 input_format=in_fmt,
@@ -516,33 +722,26 @@ def test_this_resolution_agrees_with_the_registry_on_every_swept_cell():
                 arch=MEASURED_ARCH,
             )
             found = _winner(rows, query, op.name)
-            theirs = None
-            if found is not None:
-                key = found[0]
-                theirs = tuple(
-                    (short, getattr(key, attr).name)
-                    for short, attr in (
-                        ("in", "input_format"),
-                        ("out", "output_format"),
-                        ("approx", "approx_mode"),
-                        ("dest", "dest_acc"),
-                        ("arch", "arch"),
-                    )
-                    if getattr(key, attr) is not None
-                )
-            asked = (
-                ("in", in_fmt.name),
-                ("out", out_fmt.name),
-                ("approx", approx.name),
-                ("dest", dest.name),
-                ("arch", MEASURED_ARCH.name),
+            theirs = None if found is None else _pinned(found[0])
+            # The fields `_record_ulp_measurement` writes, as it writes them.
+            (asked,) = _measured_cells(
+                [
+                    {
+                        "op": op.name,
+                        "in": in_fmt.name,
+                        "out": out_fmt.name,
+                        "approx": approx.name,
+                        "dest": dest.name,
+                        "arch": MEASURED_ARCH.name,
+                        "max": 0,
+                    }
+                ]
             )
-            mine = _resolve(table, op.name, asked)
-            assert (mine.key if mine else None) == theirs, (op.name, asked)
+            mine = _resolve(table, *asked)
+            assert (mine.key if mine else None) == theirs, asked
             compared += 1
-    from helpers.ulp_sweep import sweep_cells as _cells
-
-    assert compared == len(_cells()) * len(_SFPU_ACCURACY_BUDGET)
+    assert cells and _SFPU_ACCURACY_BUDGET, "nothing to compare"
+    assert compared == len(cells) * len(_SFPU_ACCURACY_BUDGET) > 0
 
 
 def test_the_headroom_report_fails_an_overflow_the_row_does_not_account_for():
@@ -587,3 +786,66 @@ def test_the_headroom_report_fails_an_overflow_the_row_does_not_account_for():
         ),
     )
     assert regressions == 0
+
+
+# ── The command line, which is what the guard blocks on ───────────────────────
+
+
+def _write(tmp_path, name, text):
+    path = tmp_path / name
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
+
+_RAISED = _edited(0, "{in: Float16_b, out: Float16_b, max_ulp: 9}  # max 1 ULP")
+
+
+@pytest.mark.parametrize(
+    "head, flags, status, says",
+    [
+        (_BASE, [], 0, "No budget changed"),
+        (_RAISED, [], 1, "loosen a gate"),
+        (_RAISED, ["--allow-raises"], 0, "carry no fresh measurement"),
+        (
+            _head(
+                "{in: Float16_b, max_ulp: 1}  # a", "{out: Float16_b, max_ulp: 9}  # b"
+            ),
+            ["--allow-raises"],
+            2,
+            "cannot load",
+        ),
+    ],
+    ids=["unchanged", "raised", "raised-with-label", "ambiguous-even-with-label"],
+)
+def test_diff_exit_status(tmp_path, capsys, head, flags, status, says):
+    """The exit status is the whole of what the guard blocks on. A table the registry
+    refuses is refused under the label too: the label admits a loosened gate, not a
+    table no gate can be read from."""
+    out = tmp_path / "report.md"
+    argv = [
+        "diff",
+        "--base",
+        _write(tmp_path, "base.yaml", _BASE),
+        "--head",
+        _write(tmp_path, "head.yaml", head),
+        "--out",
+        str(out),
+        *flags,
+    ]
+    assert main(argv) == status
+    assert says in out.read_text(encoding="utf-8")
+    assert says in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("worst, status", [(1, 0), (9, 1)], ids=["clean", "over"])
+def test_headroom_exit_status(tmp_path, worst, status):
+    import json
+
+    measured = _write(
+        tmp_path,
+        "m.jsonl",
+        json.dumps({"op": "Abs", "in": "Float16_b", "out": "Float16_b", "max": worst})
+        + "\n",
+    )
+    argv = ["headroom", "--table", _write(tmp_path, "t.yaml", _BASE)]
+    assert main([*argv, "--measured", measured]) == status

@@ -4,8 +4,9 @@
 """Whether a change to the SFPU accuracy table loosens a gate, and whether the
 hardware still fits the gates it declares.
 
-* ``diff``: what a pull request does to the budgets. A budget that goes up, or a row
-  that stops being gated, is a *regression* whatever the reason; the table's rule is
+* ``diff``: what a pull request does to the budgets. A budget that goes up, a row that
+  stops being gated, or a tolerance cell whose recorded measurement or declared
+  ``atol``/``rtol`` loosens, is a *regression* whatever the reason; the table's rule is
   that it may only happen alongside a fresh measurement. No hardware needed.
 * ``headroom``: what the hardware measured, from the ``--ulp-measure`` rows, against
   the budgets. The sweep already fails a cell it cannot meet; this says which budgets
@@ -25,12 +26,18 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import yaml
 
-#: The key dimensions of a row, in the order a cell is named in a report.
+#: The key dimensions of a row, in the order a cell is named in a report. The registry's
+#: own map is ``sfpu_accuracy_budget._KEY_FIELDS``; a host test holds the two equal.
 KEY_FIELDS = ("in", "out", "approx", "dest", "arch")
+
+#: ``sfpu_accuracy_budget.MEASURED_ARCH``, by enum name. A ULP row that does not name an
+#: arch binds only here; anywhere else the registry hands the cell its tolerance. Spelled
+#: out because this module may not import the registry; a host test ties them together.
+MEASURED_ARCH = "WORMHOLE"
 
 #: A cell identity: the op plus whichever key dimensions the row pins.
 Cell = Tuple[str, Tuple[Tuple[str, str], ...]]
@@ -43,6 +50,12 @@ _MAX_ROWS = 40
 #: a failure -- tightening is a deliberate change with its own measurement -- but it is
 #: the list someone should work through.
 _SLACK_FRACTION = 0.5
+
+#: The smallest budget the slack list considers. A budget of 1 measured at 0 is the
+#: emitter's floor for a strided Float32 cell, where a sample cannot prove the 0 holds
+#: over the lanes it skipped (``ulp_sweep._verdict``); the only tighter budget is the 0
+#: the emitter deliberately refused to write.
+_SLACK_MIN_BUDGET = 2
 
 #: The worst lane a row's comment says the last sweep measured. Written by the emitter
 #: on every row it produces ("max 393 ULP, budget 433 > ceiling 25"); a row without one
@@ -74,10 +87,21 @@ class Row:
     #: The near-zero floor is part of the gate: `ulp_elementwise_valid` accepts a lane
     #: inside it however many steps out it is, so widening it loosens the gate.
     near_zero_atol: Optional[float] = None
+    #: A tolerance row's declared bounds. The functional drivers still compare a
+    #: tolerance cell with them, so widening one loosens that cell.
+    atol: Optional[float] = None
+    rtol: Optional[float] = None
 
     @property
     def gated(self) -> bool:
+        """Whether the row carries a step budget. Whether that budget *binds* depends on
+        the arch it is asked about too: see :func:`_gates`."""
         return self.max_ulp is not None
+
+    @property
+    def declares_tolerance(self) -> bool:
+        """Whether the row has numbers a tolerance compare uses, as in the registry."""
+        return self.atol is not None or self.rtol is not None
 
     @property
     def floor(self) -> float:
@@ -94,30 +118,40 @@ class Change:
 
     *cell* names the row that decides the cell after the change (before it, for a cell
     nothing covers any more); *variants* is how many query variants that row decides
-    differently than the base did, since a collapsed row governs several.
+    differently than the base did, since a collapsed row governs several. *held_before*
+    and *held_after* say what the cell was held to on each side, as the report shows it.
+
+    *remeasured* is whether the deciding row's provenance comment differs from the same
+    row's in the base table -- the table's rule for raising a budget. Read off that one
+    row, not off the two rows the cell resolves to: when a deleted row hands its cells to
+    a broader one, those two comments differ although no comment was touched.
     """
 
     cell: Cell
-    kind: str  # raised | floor_widened | ungated | removed | tightened | gated | added
+    kind: str  # one of _KIND_ORDER
     before: Optional[Row]
     after: Optional[Row]
     variants: int = 1
+    held_before: str = "—"
+    held_after: str = "—"
+    remeasured: bool = False
 
     #: The kinds that weaken a gate. Everything else is neutral or an improvement.
-    REGRESSIONS = frozenset({"raised", "ungated", "removed", "floor_widened"})
+    REGRESSIONS = frozenset(
+        {
+            "raised",
+            "floor_widened",
+            "ungated",
+            "removed",
+            "tolerance_widened",
+            "baseline_raised",
+            "baseline_dropped",
+        }
+    )
 
     @property
     def is_regression(self) -> bool:
         return self.kind in self.REGRESSIONS
-
-    @property
-    def remeasured(self) -> bool:
-        """Whether the row's provenance comment changed in the same diff -- the table's
-        rule for raising a budget. A raise with the comment untouched is a number edited
-        to make a failure go away."""
-        if self.before is None or self.after is None:
-            return False
-        return self.before.provenance != self.after.provenance
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -146,16 +180,23 @@ def _provenance_by_op(text: str) -> Dict[str, Tuple[str, List[str]]]:
     return by_op
 
 
-def _key_value(value) -> str:
+def _key_value(field: str, value) -> str:
     """A key field as the registry reads it. YAML 1.1 reads a bare ``Yes``/``No`` as a
     boolean and the registry maps it back to the enum member; keyed as ``"True"`` the
     row would describe a cell that does not exist, and the two readers would disagree
-    about which cell a raise landed on."""
+    about which cell a raise landed on. An arch is accepted by enum name or value
+    (``WORMHOLE`` or ``wormhole``) and named by the enum name, as a measurement is."""
     if value is True:
         return "Yes"
     if value is False:
         return "No"
+    if field == "arch":
+        return str(value).upper()
     return str(value)
+
+
+def _number(value) -> Optional[float]:
+    return value if isinstance(value, (int, float)) and value is not True else None
 
 
 def parse_table(text: str) -> Dict[Cell, Row]:
@@ -177,7 +218,7 @@ def parse_table(text: str) -> Dict[Cell, Row]:
             if not isinstance(fields, dict):
                 continue
             key = tuple(
-                (k, _key_value(fields[k]))
+                (k, _key_value(k, fields[k]))
                 for k in KEY_FIELDS
                 if fields.get(k) is not None
             )
@@ -192,7 +233,6 @@ def parse_table(text: str) -> Dict[Cell, Row]:
             max_ulp = fields.get("max_ulp")
             if fields.get("metric") == "tolerance":
                 max_ulp = None
-            floor = fields.get("near_zero_atol")
             rows[(op, key)] = Row(
                 op=op,
                 key=key,
@@ -200,23 +240,54 @@ def parse_table(text: str) -> Dict[Cell, Row]:
                 # A row's own comment wins; one without inherits the op header's run
                 # identity, so updating either registers as a re-measurement.
                 provenance=comment or header,
-                near_zero_atol=floor if isinstance(floor, (int, float)) else None,
+                near_zero_atol=_number(fields.get("near_zero_atol")),
+                atol=_number(fields.get("atol")),
+                rtol=_number(fields.get("rtol")),
             )
     return rows
 
 
 def _resolve(
-    table: Dict[Cell, Row], op: str, key: Tuple[Tuple[str, str], ...]
+    table: Dict[Cell, Row],
+    op: str,
+    key: Tuple[Tuple[str, str], ...],
+    only: Optional[Callable[[Row], bool]] = None,
 ) -> Optional[Row]:
-    """The most specific row of *op* covering *key*, by the registry's own rule."""
+    """The most specific row of *op* covering *key*, by the registry's own rule, among
+    the rows *only* admits. Two equally specific matches are refused, as ``_winner``
+    refuses them: the registry will not load such a table, so no verdict on it means
+    anything, and keeping the first would make the verdict depend on the file's order.
+    """
     asked = dict(key)
-    best: Optional[Row] = None
-    for (row_op, row_key), row in table.items():
-        if row_op != op or any(asked.get(k) != v for k, v in row_key):
-            continue
-        if best is None or len(row_key) > len(best.key):
-            best = row
-    return best
+    matched = [
+        row
+        for (row_op, row_key), row in table.items()
+        if row_op == op
+        and all(asked.get(k) == v for k, v in row_key)
+        and (only is None or only(row))
+    ]
+    if not matched:
+        return None
+    best = max(len(row.key) for row in matched)
+    winners = [row for row in matched if len(row.key) == best]
+    if len(winners) > 1:
+        raise ValueError(
+            f"{op} has {len(winners)} equally specific rows matching "
+            f"{_cell_name(op, key)}: {', '.join(r.describe() for r in winners)}. The "
+            "registry refuses this table, so no budget verdict is meaningful for it."
+        )
+    return winners[0]
+
+
+def _gates(row: Optional[Row], key: Tuple[Tuple[str, str], ...]) -> bool:
+    """Whether *row* holds the cell *key* names to a step budget: it carries one, and
+    the cell is on the arch the budget was measured on -- :data:`MEASURED_ARCH` for a
+    row that names none (an unset arch is that one), or the arch the row names."""
+    if row is None or not row.gated:
+        return False
+    return dict(key).get("arch", MEASURED_ARCH) == MEASURED_ARCH or "arch" in dict(
+        row.key
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -227,40 +298,133 @@ def _resolve(
 def _variants(base: Dict[Cell, Row], head: Dict[Cell, Row], op: str):
     """Every query the registry could be asked about *op*, as far as either table can
     tell them apart: each key dimension takes every value some row pins, or is left
-    unset -- an unset query dimension matches only a wildcard, as in the registry."""
+    unset -- an unset query dimension matches only a wildcard, as in the registry.
+
+    The arch is never unset (``accuracy_contract`` requires it) and always includes
+    :data:`MEASURED_ARCH`, where an unkeyed budget binds. Any other arch no row names
+    binds no budget in either table, so it cannot change and is not asked."""
     values: Dict[str, set] = {k: set() for k in KEY_FIELDS}
     for table in (base, head):
         for row_op, key in table:
             if row_op == op:
                 for k, v in key:
                     values[k].add(v)
-    axes = [sorted(values[k]) + [None] for k in KEY_FIELDS]
+    axes = [
+        (
+            sorted(values[k] | {MEASURED_ARCH})
+            if k == "arch"
+            else sorted(values[k]) + [None]
+        )
+        for k in KEY_FIELDS
+    ]
     for combo in itertools.product(*axes):
         yield tuple((k, v) for k, v in zip(KEY_FIELDS, combo) if v is not None)
 
 
-def _classify(was: Optional[Row], now: Optional[Row]) -> Optional[str]:
+@dataclass(frozen=True)
+class _Held:
+    """What one query variant is held to in one revision of the table."""
+
+    row: Optional[Row]  # the row the variant resolves to
+    gated: bool  # whether that row's step budget binds here
+    #: The most specific row declaring ``atol``/``rtol``: what a tolerance compare uses.
+    declared: Optional[Row]
+
+    @property
+    def _tolerance_row(self) -> Optional[Row]:
+        """The row, if it is a tolerance row: the only kind whose comment is a baseline.
+        A step budget that does not bind on this arch is not one, and its "max N ULP"
+        describes the arch it binds on."""
+        return None if self.row is None or self.row.gated else self.row
+
+    @property
+    def baseline(self) -> Optional[int]:
+        """The measurement the headroom report holds a tolerance cell to."""
+        row = self._tolerance_row
+        return None if row is None else recorded_max(row)
+
+    @property
+    def nonfinite(self) -> int:
+        row = self._tolerance_row
+        return 0 if row is None else recorded_nonfinite(row)
+
+    def describe(self) -> str:
+        if self.row is None:
+            return "—"
+        if self.gated:
+            text = str(self.row.max_ulp)
+            if self.row.near_zero_atol:  # or a widened floor reads alike on both sides
+                text += f" (floor {self.row.near_zero_atol:g})"
+            return text
+        parts = []
+        if self.baseline is not None:
+            parts.append(f"max {self.baseline}")
+        if self.nonfinite:
+            parts.append(f"{self.nonfinite} non-finite")
+        if self.declared is not None:
+            for name in ("atol", "rtol"):
+                value = getattr(self.declared, name)
+                if value is not None:
+                    parts.append(f"{name} {value:g}")
+        return "tolerance" + (f" ({', '.join(parts)})" if parts else "")
+
+
+def _held(table: Dict[Cell, Row], op: str, key) -> _Held:
+    row = _resolve(table, op, key)
+    gated = _gates(row, key)
+    declared = (
+        None if gated else _resolve(table, op, key, only=lambda r: r.declares_tolerance)
+    )
+    return _Held(row, gated, declared)
+
+
+def _widened(was: Optional[Row], now: Optional[Row]) -> bool:
+    """Whether a tolerance compare got looser: a bound went up, or a declared bound went
+    away and left the cell on a default this tool cannot see."""
+    if was is None:
+        return False
+    if now is None:
+        return True
+    return any(
+        old is not None and (new is None or new > old)
+        for old, new in ((was.atol, now.atol), (was.rtol, now.rtol))
+    )
+
+
+def _classify(was: _Held, now: _Held) -> Optional[str]:
     """How the gate one variant resolves to has changed, or ``None`` if it has not."""
-    gated_before = was is not None and was.gated
-    gated_after = now is not None and now.gated
-    if gated_before and not gated_after:
+    if was.gated and not now.gated:
         # Only a loss if it was gating; a tolerance cell that loses its row gates
         # exactly as it did.
-        return "removed" if now is None else "ungated"
-    if not gated_before and gated_after:
+        return "removed" if now.row is None else "ungated"
+    if not was.gated and now.gated:
         return "gated"
-    if gated_before and gated_after:
-        if now.max_ulp > was.max_ulp:
+    if was.gated and now.gated:
+        if now.row.max_ulp > was.row.max_ulp:
             return "raised"
-        if now.floor > was.floor:
+        if now.row.floor > was.row.floor:
             # Before `tightened`: a smaller `max_ulp` with a wider floor rescues more
             # lanes than it fails, and the budget alone would call that an improvement.
             return "floor_widened"
-        if now.max_ulp < was.max_ulp:
+        if now.row.max_ulp < was.row.max_ulp:
             return "tightened"
         return None
-    # Neither side gates. A new tolerance row is worth a line; a vanished one is not.
-    return "added" if was is None and now is not None else None
+    # Neither side gates, but the cell is still held to something: the eltwise drivers
+    # compare it with the declared atol/rtol, and the nightly's headroom report with the
+    # measurement and the non-finite count its row records. Loosening either needs the
+    # same re-measurement a raised budget does.
+    if _widened(was.declared, now.declared):
+        return "tolerance_widened"
+    if was.baseline is not None and now.baseline is None:
+        return "baseline_dropped"
+    if (
+        was.baseline is not None
+        and now.baseline > was.baseline
+        or now.nonfinite > was.nonfinite
+    ):
+        return "baseline_raised"
+    # A new tolerance row is worth a line; a vanished one that held nothing is not.
+    return "added" if was.row is None and now.row is not None else None
 
 
 _KIND_ORDER = (
@@ -268,6 +432,9 @@ _KIND_ORDER = (
     "floor_widened",
     "ungated",
     "removed",
+    "tolerance_widened",
+    "baseline_raised",
+    "baseline_dropped",
     "tightened",
     "gated",
     "added",
@@ -286,24 +453,35 @@ def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
     grouped: Dict[Tuple, Change] = {}
     for op in sorted({c[0] for c in base} | {c[0] for c in head}):
         for key in _variants(base, head, op):
-            was, now = _resolve(base, op, key), _resolve(head, op, key)
+            was, now = _held(base, op, key), _held(head, op, key)
             kind = _classify(was, now)
             if kind is None:
                 continue
-            deciding = now if now is not None else was
-            # Grouped by the deciding row and the budgets on each side: a collapsed row
-            # replacing N keyed rows of one budget is one line marked xN.
-            ident = (
-                op,
-                kind,
-                deciding.key,
-                (was.max_ulp, was.floor) if was else None,
-                (now.max_ulp, now.floor) if now else None,
-            )
+            deciding = now.row if now.row is not None else was.row
+            # Grouped by the deciding row and what the cell is held to on each side: a
+            # collapsed row replacing N keyed rows of one budget is one line marked xN.
+            ident = (op, kind, deciding.key, was.describe(), now.describe())
             found = grouped.get(ident)
-            variants = found.variants + 1 if found else 1
-            grouped[ident] = Change((op, deciding.key), kind, was, now, variants)
+            grouped[ident] = Change(
+                (op, deciding.key),
+                kind,
+                was.row,
+                now.row,
+                variants=found.variants + 1 if found else 1,
+                held_before=was.describe(),
+                held_after=now.describe(),
+                remeasured=_remeasured(base, now.row),
+            )
     return sorted(grouped.values(), key=lambda c: (_KIND_ORDER.index(c.kind), c.cell))
+
+
+def _remeasured(base: Dict[Cell, Row], row: Optional[Row]) -> bool:
+    """Whether *row*, the head row deciding a cell, carries a provenance comment the base
+    table's same row did not -- a new row's comment is new by definition."""
+    if row is None:
+        return False
+    was = base.get((row.op, row.key))
+    return was is None or was.provenance != row.provenance
 
 
 _KIND_TEXT = {
@@ -311,19 +489,13 @@ _KIND_TEXT = {
     "floor_widened": "near-zero floor widened",
     "ungated": "gating lost (now tolerance)",
     "removed": "gate lost (no row covers it)",
+    "tolerance_widened": "declared atol/rtol loosened",
+    "baseline_raised": "recorded measurement raised",
+    "baseline_dropped": "recorded measurement dropped",
     "tightened": "budget tightened",
     "gated": "newly gated",
     "added": "new row",
 }
-
-
-def _budget(row: Optional[Row]) -> str:
-    if row is None:
-        return "—"
-    text = str(row.max_ulp) if row.gated else "tolerance"
-    if row.near_zero_atol:  # or a widened floor shows the same number on both sides
-        text += f" (floor {row.near_zero_atol:g})"
-    return text
 
 
 def _describe(c: Change) -> str:
@@ -331,17 +503,24 @@ def _describe(c: Change) -> str:
     return row.describe() + (f" ×{c.variants}" if c.variants > 1 else "")
 
 
-def _capped(lines: List[str], columns: int) -> List[str]:
-    """At most ``_MAX_ROWS`` table rows, then one row saying how many were withheld."""
+def _md_table(header: Sequence[str], lines: List[str]) -> List[str]:
+    """A markdown table of at most ``_MAX_ROWS`` rows, then one row saying how many were
+    withheld. The column count comes from *header*, so the filler row cannot drift."""
     withheld = len(lines) - _MAX_ROWS
-    if withheld <= 0:
-        return lines
-    return lines[:_MAX_ROWS] + [f"| _… {withheld} more_ |" + " |" * (columns - 1)]
+    if withheld > 0:
+        lines = lines[:_MAX_ROWS] + [
+            f"| _… {withheld} more_ |" + " |" * (len(header) - 1)
+        ]
+    return [
+        "| " + " | ".join(header) + " |",
+        "|" + " --- |" * len(header),
+        *lines,
+    ]
 
 
-def _change_row(c: Change, with_provenance: bool) -> str:
-    cells = f"| `{_describe(c)}` | {_KIND_TEXT[c.kind]} | {_budget(c.before)} | "
-    cells += f"{_budget(c.after)} |"
+def _change_row(c: Change, *, with_provenance: bool) -> str:
+    cells = f"| `{_describe(c)}` | {_KIND_TEXT[c.kind]} | {c.held_before} | "
+    cells += f"{c.held_after} |"
     if with_provenance:
         cells += f" {'yes' if c.remeasured else '**no**'} |"
     return cells
@@ -361,9 +540,10 @@ def render_budget_diff(changes: List[Change], label_hint: str) -> str:
             "change — that is the table's own rule, and it is what makes every number "
             "in it traceable.",
             "",
-            "| cell | change | before | after | re-measured |",
-            "| --- | --- | --- | --- | --- |",
-            *_capped([_change_row(c, True) for c in regressions], 5),
+            *_md_table(
+                ("cell", "change", "before", "after", "re-measured"),
+                [_change_row(c, with_provenance=True) for c in regressions],
+            ),
             "",
             "If these are genuine re-measurements, say so in the PR body and add the "
             f"`{label_hint}` label. If they are not, the budget is being fitted to a "
@@ -374,9 +554,10 @@ def render_budget_diff(changes: List[Change], label_hint: str) -> str:
         out += [
             f"<details><summary>{len(improvements)} other budget change(s)</summary>",
             "",
-            "| cell | change | before | after |",
-            "| --- | --- | --- | --- |",
-            *_capped([_change_row(c, False) for c in improvements], 4),
+            *_md_table(
+                ("cell", "change", "before", "after"),
+                [_change_row(c, with_provenance=False) for c in improvements],
+            ),
             "",
             "</details>",
             "",
@@ -411,25 +592,33 @@ def _allowed_note(regressions: List[Change], label_hint: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _measured_cell(row: dict) -> Cell:
+    """The cell one ``--ulp-measure`` row describes, keyed as a table row is."""
+    return (
+        row["op"],
+        tuple((k, str(row[k])) for k in KEY_FIELDS if row.get(k) is not None),
+    )
+
+
 def _measured_cells(rows: Iterable[dict]) -> Dict[Cell, int]:
     """The worst lane each variant reached, from ``--ulp-measure`` rows. A driver
     enumerates axes the budget key does not, so several rows land on one cell and the
     worst wins, as in ``ulp_sweep.record``."""
     worst: Dict[Cell, int] = {}
     for row in rows:
-        key = tuple((k, str(row[k])) for k in KEY_FIELDS if row.get(k) is not None)
-        cell: Cell = (row["op"], key)
+        cell = _measured_cell(row)
         worst[cell] = max(worst.get(cell, 0), int(row["max"]))
     return worst
 
 
 def _nonfinite_cells(rows: Iterable[dict]) -> Dict[Cell, int]:
-    """Per cell, the most lanes any measurement saw go non-finite against a finite
-    golden (0 for rows written before the sweep recorded it)."""
+    """Per cell, the most lanes any measurement saw where the hardware and the golden
+    disagree about being finite: an inf/NaN against a finite golden, a finite answer to
+    an infinite one, or infinities of opposite sign (0 for rows written before the sweep
+    recorded the count)."""
     worst: Dict[Cell, int] = {}
     for row in rows:
-        key = tuple((k, str(row[k])) for k in KEY_FIELDS if row.get(k) is not None)
-        cell: Cell = (row["op"], key)
+        cell = _measured_cell(row)
         worst[cell] = max(worst.get(cell, 0), int(row.get("nonfinite", 0)))
     return worst
 
@@ -478,6 +667,7 @@ def render_headroom(
     regressed: List[str] = []
     tight: List[str] = []
     slack: List[str] = []
+    unjudged = 0
     for cell, count in sorted((nonfinite or {}).items()):
         row = _resolve(table, *cell)
         if row is None or count <= recorded_nonfinite(row):
@@ -489,9 +679,11 @@ def render_headroom(
         row = _resolve(table, *cell)
         if row is None:
             continue
-        if not row.gated:
+        if not _gates(row, cell[1]):
             was = recorded_max(row)
-            if was is not None and worst > was:
+            if was is None:
+                unjudged += 1
+            elif worst > was:
                 regressed.append(_headroom_line(cell, worst, was, "regressed"))
         elif worst > row.max_ulp:
             over.append(_headroom_line(cell, worst, row.max_ulp, "over budget"))
@@ -499,13 +691,21 @@ def render_headroom(
             # `0 == 0` is an exact-by-construction op doing what it claims, enrolled so
             # that any drift fails; reporting it as "no headroom" buried the real ones.
             tight.append(_headroom_line(cell, worst, row.max_ulp, "no headroom"))
-        elif row.max_ulp > 1 and worst < _SLACK_FRACTION * row.max_ulp:
+        elif row.max_ulp >= _SLACK_MIN_BUDGET and worst < _SLACK_FRACTION * row.max_ulp:
             slack.append(_headroom_line(cell, worst, row.max_ulp, "could tighten"))
 
     out = ["### SFPU ULP sweep vs the declared budgets", ""]
     if not measured:
         return "\n".join(out + ["No measurements recorded.", ""]), 0
     out += [f"{len(measured)} cell(s) measured.", ""]
+    if unjudged:
+        # Not a failure, but not a pass either: without a recorded figure there is
+        # nothing to hold the cell to, and a clean summary must not read as covering it.
+        out += [
+            f"{unjudged} tolerance cell(s) measured but not judged: their row records no "
+            "`max N ULP` to hold them to, or does not pin both `in` and `out`.",
+            "",
+        ]
     sections = (
         ("Over budget", over, "budget", False),
         (
@@ -529,9 +729,7 @@ def render_headroom(
         out += [
             f"<details><summary>{heading}</summary>" if collapsed else f"**{heading}**",
             "",
-            f"| cell | measured | {reference} | |",
-            "| --- | --- | --- | --- |",
-            *_capped(lines, 4),
+            *_md_table(("cell", "measured", reference, ""), lines),
             "",
         ]
         if collapsed:
@@ -539,7 +737,7 @@ def render_headroom(
     if not (over or regressed or tight or slack):
         out += [
             "Every gated cell is inside its budget with headroom to spare, and no "
-            "tolerance cell is past its recorded measurement.",
+            "judged tolerance cell is past its recorded measurement.",
             "",
         ]
     return "\n".join(out), len(over) + len(regressed)
@@ -576,7 +774,9 @@ def _headroom(args) -> Tuple[str, int]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    # The whole first paragraph: it is hard-wrapped, so its first line stops mid-sentence.
+    summary = " ".join(__doc__.split("\n\n")[0].split())
+    parser = argparse.ArgumentParser(description=summary)
     sub = parser.add_subparsers(dest="mode", required=True)
 
     d = sub.add_parser("diff", help="compare two revisions of the budget table")
@@ -596,7 +796,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     h.add_argument("--out", type=Path)
 
     args = parser.parse_args(argv)
-    report, status = (_diff if args.mode == "diff" else _headroom)(args)
+    try:
+        report, status = (_diff if args.mode == "diff" else _headroom)(args)
+    except ValueError as refused:
+        # A table the registry would refuse to load. No verdict on it means anything,
+        # and the override label cannot admit one: the fix is the table.
+        report, status = (
+            f"### SFPU ULP budgets\n\nThe table cannot load: {refused}\n",
+            2,
+        )
     sys.stdout.write(report)
     if args.out:
         args.out.write_text(report, encoding="utf-8")

@@ -49,11 +49,13 @@ jobs:
         run: pip3 install PyYAML
       - name: Build test matrix
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "ALL_SKUS_IN_TESTS" \
-            ./.github/sku_config.yaml
+        # @main, as the other LLK pipelines do: the current script, not whatever copy a
+        # stale or stacked branch carries.
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "ALL_SKUS_IN_TESTS"
+          sku-config: ./.github/sku_config.yaml
 
   llk-sfpu-accuracy-exec:
     needs: [load-test-matrix, build-images]
@@ -97,6 +99,7 @@ jobs:
       # budget fails here. Tolerance cells are measured too but have no budget to
       # fail, so the step below judges them against the measurement their row records.
       - name: Run the exhaustive ULP sweep
+        id: sweep
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
         env:
@@ -104,26 +107,39 @@ jobs:
         run: |
           ${{ matrix.test-group.cmd }}
 
+      # Not `always()`: a cancelled run -- a newer push supersedes a PR's sweep -- would
+      # fold its partial measurements into a report and overwrite the PR comment with
+      # what reads as a complete all-clear.
       - name: Compare the measurements against the declared budgets and recorded measurements
-        if: always()
+        if: ${{ !cancelled() }}
         shell: bash
         working-directory: ${{ env.LLK_PATH }}/tests/python_tests
+        env:
+          SWEEP_OUTCOME: ${{ steps.sweep.outcome }}
         run: |
           set -uo pipefail
-          if [[ ! -s "${{ env.MEASURE_FILE }}" ]]; then
-            echo "No measurements were recorded — the sweep did not get that far." \
-              | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          # By path, not `-m`: the package __init__ imports ttexalens, and the tool
-          # is deliberately standalone. Its exit status is the regression signal for
-          # the tolerance cells, which the sweep itself cannot fail: a worst lane past
-          # the measurement the row records. The report is published either way.
           status=0
-          python3 helpers/ulp_budget_diff.py headroom \
-            --table helpers/sfpu_accuracy_budget.yaml \
-            --measured "${{ env.MEASURE_FILE }}" \
-            --out ulp_headroom_report.md || status=$?
+          if [[ ! -s "${{ env.MEASURE_FILE }}" ]]; then
+            # Still a report, so the PR comment says so instead of keeping the last run's.
+            printf '### SFPU ULP sweep vs the declared budgets\n\n%s\n' \
+              "No measurements were recorded: the sweep step ended in \`$SWEEP_OUTCOME\` before measuring anything." \
+              > ulp_headroom_report.md
+          else
+            # By path, not `-m`: the package __init__ imports ttexalens, and the tool
+            # is deliberately standalone. Its exit status is the regression signal for
+            # the tolerance cells, which the sweep itself cannot fail: a worst lane past
+            # the measurement the row records. The report is published either way.
+            python3 helpers/ulp_budget_diff.py headroom \
+              --table helpers/sfpu_accuracy_budget.yaml \
+              --measured "${{ env.MEASURE_FILE }}" \
+              --out ulp_headroom_report.md || status=$?
+            if [[ "$SWEEP_OUTCOME" != "success" ]]; then
+              # A failed gated cell fails the sweep step, and so does a run that stopped
+              # early; the second leaves cells unmeasured, which the counts alone hide.
+              printf '\n_The sweep step ended in `%s`: a gated cell over its budget fails it, and so does a run that stopped early, in which case only the cells it reached are counted above. See the sweep log._\n' \
+                "$SWEEP_OUTCOME" >> ulp_headroom_report.md
+            fi
+          fi
           {
             echo "## ${{ env.CHIP_ARCH }}"
             cat ulp_headroom_report.md
@@ -131,30 +147,14 @@ jobs:
           exit "$status"
 
       - name: Comment the report on the pull request
-        if: ${{ always() && inputs.report-to-pr && github.event_name == 'pull_request' }}
+        if: ${{ !cancelled() && inputs.report-to-pr && github.event_name == 'pull_request' }}
         continue-on-error: true
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
-        env:
-          REPORT: ${{ env.LLK_PATH }}/tests/python_tests/ulp_headroom_report.md
+        # Edited in place, so a series of pushes leaves one report per arch rather than
+        # one per run.
+        uses: ./.github/actions/upsert-pr-comment
         with:
-          script: |
-            const fs = require('fs');
-            if (!fs.existsSync(process.env.REPORT)) return;
-            const marker = `<!-- llk-sfpu-accuracy-${process.env.CHIP_ARCH} -->`;
-            const body = marker + '\n' + fs.readFileSync(process.env.REPORT, 'utf8');
-            const { owner, repo } = context.repo;
-            const issue_number = context.payload.pull_request.number;
-            // Edited in place, so a series of pushes leaves one report per arch
-            // rather than one per run.
-            const existing = await github.paginate(github.rest.issues.listComments, {
-              owner, repo, issue_number, per_page: 100,
-            });
-            const mine = existing.find((c) => c.body && c.body.includes(marker));
-            if (mine) {
-              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
-            } else {
-              await github.rest.issues.createComment({ owner, repo, issue_number, body });
-            }
+          marker: "<!-- llk-sfpu-accuracy-${{ env.CHIP_ARCH }} -->"
+          body-file: ${{ env.LLK_PATH }}/tests/python_tests/ulp_headroom_report.md
 
       - name: Upload the measurements and the report
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
