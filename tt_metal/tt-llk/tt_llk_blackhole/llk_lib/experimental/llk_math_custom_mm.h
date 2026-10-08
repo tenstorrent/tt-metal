@@ -171,8 +171,8 @@ inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, con
  * @tparam dense_packing: Lay output tiles 32 DEST rows apart instead of 64.
  * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
  * @param ct_dim: Number of output column tiles.
- * @note Establishes the operand-driven default Src zero-substitution state, as @ref _llk_math_matmul_init_ does;
- *       @ref _llk_math_custom_mm_ asserts it under LLK asserts.
+ * @note Establishes the operand-driven default Src zero-substitution state, which @ref _llk_math_custom_mm_ asserts
+ *       under LLK asserts. Re-run this init after any math op that leaves the flag at keep (a copy init does).
  */
 template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
 inline void _llk_math_custom_mm_init_(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim = 1)
@@ -186,6 +186,17 @@ inline void _llk_math_custom_mm_init_(const std::uint32_t operandB_face_r_dim, c
     math::_configure_default_zero_flag_state_();
 }
 
+/**
+ * @brief Run the custom_mm MVMUL MOP over kt_dim k-tiles into DEST.
+ *
+ * @tparam finalize: Merge the split accumulators at the end; must be false unless the init used split_acc.
+ * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
+ * @param dst_index: DEST tile index to write.
+ * @param kt_dim: Number of k-tiles to accumulate.
+ * @param ct_dim: Number of output column tiles.
+ * @note Call @ref _llk_math_custom_mm_init_ first, and again after any other math op (a copy init leaves the Src
+ *       zero flag at keep).
+ */
 template <bool finalize = true>
 inline void _llk_math_custom_mm_(
     const std::uint32_t operandB_face_r_dim, const std::uint32_t dst_index, const std::uint32_t kt_dim, const std::uint32_t ct_dim = 1)
