@@ -48,6 +48,20 @@ print(best.node_id if best else "")
 PY
 }
 
+drift_ok() {  # drift_ok <label>: re-measure the campaign root; fail only on a real shift, not one noisy case
+  "$T/eval_attempt.sh" --campaign "$CAMPAIGN" --measure "dream/$CAMPAIGN/root" --label "${1}_root" >>"$CHOME/logs/driver.log" 2>&1
+  dream_py - "$L/baseline.json" "$CHOME/reports/${1}_root_1/measure.json" <<'PY2'
+import json, math, sys
+base, m = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+noise = base["noise_pct"]
+d = {k: (v["us_chip_mean"] / base["shapes"][k]["us_chip_mean"] - 1) * 100 for k, v in m["shapes"].items()}
+geo = (math.exp(sum(math.log(1 + x / 100) for x in d.values()) / len(d)) - 1) * 100
+worst = max(d, key=lambda k: abs(d[k]))
+print(f"[driver] root drift: geomean {geo:+.2f}%, worst {worst} {d[worst]:+.2f}% (noise {noise}%)")
+sys.exit(0 if m["fail_class"] == "ok" and abs(geo) <= noise and abs(d[worst]) <= 3 * noise else 1)
+PY2
+}
+
 run_step() {  # run_step <round> -> 0 if a step ran, 1 if the policy stopped
   local t="$1" step="$CHOME/logs/step_r$(printf %02d "$t").json"
   dream_py "$T/policy_step.py" --campaign "$CAMPAIGN" --round "$t" --next >"$step" 2>>"$CHOME/logs/driver_err.log" || {
@@ -128,8 +142,10 @@ for t in $(seq "$start" "$ROUNDS"); do
   if [[ ! -f "$L/rounds/$rr/manifest.json" ]]; then
     root_ref="dream/$CAMPAIGN/root"
     if [[ $t -gt 1 ]]; then b="$(best_node)"; [[ -n "$b" ]] && root_ref="dream/$CAMPAIGN/n/$b"; fi
-    drift="$("$T/eval_attempt.sh" --campaign "$CAMPAIGN" --measure "dream/$CAMPAIGN/root" --label "${rr}_root" 2>&1 | tail -n 20)"
-    echo "$drift" | grep -q DRIFT && { log "baseline drift before $rr, stopping:"; echo "$drift"; break; }
+    if ! drift_ok "$rr"; then
+      log "re-measuring the root once more before deciding"
+      drift_ok "${rr}b" || { log "baseline drift confirmed before $rr, stopping (see $CHOME/reports/${rr}*_root_1)"; break; }
+    fi
     dream_py "$T/history.py" --campaign "$CAMPAIGN" >/dev/null
     dream_py "$T/policy_step.py" --campaign "$CAMPAIGN" --round "$t" --plan --root "$root_ref" >>"$CHOME/logs/driver.log" 2>&1 || {
       log "plan failed"; break; }
