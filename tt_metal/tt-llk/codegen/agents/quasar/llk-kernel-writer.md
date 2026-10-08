@@ -77,7 +77,9 @@ The writer touches only:
 - Its direct LLK wrapper if one for this op family doesn't exist (`tt_llk_{TARGET_ARCH}/llk_lib/llk_*.h`). New wrappers use target-native sync primitives — no `#ifdef ARCH_*` branches for sibling arches.
 - The `SfpuType::{Op}` / `BinaryOp::{OP}` enum line in `tt_llk_{TARGET_ARCH}/llk_lib/llk_defs.h`.
 - The registration that makes the new op selectable and compilable — so your Step 4 compile-check actually exercises the kernel body, not a vacuous build: the `#include` + dispatch branch in `tests/helpers/include/sfpu_operations_{TARGET_ARCH}.h` (SFPU) or the kernel-family dispatch header (non-SFPU), plus `MathOperation.{Op}` in `tests/python_tests/helpers/llk_params.py`. Add whatever is missing. The tester then builds the actual test cases (OpConfig, golden, input-prep) on top of this registration.
-  - **Never bind a path-selecting template parameter to a literal** in the dispatcher (e.g. `9 /* num_rows */`, `DataLayout::TILE`, `false /* accumulate */`). Every parameter the analysis's Code-Path Coverage Matrix uses to select a path must come from a test parameter (a `constexpr` the Python test emits into `build.h`), so the tester can reach every REQUIRED row and the Python test is the single source of each value. If the shared unified harness cannot carry the extra parameters without touching every other op, register the op in a dedicated test source instead (`tests/sources/{TARGET_ARCH}/sfpu_{op}_{TARGET_ARCH}_test.cpp`, modelled on the unified one) and say so in your report.
+  - **Exception — stateful / multi-pass ops** (state carried across tiles or calls, not in place, a separate finalize): add no `SfpuType` / unified-dispatcher branch; compile against the dedicated test source below. Every registered branch must be driven by a test with a golden (why: welfords PR #59440 shipped an unreachable, wrong branch).
+  - A new dispatcher branch that ignores an existing dispatcher parameter (`math_format`, `ITERATIONS`, rounding mode) `static_assert`s its supported value. After editing a shared dispatcher, grep its op lists and docstrings ("stateless — no init", `@tparam` scopes) and update them; revert any formatter hunk on lines the op did not touch.
+  - **Never bind a path-selecting template parameter to a literal** in the dispatcher (e.g. `9 /*num_rows*/`, `DataLayout::TILE`, `false /*accumulate*/`). Every parameter the analysis's Code-Path Coverage Matrix uses to select a path must come from a test parameter (a `constexpr` the Python test emits into `build.h`), so the tester can reach every REQUIRED row and the Python test is the single source of each value. If the shared unified harness cannot carry the extra parameters without touching every other op, register the op in a dedicated test source instead (`tests/sources/{TARGET_ARCH}/sfpu_{op}_{TARGET_ARCH}_test.cpp`, modelled on the unified one) and say so in your report.
 - The **compute-API wiring** in `tt_metal/hw/inc/api/compute/` when the analysis's `## Production Callers` shows the op's include or wrapper gated out for the target (`#ifndef ARCH_{TARGET}`): un-gate the include and move the wrapper out of the guard, adding a `#ifdef ARCH_{TARGET}` branch only for what genuinely differs (template list, `VectorMode`). Follow `.claude/references/metal-integration.md`. This is part of the port, not a harness shim — a kernel production code cannot reach is not done.
 
 The writer **never** touches, to make a foreign harness compile: any other file in `tt_metal/hw/inc/`; a `*_compat*.h` shim; an existing `llk_*.h` given a no-op body; or `codegen/scripts/`. If you believe one must change, that is evidence you are on the wrong path — report `FAILED` (harness not target-native).
@@ -86,7 +88,9 @@ Acid test: `git diff --stat` (read-only) should touch nothing outside the surfac
 
 ### Step 3: Write the Kernel File
 
-Write the complete kernel to `$WORKTREE_DIR/$GENERATED_KERNEL` — includes, namespace, and every function body from §6b. Namespace is `ckernel::sfpu` (`namespace ckernel { namespace sfpu { ... } }`) for SFPU; match the sibling `llk_*` kernel for math/pack/unpack.
+Write the complete kernel to `$WORKTREE_DIR/$GENERATED_KERNEL` — includes, namespace, and every function body from §6b. Namespace is `ckernel::sfpu` (`namespace ckernel { namespace sfpu { ... } }`) for SFPU; match the sibling `llk_*` kernel for math/pack/unpack. Copy the SPDX line from a sibling in the same directory.
+
+**Asserts, not caveats.** Every `LLK_ASSERT` §6b carries over from the reference's wrappers goes in, plus `LLK_ASSERT(dst + k < get_dest_max_tiles<…>())` for each extra Dest tile the kernel writes. A "caller must …" condition is an `LLK_ASSERT` / `static_assert`, never only a docstring. A metal-layer entry calls through `SFPU_UNARY_CALL*` (or the binary/ternary macro), never the kernel directly (why: ema PR #57129, welfords PR #59440, reshuffle_rows).
 
 Transcribe §6b faithfully. The analyzer already decided which macros to emit and in what order, which LREGs hold what, which params are template vs runtime, and where the 2-cycle hazards are.
 
@@ -104,9 +108,11 @@ If a `float` or runtime value would feed a `TTI_` operand, the analysis is contr
 - Hardware params are explicit integer constants, never boolean expressions.
 - `TTI_SFPLOADI` mode (2nd arg): `sfpi::SFPLOADI_MOD0_*` named constants, never raw integers (`FLOATB`=0, `FLOATA`=1, `USHORT`=2, `SHORT`=4, `UPPER`=8, `LOWER`=10).
 - `TTI_SFPLOAD` / `TTI_SFPSTORE` `instr_mod0`: `p_sfpu::sfpmem::*` named constants (`DEFAULT`, `FP16A`, `FP16B`, `FP32`, `INT32`, `UINT8`, `UINT16`), never a bare `0`.
-- Every remaining bare `0`/`1` in a `TTI_SFP*`/`TT_SFP*` call carries an inline `/* position */` comment (`/* done */`, `/* dest_reg */`, `/* mod1 */`, `/* imm12 */`); add `: effect` when non-default (`1 /* mod1: flip sign */`).
+- Every remaining bare literal or computed expression in a `TTI_*`/`TT_*` call carries the macro's formal parameter name, no spaces, no `: effect`: `0 /*instr_mod1*/`, `base + off /*dest_reg_addr*/`. Take the name from the macro in `ckernel_ops.h` / `assembly.yaml`, not a guess (`dest_reg_addr`, not `dest_reg`). Pass each operand slot a value of its own kind: never an LREG enum in an imm field (why: lcm SFPSHFT imm12).
 - If the kernel uses `sfpi::` mode constants, `#include "sfpi.h"` directly in the kernel header — do not rely on transitive inclusion.
-- Never create single-instruction wrapper functions — add an inline comment instead.
+- No single-instruction wrapper functions unless a reviewer asks or the wrapper replaces three or more identical call sites (e.g. a `TTI_REPLAY` helper, binary_bcast). A 2+-instruction sequence repeated in the file (a LOWER/UPPER `SFPLOADI` pair) gets a file-local helper.
+- Select between template-param alternatives with `if constexpr` (a local `select` lambda when several loops use it), never `?:` on a template bool; a register-renamed copy of a block becomes a helper templated on the LREGs (why: unary_max_min, lcm).
+- Derive `*_REPLAY_LEN` from named per-part counts and `static_assert` it against the bank depth (why: rand, ema).
 
 SFPI is available on Quasar (both DSL types and `sfpi::` mode constants). If a downstream agent claims these are unavailable and proposes raw hex, that diagnosis is wrong — reject it.
 
@@ -114,13 +120,13 @@ SFPI is available on Quasar (both DSL types and `sfpi::` mode constants). If a d
 ```cpp
 inline void _calculate_abs_sfp_rows_()
 {
-    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */); // load from dest into lreg[0]
+    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, 0 /*dest_reg_addr*/); // load from dest into lreg[0]
     // Apply absolute value: clear sign bit for FP32
     TTI_SFPABS(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPABS_MOD1_FLOAT);
-    TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */); // store result back
+    TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, 0 /*dest_reg_addr*/); // store result back
 }
 ```
-No file-header block, no per-function docblocks, no analysis cross-references ("see analysis §X"), no ISA/Confluence citations, no explanations of dropped reference parameters. One short inline note where a 2-cycle hazard lives. When in doubt, delete the comment.
+No file-header block, no per-function docblocks, no analysis cross-references ("see analysis §X"), no Confluence page citations, no explanations of dropped reference parameters. A NOP or fixed delay keeps the one-line errata/RTL citation §6b gives it (e.g. `// TEN-4605: SFPSWAP fed by a 2-cycle op`). When in doubt, delete the comment.
 
 ### Step 4: Compile-Check
 
@@ -335,6 +341,7 @@ Include at minimum the compile command and any scripts run to discover sibling p
 - **Written**: the generated kernel path, infra edits (`llk_defs.h`, enum tables).
 - **Compile log pointers**: final stderr on the last failing compile, if any.
 
-## Open questions / handoffs
-Things the tester must verify or that you left unresolved. If none, write "none".
+## Open risks
+Per `codegen/references/logging.md` § Open risks (`R<n> CLOSED … evidence:` / `R<n> DEFERRED … PR:`), or "none".
+Anything the tester must verify is a REQUIRED Coverage-Matrix row, not a note here.
 ```

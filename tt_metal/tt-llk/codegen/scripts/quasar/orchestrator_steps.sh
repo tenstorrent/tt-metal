@@ -1621,6 +1621,50 @@ execute_step_format_advance() {
 }
 
 # ===========================================================================
+# Step 7b — pre-PR gates: the PR Gate perf-header check, reference drift since the
+# base commit, and the open-risks gate over the agent self-logs. Writes
+# $LOG_DIR/pre_pr_gates.txt (build_report.py --pr-body reads its DRIFT lines).
+# Prints GATES: PASS or GATES: FAIL. With arg `final`, a FAIL also marks the run
+# compiled/test_failure with the findings as OBSTACLE — the run is never `success`
+# while a gate is red.
+# ===========================================================================
+execute_step_pre_pr_gates() {
+    local _L; _L="$(_LOG)"
+    local final="${1:-}" rc=0 out base ref drift
+    out="$_L/pre_pr_gates.txt"; : > "$out"
+    # Param field names must be globally unique and the QSR perf schema unchanged
+    # (rand #59437, welfords #59440, dropout #59436 all failed this in CI).
+    if ( cd tests/python_tests && PYTHONPATH=.:helpers ../.venv/bin/python -m pytest \
+            --noconftest -q -p no:cacheprovider test_perf_header_gate.py ) > "$_L/perf_header_gate.log" 2>&1; then
+        echo "PERF_HEADER_GATE: PASS" | tee -a "$out"
+    else
+        echo "PERF_HEADER_GATE: FAIL — $(grep -m1 -E '^FAILED|Error' "$_L/perf_header_gate.log") (full log: $_L/perf_header_gate.log)" | tee -a "$out"
+        rc=1
+    fi
+    # Upstream changes to the reference since the run's base (welfords #59440 needed a
+    # second port after #54786 landed). Informational: goes into the PR follow-ups.
+    base="$(sg GIT_COMMIT)"; ref="$(sg KERNEL_PATH)"
+    if [ -n "$base" ] && [ "$base" != "unknown" ] && [ -n "$ref" ]; then
+        git fetch -q origin main 2>/dev/null || true
+        drift="$(git log --oneline "$base"..origin/main -- "$ref" 2>/dev/null | head -3)"
+        if [ -n "$drift" ]; then
+            while IFS= read -r c; do echo "DRIFT: reference ${ref} changed on main since the run base: ${c}"; done <<<"$drift" | tee -a "$out"
+        else
+            echo "DRIFT: none" | tee -a "$out"
+        fi
+    fi
+    python "$_ORCH_SCRIPTS/quasar/open_risks.py" check --log-dir "$_L" | tee -a "$out"
+    [ "${PIPESTATUS[0]}" -eq 0 ] || rc=1
+    if [ "$rc" -eq 0 ]; then echo "GATES: PASS"; return 0; fi
+    echo "GATES: FAIL"
+    if [ "$final" = "final" ]; then
+        ss STATUS "compiled"; ss FINAL_RESULT "test_failure"
+        ss OBSTACLE "pre-PR gates red: $(grep -E '^(PERF_HEADER_GATE: FAIL|OPEN|MISSING|MALFORMED|WAIVER)' "$out" | head -3 | tr '\n' ';')"
+    fi
+    return 1
+}
+
+# ===========================================================================
 # Step 8a — record final line count of the generated kernel.
 # ===========================================================================
 execute_step_gather_metrics() {
@@ -1794,12 +1838,14 @@ execute_step_extract_transcripts() {
 
 # ===========================================================================
 # Step 8 — build the report from run.json + agent logs + transcripts, write it
-# to codegen/artifacts/<kernel>_report.md, and print it.
+# to codegen/artifacts/<kernel>_report.md, and print it. Also writes the short PR
+# description to $LOG_DIR/<kernel>_pr_body.md (create_prs.sh --from-run uses it).
 # ===========================================================================
 execute_step_write_report() {
     local _L; _L="$(_LOG)"
     local S="$_ORCH_SCRIPTS" kn; kn="$(sg KERNEL_NAME)"
-    python "$S/quasar/build_report.py" --log-dir "$_L" --out "codegen/artifacts/${kn}_report.md"
+    python "$S/quasar/build_report.py" --log-dir "$_L" --out "codegen/artifacts/${kn}_report.md" \
+        --pr-body "$_L/${kn}_pr_body.md"
 }
 
 # ===========================================================================
