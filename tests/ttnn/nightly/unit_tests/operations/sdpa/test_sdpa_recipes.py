@@ -21,11 +21,15 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     check_attn_mask,
     check_chunked,
     check_chunked_trace,
+    check_concat_heads,
     check_joint,
     check_key_range,
     check_legacy_arguments,
+    check_mla,
     check_op_selected_blocking,
+    check_sink,
     check_windowed,
+    MLA_SHAPES,
     l2_pct,
     program_config,
     randn,
@@ -209,6 +213,12 @@ CHUNKED_CASES = {
     "tail_sq200": dict(start=320, sq=200, block=640),
     "window300": dict(start=640, window=300),
     "more_heads_than_cores": dict(start=128, b=8, nh=24, nkv=8, block=512),
+    # Paged K/V: shuffled blocks per sequence, smaller than and not aligned to the K chunk; a cache declared in another
+    # layer's geometry (paged_cache_geometry); attention sinks.
+    "paged_5x128": dict(start=320, blocks_per_seq=5, block=128),
+    "paged_gqa_batch2_4x96": dict(start=200, b=2, nh=8, nkv=2, sq=96, blocks_per_seq=4, block=96),
+    "paged_geometry": dict(start=256, blocks_per_seq=2, block=256, cache_shape=(1, 512, 128)),
+    "sink": dict(start=384, sink=True),
 }
 
 
@@ -239,3 +249,47 @@ WINDOWED_CASES = {
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_windowed_sdpa_recipe(device, variant, case, causal):
     check_windowed(device, variant, causal=causal, **case)
+
+
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_chunked_flash_mla_prefill_recipe(device, variant):
+    """chunked_flash_mla_prefill: paged K [blocks, 1, block, 192] shared by four heads, V its first 128 columns."""
+    check_chunked(device, variant, 256, nh=4, nkv=1, sq=128, d=192, head_dim_v=128, blocks_per_seq=3, block=128)
+
+
+@pytest.mark.parametrize("v_tensor", [False, True], ids=["v_from_k", "v_tensor"])
+@pytest.mark.parametrize("causal", [True, False], ids=["causal", "noncausal"])
+@pytest.mark.parametrize("shape", ["d192_v128", "d576_v512"])
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_flash_mla_prefill_recipe(device, variant, shape, causal, v_tensor):
+    check_mla(device, variant, MLA_SHAPES[shape], causal=causal, v_tensor=v_tensor)
+
+
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_flash_mla_prefill_recipe_tails(device, variant):
+    """Sequence lengths off the tile and chunk sizes, batch 2, three heads, noncausal (Sq != Sk)."""
+    check_mla(device, variant, MLA_SHAPES["d128_v64_tails"], causal=False)
+
+
+# Sinks: noncausal, causal and sliding-window rows; a dominant sink (scaled logit about 5 above the row maxima, most of
+# each row's weight); an FP32 sink tensor.
+SINK_CASES = {
+    "noncausal": dict(),
+    "causal": dict(causal=True, shape=(1, 4, 2, 1024, 1024, 128, 256, 512)),
+    "window": dict(causal=True, window=200, shape=(1, 4, 2, 1024, 1024, 128, 256, 512)),
+    "dominant": dict(sink_offset=90.0),
+    "fp32_sink": dict(sink_dtype=ttnn.float32),
+}
+
+
+@pytest.mark.parametrize("case", SINK_CASES.values(), ids=SINK_CASES.keys())
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_sdpa_recipe_attention_sink(device, variant, case):
+    check_sink(device, variant, **case)
+
+
+@pytest.mark.parametrize("causal", [False, True], ids=["noncausal", "causal"])
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_sdpa_recipe_output_concat_heads(device, variant, causal):
+    shape = (2, 4, 2, 640, 640, 64, 128, 256) if causal else (2, 4, 2, 300, 640, 64, 128, 256)
+    check_concat_heads(device, variant, causal=causal, shape=shape)
