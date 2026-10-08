@@ -1,0 +1,9 @@
+m2	Wormhole LLK perf: the four packers lock into a fast or a slow DEST-read rhythm
+m1a	Wormhole LLK perf: pack TRISC branch predictor aliasing makes loop speed depend on code address
+m1b	Wormhole LLK perf: branch-type cache with random replacement makes math loop speed depend on start cycle
+m1c	Wormhole LLK perf: math TRISC instruction-cache set conflicts make a loop read code from L1 on every pass
+t6	Wormhole LLK perf: L1 accesses during packing (host, BRISC, other threads) change results run to run
+t2	Wormhole LLK perf: the pack loop's first tiles (own code fetch, instruction timing) select the packer rhythm
+t3	Wormhole LLK perf: in isolate run types the idle threads run their exit code in the measured window
+zone	Wormhole LLK perf: the size of the profiler zone helpers changes results
+t7	Wormhole LLK perf: the first kernel of a test depends on the kernel before it
