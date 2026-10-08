@@ -17,7 +17,9 @@
 //
 // SrcA is never unpacked into, so the row staged in step 2 is whatever SrcA happens to hold.
 // That is deliberate: the test asserts only that dest survives the borrow, which is the
-// contract the helper breaks when the two halves share a register.
+// contract the helper breaks when the two halves share a register, or when the save converts the
+// row instead of moving its bits (the kernel pins the SFPU's view of dest to the test's DEST width,
+// and the host plants Int32 values that a converting save would change).
 //
 // Step 2 is bracketed by dbg_thread_halt / dbg_thread_unhalt, as every in-tree caller does
 // (dbg_halt / dbg_unhalt, the DPRINT dest dump). The debug array read leaves the packer needing

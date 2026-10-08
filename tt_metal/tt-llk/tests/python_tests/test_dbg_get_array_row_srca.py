@@ -23,6 +23,20 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 
+# Int32 bit patterns a converting save would change: an FP32-mode save flushes the ones that read as
+# denormals (exponent 0) and a BF16-mode save drops their low half. Planted in dest row 0 so the
+# check does not depend on the random stimuli happening to include one.
+INT32_AT_RISK = [
+    1,
+    0x7FFFFF,
+    0x00373F0B,
+    -1,
+    -0x7FFFFFFF,
+    0x12345678,
+    0x00008000,
+    0x7FFFFFFF,
+]
+
 
 @parametrize(
     formats=input_output_formats(
@@ -44,6 +58,8 @@ def test_srca_row_dump_restores_dest_row_0(formats, dest_acc):
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
     )
+    if formats.input_format == DataFormat.Int32:
+        src_A[: len(INT32_AT_RISK)] = torch.tensor(INT32_AT_RISK, dtype=src_A.dtype)
 
     configuration = TestConfig(
         "sources/dbg_get_array_row_srca_test.cpp",
