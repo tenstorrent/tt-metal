@@ -26,7 +26,7 @@ import torch
 
 import ttnn
 from models.demos.glm53_flash_d_p.reference.weights import PREFIX
-from models.demos.glm53_flash_d_p.tt.common import hifi4_config, replicate
+from models.demos.glm53_flash_d_p.tt.common import attn_fidelity, hifi4_config, replicate
 
 KP = 4
 TOPK_POOLS = 512
@@ -45,8 +45,10 @@ class TtIndexer:
         assert cfg.index_kpool == KP and cfg.index_topk == KP * TOPK_POOLS
         self.ndev = mesh.get_num_devices()
         self.score_mode = SCORE_MODE
-        self.mm = hifi4_config()
-        self.score_cfg = hifi4_config(fp32_acc=False)  # the score op honours only math_fidelity
+        self.mm = hifi4_config(fidelity=attn_fidelity())
+        self.score_cfg = hifi4_config(
+            fp32_acc=False, fidelity=attn_fidelity()
+        )  # the score op honours only math_fidelity
         up = lambda t: replicate(
             mesh, t.float().T.reshape(1, 1, t.shape[1], t.shape[0]).to(torch.bfloat16)
         )  # noqa: E731

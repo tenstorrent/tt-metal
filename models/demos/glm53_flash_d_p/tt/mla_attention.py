@@ -26,7 +26,7 @@ import torch
 
 import ttnn
 from models.demos.glm53_flash_d_p.reference.weights import PREFIX
-from models.demos.glm53_flash_d_p.tt.common import hifi4_config, replicate
+from models.demos.glm53_flash_d_p.tt.common import attn_fidelity, hifi4_config, replicate
 from models.demos.glm53_flash_d_p.tt.rms_norm import TtRMSNorm
 
 MC = ttnn.DRAM_MEMORY_CONFIG
@@ -49,7 +49,7 @@ class TtMLA:
         self.ndev = mesh.get_num_devices()
         self.scale = self.dqk**-0.5
         assert float(torch.tensor(self.scale, dtype=torch.float32)) == self.scale, "scale must be fp32-exact"
-        self.mm = hifi4_config()
+        self.mm = hifi4_config(fidelity=attn_fidelity())
         self.mid = ttnn.float32 if MID_DTYPE == "fp32" else ttnn.bfloat16
         self.max_seq = max_seq
         up = lambda t: replicate(mesh, t.float().T.reshape(1, 1, t.shape[1], t.shape[0]).to(torch.bfloat16))  # noqa
