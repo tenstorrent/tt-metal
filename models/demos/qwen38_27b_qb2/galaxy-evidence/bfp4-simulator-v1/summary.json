@@ -1,0 +1,200 @@
+[
+  {
+    "dtype": "bfloat4_b",
+    "fidelity": "LoFi",
+    "cases": 10,
+    "weight_quantization": {
+      "min": 0.11030231861658066,
+      "median": 0.11611424592712383,
+      "max": 0.12414697546842876,
+      "min_pcc": 0.9923178089794124,
+      "max_worst_row_relative_rms": 0.22828477250190715
+    },
+    "output_quantization_only": {
+      "min": 0.1126036588756582,
+      "median": 0.11803079987474263,
+      "max": 0.12592833097583953,
+      "min_pcc": 0.9921054183460825,
+      "max_worst_row_relative_rms": 0.15551723170279502
+    },
+    "execution_on_quantized_operands": {
+      "min": 0.004326008938916798,
+      "median": 0.004394167255828477,
+      "max": 0.004483529585514979,
+      "min_pcc": 0.9999939174478285,
+      "max_worst_row_relative_rms": 0.005414843671533075
+    },
+    "total_against_checkpoint": {
+      "min": 0.11245515019457025,
+      "median": 0.11792999845681951,
+      "max": 0.12573062754149056,
+      "min_pcc": 0.9921016075335483,
+      "max_worst_row_relative_rms": 0.15504956347782617
+    }
+  },
+  {
+    "dtype": "bfloat4_b",
+    "fidelity": "HiFi4",
+    "cases": 10,
+    "weight_quantization": {
+      "min": 0.11030231861658066,
+      "median": 0.11611424592712383,
+      "max": 0.12414697546842876,
+      "min_pcc": 0.9923178089794124,
+      "max_worst_row_relative_rms": 0.22828477250190715
+    },
+    "output_quantization_only": {
+      "min": 0.1126036588756582,
+      "median": 0.11803079987474263,
+      "max": 0.12592833097583953,
+      "min_pcc": 0.9921054183460825,
+      "max_worst_row_relative_rms": 0.15551723170279502
+    },
+    "execution_on_quantized_operands": {
+      "min": 0.0016443698021213948,
+      "median": 0.0016706764856197955,
+      "max": 0.0016886344050959915,
+      "min_pcc": 0.9999985725587779,
+      "max_worst_row_relative_rms": 0.002169862909902885
+    },
+    "total_against_checkpoint": {
+      "min": 0.1126050455114957,
+      "median": 0.11804258066527606,
+      "max": 0.12592712917884472,
+      "min_pcc": 0.992105458081868,
+      "max_worst_row_relative_rms": 0.15552013768745454
+    }
+  },
+  {
+    "dtype": "bfloat8_b",
+    "fidelity": "LoFi",
+    "cases": 10,
+    "weight_quantization": {
+      "min": 0.007236294456682972,
+      "median": 0.00757012371153507,
+      "max": 0.00806885064549916,
+      "min_pcc": 0.9999674463097287,
+      "max_worst_row_relative_rms": 0.015642140298827396
+    },
+    "output_quantization_only": {
+      "min": 0.007333036544940923,
+      "median": 0.007621550777633617,
+      "max": 0.008348689367460086,
+      "min_pcc": 0.9999651650169187,
+      "max_worst_row_relative_rms": 0.01053007550387876
+    },
+    "execution_on_quantized_operands": {
+      "min": 0.018239912997417205,
+      "median": 0.018878776009863527,
+      "max": 0.019290398110389618,
+      "min_pcc": 0.9999057193309568,
+      "max_worst_row_relative_rms": 0.022159937755267818
+    },
+    "total_against_checkpoint": {
+      "min": 0.019799656486015133,
+      "median": 0.020320692084733128,
+      "max": 0.02059700061809817,
+      "min_pcc": 0.9998737141379297,
+      "max_worst_row_relative_rms": 0.024968354729600486
+    }
+  },
+  {
+    "dtype": "bfloat8_b",
+    "fidelity": "HiFi4",
+    "cases": 10,
+    "weight_quantization": {
+      "min": 0.007236294456682972,
+      "median": 0.00757012371153507,
+      "max": 0.00806885064549916,
+      "min_pcc": 0.9999674463097287,
+      "max_worst_row_relative_rms": 0.015642140298827396
+    },
+    "output_quantization_only": {
+      "min": 0.007333036544940923,
+      "median": 0.007621550777633617,
+      "max": 0.008348689367460086,
+      "min_pcc": 0.9999651650169187,
+      "max_worst_row_relative_rms": 0.01053007550387876
+    },
+    "execution_on_quantized_operands": {
+      "min": 0.0016563741357350026,
+      "median": 0.0016792135268959593,
+      "max": 0.0017088013989975616,
+      "min_pcc": 0.9999985395241853,
+      "max_worst_row_relative_rms": 0.002088862682696495
+    },
+    "total_against_checkpoint": {
+      "min": 0.007494244055864514,
+      "median": 0.007816839486269222,
+      "max": 0.008502151927618284,
+      "min_pcc": 0.9999638804125552,
+      "max_worst_row_relative_rms": 0.010790725551941448
+    }
+  },
+  {
+    "dtype": "bfloat16",
+    "fidelity": "LoFi",
+    "cases": 10,
+    "weight_quantization": {
+      "min": 0.0,
+      "median": 0.0,
+      "max": 0.0,
+      "min_pcc": 0.9999999999999138,
+      "max_worst_row_relative_rms": 0.0
+    },
+    "output_quantization_only": {
+      "min": 0.0,
+      "median": 0.0,
+      "max": 0.0,
+      "min_pcc": 0.999999999999999,
+      "max_worst_row_relative_rms": 0.0
+    },
+    "execution_on_quantized_operands": {
+      "min": 0.025845355309793098,
+      "median": 0.026226223505013916,
+      "max": 0.026538515341552483,
+      "min_pcc": 0.9998910689664008,
+      "max_worst_row_relative_rms": 0.03014473544219567
+    },
+    "total_against_checkpoint": {
+      "min": 0.025845355309793098,
+      "median": 0.026226223505013916,
+      "max": 0.026538515341552483,
+      "min_pcc": 0.9998910689664008,
+      "max_worst_row_relative_rms": 0.03014473544219567
+    }
+  },
+  {
+    "dtype": "bfloat16",
+    "fidelity": "HiFi4",
+    "cases": 10,
+    "weight_quantization": {
+      "min": 0.0,
+      "median": 0.0,
+      "max": 0.0,
+      "min_pcc": 0.9999999999999138,
+      "max_worst_row_relative_rms": 0.0
+    },
+    "output_quantization_only": {
+      "min": 0.0,
+      "median": 0.0,
+      "max": 0.0,
+      "min_pcc": 0.999999999999999,
+      "max_worst_row_relative_rms": 0.0
+    },
+    "execution_on_quantized_operands": {
+      "min": 0.0016627431980744119,
+      "median": 0.0016925697172819826,
+      "max": 0.0017236762017055506,
+      "min_pcc": 0.9999985178000643,
+      "max_worst_row_relative_rms": 0.0020852745282792557
+    },
+    "total_against_checkpoint": {
+      "min": 0.0016627431980744119,
+      "median": 0.0016925697172819826,
+      "max": 0.0017236762017055506,
+      "min_pcc": 0.9999985178000643,
+      "max_worst_row_relative_rms": 0.0020852745282792557
+    }
+  }
+]

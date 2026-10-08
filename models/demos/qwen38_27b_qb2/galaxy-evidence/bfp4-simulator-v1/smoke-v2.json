@@ -1,0 +1,8 @@
+{
+  "state": "completed",
+  "simulator": "/home/ttuser/qwen38-artifacts-20261007/bfp4-simulator-v1/libttsim_bh.so",
+  "visible_devices": 1,
+  "finite": true,
+  "execution_relative_rms": 0.004218489397317171,
+  "quantized_weight_relative_rms": 0.1138676106929779
+}

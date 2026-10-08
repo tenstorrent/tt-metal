@@ -1,7 +1,12 @@
 {
-  "generated_at": "2026-10-08T04:36:20.959306+00:00",
+  "generated_at": "2026-10-08T05:02:23.202610+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
+    {
+      "path": "experiments/TT-LAB-REVIEW.md",
+      "bytes": 5227,
+      "sha256": "f77a67b7c25da23daef2937914e90057930c3f46a1a7c1e5a18ea99306ddc9d5"
+    },
     {
       "path": "galaxy-evidence/attention-gdn-integration-v1/README.md",
       "bytes": 5632,
@@ -555,6 +560,89 @@
         "errors": 0,
         "skipped": 0
       }
+    },
+    {
+      "path": "galaxy-evidence/bfp4-simulator-v1/README.md",
+      "bytes": 6518,
+      "sha256": "45e08466240ada1c13d313462b4bbd3ccb4cf23371596141addfedcd05d3860b"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-simulator-v1/binary.json",
+      "bytes": 253,
+      "sha256": "b40c88368745da81aa2a551116bd229ed739e536b93203c04a157ca4909bed65"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-simulator-v1/collection.json",
+      "bytes": 878,
+      "sha256": "7cba27bb744bc171917a8a838b59ef02cccc91c0db537d28a15d4b6f23931683"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-simulator-v1/launch-v2.json",
+      "bytes": 1956,
+      "sha256": "054472b1f487238905e3e5413e372dd377c4ea8d363623237d4cd7f8ee07e0ae"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-simulator-v1/launch.json",
+      "bytes": 1763,
+      "sha256": "e8c9a8a937cddbe4aed3b57e759d90e3a07a3e5aed2aabca98c457b7de010dd1",
+      "scope": "CPU simulator only; a single virtual chip; no hardware performance claim"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-simulator-v1/probe-real-weights-v1.py.gz",
+      "bytes": 3157,
+      "sha256": "5f11523b9dd09e32f12bce6baa53b03cff9d3ac5010b6bce6038fd589b945237"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-simulator-v1/real-weights-launch-v1.json",
+      "bytes": 2307,
+      "sha256": "e1e26d3a7fc30c58e8383334fd7f18075a0cef9577f8931fbc3f7b2aed6e1a45",
+      "scope": "CPU simulator only; 1 CPU and 8GB cap; separate JIT cache; all hardware jobs untouched"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-simulator-v1/real-weights-v1.json",
+      "bytes": 86516,
+      "sha256": "013aee584250747a65426ad39538e8df3b660dfe1df7e917eec0c1a95e9545b3",
+      "state": "completed",
+      "scope": "Single virtual Blackhole; real weight submatrices with synthetic BF16 inputs; no full-model accuracy or timing claim",
+      "updated_at": "2026-10-08T04:55:23Z",
+      "model_accuracy_qualified": false,
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/bfp4-simulator-v1/real-weights-v1.log.gz",
+      "bytes": 18655,
+      "sha256": "35ba92b36da98f12585a3854776d1e612a86d7a3c1bf5427efbbd03f77565563"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-simulator-v1/smoke-v2.json",
+      "bytes": 264,
+      "sha256": "ffea0f7506689ee26a14d460834a6175dd2b03b0cb32b36cc3fb655abb92c545",
+      "state": "completed"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-simulator-v1/smoke-v2.log.gz",
+      "bytes": 1695,
+      "sha256": "6402ccb458b3ee1ac6315f35198b3ba64c3d7d70d1de778944ae1dbf823c9a02"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-simulator-v1/smoke-v2.py.gz",
+      "bytes": 879,
+      "sha256": "f5f21e5466f75e9184db32d1b8699a6abb12f4572104286d7d072cb7f3d7cfa4"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-simulator-v1/smoke.log.gz",
+      "bytes": 1822,
+      "sha256": "b44efee6bed8ed09ab037611c85bb99fe5c3c15ee009f3d129051e428289316b"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-simulator-v1/smoke.py.gz",
+      "bytes": 876,
+      "sha256": "ae9ff3b4a4b35d0b0e5e8132a908c40d67ac897d77c08d82bd88820c94454795"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-simulator-v1/summary.json",
+      "bytes": 6001,
+      "sha256": "95c05cc9d612ec0e2383b5a26f44621808da1cb537a87468ee787116cae67ef9"
     },
     {
       "path": "galaxy-evidence/capacity-pairs-launch-v1.json",

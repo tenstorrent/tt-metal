@@ -1,0 +1,30 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-bfp4-simulator-smoke-v2-20261008",
+    "--property=RuntimeMaxSec=15min",
+    "--property=TimeoutStopSec=30",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=8G",
+    "--property=CPUQuota=100%",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/bfp4-simulator-v1/smoke-v2.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/bfp4-simulator-v1/smoke-v2.log",
+    "--working-directory=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal",
+    "--setenv=PATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin:/usr/bin:/bin",
+    "--setenv=PYTHONPATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tools",
+    "--setenv=LD_LIBRARY_PATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-build/lib",
+    "--setenv=TT_METAL_HOME=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal",
+    "--setenv=TT_METAL_SIMULATOR=/home/ttuser/qwen38-artifacts-20261007/bfp4-simulator-v1/libttsim_bh.so",
+    "--setenv=TT_METAL_SLOW_DISPATCH_MODE=1",
+    "--setenv=TT_METAL_CACHE=/home/ttuser/qwen38-artifacts-20261007/bfp4-simulator-v1/jit-cache",
+    "--setenv=ARCH_NAME=blackhole",
+    "--setenv=OMP_NUM_THREADS=1",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "--setenv=TT_METAL_INSPECTOR_RPC=0",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "/home/ttuser/qwen38-artifacts-20261007/bfp4-simulator-v1/smoke-v2.py"
+  ],
+  "change": "Use pinned runtime WormholeComputeKernelConfig alias, also used by the model on Blackhole; disable only simulator inspector RPC",
+  "source_sha256": "6fa306d0adf4ea514683c00a99596d9f5599acb86f0a194a67fbc72524f3f527"
+}

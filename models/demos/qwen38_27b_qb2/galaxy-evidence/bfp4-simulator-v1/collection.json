@@ -1,0 +1,9 @@
+{
+  "collected_at": "2026-10-08T04:56:04Z",
+  "units": {
+    "qwen38-bfp4-simulator-smoke-v1-20261008.service": "Result=exit-code\nExecMainStartTimestamp=Thu 2026-10-08 04:47:18 UTC\nExecMainExitTimestamp=Thu 2026-10-08 04:47:23 UTC\nExecMainStatus=1\nActiveState=failed\nSubState=failed\n",
+    "qwen38-bfp4-simulator-smoke-v2-20261008.service": "Result=success\nExecMainStartTimestamp=n/a\nExecMainExitTimestamp=n/a\nExecMainStatus=0\nActiveState=inactive\nSubState=dead\n",
+    "qwen38-bfp4-simulator-real-weights-v1-20261008.service": "Result=success\nExecMainStartTimestamp=n/a\nExecMainExitTimestamp=n/a\nExecMainStatus=0\nActiveState=inactive\nSubState=dead\n",
+    "qwen38-capacity-pairs-v1-20261007.service": "Result=success\nExecMainStartTimestamp=Thu 2026-10-08 04:28:01 UTC\nExecMainExitTimestamp=n/a\nExecMainStatus=0\nActiveState=active\nSubState=running\n"
+  }
+}

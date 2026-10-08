@@ -24,6 +24,11 @@ failed its numerical gate.
 - Prioritize output throughput while conversations are at 32K, 128K, and 256K
   total context, with a 2,680 output tok/s/Galaxy target. Those lengths do not
   mean generating that many output tokens in each benchmark.
+- Oct 8 priority clarification: 128K and 256K carry substantially more weight
+  than 32K. This is not a strict no-regression rule: a tens-of-percent 32K gain
+  may justify a few-percent loss at 128K/256K. Explicitly flag the measured
+  gains/losses at each length, confidence/repeatability, and capacity effects.
+  Prioritize placement and bandwidth work; keep precision investigation separate.
 - Tune bandwidth before reducing precision. Current experiments preserve BFP4
   projection weights, BFP8 KV, BF16 activations, FP32 recurrent state, and the
   explicit accurate-attention policy. Runtime defaults are not auto-promoted.
@@ -143,17 +148,71 @@ Reference report links and exact caveats are in
 [Thatch review](THATCH-REVIEW.md). The simulator is an additional validation
 tool, not a replacement for hardware, long-horizon state checks, or model evals.
 
+### Oct 8: CPU simulator accuracy experiment and revised priorities
+
+- **04:47:18-04:47:23 UTC:** first CPU-only Blackhole simulator smoke failed
+  before matmul because pinned Metal exposes `WormholeComputeKernelConfig`, not
+  `BlackholeComputeKernelConfig`. This is a Python compatibility failure, not a
+  BFP4 kernel failure. Retained the failed source and log.
+- **04:49:04-04:49:05 UTC:** corrected smoke completed with one virtual device,
+  finite output and clean close. The separate simulator inspector RPC was
+  disabled to avoid colliding with the physical experiment's inspector port.
+  No simulator arithmetic/error checks, native kernels or hardware settings were
+  changed. Official ttsim **v1.11.2** Blackhole binary was digest-pinned; the
+  existing native Metal build remains `a08819ddbe23077f8037d3802303939064868ff6`.
+- **04:55:01-04:55:23 UTC:** completed **60** real-weight submatrix matmuls:
+  ten slices covering linear-attention QKV, full-attention Q, MLP down/gate and
+  LM head, each at BFP4/BFP8/BF16 and LoFi/HiFi4. BF16 inputs are seeded synthetic
+  stimuli, not captured model activations. Separate host references isolate
+  weight quantization, output error due to quantization, and matmul execution
+  error. All outputs finite, single virtual chip, clean close. No task-accuracy
+  acceptance threshold was asserted and no model precision was changed.
+- BFP4/LoFi median total output relative RMS is **11.793%**, versus **11.803%**
+  for quantization alone and **0.439%** execution error against quantized
+  operands. BFP4/HiFi4 execution error falls to **0.167%**, but total error stays
+  **11.804%**. Quantization dominates this sampled probe; this is not an
+  explanation of the historical GPQA deficit or an end-to-end qualification.
+  Full six-mode results, sources, failure evidence and reproduction command are
+  in [the simulator report](../galaxy-evidence/bfp4-simulator-v1/README.md).
+- Resource isolation: persistent simulator units use one CPU/8-GiB limits,
+  separate JIT cache and explicit simulator selection. They do not acquire
+  `/tmp/tt-device.lock` or open physical Galaxy devices. The existing 128K/B16
+  full-model capacity run completed its first repeat and remained active when
+  these simulator receipts were collected.
+- Shared-Q/K preparation now has an **unvalidated local prototype**. No
+  compilation, numerical or performance result is claimed for it, and it is not
+  enabled in the model. Following the user's clarification, long-context
+  placement, bank traffic and reduction work take precedence over this candidate.
+- Next placement diagnosis must distinguish changes in physical location from
+  changes in work partition/reduction depth. The earlier 64-/80-core alternatives
+  also reduced cores per user versus native at 128K/B16 and 256K/B8. Equal-count
+  alternatives had identical error patterns; that is a lead, not proof of the
+  numerical cause. Preserve the accurate-exp/FP32 policy and the original gate;
+  establish matched-work comparisons before claiming a placement improvement.
+- **Subsequent reference review:** cloned `tenstorrent/tt-lab` at
+  `e6baf562a72491ed9d594cddbdf42e0925b1f79e`, read its instructions and inspected
+  quantization, exact proxy/device comparison, teacher-forced CPU/proxy checks
+  and logit diagnostics. No build/model/device commands run from that repo.
+  [Review and applicability](TT-LAB-REVIEW.md): use separate arithmetic and
+  quality references; its active GPT-OSS expert path is BFP8 and its exponent
+  selection/rounding differ from standard Metal, so its BFP4 helpers are not
+  drop-in Qwen correctness or qualification evidence.
+
 ## Remaining gates and next experiments
 
 1. Finish the fresh-process capacity pairs; keep OOM, accuracy, and timing outcomes
    distinct. Then choose the useful batch/context operating points.
-2. Implement shared FP32 Q/K preparation in an isolated candidate. Check real
+2. Prioritize long-context placement and bank-aware KV/state traffic, with compact
+   reader/compute/writer attribution and calibrated bandwidth baselines. Diagnose
+   the failing placement candidates' reduction geometry before promotion. Report
+   32K/128K/256K tradeoffs together; do not automatically reject a worthwhile
+   32K gain for a small, explicitly quantified long-context regression.
+3. Validate shared FP32 Q/K preparation as a secondary isolated candidate. Check real
    cancellation-sensitive heads, changed-input replay, immutable inputs,
    persistent addresses, 4,096-step state drift, and total adapter/model time.
-3. Establish compact reader/compute/writer attribution and calibrated bandwidth
-   baselines. P0 complete stage accounting and the P1 latency target remain open.
-4. Investigate bank-aware state/KV layout and direct convolution windows. Do not
-   lower precision or promote the failing long-context placement candidates.
+4. P0 complete stage accounting and the P1 latency target remain open. Investigate
+   direct convolution windows after the priority bandwidth work. Do not lower
+   precision or promote failing numerical candidates.
 5. Complete B64 projection support and required fusions, prefill targets, and
    physical full-Galaxy sweeps. Component B64 recurrence is not full-model B64.
 6. Requalify the final policy through G0, serving/API and the required reference
