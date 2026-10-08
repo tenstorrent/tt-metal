@@ -249,7 +249,6 @@ class RunTimeOptions {
     // the two device producers overlay the same L1 profiler region and the two hosts would both drive it.
     bool streaming_profiler_enabled = false;
     uint32_t profiler_perf_counter_mode = 0;
-    int32_t profiler_perf_counter_l1_sel = -1;
     std::string profiler_noc_events_report_path;
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
@@ -734,7 +733,6 @@ public:
     bool get_streaming_profiler_inline_enabled() const { return streaming_profiler_inline_enabled; }
     bool get_streaming_profiler_enabled() const { return streaming_profiler_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
-    int32_t get_profiler_perf_counter_l1_sel() const { return profiler_perf_counter_l1_sel; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }

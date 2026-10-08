@@ -108,6 +108,14 @@ namespace kernel_profiler {
 #define PROFILE_PERF_COUNTERS_L1_3 (1 << 7)
 #define PROFILE_PERF_COUNTERS_L1_4 (1 << 8)
 #define PROFILE_PERF_COUNTERS_L1_5 (1 << 9)
+// Bits 16-24: the Quasar l1_client selection, subport*8 + event; 0 is off (event 0 is never valid).
+#define PROFILE_PERF_COUNTERS_L1_CLIENT_SEL (((PROFILE_PERF_COUNTERS) >> 16) & 0x1FF)
+// The group bits alone, so the selection does not widen the mask the loops test.
+#define PROFILE_PERF_COUNTERS_GROUPS ((PROFILE_PERF_COUNTERS) & 0xFFFF)
+
+#if defined(ARCH_QUASAR) && PROFILE_PERF_COUNTERS_L1_CLIENT_SEL != 0
+#define PERF_COUNTER_L1_CLIENT 1
+#endif
 
 #if defined(ARCH_QUASAR) &&                                                                                            \
     ((PROFILE_PERF_COUNTERS) & (PROFILE_PERF_COUNTERS_L1_0 | PROFILE_PERF_COUNTERS_L1_1 | PROFILE_PERF_COUNTERS_L1_2 | \
@@ -189,12 +197,12 @@ constexpr std::array<const llk::perf::BankRegs*, 10> regs_for_group = [] {
 inline const llk::perf::BankRegs& regs_for(PerfCounterGroup counter_group) { return *regs_for_group[counter_group]; }
 #endif  // ARCH_QUASAR
 
-#if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
-constexpr std::uint32_t QUASAR_L1_CLIENT_SEL = PROFILE_PERF_COUNTERS_L1_SEL;
+#if defined(PERF_COUNTER_L1_CLIENT)
+constexpr std::uint32_t QUASAR_L1_CLIENT_SEL = PROFILE_PERF_COUNTERS_L1_CLIENT_SEL;
 static_assert(
     llk::perf::l1_client_selection_is_valid(QUASAR_L1_CLIENT_SEL),
-    "PROFILE_PERF_COUNTERS_L1_SEL must be subport*8 + event below 296 with event not 0; THCON events 1-3 alias "
-    "selections 1-3");
+    "the l1_client selection in PROFILE_PERF_COUNTERS bits 16-24 must be subport*8 + event below 296 with event not "
+    "0; THCON events 1-3 alias selections 1-3");
 static_assert(
     llk::perf::QUASAR_L1_CLIENT_EVENT_BASE + llk::perf::QUASAR_L1_CLIENT_NUM_SELECTIONS < (1u << 16),
     "l1_client encoding must fit the 16-bit counter_type");
@@ -209,7 +217,7 @@ inline void start_l1_client_event_counter(std::uint32_t neo) {
 inline void stop_l1_client_event_counter(std::uint32_t neo) {
     llk::perf::l1_client_stop(llk::perf::l1_client_regs(llk::perf::neo_window(neo)));
 }
-#endif  // ARCH_QUASAR && PROFILE_PERF_COUNTERS_L1_SEL
+#endif  // PERF_COUNTER_L1_CLIENT
 
 #if defined(PERF_COUNTER_START_RISC)
 // --- Start thread only: start the counters with the compute kernel ----------
@@ -227,16 +235,16 @@ __attribute__((noinline)) void start_single_group(PerfCounterGroup counter_group
 
 void start_perf_counter() {
     for (std::uint32_t n = 0; n < NUM_NEOS; n++) {
-#if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
+#if defined(PERF_COUNTER_L1_CLIENT)
         start_l1_client_event_counter(n);
 #endif
         for (std::uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
-            if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
+            if (PROFILE_PERF_COUNTERS_GROUPS & counter_group_flags[i].second) {
                 start_single_group(counter_group_flags[i].first PERF_COUNTER_NEO_ARG(n));
             }
         }
     }
-#if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
+#if defined(PERF_COUNTER_L1_CLIENT)
     l1_client_start_cycles = static_cast<std::uint32_t>(quasar_read_wall_clock_64());
 #endif
 }
@@ -330,7 +338,7 @@ __attribute__((noinline)) void emit_counter(PerfCounterType type, std::uint32_t 
 }
 #endif  // !ARCH_QUASAR
 
-#if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
+#if defined(PERF_COUNTER_L1_CLIENT)
 inline void read_l1_client_event_counter(std::uint32_t neo) {
     const std::uint32_t count = llk::perf::l1_client_read(llk::perf::l1_client_regs(llk::perf::neo_window(neo)));
     PerfCounter counter(
@@ -349,15 +357,15 @@ __attribute__((noinline)) void stop_single_group(PerfCounterGroup counter_group,
 void stop_perf_counter() {
     for (std::uint32_t n = 0; n < NUM_NEOS; n++) {
         for (std::uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
-            if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
+            if (PROFILE_PERF_COUNTERS_GROUPS & counter_group_flags[i].second) {
                 stop_single_group(counter_group_flags[i].first, n);
             }
         }
-#if defined(PROFILE_PERF_COUNTERS_L1_SEL)
+#if defined(PERF_COUNTER_L1_CLIENT)
         stop_l1_client_event_counter(n);
 #endif
     }
-#if defined(PROFILE_PERF_COUNTERS_L1_SEL)
+#if defined(PERF_COUNTER_L1_CLIENT)
     l1_client_elapsed_cycles = static_cast<std::uint32_t>(quasar_read_wall_clock_64()) - l1_client_start_cycles;
 #endif
 }
@@ -446,7 +454,7 @@ void read_perf_counters(std::uint32_t trisc_enables) {
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_5
         read_single_group(PerfCounterGroup::L1_5 PERF_COUNTER_NEO_ARG(n));
 #endif
-#if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
+#if defined(PERF_COUNTER_L1_CLIENT)
         read_l1_client_event_counter(n);
 #endif
 #if defined(ARCH_QUASAR)

@@ -4,6 +4,7 @@
 
 """Offline tests for the perf counter decode and metrics in tools/tracy: synthetic captures, no hardware."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from tracy.perf_counter_analysis import (
     extract_perf_counters,
     quasar_l1_client_label,
 )
+from tracy.perf_counter_multipass import plan_perf_counter_capture, split_l1_client_selection
 
 QUASAR_INSTRN_CLASSES = ("CFG", "SYNC", "THCON", "INSTISSUE", "MATH", "UNPACK", "PACK")
 
@@ -299,3 +301,29 @@ def test_quasar_metrics_are_none_without_their_counters():
     df = make_capture(["THREAD_STALLS_3", "SRCA_STALL_MATH"], "QUASAR_NEO{}", 1)
     stats = compute_perf_counter_metrics(df, "quasar", 1)["per_op_stats"]
     assert "SrcA Stall Math Rate" in stats and "SrcA Stall Math Share" not in stats
+
+
+def test_l1_client_selection_rides_in_bits_16_to_24(monkeypatch):
+    monkeypatch.setenv("TT_METAL_DEVICE_ARCH", "quasar")
+    monkeypatch.setenv("TT_METAL_PROFILE_PERF_COUNTERS", "0")  # the plan exports the mask; restored afterwards
+    assert plan_perf_counter_capture(["all", "l1_client=41"], False, True) == [39 | 41 << 16]
+    assert int(os.environ["TT_METAL_PROFILE_PERF_COUNTERS"]) == 39 | 41 << 16
+    assert plan_perf_counter_capture(["l1_client=0x29"], False, True) == [41 << 16]
+    assert split_l1_client_selection(["fpu", "pack"]) == (["fpu", "pack"], None)
+
+
+@pytest.mark.parametrize(
+    "request_groups, arch",
+    [
+        (["l1_client=40"], "quasar"),  # event 0
+        (["l1_client=33"], "quasar"),  # THCON event 1, an alias of selection 1
+        (["l1_client=296"], "quasar"),  # past the 37 x 8 mux
+        (["l1_client=x"], "quasar"),
+        (["fpu", "l1_client=41"], "blackhole"),
+    ],
+)
+def test_bad_l1_client_requests_are_rejected(monkeypatch, request_groups, arch):
+    monkeypatch.setenv("TT_METAL_DEVICE_ARCH", arch)
+    monkeypatch.setenv("TT_METAL_PROFILE_PERF_COUNTERS", "0")
+    with pytest.raises(ValueError):  # allow-pytest.raises: host option parsing, not a device error
+        plan_perf_counter_capture(request_groups, False, True)

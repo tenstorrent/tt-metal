@@ -30,6 +30,8 @@ PERF_COUNTER_GROUP_BITS = {
     "l1_5": 9,
 }
 PERF_COUNTER_L1_GROUPS = {"l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"}
+# Bits 16-24 hold the Quasar l1_client selection (subport*8 + event, 0 = off), requested as l1_client=<selection>.
+PERF_COUNTER_L1_CLIENT_SHIFT = 16
 PERF_COUNTER_BH_ONLY_GROUPS = {"l1_2", "l1_3", "l1_4", "l1_5"}
 # Every non L1 group plus one L1 bank fits the BRISC .text: 8648 of 8704 bytes on Blackhole (8692 with a harvested
 # DRAM bank) and 7584 of 7712 on Wormhole with the five group mask. The one L1 bank per pass rule forces passes.
@@ -68,10 +70,50 @@ def schedule_perf_counter_passes(requested_groups, max_groups_per_pass=PERF_COUN
 
 def arch_l1_groups(is_blackhole, is_quasar=False):
     """L1 counter groups an architecture has: Blackhole's 2-NOC L1 exposes banks 2-5 as well. Quasar has no
-    tt_perf_cnt bank on its L1 (its l1_client event counter is selected with TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL)."""
+    tt_perf_cnt bank on its L1 (its l1_client event counter is requested with l1_client=<subport*8 + event>)."""
     if is_quasar:
         return []
     return ["l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"] if is_blackhole else ["l1_0", "l1_1"]
+
+
+def split_l1_client_selection(requested):
+    """(groups, selection): the l1_client=<subport*8 + event> entry taken out of a counter request, None without one."""
+    groups, selection = [], None
+    for item in requested:
+        name, sep, value = item.partition("=")
+        if not sep:
+            groups.append(item)
+            continue
+        if name.strip().lower() != "l1_client":
+            raise ValueError(f"Unknown counter option '{item}'; the only one is l1_client=<subport*8 + event>")
+        try:
+            selection = int(value, 0)
+        except ValueError:
+            raise ValueError(f"'{item}': the l1_client selection is a number, subport*8 + event") from None
+    return groups, selection
+
+
+def _llk_perf_metrics():
+    try:
+        from tt_llk_perf import metrics
+    except ImportError:
+        sys.path.append(str(Path(__file__).resolve().parents[2] / "tt_metal" / "tt-llk" / "tools" / "python"))
+        from tt_llk_perf import metrics
+    return metrics
+
+
+def check_l1_client_selection(selection, arch):
+    """The Quasar l1_client selection rules of llk::perf::l1_client_selection_is_valid; ValueError otherwise."""
+    if arch != "quasar":
+        raise ValueError(
+            f"l1_client={selection} selects the Quasar l1_client event counter, but device arch is "
+            f"{arch or 'undeclared'}."
+        )
+    if not _llk_perf_metrics().quasar_l1_client_selection_is_valid(selection):
+        raise ValueError(
+            f"l1_client={selection} is not a valid selection: subport*8 + event with 37 subports and 8 events, "
+            "event 0 and the THCON events 1 to 3 excluded."
+        )
 
 
 def perf_counter_groups_to_bitfield(groups):
@@ -125,8 +167,8 @@ def resolve_perf_counter_groups(requested_groups, arch):
 
     if is_quasar and (set(resolved) & PERF_COUNTER_L1_GROUPS):
         raise ValueError(
-            "Quasar has no L1 performance counter bank; drop the l1_* groups and use "
-            "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL for the l1_client event counter."
+            "Quasar has no L1 performance counter bank; drop the l1_* groups and request the l1_client event "
+            "counter with l1_client=<subport*8 + event>."
         )
     bh_only = sorted(set(resolved) & PERF_COUNTER_BH_ONLY_GROUPS)
     if bh_only and not is_blackhole:
@@ -193,10 +235,16 @@ def describe_passes(passes, arch=None):
 def plan_perf_counter_capture(requested_groups, multipass, can_replay):
     """Per-pass bitfields for a counter request. One pass is also exported via TT_METAL_PROFILE_PERF_COUNTERS;
     several passes need ``multipass`` and ``can_replay`` (this process launches the workload), else ValueError."""
+    requested_groups, l1_client = split_l1_client_selection(requested_groups)
     arch = detect_device_arch()
+    if l1_client is not None:
+        check_l1_client_selection(l1_client, arch)
     resolved = resolve_perf_counter_groups(requested_groups, arch)
     passes = schedule_perf_counter_passes(resolved)
-    bitfields = [perf_counter_groups_to_bitfield(p) for p in passes]
+    if l1_client and not passes:
+        passes = [[]]
+    l1_client_bits = (l1_client or 0) << PERF_COUNTER_L1_CLIENT_SHIFT
+    bitfields = [perf_counter_groups_to_bitfield(p) | l1_client_bits for p in passes]
     if len(passes) <= 1:
         if bitfields and bitfields[0] > 0:
             os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfields[0])

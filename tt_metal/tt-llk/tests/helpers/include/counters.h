@@ -86,8 +86,8 @@ constexpr std::uint32_t PERF_CFG_BANK_MASK     = 0xFFu; // bits 7:0
 constexpr std::uint32_t PERF_L1_MUX_MAX = llk::perf::L1_MUX_MASK >> llk::perf::L1_MUX_SHIFT;
 
 #if defined(ARCH_QUASAR)
-// No L1 counter bank: slot 3 carries the l1_client CSR instead. -1 leaves it out; otherwise the same encoding as
-// TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL in metal (subport*8 + event).
+// No L1 counter bank: slot 3 carries the l1_client CSR instead. -1 leaves it out; otherwise subport*8 + event, the
+// selection metal takes in bits 16-24 of TT_METAL_PROFILE_PERF_COUNTERS.
 #ifndef LLK_PERF_L1_CLIENT_SEL
 #define LLK_PERF_L1_CLIENT_SEL (-1)
 #endif

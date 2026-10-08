@@ -163,7 +163,7 @@ Blackhole-only groups: ``l1_2``, ``l1_3``, ``l1_4``, ``l1_5`` (extended L1 clien
 
 With ``--perf-counter-multipass`` a request is split into passes (one L1 bank per pass, the other groups ride along) and ``all`` expands to the architecture's full group set.
 
-**Quasar**: each NEO has its own ``fpu``, ``pack``, ``unpack`` and ``instrn`` units and DM0 reads all four NEOs, so every metric is reported per NEO (the ``risc_type`` of a counter row is ``QUASAR_NEO<n>``). Quasar has no L1 counter groups; ``all`` maps to ``fpu,pack,unpack,instrn`` and an ``l1_*`` request is rejected. Instead each NEO has one l1_client event counter behind a subport/event mux, routed per run with ``TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL=<subport*8 + event>`` (37 subports, 8 events; event 0 and THCON events 1 to 3 are rejected at build time); its metric column is named after the selection (see *Per-class, per-unpacker and Quasar-only metrics* below).
+**Quasar**: each NEO has its own ``fpu``, ``pack``, ``unpack`` and ``instrn`` units and DM0 reads all four NEOs, so every metric is reported per NEO (the ``risc_type`` of a counter row is ``QUASAR_NEO<n>``). Quasar has no L1 counter groups; ``all`` maps to ``fpu,pack,unpack,instrn`` and an ``l1_*`` request is rejected. Instead each NEO has one l1_client event counter behind a subport/event mux, routed per run with ``l1_client=<subport*8 + event>`` in ``--profiler-capture-perf-counters`` (for example ``all,l1_client=41``), which sets bits 16 to 24 of ``TT_METAL_PROFILE_PERF_COUNTERS`` (37 subports, 8 events; event 0 and THCON events 1 to 3 are rejected); its metric column is named after the selection (see *Per-class, per-unpacker and Quasar-only metrics* below).
 
 **Output**
 

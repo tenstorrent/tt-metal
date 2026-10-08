@@ -65,6 +65,7 @@ One limit forces a request like `all` into several capture passes: the L1 banks 
 | `1 << 7` | 128 | L1 bank 3 (BH only: ring1 NOC ports 2-3, extended packers 2-5) |
 | `1 << 8` | 256 | L1 bank 4 (BH only: extended packers 6-7, tag search, extended unpackers 8-12) |
 | `1 << 9` | 512 | L1 bank 5 (BH only: extended unpackers 13-14; the mux wires only two slots here) |
+| bits 16-24 | `sel << 16` | Quasar only: the l1_client event counter selection, `subport * 8 + event` (0 = off) |
 
 The env-var path selects one pass directly: any set of groups with at most one L1 bank. Each counter is a 24 byte record per core per op, and the device profiler keeps 48 bytes per supported program per RISC between host reads (`TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT`, default 1000, the `--op-support-count` option of `python -m tracy`), so the five group mask (101 records) holds about 19 ops per run and a three group pass with `instrn` (75 records) about 25 before the tail of the run is dropped and the report fails with a host versus device op count mismatch. Raise the support count for longer runs; the planner prints the estimate with its pass plan. Example single-pass capture:
 
@@ -76,11 +77,13 @@ export TT_METAL_PROFILE_PERF_COUNTERS=11   # FPU | PACK | L1 bank 0
 
 **Quasar mask:** the L1 bits do not exist there. `tt_metal/jit_build/build.cpp` remaps the front end's `all` mask 47 to 39 (`FPU | PACK | UNPACK | INSTRN`) and fails with `TT_FATAL` on any other mask with a bit outside those four; `perf_counters.hpp` has a matching `#error`. The four groups fit the DM0 firmware in one run.
 
-**`TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL`** (Quasar only, default -1 = off) routes the one l1_client event counter of every NEO for the run. The value is `subport * 8 + event`: 37 subports (0-3 TRISC, 4 THCON, 5-24 unpacker read interfaces, 25-36 packer write interfaces) by 8 events, 296 selections of which 256 are valid. Event 0 reads 0 in the RTL and the THCON subport's events 1 to 3 duplicate the TRISC port's SBank 0, so `build.cpp` rejects those (same rule as `llk::perf::l1_client_selection_is_valid` in `quasar.h`, which the firmware `static_assert`s). The CSR has no reference counter; its record carries the wall-clock span between arm and freeze, and the host names the resulting column after the selection (see [L1 client events (Quasar)](../../tt_metal/tt-llk/docs/performance_counters/hardware_reference.md#l1-client-events-quasar)).
+**l1_client selection** (Quasar only, bits 16-24, 0 = off) routes the one l1_client event counter of every NEO for the run. The value is `subport * 8 + event`: 37 subports (0-3 TRISC, 4 THCON, 5-24 unpacker read interfaces, 25-36 packer write interfaces) by 8 events, 296 selections of which 256 are valid. Event 0 reads 0 in the RTL (so 0 can mean off) and the THCON subport's events 1 to 3 duplicate the TRISC port's SBank 0, so `build.cpp` rejects those, as it rejects these bits on tt-1xx (same rule as `llk::perf::l1_client_selection_is_valid` in `quasar.h`, which the firmware `static_assert`s). The CSR has no reference counter; its record carries the wall-clock span between arm and freeze, and the host names the resulting column after the selection (see [L1 client events (Quasar)](../../tt_metal/tt-llk/docs/performance_counters/hardware_reference.md#l1-client-events-quasar)). With `python -m tracy` add `l1_client=<selection>` to `--profiler-capture-perf-counters`.
 
 ```bash
-export TT_METAL_PROFILE_PERF_COUNTERS=39        # FPU | PACK | UNPACK | INSTRN, the Quasar "all"
-export TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL=41 # subport 5 (unpacker 0, interface 0), event 1: L1_CLIENT_UNPACK0_IF0_SBANK0_SBANK_POP
+# FPU | PACK | UNPACK | INSTRN (the Quasar "all") plus selection 41: subport 5 (unpacker 0, interface 0), event 1,
+# L1_CLIENT_UNPACK0_IF0_SBANK0_SBANK_POP
+export TT_METAL_PROFILE_PERF_COUNTERS=$((39 | 41 << 16))
+python -m tracy --profiler-capture-perf-counters=all,l1_client=41 -m "pytest your_test.py"   # the same from the CLI
 ```
 
 ### Architecture Summary

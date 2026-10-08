@@ -204,45 +204,49 @@ std::string get_cache_root(const llrt::RunTimeOptions& rtoptions) {
 
 JitBuildEnv::JitBuildEnv() = default;
 
+// Bits 16-24 of TT_METAL_PROFILE_PERF_COUNTERS select the Quasar l1_client event counter, subport*8 + event; 0 is
+// off because event 0 is never valid. perf_counters.hpp decodes the same field from PROFILE_PERF_COUNTERS.
+constexpr uint32_t PERF_COUNTER_L1_CLIENT_SHIFT = 16;
+constexpr uint32_t PERF_COUNTER_GROUP_MASK = (1u << PERF_COUNTER_L1_CLIENT_SHIFT) - 1;
+
 // Quasar has no L1 counter unit: valid groups are FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32). The tracy frontend sends
-// the tt-1xx "all" mask (47), so map it to the Quasar mask (39) instead of rejecting it.
+// the tt-1xx "all" mask (47), so map it to the Quasar mask (39) instead of rejecting it. The l1_client checks mirror
+// llk::perf::l1_client_selection_is_valid in tt-llk/tools/include/perf_counters/quasar.h (37 subports, 8 events).
 static uint32_t quasar_perf_counter_mode(uint32_t mode) {
     constexpr uint32_t quasar_groups = 0x27;
     constexpr uint32_t tt1xx_all_groups = 0x2F;
-    if (mode == tt1xx_all_groups) {
-        mode = quasar_groups;
+    uint32_t groups = mode & PERF_COUNTER_GROUP_MASK;
+    const uint32_t sel = mode >> PERF_COUNTER_L1_CLIENT_SHIFT;
+    if (groups == tt1xx_all_groups) {
+        groups = quasar_groups;
     }
     TT_FATAL(
-        (mode & ~quasar_groups) == 0,
+        (groups & ~quasar_groups) == 0,
         "TT_METAL_PROFILE_PERF_COUNTERS={} selects perf counter groups that do not exist on Quasar; valid bits are "
         "FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32), 'all' = 39",
         mode);
-    return mode;
-}
-
-// The l1_client event counter is one CSR behind a subport*8 + event mux (37 subports, 8 events). The checks mirror
-// llk::perf::l1_client_selection_is_valid in tt-llk/tools/include/perf_counters/quasar.h.
-static std::string quasar_l1_client_defines(const tt::llrt::RunTimeOptions& rtoptions) {
-    const int sel = rtoptions.get_profiler_perf_counter_l1_sel();
-    if (sel < 0) {
-        return "";
+    if (sel != 0) {
+        constexpr uint32_t num_events = 8;
+        constexpr uint32_t num_selections = 37 * num_events;
+        TT_FATAL(
+            sel < num_selections,
+            "TT_METAL_PROFILE_PERF_COUNTERS={}: l1_client selection {} (bits 16-24) is out of range; it encodes "
+            "subport*8 + event with 37 subports and 8 events",
+            mode,
+            sel);
+        TT_FATAL(
+            sel % num_events != 0,
+            "TT_METAL_PROFILE_PERF_COUNTERS={}: l1_client selection {} is event 0, which is unused in the L1 RTL",
+            mode,
+            sel);
+        TT_FATAL(
+            !(sel / num_events == 4 && sel % num_events <= 3),
+            "TT_METAL_PROFILE_PERF_COUNTERS={}: l1_client selection {} is a THCON event 1-3, the TRISC port's SBank 0 "
+            "counters already exposed by selections 1-3",
+            mode,
+            sel);
     }
-    constexpr int num_events = 8;
-    constexpr int num_selections = 37 * num_events;
-    TT_FATAL(
-        sel < num_selections,
-        "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL={} out of range; it encodes subport*8 + event with 37 subports and 8 "
-        "events",
-        sel);
-    const int subport = sel / num_events;
-    const int event = sel % num_events;
-    TT_FATAL(event != 0, "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL={}: event 0 is unused in the L1 RTL and reads 0", sel);
-    TT_FATAL(
-        !(subport == 4 && event <= 3),
-        "TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL={}: THCON events 1-3 are the TRISC port's SBank 0 counters, already "
-        "exposed by selections 1-3",
-        sel);
-    return "-DPROFILE_PERF_COUNTERS_L1_SEL=" + std::to_string(sel) + " ";
+    return groups | (sel << PERF_COUNTER_L1_CLIENT_SHIFT);
 }
 
 void JitBuildEnv::init(
@@ -403,7 +407,12 @@ void JitBuildEnv::init(
         uint32_t perf_counter_mode = rtoptions.get_profiler_perf_counter_mode();
         if (this->arch_ == tt::ARCH::QUASAR) {
             perf_counter_mode = quasar_perf_counter_mode(perf_counter_mode);
-            this->defines_ += quasar_l1_client_defines(rtoptions);
+        } else {
+            TT_FATAL(
+                (perf_counter_mode >> PERF_COUNTER_L1_CLIENT_SHIFT) == 0,
+                "TT_METAL_PROFILE_PERF_COUNTERS={}: bits 16-24 select the Quasar l1_client event counter, which this "
+                "architecture does not have",
+                perf_counter_mode);
         }
         this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(perf_counter_mode) + " ";
     }
