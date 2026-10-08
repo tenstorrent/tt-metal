@@ -11,3 +11,9 @@ A/B of the NA compute-config knobs DIFFVAE_NA_APPROX_EXP=1 and DIFFVAE_NA_FIDELI
   out/cmp_{def,approx,lofi}.json. If an arm passes and is faster: flip its default on t48 (=0 off switch, unit test
   in models/tt_dit/tests/unit/test_diffvae_ops.py like test_packed_lanes_default_on), land via a -land branch + ttp push.
   If 887 dropped, the driver reruns it itself (second drop -> skipped).
+
+## Result (job 887, completed, no drops)
+- Warm 1080p 145f decode, seeds 0,1: def 3.511 s, approx 3.512 s, lofi 3.510 s, def recheck 3.513 s. No gain.
+- PCC/PSNR identical in all arms (0.999956/55.51 dB s0, 0.999957/55.07 dB s1): the outputs match the default
+  to every digit, so both knobs look inert on this decode path (NA compute config not honored or already equal).
+- Nothing landed on t48. Do not redo.
