@@ -256,7 +256,7 @@ MeshPartitionTopology partition_whole_mesh(
 std::optional<size_t> other_nontrivial_axis_sharding_dim(
     const ttsl::SmallVector<Placement>& placements,
     const MeshShape& distribution_shape,
-    size_t partitioned_axis,
+    size_t partitioned_axis,  // The cluster_axis, the axis the op splits along now
     uint32_t dim,
     uint32_t rank) {
     for (size_t axis = 0; axis < placements.size(); ++axis) {
@@ -291,7 +291,10 @@ bool same_dim_shards_collapse_row_major(
 
 // Rule 1 (N-D label, cluster axis a): Shard{dim} on a, and 1(i)-(iii) for another axis that also shards dim.
 MeshPartitionTopology partition_nd_label(
-    const TensorTopology& input_topology, size_t partitioned_axis, uint32_t dim, uint32_t rank) {
+    const TensorTopology& input_topology,
+    size_t partitioned_axis,  // The cluster_axis, the axis the op splits along now
+    uint32_t dim,
+    uint32_t rank) {
     const auto& placements = input_topology.placements();
     const auto& distribution_shape = input_topology.distribution_shape();
     if (partitioned_axis >= placements.size()) {
@@ -320,7 +323,9 @@ MeshPartitionTopology partition_nd_label(
 
 // Rule 3 (collapsed label along the cluster axis): {N},[Shard{dim}] whatever it held, if the coords follow that axis.
 MeshPartitionTopology partition_collapsed_line(
-    const TensorTopology& input_topology, size_t partitioned_axis, uint32_t dim) {
+    const TensorTopology& input_topology,
+    size_t partitioned_axis,  // The cluster_axis, the axis the op splits along now
+    uint32_t dim) {
     if (!coords_follow_axis(input_topology.mesh_coords(), input_topology.distribution_shape(), 0, partitioned_axis)) {
         return fallback(kCoordsOffAxis);
     }
@@ -330,7 +335,10 @@ MeshPartitionTopology partition_collapsed_line(
 
 // Rule 4 (collapsed Replicate on a multi-axis mesh): uncollapse to the mesh, Shard{dim} on the cluster axis.
 MeshPartitionTopology uncollapse_replicate(
-    const TensorTopology& input_topology, const MeshShape& mesh_shape, size_t partitioned_axis, uint32_t dim) {
+    const TensorTopology& input_topology,
+    const MeshShape& mesh_shape,
+    size_t partitioned_axis,  // The cluster_axis, the axis the op splits along now
+    uint32_t dim) {
     if (!coords_follow_axis(input_topology.mesh_coords(), mesh_shape, partitioned_axis, partitioned_axis)) {
         return fallback(kCoordsOffAxis);
     }
