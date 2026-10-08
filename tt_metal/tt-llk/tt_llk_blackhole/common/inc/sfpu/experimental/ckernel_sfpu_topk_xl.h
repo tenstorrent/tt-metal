@@ -3748,8 +3748,8 @@ inline void _topk_xl_separate_indices_()
 // and _topk_xl_rebuild_<K, true>, in the same instruction order. The SrcA/SrcB releases (CLR_AB) and the transposes are
 // left to MATH; every segment sets its own Dst offset.
 
-// PACK, once: ADDR_MOD_3 takes the stamp's +4 so ADDR_MOD_6 keeps the sort's +32; ADDR_MOD_4 is the K = 2048 stamp's
-// face skip.
+// PACK, once per row: ADDR_MOD_3 takes the stamp's +4 so ADDR_MOD_6 keeps the sort's +32; ADDR_MOD_4 is the K = 2048
+// stamp's face skip. K = 2048's segments share one fused macro configuration, programmed here; none reprograms it.
 template <std::uint32_t K>
 inline void _topk_xl_split_sfpu_init_()
 {
@@ -3763,6 +3763,9 @@ inline void _topk_xl_split_sfpu_init_()
     if constexpr (K == 2048)
     {
         addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 16}}.set(ADDR_MOD_4);
+#if TOPK_XL_FUSED_MACRO
+        topk_xl_fused_macro::configure();
+#endif
     }
 }
 
@@ -3875,9 +3878,6 @@ inline void _topk_xl_split_sort_head_512_(const std::uint32_t tile_offset, const
 // Local sort up to its first transpose: per column the length-32 to 128 builds, then the length-256 pass.
 inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, const bool ascending)
 {
-#if TOPK_XL_FUSED_MACRO
-    topk_xl_fused_macro::configure();
-#endif
     _topk_xl_split_begin_(tile_offset);
     constexpr int consecutive_32_offset = 16;
     bool dir                            = ascending;
@@ -4043,12 +4043,6 @@ inline void _topk_xl_split_merge_(const std::uint32_t tile_offset)
     static_assert(distance == 64 * tiles_per_sequence || distance == 128 * tiles_per_sequence, "the incoming run sits one or two sequences past the survivor");
     constexpr int n_iters = K == 512 ? 2 : 8;
     topk_mop_config<true>();
-#if TOPK_XL_FUSED_MACRO
-    if constexpr (K == 2048)
-    {
-        topk_xl_fused_macro::configure();
-    }
-#endif
     _topk_xl_split_begin_(tile_offset);
 #if TOPK_XL_FUSED_MACRO
     if constexpr (K == 2048)
@@ -4087,12 +4081,6 @@ inline void _topk_xl_split_merge_(const std::uint32_t tile_offset)
 template <std::uint32_t K>
 inline void _topk_xl_split_rebuild_build_(const std::uint32_t tile_offset, const bool dir)
 {
-#if TOPK_XL_FUSED_MACRO
-    if constexpr (K == 2048)
-    {
-        topk_xl_fused_macro::configure();
-    }
-#endif
     _topk_xl_split_begin_(tile_offset);
     topk_rebuild_build2048_mop_config();
     load_replay_buf<Exec>(
