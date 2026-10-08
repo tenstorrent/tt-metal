@@ -1,16 +1,21 @@
 {
-  "generated_at": "2026-10-08T09:16:16.454279+00:00",
+  "generated_at": "2026-10-08T15:58:40.037258+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 44660,
-      "sha256": "104f0934458926aa47deb052c2faa2ff8fd6773ce2a1c0b7749fd021e6ee78ab"
+      "bytes": 46785,
+      "sha256": "c9cb62c814e496fc27e695c5ccea2e612722e9f80f84d54b2635a6031cd02747"
+    },
+    {
+      "path": "experiments/OPTIMIZATION-BACKLOG.md",
+      "bytes": 5051,
+      "sha256": "aae87e1d7a276a6eeca4492319ed9b579c046dc9e71853bd9ab0f32e3f063993"
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 17813,
-      "sha256": "b10a37f82f72882aca234ecad81cb947faafdbecf981aa9e63816d8b805f6ebb"
+      "bytes": 18583,
+      "sha256": "ab9e458ba63999fc0830f82d11882b3fadd8ee2bcbb764841e4c4a36710c676c"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -3597,6 +3602,344 @@
         "errors": 0,
         "skipped": 0
       }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/README.md",
+      "bytes": 4168,
+      "sha256": "13840f0e12a7debf64456c504b500c703af29ceaddac11307dbe1cea42b919d5"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-launch-v1.json",
+      "bytes": 3428,
+      "sha256": "8008034b0c5905fb7fbe796a3710caa74a6a9410856b93dc9ea5d368003e6c35",
+      "scope": "Fresh-process full-model control and shared Q/K; fixed concurrency, identical output tokens required; 1 warmup and 3 fresh-prefill measured repeats per arm",
+      "created_at": "2026-10-08T09:09:38.943201+00:00",
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/queue.json",
+      "bytes": 32900,
+      "sha256": "6aae9047c25e7c5259133b464e8af830192e29226c8ed52cc97d6515860dc7f3",
+      "state": "completed",
+      "updated_at": "2026-10-08T13:10:41Z",
+      "cleanup_completed": true,
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s131072-b16/comparison/comparison.csv",
+      "bytes": 592,
+      "sha256": "6b2e4eec2c9233e8974361bafe6ab6aa27567db8acd930723d5cae65d02421a9"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s131072-b16/comparison/comparison.json",
+      "bytes": 2268,
+      "sha256": "2f6c6a35b8dba329a0489bdc178c414fd73d088df52b9007c6c03b9294340ff4",
+      "state": "completed",
+      "scope": "One TP4 replica, 64 layers; measured decode output throughput, not full-Galaxy or online-eval qualification",
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s131072-b16/comparison/comparison.pdf",
+      "bytes": 31600,
+      "sha256": "b86bbbb65f382bdce2ed86d46d6f5eb44a8101f144fadf488dd08757345df916"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s131072-b16/comparison/comparison.png",
+      "bytes": 101506,
+      "sha256": "36390366347daa5d83a45a9e266d3a7935571f8ea22daa6b56e3cd5ea224851d"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s131072-b16/comparison/comparison.svg",
+      "bytes": 86744,
+      "sha256": "4a20e498968b87baec24a12e314a99f752d6e1c907c216cf3bd73558b9c3fee5"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s131072-b16/shared-qk/attempt-01/hardware.xml.gz",
+      "bytes": 303,
+      "sha256": "09b8a23a502c35364dce204ae2bac69fd3bbd311778e86b40fa1b260c3e5bf5e",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s131072-b16/shared-qk/sweep.json",
+      "bytes": 15134,
+      "sha256": "c17e379eb8e07615076c693edf48e2da62a42b194b20730fb9c88e97d83e352e",
+      "state": "completed",
+      "created_at": "2026-10-08T10:57:15.941274+00:00",
+      "updated_at": "2026-10-08T11:39:33.586201+00:00",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s131072-b16/single-step/attempt-01/hardware.xml.gz",
+      "bytes": 300,
+      "sha256": "c30485617a4fd1601fc7e0eb6c1a4f7933c1e319da42c659a2912964b1481e20",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s131072-b16/single-step/sweep.json",
+      "bytes": 15070,
+      "sha256": "97d3b05c5b273b90966bf18f47e411ba84d1063c5be219f66790d86d5033c752",
+      "state": "completed",
+      "created_at": "2026-10-08T10:14:57.572447+00:00",
+      "updated_at": "2026-10-08T10:57:13.251090+00:00",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s16384-b32/comparison/comparison.csv",
+      "bytes": 587,
+      "sha256": "6bd16f76ebf93aac62fc2c816e5f4537bdab6d0c167197d5e1ade09f4e37738f"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s16384-b32/comparison/comparison.json",
+      "bytes": 2261,
+      "sha256": "d35db33863cdc51f849fa74ef138b1ba9f4e93999dea2673243509fd13ca05e2",
+      "state": "completed",
+      "scope": "One TP4 replica, 64 layers; measured decode output throughput, not full-Galaxy or online-eval qualification",
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s16384-b32/comparison/comparison.pdf",
+      "bytes": 32403,
+      "sha256": "5470cbff215685e252eb6e78d77103ded1dacc9b326f214fecc4c83d3480b160"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s16384-b32/comparison/comparison.png",
+      "bytes": 101901,
+      "sha256": "66e236e949668beda9c57549a790e74e92fe2724cba561fad037022f507ef45d"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s16384-b32/comparison/comparison.svg",
+      "bytes": 88056,
+      "sha256": "ba2339e5bc109d1d928ac28241e1a0ff4ecdfd9d717ec3f741e4361c7cc6c5dd"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s16384-b32/shared-qk/attempt-01/hardware.xml.gz",
+      "bytes": 300,
+      "sha256": "5c1480efa44333557859e2fa66a0ef6025f1566cd056c97be97e066ed3982018",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s16384-b32/shared-qk/sweep.json",
+      "bytes": 17045,
+      "sha256": "1274494b592cda8ca4bfc666cd50288caac8f5c1f37384bb30ecb56d7b4d60e6",
+      "state": "completed",
+      "created_at": "2026-10-08T10:02:44.813514+00:00",
+      "updated_at": "2026-10-08T10:14:53.975610+00:00",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s16384-b32/single-step/attempt-01/hardware.xml.gz",
+      "bytes": 303,
+      "sha256": "633cdcb018bd8f2b5ac7823f3c455f136e3c63887928366c083f24b9ca850f34",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s16384-b32/single-step/sweep.json",
+      "bytes": 16966,
+      "sha256": "65488c4449d74d0326d5508d33833195e48ca489141d72741b3baf5c7a977377",
+      "state": "completed",
+      "created_at": "2026-10-08T09:50:30.989784+00:00",
+      "updated_at": "2026-10-08T10:02:42.930093+00:00",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s262016-b8/comparison/comparison.csv",
+      "bytes": 591,
+      "sha256": "fd3caa9646dd547c8af3a2f07ccfe0abd727b878616dc3ed6d350a287baefe37"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s262016-b8/comparison/comparison.json",
+      "bytes": 2265,
+      "sha256": "785ef92bc3aa0323e1f3a713eaf361743f6f7a1de45a9e0cd7fdd8a1ef0a7542",
+      "state": "completed",
+      "scope": "One TP4 replica, 64 layers; measured decode output throughput, not full-Galaxy or online-eval qualification",
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s262016-b8/comparison/comparison.pdf",
+      "bytes": 32586,
+      "sha256": "a031eeca2b5d4f99e38614afc598625069e64d93a24fddcefd5836f9dcee799a"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s262016-b8/comparison/comparison.png",
+      "bytes": 96438,
+      "sha256": "5d82b85d7592a71f1e8d516508eb5c18b7220a47776947595e88ce9a7b7a3145"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s262016-b8/comparison/comparison.svg",
+      "bytes": 83895,
+      "sha256": "2e61eab0b43422f204becefda06fee4ee4d500b553767b6e8e6c47fb10bab9f8"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s262016-b8/shared-qk/attempt-01/hardware.xml.gz",
+      "bytes": 303,
+      "sha256": "eaa1e2445fb8ee46a238966a71f627e44ce28262b74b8970d346b28cf5e4269f",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s262016-b8/shared-qk/sweep.json",
+      "bytes": 14137,
+      "sha256": "9bbeb366f831f59c235c4ea39889053ec597fa6765fcc8b5896855ec270b1b3a",
+      "state": "completed",
+      "created_at": "2026-10-08T12:25:09.767495+00:00",
+      "updated_at": "2026-10-08T13:10:37.226726+00:00",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s262016-b8/single-step/attempt-01/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "e00b25443d83c0a83a5ad72a3d58c1cbaacff864ce5559f9bae459ffcc623bc3",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s262016-b8/single-step/sweep.json",
+      "bytes": 14128,
+      "sha256": "6f0322f535b938146131335624d9aa2668b087f7bb83c552f7764e2f4e5e4159",
+      "state": "completed",
+      "created_at": "2026-10-08T11:39:37.164989+00:00",
+      "updated_at": "2026-10-08T12:25:06.830355+00:00",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s32768-b32/comparison/comparison.csv",
+      "bytes": 593,
+      "sha256": "a6ea22c33d8eedef2c42cb94ebc66806352afcc4a8d29cf852a8699e1bf0f9a7"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s32768-b32/comparison/comparison.json",
+      "bytes": 2267,
+      "sha256": "dfd72d67ac0d347860052ce81f547c93c47522e6cc17dc0d0d9ec14d834021e0",
+      "state": "completed",
+      "scope": "One TP4 replica, 64 layers; measured decode output throughput, not full-Galaxy or online-eval qualification",
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s32768-b32/comparison/comparison.pdf",
+      "bytes": 31928,
+      "sha256": "a5f6a84e41e938fba702d6b498deac8f95ce22f2d03523cace1ff34ad601d30e"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s32768-b32/comparison/comparison.png",
+      "bytes": 100961,
+      "sha256": "6ab683437eacd69505590e9e6933d11d68a9089806f6c7545ff8c5884974f247"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s32768-b32/comparison/comparison.svg",
+      "bytes": 86389,
+      "sha256": "3159737e6ebbcd52051466728115617d1cb8c03405dd8c5bf1327deeb76145c0"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s32768-b32/shared-qk/attempt-01/hardware.xml.gz",
+      "bytes": 302,
+      "sha256": "9fc86b9519f3af9ca7111c57cc5020335b6408e2fffccbff0d9908c44cc22095",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s32768-b32/shared-qk/sweep.json",
+      "bytes": 17096,
+      "sha256": "35391cfc51891a44fe2e7d429e71f7f78f9735030dfc51d6b5ac68bea39c13c3",
+      "state": "completed",
+      "created_at": "2026-10-08T09:30:09.534378+00:00",
+      "updated_at": "2026-10-08T09:50:26.758189+00:00",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s32768-b32/single-step/attempt-01/hardware.xml.gz",
+      "bytes": 300,
+      "sha256": "c2ce31b4846b757395fe17cc2595448c55c43c023c89495570e158dff9c360c7",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/s32768-b32/single-step/sweep.json",
+      "bytes": 17175,
+      "sha256": "d4a9151dcebf80ce73d04bacb69b97cbcc2d934bbb3f21cf955374a07232706d",
+      "state": "completed",
+      "created_at": "2026-10-08T09:09:46.661740+00:00",
+      "updated_at": "2026-10-08T09:30:07.311958+00:00",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/gdn-shared-qk-model-v1/unit.xml.gz",
+      "bytes": 6605,
+      "sha256": "8267dc4ea09525083fea8c5e1ff7699fa1546b554c8e74e16736534bb2777748",
+      "junit": {
+        "tests": 390,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/shared-qk-g0-v1/launch.json",
+      "bytes": 3512,
+      "sha256": "7e02fb7016434507dcabe199fa92a2e1f785f199000e765aad434c23e480a4db",
+      "scope": "Eight physical TP4 replicas, B1 short-prompt equality and isolated/concurrent TPOT <=3% regression; does not measure B32 or long-context scaling",
+      "created_at": "2026-10-08T15:46:56.338129+00:00"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/shared-qk-gpqa-launch-v1.json",
+      "bytes": 2769,
+      "sha256": "30b69d24a814ff0b80a2d9025f05fc1324e2ecc22a016c10c2aaebf2078d15c8",
+      "scope": "Persistent full GPQA after exact-source eight-replica G0; same sampling and output budget as prior full run; stops owned endpoint after evaluation",
+      "created_at": "2026-10-08T15:52:31.607615+00:00"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/shared-qk-gpqa-unit-v1.xml.gz",
+      "bytes": 6606,
+      "sha256": "1ebe36f94b8fadd0a03535e5ee54bea989d6b9c4309f63a42ce1e3141f16140b",
+      "junit": {
+        "tests": 390,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-full-model-v1/shared-qk-gpqa-v1/queue.json",
+      "bytes": 19475,
+      "sha256": "0746f6fd2191b5540e653185e23439cb7b66b3d8a223aee3d681d1af05836911",
+      "state": "waiting_for_g0",
+      "passed": false,
+      "updated_at": "2026-10-08T15:55:19Z"
     },
     {
       "path": "galaxy-evidence/storage-recovery-20261007/checkpoint-local-copy.json",

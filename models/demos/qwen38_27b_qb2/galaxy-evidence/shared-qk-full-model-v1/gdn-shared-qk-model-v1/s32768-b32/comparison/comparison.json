@@ -1,0 +1,41 @@
+{
+  "state": "completed",
+  "scope": "One TP4 replica, 64 layers; measured decode output throughput, not full-Galaxy or online-eval qualification",
+  "replicas": 1,
+  "precision_change": false,
+  "promoted_to_serving": false,
+  "variant_labels": [
+    "single-step",
+    "shared-qk"
+  ],
+  "output_equivalence_required": true,
+  "source_receipts": [
+    {
+      "path": "/home/ttuser/qwen38-artifacts-20261007/gdn-shared-qk-model-v1/s32768-b32/single-step/sweep.json",
+      "sha256": "d4a9151dcebf80ce73d04bacb69b97cbcc2d934bbb3f21cf955374a07232706d"
+    },
+    {
+      "path": "/home/ttuser/qwen38-artifacts-20261007/gdn-shared-qk-model-v1/s32768-b32/shared-qk/sweep.json",
+      "sha256": "35391cfc51891a44fe2e7d429e71f7f78f9735030dfc51d6b5ac68bea39c13c3"
+    }
+  ],
+  "methodology": "Full 64-layer native generator; fresh full prefills, no prefix reuse; fixed 128-token output including tokens beyond EOS. Warm measurements exclude weight loading and first-use compilation. TTFT includes request-state reset, prefill and first token readback. Decode uses device sampling and deferred history readback; HTTP and router overhead are not included. Input throughput times prefill_forward through device synchronization, excluding reset, sampling and readback. This native harness submits replica prefills sequentially; its aggregate input rate reflects that schedule, not ideal parallel prefill capacity. Whole-Galaxy throughput is measured only when replicas=8, never multiplied from TP4 results.",
+  "cells": [
+    {
+      "input_tokens": 32768,
+      "batch_per_replica": 32,
+      "native_status": "completed",
+      "candidate_status": "completed",
+      "native_aggregate_decode_tokens_per_second": 350.4156051256093,
+      "native_tokens_per_second_per_user": 10.950487660175291,
+      "native_aggregate_input_tokens_per_second": 5185.0263686705775,
+      "native_ttft_p50_s": 202.49141501355916,
+      "candidate_aggregate_decode_tokens_per_second": 373.69515228773605,
+      "candidate_tokens_per_second_per_user": 11.677973508991752,
+      "candidate_aggregate_input_tokens_per_second": 5185.043347163483,
+      "candidate_ttft_p50_s": 202.487922469154,
+      "decode_uplift_percent": 6.643410516430048,
+      "same_output_hash_as_native": true
+    }
+  ]
+}

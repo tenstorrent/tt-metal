@@ -5,6 +5,8 @@ set -euo pipefail
 QWEN_TASK_ROOT=${1:?Provide the isolated Qwen runtime directory}
 QWEN_SERVING_RESULTS=${2:?Provide a new receipt directory}
 QWEN_G0_RECEIPT=${3:?Provide the passing eight-replica G0 receipt}
+QWEN_MODEL_SOURCE=${4:-$QWEN_TASK_ROOT/metal-galaxy}
+if (( $# >= 4 )); then shift 4; else shift 3; fi
 if [[ -n "${QWEN_WAIT_FOR_UNIT:-}" ]]; then
     echo "Waiting for $QWEN_WAIT_FOR_UNIT before serving"
     while true; do
@@ -23,12 +25,13 @@ if [[ -n "${QWEN_WAIT_FOR_UNIT:-}" ]]; then
 fi
 export PATH="$QWEN_TASK_ROOT/serving_env/bin:$PATH"
 export TT_METAL_HOME="$QWEN_TASK_ROOT/metal"
-export PYTHONPATH="$QWEN_TASK_ROOT/metal-galaxy:$TT_METAL_HOME:$TT_METAL_HOME/tools"
+export PYTHONPATH="$QWEN_MODEL_SOURCE:$TT_METAL_HOME:$TT_METAL_HOME/tools"
 export LD_LIBRARY_PATH="$QWEN_TASK_ROOT/metal-install/lib:$QWEN_TASK_ROOT/metal-build/lib:${LD_LIBRARY_PATH:-}"
 export TT_METAL_CACHE="$QWEN_TASK_ROOT/jit-cache-metal-galaxy"
 export MPLCONFIGDIR="$QWEN_TASK_ROOT/matplotlib-cache"
 export ARCH_NAME=blackhole OMP_NUM_THREADS=8 PYTHONUNBUFFERED=1
 export MODEL_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR:?Set the pinned checkpoint directory}
+cd "$QWEN_MODEL_SOURCE"
 # Check G0 before touching the hardware. The supervisor repeats this validation
 # and records the exact receipt hash alongside the actual worker assignments.
 python - "$QWEN_G0_RECEIPT" <<'PY'
@@ -66,5 +69,5 @@ fi
 touch /tmp/tt-device.dirty
 # Keep the marker pessimistically: a long-lived server can be stopped between
 # receipt updates. The next safe runner will reset before using the devices.
-exec python "$QWEN_TASK_ROOT/metal-galaxy/models/demos/qwen38_27b_qb2/demo/run_galaxy_serving.py" \
-    --task-root "$QWEN_TASK_ROOT" --output "$QWEN_SERVING_RESULTS" --qualification "$QWEN_G0_RECEIPT"
+exec python "$QWEN_MODEL_SOURCE/models/demos/qwen38_27b_qb2/demo/run_galaxy_serving.py" \
+    --task-root "$QWEN_TASK_ROOT" --output "$QWEN_SERVING_RESULTS" --qualification "$QWEN_G0_RECEIPT" "$@"

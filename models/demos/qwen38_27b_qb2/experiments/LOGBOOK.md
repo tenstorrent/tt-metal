@@ -523,3 +523,33 @@ regresses at matched offered concurrency.
 
 Raw receipts, pins, failed preflight, compressed per-op profiles and reproduction
 notes: [shared-qk-and-bandwidth-v1](../galaxy-evidence/shared-qk-and-bandwidth-v1/README.md).
+
+## Oct 8, 13:10-15:53 UTC: shared-Q/K model pass and eight-replica qualification
+
+- **13:10:41:** all four full-model pairs completed. Shared/control generated
+  tokens match for every repeat. 32K/B32 350.416 -> 373.695 output tok/s/TP4
+  (+6.64%); 16K/B32 402.164 -> 432.929 (+7.65%); 128K/B16 163.357 ->
+  168.739 (+3.29%); near256K/B8 89.832 -> 91.303 (+1.64%). Prefill unchanged.
+  Local recomputation verified raw repeats, precision/source parity and receipts.
+  Eightfold 32K projection 2989.6 tok/s is still not physical Galaxy evidence.
+- **15:46:56:** launched persistent eight-replica G0 on the passing immutable
+  source, short-prompt B1, 3% concurrent/isolated TPOT gate. PID 3289234 observed
+  live. B1 uses fused normalization fallback; do not claim B32 scaling from G0.
+- **15:52:31:** queued full GPQA after successful G0/source/precision/JUnit checks,
+  PID 3295587 observed live. All 198 questions, concurrency 128, unchanged
+  32K output budget and T=1/top_p=.95/top_k=20/seed42. Gate remains .892.
+  Added isolated serving-source selection and exit-after-eval mode to release
+  hardware for subsequent experiments; no default model or native-install edits.
+  Prefill budget is explicit 32768. CPU 350 tests +40 subtests; shell syntax
+  and pre-commit passed. The evaluation has not run yet; no score claimed.
+- Refreshed official model card: GPQA-D 89.2%, recommended thinking sampling
+  matches. Complete official GPQA harness/budget is unspecified in that card.
+- Host observation: 472 GiB available RAM, 56 GiB free on artifact disk before
+  launch. Each service capped at 256 GiB; no NFS/checkpoint/firmware changes.
+- User asked what remains: recorded prioritized bank-local delivery, GDN/layout
+  fusion, B32 serving/B64 projection work, matmul/CCL tuning, prefill and overlap
+  in [optimization backlog](OPTIMIZATION-BACKLOG.md). BFP4 and speculative
+  defaults remain unqualified. Cross-core delivery prototype remains next work;
+  no claim that the isolated read improvement has reached attention.
+
+[Full-model results and launch receipts](../galaxy-evidence/shared-qk-full-model-v1/README.md).

@@ -237,3 +237,17 @@ The 256K capacity pair and all 12 profile captures are complete. Earlier
 "running/queued" statements above are historical snapshots. Updated near256K/B8
 single-step output is 89.831 tok/s/TP4 versus native 89.983, effectively flat.
 Reference-eval qualification and physical eight-replica scaling remain open.
+
+## Latest evidence: Oct 8, 15:53 UTC
+
+Shared Q/K now passes all four full-model pairs, not just component tests.
+Measured output rates per TP4: 32K/B32 373.70 (+6.64%), 16K/B32 432.93
+(+7.65%), 128K/B16 168.74 (+3.29%), near256K/B8 91.30 (+1.64%). All generated
+output hashes match the single-step control and precision remains unchanged.
+Eight-replica G0 is running, with full GPQA persistently queued afterward.
+The source/API workflow is isolated and ends its owned endpoint after eval.
+The unchanged 89.2% GPQA gate remains open. Historical running/queued statements
+above have been superseded by these receipts.
+
+See [new full-model evidence](../galaxy-evidence/shared-qk-full-model-v1/README.md)
+and the [remaining optimization backlog](OPTIMIZATION-BACKLOG.md).

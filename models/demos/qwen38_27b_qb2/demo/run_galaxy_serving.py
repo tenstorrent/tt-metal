@@ -112,7 +112,7 @@ def main(args):
         environment = {key: value for key, value in os.environ.items() if not key.startswith("QWEN_")}
         environment.update(runtime_environment)
         environment.update(
-            EXTRA_MODELS_DIR=str(task / "metal-galaxy/models/demos"),
+            EXTRA_MODELS_DIR=str(source.parent),
             MESH_DEVICE="(8, 4)",
             HF_HOME=str(task / "hf-eval"),
             HF_HUB_OFFLINE="1",
@@ -136,7 +136,7 @@ def main(args):
         server_log = (output / "server.log").open("w")
         server = subprocess.Popen(
             command,
-            cwd=task / "metal-galaxy",
+            cwd=source.parents[2],
             env=environment,
             stdout=server_log,
             stderr=subprocess.STDOUT,
@@ -215,6 +215,14 @@ def main(args):
         report["gpqa"] = json.loads(summary_path.read_text())["gpqa_result"]
         if report["gpqa"]["completed_samples"] != 198 or not report["gpqa"]["full_dataset"]:
             raise RuntimeError("GPQA result does not cover all 198 questions")
+        if args.exit_after_eval:
+            report.update(
+                state="evaluation_completed",
+                passed=report["gpqa"]["passed"] and report["evaluation_exit_code"] == 0,
+                resident_endpoint=False,
+            )
+            print(f"GALAXY_EVALUATION_FINISHED passed={report['passed']}", flush=True)
+            return
         # Preserve and measure a healthy deployment even if the accuracy gate
         # misses; never relabel that result as qualified.
         report["state"] = "http_sweep"
@@ -240,6 +248,7 @@ def main(args):
         stop_child(server)
         if server_log is not None:
             server_log.close()
+        report["owned_processes_stopped"] = True
         write_receipt(receipt, report)
 
 
@@ -251,4 +260,9 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--readiness-timeout", type=int, default=5400)
     parser.add_argument("--evaluation-timeout", type=int, default=14400)
+    parser.add_argument(
+        "--exit-after-eval",
+        action="store_true",
+        help="Stop owned workers after full GPQA; omit HTTP sweep and resident serving",
+    )
     main(parser.parse_args())
