@@ -50,6 +50,7 @@ tt::tt_metal::ProgramDescriptor SendAsyncD2HDeviceOperation::create_descriptor(
 
     // The D2H socket lives on exactly one mesh coordinate; only that coordinate gets a program.
     // Validation requires that coordinate to be part of the input tensor's coordinate set.
+    // The active core (device and core coordinate) is part of the program hash.
     const auto active_core = get_d2h_active_core(d2h_socket);
     if (*mesh_dispatch_coordinate != active_core.device_coord) {
         return ProgramDescriptor{};

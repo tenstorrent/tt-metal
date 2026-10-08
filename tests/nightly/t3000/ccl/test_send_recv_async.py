@@ -86,11 +86,16 @@ def _send_recv_once(send_device, recv_device, send_socket, recv_socket, torch_in
     return input_tensor, output_tensor
 
 
-def _assert_send_recv_equal(send_device, recv_device, input_tensor, output_tensor):
+def _assert_send_recv_equal(send_device, recv_device, input_tensor, output_tensor, context):
     input_data = ttnn.to_torch(input_tensor, mesh_composer=ttnn.ConcatMeshToTensor(send_device, dim=0))
     output_data = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(recv_device, dim=0))
     eq, output = comp_equal(input_data, output_data)
-    assert eq, output
+    assert eq, f"{context}: recv_async output does not match send_async input: {output}"
+
+
+def _assert_num_program_cache_entries(device, expected, context):
+    actual = device.num_program_cache_entries()
+    assert actual == expected, f"{context}: expected {expected} program cache entries, found {actual}"
 
 
 @pytest.mark.timeout(120)
@@ -135,7 +140,7 @@ def test_send_recv_program_cache(mesh_device, socket_storage_type):
         dtype,
         layout,
     )
-    _assert_send_recv_equal(send_device, recv_device, input_miss, output_miss)
+    _assert_send_recv_equal(send_device, recv_device, input_miss, output_miss, "miss")
     send_cache_entries = send_device.num_program_cache_entries()
     recv_cache_entries = recv_device.num_program_cache_entries()
 
@@ -153,11 +158,15 @@ def test_send_recv_program_cache(mesh_device, socket_storage_type):
         layout,
     )
 
-    assert send_device.num_program_cache_entries() == send_cache_entries
-    assert recv_device.num_program_cache_entries() == recv_cache_entries
-    _assert_send_recv_equal(send_device, recv_device, input_hit, output_hit)
+    _assert_num_program_cache_entries(
+        send_device, send_cache_entries, "send_async second call with an equivalent socket must hit the cache"
+    )
+    _assert_num_program_cache_entries(
+        recv_device, recv_cache_entries, "recv_async second call with an equivalent socket must hit the cache"
+    )
+    _assert_send_recv_equal(send_device, recv_device, input_hit, output_hit, "hit")
     # A stale output address on the hit would have overwritten the miss output.
-    _assert_send_recv_equal(send_device, recv_device, input_miss, output_miss)
+    _assert_send_recv_equal(send_device, recv_device, input_miss, output_miss, "miss output after hit")
 
 
 @pytest.mark.timeout(120)

@@ -50,6 +50,7 @@ tt::tt_metal::ProgramDescriptor RecvAsyncH2DDeviceOperation::create_descriptor(
 
     // The H2D socket lives on exactly one mesh coordinate; only that coordinate gets a program.
     // Validation requires that coordinate to be part of the output tensor's coordinate set.
+    // The active core (device and core coordinate) is part of the program hash.
     const auto active_core = get_h2d_active_core(h2d_socket);
     if (*mesh_dispatch_coordinate != active_core.device_coord) {
         return ProgramDescriptor{};
