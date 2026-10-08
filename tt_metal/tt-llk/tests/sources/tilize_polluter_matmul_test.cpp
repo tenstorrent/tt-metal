@@ -60,10 +60,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t mm_num_faces = 4; // regular matmul operands
 
     // ---- Run 0: tilize "polluter" (output discarded) ----
-    // Two tiles wide so the leaked tilize row pitch differs from one tile's row. On Blackhole a one-tile-wide
-    // tilize leaves a pitch equal to the tile row, which reads a tilized tile unchanged, so the leak would not show.
-    // With 4 faces (face_r_dim 16) the wider pitch reads past buffer_A[0]; only reads, and its output is discarded.
-    constexpr std::uint32_t pol_ct_dim   = 2;
+    // Polluter width in tiles, from the Python test (POLLUTER_CT_DIM explains why it is two tiles wide).
+    constexpr std::uint32_t pol_ct_dim   = POLLUTER_CT_DIM;
     int run                              = 0;
     const std::uint32_t pol_block_ct_dim = _llk_unpack_tilize_block_ct_dim_wrapper_(pol_ct_dim);
     const std::uint32_t pol_tilize_nf    = pol_num_faces;

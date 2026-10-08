@@ -24,12 +24,13 @@ The `do_restore` toggle makes this a controlled experiment:
     do_restore=True  -> transition restores the baseline; matmul must match golden.
     do_restore=False -> no restore; the leaked tilize state corrupts the matmul, for every
                         polluter geometry including the regular G0 (face_r_dim=16).
-                        On Wormhole the leaked `tilize_mode` and `Tile_x_dim` alone change
-                        the matmul read. On Blackhole they do not: a one-tile-wide polluter
-                        leaks all of that and the matmul still matches golden, because its
-                        row pitch equals one tile row. The polluter is two tiles wide so the
-                        leaked row pitch differs from a tile row, and that pitch is what makes
-                        the Blackhole control diverge.
+                        What diverges is the leaked `tilize_mode` with its row pitch. With a
+                        one-tile-wide polluter the pitch is one tile row: Wormhole's tilize
+                        mode reads 16-datum rows, so that pitch skips every other chunk and
+                        the matmul diverges, but Blackhole reads 32-datum rows (2/4-byte
+                        formats), so the same pitch reads the tilized tile unchanged. The
+                        polluter is therefore two tiles wide (POLLUTER_CT_DIM), so the pitch
+                        differs from a tile row on both arches.
 """
 
 from dataclasses import dataclass
@@ -71,6 +72,21 @@ class DO_RESTORE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool DO_RESTORE = {str(self.do_restore).lower()};"
+
+
+@dataclass
+class POLLUTER_CT_DIM(TemplateParameter):
+    """Width of the run-0 tilize polluter in tiles.
+
+    Two tiles, so the leaked tilize row pitch differs from one tile row; with one tile the
+    Blackhole matmul read is unaffected and the negative control cannot fail. The 4-face
+    polluter then reads past buffer_A[0] into buffer_B[0] (reads only; output discarded).
+    """
+
+    ct_dim: int = 2
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t POLLUTER_CT_DIM = {self.ct_dim};"
 
 
 @parametrize(
@@ -167,6 +183,7 @@ def test_tilize_polluter_matmul(
             generate_input_dim(mm_dimensions, mm_dimensions),
             MATH_FIDELITY(math_fidelity),
             DO_RESTORE(do_restore=do_restore),
+            POLLUTER_CT_DIM(),
         ],
         runtimes=[
             NUM_FACES(polluter_num_faces),
@@ -216,8 +233,7 @@ def test_tilize_polluter_matmul(
         # restore that we skipped here, so the polluter tilize state (tilize_mode, mutated
         # Tile_x_dim / Y-stride, and for tiny polluters a <4-face descriptor) leaks into the
         # regular matmul. The divergence shows that _llk_unpack_AB_matmul_init_ does not
-        # reset the leaked state the matmul read depends on: on Wormhole that includes
-        # Tile_x_dim; on Blackhole only the two-tile polluter's row pitch makes it diverge.
+        # reset the leaked tilize mode and row pitch, which is what the matmul read depends on.
         assert (
             not result_matches
         ), "expected a state leak without restore, but the matmul matched golden"
