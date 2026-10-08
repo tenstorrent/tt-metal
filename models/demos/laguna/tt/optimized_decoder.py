@@ -247,6 +247,10 @@ def _sparse_pc(n: int, m: int, k: int, in0_block_w: int = 16):
     nt = int(math.ceil(n / TILE))
     per_core_N = (nt + num_cores - 1) // num_cores
     kt = int(math.ceil(k / TILE))
+    if m <= TILE:
+        # decode (one tile row): a 32-tile inner block halves the K-block iterations of the 16 default; traced
+        # 48-layer decode 28.85 -> 28.33 ms/tok on S p150x4 (48: 28.64, 96: 28.67). TT_LAGUNA_DECODE_SPARSE_BW sweeps.
+        in0_block_w = int(os.environ.get("TT_LAGUNA_DECODE_SPARSE_BW", "32"))
     if kt % in0_block_w != 0:
         divs = [d for d in range(2, in0_block_w + 1) if kt % d == 0]
         in0_block_w = max(divs) if divs else kt
