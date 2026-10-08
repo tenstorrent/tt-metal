@@ -666,7 +666,7 @@
   additional-server-args: "--max_model_len 2048 --async-scheduling"
   skus:
     wh_llmbox:
-      timeout: 60
+      timeout: 45
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -685,7 +685,7 @@
   additional-server-args: "--max_model_len 2048 --async-scheduling"
   skus:
     wh_llmbox:
-      timeout: 45
+      timeout: 35
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -704,7 +704,7 @@
   additional-server-args: "--max_model_len 2048 --async-scheduling"
   skus:
     wh_llmbox:
-      timeout: 45
+      timeout: 35
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
