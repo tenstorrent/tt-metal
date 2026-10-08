@@ -139,6 +139,28 @@ static ttnn::Shape compute_broadcasted_output_binary(const ttnn::Shape& a_shape,
     return ttnn::Shape(output_shape);
 }
 
+static ttnn::Shape compute_output_logical_shape(
+    const TernaryDeviceOperation::operation_attributes_t& args,
+    const TernaryDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& a_shape = tensor_args.input_tensor_a.logical_shape();
+    if (args.broadcast_type == TernaryBroadcastType::NONE) {
+        return a_shape;
+    }
+    switch (args.ternary_variant) {
+        case TernaryVariant::TTT:
+            return compute_broadcasted_output_ternary(
+                a_shape,
+                tensor_args.input_tensor_b.value().logical_shape(),
+                tensor_args.input_tensor_c.value().logical_shape());
+        case TernaryVariant::TTS:
+            return compute_broadcasted_output_binary(a_shape, tensor_args.input_tensor_b.value().logical_shape());
+        case TernaryVariant::TST:
+            return compute_broadcasted_output_binary(a_shape, tensor_args.input_tensor_c.value().logical_shape());
+        case TernaryVariant::TSS: return a_shape;
+    }
+    return a_shape;
+}
+
 static ShardSpec generate_shard_spec_specless(
     const Tensor& input_tensor_a,
     const Shape& padded_out_shape,
@@ -360,15 +382,7 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (optional_output_tensor.has_value()) {
-        // compute_output_specs returns a preallocated output's own spec, so derive the shape from the inputs.
-        const auto computed_output_shape = compute_output_specs(
-                                               args,
-                                               tensor_args_t{
-                                                   .input_tensor_a = tensor_args.input_tensor_a,
-                                                   .input_tensor_b = tensor_args.input_tensor_b,
-                                                   .input_tensor_c = tensor_args.input_tensor_c,
-                                                   .optional_output_tensor = std::nullopt})
-                                               .logical_shape();
+        const auto computed_output_shape = compute_output_logical_shape(args, tensor_args);
         const auto optional_output_tensor_shape = optional_output_tensor.value().logical_shape();
         TT_FATAL(
             optional_output_tensor_shape == computed_output_shape,
@@ -462,29 +476,12 @@ tt::tt_metal::TensorSpec TernaryDeviceOperation::compute_output_specs(
         output_layout = tensor_args.input_tensor_a.layout();
     }
 
-    auto broadcast_type = args.broadcast_type;
-    auto output_shape = tensor_args.input_tensor_a.logical_shape();
+    const auto output_shape = compute_output_logical_shape(args, tensor_args);
 
-    if (broadcast_type == TernaryBroadcastType::NONE && !args.memory_config.is_sharded()) {
+    if (args.broadcast_type == TernaryBroadcastType::NONE && !args.memory_config.is_sharded()) {
         // Early return for NONE broadcast with non-sharded memory config
         return tt::tt_metal::TensorSpec(
             output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
-    }
-
-    if (broadcast_type != TernaryBroadcastType::NONE) {
-        if (args.ternary_variant == TernaryVariant::TTT) {
-            auto a_shape = tensor_args.input_tensor_a.logical_shape();
-            auto b_shape = tensor_args.input_tensor_b.value().logical_shape();
-            auto c_shape = tensor_args.input_tensor_c.value().logical_shape();
-
-            output_shape = compute_broadcasted_output_ternary(a_shape, b_shape, c_shape);
-        } else if (args.ternary_variant == TernaryVariant::TTS) {
-            output_shape = compute_broadcasted_output_binary(
-                tensor_args.input_tensor_a.logical_shape(), tensor_args.input_tensor_b.value().logical_shape());
-        } else if (args.ternary_variant == TernaryVariant::TST) {
-            output_shape = compute_broadcasted_output_binary(
-                tensor_args.input_tensor_a.logical_shape(), tensor_args.input_tensor_c.value().logical_shape());
-        }
     }
 
     if (args.memory_config.is_sharded()) {

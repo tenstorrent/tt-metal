@@ -35,7 +35,10 @@ def test_bw_min(input_shapes, device):
 @pytest.mark.parametrize("grad_value", [float("inf"), float("-inf"), float("nan")], ids=["pos_inf", "neg_inf", "nan"])
 def test_bw_min_non_finite_grad(device, dtype, grad_value):
     if grad_value != grad_value and dtype == ttnn.bfloat16:
-        pytest.skip("#31406: bfloat16 loses a NaN operand on the device, returning an infinity")
+        pytest.skip(
+            "bfloat16 loses a NaN operand on the device, returning an infinity: "
+            "https://github.com/tenstorrent/tt-metal/issues/31406"
+        )
     shape = torch.Size([1, 1, 32, 32])
 
     def to_device(value):

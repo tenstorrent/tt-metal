@@ -38,7 +38,10 @@ def test_bw_relu(input_shapes, device):
 def test_bw_relu_non_finite_grad(device, dtype, grad_value, input_value):
     active = input_value > 0
     if active and grad_value != grad_value and dtype == ttnn.bfloat16:
-        pytest.skip("#31406: bfloat16 loses a NaN operand on the device, returning an infinity")
+        pytest.skip(
+            "bfloat16 loses a NaN operand on the device, returning an infinity: "
+            "https://github.com/tenstorrent/tt-metal/issues/31406"
+        )
     shape = torch.Size([1, 1, 32, 32])
     grad = ttnn.from_torch(torch.full(shape, grad_value), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     inp = ttnn.from_torch(torch.full(shape, input_value), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
