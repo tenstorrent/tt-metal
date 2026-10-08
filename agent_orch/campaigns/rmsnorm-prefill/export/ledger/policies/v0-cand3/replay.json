@@ -1,0 +1,80 @@
+{
+  "policy": "/localdev/nstamatovic/dream/rmsnorm-prefill/ledger/policies/v0-cand3/policy.py",
+  "default_beta": 0.6,
+  "objective_V": 1.1732,
+  "cost_per_attempt": 0.005,
+  "parallel_bonus": 0.01,
+  "noise_pct": 1.0,
+  "rounds": [
+    1
+  ],
+  "sweep": {
+    "0.2": {
+      "mean_V": 1.1882,
+      "mean_attempts": 10,
+      "mean_best": 1.2132
+    },
+    "0.4": {
+      "mean_V": 1.1807,
+      "mean_attempts": 13,
+      "mean_best": 1.2132
+    },
+    "0.6": {
+      "mean_V": 1.1732,
+      "mean_attempts": 16,
+      "mean_best": 1.2132
+    },
+    "0.8": {
+      "mean_V": 1.1732,
+      "mean_attempts": 16,
+      "mean_best": 1.2132
+    },
+    "1.0": {
+      "mean_V": 1.1732,
+      "mean_attempts": 16,
+      "mean_best": 1.2132
+    }
+  },
+  "episodes": [
+    {
+      "round": 1,
+      "beta": 0.2,
+      "V": 1.1882,
+      "attempts": 10,
+      "steps": 4,
+      "best": 1.2132
+    },
+    {
+      "round": 1,
+      "beta": 0.4,
+      "V": 1.1807,
+      "attempts": 13,
+      "steps": 4,
+      "best": 1.2132
+    },
+    {
+      "round": 1,
+      "beta": 0.6,
+      "V": 1.1732,
+      "attempts": 16,
+      "steps": 4,
+      "best": 1.2132
+    },
+    {
+      "round": 1,
+      "beta": 0.8,
+      "V": 1.1732,
+      "attempts": 16,
+      "steps": 4,
+      "best": 1.2132
+    },
+    {
+      "round": 1,
+      "beta": 1.0,
+      "V": 1.1732,
+      "attempts": 16,
+      "steps": 4,
+      "best": 1.2132
+    }
+  ]
+}

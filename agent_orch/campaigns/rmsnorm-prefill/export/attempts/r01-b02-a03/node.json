@@ -1,0 +1,29 @@
+{
+  "node_id": "r01-b02-a03",
+  "campaign": "rmsnorm-prefill",
+  "round": 1,
+  "branch": 2,
+  "attempt": 3,
+  "parent": "r01-b02-a02",
+  "parent_commit": "eb597a54de874bde1d269fe2ac60e33d0c9d5454",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T11:28:50+00:00",
+  "mechanism": "stack x*gamma under the AG wait (r01-b01-a01) on top of the deep trid input read (r01-b02-a02)",
+  "tags": [
+    "compute",
+    "overlap",
+    "post-phase",
+    "combination",
+    "reader-weight-batching"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.1721,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 22,
+  "finished_at": "2026-10-08T11:33:20+00:00"
+}

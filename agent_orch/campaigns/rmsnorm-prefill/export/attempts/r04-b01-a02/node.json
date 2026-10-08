@@ -1,0 +1,28 @@
+{
+  "node_id": "r04-b01-a02",
+  "campaign": "rmsnorm-prefill",
+  "round": 4,
+  "branch": 1,
+  "attempt": 2,
+  "parent": "r04-b01-a01",
+  "parent_commit": "8472d85bc7919d9883ac5193537fa68f25727b7a",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T14:15:43+00:00",
+  "mechanism": "PRE at HiFi2: the per-tile x*x ELWMUL and the ones*S^T row-sum matmul run at MathFidelity::HiFi2 instead of HiFi4; POST and the post-AG combine stay HiFi4",
+  "tags": [
+    "compute",
+    "pre-phase",
+    "math-fidelity",
+    "ag-start",
+    "accuracy-tradeoff"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.3911,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 20,
+  "finished_at": "2026-10-08T14:20:54+00:00"
+}

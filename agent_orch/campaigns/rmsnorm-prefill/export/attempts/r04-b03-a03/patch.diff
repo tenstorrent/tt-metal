@@ -1,0 +1,131 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+index d9c762d41de..6129a3fc5b5 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+@@ -1124,6 +1124,14 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+     const bool writer_reads_weight =
+         use_mux && has_weight && !per_token_weight && !per_batch_weight && !block_major_post;
+     reader_compile_args.push_back(static_cast<uint32_t>(writer_reads_weight));
++    // DRAM bank de-phasing: each worker walks its row's columns from a per-core rotation (CB slot k <->
++    // column (k + rot) % num_tile_cols, rot puts the worker's first page in bank tile_row % NUM_DRAM_BANKS) in
++    // the input read, the writer's gamma read and the output drain, so widths that are 0 mod 8 tiles don't
++    // march all workers across the banks in lockstep. Compute is slot-indexed, so only the plain resident
++    // RMSNorm AG path (no rope / heads / bias / streaming, gamma via the writer) is eligible.
++    const bool col_rotate = use_mux && !is_layernorm && !fuse_rope && !streaming_low_l1 && !block_major_post &&
++                            num_heads_per_device == 1 && !has_bias && (!has_weight || writer_reads_weight);
++    reader_compile_args.push_back(static_cast<uint32_t>(col_rotate));
+ 
+     // Path-aware dual-NoC output drain (AG worker writer, Blackhole, DRAM-interleaved output): the
+     // writer (BRISC, NoC1) sends part of its output tiles on NoC0, so both DM kernels on the worker
+@@ -1237,6 +1245,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+             TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
+         }
+         writer_compile_args.push_back(static_cast<uint32_t>(dual_noc_drain));
++        writer_compile_args.push_back(static_cast<uint32_t>(col_rotate));
+         DataMovementConfig writer_config = WriterDataMovementConfig(writer_compile_args);
+         if (dual_noc_drain) {
+             writer_config.noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+index 726ef298adb..f0777080497 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+@@ -105,6 +105,11 @@ void kernel_main() {
+     // Broadcast gamma read by the worker writer (BRISC) at kernel start instead of here, so the
+     // NCRISC read queue carries only the input row (see the factory's writer_reads_weight).
+     constexpr uint32_t weight_from_writer = get_compile_time_arg_val(recip_args.next_compile_time_args_offset());
++    // DRAM bank de-phasing (resident AG RMSNorm path only): CB slot k holds column (k + col_rot) % num_tile_cols,
++    // with col_rot chosen so this worker's first input page sits in bank tile_row_start % NUM_DRAM_BANKS. Widths
++    // that are 0 mod 8 tiles otherwise make all workers walk the banks in lockstep. The worker writer applies the
++    // same slot -> column map to gamma and the output drain; compute only sees slots.
++    constexpr uint32_t col_rotate = get_compile_time_arg_val(recip_args.next_compile_time_args_offset() + 1);
+ 
+     uint32_t arg_idx = 0;
+     const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
+@@ -116,6 +121,13 @@ void kernel_main() {
+     const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
+     const uint32_t recip_addr = get_common_arg_val<uint32_t>(5);
+ 
++    uint32_t col_rot = 0;
++    if constexpr (col_rotate != 0) {
++        const uint32_t base_bank = (tile_row_start * num_tile_cols) % NUM_DRAM_BANKS;
++        col_rot = ((tile_row_start % NUM_DRAM_BANKS) + NUM_DRAM_BANKS - base_bank) % NUM_DRAM_BANKS;
++        col_rot %= num_tile_cols;
++    }
++
+     Noc noc;
+ 
+     CircularBuffer cb_input(input_cb);
+@@ -232,18 +244,21 @@ void kernel_main() {
+                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                 const uint32_t trid = 1u + (k % kInputTrids);
+                 for (uint32_t i = 0; i < tiles_in_block; i++) {
++                    uint32_t col = col_tile + i + col_rot;
++                    col = (col >= num_tile_cols) ? (col - num_tile_cols) : col;
+                     noc.async_read<NocOptions::TXN_ID>(
+                         input_accessor,
+                         CoreLocalMem<uint32_t>(input_base + (col_tile + i) * input_tile_bytes),
+                         input_page_bytes,
+-                        {.page_id = input_tile_idx + col_tile + i},
++                        {.page_id = input_tile_idx + col},
+                         {},
+                         {.trid = trid});
+                 }
+                 if (with_weight) {
+                     for (uint32_t i = 0; i < tiles_in_block; i++) {
+-                        const uint32_t w_page = col_tile + i;
+-                        const uint32_t w_dst = weight_base + w_page * weight_tile_bytes;
++                        uint32_t w_page = col_tile + i + col_rot;
++                        w_page = (w_page >= num_tile_cols) ? (w_page - num_tile_cols) : w_page;
++                        const uint32_t w_dst = weight_base + (col_tile + i) * weight_tile_bytes;
+                         noc.async_read<NocOptions::TXN_ID>(
+                             weight_accessor,
+                             CoreLocalMem<uint32_t>(w_dst),
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index 4623e376765..c38771c8916 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -90,6 +90,9 @@ constexpr auto w_weight_args = TensorAccessorArgs<WCB + 3>();
+ // loaded by every core's wrap-around traffic. A destination whose NoC0 (east, then south) path is short goes
+ // out on NoC0 on every other visit to its bank, unloading those links without crowding NoC0's own rows.
+ constexpr uint32_t dual_noc_drain = get_compile_time_arg_val(w_weight_args.next_compile_time_args_offset());
++// DRAM bank de-phasing: CB slot k holds column (k + col_rot) % num_tile_cols (same map as the reader), so
++// the 20 workers' gamma reads and output drains don't target the same banks / DRAM column in lockstep.
++constexpr uint32_t col_rotate = get_compile_time_arg_val(w_weight_args.next_compile_time_args_offset() + 1);
+ 
+ void kernel_main() {
+     size_t arg_idx = 0;
+@@ -106,6 +109,13 @@ void kernel_main() {
+     const uint32_t my_slot = get_arg_val<uint32_t>(arg_idx++);
+     const uint32_t weight_addr = get_common_arg_val<uint32_t>(3);
+ 
++    uint32_t col_rot = 0;
++    if constexpr (col_rotate != 0) {
++        const uint32_t base_bank = (tile_row_start * num_tile_cols) % NUM_DRAM_BANKS;
++        col_rot = ((tile_row_start % NUM_DRAM_BANKS) + NUM_DRAM_BANKS - base_bank) % NUM_DRAM_BANKS;
++        col_rot %= num_tile_cols;
++    }
++
+     Noc noc;
+     // Second NoC for the dual-NoC drain (only used when dual_noc_drain; the writer's own NoC is 1).
+     Noc noc_alt(static_cast<uint8_t>(1u - noc.get_noc_id()));
+@@ -193,7 +203,9 @@ void kernel_main() {
+         const uint32_t weight_base = cb_weight.get_write_ptr();
+         uint32_t w_page = tile_row_start % w_weight_tiles;
+         for (uint32_t n = 0; n < w_weight_tiles; n++) {
+-            const uint32_t w_dst = weight_base + w_page * weight_tile_bytes;
++            // Page w_page belongs in slot (w_page - col_rot) mod W, where compute pairs it with input slot.
++            const uint32_t w_slot = (w_page >= col_rot) ? (w_page - col_rot) : (w_page + w_weight_tiles - col_rot);
++            const uint32_t w_dst = weight_base + w_slot * weight_tile_bytes;
+             noc.async_read(
+                 weight_accessor, CoreLocalMem<uint32_t>(w_dst), weight_face_row_bytes, {.page_id = w_page}, {});
+             noc.async_read(
+@@ -279,7 +291,8 @@ void kernel_main() {
+                 cb_output.wait_front(block_size);
+                 uint32_t rd = cb_output.get_read_ptr();
+                 for (uint32_t i = 0; i < tiles_in_block; i++) {
+-                    const uint32_t c = col_tile + i;
++                    uint32_t c = col_tile + i + col_rot;
++                    c = (c >= num_tile_cols) ? (c - num_tile_cols) : c;
+                     const uint32_t h = c / head_dim_tiles;
+                     const uint32_t t_col = c - h * head_dim_tiles;
+                     const uint32_t out_idx =

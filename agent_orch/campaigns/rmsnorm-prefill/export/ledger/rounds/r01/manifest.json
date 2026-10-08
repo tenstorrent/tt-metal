@@ -1,0 +1,12 @@
+{
+  "round": 1,
+  "policy": "v0",
+  "beta": 0.6,
+  "W": 4,
+  "R": 4,
+  "reason": "v0: fixed campaign defaults",
+  "round_root": "dream/rmsnorm-prefill/root",
+  "round_root_commit": "4e704cd33dd3b7502a063b4fb5e45bad65d60aee",
+  "max_steps": 30,
+  "started_at": "2026-10-08T10:26:00+00:00"
+}

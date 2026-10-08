@@ -1,0 +1,29 @@
+{
+  "node_id": "r01-b02-a04",
+  "campaign": "rmsnorm-prefill",
+  "round": 1,
+  "branch": 2,
+  "attempt": 4,
+  "parent": "r01-b02-a03",
+  "parent_commit": "b70072eb0590e53818307ef90a83b1bbe1b7ba1a",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T11:37:13+00:00",
+  "mechanism": "split the output drain across both NoCs: the idle reader (NCRISC/NoC1) writes the odd output blocks while the writer (BRISC/NoC0) writes the even ones",
+  "tags": [
+    "dataflow",
+    "writer-drain",
+    "dual-noc",
+    "reader"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 0.9853,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 21,
+  "eval_seconds": 23,
+  "finished_at": "2026-10-08T11:44:29+00:00"
+}

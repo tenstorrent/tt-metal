@@ -1,0 +1,28 @@
+{
+  "node_id": "r04-b04-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 4,
+  "branch": 4,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "133aa8e859d79fabe94c170b0cd0ee59baf1ca8c",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T13:53:22+00:00",
+  "mechanism": "posted (no-ack) output-drain writes: BRISC issues each 2 KB output tile with NocOptions::POSTED and flushes posted-sent before each pop, instead of non-posted writes",
+  "tags": [
+    "writer-drain",
+    "posted-writes",
+    "noc",
+    "per-core-bound",
+    "dataflow"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.3666,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T13:56:21+00:00"
+}

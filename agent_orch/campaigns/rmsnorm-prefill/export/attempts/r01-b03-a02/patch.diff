@@ -1,0 +1,48 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+index 2118a374cce..b5ddf5b128f 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+@@ -516,9 +516,14 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+     // relays the forwarder's go to its followers. num_workers stays the row-worker (leader)
+     // count, so the forwarder groups / stats-buffer geometry (compute_sizing) are unchanged.
+     // Restricted to the plain resident RMS AG path (no RoPE, one head, broadcast affine).
++    // Only equal-width splits (col_splits divides num_tile_cols) are used: uneven slices need a
++    // second kernel group (num_tile_cols is a CT arg), and a 2-group program measured a ~40-50 us
++    // device-side dispatch gap per op on BH vs ~0.5 us for one group.
+     uint32_t col_splits = 1u;
+     {
+-        constexpr uint32_t kColSplitCoreBudget = 64u;  // same DRAM/NoC knee as the BH round-bound cap
++        // Single AG round, so no multi-round DRAM/fabric knee applies; spreading the output drain
++        // over more grid rows shortens the NoC-congested write tail.
++        constexpr uint32_t kColSplitCoreBudget = 80u;
+         constexpr uint32_t kColSplitMinSliceTiles = 4u;
+         constexpr uint32_t kColSplitMaxRowTiles = 64u;  // keeps the resident (non-streaming) layout
+         const bool col_split_ok = use_mux && !args.per_head_norm && args.norm_type == DitFusedNormType::RMS &&
+@@ -527,9 +532,14 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+                                   num_tile_rows == num_workers;  // one row per row-worker
+         if (col_split_ok) {
+             const uint32_t budget = std::min<uint32_t>(kColSplitCoreBudget, max_cores - num_forwarders);
+-            col_splits = std::max<uint32_t>(1u, budget / num_workers);
+-            col_splits = std::min<uint32_t>(col_splits, num_tile_cols / kColSplitMinSliceTiles);
+-            col_splits = std::max<uint32_t>(1u, col_splits);
++            const uint32_t max_splits =
++                std::min<uint32_t>(budget / num_workers, num_tile_cols / kColSplitMinSliceTiles);
++            for (uint32_t k = max_splits; k > 1u; k--) {
++                if (num_tile_cols % k == 0u) {
++                    col_splits = k;
++                    break;
++                }
++            }
+         }
+     }
+     const uint32_t num_worker_cores = num_workers * col_splits;
+@@ -556,7 +566,8 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+         forwarder_cores.push_back(all_cores_vec[num_worker_cores + f]);
+     }
+     // Column slices: the first (num_tile_cols % col_splits) slices get one extra tile. Two
+-    // widths at most -> at most two kernel groups (num_tile_cols is a compile-time arg).
++    // widths at most -> at most two kernel groups (num_tile_cols is a compile-time arg). The
++    // col_splits choice above keeps the widths equal, so this is a single group in practice.
+     const uint32_t slice_cols_lo = num_tile_cols / col_splits;
+     const uint32_t slice_cols_extra = num_tile_cols % col_splits;
+     const uint32_t slice_cols_hi = slice_cols_lo + (slice_cols_extra ? 1u : 0u);

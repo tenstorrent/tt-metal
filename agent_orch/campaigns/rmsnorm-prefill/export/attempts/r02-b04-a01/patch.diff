@@ -1,0 +1,36 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+index fd1eb77c164..956fe4e1b7e 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+@@ -523,10 +523,29 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+     // [worker_0..N-1, forwarder_0..F-1] on the device grid (row-major).
+     const auto all_cores_vec = corerange_to_cores(core_grid, max_cores, /*row_wise=*/true);
+     std::vector<CoreCoord> worker_cores(all_cores_vec.begin(), all_cores_vec.begin() + num_workers);
++    // AG path: spread the workers over every grid row (column-major in a few full columns spread
++    // across the width) instead of packing them row-major into ~2 rows. Each worker's DRAM reads and
++    // output writes travel along its own row's NoC links, so packing 9-11 workers per row made the
++    // input read and the drain slow down with x (link congestion). Full columns keep the worker set
++    // to a few CoreRanges (cheap dispatch). Forwarders take the first row-major cores left over.
++    const uint32_t spread_cols = tt::div_up(num_workers, static_cast<uint32_t>(grid_size.y));
++    if (use_mux && spread_cols <= static_cast<uint32_t>(grid_size.x) &&
++        spread_cols * static_cast<uint32_t>(grid_size.y) + num_forwarders <= max_cores) {
++        const uint32_t col_stride = static_cast<uint32_t>(grid_size.x) / spread_cols;
++        for (uint32_t w = 0; w < num_workers; w++) {
++            const uint32_t k = w / static_cast<uint32_t>(grid_size.y);
++            worker_cores[w] = CoreCoord(grid_size.x - 1 - k * col_stride, w % grid_size.y);
++        }
++    }
+     std::vector<CoreCoord> forwarder_cores;
+     forwarder_cores.reserve(num_forwarders);
+-for (uint32_t f = 0; f < num_forwarders; f++) {
+-        forwarder_cores.push_back(all_cores_vec[num_workers + f]);
++    for (const auto& c : all_cores_vec) {
++        if (forwarder_cores.size() == num_forwarders) {
++            break;
++        }
++        if (std::find(worker_cores.begin(), worker_cores.end(), c) == worker_cores.end()) {
++            forwarder_cores.push_back(c);
++        }
+     }
+ 
+     CoreRangeSet worker_core_set;

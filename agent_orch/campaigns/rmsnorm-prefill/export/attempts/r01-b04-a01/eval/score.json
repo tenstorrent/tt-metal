@@ -1,0 +1,71 @@
+{
+  "valid": true,
+  "fail_class": "ok",
+  "error": null,
+  "score": 1.0761,
+  "shapes": {
+    "kimi-k3-latent-moe-h3584": {
+      "pytest": "PASSED",
+      "pcc": 0.9999984966173517,
+      "max_abs": 0.021683,
+      "us_chip_mean": 15.233,
+      "us_chip_max": 16.258,
+      "us_chip_p50": 15.148,
+      "us_min": 13.833,
+      "us_max": 16.49,
+      "n_rows": 40,
+      "core_count": 21,
+      "baseline_us": 16.992,
+      "speedup": 1.1155
+    },
+    "deepseek-v4-flash-h4096": {
+      "pytest": "PASSED",
+      "pcc": 0.9999984879213994,
+      "max_abs": 0.024332,
+      "us_chip_mean": 16.22,
+      "us_chip_max": 16.524,
+      "us_chip_p50": 16.183,
+      "us_min": 15.21,
+      "us_max": 17.622,
+      "n_rows": 40,
+      "core_count": 21,
+      "baseline_us": 18.256,
+      "speedup": 1.1255
+    },
+    "glm-5-3-h6144": {
+      "pytest": "PASSED",
+      "pcc": 0.9999984887532942,
+      "max_abs": 0.024031,
+      "us_chip_mean": 22.325,
+      "us_chip_max": 22.574,
+      "us_chip_p50": 22.33,
+      "us_min": 21.39,
+      "us_max": 22.879,
+      "n_rows": 40,
+      "core_count": 21,
+      "baseline_us": 23.478,
+      "speedup": 1.0516
+    },
+    "kimi-k2-7-h7168": {
+      "pytest": "PASSED",
+      "pcc": 0.9999984886739718,
+      "max_abs": 0.024128,
+      "us_chip_mean": 25.621,
+      "us_chip_max": 25.891,
+      "us_chip_p50": 25.602,
+      "us_min": 24.747,
+      "us_max": 26.465,
+      "n_rows": 40,
+      "core_count": 21,
+      "baseline_us": 26.026,
+      "speedup": 1.0158
+    }
+  },
+  "ops_csv": "/localdev/nstamatovic/dream/rmsnorm-prefill/reports/r01-b04-a01/reports/2026_10_08_12_29_37/ops_perf_results_2026_10_08_12_29_37.csv",
+  "score_def": "geomean over shapes of baseline_us / attempt_us; per-chip mean device kernel time, measured calls only",
+  "noise_pct": 1.0,
+  "commit_under_test": "993099d31f14040e1bc4aeb658ed8808b2a3756a",
+  "build_seconds": 0,
+  "eval_seconds": 19,
+  "report_dir": "/localdev/nstamatovic/dream/rmsnorm-prefill/reports/r01-b04-a01"
+}

@@ -1,0 +1,32 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index 69e852ae967..d10f8096c6c 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -164,12 +164,15 @@ void kernel_main() {
+                 {},
+                 {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub + kFaceRowBytes});
+         }
+-        noc.async_write_barrier();
+         // Arrival handshake: the stick must be visible in the forwarder's packet buffer
+-        // *before* the forwarder sees the count go up, hence the write barrier above and
+-        // the atomic barrier below.
++        // *before* the forwarder sees the count go up. The writes and the inc leave this core
++        // on the same NoC and VC (NOC_UNICAST_WRITE_VC) for the same destination, so they are
++        // delivered in order once the writes have left the NIU (the fabric's flush=true fused
++        // write+inc relies on the same ordering). No write-ack round trip before the inc, and
++        // no atomic-ack wait here: the atomic barrier runs once at kernel end. Flushed also
++        // means the stat CB slot has been read out, so it can be popped.
++        noc.async_writes_flushed();
+         fwd_arrival_sem.up(noc, fwd_x, fwd_y, 1);
+-        noc.async_atomic_barrier();
+         cb_stats_local.pop_front(num_stats);
+     };
+ 
+@@ -305,6 +308,7 @@ void kernel_main() {
+         }
+     }
+     noc.async_write_barrier();
++    noc.async_atomic_barrier();  // the arrival incs (not waited on per push)
+     if constexpr (dual_noc_drain != 0) {
+         noc_alt.async_write_barrier();
+     }

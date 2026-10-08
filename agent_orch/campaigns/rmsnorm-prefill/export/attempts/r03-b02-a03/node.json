@@ -1,0 +1,28 @@
+{
+  "node_id": "r03-b02-a03",
+  "campaign": "rmsnorm-prefill",
+  "round": 3,
+  "branch": 2,
+  "attempt": 3,
+  "parent": "r03-b02-a02",
+  "parent_commit": "133aa8e859d79fabe94c170b0cd0ee59baf1ca8c",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T13:30:59+00:00",
+  "mechanism": "output drain keeps two writes in flight per NoC: BRISC alternates its write cmd buf 0 and its idle read/atomic cmd buf 1 (source coord set before, return coord restored after), same per-tile NoC routing as the parent",
+  "tags": [
+    "writer-drain",
+    "noc-cmd-buf",
+    "issue-pipelining",
+    "dataflow",
+    "per-core-bound"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.3,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T13:39:56+00:00"
+}

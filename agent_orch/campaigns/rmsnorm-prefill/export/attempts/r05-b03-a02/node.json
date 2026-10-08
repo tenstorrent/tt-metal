@@ -1,0 +1,35 @@
+{
+  "node_id": "r05-b03-a02",
+  "campaign": "rmsnorm-prefill",
+  "round": 5,
+  "branch": 3,
+  "attempt": 2,
+  "parent": "r05-b03-a01",
+  "parent_commit": "49d327f628c011eb999c7a5a863d977770f45dbc",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T15:27:35+00:00",
+  "mechanism": "four-wave row pipeline on 80 quarter-row workers (k=4 column split, 4 AG waves of 20 cores, 8-bit wave fields in a 4-wave forwarder), with tile-row-0 stick slots so the post-go gather is one 1280 B read per chip",
+  "tags": [
+    "pipelining",
+    "waves",
+    "column-split",
+    "ag-overlap",
+    "forwarder",
+    "gather-layout",
+    "host-factory"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4219,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_wave_forwarder.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 23,
+  "finished_at": "2026-10-08T15:38:09+00:00"
+}

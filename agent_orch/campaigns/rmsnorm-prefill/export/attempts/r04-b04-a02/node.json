@@ -1,0 +1,29 @@
+{
+  "node_id": "r04-b04-a02",
+  "campaign": "rmsnorm-prefill",
+  "round": 4,
+  "branch": 4,
+  "attempt": 2,
+  "parent": "r04-b04-a01",
+  "parent_commit": "078c0e35048c8a45172b5c5b587a20e7f809de79",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T14:15:43+00:00",
+  "mechanism": "stack round 4's two other writer-only wins on the posted drain: ack-free stick push (r04-b03-a01) + streamed gamma chunks (r04-b01-a01)",
+  "tags": [
+    "combination",
+    "port",
+    "writer",
+    "ag-start",
+    "gamma-read",
+    "posted-writes"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.3997,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T14:20:36+00:00"
+}

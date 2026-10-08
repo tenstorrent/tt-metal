@@ -1,0 +1,131 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+index d79766bedbf..62bf5d5c66d 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+@@ -1258,6 +1258,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         } else {
+             TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
+         }
++        // deep_drain: output_cb is 2 whole padded rows unless block_major_post (then 2 blocks).
++        writer_compile_args.push_back(static_cast<uint32_t>(!block_major_post));
+         writer_kernel_id = CreateKernel(
+             program,
+             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+index 8c161f34165..ef19445c132 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+@@ -207,6 +207,52 @@ void kernel_main() {
+         }
+     };
+ 
++    // Resident whole-row read, kept DEEP: every block's reads are tagged with their own
++    // NoC read transaction id, so all blocks are in flight at once, yet compute still
++    // gets block-granular pushes (it starts PRE on block 0 while the rest land). The
++    // per-block barrier above caps outstanding reads at block_size, which makes the
++    // read latency bound. input_cb holds 2 whole rows, so a whole-row reservation is
++    // contiguous. Trids 1..kNumTrids rotate as a sliding window over the blocks.
++    constexpr uint32_t kNumTrids = 15u;
++    constexpr uint32_t num_blocks = (num_tile_cols + block_size - 1) / block_size;
++    auto read_input_row_deep = [&](uint32_t input_tile_idx) {
++        cb_input.reserve_back(num_tile_cols);
++        const uint32_t row_base = cb_input.get_write_ptr();
++        auto issue_block = [&](uint32_t blk) {
++            const uint32_t col_tile = blk * block_size;
++            const uint32_t tiles_in_block =
++                ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
++            const uint32_t trid = 1u + (blk % kNumTrids);
++            uint32_t input_wr_ptr = row_base + col_tile * input_tile_bytes;
++            for (uint32_t i = 0; i < tiles_in_block; i++) {
++                noc.async_read<NocOptions::TXN_ID>(
++                    input_accessor,
++                    CoreLocalMem<uint32_t>(input_wr_ptr),
++                    input_page_bytes,
++                    {.page_id = input_tile_idx + col_tile + i},
++                    {},
++                    {.trid = trid});
++                input_wr_ptr += input_tile_bytes;
++            }
++        };
++        constexpr uint32_t first_wave = (num_blocks < kNumTrids) ? num_blocks : kNumTrids;
++        for (uint32_t blk = 0; blk < first_wave; blk++) {
++            issue_block(blk);
++        }
++        for (uint32_t blk = 0; blk < num_blocks; blk++) {
++            const uint32_t col_tile = blk * block_size;
++            const uint32_t tiles_in_block =
++                ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
++            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 1u + (blk % kNumTrids)});
++            cb_input.push_back(tiles_in_block);
++            if (blk + kNumTrids < num_blocks) {
++                issue_block(blk + kNumTrids);  // reuses the trid just retired
++            }
++        }
++        // The packet tag is sticky on the read cmd buf: restore the default for later reads.
++        noc_async_read_set_trid(0, noc.get_noc_id());
++    };
++
+     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
+         // Deep input read: issue the whole row's tiles, then ONE barrier, so
+         // num_tile_cols reads are in flight at once (keeps DRAM-read latency hidden;
+@@ -229,9 +275,11 @@ void kernel_main() {
+         //   DEFER_ALL: read nothing here; both passes are read below, after side inputs.
+         if constexpr (input_schedule == SCHED_INPUT_FIRST) {
+             DeviceZoneScopedN("R_INPUT");
+-            read_input_pass(input_tile_idx);
+             if constexpr (streaming_low_l1) {
++                read_input_pass(input_tile_idx);
+                 read_input_pass(input_tile_idx);  // POST re-read pass
++            } else {
++                read_input_row_deep(input_tile_idx);
+             }
+         } else if constexpr (input_schedule == SCHED_SPLIT) {
+             DeviceZoneScopedN("R_INPUT");
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index 21e0fddbb0a..32ac889ecc7 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -78,6 +78,9 @@ constexpr uint32_t w_reduce_factor = get_compile_time_arg_val(SCB + 4);
+ constexpr uint32_t w_eps_bits = get_compile_time_arg_val(SCB + 5);
+ constexpr uint32_t w_fuse_rope = get_compile_time_arg_val(SCB + 6);
+ constexpr auto w_transmat_args = TensorAccessorArgs<SCB + 7>();
++// deep_drain: output_cb holds 2 whole padded rows (i.e. not block_major_post), so the drain
++// can wait cumulatively per block and flush + pop once per row instead of once per block.
++constexpr uint32_t deep_drain = get_compile_time_arg_val(w_transmat_args.next_compile_time_args_offset());
+ 
+ void kernel_main() {
+     size_t arg_idx = 0;
+@@ -215,7 +218,32 @@ void kernel_main() {
+         // uses the per-block drain-only writer, worked while TP>1 wide hung). Compute
+         // pushes block_size-padded slots per col-block; wait/pop the full block, but
+         // only NoC-write the valid tiles. Matches the drain-only writer's drain loop.
+-        {
++        if constexpr (deep_drain) {
++            // Whole padded row resident in output_cb: issue each block's writes as soon as
++            // compute pushes it (cumulative wait, no flush in between) so writes stay deep
++            // on the NoC; one flush + pop per row frees the slots for the row after next.
++            DeviceZoneScopedN("W_DRAIN");
++            constexpr uint32_t padded_row_tiles = ((num_tile_cols + block_size - 1) / block_size) * block_size;
++            const uint32_t row_rd = cb_output.get_read_ptr();
++            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
++                const uint32_t tiles_in_block =
++                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
++                cb_output.wait_front(col_tile + block_size);
++                uint32_t rd = row_rd + col_tile * output_tile_bytes;
++                for (uint32_t i = 0; i < tiles_in_block; i++) {
++                    const uint32_t c = col_offset + col_tile + i;
++                    const uint32_t h = c / head_dim_tiles;
++                    const uint32_t t_col = c - h * head_dim_tiles;
++                    const uint32_t out_idx =
++                        h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
++                    noc.async_write(
++                        CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
++                    rd += output_tile_bytes;
++                }
++            }
++            noc.async_writes_flushed();
++            cb_output.pop_front(padded_row_tiles);
++        } else {
+             DeviceZoneScopedN("W_DRAIN");
+             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                 const uint32_t tiles_in_block =

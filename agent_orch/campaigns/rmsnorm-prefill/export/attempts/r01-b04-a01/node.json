@@ -1,0 +1,26 @@
+{
+  "node_id": "r01-b04-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 1,
+  "branch": 4,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "4e704cd33dd3b7502a063b4fb5e45bad65d60aee",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T10:26:06+00:00",
+  "mechanism": "precompute x*gamma during the all-gather wait so POST is a single x*gamma*(1/rms) pass",
+  "tags": [
+    "compute",
+    "overlap",
+    "post-phase"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.0761,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T10:30:05+00:00"
+}

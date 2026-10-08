@@ -1,0 +1,28 @@
+{
+  "node_id": "r04-b03-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 4,
+  "branch": 3,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "133aa8e859d79fabe94c170b0cd0ee59baf1ca8c",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T13:53:21+00:00",
+  "mechanism": "stick-push handshake without the write-ack round trip: flush the two 64 B stick writes, then fire the arrival inc on the same NoC/VC (in-order delivery), atomic barrier deferred to kernel end",
+  "tags": [
+    "ag-start",
+    "writer",
+    "noc-ordering",
+    "handshake",
+    "latency"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.3543,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T13:57:18+00:00"
+}

@@ -1,0 +1,72 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+index 0beef931212..c36d52a0b97 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+@@ -39,8 +39,10 @@
+ #include "api/compute/matmul.h"
+ #include "api/compute/transpose.h"
+ #include "api/compute/transpose_dest.h"
++#include "api/compute/experimental/add_rsqrt.h"
+ #include "api/dataflow/circular_buffer.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
++#include "tools/profiler/kernel_profiler.hpp"
+ 
+ void kernel_main() {
+     // === Compile-time args ===
+@@ -480,6 +482,7 @@ void kernel_main() {
+                                     // round-trip — then *1/H + eps + rsqrt on col 0. One transpose
+                                     // total (deferred past the sum) vs one per gathered tile.
+                                     cb_stats_transposed_gathered.wait_front(stats_tiles_cols);
++                                    DeviceZoneScopedN("C_COMB");
+                                     reconfig_data_format(stats_transposed_gathered_cb, stats_transposed_gathered_cb);
+                                     pack_reconfig_data_format(reduce_result_cb);
+                                     tile_regs_acquire();
+@@ -492,6 +495,18 @@ void kernel_main() {
+                                         add_tiles(
+                                             stats_transposed_gathered_cb, stats_transposed_gathered_cb, k, k + 1, 0);
+                                     }
++#if defined(ARCH_BLACKHOLE)
++                                    // 1/rms = rsqrt(sum * 1/H + eps) on ROW 0 only, before the transpose: the 32
++                                    // per-token sums are tile row 0 (faces 0/1). One BH SFPLOAD covers 4 rows x 8
++                                    // cols of one column parity, so ITERATIONS=2 per face = rows 0-3, all columns;
++                                    // VectorMode::R = faces 0 and 1. 4 SFPU iterations of one fused MAD + rsqrt
++                                    // instead of 3 full-tile (96-iteration) passes on the post-AG critical path.
++                                    add_rsqrt_tile_init();
++                                    add_rsqrt_tile<false, VectorMode::R, 2, false, recip_h_full_bits>(0, eps_bits);
++                                    // row-0 1/rms -> col-0, in place (fp32 DST).
++                                    transpose_dest_init<true>(stats_transposed_gathered_cb);
++                                    transpose_dest<true>(0);
++#else
+                                     // row-0 sum -> col-0, in place (fp32 DST).
+                                     transpose_dest_init<true>(stats_transposed_gathered_cb);
+                                     transpose_dest<true>(0);
+@@ -500,6 +515,7 @@ void kernel_main() {
+                                     add_unary_tile(0, eps_bits);
+                                     rsqrt_tile_init();
+                                     rsqrt_tile(0);
++#endif
+                                     tile_regs_commit();
+                                     tile_regs_wait();
+                                     cb_reduce_result.reserve_back(1);
+@@ -551,7 +567,11 @@ void kernel_main() {
+                                     eps_rsqrt);
+                             }
+ 
+-                            cb_reduce_result.wait_front(1);
++                            // The prescale POST waits after its unpack reconfig/init (below), so the
++                            // unpacker sets up POST while math/pack still run the stat combine.
++                            if constexpr (!prescale_weight) {
++                                cb_reduce_result.wait_front(1);
++                            }
+                         }  // P_NRED
+ 
+                         // block_major_post fuses mul-rms into the single per-block POST loop
+@@ -562,6 +582,8 @@ void kernel_main() {
+                             reconfig_data_format(intermediate_cb, reduce_result_cb);
+                             pack_reconfig_data_format(output_cb);
+                             mul_bcast_cols_init(intermediate_cb, reduce_result_cb);
++                            cb_reduce_result.wait_front(1);
++                            DeviceZoneScopedN("C_POST");
+                             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                                 const uint32_t tiles_in_block =
+                                     (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);

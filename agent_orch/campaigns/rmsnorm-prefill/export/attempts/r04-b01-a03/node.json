@@ -1,0 +1,29 @@
+{
+  "node_id": "r04-b01-a03",
+  "campaign": "rmsnorm-prefill",
+  "round": 4,
+  "branch": 1,
+  "attempt": 3,
+  "parent": "r04-b01-a02",
+  "parent_commit": "e746e007c21ea370b5696929251657be2af3489e",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T14:23:32+00:00",
+  "mechanism": "stack r04-b04-a02's writer (posted output drain + ack-free stick push) onto the HiFi2 PRE node r04-b01-a02",
+  "tags": [
+    "combination",
+    "port",
+    "writer",
+    "posted-writes",
+    "ag-start",
+    "math-fidelity"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4475,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T14:26:25+00:00"
+}

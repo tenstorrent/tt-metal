@@ -1,0 +1,29 @@
+{
+  "node_id": "r01-b04-a04",
+  "campaign": "rmsnorm-prefill",
+  "round": 1,
+  "branch": 4,
+  "attempt": 4,
+  "parent": "r01-b04-a03",
+  "parent_commit": "2181598ab0bf7919ee40c0ab2930c0b7efc86a1d",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T11:37:14+00:00",
+  "mechanism": "accumulate sum(x^2) in DST across the row (ELWMUL accumulates) and pack once per row instead of an L1-acc pack per tile; stick push may preempt the BRISC gamma issue loop",
+  "tags": [
+    "compute",
+    "pre-phase",
+    "dst-accumulation",
+    "ag-start",
+    "writer"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.2132,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 21,
+  "eval_seconds": 23,
+  "finished_at": "2026-10-08T11:44:49+00:00"
+}

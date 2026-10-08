@@ -1,0 +1,163 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_forwarder.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_forwarder.cpp
+index 0e5d2db66bc..a583a3779da 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_forwarder.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_forwarder.cpp
+@@ -192,63 +192,113 @@ void kernel_main() {
+         // Page (my_device, forwarder, r) — same DRAM address on every chip.
+         const uint32_t page_idx = my_device_index * num_chunks_per_device + forwarder_index * max_rounds + r;
+         const uint64_t dram_dest = tt::tt_fabric::linear::addrgen_detail::get_noc_address(stats_dram, page_idx, 0);
+-        {
+-            DeviceZoneScopedN("F_FABRIC");
+-            size_t l1_read_addr = packet_addr;
+-            fused_write_atomic_and_advance_local_read_address_for_fabric_write(
+-                dram_dest,
+-                pkt_hdr_fwd,
+-                pkt_hdr_bwd,
+-                fabric_connection,
+-                l1_read_addr,
+-                payload_bytes,
+-                out_ready_sem_noc,
+-                /*val=*/1,
+-                /*flush=*/true);
+-            if constexpr (gather_mcast != 0) {
+-                // My own page is final: push it to the workers while the fabric packets travel.
++        if constexpr (gather_mcast != 0) {
++            // Peers fuse-inc out_ready by their own bit field (one round -> each field reaches 1), so the
++            // value says WHICH pages have landed in my L1 shard; flush=true + same NoC/VC orders the payload
++            // before the inc. Each page is multicast to the workers as soon as it lands, so after the last
++            // arrival only that page + the go flag remain.
++            constexpr uint32_t field_bits = ring_size <= 4 ? 8u : 4u;
++            constexpr uint32_t field_mask = (1u << field_bits) - 1u;
++            constexpr uint32_t all_peers = ((1u << ring_size) - 1u) & ~(1u << my_device_index);
++            auto mcast_peer_page = [&](uint32_t d) {
++                const uint32_t src =
++                    stats_dram_addr + (d * num_chunks_per_device + forwarder_index * max_rounds + r) * gather_page_stride;
+                 noc_async_write_multicast_loopback_src(
+-                    packet_addr,
+-                    mcast_addr(gathered_base + my_device_index * gather_page_stride),
++                    src,
++                    mcast_addr(gathered_base + d * gather_page_stride),
+                     payload_bytes,
+                     mc_num_dests,
+                     false,
+                     noc.get_noc_id());
+-            }
+-            cumulative_incs += (ring_size - 1);
+-            if (cumulative_incs > 0) {
+-                // out_ready is a GlobalSemaphore.
+-                noc_semaphore_wait_min(out_ready_sem_ptr, cumulative_incs);
+-            }
+-            noc.async_write_barrier();
+-            noc.async_atomic_barrier();
+-        }
+-
+-        if constexpr (gather_mcast != 0) {
+-            DeviceZoneScopedN("F_MCAST");
+-            // Peers' pages are in my L1 (scratch shard); multicast each to the same CB offset everywhere.
+-            for (uint32_t d = 0; d < ring_size; d++) {
+-                if (d == my_device_index) {
+-                    continue;
+-                }
+-                const uint32_t src = stats_dram_addr + (d * num_chunks_per_device + forwarder_index * max_rounds + r) *
+-                                                           gather_page_stride;
++            };
++            uint32_t sent = 0;
++            {
++                DeviceZoneScopedN("F_FABRIC");
++                size_t l1_read_addr = packet_addr;
++                fused_write_atomic_and_advance_local_read_address_for_fabric_write(
++                    dram_dest,
++                    pkt_hdr_fwd,
++                    pkt_hdr_bwd,
++                    fabric_connection,
++                    l1_read_addr,
++                    payload_bytes,
++                    out_ready_sem_noc,
++                    /*val=*/1u << (field_bits * my_device_index),
++                    /*flush=*/true);
++                // My own page is final: push it to the workers while the fabric packets travel.
+                 noc_async_write_multicast_loopback_src(
+-                    src,
+-                    mcast_addr(gathered_base + d * gather_page_stride),
++                    packet_addr,
++                    mcast_addr(gathered_base + my_device_index * gather_page_stride),
+                     payload_bytes,
+                     mc_num_dests,
+                     false,
+                     noc.get_noc_id());
++                while (true) {
++                    invalidate_l1_cache();
++                    const uint32_t v = *out_ready_sem_ptr;
++                    uint32_t arrived = 0;
++                    for (uint32_t d = 0; d < ring_size; d++) {
++                        if ((v >> (field_bits * d)) & field_mask) {
++                            arrived |= 1u << d;
++                        }
++                    }
++                    arrived &= all_peers;
++                    if (arrived == all_peers) {
++                        break;
++                    }
++                    const uint32_t fresh = arrived & ~sent;
++                    for (uint32_t d = 0; d < ring_size; d++) {
++                        if ((fresh >> d) & 1u) {
++                            mcast_peer_page(d);
++                        }
++                    }
++                    sent |= fresh;
++                }
++            }
++            auto finish = [&]() {
++                for (uint32_t d = 0; d < ring_size; d++) {
++                    if (((all_peers & ~sent) >> d) & 1u) {
++                        mcast_peer_page(d);
++                    }
++                }
++                // go = r + 1 on the same NoC and VC as the data, so it lands after it. Every worker is present
++                // (one round), and my own copy of the grid-uniform go-sem is unused, so stage the value there.
++                group_go_sem.set(r + 1);
++                noc_semaphore_set_multicast_loopback_src(
++                    get_semaphore(go_sem_id), mcast_addr(get_semaphore(go_sem_id)), mc_num_dests, false, noc.get_noc_id());
++                // The multicasts read their sources from L1: keep them until acked.
++                noc.async_write_barrier();
++                noc.async_atomic_barrier();
++            };
++            if (__builtin_popcount(all_peers & ~sent) <= 1) {
++                DeviceZoneScopedN("F_MCAST");
++                finish();
++            } else {
++                DeviceZoneScopedN("F_MCASTN");
++                finish();
+             }
+-            // go = r + 1 on the same NoC and VC as the data, so it lands after it. Every worker is present
+-            // (one round), and my own copy of the grid-uniform go-sem is unused, so stage the value there.
+-            group_go_sem.set(r + 1);
+-            noc_semaphore_set_multicast_loopback_src(
+-                get_semaphore(go_sem_id), mcast_addr(get_semaphore(go_sem_id)), mc_num_dests, false, noc.get_noc_id());
+-            // The multicasts read their sources from L1: keep them until acked.
+-            noc.async_write_barrier();
+         } else {
++            {
++                DeviceZoneScopedN("F_FABRIC");
++                size_t l1_read_addr = packet_addr;
++                fused_write_atomic_and_advance_local_read_address_for_fabric_write(
++                    dram_dest,
++                    pkt_hdr_fwd,
++                    pkt_hdr_bwd,
++                    fabric_connection,
++                    l1_read_addr,
++                    payload_bytes,
++                    out_ready_sem_noc,
++                    /*val=*/1,
++                    /*flush=*/true);
++                cumulative_incs += (ring_size - 1);
++                if (cumulative_incs > 0) {
++                    // out_ready is a GlobalSemaphore.
++                    noc_semaphore_wait_min(out_ready_sem_ptr, cumulative_incs);
++                }
++                noc.async_write_barrier();
++                noc.async_atomic_barrier();
++            }
+             // Release this round's POST: inc each PRESENT group worker's go-sem. The
+             // present set is the contiguous slot prefix [0, pc) (earlier workers get
+             // the ceil row count), so only the first pc workers loop this round.

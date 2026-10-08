@@ -1,0 +1,28 @@
+{
+  "node_id": "r03-b02-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 3,
+  "branch": 2,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "227bd7adcbdb1caec2dab04a37c30db5d2f54069",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T13:00:39+00:00",
+  "mechanism": "post-AG stat combine on row 0 only: one fused SFPU add_rsqrt (sum*1/H + eps, rsqrt) over the 4 SFPU iterations holding tile row 0, before transpose_dest, replaces three full-tile SFPU passes; POST unpack reconfig/init hoisted ahead of the 1/rms wait",
+  "tags": [
+    "compute",
+    "post-phase",
+    "ag-end",
+    "sfpu",
+    "combine"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.3231,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 23,
+  "finished_at": "2026-10-08T13:10:01+00:00"
+}

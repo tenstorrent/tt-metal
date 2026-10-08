@@ -1,0 +1,31 @@
+{
+  "node_id": "r04-b03-a03",
+  "campaign": "rmsnorm-prefill",
+  "round": 4,
+  "branch": 3,
+  "attempt": 3,
+  "parent": "r04-b03-a02",
+  "parent_commit": "3f00217583cd5b46803ad491fea7b702dc912492",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T14:23:33+00:00",
+  "mechanism": "de-phase DRAM banks per worker on the 20-core pull path: CB slot k <-> column (k+rot) mod W with rot putting each worker's first page in bank tile_row % 8, applied to the input read, the BRISC gamma read and the posted output drain (compute untouched)",
+  "tags": [
+    "dataflow",
+    "dram-banks",
+    "access-order",
+    "reader",
+    "writer-drain",
+    "port"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.3894,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T14:30:49+00:00"
+}

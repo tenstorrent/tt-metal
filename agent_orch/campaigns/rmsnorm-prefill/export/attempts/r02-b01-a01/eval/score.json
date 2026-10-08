@@ -1,0 +1,71 @@
+{
+  "valid": true,
+  "fail_class": "ok",
+  "error": null,
+  "score": 1.1058,
+  "shapes": {
+    "kimi-k3-latent-moe-h3584": {
+      "pytest": "PASSED",
+      "pcc": 0.9999984966173517,
+      "max_abs": 0.021683,
+      "us_chip_mean": 15.527,
+      "us_chip_max": 16.401,
+      "us_chip_p50": 15.51,
+      "us_min": 13.436,
+      "us_max": 17.198,
+      "n_rows": 40,
+      "core_count": 21,
+      "baseline_us": 16.992,
+      "speedup": 1.0944
+    },
+    "deepseek-v4-flash-h4096": {
+      "pytest": "PASSED",
+      "pcc": 0.9999984879213994,
+      "max_abs": 0.024332,
+      "us_chip_mean": 16.573,
+      "us_chip_max": 17.851,
+      "us_chip_p50": 16.476,
+      "us_min": 14.776,
+      "us_max": 18.196,
+      "n_rows": 40,
+      "core_count": 21,
+      "baseline_us": 18.256,
+      "speedup": 1.1016
+    },
+    "glm-5-3-h6144": {
+      "pytest": "PASSED",
+      "pcc": 0.9999984887532942,
+      "max_abs": 0.024031,
+      "us_chip_mean": 21.134,
+      "us_chip_max": 21.786,
+      "us_chip_p50": 21.172,
+      "us_min": 20.17,
+      "us_max": 22.599,
+      "n_rows": 40,
+      "core_count": 21,
+      "baseline_us": 23.478,
+      "speedup": 1.1109
+    },
+    "kimi-k2-7-h7168": {
+      "pytest": "PASSED",
+      "pcc": 0.9999984886739718,
+      "max_abs": 0.024128,
+      "us_chip_mean": 23.311,
+      "us_chip_max": 23.709,
+      "us_chip_p50": 23.263,
+      "us_min": 22.206,
+      "us_max": 24.634,
+      "n_rows": 40,
+      "core_count": 21,
+      "baseline_us": 26.026,
+      "speedup": 1.1165
+    }
+  },
+  "ops_csv": "/localdev/nstamatovic/dream/rmsnorm-prefill/reports/r02-b01-a01/reports/2026_10_08_14_06_03/ops_perf_results_2026_10_08_14_06_03.csv",
+  "score_def": "geomean over shapes of baseline_us / attempt_us; per-chip mean device kernel time, measured calls only",
+  "noise_pct": 1.0,
+  "commit_under_test": "da36f4a5777c865c4cb3b9f0cacb5beb39ecf59b",
+  "build_seconds": 21,
+  "eval_seconds": 37,
+  "report_dir": "/localdev/nstamatovic/dream/rmsnorm-prefill/reports/r02-b01-a01"
+}

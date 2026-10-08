@@ -1,0 +1,57 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+index 0beef931212..da72e344040 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+@@ -41,6 +41,10 @@
+ #include "api/compute/transpose_dest.h"
+ #include "api/dataflow/circular_buffer.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
++#include "tools/profiler/kernel_profiler.hpp"
++#ifdef ARCH_BLACKHOLE
++#include "api/compute/experimental/add_rsqrt.h"
++#endif
+ 
+ void kernel_main() {
+     // === Compile-time args ===
+@@ -480,6 +484,7 @@ void kernel_main() {
+                                     // round-trip — then *1/H + eps + rsqrt on col 0. One transpose
+                                     // total (deferred past the sum) vs one per gathered tile.
+                                     cb_stats_transposed_gathered.wait_front(stats_tiles_cols);
++                                    DeviceZoneScopedN("C_COMB");
+                                     reconfig_data_format(stats_transposed_gathered_cb, stats_transposed_gathered_cb);
+                                     pack_reconfig_data_format(reduce_result_cb);
+                                     tile_regs_acquire();
+@@ -492,6 +497,17 @@ void kernel_main() {
+                                         add_tiles(
+                                             stats_transposed_gathered_cb, stats_transposed_gathered_cb, k, k + 1, 0);
+                                     }
++#ifdef ARCH_BLACKHOLE
++                                    // rsqrt(sum * 1/H + eps) while the stat is still in ROW 0: one fused
++                                    // SFPU op over faces 0/1 (VectorMode::R), 2 iterations each = dest rows
++                                    // 0-3, even + odd cols (an SFPLOAD covers 4 rows x 8 cols). 4 SFPU
++                                    // iterations instead of 3 ops x 32 on the full tile after the transpose.
++                                    add_rsqrt_tile_init();
++                                    add_rsqrt_tile<false, VectorMode::R, 2, false, recip_h_full_bits>(0, eps_bits);
++                                    // row-0 rsqrt -> col-0, in place (fp32 DST); waits on the SFPU.
++                                    transpose_dest_init<true>(stats_transposed_gathered_cb);
++                                    transpose_dest<true>(0);
++#else
+                                     // row-0 sum -> col-0, in place (fp32 DST).
+                                     transpose_dest_init<true>(stats_transposed_gathered_cb);
+                                     transpose_dest<true>(0);
+@@ -500,6 +516,7 @@ void kernel_main() {
+                                     add_unary_tile(0, eps_bits);
+                                     rsqrt_tile_init();
+                                     rsqrt_tile(0);
++#endif
+                                     tile_regs_commit();
+                                     tile_regs_wait();
+                                     cb_reduce_result.reserve_back(1);
+@@ -559,6 +576,7 @@ void kernel_main() {
+                         // reduce_result_cb stays resident for that loop to consume).
+                         if constexpr (prescale_weight) {
+                             // ----- Single POST pass: (x * gamma) * (1/rms) → output_cb -----
++                            DeviceZoneScopedN("C_POST");
+                             reconfig_data_format(intermediate_cb, reduce_result_cb);
+                             pack_reconfig_data_format(output_cb);
+                             mul_bcast_cols_init(intermediate_cb, reduce_result_cb);

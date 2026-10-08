@@ -1,0 +1,198 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+index f09a6595888..c642a86806b 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+@@ -182,6 +182,15 @@ void kernel_main() {
+     CircularBuffer cb_mul_weight_result(mul_weight_result_cb);
+     CircularBuffer cb_add_bias_result(add_bias_result_cb);
+ 
++    // Pre-scale by gamma under the AG wait: x * gamma doesn't depend on the gathered
++    // stats, so for the plain broadcast-weight path compute it into intermediate_cb
++    // (fp32, whole padded row) right after the local stat is pushed, while the
++    // forwarder ring-gathers. POST then collapses to ONE pass:
++    // out = (x * gamma) * bcast_col(1/rms), replacing sub-phases 1 (x * 1/rms) and 2 (* gamma).
++    constexpr bool prescale_weight = (has_weight != 0) && (per_token_weight == 0) && (has_bias == 0) &&
++                                     (fuse_rope == 0) && (per_head_norm == 0) && (streaming_low_l1 == 0) &&
++                                     (block_major_post == 0) && (packed_ag_enabled != 0);
++
+     // Process the core's tile rows one at a time (chunk size is always 1).
+     // per_head_norm produces num_heads_per_device stats per row (one per
+     // head) instead of stats_tiles_cols (== ring_size) for the AG path.
+@@ -339,6 +348,30 @@ void kernel_main() {
+             }
+         }
+ 
++        // -------- x * gamma → intermediate_cb (overlaps the AG) --------
++        if constexpr (prescale_weight) {
++            reconfig_data_format(input_cb, weight_cb);
++            pack_reconfig_data_format(intermediate_cb);
++            mul_bcast_rows_init(input_cb, weight_cb);
++            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
++                const uint32_t tiles_in_block =
++                    (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
++                cb_weight.wait_front(col_tile + tiles_in_block);
++                cb_intermediate.reserve_back(block_size);
++                tile_regs_acquire();
++                for (uint32_t i = 0; i < tiles_in_block; i++) {
++                    mul_tiles_bcast_rows(input_cb, weight_cb, col_tile + i, col_tile + i, i);
++                }
++                tile_regs_commit();
++                tile_regs_wait();
++                for (uint32_t i = 0; i < tiles_in_block; i++) {
++                    pack_tile(i, intermediate_cb);
++                }
++                tile_regs_release();
++                cb_intermediate.push_back(block_size);
++            }
++        }
++
+         // -------- WAIT FOR FORWARDER TO COMPLETE AG FOR THIS CHUNK --------
+         {
+             // Packed-AG path: the worker writer lands the ring gather in row-0 of the
+@@ -500,7 +533,31 @@ void kernel_main() {
+                         // block_major_post fuses mul-rms into the single per-block POST loop
+                         // below, so the standalone P_NMUL sub-phase is skipped (and
+                         // reduce_result_cb stays resident for that loop to consume).
+-                        if constexpr (!block_major_post) {
++                        if constexpr (prescale_weight) {
++                            // ----- Single POST pass: (x * gamma) * (1/rms) → output_cb -----
++                            reconfig_data_format(intermediate_cb, reduce_result_cb);
++                            pack_reconfig_data_format(output_cb);
++                            mul_bcast_cols_init(intermediate_cb, reduce_result_cb);
++                            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
++                                const uint32_t tiles_in_block =
++                                    (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
++                                cb_intermediate.wait_front(block_size);
++                                cb_output.reserve_back(block_size);
++                                tile_regs_acquire();
++                                for (uint32_t i = 0; i < tiles_in_block; i++) {
++                                    mul_tiles_bcast_cols(intermediate_cb, reduce_result_cb, i, 0, i);
++                                }
++                                tile_regs_commit();
++                                tile_regs_wait();
++                                for (uint32_t i = 0; i < tiles_in_block; i++) {
++                                    pack_tile(i, output_cb);
++                                }
++                                tile_regs_release();
++                                cb_intermediate.pop_front(block_size);
++                                cb_output.push_back(block_size);
++                            }
++                            cb_reduce_result.pop_front(1);
++                        } else if constexpr (!block_major_post) {
+                             // ----- Sub-phase 1: x * (1/rms) → mul_rms_result_cb -----
+                             reconfig_data_format(input_cb, reduce_result_cb);
+                             pack_reconfig_data_format(mul_rms_result_cb);
+@@ -908,7 +965,7 @@ void kernel_main() {
+                     }
+                 }
+ 
+-                if constexpr (has_weight && !block_major_post) {
++                if constexpr (has_weight && !block_major_post && !prescale_weight) {
+                     // ----- Sub-phase 2: (x * 1/rms) * weight → mul_weight_result_cb -----
+                     // Broadcast weight (default): weight_cb holds num_tile_cols
+                     // row-broadcast tiles pushed once per worker; we use
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+index a65e6ea1a58..222acfa66f4 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+@@ -203,6 +203,79 @@ void kernel_main() {
+         }
+     };
+ 
++    // Trid-pipelined resident input pass. Each block_size-tile block is tagged with its own
++    // NoC read transaction id, so up to kInputLookahead blocks are in flight while we wait
++    // on (and push) only the oldest one: PRE still consumes block by block, but the DRAM
++    // round-trips overlap instead of serialising per block. When `with_weight`, the broadcast
++    // gamma face-row reads for each block are issued right behind its input reads (one
++    // shared trid), so gamma is resident as soon as the input row is, instead of a second
++    // per-block-barriered pass after it.
++    constexpr uint32_t kInputTrids = 14u;  // trids 1..14 for input blocks
++    constexpr uint32_t kWeightTrid = 15u;
++    constexpr uint32_t kInputLookahead = 4u;
++    constexpr uint32_t num_input_blocks = (num_tile_cols + block_size - 1u) / block_size;
++    auto read_input_pass_pipelined = [&](uint32_t input_tile_idx, bool with_weight) {
++        cb_input.reserve_back(num_tile_cols);
++        const uint32_t input_base = cb_input.get_write_ptr();
++        uint32_t weight_base = 0;
++        if (with_weight) {
++            cb_weight.reserve_back(weight_bcast_tiles);
++            weight_base = cb_weight.get_write_ptr();
++        }
++        for (uint32_t k = 0; k < num_input_blocks + kInputLookahead; k++) {
++            if (k < num_input_blocks) {
++                const uint32_t col_tile = k * block_size;
++                const uint32_t tiles_in_block =
++                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
++                const uint32_t trid = 1u + (k % kInputTrids);
++                for (uint32_t i = 0; i < tiles_in_block; i++) {
++                    noc.async_read<NocOptions::TXN_ID>(
++                        input_accessor,
++                        CoreLocalMem<uint32_t>(input_base + (col_tile + i) * input_tile_bytes),
++                        input_page_bytes,
++                        {.page_id = input_tile_idx + col_tile + i},
++                        {},
++                        {.trid = trid});
++                }
++                if (with_weight) {
++                    for (uint32_t i = 0; i < tiles_in_block; i++) {
++                        const uint32_t w_page = col_tile + i;
++                        const uint32_t w_dst = weight_base + w_page * weight_tile_bytes;
++                        noc.async_read<NocOptions::TXN_ID>(
++                            weight_accessor,
++                            CoreLocalMem<uint32_t>(w_dst),
++                            weight_face_row_bytes,
++                            {.page_id = w_page},
++                            {},
++                            {.trid = kWeightTrid});
++                        noc.async_read<NocOptions::TXN_ID>(
++                            weight_accessor,
++                            CoreLocalMem<uint32_t>(w_dst + weight_face_bytes),
++                            weight_face_row_bytes,
++                            {.page_id = w_page, .offset_bytes = weight_face_bytes},
++                            {},
++                            {.trid = kWeightTrid});
++                    }
++                }
++            }
++            if (k >= kInputLookahead) {
++                const uint32_t kb = k - kInputLookahead;
++                const uint32_t col_tile = kb * block_size;
++                const uint32_t tiles_in_block =
++                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
++                noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 1u + (kb % kInputTrids)});
++                cb_input.push_back(tiles_in_block);
++            }
++        }
++        if (with_weight) {
++            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = kWeightTrid});
++            cb_weight.push_back(weight_bcast_tiles);
++        }
++        // Restore the default read trid for the plain reads below / later kernels.
++        noc_async_read_set_trid(0, noc.get_noc_id());
++    };
++    static_assert(kInputLookahead < kInputTrids, "lookahead must not reuse an in-flight trid");
++
+     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
+         // Deep input read: issue the whole row's tiles, then ONE barrier, so
+         // num_tile_cols reads are in flight at once (keeps DRAM-read latency hidden;
+@@ -225,9 +298,19 @@ void kernel_main() {
+         //   DEFER_ALL: read nothing here; both passes are read below, after side inputs.
+         if constexpr (input_schedule == SCHED_INPUT_FIRST) {
+             DeviceZoneScopedN("R_INPUT");
+-            read_input_pass(input_tile_idx);
+             if constexpr (streaming_low_l1) {
++                read_input_pass(input_tile_idx);
+                 read_input_pass(input_tile_idx);  // POST re-read pass
++            } else {
++                // Broadcast gamma rides along with the first row's input (the deferred
++                // weight read below then sees weight_pushed and skips).
++                constexpr bool bcast_weight =
++                    (has_weight != 0) && (per_token_weight == 0) && (per_batch_weight == 0);
++                const bool with_weight = bcast_weight && !weight_pushed;
++                read_input_pass_pipelined(input_tile_idx, with_weight);
++                if (with_weight) {
++                    weight_pushed = true;
++                }
+             }
+         } else if constexpr (input_schedule == SCHED_SPLIT) {
+             DeviceZoneScopedN("R_INPUT");

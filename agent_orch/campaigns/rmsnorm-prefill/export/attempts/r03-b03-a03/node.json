@@ -1,0 +1,27 @@
+{
+  "node_id": "r03-b03-a03",
+  "campaign": "rmsnorm-prefill",
+  "round": 3,
+  "branch": 3,
+  "attempt": 3,
+  "parent": "r03-b03-a02",
+  "parent_commit": "37ef0f15a33fd8d617924b8af41b576051a46358",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T13:30:59+00:00",
+  "mechanism": "output drain round-robins its DRAM tile writes over the 4 unicast request VCs (0-3) instead of the single static VC 1, so a core keeps several 2 KB packets injecting at once",
+  "tags": [
+    "dataflow",
+    "writer-drain",
+    "noc-vc",
+    "injection-concurrency"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.3023,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T13:42:34+00:00"
+}

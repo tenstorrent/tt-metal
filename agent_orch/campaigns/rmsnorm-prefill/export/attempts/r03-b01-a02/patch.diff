@@ -1,0 +1,102 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
+index f6352a82f80..ac554a1feb5 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
+@@ -233,7 +233,7 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
+             tensor_args.persistent_output_buffer.has_value(),
+             "persistent_output_buffer is required for TP>1 with multiple workers (use_mux). "
+             "Allocate it as a regular device tensor with shape "
+-            "[1, 1, {}, {}], dtype=FLOAT32, layout=ROW_MAJOR, DRAM INTERLEAVED.",
++            "[1, 1, {}, {}], dtype=FLOAT32, layout=ROW_MAJOR, L1 INTERLEAVED.",
+             e_shape[2],
+             e_shape[3]);
+         const auto& buf = tensor_args.persistent_output_buffer.value();
+@@ -251,7 +251,7 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
+             buf.dtype());
+         TT_FATAL(
+             buf.memory_config().buffer_type() == expected.memory_config().buffer_type(),
+-            "persistent_output_buffer must be in DRAM");
++            "persistent_output_buffer must be in L1 (allocate it with create_stats_buffer)");
+         TT_FATAL(
+             buf.memory_config().memory_layout() == expected.memory_config().memory_layout(),
+             "persistent_output_buffer must be INTERLEAVED");
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+index a3a24601313..5103ca19600 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+@@ -341,10 +341,14 @@ DitFusedDistributedRmsnormSizing compute_sizing(
+ }
+ 
+ tt::tt_metal::TensorSpec make_stats_tensor_spec(const DitFusedDistributedRmsnormSizing& sizing) {
+-    // Row-major fp32 DRAM-interleaved scratch: one accessor page per packed stats page.
++    // Row-major fp32 L1-interleaved scratch: one accessor page per packed stats page.
+     // Kept in one place so the pre-alloc helper, compute_output_specs, and validate agree.
++    // L1, not DRAM: the fabric lands the gathered sticks in Tensix L1 and each worker's post-go
++    // stick read is an L1-to-L1 NoC read instead of a DRAM round trip on the AG-end critical path.
++    // The tensor is caller-owned and persistent, so its L1 region stays reserved (same address
++    // on every chip) exactly like the DRAM version.
+     ttnn::Shape stats_shape({1u, 1u, sizing.total_pages, TILE_HEIGHT * sizing.window_size});
+-    MemoryConfig stats_mem{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
++    MemoryConfig stats_mem{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
+     return tt::tt_metal::TensorSpec(
+         stats_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), stats_mem));
+ }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index 69e852ae967..21548a47c4a 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -12,8 +12,8 @@
+  *      contiguous) into its forwarder's packet_buf[round%2] + slot*128 B, then
+  *      increments the forwarder's fwd_arrival_sem.
+  *   2. Waits on its own go-sem (forwarder sets it once that round's ring gather
+- *      has landed in this chip's DRAM scratch).
+- *   3. Reads its ring_size gathered sticks from DRAM (page(d, forwarder, round)
++ *      has landed in this chip's L1-interleaved stats scratch).
++ *   3. Reads its ring_size gathered sticks from that scratch (page(d, forwarder, round)
+  *      + slot*128 B for each device d) into ROW 0 of stats_transposed_gathered_cb
+  *      tiles, and pushes them to compute (which FPU-adds + transpose_wh_dest).
+  *   4. Drains the row's output_cb tiles to the output tensor.
+@@ -228,7 +228,7 @@ void kernel_main() {
+             go_sem.wait_min(go_target);
+         }
+ 
+-        // ---- 3. read num_stats*ring gathered sticks from DRAM into ROW 0 of gathered tiles ----
++        // ---- 3. read num_stats*ring gathered sticks from the L1 scratch into ROW 0 of gathered tiles ----
+         // Device-major, stat-minor order: gathered tile (d*num_stats + s). For LayerNorm
+         // this yields interleaved [mean_d, var_d] per device, as combine_welford_partials wants.
+         cb_stats_gathered.reserve_back(num_stats * ring_size);
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm.hpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm.hpp
+index e1e7f7dd94e..0db4109b0d6 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm.hpp
+@@ -76,7 +76,7 @@ ttnn::Tensor dit_fused_distributed_layernorm(
+     // fallback. Build with ttnn.create_layer_norm_reciprocals.
+     const std::optional<const ttnn::Tensor>& reciprocals = std::nullopt);
+ 
+-// Allocate the persistent stats DRAM scratch buffer required by the all-gather path
++// Allocate the persistent stats L1 scratch buffer required by the all-gather path
+ // (TP>1, whole-row norm). Returns std::nullopt for shapes that don't all-gather (TP=1,
+ // cluster_axis == std::nullopt, or per_head_norm), which reduce locally and need no scratch.
+ // The caller must hold this tensor across launches (a mesh-coherent MeshBuffer, which the
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm_nanobind.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm_nanobind.cpp
+index 4ebd46cb4c5..eae328cab02 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm_nanobind.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm_nanobind.cpp
+@@ -87,7 +87,7 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
+     ttnn::bind_function<"dit_fused_distributed_rmsnorm_create_stats_buffer", "ttnn.experimental.">(
+         mod,
+         R"doc(
+-            Allocate the persistent stats DRAM scratch buffer required by
++            Allocate the persistent stats L1 scratch buffer required by
+             `dit_fused_distributed_rmsnorm`'s all-gather path (TP>1, whole-row norm).
+             Returns None when the op reduces locally and needs no scratch (TP=1,
+             `cluster_axis=None`, or per_head_norm). Hold the returned tensor across
+@@ -109,7 +109,7 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
+     ttnn::bind_function<"dit_fused_distributed_layernorm_create_stats_buffer", "ttnn.experimental.">(
+         mod,
+         R"doc(
+-            Allocate the persistent stats DRAM scratch buffer required by
++            Allocate the persistent stats L1 scratch buffer required by
+             `dit_fused_distributed_layernorm`'s all-gather path. LayerNorm transports 2
+             stats/token (mean+var) vs RMS's 1, so this buffer is 2x wider than the RMS
+             one — use this variant for LayerNorm ops. Returns None when the op needs no

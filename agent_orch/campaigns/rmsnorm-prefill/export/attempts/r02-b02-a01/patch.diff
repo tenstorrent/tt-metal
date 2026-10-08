@@ -1,0 +1,121 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+index fd1eb77c164..a3a24601313 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+@@ -1120,12 +1120,24 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         use_mux && has_weight && !per_token_weight && !per_batch_weight && !block_major_post;
+     reader_compile_args.push_back(static_cast<uint32_t>(writer_reads_weight));
+ 
++    // Path-aware dual-NoC output drain (AG worker writer, Blackhole, DRAM-interleaved output): the
++    // writer (BRISC, NoC1) sends part of its output tiles on NoC0, so both DM kernels on the worker
++    // cores run in dynamic-NoC mode (a core's DM kernels must share the noc mode). Each keeps its
++    // default NoC; only the writer's drain issues on the other one.
++    const bool dual_noc_drain = use_mux && device->arch() == tt::ARCH::BLACKHOLE &&
++                                output_tensor.buffer()->buffer_type() == BufferType::DRAM &&
++                                output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
++    DataMovementConfig reader_config = ReaderDataMovementConfig(reader_compile_args);
++    if (dual_noc_drain) {
++        reader_config.noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
++    }
++
+     KernelHandle reader_kernel_id = CreateKernel(
+         program,
+         "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
+         "dit_rmsnorm_fused_reader.cpp",
+         worker_core_set,
+-        ReaderDataMovementConfig(reader_compile_args));
++        reader_config);
+ 
+     // ------------------------------------------------------------------------
+     // Writer kernel (on worker cores). Two variants:
+@@ -1219,12 +1231,17 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         } else {
+             TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
+         }
++        writer_compile_args.push_back(static_cast<uint32_t>(dual_noc_drain));
++        DataMovementConfig writer_config = WriterDataMovementConfig(writer_compile_args);
++        if (dual_noc_drain) {
++            writer_config.noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
++        }
+         writer_kernel_id = CreateKernel(
+             program,
+             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
+             "dit_rmsnorm_fused_worker_writer.cpp",
+             worker_core_set,
+-            WriterDataMovementConfig(writer_compile_args));
++            writer_config);
+     }
+ 
+     // ------------------------------------------------------------------------
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index a273b67ae76..69e852ae967 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -85,6 +85,11 @@ constexpr uint32_t writer_reads_weight = get_compile_time_arg_val(WCB + 0);
+ constexpr uint32_t w_weight_cb = get_compile_time_arg_val(WCB + 1);
+ constexpr uint32_t w_weight_tiles = get_compile_time_arg_val(WCB + 2);
+ constexpr auto w_weight_args = TensorAccessorArgs<WCB + 3>();
++// Path-aware dual-NoC drain (Blackhole, DRAM-interleaved output, kernels in DM_DYNAMIC_NOC). The drain's
++// default NoC1 routes north then west, so the hot links are the westward rows next to the DRAM columns,
++// loaded by every core's wrap-around traffic. A destination whose NoC0 (east, then south) path is short goes
++// out on NoC0 on every other visit to its bank, unloading those links without crowding NoC0's own rows.
++constexpr uint32_t dual_noc_drain = get_compile_time_arg_val(w_weight_args.next_compile_time_args_offset());
+ 
+ void kernel_main() {
+     size_t arg_idx = 0;
+@@ -102,6 +107,8 @@ void kernel_main() {
+     const uint32_t weight_addr = get_common_arg_val<uint32_t>(3);
+ 
+     Noc noc;
++    // Second NoC for the dual-NoC drain (only used when dual_noc_drain; the writer's own NoC is 1).
++    Noc noc_alt(static_cast<uint8_t>(1u - noc.get_noc_id()));
+ 
+     CircularBuffer cb_packet(packet_cb);
+     CircularBuffer cb_output(output_cb);
+@@ -259,6 +266,10 @@ void kernel_main() {
+         // only NoC-write the valid tiles. Matches the drain-only writer's drain loop.
+         {
+             DeviceZoneScopedN("W_DRAIN");
++            // Banks 0-3 sit in the x=0 DRAM column and banks 4-7 in the x=9 column (BH channel == bank).
++            // The short eastward (NoC0) column is x=9 for cores left of it and x=0 (via the 16->0 wrap)
++            // for cores right of it.
++            const bool left_of_dram_col = my_x[0] < 9u;
+             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                 const uint32_t tiles_in_block =
+                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+@@ -270,16 +281,33 @@ void kernel_main() {
+                     const uint32_t t_col = c - h * head_dim_tiles;
+                     const uint32_t out_idx =
+                         h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
+-                    noc.async_write(
+-                        CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
++                    bool use_alt = false;
++                    if constexpr (dual_noc_drain != 0) {
++                        const uint32_t bank = out_idx % NUM_DRAM_BANKS;
++                        const bool east_col_bank = (bank >= NUM_DRAM_BANKS / 2) == left_of_dram_col;
++                        use_alt = east_col_bank && (((out_idx / NUM_DRAM_BANKS) & 1u) == 0u);
++                    }
++                    if (use_alt) {
++                        noc_alt.async_write(
++                            CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
++                    } else {
++                        noc.async_write(
++                            CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
++                    }
+                     rd += output_tile_bytes;
+                 }
+                 noc.async_writes_flushed();
++                if constexpr (dual_noc_drain != 0) {
++                    noc_alt.async_writes_flushed();
++                }
+                 cb_output.pop_front(block_size);
+             }
+         }
+     }
+     noc.async_write_barrier();
++    if constexpr (dual_noc_drain != 0) {
++        noc_alt.async_write_barrier();
++    }
+     // Reset the go-sem for the next invocation. Trace replay re-runs this kernel without
+     // re-running host-side semaphore init, so leaving a stale non-zero count here would let
+     // the next replay's very first go_sem.wait_min(1) fall straight through.

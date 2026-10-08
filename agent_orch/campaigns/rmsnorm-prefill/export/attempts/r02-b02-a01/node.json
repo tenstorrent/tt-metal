@@ -1,0 +1,29 @@
+{
+  "node_id": "r02-b02-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 2,
+  "branch": 2,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "a89c280e84a3365c989cf74462a7006b59d2daae",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T11:53:37+00:00",
+  "mechanism": "path-aware dual-NoC output drain: BRISC (DM_DYNAMIC_NOC) sends short-eastward DRAM destinations on NoC0 every other bank visit, the rest on its default NoC1",
+  "tags": [
+    "dataflow",
+    "writer-drain",
+    "dual-noc",
+    "noc-routing",
+    "dynamic-noc"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.2385,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 22,
+  "finished_at": "2026-10-08T12:11:19+00:00"
+}

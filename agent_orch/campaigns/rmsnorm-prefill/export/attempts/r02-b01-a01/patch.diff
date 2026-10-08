@@ -1,0 +1,60 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index a273b67ae76..85e3618164d 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -102,6 +102,19 @@ void kernel_main() {
+     const uint32_t weight_addr = get_common_arg_val<uint32_t>(3);
+ 
+     Noc noc;
++    // The other NoC, used by the drain only. Its owner (the reader, NCRISC) only issues reads,
++    // and they have completed before any output tile exists, so the write/ack counters on it are
++    // ours. Dedicated-NoC firmware syncs only this RISC's own NoC at kernel start, so sync the
++    // other one here.
++    const uint8_t other_noc_id = 1 - noc_index;
++    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
++        noc_local_state_init(other_noc_id);
++    }
++    Noc noc_other(other_noc_id);
++    // DRAM column x of the west banks (physical 0, translated 17); the east column is 9 / 18.
++    constexpr uint32_t kDramWestPhysX = 0u;
++    constexpr uint32_t kDramWestTranslatedX = 17u;
++    const bool core_left_half = my_x[0] < 9u;
+ 
+     CircularBuffer cb_packet(packet_cb);
+     CircularBuffer cb_output(output_cb);
+@@ -257,6 +270,11 @@ void kernel_main() {
+         // uses the per-block drain-only writer, worked while TP>1 wide hung). Compute
+         // pushes block_size-padded slots per col-block; wait/pop the full block, but
+         // only NoC-write the valid tiles. Matches the drain-only writer's drain loop.
++        // Each tile goes on the NoC whose x-direction reaches its DRAM column without wrapping:
++        // NoC0 runs east, NoC1 west. A left-half core (x < 9) sends west-column (x=0) pages on NoC1
++        // and east-column (x=9) pages on NoC0; a right-half core the opposite (NoC0 reaches x=0
++        // through the x=16->0 wrap). A position-blind split sends half of the NoC1 tiles around
++        // the whole row (r01-b02-a04 / r01-b03-a04).
+         {
+             DeviceZoneScopedN("W_DRAIN");
+             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+@@ -270,16 +288,22 @@ void kernel_main() {
+                     const uint32_t t_col = c - h * head_dim_tiles;
+                     const uint32_t out_idx =
+                         h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
+-                    noc.async_write(
++                    const uint32_t dst_x = NOC_UNICAST_ADDR_X(output_accessor.get_noc_addr(out_idx, 0, 0));
++                    const bool dst_west = (dst_x == kDramWestPhysX) || (dst_x == kDramWestTranslatedX);
++                    const bool want_noc1 = (dst_west == core_left_half);
++                    const Noc& wnoc = (want_noc1 == (noc_index == 1)) ? noc : noc_other;
++                    wnoc.async_write(
+                         CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
+                     rd += output_tile_bytes;
+                 }
+                 noc.async_writes_flushed();
++                noc_other.async_writes_flushed();
+                 cb_output.pop_front(block_size);
+             }
+         }
+     }
+     noc.async_write_barrier();
++    noc_other.async_write_barrier();
+     // Reset the go-sem for the next invocation. Trace replay re-runs this kernel without
+     // re-running host-side semaphore init, so leaving a stale non-zero count here would let
+     // the next replay's very first go_sem.wait_min(1) fall straight through.

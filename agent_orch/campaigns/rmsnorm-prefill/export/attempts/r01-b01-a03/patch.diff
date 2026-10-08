@@ -1,0 +1,150 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+index 70981eccf26..b414f793f6c 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+@@ -1108,12 +1108,17 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
+         TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
+     }
+-    // Recip LUT accessor (last). Dummy=input when the LUT is unused.
++    // Recip LUT accessor. Dummy=input when the LUT is unused.
+     if (use_recip_lut) {
+         TensorAccessorArgs(reciprocals.value().buffer()).append_to(reader_compile_args);
+     } else {
+         TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);  // dummy
+     }
++    // writer_gamma (last reader CT arg): on the AG path the worker writer (other RISC/NoC, idle
++    // until PRE ends) reads + pushes the broadcast weight row, so the reader's input stream
++    // carries no gamma traffic. Resident layouts only (streaming keeps the reader schedules).
++    const bool writer_gamma = use_mux && has_weight && !per_token_weight && !per_batch_weight && !streaming_low_l1;
++    reader_compile_args.push_back(static_cast<uint32_t>(writer_gamma));
+ 
+     KernelHandle reader_kernel_id = CreateKernel(
+         program,
+@@ -1206,6 +1211,14 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         } else {
+             TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
+         }
++        writer_compile_args.push_back(weight_cb_id);
++        writer_compile_args.push_back(static_cast<uint32_t>(writer_gamma));
++        writer_compile_args.push_back(weight_bcast_tiles);
++        if (writer_gamma) {
++            TensorAccessorArgs(weight.value().buffer()).append_to(writer_compile_args);
++        } else {
++            TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
++        }
+         writer_kernel_id = CreateKernel(
+             program,
+             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
+@@ -1394,7 +1407,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+     SetCommonRuntimeArgs(
+         program, reader_kernel_id, {input_addr, weight_addr, bias_addr, rope_cos_addr, rope_sin_addr, recip_addr_rt});
+     if (use_mux) {
+-        SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt, stats_dram_addr});
++        SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt, stats_dram_addr, weight_addr});
+     } else {
+         SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt});
+     }
+@@ -1561,6 +1574,7 @@ void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
+         writer_common[1] = trans_mat_addr;
+         if (!shared.forwarder_runtime_args.empty()) {
+             writer_common[2] = stats_dram_addr;
++            writer_common[3] = weight_addr;
+         }
+         // Forwarders read the stats DRAM scratch base at rt[0] and the out_ready
+         // GlobalSemaphore address at rt[1]. BOTH must be refreshed on cache hits:
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+index e2625b20468..64d9cdea20a 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+@@ -102,6 +102,10 @@ void kernel_main() {
+     constexpr auto rope_cos_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+     constexpr auto rope_sin_args = TensorAccessorArgs<rope_cos_args.next_compile_time_args_offset()>();
+     constexpr auto recip_args = TensorAccessorArgs<rope_sin_args.next_compile_time_args_offset()>();
++    // writer_gamma (CT, after the recip accessor): the worker WRITER (BRISC, other NoC) reads +
++    // pushes the broadcast weight row, so this reader never touches weight_cb and its input read
++    // carries no gamma traffic.
++    constexpr uint32_t writer_gamma = get_compile_time_arg_val(recip_args.next_compile_time_args_offset());
+ 
+     uint32_t arg_idx = 0;
+     const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
+@@ -176,7 +180,7 @@ void kernel_main() {
+     // until chunk 0's input rows are all pushed — the latency then hides
+     // behind chunk 0's pre compute + fabric mcast + fabric wait. Issued in
+     // `block_size`-sized pushes so the compute kernel can consume cumulatively.
+-    bool weight_pushed = (has_weight == 0);
++    bool weight_pushed = (has_weight == 0) || (writer_gamma != 0);
+     bool bias_pushed = (has_bias == 0);
+ 
+     // Read one full pass over a tile-row's input (num_tile_cols tiles) in block_size
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index 54e5b9ce885..291674264d6 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -78,6 +78,14 @@ constexpr uint32_t w_reduce_factor = get_compile_time_arg_val(SCB + 4);
+ constexpr uint32_t w_eps_bits = get_compile_time_arg_val(SCB + 5);
+ constexpr uint32_t w_fuse_rope = get_compile_time_arg_val(SCB + 6);
+ constexpr auto w_transmat_args = TensorAccessorArgs<SCB + 7>();
++// Broadcast gamma read on THIS RISC (writer_gamma): the [1, H] weight's face-row reads go out on
++// the writer's NoC at kernel start (it is otherwise idle until PRE pushes the stat tile), so the
++// reader's input stream carries no gamma traffic. weight accessor addr = common RT arg 3.
++constexpr uint32_t WCB = w_transmat_args.next_compile_time_args_offset();
++constexpr uint32_t weight_cb = get_compile_time_arg_val(WCB + 0);
++constexpr uint32_t writer_gamma = get_compile_time_arg_val(WCB + 1);
++constexpr uint32_t weight_bcast_tiles = get_compile_time_arg_val(WCB + 2);
++constexpr auto w_weight_args = TensorAccessorArgs<WCB + 3>();
+ 
+ void kernel_main() {
+     size_t arg_idx = 0;
+@@ -123,6 +131,35 @@ void kernel_main() {
+         w_reduce_factor,
+         static_cast<bool>(w_fuse_rope)>(w_eps_bits, TensorAccessor(w_transmat_args, transformation_mat_addr));
+ 
++    // Issue the whole gamma row now (no barrier): face_00 row 0 + face_01 row 0 per tile. Each
++    // worker starts at tile my_slot and wraps, so the workers read different gamma pages (DRAM
++    // banks) at any moment instead of all hitting the same page. Barriered + pushed after the
++    // first stick push below, so the AG start never waits on it.
++    bool weight_pending = false;
++    if constexpr (writer_gamma != 0) {
++        CircularBuffer cb_weight(weight_cb);
++        const auto weight_accessor = TensorAccessor(w_weight_args, get_common_arg_val<uint32_t>(3));
++        const uint32_t weight_tile_bytes = cb_weight.get_tile_size();
++        constexpr uint32_t kTileHW = 1024u;
++        const uint32_t weight_face_row_bytes = 16u * (weight_tile_bytes / kTileHW);
++        const uint32_t weight_face_bytes = 256u * (weight_tile_bytes / kTileHW);
++        cb_weight.reserve_back(weight_bcast_tiles);
++        const uint32_t weight_base = cb_weight.get_write_ptr();
++        uint32_t w_page = my_slot % weight_bcast_tiles;
++        for (uint32_t n = 0; n < weight_bcast_tiles; n++) {
++            const uint32_t dst = weight_base + w_page * weight_tile_bytes;
++            noc.async_read(weight_accessor, CoreLocalMem<uint32_t>(dst), weight_face_row_bytes, {.page_id = w_page}, {});
++            noc.async_read(
++                weight_accessor,
++                CoreLocalMem<uint32_t>(dst + weight_face_bytes),
++                weight_face_row_bytes,
++                {.page_id = w_page, .offset_bytes = weight_face_bytes},
++                {});
++            w_page = (w_page + 1 == weight_bcast_tiles) ? 0u : (w_page + 1);
++        }
++        weight_pending = true;
++    }
++
+     uint32_t go_target = 0;
+     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
+         const uint32_t round = tile_row - tile_row_start;
+@@ -162,6 +199,15 @@ void kernel_main() {
+             cb_stats_local.pop_front(num_stats);
+         }
+ 
++        if constexpr (writer_gamma != 0) {
++            if (weight_pending) {
++                CircularBuffer cb_weight(weight_cb);
++                noc.async_read_barrier();
++                cb_weight.push_back(weight_bcast_tiles);
++                weight_pending = false;
++            }
++        }
++
+         // ---- 2. wait for the forwarder's go (this round's ring gather landed) ----
+         {
+             DeviceZoneScopedN("W_AGWAIT");

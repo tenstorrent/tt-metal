@@ -1,0 +1,30 @@
+{
+  "node_id": "r02-b02-a02",
+  "campaign": "rmsnorm-prefill",
+  "round": 2,
+  "branch": 2,
+  "attempt": 2,
+  "parent": "r02-b02-a01",
+  "parent_commit": "bde758b46439938257d6de5308984588c84372c6",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T12:11:42+00:00",
+  "mechanism": "sum(x^2) per row as the diagonal of a DST-accumulated x*x^T matmul; BRISC gathers the 32 diagonal words into the stick, so the reduce + transpose leave the AG-start path",
+  "tags": [
+    "compute",
+    "pre-phase",
+    "ag-start",
+    "matmul",
+    "writer"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.2292,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T12:21:41+00:00"
+}

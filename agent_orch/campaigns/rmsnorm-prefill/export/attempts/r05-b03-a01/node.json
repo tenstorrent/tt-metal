@@ -1,0 +1,34 @@
+{
+  "node_id": "r05-b03-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 5,
+  "branch": 3,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "c5ff3191e686a9709a062e0c577e4459b86d8ddb",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T15:03:12+00:00",
+  "mechanism": "two-wave row pipeline on 40 half-row workers (2 cores per tile-row, 2 waves of 20, one forwarder round/page per wave): wave B's input read overlaps wave A's all-gather and wave A's drain overlaps wave B's all-gather",
+  "tags": [
+    "pipelining",
+    "waves",
+    "column-split",
+    "ag-overlap",
+    "forwarder",
+    "host-factory",
+    "dataflow"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5174,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_wave_forwarder.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 21,
+  "finished_at": "2026-10-08T15:23:59+00:00"
+}

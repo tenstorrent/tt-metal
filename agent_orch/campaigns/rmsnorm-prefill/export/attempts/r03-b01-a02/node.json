@@ -1,0 +1,32 @@
+{
+  "node_id": "r03-b01-a02",
+  "campaign": "rmsnorm-prefill",
+  "round": 3,
+  "branch": 1,
+  "attempt": 2,
+  "parent": "r03-b01-a01",
+  "parent_commit": "02afdac03633eda36211e5a5581ce220f85df2e1",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T13:17:59+00:00",
+  "mechanism": "land the all-gathered stat sticks in L1, not DRAM: the persistent stats scratch becomes an L1-interleaved mesh buffer, so the fabric writes and the worker post-go stick read are L1 transactions",
+  "tags": [
+    "ag-end",
+    "stats-scratch",
+    "l1",
+    "latency",
+    "host-factory"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.322,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm_nanobind.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T13:22:26+00:00"
+}

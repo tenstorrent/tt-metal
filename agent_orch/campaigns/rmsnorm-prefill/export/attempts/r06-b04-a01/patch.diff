@@ -1,0 +1,149 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index cb64f8d732e..7f2753543e0 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -343,40 +343,122 @@ void kernel_main() {
+             // The short eastward (NoC0) column is x=9 for cores left of it and x=0 (via the 16->0 wrap)
+             // for cores right of it.
+             const bool left_of_dram_col = my_x[0] < 9u;
+-            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+-                const uint32_t tiles_in_block =
+-                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+-                cb_output.wait_front(block_size);
+-                uint32_t rd = cb_output.get_read_ptr();
+-                for (uint32_t i = 0; i < tiles_in_block; i++) {
+-                    const uint32_t c = col_offset + col_tile + i;
++            if constexpr (col_split != 0 && dual_noc_drain != 0) {
++                // Congestion-aware, out-of-order dual-NoC drain. A tile whose bank is in the short-eastward
++                // DRAM column may go on either NoC (E); every other tile is NoC1-only (N). Before each issue
++                // we compare the two NoCs' posted-write backlogs (issued - sent by the NIU): N tiles go while
++                // NoC1 is no more backed up than NoC0, otherwise the next E tile goes on the less backed-up
++                // NoC. So a core whose NoC1 injection is starved on a hot DRAM-column row shifts its E tiles
++                // to NoC0 instead of blocking on NoC1's command buffer while NoC0 idles. output_cb holds two
++                // whole rows and this worker has one, so compute never waits on the drain: the ready window
++                // grows block by block without blocking, tiles are issued in any order, and one flush per NoC
++                // + one pop at the row end replace the per-block flush + pop.
++                constexpr uint32_t num_blocks = (num_tile_cols + block_size - 1u) / block_size;
++                const uint8_t noc1_id = noc.get_noc_id();
++                const uint8_t noc0_id = noc_alt.get_noc_id();
++                // Backlog = posted writes the NIU hasn't sent yet, +1 while the write command buffer is still
++                // busy with the last request (back-pressured injection).
++                auto backlog = [](uint8_t n) -> int32_t {
++                    const uint32_t issued =
++                        get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(n) +
++                        get_noc_counter_val<1 - proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(n);
++                    const int32_t unsent =
++                        static_cast<int32_t>(issued - NOC_STATUS_READ_REG(n, NIU_MST_POSTED_WR_REQ_SENT));
++                    return unsent + (noc_cmd_buf_ready(n, write_cmd_buf) ? 0 : 1);
++                };
++                auto out_index = [&](uint32_t t) -> uint32_t {
++                    const uint32_t c = col_offset + t;
+                     const uint32_t h = c / head_dim_tiles;
+                     const uint32_t t_col = c - h * head_dim_tiles;
+-                    const uint32_t out_idx =
+-                        h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
+-                    bool use_alt = false;
+-                    if constexpr (dual_noc_drain != 0) {
+-                        const uint32_t bank = out_idx % NUM_DRAM_BANKS;
+-                        const bool east_col_bank = (bank >= NUM_DRAM_BANKS / 2) == left_of_dram_col;
+-                        use_alt = east_col_bank && (((out_idx / NUM_DRAM_BANKS) & 1u) == 0u);
++                    return h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
++                };
++                auto is_e = [&](uint32_t t) -> bool {
++                    return ((out_index(t) % NUM_DRAM_BANKS) >= NUM_DRAM_BANKS / 2) == left_of_dram_col;
++                };
++                // One row per worker in a two-row CB: the row's tile slots are contiguous from the read ptr.
++                const uint32_t rd_base = cb_output.get_read_ptr();
++                uint32_t blocks_ready = 0;
++                uint32_t ready = 0;
++                uint32_t cur_n = 0;
++                uint32_t cur_e = 0;
++                for (uint32_t sent = 0; sent < num_tile_cols;) {
++                    while (blocks_ready < num_blocks && cb_output.pages_available_at_front((blocks_ready + 1u) * block_size)) {
++                        blocks_ready++;
++                    }
++                    ready = (blocks_ready * block_size < num_tile_cols) ? blocks_ready * block_size : num_tile_cols;
++                    while (cur_n < ready && is_e(cur_n)) {
++                        cur_n++;
++                    }
++                    while (cur_e < ready && !is_e(cur_e)) {
++                        cur_e++;
+                     }
+-                    // Posted (no write ack): the drain's per-core rate is capped downstream of issue
+-                    // (r03-b02-a03 / r03-b03-a03), so drop the ack round trip each 2 KB tile carries.
++                    const bool have_n = cur_n < ready;
++                    const bool have_e = cur_e < ready;
++                    if (!have_n && !have_e) {
++                        cb_output.wait_front((blocks_ready + 1u) * block_size);
++                        continue;
++                    }
++                    const int32_t b1 = backlog(noc1_id);
++                    const int32_t b0 = backlog(noc0_id);
++                    uint32_t t;
++                    bool use_alt;
++                    if (have_n && (b1 <= b0 || !have_e)) {
++                        t = cur_n++;
++                        use_alt = false;
++                    } else {
++                        t = cur_e++;
++                        use_alt = (b0 <= b1);
++                    }
++                    const uint32_t src = rd_base + t * output_tile_bytes;
+                     if (use_alt) {
+                         noc_alt.async_write<NocOptions::POSTED>(
+-                            CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
++                            CoreLocalMem<uint32_t>(src), output_accessor, output_page_bytes, {}, {.page_id = out_index(t)});
+                     } else {
+                         noc.async_write<NocOptions::POSTED>(
+-                            CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
++                            CoreLocalMem<uint32_t>(src), output_accessor, output_page_bytes, {}, {.page_id = out_index(t)});
+                     }
+-                    rd += output_tile_bytes;
++                    sent++;
+                 }
+                 // Departed from L1 before compute may reuse the slots.
+                 noc.async_writes_flushed<NocOptions::POSTED>();
+-                if constexpr (dual_noc_drain != 0) {
+-                    noc_alt.async_writes_flushed<NocOptions::POSTED>();
++                noc_alt.async_writes_flushed<NocOptions::POSTED>();
++                cb_output.pop_front(num_blocks * block_size);
++            } else {
++                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
++                    const uint32_t tiles_in_block =
++                        ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
++                    cb_output.wait_front(block_size);
++                    uint32_t rd = cb_output.get_read_ptr();
++                    for (uint32_t i = 0; i < tiles_in_block; i++) {
++                        const uint32_t c = col_offset + col_tile + i;
++                        const uint32_t h = c / head_dim_tiles;
++                        const uint32_t t_col = c - h * head_dim_tiles;
++                        const uint32_t out_idx =
++                            h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
++                        bool use_alt = false;
++                        if constexpr (dual_noc_drain != 0) {
++                            const uint32_t bank = out_idx % NUM_DRAM_BANKS;
++                            const bool east_col_bank = (bank >= NUM_DRAM_BANKS / 2) == left_of_dram_col;
++                            use_alt = east_col_bank && (((out_idx / NUM_DRAM_BANKS) & 1u) == 0u);
++                        }
++                        // Posted (no write ack): the drain's per-core rate is capped downstream of issue
++                        // (r03-b02-a03 / r03-b03-a03), so drop the ack round trip each 2 KB tile carries.
++                        if (use_alt) {
++                            noc_alt.async_write<NocOptions::POSTED>(
++                                CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
++                        } else {
++                            noc.async_write<NocOptions::POSTED>(
++                                CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
++                        }
++                        rd += output_tile_bytes;
++                    }
++                    // Departed from L1 before compute may reuse the slots.
++                    noc.async_writes_flushed<NocOptions::POSTED>();
++                    if constexpr (dual_noc_drain != 0) {
++                        noc_alt.async_writes_flushed<NocOptions::POSTED>();
++                    }
++                    cb_output.pop_front(block_size);
+                 }
+-                cb_output.pop_front(block_size);
+             }
+         }
+     }

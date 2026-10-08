@@ -1,0 +1,30 @@
+{
+  "node_id": "r02-b02-a03",
+  "campaign": "rmsnorm-prefill",
+  "round": 2,
+  "branch": 2,
+  "attempt": 3,
+  "parent": "r02-b02-a02",
+  "parent_commit": "2700ca64380f68556c5f58800b7ce4fcd6e6bd53",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T12:22:03+00:00",
+  "mechanism": "row-0 stat from ONE matmul: C = ones*S^T on the DST-accumulated S = sum x*x replaces reduce<SUM,ROW> + transpose; writer keeps its two 64 B face-row stick writes (no BRISC diagonal gather)",
+  "tags": [
+    "compute",
+    "pre-phase",
+    "ag-start",
+    "matmul",
+    "repair"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.2396,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 20,
+  "finished_at": "2026-10-08T12:28:53+00:00"
+}

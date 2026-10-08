@@ -1,0 +1,115 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+index c36d52a0b97..2a1daeae5f5 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+@@ -40,6 +40,9 @@
+ #include "api/compute/transpose.h"
+ #include "api/compute/transpose_dest.h"
+ #include "api/compute/experimental/add_rsqrt.h"
++#include "api/compute/compute_kernel_api.h"
++#include "api/compute/eltwise_binary_sfpu.h"
++#include "api/compute/tile_move_copy.h"
+ #include "api/dataflow/circular_buffer.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+ #include "tools/profiler/kernel_profiler.hpp"
+@@ -146,6 +149,18 @@ void kernel_main() {
+     // S is unpacked to tf32 in SrcA exactly as the reduce did, so the stat precision is unchanged.
+     constexpr bool mm_row_stat = (packed_ag_enabled != 0) && (streaming_low_l1 == 0) && (per_head_norm == 0);
+ 
++    // Blackhole, RoPE not fused: the worker writer builds an identity tile in the (otherwise unused) trans_mat CB.
++    // With it the resident PRE skips S entirely: DST[0] accumulates C = sum_k x_k * x_k^T with one HiFi4 matmul per
++    // input tile, so C[i][i] = sum_j x[i][j]^2. An fp32 SFPU multiply by the identity (DST[1]) keeps the diagonal and
++    // the SFPU column sum moves it to row 0 (col sum of a diagonal matrix = its diagonal): the same row-0 stick,
++    // packed once, with no S pack -> L1 -> unpack -> ones*S^T matmul hop on the AG-start path.
++#ifdef ARCH_BLACKHOLE
++    constexpr bool ident_from_writer = (packed_ag_enabled != 0) && (fuse_rope == 0);
++#else
++    constexpr bool ident_from_writer = false;
++#endif
++    constexpr bool diag_row_stat = ident_from_writer && mm_row_stat;
++
+     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
+ 
+     compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_cb, transformation_mat_cb, rotated_input_cb);
+@@ -278,7 +293,44 @@ void kernel_main() {
+                 {  // single row per iteration (chunk size is 1)
+                     constexpr uint32_t row_base = 0u;
+ 
+-                    for (uint32_t g = 0; g < pre_groups_per_row; g++) {
++#ifdef ARCH_BLACKHOLE
++                    if constexpr (diag_row_stat) {
++                        // Identity -> DST[1] and the matmul init run before the first input block lands.
++                        cb_transformation_mat.wait_front(1);
++                        pack_reconfig_data_format(stats_transposed_local_cb);
++                        PACK((llk_pack_reconfig_l1_acc(0)));
++                        copy_init(transformation_mat_cb);
++                        tile_regs_acquire();
++                        copy_tile(transformation_mat_cb, 0, 1);
++                        reconfig_data_format(input_cb, input_cb);
++                        matmul_init(input_cb, input_cb, /*transpose=*/1);
++                        // DST[0] += x_k * x_k^T per tile (matmul accumulates; DST is zeroed on release).
++                        for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
++                            const uint32_t tiles_in_block =
++                                ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
++                            const uint32_t need = col_tile + tiles_in_block;
++                            if (need > input_tiles_waited) {
++                                cb_input.wait_front(need);
++                                input_tiles_waited = need;
++                            }
++                            for (uint32_t i = 0; i < tiles_in_block; i++) {
++                                matmul_tiles(input_cb, input_cb, col_tile + i, col_tile + i, 0);
++                            }
++                        }
++                        // diag(C) -> row 0: mask with the identity, then column-sum into row 0 (fp32 SFPU).
++                        mul_binary_tile_init();
++                        mul_binary_tile(0, 1, 0);
++                        sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
++                        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
++                        tile_regs_commit();
++                        cb_stats_transposed_local.reserve_back(1);
++                        tile_regs_wait();
++                        pack_tile(0, stats_transposed_local_cb);
++                        tile_regs_release();
++                        cb_stats_transposed_local.push_back(1);
++                    }
++#endif
++                    for (uint32_t g = 0; g < (diag_row_stat ? 0u : pre_groups_per_row); g++) {
+                         const uint32_t group_base = row_base + g * pre_group_width;
+ 
+                         reconfig_data_format(input_cb, input_cb);
+@@ -1335,4 +1387,8 @@ void kernel_main() {
+     if constexpr (fuse_rope) {
+         cb_transformation_mat.pop_front(1);
+     }
++    if constexpr (ident_from_writer) {
++        cb_transformation_mat.wait_front(1);  // streaming PRE pushes it too but never reads it
++        cb_transformation_mat.pop_front(1);
++    }
+ }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index ca660e1d5bf..52d934baa75 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -137,6 +137,22 @@ void kernel_main() {
+         w_transmat_cb,
+         w_reduce_factor,
+         static_cast<bool>(w_fuse_rope)>(w_eps_bits, TensorAccessor(w_transmat_args, transformation_mat_addr));
++#ifdef ARCH_BLACKHOLE
++    // RMS without fused RoPE: the trans_mat CB is free, so it carries the bf16 identity tile that compute's
++    // diagonal row-stat PRE masks x*x^T with (diagonal = face_00 element 17*i and face_11 element 768 + 17*i).
++    if constexpr (num_stats == 1 && w_fuse_rope == 0) {
++        CircularBuffer cb_ident(w_transmat_cb);
++        cb_ident.reserve_back(1);
++        noc.async_write_zeros(cb_ident, cb_ident.get_tile_size());
++        noc.write_zeros_l1_barrier();
++        volatile tt_l1_ptr uint16_t* ident = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_ident.get_write_ptr());
++        for (uint32_t i = 0; i < 16; i++) {
++            ident[17u * i] = 0x3F80u;  // bf16 1.0
++            ident[768u + 17u * i] = 0x3F80u;
++        }
++        cb_ident.push_back(1);
++    }
++#endif
+ 
+     // ---- push my num_stats sticks for `round` into the forwarder's packet_buf, inc arrival ----
+     // Each stat occupies a 128 B sub-stick at dst + s*128 (mean then variance for

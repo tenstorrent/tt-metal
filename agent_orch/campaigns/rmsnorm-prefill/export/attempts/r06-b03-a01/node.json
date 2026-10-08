@@ -1,0 +1,33 @@
+{
+  "node_id": "r06-b03-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 6,
+  "branch": 3,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "a49989332977fa672a4f5a3c520b6ef43657d533",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T15:52:26+00:00",
+  "mechanism": "uneven two-wave row split: wave A takes 9 of 20 tile-rows (18 workers) and wave B 11 (22 workers), so A reads, gathers and drains earlier and its drain ends before B's starts instead of the two drains overlapping; wave-A workers gate 1-2 wave-B readers, forwarder counts per-wave slots",
+  "tags": [
+    "waves",
+    "work-split",
+    "load-balance",
+    "ag-pipeline",
+    "forwarder",
+    "host-factory",
+    "reader"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5512,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_wave_forwarder.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T16:02:08+00:00"
+}

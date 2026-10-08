@@ -1,0 +1,12 @@
+{
+  "round": 2,
+  "policy": "v1",
+  "beta": 0.6,
+  "W": 4,
+  "R": 4,
+  "reason": "campaign defaults (1 earlier round(s); no wider/deeper plan in support)",
+  "round_root": "dream/rmsnorm-prefill/n/r01-b04-a04",
+  "round_root_commit": "a89c280e84a3365c989cf74462a7006b59d2daae",
+  "max_steps": 30,
+  "started_at": "2026-10-08T11:53:33+00:00"
+}

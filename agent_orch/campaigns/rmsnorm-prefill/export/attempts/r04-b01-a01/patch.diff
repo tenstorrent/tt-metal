@@ -1,0 +1,99 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index 69e852ae967..813aa2430b5 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -175,9 +175,13 @@ void kernel_main() {
+ 
+     bool first_stick_pushed = false;
+ 
+-    // Whole gamma row under ONE barrier: face_00 row 0 + face_01 row 0 per tile (the rest of
+-    // a [1,H] TILE page is padding). Each worker starts at a different page so the workers
+-    // don't all hit the same DRAM bank at once. Compute waits on weight_cb cumulatively.
++    // Gamma face_00 row 0 + face_01 row 0 per tile (the rest of a [1,H] TILE page is padding),
++    // streamed to compute in chunks of NUM_DRAM_BANKS pages: each chunk's reads carry their own
++    // read trid, and a chunk is pushed kGammaLookahead chunks behind the issue front, so compute's
++    // x*gamma pre-pass (cumulative per-block weight_cb wait) starts as soon as PRE ends instead
++    // of after the last gamma page lands (the issue loop is ~50 ns/read, ~5.5 us at H=7168/4).
++    // Within a chunk each worker starts at a different page (one page per bank per chunk), so
++    // the workers don't all hit the same DRAM bank at once.
+     if constexpr (writer_reads_weight != 0) {
+         DeviceZoneScopedN("W_GAMMA");
+         CircularBuffer cb_weight(w_weight_cb);
+@@ -186,30 +190,59 @@ void kernel_main() {
+         const uint32_t weight_datum_bytes = weight_tile_bytes / 1024u;    // bf16 2 B / fp32 4 B
+         const uint32_t weight_face_row_bytes = 16u * weight_datum_bytes;  // FACE_WIDTH
+         const uint32_t weight_face_bytes = 256u * weight_datum_bytes;     // FACE_HW
+-        cb_weight.reserve_back(w_weight_tiles);
+-        const uint32_t weight_base = cb_weight.get_write_ptr();
+-        uint32_t w_page = tile_row_start % w_weight_tiles;
+-        for (uint32_t n = 0; n < w_weight_tiles; n++) {
+-            const uint32_t w_dst = weight_base + w_page * weight_tile_bytes;
+-            noc.async_read(
+-                weight_accessor, CoreLocalMem<uint32_t>(w_dst), weight_face_row_bytes, {.page_id = w_page}, {});
+-            noc.async_read(
+-                weight_accessor,
+-                CoreLocalMem<uint32_t>(w_dst + weight_face_bytes),
+-                weight_face_row_bytes,
+-                {.page_id = w_page, .offset_bytes = weight_face_bytes},
+-                {});
+-            w_page = (w_page + 1 == w_weight_tiles) ? 0u : (w_page + 1);
+-            // Don't let the gamma issue loop gate the AG start: if PRE has already pushed the
+-            // first row's stat, push the stick now (write barrier only, the reads stay in flight).
++        constexpr uint32_t kGammaChunk = NUM_DRAM_BANKS;
++        constexpr uint32_t kGammaTrids = 4u;  // read trids 1..4 on this RISC's NoC (BRISC only)
++        constexpr uint32_t kGammaLookahead = 2u;
++        static_assert(kGammaLookahead < kGammaTrids, "lookahead must not reuse an in-flight trid");
++        constexpr uint32_t kFaceRowMaxBytes = 64u;  // fp32 face row; one NoC packet
++        constexpr uint32_t num_gamma_chunks = (w_weight_tiles + kGammaChunk - 1u) / kGammaChunk;
++        const uint32_t rot = tile_row_start % kGammaChunk;
++        // Don't let the gamma issue loop gate the AG start: if PRE has already pushed the
++        // first row's stat, push the stick now (write barrier only, the reads stay in flight).
++        auto poll_stick = [&]() {
+             if (!first_stick_pushed && tile_row_start < tile_row_end &&
+                 cb_stats_local.pages_available_at_front(num_stats)) {
+                 push_stick(0);
+                 first_stick_pushed = true;
+             }
++        };
++        cb_weight.reserve_back(w_weight_tiles);
++        const uint32_t weight_base = cb_weight.get_write_ptr();
++        for (uint32_t k = 0; k < num_gamma_chunks + kGammaLookahead; k++) {
++            if (k < num_gamma_chunks) {
++                const uint32_t chunk_start = k * kGammaChunk;
++                const uint32_t chunk_pages =
++                    (w_weight_tiles - chunk_start >= kGammaChunk) ? kGammaChunk : (w_weight_tiles - chunk_start);
++                // Sticky tag: every read below (plain one-packet reads) is counted under this trid.
++                noc_async_read_set_trid(1u + (k % kGammaTrids), noc.get_noc_id());
++                uint32_t j = rot % chunk_pages;
++                for (uint32_t n = 0; n < chunk_pages; n++) {
++                    const uint32_t w_page = chunk_start + j;
++                    const uint32_t w_dst = weight_base + w_page * weight_tile_bytes;
++                    noc.async_read<NocOptions::DEFAULT, kFaceRowMaxBytes>(
++                        weight_accessor, CoreLocalMem<uint32_t>(w_dst), weight_face_row_bytes, {.page_id = w_page}, {});
++                    noc.async_read<NocOptions::DEFAULT, kFaceRowMaxBytes>(
++                        weight_accessor,
++                        CoreLocalMem<uint32_t>(w_dst + weight_face_bytes),
++                        weight_face_row_bytes,
++                        {.page_id = w_page, .offset_bytes = weight_face_bytes},
++                        {});
++                    j = (j + 1 == chunk_pages) ? 0u : (j + 1);
++                    poll_stick();
++                }
++            }
++            if (k >= kGammaLookahead) {
++                const uint32_t kb = k - kGammaLookahead;
++                const uint32_t kb_start = kb * kGammaChunk;
++                const uint32_t kb_pages =
++                    (w_weight_tiles - kb_start >= kGammaChunk) ? kGammaChunk : (w_weight_tiles - kb_start);
++                noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 1u + (kb % kGammaTrids)});
++                cb_weight.push_back(kb_pages);
++            }
++            poll_stick();
+         }
+-        noc.async_read_barrier();
+-        cb_weight.push_back(w_weight_tiles);
++        // Restore the default read trid for the plain reads below.
++        noc_async_read_set_trid(0, noc.get_noc_id());
+     }
+ 
+     uint32_t go_target = 0;

@@ -1,0 +1,28 @@
+{
+  "node_id": "r04-b04-a03",
+  "campaign": "rmsnorm-prefill",
+  "round": 4,
+  "branch": 4,
+  "attempt": 3,
+  "parent": "r04-b04-a02",
+  "parent_commit": "c5ff3191e686a9709a062e0c577e4459b86d8ddb",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T14:23:33+00:00",
+  "mechanism": "position-aware input-read depth: workers left of the x=9 DRAM column keep 6 trid blocks (24 tiles) of input reads in flight instead of 4, so the slow side's read and stick push stop gating F_COLLECT",
+  "tags": [
+    "reader",
+    "read-depth",
+    "load-balance",
+    "ag-start",
+    "noc-position"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.3949,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T14:42:22+00:00"
+}

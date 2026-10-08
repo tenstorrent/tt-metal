@@ -1,0 +1,35 @@
+{
+  "node_id": "r05-b04-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 5,
+  "branch": 4,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "c5ff3191e686a9709a062e0c577e4459b86d8ddb",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T15:03:14+00:00",
+  "mechanism": "two-round half-row pipeline: each of the 20 workers takes one column half of two rows in two forwarder rounds (stock forwarder, 20 sticks/round), so round 0's all-gather overlaps round 1's read and round 0's POST/drain overlaps round 1's all-gather",
+  "tags": [
+    "schedule",
+    "pipelining",
+    "ag-overlap",
+    "col-split",
+    "rounds",
+    "compute-order",
+    "writer",
+    "reader",
+    "host-factory"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.1939,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 20,
+  "finished_at": "2026-10-08T15:22:49+00:00"
+}

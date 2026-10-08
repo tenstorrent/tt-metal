@@ -1,0 +1,27 @@
+{
+  "node_id": "r01-b01-a04",
+  "campaign": "rmsnorm-prefill",
+  "round": 1,
+  "branch": 1,
+  "attempt": 4,
+  "parent": "r01-b01-a03",
+  "parent_commit": "44c8c3a18d898e6f1308a2f2abf77869fa94263c",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T11:37:13+00:00",
+  "mechanism": "accumulate sum(x^2) in fp32 DST via the ELWMUL dest-MAC under one acquire per row, so PRE packs once per row instead of an L1-acc fp32 pack per tile",
+  "tags": [
+    "compute",
+    "pre-phase",
+    "dst-accumulation",
+    "pack-reduction"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.2042,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp"
+  ],
+  "build_seconds": 21,
+  "eval_seconds": 25,
+  "finished_at": "2026-10-08T11:42:51+00:00"
+}

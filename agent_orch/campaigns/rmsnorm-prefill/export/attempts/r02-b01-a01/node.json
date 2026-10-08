@@ -1,0 +1,28 @@
+{
+  "node_id": "r02-b01-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 2,
+  "branch": 1,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "a89c280e84a3365c989cf74462a7006b59d2daae",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T11:53:35+00:00",
+  "mechanism": "route each output tile on the NoC with the short (non-wrapping) x-path to its DRAM column: left-half cores send west-bank tiles on NoC1, right-half cores send east-bank tiles on NoC1, BRISC issues both",
+  "tags": [
+    "dataflow",
+    "writer-drain",
+    "dual-noc",
+    "noc-routing",
+    "dram-column"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.1058,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 21,
+  "eval_seconds": 37,
+  "finished_at": "2026-10-08T12:07:11+00:00"
+}

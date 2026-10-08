@@ -1,0 +1,49 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+index 0c7a0894451..39e72bca1d1 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+@@ -279,6 +279,12 @@ void kernel_main() {
+ 
+                         cb_pre_intermediate.reserve_back(1);
+ 
++                        // DST-accumulated sum of squares: ELWMUL is a dest MAC (dst += a*b; the
++                        // HiFi phases rely on it) and dest is zeroed on release, so squaring every
++                        // tile of the group into DST slot 0 under ONE acquire leaves sum_k x_k**2 in
++                        // fp32 DST. One pack per group instead of an L1-accumulating fp32 pack per
++                        // tile, which bounded PRE at ~125 ns/tile.
++                        tile_regs_acquire();
+                         for (uint32_t col_tile = 0; col_tile < pre_group_width; col_tile += block_size) {
+                             const uint32_t tiles_in_block = ((pre_group_width - col_tile) >= block_size)
+                                                                 ? block_size
+@@ -294,24 +300,17 @@ void kernel_main() {
+                                 input_tiles_waited = need;
+                             }
+ 
+-                            tile_regs_acquire();
+-                            for (uint32_t i = 0; i < block_size && col_tile + i < pre_group_width; i++) {
++                            for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                 const uint32_t abs_idx = group_base + col_tile + i;
+-                                mul_tiles(input_cb, input_cb, abs_idx, abs_idx, i);
+-                            }
+-                            tile_regs_commit();
+-
+-                            tile_regs_wait();
+-                            for (uint32_t i = 0; i < block_size && col_tile + i < pre_group_width; i++) {
+-                                pack_tile<true>(i, pre_intermediate_cb, 0);
+-                                if (col_tile == 0 && i == 0) {
+-                                    PACK((llk_pack_reconfig_l1_acc(1)));
+-                                }
++                                mul_tiles(input_cb, input_cb, abs_idx, abs_idx, 0);
+                             }
+-                            tile_regs_release();
+                         }
++                        tile_regs_commit();
++
++                        tile_regs_wait();
++                        pack_tile(0, pre_intermediate_cb);
++                        tile_regs_release();
+                         cb_pre_intermediate.push_back(1);
+-                        PACK((llk_pack_reconfig_l1_acc(0)));
+ 
+                         // Row/head reduce → 1 stat tile. SUM (col 0 = sum). Post phase
+                         // divides by H_full or head_dim via the AVG scalar.

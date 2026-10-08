@@ -1,0 +1,165 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+index b5ddf5b128f..528c5ad0790 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+@@ -7,6 +7,7 @@
+ #include <algorithm>
+ #include <bit>
+ #include <cstdlib>
++#include <limits>
+ #include <map>
+ #include <string>
+ #include <vector>
+@@ -520,16 +521,16 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+     // second kernel group (num_tile_cols is a CT arg), and a 2-group program measured a ~40-50 us
+     // device-side dispatch gap per op on BH vs ~0.5 us for one group.
+     uint32_t col_splits = 1u;
++    constexpr uint32_t kColSplitMaxRowTiles = 64u;  // keeps the resident (non-streaming) layout
++    const bool col_split_ok = use_mux && !args.per_head_norm && args.norm_type == DitFusedNormType::RMS &&
++                              !fuse_rope && num_heads_per_device == 1u && !per_token_weight && !per_token_bias &&
++                              !per_batch_weight && !per_batch_bias && num_tile_cols <= kColSplitMaxRowTiles &&
++                              num_tile_rows == num_workers;  // one row per row-worker
+     {
+         // Single AG round, so no multi-round DRAM/fabric knee applies; spreading the output drain
+         // over more grid rows shortens the NoC-congested write tail.
+         constexpr uint32_t kColSplitCoreBudget = 80u;
+         constexpr uint32_t kColSplitMinSliceTiles = 4u;
+-        constexpr uint32_t kColSplitMaxRowTiles = 64u;  // keeps the resident (non-streaming) layout
+-        const bool col_split_ok = use_mux && !args.per_head_norm && args.norm_type == DitFusedNormType::RMS &&
+-                                  !fuse_rope && num_heads_per_device == 1u && !per_token_weight && !per_token_bias &&
+-                                  !per_batch_weight && !per_batch_bias && num_tile_cols <= kColSplitMaxRowTiles &&
+-                                  num_tile_rows == num_workers;  // one row per row-worker
+         if (col_split_ok) {
+             const uint32_t budget = std::min<uint32_t>(kColSplitCoreBudget, max_cores - num_forwarders);
+             const uint32_t max_splits =
+@@ -1508,6 +1509,40 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+             SetCommonRuntimeArgs(program, g.writer, {output_addr, trans_mat_addr_rt});
+         }
+     }
++    // DRAM bank de-phasing: each core walks its column slice starting at a rotated position
++    // col_rot (reader input + gamma, compute in CB order, writer output all use the same order),
++    // so at each step the worker cores hit different interleaved DRAM banks (page % num_banks)
++    // instead of marching in phase. Without it, a row stride and slice starts that are multiples
++    // of num_banks put every core on the same bank (h4096: all 80 cores on one bank per step).
++    // Greedy per core: pick the rotation that minimises the bank collisions with the cores
++    // already placed, summed over all slice positions. Only the plain column-split-eligible
++    // layout (no RoPE / per-token / per-batch affine, resident POST) is rotated.
++    std::vector<uint32_t> col_rot(num_worker_cores, 0u);
++    if (col_split_ok && slice_cols_extra == 0u && !streaming_low_l1 && !block_major_post) {
++        const uint32_t num_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
++        const uint32_t slice = slice_cols_lo;
++        std::vector<uint32_t> bank_load(slice * num_banks, 0u);
++        for (uint32_t ic = 0; ic < num_worker_cores; ic++) {
++            const uint32_t tile_row_start = std::min((ic / col_splits) * num_tile_rows_per_worker, num_tile_rows);
++            const uint32_t base = tile_row_start * num_tile_cols + slice_start(ic % col_splits);
++            uint32_t best_rot = 0u;
++            uint32_t best_cost = std::numeric_limits<uint32_t>::max();
++            for (uint32_t rot = 0; rot < slice; rot++) {
++                uint32_t cost = 0u;
++                for (uint32_t p = 0; p < slice; p++) {
++                    cost += bank_load[p * num_banks + (base + (p + rot) % slice) % num_banks];
++                }
++                if (cost < best_cost) {
++                    best_cost = cost;
++                    best_rot = rot;
++                }
++            }
++            col_rot[ic] = best_rot;
++            for (uint32_t p = 0; p < slice; p++) {
++                bank_load[p * num_banks + (base + (p + best_rot) % slice) % num_banks]++;
++            }
++        }
++    }
+     for (uint32_t ic = 0; ic < num_worker_cores; ic++) {
+         const auto& core = worker_cores[ic];
+         const auto& g = slice_groups[worker_slice_group(ic)];
+@@ -1518,8 +1553,9 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+         const uint32_t tile_row_end = std::min(tile_row_start + num_tile_rows_per_worker, num_tile_rows);
+         const uint32_t this_core_rows = tile_row_end - tile_row_start;
+ 
+-        // RT 2/3: first column tile of this slice + the full row stride (tiles).
+-        SetRuntimeArgs(program, g.reader, core, {tile_row_start, tile_row_end, col_start, num_tile_cols});
++        // RT 2/3/4: first column tile of this slice, the full row stride (tiles), and the
++        // slice walk rotation (DRAM bank de-phasing).
++        SetRuntimeArgs(program, g.reader, core, {tile_row_start, tile_row_end, col_start, num_tile_cols, col_rot[ic]});
+ 
+         std::vector<uint32_t> writer_rt_args = {tile_row_start, tile_row_end};
+         if (use_mux) {
+@@ -1534,6 +1570,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+             // x/y, then (leader only) the followers' NoC x/y to relay the go-sem to.
+             const auto& leader_v = worker_virtual[i * col_splits];
+             writer_rt_args.push_back(col_start);
++            writer_rt_args.push_back(col_rot[ic]);
+             writer_rt_args.push_back(j);
+             writer_rt_args.push_back(static_cast<uint32_t>(leader_v.x));
+             writer_rt_args.push_back(static_cast<uint32_t>(leader_v.y));
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+index 282756dcbc4..63c44c7ee64 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+@@ -115,6 +115,14 @@ void kernel_main() {
+     // row_stride_tiles is the full local row width (== num_tile_cols when unsplit).
+     const uint32_t col_start = get_arg_val<uint32_t>(arg_idx++);
+     const uint32_t row_stride_tiles = get_arg_val<uint32_t>(arg_idx++);
++    // DRAM bank de-phasing: CB position p of the slice holds column (p + col_rot) % num_tile_cols,
++    // for the input and the broadcast weight/bias alike (compute is position-agnostic; the
++    // writer applies the same mapping). 0 on every layout that isn't rotated by the factory.
++    const uint32_t col_rot = get_arg_val<uint32_t>(arg_idx++);
++    auto rotated_col = [&](uint32_t p) -> uint32_t {
++        const uint32_t c = p + col_rot;
++        return (c >= num_tile_cols) ? (c - num_tile_cols) : c;
++    };
+     const uint32_t recip_addr = get_common_arg_val<uint32_t>(5);
+ 
+     Noc noc;
+@@ -198,7 +206,7 @@ void kernel_main() {
+                     input_accessor,
+                     CoreLocalMem<uint32_t>(input_wr_ptr),
+                     input_page_bytes,
+-                    {.page_id = input_tile_idx + col_tile + i},
++                    {.page_id = input_tile_idx + rotated_col(col_tile + i)},
+                     {});
+                 input_wr_ptr += input_tile_bytes;
+             }
+@@ -361,7 +369,7 @@ void kernel_main() {
+                     uint32_t weight_wr_ptr = cb_weight.get_write_ptr();
+                     for (uint32_t i = 0; i < tiles_in_block; i++) {
+                         // face_00 row 0 + face_01 row 0, as for the per-batch read above.
+-                        const uint32_t w_page = col_start + col_tile + i;
++                        const uint32_t w_page = col_start + rotated_col(col_tile + i);
+                         noc.async_read(
+                             weight_accessor,
+                             CoreLocalMem<uint32_t>(weight_wr_ptr),
+@@ -391,7 +399,7 @@ void kernel_main() {
+                     uint32_t bias_wr_ptr = cb_bias.get_write_ptr();
+                     for (uint32_t i = 0; i < tiles_in_block; i++) {
+                         // face_00 row 0 + face_01 row 0, as for the per-batch read above.
+-                        const uint32_t b_page = col_start + col_tile + i;
++                        const uint32_t b_page = col_start + rotated_col(col_tile + i);
+                         noc.async_read(
+                             bias_accessor,
+                             CoreLocalMem<uint32_t>(bias_wr_ptr),
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index dbedfbd87d4..c8f3e2e92fd 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -100,6 +100,9 @@ void kernel_main() {
+     // row. peer_idx 0 = row leader (talks to the forwarder), >0 = follower. The leader gets its
+     // followers' NoC coords to relay the forwarder's go.
+     const uint32_t col_start = get_arg_val<uint32_t>(arg_idx++);
++    // DRAM bank de-phasing: output_cb position p is column (p + col_rot) % num_tile_cols of the
++    // slice (the reader fetched input/weight in that order).
++    const uint32_t col_rot = get_arg_val<uint32_t>(arg_idx++);
+     const uint32_t peer_idx = get_arg_val<uint32_t>(arg_idx++);
+     const uint32_t leader_x = get_arg_val<uint32_t>(arg_idx++);
+     const uint32_t leader_y = get_arg_val<uint32_t>(arg_idx++);
+@@ -267,7 +270,8 @@ void kernel_main() {
+                 cb_output.wait_front(block_size);
+                 uint32_t rd = cb_output.get_read_ptr();
+                 for (uint32_t i = 0; i < tiles_in_block; i++) {
+-                    const uint32_t c = col_start + col_tile + i;
++                    const uint32_t p = col_tile + i + col_rot;
++                    const uint32_t c = col_start + ((p >= num_tile_cols) ? (p - num_tile_cols) : p);
+                     const uint32_t h = c / head_dim_tiles;
+                     const uint32_t t_col = c - h * head_dim_tiles;
+                     const uint32_t out_idx =

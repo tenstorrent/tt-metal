@@ -1,0 +1,29 @@
+{
+  "node_id": "r05-b01-a03",
+  "campaign": "rmsnorm-prefill",
+  "round": 5,
+  "branch": 1,
+  "attempt": 3,
+  "parent": "r05-b01-a02",
+  "parent_commit": "23b50df8e7f4b63f694fafd8b4ce84b0aef31519",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T15:41:31+00:00",
+  "mechanism": "un-gate the 4-wave stick push from the streamed-gamma trid barrier: the W_GAMMA loop spins on is_read_trid_flushed and keeps polling for the row-0 stat, so each wave pushes as its PRE finishes instead of when gamma lands after the whole input stream",
+  "tags": [
+    "writer",
+    "ag-start",
+    "gamma-read",
+    "waves",
+    "repair",
+    "transaction-id"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4661,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 21,
+  "finished_at": "2026-10-08T15:44:44+00:00"
+}

@@ -1,0 +1,386 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+index a3a24601313..5cd1a6dcd9c 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+@@ -1280,8 +1280,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         fwd_ct.insert(fwd_ct.end(), backward_route.begin(), backward_route.end());
+         forwarder_kernel_ids[f] = CreateKernel(
+             program,
+-            "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_norm_common/kernels/dataflow/"
+-            "dit_fused_norm_forwarder.cpp",
++            "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
++            "dit_rmsnorm_forwarder.cpp",
+             CoreRangeSet({CoreRange(forwarder_cores[f], forwarder_cores[f])}),
+             WriterDataMovementConfig(fwd_ct));
+     }
+@@ -1483,6 +1483,26 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+             }
+             fwd_rt.push_back(pc);
+         }
++        // Go multicast rectangles: the group's workers split into runs of consecutive logical x
++        // in one logical row (row-major order). Each run is one NoC rectangle; increasing logical
++        // x maps to increasing virtual x, and the non-Tensix columns in between are skipped by
++        // the NoC's broadcast-disable config, so the rectangle reaches exactly the run's cores.
++        std::vector<uint32_t> go_rects;
++        for (uint32_t w = group_begin; w < group_end;) {
++            uint32_t e = w;
++            while (e + 1 < group_end && worker_cores[e + 1].y == worker_cores[w].y &&
++                   worker_cores[e + 1].x == worker_cores[e].x + 1) {
++                e++;
++            }
++            go_rects.push_back(static_cast<uint32_t>(worker_virtual[w].x));
++            go_rects.push_back(static_cast<uint32_t>(worker_virtual[w].y));
++            go_rects.push_back(static_cast<uint32_t>(worker_virtual[e].x));
++            go_rects.push_back(static_cast<uint32_t>(worker_virtual[e].y));
++            go_rects.push_back(e - w + 1);
++            w = e + 1;
++        }
++        fwd_rt.push_back(static_cast<uint32_t>(go_rects.size() / 5));
++        fwd_rt.insert(fwd_rt.end(), go_rects.begin(), go_rects.end());
+         fwd_rt.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
+         if (forward_fabric_node_id.has_value()) {
+             tt::tt_fabric::append_fabric_connection_rt_args(
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+index 0beef931212..1ced445b858 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+@@ -41,6 +41,7 @@
+ #include "api/compute/transpose_dest.h"
+ #include "api/dataflow/circular_buffer.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
++#include "tools/profiler/kernel_profiler.hpp"
+ 
+ void kernel_main() {
+     // === Compile-time args ===
+@@ -480,6 +481,7 @@ void kernel_main() {
+                                     // round-trip — then *1/H + eps + rsqrt on col 0. One transpose
+                                     // total (deferred past the sum) vs one per gathered tile.
+                                     cb_stats_transposed_gathered.wait_front(stats_tiles_cols);
++                                    DeviceZoneScopedN("C_COMB");
+                                     reconfig_data_format(stats_transposed_gathered_cb, stats_transposed_gathered_cb);
+                                     pack_reconfig_data_format(reduce_result_cb);
+                                     tile_regs_acquire();
+@@ -559,6 +561,7 @@ void kernel_main() {
+                         // reduce_result_cb stays resident for that loop to consume).
+                         if constexpr (prescale_weight) {
+                             // ----- Single POST pass: (x * gamma) * (1/rms) → output_cb -----
++                            DeviceZoneScopedN("C_POST");
+                             reconfig_data_format(intermediate_cb, reduce_result_cb);
+                             pack_reconfig_data_format(output_cb);
+                             mul_bcast_cols_init(intermediate_cb, reduce_result_cb);
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_forwarder.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_forwarder.cpp
+new file mode 100644
+index 00000000000..f7b8c492a85
+--- /dev/null
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_forwarder.cpp
+@@ -0,0 +1,240 @@
++// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
++//
++// SPDX-License-Identifier: Apache-2.0
++
++/*
++ * Coalescing fabric forwarder for the fused distributed RMSNorm stats all-gather.
++ *
++ * RMSNorm-only copy of dit_fused_norm_common/kernels/dataflow/dit_fused_norm_forwarder.cpp
++ * (GroupNorm keeps that one). Consumer: DitFusedDistributedRmsnormMeshWorkloadFactory.
++ * Difference: step 4 releases a fully-present group with one go-sem multicast per
++ * worker row-segment instead of one unicast inc per worker (runtime args below).
++ *
++ * One forwarder core per fabric link (num_forwarders = min(num_links,
++ * num_workers)). It owns a contiguous GROUP of worker cores on this chip and
++ * holds the fwd+bwd fabric connections for its link. Its job: coalesce the
++ * group's tiny 128 B stat "sticks" into one large fabric packet per row-round
++ * and ring-multicast it, instead of each worker sending its own tiny 128 B
++ * (≈3% utilization) fabric packet.
++ *
++ * Per row-round r (r in [0, max_rounds)):
++ *   1. Wait for present_count(r) arrivals on fwd_arrival_sem — each present
++ *      worker NoC-writes its 128 B stick into packet_buf[r%2] + slot*128 B and
++ *      increments the sem. (present_count shrinks on the last, remainder round;
++ *      the present set is always a contiguous slot prefix [0, present_count).)
++ *   2. Ring-multicast packet_buf[r%2][0 : present_count(r)*128 B] to the DRAM
++ *      scratch page (my_device, forwarder, r) on every chip (local write + fwd
++ *      + bwd fabric), fusing an atomic_inc on every PEER forwarder's
++ *      out_ready_sem (flush=true: payload committed before the inc is seen).
++ *   3. Wait out_ready_sem >= cumulative (ring_size-1) incs for this round —
++ *      i.e. all peer forwarders' packets have landed in THIS chip's DRAM.
++ *   4. On-chip: release the group's go-sem so they read their gathered sticks
++ *      from DRAM and run POST for row r. When every group worker is present the
++ *      forwarder multicasts go = r+1 (each such worker was present in every
++ *      earlier round, so r+1 is exactly its cumulative go count) to each worker
++ *      row-segment rectangle; a remainder round falls back to a unicast inc per
++ *      present worker, so absent workers (possibly finished) are never written.
++ *
++ * Symmetric across devices (TP shards features, so every chip has identical
++ * num_tile_rows / partition), so the per-round present set + inc counts match
++ * on both ends — no deadlock, no orphaned waits. Remote packets land in DRAM
++ * (workers read them), so the forwarder holds only its outbound packet_buf.
++ */
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++#include "api/dataflow/noc.h"
++#include "api/dataflow/circular_buffer.h"
++#include "api/dataflow/noc_semaphore.h"
++#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
++#include "tt_metal/fabric/hw/inc/noc_addr.h"
++#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
++#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
++#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
++#include "tools/profiler/kernel_profiler.hpp"
++
++// ---------- compile-time args ----------
++constexpr uint32_t packet_cb = get_compile_time_arg_val(0);  // outbound packet buffer (unit_packet x2)
++constexpr uint32_t reserved_packet_header_cb = get_compile_time_arg_val(1);
++constexpr uint32_t ring_size = get_compile_time_arg_val(2);
++constexpr uint32_t my_device_index = get_compile_time_arg_val(3);
++constexpr uint32_t num_targets_forward = get_compile_time_arg_val(4);
++constexpr uint32_t num_targets_backward = get_compile_time_arg_val(5);
++constexpr uint32_t forwarder_index = get_compile_time_arg_val(6);  // which link/group on this chip
++constexpr uint32_t num_forwarders = get_compile_time_arg_val(7);
++constexpr uint32_t group_size = get_compile_time_arg_val(8);    // workers in this forwarder's group
++constexpr uint32_t max_rounds = get_compile_time_arg_val(9);    // ceil(num_tile_rows / num_workers)
++constexpr uint32_t stick_bytes = get_compile_time_arg_val(10);  // 128 (32 fp32)
++constexpr uint32_t num_chunks_per_device =
++    get_compile_time_arg_val(11);  // = num_forwarders * max_rounds (pages/device)
++// Grid-uniform semaphore ids (created on the whole core grid -> same L1 addr on
++// every worker + forwarder core, so no cross-core address args are needed).
++constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(12);  // workers inc; forwarder waits
++constexpr uint32_t go_sem_id = get_compile_time_arg_val(13);       // forwarder incs; workers wait
++constexpr auto stats_dram_args = TensorAccessorArgs<14>();
++constexpr auto forward_route =
++    ccl_routing_utils::get_line_multicast_route_info_from_args<stats_dram_args.next_compile_time_args_offset()>();
++constexpr auto backward_route = ccl_routing_utils::get_line_multicast_route_info_from_args<
++    stats_dram_args.next_compile_time_args_offset() + ccl_routing_utils::num_line_multicast_args>();
++
++void kernel_main() {
++    size_t arg_idx = 0;
++    const uint32_t stats_dram_addr = get_arg_val<uint32_t>(arg_idx++);
++    // out_ready_sem: a GlobalSemaphore — PEER forwarders fuse-inc it over fabric
++    // (same L1 addr on every chip). Local pointer for the wait + reset.
++    const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(arg_idx++);
++    // group worker NoC coords (x,y) x group_size, then present_count[r]. Sized by
++    // the constexpr CT args (group_size / max_rounds) so large-row configs (e.g.
++    // wan self_sp4_N18944 -> 592 tile-rows / 32 workers = 19 rounds) don't overflow
++    // a fixed bound -> -Werror=aggressive-loop-optimizations at JIT time.
++    uint32_t worker_x[group_size];
++    uint32_t worker_y[group_size];
++    for (uint32_t i = 0; i < group_size; i++) {
++        worker_x[i] = get_arg_val<uint32_t>(arg_idx++);
++        worker_y[i] = get_arg_val<uint32_t>(arg_idx++);
++    }
++    uint32_t present_count[max_rounds];
++    for (uint32_t r = 0; r < max_rounds; r++) {
++        present_count[r] = get_arg_val<uint32_t>(arg_idx++);
++    }
++    // Go multicast rectangles covering exactly this group's workers: count, then per
++    // rectangle (x_start, y_start, x_end, y_end, num_cores) in virtual coords, start <= end.
++    const uint32_t num_go_rects = get_arg_val<uint32_t>(arg_idx++);
++    const uint32_t go_rects_arg_idx = arg_idx;
++    arg_idx += 5u * num_go_rects;
++    Noc noc;
++    CircularBuffer cb_pkt_hdr(reserved_packet_header_cb);
++    CircularBuffer cb_packet(packet_cb);
++    Semaphore<> fwd_arrival_sem(arrival_sem_id);
++    Semaphore<> group_go_sem(go_sem_id);
++
++    // Fabric connection (fwd+bwd) for this forwarder's link.
++    auto fabric_connection =
++        FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
++            arg_idx);
++
++    cb_pkt_hdr.reserve_back(1);
++    auto pkt_hdr_fwd_addr = cb_pkt_hdr.get_write_ptr();
++    cb_pkt_hdr.push_back(1);
++    cb_pkt_hdr.reserve_back(1);
++    auto pkt_hdr_bwd_addr = cb_pkt_hdr.get_write_ptr();
++    cb_pkt_hdr.push_back(1);
++    volatile PACKET_HEADER_TYPE* pkt_hdr_fwd = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_fwd_addr);
++    volatile PACKET_HEADER_TYPE* pkt_hdr_bwd = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_bwd_addr);
++    // The hop-only header initializer is a no-op for 2D fabric headers.
++    // Use the shared CCL helper to initialize the correct route for either fabric.
++    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_fwd, forward_route);
++    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_bwd, backward_route);
++    // Guard open_finish on is_logically_connected(), matching the canonical CCL writers
++    // (all_reduce_async / all_to_all_async): a forwarder with no live fabric connection
++    // (e.g. a line-topology edge or a degenerate ring) must not run the open handshake.
++    if (fabric_connection.is_logically_connected()) {
++        fabric_connection.open_finish();
++    }
++
++    const auto stats_dram = TensorAccessor(stats_dram_args, stats_dram_addr);
++    const uint32_t packet_base = cb_packet.get_read_ptr();         // packet_cb is depth-2; we index by r%2 manually
++    const uint32_t packet_tile_bytes = cb_packet.get_tile_size();  // = unit_packet_bytes (one slot)
++
++    const uint64_t out_ready_sem_noc = safe_get_noc_addr(my_x[0], my_y[0], out_ready_sem_addr, 0);
++    volatile tt_l1_ptr uint32_t* out_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_addr);
++
++    uint32_t cumulative_arrivals = 0;
++    uint32_t cumulative_incs = 0;
++    for (uint32_t r = 0; r < max_rounds; r++) {
++        const uint32_t pc = present_count[r];
++        // Zero-present round (uneven num_tile_rows / num_workers split, e.g. 38
++        // tile-rows over 32 workers -> later forwarders have no worker on the
++        // remainder round). Symmetric across devices, so every peer forwarder_index
++        // also has pc==0 and skips: no arrivals, no fabric packet, no peer incs, no
++        // workers to release. A 0-byte fused fabric write would NOT transmit its
++        // atomic inc, so peers would wait forever -> must skip the round entirely.
++        if (pc == 0) {
++            continue;
++        }
++        const uint32_t packet_addr = packet_base + (r & 1u) * packet_tile_bytes;
++
++        {
++            DeviceZoneScopedN("F_COLLECT");
++            // Workers write their stick into packet_addr + slot*stick_bytes and inc.
++            cumulative_arrivals += pc;
++            fwd_arrival_sem.wait_min(cumulative_arrivals);
++        }
++
++        // Page (my_device, forwarder, r) — same DRAM address on every chip.
++        const uint32_t page_idx = my_device_index * num_chunks_per_device + forwarder_index * max_rounds + r;
++        const uint64_t dram_dest = tt::tt_fabric::linear::addrgen_detail::get_noc_address(stats_dram, page_idx, 0);
++        {
++            DeviceZoneScopedN("F_FABRIC");
++            size_t l1_read_addr = packet_addr;
++            fused_write_atomic_and_advance_local_read_address_for_fabric_write(
++                dram_dest,
++                pkt_hdr_fwd,
++                pkt_hdr_bwd,
++                fabric_connection,
++                l1_read_addr,
++                pc * stick_bytes,
++                out_ready_sem_noc,
++                /*val=*/1,
++                /*flush=*/true);
++            cumulative_incs += (ring_size - 1);
++            if (cumulative_incs > 0) {
++                // out_ready is a GlobalSemaphore.
++                noc_semaphore_wait_min(out_ready_sem_ptr, cumulative_incs);
++            }
++            noc.async_write_barrier();
++            noc.async_atomic_barrier();
++        }
++
++        // Release this round's POST. The present set is the contiguous slot prefix
++        // [0, pc) (earlier workers get the ceil row count).
++        if (pc == group_size && num_go_rects > 0) {
++            // Whole group present: my own copy of the grid-uniform go-sem is unused, so
++            // stage r+1 there and multicast it to every worker row-segment at once.
++            group_go_sem.set(r + 1);
++            const bool noc1 = noc.get_noc_id() == 1;
++            for (uint32_t k = 0; k < num_go_rects; k++) {
++                const uint32_t a = go_rects_arg_idx + 5u * k;
++                const uint32_t x0 = get_arg_val<uint32_t>(a + 0);
++                const uint32_t y0 = get_arg_val<uint32_t>(a + 1);
++                const uint32_t x1 = get_arg_val<uint32_t>(a + 2);
++                const uint32_t y1 = get_arg_val<uint32_t>(a + 3);
++                const uint32_t n = get_arg_val<uint32_t>(a + 4);
++                // NoC1 multicast rectangles run from the bottom-right corner.
++                if (noc1) {
++                    group_go_sem.set_multicast(noc, x1, y1, x0, y0, n);
++                } else {
++                    group_go_sem.set_multicast(noc, x0, y0, x1, y1, n);
++                }
++            }
++            // The multicasts read the staged value from L1: keep it until they are acked.
++            noc.async_write_barrier();
++        } else {
++            for (uint32_t i = 0; i < pc; i++) {
++                group_go_sem.up(noc, worker_x[i], worker_y[i], 1);
++            }
++            noc.async_atomic_barrier();
++        }
++    }
++
++    // Reset BOTH op-managed semaphores this core owns to 0 so a traced replay
++    // starts clean. Trace capture/replay does NOT re-run the host-side semaphore
++    // init that eager launches get, so any sem left non-zero accumulates across
++    // replays. out_ready (peers fuse-inc it) and fwd_arrival (workers inc it) both
++    // live on this forwarder core; the workers reset their own go-sem. Without the
++    // arrival reset the forwarder's fwd_arrival_sem.wait_min(cumulative) passes
++    // instantly on replay (sem already high) -> it stops waiting for the workers'
++    // sticks -> races (fast-but-wrong) or desyncs into a hang. (go/out_ready already
++    // reset.)
++    //
++    // out_ready is a GlobalSemaphore.
++    noc_semaphore_set(out_ready_sem_ptr, 0);
++    fwd_arrival_sem.set(0);
++    group_go_sem.set(0);
++    // Guard close on is_logically_connected(), matching the canonical CCL writers.
++    if (fabric_connection.is_logically_connected()) {
++        fabric_connection.close_start();
++        fabric_connection.close_finish();
++    }
++}
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index 69e852ae967..891748d501c 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -221,37 +221,43 @@ void kernel_main() {
+             push_stick(round);
+         }
+ 
+-        // ---- 2. wait for the forwarder's go (this round's ring gather landed) ----
+-        {
+-            DeviceZoneScopedN("W_AGWAIT");
+-            go_target += 1;
+-            go_sem.wait_min(go_target);
+-        }
+-
+-        // ---- 3. read num_stats*ring gathered sticks from DRAM into ROW 0 of gathered tiles ----
++        // ---- 2. stage the gather read, then wait for the forwarder's go ----
+         // Device-major, stat-minor order: gathered tile (d*num_stats + s). For LayerNorm
+         // this yields interleaved [mean_d, var_d] per device, as combine_welford_partials wants.
++        // The CB reserve and the stick NoC addresses don't depend on the go, so they are
++        // resolved while waiting and only the reads themselves follow the go.
+         cb_stats_gathered.reserve_back(num_stats * ring_size);
+         const uint32_t gbase = cb_stats_gathered.get_write_ptr();
++        uint64_t stick_src[ring_size * num_stats];
+         for (uint32_t d = 0; d < ring_size; d++) {
+             const uint32_t page_idx = d * num_chunks_per_device + my_forwarder_index * max_rounds + round;
+             for (uint32_t s = 0; s < num_stats; s++) {
+-                const uint32_t tile_dst = gbase + (d * num_stats + s) * gathered_tile_bytes;
+-                const uint32_t src_off = my_slot * stick_bytes + s * kStatBytes;
+-                noc.async_read(  // -> face_00 row0
+-                    stats_dram,
+-                    CoreLocalMem<uint32_t>(tile_dst),
+-                    kFaceRowBytes,
+-                    {.page_id = page_idx, .offset_bytes = src_off},
+-                    {});
+-                noc.async_read(  // -> face_01 row0
+-                    stats_dram,
+-                    CoreLocalMem<uint32_t>(tile_dst + kFace01Off),
+-                    kFaceRowBytes,
+-                    {.page_id = page_idx, .offset_bytes = src_off + kFaceRowBytes},
+-                    {});
++                stick_src[d * num_stats + s] =
++                    stats_dram.get_noc_addr(page_idx, my_slot * stick_bytes + s * kStatBytes, noc.get_noc_id());
+             }
+         }
++        {
++            DeviceZoneScopedN("W_AGWAIT");
++            go_target += 1;
++            go_sem.wait_min(go_target);
++        }
++
++        // ---- 3. read num_stats*ring gathered sticks from DRAM into ROW 0 of gathered tiles ----
++        for (uint32_t t = 0; t < ring_size * num_stats; t++) {
++            const uint32_t tile_dst = gbase + t * gathered_tile_bytes;
++            noc.async_read(  // -> face_00 row0
++                PrecomposedUnicastEndpoint{},
++                CoreLocalMem<uint32_t>(tile_dst),
++                kFaceRowBytes,
++                {.noc_addr = stick_src[t]},
++                {});
++            noc.async_read(  // -> face_01 row0
++                PrecomposedUnicastEndpoint{},
++                CoreLocalMem<uint32_t>(tile_dst + kFace01Off),
++                kFaceRowBytes,
++                {.noc_addr = stick_src[t] + kFaceRowBytes},
++                {});
++        }
+         noc.async_read_barrier();
+         cb_stats_gathered.push_back(num_stats * ring_size);
+ 

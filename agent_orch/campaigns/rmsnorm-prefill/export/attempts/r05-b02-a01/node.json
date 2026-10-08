@@ -1,0 +1,30 @@
+{
+  "node_id": "r05-b02-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 5,
+  "branch": 2,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "c5ff3191e686a9709a062e0c577e4459b86d8ddb",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T15:03:11+00:00",
+  "mechanism": "PRE row stat as the diagonal of a DST-accumulated x*x^T matmul (HiFi4), moved to row 0 inside DST by an fp32 SFPU identity mask + SFPU column sum, replacing the ELWMUL x*x + S pack/unpack + ones*S^T matmul round trip",
+  "tags": [
+    "compute",
+    "pre-phase",
+    "ag-start",
+    "matmul",
+    "sfpu",
+    "dst-resident"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4078,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T15:22:50+00:00"
+}

@@ -1,0 +1,57 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
+index f6352a82f80..ec4d46115aa 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
+@@ -233,7 +233,7 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
+             tensor_args.persistent_output_buffer.has_value(),
+             "persistent_output_buffer is required for TP>1 with multiple workers (use_mux). "
+             "Allocate it as a regular device tensor with shape "
+-            "[1, 1, {}, {}], dtype=FLOAT32, layout=ROW_MAJOR, DRAM INTERLEAVED.",
++            "[1, 1, {}, {}], dtype=FLOAT32, layout=ROW_MAJOR, L1 INTERLEAVED.",
+             e_shape[2],
+             e_shape[3]);
+         const auto& buf = tensor_args.persistent_output_buffer.value();
+@@ -251,7 +251,7 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
+             buf.dtype());
+         TT_FATAL(
+             buf.memory_config().buffer_type() == expected.memory_config().buffer_type(),
+-            "persistent_output_buffer must be in DRAM");
++            "persistent_output_buffer must be in L1 (allocate it with the op's create_stats_buffer)");
+         TT_FATAL(
+             buf.memory_config().memory_layout() == expected.memory_config().memory_layout(),
+             "persistent_output_buffer must be INTERLEAVED");
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp
+index a47e6cf1cf5..7ce9c21d206 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp
+@@ -152,7 +152,7 @@ DitFusedDistributedRmsnormSizing compute_sizing(
+     const DitFusedDistributedRmsnormParams& args, const Tensor& input);
+ 
+ // Single source of truth for the persistent gathered-stats DRAM scratch spec:
+-// [1, 1, total_pages, TILE_HEIGHT * window_size], FLOAT32, ROW_MAJOR, DRAM INTERLEAVED.
++// [1, 1, total_pages, TILE_HEIGHT * window_size], FLOAT32, ROW_MAJOR, L1 INTERLEAVED.
+ // Used by the pre-alloc helper, compute_output_specs, and validate so the pre-allocated
+ // buffer, the op's expected spec, and the validation check cannot drift. Only meaningful
+ // on the all-gather path (sizing.use_mux; total_pages > 0).
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+index a3a24601313..d9c762d41de 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+@@ -341,10 +341,15 @@ DitFusedDistributedRmsnormSizing compute_sizing(
+ }
+ 
+ tt::tt_metal::TensorSpec make_stats_tensor_spec(const DitFusedDistributedRmsnormSizing& sizing) {
+-    // Row-major fp32 DRAM-interleaved scratch: one accessor page per packed stats page.
++    // Row-major fp32 L1-interleaved scratch: one accessor page per packed stats page.
+     // Kept in one place so the pre-alloc helper, compute_output_specs, and validate agree.
++    // L1, not DRAM: the gathered sticks are on the post-AG critical path twice -- every landing
++    // write (local + each peer's fused write+atomic, flush=true) is acked before the forwarder can
++    // release go, and each worker then reads its 2*ring_size 64 B face-rows back. An L1 bank round
++    // trip is much shorter than a DRAM one. Still a mesh-coherent MeshBuffer (same address and
++    // bank->core map on every chip), and the kernels address it through a TensorAccessor either way.
+     ttnn::Shape stats_shape({1u, 1u, sizing.total_pages, TILE_HEIGHT * sizing.window_size});
+-    MemoryConfig stats_mem{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
++    MemoryConfig stats_mem{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
+     return tt::tt_metal::TensorSpec(
+         stats_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), stats_mem));
+ }

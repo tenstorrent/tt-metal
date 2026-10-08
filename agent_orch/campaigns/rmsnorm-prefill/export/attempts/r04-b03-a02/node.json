@@ -1,0 +1,29 @@
+{
+  "node_id": "r04-b03-a02",
+  "campaign": "rmsnorm-prefill",
+  "round": 4,
+  "branch": 3,
+  "attempt": 2,
+  "parent": "r04-b03-a01",
+  "parent_commit": "1126a59fd2811559b210e8b5456812474408853c",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T14:15:43+00:00",
+  "mechanism": "stack r04-b04-a01's posted (no-ack) output-drain writes onto this node's ack-free stick-push handshake: AG-start push cut + drain per-tile ack cut together",
+  "tags": [
+    "combination",
+    "writer-drain",
+    "posted-writes",
+    "ag-start",
+    "writer",
+    "port"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.3906,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 21,
+  "finished_at": "2026-10-08T14:19:55+00:00"
+}

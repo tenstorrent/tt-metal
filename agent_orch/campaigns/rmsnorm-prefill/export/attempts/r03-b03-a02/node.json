@@ -1,0 +1,28 @@
+{
+  "node_id": "r03-b03-a02",
+  "campaign": "rmsnorm-prefill",
+  "round": 3,
+  "branch": 3,
+  "attempt": 2,
+  "parent": "r03-b03-a01",
+  "parent_commit": "4d7d05b948e869bb7fee870ecaaf07007c7d545b",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T13:17:59+00:00",
+  "mechanism": "PRE row stat straight out of the accumulating DST: fp32 transpose_dest + SFPU column-sum (sfpu_reduce<SUM,REDUCE_COL>) puts sum(x^2) per row into row 0 before the single pack, replacing the S pack -> L1 -> unpack -> ones*S^T matmul -> pack round trip",
+  "tags": [
+    "compute",
+    "pre-phase",
+    "ag-start",
+    "sfpu",
+    "dst-resident"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.312,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T13:25:26+00:00"
+}

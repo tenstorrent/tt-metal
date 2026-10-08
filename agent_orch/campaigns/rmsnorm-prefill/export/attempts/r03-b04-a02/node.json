@@ -1,0 +1,31 @@
+{
+  "node_id": "r03-b04-a02",
+  "campaign": "rmsnorm-prefill",
+  "round": 3,
+  "branch": 4,
+  "attempt": 2,
+  "parent": "r03-b04-a01",
+  "parent_commit": "2107e68747b757df0e7b7993b5f1cc58625886e2",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T13:17:59+00:00",
+  "mechanism": "two-wave AG pipeline: even workers read first, odd workers start as their neighbour's read lands; a forked forwarder gathers + releases each wave separately (16-bit per-wave sem fields), so wave A's AG overlaps wave B's read and B's AG overlaps A's drain",
+  "tags": [
+    "ag-pipeline",
+    "overlap",
+    "forwarder",
+    "dataflow",
+    "scheduling"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.244,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_wave_forwarder.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T13:30:43+00:00"
+}

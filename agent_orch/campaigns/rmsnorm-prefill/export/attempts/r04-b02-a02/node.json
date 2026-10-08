@@ -1,0 +1,29 @@
+{
+  "node_id": "r04-b02-a02",
+  "campaign": "rmsnorm-prefill",
+  "round": 4,
+  "branch": 2,
+  "attempt": 2,
+  "parent": "r04-b02-a01",
+  "parent_commit": "81cc779957582c1cd00e8c45063868474b645a2b",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T14:15:43+00:00",
+  "mechanism": "streamed forwarder multicast: peers' fused incs carry a per-source-device bit field in out_ready, so the forwarder multicasts each peer's gathered page to the worker rectangle as soon as it lands; only the last page + go remain after the final arrival",
+  "tags": [
+    "ag-release",
+    "forwarder",
+    "multicast",
+    "overlap",
+    "cross-chip-skew",
+    "semaphore-fields"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.3175,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_forwarder.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 20,
+  "finished_at": "2026-10-08T14:23:17+00:00"
+}

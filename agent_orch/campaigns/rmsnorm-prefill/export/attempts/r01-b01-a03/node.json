@@ -1,0 +1,30 @@
+{
+  "node_id": "r01-b01-a03",
+  "campaign": "rmsnorm-prefill",
+  "round": 1,
+  "branch": 1,
+  "attempt": 3,
+  "parent": "r01-b01-a02",
+  "parent_commit": "ebb10e0d9a18eb5d385b298ebcc433e85be664a4",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T11:28:50+00:00",
+  "mechanism": "read gamma on the idle writer RISC (BRISC/NoC0) at kernel start with per-worker rotated start tile, so the NCRISC trid input read carries no gamma traffic",
+  "tags": [
+    "dataflow",
+    "writer",
+    "gamma-read",
+    "dram-bank-spread",
+    "repair"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.1868,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 24,
+  "eval_seconds": 21,
+  "finished_at": "2026-10-08T11:33:22+00:00"
+}

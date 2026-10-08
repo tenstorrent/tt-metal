@@ -1,0 +1,308 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp
+index 7dc3a907da4..ba412b40124 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp
+@@ -151,7 +151,8 @@ struct DitFusedDistributedRmsnormSizing {
+     // of the page, slot j at dit_rmsnorm_wave_slot_offset(j) (fp32 tile row 0 layout). Shape-only, so the
+     // stats buffer spec agrees; create_at may still run the plain path (the page is just larger).
+     bool col_split_capable = false;
+-    uint32_t wave_slots = 0;  // sticks per wave (2 * rows of the larger wave)
++    uint32_t wave_slots = 0;    // sticks per wave region (2 * rows of the larger wave, B)
++    uint32_t wave_a_slots = 0;  // sticks in wave A (2 * dit_rmsnorm_wave_a_rows); wave B has the rest
+     uint32_t wave_span_bytes = 0;
+ };
+ 
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+index fdfcafb3530..dd7a56a96d6 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+@@ -5,6 +5,7 @@
+ #include "dit_fused_distributed_rmsnorm_program_factory.hpp"
+ 
+ #include <algorithm>
++#include <array>
+ #include <bit>
+ #include <cstdlib>
+ #include <map>
+@@ -59,6 +60,13 @@ constexpr uint32_t kGatherCbPageBytes = 64u;
+ constexpr uint32_t kWaveMaxSlots = 32u;
+ constexpr uint32_t kWavePairReadBytes = 1024u + 2u * 64u;
+ constexpr uint32_t dit_rmsnorm_wave_slot_offset(uint32_t slot) { return (slot / 16u) * 2048u + (slot % 16u) * 64u; }
++// Rows in wave A (the rest go to wave B). The read is aggregate-bound, so A's read end scales with its share,
++// and A's drain should finish before B's starts (equal waves overlapped their drains, which then ran at the
++// shared write rate from A's drain start). A slightly smaller first wave starts A's chain earlier.
++constexpr uint32_t dit_rmsnorm_wave_a_rows(uint32_t rows) {
++    const uint32_t a = (rows * 9u) / 20u;
++    return a == 0u ? 1u : a;
++}
+ // input_cb double-buffer depth (chunks): reader fills chunk N+1 while compute is in
+ // chunk N's post phase. 2 = one in flight + one filling.
+ constexpr uint32_t kInputCbChunks = 2u;
+@@ -343,21 +351,27 @@ DitFusedDistributedRmsnormSizing compute_sizing(
+         // formula page_size = TILE_HEIGHT * window_size * 4 == sticks_per_packet * stick_bytes.
+         s.window_size = sticks_per_packet * s.stats_per_token;
+         // Two-wave column split: one forwarder, one row per worker, RMS sticks, an even tile-col count,
+-        // an even row count, and room for 2 * rows workers + the forwarder. Each wave takes rows/2 rows;
+-        // each wave owns a span of the page holding 2 sticks per row in the tile-row-0 slot layout.
++        // an even row count, and room for 2 * rows workers + the forwarder. Wave A takes
++        // dit_rmsnorm_wave_a_rows rows and wave B the rest; each wave owns a span of the page holding 2 sticks
++        // per row in the tile-row-0 slot layout.
+         const auto grid = input.device()->compute_with_storage_grid_size();
+         const uint32_t num_tile_cols = W / TILE_WIDTH;
+-        const uint32_t wave_slots = 2u * tt::div_up(s.num_tile_rows, 2u);
++        const uint32_t wave_a_rows = dit_rmsnorm_wave_a_rows(s.num_tile_rows);
++        const uint32_t wave_b_rows = s.num_tile_rows > wave_a_rows ? s.num_tile_rows - wave_a_rows : 0u;
++        // Wave regions are sized for the larger wave B; each wave-A worker gates at most two wave-B readers.
++        const uint32_t wave_slots = 2u * std::max(wave_a_rows, wave_b_rows);
+         const uint32_t wave_span =
+             tt::round_up(dit_rmsnorm_wave_slot_offset(wave_slots - 1u) + kWavePairReadBytes - 64u, kGatherCbPageBytes);
+         s.col_split_capable = input.device()->arch() == tt::ARCH::BLACKHOLE && s.stats_per_token == 1u &&
+                               num_forwarders == 1u && max_rounds == 1u && s.num_workers == s.num_tile_rows &&
+                               s.num_tile_rows >= 4u && s.num_tile_rows % 2u == 0u && wave_slots <= kWaveMaxSlots && num_tile_cols % 2u == 0u &&
++                              wave_b_rows >= wave_a_rows && wave_b_rows <= 2u * wave_a_rows &&
+                               num_tile_cols >= 8u && args.ring_size <= 8u &&
+                               2u * s.num_tile_rows + 1u <= grid.x * grid.y &&
+                               wave_span <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+         if (s.col_split_capable) {
+             s.wave_slots = wave_slots;
++            s.wave_a_slots = 2u * wave_a_rows;
+             s.wave_span_bytes = wave_span;
+             s.window_size = std::max<uint32_t>(s.window_size, tt::div_up(2u * wave_span, TILE_HEIGHT * sizeof(float)));
+         }
+@@ -605,12 +619,55 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         const uint32_t e = std::min(s + num_tile_rows_per_worker, num_tile_rows);
+         return e - s;
+     };
+-    // Column split: worker i -> wave (i % 2), wave slot j = i / 2 -> (row j / 2 of the wave, column half j % 2).
+-    // Even/odd waves interleave over the grid so each wave spans every worker position. Wave A holds rows
+-    // [0, wave_a_rows), wave B the rest; a row's two halves are adjacent slots 2p / 2p+1.
+-    const uint32_t wave_a_rows = tt::div_up(num_tile_rows, 2u);
+-    auto split_wave = [&](uint32_t w) -> uint32_t { return w % 2u; };
+-    auto split_slot = [&](uint32_t w) -> uint32_t { return w / 2u; };
++    // Column split: worker i -> wave, wave slot j -> (row j / 2 of the wave, column half j % 2). Wave A holds
++    // rows [0, wave_a_rows) (wave_a_slots workers), wave B the rest; a row's two halves are adjacent slots
++    // 2p / 2p+1. The wave-A workers are spread evenly over the row-major workers so each wave
++    // spans every worker position. Each wave-B worker's read is gated by the nearest preceding wave-A worker
++    // (the first one if none precedes it), so a wave-A worker signals one or two partners.
++    const uint32_t wave_a_rows = split_sizing.wave_a_slots / 2u;
++    std::vector<uint32_t> split_wave_of(col_split ? num_workers : 0u, 0u);
++    std::vector<uint32_t> split_slot_of(col_split ? num_workers : 0u, 0u);
++    std::vector<std::vector<uint32_t>> split_partners(col_split ? num_workers : 0u);
++    if (col_split) {
++        const uint32_t n_a = split_sizing.wave_a_slots;
++        TT_FATAL(
++            n_a > 0u && n_a <= num_workers && num_workers - n_a <= split_sizing.wave_slots &&
++                num_workers - n_a <= 2u * n_a,
++            "dit_fused_distributed_rmsnorm: bad wave split {} / {}",
++            n_a,
++            num_workers - n_a);
++        // Wave-A workers sit at ceil(k * N / n_a), k < n_a: worker 0 is wave A and the gaps between them
++        // hold one or two wave-B workers (n_a <= N - n_a <= 2 * n_a).
++        std::vector<bool> is_wave_a(num_workers, false);
++        for (uint32_t k = 0; k < n_a; k++) {
++            is_wave_a[tt::div_up(k * num_workers, n_a)] = true;
++        }
++        uint32_t next_a = 0u, next_b = 0u;
++        int32_t last_a = -1;
++        std::vector<uint32_t> orphan_b;
++        for (uint32_t w = 0; w < num_workers; w++) {
++            const bool is_a = is_wave_a[w];
++            split_wave_of[w] = is_a ? 0u : 1u;
++            split_slot_of[w] = is_a ? next_a++ : next_b++;
++            if (is_a) {
++                last_a = static_cast<int32_t>(w);
++                for (const uint32_t b : orphan_b) {
++                    split_partners[w].push_back(b);
++                }
++                orphan_b.clear();
++            } else if (last_a >= 0) {
++                split_partners[last_a].push_back(w);
++            } else {
++                orphan_b.push_back(w);
++            }
++        }
++        TT_FATAL(next_a == n_a && orphan_b.empty(), "dit_fused_distributed_rmsnorm: wave split mapping");
++        for (uint32_t w = 0; w < num_workers; w++) {
++            TT_FATAL(split_partners[w].size() <= 2u, "dit_fused_distributed_rmsnorm: >2 wave-B partners");
++        }
++    }
++    auto split_wave = [&](uint32_t w) -> uint32_t { return split_wave_of[w]; };
++    auto split_slot = [&](uint32_t w) -> uint32_t { return split_slot_of[w]; };
+     auto split_row = [&](uint32_t w) -> uint32_t { return split_wave(w) * wave_a_rows + split_slot(w) / 2u; };
+     auto split_half = [&](uint32_t w) -> uint32_t { return split_slot(w) % 2u; };
+ 
+@@ -1369,9 +1426,11 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         fwd_ct.insert(fwd_ct.end(), forward_route.begin(), forward_route.end());
+         fwd_ct.insert(fwd_ct.end(), backward_route.begin(), backward_route.end());
+         if (col_split) {
+-            // Two-wave forwarder: wave w's sticks are the page region [w * span, (w + 1) * span).
++            // Two-wave forwarder: wave w's sticks are the page region [w * span, (w + 1) * span); wave A has
++            // wave_a_slots sticks, wave B the rest of the group.
+             fwd_ct.push_back(split_sizing.wave_slots);
+             fwd_ct.push_back(split_sizing.wave_span_bytes);
++            fwd_ct.push_back(split_sizing.wave_a_slots);
+         }
+         forwarder_kernel_ids[f] = CreateKernel(
+             program,
+@@ -1539,17 +1598,20 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         const uint32_t tile_row_end = std::min(tile_row_start + num_tile_rows_per_worker, num_tile_rows);
+         const uint32_t this_core_rows = tile_row_end - tile_row_start;
+ 
+-        // Column split: column offset of this worker's half, and its wave role (1 = wave A, ups the
+-        // wave-B partner's start_sem; 2 = wave B, waits for it; 0 = no waves).
++        // Column split: column offset of this worker's half, and its wave role (1 = wave A, ups its
++        // wave-B partners' start_sem; 2 = wave B, waits for it; 0 = no waves) + up to two partner coords.
+         const uint32_t col_offset = col_split ? split_half(i) * num_tile_cols : 0u;
+         uint32_t wave_role = 0u;
+-        CoreCoord wave_partner{0, 0};
++        std::array<CoreCoord, 2> wave_partner{CoreCoord{0, 0}, CoreCoord{0, 0}};
++        uint32_t num_wave_partners = 0u;
+         if (col_split) {
+             if (split_wave(i) == 1u) {
+                 wave_role = 2u;
+             } else {
+                 wave_role = 1u;
+-                wave_partner = mesh_device->worker_core_from_logical_core(worker_cores[i + 1u]);
++                for (const uint32_t b : split_partners[i]) {
++                    wave_partner[num_wave_partners++] = mesh_device->worker_core_from_logical_core(worker_cores[b]);
++                }
+             }
+         }
+         SetRuntimeArgs(
+@@ -1560,8 +1622,11 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+              tile_row_end,
+              col_offset,
+              wave_role,
+-             static_cast<uint32_t>(wave_partner.x),
+-             static_cast<uint32_t>(wave_partner.y)});
++             num_wave_partners,
++             static_cast<uint32_t>(wave_partner[0].x),
++             static_cast<uint32_t>(wave_partner[0].y),
++             static_cast<uint32_t>(wave_partner[1].x),
++             static_cast<uint32_t>(wave_partner[1].y)});
+ 
+         std::vector<uint32_t> writer_rt_args = {tile_row_start, tile_row_end};
+         if (use_mux) {
+@@ -1606,10 +1671,10 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
+         std::vector<uint32_t> fwd_rt = {stats_dram_addr, out_ready_sem_bank_addr};
+         if (col_split) {
+-            // Wave-major, slot order: entry w * wave_slots + j is wave w's slot j (the go release order).
++            // Compact wave-major, slot order: wave A's wave_a_slots workers, then wave B's (the go release order).
+             std::vector<uint32_t> slot_worker(group_end - group_begin, 0u);
+             for (uint32_t w = group_begin; w < group_end; w++) {
+-                slot_worker[split_wave(w) * split_sizing.wave_slots + split_slot(w)] = w;
++                slot_worker[split_wave(w) * split_sizing.wave_a_slots + split_slot(w)] = w;
+             }
+             for (const uint32_t w : slot_worker) {
+                 fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].x));
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+index 60eb3ccbca7..6136bb608a3 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+@@ -107,7 +107,8 @@ void kernel_main() {
+     // NCRISC read queue carries only the input row (see the factory's writer_reads_weight).
+     constexpr uint32_t weight_from_writer = get_compile_time_arg_val(recip_args.next_compile_time_args_offset());
+     // Two-wave column split: the DRAM row stride (the worker reads num_tile_cols tiles from col_offset),
+-    // and the start semaphore a wave-B worker waits on. Its wave-A partner ups it once its own read is
++    // and the start semaphore a wave-B worker waits on. Its wave-A gate (one A worker gates one or two B
++    // workers when the waves are uneven) ups it once its own read is
+     // kWaveSignalLeadBlocks blocks from landing, so B's reads queue right behind A's and each wave reads
+     // with the DRAM to itself.
+     constexpr uint32_t row_stride_tiles = get_compile_time_arg_val(recip_args.next_compile_time_args_offset() + 1);
+@@ -127,8 +128,11 @@ void kernel_main() {
+     const uint32_t recip_addr = get_common_arg_val<uint32_t>(5);
+     const uint32_t col_offset = get_arg_val<uint32_t>(arg_idx++);
+     const uint32_t wave_role = get_arg_val<uint32_t>(arg_idx++);
++    const uint32_t num_partners = get_arg_val<uint32_t>(arg_idx++);
+     const uint32_t partner_x = get_arg_val<uint32_t>(arg_idx++);
+     const uint32_t partner_y = get_arg_val<uint32_t>(arg_idx++);
++    const uint32_t partner2_x = get_arg_val<uint32_t>(arg_idx++);
++    const uint32_t partner2_y = get_arg_val<uint32_t>(arg_idx++);
+ 
+     Noc noc;
+ 
+@@ -285,7 +289,12 @@ void kernel_main() {
+                 noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 1u + (kb % kInputTrids)});
+                 cb_input.push_back(tiles_in_block);
+                 if (kb == wave_signal_block && wave_role == kWaveSignal) {
+-                    Semaphore<>(start_sem_id).up(noc, partner_x, partner_y, 1);
++                    if (num_partners > 0u) {
++                        Semaphore<>(start_sem_id).up(noc, partner_x, partner_y, 1);
++                    }
++                    if (num_partners > 1u) {
++                        Semaphore<>(start_sem_id).up(noc, partner2_x, partner2_y, 1);
++                    }
+                 }
+             }
+         }
+@@ -615,6 +624,6 @@ void kernel_main() {
+         }
+     }
+     if (wave_role == kWaveSignal) {
+-        noc.async_atomic_barrier();  // the partner's start_sem inc
++        noc.async_atomic_barrier();  // the partners' start_sem incs
+     }
+ }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_wave_forwarder.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_wave_forwarder.cpp
+index 57759e69eb5..da598d8dd29 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_wave_forwarder.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_wave_forwarder.cpp
+@@ -6,10 +6,11 @@
+  * Two-wave RMSNorm fork of the coalescing fabric forwarder
+  * (dit_fused_norm_common/kernels/dataflow/dit_fused_norm_forwarder.cpp) for the column-split layout.
+  * Consumer: ttnn::experimental::prim::DitFusedDistributedRmsnormMeshWorkloadFactory (col_split only).
+- * Compile-time and runtime args are the common forwarder's, plus wave_slots / wave_span_bytes (CT).
++ * Compile-time and runtime args are the common forwarder's, plus wave_slots / wave_span_bytes /
++ * wave_a_slots (CT).
+  *
+- * The group's 2 * wave_slots workers form two waves (two column-half workers per tile-row, half of the
+- * rows per wave). The factory starts wave 1's input read only as wave 0's lands, so wave 0's ring gather
++ * The group's workers form two waves (two column-half workers per tile-row): wave A has wave_a_slots
++ * workers, wave B the rest of the group (at most wave_slots, the size of a wave's page region). The factory starts wave 1's input read only as wave 0's lands, so wave 0's ring gather
+  * overlaps wave 1's DRAM read and wave 1's gather overlaps wave 0's output drain. Wave w's sticks are the
+  * region [w * wave_span_bytes, (w + 1) * wave_span_bytes) of packet_buf[0] and of the scratch page
+  * (my_device, forwarder, 0) on every chip.
+@@ -57,9 +58,14 @@ constexpr auto backward_route = ccl_routing_utils::get_line_multicast_route_info
+ constexpr uint32_t kWaveArgs = stats_dram_args.next_compile_time_args_offset() + 2 * ccl_routing_utils::num_line_multicast_args;
+ constexpr uint32_t wave_slots = get_compile_time_arg_val(kWaveArgs);           // sticks (workers) per wave
+ constexpr uint32_t wave_span_bytes = get_compile_time_arg_val(kWaveArgs + 1);  // wave region in the page
++constexpr uint32_t wave_a_slots = get_compile_time_arg_val(kWaveArgs + 2);     // sticks (workers) in wave A
+ constexpr uint32_t kNumWaves = 2u;
+ static_assert(max_rounds == 1, "two-wave forwarder needs a single row-round");
+-static_assert(group_size == kNumWaves * wave_slots, "two-wave forwarder: group must be two full waves");
++static_assert(
++    wave_a_slots <= wave_slots && group_size >= wave_a_slots && group_size - wave_a_slots <= wave_slots,
++    "two-wave forwarder: each wave must fit its page region");
++// Wave w's workers are entries [wave_begin(w), wave_begin(w + 1)) of the slot-ordered worker list.
++constexpr uint32_t wave_begin(uint32_t w) { return w == 0u ? 0u : (w == 1u ? wave_a_slots : group_size); }
+ constexpr uint32_t kWaveFieldBits = 16u;
+ constexpr uint32_t kWaveFieldMask = (1u << kWaveFieldBits) - 1u;
+ 
+@@ -69,7 +75,7 @@ void kernel_main() {
+     // out_ready_sem: a GlobalSemaphore — PEER forwarders fuse-inc it over fabric
+     // (same L1 addr on every chip). Local pointer for the wait + reset.
+     const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+-    // Group worker NoC coords (x,y), wave-major slot order, then present_count[0] (unused: every slot is
++    // Group worker NoC coords (x,y), compact wave-major slot order (wave A, then wave B), then present_count[0] (unused: every slot is
+     // present with one row per worker).
+     uint32_t worker_x[group_size];
+     uint32_t worker_y[group_size];
+@@ -118,7 +124,7 @@ void kernel_main() {
+         invalidate_l1_cache();
+         if (sent < kNumWaves) {
+             const uint32_t shift = sent * kWaveFieldBits;
+-            if (((*arrival_ptr >> shift) & kWaveFieldMask) >= wave_slots) {
++            if (((*arrival_ptr >> shift) & kWaveFieldMask) >= wave_begin(sent + 1u) - wave_begin(sent)) {
+                 DeviceZoneScopedN("F_SEND");
+                 // Wave `sent`'s region of packet_buf[0] -> the same offset of page (my_device, fwd, 0).
+                 const uint32_t off = sent * wave_span_bytes;
+@@ -144,7 +150,7 @@ void kernel_main() {
+                 DeviceZoneScopedN("F_GO");
+                 // Our own local write of this wave must have landed before its workers read it.
+                 noc.async_write_barrier();
+-                for (uint32_t i = released * wave_slots; i < (released + 1) * wave_slots; i++) {
++                for (uint32_t i = wave_begin(released); i < wave_begin(released + 1u); i++) {
+                     group_go_sem.up(noc, worker_x[i], worker_y[i], 1);
+                 }
+                 released++;

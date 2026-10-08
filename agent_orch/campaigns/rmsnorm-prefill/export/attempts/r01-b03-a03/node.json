@@ -1,0 +1,30 @@
+{
+  "node_id": "r01-b03-a03",
+  "campaign": "rmsnorm-prefill",
+  "round": 1,
+  "branch": 3,
+  "attempt": 3,
+  "parent": "r01-b03-a02",
+  "parent_commit": "e7914ff7b0547c9f23963a8cd5901ac7dab3a3ff",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T11:28:50+00:00",
+  "mechanism": "De-phase DRAM bank access: each column-split core walks its slice from a greedy per-core rotation so concurrent cores hit different interleaved banks",
+  "tags": [
+    "dataflow",
+    "dram-banks",
+    "access-order",
+    "reader",
+    "writer-drain"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.1313,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 22,
+  "finished_at": "2026-10-08T11:34:42+00:00"
+}

@@ -1,0 +1,31 @@
+{
+  "node_id": "r02-b02-a04",
+  "campaign": "rmsnorm-prefill",
+  "round": 2,
+  "branch": 2,
+  "attempt": 4,
+  "parent": "r02-b02-a03",
+  "parent_commit": "227bd7adcbdb1caec2dab04a37c30db5d2f54069",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T12:29:09+00:00",
+  "mechanism": "AG release by multicast: forwarder (forked into the op dir) sets the go-sem on each worker row-segment with one multicast instead of 20 serial unicast incs; workers pre-stage the gathered-stick CB reserve + NoC addresses before the go wait",
+  "tags": [
+    "ag-release",
+    "forwarder",
+    "multicast",
+    "writer",
+    "latency"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.2346,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_forwarder.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T12:46:01+00:00"
+}

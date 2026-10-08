@@ -1,0 +1,31 @@
+{
+  "node_id": "r06-b02-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 6,
+  "branch": 2,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "a49989332977fa672a4f5a3c520b6ef43657d533",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T15:52:24+00:00",
+  "mechanism": "uneven two-wave split: wave A takes 9 of 20 tile-rows (18 workers), wave B 11 (22 workers), so A's drain starts earlier and finishes as B's drain begins",
+  "tags": [
+    "waves",
+    "col-split",
+    "load-balance",
+    "drain",
+    "host-factory",
+    "forwarder"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5419,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_wave_forwarder.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 20,
+  "finished_at": "2026-10-08T15:58:06+00:00"
+}

@@ -1,0 +1,69 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+index da72e344040..973f19dfd0f 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+@@ -39,6 +39,7 @@
+ #include "api/compute/matmul.h"
+ #include "api/compute/transpose.h"
+ #include "api/compute/transpose_dest.h"
++#include "api/compute/compute_kernel_api.h"
+ #include "api/dataflow/circular_buffer.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+ #include "tools/profiler/kernel_profiler.hpp"
+@@ -147,6 +148,15 @@ void kernel_main() {
+     // the col-0 -> row-0 transpose: one unpack/math/pack round trip instead of two on the AG-start path.
+     // S is unpacked to tf32 in SrcA exactly as the reduce did, so the stat precision is unchanged.
+     constexpr bool mm_row_stat = (packed_ag_enabled != 0) && (streaming_low_l1 == 0) && (per_head_norm == 0);
++    // Blackhole: skip S's L1 round trip entirely. In the accumulating DST, transpose_dest<fp32> turns S into S^T and
++    // the SFPU column sum (sfpu_reduce<SUM, REDUCE_COL>) leaves sum_j S[i][j] in row 0, col i: the same row-0 stick
++    // layout, packed once to stats_transposed_local_cb. Removes the S pack -> unpack -> matmul -> pack handoff from
++    // the AG-start path; the row sum is an fp32 SFPU add tree instead of a tf32 SrcA matmul.
++#ifdef ARCH_BLACKHOLE
++    constexpr bool dst_row_stat = mm_row_stat;
++#else
++    constexpr bool dst_row_stat = false;
++#endif
+ 
+     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
+ 
+@@ -284,11 +294,13 @@ void kernel_main() {
+                         const uint32_t group_base = row_base + g * pre_group_width;
+ 
+                         reconfig_data_format(input_cb, input_cb);
+-                        pack_reconfig_data_format(pre_intermediate_cb);
++                        pack_reconfig_data_format(dst_row_stat ? stats_transposed_local_cb : pre_intermediate_cb);
+                         PACK((llk_pack_reconfig_l1_acc(0)));
+                         mul_init(input_cb, input_cb);
+ 
+-                        cb_pre_intermediate.reserve_back(1);
++                        if constexpr (!dst_row_stat) {
++                            cb_pre_intermediate.reserve_back(1);
++                        }
+ 
+                         // Accumulate sum(x**2) for the whole group in DST tile 0: ELWMUL always
+                         // accumulates onto Dst (Dst += SrcA*SrcB; DST is zeroed on release), so
+@@ -317,6 +329,24 @@ void kernel_main() {
+                                 mul_tiles(input_cb, input_cb, abs_idx, abs_idx, 0);
+                             }
+                         }
++
++#ifdef ARCH_BLACKHOLE
++                        if constexpr (dst_row_stat) {
++                            // Row sums straight into row 0 without leaving DST (see dst_row_stat):
++                            // S -> S^T (fp32), then the SFPU column sum lands sum_j S[c][j] in row 0, col c.
++                            transpose_dest_init<true>(input_cb);
++                            transpose_dest<true>(0);
++                            sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
++                            sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
++                            tile_regs_commit();
++                            cb_stats_transposed_local.reserve_back(1);
++                            tile_regs_wait();
++                            pack_tile(0, stats_transposed_local_cb);
++                            tile_regs_release();
++                            cb_stats_transposed_local.push_back(1);
++                            continue;
++                        }
++#endif
+                         tile_regs_commit();
+ 
+                         tile_regs_wait();

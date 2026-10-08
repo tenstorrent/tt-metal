@@ -1,0 +1,54 @@
+{
+  "shapes": {
+    "kimi-k3-latent-moe-h3584": {
+      "us_chip_mean": 16.992,
+      "us_chip_max": 17.774,
+      "runs_us_chip_mean": [
+        16.932,
+        17.007,
+        16.992
+      ],
+      "spread_pct": 0.44,
+      "pcc": 0.999998496845024,
+      "max_abs": 0.021333
+    },
+    "deepseek-v4-flash-h4096": {
+      "us_chip_mean": 18.256,
+      "us_chip_max": 19.191,
+      "runs_us_chip_mean": [
+        18.246,
+        18.279,
+        18.256
+      ],
+      "spread_pct": 0.18,
+      "pcc": 0.9999984901099912,
+      "max_abs": 0.023895
+    },
+    "glm-5-3-h6144": {
+      "us_chip_mean": 23.478,
+      "us_chip_max": 24.301,
+      "runs_us_chip_mean": [
+        23.491,
+        23.461,
+        23.478
+      ],
+      "spread_pct": 0.13,
+      "pcc": 0.9999984904649517,
+      "max_abs": 0.022278
+    },
+    "kimi-k2-7-h7168": {
+      "us_chip_mean": 26.026,
+      "us_chip_max": 26.789,
+      "runs_us_chip_mean": [
+        26.088,
+        26.026,
+        26.024
+      ],
+      "spread_pct": 0.25,
+      "pcc": 0.9999984880771047,
+      "max_abs": 0.022055
+    }
+  },
+  "noise_pct": 1.0,
+  "runs": 3
+}

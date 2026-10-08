@@ -1,0 +1,188 @@
+<title>rmsnorm-prefill discovery tree</title><style>
+:root{--bg:#f5f6f8;--surface:#fff;--fg:#1a2130;--muted:#5d6779;--line:#d8dde6;--accent:#2a5bd7;
+--win:#1f8a5b;--win-soft:#d9f1e5;--win-strong:#a9e0c3;--flat:#eceef2;--fail:#c2413b;--fail-soft:#f8dedc}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#11151d;--surface:#181e29;--fg:#e4e8f0;
+--muted:#98a2b5;--line:#2b3342;--accent:#7ea2ff;--win:#5cd69c;--win-soft:#173a2b;--win-strong:#1f5a3f;--flat:#252c39;
+--fail:#ff8a80;--fail-soft:#43201f;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#11151d;--surface:#181e29;--fg:#e4e8f0;--muted:#98a2b5;--line:#2b3342;--accent:#7ea2ff;
+--win:#5cd69c;--win-soft:#173a2b;--win-strong:#1f5a3f;--flat:#252c39;--fail:#ff8a80;--fail-soft:#43201f;color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;padding-inline:18px;padding-block:28px 60px}
+main{max-width:1000px;margin:0 auto;display:flex;flex-direction:column;gap:36px}
+h1{font-size:1.8rem;margin:0}h2{font-size:1.25rem;margin:0 0 10px}
+.mono,td.num{font-family:ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
+.stats{display:flex;flex-wrap:wrap;gap:12px}.stat{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 14px;min-width:150px}
+.stat b{display:block;font-size:1.3rem}.stat span{color:var(--muted);font-size:.8rem}
+.wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:.88rem}
+th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left}th{color:var(--muted);font-weight:600}
+.grid td.cell{text-align:center;border-radius:4px;font-family:ui-monospace,Menlo,monospace;font-size:.8rem;border:2px solid var(--bg)}
+.win{background:var(--win-soft);color:var(--win)}.big{background:var(--win-strong);color:var(--win);font-weight:700}
+.flat{background:var(--flat);color:var(--muted)}.fail{background:var(--fail-soft);color:var(--fail)}
+.best{outline:2px solid var(--win);outline-offset:-2px}tr.closed td{opacity:.45}
+.note{color:var(--muted);font-size:.85rem}
+.bar{height:10px;border-radius:3px;background:var(--accent)}.bar.base{background:var(--line)}
+svg text{fill:var(--muted);font-size:11px}svg .axis{stroke:var(--line)}svg .best{stroke:var(--win);fill:none;stroke-width:2.5}
+svg .pt{fill:var(--accent);opacity:.55}svg .ptf{fill:var(--fail);opacity:.55}svg .rb{stroke:var(--muted);stroke-dasharray:4 4}
+</style><main>
+<header><h1>rmsnorm-prefill</h1><p class='note'>ttnn.experimental.dit_fused_distributed_rmsnorm · generated 2026-10-08T18:17</p></header>
+<section class='stats'>
+<div class='stat'><b>1.5696</b><span>best score (r05-b01-a01)</span></div>
+<div class='stat'><b>58</b><span>attempts (55 valid)</span></div>
+<div class='stat'><b>6</b><span>rounds</span></div>
+<div class='stat'><b>±1.0%</b><span>noise band</span></div></section>
+<section><h2>Best score vs. attempts</h2><svg viewBox="0 0 760 240" width="100%" role="img" aria-label="Best score vs attempts"><line class="axis" x1="46" x2="748" y1="210.0" y2="210.0"/><text x="40" y="214.0" text-anchor="end">0.82</text><line class="axis" x1="46" x2="748" y1="160.5" y2="160.5"/><text x="40" y="164.5" text-anchor="end">1.01</text><line class="axis" x1="46" x2="748" y1="111.0" y2="111.0"/><text x="40" y="115.0" text-anchor="end">1.20</text><line class="axis" x1="46" x2="748" y1="61.5" y2="61.5"/><text x="40" y="65.5" text-anchor="end">1.40</text><line class="axis" x1="46" x2="748" y1="12.0" y2="12.0"/><text x="40" y="16.0" text-anchor="end">1.59</text><line class="rb" x1="46.0" x2="46.0" y1="12" y2="210"/><text x="50.0" y="22">r01</text><line class="rb" x1="239.7" x2="239.7" y1="12" y2="210"/><text x="243.7" y="22">r02</text><line class="rb" x1="324.4" x2="324.4" y1="12" y2="210"/><text x="328.4" y="22">r03</text><line class="rb" x1="469.6" x2="469.6" y1="12" y2="210"/><text x="473.6" y="22">r04</text><line class="rb" x1="614.9" x2="614.9" y1="12" y2="210"/><text x="618.9" y="22">r05</text><line class="rb" x1="711.7" x2="711.7" y1="12" y2="210"/><text x="715.7" y="22">r06</text><circle class="pt" cx="58.1" cy="135.6" r="3"/><circle class="pt" cx="70.2" cy="163.0" r="3"/><circle class="pt" cx="82.3" cy="167.1" r="3"/><circle class="pt" cx="94.4" cy="144.1" r="3"/><circle class="pt" cx="106.5" cy="189.5" r="3"/><circle class="pt" cx="118.6" cy="154.9" r="3"/><circle class="pt" cx="130.7" cy="139.4" r="3"/><circle class="pt" cx="142.8" cy="204.9" r="3"/><circle class="pt" cx="154.9" cy="115.6" r="3"/><circle class="pt" cx="167.0" cy="119.4" r="3"/><circle class="pt" cx="179.1" cy="129.9" r="3"/><circle class="pt" cx="191.2" cy="110.3" r="3"/><circle class="pt" cx="203.3" cy="111.1" r="3"/><circle class="pt" cx="215.4" cy="167.4" r="3"/><circle class="pt" cx="227.6" cy="121.1" r="3"/><circle class="pt" cx="239.7" cy="108.8" r="3"/><circle class="pt" cx="251.8" cy="136.4" r="3"/><circle class="pt" cx="263.9" cy="102.3" r="3"/><circle class="pt" cx="276.0" cy="155.6" r="3"/><circle class="pt" cx="288.1" cy="203.0" r="3"/><circle class="pt" cx="300.2" cy="104.7" r="3"/><circle class="pt" cx="312.3" cy="102.0" r="3"/><circle class="pt" cx="324.4" cy="103.3" r="3"/><circle class="pt" cx="336.5" cy="83.2" r="3"/><circle class="pt" cx="348.6" cy="80.5" r="3"/><circle class="pt" cx="360.7" cy="82.0" r="3"/><circle class="pt" cx="372.8" cy="83.1" r="3"/><circle class="pt" cx="384.9" cy="80.8" r="3"/><circle class="pt" cx="397.0" cy="77.9" r="3"/><circle class="pt" cx="409.1" cy="83.4" r="3"/><circle class="pt" cx="421.2" cy="100.9" r="3"/><circle class="pt" cx="433.3" cy="79.9" r="3"/><circle class="pt" cx="445.4" cy="86.5" r="3"/><circle class="pt" cx="457.5" cy="85.9" r="3"/><circle class="pt" cx="469.6" cy="78.3" r="3"/><circle class="pt" cx="481.7" cy="75.3" r="3"/><circle class="pt" cx="493.8" cy="86.8" r="3"/><circle class="pt" cx="505.9" cy="72.5" r="3"/><circle class="pt" cx="518.0" cy="69.4" r="3"/><circle class="ptf" cx="530.1" cy="207" r="2.5"/><circle class="pt" cx="542.2" cy="82.0" r="3"/><circle class="pt" cx="554.3" cy="63.2" r="3"/><circle class="pt" cx="566.4" cy="60.8" r="3"/><circle class="ptf" cx="578.6" cy="207" r="2.5"/><circle class="ptf" cx="590.7" cy="207" r="2.5"/><circle class="pt" cx="602.8" cy="63.5" r="3"/><circle class="pt" cx="614.9" cy="62.1" r="3"/><circle class="pt" cx="627.0" cy="17.1" r="3"/><circle class="pt" cx="639.1" cy="58.8" r="3"/><circle class="pt" cx="651.2" cy="30.6" r="3"/><circle class="pt" cx="663.3" cy="113.8" r="3"/><circle class="pt" cx="675.4" cy="52.5" r="3"/><circle class="pt" cx="687.5" cy="55.1" r="3"/><circle class="pt" cx="699.6" cy="43.8" r="3"/><circle class="pt" cx="711.7" cy="38.1" r="3"/><circle class="pt" cx="723.8" cy="24.3" r="3"/><circle class="pt" cx="735.9" cy="21.9" r="3"/><circle class="pt" cx="748.0" cy="54.0" r="3"/><polyline class="best" points="46.0,163.6 58.1,163.6 58.1,135.6 70.2,135.6 70.2,135.6 82.3,135.6 82.3,135.6 94.4,135.6 94.4,135.6 106.5,135.6 106.5,135.6 118.6,135.6 118.6,135.6 130.7,135.6 130.7,135.6 142.8,135.6 142.8,135.6 154.9,135.6 154.9,115.6 167.0,115.6 167.0,115.6 179.1,115.6 179.1,115.6 191.2,115.6 191.2,110.3 203.3,110.3 203.3,110.3 215.4,110.3 215.4,110.3 227.6,110.3 227.6,110.3 239.7,110.3 239.7,108.8 251.8,108.8 251.8,108.8 263.9,108.8 263.9,102.3 276.0,102.3 276.0,102.3 288.1,102.3 288.1,102.3 300.2,102.3 300.2,102.3 312.3,102.3 312.3,102.0 324.4,102.0 324.4,102.0 336.5,102.0 336.5,83.2 348.6,83.2 348.6,80.5 360.7,80.5 360.7,80.5 372.8,80.5 372.8,80.5 384.9,80.5 384.9,80.5 397.0,80.5 397.0,77.9 409.1,77.9 409.1,77.9 421.2,77.9 421.2,77.9 433.3,77.9 433.3,77.9 445.4,77.9 445.4,77.9 457.5,77.9 457.5,77.9 469.6,77.9 469.6,77.9 481.7,77.9 481.7,75.3 493.8,75.3 493.8,75.3 505.9,75.3 505.9,72.5 518.0,72.5 518.0,69.4 530.1,69.4 530.1,69.4 542.2,69.4 542.2,69.4 554.3,69.4 554.3,63.2 566.4,63.2 566.4,60.8 578.6,60.8 578.6,60.8 590.7,60.8 590.7,60.8 602.8,60.8 602.8,60.8 614.9,60.8 614.9,60.8 627.0,60.8 627.0,17.1 639.1,17.1 639.1,17.1 651.2,17.1 651.2,17.1 663.3,17.1 663.3,17.1 675.4,17.1 675.4,17.1 687.5,17.1 687.5,17.1 699.6,17.1 699.6,17.1 711.7,17.1 711.7,17.1 723.8,17.1 723.8,17.1 735.9,17.1 735.9,17.1 748.0,17.1 748.0,17.1"/><text x="403" y="234" text-anchor="middle">attempts (cumulative)</text></svg><p class='note'>Line: best valid score so far. Dots: each valid attempt; red dots on the floor: failed attempts.</p></section>
+<section><h2>Round r01</h2><p class='note'>policy v0, W=4, R=4, 16 attempts, 4 steps. v0: fixed campaign defaults</p>
+<div class='wrap'><table class='grid'><tr><th>branch</th><th>a01</th><th>a02</th><th>a03</th><th>a04</th><th>first idea</th></tr>
+<tr class=''><td class='mono'>b01</td>
+<td class='cell big' title='r01-b01-a01: apply gamma (x*w) during the all-gather wait so POST is a single x*rsqrt pass'>1.109</td>
+<td class='cell flat' title='r01-b01-a02: pipeline the reader input row with per-block NoC transaction ids and interleave the gamma reads into the gaps'>0.899</td>
+<td class='cell big' title='r01-b01-a03: read gamma on the idle writer RISC (BRISC/NoC0) at kernel start with per-worker rotated start tile, so the NCRISC trid input read carries no gamma traffic'>1.187</td>
+<td class='cell big' title='r01-b01-a04: accumulate sum(x^2) in fp32 DST via the ELWMUL dest-MAC under one acquire per row, so PRE packs once per row instead of an L1-acc fp32 pack per tile'>1.204</td>
+<td>apply gamma (x*w) during the all-gather wait so POST is a single x*rsqrt pass</td></tr>
+<tr class=''><td class='mono'>b02</td>
+<td class='cell flat' title='r01-b02-a01: column-split each tile-row across multiple worker cores (more cores, same single AG round)'>1.002</td>
+<td class='cell win' title='r01-b02-a02: keep DRAM I/O deep: per-block transaction-ID input read and one flush per row in the output drain'>1.034</td>
+<td class='cell big' title='r01-b02-a03: stack x*gamma under the AG wait (r01-b01-a01) on top of the deep trid input read (r01-b02-a02)'>1.172</td>
+<td class='cell flat' title='r01-b02-a04: split the output drain across both NoCs: the idle reader (NCRISC/NoC1) writes the odd output blocks while the writer (BRISC/NoC0) writes the even ones'>0.985</td>
+<td>column-split each tile-row across multiple worker cores (more cores, same single AG round)</td></tr>
+<tr class=''><td class='mono'>b03</td>
+<td class='cell flat' title='r01-b03-a01: Column-split each tile-row across k=floor(64/rows) worker cores; row leader FPU-sums follower partial sum-of-squares before the forwarder AG'>0.987</td>
+<td class='cell win' title='r01-b03-a02: Column split with equal-width slices only (k divides num_tile_cols, k=4 -&gt; 81 cores): one kernel group, no dispatch stall'>1.094</td>
+<td class='cell big' title='r01-b03-a03: De-phase DRAM bank access: each column-split core walks its slice from a greedy per-core rotation so concurrent cores hit different interleaved banks'>1.131</td>
+<td class='cell big' title='r01-b03-a04: split the output drain across both NoCs: BRISC writes even CB positions on NoC0, the idle reader (NCRISC) writes odd positions on NoC1'>1.165</td>
+<td>Column-split each tile-row across k=floor(64/rows) worker cores; row leader FPU-sums follower partial sum-of-squares before the forwarder AG</td></tr>
+<tr class=''><td class='mono'>b04</td>
+<td class='cell win' title='r01-b04-a01: precompute x*gamma during the all-gather wait so POST is a single x*gamma*(1/rms) pass'>1.076</td>
+<td class='cell flat' title='r01-b04-a02: trid-pipelined input read with gamma face-row reads interleaved per block'>0.840</td>
+<td class='cell big' title='r01-b04-a03: read broadcast gamma on the idle writer (BRISC) at kernel start; reader keeps only the trid-pipelined input'>1.208</td>
+<td class='cell big' title='r01-b04-a04: accumulate sum(x^2) in DST across the row (ELWMUL accumulates) and pack once per row instead of an L1-acc pack per tile; stick push may preempt the BRISC gamma issue loop'>1.213</td>
+<td>precompute x*gamma during the all-gather wait so POST is a single x*gamma*(1/rms) pass</td></tr>
+</table></div></section>
+<section><h2>Round r02</h2><p class='note'>policy v1, W=4, R=4, 7 attempts, 4 steps. campaign defaults (1 earlier round(s); no wider/deeper plan in support)</p>
+<div class='wrap'><table class='grid'><tr><th>branch</th><th>a01</th><th>a02</th><th>a03</th><th>a04</th><th>first idea</th></tr>
+<tr class='closed'><td class='mono'>b01</td>
+<td class='cell big' title='r02-b01-a01: route each output tile on the NoC with the short (non-wrapping) x-path to its DRAM column: left-half cores send west-bank tiles on NoC1, right-half cores send east-bank tiles on NoC1, BRISC issues both'>1.106</td>
+<td></td>
+<td></td>
+<td></td>
+<td>route each output tile on the NoC with the short (non-wrapping) x-path to its DRAM column: left-half cores send west-bank tiles on NoC1, right-half cores send east-bank tiles on NoC1, BRISC issues both · closed: anchor 1.1058 trails leader 1.2385 by more than 6.8%</td></tr>
+<tr class=''><td class='mono'>b02</td>
+<td class='cell big' title='r02-b02-a01: path-aware dual-NoC output drain: BRISC (DM_DYNAMIC_NOC) sends short-eastward DRAM destinations on NoC0 every other bank visit, the rest on its default NoC1'>1.238</td>
+<td class='cell big' title='r02-b02-a02: sum(x^2) per row as the diagonal of a DST-accumulated x*x^T matmul; BRISC gathers the 32 diagonal words into the stick, so the reduce + transpose leave the AG-start path'>1.229</td>
+<td class='cell big' title='r02-b02-a03: row-0 stat from ONE matmul: C = ones*S^T on the DST-accumulated S = sum x*x replaces reduce&lt;SUM,ROW&gt; + transpose; writer keeps its two 64 B face-row stick writes (no BRISC diagonal gather)'>1.240</td>
+<td class='cell big' title='r02-b02-a04: AG release by multicast: forwarder (forked into the op dir) sets the go-sem on each worker row-segment with one multicast instead of 20 serial unicast incs; workers pre-stage the gathered-stick CB reserve + NoC addresses before the go wait'>1.235</td>
+<td>path-aware dual-NoC output drain: BRISC (DM_DYNAMIC_NOC) sends short-eastward DRAM destinations on NoC0 every other bank visit, the rest on its default NoC1</td></tr>
+<tr class='closed'><td class='mono'>b03</td>
+<td class='cell win' title='r02-b03-a01: destination-aware dual-NoC output drain: each output tile goes on the NoC with the shorter torus path to its DRAM bank (BRISC/NoC0 + idle NCRISC/NoC1)'>1.031</td>
+<td></td>
+<td></td>
+<td></td>
+<td>destination-aware dual-NoC output drain: each output tile goes on the NoC with the shorter torus path to its DRAM bank (BRISC/NoC0 + idle NCRISC/NoC1) · closed: anchor 1.0312 trails leader 1.2385 by more than 6.8%</td></tr>
+<tr class='closed'><td class='mono'>b04</td>
+<td class='cell flat' title='r02-b04-a01: spread the 20 AG-path worker cores over all 10 grid rows (2 full columns, column-major) instead of packing them row-major into 2 rows, to cut per-row NoC link congestion on the input read and output drain'>0.847</td>
+<td></td>
+<td></td>
+<td></td>
+<td>spread the 20 AG-path worker cores over all 10 grid rows (2 full columns, column-major) instead of packing them row-major into 2 rows, to cut per-row NoC link congestion on the input read and output drain · closed: anchor 0.8470 trails leader 1.2385 by more than 6.8%</td></tr>
+</table></div></section>
+<section><h2>Round r03</h2><p class='note'>policy v2, W=4, R=3, 12 attempts, 3 steps. R=3 (beta 0.6): recorded 4th attempts never lifted a round best by more than noise; the next round re-roots at this round&#x27;s best, so depth continues there (2 earlier round(s))</p>
+<div class='wrap'><table class='grid'><tr><th>branch</th><th>a01</th><th>a02</th><th>a03</th><th>first idea</th></tr>
+<tr class=''><td class='mono'>b01</td>
+<td class='cell big' title='r03-b01-a01: post-AG stat combine: run *1/H + eps + rsqrt on the SFPU over the stat row only (VectorMode::R, 2 iterations/face) before transpose_dest, instead of over the full 32x32 fp32 tile after it'>1.313</td>
+<td class='cell big' title='r03-b01-a02: land the all-gathered stat sticks in L1, not DRAM: the persistent stats scratch becomes an L1-interleaved mesh buffer, so the fabric writes and the worker post-go stick read are L1 transactions'>1.322</td>
+<td class='cell big' title='r03-b01-a03: stick push no longer waits behind the gamma read barrier: BRISC polls for the row-0 stat while its broadcast-gamma reads land, instead of blocking in async_read_barrier'>1.325</td>
+<td>post-AG stat combine: run *1/H + eps + rsqrt on the SFPU over the stat row only (VectorMode::R, 2 iterations/face) before transpose_dest, instead of over the full 32x32 fp32 tile after it</td></tr>
+<tr class=''><td class='mono'>b02</td>
+<td class='cell big' title='r03-b02-a01: post-AG stat combine on row 0 only: one fused SFPU add_rsqrt (sum*1/H + eps, rsqrt) over the 4 SFPU iterations holding tile row 0, before transpose_dest, replaces three full-tile SFPU passes; POST unpack reconfig/init hoisted ahead of the 1/rms wait'>1.323</td>
+<td class='cell big' title='r03-b02-a02: land the all-gather stats scratch in L1 (mesh-coherent L1-interleaved persistent buffer) instead of DRAM: gathered-stick read after go 0.69 -&gt; 0.60 us, fabric landing unchanged'>1.333</td>
+<td class='cell big' title='r03-b02-a03: output drain keeps two writes in flight per NoC: BRISC alternates its write cmd buf 0 and its idle read/atomic cmd buf 1 (source coord set before, return coord restored after), same per-tile NoC routing as the parent'>1.300</td>
+<td>post-AG stat combine on row 0 only: one fused SFPU add_rsqrt (sum*1/H + eps, rsqrt) over the 4 SFPU iterations holding tile row 0, before transpose_dest, replaces three full-tile SFPU passes; POST unpack reconfig/init hoisted ahead of the 1/rms wait</td></tr>
+<tr class=''><td class='mono'>b03</td>
+<td class='cell big' title='r03-b03-a01: post-AG stat chain on row 0 only: one fused SFPU add_rsqrt (x*1/H + eps, rsqrt) with VectorMode::R over 2 iterations/face before the fp32 transpose_dest, instead of three full-tile SFPU passes after it'>1.317</td>
+<td class='cell big' title='r03-b03-a02: PRE row stat straight out of the accumulating DST: fp32 transpose_dest + SFPU column-sum (sfpu_reduce&lt;SUM,REDUCE_COL&gt;) puts sum(x^2) per row into row 0 before the single pack, replacing the S pack -&gt; L1 -&gt; unpack -&gt; ones*S^T matmul -&gt; pack round trip'>1.312</td>
+<td class='cell big' title='r03-b03-a03: output drain round-robins its DRAM tile writes over the 4 unicast request VCs (0-3) instead of the single static VC 1, so a core keeps several 2 KB packets injecting at once'>1.302</td>
+<td>post-AG stat chain on row 0 only: one fused SFPU add_rsqrt (x*1/H + eps, rsqrt) with VectorMode::R over 2 iterations/face before the fp32 transpose_dest, instead of three full-tile SFPU passes after it</td></tr>
+<tr class=''><td class='mono'>b04</td>
+<td class='cell big' title='r03-b04-a01: post-AG stat finalize on row 0 only: *1/H, +eps and rsqrt as 2-iteration VectorMode::R SFPU passes before transpose_dest instead of full-tile passes after it'>1.313</td>
+<td class='cell big' title='r03-b04-a02: two-wave AG pipeline: even workers read first, odd workers start as their neighbour&#x27;s read lands; a forked forwarder gathers + releases each wave separately (16-bit per-wave sem fields), so wave A&#x27;s AG overlaps wave B&#x27;s read and B&#x27;s AG overlaps A&#x27;s drain'>1.244</td>
+<td class='cell big' title='r03-b04-a03: stream gamma to compute in 8-page chunks (sticky-trid BRISC reads, bank-rotated within each chunk) so the x*gamma pre-pass starts at PRE end instead of after the last gamma page; parent&#x27;s two-wave AG reverted to r03-b04-a01'>1.332</td>
+<td>post-AG stat finalize on row 0 only: *1/H, +eps and rsqrt as 2-iteration VectorMode::R SFPU passes before transpose_dest instead of full-tile passes after it</td></tr>
+</table></div></section>
+<section><h2>Round r04</h2><p class='note'>policy v3, W=4, R=3, 12 attempts, 3 steps. R=3 (beta 0.6): recorded 4th attempts never lifted a round best by more than noise; the next round re-roots at this round&#x27;s best, so depth continues there (3 earlier round(s))</p>
+<div class='wrap'><table class='grid'><tr><th>branch</th><th>a01</th><th>a02</th><th>a03</th><th>first idea</th></tr>
+<tr class=''><td class='mono'>b01</td>
+<td class='cell big' title='r04-b01-a01: port r03-b04-a03&#x27;s streamed gamma (8-page sticky-trid chunks pushed 2 chunks behind the issue front) onto the best node r03-b02-a02, removing its dev-0 h7168 cross-call straggler'>1.344</td>
+<td class='cell fail' title='r04-b01-a02: PRE at HiFi2: the per-tile x*x ELWMUL and the ones*S^T row-sum matmul run at MathFidelity::HiFi2 instead of HiFi4; POST and the post-AG combine stay HiFi4'>✗ forbidden_edit</td>
+<td class='cell fail' title='r04-b01-a03: stack r04-b04-a02&#x27;s writer (posted output drain + ack-free stick push) onto the HiFi2 PRE node r04-b01-a02'>✗ forbidden_edit</td>
+<td>port r03-b04-a03&#x27;s streamed gamma (8-page sticky-trid chunks pushed 2 chunks behind the issue front) onto the best node r03-b02-a02, removing its dev-0 h7168 cross-call straggler</td></tr>
+<tr class=''><td class='mono'>b02</td>
+<td class='cell big' title='r04-b02-a01: forwarder-push AG release: stats scratch height-sharded on the forwarder core, forwarder multicasts the gathered pages + go to the worker rectangle and compute unpacks each worker&#x27;s stick in place (64 B-page gathered CB), replacing 20 serial go incs + 8 post-go remote stick reads'>1.299</td>
+<td class='cell big' title='r04-b02-a02: streamed forwarder multicast: peers&#x27; fused incs carry a per-source-device bit field in out_ready, so the forwarder multicasts each peer&#x27;s gathered page to the worker rectangle as soon as it lands; only the last page + go remain after the final arrival'>1.317</td>
+<td class='cell fail' title='r04-b02-a03: port the round-4 stack (posted drain + ack-free stick push + streamed gamma from r04-b04-a02, PRE at HiFi2 from r04-b01-a02) onto the streamed-multicast AG release'>✗ forbidden_edit</td>
+<td>forwarder-push AG release: stats scratch height-sharded on the forwarder core, forwarder multicasts the gathered pages + go to the worker rectangle and compute unpacks each worker&#x27;s stick in place (64 B-page gathered CB), replacing 20 serial go incs + 8 post-go remote stick reads</td></tr>
+<tr class='closed'><td class='mono'>b03</td>
+<td class='cell big' title='r04-b03-a01: stick-push handshake without the write-ack round trip: flush the two 64 B stick writes, then fire the arrival inc on the same NoC/VC (in-order delivery), atomic barrier deferred to kernel end'>1.354</td>
+<td class='cell big' title='r04-b03-a02: stack r04-b04-a01&#x27;s posted (no-ack) output-drain writes onto this node&#x27;s ack-free stick-push handshake: AG-start push cut + drain per-tile ack cut together'>1.391</td>
+<td class='cell big' title='r04-b03-a03: de-phase DRAM banks per worker on the 20-core pull path: CB slot k &lt;-&gt; column (k+rot) mod W with rot putting each worker&#x27;s first page in bank tile_row % 8, applied to the input read, the BRISC gamma read and the posted output drain (compute untouched)'>1.389</td>
+<td>stick-push handshake without the write-ack round trip: flush the two 64 B stick writes, then fire the arrival inc on the same NoC/VC (in-order delivery), atomic barrier deferred to kernel end · closed: stalled: last 1 refinement(s) within 1.0% noise of the anchor (-0.09%)</td></tr>
+<tr class='closed'><td class='mono'>b04</td>
+<td class='cell big' title='r04-b04-a01: posted (no-ack) output-drain writes: BRISC issues each 2 KB output tile with NocOptions::POSTED and flushes posted-sent before each pop, instead of non-posted writes'>1.367</td>
+<td class='cell big' title='r04-b04-a02: stack round 4&#x27;s two other writer-only wins on the posted drain: ack-free stick push (r04-b03-a01) + streamed gamma chunks (r04-b01-a01)'>1.400</td>
+<td class='cell big' title='r04-b04-a03: position-aware input-read depth: workers left of the x=9 DRAM column keep 6 trid blocks (24 tiles) of input reads in flight instead of 4, so the slow side&#x27;s read and stick push stop gating F_COLLECT'>1.395</td>
+<td>posted (no-ack) output-drain writes: BRISC issues each 2 KB output tile with NocOptions::POSTED and flushes posted-sent before each pop, instead of non-posted writes · closed: stalled: last 1 refinement(s) within 1.0% noise of the anchor (-0.34%)</td></tr>
+</table></div></section>
+<section><h2>Round r05</h2><p class='note'>policy v4, W=4, R=3, 8 attempts, 3 steps. R=3 (beta 0.6): recorded 4th attempts never lifted a round best by more than noise; the next round re-roots at this round&#x27;s best, so depth continues there (4 earlier round(s))</p>
+<div class='wrap'><table class='grid'><tr><th>branch</th><th>a01</th><th>a02</th><th>a03</th><th>first idea</th></tr>
+<tr class=''><td class='mono'>b01</td>
+<td class='cell big best' title='r05-b01-a01: k=2 column split run as two 20-core AG waves: 40 workers each take half a tile-row; wave A reads first, wave B reads as A lands, each wave has its own fabric gather + go (forked two-wave forwarder), and one 1152 B read per chip brings both halves&#x27; sticks'>1.570</td>
+<td class='cell big' title='r05-b01-a02: four-wave k=4 column split: 80 quarter-row workers run as four 20-core AG waves (chained start sems, 8-bit wave fields in a 4-wave forwarder, one 1280 B group read per chip, 16-partial combine)'>1.432</td>
+<td class='cell big' title='r05-b01-a03: un-gate the 4-wave stick push from the streamed-gamma trid barrier: the W_GAMMA loop spins on is_read_trid_flushed and keeps polling for the row-0 stat, so each wave pushes as its PRE finishes instead of when gamma lands after the whole input stream'>1.466</td>
+<td>k=2 column split run as two 20-core AG waves: 40 workers each take half a tile-row; wave A reads first, wave B reads as A lands, each wave has its own fabric gather + go (forked two-wave forwarder), and one 1152 B read per chip brings both halves&#x27; sticks</td></tr>
+<tr class='closed'><td class='mono'>b02</td>
+<td class='cell big' title='r05-b02-a01: PRE row stat as the diagonal of a DST-accumulated x*x^T matmul (HiFi4), moved to row 0 inside DST by an fp32 SFPU identity mask + SFPU column sum, replacing the ELWMUL x*x + S pack/unpack + ones*S^T matmul round trip'>1.408</td>
+<td></td>
+<td></td>
+<td>PRE row stat as the diagonal of a DST-accumulated x*x^T matmul (HiFi4), moved to row 0 inside DST by an fp32 SFPU identity mask + SFPU column sum, replacing the ELWMUL x*x + S pack/unpack + ones*S^T matmul round trip · closed: anchor 1.4078 trails leader 1.5696 by more than 6.8%</td></tr>
+<tr class=''><td class='mono'>b03</td>
+<td class='cell big' title='r05-b03-a01: two-wave row pipeline on 40 half-row workers (2 cores per tile-row, 2 waves of 20, one forwarder round/page per wave): wave B&#x27;s input read overlaps wave A&#x27;s all-gather and wave A&#x27;s drain overlaps wave B&#x27;s all-gather'>1.517</td>
+<td class='cell big' title='r05-b03-a02: four-wave row pipeline on 80 quarter-row workers (k=4 column split, 4 AG waves of 20 cores, 8-bit wave fields in a 4-wave forwarder), with tile-row-0 stick slots so the post-go gather is one 1280 B read per chip'>1.422</td>
+<td class='cell big' title='r05-b03-a03: un-gate the stick push from the streamed-gamma barrier on the 4-wave row pipeline: spin on each gamma chunk&#x27;s read trid while polling for the stat, so each wave&#x27;s AG starts at its own read end instead of at the last wave&#x27;s gamma landing'>1.488</td>
+<td>two-wave row pipeline on 40 half-row workers (2 cores per tile-row, 2 waves of 20, one forwarder round/page per wave): wave B&#x27;s input read overlaps wave A&#x27;s all-gather and wave A&#x27;s drain overlaps wave B&#x27;s all-gather</td></tr>
+<tr class='closed'><td class='mono'>b04</td>
+<td class='cell big' title='r05-b04-a01: two-round half-row pipeline: each of the 20 workers takes one column half of two rows in two forwarder rounds (stock forwarder, 20 sticks/round), so round 0&#x27;s all-gather overlaps round 1&#x27;s read and round 0&#x27;s POST/drain overlaps round 1&#x27;s all-gather'>1.194</td>
+<td></td>
+<td></td>
+<td>two-round half-row pipeline: each of the 20 workers takes one column half of two rows in two forwarder rounds (stock forwarder, 20 sticks/round), so round 0&#x27;s all-gather overlaps round 1&#x27;s read and round 0&#x27;s POST/drain overlaps round 1&#x27;s all-gather · closed: anchor 1.1939 trails leader 1.5696 by more than 6.8%</td></tr>
+</table></div></section>
+<section><h2>Round r06</h2><p class='note'>policy v5, W=4, R=3, 3 attempts, 1 steps. R=3 (beta 0.6): recorded 4th attempts never lifted a round best by more than noise; the next round re-roots at this round&#x27;s best, so depth continues there; depth cap 2 if noise_pct &gt;= -5.19% (previous round&#x27;s depth-3 attempts vs its shallower best) (5 earlier round(s))</p>
+<div class='wrap'><table class='grid'><tr><th>branch</th><th>a01</th><th>a02</th><th>a03</th><th>first idea</th></tr>
+<tr class=''><td class='mono'>b02</td>
+<td class='cell big' title='r06-b02-a01: uneven two-wave split: wave A takes 9 of 20 tile-rows (18 workers), wave B 11 (22 workers), so A&#x27;s drain starts earlier and finishes as B&#x27;s drain begins'>1.542</td>
+<td></td>
+<td></td>
+<td>uneven two-wave split: wave A takes 9 of 20 tile-rows (18 workers), wave B 11 (22 workers), so A&#x27;s drain starts earlier and finishes as B&#x27;s drain begins</td></tr>
+<tr class=''><td class='mono'>b03</td>
+<td class='cell big' title='r06-b03-a01: uneven two-wave row split: wave A takes 9 of 20 tile-rows (18 workers) and wave B 11 (22 workers), so A reads, gathers and drains earlier and its drain ends before B&#x27;s starts instead of the two drains overlapping; wave-A workers gate 1-2 wave-B readers, forwarder counts per-wave slots'>1.551</td>
+<td></td>
+<td></td>
+<td>uneven two-wave row split: wave A takes 9 of 20 tile-rows (18 workers) and wave B 11 (22 workers), so A reads, gathers and drains earlier and its drain ends before B&#x27;s starts instead of the two drains overlapping; wave-A workers gate 1-2 wave-B readers, forwarder counts per-wave slots</td></tr>
+<tr class=''><td class='mono'>b04</td>
+<td class='cell big' title='r06-b04-a01: congestion-aware out-of-order dual-NoC drain: per tile, NoC0-eligible (short-eastward bank) tiles go on whichever NoC has the smaller posted-write backlog (NIU unsent + busy cmd buf), NoC1-only tiles go when NoC1 is no more backed up, tiles issue out of order across the ready part of the row, one flush+pop per row instead of per block'>1.426</td>
+<td></td>
+<td></td>
+<td>congestion-aware out-of-order dual-NoC drain: per tile, NoC0-eligible (short-eastward bank) tiles go on whichever NoC has the smaller posted-write backlog (NIU unsent + busy cmd buf), NoC1-only tiles go when NoC1 is no more backed up, tiles issue out of order across the ready part of the row, one flush+pop per row instead of per block</td></tr>
+</table></div></section>
+<section><h2>Best node vs. baseline</h2><p class='note'>r05-b01-a01: k=2 column split run as two 20-core AG waves: 40 workers each take half a tile-row; wave A reads first, wave B reads as A lands, each wave has its own fabric gather + go (forked two-wave forwarder), and one 1152 B read per chip brings both halves&#x27; sticks</p><div class='wrap'><table><tr><th>shape</th><th>baseline µs</th><th>best µs</th><th>speedup</th><th></th></tr>
+<tr><td class='mono'>kimi-k3-latent-moe-h3584</td><td class='num'>16.99</td><td class='num'>11.19</td><td class='num'>1.518×</td><td style='min-width:160px'><div class='bar base' style='width:65%'></div><div class='bar' style='width:43%;margin-top:3px'></div></td></tr>
+<tr><td class='mono'>deepseek-v4-flash-h4096</td><td class='num'>18.26</td><td class='num'>12.08</td><td class='num'>1.512×</td><td style='min-width:160px'><div class='bar base' style='width:70%'></div><div class='bar' style='width:46%;margin-top:3px'></div></td></tr>
+<tr><td class='mono'>glm-5-3-h6144</td><td class='num'>23.48</td><td class='num'>14.59</td><td class='num'>1.610×</td><td style='min-width:160px'><div class='bar base' style='width:90%'></div><div class='bar' style='width:56%;margin-top:3px'></div></td></tr>
+<tr><td class='mono'>kimi-k2-7-h7168</td><td class='num'>26.03</td><td class='num'>15.84</td><td class='num'>1.643×</td><td style='min-width:160px'><div class='bar base' style='width:100%'></div><div class='bar' style='width:61%;margin-top:3px'></div></td></tr>
+</table></div></section>
+<section><h2>Rounds</h2><div class='wrap'><table><tr><th>round</th><th>policy</th><th>attempts</th><th>valid</th><th>lost</th><th>best</th></tr>
+<tr><td class='mono'>r01</td><td>v0</td><td class='num'>16</td><td class='num'>16</td><td class='num'>0</td><td class='num'>1.2132</td></tr>
+<tr><td class='mono'>r02</td><td>v1</td><td class='num'>7</td><td class='num'>7</td><td class='num'>0</td><td class='num'>1.2396</td></tr>
+<tr><td class='mono'>r03</td><td>v2</td><td class='num'>12</td><td class='num'>12</td><td class='num'>0</td><td class='num'>1.3333</td></tr>
+<tr><td class='mono'>r04</td><td>v3</td><td class='num'>12</td><td class='num'>9</td><td class='num'>0</td><td class='num'>1.3997</td></tr>
+<tr><td class='mono'>r05</td><td>v4</td><td class='num'>8</td><td class='num'>8</td><td class='num'>0</td><td class='num'>1.5696</td></tr>
+<tr><td class='mono'>r06</td><td>v5</td><td class='num'>3</td><td class='num'>3</td><td class='num'>1</td><td class='num'>1.5512</td></tr>
+</table></div></section></main>

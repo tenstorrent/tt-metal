@@ -1,0 +1,71 @@
+{
+  "valid": true,
+  "fail_class": "ok",
+  "error": null,
+  "score": 1.2042,
+  "shapes": {
+    "kimi-k3-latent-moe-h3584": {
+      "pytest": "PASSED",
+      "pcc": 0.9999984966173517,
+      "max_abs": 0.021683,
+      "us_chip_mean": 14.147,
+      "us_chip_max": 16.011,
+      "us_chip_p50": 14.072,
+      "us_min": 12.091,
+      "us_max": 16.661,
+      "n_rows": 40,
+      "core_count": 21,
+      "baseline_us": 16.992,
+      "speedup": 1.2011
+    },
+    "deepseek-v4-flash-h4096": {
+      "pytest": "PASSED",
+      "pcc": 0.9999984879213994,
+      "max_abs": 0.024332,
+      "us_chip_mean": 15.348,
+      "us_chip_max": 16.122,
+      "us_chip_p50": 15.398,
+      "us_min": 13.809,
+      "us_max": 16.761,
+      "n_rows": 40,
+      "core_count": 21,
+      "baseline_us": 18.256,
+      "speedup": 1.1895
+    },
+    "glm-5-3-h6144": {
+      "pytest": "PASSED",
+      "pcc": 0.9999984887532942,
+      "max_abs": 0.024031,
+      "us_chip_mean": 19.316,
+      "us_chip_max": 19.994,
+      "us_chip_p50": 19.306,
+      "us_min": 17.742,
+      "us_max": 21.688,
+      "n_rows": 40,
+      "core_count": 21,
+      "baseline_us": 23.478,
+      "speedup": 1.2155
+    },
+    "kimi-k2-7-h7168": {
+      "pytest": "PASSED",
+      "pcc": 0.9999984886739718,
+      "max_abs": 0.024128,
+      "us_chip_mean": 21.494,
+      "us_chip_max": 22.054,
+      "us_chip_p50": 21.378,
+      "us_min": 20.203,
+      "us_max": 24.33,
+      "n_rows": 40,
+      "core_count": 21,
+      "baseline_us": 26.026,
+      "speedup": 1.2108
+    }
+  },
+  "ops_csv": "/localdev/nstamatovic/dream/rmsnorm-prefill/reports/r01-b01-a04/reports/2026_10_08_13_41_17/ops_perf_results_2026_10_08_13_41_17.csv",
+  "score_def": "geomean over shapes of baseline_us / attempt_us; per-chip mean device kernel time, measured calls only",
+  "noise_pct": 1.0,
+  "commit_under_test": "01cc9c934b4e4ca34bd2f4665ddf7de2cfbcaefa",
+  "build_seconds": 21,
+  "eval_seconds": 25,
+  "report_dir": "/localdev/nstamatovic/dream/rmsnorm-prefill/reports/r01-b01-a04"
+}

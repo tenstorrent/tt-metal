@@ -1,0 +1,27 @@
+{
+  "node_id": "r01-b03-a02",
+  "campaign": "rmsnorm-prefill",
+  "round": 1,
+  "branch": 3,
+  "attempt": 2,
+  "parent": "r01-b03-a01",
+  "parent_commit": "779c55f50738259702bf9e23f5bca15a4e0e4071",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T10:45:21+00:00",
+  "mechanism": "Column split with equal-width slices only (k divides num_tile_cols, k=4 -> 81 cores): one kernel group, no dispatch stall",
+  "tags": [
+    "parallelism",
+    "work-split",
+    "dispatch",
+    "repair"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.0942,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 20,
+  "finished_at": "2026-10-08T10:52:25+00:00"
+}

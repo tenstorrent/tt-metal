@@ -1,0 +1,27 @@
+{
+  "node_id": "r01-b01-a02",
+  "campaign": "rmsnorm-prefill",
+  "round": 1,
+  "branch": 1,
+  "attempt": 2,
+  "parent": "r01-b01-a01",
+  "parent_commit": "4675730a931f7be6fd4876b1d0ee3b416954c8a2",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T10:45:21+00:00",
+  "mechanism": "pipeline the reader input row with per-block NoC transaction ids and interleave the gamma reads into the gaps",
+  "tags": [
+    "dataflow",
+    "reader",
+    "read-pipelining",
+    "transaction-id"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 0.8994,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T10:50:11+00:00"
+}

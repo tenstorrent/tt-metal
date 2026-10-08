@@ -1,0 +1,27 @@
+{
+  "node_id": "r02-b04-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 2,
+  "branch": 4,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "a89c280e84a3365c989cf74462a7006b59d2daae",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T11:53:40+00:00",
+  "mechanism": "spread the 20 AG-path worker cores over all 10 grid rows (2 full columns, column-major) instead of packing them row-major into 2 rows, to cut per-row NoC link congestion on the input read and output drain",
+  "tags": [
+    "placement",
+    "noc-congestion",
+    "dataflow",
+    "host-factory"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 0.847,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp"
+  ],
+  "build_seconds": 21,
+  "eval_seconds": 26,
+  "finished_at": "2026-10-08T12:01:26+00:00"
+}

@@ -1,0 +1,20 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index 9061b4a7860..0a82f3ce5de 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -260,7 +260,14 @@ void kernel_main() {
+                 const uint32_t kb_start = kb * kGammaChunk;
+                 const uint32_t kb_pages =
+                     (w_weight_tiles - kb_start >= kGammaChunk) ? kGammaChunk : (w_weight_tiles - kb_start);
+-                noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 1u + (kb % kGammaTrids)});
++                // Gamma lands only once the input reads ahead of it in the DRAM queues drain (~the last
++                // wave's read end), so keep polling for the stat while waiting: a blocking barrier here
++                // would hold every wave's stick push until then and bunch the waves' all-gathers.
++                const uint32_t kb_trid = 1u + (kb % kGammaTrids);
++                while (!noc.is_read_trid_flushed(kb_trid)) {
++                    poll_stick();
++                }
++                noc.async_read_barrier<NocOptions::TXN_ID>({.trid = kb_trid});
+                 cb_weight.push_back(kb_pages);
+             }
+             poll_stick();

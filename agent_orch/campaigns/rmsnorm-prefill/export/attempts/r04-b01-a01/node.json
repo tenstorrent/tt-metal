@@ -1,0 +1,29 @@
+{
+  "node_id": "r04-b01-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 4,
+  "branch": 1,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "133aa8e859d79fabe94c170b0cd0ee59baf1ca8c",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T13:53:17+00:00",
+  "mechanism": "port r03-b04-a03's streamed gamma (8-page sticky-trid chunks pushed 2 chunks behind the issue front) onto the best node r03-b02-a02, removing its dev-0 h7168 cross-call straggler",
+  "tags": [
+    "gamma-read",
+    "pipelining",
+    "writer",
+    "straggler",
+    "combination",
+    "port"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.3436,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 20,
+  "finished_at": "2026-10-08T13:55:37+00:00"
+}

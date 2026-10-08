@@ -1,0 +1,28 @@
+{
+  "node_id": "r03-b04-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 3,
+  "branch": 4,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "227bd7adcbdb1caec2dab04a37c30db5d2f54069",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T13:00:42+00:00",
+  "mechanism": "post-AG stat finalize on row 0 only: *1/H, +eps and rsqrt as 2-iteration VectorMode::R SFPU passes before transpose_dest instead of full-tile passes after it",
+  "tags": [
+    "compute",
+    "post-ag",
+    "combine",
+    "sfpu",
+    "critical-path"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.3131,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T13:07:00+00:00"
+}

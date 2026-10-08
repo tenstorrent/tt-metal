@@ -1,0 +1,29 @@
+{
+  "node_id": "r06-b04-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 6,
+  "branch": 4,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "a49989332977fa672a4f5a3c520b6ef43657d533",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T15:52:27+00:00",
+  "mechanism": "congestion-aware out-of-order dual-NoC drain: per tile, NoC0-eligible (short-eastward bank) tiles go on whichever NoC has the smaller posted-write backlog (NIU unsent + busy cmd buf), NoC1-only tiles go when NoC1 is no more backed up, tiles issue out of order across the ready part of the row, one flush+pop per row instead of per block",
+  "tags": [
+    "writer-drain",
+    "dual-noc",
+    "congestion-aware",
+    "out-of-order-issue",
+    "noc-backlog",
+    "straggler"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4264,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 20,
+  "finished_at": "2026-10-08T16:09:22+00:00"
+}

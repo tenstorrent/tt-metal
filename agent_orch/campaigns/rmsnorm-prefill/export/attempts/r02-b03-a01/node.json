@@ -1,0 +1,31 @@
+{
+  "node_id": "r02-b03-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 2,
+  "branch": 3,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "a89c280e84a3365c989cf74462a7006b59d2daae",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T11:53:38+00:00",
+  "mechanism": "destination-aware dual-NoC output drain: each output tile goes on the NoC with the shorter torus path to its DRAM bank (BRISC/NoC0 + idle NCRISC/NoC1)",
+  "tags": [
+    "dataflow",
+    "writer-drain",
+    "dual-noc",
+    "noc-routing",
+    "reader"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.0312,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_drain_noc_split.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 24,
+  "eval_seconds": 37,
+  "finished_at": "2026-10-08T12:08:15+00:00"
+}

@@ -1,0 +1,191 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+index 528c5ad0790..e54ea4643cd 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+@@ -1121,6 +1121,12 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+         std::max<uint32_t>(1u, col_splits - 1u),
+         fp32_format);
+     const uint32_t peer_sem_id = use_mux ? tt::tt_metal::CreateSemaphore(program, worker_core_set, 0u) : 0u;
++    // Split output drain: the worker writer (NoC0) drains the even output_cb positions and the reader
++    // (NoC1, idle after its reads) the odd ones, so the 2 KB output writes no longer all queue on
++    // NoC0 (the drain tail grew with core x/y: NoC0 write congestion). Needs one row per core and a
++    // whole-row resident output_cb (the reader waits cumulatively; the writer pops once at the end).
++    const bool split_drain = col_split_ok && !streaming_low_l1 && !block_major_post;
++    const uint32_t drain_sem_id = split_drain ? tt::tt_metal::CreateSemaphore(program, worker_core_set, 0u) : 0u;
+ 
+     // ------------------------------------------------------------------------
+     // Reader kernel (on worker cores)
+@@ -1198,6 +1204,11 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+     } else {
+         TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);  // dummy
+     }
++    // Split output drain (after the recip accessor): flag, output_cb, drain_sem, output accessor.
++    reader_compile_args.push_back(static_cast<uint32_t>(split_drain));
++    reader_compile_args.push_back(output_cb_id);
++    reader_compile_args.push_back(drain_sem_id);
++    TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
+ 
+     for (auto& g : slice_groups) {
+         auto ct = reader_compile_args;
+@@ -1302,6 +1313,8 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+         // Column-split peer handshake (appended after the trans_mat accessor).
+         writer_compile_args.push_back(peer_partials_cb_id);
+         writer_compile_args.push_back(peer_sem_id);
++        writer_compile_args.push_back(static_cast<uint32_t>(split_drain));
++        writer_compile_args.push_back(drain_sem_id);
+         for (auto& g : slice_groups) {
+             auto ct = writer_compile_args;
+             ct[1] = g.cols;
+@@ -1502,7 +1515,9 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+     // routing in per-core args so a cache hit updates each binding only once.
+     for (const auto& g : slice_groups) {
+         SetCommonRuntimeArgs(
+-            program, g.reader, {input_addr, weight_addr, bias_addr, rope_cos_addr, rope_sin_addr, recip_addr_rt});
++            program,
++            g.reader,
++            {input_addr, weight_addr, bias_addr, rope_cos_addr, rope_sin_addr, recip_addr_rt, output_addr});
+         if (use_mux) {
+             SetCommonRuntimeArgs(program, g.writer, {output_addr, trans_mat_addr_rt, stats_dram_addr});
+         } else {
+@@ -1639,7 +1654,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+     for (const auto& g : slice_groups) {
+         shared.reader_common_args.push_back(&GetCommonRuntimeArgs(program, g.reader));
+         shared.writer_common_args.push_back(&GetCommonRuntimeArgs(program, g.writer));
+-        TT_ASSERT(shared.reader_common_args.back()->size() == 6);
++        TT_ASSERT(shared.reader_common_args.back()->size() == 7);
+         TT_ASSERT(shared.writer_common_args.back()->size() == (use_mux ? 3 : 2));
+     }
+     shared.forwarder_runtime_args.reserve(forwarder_kernel_ids.size());
+@@ -1724,6 +1739,7 @@ void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
+             reader_common[3] = rope_cos_addr;
+             reader_common[4] = rope_sin_addr;
+             reader_common[5] = recip_addr;
++            reader_common[6] = output_addr;
+         }
+ 
+         for (auto* writer_args : shared.writer_common_args) {
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+index 63c44c7ee64..6e21ac6916b 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+@@ -23,6 +23,7 @@
+ #include "api/dataflow/dataflow_api.h"
+ #include "api/dataflow/noc.h"
+ #include "api/dataflow/circular_buffer.h"
++#include "api/dataflow/noc_semaphore.h"
+ #include "api/tensor/noc_traits.h"
+ #include "api/core_local_mem.h"
+ #include <tt-metalium/constants.hpp>
+@@ -102,6 +103,15 @@ void kernel_main() {
+     constexpr auto rope_cos_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+     constexpr auto rope_sin_args = TensorAccessorArgs<rope_cos_args.next_compile_time_args_offset()>();
+     constexpr auto recip_args = TensorAccessorArgs<rope_sin_args.next_compile_time_args_offset()>();
++    // Split output drain (appended after the recip accessor): when set, this reader (idle after its
++    // reads) writes the ODD output_cb positions of the row on its own NoC while the worker writer
++    // writes the even ones, then raises the local drain_sem so the writer may pop the row. Only the
++    // one-row-per-core resident layout uses it (output_cb holds the whole row and never wraps).
++    constexpr uint32_t SDC = recip_args.next_compile_time_args_offset();
++    constexpr uint32_t split_drain = get_compile_time_arg_val(SDC + 0);
++    constexpr uint32_t output_cb = get_compile_time_arg_val(SDC + 1);
++    constexpr uint32_t drain_sem_id = get_compile_time_arg_val(SDC + 2);
++    constexpr auto output_args = TensorAccessorArgs<SDC + 3>();
+ 
+     uint32_t arg_idx = 0;
+     const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
+@@ -124,6 +134,7 @@ void kernel_main() {
+         return (c >= num_tile_cols) ? (c - num_tile_cols) : c;
+     };
+     const uint32_t recip_addr = get_common_arg_val<uint32_t>(5);
++    const uint32_t output_addr = get_common_arg_val<uint32_t>(6);
+ 
+     Noc noc;
+ 
+@@ -514,5 +525,35 @@ void kernel_main() {
+             DeviceZoneScopedN("R_INPUT");
+             read_input_pass(input_tile_idx);  // POST re-read pass
+         }
++
++        // Split output drain: write the odd CB positions of this row on this RISC's NoC. Waits are
++        // cumulative and this reader never pops: the writer pops the row only after drain_sem.
++        if constexpr (split_drain) {
++            DeviceZoneScopedN("R_DRAIN");
++            CircularBuffer cb_output(output_cb);
++            const auto output_accessor = TensorAccessor(output_args, output_addr);
++            const uint32_t output_page_bytes = output_accessor.get_aligned_page_size();
++            const uint32_t output_tile_bytes = cb_output.get_tile_size();
++            const uint32_t rd_base = cb_output.get_read_ptr();
++            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
++                const uint32_t block_end = ((num_tile_cols - col_tile) >= block_size) ? (col_tile + block_size)
++                                                                                        : num_tile_cols;
++                cb_output.wait_front(col_tile + block_size);
++                for (uint32_t p = col_tile + 1u - (col_tile & 1u); p < block_end; p += 2) {
++                    noc.async_write(
++                        CoreLocalMem<uint32_t>(rd_base + p * output_tile_bytes),
++                        output_accessor,
++                        output_page_bytes,
++                        {},
++                        {.page_id = input_tile_idx + rotated_col(p)});
++                }
++            }
++            noc.async_writes_flushed();
++            Semaphore<> drain_sem(drain_sem_id);
++            drain_sem.set(1);
++        }
++    }
++    if constexpr (split_drain) {
++        noc.async_write_barrier();
+     }
+ }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index c8f3e2e92fd..6d538c027bc 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -82,6 +82,10 @@ constexpr auto w_transmat_args = TensorAccessorArgs<SCB + 7>();
+ // the row leader's peer_partials_cb (worker-grid-uniform address) and inc its peer_sem.
+ constexpr uint32_t peer_partials_cb = get_compile_time_arg_val(w_transmat_args.next_compile_time_args_offset());
+ constexpr uint32_t peer_sem_id = get_compile_time_arg_val(w_transmat_args.next_compile_time_args_offset() + 1);
++// Split output drain: this writer drains the EVEN output_cb positions on its NoC, the reader the odd
++// ones on the other NoC; the reader raises the local drain_sem once its writes have left L1.
++constexpr uint32_t split_drain = get_compile_time_arg_val(w_transmat_args.next_compile_time_args_offset() + 2);
++constexpr uint32_t drain_sem_id = get_compile_time_arg_val(w_transmat_args.next_compile_time_args_offset() + 3);
+ 
+ void kernel_main() {
+     size_t arg_idx = 0;
+@@ -262,7 +266,36 @@ void kernel_main() {
+         // uses the per-block drain-only writer, worked while TP>1 wide hung). Compute
+         // pushes block_size-padded slots per col-block; wait/pop the full block, but
+         // only NoC-write the valid tiles. Matches the drain-only writer's drain loop.
+-        {
++        if constexpr (split_drain) {
++            // One row per core and output_cb holds the whole padded row, so wait cumulatively and pop
++            // once: popping earlier would move tiles_acked under the reader's cumulative waits.
++            DeviceZoneScopedN("W_DRAIN");
++            const uint32_t rd_base = cb_output.get_read_ptr();
++            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
++                const uint32_t block_end =
++                    ((num_tile_cols - col_tile) >= block_size) ? (col_tile + block_size) : num_tile_cols;
++                cb_output.wait_front(col_tile + block_size);
++                for (uint32_t p = col_tile + (col_tile & 1u); p < block_end; p += 2) {
++                    const uint32_t q = p + col_rot;
++                    const uint32_t c = col_start + ((q >= num_tile_cols) ? (q - num_tile_cols) : q);
++                    const uint32_t h = c / head_dim_tiles;
++                    const uint32_t t_col = c - h * head_dim_tiles;
++                    const uint32_t out_idx =
++                        h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
++                    noc.async_write(
++                        CoreLocalMem<uint32_t>(rd_base + p * output_tile_bytes),
++                        output_accessor,
++                        output_page_bytes,
++                        {},
++                        {.page_id = out_idx});
++                }
++            }
++            noc.async_writes_flushed();
++            Semaphore<> drain_sem(drain_sem_id);
++            drain_sem.wait(1);
++            drain_sem.set(0);
++            cb_output.pop_front(((num_tile_cols + block_size - 1u) / block_size) * block_size);
++        } else {
+             DeviceZoneScopedN("W_DRAIN");
+             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                 const uint32_t tiles_in_block =

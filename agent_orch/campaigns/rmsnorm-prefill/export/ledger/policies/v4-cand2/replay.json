@@ -1,0 +1,244 @@
+{
+  "policy": "/localdev/nstamatovic/dream/rmsnorm-prefill/ledger/policies/v4-cand2/policy.py",
+  "default_beta": 0.6,
+  "objective_V": 1.3447,
+  "cost_per_attempt": 0.005,
+  "parallel_bonus": 0.01,
+  "noise_pct": 1.0,
+  "rounds": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "sweep": {
+    "0.2": {
+      "mean_V": 1.334,
+      "mean_attempts": 6.2,
+      "mean_best": 1.33
+    },
+    "0.4": {
+      "mean_V": 1.3451,
+      "mean_attempts": 7.6,
+      "mean_best": 1.3497
+    },
+    "0.6": {
+      "mean_V": 1.3447,
+      "mean_attempts": 7.8,
+      "mean_best": 1.3497
+    },
+    "0.8": {
+      "mean_V": 1.3338,
+      "mean_attempts": 9.4,
+      "mean_best": 1.3511
+    },
+    "1.0": {
+      "mean_V": 1.3323,
+      "mean_attempts": 10,
+      "mean_best": 1.3511
+    }
+  },
+  "episodes": [
+    {
+      "round": 1,
+      "beta": 0.2,
+      "V": 1.1089,
+      "attempts": 6,
+      "steps": 2,
+      "best": 1.1089
+    },
+    {
+      "round": 2,
+      "beta": 0.2,
+      "V": 1.2585,
+      "attempts": 4,
+      "steps": 1,
+      "best": 1.2385
+    },
+    {
+      "round": 3,
+      "beta": 0.2,
+      "V": 1.3333,
+      "attempts": 8,
+      "steps": 2,
+      "best": 1.3333
+    },
+    {
+      "round": 4,
+      "beta": 0.2,
+      "V": 1.3997,
+      "attempts": 7,
+      "steps": 2,
+      "best": 1.3997
+    },
+    {
+      "round": 5,
+      "beta": 0.2,
+      "V": 1.5696,
+      "attempts": 6,
+      "steps": 2,
+      "best": 1.5696
+    },
+    {
+      "round": 1,
+      "beta": 0.4,
+      "V": 1.1942,
+      "attempts": 8,
+      "steps": 3,
+      "best": 1.2075
+    },
+    {
+      "round": 2,
+      "beta": 0.4,
+      "V": 1.2585,
+      "attempts": 4,
+      "steps": 1,
+      "best": 1.2385
+    },
+    {
+      "round": 3,
+      "beta": 0.4,
+      "V": 1.3333,
+      "attempts": 8,
+      "steps": 2,
+      "best": 1.3333
+    },
+    {
+      "round": 4,
+      "beta": 0.4,
+      "V": 1.383,
+      "attempts": 10,
+      "steps": 3,
+      "best": 1.3997
+    },
+    {
+      "round": 5,
+      "beta": 0.4,
+      "V": 1.5563,
+      "attempts": 8,
+      "steps": 3,
+      "best": 1.5696
+    },
+    {
+      "round": 1,
+      "beta": 0.6,
+      "V": 1.1942,
+      "attempts": 8,
+      "steps": 3,
+      "best": 1.2075
+    },
+    {
+      "round": 2,
+      "beta": 0.6,
+      "V": 1.2585,
+      "attempts": 4,
+      "steps": 1,
+      "best": 1.2385
+    },
+    {
+      "round": 3,
+      "beta": 0.6,
+      "V": 1.3333,
+      "attempts": 8,
+      "steps": 2,
+      "best": 1.3333
+    },
+    {
+      "round": 4,
+      "beta": 0.6,
+      "V": 1.3814,
+      "attempts": 11,
+      "steps": 3,
+      "best": 1.3997
+    },
+    {
+      "round": 5,
+      "beta": 0.6,
+      "V": 1.5563,
+      "attempts": 8,
+      "steps": 3,
+      "best": 1.5696
+    },
+    {
+      "round": 1,
+      "beta": 0.8,
+      "V": 1.1882,
+      "attempts": 10,
+      "steps": 4,
+      "best": 1.2132
+    },
+    {
+      "round": 2,
+      "beta": 0.8,
+      "V": 1.2296,
+      "attempts": 6,
+      "steps": 3,
+      "best": 1.2396
+    },
+    {
+      "round": 3,
+      "beta": 0.8,
+      "V": 1.3133,
+      "attempts": 12,
+      "steps": 3,
+      "best": 1.3333
+    },
+    {
+      "round": 4,
+      "beta": 0.8,
+      "V": 1.3814,
+      "attempts": 11,
+      "steps": 3,
+      "best": 1.3997
+    },
+    {
+      "round": 5,
+      "beta": 0.8,
+      "V": 1.5563,
+      "attempts": 8,
+      "steps": 3,
+      "best": 1.5696
+    },
+    {
+      "round": 1,
+      "beta": 1.0,
+      "V": 1.1807,
+      "attempts": 13,
+      "steps": 4,
+      "best": 1.2132
+    },
+    {
+      "round": 2,
+      "beta": 1.0,
+      "V": 1.2296,
+      "attempts": 6,
+      "steps": 3,
+      "best": 1.2396
+    },
+    {
+      "round": 3,
+      "beta": 1.0,
+      "V": 1.3133,
+      "attempts": 12,
+      "steps": 3,
+      "best": 1.3333
+    },
+    {
+      "round": 4,
+      "beta": 1.0,
+      "V": 1.3814,
+      "attempts": 11,
+      "steps": 3,
+      "best": 1.3997
+    },
+    {
+      "round": 5,
+      "beta": 1.0,
+      "V": 1.5563,
+      "attempts": 8,
+      "steps": 3,
+      "best": 1.5696
+    }
+  ]
+}

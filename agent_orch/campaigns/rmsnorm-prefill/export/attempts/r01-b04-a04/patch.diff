@@ -1,0 +1,155 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+index c642a86806b..8994fe21891 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+@@ -279,6 +279,13 @@ void kernel_main() {
+ 
+                         cb_pre_intermediate.reserve_back(1);
+ 
++                        // Accumulate sum(x**2) for the whole group in DST tile 0: ELWMUL always
++                        // accumulates onto Dst (Dst += SrcA*SrcB; DST is zeroed on release), so
++                        // every mul_tiles into dst 0 adds its square to the running fp32 sum. One
++                        // pack per group instead of one L1-accumulating fp32 pack per input tile
++                        // (the packer was the PRE bottleneck, ~125 ns/tile). DST is held across
++                        // the cumulative input waits; nothing upstream depends on compute here.
++                        tile_regs_acquire();
+                         for (uint32_t col_tile = 0; col_tile < pre_group_width; col_tile += block_size) {
+                             const uint32_t tiles_in_block = ((pre_group_width - col_tile) >= block_size)
+                                                                 ? block_size
+@@ -294,24 +301,17 @@ void kernel_main() {
+                                 input_tiles_waited = need;
+                             }
+ 
+-                            tile_regs_acquire();
+-                            for (uint32_t i = 0; i < block_size && col_tile + i < pre_group_width; i++) {
++                            for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                 const uint32_t abs_idx = group_base + col_tile + i;
+-                                mul_tiles(input_cb, input_cb, abs_idx, abs_idx, i);
+-                            }
+-                            tile_regs_commit();
+-
+-                            tile_regs_wait();
+-                            for (uint32_t i = 0; i < block_size && col_tile + i < pre_group_width; i++) {
+-                                pack_tile<true>(i, pre_intermediate_cb, 0);
+-                                if (col_tile == 0 && i == 0) {
+-                                    PACK((llk_pack_reconfig_l1_acc(1)));
+-                                }
++                                mul_tiles(input_cb, input_cb, abs_idx, abs_idx, 0);
+                             }
+-                            tile_regs_release();
+                         }
++                        tile_regs_commit();
++
++                        tile_regs_wait();
++                        pack_tile(0, pre_intermediate_cb);
++                        tile_regs_release();
+                         cb_pre_intermediate.push_back(1);
+-                        PACK((llk_pack_reconfig_l1_acc(0)));
+ 
+                         // Row/head reduce → 1 stat tile. SUM (col 0 = sum). Post phase
+                         // divides by H_full or head_dim via the AVG scalar.
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index dd3dfc315b2..a273b67ae76 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -131,6 +131,43 @@ void kernel_main() {
+         w_reduce_factor,
+         static_cast<bool>(w_fuse_rope)>(w_eps_bits, TensorAccessor(w_transmat_args, transformation_mat_addr));
+ 
++    // ---- push my num_stats sticks for `round` into the forwarder's packet_buf, inc arrival ----
++    // Each stat occupies a 128 B sub-stick at dst + s*128 (mean then variance for
++    // LayerNorm); the worker contributes one slot (my_slot*stick_bytes) regardless.
++    auto push_stick = [&](uint32_t round) {
++        DeviceZoneScopedN("W_PUSH");
++        cb_stats_local.wait_front(num_stats);
++        const uint32_t src0 = cb_stats_local.get_read_ptr();
++        const uint32_t dst = fwd_packet_buf_addr + (round & 1u) * packet_slot_bytes + my_slot * stick_bytes;
++        // The forwarder's packet buffer is a grid-uniform CB, so its address is our own.
++        UnicastEndpoint fwd_core;
++        for (uint32_t s = 0; s < num_stats; s++) {
++            const uint32_t src = src0 + s * stat_tile_bytes;
++            const uint32_t sub = dst + s * kStatBytes;
++            noc.async_write(  // face_00 row0
++                CoreLocalMem<uint32_t>(src),
++                fwd_core,
++                kFaceRowBytes,
++                {},
++                {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub});
++            noc.async_write(  // face_01 row0
++                CoreLocalMem<uint32_t>(src + kFace01Off),
++                fwd_core,
++                kFaceRowBytes,
++                {},
++                {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub + kFaceRowBytes});
++        }
++        noc.async_write_barrier();
++        // Arrival handshake: the stick must be visible in the forwarder's packet buffer
++        // *before* the forwarder sees the count go up, hence the write barrier above and
++        // the atomic barrier below.
++        fwd_arrival_sem.up(noc, fwd_x, fwd_y, 1);
++        noc.async_atomic_barrier();
++        cb_stats_local.pop_front(num_stats);
++    };
++
++    bool first_stick_pushed = false;
++
+     // Whole gamma row under ONE barrier: face_00 row 0 + face_01 row 0 per tile (the rest of
+     // a [1,H] TILE page is padding). Each worker starts at a different page so the workers
+     // don't all hit the same DRAM bank at once. Compute waits on weight_cb cumulatively.
+@@ -156,6 +193,13 @@ void kernel_main() {
+                 {.page_id = w_page, .offset_bytes = weight_face_bytes},
+                 {});
+             w_page = (w_page + 1 == w_weight_tiles) ? 0u : (w_page + 1);
++            // Don't let the gamma issue loop gate the AG start: if PRE has already pushed the
++            // first row's stat, push the stick now (write barrier only, the reads stay in flight).
++            if (!first_stick_pushed && tile_row_start < tile_row_end &&
++                cb_stats_local.pages_available_at_front(num_stats)) {
++                push_stick(0);
++                first_stick_pushed = true;
++            }
+         }
+         noc.async_read_barrier();
+         cb_weight.push_back(w_weight_tiles);
+@@ -165,39 +209,9 @@ void kernel_main() {
+     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
+         const uint32_t round = tile_row - tile_row_start;
+ 
+-        // ---- 1. push my num_stats sticks into the forwarder's packet_buf, inc arrival ----
+-        // Each stat occupies a 128 B sub-stick at dst + s*128 (mean then variance for
+-        // LayerNorm); the worker contributes one slot (my_slot*stick_bytes) regardless.
+-        {
+-            DeviceZoneScopedN("W_PUSH");
+-            cb_stats_local.wait_front(num_stats);
+-            const uint32_t src0 = cb_stats_local.get_read_ptr();
+-            const uint32_t dst = fwd_packet_buf_addr + (round & 1u) * packet_slot_bytes + my_slot * stick_bytes;
+-            // The forwarder's packet buffer is a grid-uniform CB, so its address is our own.
+-            UnicastEndpoint fwd_core;
+-            for (uint32_t s = 0; s < num_stats; s++) {
+-                const uint32_t src = src0 + s * stat_tile_bytes;
+-                const uint32_t sub = dst + s * kStatBytes;
+-                noc.async_write(  // face_00 row0
+-                    CoreLocalMem<uint32_t>(src),
+-                    fwd_core,
+-                    kFaceRowBytes,
+-                    {},
+-                    {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub});
+-                noc.async_write(  // face_01 row0
+-                    CoreLocalMem<uint32_t>(src + kFace01Off),
+-                    fwd_core,
+-                    kFaceRowBytes,
+-                    {},
+-                    {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub + kFaceRowBytes});
+-            }
+-            noc.async_write_barrier();
+-            // Arrival handshake: the stick must be visible in the forwarder's packet buffer
+-            // *before* the forwarder sees the count go up, hence the write barrier above and
+-            // the atomic barrier below.
+-            fwd_arrival_sem.up(noc, fwd_x, fwd_y, 1);
+-            noc.async_atomic_barrier();
+-            cb_stats_local.pop_front(num_stats);
++        // ---- 1. push my sticks (unless already pushed while the gamma reads were in flight) ----
++        if (!first_stick_pushed || round != 0) {
++            push_stick(round);
+         }
+ 
+         // ---- 2. wait for the forwarder's go (this round's ring gather landed) ----

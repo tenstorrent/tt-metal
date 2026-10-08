@@ -1,0 +1,40 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index 69e852ae967..1b5021fc1cb 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -287,26 +287,31 @@ void kernel_main() {
+                         const bool east_col_bank = (bank >= NUM_DRAM_BANKS / 2) == left_of_dram_col;
+                         use_alt = east_col_bank && (((out_idx / NUM_DRAM_BANKS) & 1u) == 0u);
+                     }
++                    // Posted (no write ack): the drain's per-core rate is capped downstream of issue
++                    // (r03-b02-a03 / r03-b03-a03), so drop the ack round trip each 2 KB tile carries.
+                     if (use_alt) {
+-                        noc_alt.async_write(
++                        noc_alt.async_write<NocOptions::POSTED>(
+                             CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
+                     } else {
+-                        noc.async_write(
++                        noc.async_write<NocOptions::POSTED>(
+                             CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
+                     }
+                     rd += output_tile_bytes;
+                 }
+-                noc.async_writes_flushed();
++                // Departed from L1 before compute may reuse the slots.
++                noc.async_writes_flushed<NocOptions::POSTED>();
+                 if constexpr (dual_noc_drain != 0) {
+-                    noc_alt.async_writes_flushed();
++                    noc_alt.async_writes_flushed<NocOptions::POSTED>();
+                 }
+                 cb_output.pop_front(block_size);
+             }
+         }
+     }
+     noc.async_write_barrier();
++    noc.async_writes_flushed<NocOptions::POSTED>();
+     if constexpr (dual_noc_drain != 0) {
+         noc_alt.async_write_barrier();
++        noc_alt.async_writes_flushed<NocOptions::POSTED>();
+     }
+     // Reset the go-sem for the next invocation. Trace replay re-runs this kernel without
+     // re-running host-side semaphore init, so leaving a stale non-zero count here would let

@@ -1,0 +1,35 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index 21548a47c4a..364336a82a9 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -208,6 +208,30 @@ void kernel_main() {
+                 first_stick_pushed = true;
+             }
+         }
++        // Same for the wait on the gamma reads landing: poll the read-response counter the barrier
++        // spins on, and push the stick the moment the stat is ready instead of holding it until
++        // the last gamma read is in. Compute only needs gamma after it has produced the stat.
++        {
++            DeviceZoneScopedN("W_GBAR");
++            const uint8_t noc_id = noc.get_noc_id();
++            while (true) {
++                if constexpr (noc_mode == DM_DYNAMIC_NOC) {
++                    invalidate_l1_cache();
++                    if (ncrisc_dynamic_noc_reads_flushed(noc_id)) {
++                        break;
++                    }
++                } else {
++                    if (ncrisc_noc_reads_flushed(noc_id)) {
++                        break;
++                    }
++                }
++                if (!first_stick_pushed && tile_row_start < tile_row_end &&
++                    cb_stats_local.pages_available_at_front(num_stats)) {
++                    push_stick(0);
++                    first_stick_pushed = true;
++                }
++            }
++        }
+         noc.async_read_barrier();
+         cb_weight.push_back(w_weight_tiles);
+     }

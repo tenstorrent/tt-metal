@@ -1,0 +1,52 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index 69e852ae967..3b20eb30d20 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -90,6 +90,10 @@ constexpr auto w_weight_args = TensorAccessorArgs<WCB + 3>();
+ // loaded by every core's wrap-around traffic. A destination whose NoC0 (east, then south) path is short goes
+ // out on NoC0 on every other visit to its bank, unloading those links without crowding NoC0's own rows.
+ constexpr uint32_t dual_noc_drain = get_compile_time_arg_val(w_weight_args.next_compile_time_args_offset());
++// Drain writes rotate over the 4 unicast request VCs (static VC = buddy bit + class 0b00/0b01). A write's cmd buf
++// only turns ready once its VC is assigned, so on a single VC each 2 KB tile waits for the previous packet to leave
++// that VC's injection buffer; spreading consecutive tiles (different DRAM banks) over 4 VCs keeps several in flight.
++constexpr uint32_t kDrainVcs = 4u;
+ 
+ void kernel_main() {
+     size_t arg_idx = 0;
+@@ -270,6 +274,8 @@ void kernel_main() {
+             // The short eastward (NoC0) column is x=9 for cores left of it and x=0 (via the 16->0 wrap)
+             // for cores right of it.
+             const bool left_of_dram_col = my_x[0] < 9u;
++            uint32_t drain_vc = 0;
++            uint32_t alt_vc = 0;
+             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                 const uint32_t tiles_in_block =
+                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+@@ -288,11 +294,23 @@ void kernel_main() {
+                         use_alt = east_col_bank && (((out_idx / NUM_DRAM_BANKS) & 1u) == 0u);
+                     }
+                     if (use_alt) {
+-                        noc_alt.async_write(
+-                            CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
++                        noc_alt.async_write<NocOptions::CUSTOM_VC>(
++                            CoreLocalMem<uint32_t>(rd),
++                            output_accessor,
++                            output_page_bytes,
++                            {},
++                            {.page_id = out_idx},
++                            {.vc = alt_vc});
++                        alt_vc = (alt_vc + 1 == kDrainVcs) ? 0u : (alt_vc + 1);
+                     } else {
+-                        noc.async_write(
+-                            CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
++                        noc.async_write<NocOptions::CUSTOM_VC>(
++                            CoreLocalMem<uint32_t>(rd),
++                            output_accessor,
++                            output_page_bytes,
++                            {},
++                            {.page_id = out_idx},
++                            {.vc = drain_vc});
++                        drain_vc = (drain_vc + 1 == kDrainVcs) ? 0u : (drain_vc + 1);
+                     }
+                     rd += output_tile_bytes;
+                 }

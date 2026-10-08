@@ -1,0 +1,28 @@
+{
+  "node_id": "r01-b02-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 1,
+  "branch": 2,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "4e704cd33dd3b7502a063b4fb5e45bad65d60aee",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T10:26:03+00:00",
+  "mechanism": "column-split each tile-row across multiple worker cores (more cores, same single AG round)",
+  "tags": [
+    "parallelism",
+    "work-decomposition",
+    "col-split"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.0025,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T10:32:30+00:00"
+}

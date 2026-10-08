@@ -1,0 +1,34 @@
+{
+  "node_id": "r04-b02-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 4,
+  "branch": 2,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "133aa8e859d79fabe94c170b0cd0ee59baf1ca8c",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T13:53:19+00:00",
+  "mechanism": "forwarder-push AG release: stats scratch height-sharded on the forwarder core, forwarder multicasts the gathered pages + go to the worker rectangle and compute unpacks each worker's stick in place (64 B-page gathered CB), replacing 20 serial go incs + 8 post-go remote stick reads",
+  "tags": [
+    "ag-release",
+    "forwarder",
+    "multicast",
+    "stick-read",
+    "l1-scratch",
+    "compute-indexing"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.2988,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_forwarder.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T14:15:26+00:00"
+}

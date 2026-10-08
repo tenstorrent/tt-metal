@@ -1,0 +1,31 @@
+{
+  "node_id": "r01-b03-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 1,
+  "branch": 3,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "4e704cd33dd3b7502a063b4fb5e45bad65d60aee",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T10:26:04+00:00",
+  "mechanism": "Column-split each tile-row across k=floor(64/rows) worker cores; row leader FPU-sums follower partial sum-of-squares before the forwarder AG",
+  "tags": [
+    "parallelism",
+    "core-count",
+    "work-split",
+    "ag-protocol"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 0.9867,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 22,
+  "finished_at": "2026-10-08T10:36:51+00:00"
+}

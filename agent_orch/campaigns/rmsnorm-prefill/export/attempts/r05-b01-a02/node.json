@@ -1,0 +1,35 @@
+{
+  "node_id": "r05-b01-a02",
+  "campaign": "rmsnorm-prefill",
+  "round": 5,
+  "branch": 1,
+  "attempt": 2,
+  "parent": "r05-b01-a01",
+  "parent_commit": "a49989332977fa672a4f5a3c520b6ef43657d533",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T15:27:35+00:00",
+  "mechanism": "four-wave k=4 column split: 80 quarter-row workers run as four 20-core AG waves (chained start sems, 8-bit wave fields in a 4-wave forwarder, one 1280 B group read per chip, 16-partial combine)",
+  "tags": [
+    "parallelism",
+    "col-split",
+    "ag-pipeline",
+    "waves",
+    "forwarder",
+    "host-factory",
+    "writer"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.432,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_wave_forwarder.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 22,
+  "finished_at": "2026-10-08T15:39:17+00:00"
+}

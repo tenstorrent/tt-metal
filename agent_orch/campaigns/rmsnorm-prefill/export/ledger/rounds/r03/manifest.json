@@ -1,0 +1,12 @@
+{
+  "round": 3,
+  "policy": "v2",
+  "beta": 0.6,
+  "W": 4,
+  "R": 3,
+  "reason": "R=3 (beta 0.6): recorded 4th attempts never lifted a round best by more than noise; the next round re-roots at this round's best, so depth continues there (2 earlier round(s))",
+  "round_root": "dream/rmsnorm-prefill/n/r02-b02-a03",
+  "round_root_commit": "227bd7adcbdb1caec2dab04a37c30db5d2f54069",
+  "max_steps": 30,
+  "started_at": "2026-10-08T13:00:36+00:00"
+}

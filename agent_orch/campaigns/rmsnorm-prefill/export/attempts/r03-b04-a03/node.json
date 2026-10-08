@@ -1,0 +1,32 @@
+{
+  "node_id": "r03-b04-a03",
+  "campaign": "rmsnorm-prefill",
+  "round": 3,
+  "branch": 4,
+  "attempt": 3,
+  "parent": "r03-b04-a02",
+  "parent_commit": "0500b1b54c7b8b296092f2c4fcd6bbe177091482",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T13:30:59+00:00",
+  "mechanism": "stream gamma to compute in 8-page chunks (sticky-trid BRISC reads, bank-rotated within each chunk) so the x*gamma pre-pass starts at PRE end instead of after the last gamma page; parent's two-wave AG reverted to r03-b04-a01",
+  "tags": [
+    "gamma-read",
+    "pipelining",
+    "writer",
+    "straggler",
+    "transaction-id",
+    "revert"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.3318,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_wave_forwarder.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 20,
+  "finished_at": "2026-10-08T13:43:41+00:00"
+}

@@ -1,0 +1,31 @@
+{
+  "node_id": "r04-b02-a03",
+  "campaign": "rmsnorm-prefill",
+  "round": 4,
+  "branch": 2,
+  "attempt": 3,
+  "parent": "r04-b02-a02",
+  "parent_commit": "3720156b14cef1171a6090baf45c9f66f1ea0422",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T14:23:33+00:00",
+  "mechanism": "port the round-4 stack (posted drain + ack-free stick push + streamed gamma from r04-b04-a02, PRE at HiFi2 from r04-b01-a02) onto the streamed-multicast AG release",
+  "tags": [
+    "combination",
+    "port",
+    "ag-release",
+    "multicast",
+    "posted-writes",
+    "math-fidelity",
+    "gamma-read"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4216,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T14:25:39+00:00"
+}

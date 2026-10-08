@@ -1,0 +1,28 @@
+{
+  "node_id": "r03-b01-a01",
+  "campaign": "rmsnorm-prefill",
+  "round": 3,
+  "branch": 1,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "227bd7adcbdb1caec2dab04a37c30db5d2f54069",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T13:00:37+00:00",
+  "mechanism": "post-AG stat combine: run *1/H + eps + rsqrt on the SFPU over the stat row only (VectorMode::R, 2 iterations/face) before transpose_dest, instead of over the full 32x32 fp32 tile after it",
+  "tags": [
+    "compute",
+    "post-phase",
+    "stat-combine",
+    "sfpu",
+    "ag-release"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.3129,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 20,
+  "finished_at": "2026-10-08T13:05:28+00:00"
+}

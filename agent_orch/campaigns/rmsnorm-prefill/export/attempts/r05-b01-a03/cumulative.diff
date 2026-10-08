@@ -1,0 +1,1450 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
+index f6352a82f80..ec4d46115aa 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
+@@ -233,7 +233,7 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
+             tensor_args.persistent_output_buffer.has_value(),
+             "persistent_output_buffer is required for TP>1 with multiple workers (use_mux). "
+             "Allocate it as a regular device tensor with shape "
+-            "[1, 1, {}, {}], dtype=FLOAT32, layout=ROW_MAJOR, DRAM INTERLEAVED.",
++            "[1, 1, {}, {}], dtype=FLOAT32, layout=ROW_MAJOR, L1 INTERLEAVED.",
+             e_shape[2],
+             e_shape[3]);
+         const auto& buf = tensor_args.persistent_output_buffer.value();
+@@ -251,7 +251,7 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
+             buf.dtype());
+         TT_FATAL(
+             buf.memory_config().buffer_type() == expected.memory_config().buffer_type(),
+-            "persistent_output_buffer must be in DRAM");
++            "persistent_output_buffer must be in L1 (allocate it with the op's create_stats_buffer)");
+         TT_FATAL(
+             buf.memory_config().memory_layout() == expected.memory_config().memory_layout(),
+             "persistent_output_buffer must be INTERLEAVED");
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp
+index a47e6cf1cf5..5cd9167a321 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp
+@@ -146,13 +146,21 @@ struct DitFusedDistributedRmsnormSizing {
+     // physical stick is stats_per_token * 128 B.
+     uint32_t stats_per_token = 1;
+     uint32_t stick_bytes = 128;  // stats_per_token * 128
++    // Wave column split (RMS, one forwarder, one row per worker): col_split_factor S workers per tile-row
++    // (column 1/S slices), rows split into S AG waves. Each wave's sticks occupy their own wave_span_bytes
++    // region of the page, slot j at dit_rmsnorm_wave_slot_offset(j) (fp32 tile row 0 layout). Shape-only, so
++    // the stats buffer spec agrees; create_at may still run the plain path (the page is just larger).
++    bool col_split_capable = false;
++    uint32_t col_split_factor = 0;  // S (2 or 4); 0 = no split
++    uint32_t wave_slots = 0;        // sticks per wave (S * rows / S)
++    uint32_t wave_span_bytes = 0;
+ };
+ 
+ DitFusedDistributedRmsnormSizing compute_sizing(
+     const DitFusedDistributedRmsnormParams& args, const Tensor& input);
+ 
+ // Single source of truth for the persistent gathered-stats DRAM scratch spec:
+-// [1, 1, total_pages, TILE_HEIGHT * window_size], FLOAT32, ROW_MAJOR, DRAM INTERLEAVED.
++// [1, 1, total_pages, TILE_HEIGHT * window_size], FLOAT32, ROW_MAJOR, L1 INTERLEAVED.
+ // Used by the pre-alloc helper, compute_output_specs, and validate so the pre-allocated
+ // buffer, the op's expected spec, and the validation check cannot drift. Only meaningful
+ // on the all-gather path (sizing.use_mux; total_pages > 0).
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+index 70981eccf26..ea5bf6e6508 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+@@ -50,6 +50,16 @@ namespace ttnn::experimental::prim {
+ // num_tile_rows below this uses a single worker — spinning up forwarders + the
+ // per-round AG handshake doesn't pay off with <4 tile-rows of compute per chip.
+ constexpr uint32_t kMuxRowsThreshold = 4u;
++// Wave column split (sizing.col_split_capable, factor S): wave slot j's stick sits at
++// dit_rmsnorm_wave_slot_offset(j) inside its wave's region, as fp32 tile row 0 (face_00 row 0 there,
++// face_01 row 0 at +1024). A row's S column slices are slots S*p .. S*p+S-1, 64 B apart (never across the
++// 16-slot face boundary for S | 16), so one dit_rmsnorm_wave_group_read_bytes(S) read lands all of them,
++// and compute addresses each slice's tile at a 64 B granular offset of the gathered CB (kGatherCbPageBytes
++// pages).
++constexpr uint32_t kGatherCbPageBytes = 64u;
++constexpr uint32_t kWaveMaxSlots = 32u;
++constexpr uint32_t dit_rmsnorm_wave_group_read_bytes(uint32_t split) { return 1024u + split * 64u; }
++constexpr uint32_t dit_rmsnorm_wave_slot_offset(uint32_t slot) { return (slot / 16u) * 2048u + (slot % 16u) * 64u; }
+ // input_cb double-buffer depth (chunks): reader fills chunk N+1 while compute is in
+ // chunk N's post phase. 2 = one in flight + one filling.
+ constexpr uint32_t kInputCbChunks = 2u;
+@@ -333,6 +343,38 @@ DitFusedDistributedRmsnormSizing compute_sizing(
+         // window_size is the logical fp32 page width / TILE_HEIGHT; keep the page
+         // formula page_size = TILE_HEIGHT * window_size * 4 == sticks_per_packet * stick_bytes.
+         s.window_size = sticks_per_packet * s.stats_per_token;
++        // Wave column split, factor S in {4, 2} (largest that fits): one forwarder, one row per worker, RMS
++        // sticks, tile-cols and rows divisible by S (>= 4 tiles per worker), and room for S * rows workers +
++        // the forwarder. S workers per row, S waves of rows/S rows; each wave owns a span of the page holding
++        // S sticks per row in the tile-row-0 slot layout. S = 4 keeps 20 cores per wave at 20 rows.
++        const auto grid = input.device()->compute_with_storage_grid_size();
++        const uint32_t num_tile_cols = W / TILE_WIDTH;
++        const bool split_base_ok = input.device()->arch() == tt::ARCH::BLACKHOLE && s.stats_per_token == 1u &&
++                                   num_forwarders == 1u && max_rounds == 1u && s.num_workers == s.num_tile_rows &&
++                                   args.ring_size <= 8u;
++        for (const uint32_t split : {4u, 2u}) {
++            if (!split_base_ok || s.num_tile_rows < 2u * split || s.num_tile_rows % split != 0u ||
++                num_tile_cols % split != 0u || num_tile_cols < 4u * split ||
++                split * s.num_tile_rows + 1u > grid.x * grid.y) {
++                continue;
++            }
++            const uint32_t wave_slots = s.num_tile_rows;  // split * (rows / split)
++            if (wave_slots > kWaveMaxSlots) {
++                continue;
++            }
++            const uint32_t wave_span = tt::round_up(
++                dit_rmsnorm_wave_slot_offset(wave_slots - 1u) + 1024u + 64u, kGatherCbPageBytes);
++            if (wave_span > tt::tt_fabric::get_tt_fabric_max_payload_size_bytes()) {
++                continue;
++            }
++            s.col_split_capable = true;
++            s.col_split_factor = split;
++            s.wave_slots = wave_slots;
++            s.wave_span_bytes = wave_span;
++            s.window_size =
++                std::max<uint32_t>(s.window_size, tt::div_up(split * wave_span, TILE_HEIGHT * sizeof(float)));
++            break;
++        }
+         s.num_chunks_per_device = num_forwarders * max_rounds;
+         s.total_pages = args.ring_size * s.num_chunks_per_device;
+         s.page_size_bytes = TILE_HEIGHT * s.window_size * sizeof(float);
+@@ -341,10 +383,15 @@ DitFusedDistributedRmsnormSizing compute_sizing(
+ }
+ 
+ tt::tt_metal::TensorSpec make_stats_tensor_spec(const DitFusedDistributedRmsnormSizing& sizing) {
+-    // Row-major fp32 DRAM-interleaved scratch: one accessor page per packed stats page.
++    // Row-major fp32 L1-interleaved scratch: one accessor page per packed stats page.
+     // Kept in one place so the pre-alloc helper, compute_output_specs, and validate agree.
++    // L1, not DRAM: the gathered sticks are on the post-AG critical path twice -- every landing
++    // write (local + each peer's fused write+atomic, flush=true) is acked before the forwarder can
++    // release go, and each worker then reads its 2*ring_size 64 B face-rows back. An L1 bank round
++    // trip is much shorter than a DRAM one. Still a mesh-coherent MeshBuffer (same address and
++    // bank->core map on every chip), and the kernels address it through a TensorAccessor either way.
+     ttnn::Shape stats_shape({1u, 1u, sizing.total_pages, TILE_HEIGHT * sizing.window_size});
+-    MemoryConfig stats_mem{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
++    MemoryConfig stats_mem{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
+     return tt::tt_metal::TensorSpec(
+         stats_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), stats_mem));
+ }
+@@ -372,7 +419,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+     const auto& input_shape = input_tensor.padded_shape();
+     const uint32_t W = input_shape[-1];                            // hidden dim per device
+     const uint32_t folded_H = input_tensor.physical_volume() / W;  // total seq rows
+-    const uint32_t num_tile_cols = W / TILE_WIDTH;
++    const uint32_t full_tile_cols = W / TILE_WIDTH;                // tile-cols per device row
+     const uint32_t num_tile_rows = folded_H / TILE_HEIGHT;
+ 
+     const uint32_t num_heads_per_device = args.num_heads_per_device;
+@@ -407,9 +454,24 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+     // Broadcast bulk-read count is one row (num_tile_cols): only TRUE broadcast [1,1,H] uses the
+     // one-shot resident read. per-batch adaLN now streams its per-row batch slice (like per-token),
+     // so it does NOT bulk-read all batches here.
++    const bool fuse_rope = trans_mat.has_value() && rope_cos.has_value() && rope_sin.has_value();
++
++    // Wave column split (see compute_sizing): S = split_factor workers per tile-row, each owning one column
++    // 1/S slice, and the rows split into S all-gather waves. Wave 0 reads first, wave k+1's read queues
++    // behind wave k's, and each wave gets its own fabric gather + go release, so a wave's gather overlaps the
++    // later waves' reads and its drain overlaps the later waves' gathers. Every kernel runs on its slice:
++    // num_tile_cols below is the per-worker width; full_tile_cols stays the DRAM row stride. Only the plain
++    // resident RMS + broadcast-gamma path.
++    const auto split_sizing = compute_sizing(args, input_tensor);
++    const uint32_t split_factor = split_sizing.col_split_factor;
++    const bool col_split = split_sizing.col_split_capable && args.norm_type == DitFusedNormType::RMS &&
++                           !args.per_head_norm && args.num_heads_per_device == 1u && args.ring_size > 1u &&
++                           !has_bias && !fuse_rope && !per_token_weight && !per_batch_weight &&
++                           full_tile_cols / split_factor <= 32u;
++    const uint32_t num_tile_cols = col_split ? full_tile_cols / split_factor : full_tile_cols;
++
+     const uint32_t weight_bcast_tiles = num_tile_cols;
+     const uint32_t bias_bcast_tiles = num_tile_cols;
+-    const bool fuse_rope = trans_mat.has_value() && rope_cos.has_value() && rope_sin.has_value();
+ 
+     // Per-head RoPE: cos/sin shape[1] == num_heads_per_device gives each head
+     // its own cos/sin block. shape[1] == 1 means broadcast (current default).
+@@ -499,6 +561,10 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+         num_workers = pick_num_workers_tp_gt_1(
+             num_tile_rows,
+             derive_worker_cap(grid_size, args.num_links, device->arch(), stick_bytes, args.ring_size, num_tile_rows));
++        if (col_split) {
++            TT_FATAL(num_workers == num_tile_rows, "dit_fused_distributed_rmsnorm: column split needs one row per worker");
++            num_workers = split_factor * num_tile_rows;
++        }
+     }
+     use_mux = !is_tp_1;  // "uses the fabric-forwarder all-gather"
+ 
+@@ -516,7 +582,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
+         num_forwarders,
+         max_cores);
+ 
+-    const uint32_t num_tile_rows_per_worker = tt::div_up(num_tile_rows, num_workers);
++    const uint32_t num_tile_rows_per_worker = col_split ? 1u : tt::div_up(num_tile_rows, num_workers);
+     const uint32_t workers_per_forwarder = use_mux ? tt::div_up(num_workers, num_forwarders) : num_workers;
+     const uint32_t max_rounds = num_tile_rows_per_worker;  // forwarder round == tile-row
+ 
+@@ -548,10 +614,22 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+     auto worker_forwarder = [&](uint32_t w) -> uint32_t { return use_mux ? (w / workers_per_forwarder) : 0u; };
+     auto worker_slot = [&](uint32_t w) -> uint32_t { return use_mux ? (w % workers_per_forwarder) : 0u; };
+     auto worker_num_rows = [&](uint32_t w) -> uint32_t {
++        if (col_split) {
++            return 1u;
++        }
+         const uint32_t s = std::min(w * num_tile_rows_per_worker, num_tile_rows);
+         const uint32_t e = std::min(s + num_tile_rows_per_worker, num_tile_rows);
+         return e - s;
+     };
++    // Column split (factor S): worker i -> wave (i % S), wave slot j = i / S -> (row j / S of the wave, column
++    // slice j % S). The waves interleave over the grid so each wave spans every worker position. Wave w holds
++    // rows [w * rows / S, (w + 1) * rows / S); a row's S slices are adjacent slots S*p .. S*p+S-1.
++    const uint32_t split = std::max<uint32_t>(split_factor, 1u);
++    const uint32_t wave_rows = num_tile_rows / split;
++    auto split_wave = [&](uint32_t w) -> uint32_t { return w % split; };
++    auto split_slot = [&](uint32_t w) -> uint32_t { return w / split; };
++    auto split_row = [&](uint32_t w) -> uint32_t { return split_wave(w) * wave_rows + split_slot(w) / split; };
++    auto split_half = [&](uint32_t w) -> uint32_t { return split_slot(w) % split; };
+ 
+     // The compute kernel processes one tile-row at a time (a sweep over chunk 1-4 showed
+     // chunk=1 best-or-tied everywhere: fabric/AG is only ~2us exposed so bigger chunks buy
+@@ -855,13 +933,33 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+     // stats_per_token (1 RMS sum-sq, 2 LayerNorm mean+var); gathered is
+     // stats_per_token * ring_size (the per-device partials to merge).
+     create_cb(stats_transposed_local_cb_id, program, worker_core_set, fp32_tile_size, stats_per_token, fp32_format);
+-    create_cb(
+-        stats_transposed_gathered_cb_id,
+-        program,
+-        worker_core_set,
+-        fp32_tile_size,
+-        use_mux ? args.ring_size * stats_per_token : 1u,
+-        fp32_format);
++    // Column split: device d's group read (all S slices' sticks) lands at d * gather_pair_stride of the
++    // gathered CB, and compute reads slice h's fp32 tile at page d * gather_pair_pages + h (64 B pages). The
++    // CB extends one full tile past the last slice view so that tile view stays inside it.
++    const uint32_t gather_pair_stride =
++        col_split ? tt::round_up(dit_rmsnorm_wave_group_read_bytes(split_factor), kGatherCbPageBytes) : 0u;
++    const uint32_t gather_pair_pages = gather_pair_stride / kGatherCbPageBytes;
++    const uint32_t gathered_cb_pages =
++        col_split ? tt::div_up(
++                        (args.ring_size - 1u) * gather_pair_stride + (split_factor - 1u) * kGatherCbPageBytes +
++                            fp32_tile_size,
++                        kGatherCbPageBytes)
++                  : 0u;
++    if (col_split) {
++        tt::tt_metal::CircularBufferConfig gathered_cfg =
++            tt::tt_metal::CircularBufferConfig(
++                gathered_cb_pages * kGatherCbPageBytes, {{stats_transposed_gathered_cb_id, fp32_format}})
++                .set_page_size(stats_transposed_gathered_cb_id, kGatherCbPageBytes);
++        tt::tt_metal::CreateCircularBuffer(program, worker_core_set, gathered_cfg);
++    } else {
++        create_cb(
++            stats_transposed_gathered_cb_id,
++            program,
++            worker_core_set,
++            fp32_tile_size,
++            use_mux ? args.ring_size * stats_per_token : 1u,
++            fp32_format);
++    }
+     uint32_t unit_packet_bytes = 0u;
+     if (use_mux) {
+         // Coalesced fabric packet, allocated on the WHOLE grid so its L1 address
+@@ -870,9 +968,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         // its own). page == one fabric packet (sticks_per_packet * 128 B), depth 2.
+         const uint32_t sticks_per_packet =
+             std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / stick_bytes);
+-        unit_packet_bytes = sticks_per_packet * stick_bytes;
++        unit_packet_bytes = col_split ? split_sizing.page_size_bytes : sticks_per_packet * stick_bytes;
+         TT_FATAL(
+-            sticks_per_packet >= workers_per_forwarder,
++            col_split || sticks_per_packet >= workers_per_forwarder,
+             "dit_fused_distributed_rmsnorm: fabric packet holds {} sticks but a forwarder group has {} workers",
+             sticks_per_packet,
+             workers_per_forwarder);
+@@ -1037,6 +1135,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+     // fabric-inc'd by peer forwarders (resolved later).
+     const uint32_t arrival_sem_id = use_mux ? tt::tt_metal::CreateSemaphore(program, all_core_set, 0u) : 0u;
+     const uint32_t go_sem_id = use_mux ? tt::tt_metal::CreateSemaphore(program, all_core_set, 0u) : 0u;
++    // Column split: a wave-k (k > 0) worker's reader waits on start_sem until its wave-(k-1) partner's read is
++    // nearly in.
++    const uint32_t start_sem_id = col_split ? tt::tt_metal::CreateSemaphore(program, worker_core_set, 0u) : 0u;
+ 
+     // ------------------------------------------------------------------------
+     // Reader kernel (on worker cores)
+@@ -1114,13 +1215,36 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+     } else {
+         TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);  // dummy
+     }
++    // Broadcast [1,H] gamma on the AG path with a resident POST: the worker writer (BRISC,
++    // idle until PRE ends) reads it at kernel start, so the reader's queue carries only input.
++    const bool writer_reads_weight =
++        use_mux && has_weight && !per_token_weight && !per_batch_weight && !block_major_post;
++    reader_compile_args.push_back(static_cast<uint32_t>(writer_reads_weight));
++    TT_FATAL(
++        !col_split || (!streaming_low_l1 && !block_major_post && (writer_reads_weight || !has_weight)),
++        "dit_fused_distributed_rmsnorm: column split needs the resident POST with writer-read broadcast gamma");
++    // Column split: DRAM row stride (full tile-cols) + the wave-B start semaphore.
++    reader_compile_args.push_back(full_tile_cols);
++    reader_compile_args.push_back(start_sem_id);
++
++    // Path-aware dual-NoC output drain (AG worker writer, Blackhole, DRAM-interleaved output): the
++    // writer (BRISC, NoC1) sends part of its output tiles on NoC0, so both DM kernels on the worker
++    // cores run in dynamic-NoC mode (a core's DM kernels must share the noc mode). Each keeps its
++    // default NoC; only the writer's drain issues on the other one.
++    const bool dual_noc_drain = use_mux && device->arch() == tt::ARCH::BLACKHOLE &&
++                                output_tensor.buffer()->buffer_type() == BufferType::DRAM &&
++                                output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
++    DataMovementConfig reader_config = ReaderDataMovementConfig(reader_compile_args);
++    if (dual_noc_drain) {
++        reader_config.noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
++    }
+ 
+     KernelHandle reader_kernel_id = CreateKernel(
+         program,
+         "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
+         "dit_rmsnorm_fused_reader.cpp",
+         worker_core_set,
+-        ReaderDataMovementConfig(reader_compile_args));
++        reader_config);
+ 
+     // ------------------------------------------------------------------------
+     // Writer kernel (on worker cores). Two variants:
+@@ -1206,12 +1330,29 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         } else {
+             TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
+         }
++        writer_compile_args.push_back(static_cast<uint32_t>(writer_reads_weight));
++        writer_compile_args.push_back(weight_cb_id);
++        writer_compile_args.push_back(weight_bcast_tiles);
++        if (has_weight) {
++            TensorAccessorArgs(weight.value().buffer()).append_to(writer_compile_args);
++        } else {
++            TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
++        }
++        writer_compile_args.push_back(static_cast<uint32_t>(dual_noc_drain));
++        // Column split: tile-row-0 stick slots, one group read per device into the 64 B-page gathered CB.
++        writer_compile_args.push_back(col_split ? split_factor : 0u);
++        writer_compile_args.push_back(gathered_cb_pages);
++        writer_compile_args.push_back(gather_pair_stride);
++        DataMovementConfig writer_config = WriterDataMovementConfig(writer_compile_args);
++        if (dual_noc_drain) {
++            writer_config.noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
++        }
+         writer_kernel_id = CreateKernel(
+             program,
+             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
+             "dit_rmsnorm_fused_worker_writer.cpp",
+             worker_core_set,
+-            WriterDataMovementConfig(writer_compile_args));
++            writer_config);
+     }
+ 
+     // ------------------------------------------------------------------------
+@@ -1248,10 +1389,18 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+             mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
+         fwd_ct.insert(fwd_ct.end(), forward_route.begin(), forward_route.end());
+         fwd_ct.insert(fwd_ct.end(), backward_route.begin(), backward_route.end());
++        if (col_split) {
++            // Wave forwarder: wave w's sticks are the page region [w * span, (w + 1) * span), S waves.
++            fwd_ct.push_back(split_sizing.wave_slots);
++            fwd_ct.push_back(split_sizing.wave_span_bytes);
++            fwd_ct.push_back(split_factor);
++        }
+         forwarder_kernel_ids[f] = CreateKernel(
+             program,
+-            "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_norm_common/kernels/dataflow/"
+-            "dit_fused_norm_forwarder.cpp",
++            col_split ? "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/"
++                        "dataflow/dit_rmsnorm_wave_forwarder.cpp"
++                      : "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_norm_common/kernels/dataflow/"
++                        "dit_fused_norm_forwarder.cpp",
+             CoreRangeSet({CoreRange(forwarder_cores[f], forwarder_cores[f])}),
+             WriterDataMovementConfig(fwd_ct));
+     }
+@@ -1277,7 +1426,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         rotated_input_cb_id,
+         num_tile_cols,
+         block_size,
+-        /*stats_tiles_cols=*/args.ring_size,
++        // Column split: each device contributes all S column slices' partials (S * ring_size tiles), and the
++        // combine's 1/(num_tile_cols * 32 * stats_tiles_cols) stays 1/H_full with the 1/S num_tile_cols.
++        /*stats_tiles_cols=*/col_split ? split_factor * args.ring_size : args.ring_size,
+         static_cast<uint32_t>(has_weight),
+         static_cast<uint32_t>(fuse_rope),
+         head_dim_tiles,
+@@ -1322,6 +1473,11 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         static_cast<uint32_t>(per_batch_weight),
+         static_cast<uint32_t>(per_batch_bias),
+         rows_per_batch_tiles,
++        // CT 43/44/45: column split factor S (0 = off). The gathered CB has 64 B pages; device d / slice h's
++        // partial is the fp32 tile at page d * gather_pair_pages + h.
++        col_split ? split_factor : 0u,
++        gathered_cb_pages,
++        gather_pair_pages,
+     };
+ 
+     // fp32 dest accumulation is REQUIRED, unconditionally — not just for fp32
+@@ -1394,17 +1550,41 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+     SetCommonRuntimeArgs(
+         program, reader_kernel_id, {input_addr, weight_addr, bias_addr, rope_cos_addr, rope_sin_addr, recip_addr_rt});
+     if (use_mux) {
+-        SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt, stats_dram_addr});
++        SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt, stats_dram_addr, weight_addr});
+     } else {
+         SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt});
+     }
+     for (uint32_t i = 0; i < num_workers; i++) {
+         const auto& core = worker_cores[i];
+-        const uint32_t tile_row_start = std::min(i * num_tile_rows_per_worker, num_tile_rows);
++        const uint32_t tile_row_start =
++            col_split ? split_row(i) : std::min(i * num_tile_rows_per_worker, num_tile_rows);
+         const uint32_t tile_row_end = std::min(tile_row_start + num_tile_rows_per_worker, num_tile_rows);
+         const uint32_t this_core_rows = tile_row_end - tile_row_start;
+ 
+-        SetRuntimeArgs(program, reader_kernel_id, core, {tile_row_start, tile_row_end});
++        // Column split: column offset of this worker's slice, and its wave role bits (1 = ups the next
++        // wave's same-slot partner's start_sem, worker i + 1; 2 = waits on its own start_sem; 0 = no waves).
++        const uint32_t col_offset = col_split ? split_half(i) * num_tile_cols : 0u;
++        uint32_t wave_role = 0u;
++        CoreCoord wave_partner{0, 0};
++        if (col_split) {
++            if (split_wave(i) > 0u) {
++                wave_role |= 2u;
++            }
++            if (split_wave(i) + 1u < split_factor) {
++                wave_role |= 1u;
++                wave_partner = mesh_device->worker_core_from_logical_core(worker_cores[i + 1u]);
++            }
++        }
++        SetRuntimeArgs(
++            program,
++            reader_kernel_id,
++            core,
++            {tile_row_start,
++             tile_row_end,
++             col_offset,
++             wave_role,
++             static_cast<uint32_t>(wave_partner.x),
++             static_cast<uint32_t>(wave_partner.y)});
+ 
+         std::vector<uint32_t> writer_rt_args = {tile_row_start, tile_row_end};
+         if (use_mux) {
+@@ -1414,6 +1594,16 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+             writer_rt_args.push_back(static_cast<uint32_t>(forwarder_virtual[f].y));
+             writer_rt_args.push_back(f);
+             writer_rt_args.push_back(worker_slot(i));
++            // Column split: column offset, stick byte offset in the page, the row pair's read offset, and
++            // the arrival increment (wave w counts in its own 32/S-bit field of the forwarder's arrival sem).
++            const uint32_t wave_base = col_split ? split_wave(i) * split_sizing.wave_span_bytes : 0u;
++            writer_rt_args.push_back(col_offset);
++            writer_rt_args.push_back(
++                col_split ? wave_base + dit_rmsnorm_wave_slot_offset(split_slot(i)) : worker_slot(i) * stick_bytes);
++            writer_rt_args.push_back(
++                col_split ? wave_base + dit_rmsnorm_wave_slot_offset(split_slot(i) - split_slot(i) % split_factor)
++                          : 0u);
++            writer_rt_args.push_back(col_split ? (1u << ((32u / split_factor) * split_wave(i))) : 1u);
+         }
+         SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
+ 
+@@ -1440,9 +1630,21 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         const uint32_t group_begin = f * workers_per_forwarder;
+         const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
+         std::vector<uint32_t> fwd_rt = {stats_dram_addr, out_ready_sem_bank_addr};
+-        for (uint32_t w = group_begin; w < group_end; w++) {
+-            fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].x));
+-            fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].y));
++        if (col_split) {
++            // Wave-major, slot order: entry w * wave_slots + j is wave w's slot j (the go release order).
++            std::vector<uint32_t> slot_worker(group_end - group_begin, 0u);
++            for (uint32_t w = group_begin; w < group_end; w++) {
++                slot_worker[split_wave(w) * split_sizing.wave_slots + split_slot(w)] = w;
++            }
++            for (const uint32_t w : slot_worker) {
++                fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].x));
++                fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].y));
++            }
++        } else {
++            for (uint32_t w = group_begin; w < group_end; w++) {
++                fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].x));
++                fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].y));
++            }
+         }
+         for (uint32_t r = 0; r < max_rounds; r++) {
+             uint32_t pc = 0;
+@@ -1473,7 +1675,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         .forwarder_runtime_args = {},
+     };
+     TT_ASSERT(shared.reader_common_args->size() == 6);
+-    TT_ASSERT(shared.writer_common_args->size() == (use_mux ? 3 : 2));
++    TT_ASSERT(shared.writer_common_args->size() == (use_mux ? 4 : 2));
+     shared.forwarder_runtime_args.reserve(forwarder_kernel_ids.size());
+     for (size_t f = 0; f < forwarder_kernel_ids.size(); ++f) {
+         auto& runtime_args = GetRuntimeArgs(program, forwarder_kernel_ids[f], forwarder_cores[f]);
+@@ -1561,6 +1763,7 @@ void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
+         writer_common[1] = trans_mat_addr;
+         if (!shared.forwarder_runtime_args.empty()) {
+             writer_common[2] = stats_dram_addr;
++            writer_common[3] = weight_addr;
+         }
+         // Forwarders read the stats DRAM scratch base at rt[0] and the out_ready
+         // GlobalSemaphore address at rt[1]. BOTH must be refreshed on cache hits:
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+index f09a6595888..68bfbb79e1d 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+@@ -39,8 +39,10 @@
+ #include "api/compute/matmul.h"
+ #include "api/compute/transpose.h"
+ #include "api/compute/transpose_dest.h"
++#include "api/compute/experimental/add_rsqrt.h"
+ #include "api/dataflow/circular_buffer.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
++#include "tools/profiler/kernel_profiler.hpp"
+ 
+ void kernel_main() {
+     // === Compile-time args ===
+@@ -137,8 +139,31 @@ void kernel_main() {
+     constexpr uint32_t stats_reduce_src_cb =
+         (packed_ag_enabled != 0) ? stats_transposed_gathered_cb : stats_gathered_cb;
+ 
++    // Resident whole-row packed-AG PRE: turn S = sum_k x_k*x_k (DST-accumulated, packed once) into the
++    // ROW-0 stick layout with ONE matmul C = ones * S^T, where ones = the SUM reduce-scalar tile (1.0 in
++    // row 0 of every face), so C[0][i] = sum_j S[i][j]. That replaces reduce<SUM,REDUCE_ROW> (col 0) plus
++    // the col-0 -> row-0 transpose: one unpack/math/pack round trip instead of two on the AG-start path.
++    // S is unpacked to tf32 in SrcA exactly as the reduce did, so the stat precision is unchanged.
++    constexpr bool mm_row_stat = (packed_ag_enabled != 0) && (streaming_low_l1 == 0) && (per_head_norm == 0);
++
+     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
+ 
++    // Wave column split (factor col_split = S, 0 = off): the writer lands one group read per device in the
++    // gathered CB, whose pages are 64 B. Partial t (device t / S, column slice t % S) is the fp32 tile whose
++    // row 0 starts at page (t / S) * gather_pair_pages + t % S; the rest of that tile view is other slots'
++    // data, unused.
++    constexpr uint32_t col_split = get_compile_time_arg_val(43);
++    constexpr uint32_t gathered_cb_pages = get_compile_time_arg_val(44);
++    constexpr uint32_t gather_pair_pages = get_compile_time_arg_val(45);
++    constexpr uint32_t gathered_wait_pages = (col_split != 0) ? gathered_cb_pages : stats_tiles_cols;
++    auto gathered_tile = [](uint32_t t) -> uint32_t {
++        if constexpr (col_split != 0) {
++            return (t / col_split) * gather_pair_pages + (t % col_split);
++        } else {
++            return t;
++        }
++    };
++
+     compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_cb, transformation_mat_cb, rotated_input_cb);
+     matmul_init(intermediate_cb, transformation_mat_cb);
+     compute_kernel_hw_startup(input_cb, input_cb, input_cb);
+@@ -182,6 +207,15 @@ void kernel_main() {
+     CircularBuffer cb_mul_weight_result(mul_weight_result_cb);
+     CircularBuffer cb_add_bias_result(add_bias_result_cb);
+ 
++    // Pre-scale by gamma under the AG wait: x * gamma doesn't depend on the gathered
++    // stats, so for the plain broadcast-weight path compute it into intermediate_cb
++    // (fp32, whole padded row) right after the local stat is pushed, while the
++    // forwarder ring-gathers. POST then collapses to ONE pass:
++    // out = (x * gamma) * bcast_col(1/rms), replacing sub-phases 1 (x * 1/rms) and 2 (* gamma).
++    constexpr bool prescale_weight = (has_weight != 0) && (per_token_weight == 0) && (has_bias == 0) &&
++                                     (fuse_rope == 0) && (per_head_norm == 0) && (streaming_low_l1 == 0) &&
++                                     (block_major_post == 0) && (packed_ag_enabled != 0);
++
+     // Process the core's tile rows one at a time (chunk size is always 1).
+     // per_head_norm produces num_heads_per_device stats per row (one per
+     // head) instead of stats_tiles_cols (== ring_size) for the AG path.
+@@ -270,6 +304,13 @@ void kernel_main() {
+ 
+                         cb_pre_intermediate.reserve_back(1);
+ 
++                        // Accumulate sum(x**2) for the whole group in DST tile 0: ELWMUL always
++                        // accumulates onto Dst (Dst += SrcA*SrcB; DST is zeroed on release), so
++                        // every mul_tiles into dst 0 adds its square to the running fp32 sum. One
++                        // pack per group instead of one L1-accumulating fp32 pack per input tile
++                        // (the packer was the PRE bottleneck, ~125 ns/tile). DST is held across
++                        // the cumulative input waits; nothing upstream depends on compute here.
++                        tile_regs_acquire();
+                         for (uint32_t col_tile = 0; col_tile < pre_group_width; col_tile += block_size) {
+                             const uint32_t tiles_in_block = ((pre_group_width - col_tile) >= block_size)
+                                                                 ? block_size
+@@ -285,33 +326,43 @@ void kernel_main() {
+                                 input_tiles_waited = need;
+                             }
+ 
+-                            tile_regs_acquire();
+-                            for (uint32_t i = 0; i < block_size && col_tile + i < pre_group_width; i++) {
++                            for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                 const uint32_t abs_idx = group_base + col_tile + i;
+-                                mul_tiles(input_cb, input_cb, abs_idx, abs_idx, i);
++                                mul_tiles(input_cb, input_cb, abs_idx, abs_idx, 0);
+                             }
+-                            tile_regs_commit();
++                        }
++                        tile_regs_commit();
+ 
++                        tile_regs_wait();
++                        pack_tile(0, pre_intermediate_cb);
++                        tile_regs_release();
++                        cb_pre_intermediate.push_back(1);
++
++                        if constexpr (mm_row_stat) {
++                            // Row sums straight into row 0 (see mm_row_stat): matmul transposes in1 (S).
++                            reconfig_data_format(pre_intermediate_cb, reduce_scalar_sum_cb);
++                            pack_reconfig_data_format(stats_transposed_local_cb);
++                            matmul_init(reduce_scalar_sum_cb, pre_intermediate_cb, /*transpose=*/1);
++                            cb_pre_intermediate.wait_front(1);
++                            cb_stats_transposed_local.reserve_back(1);
++                            tile_regs_acquire();
++                            matmul_tiles(reduce_scalar_sum_cb, pre_intermediate_cb, 0, 0, 0);
++                            tile_regs_commit();
+                             tile_regs_wait();
+-                            for (uint32_t i = 0; i < block_size && col_tile + i < pre_group_width; i++) {
+-                                pack_tile<true>(i, pre_intermediate_cb, 0);
+-                                if (col_tile == 0 && i == 0) {
+-                                    PACK((llk_pack_reconfig_l1_acc(1)));
+-                                }
+-                            }
++                            pack_tile(0, stats_transposed_local_cb);
+                             tile_regs_release();
++                            cb_stats_transposed_local.push_back(1);
++                            cb_pre_intermediate.pop_front(1);
++                        } else {
++                            // Row/head reduce → 1 stat tile. SUM (col 0 = sum). Post phase
++                            // divides by H_full or head_dim via the AVG scalar.
++                            compute_kernel_lib::reduce<
++                                PoolType::SUM,
++                                ReduceDim::REDUCE_ROW,
++                                pre_intermediate_cb,
++                                reduce_scalar_sum_cb,
++                                stats_dest_cb>(compute_kernel_lib::ReduceInputBlockShape::single());
+                         }
+-                        cb_pre_intermediate.push_back(1);
+-                        PACK((llk_pack_reconfig_l1_acc(0)));
+-
+-                        // Row/head reduce → 1 stat tile. SUM (col 0 = sum). Post phase
+-                        // divides by H_full or head_dim via the AVG scalar.
+-                        compute_kernel_lib::reduce<
+-                            PoolType::SUM,
+-                            ReduceDim::REDUCE_ROW,
+-                            pre_intermediate_cb,
+-                            reduce_scalar_sum_cb,
+-                            stats_dest_cb>(compute_kernel_lib::ReduceInputBlockShape::single());
+                     }
+                 }
+             }
+@@ -322,7 +373,7 @@ void kernel_main() {
+         // 32 strided fp32 col-0 loads. transpose_wh maps col 0 (face_00 col0 +
+         // face_10 col0) -> row 0 (face_00 row0 + face_01 row0). Packed-AG (all-gather)
+         // path only; is_tp_1 keeps col 0 and reduces locally (no forwarder involved).
+-        if constexpr (packed_ag_enabled != 0) {
++        if constexpr (packed_ag_enabled != 0 && !mm_row_stat) {
+             transpose_init(stats_local_cb);
+             pack_reconfig_data_format(stats_transposed_local_cb);
+             {  // single row per iteration (chunk size is 1)
+@@ -339,6 +390,30 @@ void kernel_main() {
+             }
+         }
+ 
++        // -------- x * gamma → intermediate_cb (overlaps the AG) --------
++        if constexpr (prescale_weight) {
++            reconfig_data_format(input_cb, weight_cb);
++            pack_reconfig_data_format(intermediate_cb);
++            mul_bcast_rows_init(input_cb, weight_cb);
++            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
++                const uint32_t tiles_in_block =
++                    (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
++                cb_weight.wait_front(col_tile + tiles_in_block);
++                cb_intermediate.reserve_back(block_size);
++                tile_regs_acquire();
++                for (uint32_t i = 0; i < tiles_in_block; i++) {
++                    mul_tiles_bcast_rows(input_cb, weight_cb, col_tile + i, col_tile + i, i);
++                }
++                tile_regs_commit();
++                tile_regs_wait();
++                for (uint32_t i = 0; i < tiles_in_block; i++) {
++                    pack_tile(i, intermediate_cb);
++                }
++                tile_regs_release();
++                cb_intermediate.push_back(block_size);
++            }
++        }
++
+         // -------- WAIT FOR FORWARDER TO COMPLETE AG FOR THIS CHUNK --------
+         {
+             // Packed-AG path: the worker writer lands the ring gather in row-0 of the
+@@ -422,19 +497,41 @@ void kernel_main() {
+                                     // tile IN DST (row 0 -> col 0) with transpose_dest — no CB
+                                     // round-trip — then *1/H + eps + rsqrt on col 0. One transpose
+                                     // total (deferred past the sum) vs one per gathered tile.
+-                                    cb_stats_transposed_gathered.wait_front(stats_tiles_cols);
++                                    cb_stats_transposed_gathered.wait_front(gathered_wait_pages);
++                                    DeviceZoneScopedN("C_COMB");
+                                     reconfig_data_format(stats_transposed_gathered_cb, stats_transposed_gathered_cb);
+                                     pack_reconfig_data_format(reduce_result_cb);
+                                     tile_regs_acquire();
+                                     binary_tiles_init<true, EltwiseBinaryType::ELWADD>(
+                                         stats_transposed_gathered_cb, stats_transposed_gathered_cb, false);
+-                                    add_tiles(stats_transposed_gathered_cb, stats_transposed_gathered_cb, 0, 1, 0);
++                                    add_tiles(
++                                        stats_transposed_gathered_cb,
++                                        stats_transposed_gathered_cb,
++                                        gathered_tile(0),
++                                        gathered_tile(1),
++                                        0);
+                                     binary_tiles_init<false, EltwiseBinaryType::ELWADD>(
+                                         stats_transposed_gathered_cb, stats_transposed_gathered_cb, true);
+                                     for (uint32_t k = 2; k < stats_tiles_cols; k += 2) {
+                                         add_tiles(
+-                                            stats_transposed_gathered_cb, stats_transposed_gathered_cb, k, k + 1, 0);
++                                            stats_transposed_gathered_cb,
++                                            stats_transposed_gathered_cb,
++                                            gathered_tile(k),
++                                            gathered_tile(k + 1),
++                                            0);
+                                     }
++#if defined(ARCH_BLACKHOLE)
++                                    // 1/rms = rsqrt(sum * 1/H + eps) on ROW 0 only, before the transpose: the 32
++                                    // per-token sums are tile row 0 (faces 0/1). One BH SFPLOAD covers 4 rows x 8
++                                    // cols of one column parity, so ITERATIONS=2 per face = rows 0-3, all columns;
++                                    // VectorMode::R = faces 0 and 1. 4 SFPU iterations of one fused MAD + rsqrt
++                                    // instead of 3 full-tile (96-iteration) passes on the post-AG critical path.
++                                    add_rsqrt_tile_init();
++                                    add_rsqrt_tile<false, VectorMode::R, 2, false, recip_h_full_bits>(0, eps_bits);
++                                    // row-0 1/rms -> col-0, in place (fp32 DST).
++                                    transpose_dest_init<true>(stats_transposed_gathered_cb);
++                                    transpose_dest<true>(0);
++#else
+                                     // row-0 sum -> col-0, in place (fp32 DST).
+                                     transpose_dest_init<true>(stats_transposed_gathered_cb);
+                                     transpose_dest<true>(0);
+@@ -443,13 +540,14 @@ void kernel_main() {
+                                     add_unary_tile(0, eps_bits);
+                                     rsqrt_tile_init();
+                                     rsqrt_tile(0);
++#endif
+                                     tile_regs_commit();
+                                     tile_regs_wait();
+                                     cb_reduce_result.reserve_back(1);
+                                     pack_tile(0, reduce_result_cb);
+                                     cb_reduce_result.push_back(1);
+                                     tile_regs_release();
+-                                    cb_stats_transposed_gathered.pop_front(stats_tiles_cols);
++                                    cb_stats_transposed_gathered.pop_front(gathered_wait_pages);
+                                 } else {
+                                     // Non-packed path: gathered tiles are in COL 0.
+                                     cb_stats_gathered.wait_front(stats_tiles_cols);
+@@ -494,13 +592,43 @@ void kernel_main() {
+                                     eps_rsqrt);
+                             }
+ 
+-                            cb_reduce_result.wait_front(1);
++                            // The prescale POST waits after its unpack reconfig/init (below), so the
++                            // unpacker sets up POST while math/pack still run the stat combine.
++                            if constexpr (!prescale_weight) {
++                                cb_reduce_result.wait_front(1);
++                            }
+                         }  // P_NRED
+ 
+                         // block_major_post fuses mul-rms into the single per-block POST loop
+                         // below, so the standalone P_NMUL sub-phase is skipped (and
+                         // reduce_result_cb stays resident for that loop to consume).
+-                        if constexpr (!block_major_post) {
++                        if constexpr (prescale_weight) {
++                            // ----- Single POST pass: (x * gamma) * (1/rms) → output_cb -----
++                            reconfig_data_format(intermediate_cb, reduce_result_cb);
++                            pack_reconfig_data_format(output_cb);
++                            mul_bcast_cols_init(intermediate_cb, reduce_result_cb);
++                            cb_reduce_result.wait_front(1);
++                            DeviceZoneScopedN("C_POST");
++                            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
++                                const uint32_t tiles_in_block =
++                                    (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
++                                cb_intermediate.wait_front(block_size);
++                                cb_output.reserve_back(block_size);
++                                tile_regs_acquire();
++                                for (uint32_t i = 0; i < tiles_in_block; i++) {
++                                    mul_tiles_bcast_cols(intermediate_cb, reduce_result_cb, i, 0, i);
++                                }
++                                tile_regs_commit();
++                                tile_regs_wait();
++                                for (uint32_t i = 0; i < tiles_in_block; i++) {
++                                    pack_tile(i, output_cb);
++                                }
++                                tile_regs_release();
++                                cb_intermediate.pop_front(block_size);
++                                cb_output.push_back(block_size);
++                            }
++                            cb_reduce_result.pop_front(1);
++                        } else if constexpr (!block_major_post) {
+                             // ----- Sub-phase 1: x * (1/rms) → mul_rms_result_cb -----
+                             reconfig_data_format(input_cb, reduce_result_cb);
+                             pack_reconfig_data_format(mul_rms_result_cb);
+@@ -908,7 +1036,7 @@ void kernel_main() {
+                     }
+                 }
+ 
+-                if constexpr (has_weight && !block_major_post) {
++                if constexpr (has_weight && !block_major_post && !prescale_weight) {
+                     // ----- Sub-phase 2: (x * 1/rms) * weight → mul_weight_result_cb -----
+                     // Broadcast weight (default): weight_cb holds num_tile_cols
+                     // row-broadcast tiles pushed once per worker; we use
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+index a65e6ea1a58..a55c201971b 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+@@ -23,6 +23,7 @@
+ #include "api/dataflow/dataflow_api.h"
+ #include "api/dataflow/noc.h"
+ #include "api/dataflow/circular_buffer.h"
++#include "api/dataflow/noc_semaphore.h"
+ #include "api/tensor/noc_traits.h"
+ #include "api/core_local_mem.h"
+ #include <tt-metalium/constants.hpp>
+@@ -102,6 +103,18 @@ void kernel_main() {
+     constexpr auto rope_cos_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+     constexpr auto rope_sin_args = TensorAccessorArgs<rope_cos_args.next_compile_time_args_offset()>();
+     constexpr auto recip_args = TensorAccessorArgs<rope_sin_args.next_compile_time_args_offset()>();
++    // Broadcast gamma read by the worker writer (BRISC) at kernel start instead of here, so the
++    // NCRISC read queue carries only the input row (see the factory's writer_reads_weight).
++    constexpr uint32_t weight_from_writer = get_compile_time_arg_val(recip_args.next_compile_time_args_offset());
++    // Wave column split: the DRAM row stride (the worker reads num_tile_cols tiles from col_offset), and
++    // the start semaphore a wave-k (k > 0) worker waits on. Its wave-(k-1) partner ups it once its own read
++    // is kWaveSignalLeadBlocks blocks from landing, so wave k's reads queue right behind wave k-1's and the
++    // DRAM stays busy across the waves. wave_role is a bit set: a middle wave both waits and signals.
++    constexpr uint32_t row_stride_tiles = get_compile_time_arg_val(recip_args.next_compile_time_args_offset() + 1);
++    constexpr uint32_t start_sem_id = get_compile_time_arg_val(recip_args.next_compile_time_args_offset() + 2);
++    constexpr uint32_t kWaveSignal = 1u;
++    constexpr uint32_t kWaveWait = 2u;
++    constexpr uint32_t kWaveSignalLeadBlocks = 2u;
+ 
+     uint32_t arg_idx = 0;
+     const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
+@@ -112,6 +125,10 @@ void kernel_main() {
+     const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
+     const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
+     const uint32_t recip_addr = get_common_arg_val<uint32_t>(5);
++    const uint32_t col_offset = get_arg_val<uint32_t>(arg_idx++);
++    const uint32_t wave_role = get_arg_val<uint32_t>(arg_idx++);
++    const uint32_t partner_x = get_arg_val<uint32_t>(arg_idx++);
++    const uint32_t partner_y = get_arg_val<uint32_t>(arg_idx++);
+ 
+     Noc noc;
+ 
+@@ -176,7 +193,7 @@ void kernel_main() {
+     // until chunk 0's input rows are all pushed — the latency then hides
+     // behind chunk 0's pre compute + fabric mcast + fabric wait. Issued in
+     // `block_size`-sized pushes so the compute kernel can consume cumulatively.
+-    bool weight_pushed = (has_weight == 0);
++    bool weight_pushed = (has_weight == 0) || (weight_from_writer != 0);
+     bool bias_pushed = (has_bias == 0);
+ 
+     // Read one full pass over a tile-row's input (num_tile_cols tiles) in block_size
+@@ -203,6 +220,84 @@ void kernel_main() {
+         }
+     };
+ 
++    // Trid-pipelined resident input pass. Each block_size-tile block is tagged with its own
++    // NoC read transaction id, so up to kInputLookahead blocks are in flight while we wait
++    // on (and push) only the oldest one: PRE still consumes block by block, but the DRAM
++    // round-trips overlap instead of serialising per block. When `with_weight`, the broadcast
++    // gamma face-row reads for each block are issued right behind its input reads (one
++    // shared trid), so gamma is resident as soon as the input row is, instead of a second
++    // per-block-barriered pass after it.
++    constexpr uint32_t kInputTrids = 14u;  // trids 1..14 for input blocks
++    constexpr uint32_t kWeightTrid = 15u;
++    constexpr uint32_t kInputLookahead = 4u;
++    constexpr uint32_t num_input_blocks = (num_tile_cols + block_size - 1u) / block_size;
++    constexpr uint32_t wave_signal_block =
++        (num_input_blocks > kWaveSignalLeadBlocks) ? (num_input_blocks - 1u - kWaveSignalLeadBlocks) : 0u;
++    auto read_input_pass_pipelined = [&](uint32_t input_tile_idx, bool with_weight) {
++        cb_input.reserve_back(num_tile_cols);
++        const uint32_t input_base = cb_input.get_write_ptr();
++        uint32_t weight_base = 0;
++        if (with_weight) {
++            cb_weight.reserve_back(weight_bcast_tiles);
++            weight_base = cb_weight.get_write_ptr();
++        }
++        for (uint32_t k = 0; k < num_input_blocks + kInputLookahead; k++) {
++            if (k < num_input_blocks) {
++                const uint32_t col_tile = k * block_size;
++                const uint32_t tiles_in_block =
++                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
++                const uint32_t trid = 1u + (k % kInputTrids);
++                for (uint32_t i = 0; i < tiles_in_block; i++) {
++                    noc.async_read<NocOptions::TXN_ID>(
++                        input_accessor,
++                        CoreLocalMem<uint32_t>(input_base + (col_tile + i) * input_tile_bytes),
++                        input_page_bytes,
++                        {.page_id = input_tile_idx + col_tile + i},
++                        {},
++                        {.trid = trid});
++                }
++                if (with_weight) {
++                    for (uint32_t i = 0; i < tiles_in_block; i++) {
++                        const uint32_t w_page = col_tile + i;
++                        const uint32_t w_dst = weight_base + w_page * weight_tile_bytes;
++                        noc.async_read<NocOptions::TXN_ID>(
++                            weight_accessor,
++                            CoreLocalMem<uint32_t>(w_dst),
++                            weight_face_row_bytes,
++                            {.page_id = w_page},
++                            {},
++                            {.trid = kWeightTrid});
++                        noc.async_read<NocOptions::TXN_ID>(
++                            weight_accessor,
++                            CoreLocalMem<uint32_t>(w_dst + weight_face_bytes),
++                            weight_face_row_bytes,
++                            {.page_id = w_page, .offset_bytes = weight_face_bytes},
++                            {},
++                            {.trid = kWeightTrid});
++                    }
++                }
++            }
++            if (k >= kInputLookahead) {
++                const uint32_t kb = k - kInputLookahead;
++                const uint32_t col_tile = kb * block_size;
++                const uint32_t tiles_in_block =
++                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
++                noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 1u + (kb % kInputTrids)});
++                cb_input.push_back(tiles_in_block);
++                if (kb == wave_signal_block && (wave_role & kWaveSignal) != 0u) {
++                    Semaphore<>(start_sem_id).up(noc, partner_x, partner_y, 1);
++                }
++            }
++        }
++        if (with_weight) {
++            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = kWeightTrid});
++            cb_weight.push_back(weight_bcast_tiles);
++        }
++        // Restore the default read trid for the plain reads below / later kernels.
++        noc_async_read_set_trid(0, noc.get_noc_id());
++    };
++    static_assert(kInputLookahead < kInputTrids, "lookahead must not reuse an in-flight trid");
++
+     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
+         // Deep input read: issue the whole row's tiles, then ONE barrier, so
+         // num_tile_cols reads are in flight at once (keeps DRAM-read latency hidden;
+@@ -215,7 +310,13 @@ void kernel_main() {
+         // sum-of-squares starts as soon as input lands; cos/sin are issued AFTER (see
+         // below) so their DRAM read latency overlaps PRE — they aren't consumed until
+         // the POST RoPE phase.
+-        const uint32_t input_tile_idx = tile_row * num_tile_cols;
++        const uint32_t input_tile_idx = tile_row * row_stride_tiles + col_offset;
++        if ((wave_role & kWaveWait) != 0u && tile_row == tile_row_start) {
++            DeviceZoneScopedN("R_WAVEWAIT");
++            Semaphore<> start_sem(start_sem_id);
++            start_sem.wait_min(1);
++            start_sem.set(0);  // trace replay doesn't re-run the host semaphore init
++        }
+         // Input read placement is schedule-driven (see input_schedule above):
+         //   INPUT_FIRST: read everything HERE so PRE starts ASAP — streaming = both
+         //     passes (PRE + POST re-read), resident = the whole row once.
+@@ -225,9 +326,19 @@ void kernel_main() {
+         //   DEFER_ALL: read nothing here; both passes are read below, after side inputs.
+         if constexpr (input_schedule == SCHED_INPUT_FIRST) {
+             DeviceZoneScopedN("R_INPUT");
+-            read_input_pass(input_tile_idx);
+             if constexpr (streaming_low_l1) {
++                read_input_pass(input_tile_idx);
+                 read_input_pass(input_tile_idx);  // POST re-read pass
++            } else {
++                // Broadcast gamma rides along with the first row's input (the deferred
++                // weight read below then sees weight_pushed and skips).
++                constexpr bool bcast_weight =
++                    (has_weight != 0) && (per_token_weight == 0) && (per_batch_weight == 0);
++                const bool with_weight = bcast_weight && !weight_pushed;
++                read_input_pass_pipelined(input_tile_idx, with_weight);
++                if (with_weight) {
++                    weight_pushed = true;
++                }
+             }
+         } else if constexpr (input_schedule == SCHED_SPLIT) {
+             DeviceZoneScopedN("R_INPUT");
+@@ -503,4 +614,7 @@ void kernel_main() {
+             read_input_pass(input_tile_idx);  // POST re-read pass
+         }
+     }
++    if ((wave_role & kWaveSignal) != 0u) {
++        noc.async_atomic_barrier();  // the partner's start_sem inc
++    }
+ }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index 54e5b9ce885..21b477717a5 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -78,6 +78,26 @@ constexpr uint32_t w_reduce_factor = get_compile_time_arg_val(SCB + 4);
+ constexpr uint32_t w_eps_bits = get_compile_time_arg_val(SCB + 5);
+ constexpr uint32_t w_fuse_rope = get_compile_time_arg_val(SCB + 6);
+ constexpr auto w_transmat_args = TensorAccessorArgs<SCB + 7>();
++// Broadcast [1,H] gamma read on BRISC at kernel start (the reader then skips it): the writer is
++// idle until PRE ends, so gamma lands during the input read without sharing NCRISC's queue.
++constexpr uint32_t WCB = w_transmat_args.next_compile_time_args_offset();
++constexpr uint32_t writer_reads_weight = get_compile_time_arg_val(WCB + 0);
++constexpr uint32_t w_weight_cb = get_compile_time_arg_val(WCB + 1);
++constexpr uint32_t w_weight_tiles = get_compile_time_arg_val(WCB + 2);
++constexpr auto w_weight_args = TensorAccessorArgs<WCB + 3>();
++// Path-aware dual-NoC drain (Blackhole, DRAM-interleaved output, kernels in DM_DYNAMIC_NOC). The drain's
++// default NoC1 routes north then west, so the hot links are the westward rows next to the DRAM columns,
++// loaded by every core's wrap-around traffic. A destination whose NoC0 (east, then south) path is short goes
++// out on NoC0 on every other visit to its bank, unloading those links without crowding NoC0's own rows.
++constexpr uint32_t dual_noc_drain = get_compile_time_arg_val(w_weight_args.next_compile_time_args_offset());
++// Wave column split (factor col_split = S, 0 = off): this worker owns one column 1/S slice of its tile-row.
++// Its stick sits in the page as fp32 tile row 0 (face_00 row 0 at the slot offset, face_01 row 0 at +1024),
++// and the row's S slices are adjacent 64 B slots, so one gather_pair_stride-spaced read per device brings
++// all S slices' sticks.
++constexpr uint32_t col_split = get_compile_time_arg_val(w_weight_args.next_compile_time_args_offset() + 1);
++constexpr uint32_t gathered_cb_pages = get_compile_time_arg_val(w_weight_args.next_compile_time_args_offset() + 2);
++constexpr uint32_t gather_pair_stride = get_compile_time_arg_val(w_weight_args.next_compile_time_args_offset() + 3);
++constexpr uint32_t kPairReadBytes = kFace01Off + col_split * kFaceRowBytes;
+ 
+ void kernel_main() {
+     size_t arg_idx = 0;
+@@ -92,8 +112,18 @@ void kernel_main() {
+     const uint32_t fwd_y = get_arg_val<uint32_t>(arg_idx++);
+     const uint32_t my_forwarder_index = get_arg_val<uint32_t>(arg_idx++);
+     const uint32_t my_slot = get_arg_val<uint32_t>(arg_idx++);
++    // Column offset of this worker's slice (0 without the split), the stick's byte offset in the forwarder
++    // packet, the row group's byte offset in each device page, and the arrival increment
++    // (1 << (32/S)*wave).
++    const uint32_t col_offset = get_arg_val<uint32_t>(arg_idx++);
++    const uint32_t stick_off = get_arg_val<uint32_t>(arg_idx++);
++    const uint32_t pair_off = get_arg_val<uint32_t>(arg_idx++);
++    const uint32_t arrival_inc = get_arg_val<uint32_t>(arg_idx++);
++    const uint32_t weight_addr = get_common_arg_val<uint32_t>(3);
+ 
+     Noc noc;
++    // Second NoC for the dual-NoC drain (only used when dual_noc_drain; the writer's own NoC is 1).
++    Noc noc_alt(static_cast<uint8_t>(1u - noc.get_noc_id()));
+ 
+     CircularBuffer cb_packet(packet_cb);
+     CircularBuffer cb_output(output_cb);
+@@ -123,43 +153,136 @@ void kernel_main() {
+         w_reduce_factor,
+         static_cast<bool>(w_fuse_rope)>(w_eps_bits, TensorAccessor(w_transmat_args, transformation_mat_addr));
+ 
++    // ---- push my num_stats sticks for `round` into the forwarder's packet_buf, inc arrival ----
++    // Each stat occupies a 128 B sub-stick at dst + s*128 (mean then variance for
++    // LayerNorm); the worker contributes one slot (my_slot*stick_bytes) regardless.
++    auto push_stick = [&](uint32_t round) {
++        DeviceZoneScopedN("W_PUSH");
++        cb_stats_local.wait_front(num_stats);
++        const uint32_t src0 = cb_stats_local.get_read_ptr();
++        const uint32_t dst = fwd_packet_buf_addr + (round & 1u) * packet_slot_bytes + stick_off;
++        constexpr uint32_t f01_dst_off = (col_split != 0) ? kFace01Off : kFaceRowBytes;
++        // The forwarder's packet buffer is a grid-uniform CB, so its address is our own.
++        UnicastEndpoint fwd_core;
++        for (uint32_t s = 0; s < num_stats; s++) {
++            const uint32_t src = src0 + s * stat_tile_bytes;
++            const uint32_t sub = dst + s * kStatBytes;
++            noc.async_write(  // face_00 row0
++                CoreLocalMem<uint32_t>(src),
++                fwd_core,
++                kFaceRowBytes,
++                {},
++                {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub});
++            noc.async_write(  // face_01 row0
++                CoreLocalMem<uint32_t>(src + kFace01Off),
++                fwd_core,
++                kFaceRowBytes,
++                {},
++                {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub + f01_dst_off});
++        }
++        // Arrival handshake: the stick must be visible in the forwarder's packet buffer
++        // *before* the forwarder sees the count go up. The writes and the inc leave this core
++        // on the same NoC and VC (NOC_UNICAST_WRITE_VC) for the same destination, so they are
++        // delivered in order once the writes have left the NIU (the fabric's flush=true fused
++        // write+inc relies on the same ordering). No write-ack round trip before the inc, and
++        // no atomic-ack wait here: the atomic barrier runs once at kernel end. Flushed also
++        // means the stat CB slot has been read out, so it can be popped.
++        noc.async_writes_flushed();
++        fwd_arrival_sem.up(noc, fwd_x, fwd_y, arrival_inc);
++        cb_stats_local.pop_front(num_stats);
++    };
++
++    bool first_stick_pushed = false;
++
++    // Gamma face_00 row 0 + face_01 row 0 per tile (the rest of a [1,H] TILE page is padding),
++    // streamed to compute in chunks of NUM_DRAM_BANKS pages: each chunk's reads carry their own
++    // read trid, and a chunk is pushed kGammaLookahead chunks behind the issue front, so compute's
++    // x*gamma pre-pass (cumulative per-block weight_cb wait) starts as soon as PRE ends instead
++    // of after the last gamma page lands (the issue loop is ~50 ns/read, ~5.5 us at H=7168/4).
++    // Within a chunk each worker starts at a different page (one page per bank per chunk), so
++    // the workers don't all hit the same DRAM bank at once.
++    if constexpr (writer_reads_weight != 0) {
++        DeviceZoneScopedN("W_GAMMA");
++        CircularBuffer cb_weight(w_weight_cb);
++        const auto weight_accessor = TensorAccessor(w_weight_args, weight_addr);
++        const uint32_t weight_tile_bytes = cb_weight.get_tile_size();
++        const uint32_t weight_datum_bytes = weight_tile_bytes / 1024u;    // bf16 2 B / fp32 4 B
++        const uint32_t weight_face_row_bytes = 16u * weight_datum_bytes;  // FACE_WIDTH
++        const uint32_t weight_face_bytes = 256u * weight_datum_bytes;     // FACE_HW
++        constexpr uint32_t kGammaChunk = NUM_DRAM_BANKS;
++        constexpr uint32_t kGammaTrids = 4u;  // read trids 1..4 on this RISC's NoC (BRISC only)
++        constexpr uint32_t kGammaLookahead = 2u;
++        static_assert(kGammaLookahead < kGammaTrids, "lookahead must not reuse an in-flight trid");
++        constexpr uint32_t kFaceRowMaxBytes = 64u;  // fp32 face row; one NoC packet
++        constexpr uint32_t num_gamma_chunks = (w_weight_tiles + kGammaChunk - 1u) / kGammaChunk;
++        const uint32_t rot = tile_row_start % kGammaChunk;
++        // Don't let the gamma issue loop gate the AG start: if PRE has already pushed the
++        // first row's stat, push the stick now (write flush only, the reads stay in flight).
++        auto poll_stick = [&]() {
++            if (!first_stick_pushed && tile_row_start < tile_row_end &&
++                cb_stats_local.pages_available_at_front(num_stats)) {
++                push_stick(0);
++                first_stick_pushed = true;
++            }
++        };
++        cb_weight.reserve_back(w_weight_tiles);
++        const uint32_t weight_base = cb_weight.get_write_ptr();
++        for (uint32_t k = 0; k < num_gamma_chunks + kGammaLookahead; k++) {
++            if (k < num_gamma_chunks) {
++                const uint32_t chunk_start = k * kGammaChunk;
++                const uint32_t chunk_pages =
++                    (w_weight_tiles - chunk_start >= kGammaChunk) ? kGammaChunk : (w_weight_tiles - chunk_start);
++                // Sticky tag: every read below (plain one-packet reads) is counted under this trid.
++                noc_async_read_set_trid(1u + (k % kGammaTrids), noc.get_noc_id());
++                uint32_t j = rot % chunk_pages;
++                for (uint32_t n = 0; n < chunk_pages; n++) {
++                    const uint32_t w_page = chunk_start + j;
++                    const uint32_t w_dst = weight_base + w_page * weight_tile_bytes;
++                    noc.async_read<NocOptions::DEFAULT, kFaceRowMaxBytes>(
++                        weight_accessor,
++                        CoreLocalMem<uint32_t>(w_dst),
++                        weight_face_row_bytes,
++                        {.page_id = col_offset + w_page},
++                        {});
++                    noc.async_read<NocOptions::DEFAULT, kFaceRowMaxBytes>(
++                        weight_accessor,
++                        CoreLocalMem<uint32_t>(w_dst + weight_face_bytes),
++                        weight_face_row_bytes,
++                        {.page_id = col_offset + w_page, .offset_bytes = weight_face_bytes},
++                        {});
++                    j = (j + 1 == chunk_pages) ? 0u : (j + 1);
++                    poll_stick();
++                }
++            }
++            if (k >= kGammaLookahead) {
++                const uint32_t kb = k - kGammaLookahead;
++                const uint32_t kb_start = kb * kGammaChunk;
++                const uint32_t kb_pages =
++                    (w_weight_tiles - kb_start >= kGammaChunk) ? kGammaChunk : (w_weight_tiles - kb_start);
++                // Spin instead of blocking: gamma lands only once the input DRAM stream drains (every
++                // wave's reads are ahead of it), and a wave's stat is usually ready long before that.
++                // Keep polling so the stick goes out as soon as PRE pushes it (the barrier below then
++                // returns at once and just does the L1 invalidate).
++                const uint32_t kb_trid = 1u + (kb % kGammaTrids);
++                while (!noc.is_read_trid_flushed(kb_trid)) {
++                    poll_stick();
++                }
++                noc.async_read_barrier<NocOptions::TXN_ID>({.trid = kb_trid});
++                cb_weight.push_back(kb_pages);
++            }
++            poll_stick();
++        }
++        // Restore the default read trid for the plain reads below.
++        noc_async_read_set_trid(0, noc.get_noc_id());
++    }
++
+     uint32_t go_target = 0;
+     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
+         const uint32_t round = tile_row - tile_row_start;
+ 
+-        // ---- 1. push my num_stats sticks into the forwarder's packet_buf, inc arrival ----
+-        // Each stat occupies a 128 B sub-stick at dst + s*128 (mean then variance for
+-        // LayerNorm); the worker contributes one slot (my_slot*stick_bytes) regardless.
+-        {
+-            DeviceZoneScopedN("W_PUSH");
+-            cb_stats_local.wait_front(num_stats);
+-            const uint32_t src0 = cb_stats_local.get_read_ptr();
+-            const uint32_t dst = fwd_packet_buf_addr + (round & 1u) * packet_slot_bytes + my_slot * stick_bytes;
+-            // The forwarder's packet buffer is a grid-uniform CB, so its address is our own.
+-            UnicastEndpoint fwd_core;
+-            for (uint32_t s = 0; s < num_stats; s++) {
+-                const uint32_t src = src0 + s * stat_tile_bytes;
+-                const uint32_t sub = dst + s * kStatBytes;
+-                noc.async_write(  // face_00 row0
+-                    CoreLocalMem<uint32_t>(src),
+-                    fwd_core,
+-                    kFaceRowBytes,
+-                    {},
+-                    {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub});
+-                noc.async_write(  // face_01 row0
+-                    CoreLocalMem<uint32_t>(src + kFace01Off),
+-                    fwd_core,
+-                    kFaceRowBytes,
+-                    {},
+-                    {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub + kFaceRowBytes});
+-            }
+-            noc.async_write_barrier();
+-            // Arrival handshake: the stick must be visible in the forwarder's packet buffer
+-            // *before* the forwarder sees the count go up, hence the write barrier above and
+-            // the atomic barrier below.
+-            fwd_arrival_sem.up(noc, fwd_x, fwd_y, 1);
+-            noc.async_atomic_barrier();
+-            cb_stats_local.pop_front(num_stats);
++        // ---- 1. push my sticks (unless already pushed while the gamma reads were in flight) ----
++        if (!first_stick_pushed || round != 0) {
++            push_stick(round);
+         }
+ 
+         // ---- 2. wait for the forwarder's go (this round's ring gather landed) ----
+@@ -172,6 +295,24 @@ void kernel_main() {
+         // ---- 3. read num_stats*ring gathered sticks from DRAM into ROW 0 of gathered tiles ----
+         // Device-major, stat-minor order: gathered tile (d*num_stats + s). For LayerNorm
+         // this yields interleaved [mean_d, var_d] per device, as combine_welford_partials wants.
++        if constexpr (col_split != 0) {
++            // One read per device: [pair_off, pair_off + 1024 + S*64) holds the S slices' face_00 rows 0
++            // (64 B apart) and, 1024 B on, their face_01 rows 0. Landed at d * gather_pair_stride, slice h's
++            // stick is the fp32 tile row 0 at 64 B page d * pair_pages + h (compute indexes it there).
++            cb_stats_gathered.reserve_back(gathered_cb_pages);
++            const uint32_t gbase = cb_stats_gathered.get_write_ptr();
++            for (uint32_t d = 0; d < ring_size; d++) {
++                const uint32_t page_idx = d * num_chunks_per_device + my_forwarder_index * max_rounds + round;
++                noc.async_read(
++                    stats_dram,
++                    CoreLocalMem<uint32_t>(gbase + d * gather_pair_stride),
++                    kPairReadBytes,
++                    {.page_id = page_idx, .offset_bytes = pair_off},
++                    {});
++            }
++            noc.async_read_barrier();
++            cb_stats_gathered.push_back(gathered_cb_pages);
++        } else {
+         cb_stats_gathered.reserve_back(num_stats * ring_size);
+         const uint32_t gbase = cb_stats_gathered.get_write_ptr();
+         for (uint32_t d = 0; d < ring_size; d++) {
+@@ -195,6 +336,7 @@ void kernel_main() {
+         }
+         noc.async_read_barrier();
+         cb_stats_gathered.push_back(num_stats * ring_size);
++        }
+ 
+         // ---- 4. drain this row's output_cb tiles ----
+         // Per-block wait + pop (NOT a cumulative wait with a single end-of-row pop):
+@@ -207,27 +349,54 @@ void kernel_main() {
+         // only NoC-write the valid tiles. Matches the drain-only writer's drain loop.
+         {
+             DeviceZoneScopedN("W_DRAIN");
++            // Banks 0-3 sit in the x=0 DRAM column and banks 4-7 in the x=9 column (BH channel == bank).
++            // The short eastward (NoC0) column is x=9 for cores left of it and x=0 (via the 16->0 wrap)
++            // for cores right of it.
++            const bool left_of_dram_col = my_x[0] < 9u;
+             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                 const uint32_t tiles_in_block =
+                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                 cb_output.wait_front(block_size);
+                 uint32_t rd = cb_output.get_read_ptr();
+                 for (uint32_t i = 0; i < tiles_in_block; i++) {
+-                    const uint32_t c = col_tile + i;
++                    const uint32_t c = col_offset + col_tile + i;
+                     const uint32_t h = c / head_dim_tiles;
+                     const uint32_t t_col = c - h * head_dim_tiles;
+                     const uint32_t out_idx =
+                         h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
+-                    noc.async_write(
+-                        CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
++                    bool use_alt = false;
++                    if constexpr (dual_noc_drain != 0) {
++                        const uint32_t bank = out_idx % NUM_DRAM_BANKS;
++                        const bool east_col_bank = (bank >= NUM_DRAM_BANKS / 2) == left_of_dram_col;
++                        use_alt = east_col_bank && (((out_idx / NUM_DRAM_BANKS) & 1u) == 0u);
++                    }
++                    // Posted (no write ack): the drain's per-core rate is capped downstream of issue
++                    // (r03-b02-a03 / r03-b03-a03), so drop the ack round trip each 2 KB tile carries.
++                    if (use_alt) {
++                        noc_alt.async_write<NocOptions::POSTED>(
++                            CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
++                    } else {
++                        noc.async_write<NocOptions::POSTED>(
++                            CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
++                    }
+                     rd += output_tile_bytes;
+                 }
+-                noc.async_writes_flushed();
++                // Departed from L1 before compute may reuse the slots.
++                noc.async_writes_flushed<NocOptions::POSTED>();
++                if constexpr (dual_noc_drain != 0) {
++                    noc_alt.async_writes_flushed<NocOptions::POSTED>();
++                }
+                 cb_output.pop_front(block_size);
+             }
+         }
+     }
+     noc.async_write_barrier();
++    noc.async_writes_flushed<NocOptions::POSTED>();
++    noc.async_atomic_barrier();  // the arrival incs (not waited on per push)
++    if constexpr (dual_noc_drain != 0) {
++        noc_alt.async_write_barrier();
++        noc_alt.async_writes_flushed<NocOptions::POSTED>();
++    }
+     // Reset the go-sem for the next invocation. Trace replay re-runs this kernel without
+     // re-running host-side semaphore init, so leaving a stale non-zero count here would let
+     // the next replay's very first go_sem.wait_min(1) fall straight through.
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_wave_forwarder.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_wave_forwarder.cpp
+new file mode 100644
+index 00000000000..6894dad01ec
+--- /dev/null
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_wave_forwarder.cpp
+@@ -0,0 +1,169 @@
++// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
++//
++// SPDX-License-Identifier: Apache-2.0
++
++/*
++ * Multi-wave RMSNorm fork of the coalescing fabric forwarder
++ * (dit_fused_norm_common/kernels/dataflow/dit_fused_norm_forwarder.cpp) for the column-split layout.
++ * Consumer: ttnn::experimental::prim::DitFusedDistributedRmsnormMeshWorkloadFactory (col_split only).
++ * Compile-time and runtime args are the common forwarder's, plus wave_slots / wave_span_bytes / num_waves
++ * (CT).
++ *
++ * The group's num_waves * wave_slots workers form num_waves waves (num_waves column-slice workers per
++ * tile-row, rows / num_waves rows per wave). The factory starts wave k+1's input read only as wave k's
++ * lands, so wave k's ring gather overlaps the later waves' DRAM reads and its output drain overlaps their
++ * gathers. Wave w's sticks are the region [w * wave_span_bytes, (w + 1) * wave_span_bytes) of
++ * packet_buf[0] and of the scratch page (my_device, forwarder, 0) on every chip.
++ *
++ * Each wave is counted in its own (32 / num_waves)-bit field of the shared semaphores: a wave-w worker
++ * incs fwd_arrival by 1 << (bits*w), and wave w's fused fabric inc adds 1 << (bits*w) to every peer's
++ * out_ready. So a fast peer's wave-(w+1) inc can never satisfy this chip's wave-w wait, and wave w+1's
++ * packet doesn't wait behind wave w's out_ready. One poll loop: send wave `sent` once its arrivals are
++ * complete; release wave `released` (inc its workers' go-sems, slot order) once all peers' wave packets
++ * have landed.
++ */
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++#include "api/dataflow/noc.h"
++#include "api/dataflow/circular_buffer.h"
++#include "api/dataflow/noc_semaphore.h"
++#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
++#include "tt_metal/fabric/hw/inc/noc_addr.h"
++#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
++#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
++#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
++#include "tools/profiler/kernel_profiler.hpp"
++
++// ---------- compile-time args ----------
++constexpr uint32_t packet_cb = get_compile_time_arg_val(0);  // outbound packet buffer (unit_packet x2)
++constexpr uint32_t reserved_packet_header_cb = get_compile_time_arg_val(1);
++constexpr uint32_t ring_size = get_compile_time_arg_val(2);
++constexpr uint32_t my_device_index = get_compile_time_arg_val(3);
++constexpr uint32_t num_targets_forward = get_compile_time_arg_val(4);
++constexpr uint32_t num_targets_backward = get_compile_time_arg_val(5);
++constexpr uint32_t forwarder_index = get_compile_time_arg_val(6);  // which link/group on this chip
++constexpr uint32_t num_forwarders = get_compile_time_arg_val(7);
++constexpr uint32_t group_size = get_compile_time_arg_val(8);  // workers in this forwarder's group
++constexpr uint32_t max_rounds = get_compile_time_arg_val(9);  // 1 (one row per worker)
++constexpr uint32_t stick_bytes = get_compile_time_arg_val(10);
++constexpr uint32_t num_chunks_per_device = get_compile_time_arg_val(11);  // = num_forwarders * max_rounds
++constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(12);         // workers inc; forwarder waits
++constexpr uint32_t go_sem_id = get_compile_time_arg_val(13);              // forwarder incs; workers wait
++constexpr auto stats_dram_args = TensorAccessorArgs<14>();
++constexpr auto forward_route =
++    ccl_routing_utils::get_line_multicast_route_info_from_args<stats_dram_args.next_compile_time_args_offset()>();
++constexpr auto backward_route = ccl_routing_utils::get_line_multicast_route_info_from_args<
++    stats_dram_args.next_compile_time_args_offset() + ccl_routing_utils::num_line_multicast_args>();
++constexpr uint32_t kWaveArgs = stats_dram_args.next_compile_time_args_offset() + 2 * ccl_routing_utils::num_line_multicast_args;
++constexpr uint32_t wave_slots = get_compile_time_arg_val(kWaveArgs);           // sticks (workers) per wave
++constexpr uint32_t wave_span_bytes = get_compile_time_arg_val(kWaveArgs + 1);  // wave region in the page
++constexpr uint32_t kNumWaves = get_compile_time_arg_val(kWaveArgs + 2);
++static_assert(max_rounds == 1, "wave forwarder needs a single row-round");
++static_assert(kNumWaves == 2 || kNumWaves == 4, "wave forwarder: 2 or 4 waves");
++static_assert(group_size == kNumWaves * wave_slots, "wave forwarder: group must be whole waves");
++constexpr uint32_t kWaveFieldBits = 32u / kNumWaves;
++static_assert(wave_slots < (1u << kWaveFieldBits) && ring_size - 1 < (1u << kWaveFieldBits), "wave field overflow");
++constexpr uint32_t kWaveFieldMask = (1u << kWaveFieldBits) - 1u;
++
++void kernel_main() {
++    size_t arg_idx = 0;
++    const uint32_t stats_dram_addr = get_arg_val<uint32_t>(arg_idx++);
++    // out_ready_sem: a GlobalSemaphore — PEER forwarders fuse-inc it over fabric
++    // (same L1 addr on every chip). Local pointer for the wait + reset.
++    const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(arg_idx++);
++    // Group worker NoC coords (x,y), wave-major slot order, then present_count[0] (unused: every slot is
++    // present with one row per worker).
++    uint32_t worker_x[group_size];
++    uint32_t worker_y[group_size];
++    for (uint32_t i = 0; i < group_size; i++) {
++        worker_x[i] = get_arg_val<uint32_t>(arg_idx++);
++        worker_y[i] = get_arg_val<uint32_t>(arg_idx++);
++    }
++    arg_idx += max_rounds;
++    Noc noc;
++    CircularBuffer cb_pkt_hdr(reserved_packet_header_cb);
++    CircularBuffer cb_packet(packet_cb);
++    Semaphore<> fwd_arrival_sem(arrival_sem_id);
++    Semaphore<> group_go_sem(go_sem_id);
++
++    // Fabric connection (fwd+bwd) for this forwarder's link.
++    auto fabric_connection =
++        FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
++            arg_idx);
++
++    cb_pkt_hdr.reserve_back(1);
++    auto pkt_hdr_fwd_addr = cb_pkt_hdr.get_write_ptr();
++    cb_pkt_hdr.push_back(1);
++    cb_pkt_hdr.reserve_back(1);
++    auto pkt_hdr_bwd_addr = cb_pkt_hdr.get_write_ptr();
++    cb_pkt_hdr.push_back(1);
++    volatile PACKET_HEADER_TYPE* pkt_hdr_fwd = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_fwd_addr);
++    volatile PACKET_HEADER_TYPE* pkt_hdr_bwd = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_bwd_addr);
++    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_fwd, forward_route);
++    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_bwd, backward_route);
++    if (fabric_connection.is_logically_connected()) {
++        fabric_connection.open_finish();
++    }
++
++    const auto stats_dram = TensorAccessor(stats_dram_args, stats_dram_addr);
++    const uint32_t packet_base = cb_packet.get_read_ptr();
++
++    const uint64_t out_ready_sem_noc = safe_get_noc_addr(my_x[0], my_y[0], out_ready_sem_addr, 0);
++    volatile tt_l1_ptr uint32_t* out_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_addr);
++    volatile tt_l1_ptr uint32_t* arrival_ptr =
++        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(arrival_sem_id));
++
++    const uint32_t page_idx = my_device_index * num_chunks_per_device + forwarder_index * max_rounds;
++    uint32_t sent = 0;
++    uint32_t released = 0;
++    while (released < kNumWaves) {
++        invalidate_l1_cache();
++        if (sent < kNumWaves) {
++            const uint32_t shift = sent * kWaveFieldBits;
++            if (((*arrival_ptr >> shift) & kWaveFieldMask) >= wave_slots) {
++                DeviceZoneScopedN("F_SEND");
++                // Wave `sent`'s region of packet_buf[0] -> the same offset of page (my_device, fwd, 0).
++                const uint32_t off = sent * wave_span_bytes;
++                const uint64_t dram_dest = tt::tt_fabric::linear::addrgen_detail::get_noc_address(stats_dram, page_idx, off);
++                size_t l1_read_addr = packet_base + off;
++                fused_write_atomic_and_advance_local_read_address_for_fabric_write(
++                    dram_dest,
++                    pkt_hdr_fwd,
++                    pkt_hdr_bwd,
++                    fabric_connection,
++                    l1_read_addr,
++                    wave_span_bytes,
++                    out_ready_sem_noc,
++                    /*val=*/1u << shift,
++                    /*flush=*/true);
++                sent++;
++                continue;
++            }
++        }
++        if (released < sent) {
++            const uint32_t shift = released * kWaveFieldBits;
++            if (((*out_ready_sem_ptr >> shift) & kWaveFieldMask) >= ring_size - 1) {
++                DeviceZoneScopedN("F_GO");
++                // Our own local write of this wave must have landed before its workers read it.
++                noc.async_write_barrier();
++                for (uint32_t i = released * wave_slots; i < (released + 1) * wave_slots; i++) {
++                    group_go_sem.up(noc, worker_x[i], worker_y[i], 1);
++                }
++                released++;
++            }
++        }
++    }
++    noc.async_write_barrier();
++    noc.async_atomic_barrier();
++
++    // Reset BOTH op-managed semaphores this core owns to 0 so a traced replay starts clean (trace replay
++    // does not re-run the host-side semaphore init). The workers reset their own go-sem.
++    noc_semaphore_set(out_ready_sem_ptr, 0);
++    fwd_arrival_sem.set(0);
++    if (fabric_connection.is_logically_connected()) {
++        fabric_connection.close_start();
++        fabric_connection.close_finish();
++    }
++}

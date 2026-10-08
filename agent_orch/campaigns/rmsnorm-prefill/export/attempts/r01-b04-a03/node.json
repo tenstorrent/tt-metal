@@ -1,0 +1,30 @@
+{
+  "node_id": "r01-b04-a03",
+  "campaign": "rmsnorm-prefill",
+  "round": 1,
+  "branch": 4,
+  "attempt": 3,
+  "parent": "r01-b04-a02",
+  "parent_commit": "25f32eb8edc799992c0ef6ea71c08937e58815f8",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T11:28:50+00:00",
+  "mechanism": "read broadcast gamma on the idle writer (BRISC) at kernel start; reader keeps only the trid-pipelined input",
+  "tags": [
+    "dataflow",
+    "writer",
+    "gamma-read",
+    "overlap",
+    "repair"
+  ],
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.2075,
+  "build_seconds": 20,
+  "eval_seconds": 20,
+  "finished_at": "2026-10-08T11:34:58+00:00"
+}

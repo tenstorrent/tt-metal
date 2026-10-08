@@ -1,0 +1,80 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index 69e852ae967..eccd7d5368c 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -91,6 +91,14 @@ constexpr auto w_weight_args = TensorAccessorArgs<WCB + 3>();
+ // out on NoC0 on every other visit to its bank, unloading those links without crowding NoC0's own rows.
+ constexpr uint32_t dual_noc_drain = get_compile_time_arg_val(w_weight_args.next_compile_time_args_offset());
+ 
++// This core's coordinate in `noc`'s address space, as dynamic_noc_init programs it into the cmd buffers.
++FORCE_INLINE uint32_t local_noc_coord(uint32_t noc) {
++    const uint32_t id = NOC_CMD_BUF_READ_REG(noc, 0, NOC_CFG(NOC_ID_LOGICAL));
++    const uint32_t x = id & NOC_NODE_ID_MASK;
++    const uint32_t y = (id >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
++    return static_cast<uint32_t>(NOC_XY_ADDR(x, y, 0) >> NOC_ADDR_COORD_SHIFT);
++}
++
+ void kernel_main() {
+     size_t arg_idx = 0;
+     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
+@@ -270,6 +278,20 @@ void kernel_main() {
+             // The short eastward (NoC0) column is x=9 for cores left of it and x=0 (via the 16->0 wrap)
+             // for cores right of it.
+             const bool left_of_dram_col = my_x[0] < 9u;
++            // Two requests in flight per NoC: a command buffer stays busy while its 2 KB write is injected,
++            // so with one buffer each tile's issue waits for the previous tile's injection. Under
++            // DM_DYNAMIC_NOC BRISC also owns cmd buf 1 (reads + atomics), idle during the drain; point its
++            // write source at this core and alternate tiles between cmd bufs 0 and 1 on each NoC.
++            constexpr bool two_cmd_bufs = dual_noc_drain != 0 && noc_mode == DM_DYNAMIC_NOC;
++            constexpr uint32_t kAltCmdBuf = DYNAMIC_NOC_BRISC_RD_CMD_BUF;
++            [[maybe_unused]] uint32_t next_cmd_buf[NUM_NOCS] = {
++                DYNAMIC_NOC_BRISC_WR_CMD_BUF, DYNAMIC_NOC_BRISC_WR_CMD_BUF};
++            if constexpr (two_cmd_bufs) {
++                for (uint32_t n = 0; n < NUM_NOCS; n++) {
++                    while (!noc_cmd_buf_ready(n, kAltCmdBuf));
++                    NOC_CMD_BUF_WRITE_REG(n, kAltCmdBuf, NOC_TARG_ADDR_COORDINATE, local_noc_coord(n));
++                }
++            }
+             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                 const uint32_t tiles_in_block =
+                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+@@ -287,7 +309,23 @@ void kernel_main() {
+                         const bool east_col_bank = (bank >= NUM_DRAM_BANKS / 2) == left_of_dram_col;
+                         use_alt = east_col_bank && (((out_idx / NUM_DRAM_BANKS) & 1u) == 0u);
+                     }
+-                    if (use_alt) {
++                    if constexpr (two_cmd_bufs) {
++                        const uint32_t nid = use_alt ? noc_alt.get_noc_id() : noc.get_noc_id();
++                        const uint32_t cmd_buf = next_cmd_buf[nid];
++                        next_cmd_buf[nid] = cmd_buf ^ (DYNAMIC_NOC_BRISC_WR_CMD_BUF ^ kAltCmdBuf);
++                        ncrisc_noc_fast_write_any_len<noc_mode>(
++                            nid,
++                            cmd_buf,
++                            rd,
++                            output_accessor.get_noc_addr(out_idx, 0, nid),
++                            output_page_bytes,
++                            NOC_UNICAST_WRITE_VC,
++                            false,  // mcast
++                            false,  // linked
++                            1,      // num_dests
++                            true,   // multicast_path_reserve
++                            false);  // posted
++                    } else if (use_alt) {
+                         noc_alt.async_write(
+                             CoreLocalMem<uint32_t>(rd), output_accessor, output_page_bytes, {}, {.page_id = out_idx});
+                     } else {
+@@ -302,6 +340,14 @@ void kernel_main() {
+                 }
+                 cb_output.pop_front(block_size);
+             }
++            if constexpr (two_cmd_bufs) {
++                // Reads and atomics on cmd buf 1 rely on its preset return coordinate (this core); the
++                // writes above replaced it with DRAM coordinates.
++                for (uint32_t n = 0; n < NUM_NOCS; n++) {
++                    while (!noc_cmd_buf_ready(n, kAltCmdBuf));
++                    NOC_CMD_BUF_WRITE_REG(n, kAltCmdBuf, NOC_RET_ADDR_COORDINATE, local_noc_coord(n));
++                }
++            }
+         }
+     }
+     noc.async_write_barrier();

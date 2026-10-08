@@ -1,0 +1,708 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
+index ec4d46115aa..3fccd1fd7e9 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
+@@ -253,8 +253,10 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
+             buf.memory_config().buffer_type() == expected.memory_config().buffer_type(),
+             "persistent_output_buffer must be in L1 (allocate it with the op's create_stats_buffer)");
+         TT_FATAL(
+-            buf.memory_config().memory_layout() == expected.memory_config().memory_layout(),
+-            "persistent_output_buffer must be INTERLEAVED");
++            buf.memory_config().memory_layout() == expected.memory_config().memory_layout() &&
++                buf.memory_config().shard_spec() == expected.memory_config().shard_spec(),
++            "persistent_output_buffer must be {} (allocate it with the op's create_stats_buffer)",
++            expected.memory_config());
+         const auto& b_shape = buf.logical_shape();
+         TT_FATAL(b_shape.rank() == 4, "persistent_output_buffer rank must be 4 (got {})", b_shape.rank());
+         TT_FATAL(
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp
+index 7ce9c21d206..d4213592b13 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp
+@@ -146,13 +146,20 @@ struct DitFusedDistributedRmsnormSizing {
+     // physical stick is stats_per_token * 128 B.
+     uint32_t stats_per_token = 1;
+     uint32_t stick_bytes = 128;  // stats_per_token * 128
++    // Forwarder-push gather (RMS, one forwarder, one row per worker): the scratch is height-sharded
++    // on the forwarder core so peer chips land in its own L1, and the forwarder multicasts the gathered
++    // pages + go to the workers instead of each worker reading its sticks back after go.
++    bool gather_mcast = false;
++    uint32_t forwarder_core_x = 0;  // logical forwarder core (gather_mcast only)
++    uint32_t forwarder_core_y = 0;
+ };
+ 
+ DitFusedDistributedRmsnormSizing compute_sizing(
+     const DitFusedDistributedRmsnormParams& args, const Tensor& input);
+ 
+ // Single source of truth for the persistent gathered-stats DRAM scratch spec:
+-// [1, 1, total_pages, TILE_HEIGHT * window_size], FLOAT32, ROW_MAJOR, L1 INTERLEAVED.
++// [1, 1, total_pages, TILE_HEIGHT * window_size], FLOAT32, ROW_MAJOR, L1 INTERLEAVED
++// (L1 HEIGHT_SHARDED on the forwarder core when sizing.gather_mcast).
+ // Used by the pre-alloc helper, compute_output_specs, and validate so the pre-allocated
+ // buffer, the op's expected spec, and the validation check cannot drift. Only meaningful
+ // on the all-gather path (sizing.use_mux; total_pages > 0).
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+index d9c762d41de..73f7a0bc713 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+@@ -50,6 +50,14 @@ namespace ttnn::experimental::prim {
+ // num_tile_rows below this uses a single worker — spinning up forwarders + the
+ // per-round AG handshake doesn't pay off with <4 tile-rows of compute per chip.
+ constexpr uint32_t kMuxRowsThreshold = 4u;
++// Forwarder-push gather (sizing.gather_mcast). Slot s's stick sits in a device page as fp32 tile row 0
++// starting at dit_rmsnorm_gather_slot_offset(s): face_00 row 0 there, face_01 row 0 at +1024. 16 slots
++// share each 2 KB band, so 32 slots span 4096 B of the page. The gathered CB uses 64 B pages so compute
++// can address each slot's tile at a 64 B granular offset.
++constexpr uint32_t kGatherMcastMaxWorkers = 32u;
++constexpr uint32_t kGatherMcastSlotSpanBytes = 4096u;
++constexpr uint32_t kGatherCbPageBytes = 64u;
++constexpr uint32_t dit_rmsnorm_gather_slot_offset(uint32_t slot) { return (slot / 16u) * 2048u + (slot % 16u) * 64u; }
+ // input_cb double-buffer depth (chunks): reader fills chunk N+1 while compute is in
+ // chunk N's post phase. 2 = one in flight + one filling.
+ constexpr uint32_t kInputCbChunks = 2u;
+@@ -336,11 +344,38 @@ DitFusedDistributedRmsnormSizing compute_sizing(
+         s.num_chunks_per_device = num_forwarders * max_rounds;
+         s.total_pages = args.ring_size * s.num_chunks_per_device;
+         s.page_size_bytes = TILE_HEIGHT * s.window_size * sizeof(float);
++        // Forwarder-push gather: one forwarder, one row per worker, RMS sticks, and every slot's
++        // tile-row-0 layout (dit_rmsnorm_gather_slot_offset) fits one page. The forwarder is the core
++        // right after the workers in row-major order (create_at's placement).
++        const auto grid = input.device()->compute_with_storage_grid_size();
++        s.gather_mcast = input.device()->arch() == tt::ARCH::BLACKHOLE && s.stats_per_token == 1u &&
++                         num_forwarders == 1u && max_rounds == 1u && s.num_workers <= kGatherMcastMaxWorkers &&
++                         args.ring_size <= 8u && s.page_size_bytes >= kGatherMcastSlotSpanBytes &&
++                         s.page_size_bytes % kGatherCbPageBytes == 0u && s.num_workers < grid.x * grid.y;
++        if (s.gather_mcast) {
++            s.forwarder_core_x = s.num_workers % grid.x;
++            s.forwarder_core_y = s.num_workers / grid.x;
++        }
+     }
+     return s;
+ }
+ 
+ tt::tt_metal::TensorSpec make_stats_tensor_spec(const DitFusedDistributedRmsnormSizing& sizing) {
++    if (sizing.gather_mcast) {
++        // Forwarder-push gather: the whole scratch is one shard on the forwarder core, so every peer's
++        // fused write+inc lands in the forwarder's own L1 and it can multicast the gathered pages on.
++        const CoreCoord fwd{sizing.forwarder_core_x, sizing.forwarder_core_y};
++        ttnn::Shape stats_shape({1u, 1u, sizing.total_pages, TILE_HEIGHT * sizing.window_size});
++        MemoryConfig stats_mem{
++            TensorMemoryLayout::HEIGHT_SHARDED,
++            BufferType::L1,
++            ShardSpec(
++                CoreRangeSet({CoreRange(fwd, fwd)}),
++                {sizing.total_pages, TILE_HEIGHT * sizing.window_size},
++                ShardOrientation::ROW_MAJOR)};
++        return tt::tt_metal::TensorSpec(
++            stats_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), stats_mem));
++    }
+     // Row-major fp32 L1-interleaved scratch: one accessor page per packed stats page.
+     // Kept in one place so the pre-alloc helper, compute_output_specs, and validate agree.
+     // L1, not DRAM: the gathered sticks are on the post-AG critical path twice -- every landing
+@@ -773,6 +808,28 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         "create_at requires a stats DRAM scratch tensor at tensor_return_value[1] when use_mux is true");
+     tt::tt_metal::Buffer* stats_dram_buffer = use_mux ? stats_dram_tensor->buffer() : nullptr;
+ 
++    // Forwarder-push gather: same single-source decision as the scratch spec (validate() has already
++    // checked that the caller's scratch is the forwarder-core shard it describes).
++    const auto sizing = compute_sizing(args, input_tensor);
++    const bool gather_mcast = use_mux && sizing.gather_mcast;
++    if (gather_mcast) {
++        TT_FATAL(
++            num_forwarders == 1 && max_rounds == 1 && sizing.num_workers == num_workers &&
++                forwarder_cores[0] == CoreCoord(sizing.forwarder_core_x, sizing.forwarder_core_y) &&
++                stats_dram_buffer->buffer_type() == BufferType::L1 &&
++                stats_dram_buffer->buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
++            "dit_fused_distributed_rmsnorm: forwarder-push gather layout mismatch");
++    }
++    // Gathered pages: device d's page lands at d * page_size_bytes of the gathered CB, and slot s reads an
++    // fp32 tile starting dit_rmsnorm_gather_slot_offset(s) into it.
++    const uint32_t gather_page_tiles = gather_mcast ? sizing.page_size_bytes / kGatherCbPageBytes : 0u;
++    const uint32_t gathered_cb_pages =
++        gather_mcast ? tt::div_up(
++                           (args.ring_size - 1u) * sizing.page_size_bytes +
++                               dit_rmsnorm_gather_slot_offset(num_workers - 1u) + TILE_HW * sizeof(float),
++                           kGatherCbPageBytes)
++                     : 0u;
++
+     // ------------------------------------------------------------------------
+     // CB allocations (on worker cores)
+     // ------------------------------------------------------------------------
+@@ -860,13 +917,23 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+     // stats_per_token (1 RMS sum-sq, 2 LayerNorm mean+var); gathered is
+     // stats_per_token * ring_size (the per-device partials to merge).
+     create_cb(stats_transposed_local_cb_id, program, worker_core_set, fp32_tile_size, stats_per_token, fp32_format);
+-    create_cb(
+-        stats_transposed_gathered_cb_id,
+-        program,
+-        worker_core_set,
+-        fp32_tile_size,
+-        use_mux ? args.ring_size * stats_per_token : 1u,
+-        fp32_format);
++    if (gather_mcast) {
++        // Whole grid: the forwarder multicasts into one rectangle of rows that also holds itself and
++        // possibly idle cores, so the region must be reserved (and grid-uniform) everywhere.
++        tt::tt_metal::CircularBufferConfig gathered_cfg =
++            tt::tt_metal::CircularBufferConfig(
++                gathered_cb_pages * kGatherCbPageBytes, {{stats_transposed_gathered_cb_id, fp32_format}})
++                .set_page_size(stats_transposed_gathered_cb_id, kGatherCbPageBytes);
++        tt::tt_metal::CreateCircularBuffer(program, all_core_set, gathered_cfg);
++    } else {
++        create_cb(
++            stats_transposed_gathered_cb_id,
++            program,
++            worker_core_set,
++            fp32_tile_size,
++            use_mux ? args.ring_size * stats_per_token : 1u,
++            fp32_format);
++    }
+     uint32_t unit_packet_bytes = 0u;
+     if (use_mux) {
+         // Coalesced fabric packet, allocated on the WHOLE grid so its L1 address
+@@ -1237,6 +1304,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+             TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
+         }
+         writer_compile_args.push_back(static_cast<uint32_t>(dual_noc_drain));
++        writer_compile_args.push_back(static_cast<uint32_t>(gather_mcast));
++        writer_compile_args.push_back(gathered_cb_pages);
+         DataMovementConfig writer_config = WriterDataMovementConfig(writer_compile_args);
+         if (dual_noc_drain) {
+             writer_config.noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+@@ -1274,6 +1343,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+             go_sem_id,
+         };
+         TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
++        fwd_ct.push_back(static_cast<uint32_t>(gather_mcast));
++        fwd_ct.push_back(stats_transposed_gathered_cb_id);
++        fwd_ct.push_back(gather_mcast ? sizing.page_size_bytes : 0u);
+         // 2D fabric multicasts N hops in one physical direction: the cluster axis must be a straight physical line.
+         TT_FATAL(
+             !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
+@@ -1285,8 +1357,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         fwd_ct.insert(fwd_ct.end(), backward_route.begin(), backward_route.end());
+         forwarder_kernel_ids[f] = CreateKernel(
+             program,
+-            "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_norm_common/kernels/dataflow/"
+-            "dit_fused_norm_forwarder.cpp",
++            "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
++            "dit_rmsnorm_forwarder.cpp",
+             CoreRangeSet({CoreRange(forwarder_cores[f], forwarder_cores[f])}),
+             WriterDataMovementConfig(fwd_ct));
+     }
+@@ -1357,6 +1429,11 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+         static_cast<uint32_t>(per_batch_weight),
+         static_cast<uint32_t>(per_batch_bias),
+         rows_per_batch_tiles,
++        // CT 43/44/45: forwarder-push gather. The gathered CB has 64 B pages; device d's slot tile is
++        // page d * gather_page_tiles + (RT arg 2).
++        static_cast<uint32_t>(gather_mcast),
++        gathered_cb_pages,
++        gather_page_tiles,
+     };
+ 
+     // fp32 dest accumulation is REQUIRED, unconditionally — not just for fp32
+@@ -1454,7 +1531,10 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+ 
+         // RT arg 1 (tile_row_start): the worker's first GLOBAL tile-row, so LN compute can map
+         // each local row to its batch (global_row / rows_per_batch_tiles) for per-batch adaLN.
+-        std::vector<uint32_t> compute_rt_args = {this_core_rows, tile_row_start};
++        std::vector<uint32_t> compute_rt_args = {
++            this_core_rows,
++            tile_row_start,
++            gather_mcast ? dit_rmsnorm_gather_slot_offset(worker_slot(i)) / kGatherCbPageBytes : 0u};
+         SetRuntimeArgs(program, compute_kernel_id, core, compute_rt_args);
+     }
+ 
+@@ -1488,6 +1568,19 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
+             }
+             fwd_rt.push_back(pc);
+         }
++        if (gather_mcast) {
++            // One multicast rectangle: logical rows 0 .. (forwarder row), full grid width. It holds every
++            // worker (row-major prefix), the forwarder itself (loopback source) and maybe idle cores, whose
++            // copies of the grid-wide gathered CB / go-sem are unused.
++            const CoreCoord mc_start = mesh_device->worker_core_from_logical_core(CoreCoord(0, 0));
++            const CoreCoord mc_end =
++                mesh_device->worker_core_from_logical_core(CoreCoord(grid_size.x - 1, forwarder_cores[f].y));
++            fwd_rt.push_back(static_cast<uint32_t>(mc_start.x));
++            fwd_rt.push_back(static_cast<uint32_t>(mc_start.y));
++            fwd_rt.push_back(static_cast<uint32_t>(mc_end.x));
++            fwd_rt.push_back(static_cast<uint32_t>(mc_end.y));
++            fwd_rt.push_back(static_cast<uint32_t>(grid_size.x * (forwarder_cores[f].y + 1)));
++        }
+         fwd_rt.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
+         if (forward_fabric_node_id.has_value()) {
+             tt::tt_fabric::append_fabric_connection_rt_args(
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+index c36d52a0b97..11184f562de 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp
+@@ -148,6 +148,18 @@ void kernel_main() {
+ 
+     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
+ 
++    // Forwarder-push gather: the forwarder multicasts every chip's stats page into the gathered CB, whose
++    // pages are 64 B. Device d's stick for this worker is the fp32 tile whose row 0 starts at page
++    // d * gather_page_tiles + gather_slot_tile (the slot's tile-row-0 offset in the page, RT arg 2).
++    constexpr uint32_t gather_mcast = get_compile_time_arg_val(43);
++    constexpr uint32_t gathered_cb_pages = get_compile_time_arg_val(44);
++    constexpr uint32_t gather_page_tiles = get_compile_time_arg_val(45);
++    const uint32_t gather_slot_tile = get_arg_val<uint32_t>(2);
++    constexpr uint32_t gathered_wait_pages = (gather_mcast != 0) ? gathered_cb_pages : stats_tiles_cols;
++    auto gathered_tile = [&](uint32_t d) -> uint32_t {
++        return (gather_mcast != 0) ? d * gather_page_tiles + gather_slot_tile : d;
++    };
++
+     compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_cb, transformation_mat_cb, rotated_input_cb);
+     matmul_init(intermediate_cb, transformation_mat_cb);
+     compute_kernel_hw_startup(input_cb, input_cb, input_cb);
+@@ -481,19 +493,28 @@ void kernel_main() {
+                                     // tile IN DST (row 0 -> col 0) with transpose_dest — no CB
+                                     // round-trip — then *1/H + eps + rsqrt on col 0. One transpose
+                                     // total (deferred past the sum) vs one per gathered tile.
+-                                    cb_stats_transposed_gathered.wait_front(stats_tiles_cols);
++                                    cb_stats_transposed_gathered.wait_front(gathered_wait_pages);
+                                     DeviceZoneScopedN("C_COMB");
+                                     reconfig_data_format(stats_transposed_gathered_cb, stats_transposed_gathered_cb);
+                                     pack_reconfig_data_format(reduce_result_cb);
+                                     tile_regs_acquire();
+                                     binary_tiles_init<true, EltwiseBinaryType::ELWADD>(
+                                         stats_transposed_gathered_cb, stats_transposed_gathered_cb, false);
+-                                    add_tiles(stats_transposed_gathered_cb, stats_transposed_gathered_cb, 0, 1, 0);
++                                    add_tiles(
++                                        stats_transposed_gathered_cb,
++                                        stats_transposed_gathered_cb,
++                                        gathered_tile(0),
++                                        gathered_tile(1),
++                                        0);
+                                     binary_tiles_init<false, EltwiseBinaryType::ELWADD>(
+                                         stats_transposed_gathered_cb, stats_transposed_gathered_cb, true);
+                                     for (uint32_t k = 2; k < stats_tiles_cols; k += 2) {
+                                         add_tiles(
+-                                            stats_transposed_gathered_cb, stats_transposed_gathered_cb, k, k + 1, 0);
++                                            stats_transposed_gathered_cb,
++                                            stats_transposed_gathered_cb,
++                                            gathered_tile(k),
++                                            gathered_tile(k + 1),
++                                            0);
+                                     }
+ #if defined(ARCH_BLACKHOLE)
+                                     // 1/rms = rsqrt(sum * 1/H + eps) on ROW 0 only, before the transpose: the 32
+@@ -522,7 +543,7 @@ void kernel_main() {
+                                     pack_tile(0, reduce_result_cb);
+                                     cb_reduce_result.push_back(1);
+                                     tile_regs_release();
+-                                    cb_stats_transposed_gathered.pop_front(stats_tiles_cols);
++                                    cb_stats_transposed_gathered.pop_front(gathered_wait_pages);
+                                 } else {
+                                     // Non-packed path: gathered tiles are in COL 0.
+                                     cb_stats_gathered.wait_front(stats_tiles_cols);
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_forwarder.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_forwarder.cpp
+new file mode 100644
+index 00000000000..0e5d2db66bc
+--- /dev/null
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_forwarder.cpp
+@@ -0,0 +1,283 @@
++// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
++//
++// SPDX-License-Identifier: Apache-2.0
++
++/*
++ * Coalescing fabric forwarder for the fused distributed RMSNorm / LayerNorm stats all-gather.
++ *
++ * Copy of dit_fused_norm_common/kernels/dataflow/dit_fused_norm_forwarder.cpp for
++ * DitFusedDistributedRmsnormMeshWorkloadFactory only (GroupNorm keeps the common one), plus the
++ * forwarder-push gather (gather_mcast, see the end of this comment).
++ *
++ * One forwarder core per fabric link (num_forwarders = min(num_links,
++ * num_workers)). It owns a contiguous GROUP of worker cores on this chip and
++ * holds the fwd+bwd fabric connections for its link. Its job: coalesce the
++ * group's tiny 128 B stat "sticks" into one large fabric packet per row-round
++ * and ring-multicast it, instead of each worker sending its own tiny 128 B
++ * (≈3% utilization) fabric packet.
++ *
++ * Per row-round r (r in [0, max_rounds)):
++ *   1. Wait for present_count(r) arrivals on fwd_arrival_sem — each present
++ *      worker NoC-writes its 128 B stick into packet_buf[r%2] + slot*128 B and
++ *      increments the sem. (present_count shrinks on the last, remainder round;
++ *      the present set is always a contiguous slot prefix [0, present_count).)
++ *   2. Ring-multicast packet_buf[r%2][0 : present_count(r)*128 B] to the DRAM
++ *      scratch page (my_device, forwarder, r) on every chip (local write + fwd
++ *      + bwd fabric), fusing an atomic_inc on every PEER forwarder's
++ *      out_ready_sem (flush=true: payload committed before the inc is seen).
++ *   3. Wait out_ready_sem >= cumulative (ring_size-1) incs for this round —
++ *      i.e. all peer forwarders' packets have landed in THIS chip's DRAM.
++ *   4. On-chip: increment each group worker's go-sem so they read their
++ *      gathered sticks from DRAM and run POST for row r.
++ *
++ * gather_mcast (RMS, one forwarder, one round): the stats scratch is one shard on THIS core, so
++ * step 3 leaves every chip's page in local L1. Instead of step 4's per-worker go inc (after which
++ * each worker read its sticks back), the forwarder multicasts the pages to the same offsets
++ * (d * page_stride) of every worker's grid-uniform gathered CB — its own page while the fabric
++ * packets are in flight, the peers' pages after out_ready — and then multicasts go = 1 on the same
++ * NoC/VC, so the go lands behind the data. Workers wrote their sticks at the slot's tile-row-0
++ * offset, so compute unpacks each device's stick in place.
++ *
++ * Symmetric across devices (TP shards features, so every chip has identical
++ * num_tile_rows / partition), so the per-round present set + inc counts match
++ * on both ends — no deadlock, no orphaned waits. Remote packets land in DRAM
++ * (workers read them), so the forwarder holds only its outbound packet_buf.
++ */
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++#include "api/dataflow/noc.h"
++#include "api/dataflow/circular_buffer.h"
++#include "api/dataflow/noc_semaphore.h"
++#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
++#include "tt_metal/fabric/hw/inc/noc_addr.h"
++#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
++#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
++#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
++#include "tools/profiler/kernel_profiler.hpp"
++
++// ---------- compile-time args ----------
++constexpr uint32_t packet_cb = get_compile_time_arg_val(0);  // outbound packet buffer (unit_packet x2)
++constexpr uint32_t reserved_packet_header_cb = get_compile_time_arg_val(1);
++constexpr uint32_t ring_size = get_compile_time_arg_val(2);
++constexpr uint32_t my_device_index = get_compile_time_arg_val(3);
++constexpr uint32_t num_targets_forward = get_compile_time_arg_val(4);
++constexpr uint32_t num_targets_backward = get_compile_time_arg_val(5);
++constexpr uint32_t forwarder_index = get_compile_time_arg_val(6);  // which link/group on this chip
++constexpr uint32_t num_forwarders = get_compile_time_arg_val(7);
++constexpr uint32_t group_size = get_compile_time_arg_val(8);    // workers in this forwarder's group
++constexpr uint32_t max_rounds = get_compile_time_arg_val(9);    // ceil(num_tile_rows / num_workers)
++constexpr uint32_t stick_bytes = get_compile_time_arg_val(10);  // 128 (32 fp32)
++constexpr uint32_t num_chunks_per_device =
++    get_compile_time_arg_val(11);  // = num_forwarders * max_rounds (pages/device)
++// Grid-uniform semaphore ids (created on the whole core grid -> same L1 addr on
++// every worker + forwarder core, so no cross-core address args are needed).
++constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(12);  // workers inc; forwarder waits
++constexpr uint32_t go_sem_id = get_compile_time_arg_val(13);       // forwarder incs; workers wait
++constexpr auto stats_dram_args = TensorAccessorArgs<14>();
++constexpr uint32_t GCB = stats_dram_args.next_compile_time_args_offset();
++constexpr uint32_t gather_mcast = get_compile_time_arg_val(GCB + 0);
++constexpr uint32_t gathered_cb = get_compile_time_arg_val(GCB + 1);  // grid-uniform on every core
++constexpr uint32_t gather_page_stride = get_compile_time_arg_val(GCB + 2);  // scratch page / gathered CB stride
++constexpr auto forward_route = ccl_routing_utils::get_line_multicast_route_info_from_args<GCB + 3>();
++constexpr auto backward_route =
++    ccl_routing_utils::get_line_multicast_route_info_from_args<GCB + 3 + ccl_routing_utils::num_line_multicast_args>();
++
++void kernel_main() {
++    size_t arg_idx = 0;
++    const uint32_t stats_dram_addr = get_arg_val<uint32_t>(arg_idx++);
++    // out_ready_sem: a GlobalSemaphore — PEER forwarders fuse-inc it over fabric
++    // (same L1 addr on every chip). Local pointer for the wait + reset.
++    const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(arg_idx++);
++    // group worker NoC coords (x,y) x group_size, then present_count[r]. Sized by
++    // the constexpr CT args (group_size / max_rounds) so large-row configs (e.g.
++    // wan self_sp4_N18944 -> 592 tile-rows / 32 workers = 19 rounds) don't overflow
++    // a fixed bound -> -Werror=aggressive-loop-optimizations at JIT time.
++    uint32_t worker_x[group_size];
++    uint32_t worker_y[group_size];
++    for (uint32_t i = 0; i < group_size; i++) {
++        worker_x[i] = get_arg_val<uint32_t>(arg_idx++);
++        worker_y[i] = get_arg_val<uint32_t>(arg_idx++);
++    }
++    uint32_t present_count[max_rounds];
++    for (uint32_t r = 0; r < max_rounds; r++) {
++        present_count[r] = get_arg_val<uint32_t>(arg_idx++);
++    }
++    // gather_mcast: the rectangle (virtual coords, start <= end) holding the workers and this core.
++    uint32_t mc_x0 = 0, mc_y0 = 0, mc_x1 = 0, mc_y1 = 0, mc_num_dests = 0;
++    if constexpr (gather_mcast != 0) {
++        mc_x0 = get_arg_val<uint32_t>(arg_idx++);
++        mc_y0 = get_arg_val<uint32_t>(arg_idx++);
++        mc_x1 = get_arg_val<uint32_t>(arg_idx++);
++        mc_y1 = get_arg_val<uint32_t>(arg_idx++);
++        mc_num_dests = get_arg_val<uint32_t>(arg_idx++);
++    }
++    Noc noc;
++    CircularBuffer cb_pkt_hdr(reserved_packet_header_cb);
++    CircularBuffer cb_packet(packet_cb);
++    Semaphore<> fwd_arrival_sem(arrival_sem_id);
++    Semaphore<> group_go_sem(go_sem_id);
++
++    // Fabric connection (fwd+bwd) for this forwarder's link.
++    auto fabric_connection =
++        FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
++            arg_idx);
++
++    cb_pkt_hdr.reserve_back(1);
++    auto pkt_hdr_fwd_addr = cb_pkt_hdr.get_write_ptr();
++    cb_pkt_hdr.push_back(1);
++    cb_pkt_hdr.reserve_back(1);
++    auto pkt_hdr_bwd_addr = cb_pkt_hdr.get_write_ptr();
++    cb_pkt_hdr.push_back(1);
++    volatile PACKET_HEADER_TYPE* pkt_hdr_fwd = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_fwd_addr);
++    volatile PACKET_HEADER_TYPE* pkt_hdr_bwd = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_bwd_addr);
++    // The hop-only header initializer is a no-op for 2D fabric headers.
++    // Use the shared CCL helper to initialize the correct route for either fabric.
++    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_fwd, forward_route);
++    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_bwd, backward_route);
++    // Guard open_finish on is_logically_connected(), matching the canonical CCL writers
++    // (all_reduce_async / all_to_all_async): a forwarder with no live fabric connection
++    // (e.g. a line-topology edge or a degenerate ring) must not run the open handshake.
++    if (fabric_connection.is_logically_connected()) {
++        fabric_connection.open_finish();
++    }
++
++    const auto stats_dram = TensorAccessor(stats_dram_args, stats_dram_addr);
++    const uint32_t packet_base = cb_packet.get_read_ptr();         // packet_cb is depth-2; we index by r%2 manually
++    const uint32_t packet_tile_bytes = cb_packet.get_tile_size();  // = unit_packet_bytes (one slot)
++
++    const uint64_t out_ready_sem_noc = safe_get_noc_addr(my_x[0], my_y[0], out_ready_sem_addr, 0);
++    volatile tt_l1_ptr uint32_t* out_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_addr);
++
++    // NoC1 multicast rectangles run from the bottom-right corner.
++    const bool noc1 = noc.get_noc_id() == 1;
++    auto mcast_addr = [&](uint32_t l1_addr) -> uint64_t {
++        return noc1 ? get_noc_multicast_addr(mc_x1, mc_y1, mc_x0, mc_y0, l1_addr, noc.get_noc_id())
++                    : get_noc_multicast_addr(mc_x0, mc_y0, mc_x1, mc_y1, l1_addr, noc.get_noc_id());
++    };
++    uint32_t gathered_base = 0;
++    if constexpr (gather_mcast != 0) {
++        gathered_base = CircularBuffer(gathered_cb).get_write_ptr();
++    }
++
++    uint32_t cumulative_arrivals = 0;
++    uint32_t cumulative_incs = 0;
++    for (uint32_t r = 0; r < max_rounds; r++) {
++        const uint32_t pc = present_count[r];
++        // Zero-present round (uneven num_tile_rows / num_workers split, e.g. 38
++        // tile-rows over 32 workers -> later forwarders have no worker on the
++        // remainder round). Symmetric across devices, so every peer forwarder_index
++        // also has pc==0 and skips: no arrivals, no fabric packet, no peer incs, no
++        // workers to release. A 0-byte fused fabric write would NOT transmit its
++        // atomic inc, so peers would wait forever -> must skip the round entirely.
++        if (pc == 0) {
++            continue;
++        }
++        const uint32_t packet_addr = packet_base + (r & 1u) * packet_tile_bytes;
++
++        {
++            DeviceZoneScopedN("F_COLLECT");
++            // Workers write their stick into packet_addr + slot*stick_bytes and inc.
++            cumulative_arrivals += pc;
++            fwd_arrival_sem.wait_min(cumulative_arrivals);
++        }
++        // gather_mcast: the workers' slot layout spans up to the last present slot's face_01 row 0.
++        uint32_t payload_bytes = pc * stick_bytes;
++        if constexpr (gather_mcast != 0) {
++            const uint32_t last = pc - 1;
++            payload_bytes = (last / 16u) * 2048u + (last % 16u) * 64u + 1024u + 64u;
++        }
++
++        // Page (my_device, forwarder, r) — same DRAM address on every chip.
++        const uint32_t page_idx = my_device_index * num_chunks_per_device + forwarder_index * max_rounds + r;
++        const uint64_t dram_dest = tt::tt_fabric::linear::addrgen_detail::get_noc_address(stats_dram, page_idx, 0);
++        {
++            DeviceZoneScopedN("F_FABRIC");
++            size_t l1_read_addr = packet_addr;
++            fused_write_atomic_and_advance_local_read_address_for_fabric_write(
++                dram_dest,
++                pkt_hdr_fwd,
++                pkt_hdr_bwd,
++                fabric_connection,
++                l1_read_addr,
++                payload_bytes,
++                out_ready_sem_noc,
++                /*val=*/1,
++                /*flush=*/true);
++            if constexpr (gather_mcast != 0) {
++                // My own page is final: push it to the workers while the fabric packets travel.
++                noc_async_write_multicast_loopback_src(
++                    packet_addr,
++                    mcast_addr(gathered_base + my_device_index * gather_page_stride),
++                    payload_bytes,
++                    mc_num_dests,
++                    false,
++                    noc.get_noc_id());
++            }
++            cumulative_incs += (ring_size - 1);
++            if (cumulative_incs > 0) {
++                // out_ready is a GlobalSemaphore.
++                noc_semaphore_wait_min(out_ready_sem_ptr, cumulative_incs);
++            }
++            noc.async_write_barrier();
++            noc.async_atomic_barrier();
++        }
++
++        if constexpr (gather_mcast != 0) {
++            DeviceZoneScopedN("F_MCAST");
++            // Peers' pages are in my L1 (scratch shard); multicast each to the same CB offset everywhere.
++            for (uint32_t d = 0; d < ring_size; d++) {
++                if (d == my_device_index) {
++                    continue;
++                }
++                const uint32_t src = stats_dram_addr + (d * num_chunks_per_device + forwarder_index * max_rounds + r) *
++                                                           gather_page_stride;
++                noc_async_write_multicast_loopback_src(
++                    src,
++                    mcast_addr(gathered_base + d * gather_page_stride),
++                    payload_bytes,
++                    mc_num_dests,
++                    false,
++                    noc.get_noc_id());
++            }
++            // go = r + 1 on the same NoC and VC as the data, so it lands after it. Every worker is present
++            // (one round), and my own copy of the grid-uniform go-sem is unused, so stage the value there.
++            group_go_sem.set(r + 1);
++            noc_semaphore_set_multicast_loopback_src(
++                get_semaphore(go_sem_id), mcast_addr(get_semaphore(go_sem_id)), mc_num_dests, false, noc.get_noc_id());
++            // The multicasts read their sources from L1: keep them until acked.
++            noc.async_write_barrier();
++        } else {
++            // Release this round's POST: inc each PRESENT group worker's go-sem. The
++            // present set is the contiguous slot prefix [0, pc) (earlier workers get
++            // the ceil row count), so only the first pc workers loop this round.
++            for (uint32_t i = 0; i < pc; i++) {
++                group_go_sem.up(noc, worker_x[i], worker_y[i], 1);
++            }
++            noc.async_atomic_barrier();
++        }
++    }
++
++    // Reset BOTH op-managed semaphores this core owns to 0 so a traced replay
++    // starts clean. Trace capture/replay does NOT re-run the host-side semaphore
++    // init that eager launches get, so any sem left non-zero accumulates across
++    // replays. out_ready (peers fuse-inc it) and fwd_arrival (workers inc it) both
++    // live on this forwarder core; the workers reset their own go-sem. Without the
++    // arrival reset the forwarder's fwd_arrival_sem.wait_min(cumulative) passes
++    // instantly on replay (sem already high) -> it stops waiting for the workers'
++    // sticks -> races (fast-but-wrong) or desyncs into a hang. (go/out_ready already
++    // reset.)
++    //
++    // out_ready is a GlobalSemaphore.
++    noc_semaphore_set(out_ready_sem_ptr, 0);
++    fwd_arrival_sem.set(0);
++    if constexpr (gather_mcast != 0) {
++        group_go_sem.set(0);
++    }
++    // Guard close on is_logically_connected(), matching the canonical CCL writers.
++    if (fabric_connection.is_logically_connected()) {
++        fabric_connection.close_start();
++        fabric_connection.close_finish();
++    }
++}
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+index 69e852ae967..49af26ef3d1 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp
+@@ -90,6 +90,13 @@ constexpr auto w_weight_args = TensorAccessorArgs<WCB + 3>();
+ // loaded by every core's wrap-around traffic. A destination whose NoC0 (east, then south) path is short goes
+ // out on NoC0 on every other visit to its bank, unloading those links without crowding NoC0's own rows.
+ constexpr uint32_t dual_noc_drain = get_compile_time_arg_val(w_weight_args.next_compile_time_args_offset());
++// Forwarder-push gather: the forwarder multicasts every chip's page into my gathered CB (64 B pages)
++// and then the go, so after the go there is nothing to read. My stick goes into the packet at the
++// slot's fp32 tile-row-0 offset, which makes page + gather_slot_offset(my_slot) a tile compute can
++// unpack in place.
++constexpr uint32_t gather_mcast = get_compile_time_arg_val(w_weight_args.next_compile_time_args_offset() + 1);
++constexpr uint32_t gathered_cb_pages = get_compile_time_arg_val(w_weight_args.next_compile_time_args_offset() + 2);
++constexpr uint32_t gather_slot_offset(uint32_t slot) { return (slot / 16u) * 2048u + (slot % 16u) * 64u; }
+ 
+ void kernel_main() {
+     size_t arg_idx = 0;
+@@ -145,7 +152,10 @@ void kernel_main() {
+         DeviceZoneScopedN("W_PUSH");
+         cb_stats_local.wait_front(num_stats);
+         const uint32_t src0 = cb_stats_local.get_read_ptr();
+-        const uint32_t dst = fwd_packet_buf_addr + (round & 1u) * packet_slot_bytes + my_slot * stick_bytes;
++        const uint32_t slot_off = gather_mcast ? gather_slot_offset(my_slot) : my_slot * stick_bytes;
++        const uint32_t dst = fwd_packet_buf_addr + (round & 1u) * packet_slot_bytes + slot_off;
++        // face_01 row 0 goes next to face_00's (packed stick) or a tile face apart (gather_mcast).
++        constexpr uint32_t second_half_off = gather_mcast ? kFace01Off : kFaceRowBytes;
+         // The forwarder's packet buffer is a grid-uniform CB, so its address is our own.
+         UnicastEndpoint fwd_core;
+         for (uint32_t s = 0; s < num_stats; s++) {
+@@ -162,7 +172,7 @@ void kernel_main() {
+                 fwd_core,
+                 kFaceRowBytes,
+                 {},
+-                {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub + kFaceRowBytes});
++                {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub + second_half_off});
+         }
+         noc.async_write_barrier();
+         // Arrival handshake: the stick must be visible in the forwarder's packet buffer
+@@ -221,39 +231,50 @@ void kernel_main() {
+             push_stick(round);
+         }
+ 
+-        // ---- 2. wait for the forwarder's go (this round's ring gather landed) ----
+-        {
+-            DeviceZoneScopedN("W_AGWAIT");
+-            go_target += 1;
+-            go_sem.wait_min(go_target);
+-        }
++        if constexpr (gather_mcast != 0) {
++            // ---- 2+3. the forwarder multicast every chip's page into my gathered CB, then the go ----
++            cb_stats_gathered.reserve_back(gathered_cb_pages);
++            {
++                DeviceZoneScopedN("W_AGWAIT");
++                go_target += 1;
++                go_sem.wait_min(go_target);
++            }
++            cb_stats_gathered.push_back(gathered_cb_pages);
++        } else {
++            // ---- 2. wait for the forwarder's go (this round's ring gather landed) ----
++            {
++                DeviceZoneScopedN("W_AGWAIT");
++                go_target += 1;
++                go_sem.wait_min(go_target);
++            }
+ 
+-        // ---- 3. read num_stats*ring gathered sticks from DRAM into ROW 0 of gathered tiles ----
+-        // Device-major, stat-minor order: gathered tile (d*num_stats + s). For LayerNorm
+-        // this yields interleaved [mean_d, var_d] per device, as combine_welford_partials wants.
+-        cb_stats_gathered.reserve_back(num_stats * ring_size);
+-        const uint32_t gbase = cb_stats_gathered.get_write_ptr();
+-        for (uint32_t d = 0; d < ring_size; d++) {
+-            const uint32_t page_idx = d * num_chunks_per_device + my_forwarder_index * max_rounds + round;
+-            for (uint32_t s = 0; s < num_stats; s++) {
+-                const uint32_t tile_dst = gbase + (d * num_stats + s) * gathered_tile_bytes;
+-                const uint32_t src_off = my_slot * stick_bytes + s * kStatBytes;
+-                noc.async_read(  // -> face_00 row0
+-                    stats_dram,
+-                    CoreLocalMem<uint32_t>(tile_dst),
+-                    kFaceRowBytes,
+-                    {.page_id = page_idx, .offset_bytes = src_off},
+-                    {});
+-                noc.async_read(  // -> face_01 row0
+-                    stats_dram,
+-                    CoreLocalMem<uint32_t>(tile_dst + kFace01Off),
+-                    kFaceRowBytes,
+-                    {.page_id = page_idx, .offset_bytes = src_off + kFaceRowBytes},
+-                    {});
++            // ---- 3. read num_stats*ring gathered sticks from DRAM into ROW 0 of gathered tiles ----
++            // Device-major, stat-minor order: gathered tile (d*num_stats + s). For LayerNorm
++            // this yields interleaved [mean_d, var_d] per device, as combine_welford_partials wants.
++            cb_stats_gathered.reserve_back(num_stats * ring_size);
++            const uint32_t gbase = cb_stats_gathered.get_write_ptr();
++            for (uint32_t d = 0; d < ring_size; d++) {
++                const uint32_t page_idx = d * num_chunks_per_device + my_forwarder_index * max_rounds + round;
++                for (uint32_t s = 0; s < num_stats; s++) {
++                    const uint32_t tile_dst = gbase + (d * num_stats + s) * gathered_tile_bytes;
++                    const uint32_t src_off = my_slot * stick_bytes + s * kStatBytes;
++                    noc.async_read(  // -> face_00 row0
++                        stats_dram,
++                        CoreLocalMem<uint32_t>(tile_dst),
++                        kFaceRowBytes,
++                        {.page_id = page_idx, .offset_bytes = src_off},
++                        {});
++                    noc.async_read(  // -> face_01 row0
++                        stats_dram,
++                        CoreLocalMem<uint32_t>(tile_dst + kFace01Off),
++                        kFaceRowBytes,
++                        {.page_id = page_idx, .offset_bytes = src_off + kFaceRowBytes},
++                        {});
++                }
+             }
++            noc.async_read_barrier();
++            cb_stats_gathered.push_back(num_stats * ring_size);
+         }
+-        noc.async_read_barrier();
+-        cb_stats_gathered.push_back(num_stats * ring_size);
+ 
+         // ---- 4. drain this row's output_cb tiles ----
+         // Per-block wait + pop (NOT a cumulative wait with a single end-of-row pop):

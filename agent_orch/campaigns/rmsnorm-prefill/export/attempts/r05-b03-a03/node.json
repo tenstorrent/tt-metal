@@ -1,0 +1,29 @@
+{
+  "node_id": "r05-b03-a03",
+  "campaign": "rmsnorm-prefill",
+  "round": 5,
+  "branch": 3,
+  "attempt": 3,
+  "parent": "r05-b03-a02",
+  "parent_commit": "06325a23c423c8d2aec1e14991fd44dff00c51f6",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T15:41:31+00:00",
+  "mechanism": "un-gate the stick push from the streamed-gamma barrier on the 4-wave row pipeline: spin on each gamma chunk's read trid while polling for the stat, so each wave's AG starts at its own read end instead of at the last wave's gamma landing",
+  "tags": [
+    "repair",
+    "writer",
+    "ag-start",
+    "gamma-read",
+    "waves",
+    "scheduling"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4881,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_worker_writer.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 21,
+  "finished_at": "2026-10-08T15:45:24+00:00"
+}

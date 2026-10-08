@@ -1,0 +1,30 @@
+{
+  "node_id": "r03-b02-a02",
+  "campaign": "rmsnorm-prefill",
+  "round": 3,
+  "branch": 2,
+  "attempt": 2,
+  "parent": "r03-b02-a01",
+  "parent_commit": "eb86075a1e20a69c17b5cb5b2a28b186fb59fd81",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T13:17:59+00:00",
+  "mechanism": "land the all-gather stats scratch in L1 (mesh-coherent L1-interleaved persistent buffer) instead of DRAM: gathered-stick read after go 0.69 -> 0.60 us, fabric landing unchanged",
+  "tags": [
+    "ag-landing",
+    "l1-scratch",
+    "stick-read",
+    "host-factory",
+    "latency"
+  ],
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation_types.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.3333,
+  "build_seconds": 20,
+  "eval_seconds": 19,
+  "finished_at": "2026-10-08T13:24:05+00:00"
+}

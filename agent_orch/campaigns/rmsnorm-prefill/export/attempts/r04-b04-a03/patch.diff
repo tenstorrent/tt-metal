@@ -1,0 +1,55 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+index 726ef298adb..2784b4a1eac 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_fused_reader.cpp
+@@ -207,7 +207,7 @@ void kernel_main() {
+     };
+ 
+     // Trid-pipelined resident input pass. Each block_size-tile block is tagged with its own
+-    // NoC read transaction id, so up to kInputLookahead blocks are in flight while we wait
++    // NoC read transaction id, so up to input_lookahead blocks are in flight while we wait
+     // on (and push) only the oldest one: PRE still consumes block by block, but the DRAM
+     // round-trips overlap instead of serialising per block. When `with_weight`, the broadcast
+     // gamma face-row reads for each block are issued right behind its input reads (one
+@@ -216,6 +216,10 @@ void kernel_main() {
+     constexpr uint32_t kInputTrids = 14u;  // trids 1..14 for input blocks
+     constexpr uint32_t kWeightTrid = 15u;
+     constexpr uint32_t kInputLookahead = 4u;
++    // Cores left of the x=9 DRAM column get their x=9-bank responses over the long NoC0 east wrap, so with
++    // the same reads in flight they read slower and their stick push gates the AG start. Keep more in flight there.
++    constexpr uint32_t kInputLookaheadFar = 6u;
++    const uint32_t input_lookahead = (my_x[0] < 9u) ? kInputLookaheadFar : kInputLookahead;
+     constexpr uint32_t num_input_blocks = (num_tile_cols + block_size - 1u) / block_size;
+     auto read_input_pass_pipelined = [&](uint32_t input_tile_idx, bool with_weight) {
+         cb_input.reserve_back(num_tile_cols);
+@@ -225,7 +229,7 @@ void kernel_main() {
+             cb_weight.reserve_back(weight_bcast_tiles);
+             weight_base = cb_weight.get_write_ptr();
+         }
+-        for (uint32_t k = 0; k < num_input_blocks + kInputLookahead; k++) {
++        for (uint32_t k = 0; k < num_input_blocks + input_lookahead; k++) {
+             if (k < num_input_blocks) {
+                 const uint32_t col_tile = k * block_size;
+                 const uint32_t tiles_in_block =
+@@ -261,8 +265,8 @@ void kernel_main() {
+                     }
+                 }
+             }
+-            if (k >= kInputLookahead) {
+-                const uint32_t kb = k - kInputLookahead;
++            if (k >= input_lookahead) {
++                const uint32_t kb = k - input_lookahead;
+                 const uint32_t col_tile = kb * block_size;
+                 const uint32_t tiles_in_block =
+                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+@@ -277,7 +281,9 @@ void kernel_main() {
+         // Restore the default read trid for the plain reads below / later kernels.
+         noc_async_read_set_trid(0, noc.get_noc_id());
+     };
+-    static_assert(kInputLookahead < kInputTrids, "lookahead must not reuse an in-flight trid");
++    static_assert(
++        kInputLookahead < kInputTrids && kInputLookaheadFar < kInputTrids,
++        "lookahead must not reuse an in-flight trid");
+ 
+     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
+         // Deep input read: issue the whole row's tiles, then ONE barrier, so
