@@ -1058,9 +1058,16 @@ class DiffVAEStage5(Module):
         return out
 
     def _brick_activation(
-        self, x: ttnn.Tensor, volume: tuple[int, int, int], brick: tuple[int, int, int]
+        self,
+        x: ttnn.Tensor,
+        volume: tuple[int, int, int],
+        brick: tuple[int, int, int],
+        *,
+        release_input: bool = True,
     ) -> ttnn.Tensor:
-        """``(1, batch, T*H*W, C)`` TILE natural -> ``(1, batch, bricked_sites, C)`` TILE."""
+        """``(1, batch, T*H*W, C)`` TILE natural -> ``(1, batch, bricked_sites, C)`` TILE.
+
+        ``release_input=False`` leaves ``x`` allocated, for a trace input the replays write into."""
         channels = int(x.shape[-1])
         batch = int(x.shape[1])
         rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
@@ -1069,7 +1076,10 @@ class DiffVAEStage5(Module):
         flat = ttnn.reshape(grid5, (1, batch, brick_count(volume, brick) * SITES_PER_BRICK, channels))
         out = ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
         # Freed together, by buffer rather than by object: vol is a view of rm and flat one of grid5.
-        release_intermediates((x, rm, vol, grid5, flat), keep=out)
+        temps = (x, rm, vol, grid5, flat)
+        if not release_input:
+            temps = tuple(t for t in temps[1:] if not t.is_allocated() or t.buffer_address() != x.buffer_address())
+        release_intermediates(temps, keep=out)
         return out
 
     def _unbrick_activation(
@@ -1131,6 +1141,13 @@ class DiffVAEStage5(Module):
             frames = None
         align = self._stage5_brick(grid)[0] if self._keep_bricked else 1
         return _bands(grid.t, frames=frames, kernel=kernel, align=align)
+
+    def noise_bands(self, grid: Grid, *, x_t: torch.Tensor | None = None, seed: int = 0) -> list[ttnn.Tensor]:
+        """Embedded x_t noise, one tensor per band: drawn on device from ``seed``, or ``x_t`` from the host."""
+        bands = self.bands(grid)
+        _label = "stage5: device randn + embed x_t" if x_t is None else "stage5: host patchify + embed x_t"
+        with timing_tree.span(self.mesh_device, _label, category=timing_tree.HOST_COMPUTE):
+            return self.device_x_t(grid, bands, seed=seed) if x_t is None else self.embed_x_t(x_t, bands)
 
     def device_x_t(self, grid: Grid, bands: tuple[_Band, ...], *, seed: int = 0) -> list[ttnn.Tensor]:
         """x_t noise drawn on device, already in the patchified layout. One tensor per band.
@@ -1292,9 +1309,14 @@ class DiffVAEStage5(Module):
         seed: int = 0,
         device_out: bool = False,
         output_type: str = "float",
+        x_bands: list[ttnn.Tensor] | None = None,
     ) -> torch.Tensor | ttnn.Tensor:
         """Return pixels. Valid as the whole decode only for ``model_output_type="x0"`` with a
         single inference step, which is what the shipped 2.5 DiffVAE config asks for.
+
+        ``x_bands`` is the embedded noise from :meth:`noise_bands`, drawn by the caller; ``x_t`` and
+        ``seed`` are then ignored. It lets a trace take the noise as an input instead of baking a
+        seed into its captured randn.
 
         ``device_out=True`` returns pixels still on device, stopping immediately before the PCIe
         pull, so a caller capturing the decode as a trace can transfer them itself.
@@ -1312,18 +1334,25 @@ class DiffVAEStage5(Module):
             if self.h_axis is not None:
                 context = self._h_partition(context, grid)
 
-        _label = "stage5: device randn + embed x_t" if x_t is None else "stage5: host patchify + embed x_t"
-        with timing_tree.span(self.mesh_device, _label, category=timing_tree.HOST_COMPUTE):
-            x_bands = self.device_x_t(grid, bands, seed=seed) if x_t is None else self.embed_x_t(x_t, bands)
+        caller_noise = x_bands is not None
+        if caller_noise:
+            assert len(x_bands) == len(bands), f"{len(x_bands)} noise bands for {len(bands)} bands"
+        else:
+            x_bands = self.noise_bands(grid, x_t=x_t, seed=seed)
 
         brick = self._stage5_brick(grid) if self._keep_bricked else None
         if brick is not None:
             with timing_tree.span(self.mesh_device, "stage5: brick x+context", category=timing_tree.RESHAPE):
                 context = self._brick_activation(context, self._local_volume(grid), brick)
                 x_bands = [
-                    self._brick_activation(band_x, self._local_volume(grid, t=band.hi - band.lo), brick)
+                    self._brick_activation(
+                        band_x, self._local_volume(grid, t=band.hi - band.lo), brick, release_input=not caller_noise
+                    )
                     for band_x, band in zip(x_bands, bands)
                 ]
+        elif caller_noise:
+            # The blocks free their inputs; the caller's bands must outlive this call.
+            x_bands = [ttnn.clone(band_x) for band_x in x_bands]
 
         out = self.forward_diff_step(context, x_bands, timestep, grid, bands, brick=brick)
         return self._to_pixels(out, grid, device_out=device_out, output_type=output_type)

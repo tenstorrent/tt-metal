@@ -868,6 +868,7 @@ class DiffVAEDecoder(Module):
         # Set True by the pipeline after warm-up: forward() then captures the device half of the
         # decode as a ttnn trace on its first call and replays it after.
         self._vae_traced = False
+        self._eager_shapes: set[tuple[int, ...]] = set()
         self.ccl_manager = ccl_manager
         self.patch_size = config["patch_size"]
         self.out_channels = config["out_channels"]
@@ -877,6 +878,7 @@ class DiffVAEDecoder(Module):
         self.ghost_latent_frames = (config["stage_kernels"][0][0] // 2) * 2
         # Composed temporal upscale of the four upsamples.
         self.time_scale = math.prod(stride[0] for stride, _ in config["upsamples"])
+        self.space_scale = tuple(math.prod(stride[axis] for stride, _ in config["upsamples"]) for axis in (1, 2))
 
         self.stages = DeterministicStages(
             in_channels=config["in_channels"],
@@ -971,6 +973,12 @@ class DiffVAEDecoder(Module):
         grown = self.time_scale * (padded - 1) + 1
         return max(grown - self.ghost_latent_frames * self.time_scale, self.stage5_kernel[0])
 
+    def stage5_grid(self, t: int, h: int, w: int) -> Grid:
+        """The stage-5 grid :meth:`decode` builds for a ``(T, H, W)`` latent."""
+        padded = t + self.ghost_latent_frames
+        grown = self.time_scale * (padded - 1) + 1
+        return Grid(batch=1, t=min(self.context_frames(t), grown), h=h * self.space_scale[0], w=w * self.space_scale[1])
+
     @timing_tree.span("mesh_device", "det stages TOTAL (forward_context)")
     def forward_context(
         self, latent: torch.Tensor, *, gather_output: bool = True, latent_tt: ttnn.Tensor | None = None
@@ -1061,10 +1069,16 @@ class DiffVAEDecoder(Module):
         )
         return out
 
-    def _decode(self, latent, *, noise, seed, latent_tt, device_out, output_type):
-        """:meth:`decode`, also returning the stage-5 grid the pixel pull needs."""
+    def _decode(self, latent, *, noise, seed, latent_tt, device_out, output_type, x_bands=None):
+        """:meth:`decode`, also returning the stage-5 grid the pixel pull needs.
+
+        ``x_bands`` is stage 5's embedded noise drawn by the caller (see :meth:`DiffVAEStage5.noise_bands`).
+        """
         context, dims = self.forward_context(latent, gather_output=not self._wsharded_handoff, latent_tt=latent_tt)
         grid = Grid(batch=1, t=dims[0], h=dims[1], w=dims[2])
+        assert grid == self.stage5_grid(
+            *latent.shape[2:]
+        ), f"stage-5 grid {grid} != {self.stage5_grid(*latent.shape[2:])}"
         channels_out = self.config["stage_channels"][-1]
         with timing_tree.span(self.mesh_device, "context reshape for stage 5", category=timing_tree.RESHAPE):
             if self._wsharded_handoff:
@@ -1074,7 +1088,7 @@ class DiffVAEDecoder(Module):
                 context = ttnn.reshape(context, (1, 1, grid.sites, channels_out))
 
         # With the boundaries on device, noise stays None and stage 5 draws it there.
-        if noise is None and not self.options.device_boundaries:
+        if noise is None and x_bands is None and not self.options.device_boundaries:
             shape = (1, self.out_channels, grid.t, grid.h * self.patch_size, grid.w * self.patch_size)
             with timing_tree.span(
                 self.mesh_device, f"host: noise randn {tuple(shape)}", category=timing_tree.HOST_COMPUTE
@@ -1097,29 +1111,34 @@ class DiffVAEDecoder(Module):
             seed=seed,
             device_out=device_out,
             output_type=output_type,
+            x_bands=x_bands,
         )
         log_dram(self.mesh_device, "decode done")
         log_ccl_cache(self.stage5.ccl_manager, "decode done")
         return out, grid
 
     @traced_function(device=lambda self: self.mesh_device, prep_run=False, clone_prep_inputs=False)
-    def decode_device(self, raw: ttnn.Tensor, t: int, h: int, w: int, seed: int):
-        """The device half of the decode: raw latent buffer in, this chip's pixel volume out.
+    def decode_device(self, raw: ttnn.Tensor, x_bands: list[ttnn.Tensor], t: int, h: int, w: int):
+        """The device half of the decode: raw latent and stage-5 noise in, this chip's pixel volume out.
 
         Everything between the two host boundaries, so that it captures as one ttnn trace. ``raw``
-        is the ``(1, C, T, H*W)`` ROW_MAJOR upload the device-preproc path reads. Returns the volume
-        and the stage-5 grid ``(T', H', W')`` as plain ints, which the tracer passes through.
+        is the ``(1, C, T, H*W)`` ROW_MAJOR upload the device-preproc path reads; ``x_bands`` the
+        embedded noise, drawn outside so one capture serves every seed. Returns the volume and the
+        stage-5 grid ``(T', H', W')`` as plain ints, which the tracer passes through.
         """
         shape_only = torch.empty(1, self.in_channels, t, h, w)
-        vol, grid = self._decode(shape_only, noise=None, seed=seed, latent_tt=raw, device_out=True, output_type="float")
+        vol, grid = self._decode(
+            shape_only, noise=None, seed=0, latent_tt=raw, device_out=True, output_type="float", x_bands=x_bands
+        )
         return vol, grid.t, grid.h, grid.w
 
-    def _pixels_traced(self, latent: torch.Tensor, *, seed: int, output_type: str):
+    def _pixels_traced(self, latent: torch.Tensor, *, seed: int, noise: torch.Tensor | None, output_type: str):
         """One decode through the captured trace (captured on the first call), pixels on the host.
 
-        The latent is uploaded to a fresh buffer each call; the tracer copies it into the trace's
-        own input buffer, so the fresh one is freed afterwards, except on the capture call, where
-        the fresh buffer IS the trace's input and has to stay.
+        The latent and the noise are made fresh each call (the noise drawn eagerly from ``seed``, or
+        embedded from ``noise``); the tracer copies them into the trace's own input buffers, so the
+        fresh ones are freed afterwards, except on the capture call, where they ARE the trace's inputs
+        and have to stay.
         """
         if not self.options.device_boundaries:
             msg = (
@@ -1132,7 +1151,7 @@ class DiffVAEDecoder(Module):
             raise RuntimeError(msg)
 
         b, c, t, h, w = latent.shape
-        key = (c, t, h, w, seed)
+        key = (c, t, h, w)
         tracer = type(self).decode_device._tracers_keyed.get(self, {}).get(key)
         capturing = tracer is None or not tracer.trace_captured
         raw = ttnn.from_torch(
@@ -1141,9 +1160,11 @@ class DiffVAEDecoder(Module):
             dtype=self.dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        vol, gt, gh, gw = self.decode_device(raw, t, h, w, seed, traced=True, tracer_trace_key=key)
+        x_bands = self.stage5.noise_bands(self.stage5_grid(t, h, w), x_t=noise, seed=seed)
+        vol, gt, gh, gw = self.decode_device(raw, x_bands, t, h, w, traced=True, tracer_trace_key=key)
         if not capturing:
-            ttnn.deallocate(raw)
+            for tensor in (raw, *x_bands):
+                ttnn.deallocate(tensor)
         return self.stage5.pull_pixels(vol, Grid(batch=1, t=gt, h=gh, w=gw), output_type, release=False)
 
     def forward(
@@ -1160,11 +1181,10 @@ class DiffVAEDecoder(Module):
         maps it to planar uint8, ``yuv`` converts and gathers YUV 4:2:0 on device (needs
         ``DiffVAEOptions.device_boundaries``).
         """
-        if self._vae_traced:
-            if noise is not None:
-                msg = "a traced decode draws its noise on device; a caller-supplied noise cannot enter the trace"
-                raise ValueError(msg)
-            pixels = self._pixels_traced(latent, seed=seed, output_type="yuv" if output_type == "yuv" else "float")
+        if self._vae_traced or self._trace_env_shapes(latent):
+            pixels = self._pixels_traced(
+                latent, seed=seed, noise=noise, output_type="yuv" if output_type == "yuv" else "float"
+            )
             if output_type == "yuv":
                 return pixels
         elif output_type == "yuv":
@@ -1176,6 +1196,19 @@ class DiffVAEDecoder(Module):
         if output_type == "rgb":
             return pixels.add(1.0).mul(0.5 * 255.0).clamp(0.0, 255.0).to(torch.uint8)
         raise ValueError(f"unknown output_type {output_type!r}")
+
+    def _trace_env_shapes(self, latent: torch.Tensor) -> bool:
+        """``DIFFVAE_TRACED=1``: decode eagerly the first time a latent shape is seen, traced after.
+
+        The eager call compiles every program, so the capture that follows records no compiles.
+        """
+        if os.environ.get("DIFFVAE_TRACED", "0") != "1" or not self.options.device_boundaries:
+            return False
+        shape = tuple(latent.shape)
+        if shape in self._eager_shapes:
+            return True
+        self._eager_shapes.add(shape)
+        return False
 
     def release_trace(self) -> None:
         """Free every captured decode trace (on shutdown, or before re-warming)."""
