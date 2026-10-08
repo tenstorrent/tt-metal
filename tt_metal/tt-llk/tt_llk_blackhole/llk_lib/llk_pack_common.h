@@ -90,8 +90,7 @@ inline void _llk_pack_dest_section_done_()
     if constexpr (Dst == DstSync::SyncHalf)
     {
         flip_packer_dest_offset_id();
-        // The half offsets, 0 and DEST_REGISTER_HALF_SIZE, differ only in byte 1 of the register.
-        TT_RMWCIB1(0xff, get_packer_dest_offset() >> 8, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        select_packer_dest_registers<Dst>();
     }
 }
 
