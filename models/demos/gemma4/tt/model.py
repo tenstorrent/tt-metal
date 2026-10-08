@@ -450,6 +450,13 @@ class Gemma4Model:
                         "per_layer_model_projection": state_dict[pli_proj_key],  # [n_layers * pli_size, hidden]
                         "per_layer_projection_norm": state_dict[pli_norm_key],  # [pli_size]
                     }
+                    # Device-PLI plan, Phase 0 quick win: convert the projection
+                    # to fp32 once at load. _compute_per_layer_inputs ran
+                    # proj_w.float() on every decoded token, a fresh 55 MB copy
+                    # per step that dominated the host-side PLI cost.
+                    self.per_layer_input_weights["per_layer_model_projection_fp32"] = self.per_layer_input_weights[
+                        "per_layer_model_projection"
+                    ].float()
                     self.per_layer_input_scale = 2.0**-0.5
                     self.per_layer_model_projection_scale = hf_config.hidden_size**-0.5
                     self.per_layer_embed_scale = pli_size**0.5
@@ -744,8 +751,11 @@ class Gemma4Model:
         pli_embed = pli_embed.reshape(*input_ids_torch.shape, full_n_layers, pli_size)
 
         # 2. Projection from main embeddings
-        proj_w = w["per_layer_model_projection"]  # [full_n_layers * pli_size, hidden]
-        pli_proj = F.linear(embeds_torch.float(), proj_w.float()) * self.per_layer_model_projection_scale
+        # [full_n_layers * pli_size, hidden]; fp32 copy made once at load
+        proj_w = w.get("per_layer_model_projection_fp32")
+        if proj_w is None:
+            proj_w = w["per_layer_model_projection"].float()
+        pli_proj = F.linear(embeds_torch.float(), proj_w) * self.per_layer_model_projection_scale
         pli_proj = pli_proj.reshape(*embeds_torch.shape[:-1], full_n_layers, pli_size)
 
         # 3. Norm the projection
@@ -2219,7 +2229,7 @@ class Gemma4Model:
         if self.hidden_size_per_layer_input and self.per_layer_input_weights:
             if batch != 1:
                 raise NotImplementedError("Batched decode with per-layer inputs (E2B/E4B) is not yet supported")
-            _, pli = self.compute_host_embeddings(int(tok_flat[0].item()))
+            pli = self.compute_host_pli(int(tok_flat[0].item()))
             if pli is not None:
                 pli_tt = ttnn.from_torch(
                     pli.to(torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
