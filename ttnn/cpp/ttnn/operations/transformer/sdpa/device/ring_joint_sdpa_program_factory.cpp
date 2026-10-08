@@ -1408,7 +1408,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     TT_ASSERT(args.kv_stripe_split == 1 || use_streaming_compute);
     TT_FATAL(
         !kv_pad_rotation_enabled || use_streaming_compute,
-        "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
+        "kv_actual_isl requires the ring-joint streaming compute path; the legacy sdpa_ring path selected by "
         "fp32_dest_acc_en=true is not supported.");
 
     // K split: when the (head, Q chunk) units leave the grid idle, the rows are divided into bands that each hold

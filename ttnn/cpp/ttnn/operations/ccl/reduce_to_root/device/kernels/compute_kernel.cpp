@@ -17,7 +17,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/reduce.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_block_ops.hpp"
 
 struct OutputCBs {
     uint32_t l_cb;
