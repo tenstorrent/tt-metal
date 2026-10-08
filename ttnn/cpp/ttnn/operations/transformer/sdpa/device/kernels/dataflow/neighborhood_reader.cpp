@@ -517,6 +517,23 @@ void kernel_main() {
 
     Noc noc;
 
+    // ---- K/V ring ----
+    // Bricks of absolute column c sit in ring slot c % kv_ring_columns of their gather (t, h) row.
+    // The ring holds [ring_first_column, ring_end_column) of the row named by the ring_* tag, and
+    // after each chunk it holds that chunk's last kv_ring_columns columns. Every slot is still
+    // copied into cb_key/cb_value in gather order, so compute sees the same tiles as without it.
+    constexpr uint32_t kv_ring_mode = get_compile_time_arg_val(kernel_args::reader_arg::kv_ring_mode);
+    constexpr uint32_t kv_ring_columns = get_compile_time_arg_val(kernel_args::reader_arg::kv_ring_columns);
+    constexpr bool ring_keys = kv_ring_mode >= 1;
+    constexpr bool ring_values = kv_ring_mode == 2;
+    constexpr uint32_t gather_width = gather_bricks.width();
+    const uint32_t key_ring_base = ring_keys ? CircularBuffer(kernel_args::cb_key_ring).get_write_ptr() : 0;
+    const uint32_t value_ring_base = ring_values ? CircularBuffer(kernel_args::cb_value_ring).get_write_ptr() : 0;
+    const uint32_t ring_entry_bytes = head_dim_tiles * tile_bytes;
+    bool ring_is_valid = false;
+    uint32_t ring_batch = 0, ring_head = 0, ring_time = 0, ring_height = 0;
+    uint32_t ring_first_column = 0, ring_end_column = 0;
+
     for (uint32_t work_item = work_item_start; work_item < work_item_start + work_item_count; ++work_item) {
         // A work item is one (batch, head, query brick). Bricks vary fastest so that
         // neighbouring bricks -- which share most of their context window -- land on the same
@@ -660,6 +677,42 @@ void kernel_main() {
             }
         }
 
+        const uint32_t window_first_column = gather_origin_brick.width();
+        const uint32_t keep_first_column = window_first_column + gather_width - kv_ring_columns;
+        const bool ring_row_matches = ring_is_valid && ring_batch == batch_index && ring_head == head_index &&
+                                      ring_time == gather_origin_brick.time() &&
+                                      ring_height == gather_origin_brick.height();
+        // Slots fetched from DRAM this kv chunk whose column the next chunk keeps: copied into the
+        // ring once the chunk's reads have landed.
+        uint32_t ring_store_slot[MAX_TILES_PER_KV_CHUNK];
+        uint32_t ring_store_entry[MAX_TILES_PER_KV_CHUNK];
+        uint32_t ring_store_count = 0;
+        uint32_t key_base_pointer = 0;
+        uint32_t value_base_pointer = 0;
+        // Called after the chunk's read barrier and before its push. The copies may still be in
+        // flight at the push: cb_key and cb_value hold two chunks, so these pages are next written
+        // only after another barrier.
+        auto store_ring_entries = [&]() {
+            for (uint32_t index = 0; index < ring_store_count; ++index) {
+                const uint32_t entry_offset = ring_store_entry[index] * ring_entry_bytes;
+                for (uint32_t head_dim_tile = 0; head_dim_tile < head_dim_tiles; ++head_dim_tile) {
+                    noc_async_read(
+                        get_noc_addr(
+                            key_base_pointer +
+                            (head_dim_tile * tiles_per_kv_chunk + ring_store_slot[index]) * tile_bytes),
+                        key_ring_base + entry_offset + head_dim_tile * tile_bytes,
+                        tile_bytes);
+                }
+                if constexpr (ring_values) {
+                    noc_async_read(
+                        get_noc_addr(value_base_pointer + ring_store_slot[index] * ring_entry_bytes),
+                        value_ring_base + entry_offset,
+                        ring_entry_bytes);
+                }
+            }
+            ring_store_count = 0;
+        };
+
         // ---- K, V and the mask, one flash chunk at a time ----
         for (uint32_t kv_chunk_index = 0; kv_chunk_index < kv_chunk_count; ++kv_chunk_index) {
             cb_key.reserve_back(tiles_per_kv_chunk * head_dim_tiles);
@@ -676,8 +729,9 @@ void kernel_main() {
             //
             // At head_dim_tiles == 1 the two layouts are the same buffer, which is why a wrong K
             // layout survived every test until one used a 64-wide head.
-            const uint32_t key_base_pointer = cb_key.get_write_ptr();
-            uint32_t value_write_pointer = cb_value.get_write_ptr();
+            key_base_pointer = cb_key.get_write_ptr();
+            value_base_pointer = cb_value.get_write_ptr();
+            uint32_t value_write_pointer = value_base_pointer;
             uint32_t mask_write_pointer = cb_mask.get_write_ptr();
 
             // Three passes, deliberately. Mixing the constant fills with fill_mask_tile in one
@@ -705,6 +759,53 @@ void kernel_main() {
                 coverage[slot] = (slot_is_padding || use_interior_table)
                                      ? mask_gen::BrickCoverage::NoneVisible
                                      : mask_gen::classify_brick(chunk_origin_site, key_origins[slot], extents);
+
+                if constexpr (ring_keys) {
+                    if (!slot_is_padding) {
+                        const uint32_t column = window_first_column + slot_offset.width();
+                        const uint32_t ring_entry =
+                            (gather_slot / gather_width) * kv_ring_columns + column % kv_ring_columns;
+                        if (ring_row_matches && column >= ring_first_column && column < ring_end_column) {
+                            const uint32_t entry_offset = ring_entry * ring_entry_bytes;
+                            for (uint32_t head_dim_tile = 0; head_dim_tile < head_dim_tiles; ++head_dim_tile) {
+                                noc_async_read(
+                                    get_noc_addr(key_ring_base + entry_offset + head_dim_tile * tile_bytes),
+                                    key_base_pointer + (head_dim_tile * tiles_per_kv_chunk + slot) * tile_bytes,
+                                    tile_bytes);
+                            }
+                            if constexpr (ring_values) {
+                                noc_async_read(
+                                    get_noc_addr(value_ring_base + entry_offset),
+                                    value_write_pointer,
+                                    ring_entry_bytes);
+                                value_write_pointer += ring_entry_bytes;
+                                continue;
+                            }
+                            const uint32_t value_first_tile = layout::tile_offset(
+                                batch_index,
+                                layout::point3_to_linear(key_brick, volume_bricks),
+                                head_index,
+                                brick_count,
+                                head_count,
+                                head_dim_tiles);
+                            for (uint32_t head_dim_tile = 0; head_dim_tile < head_dim_tiles; ++head_dim_tile) {
+                                noc.async_read(
+                                    value_reader,
+                                    CoreLocalMem<uint32_t>(value_write_pointer),
+                                    tile_bytes,
+                                    {.page_id = value_first_tile + head_dim_tile},
+                                    {});
+                                value_write_pointer += tile_bytes;
+                            }
+                            continue;
+                        }
+                        if (column >= keep_first_column) {
+                            ring_store_slot[ring_store_count] = slot;
+                            ring_store_entry[ring_store_count] = ring_entry;
+                            ++ring_store_count;
+                        }
+                    }
+                }
 
                 const uint32_t key_first_tile = layout::tile_offset(
                     batch_index,
@@ -793,6 +894,9 @@ void kernel_main() {
                     }
                 }
                 noc.async_read_barrier();
+                if constexpr (ring_keys) {
+                    store_ring_entries();
+                }
                 cb_key.push_back(tiles_per_kv_chunk * head_dim_tiles);
                 cb_value.push_back(tiles_per_kv_chunk * head_dim_tiles);
                 cb_mask.push_back(mask_tiles_per_kv_chunk);
@@ -828,6 +932,9 @@ void kernel_main() {
                     }
                 }
                 noc.async_read_barrier();
+                if constexpr (ring_keys) {
+                    store_ring_entries();
+                }
                 cb_key.push_back(tiles_per_kv_chunk * head_dim_tiles);
                 cb_value.push_back(tiles_per_kv_chunk * head_dim_tiles);
                 cb_mask.push_back(tiles_per_kv_chunk);
@@ -881,9 +988,24 @@ void kernel_main() {
             }
 
             noc.async_read_barrier();
+            if constexpr (ring_keys) {
+                store_ring_entries();
+            }
             cb_key.push_back(tiles_per_kv_chunk * head_dim_tiles);
             cb_value.push_back(tiles_per_kv_chunk * head_dim_tiles);
             cb_mask.push_back(tiles_per_kv_chunk);
+        }
+
+        if constexpr (ring_keys) {
+            // The next chunk reads these ring entries, so the stores must have landed.
+            noc.async_read_barrier();
+            ring_is_valid = true;
+            ring_batch = batch_index;
+            ring_head = head_index;
+            ring_time = gather_origin_brick.time();
+            ring_height = gather_origin_brick.height();
+            ring_first_column = keep_first_column;
+            ring_end_column = window_first_column + gather_width;
         }
 
         // An edge brick wrote generated tiles over the pages, so the next unclamped one must

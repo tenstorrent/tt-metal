@@ -112,10 +112,12 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     const uint32_t cores_with_one_extra = work_item_count % worker_core_count;
 
     // ---- circular buffers ----
+    uint32_t circular_buffer_bytes = 0;
     const auto add_circular_buffer = [&](uint32_t buffer_index,
                                          uint32_t page_bytes,
                                          uint32_t page_count,
                                          tt::DataFormat format) {
+        circular_buffer_bytes += page_bytes * page_count;
         descriptor.cbs.push_back(tt::tt_metal::CBDescriptor{
             .total_size = page_bytes * page_count,
             .core_ranges = worker_core_range,
@@ -179,6 +181,46 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
             kernel_args::cb_resident_mask, bfloat16_tile_bytes, plan.gather_brick_count, bfloat16_format);
     }
 
+    // ---- K/V ring ----
+    // gather_width - 1 columns per gather (t, h) row is enough: a one-column step keeps all but the
+    // first column, and the new column lands in that column's slot once its read has completed.
+    // Values are ringed too only when both rings fit next to the CBs above, keys alone otherwise.
+    // The store into the ring trails the kv chunk barrier, so it relies on cb_key and cb_value
+    // holding two chunks: the next write into the stored pages waits for one more barrier.
+    const uint32_t gather_width = plan.gather_bricks.width();
+    const uint32_t ring_columns = gather_width > 1 ? gather_width - 1 : 0;
+    uint32_t kv_ring_mode = 0;
+    if (NeighborhoodSDPAOperation::kv_ring_requested() && ring_columns > 0 && plan.gather_brick_count >= gather_width &&
+        tiles_per_kv_chunk <= 8) {
+        const uint32_t ring_bytes =
+            plan.gather_bricks.time() * plan.gather_bricks.height() * ring_columns * head_dim_tiles * tile_bytes;
+        const uint64_t l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        const uint64_t l1_end = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
+        const uint64_t free_bytes =
+            l1_end > l1_base + circular_buffer_bytes ? l1_end - l1_base - circular_buffer_bytes : 0;
+        // Each CB is aligned on its own; keep some slack for that.
+        constexpr uint64_t ALIGNMENT_SLACK = 4096;
+        if (free_bytes >= 2ull * ring_bytes + ALIGNMENT_SLACK) {
+            kv_ring_mode = 2;
+        } else if (free_bytes >= ring_bytes + ALIGNMENT_SLACK) {
+            kv_ring_mode = 1;
+        }
+        log_info(
+            tt::LogOp,
+            "neighborhood sdpa kv ring: mode={} columns={} ring_bytes={} cb_bytes={} free_bytes={}",
+            kv_ring_mode,
+            ring_columns,
+            ring_bytes,
+            circular_buffer_bytes,
+            free_bytes);
+        if (kv_ring_mode >= 1) {
+            add_circular_buffer(kernel_args::cb_key_ring, tile_bytes, ring_bytes / tile_bytes, data_format);
+        }
+        if (kv_ring_mode == 2) {
+            add_circular_buffer(kernel_args::cb_value_ring, tile_bytes, ring_bytes / tile_bytes, data_format);
+        }
+    }
+
     // ---- compile-time arguments, written by name ----
     std::vector<uint32_t> reader_compile_args(kernel_args::reader_arg::COUNT);
     reader_compile_args[kernel_args::reader_arg::head_count] = head_count;
@@ -230,6 +272,8 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     // A stride-1 table is relative; a GNA one is per-regime. The kernel indexes them differently.
     const bool relative_mask = config.stride.time() == 1 && config.stride.height() == 1 && config.stride.width() == 1;
     reader_compile_args[kernel_args::reader_arg::relative_mask] = relative_mask ? 1u : 0u;
+    reader_compile_args[kernel_args::reader_arg::kv_ring_mode] = kv_ring_mode;
+    reader_compile_args[kernel_args::reader_arg::kv_ring_columns] = ring_columns;
 
     // Accessor args come after the named block, in the order the reader constructs them.
     tt::tt_metal::TensorAccessorArgs(tensors.query_tensor.buffer()).append_to(reader_compile_args);

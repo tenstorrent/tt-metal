@@ -38,6 +38,10 @@ struct NeighborhoodSDPAOperation {
     // Explicit rather than reflected: the attributes carry a NeighborhoodConfig of std::arrays,
     // and the eight stage-5 blocks must share one compiled program.
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
+    // DIFFVAE_NA_KV_RING=1 keeps the K/V bricks that W-adjacent chunks share in an L1 ring. Read
+    // from the environment on every call, so it is part of the program hash.
+    static bool kv_ring_requested();
 };
 
 Tensor neighborhood_sdpa(

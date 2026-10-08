@@ -41,6 +41,8 @@ enum CircularBufferId : uint32_t {
     cb_gather_origin,  // reader-internal scratch: one row of the host-built origin table
     cb_resident_mask,  // reader-internal scratch: one regime's whole uploaded mask set, kept
                        // across work items so a shared pattern is fetched once, not per chunk
+    cb_key_ring,       // reader-internal scratch: the K bricks a W-adjacent chunk will reuse
+    cb_value_ring,     // reader-internal scratch: the same for V
     CB_COUNT
 };
 
@@ -166,6 +168,12 @@ enum : uint32_t {
     // instead of being re-evaluated per (query brick, key brick) pair -- the same collapse the
     // reference gets by broadcasting one mask over a whole group of query tiles.
     has_interior_mask,
+
+    // K/V ring (DIFFVAE_NA_KV_RING): 0 off, 1 keys only, 2 keys and values. A core's work items
+    // are W-adjacent chunks of one (head, t, h) row, so consecutive gathers share all but one
+    // brick column; the ring keeps kv_ring_columns of them per gather (t, h) row in L1.
+    kv_ring_mode,
+    kv_ring_columns,
 
     COUNT
 };
