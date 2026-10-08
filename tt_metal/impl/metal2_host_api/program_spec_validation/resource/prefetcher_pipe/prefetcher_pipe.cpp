@@ -18,9 +18,7 @@ namespace tt::tt_metal::experimental {
 //
 // Rule 1. Geometry: non-empty receivers, ring_size > 0, entry_size > 0, L1-aligned and <= ring_size.
 // (Rules 2-6 are structural: roles.cpp and lanes_and_relays.cpp.)
-void ValidatePrefetcherPipeParameter(const PrefetcherPipeParameter& pipe, const ValidationContext& ctx) {
-    const uint32_t l1_alignment = ctx.hal.get_alignment(HalMemType::L1);
-
+void ValidatePrefetcherPipeParameter(const PrefetcherPipeParameter& pipe, uint32_t l1_alignment) {
     const NodeRangeSet receivers = to_node_range_set(pipe.receivers);
     TT_FATAL(receivers.num_cores() > 0, "PrefetcherPipeParameter '{}' has no receiver nodes", pipe.unique_id);
     TT_FATAL(pipe.ring_size > 0, "PrefetcherPipeParameter '{}' has ring_size = 0", pipe.unique_id);

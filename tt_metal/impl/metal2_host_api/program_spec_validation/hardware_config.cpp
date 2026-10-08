@@ -30,8 +30,8 @@ bool is_32bit_element_format(tt::DataFormat fmt) {
 // Gen1 has exactly two DM processors: RISCV_0 (BRISC) and RISCV_1 (NCRISC).
 // RISCV_2..RISCV_7 exist only on Gen2/Quasar. Reject them here, mirroring the legacy
 // CreateDataMovementKernel "DM0 or DM1 only" guard.
-void ValidateGen1DataMovementConfig(const KernelSpec& kernel, const Hal& hal) {
-    if (!is_gen1_arch(hal) || !kernel.is_data_movement_kernel()) {
+void ValidateGen1DataMovementConfig(const KernelSpec& kernel, tt::ARCH arch) {
+    if (!is_gen1_arch(arch) || !kernel.is_data_movement_kernel()) {
         return;
     }
     const auto& data_movement_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
@@ -79,14 +79,14 @@ void ValidateGen1DataMovementConfig(const KernelSpec& kernel, const Hal& hal) {
 // defaults to UnpackToSrc (its 32-bit value truncated to ~19 bits): wrong, but it preserves
 // existing behavior. (Some accepted UnpackToDest cases are also silently mishandled by the LLK
 // today — a codegen gap being fixed LLK-side, not a host-validation concern.)
-void ValidateUnpackModes(const KernelSpec& kernel, const CollectedSpecData& collected, const Hal& hal) {
+void ValidateUnpackModes(const KernelSpec& kernel, const CollectedSpecData& collected, tt::ARCH arch) {
     if (!kernel.is_compute_kernel()) {
         return;
     }
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
     const auto& unpack_modes = compute_config.unpack_modes;
     const bool enable_32_bit_dest = compute_config.enable_32_bit_dest;
-    const bool is_gen2 = is_gen2_arch(hal);
+    const bool is_gen2 = is_gen2_arch(arch);
 
     // Index the kernel's DFB bindings: which it binds at all, and which it CONSUMES. A self-loop
     // DFB appears as two separate bindings (one PRODUCER, one CONSUMER — there is no BOTH endpoint
@@ -223,9 +223,9 @@ void ValidateImplicitSyncOptOuts(const KernelSpec& kernel) {
 
 }  // namespace
 
-void ValidateKernelHardwareConfig(const KernelSpec& kernel, const ValidationContext& ctx) {
-    ValidateGen1DataMovementConfig(kernel, ctx.hal);
-    ValidateUnpackModes(kernel, ctx.collected, ctx.hal);
+void ValidateKernelHardwareConfig(const KernelSpec& kernel, const ValidationContext& ctx, tt::ARCH arch) {
+    ValidateGen1DataMovementConfig(kernel, arch);
+    ValidateUnpackModes(kernel, ctx.collected, arch);
     ValidateImplicitSyncOptOuts(kernel);
 }
 

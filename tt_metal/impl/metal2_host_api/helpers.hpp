@@ -103,12 +103,13 @@ inline bool IsValidCppIdentifier(std::string_view s) {
     return !kCppKeywords.contains(s);
 }
 
-inline bool is_gen2_arch(const Hal& hal) { return hal.get_arch() == tt::ARCH::QUASAR; }
+inline bool is_gen2_arch(tt::ARCH arch) { return arch == tt::ARCH::QUASAR; }
 
-inline bool is_gen1_arch(const Hal& hal) {
-    tt::ARCH arch = hal.get_arch();
-    return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
-}
+inline bool is_gen2_arch(const Hal& hal) { return is_gen2_arch(hal.get_arch()); }
+
+inline bool is_gen1_arch(tt::ARCH arch) { return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE; }
+
+inline bool is_gen1_arch(const Hal& hal) { return is_gen1_arch(hal.get_arch()); }
 
 inline bool nodes_intersect(const Nodes& a, const Nodes& b) {
     NodeRangeSet a_set = to_node_range_set(a);

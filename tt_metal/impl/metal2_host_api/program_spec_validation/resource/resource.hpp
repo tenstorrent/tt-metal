@@ -23,30 +23,39 @@ namespace tt::tt_metal::experimental {
 // (resource.cpp fixes the order of checks within each phase).
 
 // One kernel's bindings to every resource kind.
-void ValidateResourceBindings(const KernelSpec& kernel, const ValidationContext& ctx);
+void ValidateResourceBindings(const KernelSpec& kernel, const ValidationContext& ctx, tt::ARCH arch);
 
 // Each resource declaration on its own.
-void ValidateResourceSpecs(const ValidationContext& ctx);
+void ValidateResourceSpecs(
+    const ValidationContext& ctx,
+    tt::ARCH arch,
+    uint32_t l1_alignment,
+    const NumBanksFromBufferType& num_banks_from_buffer_type);
 
 // Rules that need every kernel's bindings: shared use, endpoints, aliasing, unused declarations.
-void ValidateResourceUsage(const ValidationContext& ctx);
+void ValidateResourceUsage(const ValidationContext& ctx, tt::ARCH arch);
 
 // ----------------------------------------------------------------------------
 // These are the individual validator
 // ----------------------------------------------------------------------------
 
 // dfb/dfb.cpp
-void ValidateDFBSpec(const DataflowBufferSpec& dfb, const ValidationContext& ctx);
+void ValidateDFBSpec(
+    const DataflowBufferSpec& dfb,
+    const CollectedSpecData& collected,
+    uint32_t l1_alignment,
+    tt::ARCH arch,
+    const NumBanksFromBufferType& num_banks_from_buffer_type);
 void ValidateDFBBindings(const KernelSpec& kernel, const ValidationContext& ctx);
 
 // dfb/endpoints.cpp
-void ValidateDFBEndpoints(const ValidationContext& ctx);
+void ValidateDFBEndpoints(const ValidationContext& ctx, tt::ARCH arch);
 
 // dfb/aliasing.cpp
 void ValidateDFBAliasing(const ValidationContext& ctx);
 
 // prefetcher_pipe/prefetcher_pipe.cpp
-void ValidatePrefetcherPipeParameter(const PrefetcherPipeParameter& pipe, const ValidationContext& ctx);
+void ValidatePrefetcherPipeParameter(const PrefetcherPipeParameter& pipe, uint32_t l1_alignment);
 void ValidatePrefetcherPipeBindings(const KernelSpec& kernel);
 void ValidatePrefetcherPipesUsed(const ValidationContext& ctx);
 
@@ -58,16 +67,17 @@ struct PrefetcherPipeRoles {
 PrefetcherPipeRoles ValidatePrefetcherPipeRoles(const ValidationContext& ctx);
 
 // prefetcher_pipe/lanes_and_relays.cpp
-void ValidatePrefetcherPipeLanesAndRelays(const ValidationContext& ctx, const PrefetcherPipeRoles& roles);
+void ValidatePrefetcherPipeLanesAndRelays(
+    const ValidationContext& ctx, const PrefetcherPipeRoles& roles, tt::ARCH arch);
 
 // scratchpad.cpp
-void ValidateScratchpadSpec(const ScratchpadSpec& scratchpad, const ValidationContext& ctx);
+void ValidateScratchpadSpec(const ScratchpadSpec& scratchpad, tt::ARCH arch);
 void ValidateScratchpadBindings(const KernelSpec& kernel);
 void ValidateScratchpadsBound(const ValidationContext& ctx);
 
 // semaphore.cpp
-void ValidateSemaphoreSpec(const SemaphoreSpec& sem, const ValidationContext& ctx);
-void ValidateSemaphoreBindings(const KernelSpec& kernel, const ValidationContext& ctx);
+void ValidateSemaphoreSpec(const SemaphoreSpec& sem, tt::ARCH arch);
+void ValidateSemaphoreBindings(const KernelSpec& kernel, tt::ARCH arch);
 void ValidateComputeSemaphores(const ValidationContext& ctx);
 
 // tensor.cpp

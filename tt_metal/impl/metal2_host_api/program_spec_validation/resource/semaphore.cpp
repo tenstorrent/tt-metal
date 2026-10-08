@@ -13,9 +13,9 @@
 
 namespace tt::tt_metal::experimental {
 
-void ValidateSemaphoreSpec(const SemaphoreSpec& sem, const ValidationContext& ctx) {
+void ValidateSemaphoreSpec(const SemaphoreSpec& sem, tt::ARCH arch) {
     const uint32_t init_value = sem.advanced_options.initial_value;
-    if (is_gen2_arch(ctx.hal)) {
+    if (is_gen2_arch(arch)) {
         TT_FATAL(
             init_value == 0,
             "SemaphoreSpec '{}' has initial_value={} but only zero is supported on Quasar",
@@ -24,7 +24,7 @@ void ValidateSemaphoreSpec(const SemaphoreSpec& sem, const ValidationContext& ct
     }
 }
 
-void ValidateSemaphoreBindings(const KernelSpec& kernel, const ValidationContext& ctx) {
+void ValidateSemaphoreBindings(const KernelSpec& kernel, tt::ARCH arch) {
     std::unordered_set<std::string> accessor_names;
     for (const auto& binding : kernel.semaphore_bindings) {
         auto [it, inserted] = accessor_names.insert(binding.accessor_name);
@@ -44,7 +44,7 @@ void ValidateSemaphoreBindings(const KernelSpec& kernel, const ValidationContext
     // Blackhole supports local semaphore bindings on UNPACK and PACK (SemScope::COMPUTE_ATOMIC).
     // Wormhole has no compute implementation and Quasar compute remains out of scope.
     TT_FATAL(
-        !kernel.is_compute_kernel() || kernel.semaphore_bindings.empty() || ctx.hal.get_arch() == tt::ARCH::BLACKHOLE,
+        !kernel.is_compute_kernel() || kernel.semaphore_bindings.empty() || arch == tt::ARCH::BLACKHOLE,
         "KernelSpec '{}' has semaphore bindings. "
         "Semaphore bindings on compute kernels are supported only on Blackhole.",
         kernel.unique_id);

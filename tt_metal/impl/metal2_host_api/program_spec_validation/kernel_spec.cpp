@@ -53,10 +53,10 @@ void ValidateKernelArguments(const KernelSpec& kernel) {
     }
 }
 
-void ValidateNumThreads(const KernelSpec& kernel, const Hal& hal) {
+void ValidateNumThreads(const KernelSpec& kernel, tt::ARCH arch) {
     TT_FATAL(kernel.num_threads > 0, "KernelSpec '{}' has no threads!", kernel.unique_id);
     if (kernel.is_compute_kernel()) {
-        if (is_gen2_arch(hal)) {
+        if (is_gen2_arch(arch)) {
             TT_FATAL(
                 kernel.num_threads <= QUASAR_TENSIX_ENGINES_PER_NODE,
                 "KernelSpec '{}' has too many threads. The architecture supports up to {} for compute kernels.",
@@ -78,7 +78,7 @@ void ValidateNumThreads(const KernelSpec& kernel, const Hal& hal) {
         }
     }
     if (kernel.is_data_movement_kernel()) {
-        if (is_gen2_arch(hal)) {
+        if (is_gen2_arch(arch)) {
             TT_FATAL(
                 kernel.num_threads <= QUASAR_USER_DM_CORES_PER_NODE,
                 "KernelSpec '{}' has too many data movement threads. The maximum is {}.",
@@ -98,11 +98,11 @@ void ValidateNumThreads(const KernelSpec& kernel, const Hal& hal) {
 
 }  // namespace
 
-void ValidateKernelSpec(const KernelSpec& kernel, const ValidationContext& ctx) {
-    ValidateResourceBindings(kernel, ctx);
+void ValidateKernelSpec(const KernelSpec& kernel, const ValidationContext& ctx, tt::ARCH arch) {
+    ValidateResourceBindings(kernel, ctx, arch);
     ValidateKernelArguments(kernel);
-    ValidateNumThreads(kernel, ctx.hal);
-    ValidateKernelHardwareConfig(kernel, ctx);
+    ValidateNumThreads(kernel, arch);
+    ValidateKernelHardwareConfig(kernel, ctx, arch);
 }
 
 }  // namespace tt::tt_metal::experimental

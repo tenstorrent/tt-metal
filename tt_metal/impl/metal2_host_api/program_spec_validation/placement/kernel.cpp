@@ -29,12 +29,11 @@ namespace tt::tt_metal::experimental {
 //      the second DM kernel is registered). DM_DYNAMIC_NOC kernels are exempt: they may
 //      intentionally share a NOC, freeing the other NOC for fabric.
 // (Each kernel's effective node set is derived from WorkUnitSpec membership.)
-void ValidateGen1DMPlacement(const ValidationContext& ctx) {
+void ValidateGen1DMPlacement(const ValidationContext& ctx, tt::ARCH arch) {
     const ProgramSpec& spec = ctx.spec;
     const CollectedSpecData& collected = ctx.collected;
-    const Hal& hal = ctx.hal;
 
-    if (!is_gen1_arch(hal)) {
+    if (!is_gen1_arch(arch)) {
         return;
     }
     // (node, processor) -> the kernel that already claimed it.

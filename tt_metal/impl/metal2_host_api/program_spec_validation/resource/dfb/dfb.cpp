@@ -24,14 +24,18 @@ namespace {
 //  - the spec is large enough
 // We don't validate any layout considerations (interleaved vs sharded, page / tile sizes, etc.)
 // That's on the user; this is an advanced feature.
-void ValidateBorrowedMemory(const DataflowBufferSpec& dfb, const ValidationContext& ctx) {
+void ValidateBorrowedMemory(
+    const DataflowBufferSpec& dfb,
+    const CollectedSpecData& collected,
+    uint32_t l1_alignment,
+    const NumBanksFromBufferType& num_banks_from_buffer_type) {
     if (!dfb.borrowed_from.has_value()) {
         return;
     }
     const TensorParamName& tp_name = *dfb.borrowed_from;
-    auto it = ctx.collected.tensor_parameter_by_name.find(tp_name);
+    auto it = collected.tensor_parameter_by_name.find(tp_name);
     TT_FATAL(
-        it != ctx.collected.tensor_parameter_by_name.end(),
+        it != collected.tensor_parameter_by_name.end(),
         "DFB '{}' borrows memory from TensorParameter '{}', but no such TensorParameter is declared in the "
         "ProgramSpec.",
         dfb.unique_id,
@@ -57,10 +61,9 @@ void ValidateBorrowedMemory(const DataflowBufferSpec& dfb, const ValidationConte
     // slice than what we compute, and a DFB sized to it would be rejected here even though
     // attach time would take it. Sharded specs ignore num_banks and so are unaffected. Thread a
     // SubDeviceId in here if that combination ever shows up.
-    const uint32_t num_banks = ctx.allocator.get_num_banks(tensor_spec.memory_config().buffer_type());
+    const uint32_t num_banks = num_banks_from_buffer_type(tensor_spec.memory_config().buffer_type());
     const size_t dfb_bytes = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
-    const size_t tensor_bytes =
-        tensor_spec.compute_consumed_memory_bytes_per_bank(ctx.hal.get_alignment(HalMemType::L1), num_banks);
+    const size_t tensor_bytes = tensor_spec.compute_consumed_memory_bytes_per_bank(l1_alignment, num_banks);
     TT_FATAL(
         dfb_bytes <= tensor_bytes,
         "DFB '{}' (entry_size {} * num_entries {} = {} bytes) is larger than the per-bank allocation of its "
@@ -75,10 +78,12 @@ void ValidateBorrowedMemory(const DataflowBufferSpec& dfb, const ValidationConte
 
 }  // namespace
 
-void ValidateDFBSpec(const DataflowBufferSpec& dfb, const ValidationContext& ctx) {
-    const CollectedSpecData& collected = ctx.collected;
-    const Hal& hal = ctx.hal;
-
+void ValidateDFBSpec(
+    const DataflowBufferSpec& dfb,
+    const CollectedSpecData& collected,
+    uint32_t l1_alignment,
+    tt::ARCH arch,
+    const NumBanksFromBufferType& num_banks_from_buffer_type) {
     // Validate per-DFB sizing: entry_size and num_entries must be set to non-zero values.
     // (Sizes may still be overridden at runtime via ProgramRunArgs, but a ProgramSpec value is required.)
     TT_FATAL(
@@ -91,7 +96,6 @@ void ValidateDFBSpec(const DataflowBufferSpec& dfb, const ValidationContext& ctx
         dfb.unique_id);
 
     // Data format must be valid for the architecture
-    const tt::ARCH arch = hal.get_arch();
     if (dfb.data_format_metadata.has_value()) {
         TT_FATAL(
             tt::is_data_format_supported(dfb.data_format_metadata.value(), arch),
@@ -105,7 +109,7 @@ void ValidateDFBSpec(const DataflowBufferSpec& dfb, const ValidationContext& ctx
     // tile-counter / remapper machinery is driven by the producer/consumer masks, so a multi-bound
     // instance cannot be lowered. Reject the flag itself on Gen2, independent of whether any instance
     // is actually multi-bound — a Gen2 spec carrying it is never valid.
-    if (is_gen2_arch(hal)) {
+    if (is_gen2_arch(arch)) {
         TT_FATAL(
             !dfb.advanced_options.allow_instance_multi_binding,
             "DFB '{}' sets allow_instance_multi_binding, which is only supported on Gen1 (WH/BH) "
@@ -129,7 +133,7 @@ void ValidateDFBSpec(const DataflowBufferSpec& dfb, const ValidationContext& ctx
         "pipe ring",
         dfb.unique_id);
 
-    ValidateBorrowedMemory(dfb, ctx);
+    ValidateBorrowedMemory(dfb, collected, l1_alignment, num_banks_from_buffer_type);
 }
 
 // DFB bindings: accessor names, self-loop pairs, role aliasing

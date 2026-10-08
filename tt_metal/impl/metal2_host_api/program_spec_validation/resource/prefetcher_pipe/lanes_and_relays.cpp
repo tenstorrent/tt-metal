@@ -28,10 +28,11 @@ namespace tt::tt_metal::experimental {
 //  6. The relayed pipes' receiver sets are pairwise disjoint and their union equals the DFB's
 //     node set; every PRODUCER kernel binds exactly the relayed pipe set under one accessor (so
 //     it is those pipes' receiver kernel and can drive the protocol the relay depends on).
-void ValidatePrefetcherPipeLanesAndRelays(const ValidationContext& ctx, const PrefetcherPipeRoles& roles) {
+void ValidatePrefetcherPipeLanesAndRelays(
+    const ValidationContext& ctx, const PrefetcherPipeRoles& roles, tt::ARCH arch) {
     const ProgramSpec& spec = ctx.spec;
     const CollectedSpecData& collected = ctx.collected;
-    const uint32_t lane_capacity = is_gen2_arch(ctx.hal) ? PREFETCHER_PIPE_MAX_CREDIT_LANES : 1u;
+    const uint32_t lane_capacity = is_gen2_arch(arch) ? PREFETCHER_PIPE_MAX_CREDIT_LANES : 1u;
     const auto& pipe_receiver_set = roles.pipe_receiver_set;
     const auto& receiver_kernel_of = roles.receiver_kernel_of;
 

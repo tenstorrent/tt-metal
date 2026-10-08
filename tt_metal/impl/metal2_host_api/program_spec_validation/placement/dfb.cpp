@@ -8,7 +8,6 @@
 
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec_validation/validate_spec.hpp"
-#include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 
 namespace tt::tt_metal::experimental {
 
@@ -17,13 +16,10 @@ namespace tt::tt_metal::experimental {
 // ProgramSpec::dataflow_buffers.size(). Gen1 lowers each slot to a circular buffer; Gen2
 // indexes the packed config by device slot up to dfb::NUM_DFBS. Tile-counter exhaustion on
 // Gen2 is still checked later at enqueue.
-void ValidateDFBSlotsPerNode(const WorkUnitSpec& work_unit, const ValidationContext& ctx) {
+void ValidateDFBSlotsPerNode(
+    const WorkUnitSpec& work_unit, const ValidationContext& ctx, uint32_t max_slots_per_core, tt::ARCH arch) {
     const ProgramSpec& spec = ctx.spec;
     const CollectedSpecData& collected = ctx.collected;
-    const Hal& hal = ctx.hal;
-
-    const uint32_t max_slots_per_core =
-        hal.has_tile_counter_registers() ? static_cast<uint32_t>(::dfb::NUM_DFBS) : hal.get_num_dataflow_buffers();
 
     const NodeRangeSet nodes = to_node_range_set(work_unit.target_nodes);
     std::unordered_map<NodeCoord, uint32_t> dfbs_per_node;
@@ -37,7 +33,7 @@ void ValidateDFBSlotsPerNode(const WorkUnitSpec& work_unit, const ValidationCont
         if (count <= max_slots_per_core) {
             continue;
         }
-        if (is_gen1_arch(hal)) {
+        if (is_gen1_arch(arch)) {
             TT_THROW(
                 "ProgramSpec '{}' places {} DataflowBufferSpecs on node ({}, {}), but Gen1 "
                 "supports at most {} device slots per core (disjoint cores may reuse slots).",
@@ -46,7 +42,7 @@ void ValidateDFBSlotsPerNode(const WorkUnitSpec& work_unit, const ValidationCont
                 node.x,
                 node.y,
                 max_slots_per_core);
-        } else if (is_gen2_arch(hal)) {
+        } else if (is_gen2_arch(arch)) {
             TT_THROW(
                 "ProgramSpec '{}' places {} DataflowBufferSpecs on node ({}, {}), but the "
                 "target architecture supports at most {} device slots per core. The true "

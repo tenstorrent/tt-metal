@@ -30,7 +30,7 @@ namespace {
 // opt-out — either all disable it (by list or by _all), or none do. (Producer-side and
 // consumer-side are checked separately; the underlying hardware mechanism is per-side, with
 // one mask per side.)
-void ValidateImplicitSyncAgreement(const CollectedSpecData& collected, const Hal& hal) {
+void ValidateImplicitSyncAgreement(const CollectedSpecData& collected, tt::ARCH arch) {
     // Note: a single DFB can be bound by multiple producer KernelSpecs and multiple
     // consumer KernelSpecs — ops sometimes specialize the same kernel source by CTAs,
     // producing several KernelSpecs that share a DFB.
@@ -44,7 +44,7 @@ void ValidateImplicitSyncAgreement(const CollectedSpecData& collected, const Hal
                 continue;
             }
             const auto& dm_config = std::get<DataMovementHardwareConfig>(ep.kernel->hw_config);
-            if (!is_gen2_arch(hal)) {
+            if (!is_gen2_arch(arch)) {
                 // Gen1 device — can't physically participate in Gen2 implicit sync; abstains.
                 continue;
             }
@@ -83,7 +83,7 @@ void ValidateImplicitSyncAgreement(const CollectedSpecData& collected, const Hal
 //      credit-tracking config is shared per role).
 // Self-loop (a kernel that appears in both producers and consumers of a DFB) is currently
 // restricted to the simple single-producer-single-consumer case.
-void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const CollectedSpecData& collected, const Hal& hal) {
+void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const CollectedSpecData& collected, tt::ARCH arch) {
     const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
 
     // allow_instance_multi_binding (Gen1-only; rejected on Gen2 in ValidateDFBSpec) turns
@@ -254,7 +254,7 @@ void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const Collected
         // consumer_risc_mask must not overlap" error in the DFB backend. (Compute self-loops are
         // always legal: they lower to the intra-Tensix packer->unpacker flow.)
         TT_FATAL(
-            !(is_gen2_arch(hal) && self_loop_kernel->is_data_movement_kernel()),
+            !(is_gen2_arch(arch) && self_loop_kernel->is_data_movement_kernel()),
             "DataflowBuffer '{}' is self-looped by data-movement kernel '{}' (bound as both PRODUCER "
             "and CONSUMER). Self-loop DFBs are not supported for data-movement kernels on Gen2 "
             "architectures. Consider using a scratchpad or LocalTensorAccessor instead.",
@@ -310,7 +310,7 @@ void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const Collected
                 static_cast<int>(processor));
         }
     };
-    if (!allow_multi && is_gen1_arch(hal)) {
+    if (!allow_multi && is_gen1_arch(arch)) {
         check_role_processor(endpoints.producers, "PRODUCER");
         check_role_processor(endpoints.consumers, "CONSUMER");
     }
@@ -318,10 +318,10 @@ void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const Collected
 
 }  // namespace
 
-void ValidateDFBEndpoints(const ValidationContext& ctx) {
-    ValidateImplicitSyncAgreement(ctx.collected, ctx.hal);
+void ValidateDFBEndpoints(const ValidationContext& ctx, tt::ARCH arch) {
+    ValidateImplicitSyncAgreement(ctx.collected, arch);
     for (const auto& dfb : ctx.spec.dataflow_buffers) {
-        ValidateDFBEndpointPlacement(dfb, ctx.collected, ctx.hal);
+        ValidateDFBEndpointPlacement(dfb, ctx.collected, arch);
     }
 }
 

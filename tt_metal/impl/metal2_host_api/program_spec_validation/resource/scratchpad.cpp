@@ -12,14 +12,13 @@
 
 namespace tt::tt_metal::experimental {
 
-void ValidateScratchpadSpec(const ScratchpadSpec& scratchpad, const ValidationContext& ctx) {
+void ValidateScratchpadSpec(const ScratchpadSpec& scratchpad, tt::ARCH arch) {
     TT_FATAL(
         scratchpad.size_per_node != 0,
         "ScratchpadSpec '{}' has size_per_node == 0; a scratchpad must reserve a non-zero number of bytes "
         "(did you forget to set size_per_node?).",
         scratchpad.unique_id);
 
-    const tt::ARCH arch = ctx.hal.get_arch();
     const bool has_format = scratchpad.data_format_metadata.has_value();
     const bool has_tile = scratchpad.tile_format_metadata.has_value();
     TT_FATAL(
