@@ -149,24 +149,14 @@ std::optional<Blocking> block_2d(
     return best;
 }
 
-// The widest divisor of `n` that is at most `limit`.
-uint32_t widest_divisor_within(uint32_t n, uint32_t limit) {
-    for (uint32_t d = std::min(n, limit); d > 1; --d) {
-        if (n % d == 0) {
-            return d;
-        }
-    }
-    return 1;
-}
-
 // 1D mcast (issue #57884 heuristic 2): keep the full per-core extent along the multicast dimension, shrink
 // the other one only if needed; in0_block_w is the largest that fits, within the K depth rule (or the layout's
-// preferred one, as in 2D). Two refinements:
-//  - in 1D in0-mcast the core that reads B also writes the output, and a single output block wider than a
-//    subblock row queues all of its writes after the last read: the block is split to the widest subblock
-//    width (when that is at least 2 tiles; a sharded output keeps full-width blocks);
-//  - if keeping the full multicast extent only fits with single-tile K steps, both dimensions are searched
-//    as in 2D (largest in0_block_w * area; ties avoid 1-tile dimensions, then prefer the larger, squarer block).
+// preferred one, as in 2D). The output block isn't split narrower than L1 requires: each output block runs the
+// whole K loop again (and in0-mcast re-sends A for it), which costs more than overlapping the output
+// writes saves once K takes more than one block (WH sweeps: split blocks 1.11x slower in geomean, 1.2x with
+// over 32 K blocks). If keeping the full multicast extent only fits with single-tile K steps, both dimensions
+// are searched as in 2D (largest in0_block_w * area; ties avoid 1-tile dimensions, then prefer the larger,
+// squarer block).
 std::optional<Blocking> block_1d(
     const HeuristicBlocking::Params& params,
     const MatmulDesc& p,
@@ -180,9 +170,6 @@ std::optional<Blocking> block_1d(
     const uint32_t fixed_full = is_tall ? per_core_N : per_core_M;
     const uint32_t cheap_full = is_tall ? per_core_M : per_core_N;
     const uint32_t M_rows = output_rows(p, fuse_batch);
-    const uint32_t max_area = max_subblock_area(p, family);
-    const uint32_t split_w = widest_divisor_within(per_core_N, max_area);
-    const bool split = !is_tall && rules.k_fixed == 0 && !rules.sharded_out && per_core_N > max_area && split_w > 1;
 
     // The largest fitting in0_block_w for this output block, if any
     auto fit = [&](uint32_t out_block_h, uint32_t out_block_w) -> std::optional<Blocking> {
@@ -190,7 +177,7 @@ std::optional<Blocking> block_1d(
         if (is_tall && div_up(M_rows, per_core_M) == 1 && M_rows % out_block_h != 0 && per_core_M != out_block_h) {
             return std::nullopt;
         }
-        if (!block_allowed(rules, per_core_N, out_block_w) || (split && out_block_w > split_w)) {
+        if (!block_allowed(rules, per_core_N, out_block_w)) {
             return std::nullopt;
         }
         const uint32_t k_limit = rules.k_fixed != 0

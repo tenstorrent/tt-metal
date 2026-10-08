@@ -404,19 +404,17 @@ TEST(MatmulAutoConfig, FullSyncDestKeepsSubblockLimit) {
     EXPECT_NE(check_config(p, hw, to_program_config(p, whole)).find("DST capacity"), std::string::npos);
 }
 
-// 1D in0-mcast splits a wide output block into subblock-wide blocks (not into 1-tile ones)
-TEST(MatmulAutoConfig, OneDOutputBlockSplit) {
+// 1D in0-mcast keeps the whole per-core output width in one block when L1 allows: each extra output block runs the
+// whole K loop again (a 32 x 4640 x 27584 decode-shaped matmul was 1.78x slower than legacy with 1-tile-wide blocks)
+TEST(MatmulAutoConfig, OneDOutputBlockWhole) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
-    auto p = make_matmul(1, 1, 32, 2560, 262144);
-    auto chosen = choose(p, hw);
-    ASSERT_TRUE(chosen.has_value());
-    EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast1DIn0));
-    EXPECT_EQ(chosen->blocking.per_core_N, 128u);
-    EXPECT_EQ(chosen->blocking.out_block_w, 8u);
-    p = make_matmul(1, 1, 32, 4544, 11 * 32 * 64);  // per_core_N = 11 has no divisor in 2..8
-    chosen = choose(p, hw);
-    ASSERT_TRUE(chosen.has_value());
-    EXPECT_EQ(chosen->blocking.out_block_w, chosen->blocking.per_core_N);
+    for (auto [K, N] : {std::pair<uint32_t, uint32_t>{4640, 27584}, {4544, 11 * 32 * 64}, {1024, 48192}}) {
+        auto p = make_matmul(1, 1, 32, K, N);
+        auto chosen = choose(p, hw);
+        ASSERT_TRUE(chosen.has_value());
+        EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast1DIn0)) << K << "x" << N;
+        EXPECT_EQ(chosen->blocking.out_block_w, chosen->blocking.per_core_N) << K << "x" << N;
+    }
 }
 
 // Large 2D output blocks may use K blocks up to 16 deep; small ones stay at 8
