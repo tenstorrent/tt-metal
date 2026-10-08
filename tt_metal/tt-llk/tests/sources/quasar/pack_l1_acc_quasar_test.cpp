@@ -31,6 +31,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT                  = params.TILE_CNT;
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t OUTPUT_NUM_BLOCKS         = params.OUTPUT_NUM_BLOCKS;
+    const std::uint32_t TEST_FACE_R_DIM           = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces                 = params.num_faces;
     const Operand& buffer_A                       = params.buffer_A;
 #endif
     constexpr std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
@@ -52,7 +54,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
             _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
@@ -238,6 +240,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int RELU_CONFIG                         = params.RELU_CONFIG;
     const std::uint32_t OUTPUT_NUM_BLOCKS         = params.OUTPUT_NUM_BLOCKS;
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t TEST_FACE_R_DIM           = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces                 = params.num_faces;
     const Operand& buffer_Res                     = params.buffer_Res;
 #endif
 
@@ -262,7 +266,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         const ckernel::ReluConfig relu_config = ckernel::ReluConfig::from_packed(RELU_CONFIG);
         _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
