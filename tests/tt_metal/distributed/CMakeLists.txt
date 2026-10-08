@@ -154,4 +154,29 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
 )
 
+# E2H leg benchmark: no MPI, one device, fabric up. It carries its own main(), so it cannot link
+# benchmark_main.
+add_executable(erisc_e2h_benchmark)
+target_sources(erisc_e2h_benchmark PRIVATE benchmark_erisc_e2h_leg.cpp)
+target_link_libraries(
+    erisc_e2h_benchmark
+    PRIVATE
+        tt_metal
+        test_common_libs
+        benchmark::benchmark
+)
+target_include_directories(
+    erisc_e2h_benchmark
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}
+)
+set_target_properties(
+    erisc_e2h_benchmark
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+)
+
 add_subdirectory(multiprocess)

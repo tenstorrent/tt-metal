@@ -43,4 +43,8 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion/layer_completion_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion/layer_completion_reorder_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion/layer_completion_router.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/erisc_bridge_placement.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/erisc_bridge_reg_access.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/erisc_bridge_region.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/erisc_e2h_leg.cpp
 )

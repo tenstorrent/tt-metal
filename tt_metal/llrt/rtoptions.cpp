@@ -116,6 +116,9 @@ enum class EnvVarID {
     TT_METAL_DISABLE_DMA_OPS,                           // Disable DMA operations
     RELIABILITY_MODE,                                   // Fabric reliability mode (strict/relaxed)
     TT_METAL_DISABLE_MULTI_AERISC,                      // Disable multi-erisc mode (inverted logic, enabled by default)
+    TT_METAL_E2H_BRIDGE_ENABLE,                         // ERISC host bridge on
+    TT_METAL_E2H_BRIDGE_FORCE_CHAN,                     // TEST ONLY: eth channel whose router is bridged
+    TT_METAL_E2H_BRIDGE_NO_FAR_RECEIVER,                // TEST ONLY: nothing downstream completes bridged frames
     TT_METAL_USE_MGD_2_0,                               // Use mesh graph descriptor 2.0
     TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
@@ -881,6 +884,32 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_DISABLE_MULTI_AERISC:
             log_info(tt::LogMetal, "Disabling multi-erisc mode with TT_METAL_DISABLE_MULTI_AERISC");
             this->enable_2_erisc_mode = false;
+            break;
+
+        // TT_METAL_E2H_BRIDGE_ENABLE=1 turns the ERISC host bridge on.
+        case EnvVarID::TT_METAL_E2H_BRIDGE_ENABLE:
+            this->e2h_bridge_enable = (value == nullptr) || (std::string_view(value) != "0");
+            log_info(tt::LogMetal, "ERISC host bridge {}", this->e2h_bridge_enable ? "enabled" : "disabled");
+            break;
+
+        // TT_METAL_E2H_BRIDGE_FORCE_CHAN=3. TEST ONLY: the router on this eth channel is bridged.
+        case EnvVarID::TT_METAL_E2H_BRIDGE_FORCE_CHAN:
+            if (value != nullptr) {
+                try {
+                    this->e2h_bridge_force_chan = static_cast<std::uint32_t>(std::stoul(value, nullptr, 0));
+                } catch (const std::invalid_argument&) {
+                    TT_THROW("TT_METAL_E2H_BRIDGE_FORCE_CHAN must be an eth channel number: {}", value);
+                } catch (const std::out_of_range&) {
+                    TT_THROW("TT_METAL_E2H_BRIDGE_FORCE_CHAN value out of range: {}", value);
+                }
+                log_warning(tt::LogMetal, "E2H bridge forced on eth chan {}. Test only.", this->e2h_bridge_force_chan);
+            }
+            break;
+
+        // TT_METAL_E2H_BRIDGE_NO_FAR_RECEIVER=1. The E2H leg alone: the host is the terminus, so no
+        // completion can return and the router must retire its own frames. OFF for the pipeline.
+        case EnvVarID::TT_METAL_E2H_BRIDGE_NO_FAR_RECEIVER:
+            this->e2h_bridge_no_far_receiver = (value == nullptr) || (std::string_view(value) != "0");
             break;
 
         // TT_METAL_USE_MGD_2_0
