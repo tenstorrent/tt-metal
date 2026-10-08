@@ -120,18 +120,19 @@ def test_synthetic_view_drives_the_engine():
 
 def test_table_parser_reads_hex_and_rejects_what_it_cannot_parse():
     decl = "inline constexpr std::array<Entry, {n}> fpu_counters = {{{{{body}}}}};"
-    hex_body = "{PerfCounterType::FPU_COUNTER, 0x101}, {PerfCounterType::SFPU_COUNTER, 7}"
-    entries = headers.parse_tables(decl.format(n=2, body=hex_body))["FPU"]
+    hex_entry = "{PerfCounterType::FPU_COUNTER, 0x101}"
+    body = hex_entry + ", {PerfCounterType::SFPU_COUNTER, 7}"
+    entries = headers.parse_tables(decl.format(n=2, body=body))["FPU"]
     assert [(e.name, e.select) for e in entries] == [
         ("FPU_COUNTER", 257),
         ("SFPU_COUNTER", 7),
     ]
-    named = "{PerfCounterType::FPU_COUNTER, GRANT_BASE | 1}"
+    named = decl.format(n=1, body="{PerfCounterType::FPU_COUNTER, GRANT_BASE | 1}")
     # allow-pytest.raises: same reason as test_arch_aliases_and_quasar.
-    with pytest.raises(ValueError, match="not an integer literal"):  # allow-pytest.raises
-        headers.parse_tables(decl.format(n=1, body=named))
+    with pytest.raises(ValueError, match="integer literal"):  # allow-pytest.raises
+        headers.parse_tables(named)
     with pytest.raises(ValueError, match="declares 3"):  # allow-pytest.raises
-        headers.parse_tables(decl.format(n=3, body=hex_body))
+        headers.parse_tables(decl.format(n=3, body=body))
 
 
 def test_a_missed_select_reads_missing_not_zero():

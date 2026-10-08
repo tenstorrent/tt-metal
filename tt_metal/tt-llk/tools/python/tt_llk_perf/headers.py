@@ -133,7 +133,9 @@ def counter_type_names(include_dir=None) -> Dict[int, str]:
     return names
 
 
-_TABLE_DECL = re.compile(r"std::array<\s*Entry\s*,\s*(\d+)\s*>\s+(\w+_counters)\b[^=;]*=")
+_TABLE_DECL = re.compile(
+    r"std::array<\s*Entry\s*,\s*(\d+)\s*>\s+(\w+_counters)\b[^=;]*="
+)
 _TABLE_ENTRY = re.compile(r"\{\s*PerfCounterType::(\w+)\s*,\s*([^{}]*?)\s*\}")
 _SELECT_LITERAL = re.compile(r"0[xX][0-9a-fA-F]+|0|[1-9]\d*")
 
