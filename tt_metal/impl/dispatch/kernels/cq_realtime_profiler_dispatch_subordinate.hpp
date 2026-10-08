@@ -56,7 +56,7 @@ FORCE_INLINE void dispatch_subordinate_realtime_profiler() {
         volatile uint32_t* stream_reg =
             (volatile uint32_t*)STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
         last_counts[i] = *stream_reg & REALTIME_PROFILER_STREAM_COUNT_MASK;
-        rt_profiler_msg->stream_done[i].count = last_counts[i];
+        rt_profiler_msg->streams[i].done_count = last_counts[i];
     }
 
     while (rt_profiler_msg->realtime_profiler_state != REALTIME_PROFILER_STATE_TERMINATE) {

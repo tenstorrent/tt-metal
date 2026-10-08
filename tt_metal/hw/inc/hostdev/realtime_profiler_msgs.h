@@ -29,12 +29,13 @@ struct realtime_profiler_timestamp_t {
 // Matches DISPATCH_MAX_MESSAGE_ENTRIES: one worker-completion stream per sub-device.
 constexpr uint32_t REALTIME_PROFILER_NUM_STREAMS = 8;
 
-// Last completion seen on one worker-completion stream, written by the dispatch_s TRISC.
-struct realtime_profiler_stream_done_t {
-    uint32_t count;
-    uint32_t time_hi;
-    uint32_t time_lo;
-    uint32_t pad;
+struct realtime_profiler_stream_t {
+    uint32_t done_count;
+    uint32_t done_time_hi;
+    uint32_t done_time_lo;
+    uint32_t open_id;
+    uint32_t open_start_hi;
+    uint32_t open_start_lo;
 };
 
 struct realtime_profiler_msg_t {
@@ -51,5 +52,5 @@ struct realtime_profiler_msg_t {
     volatile uint32_t program_id_fifo[32];
     volatile uint32_t program_id_fifo_start;
     volatile uint32_t program_id_fifo_end;
-    struct realtime_profiler_stream_done_t stream_done[REALTIME_PROFILER_NUM_STREAMS];
+    struct realtime_profiler_stream_t streams[REALTIME_PROFILER_NUM_STREAMS];
 };
