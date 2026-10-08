@@ -2184,3 +2184,46 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_lt_65536_dev_33420fb40a7.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/spec_dev.py, models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py
 - data: {"plain_ms_4k":58.5,"plain_ms_16k":58.7,"plain_ms_64k":59.7,"round_ms_4k":89.7,"round_ms_16k":89.4,"round_ms_64k":97.7,"accepted_4k":2.50,"accepted_16k":2.50,"accepted_64k":2.65,"speedup_64k":1.62,"argmax_flip_rate_4k":0.0197,"max_divergence_gap_ulps":3}
+## E261007-2339-58c
+- date: 2026-10-07T23:39:56
+- commit: b3f676039fc
+- branch: ssinghal/mimo-moe
+- host: DC16-2-BG-0204-u20-44
+- track: moe
+- status: verified
+- claim: SPEC DEVICE ROUND WITH RING MoE (env: MIMO_MOE_DECODE=ring MIMO_EXPERT_OP=unified MIMO_ROUTER=fast MIMO_MOE_AR=ag_sum, LD_LIBRARY_PATH=artifacts/integ_e4ff6c137d3/lib, 48 layers, GSM8K enable_thinking=false 256 new, plain and spec in separate processes, ring weights from NFS cache; launch.py header does not echo --env pairs, the 47 'Loaded cached expert weights ring_L*' lines in each log prove ring): U=1: identical 4/4, accepted 4.395, round 61.1 ms (unified 102.6); U=2: identical 7/8, accepted 4.601, round 74.6 ms (unified 113.3); U=4: identical 13/16, accepted 4.425, round 85.3 ms (unified 126.6) => ~-41 ms per round (-40%/-34%/-33%). Plain ring decode ms/token 32.0/39.7/47.5 at U=1/2/4. Divergences (U=2 user4 idx160 and U=4 users 4,12,13 at idx 160/221/231) are bf16 near-ties of the teacher-forced ring logits: top1-top2 gap 0.125, 0.0, 0.25 (bf16 ulp at logit ~26 is 0.125; unified had 2 exact ties at U=4, ring has one exact tie + two 1-2 ulp). DRAM free after both copies at U=4: 721 MB/bank (5.6 GiB/chip) with ring. Logs moe_AC_specplain_ring_u{1,2,4}_h*, moe_AD_specdev_ring_u*_h*, moe_AE_specgap_ring_u4_h43
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AD_specdev_ring_u4.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/spec_dev.py
+
+## E261008-0040-989
+- date: 2026-10-08T00:40:42
+- commit: 0f24c7f6c92
+- branch: ssinghal/mimo-moe
+- host: DC16-2-BG-0204-u20-44
+- track: moe
+- status: verified
+- claim: RING decode MoE GSM8K GATE with device-resident decode loop: full 48-layer model, greedy non-thinking, n=128, max_new 512, B=128 (U=32), traced decode, env MIMO_MOE_DECODE=ring MIMO_EXPERT_OP=unified MIMO_ROUTER=fast MIMO_MOE_AR=ag_sum MIMO_FEEDBACK=1 LD_LIBRARY_PATH=/mnt/tt-data/ssinghal/mimo/artifacts/integ_e4ff6c137d3/lib, commit 0f24c7f6c92: run a (host 30) and run b (host 48) both 113/128 = 88.3% (Wilson 81.6-92.8), step median 63.4 ms, same gen_lens, all 128 completion texts identical between runs a and b (moe_AG_gsm_ring_{a,b}_s0_texts.json); gate >=109 passed
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AG_gsm_ring_a_h30_0f24c7f6c92.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/layer.py
+
+## E261008-0113-9c6
+- date: 2026-10-08T01:13:32
+- commit: 553b9c416bc
+- branch: ssinghal/mimo-moe
+- host: DC16-2-BG-0204-u20-44
+- track: moe
+- status: verified
+- claim: DECODE DEFAULT FLIPPED TO RING MoE (layer.py MIMO_MOE_DECODE default ring; unified = documented fallback, automatic DRAM-headroom fallback kept). Default-path proof with NO MIMO_MOE_*/MIMO_ROUTER/MIMO_MOE_AR override (only LD_LIBRARY_PATH=artifacts/integ_e4ff6c137d3/lib and MIMO_EXPERT_OP=unified for prefill): test_verify_decode 48 layers U=1,2,4 at 553b9c416bc: argmax 100% token-exact vs sequential at all three, features bit-identical (feat_pcc_min 1.0), verify repeat bit-identical; 47 ring_L cache loads in the log prove ring
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AH_default_verify48.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/moe_ring.py
+
+## E261008-0113-173
+- date: 2026-10-08T01:13:33
+- commit: 48bdf86463d
+- branch: ssinghal/mimo-moe
+- host: DC16-2-BG-0204-u20-44
+- track: moe
+- status: verified
+- claim: 4-layer closed-loop decode vs CPU oracle with the DEFAULT (ring) MoE, ONE process reconfigure U=32,1,4 (test_decode_reconf, DEC_LAYERS=4, only LD_LIBRARY_PATH=integ_e4ff6c137d3/lib set) at 48bdf86463d: teacher-forced and free-running tokens equal the oracle 100% at U=32/1/4, first-token logits PCC min 0.9996-0.9997, step logits PCC min 0.99871 (U=32) / 0.99969 (U=1) / 0.99934 (U=4), DRAM identical on return. FOUND+FIXED: at 553b9c416bc the same run failed at the U=4 prefill (rms_norm: 'Statically allocated dataflow buffers clash with L1 buffers', log moe_AH_default_reconf4_h30_553b9c416bc.log): the ring per-T L1 scratch sets stay allocated across Generator.reconfigure; fix = moe_ring.release_ring_buffers(mesh) called from Generator.reconfigure after dec.close() (one added line in generator.py, decode agent's file) + ring_buffers() frees other-T sets
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AI_default_reconf4.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/generator.py
