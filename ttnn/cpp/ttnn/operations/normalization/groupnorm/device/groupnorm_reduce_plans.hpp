@@ -78,7 +78,7 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
         configure(plan);
         if (plan.tail_plan) {
             configure(*plan.tail_plan);
-            // Full blocks read the marker at offset 0; the final block reads the tail at offset 1.
+            // Full blocks read the zero record at offset 0; the final block reads the tail at offset 3.
             plan.append_runtime_args(result.local_runtime_args, false);
             plan.append_runtime_args(result.local_runtime_args);
         }
