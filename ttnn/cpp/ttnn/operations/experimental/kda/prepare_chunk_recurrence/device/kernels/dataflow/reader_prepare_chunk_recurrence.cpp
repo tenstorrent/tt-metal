@@ -104,8 +104,9 @@ inline void fill_constant_tiles(
 }
 
 // The gate's prefix-sum (inclusive lower-triangular) and sum-broadcast (all-ones) matrices carry the gate scale,
-// so the cumulative sum applies it exactly, without a separate pass over the gate. Like fill_constant_tiles, seed
-// one face row and replicate it with local NoC reads.
+// so the cumulative sum applies it without a separate pass over the gate (exactly when the FPU holds the scale
+// exactly, as for a power of two). One tile each, which is every chunk matrix while Ct == 1. Like
+// fill_constant_tiles, seed one face row and replicate it with local NoC reads.
 template <uint32_t gate_scale_bits>
 inline void fill_gate_tiles(DataflowBuffer& gate_tril, DataflowBuffer& gate_ones) {
     constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
@@ -114,6 +115,7 @@ inline void fill_gate_tiles(DataflowBuffer& gate_tril, DataflowBuffer& gate_ones
     constexpr uint32_t faces_per_tile_row = tt::constants::TILE_WIDTH / face_width;
     constexpr uint32_t row_bytes = face_width * sizeof(uint32_t);
     constexpr uint32_t face_bytes = tt::constants::FACE_HW * sizeof(uint32_t);
+    constexpr uint32_t bottom_right_face = faces_per_tile_row + 1;
 
     gate_tril.reserve_back(1);
     gate_ones.reserve_back(1);
@@ -145,7 +147,7 @@ inline void fill_gate_tiles(DataflowBuffer& gate_tril, DataflowBuffer& gate_ones
     }
     const auto tril_source = noc_traits_t<UnicastEndpoint>::src_args_type{
         .noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = gate_tril.get_write_ptr()};
-    noc.async_read(self, gate_tril, face_bytes, tril_source, {.offset_bytes = 3 * face_bytes});
+    noc.async_read(self, gate_tril, face_bytes, tril_source, {.offset_bytes = bottom_right_face * face_bytes});
     noc.async_read_barrier();
     gate_tril.push_back(1);
     gate_ones.push_back(1);
@@ -158,6 +160,7 @@ template <
     uint32_t beta_token_major,
     uint32_t beta_width_tiles,
     uint32_t beta_offset_tiles,
+    uint32_t beta_logits,
     uint32_t GATE_SCALE_BITS,
     uint32_t has_actual_start,
     uint32_t has_actual_end,
@@ -225,8 +228,14 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
                 {.offset_bytes = tile * buffer.get_entry_size()});
         }
     };
-    fill_constant_tiles(eye, tril, ones, block_masks);
-    fill_gate_tiles<GATE_SCALE_BITS>(gate_tril, gate_ones);
+    // The constants are filled while the first work item's reads are in flight.
+    bool constants_pending = true;
+    const auto fill_constants = [&]() {
+        fill_constant_tiles(eye, tril, ones, block_masks);
+        static_assert(Ct == 1, "fill_gate_tiles fills one tile per chunk matrix");
+        fill_gate_tiles<GATE_SCALE_BITS>(gate_tril, gate_ones);
+        constants_pending = false;
+    };
 
     auto enqueue_head_chunk_read =
         [&](const auto& accessor, DataflowBuffer& buffer, uint32_t head_chunk_index, uint32_t width_tiles) {
@@ -269,6 +278,9 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         } else {
             enqueue_contiguous_read(beta_accessor, beta, head_chunk_index * Ct, Ct);
         }
+        if (constants_pending) {
+            fill_constants();
+        }
         // All five inputs are independent reads on the same NoC. One barrier lets them overlap, then publishes
         // the complete work item atomically to compute.
         noc.async_read_barrier();
@@ -287,11 +299,11 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
                     tile[face_row * 2 * tt::constants::FACE_HW + row_base] = tile[source];
                 }
             };
-            // FP32 beta, or BF16 beta logits read in place from a wider tensor.
-            if (beta.get_entry_size() == tt::constants::TILE_HW * sizeof(uint32_t)) {
-                move_head_column(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(beta.get_write_ptr()));
-            } else {
+            // BF16 beta logits read in place from a wider tensor, or FP32 beta.
+            if constexpr (beta_logits) {
                 move_head_column(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(beta.get_write_ptr()));
+            } else {
+                move_head_column(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(beta.get_write_ptr()));
             }
         }
         q.push_back(chunk_key_tiles);
@@ -299,5 +311,8 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         v.push_back(chunk_value_tiles);
         g.push_back(chunk_key_tiles);
         beta.push_back(Ct);
+    }
+    if (constants_pending) {
+        fill_constants();
     }
 }

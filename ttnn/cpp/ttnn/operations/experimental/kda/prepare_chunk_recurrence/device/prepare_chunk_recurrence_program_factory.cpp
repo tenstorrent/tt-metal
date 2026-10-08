@@ -74,7 +74,6 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     const m2::DFBSpecName gate_ones_dfb{"gate_ones"};
     const m2::DFBSpecName block_masks_dfb{"block_masks"};
     const m2::DFBSpecName workspace_0_dfb{"workspace_0"};
-    const m2::DFBSpecName scan_decay_dfb{"scan_decay"};
     const m2::DFBSpecName centered_inverse_decay_dfb{"centered_inverse_decay"};
     const m2::DFBSpecName akk_dfb{"akk"};
     const m2::DFBSpecName t_inv_dfb{"t_inv"};
@@ -136,7 +135,6 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         make_dfb(gate_ones_dfb, cc, fp32),
         make_dfb(block_masks_dfb, 3, fp32),
         make_dfb(workspace_0_dfb, ck, fp32),
-        make_dfb(scan_decay_dfb, ck, fp32),
         make_dfb(centered_inverse_decay_dfb, ck, fp32),
         make_dfb(akk_dfb, cc, fp32),
         make_dfb(t_inv_dfb, 2 * cc, output_formats[6]),
@@ -194,6 +192,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
              {"beta_token_major", static_cast<uint32_t>(in.beta.logical_shape().rank() == 3)},
              {"beta_width_tiles", static_cast<uint32_t>(in.beta.padded_shape()[-1]) / tt::constants::TILE_WIDTH},
              {"beta_offset_tiles", attrs.beta_logits_column_offset.value_or(0) / tt::constants::TILE_WIDTH},
+             {"beta_logits", static_cast<uint32_t>(beta_logits)},
              {"GATE_SCALE_BITS", std::bit_cast<uint32_t>(attrs.gate_scale)}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks", "num_heads"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
@@ -244,7 +243,6 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     unpack_modes[gate_ones_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[block_masks_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[workspace_0_dfb] = UnpackMode::UnpackToSrc;
-    unpack_modes[scan_decay_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[centered_inverse_decay_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[akk_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[t_inv_dfb] = UnpackMode::UnpackToSrc;
@@ -287,8 +285,6 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{workspace_0_dfb, "workspace_0", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{workspace_0_dfb, "workspace_0", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{scan_decay_dfb, "scan_decay", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{scan_decay_dfb, "scan_decay", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{centered_inverse_decay_dfb, "centered_inverse_decay", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{centered_inverse_decay_dfb, "centered_inverse_decay", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{akk_dfb, "akk", m2::DFBEndpointType::PRODUCER},
