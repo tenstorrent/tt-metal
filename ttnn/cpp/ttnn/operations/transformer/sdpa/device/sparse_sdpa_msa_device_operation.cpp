@@ -10,6 +10,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/indexer_score/device/kernels/indexer_score_causal_geometry.hpp"
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -304,11 +305,11 @@ std::vector<SparseSDPAMsaOperation::CbSpec> SparseSDPAMsaOperation::base_cbs(
         {cb_out_im, tile_bytes, g.Sqt * g.vDHt, bf},  // bf16 accumulator, full precision
         {cb_out_rm, tt::tile_size(g.out_df), g.Sqt * g.vDHt, g.out_df},
         {cb_idx, g.idx_row_bytes, 1, bf},
-        {cb_ctrl, sparse_sdpa_msa::ctrl::PAGE_BYTES, 2, bf},  // active block count + causal control
+        {cb_ctrl, message_page_bytes(sparse_sdpa_msa::ctrl::WORD_COUNT), 2, bf},  // active block count + causal control
         {cb_col_identity, tile_bytes, 1, bf},
         {cb_recip_scratch, tile_bytes, 1, bf},
-        {cb_kreq, sparse_sdpa_msa::kreq::PAGE_BYTES, 2, bf},
-        {cb_kack, sparse_sdpa_msa::ACK_PAGE_BYTES, 2, bf},
+        {cb_kreq, message_page_bytes(sparse_sdpa_msa::kreq::WORD_COUNT), 2, bf},
+        {cb_kack, message_page_bytes(1), 2, bf},
     };
     // Streamed K/V: one block, single-buffered -- the reader reserves it and the writer fills its half into the
     // same L1. Absent when the block cache serves K/V (compute then reads the cache CBs in place).
@@ -322,6 +323,12 @@ std::vector<SparseSDPAMsaOperation::CbSpec> SparseSDPAMsaOperation::base_cbs(
         cbs.push_back({cb_vmask, tile_bytes, 2, bf});
     }
     return cbs;
+}
+
+uint32_t SparseSDPAMsaOperation::message_page_bytes(uint32_t words) {
+    const uint32_t quantum =
+        std::max<uint32_t>(tt::tt_metal::hal::get_l1_alignment(), CIRCULAR_BUFFER_COMPUTE_WORD_SIZE);
+    return tt::align(words * static_cast<uint32_t>(sizeof(uint32_t)), quantum);
 }
 
 SparseSDPAMsaOperation::KvCachePlan SparseSDPAMsaOperation::resolve_kv_cache(
@@ -341,8 +348,8 @@ SparseSDPAMsaOperation::KvCachePlan SparseSDPAMsaOperation::resolve_kv_cache(
     // launch exactly where the cache-off op would.
     auto* device = t.q.device();
     const uint64_t cb_align = tt::tt_metal::hal::get_dram_alignment();
-    uint64_t base_bytes = tt::align(
-        static_cast<uint64_t>(sparse_sdpa_msa::SLOT_PAGE_BYTES) * sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH_MAX, cb_align);
+    uint64_t base_bytes =
+        tt::align(static_cast<uint64_t>(message_page_bytes(1)) * sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH_MAX, cb_align);
     for (const CbSpec& s : base_cbs(g, attrs.causal_enabled(), /*block_cache_serves_kv=*/true)) {
         base_bytes += tt::align(static_cast<uint64_t>(s.page_size) * s.num_pages, cb_align);
     }

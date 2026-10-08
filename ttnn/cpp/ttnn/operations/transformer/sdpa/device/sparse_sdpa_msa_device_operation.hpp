@@ -177,6 +177,9 @@ struct SparseSDPAMsaOperation {
     // Every circular buffer except the block cache. The streamed K/V block buffers exist only when the block
     // cache does not serve K/V. The cache sizing budgets against this list.
     static std::vector<CbSpec> base_cbs(const Geometry& g, bool causal, bool block_cache_serves_kv);
+    // Bytes of a message-CB page holding `words` u32: CB FIFO pointers count 16-byte words and the NoC lands the
+    // records on L1-aligned addresses, so a page is rounded up to the larger of the two.
+    static uint32_t message_page_bytes(uint32_t words);
 
     // The block cache as resolved for THIS call. slots == 0 selects the streamed kernels. auto depends on the free
     // L1 at call time, so slots is a program-hash input. slot_depth = cb_slot depth = blocks the reader may run
