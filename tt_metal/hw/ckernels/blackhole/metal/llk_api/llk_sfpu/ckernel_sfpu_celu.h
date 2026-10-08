@@ -12,7 +12,12 @@
 
 namespace ckernel::sfpu {
 
-inline void celu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+// Programs the Cody-Waite constants of expm1_cw_clamped into vConstFloatPrgm0/1/2, which calculate_celu
+// reads on every row. This kernel runs no reciprocal, so Prgm0 is not sfpu_reciprocal_init's 2.0f here.
+inline void celu_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    expm1_cw_init_prgm_consts();
+}
 
 // celu(x) = x for x>=0, alpha*(exp(x/alpha)-1) for x<0
 
@@ -20,12 +25,18 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_celu(std::uint32_t param0, std::uint32_t param1) {
     sfpi::vFloat alpha = Converter::as_float(param0);
     sfpi::vFloat alpha_recip = Converter::as_float(param1);
+    // expm1's top Horner coefficient, loaded once and held in an LReg for the whole loop (the three
+    // Cody-Waite constants come from Prgm0/1/2, see the init above; sfpi (through 7.84.0) never hoists a literal out
+    // of a loop by itself). With alpha_recip live as well there is no LReg for the second one, so it
+    // stays a per-row literal.
+    sfpi::vFloat h_top1 = CW_EXPM1_H_TOP1;
+    constexpr float h_top0 = CW_EXPM1_H_TOP0;
 // unroll 2: with expm1_cw_clamped inlined the loop body is large enough that
 // partial unroll outperforms both full (unroll 8) and no-unroll (~0.8us on WH)
 #pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat result = alpha * expm1_cw_clamped(alpha_recip * x);
+        sfpi::vFloat result = alpha * expm1_cw_clamped_prgm(alpha_recip * x, h_top1, h_top0);
 
         v_if(x >= 0.0f) { result = x; }
         v_endif;
