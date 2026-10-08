@@ -30,8 +30,15 @@ constexpr float CW_NEG_LN2_LO = -3.19461832987e-05f;
 // exp(88.7229) = FLT_MAX. Above this expm1(x) is +inf.
 constexpr float CW_EXPM1_MAX  = 88.5f;
 
+// FULL_RANGE = false is the body ELU/CELU/SELU inline. Those callers overwrite
+// every x >= 0 lane, so they only consume x < 0, and their code is unchanged.
+// It is NOT a correct expm1 for x in (127.5*ln2, 88.5] = (88.376, 88.5]: k = 128
+// there and 2^k is not a finite fp32. FULL_RANGE = true is the standalone
+// expm1 (calculate_expm1_cw), correct on the whole line including NaN.
+template <bool FULL_RANGE = false>
 sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x)
 {
+    const sfpi::vFloat x_raw = x;
     // Clamp to prevent exponent underflow (k < -127 wraps setexp)
     x = sfpi::max(x, -87.0f);
 
@@ -64,11 +71,40 @@ sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x)
     constexpr int kC231Bias = 0x4B3FFF81;
     sfpi::vFloat two_k      = sfpi::setexp(1.0f, sfpi::as<sfpi::vInt>(tmp) - kC231Bias);
     sfpi::vFloat result     = (two_k - 1.0f) + two_k * h;
+    if constexpr (FULL_RANGE)
+    {
+        // k = 128 for x in (88.376, 88.5]: setexp writes the inf/NaN exponent field,
+        // two_k = +inf, and (inf - 1) + inf*h with h < 0 is inf - inf = NaN at
+        // x = 88.5 where expm1 = 2.72e38 is finite. Rebuild from 2^(k-1) and double;
+        // the doubling is exact because nothing here is near the subnormal range.
+        v_if (k_f >= 128.0f)
+        {
+            sfpi::vFloat half_k = sfpi::setexp(1.0f, sfpi::as<sfpi::vInt>(tmp) - (kC231Bias + 1));
+            result              = ((half_k - 0.5f) + half_k * h) * 2.0f;
+        }
+        v_endif;
+    }
     v_if (x_in > CW_EXPM1_MAX)
     {
         result = Converter::as_float(0x7F800000U); // +inf
     }
     v_endif;
+    if constexpr (FULL_RANGE)
+    {
+        // NaN in, NaN out. max() above sends a negative NaN to -87 (=> -1.0) and
+        // min() a positive one to 88.5 (=> +inf); classify by the exponent and
+        // fraction bits, since an FP compare with NaN is not reliable here.
+        const sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(x_raw);
+        v_if ((bits & 0x7F800000u) == 0x7F800000u)
+        {
+            v_if ((bits & 0x007FFFFFu) != 0u)
+            {
+                result = x_raw;
+            }
+            v_endif;
+        }
+        v_endif;
+    }
     return result;
 }
 

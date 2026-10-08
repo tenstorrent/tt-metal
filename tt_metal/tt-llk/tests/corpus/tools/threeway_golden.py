@@ -642,12 +642,19 @@ def _rsqrt(x):
     return _np(torch.rsqrt(_t(x)))
 
 
+# torch.special.i0/i1 return NaN at +-inf (the Cephes Chebyshev evaluation
+# overflows), but the limits are I0(+-inf) = +inf and I1(+-inf) = +-inf, and the
+# device returns exactly those. Grading the device against NaN fails a correct
+# kernel at fp32 DEST and is invisible at a 16-bit DEST only because the packer
+# turns the NaN golden into an inf. State the limits.
 def _i0(x):
-    return _np(torch.special.i0(_t(x)))
+    t = _t(x)
+    return _np(torch.where(torch.isinf(t), torch.abs(t), torch.special.i0(t)))
 
 
 def _i1(x):
-    return _np(torch.special.i1(_t(x)))
+    t = _t(x)
+    return _np(torch.where(torch.isinf(t), t, torch.special.i1(t)))
 
 
 def _digamma(x):
@@ -1355,6 +1362,28 @@ _CORPUS_DESTACC = [
         note="softplus on Float16_b->Float32 dest_acc=Yes -- the audit's rank 6b names "
         "the bf16 arm specifically, and this is that arm at full Dest width",
     ),
+    # The fp32-DEST rows for the 2026-09-30 i0/i1/expm1cw overflow fixes. Those fixes
+    # were measured only at Float32->Float32 dest_acc=No, i.e. a 16-bit Dest and the
+    # bf16 arm; these rows grade the same bodies at a 32-bit Dest with an fp32 output,
+    # exhaustive over the bf16 input space (one band).
+    GoldenSpec(
+        "i0-destacc",
+        _i0,
+        dst_acc=True,
+        note="torch.special.i0 on Float16_b->Float32 dest_acc=Yes: fp32 DEST/output",
+    ),
+    GoldenSpec(
+        "i1-destacc",
+        _i1,
+        dst_acc=True,
+        note="torch.special.i1 on Float16_b->Float32 dest_acc=Yes: fp32 DEST/output",
+    ),
+    GoldenSpec(
+        "expm1cw-destacc",
+        _expm1,
+        dst_acc=True,
+        note="torch.expm1 on Float16_b->Float32 dest_acc=Yes: fp32 DEST/output",
+    ),
 ]
 
 # Two further single-row vehicles whose test file had no hook and whose row IS
@@ -1579,6 +1608,9 @@ CLAIMED_ACCURACY_DOMAIN: dict[str, tuple] = {
     "recip-ilv2": (0.0, 1.0),
     "sigmoid-destacc": (-8.0, 8.0),   # Sigmoid
     "softplus-destacc": (-5.0, 30.0),  # Softplus
+    "i0-destacc": (-3.75, 3.75),       # I0
+    "i1-destacc": (-3.75, 3.75),       # I1
+    "expm1cw-destacc": (-5.0, 5.0),    # Expm1Cw
     "sdpa": (-20.0, 0.0),          # the row's own swept input_range
     "binopscalar": (-1.0, 1.0),    # Elwadd's _OP_DOMAIN_REGISTRY interval
     # blaze / coverage rows: the interval each row's own StimuliSpec sweeps.

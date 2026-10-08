@@ -156,8 +156,11 @@ inline void calculate_i1() {
         v_endif;
 
         // |x| >= 91.9022: i1 exceeds FLT_MAX, so the analytic limit is +-inf. The
-        // clamp saturated abs_x here, which is exactly the condition to test.
-        v_if(abs_x >= I1_MAX_INPUT) { val = sfpi::copysgn(sfpi::vFloat(std::numeric_limits<float>::infinity()), x); }
+        // clamp saturated abs_x here, which is exactly the condition to test. The
+        // clamp also maps a NaN to +-91.9022, so take the sign from the RAW input:
+        // raw * inf is +-inf for every finite or infinite |x| past the bound and
+        // NaN for a NaN, instead of an inf that NaN never asked for.
+        v_if(abs_x >= I1_MAX_INPUT) { val = sfpi::dst_reg[0] * sfpi::vFloat(std::numeric_limits<float>::infinity()); }
         v_endif;
 #ifndef INP_FLOAT32
         val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::Nearest);

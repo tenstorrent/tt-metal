@@ -34,7 +34,7 @@ inline void calculate_expm1_cw()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::dst_reg[0] = expm1_cw_clamped(sfpi::dst_reg[0]);
+        sfpi::dst_reg[0] = expm1_cw_clamped<true>(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }

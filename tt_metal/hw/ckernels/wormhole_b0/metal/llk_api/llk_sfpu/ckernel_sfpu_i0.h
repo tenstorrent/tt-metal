@@ -107,7 +107,9 @@ inline void calculate_i0() {
 
         v_if(abs_x > I0_THRESHOLD) {
             result = calculate_i0_asymptotic_(sfpi::min(abs_x, vFloat(I0_MAX_FINITE)));
-            v_if(abs_x >= I0_MAX_FINITE) { result = std::numeric_limits<float>::infinity(); }
+            // abs_x * inf rather than the constant: +inf for every |x| past the
+            // overflow point, but a NaN (which the compares above admit) stays NaN.
+            v_if(abs_x >= I0_MAX_FINITE) { result = abs_x * vFloat(std::numeric_limits<float>::infinity()); }
             v_endif;
         }
         v_endif;

@@ -3067,7 +3067,10 @@ class UnarySFPUGolden:
 
     def _i0(self, x):
         # modified Bessel I0; kernel uses a poly approx valid on |x| <= 3.75.
-        return self._torch_unary(x, torch.special.i0)
+        # torch returns NaN at +-inf; the limit is +inf (threeway_golden._i0).
+        return self._torch_unary(
+            x, lambda t: torch.where(torch.isinf(t), torch.abs(t), torch.special.i0(t))
+        )
 
     def _rdiv(self, x, value=2.0):
         # rdiv(x) = value / x; value fixed to the dispatch constant (2.0).
@@ -3282,7 +3285,10 @@ class UnarySFPUGolden:
 
     def _i1_bessel(self, x):
         # Modified Bessel I1; kernel poly approx is valid on |x| <= ~3.75.
-        return self._torch_unary(x, torch.special.i1)
+        # torch returns NaN at +-inf; the limit is +-inf (threeway_golden._i1).
+        return self._torch_unary(
+            x, lambda t: torch.where(torch.isinf(t), t, torch.special.i1(t))
+        )
 
     def _sign(self, x):
         # Matches calculate_sign: -1 for x<0, 0 for x==0, +1 otherwise.

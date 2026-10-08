@@ -804,9 +804,11 @@ __attribute__((noinline)) void calculate_i1_fresh_cpp()
         v_endif;
 
         // |x| >= 91.9022: i1 exceeds FLT_MAX, so the value is +-inf by definition.
+        // The clamp maps a NaN to +-91.9022 too; the raw input times inf keeps the
+        // overflow sign and lets a NaN through as NaN.
         v_if (abs_x >= I1_MAX_INPUT)
         {
-            val = sfpi::copysgn(sfpi::vFloat(std::numeric_limits<float>::infinity()), x);
+            val = sfpi::dst_reg[0] * sfpi::vFloat(std::numeric_limits<float>::infinity());
         }
         v_endif;
 #ifndef INP_FLOAT32

@@ -653,7 +653,13 @@ def case_faithful_destacc():
 
     u16 = np.arange(65536, dtype=np.uint32)
     xs = tg._bf16_bits_to_f32(u16)
-    for op, mathop_name in (("sigmoid-destacc", "Sigmoid"), ("softplus-destacc", "Softplus")):
+    for op, mathop_name in (
+        ("sigmoid-destacc", "Sigmoid"),
+        ("softplus-destacc", "Softplus"),
+        ("i0-destacc", "I0"),
+        ("i1-destacc", "I1"),
+        ("expm1cw-destacc", "Expm1Cw"),
+    ):
         spec = tg.get_spec(op)
         check(f"destacc-flag[{op}]", spec is not None and spec.dst_acc, "dst_acc must be True")
         ref = (
