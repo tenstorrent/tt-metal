@@ -60,7 +60,7 @@ inline void calculate_dropout(uint probability, uint scale) {
 template <bool APPROXIMATION_MODE>
 inline void dropout_init(const uint seed) {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    init_prng_seed(seed);
+    init_prng_seed_sfpu(seed);
 }
 
 }  // namespace sfpu
