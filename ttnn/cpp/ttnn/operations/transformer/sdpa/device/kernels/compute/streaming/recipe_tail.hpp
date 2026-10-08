@@ -24,8 +24,15 @@ inline void mask_recipe_columns(uint32_t valid_columns) {
 // rows (lane row (id >> 4) & 3) and the even or odd columns (id & 0xe, + 1) of one face; per 4-row group the
 // threshold on column - row moves by 4.
 inline void mask_recipe_diagonal() {
+#ifdef ARCH_WORMHOLE
+    // Wormhole has no arithmetic vector shift: the lane id is nonnegative, so compute unsigned and reinterpret.
+    const sfpi::vUInt column = sfpi::vConstTileId & sfpi::vUInt(0xe);
+    const sfpi::vUInt row = (sfpi::vConstTileId & sfpi::vUInt(0x30)) >> 4;
+    const sfpi::vInt column_minus_row = sfpi::as<sfpi::vInt>(column - row);
+#else
     const sfpi::vInt id = sfpi::vConstTileId;
     const sfpi::vInt column_minus_row = (id & sfpi::vInt(0xe)) - ((id >> 4) & sfpi::vInt(3));
+#endif
     const sfpi::vFloat negative_infinity = Converter::as_float(0xff800000);
 #pragma GCC unroll 1
     for (uint32_t face = 0; face < 4; face += 3) {
