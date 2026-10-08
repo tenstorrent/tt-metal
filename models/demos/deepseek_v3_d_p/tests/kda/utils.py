@@ -55,14 +55,24 @@ def collect_mesh_accuracy_and_determinism_results(
     run: Callable[[], Sequence[ttnn.Tensor]],
     *,
     count: int = 3,
+    defined: Sequence[ttnn.Tensor | None] | None = None,
 ) -> tuple[tuple[ttnn.Tensor, ...], tuple[torch.Tensor, ...]]:
-    """Retain first mesh outputs and reduce exact repeat mismatches on device."""
+    """Retain first mesh outputs and reduce exact repeat mismatches on device.
+
+    ``ttnn.ne`` compares values: +0 and -0, and subnormals and zero, compare equal.
+    ``defined`` optionally gives, per output, a 0/1 mask broadcastable to it that
+    selects the defined elements; mismatches elsewhere, such as NaN padded rows
+    (NaN != NaN), are ignored. ``None`` compares the whole output.
+    """
     if count <= 1:
         raise ValueError("count must be greater than one")
 
     reference_outputs = tuple(run())
     if not reference_outputs:
         raise ValueError("run must return at least one output")
+    masks = tuple(defined) if defined is not None else (None,) * len(reference_outputs)
+    if len(masks) != len(reference_outputs):
+        raise ValueError("defined must give one mask or None per output")
 
     mismatch_marker = None
     for _ in range(1, count):
@@ -71,7 +81,7 @@ def collect_mesh_accuracy_and_determinism_results(
             for output in outputs:
                 ttnn.deallocate(output)
             raise ValueError("run returned a different number of outputs")
-        for reference, output in zip(reference_outputs, outputs, strict=True):
+        for reference, output, mask in zip(reference_outputs, outputs, masks, strict=True):
             if (
                 output.shape != reference.shape
                 or output.dtype != reference.dtype
@@ -82,6 +92,11 @@ def collect_mesh_accuracy_and_determinism_results(
                     ttnn.deallocate(repeat_output)
                 raise ValueError("run returned output with different metadata")
             mismatch = ttnn.ne(reference, output, dtype=ttnn.bfloat16)
+            if mask is not None:
+                # The 0/1 mismatch is finite, so masking it by multiplication is exact.
+                defined_mismatch = ttnn.multiply(mismatch, mask)
+                ttnn.deallocate(mismatch)
+                mismatch = defined_mismatch
             current_marker = ttnn.max(mismatch)
             ttnn.deallocate(mismatch)
             if mismatch_marker is None:
