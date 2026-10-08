@@ -41,14 +41,12 @@ inline constexpr bool noc_zero_l1_endpoint_v = false;
 template <typename T>
 inline constexpr bool is_scratchpad_v = false;
 
-// Push (Quasar tensor endpoints in a TT_TA_ADDRGEN_PUSH build; api/tensor/noc_traits.h): can the address generator
-// write T's remote address straight into the command buffer instead of returning it? Then noc_traits_t<T> also has:
-//   src/dst_noc_addr_or_pushed(): the remote NoC address, or kAddrPushed when the generator already wrote it into the
-//                                 command buffer's SRC_ADDR (reads) / DEST_ADDR (writes)
-//   is_pushed(addr):              addr == kAddrPushed
-//   issue_pushed_read/write():    the NoC V3 read / write without writing that address register
-// noc.h is shared by every arch and the push issue exists only in Quasar's NoC V3 header, so the issue goes through the
-// traits. Only async_read / async_write (and their DFB overloads) push; every other API takes the plain address.
+// Push (Quasar tensor endpoints in a TT_TA_ADDRGEN_PUSH build; api/tensor/noc_traits.h): the address generator can
+// write T's remote address straight into the command buffer instead of returning it. Such an endpoint issues
+// async_read / async_write itself, through noc_traits_t<T>::issue_read / issue_write: it either runs the transfer with
+// the address already in the command buffer, or calls back the ordinary issue (a lambda from the call site) with the
+// address. noc.h never sees a pushed address, and endpoints that can't push compile to the ordinary issue alone.
+// (noc.h is shared by every arch; the pushed issue exists only in Quasar's NoC V3 header, hence the traits.)
 template <typename T, typename = void>
 inline constexpr bool noc_addrgen_push_v = false;
 template <typename T>
@@ -139,10 +137,10 @@ private:
     friend struct noc_traits_t<UnicastEndpoint>;
     friend struct noc_traits_t<MulticastEndpoint>;
 
-    // Every NoC transfer path takes its endpoint addresses from these three helpers (or the *_noc_addr_or_pushed
-    // siblings below, for an address the address generator may push), so this is where op-to-op R/W inference notes a
-    // bound tensor: a source is read, a destination written (api/dataflow/buf_rw_note.h). The notes are section data
-    // only: no instructions.
+    // Every NoC transfer path takes its endpoint addresses from these three helpers (or the *_maybe_pushed issues
+    // below, for an endpoint whose address the address generator may push), so this is where op-to-op R/W inference
+    // notes a bound tensor: a source is read, a destination written (api/dataflow/buf_rw_note.h). The notes are section
+    // data only: no instructions.
     template <AddressType address_type, typename Src>
     auto get_src_ptr(const Src& src, const src_args_t<Src>& src_args) const {
         tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();
@@ -154,13 +152,19 @@ private:
         }
     }
 
-    // For a source that may push (noc_addrgen_push_v): returns the source's remote NoC address, or kAddrPushed when the
-    // address generator already wrote it into the read command buffer's SRC_ADDR (check with traits::is_pushed()).
-    // Notes the read like get_src_ptr.
-    template <typename Src>
-    uint64_t get_src_noc_addr_or_pushed(const Src& src, const src_args_t<Src>& src_args) const {
+    // Issue a read from a source that may push its address (noc_addrgen_push_v): its traits get the remote address and
+    // either issue the read with it already in the command buffer, or call `issue` (the ordinary issue) with it. Notes
+    // the read like get_src_ptr.
+    template <typename Src, typename Issue>
+    void issue_read_maybe_pushed(
+        const Src& src,
+        const src_args_t<Src>& src_args,
+        uint32_t dst_local_l1_addr,
+        uint32_t size_bytes,
+        uint32_t vc,
+        Issue&& issue) const {
         tt_buf_rw::note_if_bound<tt_buf_rw::READ, Src>();
-        return noc_traits_t<Src>::src_noc_addr_or_pushed(src, *this, src_args);
+        noc_traits_t<Src>::issue_read(src, *this, src_args, dst_local_l1_addr, size_bytes, vc, issue);
     }
 
     template <AddressType address_type, typename Dst>
@@ -174,12 +178,20 @@ private:
         }
     }
 
-    // get_src_noc_addr_or_pushed for a destination: the remote NoC address, or kAddrPushed when it is already in the
-    // write command buffer's DEST_ADDR. Notes the write like get_dst_ptr.
-    template <typename Dst>
-    uint64_t get_dst_noc_addr_or_pushed(const Dst& dst, const dst_args_t<Dst>& dst_args) const {
+    // issue_read_maybe_pushed for a destination: issue a write to a destination that may push its address. Notes the
+    // write like get_dst_ptr.
+    template <bool posted, bool use_trid, typename Dst, typename Issue>
+    void issue_write_maybe_pushed(
+        const Dst& dst,
+        const dst_args_t<Dst>& dst_args,
+        uint32_t src_local_l1_addr,
+        uint32_t size_bytes,
+        uint32_t vc,
+        uint32_t trid,
+        Issue&& issue) const {
         tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, Dst>();
-        return noc_traits_t<Dst>::dst_noc_addr_or_pushed(dst, *this, dst_args);
+        noc_traits_t<Dst>::template issue_write<posted, use_trid>(
+            dst, *this, dst_args, src_local_l1_addr, size_bytes, vc, trid, issue);
     }
 
     template <AddressType address_type, typename Dst>
@@ -242,22 +254,14 @@ public:
         const uint32_t req_vc = has_flag(opts, NocOptions::CUSTOM_VC)
                                     ? static_cast<uint32_t>(noc_opts.vc)
                                     : NOC_UNICAST_WRITE_VC;
+        const uint32_t dst_addr = get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args);
+        auto issue = [&](uint64_t src_noc_addr) {
+            noc_async_read<max_page_size, enable_noc_tracing>(src_noc_addr, dst_addr, size_bytes, noc_id_, req_vc);
+        };
         if constexpr (noc_addrgen_push_v<Src>) {
-            // The source address may already be in the read command buffer (pushed by the address generator).
-            const uint64_t src_noc_addr = get_src_noc_addr_or_pushed(src, src_args);
-            const uint32_t dst_addr = get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args);
-            if (noc_traits_t<Src>::is_pushed(src_noc_addr)) {
-                noc_traits_t<Src>::issue_pushed_read(dst_addr, size_bytes, noc_id_, req_vc);
-            } else {
-                noc_async_read<max_page_size, enable_noc_tracing>(src_noc_addr, dst_addr, size_bytes, noc_id_, req_vc);
-            }
+            issue_read_maybe_pushed(src, src_args, dst_addr, size_bytes, req_vc, issue);
         } else {
-            noc_async_read<max_page_size, enable_noc_tracing>(
-                get_src_ptr<AddressType::NOC>(src, src_args),
-                get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
-                size_bytes,
-                noc_id_,
-                req_vc);
+            issue(get_src_ptr<AddressType::NOC>(src, src_args));
         }
     }
 
@@ -409,63 +413,48 @@ public:
             WAYPOINT("NAWW");
             const uint32_t vc =
                 has_flag(opts, NocOptions::CUSTOM_VC) ? static_cast<uint32_t>(noc_opts.vc) : NOC_UNICAST_WRITE_VC;
-            uint64_t dst_noc_addr;
-            if constexpr (noc_addrgen_push_v<Dst>) {
-                // The destination address may already be in the write command buffer (pushed by the address
-                // generator).
-                dst_noc_addr = get_dst_noc_addr_or_pushed(dst, dst_args);
-                if (noc_traits_t<Dst>::is_pushed(dst_noc_addr)) {
-                    noc_traits_t<Dst>::template issue_pushed_write<posted, /*use_trid=*/true>(
-                        get_src_ptr<AddressType::LOCAL_L1>(src, src_args), size_bytes, noc_id_, vc, noc_opts.trid);
-                    WAYPOINT("NWPD");
-                    return;
+            const uint32_t src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
+            auto issue = [&](uint64_t dst_noc_addr) {
+                if constexpr (enable_noc_tracing) {
+                    RECORD_NOC_EVENT_WITH_ADDR(
+                        NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
                 }
+                DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, size_bytes);
+                constexpr bool one_packet = max_page_size <= NOC_MAX_BURST_SIZE;
+                ncrisc_noc_fast_write_any_len<noc_mode, true, one_packet>(
+                    noc_id_,
+                    write_cmd_buf,
+                    src_addr,
+                    dst_noc_addr,
+                    size_bytes,
+                    vc,
+                    false,  // mcast
+                    false,  // linked
+                    1,      // num_dests
+                    true,   // multicast_path_reserve
+                    posted,
+                    noc_opts.trid);
+            };
+            if constexpr (noc_addrgen_push_v<Dst>) {
+                issue_write_maybe_pushed<posted, /*use_trid=*/true>(
+                    dst, dst_args, src_addr, size_bytes, vc, noc_opts.trid, issue);
             } else {
-                dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
+                issue(get_dst_ptr<AddressType::NOC>(dst, dst_args));
             }
-            auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
-            if constexpr (enable_noc_tracing) {
-                RECORD_NOC_EVENT_WITH_ADDR(
-                    NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
-            }
-            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, size_bytes);
-            constexpr bool one_packet = max_page_size <= NOC_MAX_BURST_SIZE;
-            ncrisc_noc_fast_write_any_len<noc_mode, true, one_packet>(
-                noc_id_,
-                write_cmd_buf,
-                src_addr,
-                dst_noc_addr,
-                size_bytes,
-                vc,
-                false,  // mcast
-                false,  // linked
-                1,      // num_dests
-                true,   // multicast_path_reserve
-                posted,
-                noc_opts.trid);
             WAYPOINT("NWPD");
         } else {
             const uint32_t vc = has_flag(opts, NocOptions::CUSTOM_VC)
                                     ? static_cast<uint32_t>(noc_opts.vc)
                                     : NOC_UNICAST_WRITE_VC;
-            if constexpr (noc_addrgen_push_v<Dst>) {
-                // The destination address may already be in the write command buffer (pushed by the address
-                // generator).
-                const uint64_t dst_noc_addr = get_dst_noc_addr_or_pushed(dst, dst_args);
-                const uint32_t src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
-                if (noc_traits_t<Dst>::is_pushed(dst_noc_addr)) {
-                    noc_traits_t<Dst>::template issue_pushed_write<posted>(src_addr, size_bytes, noc_id_, vc);
-                } else {
-                    noc_async_write<max_page_size, enable_noc_tracing, posted>(
-                        src_addr, dst_noc_addr, size_bytes, noc_id_, vc);
-                }
-            } else {
+            const uint32_t src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
+            auto issue = [&](uint64_t dst_noc_addr) {
                 noc_async_write<max_page_size, enable_noc_tracing, posted>(
-                    get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
-                    get_dst_ptr<AddressType::NOC>(dst, dst_args),
-                    size_bytes,
-                    noc_id_,
-                    vc);
+                    src_addr, dst_noc_addr, size_bytes, noc_id_, vc);
+            };
+            if constexpr (noc_addrgen_push_v<Dst>) {
+                issue_write_maybe_pushed<posted, /*use_trid=*/false>(dst, dst_args, src_addr, size_bytes, vc, 0, issue);
+            } else {
+                issue(get_dst_ptr<AddressType::NOC>(dst, dst_args));
             }
         }
     }

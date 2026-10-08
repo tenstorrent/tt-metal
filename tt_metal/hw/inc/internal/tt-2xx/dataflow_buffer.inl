@@ -698,23 +698,16 @@ Noc::async_read(
     noc_async_read_set_trid(txn_id, noc_id_);
     while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
     // DPRINT("Issue the read\n");
-    if constexpr (noc_addrgen_push_v<Src>) {
-        // The source address may already be in the read command buffer (pushed by the address generator).
-        const uint64_t src_noc_addr = get_src_noc_addr_or_pushed(src, src_args);
-        if (noc_traits_t<Src>::is_pushed(src_noc_addr)) {
-            noc_traits_t<Src>::issue_pushed_read(dst.get_noc_write_addr(), dst.get_entry_size(), noc_id_, NOC_UNICAST_WRITE_VC);
-        } else {
-            noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
-                src_noc_addr, dst.get_noc_write_addr(), dst.get_entry_size(), noc_id_, NOC_UNICAST_WRITE_VC);
-        }
-    } else {
+    // Use cached addresses for NOC APIs
+    const uint32_t dst_addr = dst.get_noc_write_addr();
+    auto issue = [&](uint64_t src_noc_addr) {
         noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
-            get_src_ptr<AddressType::NOC>(src, src_args),
-            // Use cached addresses for NOC APIs
-            dst.get_noc_write_addr(),
-            dst.get_entry_size(),
-            noc_id_,
-            NOC_UNICAST_WRITE_VC);
+            src_noc_addr, dst_addr, dst.get_entry_size(), noc_id_, NOC_UNICAST_WRITE_VC);
+    };
+    if constexpr (noc_addrgen_push_v<Src>) {
+        issue_read_maybe_pushed(src, src_args, dst_addr, dst.get_entry_size(), NOC_UNICAST_WRITE_VC, issue);
+    } else {
+        issue(get_src_ptr<AddressType::NOC>(src, src_args));
     }
     dst.commit_implicit_read();
 }
@@ -732,35 +725,30 @@ Noc::async_write(
     uint32_t txn_id = src.prepare_implicit_write();
     // Use cached addresses for NOC APIs
     auto src_addr = src.get_noc_read_addr();
-    uint64_t dst_noc_addr;
+    auto issue = [&](uint64_t dst_noc_addr) {
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, src.get_entry_size());
+        // DPRINT("Issue the write\n");
+        ncrisc_noc_fast_write_any_len<noc_mode, true, /*one_packet*/false>(
+            noc_id_,
+            write_cmd_buf,
+            src_addr,
+            dst_noc_addr,
+            src.get_entry_size(),
+            NOC_UNICAST_WRITE_VC,
+            false,   // mcast
+            false,   // linked
+            1,       // num_dests
+            true,    // multicast_path_reserve
+            false,   // posted == false (NocOptions::POSTED not set)
+            txn_id);
+    };
     if constexpr (noc_addrgen_push_v<Dst>) {
-        // The destination address may already be in the write command buffer (pushed by the address generator).
-        dst_noc_addr = get_dst_noc_addr_or_pushed(dst, dst_args);
-        if (noc_traits_t<Dst>::is_pushed(dst_noc_addr)) {
-            noc_traits_t<Dst>::template issue_pushed_write</*posted=*/false, /*use_trid=*/true>(
-                src_addr, src.get_entry_size(), noc_id_, NOC_UNICAST_WRITE_VC, txn_id);
-            src.commit_implicit_write();
-            return;
-        }
+        issue_write_maybe_pushed</*posted=*/false, /*use_trid=*/true>(
+            dst, dst_args, src_addr, src.get_entry_size(), NOC_UNICAST_WRITE_VC, txn_id, issue);
     } else {
-        dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
+        issue(get_dst_ptr<AddressType::NOC>(dst, dst_args));
     }
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, src.get_entry_size());
-    // DPRINT("Issue the write\n");
-    ncrisc_noc_fast_write_any_len<noc_mode, true, /*one_packet*/false>(
-        noc_id_,
-        write_cmd_buf,
-        src_addr,
-        dst_noc_addr,
-        src.get_entry_size(),
-        NOC_UNICAST_WRITE_VC,
-        false,   // mcast
-        false,   // linked
-        1,       // num_dests
-        true,    // multicast_path_reserve
-        false,   // posted == false (NocOptions::POSTED not set)
-        txn_id);
     src.commit_implicit_write();
 }
 
