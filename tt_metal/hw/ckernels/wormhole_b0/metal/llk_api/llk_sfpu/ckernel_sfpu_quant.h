@@ -90,12 +90,29 @@ constexpr std::uint32_t INT8_SIGN_MASK = 0x00000080u;
 constexpr std::uint32_t RNE_MAGIC_FP32 = 0x4b400000u;  // 12582912.0f = 1.5 * 2^23
 constexpr std::uint32_t ZP_SPLIT_FP32 = 0x4c400000u;  // 50331648.0f = 1.5 * 2^25
 
-// T_LREG holds t on entry. LREG12 = t + LO and LREG13 = t + HI.
+// T_LREG holds the zero point on entry. LREG0 and LREG1 are scratch.
+// On exit, LREG5 = RNE_MAGIC + zp_hi. This is the addend that rounds.
+// LREG12 = t + LO and LREG13 = t + HI, where t = RNE_MAGIC - zp_lo.
 // T_LREG = -bits(t) with +128 for the int8 output.
 template <DataFormat OUTPUT_FORMAT, std::uint32_t T_LREG>
 inline void _rne_clamp_init_() {
     constexpr int LO = OUTPUT_FORMAT == DataFormat::UInt8 ? 0 : -128;
     constexpr int HI = OUTPUT_FORMAT == DataFormat::UInt8 ? 255 : 127;
+    _sfpu_load_imm32_(p_sfpu::LREG5, RNE_MAGIC_FP32);
+    _sfpu_load_imm32_(p_sfpu::LREG1, ZP_SPLIT_FP32);
+    // LREG0 = zp_hi = fl(zp + ZP_SPLIT) - ZP_SPLIT
+    TTI_SFPMAD(T_LREG, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0 /*mod1*/);
+    TTI_SFPNOP;
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_neg1, p_sfpu::LREG0, p_sfpu::LREG0, 0 /*mod1*/);
+    TTI_SFPNOP;
+    // T_LREG = zp_lo = zp - zp_hi
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_neg1, T_LREG, T_LREG, 0 /*mod1*/);
+    TTI_SFPNOP;
+    // T_LREG = t = RNE_MAGIC - zp_lo
+    TTI_SFPMAD(T_LREG, p_sfpu::LCONST_neg1, p_sfpu::LREG5, T_LREG, 0 /*mod1*/);
+    // LREG5 = RNE_MAGIC + zp_hi
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG5, 0 /*mod1*/);
+    TTI_SFPNOP;
     TTI_SFPIADD(LO & 0xfff, T_LREG, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPCONFIG(0, 12, 0);
     TTI_SFPIADD(HI & 0xfff, T_LREG, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
@@ -329,22 +346,8 @@ void quant_init(const uint zero_point) {
     static_assert(
         OUTPUT_FORMAT == DataFormat::Int32 || OUTPUT_FORMAT == DataFormat::UInt8 || OUTPUT_FORMAT == DataFormat::Int8,
         "quant_init OUTPUT_FORMAT must be Int32, UInt8 or Int8");
-    // LREG5 = RNE_MAGIC + zp_hi (the MAD addend); LREG2 = t = RNE_MAGIC - zp_lo, which _rne_clamp_init_
-    // turns into the clamp bounds and then -bits(t) (+128).
+    // LREG2 holds the zero point. _rne_clamp_init_ sets up LREG5, LREG12, LREG13 and LREG2 for the body.
     _sfpu_load_imm32_(p_sfpu::LREG2, zero_point);
-    _sfpu_load_imm32_(p_sfpu::LREG5, RNE_MAGIC_FP32);
-    _sfpu_load_imm32_(p_sfpu::LREG1, ZP_SPLIT_FP32);
-    // LREG0 = zp_hi = fl(zero-point + ZP_SPLIT) - ZP_SPLIT
-    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0 /*mod1*/);
-    TTI_SFPNOP;
-    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_neg1, p_sfpu::LREG0, p_sfpu::LREG0, 0 /*mod1*/);
-    TTI_SFPNOP;
-    // LREG2 = zp_lo = zero-point - zp_hi
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_neg1, p_sfpu::LREG2, p_sfpu::LREG2, 0 /*mod1*/);
-    TTI_SFPNOP;
-    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LCONST_neg1, p_sfpu::LREG5, p_sfpu::LREG2, 0 /*mod1*/);
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG5, 0 /*mod1*/);
-    TTI_SFPNOP;
     _rne_clamp_init_<OUTPUT_FORMAT, p_sfpu::LREG2>();
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
         _sfpu_load_imm32_(p_sfpu::LREG4, INT8_SIGN_MASK);
@@ -384,22 +387,9 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
         "requant_init OUTPUT_FORMAT must be Int32, UInt8 or Int8");
     // The body rounds v = q * (s_in / s_out) + zp to nearest even and then adds out_zero_point.
     // zp is the host-folded -z_in * (s_in / s_out) in LREG2.
-    // LREG5 = RNE_MAGIC + zp_hi (the SFPADD addend); LREG6 = t = RNE_MAGIC - zp_lo ends up as -bits(t) (+128).
+    // LREG6 holds out_zero_point. _rne_clamp_init_ sets up LREG5, LREG12, LREG13 and LREG6 for the body.
     _sfpu_load_imm32_(p_sfpu::LREG2, zero_point);
-    _sfpu_load_imm32_(p_sfpu::LREG5, RNE_MAGIC_FP32);
     _sfpu_load_imm32_(p_sfpu::LREG6, out_zero_point);
-    _sfpu_load_imm32_(p_sfpu::LREG1, ZP_SPLIT_FP32);
-    // LREG0 = zp_hi = fl(out_zero_point + ZP_SPLIT) - ZP_SPLIT
-    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0 /*mod1*/);
-    TTI_SFPNOP;
-    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_neg1, p_sfpu::LREG0, p_sfpu::LREG0, 0 /*mod1*/);
-    TTI_SFPNOP;
-    // LREG6 = zp_lo = out_zero_point - zp_hi
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_neg1, p_sfpu::LREG6, p_sfpu::LREG6, 0 /*mod1*/);
-    TTI_SFPNOP;
-    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LCONST_neg1, p_sfpu::LREG5, p_sfpu::LREG6, 0 /*mod1*/);
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG5, 0 /*mod1*/);
-    TTI_SFPNOP;
     _rne_clamp_init_<OUTPUT_FORMAT, p_sfpu::LREG6>();
     if constexpr (INT8_INPUT || OUTPUT_FORMAT == DataFormat::Int8) {
         _sfpu_load_imm32_(p_sfpu::LREG4, INT8_SIGN_MASK);
