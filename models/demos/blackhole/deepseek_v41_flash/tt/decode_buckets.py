@@ -225,9 +225,22 @@ class DecodeBucket:
         m = self.m
         if not self.engram_ids:
             return None
-        hashes = m.hasher(tokens.reshape(self.B, 1).long(), pos.long(), rows=torch.as_tensor(phys).long())
-        rows = m._rows_threads(hashes)
-        cat = torch.cat([rows[l].reshape(self.B, 1, 1, -1) for l in self.engram_ids], dim=-1).to(torch.bfloat16)
+        phys = torch.as_tensor(phys).long()
+        tokens, pos = tokens.reshape(-1).long(), pos.reshape(-1).long()
+
+        def rows_of(t, p, ph):
+            hashes = m.hasher(t.reshape(-1, 1), p, rows=ph)
+            rows = m._rows_threads(hashes)
+            return torch.cat([rows[l].reshape(len(ph), 1, 1, -1) for l in self.engram_ids], dim=-1).to(torch.bfloat16)
+
+        # idle rows (token 0 at position 0: no request, nothing in the n-gram history before position 0) have the SAME Engram rows for every user: computed once, not per step
+        tmpl = self.__dict__.get("_idle_rows")
+        if tmpl is None:
+            tmpl = self._idle_rows = rows_of(tokens[:1] * 0, pos[:1] * 0, phys[:1])
+        act = ((tokens != 0) | (pos != 0)).nonzero().reshape(-1)
+        cat = tmpl.expand(self.B, 1, 1, tmpl.shape[-1]).clone()
+        if act.numel():
+            cat[act] = rows_of(tokens[act], pos[act], phys[act])
         return ttnn.from_torch(cat, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mp())
 
     def upload_rows(self, host_rows):
