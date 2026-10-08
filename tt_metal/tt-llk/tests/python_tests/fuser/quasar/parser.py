@@ -263,6 +263,11 @@ FPU_MAP = {
             REDUCE_PARAMS_REQUIRED,
             forced_unpackers("ReduceUnpacker", "UnpackReduceTilize"),
             reject(
+                lambda s, a, b: s.reduce_pool == ReducePool.Max
+                and s.math_fidelity != MathFidelity.LoFi,
+                "Quasar MAX Reduce requires LoFi fidelity",
+            ),
+            reject(
                 lambda s, a, b: a.data_format.is_integer()
                 and a.tile_shape.tile_dims != (32, 32),
                 "Quasar integer Reduce requires 32x32 tiles",
