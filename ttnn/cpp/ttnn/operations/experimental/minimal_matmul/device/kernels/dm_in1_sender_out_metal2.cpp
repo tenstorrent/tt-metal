@@ -192,6 +192,8 @@ void kernel_main() {
     constexpr uint32_t full_N_tiles_bytes = N_block_tiles * in1_tile_size;
 
     bool k_forward = true;
+    // The L1 address of the in1 block requested for the current K iteration.
+    uint32_t block_address = 0;
 
     uint32_t defer_write_m_tile = 0;
     uint32_t defer_write_m_tile_end = 0;
@@ -302,34 +304,60 @@ void kernel_main() {
                 }
 
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
-                dfb_in1.reserve_back(in1_block_num_tiles);
-
-                uint32_t in1_start_address = dfb_in1.get_write_ptr();
-                if constexpr (is_injector_core) {
 #ifdef FUSE_AG
-                    if (is_injector_core) {
-                        k_block =
-                            fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
-                    }
+                if constexpr (is_injector_core) {
+                    k_block = fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
+                }
 #endif
-                    read_in1_block_sync<K_block_tiles, N_block_tiles>(
-                        in1_reader,
-                        in1_shape,
-                        dfb_in1,
-                        in1_tile_size,
-                        k_block * K_block_tiles,
-                        (k_block + 1) * K_block_tiles,
-                        n_tile,
-                        n_tile_end);
+                // Within a K loop the next block is requested before this one is forwarded, so its reads (or its
+                // upstream forward) overlap this block's forward. The first block of a loop is requested here.
+                if (k_block_iter == 0) {
+                    dfb_in1.reserve_back(in1_block_num_tiles);
+                    block_address = dfb_in1.get_write_ptr();
+                    if constexpr (is_injector_core) {
+                        issue_in1_block_reads<K_block_tiles, N_block_tiles>(
+                            in1_reader,
+                            in1_shape,
+                            dfb_in1,
+                            in1_tile_size,
+                            k_block * K_block_tiles,
+                            (k_block + 1) * K_block_tiles,
+                            n_tile,
+                            n_tile_end);
+                    } else {
+                        in1_receiver_semaphore.set(INVALID);
+                        in1_sender_semaphore.up(noc, in1_sender_noc_x, in1_sender_noc_y, 1);
+                    }
+                }
+                uint32_t in1_start_address = block_address;
+                if constexpr (is_injector_core) {
+                    noc.async_read_barrier();
                 } else {
-                    in1_receiver_semaphore.set(INVALID);
-                    in1_sender_semaphore.up(noc, in1_sender_noc_x, in1_sender_noc_y, 1);
                     in1_receiver_semaphore.wait(VALID);
                 }
-
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 dfb_in1.push_back(in1_block_num_tiles);
+
+                if (k_block_iter + 1 < K_num_blocks) {
+                    const uint32_t next_k_block = k_forward ? k_block_iter + 1 : (K_num_blocks - 2) - k_block_iter;
+                    dfb_in1.reserve_back(in1_block_num_tiles);
+                    block_address = dfb_in1.get_write_ptr();
+                    if constexpr (is_injector_core) {
+                        issue_in1_block_reads<K_block_tiles, N_block_tiles>(
+                            in1_reader,
+                            in1_shape,
+                            dfb_in1,
+                            in1_tile_size,
+                            next_k_block * K_block_tiles,
+                            (next_k_block + 1) * K_block_tiles,
+                            n_tile,
+                            n_tile_end);
+                    } else {
+                        in1_receiver_semaphore.set(INVALID);
+                        in1_sender_semaphore.up(noc, in1_sender_noc_x, in1_sender_noc_y, 1);
+                    }
+                }
 
                 if (!is_sink_core) {
                     in1_sender_semaphore.wait(1);

@@ -124,6 +124,48 @@ void read_in0_block_sync(
     noc.write_zeros_l1_barrier();
 }
 
+// read_in1_block_sync without its read barrier: the caller waits for the reads later. Zero fills are waited
+// for here, since no NoC write may be issued while they are outstanding.
+template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+void issue_in1_block_reads(
+    const TensorAccessorType& tensor_accessor,
+    const TensorShape2D& shape,
+    const DataflowBuffer& dfb_in1,
+    uint32_t tile_size_bytes,
+    uint32_t d0_start,
+    uint32_t d0_end,
+    uint32_t d1_start,
+    uint32_t d1_end) {
+    ASSERT(d0_end > d0_start);
+    ASSERT(d1_end > d1_start);
+    Noc noc;
+    const uint32_t dfb_base_write_ptr = dfb_in1.get_write_ptr();
+    uint32_t write_ptr = dfb_base_write_ptr;
+    bool zero_filled = false;
+    for (uint32_t i = d0_start; i < d0_end; i++) {
+        for (uint32_t j = d1_start; j < d1_end; j++) {
+            if (j >= shape.logical_d1) {
+                write_ptr += tile_size_bytes;
+                continue;
+            }
+            if (i < shape.logical_d0) {
+                uint32_t tile_id = i * shape.logical_d1 + j;
+                noc.async_read(
+                    tensor_accessor, CoreLocalMem<uint32_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
+            } else {
+                fill_zeros_async(noc, dfb_in1, tile_size_bytes, write_ptr - dfb_base_write_ptr);
+                zero_filled = true;
+            }
+            write_ptr += tile_size_bytes;
+        }
+        // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
+        write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
+    }
+    if (zero_filled) {
+        noc.write_zeros_l1_barrier();
+    }
+}
+
 /**
  * Read a block of in1 from a potentially padded tensor.
  * Since this is for matmul, no need to read when N >= logical_N
