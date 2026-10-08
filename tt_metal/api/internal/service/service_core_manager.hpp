@@ -5,8 +5,8 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <memory>
-#include <stddef.h>
 #include <unordered_set>
 #include <vector>
 
