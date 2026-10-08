@@ -30,6 +30,9 @@ public:
     ~Tensor() = default;
 
     void set_value(const ttnn::Tensor &value);
+    // Sets the value cast to the dtype this tensor is stored in, so loading values into an existing tensor (a
+    // checkpoint, a weights file) never changes its precision. An empty or non-float tensor takes value as is.
+    void assign(const ttnn::Tensor &value);
     void set_grad(const ttnn::Tensor &grad);
     void set_node(const std::optional<NodeId> &node);
     void clean_node();

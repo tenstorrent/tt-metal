@@ -30,10 +30,6 @@ struct AutocastState {
 
 namespace {
 
-bool is_float_dtype(ttnn::DataType dtype) {
-    return dtype == ttnn::DataType::FLOAT32 || dtype == ttnn::DataType::BFLOAT16;
-}
-
 // A fresh state holding tensor. Non-float tensors (e.g. UINT32 embedding indices) count as FULL and are returned as
 // stored for every precision: typecast does not apply to them.
 detail::AutocastState make_state(const ttnn::Tensor &tensor) {
@@ -44,6 +40,10 @@ detail::AutocastState make_state(const ttnn::Tensor &tensor) {
 }
 
 }  // namespace
+
+bool is_float_dtype(ttnn::DataType dtype) {
+    return dtype == ttnn::DataType::FLOAT32 || dtype == ttnn::DataType::BFLOAT16;
+}
 
 MutableTensorView::MutableTensorView(std::shared_ptr<detail::AutocastState> state) : m_state(std::move(state)) {
 }

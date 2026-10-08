@@ -73,8 +73,20 @@ a new path in an existing one (for example a config option that changes which te
   bf16 parameters.
 - Stochastic rounding (`AdamWConfig::stochastic_rounding`) applies to bf16 parameters only. An fp32 parameter keeps
   the low bits that rounding would lose, so it is updated without it.
-- Loading values into an existing tensor keeps its dtype: `Tensor.assign()` (used by the checkpoint and safetensors
-  loaders) and the in-place initializers in `ttml.init` cast the new values to the dtype the tensor is stored in.
+
+## Loading values into a tensor
+
+The checkpoint loaders and `Tensor.assign()` keep the precision a tensor is stored in: the model decides it, not the
+file.
+
+- `Tensor::assign()` sets a value cast to the dtype the tensor is stored in. An empty or non-float tensor takes the
+  value as is. The Python `Tensor.assign()` calls it, so the Python checkpoint and safetensors loaders and the
+  in-place initializers in `ttml.init` keep each tensor's dtype.
+- C++ checkpoints are written as stored (`get_value(NATIVE)`), and `read_autograd_tensor` loads parameters and
+  optimizer state through `assign()`. A checkpoint from an fp32 run resumes into a bf16 model as bf16, and the other
+  way round, and the AdamW moments follow the parameters, as the fused kernel requires.
+- Gradients load as bf16, whatever dtype they were saved in: backward produces bf16 gradients, and the fused AdamW
+  and SGD kernels accept only bf16.
 
 ## Why this design
 

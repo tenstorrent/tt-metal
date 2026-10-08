@@ -114,6 +114,14 @@ void Tensor::set_value(const ttnn::Tensor& value) {
     m_value.set_tensor(value);
 }
 
+void Tensor::assign(const ttnn::Tensor& value) {
+    const auto& stored = m_value.get_tensor(PreferredPrecision::NATIVE);
+    const bool cast = core::is_tensor_initialized(stored) && core::is_tensor_initialized(value) &&
+                      is_float_dtype(stored.dtype()) && is_float_dtype(value.dtype()) &&
+                      value.dtype() != stored.dtype();
+    set_value(cast ? ttnn::typecast(value, stored.dtype()) : value);
+}
+
 void Tensor::set_grad(const ttnn::Tensor& grad) {
     if (core::is_tensor_initialized(grad)) {
         auto grad_shape = grad.logical_shape();

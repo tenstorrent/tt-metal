@@ -42,6 +42,9 @@ private:
 // The tensor of an optional view, for kernels that take optional state such as max_exp_avg_sq.
 [[nodiscard]] std::optional<ttnn::Tensor> optional_tensor(const std::optional<MutableTensorView> &view);
 
+// bf16 or fp32: the dtypes an AutocastTensor casts between.
+[[nodiscard]] bool is_float_dtype(ttnn::DataType dtype);
+
 // A tensor stored in its native precision (bf16 or fp32), plus a derived copy in the other float precision that
 // is created on first use.
 //
