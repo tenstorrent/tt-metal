@@ -8,6 +8,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.llm_runtime import paged_kv_cache
 from models.common.llm_runtime.config import PagedKVCacheConfig
 from models.common.llm_runtime.paged_kv_cache import PagedKVCacheManager, torch_dtype_for_ttnn
 
@@ -80,13 +81,12 @@ def fake_allocator(monkeypatch):
     deallocated = []
 
     # Non-failure TTNN fakes retain overloaded backend keyword options for assertions.
-    def as_tensor(host_tensor, **kwargs):
-        tensor = FakeTensor(host_tensor.shape, kwargs["dtype"])
-        allocated.append((tensor, host_tensor, kwargs))
+    def zeros(shape, **kwargs):
+        tensor = FakeTensor(shape, kwargs["dtype"])
+        allocated.append((tensor, shape, kwargs))
         return tensor
 
-    monkeypatch.setattr(ttnn, "as_tensor", as_tensor)
-    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh: ("replicate", mesh))
+    monkeypatch.setattr(paged_kv_cache, "allocate_replicated_zeros", zeros)
     monkeypatch.setattr(ttnn, "deallocate", lambda tensor: deallocated.append(tensor))
     return allocated, deallocated
 
@@ -175,10 +175,10 @@ def test_allocate_derives_shapes_and_dtypes_binds_exact_borrowed_handle(fake_all
         ttnn.bfloat16,
         ttnn.bfloat16,
     ]
-    assert all(tuple(entry[1].shape) == (4, 4, 32, 16) for entry in allocated)
-    assert len({id(entry[1]) for entry in allocated}) == 1
+    assert all(tuple(entry[1]) == (4, 4, 32, 16) for entry in allocated)
+    assert len({id(entry[0]) for entry in allocated}) == 4
     assert all(entry[2]["memory_config"] == ttnn.DRAM_MEMORY_CONFIG for entry in allocated)
-    assert all(entry[2]["cache_file_name"] is None for entry in allocated)
+    assert all("cache_file_name" not in entry[2] for entry in allocated)
     manager.validate_borrowed_handle(cache)
     with expect_error(ValueError, "exact manager-owned"):
         manager.validate_borrowed_handle([pair[:] for pair in cache])
@@ -186,32 +186,21 @@ def test_allocate_derives_shapes_and_dtypes_binds_exact_borrowed_handle(fake_all
     assert manager.bound_context.tensors[0][0] is cache[0][0]
 
 
-def test_allocate_reuses_legacy_cache_files_when_dtype_is_unambiguous(fake_allocator, tmp_path):
+@pytest.mark.parametrize("dtypes", [(ttnn.bfloat8_b, ttnn.bfloat8_b), (ttnn.bfloat8_b, ttnn.bfloat16)])
+def test_allocate_ignores_legacy_zero_cache_files(fake_allocator, tmp_path, dtypes):
     allocated, _ = fake_allocator
-    model = FakeModel()
+    model = FakeModel(dtypes=dtypes)
     model.model_args = SimpleNamespace(model_cache_path=tmp_path)
     manager = PagedKVCacheManager(model, cache_config(num_blocks=4))
+    legacy_file = tmp_path / "empty_kcache_paged_attention(4, 4, 32, 16)"
+    legacy_file.write_bytes(b"unused legacy cache")
 
     manager.allocate()
 
-    shape = (4, 4, 32, 16)
-    expected = [
-        tmp_path / f"empty_kcache_paged_attention{shape}",
-        tmp_path / f"empty_vcache_paged_attention{shape}",
-    ]
-    assert [entry[2]["cache_file_name"] for entry in allocated] == expected * 2
-    assert len({id(entry[1]) for entry in allocated}) == 1
-
-
-def test_allocate_avoids_cache_file_collision_for_nonuniform_device_dtypes(fake_allocator, tmp_path):
-    allocated, _ = fake_allocator
-    model = FakeModel(dtypes=(ttnn.bfloat8_b, ttnn.bfloat16))
-    model.model_args = SimpleNamespace(model_cache_path=tmp_path)
-    manager = PagedKVCacheManager(model, cache_config(num_blocks=4))
-
-    manager.allocate()
-
-    assert all(entry[2]["cache_file_name"] is None for entry in allocated)
+    assert len(allocated) == 4
+    assert all("cache_file_name" not in entry[2] for entry in allocated)
+    assert list(tmp_path.iterdir()) == [legacy_file]
+    assert legacy_file.read_bytes() == b"unused legacy cache"
 
 
 def test_allocation_requires_resolved_capacity_and_happens_once(fake_allocator, expect_error):
@@ -233,14 +222,12 @@ def test_partial_allocation_failure_deallocates_created_tensors(monkeypatch, exp
     deallocated = []
 
     def fail_second_allocation(
-        host_tensor,
+        shape,
         *,
         device,
-        mesh_mapper,
         layout,
         memory_config,
         dtype,
-        cache_file_name,
     ):
         nonlocal calls
         calls += 1
@@ -248,8 +235,7 @@ def test_partial_allocation_failure_deallocates_created_tensors(monkeypatch, exp
             raise RuntimeError("allocation failed")
         return first
 
-    monkeypatch.setattr(ttnn, "as_tensor", fail_second_allocation)
-    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh: None)
+    monkeypatch.setattr(paged_kv_cache, "allocate_replicated_zeros", fail_second_allocation)
     monkeypatch.setattr(ttnn, "deallocate", lambda tensor: deallocated.append(tensor))
     model = FakeModel()
     manager = PagedKVCacheManager(model, cache_config(num_blocks=4))
@@ -285,11 +271,10 @@ def test_release_unbinds_before_deallocating_and_is_idempotent(monkeypatch, expe
 
     model.set_kv_cache = set_kv_cache
     monkeypatch.setattr(
-        ttnn,
-        "as_tensor",
-        lambda host_tensor, **kwargs: FakeTensor(host_tensor.shape, kwargs["dtype"]),
+        paged_kv_cache,
+        "allocate_replicated_zeros",
+        lambda shape, **kwargs: FakeTensor(shape, kwargs["dtype"]),
     )
-    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh: None)
     monkeypatch.setattr(ttnn, "deallocate", lambda tensor: operations.append(("deallocate", tensor)))
     manager = PagedKVCacheManager(model, cache_config(num_blocks=4))
     cache = manager.allocate()
@@ -329,13 +314,12 @@ def test_borrowed_handle_mutation_cannot_redirect_owned_tensor_release(fake_allo
 def test_release_failure_retains_only_failed_tensor_and_retries(monkeypatch, expect_error):
     tensors = []
 
-    def as_tensor(host_tensor, **kwargs):
-        tensor = FakeTensor(host_tensor.shape, kwargs["dtype"])
+    def zeros(shape, **kwargs):
+        tensor = FakeTensor(shape, kwargs["dtype"])
         tensors.append(tensor)
         return tensor
 
-    monkeypatch.setattr(ttnn, "as_tensor", as_tensor)
-    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh: None)
+    monkeypatch.setattr(paged_kv_cache, "allocate_replicated_zeros", zeros)
     model = FakeModel()
     manager = PagedKVCacheManager(model, cache_config(num_blocks=4))
     manager.allocate()
@@ -368,14 +352,12 @@ def test_partial_allocation_cleanup_failure_preserves_tensor_for_release_retry(m
     deallocation_calls = 0
 
     def fail_second_allocation(
-        host_tensor,
+        shape,
         *,
         device,
-        mesh_mapper,
         layout,
         memory_config,
         dtype,
-        cache_file_name,
     ):
         nonlocal allocation_calls
         allocation_calls += 1
@@ -389,8 +371,7 @@ def test_partial_allocation_cleanup_failure_preserves_tensor_for_release_retry(m
         if deallocation_calls == 1:
             raise RuntimeError("cleanup failed")
 
-    monkeypatch.setattr(ttnn, "as_tensor", fail_second_allocation)
-    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh: None)
+    monkeypatch.setattr(paged_kv_cache, "allocate_replicated_zeros", fail_second_allocation)
     monkeypatch.setattr(ttnn, "deallocate", fail_first_deallocation)
     manager = PagedKVCacheManager(FakeModel(), cache_config(num_blocks=4))
 

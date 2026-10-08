@@ -20,6 +20,7 @@ from vllm.model_executor.models.qwen2_5_vl import (
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
+from models.common.tensor_creation import allocate_replicated_zeros
 from models.common.utility_functions import is_wormhole_b0
 from models.demos.qwen25_vl.tt.common import (
     get_hf_visual,
@@ -35,20 +36,15 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: Transformer, model_args: ModelArgs, tt_cache_path):
     for layer_idx in range(num_layers):
-        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
-
         model.layers[layer_idx].attention.layer_past = [
-            ttnn.as_tensor(
-                cache_kv,
+            allocate_replicated_zeros(
+                kv_cache_shape,
                 device=model.mesh_device,
                 dtype=ttnn.bfloat8_b,
                 layout=model_args.model_config["ATTN_W_LAYOUT_TILE"],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
-                # Separate cache files for K and V to avoid collision.
-                cache_file_name=f"{tt_cache_path}/{kv}cache_{kv_cache_shape}",
             )
-            for kv in ["k", "v"]
+            for _ in range(2)
         ]
 
     return [l.attention.layer_past for l in model.layers]

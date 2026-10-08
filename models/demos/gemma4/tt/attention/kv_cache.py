@@ -8,10 +8,8 @@ Per-device cache uses local KV head count (num_kv_heads // tp).
 Follows gpt-oss kv_cache.py pattern.
 """
 
-import torch
-
 import ttnn
-from models.demos.gemma4.utils.general_utils import get_cache_file_name
+from models.common.tensor_creation import allocate_replicated_zeros
 
 # Hot cache blocks held in staging per decode slot for the loop-free packed KV
 # write: a P-token speculative tail (P <= block_size) straddles at most 2 pages,
@@ -43,7 +41,7 @@ def init_kv_cache(
         max_seq_len: Maximum sequence length
         paged_attention_config: Optional paged attention config
         cache_dtype: Cache tensor dtype
-        tensor_cache_path: Optional cache file path
+        tensor_cache_path: Retained for caller compatibility; zero caches are not stored on disk
         max_num_blocks_override: When set (only meaningful in paged mode), size the
             physical block pool to this value instead of paged_attention_config.max_num_blocks.
             vLLM's hybrid kv_cache_groups uses this for SlidingWindowSpec layers: the
@@ -79,25 +77,19 @@ def init_kv_cache(
             head_dim,
         ]
 
-    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
-
-    k_cache = ttnn.as_tensor(
-        torch.zeros(cache_shape),
+    k_cache = allocate_replicated_zeros(
+        cache_shape,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
-        mesh_mapper=mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"k_cache_{cache_shape}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    v_cache = ttnn.as_tensor(
-        torch.zeros(cache_shape),
+    v_cache = allocate_replicated_zeros(
+        cache_shape,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
-        mesh_mapper=mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"v_cache_{cache_shape}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -131,15 +123,13 @@ def init_kv_staging(
     tp = mesh_device.shape[1] if is_mesh else 1
     num_local_kv_heads = 1 if config.num_key_value_heads < tp else config.num_key_value_heads // tp
     stage_shape = [1, num_local_kv_heads, max_batch_size * blk * block_size, config.head_dim]
-    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
     def _zeros():
-        return ttnn.as_tensor(
-            torch.zeros(stage_shape),
+        return allocate_replicated_zeros(
+            stage_shape,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=cache_dtype,
-            mesh_mapper=mesh_mapper,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 

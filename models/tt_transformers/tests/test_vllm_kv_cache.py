@@ -8,7 +8,7 @@ and that the legacy uniform-shape entry point (``allocate_vllm_kv_cache``)
 still delegates to it bit-for-bit.
 
 Real ttnn allocation requires a mesh device, so this test mocks
-``ttnn.as_tensor`` / ``ttnn.ReplicateTensorToMesh`` and the ``dp_model``
+``allocate_replicated_zeros`` and the ``dp_model``
 handles. We verify call structure and shape routing, not the resulting
 tensor contents.
 """
@@ -36,7 +36,7 @@ def dp_model():
 
 def _make_ttnn_mock():
     ttnn_mock = MagicMock()
-    ttnn_mock.as_tensor.side_effect = lambda *a, **kw: ("tt-tensor", kw.get("dtype"), kw.get("cache_file_name"))
+    ttnn_mock.zeros.side_effect = lambda *a, **kw: ("tt-tensor", kw.get("dtype"), tuple(a[0]))
     ttnn_mock.bfloat8_b = "bfloat8_b-sentinel"
     ttnn_mock.bfloat16 = "bfloat16-sentinel"
     return ttnn_mock
@@ -54,13 +54,15 @@ def test_per_layer_allocates_one_kv_pair_per_unique_tensor(dp_model):
         ((4, 2, 32, 64), torch.bfloat16, 2),
     ]
 
-    with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock:
+    with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock, patch.object(
+        generator_vllm, "allocate_replicated_zeros", side_effect=lambda *a, **kw: ttnn_mock.zeros(*a, **kw)
+    ):
         kv_cache = generator_vllm.allocate_vllm_kv_cache_per_layer(
             per_layer, dp_model=dp_model, tt_cache_path=Path("/tmp/tt-test-cache")
         )
 
     # One submesh, three layers, two tensors per layer (k, v) = 6 calls.
-    assert ttnn_mock.as_tensor.call_count == 6
+    assert ttnn_mock.zeros.call_count == 6
     assert len(kv_cache) == 1  # one submesh
     assert len(kv_cache[0]) == 3  # three layers
     assert all(len(layer) == 2 for layer in kv_cache[0])  # k, v
@@ -79,37 +81,41 @@ def test_shared_tensor_idx_reuses_one_buffer(dp_model):
         ((4, 2, 32, 64), torch.bfloat16, 0),
     ]
 
-    with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock:
+    with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock, patch.object(
+        generator_vllm, "allocate_replicated_zeros", side_effect=lambda *a, **kw: ttnn_mock.zeros(*a, **kw)
+    ):
         kv_cache = generator_vllm.allocate_vllm_kv_cache_per_layer(
             per_layer, dp_model=dp_model, tt_cache_path=Path("/tmp/tt-test-cache")
         )
 
     # 2 unique tensor_idx values × 2 (k, v) = 4 allocations.
-    assert ttnn_mock.as_tensor.call_count == 4
+    assert ttnn_mock.zeros.call_count == 4
     # Layers 0 and 2 must reference the *same* handle list.
     assert kv_cache[0][0] is kv_cache[0][2]
     assert kv_cache[0][0] is not kv_cache[0][1]
 
 
-def test_per_layer_keys_cache_filename_on_tensor_idx(dp_model):
-    """Cache filenames must distinguish independent buffers even when
-    shapes are identical, so on-disk caches can't collide across layers
-    that don't share a ``tensor_idx``."""
+def test_per_layer_uses_shape_without_host_zeros_or_cache_files(dp_model):
     from models.tt_transformers.tt import generator_vllm
 
     per_layer = [
         ((4, 2, 32, 64), torch.bfloat16, 0),
-        ((4, 2, 32, 64), torch.bfloat16, 1),
+        ((8, 2, 32, 64), torch.bfloat16, 1),
+        ((6, 2, 32, 64), torch.bfloat16, 0),
     ]
 
-    with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock:
-        generator_vllm.allocate_vllm_kv_cache_per_layer(
+    with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock, patch.object(
+        generator_vllm, "allocate_replicated_zeros", side_effect=lambda *a, **kw: ttnn_mock.zeros(*a, **kw)
+    ), patch.object(torch, "zeros", side_effect=AssertionError("host zero allocation")):
+        cache = generator_vllm.allocate_vllm_kv_cache_per_layer(
             per_layer, dp_model=dp_model, tt_cache_path=Path("/tmp/tt-test-cache")
         )
 
-    cache_filenames = [str(call.kwargs["cache_file_name"]) for call in ttnn_mock.as_tensor.call_args_list]
-    assert sum("_t0" in f for f in cache_filenames) == 2
-    assert sum("_t1" in f for f in cache_filenames) == 2
+    calls = ttnn_mock.zeros.call_args_list
+    assert [tuple(call.args[0]) for call in calls] == [(6, 2, 32, 64)] * 2 + [(8, 2, 32, 64)] * 2
+    assert all("cache_file_name" not in call.kwargs for call in calls)
+    assert cache[0][0] is cache[0][2]
+    ttnn_mock.as_tensor.assert_not_called()
 
 
 def test_legacy_uniform_shape_delegates_to_per_layer(dp_model):
@@ -123,19 +129,23 @@ def test_legacy_uniform_shape_delegates_to_per_layer(dp_model):
     dtype = torch.bfloat16
     num_layers = 3
 
-    with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock:
+    with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock, patch.object(
+        generator_vllm, "allocate_replicated_zeros", side_effect=lambda *a, **kw: ttnn_mock.zeros(*a, **kw)
+    ):
         legacy = generator_vllm.allocate_vllm_kv_cache(
             shape, dtype, num_layers, dp_model=dp_model, tt_cache_path=Path("/tmp/c")
         )
-    legacy_call_count = ttnn_mock.as_tensor.call_count
+    legacy_call_count = ttnn_mock.zeros.call_count
 
-    with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock:
+    with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock, patch.object(
+        generator_vllm, "allocate_replicated_zeros", side_effect=lambda *a, **kw: ttnn_mock.zeros(*a, **kw)
+    ):
         per_layer = generator_vllm.allocate_vllm_kv_cache_per_layer(
             [(shape, dtype, i) for i in range(num_layers)],
             dp_model=dp_model,
             tt_cache_path=Path("/tmp/c"),
         )
-    per_layer_call_count = ttnn_mock.as_tensor.call_count
+    per_layer_call_count = ttnn_mock.zeros.call_count
 
     assert legacy_call_count == per_layer_call_count
     assert len(legacy[0]) == len(per_layer[0]) == num_layers

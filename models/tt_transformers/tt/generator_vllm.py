@@ -32,6 +32,7 @@ except ImportError:
 
 import ttnn
 from models.common.llama_models import create_vision_mask
+from models.common.tensor_creation import allocate_replicated_zeros
 from models.common.utility_functions import is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
@@ -73,7 +74,7 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
             ``tensor_idx`` get their own buffer.
         dp_model: list of replicated TT model handles, one per data-parallel
             submesh.
-        tt_cache_path: path used for on-disk weight cache file naming.
+        tt_cache_path: retained for caller compatibility; zero caches are not stored on disk.
 
     Returns:
         ``list[submesh][layer_idx][k_or_v]`` of TT tensors. Multiple
@@ -88,7 +89,7 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
         # share a buffer.
         unique_buffers: dict[int, list] = {}
         kv_tt = []
-        for layer_num, (_, dtype, tensor_idx) in enumerate(
+        for layer_num, (_, _dtype, tensor_idx) in enumerate(
             tqdm(per_layer_specs, desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})")
         ):
             existing = unique_buffers.get(tensor_idx)
@@ -96,7 +97,6 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
                 kv_tt.append(existing)
                 continue
             kv_cache_shape = canonical_shape[tensor_idx]
-            cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
             # Get the dtype for the kv cache based on the configured optimizations in the model
             if dp_model[mesh_idx].args.optimizations is not None:
                 kv_cache_dtype = dp_model[mesh_idx].args.optimizations.get_tensor_dtype(
@@ -108,29 +108,14 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
             # Set default to bfloat8_b when no optimizations are configured
             kv_cache_dtype = ttnn.bfloat8_b if kv_cache_dtype is None else kv_cache_dtype
             kv_tt_i = [
-                ttnn.as_tensor(
-                    cache_kv,
+                allocate_replicated_zeros(
+                    kv_cache_shape,
                     device=submesh,
-                    # TODO: this could be ShardTensorToMesh, removing the need for vLLM to know about TP for num_kv_heads.
-                    # Could affect other calculations which use TTCacheEngine.num_kv_heads, though.
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=kv_cache_dtype,
-                    # Separate cache files for K and V to avoid collision.
-                    # ``tensor_idx`` distinguishes shared buffers that have the
-                    # same shape but back different layer subsets. A ``None``
-                    # tt_cache_path disables disk caching of these zero-filled
-                    # tensors entirely (callers whose DP ranks share one cache
-                    # dir opt out: concurrent create/load of the same file is
-                    # a torn-read crash, and caching zeros buys little).
-                    cache_file_name=(
-                        tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}_t{tensor_idx}"
-                        if tt_cache_path is not None
-                        else None
-                    ),
                 )
-                for kv in ["k", "v"]
+                for _ in range(2)
             ]
 
             unique_buffers[tensor_idx] = kv_tt_i
