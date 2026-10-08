@@ -10,6 +10,7 @@ expert backends were removed in the prefill cleanup; this mirrors deepseek_v3_d_
 """
 
 import ttnn
+from models.demos.minimax_m3.utils import kagent_flags
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
@@ -113,6 +114,7 @@ class MLP:
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "shared_expert"),
+                fidelity_group="shared",
             )
             if (shared_state_dict or cache_only)
             else None
@@ -236,7 +238,9 @@ class MLP:
         enqueued (concurrently with it under overlap_shared), and its TP collective runs after the MoE or,
         under fuse_shared_rs, is folded into the routed reduce-scatter. The output contract is the same.
         """
-        scheduled = self.overlap_shared or self.fuse_shared_rs
+        # M3_KA_MOE_SINGLE_RS forces the fused reduce-scatter; read per call so the bench can sweep it.
+        fuse_shared = self.shared_expert is not None and (self.fuse_shared_rs or kagent_flags.MOE_SINGLE_RS)
+        scheduled = self.overlap_shared or fuse_shared
         shared_out = None
         if self.shared_expert is not None and not scheduled:
             with zone("shared_expert"):
@@ -262,7 +266,7 @@ class MLP:
                 padding_config=padding_config,
                 shared_fn=shared_fn,
                 overlap=self.overlap_shared,
-                fuse_shared=self.fuse_shared_rs,
+                fuse_shared=fuse_shared,
             )
             if shared_partial is not None:
                 with zone("shared_expert"):

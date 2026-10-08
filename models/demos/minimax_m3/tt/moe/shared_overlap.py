@@ -94,7 +94,7 @@ def _block_cost(k_tiles, per_core_M, per_core_N, obh, obw, w):
 
 
 @functools.lru_cache(maxsize=None)
-def _matmul_2d_blocks(grid_x, grid_y, m_tiles, k_tiles, n_tiles, budget_tiles):
+def _matmul_2d_blocks(grid_x, grid_y, m_tiles, k_tiles, n_tiles, budget_tiles, dest_tiles=DEST_TILES):
     """(per_core_M, per_core_N, out_block_h, out_block_w, in0_block_w, out_subblock_h, out_subblock_w): the
     cheapest blocking by _block_cost whose CBs fit budget_tiles. Pure in its args, so cached: every sparse layer
     asks for the same few shapes on every forward."""
@@ -114,18 +114,18 @@ def _matmul_2d_blocks(grid_x, grid_y, m_tiles, k_tiles, n_tiles, budget_tiles):
     assert best is not None, f"no 2D matmul block fits {budget_tiles} tiles (M={m_tiles} K={k_tiles} N={n_tiles})"
     _, per_core_M, per_core_N, obh, obw, w = best
     sub = max(
-        ((h, sw) for h in _divisors_desc(obh) for sw in _divisors_desc(obw) if h * sw <= DEST_TILES),
+        ((h, sw) for h in _divisors_desc(obh) for sw in _divisors_desc(obw) if h * sw <= dest_tiles),
         key=lambda hw: (hw[0] * hw[1], hw[1]),
     )
     return per_core_M, per_core_N, obh, obw, w, sub[0], sub[1]
 
 
-def matmul_2d_config(grid, m_tiles, k_tiles, n_tiles, budget_tiles=CB_BUDGET_TILES):
+def matmul_2d_config(grid, m_tiles, k_tiles, n_tiles, budget_tiles=CB_BUDGET_TILES, dest_tiles=DEST_TILES):
     """2D mcast config over `grid` (M over rows, N over columns) whose CBs fit budget_tiles, the cheapest
     by _block_cost. per_core_M / per_core_N may round up past the minimum when that gives better blocks
     (the launched grid is then smaller than `grid`)."""
     per_core_M, per_core_N, obh, obw, w, sub_h, sub_w = _matmul_2d_blocks(
-        grid.x, grid.y, m_tiles, k_tiles, n_tiles, budget_tiles
+        grid.x, grid.y, m_tiles, k_tiles, n_tiles, budget_tiles, dest_tiles
     )
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
@@ -142,14 +142,15 @@ def matmul_2d_config(grid, m_tiles, k_tiles, n_tiles, budget_tiles=CB_BUDGET_TIL
     )
 
 
-def shared_expert_program_configs(cores, x, gate_proj, down_proj):
+def shared_expert_program_configs(cores, x, gate_proj, down_proj, fp32_dest_acc=False):
     """(gate, up, down) 2D matmul configs sized to the shared sub-device's grid. The gate keeps its raw
     accumulator: M3's clamped swigluoai is applied by one fused multiply after it."""
     grid = cores.bounding_box().grid_size()
     t = ttnn.TILE_SIZE
     m = x.padded_shape[-2] // t
-    gate = matmul_2d_config(grid, m, gate_proj.padded_shape[-2] // t, gate_proj.padded_shape[-1] // t)
-    down = matmul_2d_config(grid, m, down_proj.padded_shape[-2] // t, down_proj.padded_shape[-1] // t)
+    dest = DEST_TILES // 2 if fp32_dest_acc else DEST_TILES
+    gate = matmul_2d_config(grid, m, gate_proj.padded_shape[-2] // t, gate_proj.padded_shape[-1] // t, dest_tiles=dest)
+    down = matmul_2d_config(grid, m, down_proj.padded_shape[-2] // t, down_proj.padded_shape[-1] // t, dest_tiles=dest)
     return gate, gate, down
 
 

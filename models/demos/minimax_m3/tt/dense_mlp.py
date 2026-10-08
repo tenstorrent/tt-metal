@@ -14,6 +14,7 @@ moe/activation.apply_swiglu); anchor: transformers minimax_m3_vl MLP.
 from types import SimpleNamespace
 
 import ttnn
+from models.demos.minimax_m3.utils import kagent_flags
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
@@ -37,6 +38,7 @@ class DenseMLP:
         weight_dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         scatter_output=None,
+        fidelity_group=None,
     ):
         """scatter_output: True => close with a TP reduce-scatter (output emb/tp, the sharded-residual
         contract); False => all-reduce (output full emb). None derives it from the residual scheme.
@@ -46,6 +48,8 @@ class DenseMLP:
         self.mesh_config = mesh_config
         self.ccl_manager = ccl_manager
         self.hidden_size = hf_config.hidden_size
+        # M3_KA_MM_FIDELITY: "shared" (MoE shared expert) / "dense" (layers 0-2 MLP); None keeps the default.
+        self.fidelity_group = fidelity_group
         self.scatter_output = use_sharded_residual() if scatter_output is None else scatter_output
         # apply_swiglu only reads .swiglu_limit and .alpha.
         self.swiglu_cfg = SimpleNamespace(
@@ -99,27 +103,55 @@ class DenseMLP:
         """
         if sub_device is not None:
             return self._partial_on_sub_device(x, sub_device, keep_alive)
+        mm_config = self._mm_config()
         with zone("gate_up_proj", FINE):
-            gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat16)
-            up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat16)
+            gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat16, compute_kernel_config=mm_config)
+            up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat16, compute_kernel_config=mm_config)
         with zone("swiglu", FINE):
             act = swiglu(gate, up, self.swiglu_cfg)  # clamped swigluoai (M3); consumes gate and up
         with zone("down_proj", FINE):
-            out = ttnn.linear(act, self.down_proj, dtype=ttnn.bfloat16)
+            out = ttnn.linear(act, self.down_proj, dtype=ttnn.bfloat16, compute_kernel_config=mm_config)
         act.deallocate(True)
         return out
+
+    def _mm_config(self):
+        return kagent_flags.lofi_config(self.fidelity_group) if self.fidelity_group else None
 
     def _partial_on_sub_device(self, x, sub_device, keep_alive):
         assert keep_alive is not None, "a sub-device partial must hand its intermediates to keep_alive"
         sd_id, cores = sub_device
-        gate_cfg, up_cfg, down_cfg = shared_expert_program_configs(cores, x, self.gate_proj, self.down_proj)
+        mm_config = self._mm_config()
+        gate_cfg, up_cfg, down_cfg = shared_expert_program_configs(
+            cores, x, self.gate_proj, self.down_proj, fp32_dest_acc=mm_config is not None
+        )
         with zone("gate_up_proj", FINE):
-            gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat16, program_config=gate_cfg, sub_device_id=sd_id)
-            up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat16, program_config=up_cfg, sub_device_id=sd_id)
+            gate = ttnn.linear(
+                x,
+                self.gate_proj,
+                dtype=ttnn.bfloat16,
+                program_config=gate_cfg,
+                compute_kernel_config=mm_config,
+                sub_device_id=sd_id,
+            )
+            up = ttnn.linear(
+                x,
+                self.up_proj,
+                dtype=ttnn.bfloat16,
+                program_config=up_cfg,
+                compute_kernel_config=mm_config,
+                sub_device_id=sd_id,
+            )
         with zone("swiglu", FINE):
             act = apply_swiglu_fused(gate, up, self.swiglu_cfg, sub_core_grids=cores)
         with zone("down_proj", FINE):
-            out = ttnn.linear(act, self.down_proj, dtype=ttnn.bfloat16, program_config=down_cfg, sub_device_id=sd_id)
+            out = ttnn.linear(
+                act,
+                self.down_proj,
+                dtype=ttnn.bfloat16,
+                program_config=down_cfg,
+                compute_kernel_config=mm_config,
+                sub_device_id=sd_id,
+            )
         keep_alive.extend((gate, up, act))
         return out
 
