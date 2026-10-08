@@ -16,12 +16,12 @@ from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import Chronol
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import _layout as _selection_layout
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
-    KDA_NORM_MEMORY_CONFIG,
+    KDA_INTERMEDIATE_L1_BYTES_PER_CORE,
     KDA_OUTPUT_MEMORY_CONFIG,
-    KDA_PARTIAL_OUTPUT_MEMORY_CONFIG,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
     decay_projection_config,
+    l1_when_it_fits,
     tuned_projection_matmul_configs,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
@@ -143,6 +143,22 @@ class ttKDA:
         self.weights = weights
         self.tensor_parallel_size = self.weights.tensor_parallel_size
         self.config = replace(config, num_heads=config.num_heads // self.tensor_parallel_size)
+        # The normalized heads and the TP partial sums stay in L1 for their consumers when they fit.
+        output_bytes = 4 if program_config.gated_rms_output_dtype == ttnn.float32 else 2
+        self._norm_memory = l1_when_it_fits(
+            mesh_device,
+            self.active_seq_len_local * self.config.num_heads * self.config.head_v_dim * output_bytes,
+            KDA_INTERMEDIATE_L1_BYTES_PER_CORE,
+        )
+        self._partial_output_memory = (
+            l1_when_it_fits(
+                mesh_device,
+                self.active_seq_len_local * self.config.hidden_size * 2,
+                KDA_INTERMEDIATE_L1_BYTES_PER_CORE,
+            )
+            if self.tensor_parallel_size > 1
+            else ttnn.DRAM_MEMORY_CONFIG
+        )
         qkv_channel_chunk_size = _effective_qkv_channel_chunk_size(
             self._convolution_width, program_config.qkv_channel_chunk_size
         )
@@ -412,7 +428,7 @@ class ttKDA:
             weights.norm,
             config.num_heads,
             epsilon=config.norm_eps,
-            memory_config=KDA_NORM_MEMORY_CONFIG,
+            memory_config=self._norm_memory,
             compute_kernel_config=self.kda_compute_config,
             output_dtype=self.gated_rms_output_dtype,
             gate_column_offset=output_gate_offset,
@@ -427,10 +443,8 @@ class ttKDA:
         output = ttnn.linear(
             output,
             weights.output_projection,
-            # The reduce-scatter reads the TP partial sums from L1; without TP this is the layer output.
-            memory_config=KDA_PARTIAL_OUTPUT_MEMORY_CONFIG
-            if self.tensor_parallel_size > 1
-            else ttnn.DRAM_MEMORY_CONFIG,
+            # The reduce-scatter reads the TP partial sums; without TP this is the layer output.
+            memory_config=self._partial_output_memory,
             program_config=self.output_projection_program_config,
             compute_kernel_config=self.output_projection_compute_config,
         )

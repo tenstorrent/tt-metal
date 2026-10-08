@@ -18,16 +18,32 @@ KDA_RECURRENT_STATE_DTYPE = ttnn.float32
 KDA_AFFINE_SUMMARY_DTYPE = ttnn.bfloat16
 KDA_SCAN_OUTPUT_DTYPE = ttnn.bfloat16
 KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
-# The chunk terms, the SP scan output, the normalized heads and the TP partial outputs stay in L1 for their
-# consumers.
-KDA_PREPARATION_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
-KDA_SCAN_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
-KDA_NORM_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
-KDA_PARTIAL_OUTPUT_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
+# The chunk terms, the SP scan output, the normalized heads and the TP partial outputs stay in interleaved L1 for
+# their consumers when their share of each worker core fits these budgets; larger geometries keep them in DRAM.
+KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
+KDA_INTERMEDIATE_L1_BYTES_PER_CORE = 128 * 1024
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
+
+
+def l1_when_it_fits(device, nbytes: int, bytes_per_core: int) -> ttnn.MemoryConfig:
+    """Interleaved L1 when ``nbytes`` spread over the worker grid fits ``bytes_per_core`` per core, else DRAM."""
+    grid = device.compute_with_storage_grid_size()
+    return ttnn.L1_MEMORY_CONFIG if nbytes <= bytes_per_core * grid.x * grid.y else ttnn.DRAM_MEMORY_CONFIG
+
+
+def preparation_bytes(batch_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> int:
+    """Bytes of chunk preparation's seven outputs, in the order and formats KDA_PREP_OUTPUT_BF16_MASK selects."""
+    key_tiles, value_tiles = key_dim // ttnn.TILE_SIZE, value_dim // ttnn.TILE_SIZE
+    # v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv tiles per chunk.
+    tiles = (value_tiles, key_tiles, key_tiles, 1, key_tiles, key_tiles, 1)
+    tile_bytes = sum(
+        count * ttnn.TILE_SIZE * ttnn.TILE_SIZE * (2 if KDA_PREP_OUTPUT_BF16_MASK & (1 << index) else 4)
+        for index, count in enumerate(tiles)
+    )
+    return batch_heads * num_chunks * tile_bytes
 
 
 @dataclass(frozen=True)
