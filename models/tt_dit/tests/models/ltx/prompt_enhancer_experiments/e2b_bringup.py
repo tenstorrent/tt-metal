@@ -8,11 +8,37 @@ Opens the mesh with the LTX distilled ring params, carves ``full`` exactly like 
 Gemma4Generator on ``full`` and reproduces text_demo.py::_run_generation_via_generator with host
 greedy sampling and no tracing anywhere. Never asserts on content; records every step's wall-clock
 and the outcome to ``bringup_results.json`` under OUT_DIR ($LTX_ENHANCER_EXP_DIR, default ~/ltx_enhancer_experiments) (also on failure).
+
+``test_e2b_decode_timing`` (same file) loads the generator once and times decode across arms: eager vs
+traced decode x host vs device sampling. Results go to ``decode_timing_results.json`` in the same dir,
+rewritten after every repeat. Knobs (env):
+
+- ``E2B_ARMS``: comma list of ``eager-host,eager-device,trace-host,trace-device`` (default all, in that
+  order: eager arms run before any trace is captured).
+- ``E2B_REPEATS`` (default 3): prefill + decode per arm; repeat 0 carries the compile / trace capture.
+- ``E2B_NEW_TOKENS`` (default 128): decode steps per repeat.
+- ``E2B_IGNORE_STOP`` (default 1): decode the full budget past a stop token so every arm times the same
+  number of steps; where the reply would have stopped is still recorded.
+- ``E2B_TEMPERATURE`` (default 0 = greedy, so token parity across arms is checked); > 0 samples with the
+  enhancer's top_k 64 / top_p 0.95 and ``E2B_SEED`` (default 10).
+- ``E2B_PROMPT`` (default ``beekeeper``): user prompt, templated with the T2V system prompt.
+- ``E2B_PROFILE=1``: for a Tracy run (``python -m tracy -p -r -v -m pytest ...``). Each repeat decodes
+  1 + ``E2B_PROFILE_DECODE_STEPS`` (default 3) steps instead of ``E2B_NEW_TOKENS``. The device profiler is
+  drained only at window boundaries: after load, after each prefill, after decode step 0 (trace capture on
+  the cold repeat) and after the decode loop. On the last repeat, prefill is wrapped in
+  ``prefill_start``/``prefill_stop`` signposts and decode steps 1..K in ``start``/``stop``. Every window must
+  fit the per-core buffer, sized by ``TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT`` (default 1000 programs);
+  each drain reads the whole buffer on every core of every chip, so keep that count no larger than needed.
+
+Prefill is eager and host-sampled in every arm (PLI models never trace prefill); only decode varies.
+Gemma4 runs its device sampler eagerly even under a decode trace (``_tt_disable_sampling_trace``).
+``GEMMA4_CCL_ASYNC`` is read at generator construction, so compare it across processes.
 """
 
 import json
 import math
 import os
+import statistics
 import time
 import traceback
 
@@ -29,6 +55,7 @@ OUT_DIR = os.path.join(
 )
 os.makedirs(OUT_DIR, exist_ok=True)
 RESULTS_PATH = os.path.join(OUT_DIR, "bringup_results.json")
+TIMING_RESULTS_PATH = os.path.join(OUT_DIR, "decode_timing_results.json")
 GALAXY_RING = [p for p in LTX_DISTILLED_MESH_PARAMS_DL if p.id == "4x8sp1tp0nl2_ring_is_fsdp0"]
 
 SNAPSHOT = (
@@ -40,10 +67,10 @@ MAX_NEW_TOKENS = 64
 PAGE_BLOCK_SIZE = 64
 
 
-def _dump(results):
-    with open(RESULTS_PATH, "w") as f:
+def _dump(results, path=RESULTS_PATH):
+    with open(path, "w") as f:
         json.dump(results, f, indent=2, default=str)
-    logger.info(f"results -> {RESULTS_PATH}")
+    logger.info(f"results -> {path}")
 
 
 def _shard_argmax(dev_tensor, vocab_size):
@@ -51,6 +78,123 @@ def _shard_argmax(dev_tensor, vocab_size):
     t = ttnn.to_torch(dev_tensor).float()
     t = t.reshape(-1, t.shape[-1])[-1, :vocab_size]
     return int(t.argmax().item())
+
+
+def _load_generator(full, results):
+    """Gemma4Generator on ``full`` (snapshot, else repo id) with the batch-1 identity page table and the
+    generation_config stop ids. Records model path, layout and model args into ``results``.
+    Returns (generator, kv_cache, tokenizer, page_table), generator None on load failure."""
+    from models.demos.gemma4.demo.text_demo import (
+        _create_tt_page_table,
+        _install_hybrid_page_tables,
+        _resolve_bounded_sliding,
+    )
+    from models.demos.gemma4.tt.generator import Gemma4Generator
+    from models.tt_transformers.tt.common import PagedAttentionConfig
+
+    page_max_num_blocks = math.ceil(MAX_SEQ_LEN / PAGE_BLOCK_SIZE)  # batch=1 right-sizing
+    paged_attention_config = PagedAttentionConfig(block_size=PAGE_BLOCK_SIZE, max_num_blocks=page_max_num_blocks)
+    page_table = _create_tt_page_table(1, paged_attention_config)
+    results["page_table_shape"] = list(page_table.shape)
+
+    generator = tt_kv_cache = tokenizer = None
+    t0 = time.time()
+    for candidate in (SNAPSHOT, REPO_ID):
+        try:
+            bounded_sliding = _resolve_bounded_sliding(MAX_SEQ_LEN, full, candidate)
+            results["bounded_sliding"] = bounded_sliding
+            generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+                mesh_device=full,
+                model_path=candidate,
+                max_batch_size=1,
+                max_seq_len=MAX_SEQ_LEN,
+                paged_attention_config=paged_attention_config,
+                bounded_sliding_kv_cache=bounded_sliding,
+            )
+            results["model_path"] = candidate
+            break
+        except Exception as e:  # noqa: BLE001 — try the repo id next
+            results["errors"].append({"step": "2_load", "model_path": candidate, "traceback": traceback.format_exc()})
+            logger.warning(f"load from {candidate} failed: {type(e).__name__}: {e}")
+            if generator is not None:
+                break
+    results["timings_s"]["load_s"] = round(time.time() - t0, 3)
+    if generator is None:
+        return None, None, None, page_table
+
+    model = generator.model[0]
+    model_args = generator.model_args[0]
+    mc = getattr(model, "mesh_config", None)
+    results["layout"] = {
+        "tp": getattr(mc, "tp", None),
+        "dp": getattr(mc, "dp", None),
+        "mesh_shape": list(getattr(mc, "mesh_shape", full.shape)),
+        "tp_axis": getattr(mc, "tp_axis", None),
+        "prefill_tp": getattr(getattr(mc, "prefill", None), "tp", None),
+        "prefill_sp": getattr(getattr(mc, "prefill", None), "sp", None),
+        "generator_data_parallel": generator.data_parallel,
+        "num_models": len(generator.model),
+    }
+    results["model_args"] = {
+        "num_hidden_layers": getattr(model_args, "num_hidden_layers", None),
+        "vocab_size": getattr(model_args, "vocab_size", None),
+        "max_prefill_chunk_size": getattr(model_args, "max_prefill_chunk_size", None),
+        "device_name": getattr(model_args, "device_name", None),
+        "weight_cache_path": str(getattr(model_args, "model_cache_path", None)),
+        "has_per_layer_inputs": bool(getattr(model, "hidden_size_per_layer_input", 0)),
+    }
+    logger.info(f"[bringup] layout {json.dumps(results['layout'])}")
+    if not hasattr(tokenizer, "stop_tokens"):
+        tokenizer.stop_tokens = [tokenizer.eos_token_id]
+    # The demo's stop set is [eos]; Gemma4's turn closer <turn|> (106) is only in generation_config,
+    # so add those ids or an instruct reply never stops within the budget.
+    gen_cfg = os.path.join(results["model_path"], "generation_config.json")
+    if os.path.isfile(gen_cfg):
+        with open(gen_cfg) as f:
+            eos_ids = json.load(f).get("eos_token_id", [])
+        eos_ids = eos_ids if isinstance(eos_ids, list) else [eos_ids]
+        tokenizer.stop_tokens = sorted(set(list(tokenizer.stop_tokens) + [int(i) for i in eos_ids]))
+    results["stop_tokens"] = list(tokenizer.stop_tokens)
+    if bounded_sliding:
+        _install_hybrid_page_tables(
+            model, model_args, batch_size=1, block_size=PAGE_BLOCK_SIZE, max_seq_len=MAX_SEQ_LEN
+        )
+    return generator, tt_kv_cache, tokenizer, page_table
+
+
+def _encode_prompt(prompt, tokenizer, generator, results, max_new_tokens):
+    """T2V-templated ``prompt`` -> ([1, L] int32 prefill tokens, prompt ids, decoding_pos, prefill_lens),
+    with the template's <bos> kept single. Records the prompt diagnostics into ``results``."""
+    from models.tt_dit.pipelines.ltx.prompt_enhancer import build_messages
+    from models.tt_transformers.tt.common import preprocess_inputs_prefill
+
+    messages = build_messages(prompt, "t2v")
+    text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    results["prompt_chars"] = len(text)
+    results["prompt_head"] = text[:200]
+    results["prompt_tail"] = text[-200:]
+    # The template already emits <bos>. encode_prompt(instruct=False) calls tokenizer.encode with
+    # add_special_tokens=True; this tokenizer has add_bos_token=False so that is a no-op, but probe
+    # for a double BOS anyway and strip the template's copy if one shows up.
+    bos = getattr(tokenizer, "bos_token", None)
+    bos_id = tokenizer.bos_token_id
+    probe = tokenizer.encode(text, add_special_tokens=True)
+    text_for_encode = text
+    if bos and text.startswith(bos) and len(probe) > 1 and probe[0] == probe[1] == bos_id:
+        text_for_encode = text[len(bos) :]
+    results["bos_stripped_for_encode"] = text_for_encode is not text
+    input_tokens_prefill_pt, encoded_prompts, decoding_pos, prefill_lens = preprocess_inputs_prefill(
+        [text_for_encode], tokenizer, generator.model_args, False, max_new_tokens, max_prefill_len=MAX_SEQ_LEN
+    )
+    prompt_ids = list(encoded_prompts[0])
+    results["prompt_tokens"] = len(prompt_ids)
+    results["prompt_first_ids"] = prompt_ids[:4]
+    results["prompt_double_bos"] = len(prompt_ids) > 1 and prompt_ids[0] == prompt_ids[1] == tokenizer.bos_token_id
+    results["prefill_lens"] = list(prefill_lens)
+    results["decoding_pos"] = [int(p) for p in decoding_pos]
+    input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(1, -1)
+    results["prefill_input_shape"] = list(input_tokens_prefill_pt.shape)
+    return input_tokens_prefill_pt, prompt_ids, decoding_pos, prefill_lens
 
 
 @pytest.mark.parametrize(
@@ -92,85 +236,14 @@ def test_e2b_bringup(mesh_device, device_params, sp_axis, tp_axis, num_links, to
         mark("1_open_mesh")
 
         # ---- 2. load ------------------------------------------------------------------------
-        from models.demos.gemma4.demo.text_demo import (
-            _create_tt_page_table,
-            _host_sample_greedy,
-            _install_hybrid_page_tables,
-            _resolve_bounded_sliding,
-        )
-        from models.demos.gemma4.tt.generator import Gemma4Generator
-        from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+        from models.demos.gemma4.demo.text_demo import _host_sample_greedy
 
-        page_max_num_blocks = math.ceil(MAX_SEQ_LEN / PAGE_BLOCK_SIZE)  # batch=1 right-sizing
-        paged_attention_config = PagedAttentionConfig(block_size=PAGE_BLOCK_SIZE, max_num_blocks=page_max_num_blocks)
-        page_table = _create_tt_page_table(1, paged_attention_config)
-        results["page_table_shape"] = list(page_table.shape)
-
-        load_err = None
-        t0 = time.time()
-        for candidate in (SNAPSHOT, REPO_ID):
-            try:
-                bounded_sliding = _resolve_bounded_sliding(MAX_SEQ_LEN, full, candidate)
-                results["bounded_sliding"] = bounded_sliding
-                generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
-                    mesh_device=full,
-                    model_path=candidate,
-                    max_batch_size=1,
-                    max_seq_len=MAX_SEQ_LEN,
-                    paged_attention_config=paged_attention_config,
-                    bounded_sliding_kv_cache=bounded_sliding,
-                )
-                results["model_path"] = candidate
-                break
-            except Exception as e:  # noqa: BLE001 — try the repo id next
-                load_err = traceback.format_exc()
-                results["errors"].append({"step": "2_load", "model_path": candidate, "traceback": load_err})
-                logger.warning(f"load from {candidate} failed: {type(e).__name__}: {e}")
-                if generator is not None:
-                    break
-        results["timings_s"]["load_s"] = round(time.time() - t0, 3)
+        generator, tt_kv_cache, tokenizer, page_table = _load_generator(full, results)
         if generator is None:
             results["status"] = "load_failure"
             return
         mark("2_load")
-
-        model = generator.model[0]
         model_args = generator.model_args[0]
-        mc = getattr(model, "mesh_config", None)
-        results["layout"] = {
-            "tp": getattr(mc, "tp", None),
-            "dp": getattr(mc, "dp", None),
-            "mesh_shape": list(getattr(mc, "mesh_shape", full.shape)),
-            "tp_axis": getattr(mc, "tp_axis", None),
-            "prefill_tp": getattr(getattr(mc, "prefill", None), "tp", None),
-            "prefill_sp": getattr(getattr(mc, "prefill", None), "sp", None),
-            "generator_data_parallel": generator.data_parallel,
-            "num_models": len(generator.model),
-        }
-        results["model_args"] = {
-            "num_hidden_layers": getattr(model_args, "num_hidden_layers", None),
-            "vocab_size": getattr(model_args, "vocab_size", None),
-            "max_prefill_chunk_size": getattr(model_args, "max_prefill_chunk_size", None),
-            "device_name": getattr(model_args, "device_name", None),
-            "weight_cache_path": str(getattr(model_args, "model_cache_path", None)),
-            "has_per_layer_inputs": bool(getattr(model, "hidden_size_per_layer_input", 0)),
-        }
-        logger.info(f"[bringup] layout {json.dumps(results['layout'])}")
-        if not hasattr(tokenizer, "stop_tokens"):
-            tokenizer.stop_tokens = [tokenizer.eos_token_id]
-        # The demo's stop set is [eos]; Gemma4's turn closer <turn|> (106) is only in generation_config,
-        # so add those ids or an instruct reply never stops within the budget.
-        gen_cfg = os.path.join(results["model_path"], "generation_config.json")
-        if os.path.isfile(gen_cfg):
-            with open(gen_cfg) as f:
-                eos_ids = json.load(f).get("eos_token_id", [])
-            eos_ids = eos_ids if isinstance(eos_ids, list) else [eos_ids]
-            tokenizer.stop_tokens = sorted(set(list(tokenizer.stop_tokens) + [int(i) for i in eos_ids]))
-        results["stop_tokens"] = list(tokenizer.stop_tokens)
-        if bounded_sliding:
-            _install_hybrid_page_tables(
-                model, model_args, batch_size=1, block_size=PAGE_BLOCK_SIZE, max_seq_len=MAX_SEQ_LEN
-            )
 
         # ---- 3a. warmup ---------------------------------------------------------------------
         t0 = time.time()
@@ -181,34 +254,9 @@ def test_e2b_bringup(mesh_device, device_params, sp_axis, tp_axis, num_links, to
         mark("3a_warmup")
 
         # ---- 4. prompt ----------------------------------------------------------------------
-        from models.tt_dit.pipelines.ltx.prompt_enhancer import build_messages
-
-        messages = build_messages("beekeeper", "t2v")
-        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        results["prompt_chars"] = len(text)
-        results["prompt_head"] = text[:200]
-        results["prompt_tail"] = text[-200:]
-        # The template already emits <bos>. encode_prompt(instruct=False) calls tokenizer.encode with
-        # add_special_tokens=True; this tokenizer has add_bos_token=False so that is a no-op, but probe
-        # for a double BOS anyway and strip the template's copy if one shows up.
-        bos = getattr(tokenizer, "bos_token", None)
-        bos_id = tokenizer.bos_token_id
-        probe = tokenizer.encode(text, add_special_tokens=True)
-        text_for_encode = text
-        if bos and text.startswith(bos) and len(probe) > 1 and probe[0] == probe[1] == bos_id:
-            text_for_encode = text[len(bos) :]
-        results["bos_stripped_for_encode"] = text_for_encode is not text
-        input_tokens_prefill_pt, encoded_prompts, decoding_pos, prefill_lens = preprocess_inputs_prefill(
-            [text_for_encode], tokenizer, generator.model_args, False, MAX_NEW_TOKENS, max_prefill_len=MAX_SEQ_LEN
+        input_tokens_prefill_pt, prompt_ids, decoding_pos, prefill_lens = _encode_prompt(
+            "beekeeper", tokenizer, generator, results, MAX_NEW_TOKENS
         )
-        prompt_ids = list(encoded_prompts[0])
-        results["prompt_tokens"] = len(prompt_ids)
-        results["prompt_first_ids"] = prompt_ids[:4]
-        results["prompt_double_bos"] = len(prompt_ids) > 1 and prompt_ids[0] == prompt_ids[1] == tokenizer.bos_token_id
-        results["prefill_lens"] = list(prefill_lens)
-        results["decoding_pos"] = [int(p) for p in decoding_pos]
-        input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(1, -1)
-        results["prefill_input_shape"] = list(input_tokens_prefill_pt.shape)
         mark("4_prompt")
 
         # ---- 3b. prefill --------------------------------------------------------------------
@@ -308,3 +356,280 @@ def test_e2b_bringup(mesh_device, device_params, sp_axis, tp_axis, num_links, to
         logger.error(results["errors"][-1]["traceback"])
     finally:
         _dump(results)
+
+
+# Decode timing arms: name -> (decode trace, device sampling). Eager arms first so no trace is live yet.
+TIMING_ARMS = {
+    "eager-host": (False, False),
+    "eager-device": (False, True),
+    "trace-host": (True, False),
+    "trace-device": (True, True),
+}
+
+
+def _host_sample(logits, temperature, top_k, top_p):
+    """Last-position host sampling, same rule as the enhancer: argmax at T<=0, else top-k then top-p."""
+    from models.tt_transformers.tt.common import sample_host
+
+    last = logits.reshape(-1, logits.shape[-1])[-1:].float()
+    if temperature <= 0:
+        return int(last.argmax().item())
+    if 0 < top_k < last.shape[-1]:
+        kth = torch.topk(last, top_k, dim=-1).values[..., -1:]
+        last = last.masked_fill(last < kth, float("-inf"))
+    _, tok = sample_host(last, temperature=temperature, top_p=top_p)
+    return int(tok.reshape(-1)[0].item())
+
+
+def _step_stats(step_times):
+    """Step 0 (compile / trace capture on a cold arm) apart from the steady-state steps."""
+    stats = {"steps": len(step_times), "step0_s": step_times[0] if step_times else None}
+    steady = step_times[1:]
+    if steady:
+        stats.update(
+            steady_median_s=round(statistics.median(steady), 5),
+            steady_mean_s=round(statistics.fmean(steady), 5),
+            steady_p90_s=round(sorted(steady)[int(0.9 * (len(steady) - 1))], 5),
+            steady_min_s=round(min(steady), 5),
+            steady_max_s=round(max(steady), 5),
+            steady_tok_s=round(len(steady) / sum(steady), 3),
+        )
+    return stats
+
+
+def _first_divergence(a, b):
+    for i, (x, y) in enumerate(zip(a, b)):
+        if x != y:
+            return i
+    return None if len(a) == len(b) else min(len(a), len(b))
+
+
+@pytest.mark.parametrize(
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load",
+    GALAXY_RING,
+    indirect=["mesh_device", "device_params"],
+)
+def test_e2b_decode_timing(mesh_device, device_params, sp_axis, tp_axis, num_links, topology, is_fsdp, dynamic_load):
+    from models.demos.gemma4.demo.sampling_utils import model_can_sample_on_device
+    from models.tt_dit.pipelines.ltx.prompt_enhancer import ENHANCER_TOP_K, ENHANCER_TOP_P, resolve_enhancer_cache_dir
+
+    arms = [a.strip() for a in os.environ.get("E2B_ARMS", ",".join(TIMING_ARMS)).split(",") if a.strip()]
+    unknown = [a for a in arms if a not in TIMING_ARMS]
+    assert not unknown, f"unknown E2B_ARMS {unknown}; choose from {list(TIMING_ARMS)}"
+    repeats = int(os.environ.get("E2B_REPEATS", "3"))
+    new_tokens = int(os.environ.get("E2B_NEW_TOKENS", "128"))
+    ignore_stop = os.environ.get("E2B_IGNORE_STOP", "1") == "1"
+    temperature = float(os.environ.get("E2B_TEMPERATURE", "0"))
+    seed = int(os.environ.get("E2B_SEED", "10"))
+    prompt = os.environ.get("E2B_PROMPT", "beekeeper")
+    profile = os.environ.get("E2B_PROFILE", "0") == "1"
+    profile_decode_steps = int(os.environ.get("E2B_PROFILE_DECODE_STEPS", "3"))
+    if profile:
+        new_tokens = 1 + profile_decode_steps  # step 0 apart, then the signposted window
+    # The warm converted cache the enhancer itself uses (shared tt_cache dir when writable).
+    os.environ["TT_CACHE_PATH"] = resolve_enhancer_cache_dir()
+
+    results = {
+        "parent_shape": list(mesh_device.shape),
+        "device_params": {k: str(v) for k, v in device_params.items()},
+        "tt_cache_path": os.environ["TT_CACHE_PATH"],
+        "config": {
+            "arms": arms,
+            "repeats": repeats,
+            "new_tokens": new_tokens,
+            "ignore_stop": ignore_stop,
+            "temperature": temperature,
+            "top_k": ENHANCER_TOP_K if temperature > 0 else None,
+            "top_p": ENHANCER_TOP_P if temperature > 0 else None,
+            "seed": seed if temperature > 0 else None,
+            "prompt": prompt,
+            "profile": profile,
+            "profile_decode_steps": profile_decode_steps if profile else None,
+            "profiler_program_support_count": os.environ.get("TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"),
+            "max_seq_len": MAX_SEQ_LEN,
+            "env": {
+                k: os.environ.get(k)
+                for k in ("GEMMA4_CCL_ASYNC", "GEMMA4_CCL_TOPOLOGY", "GEMMA4_HOST_SAMPLE", "LTX_TRACED")
+            },
+        },
+        "model_path": None,
+        "layout": None,
+        "timings_s": {},
+        "arms": {},
+        "summary": [],
+        "errors": [],
+        "status": "incomplete",
+    }
+
+    def dump():
+        _dump(results, TIMING_RESULTS_PATH)
+
+    try:
+        full = mesh_device.create_submesh(ttnn.MeshShape(*mesh_device.shape))
+        generator, tt_kv_cache, tokenizer, page_table = _load_generator(full, results)
+        if generator is None:
+            results["status"] = "load_failure"
+            return
+        max_prompt_budget = new_tokens + 1  # prefill token + decode steps must fit max_seq_len
+        input_tokens_prefill_pt, _, decoding_pos, _ = _encode_prompt(
+            prompt, tokenizer, generator, results, max_prompt_budget
+        )
+        assert decoding_pos[0] + max_prompt_budget <= MAX_SEQ_LEN, (
+            f"prompt {decoding_pos[0]} + {max_prompt_budget} tokens exceeds max_seq_len={MAX_SEQ_LEN}; "
+            f"lower E2B_NEW_TOKENS"
+        )
+        can_sample = model_can_sample_on_device(generator.model[0])
+        results["can_sample_on_device"] = can_sample
+        results["sampling_dp"] = getattr(generator.model[0], "sampling_dp", None)
+        stop_tokens = set(tokenizer.stop_tokens)
+        dump()
+    except Exception:  # noqa: BLE001 — the outcome is the data
+        results["errors"].append({"step": "setup", "traceback": traceback.format_exc()})
+        results["status"] = "exception"
+        logger.error(results["errors"][-1]["traceback"])
+        dump()
+        return
+
+    from models.common.sampling.generator import SamplingParams
+
+    if temperature > 0:
+        device_sampling_params = SamplingParams(
+            temperature=temperature, top_k=ENHANCER_TOP_K, top_p=ENHANCER_TOP_P, seed=seed
+        )
+    else:  # greedy: top_k=1 routes the device sampler to its force-argmax path
+        device_sampling_params = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
+
+    def flush_profiler():
+        # Drain on-device profiler buffers to the host; only called when E2B_PROFILE=1.
+        ttnn.ReadDeviceProfiler(full)
+        ttnn.synchronize_device(full)
+
+    signpost = None
+    if profile:
+        from tracy import signpost
+
+        flush_profiler()  # load-time ops, so the first window starts from an empty buffer
+
+    reference = None  # first completed repeat's tokens; every other repeat is compared to it
+    for arm in arms:
+        enable_trace, device_sample = TIMING_ARMS[arm]
+        arm_res = results["arms"][arm] = {"enable_trace": enable_trace, "device_sampling": device_sample, "repeats": []}
+        if device_sample and not can_sample:
+            arm_res["skipped"] = "model has no on-device sampler"
+            dump()
+            continue
+        sampling_params = device_sampling_params if device_sample else None
+        for rep in range(repeats):
+            rep_res = {"repeat": rep}
+            arm_res["repeats"].append(rep_res)
+            try:
+                if temperature > 0:
+                    torch.manual_seed(seed)
+                measured = profile and rep == repeats - 1
+                if measured:
+                    signpost("prefill_start")
+                # Prefill is the same in every arm: eager, host-sampled first token.
+                t0 = time.perf_counter()
+                logits = generator.prefill_forward_text(
+                    input_tokens_prefill_pt,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    prompt_lens=decoding_pos,
+                    warmup_prefill=False,
+                    enable_trace=False,
+                    sampling_params=None,
+                )
+                tok = _host_sample(logits, temperature, ENHANCER_TOP_K, ENHANCER_TOP_P)
+                rep_res["prefill_s"] = round(time.perf_counter() - t0, 4)
+                if measured:
+                    signpost("prefill_stop")
+                if profile:
+                    flush_profiler()
+
+                new_ids = [tok]
+                stop_at = 0 if tok in stop_tokens else None
+                current_pos = torch.tensor([decoding_pos[0]])
+                step_times = []
+                t_dec = time.perf_counter()
+                for step in range(new_tokens):
+                    if stop_at is not None and not ignore_stop:
+                        break
+                    ts = time.perf_counter()
+                    out, _ = generator.decode_forward(
+                        torch.tensor([[tok]]),
+                        current_pos,
+                        enable_trace=enable_trace,
+                        page_table=page_table,
+                        kv_cache=tt_kv_cache,
+                        sampling_params=sampling_params,
+                        # E2B's per-layer inputs are host-computed per token, so inputs reload every step.
+                        reload_inputs=True,
+                        reload_page_table=False,
+                        # Prefill sampled on host, so the device sampler gets its params at decode step 0.
+                        reload_sampling_params=device_sample and step == 0,
+                        reset_sampling_state=device_sample and step == 0,
+                    )
+                    if device_sample:
+                        if step == 0:
+                            rep_res["device_token_output_shape"] = list(out.shape)
+                            flat = out.reshape(-1)
+                            rep_res["device_token_output_head"] = [int(x) for x in flat[:8].tolist()]
+                        tok = int(out.reshape(-1)[0].item())
+                    else:
+                        tok = _host_sample(out, temperature, ENHANCER_TOP_K, ENHANCER_TOP_P)
+                    step_times.append(round(time.perf_counter() - ts, 5))
+                    if profile and step == 0:
+                        flush_profiler()  # step 0 carries the trace capture on the cold repeat
+                        if measured:
+                            signpost("start")
+                    current_pos += 1
+                    new_ids.append(tok)
+                    if stop_at is None and tok in stop_tokens:
+                        stop_at = len(new_ids) - 1
+                rep_res["decode_s"] = round(time.perf_counter() - t_dec, 4)
+                if measured and step_times:
+                    signpost("stop")
+                    rep_res["signposted_decode_steps"] = len(step_times) - 1
+                if profile:
+                    flush_profiler()
+                rep_res.update(_step_stats(step_times))
+                rep_res["step_times_s"] = step_times
+                rep_res["stop_index"] = stop_at
+                rep_res["token_ids"] = new_ids
+                reply = new_ids[:stop_at] if stop_at is not None else new_ids
+                rep_res["text"] = tokenizer.decode(reply, skip_special_tokens=True)
+                if reference is None:
+                    reference = {"arm": arm, "repeat": rep, "token_ids": new_ids}
+                rep_res["first_divergence_vs_reference"] = _first_divergence(new_ids, reference["token_ids"])
+                rep_res["matches_reference"] = rep_res["first_divergence_vs_reference"] is None
+                logger.info(
+                    f"[timing] {arm} rep {rep}: prefill {rep_res['prefill_s']} s, step0 {rep_res.get('step0_s')} s, "
+                    f"steady median {rep_res.get('steady_median_s')} s = {rep_res.get('steady_tok_s')} tok/s, "
+                    f"matches ref {rep_res['matches_reference']}"
+                )
+            except Exception:  # noqa: BLE001 — record and move to the next arm
+                rep_res["error"] = traceback.format_exc()
+                results["errors"].append({"step": f"{arm}/rep{rep}", "traceback": rep_res["error"]})
+                logger.error(rep_res["error"])
+                dump()
+                break
+            dump()
+
+    results["reference"] = {k: v for k, v in (reference or {}).items() if k != "token_ids"}
+    for arm, arm_res in results["arms"].items():
+        warm = [r for r in arm_res["repeats"][1:] if "steady_tok_s" in r]
+        cold = arm_res["repeats"][0] if arm_res["repeats"] else {}
+        row = {
+            "arm": arm,
+            "cold_step0_s": cold.get("step0_s"),
+            "warm_step0_s": round(statistics.median([r["step0_s"] for r in warm]), 5) if warm else None,
+            "steady_median_s": round(statistics.median([r["steady_median_s"] for r in warm]), 5) if warm else None,
+            "steady_tok_s": round(statistics.median([r["steady_tok_s"] for r in warm]), 3) if warm else None,
+            "prefill_s": round(statistics.median([r["prefill_s"] for r in warm]), 4) if warm else None,
+            "all_match_reference": all(r.get("matches_reference") for r in arm_res["repeats"]) or None,
+            "skipped_or_failed": arm_res.get("skipped") or any("error" in r for r in arm_res["repeats"]),
+        }
+        results["summary"].append(row)
+        logger.info(f"[timing] summary {json.dumps(row)}")
+    results["status"] = "success" if not results["errors"] else "partial"
+    dump()

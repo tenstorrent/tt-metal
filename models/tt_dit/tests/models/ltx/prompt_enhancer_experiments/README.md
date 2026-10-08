@@ -29,7 +29,8 @@ On a machine without a converted cache the first load takes ~50 s longer and wri
 | Driver | Purpose | Command |
 |---|---|---|
 | `submesh_overlap.py` | Can a sibling submesh overlap the (4,8) DiT submesh safely? (No: per-handle allocators alias DRAM.) | `run <dir>/submesh_overlap.py`; add `SUBMESH_EXP_GUARD_FIRST=1 SUBMESH_EXP_TAG=_guardfirst` for the guard-reservation variant |
-| `e2b_bringup.py` | Gemma-4-E2B-it alone on the full (4,8) handle: layout, load/prefill/decode timings, 64 greedy tokens | `run <dir>/e2b_bringup.py` |
+| `e2b_bringup.py` | Gemma-4-E2B-it alone on the full (4,8) handle: layout, load/prefill/decode timings, 64 greedy tokens | `run <dir>/e2b_bringup.py::test_e2b_bringup` |
+| `e2b_bringup.py` | E2B decode timing sweep, one load: eager vs traced decode x host vs device sampling, greedy parity across arms (`decode_timing_results.json`) | `E2B_ARMS=eager-host,trace-host E2B_REPEATS=3 E2B_NEW_TOKENS=128 run <dir>/e2b_bringup.py::test_e2b_decode_timing` |
 | `e2b_hf_reference.py` | CPU HF greedy reference for the same templated prompt (no device) | `OMP_NUM_THREADS=32 python <dir>/e2b_hf_reference.py` |
 | `e2b_parity_probe.py` | Teacher-forced device-vs-HF agreement over the HF tokens (needs `hf_reference.json`) | `run <dir>/e2b_parity_probe.py` |
 | `ab_prompt_enhancer.py` | A/B inside the real LTX distilled pipeline: raw prompt vs enhanced, host or device backend | `AB_ENHANCER=device AB_PROMPT=beekeeper AB_MAX_NEW_TOKENS=300 run <dir>/ab_prompt_enhancer.py` |
