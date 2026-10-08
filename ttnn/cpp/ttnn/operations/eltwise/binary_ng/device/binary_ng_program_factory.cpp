@@ -1410,12 +1410,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
     }
 
-    // Blackhole: a multiply with operand and post activations (logical_and), whose init runs per tile, keeps the
-    // per-face program; no Blackhole caller runs one.
-    if (bh_fpu_op && fpu_binary_op == OpConfig::FpuBinaryOp::MUL && has_operand_activations && has_post_activations) {
-        compute_kernel_defines["BINARY_NG_MUL_PER_FACE"] = "1";
-    }
-
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
