@@ -72,6 +72,7 @@ def run_tt(
     resume=None,
     clear_program_cache_before_decode=False,
     probes=(),
+    check_integrity=False,
 ):
     """Run vision, prefill and teacher-forced decode. After prefill, save a snapshot to `snapshot_out` (if given);
     with `resume` (a loaded snapshot) skip vision and prefill and decode from its KV cache instead."""
@@ -110,6 +111,8 @@ def run_tt(
     recorder.wrap(monkeypatch, model.norm, "text.norm", lambda t: t.reshape(-1, t.shape[-1])[row], when=_is_prefill)
     args.use_qk_fused = False
     gen = Generator(model, args, mesh_device, processor=args.processor, tokenizer=args.tokenizer)
+    kv_flat = [t for layer in kv_cache for t in layer]
+    before = PR.checksums(PR.device_tensors(model, skip=kv_flat)) if check_integrity else None
 
     if resume:
         S.restore_kv(kv_cache, resume)
@@ -137,6 +140,11 @@ def run_tt(
         mesh_device.clear_program_cache()
     if probes:
         PR.run(probes, mesh_device)
+    if check_integrity:
+        after = PR.checksums(PR.device_tensors(model, skip=kv_flat))
+        changed = sorted(n for n in before if n in after and before[n] != after[n])
+        recorder.integrity = {"checked": len(before), "changed": {n: (before[n], after.get(n)) for n in changed}}
+        print(f"[integrity] {len(before)} device tensors checked, {len(changed)} changed: {changed[:40]}", flush=True)
     gen.update_rope_deltas([rope_delta])
     pos = torch.tensor([decoding_pos])
     for k, tok in enumerate(goldens.teacher_tokens):
