@@ -228,13 +228,9 @@ struct EltwiseMul {
 
             tile_regs_commit();
             tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, CTArgs::cb_out, total_tiles);
-#else
             for (uint32_t idx = 0; idx < total_tiles; idx++) {
                 pack_tile(idx, CTArgs::cb_out);
             }
-#endif
             tile_regs_release();
             cb_push_back(CTArgs::cb_out, total_tiles);
 
