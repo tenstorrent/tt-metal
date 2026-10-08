@@ -124,6 +124,9 @@ class DeepseekV41ForCausalLM:
             )  # prefill slots per mesh row: 4 prompts per replay, no filler cost
             os.environ.setdefault("DSV41_VLLM_CHUNK", "512")
             os.environ.setdefault(
+                "DSV41_MO_OVERLAP", "0"
+            )  # the sub-device MoE overlap loads / clears a sub-device manager inside the chunk forward: not capturable as ONE trace (the automatic default turns it on for B 16..32 and max_model_len <= 16384)
+            os.environ.setdefault(
                 "DSV41_PF_UMASK", "1"
             )  # carried prefill state of users outside a replay stays intact (read when the prefill trace is built)
             if os.environ.get("DSV41_PREFILL_DYN", "1") == "0":
