@@ -19,7 +19,6 @@
 #include "context/metal_context.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "core_coord.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/noc_logging.hpp"
@@ -59,13 +58,12 @@ bool mock_firmware_sources_available_for(tt::ARCH arch) {
     }
 }
 
-int firmware_wait_timeout_ms() {
+int firmware_wait_timeout_ms(const llrt::RunTimeOptions& rtoptions) {
     // Default timeout for real silicon.
     constexpr int kDefaultTimeoutMs = 10'000;
     // Functional sim (.so) is slower than silicon; sometimes 10s is not enough, so use half a minute.
     constexpr int kFunctionalSimTimeoutMs = 30'000;
 
-    const auto& rtoptions = MetalContext::instance().rtoptions();
     if (rtoptions.get_simulator_enabled()) {
         // RTL sim directory backends are event-driven and much slower than functional ttsim (.so).
         // llrt treats timeout_ms==0 on sim as infinite wait.
@@ -316,13 +314,19 @@ void RiscFirmwareInitializer::clear_l1_state(tt::ChipId device_id) {
         }
     }
 
-    for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
-        static uint32_t zero_vec_size = hal::get_erisc_l1_unreserved_size();
-        auto zero_vec_addr = hal::get_erisc_l1_unreserved_base();
-        static std::vector<uint32_t> zero_vec(zero_vec_size / sizeof(uint32_t), 0);
-        CoreCoord virtual_core =
-            cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
-        cluster_.write_core(device_id, virtual_core, zero_vec, zero_vec_addr);
+    const auto active_eth_cores = this->get_control_plane_().get_active_ethernet_cores(device_id);
+    if (!active_eth_cores.empty()) {
+        // Resolved from this context's HAL, once per call (not cached across contexts).
+        const uint32_t eth_zero_vec_size =
+            hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        const uint32_t eth_zero_vec_addr =
+            hal_.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        const std::vector<uint32_t> eth_zero_vec(eth_zero_vec_size / sizeof(uint32_t), 0);
+        for (const auto& eth_core : active_eth_cores) {
+            CoreCoord virtual_core =
+                cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+            cluster_.write_core(device_id, virtual_core, eth_zero_vec, eth_zero_vec_addr);
+        }
     }
 
     bool has_dram_fw = hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM);
@@ -502,7 +506,7 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
     }
 
     for (auto& id_and_cores : device_to_early_exit_cores) {
-        const int timeout_ms = firmware_wait_timeout_ms();
+        const int timeout_ms = firmware_wait_timeout_ms(rtoptions_);
         if (!id_and_cores.second.empty()) {
             try {
                 llrt::internal_::wait_until_cores_done(
@@ -1582,7 +1586,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     }
 
     log_debug(LogDevice, "Waiting for firmware init complete");
-    const int timeout_ms = firmware_wait_timeout_ms();
+    const int timeout_ms = firmware_wait_timeout_ms(rtoptions_);
     try {
         llrt::internal_::wait_until_cores_done(
             descriptor_->metal_context(), device_id, dev_msgs::RUN_MSG_INIT, not_done_cores, timeout_ms);
