@@ -45,8 +45,8 @@ struct NeighborhoodSDPAOperation {
     static bool kv_ring_requested();
 
     // Visit each core's edge chunks grouped by edge position so the persistent mask block is
-    // rewritten about once per group (DIFFVAE_NA_EDGE_ORDER=1, off by default). Part of the
-    // program hash.
+    // rewritten about once per group (on by default; DIFFVAE_NA_EDGE_ORDER=0 turns it off). Part
+    // of the program hash.
     static bool edge_order_requested();
 };
 

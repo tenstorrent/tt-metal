@@ -165,7 +165,7 @@ bool NeighborhoodSDPAOperation::kv_ring_requested() {
 
 bool NeighborhoodSDPAOperation::edge_order_requested() {
     const char* value = std::getenv("DIFFVAE_NA_EDGE_ORDER");
-    return value != nullptr && std::string_view(value) == "1";
+    return value == nullptr || std::string_view(value) != "0";
 }
 
 ttsl::hash::hash_t NeighborhoodSDPAOperation::compute_program_hash(

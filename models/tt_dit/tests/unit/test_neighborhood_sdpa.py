@@ -600,6 +600,23 @@ def test_kv_ring_is_bit_identical(mesh_device, owned_width, monkeypatch):
         assert torch.equal(left, right), f"shard {shard_index}: ring output differs"
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+@pytest.mark.parametrize("owned_width", [None, 12], ids=["unsharded", "w_sharded_negative_origin"])
+def test_edge_order_is_bit_identical(mesh_device, owned_width, monkeypatch):
+    """DIFFVAE_NA_EDGE_ORDER only changes the order a core visits its work items in; every item
+    still sees the same tiles in the same order, so its output must equal index order bit for bit."""
+    monkeypatch.setenv("DIFFVAE_NA_CHUNK_BRICKS", "2,1,1")
+    monkeypatch.setenv("DIFFVAE_NA_EDGE_ORDER", "0")
+    index_order = []
+    _run_interior_table_case(mesh_device, owned_width, None, (24, 24, 24), outputs=index_order)
+    monkeypatch.delenv("DIFFVAE_NA_EDGE_ORDER")
+    edge_order = []
+    _run_interior_table_case(mesh_device, owned_width, None, (24, 24, 24), outputs=edge_order)
+    assert len(index_order) == len(edge_order)
+    for shard_index, (left, right) in enumerate(zip(index_order, edge_order)):
+        assert torch.equal(left, right), f"shard {shard_index}: edge-grouped output differs"
+
+
 def _run_interior_table_case(mesh_device, owned_width, brick, volume, outputs=None):
     from models.tt_dit.layers.neighborhood_attention_plan import _build_relative_masks, halo_sites
 
