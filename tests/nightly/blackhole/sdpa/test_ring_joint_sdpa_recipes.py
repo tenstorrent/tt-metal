@@ -473,3 +473,87 @@ def test_ring_joint_sdpa_recipe_rejects_sliding_window(ring_mesh, variant, expec
             precision=VARIANTS[variant][0],
             **kwargs,
         )
+
+
+# Chunked prefill: batch, Q heads, KV heads, Q head dim, V head dim, chunk group rows, groups so far (the call is the
+# last), q_chunk, k_chunk, SDPA grid, indexed cache (kv_cache_batch_idx 1 of a 2-slot cache).
+CHUNKED_CASES = {
+    "q128_k256_d128": (1, 4, 1, 128, 128, 1024, 3, 128, 256, (4, 2), False),
+    "q64_k96_d64_two_groups": (1, 2, 2, 64, 64, 512, 2, 64, 96, (4, 2), False),
+    "mla_dv_lt_dq": (1, 4, 1, 192, 64, 512, 3, 64, 128, (4, 2), False),
+    "multi_q_checkpoint": (1, 4, 4, 128, 128, 1024, 2, 64, 128, (2, 2), False),
+    "indexed_cache": (1, 4, 1, 64, 64, 512, 3, 64, 128, (4, 2), True),
+}
+
+
+def growing_cache_layout(x, group_rows):
+    """Device d's K/V shard holds its slab of each chunk group so far, back to back (the ring's chunked layout); the
+    ring shards the result along the sequence."""
+    slab = group_rows // RING
+    groups = x.shape[2] // group_rows
+    return torch.cat(
+        [
+            x[:, :, g * group_rows + d * slab : g * group_rows + (d + 1) * slab]
+            for d in range(RING)
+            for g in range(groups)
+        ],
+        dim=2,
+    )
+
+
+@pytest.mark.parametrize("case", CHUNKED_CASES)
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_ring_joint_sdpa_recipe_chunked(ring_mesh, variant, case):
+    """Chunked prefill: Q is the newest chunk group (rows [s, e)), K/V the cache of every group so far in the ring's
+    chunked layout; causal over the sequence. Optionally an indexed (kv_cache_batch_idx) cache and V narrower than Q
+    (MLA)."""
+    mesh, semaphores, ccl_column = ring_mesh
+    b, nh, nkv, d, dv, group, groups, q_chunk, k_chunk, grid, indexed = CHUNKED_CASES[case]
+    precision, kv_dtype = VARIANTS[variant]
+    e = group * groups
+    s = e - group
+    q, k, v = randn(b, nh, e, d, seed=31), randn(b, nkv, e, d, seed=32), randn(b, nkv, e, dv, seed=33)
+    shard = ttnn.ShardTensorToMesh(mesh, dim=2)
+    tq = ttnn.from_torch(q[:, :, s:], device=mesh, layout=ttnn.TILE_LAYOUT, mesh_mapper=shard)
+    if precision == ttnn.SDPAPrecision.FAST:
+        tq = ttnn.transformer.prepare_sdpa_input(tq, is_query=True)
+    caches = []
+    for x, seed in ((k, 34), (v, 35)):
+        cache = growing_cache_layout(x, group)
+        if indexed:
+            # Slot 0 holds finite garbage; the call reads slot 1.
+            cache = torch.cat([8 * randn(*cache.shape, seed=seed), cache], dim=0)
+        tx = ttnn.from_torch(cache, device=mesh, layout=ttnn.TILE_LAYOUT, mesh_mapper=shard)
+        if precision == ttnn.SDPAPrecision.FAST:
+            tx = ttnn.transformer.prepare_sdpa_input(tx, is_query=False, dtype=kv_dtype)
+        caches.append(tx)
+    if precision == ttnn.SDPAPrecision.FAST:
+        # The reference takes the prepared values, back in sequence order.
+        q = torch.cat([q[:, :, :s], torch.cat(per_chip(tq), dim=2).float()], dim=2)
+        inverse = torch.argsort(growing_cache_layout(torch.arange(e).reshape(1, 1, e, 1), group).flatten())
+        k, v = (torch.cat(per_chip(x), dim=2)[-1:, :, inverse] for x in caches)
+    backing = [
+        ttnn.allocate_tensor_on_device([b, nkv, e, width], x.dtype, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+        for x, width in zip(caches, (d, dv))
+    ]
+    out = run_ring(
+        mesh,
+        semaphores,
+        ccl_column,
+        [tq, *caches],
+        [None] * 3,
+        backing,
+        grid=grid,
+        q_chunk=q_chunk,
+        k_chunk=k_chunk,
+        logical_n=e,
+        logical_l=0,
+        is_cross=False,
+        is_causal=True,
+        precision=precision,
+        **(dict(kv_cache_batch_idx=1) if indexed else {}),
+    )
+    expected = reference(q[:, :, s:], k, v, key_mask(group, e, causal=True, q_offset=s))
+    for chip in range(RING):
+        got = per_chip(out[0])[chip]
+        assert l2_pct(got, expected.chunk(RING, dim=2)[chip]) < L2_PCT_BOUND[variant], f"chip {chip}"
