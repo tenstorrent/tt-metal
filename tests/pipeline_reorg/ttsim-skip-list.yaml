@@ -15,24 +15,14 @@ wormhole_b0:
   - tests/ttnn/unit_tests/base_functionality/test_to_memory_config.py::test_to_memory_config_rm_nd_sharded_to_interleaved_large_row
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
-  # Representative cases extracted from the excluded sharded LayerNorm suite.
-  - tests/ttnn/unit_tests/operations/fused/test_two_pass_normalization_sanity.py::test_two_pass_sharded_layer_norm_large_offset
-  - tests/ttnn/unit_tests/operations/fused/test_two_pass_normalization_sanity.py::test_two_pass_sharded_layer_norm_low_bits
-  - tests/ttnn/unit_tests/operations/fused/test_two_pass_normalization_sanity.py::test_two_pass_sharded_layer_norm_beta_only
-  - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
-  - tests/ttnn/unit_tests/operations/reduce/test_cumprod.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
-
-  # Long-running tests that cause the group's 40-minute job timeout on ttsim (#54860); still run on HW.
-  - tests/ttnn/unit_tests/operations/reduce/test_reduction.py::test_2d_topk
 
   # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
@@ -43,10 +33,6 @@ blackhole:
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
   - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
-  - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
-  # Representative cases extracted from the excluded DRAM GroupNorm suite.
-  - tests/ttnn/unit_tests/operations/fused/test_two_pass_normalization_sanity.py::test_two_pass_group_norm_dram_large_offset
-  - tests/ttnn/unit_tests/operations/fused/test_two_pass_normalization_sanity.py::test_two_pass_group_norm_dirty_padding
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
@@ -56,13 +42,9 @@ blackhole:
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
-  # tensix_cfg_wr32 reg=119 (THCON_SEC1_REG1, the fp8/LF8 SEC1 config)
-  - tests/ttnn/unit_tests/base_functionality/test_to_layout.py::test_to_layout_fp8_input_to_tile
+  # fp8 operands in tensix_elw_op (e.g. src_a_fmt=4 src_b_fmt=10) are not modeled by ttsim
   - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py
   - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py
-
-  # Long-running tests that cause the group's 40-minute job timeout on ttsim (#54860); still run on HW.
-  - tests/ttnn/unit_tests/operations/reduce/test_reduction.py::test_2d_topk
 
   # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
