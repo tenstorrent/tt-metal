@@ -304,6 +304,7 @@ Tensor group_norm(
     TT_FATAL(
         input_shape.rank() == 4, "Invalid tensor shape: Input tensor must have rank 4. (rank={})", input_shape.rank());
 
+    TT_FATAL(num_groups > 0, "num_groups must be greater than 0, got {}", num_groups);
     TT_FATAL(
         input_shape[-1] % num_groups == 0,
         "Invalid channel configuration: Number of channels ({}) must be divisible by the number of groups ({}).",

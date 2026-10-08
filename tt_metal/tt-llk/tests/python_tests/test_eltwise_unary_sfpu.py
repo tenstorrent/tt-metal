@@ -1636,6 +1636,7 @@ _BF16_STOCK_SPECIALS = {
         ChipArchitecture.WORMHOLE: (
             "neg_subnormal",
             "neg_zero",
+            "pos_subnormal",
         )
     },
 }
@@ -1645,18 +1646,29 @@ _BF16_STOCK_SPECIALS = {
 _BF16_SETUP_OPS = [
     MathOperation.Softsign,
 ]
-# Every instance of those ops on BF16 and FP32 data, approximate and accurate, either DEST.
-# The setup runs after the shared init, so an instance the BF16 kernel does not replace must
-# still pass the nightly sweep's own check.
-_BF16_SETUP_PARAMS = _sweep_params(
-    [
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
-    ],
-    _BF16_SETUP_OPS,
-    [ApproximationMode.No, ApproximationMode.Yes],
-    STANDARD_DIMENSIONS,
-)
+# The (approximation, fast mode) instances each op's BF16 kernel replaces with FP32 DEST off, read
+# from its kernel's gate. Export compiles every other instance's init and tile from this tree and
+# from stock and refuses the PR unless they are identical, so only these instances run here.
+_BF16_REPLACED_INSTANCES = {
+    MathOperation.Softsign: (
+        (ApproximationMode.No, FastMode.No),
+        (ApproximationMode.No, FastMode.Yes),
+    ),
+}
+_BF16_SETUP_PARAMS = [
+    params
+    for params in _sweep_params(
+        [
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+            InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        ],
+        _BF16_SETUP_OPS,
+        [ApproximationMode.No, ApproximationMode.Yes],
+        STANDARD_DIMENSIONS,
+    )
+    if params[4] == DestAccumulation.No
+    and (params[1], params[3]) in _BF16_REPLACED_INSTANCES[params[2]]
+]
 
 
 @pytest.mark.parametrize(
@@ -1664,9 +1676,10 @@ _BF16_SETUP_PARAMS = _sweep_params(
     _BF16_SETUP_PARAMS,
     ids=[build_param_id(_UNARY_SWEEP_ARGNAMES, p) for p in _BF16_SETUP_PARAMS],
 )
-def test_eltwise_unary_sfpu_bf16_setup_keeps_stock(
+def test_eltwise_unary_sfpu_bf16_replaced_instances(
     formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions
 ):
+    """Every instance the BF16 kernel replaces, on BF16 and FP32 data, against the sweep's golden."""
     test_eltwise_unary_sfpu(
         formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions
     )
@@ -1686,7 +1699,7 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
         pytest.skip(f"{mathop.name} keeps the stock kernel on {TestConfig.CHIP_ARCH}")
     from helpers.sfpu_accuracy_budget import Metric, accuracy_contract
     from helpers.ulp import nonfinite_mismatches, ulp_distance
-    from helpers.ulp_sweep import flushed_inputs, measurable_mask, sweep_spec
+    from helpers.ulp_sweep import _normal_input, measurable_mask, sweep_spec
 
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     dest_acc = DestAccumulation.No
@@ -1696,7 +1709,7 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
         input_dimensions_A=dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=dimensions,
-        spec_A=sweep_spec(),
+        spec_A=sweep_spec(formats.input_format),
     )
     # The sweep pads with +0. The specials go in that padding, under the edge sweep's
     # gates for what the golden defines and the pipeline delivers.
@@ -1763,8 +1776,9 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
     # being NaN or infinite. Stricter than ulp_sweep.nonfinite_failures, which also excuses
     # a NaN golden, a store saturating past the output's range and inputs outside the op's
     # claim: a kernel replacing stock's on every BF16 input is held to the golden there too.
-    failures = nonfinite_mismatches(golden, result) & ~flushed_inputs(
-        src_A, formats.input_format
+    # NaN inputs are left to the output-class check below, which is stricter.
+    failures = nonfinite_mismatches(golden, result) & _normal_input(
+        src_A, formats.input_format, formats.output_format, dest_acc
     )
     assert (
         not failures.any()
@@ -1788,7 +1802,9 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
         f"{mathop.name}: {int(wrong.sum())} of {len(specials)} special inputs "
         f"{specials} change output class or sign"
     )
-    mask = measurable_mask(src_A, golden, result, formats.input_format)
+    mask = measurable_mask(
+        src_A, golden, result, formats.input_format, formats.output_format, dest_acc
+    )
     over = int(((ulp_distance(golden.to(result.dtype), result) > max_ulp) & mask).sum())
     assert passed_test(
         golden, result, formats.output_format, max_ulp=max_ulp, mask=mask
