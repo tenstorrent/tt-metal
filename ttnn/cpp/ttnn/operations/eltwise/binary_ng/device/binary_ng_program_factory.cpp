@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include "binary_ng_utils.hpp"
+#include <enchantum/enchantum.hpp>
+#include <fmt/format.h>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -1530,6 +1532,42 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             static_cast<int>(a_data_format), static_cast<int>(b_data_format), static_cast<int>(c_data_format),
             c_tiles_per_core);
         std::fprintf(stderr, "EB_R3_RULE pre_sections=%u mul_per_face=%s\n", pre_sections, eb_def("BINARY_NG_MUL_PER_FACE").c_str());
+    }
+    if (const char* eb_log = std::getenv("EB_R3_LOG_CALLS")) {  // CI only: one line per program built
+        auto eb_def = [&](const char* k) {
+            const auto it = compute_kernel_defines.find(k);
+            return it == compute_kernel_defines.end() ? std::string("-") : it->second;
+        };
+        auto eb_t = [](const Tensor& t) {
+            const auto& mc = t.memory_config();
+            std::string r = fmt::format("{}/{}/{}", enchantum::to_string(t.dtype()), enchantum::to_string(mc.memory_layout()),
+                mc.buffer_type() == BufferType::L1 ? "L1" : "DRAM");
+            if (mc.shard_spec().has_value()) {
+                const auto bb = mc.shard_spec()->grid.bounding_box();
+                r += fmt::format("/g{}x{}n{}/s{}x{}", bb.end_coord.y - bb.start_coord.y + 1, bb.end_coord.x - bb.start_coord.x + 1,
+                    mc.shard_spec()->grid.num_cores(), mc.shard_spec()->shape[0], mc.shard_spec()->shape[1]);
+            }
+            return r + fmt::format("/{}", t.logical_shape());
+        };
+        auto eb_acts = [](const auto& v) {
+            std::string r;
+            for (const auto& x : v) { r += std::string(enchantum::to_string(x.type())) + ","; }
+            return r.empty() ? std::string("-") : r;
+        };
+        const auto eb_native = native_block_broadcast(operation_attributes, a.tensor_spec(),
+            b.has_value() ? std::optional<tt::tt_metal::DataType>{b->dtype()} : std::nullopt, c.dtype());
+        if (FILE* f = std::fopen(eb_log, "a")) {
+            std::fprintf(f, "EB_CALL op=%s kern=%d bcast=%s a=%s b=%s c=%s lhs=%s rhs=%s post=%s scalar=%d native=%d%d block=%s pack=%s chunk=%s pre=%u mulpf=%s hifi3=%d ntpc=%u tiles=%u\n",
+                std::string(enchantum::to_string(operation_attributes.binary_op_type)).c_str(), static_cast<int>(compute_kernel),
+                std::string(enchantum::to_string(operation_attributes.subtile_broadcast_type)).c_str(), eb_t(a).c_str(),
+                b.has_value() ? eb_t(*b).c_str() : "-", eb_t(c).c_str(), eb_acts(operation_attributes.lhs_activations).c_str(),
+                eb_acts(operation_attributes.rhs_activations).c_str(), eb_acts(operation_attributes.post_activations).c_str(),
+                static_cast<int>(!b.has_value()), static_cast<int>(eb_native.column), static_cast<int>(eb_native.scalar),
+                eb_def("BINARY_NG_BLOCK").c_str(), eb_def("BINARY_NG_BLOCK_PACK").c_str(), eb_def("BCAST_OTHER_CHUNK").c_str(),
+                pre_sections, eb_def("BINARY_NG_MUL_PER_FACE").c_str(), static_cast<int>(mul_at_hifi3 && !fp32_dest_acc_en),
+                num_tiles_per_cycle, c_tiles_per_core);
+            std::fclose(f);
+        }
     }
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);
