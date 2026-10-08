@@ -30,6 +30,7 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/experimental/ccl/moe_compute/moe_core_placement.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace {
 
@@ -192,10 +193,18 @@ MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFact
 
         const auto& combine_core_range_set = std::get<combine_core_range_set_return_index>(core_ret);
 
-        init_barrier_semaphore =
-            ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_core_range_set, 0);
-        final_barrier_semaphore = args.combine_params->optional_cross_device_semaphore.value_or(
-            ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_core_range_set, 0));
+        // The barrier semaphores live as long as this cached program. Keep them in L1_SMALL, above every L1 tensor and
+        // circular buffer, where the device has one (as selective_reduce_combine does): created in general L1 while
+        // this call's outputs are alive, they would stay in the middle of L1 after those are freed and refuse later
+        // calls their outputs (#59738).
+        const auto semaphore_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
+        init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(
+            mesh_device, combine_core_range_set, 0, semaphore_buffer_type);
+        // only when the caller passes none (value_or would create one either way)
+        final_barrier_semaphore = args.combine_params->optional_cross_device_semaphore.has_value()
+                                      ? *args.combine_params->optional_cross_device_semaphore
+                                      : ttnn::global_semaphore::create_global_semaphore(
+                                            mesh_device, combine_core_range_set, 0, semaphore_buffer_type);
 
         tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
     }
