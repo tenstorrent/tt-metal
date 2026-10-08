@@ -31,12 +31,12 @@ struct AutocastState {
 namespace {
 
 // A fresh state holding tensor. Non-float tensors (e.g. UINT32 embedding indices) count as FULL and are returned as
-// stored for every precision: typecast does not apply to them.
+// stored for every precision: typecast does not apply to them. An empty tensor counts as FULL, as in a
+// default-constructed AutocastTensor.
 detail::AutocastState make_state(const ttnn::Tensor &tensor) {
+    const bool half = core::is_tensor_initialized(tensor) && tensor.dtype() == ttnn::DataType::BFLOAT16;
     return detail::AutocastState{
-        .native = tensor,
-        .native_precision =
-            tensor.dtype() == ttnn::DataType::BFLOAT16 ? PreferredPrecision::HALF : PreferredPrecision::FULL};
+        .native = tensor, .native_precision = half ? PreferredPrecision::HALF : PreferredPrecision::FULL};
 }
 
 }  // namespace

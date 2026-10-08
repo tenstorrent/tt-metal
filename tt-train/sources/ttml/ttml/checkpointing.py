@@ -82,7 +82,8 @@ def _walk(value) -> tuple:
 
 
 def _rebuild(node, live_node, f, display_progress: bool = False, label: str = "optimizer"):
-    """Reconstruct a skeleton `node` from stream `f`, resharding each tensor per the live `live_node`.
+    """Reconstruct a skeleton `node` from stream `f`, loading each tensor into its live counterpart in `live_node`,
+    which keeps that tensor's sharding and dtype.
 
     `label` names the current sub-state (e.g. AdamW's `exp_avg`/`exp_avg_sq`) so each leaf's progress bar
     is distinguishable rather than a string of identical "Loading optimizer" bars."""
@@ -93,8 +94,10 @@ def _rebuild(node, live_node, f, display_progress: bool = False, label: str = "o
         leaf = node["named_parameters"]
         for name, meta in _progress(leaf.items(), total=len(leaf), desc=f"Loading {label}", enabled=display_progress):
             data = pickle.load(f)
-            mapper = Sharding.from_tensor(live_node[name]).derive_mapper()
-            named[name] = _tensor_from_record(meta, data, mapper)
+            live = live_node[name]
+            # assign() casts to the live tensor's dtype, so the state keeps matching its parameter's dtype.
+            live.assign(_tensor_from_record(meta, data, Sharding.from_tensor(live).derive_mapper()))
+            named[name] = live
         return named
     return {key: _rebuild(v, live_node[key], f, display_progress, key) for key, v in node.items()}
 

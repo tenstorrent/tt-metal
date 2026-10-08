@@ -205,6 +205,51 @@ def test_partial_load_skips_absent_groups(tmp_path):
     ctx.reset_graph()
 
 
+def _store_as(model: TwoLayer, dtype) -> None:
+    """Store every parameter as ``dtype``, as a run that trains in that precision does. New parameters are bf16."""
+    for t in model.parameters().values():
+        values = ttml.autograd.Tensor.from_numpy(
+            t.to_numpy(ttnn.DataType.FLOAT32), layout=ttnn.Layout.TILE, new_type=dtype
+        )
+        t.set_value(values.get_value(ttml.autograd.PreferredPrecision.NATIVE))
+
+
+@pytest.mark.requires_device
+@pytest.mark.parametrize(
+    "saved_dtype, resumed_dtype",
+    [(ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32), (ttnn.DataType.FLOAT32, ttnn.DataType.BFLOAT16)],
+)
+def test_resume_keeps_the_models_dtype(tmp_path, saved_dtype, resumed_dtype):
+    """The parameters and the AdamW moments load in the resumed model's dtype, so the fused step still runs."""
+    ctx = ttml.autograd.AutoContext.get_instance()
+    x_np = np.random.default_rng(3).standard_normal((1, 1, DIM, DIM)).astype(np.float32)
+    native = ttml.autograd.PreferredPrecision.NATIVE
+
+    ttml.init.manual_seed(0)
+    orig = TwoLayer()
+    _store_as(orig, saved_dtype)
+    opt = _make_optimizer("AdamW", orig.parameters())
+    _train_steps(orig, opt, n=1, x_np=x_np)
+    path = str(tmp_path / "ckpt.pkl")
+    checkpointing.save_checkpoint(path, header={}, model_params=orig.parameters(), optimizer=opt)
+    ctx.reset_graph()
+
+    restored = TwoLayer()
+    _store_as(restored, resumed_dtype)
+    restored_opt = _make_optimizer("AdamW", restored.parameters())
+    checkpointing.load_checkpoint(path, model_params=restored.parameters(), optimizer=restored_opt)
+
+    for name, t in restored.parameters().items():
+        assert t.get_value(native).dtype == resumed_dtype, f"param {name}"
+    state = restored_opt.get_state_dict()
+    for key in ("exp_avg", "exp_avg_sq"):
+        for name, t in state[key].items():
+            assert t.get_value(native).dtype == resumed_dtype, f"{key}/{name}"
+    _train_steps(restored, restored_opt, n=1, x_np=x_np)
+
+    ctx.reset_graph()
+
+
 @pytest.mark.requires_device
 def test_bf16_dtype_preserved_on_disk(tmp_path):
     """A bf16 weight is stored as bf16 on disk, not widened to float32."""

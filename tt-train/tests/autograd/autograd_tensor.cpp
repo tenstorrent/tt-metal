@@ -333,6 +333,12 @@ TEST_F(AutogradTensorTest, AssignToEmptyTensorTakesTheValueAsIs) {
     EXPECT_EQ(tensor->get_value(autograd::PreferredPrecision::NATIVE).dtype(), ttnn::DataType::FLOAT32);
 }
 
+TEST_F(AutogradTensorTest, AssignEmptyValueEmptiesTheTensor) {
+    auto tensor = autograd::create_tensor(filled(1.5F, ttnn::DataType::BFLOAT16));
+    tensor->assign(ttnn::Tensor());
+    EXPECT_FALSE(core::is_tensor_initialized(tensor->get_value(autograd::PreferredPrecision::NATIVE)));
+}
+
 TEST_F(AutogradTensorTest, FullViewTracksFusedAdamWStep) {
     optimizers::AdamWConfig config;
     config.lr = 1e-2F;
