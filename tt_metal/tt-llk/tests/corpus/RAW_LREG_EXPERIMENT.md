@@ -81,8 +81,9 @@ can be carried in C++. This does not establish that independent macro wrappers
 can communicate that lifetime, nor that the effect pass can be removed globally.
 
 No production wrapper policy is changed on this evidence alone. Before choosing
-a general replacement, test partial predicates/inactive lanes, multiple live
-registers, pressure/spills, control flow, calls, and representative affected LLKs.
+a general replacement, extend the partial-predicate tests below and validate
+multiple simultaneously live registers on hardware, pressure/spills, control
+flow, calls, and representative affected LLKs.
 Other chips, arbitrary raw opcodes, formal equivalence, exhaustive input coverage,
 and performance are not established here. The proposed unknown-value builtin
 remains a design alternative, not an experimentally evaluated implementation.
@@ -114,10 +115,25 @@ These are individual-register tests, not eight simultaneously live registers.
 The compile-only dead-output matrix completed **384/384 compilations** across
 registers, TT/TTI, O2/O3, scheduling, and selected pass-disabled controls. Identity
 pairs protect the typed value in this point-clobber test, even with the new pass
-disabled. A discarded read survives optimized GIMPLE but disappears at RTL
-expansion; its assembly matches the unannotated control in all 128 comparisons.
+disabled. A discarded read survives the dump named `optimized`, then the target's
+late GIMPLE `rvtt_dce` deletes it before RTL expansion. The pass dump explicitly
+reports `Deleting unreachable __builtin_rvtt_sfpreadlreg (0);`. Its assembly
+matches the unannotated control in all 128 comparisons.
 The unannotated allocation happened to use L0, so L1–L7 non-collisions are not
 proof of protection.
+
+The separate compile-only `raw_lreg_threading_pressure.cpp` tests simultaneously
+live values: 2, 4, or 7 raw values plus a typed temporary compile for effects and
+threading (the latter with the pass disabled), TT/TTI and both scheduler settings:
+24 successful compilations. Eight live raw values plus a temporary produce the
+expected register-capacity diagnostic in all eight configurations. Those are
+rejections, not runtime correctness passes. There is no hardware pressure result.
+
+The scheduling review found no reproduced marker-association bug. GCC treats
+volatile UNSPECs and volatile assembly as register barriers; the inspected
+scheduled MMIO case keeps the raw store adjacent to its effect marker. The
+pass's preceding-instruction lookup remains an assumption deserving broader
+coverage, not an established wrong-code finding.
 
 There are distinct obligations:
 
