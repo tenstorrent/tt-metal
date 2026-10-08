@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
+#include <algorithm>
 #include <filesystem>
 
 namespace ttnn::prim::qsr {
@@ -21,8 +22,13 @@ using ttnn::device_operation::ProgramArtifacts;
 
 namespace {
 constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/experimental/quasar/simple_add/device/kernels/";
-constexpr uint32_t kEntriesPerThread = 2;      // per Tensix tile counter: double buffering
+constexpr uint32_t kEntriesPerThread = 2;      // per tile counter: double buffering
 constexpr uint32_t kQuasarComputeThreads = 4;  // every Tensix engine of a Neo cluster
+// Reader DM cores. Must divide kQuasarComputeThreads so every reader thread round-robins the same number of
+// Tensix tile counters: with 2 readers each one feeds 2 Tensix (reader t -> Tensix t and t + 2). Quasar keeps
+// DM0 (ISR) and DM1 (remapper) for itself, leaving 6 DM cores for the readers and the 1 writer.
+constexpr uint32_t kQuasarReaderThreads = 2;
+static_assert(kQuasarComputeThreads % kQuasarReaderThreads == 0);
 }  // namespace
 
 ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_program_artifacts(
@@ -41,23 +47,28 @@ ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_prog
     const m2::KernelSpecName WRITER{"writer"};
     const m2::KernelSpecName COMPUTE{"compute"};
 
-    // One Neo cluster: the whole op runs on node (0, 0). On Quasar the compute kernel runs on all 4 Tensix
-    // engines of that cluster; Wormhole/Blackhole compute kernels are single-threaded.
+    // One Neo cluster: the whole op runs on node (0, 0). On Quasar the reader runs on 2 DM cores and the compute
+    // kernel on all 4 Tensix engines; the writer stays on one DM core. Wormhole/Blackhole kernels are
+    // single-threaded.
     const m2::NodeCoord node{0, 0};
     const bool is_quasar = tensor_args.input_a.device()->arch() == tt::ARCH::QUASAR;
     const uint32_t compute_threads = is_quasar ? kQuasarComputeThreads : 1u;
+    const uint32_t reader_threads = is_quasar ? kQuasarReaderThreads : 1u;
 
     const DataFormat data_format = datatype_to_dataformat_converter(a.dtype());
     const uint32_t tile_bytes = tile_size(data_format);
     const uint32_t num_tiles = a.physical_volume() / a.tensor_spec().tile().get_tile_hw();
 
-    // Each DFB has one DM endpoint and compute_threads Tensix endpoints, so it is split into compute_threads
-    // tile counters of kEntriesPerThread slots each: num_entries must be divisible by max(producers, consumers).
-    auto make_dfb = [&](const m2::DFBSpecName& name) {
+    // A STRIDED DFB is split into max(producers, consumers) tile counters of kEntriesPerThread slots each, so
+    // num_entries is kEntriesPerThread * max(producers, consumers): in0/in1 are reader_threads -> compute_threads,
+    // out is compute_threads -> 1 writer.
+    const uint32_t in_counters = std::max(reader_threads, compute_threads);
+    const uint32_t out_counters = compute_threads;
+    auto make_dfb = [&](const m2::DFBSpecName& name, uint32_t num_counters) {
         return m2::DataflowBufferSpec{
             .unique_id = name,
             .entry_size = tile_bytes,
-            .num_entries = kEntriesPerThread * compute_threads,
+            .num_entries = kEntriesPerThread * num_counters,
             .data_format_metadata = data_format,
         };
     };
@@ -66,6 +77,7 @@ ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_prog
     m2::KernelSpec reader{
         .unique_id = READER,
         .source = std::filesystem::path{std::string(kKernelDir) + "dataflow/reader_simple_add.cpp"},
+        .num_threads = reader_threads,
         .dfb_bindings = {m2::ProducerOf(IN0_DFB, "in0"), m2::ProducerOf(IN1_DFB, "in1")},
         .tensor_bindings =
             {m2::TensorBinding{.tensor_parameter_name = A, .accessor_name = "a"},
@@ -96,7 +108,8 @@ ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_prog
     m2::ProgramSpec spec{
         .name = "simple_add",
         .kernels = {reader, writer, compute},
-        .dataflow_buffers = {make_dfb(IN0_DFB), make_dfb(IN1_DFB), make_dfb(OUT_DFB)},
+        .dataflow_buffers =
+            {make_dfb(IN0_DFB, in_counters), make_dfb(IN1_DFB, in_counters), make_dfb(OUT_DFB, out_counters)},
         .tensor_parameters =
             {m2::TensorParameter{.unique_id = A, .spec = a.tensor_spec()},
              m2::TensorParameter{.unique_id = B, .spec = b.tensor_spec()},

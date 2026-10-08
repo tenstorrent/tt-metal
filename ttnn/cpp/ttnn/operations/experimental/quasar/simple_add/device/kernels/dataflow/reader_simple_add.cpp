@@ -2,14 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// simple_add reader: one thread reads tile i of A into dfb::in0 and tile i of
-// B into dfb::in1, for i in [0, num_tiles), from DRAM-interleaved tensors. Explicit sync, as on Blackhole.
-// Each push_back rotates to the next tile counter, so tile i goes to compute thread i % num_compute_threads.
+// simple_add reader: reads tile i of A into dfb::in0 and tile i of B into dfb::in1 from DRAM-interleaved
+// tensors. Explicit sync, as on Blackhole. Runs as N threads, one per DM core (2 on Quasar, 1 on
+// Wormhole/Blackhole): thread t reads tiles t, t+N, t+2N, ... Each push_back rotates to the thread's next
+// tile counter, so tile i still goes to compute thread i % num_compute_threads. With N == 2 and 4 Tensix, DM t
+// alternates between Tensix t and t + 2.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "api/kernel_thread_globals.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -25,7 +28,8 @@ void kernel_main() {
     const auto a = TensorAccessor(tensor::a);
     const auto b = TensorAccessor(tensor::b);
 
-    for (uint32_t i = 0; i < num_tiles; ++i) {
+    const uint32_t num_threads = get_num_threads();
+    for (uint32_t i = get_my_thread_id(); i < num_tiles; i += num_threads) {
         dfb_in0.reserve_back(1);
         dfb_in1.reserve_back(1);
         noc.async_read(a, dfb_in0, in0_tile_bytes, {.page_id = i}, {});

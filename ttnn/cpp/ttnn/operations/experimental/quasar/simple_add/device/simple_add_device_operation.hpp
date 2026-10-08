@@ -13,8 +13,8 @@
 
 namespace ttnn::prim::qsr {
 
-// C = A + B on a single node: one reader and one writer thread, and the compute kernel on all 4 Tensix engines
-// of a Quasar Neo cluster (1 on Wormhole/Blackhole). A, B and C are bfloat16,
+// C = A + B on a single node: on a Quasar Neo cluster the reader runs on 2 DM cores, the compute kernel on all
+// 4 Tensix engines and the writer on 1 DM core (each a single thread on Wormhole/Blackhole). A, B and C are bfloat16,
 // TILE layout, DRAM interleaved, with the same shape.
 struct SimpleAddDeviceOperation {
     using operation_attributes_t = SimpleAddParams;
