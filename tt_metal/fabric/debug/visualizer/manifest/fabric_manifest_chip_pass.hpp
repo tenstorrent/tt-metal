@@ -29,7 +29,7 @@ manifest::Chip join_chip(
     FabricNodeId node,
     ChipId physical_chip_id);
 
-// The L1 areas the HAL fixes on every router core.
+// The L1 areas the HAL fixes on every router core, and the layout of every struct a schema names.
 manifest::Arch describe_arch(const tt::tt_metal::Hal& hal);
 
 }  // namespace tt::tt_fabric
