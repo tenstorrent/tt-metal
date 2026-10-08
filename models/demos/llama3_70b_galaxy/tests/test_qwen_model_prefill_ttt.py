@@ -53,12 +53,13 @@ from models.common.utility_functions import (
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (2048, 4096, 8192),
+    (2048, 4096, 8192, 40960),
     ids=[
         # "128",
         "2048",
         "4096",
         "8192",
+        "40k",  # 40960; id avoids matching -k 4096
         # "32k",
         # "64k",
     ],
@@ -72,9 +73,10 @@ from models.common.utility_functions import (
 )
 @pytest.mark.parametrize(
     "num_layers",
-    (64,),
+    (64, 1),
     ids=[
-        "1layer",
+        "1layer",  # historical id: this entry runs all 64 layers
+        "nl1",  # real 1-layer run (PCC floor 0.97, KV cache PCC checked)
     ],
 )
 @pytest.mark.parametrize(
@@ -298,7 +300,9 @@ def test_qwen_model_prefill_inference(
     tt_output_torch = tt_output_torch * torch.rsqrt(
         tt_output_torch.pow(2).mean(-1, keepdim=True) + tt_model.norm.norm.eps
     )
-    tt_output_torch = tt_output_torch * tt_model.norm_weight
+    # TtTransformer has no `norm_weight` attribute (AttributeError on main@8bdf164e); use the final-norm
+    # weight from the loaded state dict, which is what the on-device norm is built from.
+    tt_output_torch = tt_output_torch * state_dict[f"{state_dict_prefix}norm.weight"]
 
     # Apply LM head on host (CPU)
     # Get the last token output for prefill
@@ -336,7 +340,18 @@ def test_qwen_model_prefill_inference(
         # Compare KV caches
         if cache_pcc:
             for i in range(model_args.n_layers):
-                pytorch_layer_present = [
+                if not hasattr(reference_model, "layers"):
+                    # reference_transformer() returns HfModelWrapper (no .layers/cache_k, AttributeError on
+                    # main@8bdf164e): read the HF DynamicCache, already [batch, n_kv_heads, seq, head_dim].
+                    # TT loads q/k weights converted HF->Meta (convert_hf_qkv_to_meta_format), so its K cache
+                    # is in interleaved-rope head_dim order; apply the same permutation to the HF K for comparison.
+                    from models.tt_transformers.tt.load_checkpoints import reverse_permute_1d
+
+                    ref_cache = reference_model.past_key_values.layers[i]
+                    pytorch_layer_present = [reverse_permute_1d(ref_cache.keys.clone()), ref_cache.values.clone()]
+                else:
+                    pytorch_layer_present = None
+                pytorch_layer_present = pytorch_layer_present or [
                     reference_model.layers[i]
                     .attention.cache_k.clone()
                     .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
