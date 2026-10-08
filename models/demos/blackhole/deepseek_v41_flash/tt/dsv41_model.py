@@ -1494,8 +1494,14 @@ class Model:
         """Deterministic diverse token ids [B] fed to the users that hold no request in a decode step (a constant token routes every filler row to the same experts)."""
         f = self.__dict__.get("_dfill")
         if f is None:
-            g = torch.Generator().manual_seed(20260508)
-            f = self._dfill = torch.randint(1000, int(self.args.vocab_size), (self.B,), generator=g)
+            if os.environ.get("DSV41_VLLM_FILLER", "zero") == "diverse":
+                g = torch.Generator().manual_seed(20260508)
+                f = torch.randint(1000, int(self.args.vocab_size), (self.B,), generator=g)
+            else:
+                # token 0 (the old adapter's idle rows): identical idle rows route to the SAME few experts, so they add almost no expert-weight streaming to a decode step; diverse ids made the
+                # idle rows of a bucket activate up to 6 new experts each (+9 ms of a 16-row step at 40 layers). The blow-up seen with a constant filler was the 16k-token PREFILL chunk.
+                f = torch.zeros(self.B, dtype=torch.long)
+            self._dfill = f
         return f
 
     def warm_serving(self, chunk, s_pad, bucket_users=()):
