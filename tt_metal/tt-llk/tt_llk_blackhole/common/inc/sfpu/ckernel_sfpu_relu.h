@@ -84,29 +84,15 @@ inline void _relu_max_float_impl_(const int iterations, const float threshold)
 // that default is per-arch -- I32 here, SM32 (converting) on Wormhole.
 inline constexpr sfpi::DataLayout INT_DEST_LAYOUT = sfpi::DataLayout::I32;
 
-// Sign of an integer threshold. It is uniform across lanes, so it picks which of the integer
-// forms below runs from outside the loop.
-enum class ThresholdSign
-{
-    Negative,
-    Zero,
-    Positive
-};
-
-inline constexpr ThresholdSign threshold_sign_of(const int scalar)
-{
-    return scalar < 0 ? ThresholdSign::Negative : scalar == 0 ? ThresholdSign::Zero : ThresholdSign::Positive;
-}
-
 // Integer relu_max: max(0, min(a, threshold)) on int32 in Dst. Mirrors the metal relu_clamp_int.
-// A plain `a > threshold` is not a safe compare over the full int32 range (see _relu_min_impl_),
-// so the negative lanes are zeroed first -- which is their whole answer for a positive
-// threshold -- and the compare only ever sees non-negative operands. A threshold <= 0 gives 0 on
-// every lane.
+// A plain `a > threshold` is not a safe compare over the full int32 range: the signed compare
+// subtracts, so it inverts its answer once the operands are 2^31 or more apart. The negative
+// lanes are zeroed first -- which is their whole answer for a positive threshold -- so the
+// compare only ever sees non-negative operands. A threshold <= 0 gives 0 on every lane.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _relu_max_int_impl_(const int iterations, const int threshold, const ThresholdSign threshold_sign)
+inline void _relu_max_int_impl_(const int iterations, const int threshold)
 {
-    if (threshold_sign == ThresholdSign::Positive)
+    if (threshold > 0)
     {
         const sfpi::vInt v_threshold = threshold;
         for (int d = 0; d < iterations; d++)
@@ -161,12 +147,24 @@ inline void _relu_max_(T threshold)
     else
     {
         static_assert(
-            std::is_same_v<T, std::uint32_t>,
-            "A float threshold requires VectorType == sfpi::vFloat: sfpi::vInt has no float constructor, so the conversion below would otherwise be ambiguous");
+            std::is_same_v<T, std::uint32_t>, "sfpi::vInt takes the threshold as raw two's-complement int32 bits in a std::uint32_t, as _relu_min_ does");
         // Raw two's-complement int bits, the encoding _relu_min_ takes for its vInt branch.
-        const int scalar = static_cast<int>(threshold);
-        _relu_max_int_impl_<APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, scalar, threshold_sign_of(scalar));
+        _relu_max_int_impl_<APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, static_cast<int>(threshold));
     }
+}
+
+// Sign of an integer threshold. It is uniform across lanes, so it picks which of the integer
+// forms below runs from outside the loop.
+enum class ThresholdSign
+{
+    Negative,
+    Zero,
+    Positive
+};
+
+inline constexpr ThresholdSign threshold_sign_of(const int scalar)
+{
+    return scalar < 0 ? ThresholdSign::Negative : scalar == 0 ? ThresholdSign::Zero : ThresholdSign::Positive;
 }
 
 template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>

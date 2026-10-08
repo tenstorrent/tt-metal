@@ -8,7 +8,8 @@ from itertools import chain, product
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from conftest import blackhole_only
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -1018,24 +1019,19 @@ def _relu_max_int_inputs(threshold: int) -> list[int]:
     return sorted({v for v in values if _INT32_MIN <= v <= _INT32_MAX})
 
 
-@pytest.mark.skipif(
-    get_chip_architecture() != ChipArchitecture.BLACKHOLE,
-    reason="Wormhole _relu_max_<vInt> still decodes its threshold as float bits "
-    "(tenstorrent/tt-llk#1701 item 13); only the Blackhole kernel is fixed",
+# Blackhole only: the Wormhole _relu_max_<vInt> still decodes its threshold as float bits
+# (https://github.com/tenstorrent/tt-llk/issues/1701 item 13).
+@blackhole_only
+# pytest's own parametrize: helpers' parametrize hands a single axis over as 1-tuples.
+@pytest.mark.parametrize(
+    "threshold", _RELU_MAX_INT_THRESHOLDS, ids=lambda t: f"threshold:{t}"
 )
-@parametrize(
-    threshold=_RELU_MAX_INT_THRESHOLDS,
-    dest_acc=[DestAccumulation.Yes],
-    input_dimensions=[[32, 32]],
-)
-def test_eltwise_unary_sfpu_relu_max_int_threshold(
-    threshold: int,
-    dest_acc: DestAccumulation,
-    input_dimensions: list[int],
-):
+def test_eltwise_unary_sfpu_relu_max_int_threshold(threshold: int):
     """_relu_max_<vInt, ..., std::uint32_t> on two's-complement Int32, exact golden
     max(0, min(x, threshold)) over the full int32 range."""
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 32]
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -1043,6 +1039,9 @@ def test_eltwise_unary_sfpu_relu_max_int_threshold(
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
     )
+    # src_A is overridden rather than built from a StimuliSpec: CustomStrategy clamps signed
+    # ints at INT_MIN + 1 and zero-fills the rest of each face, so neither INT_MIN nor a full
+    # tile of probe values can come through a spec.
     inputs = _relu_max_int_inputs(threshold)
     src_A = torch.tensor(
         [inputs[i % len(inputs)] for i in range(src_A.numel())], dtype=torch.int32
@@ -1088,7 +1087,9 @@ def test_eltwise_unary_sfpu_relu_max_int_threshold(
         unpack_to_dest=True,
     )
     result = [int(v) for v in configuration.run().result]
-    assert len(result) == len(golden)
+    assert len(result) == len(
+        golden
+    ), f"threshold {threshold}: expected {len(golden)} result elements, got {len(result)}"
 
     mismatches = sorted(
         {(int(x), g, r) for x, g, r in zip(src_A.tolist(), golden, result) if g != r}
