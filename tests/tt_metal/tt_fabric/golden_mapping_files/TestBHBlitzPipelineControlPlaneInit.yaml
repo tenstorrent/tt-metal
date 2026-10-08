@@ -1,6 +1,6 @@
 asic_to_fabric_node_mapping:
   hostnames:
-    - hostname: bh-glx-d03u02
+    - hostname: bh-glx-110-d03u02
       mesh:
         - mesh: 39
         - chips:
@@ -266,7 +266,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 42
                 chip_id: 6
               asic_id: 15312641366032103285
-    - hostname: bh-glx-d03u08
+    - hostname: bh-glx-110-d03u08
       mesh:
         - mesh: 43
         - chips:
@@ -400,7 +400,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 44
                 chip_id: 7
               asic_id: 9394870631221255312
-    - hostname: bh-glx-d04u02
+    - hostname: bh-glx-110-d04u02
       mesh:
         - mesh: 35
         - chips:
@@ -666,7 +666,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 38
                 chip_id: 6
               asic_id: 7170735033174373247
-    - hostname: bh-glx-d04u08
+    - hostname: bh-glx-110-d04u08
       mesh:
         - mesh: 31
         - chips:
@@ -932,7 +932,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 34
                 chip_id: 6
               asic_id: 16123674739159269275
-    - hostname: bh-glx-d05u08
+    - hostname: bh-glx-110-d05u08
       mesh:
         - mesh: 30
         - chips:
@@ -1000,7 +1000,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 30
                 chip_id: 6
               asic_id: 14359329708194393833
-    - hostname: bh-glx-d06u08
+    - hostname: bh-glx-110-d06u08
       mesh:
         - mesh: 27
         - chips:
@@ -1200,7 +1200,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 29
                 chip_id: 7
               asic_id: 16160405194998780238
-    - hostname: bh-glx-d07u02
+    - hostname: bh-glx-110-d07u02
       mesh:
         - mesh: 3
         - chips:
@@ -1466,7 +1466,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 6
                 chip_id: 6
               asic_id: 10272368071379752254
-    - hostname: bh-glx-d07u08
+    - hostname: bh-glx-110-d07u08
       mesh:
         - mesh: 7
         - chips:
@@ -1732,7 +1732,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 10
                 chip_id: 6
               asic_id: 3868341087315840210
-    - hostname: bh-glx-d08u02
+    - hostname: bh-glx-110-d08u02
       mesh:
         - mesh: 0
         - chips:
@@ -1998,7 +1998,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 47
                 chip_id: 7
               asic_id: 10067926037207310381
-    - hostname: bh-glx-d08u08
+    - hostname: bh-glx-110-d08u08
       mesh:
         - mesh: 11
         - chips:
@@ -2198,7 +2198,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 46
                 chip_id: 6
               asic_id: 7680107641566339825
-    - hostname: bh-glx-d09u02
+    - hostname: bh-glx-110-d09u02
       mesh:
         - mesh: 21
         - chips:
@@ -2464,7 +2464,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 24
                 chip_id: 6
               asic_id: 17352350493115727449
-    - hostname: bh-glx-d09u08
+    - hostname: bh-glx-110-d09u08
       mesh:
         - mesh: 12
         - chips:
@@ -2664,7 +2664,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 26
                 chip_id: 7
               asic_id: 16239237960952268849
-    - hostname: bh-glx-d10u02
+    - hostname: bh-glx-110-d10u02
       mesh:
         - mesh: 17
         - chips:
@@ -2930,7 +2930,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 20
                 chip_id: 6
               asic_id: 7608801860044290962
-    - hostname: bh-glx-d10u08
+    - hostname: bh-glx-110-d10u08
       mesh:
         - mesh: 13
         - chips:
