@@ -53,7 +53,6 @@ using manifest::lower_enum_name;
 using manifest::mesh_key;
 using manifest::router_key;
 using manifest::schema_name;
-using manifest::schema_name_of;
 
 std::set<std::string> keys_of(const json& object) {
     std::set<std::string> keys;
@@ -691,14 +690,17 @@ bool expect_channel_status(
     return serviced;
 }
 
-// An active channel has slots. In mux mode the VC0 senders the mux carries have none.
+// An active channel has slots. A channel with none, ie every sender but VC0's worker channel in mux mode, has no
+// ring buffer.
 void expect_ring_buffer(const json& ring, uint32_t channel_buffer_size, bool active) {
-    EXPECT_EQ(keys_of(ring), k_array_region_keys);
-    EXPECT_EQ(ring.at("schema"), "packet_ring");
-    EXPECT_EQ(ring.at("size_per_element"), channel_buffer_size);
-    if (active) {
-        EXPECT_GE(ring.at("num_elements").get<uint32_t>(), 1u);
+    if (ring.is_null()) {
+        EXPECT_FALSE(active);
+        return;
     }
+    EXPECT_EQ(keys_of(ring), k_array_region_keys);
+    EXPECT_EQ(ring.at("schema"), "bytes");
+    EXPECT_EQ(ring.at("size_per_element"), channel_buffer_size);
+    EXPECT_GE(ring.at("num_elements").get<uint32_t>(), 1u);
     EXPECT_EQ(
         ring.at("size").get<uint32_t>(),
         ring.at("num_elements").get<uint32_t>() * ring.at("size_per_element").get<uint32_t>());
@@ -707,40 +709,40 @@ void expect_ring_buffer(const json& ring, uint32_t channel_buffer_size, bool act
 // A field is written as its table entry says: its category and kind, then a region, a stream register or a value.
 void expect_field(const json& entry, const manifest::RouterField& field) {
     EXPECT_EQ(entry.at("category"), lower_enum_name(field.category.value));
-    EXPECT_EQ(entry.at("kind"), kind_name(field.kind.value));
-    const auto schema = [](const manifest::ElementType& element) { return schema_name(element.type, element.size); };
+    EXPECT_EQ(entry.at("kind"), kind_name(field.content.value));
     std::set<std::string> keys = {"category", "kind"};
     std::visit(
         ttsl::overloaded{
-            [&](const manifest::kind::L1Value& kind) {
-                keys.insert(k_region_keys.begin(), k_region_keys.end());
-                EXPECT_EQ(entry.at("schema"), schema(kind.element));
-                EXPECT_EQ(entry.at("size"), kind.element.size);
+            [&](const manifest::content::L1& l1) {
+                const auto& region_keys = l1.type.count > 0 ? k_array_region_keys : k_region_keys;
+                keys.insert(region_keys.begin(), region_keys.end());
+                EXPECT_EQ(entry.at("schema"), schema_name(l1.type));
+                EXPECT_EQ(entry.at("size"), l1.type.size);
             },
-            [&](const manifest::kind::Stream& kind) {
+            [&](const manifest::content::Stream& stream) {
                 keys.insert({"stream_id", "register", "schema"});
-                EXPECT_EQ(entry.at("register"), lower_enum_name(kind.reg));
-                EXPECT_EQ(entry.at("schema"), schema(kind.element));
+                EXPECT_EQ(entry.at("register"), lower_enum_name(stream.reg));
+                EXPECT_EQ(entry.at("schema"), schema_name(stream.type));
                 const auto stream_id = entry.at("stream_id").get<uint32_t>();
                 EXPECT_TRUE(
                     stream_id < StreamRegAssignments::num_eth_stream_registers || stream_id == k_unused_stream_id)
                     << stream_id;
             },
-            [&](const manifest::kind::Number&) {
+            [&](const manifest::content::Number&) {
                 keys.insert("value");
                 EXPECT_TRUE(entry.at("value").is_number_unsigned());
             },
-            [&](const manifest::kind::Flag&) {
+            [&](const manifest::content::Flag&) {
                 keys.insert("value");
                 EXPECT_TRUE(entry.at("value").is_boolean());
             },
-            [&](const manifest::kind::Enum& kind) {
+            [&](const manifest::content::Enum& enumerator) {
                 keys.insert({"value", "schema"});
-                EXPECT_EQ(entry.at("schema"), schema(kind.element));
-                EXPECT_TRUE(kind.is_enumerator(entry.at("value").get<uint32_t>())) << entry.at("value");
+                EXPECT_EQ(entry.at("schema"), schema_name(enumerator.type));
+                EXPECT_TRUE(enumerator.is_enumerator(entry.at("value").get<uint32_t>())) << entry.at("value");
             },
         },
-        field.kind.value);
+        field.content.value);
     EXPECT_EQ(keys_of(entry), keys);
 }
 
@@ -1126,21 +1128,24 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(lower_enum_name(manifest::FieldCategory::FLOW_CONTROL), "flow_control");
     EXPECT_EQ(lower_enum_name(manifest::FieldCategory::CONTROL_INFO), "control_info");
 
-    EXPECT_EQ(kind_name<manifest::kind::L1Value>(), "l1_value");
-    EXPECT_EQ(kind_name<manifest::kind::Stream>(), "stream");
-    EXPECT_EQ(kind_name<manifest::kind::Number>(), "number");
-    EXPECT_EQ(kind_name<manifest::kind::Flag>(), "flag");
-    EXPECT_EQ(kind_name<manifest::kind::Enum>(), "enum");
+    EXPECT_EQ(kind_name<manifest::content::L1>(), "l1");
+    EXPECT_EQ(kind_name<manifest::content::Stream>(), "stream");
+    EXPECT_EQ(kind_name<manifest::content::Number>(), "number");
+    EXPECT_EQ(kind_name<manifest::content::Flag>(), "flag");
+    EXPECT_EQ(kind_name<manifest::content::Enum>(), "enum");
 
-    EXPECT_EQ(schema_name(field::Uint{}, 4), "u32");
-    EXPECT_EQ(schema_name(field::Uint{}, 1), "u8");
-    EXPECT_EQ(schema_name(field::Int{}, 2), "i16");
-    EXPECT_EQ(schema_name(field::Enum{"RouterState"}, 4), "enum:RouterState");
-    EXPECT_EQ(schema_name(field::Struct{"WorkerXY"}, 4), "struct:WorkerXY");
-    EXPECT_EQ(schema_name(field::Packed{"direction_table", 2}, 16), "packed:direction_table");
-    EXPECT_EQ(schema_name(field::Bytes{}, 1), "bytes");
-    EXPECT_EQ(schema_name(field::Pad{}, 1), "pad");
-    EXPECT_EQ(schema_name_of<uint32_t>(), "u32");
+    namespace element = layout::element;
+    EXPECT_EQ(schema_name({element::Uint{}, 4, 0}), "u32");
+    EXPECT_EQ(schema_name({element::Uint{}, 1, 0}), "u8");
+    EXPECT_EQ(schema_name({element::Int{}, 2, 0}), "i16");
+    // An array's integers take their width from one element.
+    EXPECT_EQ(schema_name({element::Uint{}, 8, 2}), "u32");
+    EXPECT_EQ(schema_name({element::Enum{"RouterState"}, 4, 0}), "enum:RouterState");
+    EXPECT_EQ(schema_name({element::Struct{"WorkerXY"}, 4, 0}), "struct:WorkerXY");
+    EXPECT_EQ(schema_name({element::Packed{"direction_table", 2}, 16, 64}), "packed:direction_table");
+    EXPECT_EQ(schema_name({element::Bytes{}, 1, 0}), "bytes");
+    EXPECT_EQ(schema_name({element::Pad{}, 1, 0}), "pad");
+    EXPECT_EQ(schema_name(layout::type_of<uint32_t>()), "u32");
 }
 
 TEST_F(Fabric1DManifestFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config, suite_start_); }
