@@ -271,15 +271,27 @@ inline void DataflowBuffer::wait_relay_consumer_caught_up() const {
 }
 #endif
 
-inline void DataflowBuffer::finish_impl() {
-#if !DFB_IS_COMPUTE_MATH
 #ifndef COMPILE_FOR_TRISC
+// Idempotent: finish() and ~DataflowBuffer() both call it, and a second call finds the credits already posted.
+inline void DataflowBuffer::post_final_credits_impl() {
     if (ptiles_read_ > 0) {
         handle_final_credits<true>(ptiles_read_, ptxn_id_index_);
     }
     if (ctiles_written_ > 0) {
         handle_final_credits<false>(ctiles_written_, ctxn_id_index_);
     }
+    // handle_final_credits rendezvouses all threads of this kernel in sync_threads(). A thread that issued no
+    // implicit-sync transactions on this DFB must still join, or its siblings wait there forever.
+    if (ptiles_read_ == 0 && ctiles_written_ == 0 && local_dfb_interface_.num_txn_ids > 0) {
+        sync_threads();
+    }
+}
+#endif
+
+inline void DataflowBuffer::finish_impl() {
+#if !DFB_IS_COMPUTE_MATH
+#ifndef COMPILE_FOR_TRISC
+    post_final_credits_impl();
 #endif
     bool all_acked = false;
     WAYPOINT("AAW");

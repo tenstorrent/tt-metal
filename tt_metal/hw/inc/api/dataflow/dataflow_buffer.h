@@ -317,8 +317,16 @@ public:
     T read_tile_value(uint32_t tile_index, uint32_t element_offset);
 #endif
 
-    // Deprecated no-op: on Quasar the drain runs in ~DataflowBuffer(); on WH/BH there is nothing to drain.
-    void finish() {}
+    // On a Quasar DM, posts the credits of a partial implicit-sync batch; the drain runs in ~DataflowBuffer().
+    // A kernel with several DFBs must call finish() on each before any is destroyed: a consumer that needs every
+    // DFB's tail entries would otherwise never ack the first DFB the destructors drain. No-op elsewhere.
+    void finish() {
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+        if (drain_owner_ == this) {
+            post_final_credits_impl();
+        }
+#endif
+    }
 
 #ifndef COMPILE_FOR_TRISC
     // Deprecated no-op on Quasar: the write barrier runs in ~DataflowBuffer().
@@ -400,6 +408,9 @@ private:
     void pop_front_impl(uint16_t num_entries);
 #ifdef ARCH_QUASAR
     void finish_impl();
+#ifndef COMPILE_FOR_TRISC
+    void post_final_credits_impl();
+#endif
 #endif
     uint32_t get_write_ptr_impl() const;
     uint32_t get_read_ptr_impl()  const;
