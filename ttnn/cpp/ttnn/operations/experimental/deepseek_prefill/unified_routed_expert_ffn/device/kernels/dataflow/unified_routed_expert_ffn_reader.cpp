@@ -180,12 +180,13 @@ void kernel_main() {
 #ifdef RING_WEIGHTS
     using Ring = unified_routed_expert_ffn::RingWeights<
         experts_per_chip,
-        (per_core_N_gu + 1) / 2,
+        (N_gate_tiles_full / 8 + 1) / 2,
         ((K_gate_tiles + 6) / 7) * 7,
-        per_core_N_d / 4,
+        K_gate_tiles / 32,
         ((K_down_tiles + 6) / 7) * 7,
-        GRID_X_NOC,
-        in0_block_w_d>;
+        8,
+        N_gate_tiles_full / 8,
+        N_gate_tiles_full / 8>;
 #endif
 
     constexpr uint32_t x_accessor_offset = 36;
@@ -749,7 +750,7 @@ void kernel_main() {
                         gate_acc,
                         0,
                         local_expert_id,
-                        my_nt_gu,
+                        gate_col0,
                         kb * in0_block_w_gu + k,
                         gate_col_end - gate_col0,
                         l1_w_gate,
@@ -785,7 +786,7 @@ void kernel_main() {
                             up_acc,
                             1,
                             local_expert_id,
-                            my_nt_gu,
+                            gate_col0,
                             kb * in0_block_w_gu + k,
                             gate_col_end - gate_col0,
                             l1_w_up,
@@ -983,7 +984,8 @@ void kernel_main() {
                     const uint32_t row = kb * in0_block_w_d + k;
                     if (row < K_down_tiles) {
 #ifdef RING_WEIGHTS
-                        Ring::read_d(noc_read, down_acc, local_expert_id, my_nt_d, row, l1_w, down_tile_bytes);
+                        Ring::read_d(
+                            noc_read, down_acc, local_expert_id, down_col0, down_col_end, row, l1_w, down_tile_bytes);
 #else
                         DRuns::read(
                             noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w, down_tile_bytes);

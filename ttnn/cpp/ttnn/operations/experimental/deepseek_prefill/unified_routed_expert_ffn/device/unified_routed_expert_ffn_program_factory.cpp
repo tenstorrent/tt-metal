@@ -221,11 +221,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // per_core_M / num_chunks at runtime from the device token count, never
     // exceeding this max; the CBs below are sized to the max so a smaller pick
     // simply uses fewer of the reserved tiles.
-    uint32_t GRID_X = ring_weights ? 8u : kCoreGridX;  // ring weights: one N column per ring core / DRAM bank
-    // ring weights: 8 columns x GRID_Y rows (MIMO_RING_GRID_Y experiment, default 8)
-    uint32_t GRID_Y = (ring_weights && std::getenv("MIMO_RING_GRID_Y"))
-                          ? static_cast<uint32_t>(std::atoi(std::getenv("MIMO_RING_GRID_Y")))
-                          : kCoreGridY;
+    uint32_t GRID_X = kCoreGridX;
+    uint32_t GRID_Y = kCoreGridY;
     // chunk_M_tiles is the CB-sized MAXIMUM chunk (per_core_M_max = 4). The host
     // deliberately does NOT pick a chunk from M_tiles_full any more: all three
     // kernels derive the ACTUAL chunk_M_tiles / per_core_M / num_chunks at runtime
@@ -247,15 +244,15 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     //
     // Keep this a POWER OF TWO * kCoreGridY: per_core_M_for_chunk() quantizes tail
     // chunks to divisors of per_core_M_max.
-    const uint32_t kMaxChunkMTiles = 4 * GRID_Y;  // per_core_M <= 4 (see above)
+    constexpr uint32_t kMaxChunkMTiles = 4 * kCoreGridY;  // per_core_M <= 4 (see above)
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
     uint32_t in0_block_w_gu = 16;
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     TT_FATAL(
-        grid_size.x >= GRID_X && grid_size.y >= GRID_Y,
+        grid_size.x >= kCoreGridX && grid_size.y >= kCoreGridY,
         "unified_routed_expert_ffn: expected at least {}x{} compute grid, got {}x{}",
-        GRID_X,
-        GRID_Y,
+        kCoreGridX,
+        kCoreGridY,
         grid_size.x,
         grid_size.y);
     // per_core_M upper bound (the CB-sized max). The adaptive L1-budget guard
@@ -297,6 +294,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
 
     const uint32_t per_core_N_gu = (N_gate_tiles_full + GRID_X - 1) / GRID_X;
     const uint32_t per_core_N_d = (N_down_tiles_full + GRID_X - 1) / GRID_X;
+    // Ring weights: the down weights are read as 4-tile groups (the ring's w2 group width), so a core's hidden slice
+    // must be a whole number of groups.
+    TT_FATAL(
+        !ring_weights || (per_core_N_d % 4 == 0 && N_down_tiles_full % 4 == 0),
+        "ring weights: per-core down N ({} tiles on {} columns, N {}) must be a multiple of the 4-tile ring group",
+        per_core_N_d,
+        GRID_X,
+        N_down_tiles_full);
     const uint32_t N_gate_tiles_padded = per_core_N_gu * GRID_X;
     const uint32_t K_down_tiles_padded = N_gate_tiles_padded;  // down K = gate N
 
@@ -1011,7 +1016,6 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     }
     if (ring_weights) {
         reader_defines.emplace_back("RING_WEIGHTS", "1");
-        reader_defines.emplace_back("ADAPT_GRID_Y", std::to_string(GRID_Y));
     }
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
@@ -1096,7 +1100,6 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     writer_kernel_desc.compile_time_args = std::move(writer_ct_args);
     if (ring_weights) {
         writer_kernel_desc.defines.emplace_back("RING_WEIGHTS", "1");
-        writer_kernel_desc.defines.emplace_back("ADAPT_GRID_Y", std::to_string(GRID_Y));
     }
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
@@ -1189,9 +1192,6 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // the SFPU fp32-dest template derive from this, staying in sync with
     // DST_CAPACITY / ComputeConfig.fp32_dest_acc_en (single source above).
     compute_defines.emplace_back("FP32_DEST_ACC_EN", kFp32DestAccEn ? "1" : "0");
-    if (ring_weights) {
-        compute_defines.emplace_back("ADAPT_GRID_Y", std::to_string(GRID_Y));
-    }
     if (op.activation == RoutedExpertActivation::SwiGluOai) {
         // SwiGLU-OAI activation (MiniMax-M3 / gpt-oss): clamp(gate,max=L),
         // clamp(up,±L), (up+1)*gate*sigmoid(alpha*gate). Bakes alpha=1.702,
