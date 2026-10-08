@@ -78,3 +78,17 @@ The ref used LTX25_ROOT=/mnt/MLPerf/... -> FORBIDDEN now (job 086 D-state hang).
   (treeA default 4 sigmas, treeB default 3 sigmas, SETUP_OK).
 - Driver pgid 105997 started 19:29 UTC; job 116 queued 19:29:50 UTC behind ltx-host job 115. No drops of ours.
 - Wake: `ssh blx01 test -e /var/tmp/fasth3/t295/drv295.done`. Then follow "Next step on wake" above.
+
+## Run 1197 (2026-10-08 19:36-19:40 UTC): job 116 failed in BOTH arms; rerun without weight cache, one arm per job
+- Job 116 (blx01, 265 s, no drop): arms A and B both failed identically: the t220 LTX-2.3 transformer cache
+  (t220/cache/dit-ltx23/.../transformer) was deleted by the #289 cleanup, so each arm loaded the safetensors
+  (90-113 s) and then failed publishing a new cache: `parameter has no data` (module.py:488 via cache._publish_cache
+  -> Module.save). Not caused by the S2 change. Publishing the cache would also add ~40 GB on blx01 (cap 150 GB).
+- Fix: run295b.sh now unsets TT_DIT_CACHE_DIR (all weights load from the checkpoint, nothing written), pytest
+  --timeout=400. drv295.sh now submits one broker job per arm (A, then B), -t 450 each (est ~260 s + 50%),
+  waits on each, writes the gen0..5 md5 A/B MATCH/DIFF lines into drv295.done.log and "DONE jobs=A:<id>/<st> B:..."
+  into drv295.done. Old markers kept as drv295.done.run1189. Driver pgid 253913 started 19:38 UTC on blx01.
+- Another task's driver (drv301.sh, task #301) also runs on blx01; drv295 waits while any smarton job runs/queues.
+- Wake: `ssh blx01 test -e /var/tmp/fasth3/t295/drv295.done`. Then: read drv295.done + drv295.done.log; 6x MATCH
+  -> revert verified; report job ids + md5s; copy run logs to tmp/t295/res/; rm -rf /var/tmp/fasth3/t295 on blx01.
+- Follow-up for t48: publishing a fresh LTX-2.3 transformer cache fails with `parameter has no data`.
