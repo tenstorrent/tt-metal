@@ -38,9 +38,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t TILE_CNT    = params.TILE_CNT;
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const Operand& buffer_A         = params.buffer_A;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_A             = params.buffer_A;
 #endif
 
     {
@@ -66,7 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
@@ -137,6 +139,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t SRC0_TILE_IDX   = params.SRC0_TILE_IDX;
     const std::uint32_t SRC1_TILE_IDX   = params.SRC1_TILE_IDX;
     const std::uint32_t DST_TILE_IDX    = params.DST_TILE_IDX;
+    const std::uint32_t ZERO_POINT      = params.ZERO_POINT;
 #endif
     // Binary SFPU stages both operands from buffer_A into Dest. TILE_CNT is the
     // number of staged tiles and is fixed by the test layout, not free-running:
@@ -181,7 +184,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // ADDR_MOD_0/1 or bank-0 programming, so both initializers can remain in
         // the INIT zone before the measured TILE_LOOP.
         _llk_math_eltwise_sfpu_init_();
-        test_utils::init_binary_sfpu_operation_quasar<SFPU_BINARY_OP, is_fp32_dest_acc_en, SFPU_SIGN_MAGNITUDE, APPROX_MODE>(params.ZERO_POINT);
+        test_utils::init_binary_sfpu_operation_quasar<SFPU_BINARY_OP, is_fp32_dest_acc_en, SFPU_SIGN_MAGNITUDE, APPROX_MODE, BROADCAST_TYPE>(ZERO_POINT);
         PROFILER_SYNC();
     }
     {
@@ -215,7 +218,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     SFPU_DST_ROUNDING_MODE,
                     SFPU_ITERATIONS,
                     SFPU_SIGN_MAGNITUDE,
-                    APPROX_MODE>(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX, math_format);
+                    APPROX_MODE,
+                    BROADCAST_TYPE>(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX, math_format);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
@@ -246,9 +250,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR  = params.LOOP_FACTOR;
-    const std::uint32_t DST_TILE_IDX = params.DST_TILE_IDX;
-    const Operand& buffer_Res        = params.buffer_Res;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t DST_TILE_IDX    = params.DST_TILE_IDX;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_Res           = params.buffer_Res;
 #endif
 
     {
@@ -272,7 +278,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*only the SFPU result tile*/);
