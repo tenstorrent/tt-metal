@@ -333,6 +333,62 @@ def test_sdxl_transformer(device, dcache, cfg):
     ttnn.deallocate(out)
 
 
+SDXL_REFINER_GEGLU = [
+    ("down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 4096, 768),
+    ("down_blocks.2.attentions.0.transformer_blocks.0.ff.net.0", 1024, 1536),
+    ("mid_block.attentions.0.transformer_blocks.0.ff.net.0", 256, 1536),
+]
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 38000}], indirect=True)
+@pytest.mark.parametrize("cfg", SDXL_REFINER_GEGLU, ids=["d1", "d2", "mid"])
+def test_sdxl_refiner_geglu(device, dcache, cfg):
+    # The refiner's down_blocks.1 GEGLU multiplies an L1 block-sharded gate by an L1-interleaved input (tt_geglu.py)
+    from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
+    from models.demos.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
+
+    path, n, dim = cfg
+    c = dcache
+    if not c:
+        torch.manual_seed(0)
+        sd = {f"{path}.proj.weight": _rand(8 * dim, dim), f"{path}.proj.bias": _rand(8 * dim)}
+        c["mod"] = TtGEGLU(device, sd, path, load_refiner_model_optimisations((1024, 1024)))
+    torch.manual_seed(1)
+    x = ttnn.from_torch(
+        torch.rand(1, 1, n, dim) * 0.2 - 0.1,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn.deallocate(c["mod"].forward(x))
+
+
+def test_mul_tg(device):
+    # llama3_70b_galaxy decode (Llama 3.3-70B, Qwen3-32B on a Blackhole Galaxy), one chip's ff1ff3: bfp8 width shards of
+    # [32, 32] on 30 cores of the model's sub-core grids from (1, 0), SiLU on a, bfp8 out (llama_mlp.py)
+    grids = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+        ]
+    )
+    crs = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 30, grids, row_wise=True)
+    mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(crs, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    torch.manual_seed(1)
+    mk = lambda: ttnn.from_torch(
+        torch.rand(1, 1, 32, 960) * 2 - 1, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc
+    )
+    a, b = mk(), mk()
+    for _ in range(4):
+        out = ttnn.mul(a, b, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], dtype=ttnn.bfloat8_b, memory_config=mc)
+        ttnn.deallocate(out)
+
+
 @pytest.mark.parametrize("batch", [1, 2])
 def test_sdxl_temb_add(device, batch):
     # tt_unet.py: temb = ttnn.add_(temb, temb_add, activations=[SILU]) on the two embedding linears' outputs

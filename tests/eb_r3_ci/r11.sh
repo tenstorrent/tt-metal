@@ -23,6 +23,9 @@ case $1 in
   dsp)     ab csa_dr $O/off_csa_dr.txt - "test_csa_compressor_single_device" models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_csa_compressor.py
            ab mhg_b $O/off_mhg_b.txt - "test_moe_hash_gate and realistic and pad0 and dsv4" $DS/test_moe_hash_gate.py
            ab mhc_h $O/off_mhc_h.txt - "test_mhc_split_sinkhorn and not sharded" $DS/test_mhc_split_sinkhorn.py ;;
+  x)       ab f6x - EB_R3_PER_FACE=1 "sdxl_refiner_geglu or test_mul_tg or mul_bfp8"
+           ab f1x - EB_R3_NO_BLOCK=1 "sdxl_refiner_geglu"
+           ab f4x - EB_R3_NO_PRE_SECTIONS=1 "test_mul_tg" ;;
   smsa)    ab sm_b $O/off_sm_b.txt - "softmax_cfg"
            ab sa_b $O/off_sa_b.txt - "llama8b_sampling" ;;
 esac
