@@ -279,6 +279,23 @@ class MultichipDecoder(OptimizedDecoder):
         self._router_sharded_logits = _parse_binary_env("TT_LAGUNA_ROUTER_SHARDED_LOGITS", True)
         self._router_fp32_out = self.D > 1 and self.PACK_GATE_UP and _parse_binary_env("TT_LAGUNA_ROUTER_FP32_OUT", True)
         self._token_dispatch_fallback_reason = "feature flag is disabled"
+        # Prefill attention gate without head reshapes: a 0/1 [nh, nh*hd] matrix expands the per-head softplus gate
+        # to full width (each output = 1.0 x one gate value, fp32 accumulation -> exact), then one flat multiply.
+        # The [seq, nh, hd] reshape pads nh to a full tile (12 or 18 -> 32) and copied ~2.7x the attention output.
+        self._gate_expand = None
+        if _parse_binary_env("TT_LAGUNA_PREFILL_GATE_EXPAND", True):
+            nh, hd = cfg.num_heads, cfg.head_dim
+            expand = torch.zeros(nh, nh * hd)
+            for h in range(nh):
+                expand[h, h * hd : (h + 1) * hd] = 1.0
+            self._gate_expand = ttnn.from_torch(
+                expand,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
         # On a 1×1 MeshDevice, TTNN's explicit parallel decode-SDPA program is inaccurate once
         # the cache crosses long/non-aligned boundaries (observed PCC ~= 0 at positions 513/2048).
         # The default decode op is accurate at the same positions. Keep the proven explicit k64
@@ -306,6 +323,16 @@ class MultichipDecoder(OptimizedDecoder):
                 raise ValueError(f"TT_LAGUNA_CCL_NUM_LINKS must be 1 or 2 for D={self.D}; got {num_links}")
             self.ccl_topology = topologies[topology_name]
             self.num_links = num_links
+
+    def _gate(self, attn, ln, g=None):
+        """Prefill: flat attention [1, seq, nh*hd] times the per-head softplus gate expanded by one matmul."""
+        if getattr(self, "_gate_expand", None) is None or len(attn.shape) != 3 or attn.shape[-2] <= TILE:
+            return super()._gate(attn, ln, g)
+        if g is None:
+            g = ttnn.linear(ln, self.w["wg"], compute_kernel_config=self._ck_gate)
+        g = ttnn.softplus(g)
+        g_full = ttnn.matmul(g, self._gate_expand, compute_kernel_config=self._ck_hifi4, dtype=ttnn.bfloat16)
+        return ttnn.mul(attn, g_full)
 
     # ---- collective ------------------------------------------------------- #
     def _reduce(self, x):
