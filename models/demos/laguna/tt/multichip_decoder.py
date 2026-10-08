@@ -908,6 +908,14 @@ class MultichipDecoder(OptimizedDecoder):
         )
 
     # ---- MoE (Expert Parallel) --------------------------------------------- #
+    def _dispatch_slice_rows(self, seq_len: int) -> int:
+        """Rows per router / shared-expert program in the dispatch path. XS p150x2 keeps its 256-row contract; S on
+        p150x4 runs the whole bucket in one program (~20 router ops per slice were ~2.5 ms/layer at 4096 rows).
+        TT_LAGUNA_DISPATCH_SLICE_ROWS overrides (0 = whole bucket)."""
+        env = os.environ.get("TT_LAGUNA_DISPATCH_SLICE_ROWS")
+        rows = int(env) if env is not None else (0 if self.D == 4 else self.MOE_PREFILL_CHUNK)
+        return seq_len if rows <= 0 else rows
+
     def _token_dispatch_router(self, ln_flat, seq_len: int):
         """Run the established 256-row router programs, then concatenate routes.
 
@@ -920,9 +928,10 @@ class MultichipDecoder(OptimizedDecoder):
         weights = []
         indices = []
         cfg = self.cfg
-        for start in range(0, seq_len, self.MOE_PREFILL_CHUNK):
-            end = min(start + self.MOE_PREFILL_CHUNK, seq_len)
-            chunk = ttnn.slice(ln_flat, [0, 0, start, 0], [1, 1, end, cfg.hidden])
+        rows = self._dispatch_slice_rows(seq_len)
+        for start in range(0, seq_len, rows):
+            end = min(start + rows, seq_len)
+            chunk = ln_flat if rows >= seq_len else ttnn.slice(ln_flat, [0, 0, start, 0], [1, 1, end, cfg.hidden])
             _, idx, wsel = self._route(chunk)
             weights.append(ttnn.reshape(ttnn.to_layout(wsel, ttnn.ROW_MAJOR_LAYOUT), (1, end - start, cfg.top_k)))
             indices.append(ttnn.reshape(ttnn.to_layout(idx, ttnn.ROW_MAJOR_LAYOUT), (1, end - start, cfg.top_k)))
@@ -933,9 +942,10 @@ class MultichipDecoder(OptimizedDecoder):
 
         partials = []
         cfg = self.cfg
-        for start in range(0, seq_len, self.MOE_PREFILL_CHUNK):
-            end = min(start + self.MOE_PREFILL_CHUNK, seq_len)
-            chunk = ttnn.slice(ln_flat, [0, 0, start, 0], [1, 1, end, cfg.hidden])
+        rows = self._dispatch_slice_rows(seq_len)
+        for start in range(0, seq_len, rows):
+            end = min(start + rows, seq_len)
+            chunk = ln_flat if rows >= seq_len else ttnn.slice(ln_flat, [0, 0, start, 0], [1, 1, end, cfg.hidden])
             partials.append(
                 self._glu_mlp(
                     chunk,
