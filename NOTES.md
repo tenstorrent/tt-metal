@@ -28,9 +28,39 @@ neighbor_pad's local copy moves one stick per NOC read barrier, so 512 B sticks 
 - def: decode 2.704/2.705 s (mean 2.705), md5 s0 2797bc15..., s1 13ee4b04...
 - h2d: CRASHED at first decode: program.cpp:2471 'Statically allocated circular buffers on core range [0-0 - 3-0] grow to 4969472 B > 1572864 B L1'. The fused 2-D neighbor_pad sizes its CB from the 4 KB sticks (too big). Fix CB sizing (page-chunk the stick) before rerun. No drop.
 
-## Next
-- If h2d >= 5% faster (>= ~0.136 s): flip default (=0 off), ttp checks, land via -land branch + ttp push --detach.
-- Else: try PARTS=32 arm (def vs h2d+parts32) as a separate job if the profile says NP is not stick-bound; else stop with notes.
+## Verdict (2026-10-08, run 1095): STOP, every in-scope lever is under the 5% bar (0.135 s)
+Nothing landed. bb6b2c20e69 (DIFFVAE_NA_HALO_2D, opt-in) stays on this branch only: it CRASHES when enabled (L1 CB).
+
+Root cause of the crash (code read, neighbor_pad_async_program_factory.cpp ~L326-338): in the fused 2-D mode
+the H-fabric cores keep a recv CB that holds ALL corner sticks of all their outer dims (no reuse, because
+fabric can deliver outer dim N+1 before the reader drains N). Bytes = outer_per_core * pad_h * corner bytes,
+independent of the stick split, so "chunk the stick" does not fix it. Only 4 H-fabric cores (2 links); more
+links are capped by the 13-wide grid (10 H cores max -> still ~2 MB > 1.5 MB). A fix needs a flow-controlled
+recv protocol in the kernels plus a host rebuild.
+
+Stage-5 geometry (run.log): volume (145,272,480), H x4, W x8, brick (2,4,4), window 11 -> halo 2 bricks
+on H and W. Owned bricks 73x17x15 = 18615 per chip; exchanged 73x21x19 = 29127 (1.56x); phased 26280 (1.41x).
+
+Band-copy accounting per lane (unit = one owned band; measured ~2.3-2.4 ms/unit from the deep profile:
+untilize 1.8 ms/1.0, gather 3.0 ms/1.41, unattributed 11.6 ms/(2 x (1+1.56))):
+- today: untilize 1, rows->grid5 1, grid5->split 1, NP-H 1.24, NP-W 1.56, site_major 1.56, gather 1.41 = ~8.8 units (~21 ms/lane, 42 ms/block)
+- h2d fixed (C++): saves grid5 copy (1) + one NP pass (~1.24) = ~2.2 units = ~11 ms/block = ~0.09 s (3.3%). Under the bar, needs a rebuild: not done.
+- direct rows->split only (Python, exact): saves 1 unit/lane = ~5 ms/block = ~0.04 s (1.5%).
+- PARTS=32 (sticks of C = 256 B, every reshape a view): saves ~3.6 units/lane but NP's local copy moves one stick
+  per read barrier with a 2-page CB, 16x more sticks (~5.4k/core/NP at ~1 us) -> +~8 ms/lane. Wash. Not run.
+- edge-only exchange + one concatenated gather table (Python, exact): slices/concats/NPs on the H edge slab
+  (2x2/17 = 24% of band) and the W slab with corners (21x4/255 = 33%), then a 1.56-unit table concat:
+  ~6.8 units -> saves ~2 units/lane = ~0.075 s (2.8%) before the extra ~12 small-op dispatches. Under the bar.
+
+What would clear the bar (all need new device code, beyond this task):
+- multi-table gather (embedding that reads [band | halo_top | halo_bot | halo_left | halo_right] by index) on top of
+  the edge-only exchange: drops the 1.56-unit table concat -> ~5.2 units, ~17 ms/block, ~0.14 s (5.1%). Marginal.
+- NA reader taking phased K/V sites straight from the tiled band + halo buffers (no untilize/reshape/gather):
+  ~42 -> <10 ms/block, ~0.25-0.3 s (9-11%). Large kernel project (site-level phase offset inside the reader).
 
 ## Drops
-(none yet)
+None. Job 022 (blx01, 2026-10-08 11:35 UTC) ran to the end; the h2d arm failed on L1 allocation, not a drop.
+
+## Cleanup
+blx01 /var/tmp/fasth3/t264 (overlay src 132 MB, out_A 871 MB incl. yuv decodes, drv) removed 2026-10-08.
+Evidence kept in tt-project/t264/ (stage_tree_def.txt, run.log, decode times, driver).
