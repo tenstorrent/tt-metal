@@ -127,6 +127,7 @@ def main():
         action="store_true",
         help="Include the first interval; its baseline is one-sided and unreliable.",
     )
+    ap.add_argument("--dpi", type=int, default=150)
     ap.add_argument("--out", type=Path, default=Path("pj_per_flop.png"))
     args = ap.parse_args()
 
@@ -150,7 +151,7 @@ def main():
             print(f"  {name:<12} {min(vals):6.1f} - {max(vals):6.1f} pJ/FLOP   best {best[0]:.1f} at {best[1]}")
 
     ylim = max(v for _, pc, gs in datasets for vals in pc.values() for g, v in vals.items() if g in gs) * 1.10
-    chart(datasets, DEFAULT_CASES, ylim, args.out, subtitle)
+    chart(datasets, DEFAULT_CASES, ylim, args.out, subtitle, args.dpi)
 
 
 if __name__ == "__main__":

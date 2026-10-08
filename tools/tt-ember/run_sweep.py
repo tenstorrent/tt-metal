@@ -222,11 +222,11 @@ def reset_hardware(tt_smi: str, log: Log, dry_run: bool) -> int:
     return 0
 
 
-def pin_aiclk(mhz: int, activate: Path, log: Log, dry_run: bool) -> int:
+def pin_aiclk(mhz: int, device_id: int, activate: Path, log: Log, dry_run: bool) -> int:
     # A reset clears the ARC FORCE_AICLK override, so this runs after every reset. Same check as
     # aiclk/tt-smi-aiclk1000.sh: the value the chip reports back has to be the one requested.
     setter = HERE / "aiclk" / "set_aiclk.py"
-    bash = f"sleep {AICLK_SETTLE_S} && source {shlex.quote(str(activate))} && python {shlex.quote(str(setter))} {mhz} --busy"
+    bash = f"sleep {AICLK_SETTLE_S} && source {shlex.quote(str(activate))} && python {shlex.quote(str(setter))} {mhz} --busy --device-id {device_id}"
     log(f"[AICLK] pin to {mhz} MHz: bash -c {shlex.quote(bash)}")
     if dry_run:
         return 0
@@ -306,7 +306,7 @@ def run_sweep(args: argparse.Namespace, sweep: Sweep, output_root: Path, log: Lo
         if rc != 0:
             return rc
         if sweep.aiclk_mhz is not None:
-            rc = pin_aiclk(sweep.aiclk_mhz, args.tt_venv_activate, log, args.dry_run)
+            rc = pin_aiclk(sweep.aiclk_mhz, args.device_id or 0, args.tt_venv_activate, log, args.dry_run)
             if rc != 0:
                 return rc
 
@@ -456,9 +456,13 @@ def an_cross_op_corrected(args, sweep, output_root, opts, log) -> int:
         *sweep.app_args[:4],
         "--dpi",
         str(args.dpi),
+        "--out",
+        str(output_root / "compare_runs_out" / "energy_per_flop_by_engine_stacked_cross_op_corrected.png"),
     ]
     if "board" in opts:
         cmd += ["--board", str(opts["board"])]
+    if not args.dry_run:
+        (output_root / "compare_runs_out").mkdir(parents=True, exist_ok=True)
     return _script(cmd, log, args.dry_run)
 
 
@@ -482,11 +486,49 @@ def an_pj_per_flop(args, sweep, output_root, opts, log) -> int:
             k,
             "--iters",
             iters,
+            "--dpi",
+            str(args.dpi),
             "--out",
             str(output_root / op / "compare_runs_out" / "pj_per_flop.png"),
         ]
         if not args.dry_run:
             (output_root / op / "compare_runs_out").mkdir(parents=True, exist_ok=True)
+        rc = _script(cmd, log, args.dry_run)
+        if rc != 0:
+            return rc
+    return 0
+
+
+def an_pj_per_flop_by_engine(args, sweep, output_root, opts, log) -> int:
+    # The published Fig. 1: peak-charge ablation against writer_amp, with regular (POWER_CASE=0)
+    # as the writer stand-in. Needs power cases 0, 1, 2 and 4.
+    if len(sweep.app_args) < 4:
+        log("[ANALYSIS] pj_per_flop_by_engine needs M N K iters in app_args, skipping")
+        return 0
+    m, n, k, iters = sweep.app_args[:4]
+    for op in sweep.ops:
+        out = output_root / op / "compare_runs_out" / "pj_per_flop_by_engine.png"
+        cmd = [
+            args.python_exe,
+            str(HERE / "analysis" / "make_pj_per_flop_by_engine.py"),
+            str(output_root / op),
+            "--label",
+            str(opts.get("label", f"{sweep.name} ({op})")),
+            "--seq",
+            m,
+            "--hidden",
+            n,
+            "--k",
+            k,
+            "--iters",
+            iters,
+            "--dpi",
+            str(args.dpi),
+            "--out",
+            str(out),
+        ]
+        if not args.dry_run:
+            out.parent.mkdir(parents=True, exist_ok=True)
         rc = _script(cmd, log, args.dry_run)
         if rc != 0:
             return rc
@@ -502,20 +544,26 @@ def an_naive_vs_blocked(args, sweep, output_root, opts, log) -> int:
     )
     blocked = output_root / str(opts.get("blocked", blocked_default)) / "program_intervals.csv"
     out = output_root / "compare_runs_out" / "pj_per_flop_naive_vs_blocked.png"
+    if len(sweep.app_args) < 4:
+        log("[ANALYSIS] naive_vs_blocked needs M N K iters in app_args, skipping")
+        return 0
     if not args.dry_run:
         out.parent.mkdir(parents=True, exist_ok=True)
-    return _script(
-        [
-            args.python_exe,
-            str(HERE / "analysis" / "make_pj_per_flop_naive_vs_blocked.py"),
-            str(naive),
-            str(blocked),
-            "--out",
-            str(out),
-        ],
-        log,
-        args.dry_run,
-    )
+    cmd = [
+        args.python_exe,
+        str(HERE / "analysis" / "make_pj_per_flop_naive_vs_blocked.py"),
+        str(naive),
+        str(blocked),
+        "--app-args",
+        *sweep.app_args[:4],
+        "--dpi",
+        str(args.dpi),
+        "--out",
+        str(out),
+    ]
+    if "board" in opts:
+        cmd += ["--board", str(opts["board"])]
+    return _script(cmd, log, args.dry_run)
 
 
 def an_compare_runs(args, sweep, output_root, opts, log) -> int:
@@ -563,6 +611,7 @@ ANALYSES = {
     "cross_op": an_cross_op,
     "cross_op_corrected": an_cross_op_corrected,
     "pj_per_flop": an_pj_per_flop,
+    "pj_per_flop_by_engine": an_pj_per_flop_by_engine,
     "naive_vs_blocked": an_naive_vs_blocked,
     "compare_runs": an_compare_runs,
     "op_breakdown": an_op_breakdown,
