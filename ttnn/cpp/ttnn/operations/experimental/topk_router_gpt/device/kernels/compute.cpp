@@ -10,7 +10,6 @@
 // Collector: continues from worker → merge 4 workers' logit tiles via
 //            insertion-sort topk → softmax → pack final output
 
-#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/topk.h"
