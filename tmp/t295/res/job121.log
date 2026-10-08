@@ -1,0 +1,100 @@
+[19:51:56] [stdout] │ Stage 1 denoise                                                 │ 2.76 s │
+[19:51:56] [stdout] │ Latent upsample                                                 │ 0.19 s │
+[19:51:56] [stdout] │ Stage 2 denoise                                                 │ 3.04 s │
+[19:51:56] [stdout] │ VAE decode                                                      │ 0.60 s │
+[19:51:56] [stdout] │ Audio decode                                                    │ 0.47 s │
+[19:51:56] [stdout] ├─────────────────────────────────────────────────────────────────┼────────┤
+[19:51:56] [stdout] │ Total                                                           │ 7.31 s │
+[19:51:56] [stdout] └─────────────────────────────────────────────────────────────────┴────────┘
+[19:51:56] [stdout]
+[19:51:56] [stdout] ┌──────────────────────────────────────────────────────────────────────────┐
+[19:51:56] [stdout] │                       LTX DISTILLED — PERFORMANCE                        │
+[19:51:56] [stdout] │ Resolution   1088x1920 · 145 frames                                      │
+[19:51:56] [stdout] │ Mesh         (4, 8) · sp=8 tp=4 · Ring                                   │
+[19:51:56] [stdout] │ Output       /var/tmp/fasth3/t295/outB/ltx_av_fast_1920x1088_5.mp4       │
+[19:51:56] [stdout] │ Prompt       A confident rapper in a black leather jacket and gold cha...│
+[19:51:56] [stdout] ├─────────────────────────────────────────────────────────────────┬────────┤
+[19:51:56] [stdout] │ Stage                                                           │   Time │
+[19:51:56] [stdout] ├─────────────────────────────────────────────────────────────────┼────────┤
+[19:51:56] [stdout] │ Encoder                                                         │ 0.24 s │
+[19:51:56] [stdout] │ Stage 1 denoise                                                 │ 2.78 s │
+[19:51:56] [stdout] │ Latent upsample                                                 │ 0.18 s │
+[19:51:56] [stdout] │ Stage 2 denoise                                                 │ 3.04 s │
+[19:51:56] [stdout] │ VAE decode                                                      │ 0.58 s │
+[19:51:56] [stdout] │ Audio decode                                                    │ 0.46 s │
+[19:51:56] [stdout] ├─────────────────────────────────────────────────────────────────┼────────┤
+[19:51:56] [stdout] │ Total                                                           │ 7.29 s │
+[19:51:56] [stdout] └─────────────────────────────────────────────────────────────────┴────────┘
+[19:51:57] [stdout] PASSED
+[19:51:57] [stdout] ==========================================================================
+[19:51:57] [stdout] WALL-TIME LEDGER · models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled[blackhole-bh_4x8sp1tp0_ring-True]
+[19:51:57] [stdout] --------------------------------------------------------------------------
+[19:51:57] [stdout] category             seconds   %wall   count   notes
+[19:51:57] [stdout] weight_load            157.7   53.5%      10   0 HIT / 10 MISS
+[19:51:57] [stdout] phase                   35.9   12.2%      22
+[19:51:57] [stdout] warmup                  26.4    9.0%       4
+[19:51:57] [stdout] gen                     59.3   20.1%      12
+[19:51:57] [stdout] untracked               15.3    5.2%
+[19:51:57] [stdout] --------------------------------------------------------------------------
+[19:51:57] [stdout] TOTAL (tracked)        279.3   94.8%
+[19:51:57] [stdout] TOTAL (wall)           294.5  100.0%
+[19:51:57] [stdout]
+[19:51:57] [stdout] ANOMALIES:
+[19:51:57] [stdout]   - CACHE MISS: weight_load ltx-2.3-22b-distilled-1.1/vae_cin16490e3a (8.5s) — TT_DIT_CACHE_DIR unset
+[19:51:57] [stdout]   - CACHE MISS: weight_load ltx-2.3-spatial-upscaler-x2-1.1/upsampler_cin7d332088 (10.2s) — TT_DIT_CACHE_DIR unset
+[19:51:57] [stdout]   - CACHE MISS: weight_load ltx-2.3-22b-distilled-1.1/audio_dec_cin55f0111e (0.9s) — TT_DIT_CACHE_DIR unset
+[19:51:57] [stdout]   - CACHE MISS: weight_load ltx-2.3-22b-distilled-1.1/audio_voc_cin55f0111e (8.7s) — TT_DIT_CACHE_DIR unset
+[19:51:57] [stdout]   - CACHE MISS: weight_load ltx-2.3-22b-distilled-1.1/transformer (72.3s) — TT_DIT_CACHE_DIR unset
+[19:51:57] [stdout]   - CACHE MISS: weight_load gemma-3-12b-it-qat-q4_0-unquantized/text_encoder (38.3s) — TT_DIT_CACHE_DIR unset
+[19:51:57] [stdout]   - CACHE MISS: weight_load ltx-2.3-22b-distilled-1.1/feature_extractor (5.3s) — TT_DIT_CACHE_DIR unset
+[19:51:57] [stdout]   - CACHE MISS: weight_load ltx-2.3-22b-distilled-1.1/video_connector (5.4s) — TT_DIT_CACHE_DIR unset
+[19:51:57] [stdout]   - CACHE MISS: weight_load ltx-2.3-22b-distilled-1.1/audio_connector (1.4s) — TT_DIT_CACHE_DIR unset
+[19:51:57] [stdout]   - CACHE MISS: weight_load ltx-2.3-22b-distilled-1.1/vae_enc_cin0f1402da (6.7s) — TT_DIT_CACHE_DIR unset
+[19:51:57] [stdout] ==========================================================================
+[19:51:57] [stdout]
+[19:51:57] [stdout]
+[19:51:57] [stdout] =============================== warnings summary ===============================
+[19:51:57] [stdout] <frozen importlib._bootstrap>:241
+[19:51:57] [stdout]   <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+[19:51:57] [stdout]
+[19:51:57] [stdout] <frozen importlib._bootstrap>:241
+[19:51:57] [stdout]   <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+[19:51:57] [stdout]
+[19:51:57] [stdout] -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+[19:51:57] [stdout] ==================================== PASSES ====================================
+[19:51:57] [stdout] - generated xml file: /var/tmp/fasth3/t295/outB/generated/test_reports/most_recent_tests.xml -
+[19:51:57] [stdout] ============================= slowest 25 durations =============================
+[19:51:57] [stdout] 294.55s call     models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled[blackhole-bh_4x8sp1tp0_ring-True]
+[19:51:57] [stdout] 8.03s setup    models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled[blackhole-bh_4x8sp1tp0_ring-True]
+[19:51:57] [stdout] 0.04s teardown models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled[blackhole-bh_4x8sp1tp0_ring-True]
+[19:51:57] [stdout] =========================== short test summary info ============================
+[19:51:57] [stdout] PASSED ../treeB/models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled[blackhole-bh_4x8sp1tp0_ring-True]
+[19:51:57] [stdout] =========== 1 passed, 7 deselected, 2 warnings in 303.73s (0:05:03) ============
+[19:51:57] [stdout] sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+[19:51:59] [stdout] 2026-10-08 19:51:59.464 | info     |    BuildKernels | JIT cache stats: 4270/4270 hits (100.0%) [4270 cached, 37159 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+[19:51:59] [stdout] 2026-10-08 19:51:59.464 | info     |    BuildKernels | JIT telemetry: 26 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+[19:51:59] [stdout] 2026-10-08 19:51:59.800 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:519)
+[19:51:59] [stdout] 2026-10-08 19:51:59.800 | info     |             UMD | Closing devices in cluster (cluster.cpp:1319)
+[19:52:01] [stdout] 2026-10-08 19:52:01.822 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1329)
+[19:52:01] [stdout] 2026-10-08 19:52:01.822 | info     |             UMD | Cluster destructor started. (cluster.cpp:1050)
+[19:52:01] [stdout] 2026-10-08 19:52:01.822 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1063)
+[19:52:02] [stdout] [t295] arm=B process wall 316 s
+[19:52:02] [stdout] f74f2d2132d8b6cea7d3d413647e40b1  ltx_av_fast_1920x1088_0.mp4
+[19:52:02] [stdout] f74f2d2132d8b6cea7d3d413647e40b1  ltx_av_fast_1920x1088_1.mp4
+[19:52:02] [stdout] ff2501382ea0d6ee1f65d29134667424  ltx_av_fast_1920x1088_2.mp4
+[19:52:02] [stdout] d296a015e5fa65a78f3ca728293217e6  ltx_av_fast_1920x1088_3.mp4
+[19:52:02] [stdout] b8a5ea41723378493c2dbe6777e6276e  ltx_av_fast_1920x1088_4.mp4
+[19:52:02] [stdout] 5b091f6b5f79c66ae3501bc873d38418  ltx_av_fast_1920x1088_5.mp4
+[19:52:02] [stdout] T295_EXIT=0
+
+======================================================================
+FINISHED:    2026-10-08T19:52:07.631914
+STATUS:      completed
+EXIT CODE:   0
+WAIT TIME:   0.0s
+RUNTIME:     321.6s
+======================================================================
+[19:52:07] [broker] [health-gate/post-job] host-pci: OK — 32/32 functions bound to tt-kmd with every BAR assigned
+[19:52:08] [broker] [health-gate/post-job] heartbeat: HEALTHY — all 32 chips' ARC heartbeat advancing
+[19:52:08] [broker] [health-gate/post-job] snapshot: OK — all 32 chips enumerated with live ARC telemetry
+[19:52:08] [broker] [health-gate/post-job] device healthy; no reset needed

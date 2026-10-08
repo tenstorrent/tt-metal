@@ -1,0 +1,100 @@
+[19:35:57] [stdout]             )
+[19:35:57] [stdout]         else:
+[19:35:57] [stdout] >           pipeline = LTXDistilledPipeline.create_pipeline(**common, checkpoint_name=ckpt, gemma_path=gemma)
+[19:35:57] [stdout]
+[19:35:57] [stdout] ../treeB/models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py:206:
+[19:35:57] [stdout] _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+[19:35:57] [stdout] ../treeB/models/tt_dit/pipelines/ltx/pipeline_ltx.py:670: in create_pipeline
+[19:35:57] [stdout]     return pipeline_cls(
+[19:35:57] [stdout] ../treeB/models/tt_dit/pipelines/ltx/pipeline_ltx.py:411: in __init__
+[19:35:57] [stdout]     self._prime_caches(audio_only=audio_only)
+[19:35:57] [stdout] ../treeB/models/tt_dit/pipelines/ltx/pipeline_ltx.py:1097: in _prime_caches
+[19:35:57] [stdout]     self._prepare_transformer(0)
+[19:35:57] [stdout] ../treeB/models/tt_dit/pipelines/ltx/pipeline_ltx.py:1130: in _prepare_transformer
+[19:35:57] [stdout]     cache_module.load_model(
+[19:35:58] [stdout] ../treeB/models/tt_dit/utils/cache.py:230: in load_model
+[19:35:58] [stdout]     _publish_cache(tt_model, cache_dir, key)
+[19:35:58] [stdout] ../treeB/models/tt_dit/utils/cache.py:427: in _publish_cache
+[19:35:58] [stdout]     tt_model.save(staging)
+[19:35:58] [stdout] ../treeB/models/tt_dit/layers/module.py:225: in save
+[19:35:58] [stdout]     child.save(directory, prefix=f"{prefix}{name}.")
+[19:35:58] [stdout] ../treeB/models/tt_dit/layers/module.py:225: in save
+[19:35:58] [stdout]     child.save(directory, prefix=f"{prefix}{name}.")
+[19:35:58] [stdout] ../treeB/models/tt_dit/layers/module.py:225: in save
+[19:35:58] [stdout]     child.save(directory, prefix=f"{prefix}{name}.")
+[19:35:58] [stdout] ../treeB/models/tt_dit/layers/module.py:225: in save
+[19:35:58] [stdout]     child.save(directory, prefix=f"{prefix}{name}.")
+[19:35:58] [stdout] ../treeB/models/tt_dit/layers/module.py:228: in save
+[19:35:58] [stdout]     parameter.save(directory / f"{prefix}{name}.tensorbin")
+[19:35:58] [stdout] ../treeB/models/tt_dit/layers/module.py:461: in save
+[19:35:58] [stdout]     ttnn.dump_tensor(path, self.data, mode=ttnn.DumpTensorMode.LOCAL)
+[19:35:58] [stdout] _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+[19:35:58] [stdout]
+[19:35:58] [stdout] self = <models.tt_dit.layers.module.Parameter object at 0x74a68d34d4b0>
+[19:35:58] [stdout]
+[19:35:58] [stdout]     @property
+[19:35:58] [stdout]     def data(self) -> ttnn.Tensor:
+[19:35:58] [stdout]         if self._data is None:
+[19:35:58] [stdout]             msg = "parameter has no data"
+[19:35:58] [stdout] >           raise RuntimeError(msg)
+[19:35:58] [stdout] E           RuntimeError: parameter has no data
+[19:35:58] [stdout]
+[19:35:58] [stdout] ../treeB/models/tt_dit/layers/module.py:488: RuntimeError
+[19:35:58] [stdout] =============================== warnings summary ===============================
+[19:35:58] [stdout] <frozen importlib._bootstrap>:241
+[19:35:58] [stdout]   <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+[19:35:58] [stdout]
+[19:35:58] [stdout] <frozen importlib._bootstrap>:241
+[19:35:58] [stdout]   <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+[19:35:58] [stdout]
+[19:35:58] [stdout] -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+[19:35:58] [stdout] - generated xml file: /var/tmp/fasth3/t295/outB/generated/test_reports/most_recent_tests.xml -
+[19:35:58] [stdout] ============================= slowest 25 durations =============================
+[19:35:58] [stdout] 123.26s call     models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled[blackhole-bh_4x8sp1tp0_ring-True]
+[19:35:58] [stdout] 9.00s setup    models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled[blackhole-bh_4x8sp1tp0_ring-True]
+[19:35:58] [stdout] 0.04s teardown models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled[blackhole-bh_4x8sp1tp0_ring-True]
+[19:35:58] [stdout] =========================== short test summary info ============================
+[19:35:58] [stdout] FAILED ../treeB/models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled[blackhole-bh_4x8sp1tp0_ring-True] - RuntimeError: parameter has no data
+[19:35:58] [stdout] =========== 1 failed, 7 deselected, 2 warnings in 133.64s (0:02:13) ============
+[19:35:58] [stdout] sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+[19:36:00] [stdout] 2026-10-08 19:36:00.091 | info     |    BuildKernels | JIT cache stats: 368/368 hits (100.0%) [368 cached, 653 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+[19:36:00] [stdout] 2026-10-08 19:36:00.091 | info     |    BuildKernels | JIT telemetry: 26 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+[19:36:00] [stdout] 2026-10-08 19:36:00.395 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:519)
+[19:36:00] [stdout] 2026-10-08 19:36:00.395 | info     |             UMD | Closing devices in cluster (cluster.cpp:1319)
+[19:36:03] [stdout] 2026-10-08 19:36:03.055 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1329)
+[19:36:03] [stdout] 2026-10-08 19:36:03.055 | info     |             UMD | Cluster destructor started. (cluster.cpp:1050)
+[19:36:03] [stdout] 2026-10-08 19:36:03.055 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1063)
+[19:36:03] [stdout] [t295] arm=B process wall 146 s
+[19:36:03] [stderr] md5sum: 'ltx_av_fast_*.mp4': No such file or directory
+[19:36:03] [stdout] T295_EXIT=1
+[19:36:03] [stdout] [t295] rcA=1 rcB=1
+[19:36:03] [stderr] /var/tmp/fasth3/t295/job295.sh: line 8: /var/tmp/fasth3/t295/outA/ltx_av_fast_1920x1088_0.mp4: No such file or directory
+[19:36:03] [stderr] /var/tmp/fasth3/t295/job295.sh: line 8: /var/tmp/fasth3/t295/outB/ltx_av_fast_1920x1088_0.mp4: No such file or directory
+[19:36:03] [stdout] [t295] gen0 A= B= DIFF
+[19:36:03] [stderr] /var/tmp/fasth3/t295/job295.sh: line 8: /var/tmp/fasth3/t295/outA/ltx_av_fast_1920x1088_1.mp4: No such file or directory
+[19:36:03] [stderr] /var/tmp/fasth3/t295/job295.sh: line 8: /var/tmp/fasth3/t295/outB/ltx_av_fast_1920x1088_1.mp4: No such file or directory
+[19:36:03] [stdout] [t295] gen1 A= B= DIFF
+[19:36:03] [stderr] /var/tmp/fasth3/t295/job295.sh: line 8: /var/tmp/fasth3/t295/outA/ltx_av_fast_1920x1088_2.mp4: No such file or directory
+[19:36:03] [stderr] /var/tmp/fasth3/t295/job295.sh: line 8: /var/tmp/fasth3/t295/outB/ltx_av_fast_1920x1088_2.mp4: No such file or directory
+[19:36:03] [stdout] [t295] gen2 A= B= DIFF
+[19:36:03] [stderr] /var/tmp/fasth3/t295/job295.sh: line 8: /var/tmp/fasth3/t295/outA/ltx_av_fast_1920x1088_3.mp4: No such file or directory
+[19:36:03] [stderr] /var/tmp/fasth3/t295/job295.sh: line 8: /var/tmp/fasth3/t295/outB/ltx_av_fast_1920x1088_3.mp4: No such file or directory
+[19:36:03] [stdout] [t295] gen3 A= B= DIFF
+[19:36:03] [stderr] /var/tmp/fasth3/t295/job295.sh: line 8: /var/tmp/fasth3/t295/outA/ltx_av_fast_1920x1088_4.mp4: No such file or directory
+[19:36:03] [stderr] /var/tmp/fasth3/t295/job295.sh: line 8: /var/tmp/fasth3/t295/outB/ltx_av_fast_1920x1088_4.mp4: No such file or directory
+[19:36:03] [stdout] [t295] gen4 A= B= DIFF
+[19:36:03] [stderr] /var/tmp/fasth3/t295/job295.sh: line 8: /var/tmp/fasth3/t295/outA/ltx_av_fast_1920x1088_5.mp4: No such file or directory
+[19:36:03] [stderr] /var/tmp/fasth3/t295/job295.sh: line 8: /var/tmp/fasth3/t295/outB/ltx_av_fast_1920x1088_5.mp4: No such file or directory
+[19:36:03] [stdout] [t295] gen5 A= B= DIFF
+
+======================================================================
+FINISHED:    2026-10-08T19:36:03.842878
+STATUS:      failed
+EXIT CODE:   1
+WAIT TIME:   107.8s
+RUNTIME:     265.1s
+======================================================================
+[19:36:03] [broker] [health-gate/post-job] host-pci: OK — 32/32 functions bound to tt-kmd with every BAR assigned
+[19:36:04] [broker] [health-gate/post-job] heartbeat: HEALTHY — all 32 chips' ARC heartbeat advancing
+[19:36:04] [broker] [health-gate/post-job] snapshot: OK — all 32 chips enumerated with live ARC telemetry
+[19:36:06] [broker] [health-gate/post-job] eth-heartbeat: OK — all active-eth cores advancing (1s)

@@ -1,0 +1,13 @@
+19:38:43 arm=A Job 119 queued (position: 1)
+Log: /var/log/tt-device-broker/2026-10-08_193843_119.log
+19:46:45 arm=A job=119 status=completed
+19:46:46 arm=B Job 121 queued (position: 0)
+Log: /var/log/tt-device-broker/2026-10-08_194646_121.log
+19:52:17 arm=B job=121 status=completed
+[t295] gen0 A=f74f2d2132d8b6cea7d3d413647e40b1 B=f74f2d2132d8b6cea7d3d413647e40b1 MATCH
+[t295] gen1 A=f74f2d2132d8b6cea7d3d413647e40b1 B=f74f2d2132d8b6cea7d3d413647e40b1 MATCH
+[t295] gen2 A=ff2501382ea0d6ee1f65d29134667424 B=ff2501382ea0d6ee1f65d29134667424 MATCH
+[t295] gen3 A=d296a015e5fa65a78f3ca728293217e6 B=d296a015e5fa65a78f3ca728293217e6 MATCH
+[t295] gen4 A=b8a5ea41723378493c2dbe6777e6276e B=b8a5ea41723378493c2dbe6777e6276e MATCH
+[t295] gen5 A=5b091f6b5f79c66ae3501bc873d38418 B=5b091f6b5f79c66ae3501bc873d38418 MATCH
+exit=0 19:52:17
