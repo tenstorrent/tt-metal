@@ -177,14 +177,15 @@ class VisionAttention(LightweightModule):
                 dim=-1,
             )
             # Prefill can use broadcasting on the bias add so wants a 1d tensor
+            # Fused into the QKV ttnn.linear (bf16, like the vision MLP biases)
             self.wqkv_bias_prefill = ttnn.as_tensor(
                 qkv_bias,
                 device=self.mesh_device,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("wqkv_bias_prefill_sharded"),
+                cache_file_name=cache_name("wqkv_bias_prefill_bf16"),
             )
 
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
@@ -326,14 +327,15 @@ class VisionAttention(LightweightModule):
 
         if f"{wo_str}.bias" in self.state_dict:
             # Prefill can use broadcasting on the bias add so wants a 1d tensor
+            # Fused into the WO ttnn.linear
             self.wo_bias_prefill = ttnn.as_tensor(
                 self.state_dict[f"{wo_str}.bias"],
                 device=self.mesh_device,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                dtype=self.dtype,
+                dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("wo_bias_prefill_sharded"),
+                cache_file_name=cache_name("wo_bias_prefill_bf16"),
             )
 
         self.scale = self.head_dim**-0.5
@@ -383,15 +385,12 @@ class VisionAttention(LightweightModule):
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
+            bias=self.wqkv_bias_prefill,
             dtype=self.activation_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
             program_config=self.xqkv_prefill_progcfg(seq_len),
         )
-
-        # FIXME: surely ttnn.linear bias should work?
-        if self.wqkv_bias_prefill is not None:
-            xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
@@ -504,14 +503,12 @@ class VisionAttention(LightweightModule):
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
+            bias=self.wo_bias_prefill,
             compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
             dtype=self.activation_dtype or ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["VISION_WO_PREFILL_PROGCFG"](seq_len),
         )
-        # FIXME: surely ttnn.linear bias should work?
-        if self.wo_bias_prefill is not None:
-            output_11SH = output_11SH + self.wo_bias_prefill
 
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
