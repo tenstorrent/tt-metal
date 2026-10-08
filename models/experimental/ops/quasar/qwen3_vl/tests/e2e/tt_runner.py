@@ -5,6 +5,7 @@
 import torch
 
 import ttnn
+from models.experimental.ops.quasar.qwen3_vl.tests.e2e import probes as PR
 from models.experimental.ops.quasar.qwen3_vl.tests.e2e import snapshot as S
 from models.experimental.ops.quasar.qwen3_vl.tt.common import (
     PagedAttentionConfig,
@@ -70,6 +71,7 @@ def run_tt(
     snapshot_out=None,
     resume=None,
     clear_program_cache_before_decode=False,
+    probes=(),
 ):
     """Run vision, prefill and teacher-forced decode. After prefill, save a snapshot to `snapshot_out` (if given);
     with `resume` (a loaded snapshot) skip vision and prefill and decode from its KV cache instead."""
@@ -133,6 +135,8 @@ def run_tt(
 
     if clear_program_cache_before_decode:
         mesh_device.clear_program_cache()
+    if probes:
+        PR.run(probes, mesh_device)
     gen.update_rope_deltas([rope_delta])
     pos = torch.tensor([decoding_pos])
     for k, tok in enumerate(goldens.teacher_tokens):
