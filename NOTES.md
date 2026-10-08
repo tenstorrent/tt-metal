@@ -19,6 +19,22 @@ Reference: tt-project/data/g15/ref_t48_f6b8/seed0-4.mp4 (job 710; t188 job 755 m
 Env = LTX_VERSION=2.5 (LTX-2.3 ckpt + LTX-2.5 split ckpt root), dit-ltx25 cache, t48 build bf7db12a149 on blx01.
 The ref used LTX25_ROOT=/mnt/MLPerf/... -> FORBIDDEN now (job 086 D-state hang). Need a LOCAL LTX-2.5 root.
 
+## Run 1172 (2026-10-08 19:08-19:15 UTC)
+- blx03: still 'No route to host'. blx01: answered at 19:08 UTC (up 3 min after a reboot; broker in
+  hold-deadline-escalate fabric check, broker job 099; a non-t295 smarton job 091 `bash /tmp/ttb151/job.sh` queued),
+  then 'No route to host' again by ~19:12 UTC. No t295 job submitted, so no drop of ours to log.
+- blx01 data as of 19:08: /var/tmp/fasth3 = 159G (over the 150 GB cap already; add nothing big).
+  cache/dit-ltx25 is GONE (only dit-h3hf, tt-metal-cache*); models/ has no LTX-2.5 split root.
+  So the LTX_VERSION=2.5 reference env (job 710/755) cannot be reproduced on blx01 without new caches.
+  It still has t220/cache/dit-ltx23 (113G, LTX-2.3 cache from t220, contents not checked: bf8 medium tier
+  certain, bf16 transformer unknown) and t48 build bf7db12a149.
+- g15blx02: /home 1.5T free, but no LTX build/ckpts/caches; a fill alone would break the 600 s cap. Not used.
+- Fallback plan if blx03's 2.5 env is gone too: pure LTX-2.3 (LTX_VERSION unset) A/B in ONE job on a box with a
+  bf16 LTX-2.3 DiT cache: arm A = overlay f6547442b30 at defaults; arm B = overlay 9e20d905481 (pre-change tip) +
+  LTX_S2_SIGMAS=0.909375,0.725,0.421875,0.0. md5 A == B per seed proves the default revert is exact. Seeds 0-1
+  per arm if 5 do not fit -t 600.
+- Wake probe: tmp/t295/probe.sh (box up >=20 min, broker not holding/resetting).
+
 ## Next step (when blx01 or blx03 answers ssh)
 1. On the box: df -h /; ls /var/tmp/fasth3/{t48,cache,models}; find a local LTX-2.5 split root
    (e.g. /var/tmp/fasth3/models/ltx-2.5*, ~/.cache/ltx-checkpoints/ltx-2.5, /home/sulphur/hf/...). None -> copy only the
