@@ -29,7 +29,7 @@ void kernel_main() {
 #ifdef SDPA_RECIPE_KRANGE
     // Key ranges (recipe_key_range.hpp): per Q chunk, the control page compute reads and the edge chunks' masks,
     // before its output. Runtime args 3-5: the scalar Q offset, then the Q offset and cu_window_seqlens addresses
-    // (0 when absent), read into this kernel's half of the scratch CB.
+    // (0 when absent), read into this kernel's half of the scratch CB; with Q slabs 6-7 the slabs' first Q chunks.
     constexpr uint32_t kr_cta0 = oa.next_compile_time_args_offset();
 #ifdef SDPA_RECIPE_Q_OFFSET_PAGE
     constexpr auto offset_args = TensorAccessorArgs<kr_cta0>();
@@ -61,11 +61,20 @@ void kernel_main() {
             i < 16 ? kRecipeMaskExponents : kRecipeMaskedNibbles;
     }
     CircularBuffer rcb(SDPA_RECIPE_KEY_RANGE_CB), mcb(SDPA_RECIPE_MASK_CB);
+#ifdef SDPA_RECIPE_Q_SLAB_JOBS
+    const RecipeQSlabs slabs{{get_arg_val<uint32_t>(6), get_arg_val<uint32_t>(7)}};
+#endif
     // Walk positions [first_job, first_job + jobs) of the heads' zigzag orders (reader_recipe.cpp).
     for (uint32_t z = first_job; z < first_job + jobs; ++z) {
         const uint32_t job = z - z % SDPA_RECIPE_Q_JOBS + recipe_zigzag_job(z % SDPA_RECIPE_Q_JOBS, SDPA_RECIPE_Q_JOBS);
+#ifdef SDPA_RECIPE_Q_SLAB_JOBS
+        // Rows of the whole sequence; slab chunks are whole.
+        const uint32_t q_row0 = slabs.chunk(job % SDPA_RECIPE_Q_JOBS) * q_tiles * 32;
+        const uint32_t q_row_end = q_row0 + q_tiles * 32;
+#else
         const uint32_t q_row0 = (job % SDPA_RECIPE_Q_JOBS) * q_tiles * 32;
         const uint32_t q_row_end = q_row0 + q_tiles * 32 < primary_rows ? q_row0 + q_tiles * 32 : primary_rows;
+#endif
         const RecipeChunkRange range = keys.chunks(q_row0, q_row_end, SDPA_K_CHUNK_TILES * 32, SDPA_RECIPE_K_CHUNKS);
         recipe_push_chunk_range(rcb, range);
         for (uint32_t ki = range.first; ki < range.end; ++ki) {
