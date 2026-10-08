@@ -1,0 +1,340 @@
+{
+  "state": "completed_with_oom",
+  "created_at": "2026-10-07T22:54:28.786362+00:00",
+  "replicas": 1,
+  "chips": 4,
+  "batches": [
+    8,
+    4,
+    16,
+    1,
+    2,
+    32,
+    64
+  ],
+  "input_lengths": [
+    131072,
+    262016,
+    32768,
+    8192,
+    128
+  ],
+  "output_tokens": 128,
+  "warmup_runs": 1,
+  "measured_runs": 3,
+  "methodology": "Full 64-layer native generator; fresh full prefills, no prefix reuse; fixed 128-token output including tokens beyond EOS. Warm measurements exclude weight loading and first-use compilation. TTFT includes request-state reset, prefill and first token readback. Decode uses device sampling and deferred history readback; HTTP and router overhead are not included. Input throughput times prefill_forward through device synchronization, excluding reset, sampling and readback. This native harness submits replica prefills sequentially; its aggregate input rate reflects that schedule, not ideal parallel prefill capacity. Whole-Galaxy throughput is measured only when replicas=8, never multiplied from TP4 results.",
+  "capacity_note": "Capacity and implementation guards are not tested; they are not measured OOM failures.",
+  "cells": [
+    {
+      "input_tokens": 32768,
+      "batch_per_replica": 16,
+      "concurrency": 16,
+      "pool_tokens_per_replica": 526336,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "fc8a22c242dc46d1194ec49d6fee1e3ef73cabf8b3a313455e017e04d5bfd4d6",
+      "warmup": {
+        "ttft_s": [
+          89.97668296704069,
+          89.97668296704069,
+          89.97668296704069,
+          89.97668296704069,
+          89.97668296704069,
+          89.97668296704069,
+          89.97668296704069,
+          89.97668296704069,
+          89.97668296704069,
+          89.97668296704069,
+          89.97668296704069,
+          89.97668296704069,
+          89.97668296704069,
+          89.97668296704069,
+          89.97668296704069,
+          89.97668296704069
+        ],
+        "prefill_s": 89.78348597418517,
+        "prefill_s_per_replica": [
+          89.78348597418517
+        ],
+        "decode_s": 13.729354679118842,
+        "elapsed_s": 103.70604019984603,
+        "output_sha256_per_replica": [
+          "0258a40ea0e446d3e57a097713e4440861e9624a84d24e3f7cf98ab70b3e30e5"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "batched_prefill_calls": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "samples": [
+        {
+          "ttft_s": [
+            80.00198810687289,
+            80.00198810687289,
+            80.00198810687289,
+            80.00198810687289,
+            80.00198810687289,
+            80.00198810687289,
+            80.00198810687289,
+            80.00198810687289,
+            80.00198810687289,
+            80.00198810687289,
+            80.00198810687289,
+            80.00198810687289,
+            80.00198810687289,
+            80.00198810687289,
+            80.00198810687289,
+            80.00198810687289
+          ],
+          "prefill_s": 79.85207510692999,
+          "prefill_s_per_replica": [
+            79.85207510692999
+          ],
+          "decode_s": 9.709607777185738,
+          "elapsed_s": 89.71159808710217,
+          "output_sha256_per_replica": [
+            "0258a40ea0e446d3e57a097713e4440861e9624a84d24e3f7cf98ab70b3e30e5"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            79.9991950490512,
+            79.9991950490512,
+            79.9991950490512,
+            79.9991950490512,
+            79.9991950490512,
+            79.9991950490512,
+            79.9991950490512,
+            79.9991950490512,
+            79.9991950490512,
+            79.9991950490512,
+            79.9991950490512,
+            79.9991950490512,
+            79.9991950490512,
+            79.9991950490512,
+            79.9991950490512,
+            79.9991950490512
+          ],
+          "prefill_s": 79.85510304709896,
+          "prefill_s_per_replica": [
+            79.85510304709896
+          ],
+          "decode_s": 9.709205561317503,
+          "elapsed_s": 89.70840284321457,
+          "output_sha256_per_replica": [
+            "0258a40ea0e446d3e57a097713e4440861e9624a84d24e3f7cf98ab70b3e30e5"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            80.00529977912083,
+            80.00529977912083,
+            80.00529977912083,
+            80.00529977912083,
+            80.00529977912083,
+            80.00529977912083,
+            80.00529977912083,
+            80.00529977912083,
+            80.00529977912083,
+            80.00529977912083,
+            80.00529977912083,
+            80.00529977912083,
+            80.00529977912083,
+            80.00529977912083,
+            80.00529977912083,
+            80.00529977912083
+          ],
+          "prefill_s": 79.85737138986588,
+          "prefill_s_per_replica": [
+            79.85737138986588
+          ],
+          "decode_s": 9.709534992929548,
+          "elapsed_s": 89.714837315958,
+          "output_sha256_per_replica": [
+            "0258a40ea0e446d3e57a097713e4440861e9624a84d24e3f7cf98ab70b3e30e5"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 13.079926082194563,
+        "aggregate_decode_tokens_per_second": 209.278817315113,
+        "aggregate_e2e_tokens_per_second": 22.828709371686475,
+        "tpot_ms": 76.45303144039015,
+        "ttft_p50_s": 80.00198810687289,
+        "ttft_p90_s": 80.00529977912083,
+        "decode_s": 9.709534992929548,
+        "elapsed_s": 89.71159808710217,
+        "samples": 3,
+        "prefill_s": 79.85510304709896,
+        "aggregate_input_tokens_per_second": 6565.491496401578,
+        "aggregate_e2e_input_tokens_per_second": 5844.149599151738
+      },
+      "carried_from": {
+        "path": "/home/ttuser/qwen38-artifacts-20261007/gdn-perf-sweeps-v4/native/attempt-01/sweep.json",
+        "sha256": "06dd9355167eb5cd30806d3927873676decdf7842b939f2620afa750b9fe8693"
+      }
+    }
+  ],
+  "recurrence_variant": "native",
+  "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
+  "updated_at": "2026-10-07T23:18:07.332893+00:00",
+  "configuration": {
+    "topology": "linear",
+    "num_links": 2,
+    "native_layers": 64,
+    "environment": {
+      "QWEN_COMPACT_DECODE_RESIDUAL": "1",
+      "QWEN_BATCHED_PREFILL": "1",
+      "QWEN_PREFILL_SKIP_INTERMEDIATE_HEAD": "1",
+      "QWEN_SWEEP_RESUME_FROM": "[\"/home/ttuser/qwen38-artifacts-20261007/gdn-perf-sweeps-v1/native/sweep.json\", \"/home/ttuser/qwen38-artifacts-20261007/gdn-perf-sweeps-v4/native/attempt-01/sweep.json\"]",
+      "QWEN_COMPACT_DECODE_ATTENTION": "1",
+      "QWEN_DECODE_BUCKETS": "0",
+      "QWEN_SWEEP_RESULTS": "/home/ttuser/qwen38-artifacts-20261007/gdn-perf-sweeps-v4/native/attempt-02",
+      "QWEN_COMPACT_DECODE_MLP": "1",
+      "QWEN_PREFILL_BATCHED_HEAD": "1",
+      "QWEN_PREFILL_STARTUP_WARMUP": "1",
+      "QWEN_PREFILL_RESIDUAL_LAYOUT": "sharded_replicated_norm",
+      "QWEN_GALAXY_SWEEP": "1",
+      "QWEN_BATCHED_DECODE_ROPE": "1",
+      "QWEN_PRECISION_CONFIG": "/home/ttuser/qwen38-artifacts-20261007/gdn-integration-source-v9/models/demos/qwen38_27b_qb2/config/precision_accurate_decode.json"
+    }
+  },
+  "source_sha256": {
+    "tt/__init__.py": "501d5b563ca412fa21db82bf39117b5480ecf99bcaf11996b9c3d5f1093bb9a8",
+    "tt/decode_attention.py": "233021a907845fb954d689934cecd57b6879a6b9343b19c5e74888351637a6f8",
+    "tt/decode_conv.py": "7a80916276118500e04798f3de08058f2074552cbafb7d2a07ced16a67292e52",
+    "tt/decoder.py": "bd2e1c040eb9e27e02a8762ee5ae342d051c751e085020b90702e43517c633fa",
+    "tt/decoder_tp.py": "1c8815b901c1e6de4d28bf1249b528d6ed44185e39f6e2165556e283c013c283",
+    "tt/gdn_step/__init__.py": "c94ebc138e25c01aae5a492beeebe5fca1f7bbbb3a0be4c55c8d6198cba2f48f",
+    "tt/gdn_step/compute.cpp": "eb5bdec63e5c49f4e7f750865d629aecda2dda32dea0552cb0f88c4b20bd65ee",
+    "tt/gdn_step/model_adapter.py": "e750c66370691114ac8bbb015957b50047ac007b1b27f81048d71d819664f62d",
+    "tt/gdn_step/op.py": "f428b429cf909e0711e5c8af8cbab7984b2a8790a7152b7edf5839d761afa81f",
+    "tt/gdn_step/reader.cpp": "2589e5ca345e9e93521b1b1025b6552ef300959983f7a8a8b07f4c5ee81a694c",
+    "tt/gdn_step/workspace.py": "cd86b8da8ccd1d603150a7242a550e76609519aabcf106a1e5b34e3414d784d9",
+    "tt/gdn_step/writer.cpp": "2632705ff4fc977076094b537ff67175f819f78d996f550d78d9955277b7698d",
+    "tt/generator.py": "c30d9967baeaac24f55fe2be689fb6590106fc3e7711d02754664d8e15306bba",
+    "tt/generator_vllm.py": "2761aa20a8f939a42353780deb294d491fa59caff8fe434a936fa985716119b0",
+    "tt/model.py": "5a30843e69d55cc21b66fe8a182772a154b72ca5e990b88c98bf5a0e31418c28",
+    "tt/precision.py": "7eabece6dd41f7537ae35997d87bed545ce8fdcd7334b69c39bf48fd77b3f435",
+    "tt/topology.py": "915668bdd65c9fb5c7454273840324877b700d088dcca362d7b936cfcebbb37f",
+    "config/precision.json": "33a8fa95c118a85ceb53e6ba707ae4d6eb74631263d5120c1842afa6605628d1",
+    "effective_precision_override": "54b42cd2f95282eecc2125c91e5bc0c35b99883c2b54d5bc23bfcaea0dcae616"
+  },
+  "setup_s_per_replica": [
+    297.60818613599986
+  ],
+  "precision": {
+    "config_id": "head_bfp4_lofi_accurate_decode",
+    "weight_groups": {
+      "attention": "bfloat4_b",
+      "output": "bfloat4_b",
+      "gate": "bfloat4_b",
+      "up": "bfloat4_b",
+      "down": "bfloat4_b",
+      "head": "bfloat4_b"
+    },
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "output": "LoFi",
+      "gate": "LoFi",
+      "up": "LoFi",
+      "down": "LoFi",
+      "head": "LoFi"
+    },
+    "fp32_dest_acc_en": true,
+    "layer_exceptions": {},
+    "activation_dtype": {
+      "attention": "bfloat16",
+      "mlp": "bfloat16"
+    },
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "recurrent_dtype": "float32",
+    "convolution_dtype": "bfloat16",
+    "sensitive_compute_fidelity": "HiFi4",
+    "token_dtype": "uint32",
+    "max_context": 262144,
+    "final_norm_compute_fidelity": "HiFi2",
+    "decode_attention": "accurate_full_tile",
+    "decode_recurrence": "native"
+  },
+  "resume_receipts": [
+    {
+      "path": "/home/ttuser/qwen38-artifacts-20261007/gdn-perf-sweeps-v1/native/sweep.json",
+      "sha256": "5ef7be4a63bc7886e92ee6b1d5956ce255c66df587ae0b91f5aee3c964533f33"
+    },
+    {
+      "path": "/home/ttuser/qwen38-artifacts-20261007/gdn-perf-sweeps-v4/native/attempt-01/sweep.json",
+      "sha256": "06dd9355167eb5cd30806d3927873676decdf7842b939f2620afa750b9fe8693"
+    }
+  ],
+  "cleanup_completed": true,
+  "attempt_returncode": 0,
+  "latest_attempt": "/home/ttuser/qwen38-artifacts-20261007/gdn-perf-sweeps-v4/native/attempt-02"
+}

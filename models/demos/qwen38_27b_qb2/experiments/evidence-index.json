@@ -1,0 +1,1989 @@
+{
+  "generated_at": "2026-10-08T04:36:20.959306+00:00",
+  "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
+  "entries": [
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/README.md",
+      "bytes": 5632,
+      "sha256": "b6d0d23f6a3e823fb3a443a97e5ac7279bdbabc6dc115fbc4368122af2563533"
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/attention-accurate-chunks-v1/chunks.json",
+      "bytes": 120904,
+      "sha256": "b4ba44fbcaa678c8db92d7fef7cae490b29f5ae430507ce4613575bcc4924260",
+      "state": "completed",
+      "passed": true,
+      "scope": "Synthetic attention chunk/core allocation; no full-model qualification",
+      "updated_at": "2026-10-07T15:24:33Z"
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/attention-accurate-chunks-v1/hardware.xml.gz",
+      "bytes": 303,
+      "sha256": "bc65eef97f6dd79d586a33a601d8313bde601361da78641df49a8f2be8a2c27b",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/attention-chunk-grid-v1/chunks.json",
+      "bytes": 234002,
+      "sha256": "da8cdddeb5b495b122e8bc4a285e9296d98a90c0490a7f4b3d8f9d7522460435",
+      "state": "failed",
+      "passed": false,
+      "scope": "Synthetic attention chunk/core allocation; no full-model qualification",
+      "updated_at": "2026-10-07T15:10:39Z",
+      "error_type": "AssertionError"
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/attention-chunk-grid-v1/hardware.xml.gz",
+      "bytes": 1511,
+      "sha256": "339d1342df262474a9b9ac95b3b42263d3bbe87cdba3a7fe99dbc1972ae412fa",
+      "junit": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/attention-full-tile-v1/hardware.xml.gz",
+      "bytes": 1506,
+      "sha256": "80f2f802425ec4abbfef9de1fcf5be68fc0c2e3650ed3c4f7f48bc1c0668a3b3",
+      "junit": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/attention-full-tile-v1/precision.json",
+      "bytes": 91712,
+      "sha256": "141241d3ab6355af6a93d9d626d219376be585607f3d0fa83e8af474270251ed",
+      "state": "failed",
+      "passed": false,
+      "scope": "Synthetic attention math diagnosis; no model accuracy or deployment qualification",
+      "updated_at": "2026-10-07T15:18:47Z",
+      "error_type": "AssertionError"
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/gdn-model-adapter-v1/adapter.json",
+      "bytes": 33675,
+      "sha256": "dfff673e8d5b1646b8b304172e93c4e5358459723ae4e634a2e6365aaf5bd800",
+      "state": "completed",
+      "passed": true,
+      "scope": "Model-layout preparation plus single-step GDN; convolution, output gating and projection excluded",
+      "updated_at": "2026-10-07T15:25:10Z"
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/gdn-model-adapter-v1/hardware.xml.gz",
+      "bytes": 297,
+      "sha256": "eb1b2558ad732183395b11d8d901aff70d5d314828db97e234b8719962b1cde1",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/gdn-native-control-v2/adapter.json",
+      "bytes": 69168,
+      "sha256": "3ae8ae8777833e29a750a10d533a19c744c9798ebe52bac084047368feb15d8b",
+      "state": "completed",
+      "passed": true,
+      "scope": "Model-layout preparation plus single-step GDN; convolution, output gating and projection excluded",
+      "updated_at": "2026-10-07T15:47:53Z"
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/gdn-native-control-v2/hardware.xml.gz",
+      "bytes": 296,
+      "sha256": "99955368abed7e6ff4a4f52d2b3e9043f7ce876d919a53b366cb96acebaf85ac",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/launch-accurate-decode-qualification-v1.json",
+      "bytes": 822,
+      "sha256": "33d92a9987a649c8a70c2ba19cca0a031f31ea7c96e923b69696e131a8fa34f8",
+      "created_at": 1791389019.68581
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/manifest.json",
+      "bytes": 2363,
+      "sha256": "923bd95b82235fb8a0bbcd90703c024c729fb54d8b2dd13c8642bf6c68deff20"
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/model-attention-v2/attention.json",
+      "bytes": 56588,
+      "sha256": "d7887c61cbe8eab790d59fbf2b81938223b2106fa7657f56fc1bfaeae8c5c641",
+      "state": "completed",
+      "passed": true,
+      "scope": "Actual decoder attention helper, including device Q padding and output slicing; no full-model eval",
+      "updated_at": "2026-10-07T15:47:17Z"
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/model-attention-v2/hardware.xml.gz",
+      "bytes": 302,
+      "sha256": "97729ee044a5f3bf4d3bc52b34d285765d6185c8c73765899f95e4dc41c34082",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/qwen38-accurate-qualification-manifest.json",
+      "bytes": 1202,
+      "sha256": "f22ab04f499e084cbffdd38425dddb51ba52912a73433e87a461e42b38c37813"
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/run-accurate-decode-qualification-v1.sh",
+      "bytes": 2800,
+      "sha256": "3c71e973b42e519beab1d32d99c38e1ed1b1454109381d562bbdbba0bbd3e604"
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/test_gdn_model_adapter.py.snapshot",
+      "bytes": 6611,
+      "sha256": "47a9f25e44cd8a6008997b1e041f7568f21666fc7fbb800f4a3ada86efa2f6e8"
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/test_long_context_attention.py.snapshot",
+      "bytes": 10661,
+      "sha256": "dbb77f473a7a1339b13e5b72fa557c3961411c75189748fef73d254c6877f2d6"
+    },
+    {
+      "path": "galaxy-evidence/attention-gdn-integration-v1/unit.xml.gz",
+      "bytes": 4044,
+      "sha256": "a14c29b8dcbe58dc3da72b99a011aefd99ead6fa2f851ea8953026d2689efe75",
+      "junit": {
+        "tests": 210,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 1
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-grid-v2/README.md",
+      "bytes": 1426,
+      "sha256": "a40a6b182ac211455c78520a07508bc49ccfadd9c6a0a7e395f1a84916a4c382"
+    },
+    {
+      "path": "galaxy-evidence/attention-grid-v2/attention-grid-validation-v2.xml.gz",
+      "bytes": 5182,
+      "sha256": "1578ede00b5ae3d2e8160fe42b3031d4ddc686bf32b4f073640135bd169d7804",
+      "junit": {
+        "tests": 294,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-grid-v2/attention-placement-launch-v2.json",
+      "bytes": 3223,
+      "sha256": "38db8ad7bc002c6ae902eadd9883bc68e7218edf10b12c1944fea1de0d6e680a",
+      "created_at": "2026-10-08T04:03:50.695329+00:00"
+    },
+    {
+      "path": "galaxy-evidence/attention-grid-v2/attention-placement-v1/placement.json",
+      "bytes": 2952,
+      "sha256": "874dfeee5066d7481f2217d9390826d8f305010c7354c55353357f2b2b17dbab",
+      "state": "failed",
+      "passed": false,
+      "cleanup_completed": true,
+      "scope": "Synthetic TP4 attention placement and common-output-layout timing; no full-model throughput or eval claim",
+      "updated_at": "2026-10-08T02:16:10Z",
+      "error_type": "ValueError"
+    },
+    {
+      "path": "galaxy-evidence/attention-grid-v2/attention-reader-launch-v2.json",
+      "bytes": 3192,
+      "sha256": "7ddc46b4fc2b4a298b7c6aca35326ccd9ca32823fbb9ffd60e96753b821bad01",
+      "created_at": "2026-10-08T04:03:50.727579+00:00"
+    },
+    {
+      "path": "galaxy-evidence/attention-grid-v2/attention-reader-v1/queue.json",
+      "bytes": 13111,
+      "sha256": "5d509a8edf16f446e5bf006b05528dd4b5e3bdd7469aba24a5058b9622bffdfb",
+      "state": "failed",
+      "updated_at": "2026-10-08T02:16:22Z",
+      "error_type": "RuntimeError"
+    },
+    {
+      "path": "galaxy-evidence/attention-placement-launch-v2.json",
+      "bytes": 3223,
+      "sha256": "38db8ad7bc002c6ae902eadd9883bc68e7218edf10b12c1944fea1de0d6e680a",
+      "created_at": "2026-10-08T04:03:50.695329+00:00"
+    },
+    {
+      "path": "galaxy-evidence/attention-placement-v1/attention-placement-launch-v1.json",
+      "bytes": 2354,
+      "sha256": "dab2b583cdbdc5269b8ab1ea0256f571e47bff4330bb411a8f47d9ae6ef49cce"
+    },
+    {
+      "path": "galaxy-evidence/attention-placement-v1/attention-placement-unit-v1.xml.gz",
+      "bytes": 4904,
+      "sha256": "7c641a75bd805396ed94916ada7c5eaa3eaf22189704fd960e1348bdac25aa23",
+      "junit": {
+        "tests": 276,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-placement-v2/hardware.xml.gz",
+      "bytes": 300,
+      "sha256": "d508538da09cc27bf9d8fb8b957c7858a5c5877476cec8b73b1eb8575084f13d",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-placement-v2/placement.json.gz",
+      "bytes": 26537,
+      "sha256": "bfeb3199f3af3f15adbe730e544b6652e1a4f04651a3d1918275e95be7c01249",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true,
+      "scope": "Synthetic TP4 attention placement and common-output-layout timing; no full-model throughput or eval claim",
+      "updated_at": "2026-10-08T04:11:50Z"
+    },
+    {
+      "path": "galaxy-evidence/attention-placement-v2/queue.json",
+      "bytes": 13602,
+      "sha256": "e409897a3d458e12b2ec6845d0d610002fbf0caefecb4ddec4e78745822b9dce",
+      "state": "completed",
+      "updated_at": "2026-10-08T04:11:54Z"
+    },
+    {
+      "path": "galaxy-evidence/attention-placement-v2/receipt.json",
+      "bytes": 393,
+      "sha256": "6ebe2ebe6b2c8af28c3b53fff8a2771f3c1498553f46f13b9c2901ecdeb95e2c",
+      "state": "completed",
+      "cleanup_completed": true,
+      "scope": "Completed experiment; eight alternative-layout cases fail numerical gates, no model promotion"
+    },
+    {
+      "path": "galaxy-evidence/attention-placement-v2/summary.csv",
+      "bytes": 3802,
+      "sha256": "91be9a94e80ae17fa20915021c47c3b4785bb20ef0377a394c2a4b394e37d65d"
+    },
+    {
+      "path": "galaxy-evidence/attention-placement-v2/unit.xml.gz",
+      "bytes": 5197,
+      "sha256": "96a430f94b7554f622139372df025ed41cbad9400a606b2cdf066bf237e8de2a",
+      "junit": {
+        "tests": 294,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-precision-v1/hardware.xml",
+      "bytes": 3812,
+      "sha256": "3c349dcce35d75eaf758308490920c09b29188d9456a0fbeae10a48f1347f274",
+      "junit": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-precision-v1/precision.json",
+      "bytes": 3841,
+      "sha256": "21c702eb4dcfa81196540e034cadb98e9617a58719f2d5e6db290519baec995e",
+      "state": "failed",
+      "passed": false,
+      "scope": "Synthetic attention math diagnosis; no model accuracy or deployment qualification",
+      "updated_at": "2026-10-07T14:45:49Z",
+      "error_type": "AttributeError"
+    },
+    {
+      "path": "galaxy-evidence/attention-precision-v2/hardware.xml",
+      "bytes": 3449,
+      "sha256": "8ebadec60eb84f5213d4ffbac7c893980a4a7a2dac014c867672b7e7f16c31b4",
+      "junit": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-precision-v2/launch-attention-precision-v2.json",
+      "bytes": 862,
+      "sha256": "3172c3797fef3ee7200e4884b23ea6245898eb7841528cad70855c6f530684c0"
+    },
+    {
+      "path": "galaxy-evidence/attention-precision-v2/precision.json",
+      "bytes": 52219,
+      "sha256": "241977bc3d5dd7d0b35fcc93278af83928a970a4f8607b9e76348749f0e3798b",
+      "state": "failed",
+      "passed": false,
+      "scope": "Synthetic attention math diagnosis; no model accuracy or deployment qualification",
+      "updated_at": "2026-10-07T14:55:42Z",
+      "error_type": "AssertionError"
+    },
+    {
+      "path": "galaxy-evidence/attention-reader-launch-v2.json",
+      "bytes": 3192,
+      "sha256": "7ddc46b4fc2b4a298b7c6aca35326ccd9ca32823fbb9ffd60e96753b821bad01",
+      "created_at": "2026-10-08T04:03:50.727579+00:00"
+    },
+    {
+      "path": "galaxy-evidence/attention-reader-v1/attention-reader-launch-v1.json",
+      "bytes": 2323,
+      "sha256": "6af8fbc5d74bee680dc2d46db7b8a0916e4e1824b7e87bebc87b0cf779ce123f"
+    },
+    {
+      "path": "galaxy-evidence/attention-reader-v1/attention-reader-unit-final-v1.xml.gz",
+      "bytes": 5129,
+      "sha256": "ae9d9d45657cdda7b477114a7cac9cec579875d15b2aa6219e87d21369788209",
+      "junit": {
+        "tests": 288,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-reader-v2/0-native/hardware.xml.gz",
+      "bytes": 298,
+      "sha256": "9cba526e1e7679108e6600b8cb547e03372e00775ccb8431b115ff1cfc8bab12",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-reader-v2/0-native/reader.json",
+      "bytes": 74749,
+      "sha256": "13641ccb32fdbee1c2c5e25b97b5c6bd3a5bf997e66f391c5d7e063fb6c6969e",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true,
+      "scope": "Real paged-SDPA op on synthetic inputs; no full-model speedup or reference-eval claim",
+      "updated_at": "2026-10-08T04:14:02Z"
+    },
+    {
+      "path": "galaxy-evidence/attention-reader-v2/1-kv4/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "9964f1383bd1f4780dda323f2a3a9bca1851d137f387709583461699b74e3c8f",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-reader-v2/1-kv4/reader.json",
+      "bytes": 74734,
+      "sha256": "75fc1f8ddb0eb25b776bfc644e9857ad38f119269af571f71194b4176300d810",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true,
+      "scope": "Real paged-SDPA op on synthetic inputs; no full-model speedup or reference-eval claim",
+      "updated_at": "2026-10-08T04:15:50Z"
+    },
+    {
+      "path": "galaxy-evidence/attention-reader-v2/2-kv8/hardware.xml.gz",
+      "bytes": 299,
+      "sha256": "c1494b3e6c19daa1634a7e3a6b69f1a7a2ed55f66939023abb94225c59478d31",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-reader-v2/2-kv8/reader.json",
+      "bytes": 74720,
+      "sha256": "90c41ac8ee6d0957633e9657f915ee209ad86df0d8f8d722244cd8f3d041432e",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true,
+      "scope": "Real paged-SDPA op on synthetic inputs; no full-model speedup or reference-eval claim",
+      "updated_at": "2026-10-08T04:17:38Z"
+    },
+    {
+      "path": "galaxy-evidence/attention-reader-v2/3-kv16/hardware.xml.gz",
+      "bytes": 298,
+      "sha256": "c58019faf0d1aa1589c7337e31020df4952f55b337cd91b375c31d4fa5726278",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-reader-v2/3-kv16/reader.json",
+      "bytes": 74747,
+      "sha256": "d4c6a99bec8695106be0496ee4ad4462fe77845fe87bfea9101035bfdc6b4c00",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true,
+      "scope": "Real paged-SDPA op on synthetic inputs; no full-model speedup or reference-eval claim",
+      "updated_at": "2026-10-08T04:19:27Z"
+    },
+    {
+      "path": "galaxy-evidence/attention-reader-v2/4-native/hardware.xml.gz",
+      "bytes": 300,
+      "sha256": "f73d1b4ecb59580b1296f33290dbcfe30baef343e090f406a42fed880e039668",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-reader-v2/4-native/reader.json",
+      "bytes": 74771,
+      "sha256": "e7d6dac01f383aca29e666eec67337c865c69c665c1608eaa0f1f861b401d0ea",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true,
+      "scope": "Real paged-SDPA op on synthetic inputs; no full-model speedup or reference-eval claim",
+      "updated_at": "2026-10-08T04:21:14Z"
+    },
+    {
+      "path": "galaxy-evidence/attention-reader-v2/queue.json",
+      "bytes": 26382,
+      "sha256": "8b39b3ee314ceb3750b0d70fa0874cb4580c8583f1fa8bbc30d839a38bf29512",
+      "state": "completed",
+      "updated_at": "2026-10-08T04:21:18Z"
+    },
+    {
+      "path": "galaxy-evidence/attention-reader-v2/unit.xml.gz",
+      "bytes": 5189,
+      "sha256": "05bbdd6a90cfd5a27e366fdc72c21f4acaa7e7f83c6250a2cadfa531dfea250d",
+      "junit": {
+        "tests": 294,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-tuning-host.xml",
+      "bytes": 1563,
+      "sha256": "cf0b543548ed82a7c5170abd879750561294506df12a02e3357dfc05596c6739",
+      "junit": {
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/attention-tuning-v4/attention.json",
+      "bytes": 4887,
+      "sha256": "dcbb2d6a7cda72a025f90caae780ca7df0d0259ba7f1d091c0b0dbd36afbf369",
+      "state": "failed",
+      "passed": false,
+      "scope": "Synthetic TP4 attention kernel experiment, not full-model performance or quality",
+      "updated_at": "2026-10-07T08:04:44Z",
+      "error_type": "AssertionError"
+    },
+    {
+      "path": "galaxy-evidence/attention-tuning-v4/hardware.xml",
+      "bytes": 8559,
+      "sha256": "07bb107a3b425c7fa32bdcae03d9944721b7f8b935faec613c0a4d5cc2037df9",
+      "junit": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/bandwidth-capacity-validation-v2.json",
+      "bytes": 951,
+      "sha256": "cc1e4270a0c697aa009d21a4df0ab0e3ff241bc3dee6a6559bf842f3fe3479e6",
+      "passed": true,
+      "scope": "Artifact accounting, not extra hardware execution or full-model qualification"
+    },
+    {
+      "path": "galaxy-evidence/baseline-v2/full-model.json",
+      "bytes": 4848,
+      "sha256": "9c4c6f0ba178a70ac591ed2c711e9bfa1c9e465ed13f209539f68a36283efcb4"
+    },
+    {
+      "path": "galaxy-evidence/baseline-v2/full-model.xml",
+      "bytes": 543,
+      "sha256": "b150e42950c22133695f4b36a208a3b70d4797f54024b543919e5cf68a75528b",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/baseline-v2/source-receipt.json",
+      "bytes": 2249,
+      "sha256": "b10f0f83a9bc4303c8ffc3602b1184f2927c2bbd898f4e95a8f27afceb5a9a70",
+      "scope": "Source bytes on host immediately after successful single-replica baseline v2; model source unchanged during run"
+    },
+    {
+      "path": "galaxy-evidence/baseline-v2/unit.xml",
+      "bytes": 22699,
+      "sha256": "516a528b84ee7e939fcd2feecfea7a4980a3afd132bd60241b07bfc6618b9888",
+      "junit": {
+        "tests": 106,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/capacity-pairs-launch-v1.json",
+      "bytes": 2693,
+      "sha256": "8ebb9660ebd714864d10e6f2ba0e30bb88386b43938658a86733585ac04dff65",
+      "qualification_scope": "Fresh process per geometry and recurrence; precision unchanged"
+    },
+    {
+      "path": "galaxy-evidence/capacity-pairs-source-v1-manifest.json",
+      "bytes": 422,
+      "sha256": "21199b3476ed393577cb5e12faee311790ae23a692402dcfcf7e9bd764374a6a"
+    },
+    {
+      "path": "galaxy-evidence/capacity-pairs-v1/queue.json",
+      "bytes": 13963,
+      "sha256": "5c0aecca936484ff980a2325cefd63a553ac29365f722eeabd68e1da710e570e",
+      "state": "hardware_sweep",
+      "updated_at": "2026-10-08T04:28:10Z"
+    },
+    {
+      "path": "galaxy-evidence/capacity-pairs-v1/service-observation.txt",
+      "bytes": 216,
+      "sha256": "20e503d06fba051025507675ec87611cfdcac1036719c118fba1a0f156c25251"
+    },
+    {
+      "path": "galaxy-evidence/capacity-pairs-validation-v1/native.json",
+      "bytes": 12757,
+      "sha256": "2e630a9959a6d827654e393267acee27931592b58473d68aa63d7b77233da59d",
+      "state": "completed_with_oom",
+      "cleanup_completed": true,
+      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
+      "created_at": "2026-10-07T22:54:28.786362+00:00",
+      "updated_at": "2026-10-07T23:18:07.332893+00:00",
+      "cell_status_counts": {
+        "completed": 1
+      }
+    },
+    {
+      "path": "galaxy-evidence/capacity-pairs-validation-v1/single-step.json",
+      "bytes": 12536,
+      "sha256": "b4b7eed3a7a90331647d4eeea3955354dbacb40c5138d17416b42e812bfd194f",
+      "state": "completed_with_oom",
+      "cleanup_completed": true,
+      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
+      "created_at": "2026-10-07T22:54:30.094016+00:00",
+      "updated_at": "2026-10-08T00:59:30.747265+00:00",
+      "cell_status_counts": {
+        "completed": 1
+      }
+    },
+    {
+      "path": "galaxy-evidence/capacity-pairs-validation-v1/unit.xml.gz",
+      "bytes": 5194,
+      "sha256": "6f666d3f6db2f876a153027554bfbd41ddc71473c842fa8b47eae99fdd7a7bb6",
+      "junit": {
+        "tests": 294,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/eight-replicas-v2/full-model.json",
+      "bytes": 256493,
+      "sha256": "bb2524fa2491def54ee822d3fbf62c93ebd60b5b5a15c56ee417f9af91e59fb6",
+      "state": "failed",
+      "passed": false,
+      "error_type": "AssertionError"
+    },
+    {
+      "path": "galaxy-evidence/eight-replicas-v2/full-model.xml",
+      "bytes": 7531,
+      "sha256": "7381c4b5f2abb38cdd8ccd6252f35819c8513b90ef0adfa32a9d3ad73e9ba909",
+      "junit": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/eight-replicas-v2/unit.xml",
+      "bytes": 36806,
+      "sha256": "9aaf4d45f77965b65d4e3ad8f2a04f5c9b464447b9e427b231bb81fdcf2a039c",
+      "junit": {
+        "tests": 151,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/eight-replicas-v3/full-model.json",
+      "bytes": 258243,
+      "sha256": "c0fb5b4daede8a9483931ef88b7e0dbf0a855a736341f7331aecb8cc4854b31f",
+      "state": "completed",
+      "passed": true
+    },
+    {
+      "path": "galaxy-evidence/eight-replicas-v3/full-model.xml",
+      "bytes": 549,
+      "sha256": "b2532f851500a9cd67c61a15a0d2b820afba5c64f801e2d761ded37f18d76257",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/eight-replicas-v3/unit.xml",
+      "bytes": 39007,
+      "sha256": "8f855a435276b229deb8cd12bc25bb85cb695cb0df656873ff28cc80204d3067",
+      "junit": {
+        "tests": 158,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/fabric-cleanup-host.xml",
+      "bytes": 2078,
+      "sha256": "bbce1c41eb481b666841c9f50463f3623c8a7ffa4a0bbdb9d592da1d400a7515",
+      "junit": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/fabric-torus-neighbors-v2.json",
+      "bytes": 2277,
+      "sha256": "10aad14a0233467827596e460cb17fd1e37e169931356f7375f0be3ce8bdcd46"
+    },
+    {
+      "path": "galaxy-evidence/fabric-v1-failed.txt",
+      "bytes": 26493,
+      "sha256": "7f397274ee52a161b36ec113cd247fd373261aded30f8d6af1c3c632618a1d95"
+    },
+    {
+      "path": "galaxy-evidence/galaxy-prompt-tests.xml",
+      "bytes": 2163,
+      "sha256": "d96a8856c97f642ae4006d9e5fd4b686b399ab6b0534f9d29f2fef76aeb0c266",
+      "junit": {
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/galaxy-serving-v9/api.json",
+      "bytes": 38786,
+      "sha256": "9f0cc44e408115ba4c444896cd65b654263a3cda58d8cf14b06593bf3ece669f",
+      "state": "completed",
+      "passed": true
+    },
+    {
+      "path": "galaxy-evidence/galaxy-serving-v9/deployment.json",
+      "bytes": 10582,
+      "sha256": "afde0f61a948b4961e8a9261527002ac192350f52266688f374c8c4ebe640288",
+      "state": "failed",
+      "passed": false,
+      "updated_at": "2026-10-07T09:23:51Z"
+    },
+    {
+      "path": "galaxy-evidence/galaxy-serving-v9/http-sweep/index.html",
+      "bytes": 114593,
+      "sha256": "60dda2529f555a2f6232d79e1887c98780c3c812130fe5814466ed6b72fc148b"
+    },
+    {
+      "path": "galaxy-evidence/galaxy-serving-v9/http-sweep/receipt.json",
+      "bytes": 380,
+      "sha256": "01565c7dd9d1fa8ac8299a125743e89cd359558de63446c8c07533e6c5a262a0",
+      "state": "failed",
+      "scope": "Partial HTTP sweep; 32K-256K cases not run"
+    },
+    {
+      "path": "galaxy-evidence/galaxy-serving-v9/http-sweep/sweep.csv",
+      "bytes": 1907,
+      "sha256": "ec851c88eaf9722af9cd5193c16825a64c39c4a3e6c467b7567cd70351b0f59f"
+    },
+    {
+      "path": "galaxy-evidence/galaxy-serving-v9/http-sweep/sweep.json.gz",
+      "bytes": 58525,
+      "sha256": "d74a950576b0fb9149aaec58c23ce585f8be5e9c56e76f813e1d9d9380819a42",
+      "state": "failed",
+      "created_at": "2026-10-07T09:15:21.352350+00:00",
+      "updated_at": "2026-10-07T09:23:50.030921+00:00",
+      "cell_status_counts": {
+        "completed": 9,
+        "failed": 1,
+        "not_run": 17,
+        "capacity_guard": 3
+      }
+    },
+    {
+      "path": "galaxy-evidence/galaxy-serving-v9/http-sweep/sweep.pdf",
+      "bytes": 36500,
+      "sha256": "f0a6a197a107b6446db6ccce9598b184b3abd82cc375ad0432894487ac9417b5"
+    },
+    {
+      "path": "galaxy-evidence/galaxy-serving-v9/http-sweep/sweep.png",
+      "bytes": 176715,
+      "sha256": "e2db393198e6749dfda37d0821aae108292f84d27bf3df18cb9a42f77325b051"
+    },
+    {
+      "path": "galaxy-evidence/galaxy-serving-v9/http-sweep/sweep.svg",
+      "bytes": 109664,
+      "sha256": "6c7fa5cf7f2e24caf17c08d1f7bd40363d7e570c7d92d5af487fede57451e169"
+    },
+    {
+      "path": "galaxy-evidence/galaxy-serving-v9/summary.json",
+      "bytes": 2069,
+      "sha256": "5636d96102a02ee1859207dc0f49a1b36287935ce0ec85d3df4a524aa7d79b7c",
+      "scope": "198/198 Diamond questions; 32768-token output budget"
+    },
+    {
+      "path": "galaxy-evidence/galaxy-vllm-host-tests.xml",
+      "bytes": 11863,
+      "sha256": "cc795499a36bb2b0dc3bc28a287578c2986c322bbf592ad262589399b6befe30",
+      "junit": {
+        "tests": 53,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-candidate-sweep-v4/README.md",
+      "bytes": 1620,
+      "sha256": "6843dbe23dddcdb65f3e0e3353b8fe68845f1c3961118708e3a762742977df8d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-candidate-sweep-v4/attempt-01/command.json",
+      "bytes": 646,
+      "sha256": "e0729acab3992da4b9dae942498523ddc761c8698da3bc48d7f297189a92ebcd"
+    },
+    {
+      "path": "galaxy-evidence/gdn-candidate-sweep-v4/attempt-01/hardware.xml.gz",
+      "bytes": 2618,
+      "sha256": "d1ca8a9708628d3926a70bf0419ee77591d43f4588fb31b4bb9b7582b2936c7b",
+      "junit": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-candidate-sweep-v4/attempt-01/sweep.json",
+      "bytes": 115160,
+      "sha256": "8e365c6372b5d07e117c2d97e59e2b238ccfaa4cc31cbeab2fe83c4eb9f2e27e",
+      "state": "allocation_failed",
+      "cleanup_completed": true,
+      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
+      "created_at": "2026-10-07T22:54:30.094016+00:00",
+      "updated_at": "2026-10-08T00:43:34.418841+00:00",
+      "cell_status_counts": {
+        "completed": 12,
+        "capacity_guard": 5,
+        "implementation_guard": 5,
+        "oom": 1,
+        "not_run": 12
+      },
+      "error_type": "RuntimeError"
+    },
+    {
+      "path": "galaxy-evidence/gdn-candidate-sweep-v4/attempt-02/command.json",
+      "bytes": 646,
+      "sha256": "002192a310d99cc4534940c95a97ec1f71239b58a7e8adf5a7e8a44bc89318d8"
+    },
+    {
+      "path": "galaxy-evidence/gdn-candidate-sweep-v4/attempt-02/hardware.xml.gz",
+      "bytes": 299,
+      "sha256": "5d40f4e3fde0886ce30519dca50f8cf858ed31ef990a474191f3d8f37f323cd6",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-candidate-sweep-v4/attempt-02/sweep.json",
+      "bytes": 171966,
+      "sha256": "a02f85d2397624b067fb1cc5f3fe4eeea3d6e8ecbda5bc0c740873ea5d72f16f",
+      "state": "completed_with_oom",
+      "cleanup_completed": true,
+      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
+      "created_at": "2026-10-07T22:54:30.094016+00:00",
+      "updated_at": "2026-10-08T00:59:25.836507+00:00",
+      "cell_status_counts": {
+        "completed": 24,
+        "capacity_guard": 5,
+        "implementation_guard": 5,
+        "oom": 1
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-candidate-sweep-v4/index.html",
+      "bytes": 175636,
+      "sha256": "7457185146c8ad684740d842434451e5c7f5bfc9b5a76f9dd7800cecb972d804"
+    },
+    {
+      "path": "galaxy-evidence/gdn-candidate-sweep-v4/sweep.csv",
+      "bytes": 19416,
+      "sha256": "193c09194805a11748b1fb6b8bd73d83eb16582fdcbf587c660c2da39ec9f425"
+    },
+    {
+      "path": "galaxy-evidence/gdn-candidate-sweep-v4/sweep.json",
+      "bytes": 172097,
+      "sha256": "e0f97aebf9c34b9fca1f5aa3696b2af3177ca4bbbd10f67a84c5698ab72c7c9e",
+      "state": "completed_with_oom",
+      "cleanup_completed": true,
+      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
+      "created_at": "2026-10-07T22:54:30.094016+00:00",
+      "updated_at": "2026-10-08T00:59:30.747265+00:00",
+      "cell_status_counts": {
+        "completed": 24,
+        "capacity_guard": 5,
+        "implementation_guard": 5,
+        "oom": 1
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-candidate-sweep-v4/sweep.pdf",
+      "bytes": 47497,
+      "sha256": "45be1e9f06678de81281a528e332f4a6d2dcb8c1ff5210da6d4383610e1744ac"
+    },
+    {
+      "path": "galaxy-evidence/gdn-candidate-sweep-v4/sweep.png",
+      "bytes": 453383,
+      "sha256": "c4407b215886692d4ba9364253c0c5f65ed7c488fb3d1b1926583a09eb7aff0a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-candidate-sweep-v4/sweep.svg",
+      "bytes": 168827,
+      "sha256": "66c33ba17fa8c54318721d13d53f938f5832fbf874a114eb94046f36f579f61e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-matched-comparison-v4/README.md",
+      "bytes": 3878,
+      "sha256": "b3c85b19e6305028cffa772017b84a9707b23eb90ea8173ff993dbb78aeaabf8"
+    },
+    {
+      "path": "galaxy-evidence/gdn-matched-comparison-v4/comparison.csv",
+      "bytes": 5781,
+      "sha256": "9cf4fa0c44294be36ddfd7d0b15724e2adc1690fafa7410e9b2d8c3fb4fb0c9f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-matched-comparison-v4/comparison.json",
+      "bytes": 21136,
+      "sha256": "72fa632a69998990206f67368683e0f0dbbf2d8434d226519b24a81c7c97ef10",
+      "state": "completed",
+      "scope": "One TP4 replica, 64 layers; measured decode output throughput, not full-Galaxy or online-eval qualification",
+      "cell_status_counts": {
+        "unspecified": 35
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-matched-comparison-v4/comparison.pdf",
+      "bytes": 43319,
+      "sha256": "2264da9bb40110e25eb034899c01ef839744c223d9cde59820700daf40164a30"
+    },
+    {
+      "path": "galaxy-evidence/gdn-matched-comparison-v4/comparison.png",
+      "bytes": 210295,
+      "sha256": "3a537dd04b65c0749444a38fce0bf202e6b11b38d2c998bc6bddc1b8e16f668a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-matched-comparison-v4/comparison.svg",
+      "bytes": 154648,
+      "sha256": "be4052880f1e447e18c310db1ed31a3c529e1e6bc01350336cc946a8e64d8b2d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-matched-comparison-v4/index.html",
+      "bytes": 156491,
+      "sha256": "765b7e5538a499fed4aee0d9fdfc64f8af0f6115f41e241fe2f6a7379f18dd67"
+    },
+    {
+      "path": "galaxy-evidence/gdn-matched-comparison-v4/validation.json",
+      "bytes": 1097,
+      "sha256": "0d1fb76d7b82e0df298db59f69d67823239326b8a89eeecc4adcfef789285051"
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/README.md",
+      "bytes": 26882,
+      "sha256": "7256cd0b04000d9fb1c5c22a8a7c39551426c50dbb2098f690cdb16ed890746d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/gdn-kernel-validation-v1/full-model.json",
+      "bytes": 7865,
+      "sha256": "4b650671a9d900b9b624e5a47d4adb675e3ec3b725f92bcb189ee88c0203429d",
+      "state": "completed",
+      "passed": true
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/gdn-kernel-validation-v1/full-model.xml.gz",
+      "bytes": 308,
+      "sha256": "a76afa849b20d3651f68d1217914f8133c0548b471eadca2002dcee651fde474",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/gdn-kernel-validation-v1/long-horizon/candidate.json",
+      "bytes": 84000,
+      "sha256": "3530ef3dd2ffc5c9c459017b9f134876b8b4d311e59a31b9321202c5751f2f2a",
+      "state": "completed",
+      "passed": true,
+      "scope": "Standalone TP4 recurrence candidate; optional fused Q/K normalization; no convolution/output gating/model eval",
+      "updated_at": "2026-10-07T17:40:40Z"
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/gdn-kernel-validation-v1/long-horizon/hardware.xml.gz",
+      "bytes": 298,
+      "sha256": "deb8031f9a42d5d83ccd4a751ca1841a413416bd722d26b8090738440d5c2348",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/gdn-kernel-validation-v1/unit.xml.gz",
+      "bytes": 4013,
+      "sha256": "acf1fa569fb9d7592c680e86d472d336f8bea78d9e26ec4610f0f71f4ff3ee4f",
+      "junit": {
+        "tests": 227,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/gdn-layer-integration-v1/hardware.xml.gz",
+      "bytes": 2791,
+      "sha256": "8329c4fe9d9ee420ee07c396cdd0f0f7681eef07e1f3fa66ee1bdf389fd5ab55",
+      "junit": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/gdn-layer-integration-v1/layer.json",
+      "bytes": 12784,
+      "sha256": "273e3d90e1a4348a716ce8f6584f62dc1cd693d324fd6c4792ae4ead0ff1b115",
+      "state": "failed",
+      "passed": false,
+      "scope": "Layer 0 GDN projection, convolution, gates, recurrence, output norm and TP output projection; MLP excluded",
+      "updated_at": "2026-10-07T17:08:57Z",
+      "error_type": "AssertionError"
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/gdn-layer-integration-v1/reproduction-sources.json",
+      "bytes": 75579,
+      "sha256": "894c9d87da713739b4eb9d2c0721370a9b9cad9d1cf7e54af1d422f6da8abe53"
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/gdn-layer-integration-v2/hardware.xml.gz",
+      "bytes": 5459,
+      "sha256": "9f2bf61feda5b221c22ad96f88767d8b49774c2bc8d4ef31149c11cb2cc7c3f3",
+      "junit": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/gdn-layer-integration-v2/layer.json",
+      "bytes": 41522,
+      "sha256": "ca353b4f0ebb357f42e573888e1470fbe309a3238ceb0b45f75b7c51319a97e7",
+      "state": "failed",
+      "passed": false,
+      "scope": "Layer 0 GDN projection, convolution, gates, recurrence, output norm and TP output projection; MLP excluded",
+      "updated_at": "2026-10-07T17:14:28Z",
+      "error_type": "RuntimeError"
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/gdn-layer-integration-v2/reproduction-sources.json",
+      "bytes": 78942,
+      "sha256": "36500e7a963a18408f061076e85c1e5b40c6a7b337ba66666768085e303ea3b0"
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/gdn-layer-integration-v4/hardware.xml.gz",
+      "bytes": 300,
+      "sha256": "644d265fcd8bc311eeb3b7f097d3d66a2ebccd84e823bce804633db28c8d0596",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/gdn-layer-integration-v4/layer.json",
+      "bytes": 36326,
+      "sha256": "d5c68c1035efee222609c355c6d4ef14432c479cefa4d108e20b4cb6898c6714",
+      "state": "completed",
+      "passed": true,
+      "scope": "Layer 0 GDN projection, convolution, gates, recurrence, output norm and TP output projection; MLP excluded",
+      "updated_at": "2026-10-07T17:24:52Z"
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/gdn-layer-integration-v4/reproduction-sources.json",
+      "bytes": 81790,
+      "sha256": "fa16174cac44d25a4a571fca21eeb0103c13d2c61e8348d4e2728436de58ab0a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/launch-gdn-kernel-validation-v1.json",
+      "bytes": 13889,
+      "sha256": "e79c323cab6a7eda026302784de4f3df9133c238bddba986a88ce3e5e800078d",
+      "created_at": 1791394807.5168233
+    },
+    {
+      "path": "galaxy-evidence/gdn-model-integration-v1/launch-gdn-perf-sweeps-v1.json",
+      "bytes": 14056,
+      "sha256": "5a3dda537811e9187a4251b09f75d20b315bcf7b2a3572ac25d35de00d364491",
+      "created_at": 1791395659.6334085
+    },
+    {
+      "path": "galaxy-evidence/gdn-native-sweep-v4/README.md",
+      "bytes": 2462,
+      "sha256": "9ff5e9375de5a1301e0def43f6efd18d7a4b1eb98d337628b2f06bc4b1f0cf9a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-native-sweep-v4/attempt-01/command.json",
+      "bytes": 641,
+      "sha256": "b13bad4f963e3b3e84c59019fbdb63070492c7fdfa93bd7e02ecb506f06d0040"
+    },
+    {
+      "path": "galaxy-evidence/gdn-native-sweep-v4/attempt-01/hardware.xml.gz",
+      "bytes": 2581,
+      "sha256": "a274d462fd0f68550bc416aadda42ea0618ecc0c8182ae361903e6f48e9e05d7",
+      "junit": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-native-sweep-v4/attempt-01/sweep.json",
+      "bytes": 118394,
+      "sha256": "06dd9355167eb5cd30806d3927873676decdf7842b939f2620afa750b9fe8693",
+      "state": "allocation_failed",
+      "cleanup_completed": true,
+      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
+      "created_at": "2026-10-07T22:54:28.786362+00:00",
+      "updated_at": "2026-10-07T23:00:31.968085+00:00",
+      "cell_status_counts": {
+        "completed": 12,
+        "capacity_guard": 5,
+        "implementation_guard": 5,
+        "oom": 1,
+        "not_run": 12
+      },
+      "error_type": "RuntimeError"
+    },
+    {
+      "path": "galaxy-evidence/gdn-native-sweep-v4/attempt-02/command.json",
+      "bytes": 641,
+      "sha256": "d8e0a36140c7b46ed4f4cae8170288826d71a6eeab6fdfbd8c476fae65b376ea"
+    },
+    {
+      "path": "galaxy-evidence/gdn-native-sweep-v4/attempt-02/hardware.xml.gz",
+      "bytes": 300,
+      "sha256": "79942e68a5ea41804c7661a29e6136834bce8d6d558abdfba7b7e73ba7a94cff",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-native-sweep-v4/attempt-02/sweep.json",
+      "bytes": 172298,
+      "sha256": "b5ff4157964f290f5f2a841a0eacb56b9317f900e5c6d9bfdcfa02759da34dd3",
+      "state": "completed_with_oom",
+      "cleanup_completed": true,
+      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
+      "created_at": "2026-10-07T22:54:28.786362+00:00",
+      "updated_at": "2026-10-07T23:18:02.509163+00:00",
+      "cell_status_counts": {
+        "completed": 24,
+        "capacity_guard": 5,
+        "implementation_guard": 5,
+        "oom": 1
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-native-sweep-v4/index.html",
+      "bytes": 177325,
+      "sha256": "74b392d14905a069a106b02de15b591b9daaccbe8703fdc6d12720086d084778"
+    },
+    {
+      "path": "galaxy-evidence/gdn-native-sweep-v4/sweep.csv",
+      "bytes": 19558,
+      "sha256": "b36210e519fcde92c6373f17d747e25599266bc85a5fc52883615291e47a9392"
+    },
+    {
+      "path": "galaxy-evidence/gdn-native-sweep-v4/sweep.json",
+      "bytes": 172424,
+      "sha256": "28bca2bcb7a2cfc4b63c2724610ca393b7bdddd3a1f1bfcf9112b6e2d26a1fd0",
+      "state": "completed_with_oom",
+      "cleanup_completed": true,
+      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
+      "created_at": "2026-10-07T22:54:28.786362+00:00",
+      "updated_at": "2026-10-07T23:18:07.332893+00:00",
+      "cell_status_counts": {
+        "completed": 24,
+        "capacity_guard": 5,
+        "implementation_guard": 5,
+        "oom": 1
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-native-sweep-v4/sweep.pdf",
+      "bytes": 47637,
+      "sha256": "325d04bcc095af6e5dfed403f620426ad22c01f4ca1cf252ea70b569a655dd1a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-native-sweep-v4/sweep.png",
+      "bytes": 465273,
+      "sha256": "aae7517ef4bb09514b065d7ff60cde829b50cbbdf5e0bb95357dc4501606b051"
+    },
+    {
+      "path": "galaxy-evidence/gdn-native-sweep-v4/sweep.svg",
+      "bytes": 170517,
+      "sha256": "8d5339b551baa2f081ebe27df26c9e8c22ed2083888661b984d768c8d61ff7a2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-partition-host.xml",
+      "bytes": 9729,
+      "sha256": "75bb70ca666f45dde84b3232e2fd7564e04ef770c4a2b0818031608e7993154f",
+      "junit": {
+        "tests": 32,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-step-buffering-v1/candidate.json.gz",
+      "bytes": 13366,
+      "sha256": "b55ff9d8f93f436188144bd82e52d53884aa2b7a356aee838bbbd277b60ebd9f",
+      "state": "completed",
+      "passed": true,
+      "scope": "Standalone TP4 recurrence candidate; no convolution/normalization/output gating or model eval",
+      "updated_at": "2026-10-07T14:47:22Z"
+    },
+    {
+      "path": "galaxy-evidence/gdn-step-buffering-v1/hardware.xml",
+      "bytes": 540,
+      "sha256": "cb16d2ec93cc7b0c503ab1393b1430e7f16a54410e2e5be3a4638c077a9a7d81",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-step-buffering-v1/summary.json",
+      "bytes": 6475,
+      "sha256": "fd662bb631c3d3a3953b36f9276d472fcbedbd37e79c4ce2f3571a4dc030dec9",
+      "state": "completed",
+      "passed": true,
+      "scope": "Standalone FP32 GDN recurrence, not full-model qualification"
+    },
+    {
+      "path": "galaxy-evidence/gdn-step-candidate-v1/candidate.json",
+      "bytes": 68156,
+      "sha256": "dcda6baf74bd3d40a33110bb1754de9498f2b03e6969d49c45c7a71ca3370383",
+      "state": "completed",
+      "passed": true,
+      "scope": "Standalone TP4 recurrence candidate; no convolution/normalization/output gating or model eval",
+      "updated_at": "2026-10-07T06:41:37Z"
+    },
+    {
+      "path": "galaxy-evidence/gdn-step-candidate-v1/hardware.xml",
+      "bytes": 540,
+      "sha256": "f0e27337d94c771b55bdcbc63bc3aaa5201afcc19d5203d234443036b9b11029",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-step-candidate-v2/queue-experiment.sh",
+      "bytes": 2160,
+      "sha256": "ada20f3d04dffd0331ccd39cb6a463d412b5cd30bf9fca2909c9cb4902aa3ebc"
+    },
+    {
+      "path": "galaxy-evidence/gdn-step-candidate-v3/candidate.json",
+      "bytes": 231842,
+      "sha256": "dfd459be750dc59c251d20f291e623a6c255273e729dbfacd37f5cfc34462e99",
+      "state": "completed",
+      "passed": true,
+      "scope": "Standalone TP4 recurrence candidate; no convolution/normalization/output gating or model eval",
+      "updated_at": "2026-10-07T08:05:41Z"
+    },
+    {
+      "path": "galaxy-evidence/gdn-step-candidate-v3/hardware.xml",
+      "bytes": 540,
+      "sha256": "b21bbc83e4f0a5166248e3570a6931a5bdd7d7d679151280246cd149419bba58",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-step-host.xml",
+      "bytes": 3769,
+      "sha256": "72945acc7ff541cd8aae9431f01df47edfc9e5b688cd24a1b2dca3d709eb2209",
+      "junit": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/README.md",
+      "bytes": 2311,
+      "sha256": "2519d11e01a4a0b02bf71963f4fadadbbbfdfc063407f00e231b4742eb9cda11"
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/baseline-preview/index.html",
+      "bytes": 156626,
+      "sha256": "fc15461f5efb1afda2fe2db6c58dcdbbe49eac1798e64edae391a94d0e2a43c3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/baseline-preview/sweep.csv",
+      "bytes": 4503,
+      "sha256": "766d0a8a784a2c77bcd8cd2e5942eaf36956ef4726c3243c23c0a6bf381a45c3"
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/baseline-preview/sweep.json",
+      "bytes": 73523,
+      "sha256": "d5c41ae873c63069754d8bd196c9111e32070ac008574736b5168171293af257",
+      "state": "failed",
+      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
+      "created_at": "2026-10-07T17:54:27.014209+00:00",
+      "updated_at": "2026-10-07T22:38:54.172987+00:00",
+      "cell_status_counts": {
+        "completed": 12,
+        "capacity_guard": 5,
+        "implementation_guard": 5,
+        "failed": 1,
+        "not_run": 12
+      },
+      "error_type": "RuntimeError"
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/baseline-preview/sweep.pdf",
+      "bytes": 43018,
+      "sha256": "2417b861917fc518bb1993a23eea6d2488cb3b6c5d10f70f8845fdeeb9966246"
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/baseline-preview/sweep.png",
+      "bytes": 285141,
+      "sha256": "135544312ab2c40dbc5baa22a1082be3ede7f1d7765f21f8bde954c416c6aef2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/baseline-preview/sweep.svg",
+      "bytes": 149944,
+      "sha256": "e4859f9e00ab3fff3e090760e5ddc9d522d8935cb1c7747c872178b241e863a6"
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/baseline-v1.json",
+      "bytes": 73413,
+      "sha256": "5ef7be4a63bc7886e92ee6b1d5956ce255c66df587ae0b91f5aee3c964533f33",
+      "state": "failed",
+      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
+      "created_at": "2026-10-07T17:54:27.014209+00:00",
+      "updated_at": "2026-10-07T19:21:34.945397+00:00",
+      "cell_status_counts": {
+        "completed": 12,
+        "capacity_guard": 5,
+        "implementation_guard": 5,
+        "failed": 1,
+        "not_run": 12
+      },
+      "error_type": "RuntimeError"
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/baseline-v1.xml.gz",
+      "bytes": 5282,
+      "sha256": "0d5c949e3374b80e2e733be5fb35b694ca71ba7653cb985a9d6f9cff2cc83d7d",
+      "junit": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/collection-v1.xml.gz",
+      "bytes": 186,
+      "sha256": "f6564b3b401f1766f670535fdb911f6c16017bdce3cfa378189578408fa9277f",
+      "junit": {
+        "tests": 0,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/collection-v3.xml.gz",
+      "bytes": 586,
+      "sha256": "e2267a878906909992cbd0c38fcc8dd89fb57784b6f0f79c3e80be0f9efec521",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 1,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/fresh-b32-v1.json",
+      "bytes": 7487,
+      "sha256": "59c1a756452c3f18609ba31a3776a00a9f6f244377a731f34f928582008a0f7e",
+      "state": "failed",
+      "created_at": "2026-10-07T21:50:59.207910+00:00",
+      "updated_at": "2026-10-07T21:56:58.832482+00:00",
+      "cell_status_counts": {
+        "failed": 1
+      },
+      "error_type": "RuntimeError"
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/fresh-b32-v1.xml.gz",
+      "bytes": 2578,
+      "sha256": "5544e16640ae6137cf24632c262154a74721eede93688b48d06874e378ecef66",
+      "junit": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/gdn-sweep-recovery-collection-v1.log",
+      "bytes": 3041,
+      "sha256": "6afaea5db953602fb787f05554ce8e2a5af6fdb66573cee8cef0d22dc0ab294c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/gdn-sweep-recovery-unit-v4.log",
+      "bytes": 414,
+      "sha256": "e35a5df2b0c9f972ad112d506097071e4135cacf506a029a05b5c4e924a57eb9"
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/gdn-sweep-recovery-unit-v5.log",
+      "bytes": 89026,
+      "sha256": "a2d6d303809b2b8d398e9ac65621c788c9e20803334136fc33a5b754e20eb4f1"
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/launch-fresh-b32-v1.json",
+      "bytes": 2924,
+      "sha256": "cba1371782eeef33a0072e2af59705f5fbd1f73278dd6ab69de4e3bd31f67909",
+      "created_at": 1791409859.2331877
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/launch-gdn-perf-sweeps-v2.json",
+      "bytes": 14439,
+      "sha256": "23378aaba08008d0df13f3c8908e25a4fd75ef7717cdf00e9fd8f8399236eec5",
+      "created_at": 1791410790.5244677
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/launch-gdn-perf-sweeps-v3.json",
+      "bytes": 14586,
+      "sha256": "f8481411e7dfeaa63ba271dda12a103238ea26094175f9b73d1d4ed9bb5f2b99",
+      "created_at": 1791412818.0762563
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/launch-gdn-perf-sweeps-v4.json",
+      "bytes": 14672,
+      "sha256": "84519ec4f0a7564b007a3521913167ae0c0752a48b845fa60e4bd39cb4dc3883",
+      "created_at": 1791413661.4977612
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/startup-v2.xml.gz",
+      "bytes": 5129,
+      "sha256": "d1c210ec90a32f07daed703ff625db3665faaa2063f6a0b94975ad1ff2b0348e",
+      "junit": {
+        "tests": 244,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/unit-v3.log",
+      "bytes": 425,
+      "sha256": "4f4761786431a0081d1d3fa1d763ddd61412362003eab7e55d3bb014438a7293"
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/unit-v3.xml.gz",
+      "bytes": 4451,
+      "sha256": "46fc0d6648838b31d9b2beaf0a4da276b7ba26e58d47839357f203b607c82411",
+      "junit": {
+        "tests": 244,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 1
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/unit-v4.xml.gz",
+      "bytes": 4356,
+      "sha256": "fbe65043d68c5e7792f94cd7e453aa9010b491a1d32b975046358870fce4e124",
+      "junit": {
+        "tests": 244,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gdn-sweep-recovery-v1/unit-v5.xml.gz",
+      "bytes": 4365,
+      "sha256": "1a23d74bc92833546c864103d3828e4c5e5454aae3a8825a3d3f0dbd41cc8891",
+      "junit": {
+        "tests": 244,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gpqa-client-tests.xml",
+      "bytes": 5475,
+      "sha256": "ba46439d8d6680c56e0800f71427c2773e2842bb6879744b11b253b8c86b5330",
+      "junit": {
+        "tests": 17,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/gpqa-full-dp8-prepared-v1/inputs.jsonl",
+      "bytes": 17710,
+      "sha256": "4b27688ca435ac4a69cad6bcb61a247287aa508cb4f95bc466c6372d3815edc9"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-full-dp8-prepared-v1/protocol.json",
+      "bytes": 1414,
+      "sha256": "49b7a5f67bd1ebe0ceccafcbd20cb79b2cf74b056869e2de76ff5c461b21e467",
+      "scope": "198/198 Diamond questions; 32768-token output budget"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-prepared-v2/inputs.jsonl",
+      "bytes": 17710,
+      "sha256": "4b27688ca435ac4a69cad6bcb61a247287aa508cb4f95bc466c6372d3815edc9"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-prepared-v2/protocol.json",
+      "bytes": 1352,
+      "sha256": "f559420a7c432d7ca68e2763f9313de49f4bac3fde9c20b75a9de23c4bc62831",
+      "scope": "198/198 Diamond questions; 32768-token output budget"
+    },
+    {
+      "path": "galaxy-evidence/kernel-diagnostics-v1/README.md",
+      "bytes": 3466,
+      "sha256": "65364445d38790bcad5771182f4db0fc89bf9c26d7daf19a373fb5792330f263"
+    },
+    {
+      "path": "galaxy-evidence/kernel-diagnostics-v1/kernel-experiments-unit-v2.xml",
+      "bytes": 13537,
+      "sha256": "ec09a77e5ac547f5b1a9d672d77a383bc4d11ef7c4386a6519e1f3de30340a77",
+      "junit": {
+        "tests": 44,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/kernel-diagnostics-v1/launch-kernel-diagnostics-v1.json",
+      "bytes": 739,
+      "sha256": "6ee991b73b6d37633e4cc1783d3f0888b18d5e8a04698fbabfc24112cb466723"
+    },
+    {
+      "path": "galaxy-evidence/kernel-diagnostics-v1/run-kernel-diagnostics-v1.sh",
+      "bytes": 1623,
+      "sha256": "eb2195ddf81994d3ab144879998a5a41e4408d0852516e5ebe56f71c08116383"
+    },
+    {
+      "path": "galaxy-evidence/layer-profile-v3/failure.json",
+      "bytes": 1144,
+      "sha256": "653af515ab790fc38ab0e863c71db6475e661f5e4bd84ee6475696265c22baa5"
+    },
+    {
+      "path": "galaxy-evidence/layer-profile-v3/hardware.xml",
+      "bytes": 546,
+      "sha256": "315c004caf702a31295b6436e97dcbfd5625b953b968645aeead31ce7d0bf416",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/layer-profile-v3/profile.json",
+      "bytes": 8747,
+      "sha256": "ba839d97ac4efbc1d1f5396456500eb3a729413adce09003b4fa202c3398f851",
+      "state": "completed",
+      "passed": true,
+      "scope": "Reduced two-layer diagnostic, not full-model throughput or accuracy qualification",
+      "cell_status_counts": {
+        "unspecified": 6
+      }
+    },
+    {
+      "path": "galaxy-evidence/layer-profile-v3/queue-recovery.sh",
+      "bytes": 2030,
+      "sha256": "a386d776492677fadbf5d7f0e427ca5a0ee6997c8989ad8cfa6a3c24b5811cc5"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/long-context-capacity-launch-v1.json",
+      "bytes": 2324,
+      "sha256": "0af938474efafebc3c28d668e351980556d63c3baa46fb512cf0e96a604ed47b"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-01/command.json",
+      "bytes": 640,
+      "sha256": "ac008cee0aa6cb062f7b25e28ba1545a4e006d9910d53bfcea5bfa4eec94788e"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-01/hardware.xml.gz",
+      "bytes": 2290,
+      "sha256": "799d7f13615023b2882ad8ef804d7bfa751be16abc225ca673c53b2c6c5c1fd2",
+      "junit": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-01/index.html",
+      "bytes": 122043,
+      "sha256": "25da4fa7d0ea292f6fb9efefebe49a579b2f0fd719f43fc5d7e924d118ad6943"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-01/sweep.csv",
+      "bytes": 14750,
+      "sha256": "41a7153c2a27a6f4e02bfb9aa6d705d081c29aaf2eadbee2503c9318bb2ca894"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-01/sweep.json",
+      "bytes": 68683,
+      "sha256": "af92caa3cea0c66889964458bc7b2e9ceefa58d1f5bc78d18cd476bbab44ab80",
+      "state": "allocation_failed",
+      "cleanup_completed": true,
+      "qualification_scope": "Fixed-precision capacity and repeatability experiment; changed prefill chunking is not reference-eval qualified",
+      "created_at": "2026-10-08T00:59:48.396482+00:00",
+      "updated_at": "2026-10-08T01:29:49.403195+00:00",
+      "cell_status_counts": {
+        "completed": 2,
+        "oom": 1,
+        "not_run": 1
+      },
+      "error_type": "RuntimeError"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-01/sweep.pdf",
+      "bytes": 33818,
+      "sha256": "c79040e624944fb47a6e1d06e048b3193a59dde51ac1472f28f8441ced5d718f"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-01/sweep.png",
+      "bytes": 169566,
+      "sha256": "6323fb4aa151dac6f156a9f377293064d6edea377b13dea570e1184efbbabc88"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-01/sweep.svg",
+      "bytes": 119158,
+      "sha256": "cf1f53d729cf5432c9b205865f44e210f95d674d5b5455e53b26459a181781bd"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-02/command.json",
+      "bytes": 640,
+      "sha256": "ff0afd4fda414f4a8c7917a0a38ccf5ac95b0ee819a63bd7f828935ee12590e5"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-02/hardware.xml.gz",
+      "bytes": 303,
+      "sha256": "50f512d2bcafd5806daff2bc6683201f6343f1f9c556ed7e58ac54375a36bb52",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-02/index.html",
+      "bytes": 130188,
+      "sha256": "7130441500d8e43cd73e87d31471ad4b02680eda8aa73ed842effc6b033fdb58"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-02/sweep.csv",
+      "bytes": 14873,
+      "sha256": "5ed595cce8884e44d09889f233696f1ef7e1c4be38fc06e82a094401a0103078"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-02/sweep.json",
+      "bytes": 62423,
+      "sha256": "befb0a8611e86f1d4558c3debfd341104ab2aa37768c9678d66b74d15b75f33b",
+      "state": "completed_with_oom",
+      "cleanup_completed": true,
+      "qualification_scope": "Fixed-precision capacity and repeatability experiment; changed prefill chunking is not reference-eval qualified",
+      "created_at": "2026-10-08T00:59:48.396482+00:00",
+      "updated_at": "2026-10-08T02:15:34.922119+00:00",
+      "cell_status_counts": {
+        "completed": 3,
+        "oom": 1
+      }
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-02/sweep.pdf",
+      "bytes": 35480,
+      "sha256": "669541d1c0b87546d8028f4c14b5f5125e428a7f8a29e4376bb4db61a783093c"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-02/sweep.png",
+      "bytes": 182823,
+      "sha256": "931cd412a3a208a1da2570e6ec18d38f5d16505ea57cc5d74ee5fd7eab5f1f8b"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-02/sweep.svg",
+      "bytes": 127283,
+      "sha256": "1a5038fe2e2e65e14d7b4138fb5378b789c4f003c5792973d7ab2593f1b736ff"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/index.html",
+      "bytes": 130188,
+      "sha256": "2fe25ae0935a735fea35b6229b341daa1a457afc934d108a7e8d781b31b1f1a8"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/sweep.csv",
+      "bytes": 14873,
+      "sha256": "5ed595cce8884e44d09889f233696f1ef7e1c4be38fc06e82a094401a0103078"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/sweep.json",
+      "bytes": 62557,
+      "sha256": "63fe670672e1c4102ca9d568d23666ecf5e5c74af2d2a93653a22613bdabb8ee",
+      "state": "completed_with_oom",
+      "cleanup_completed": true,
+      "qualification_scope": "Fixed-precision capacity and repeatability experiment; changed prefill chunking is not reference-eval qualified",
+      "created_at": "2026-10-08T00:59:48.396482+00:00",
+      "updated_at": "2026-10-08T02:15:39.557700+00:00",
+      "cell_status_counts": {
+        "completed": 3,
+        "oom": 1
+      }
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/sweep.pdf",
+      "bytes": 35480,
+      "sha256": "62bd7a88164f03be4ede41cc09bfc0aaf5d1934a1a3a06d33f51b43259155f8e"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/sweep.png",
+      "bytes": 182823,
+      "sha256": "931cd412a3a208a1da2570e6ec18d38f5d16505ea57cc5d74ee5fd7eab5f1f8b"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/sweep.svg",
+      "bytes": 127283,
+      "sha256": "0bfdc2f996a42bf13e8406574f04e2546e421e3f2f229c567040ca3079a087cc"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/queue.json",
+      "bytes": 12340,
+      "sha256": "fb315794c0e812773d391ef5932e0d0dc150047600e57203054007353e7e8d03",
+      "state": "completed",
+      "cleanup_completed": true,
+      "updated_at": "2026-10-08T02:15:40Z"
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/results/unit.xml.gz",
+      "bytes": 4740,
+      "sha256": "f0ad4a561c366e53c1e2305e4299034ffc13ad61291203f891fd220e033fcb35",
+      "junit": {
+        "tests": 268,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/long-context-capacity-v1/unit.xml.gz",
+      "bytes": 4748,
+      "sha256": "4092cc381cfe8ae49c919c71756c4ff30ac16dc5bb946fd7ab1ea654e84ea376",
+      "junit": {
+        "tests": 268,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/long-context-profile-host.xml",
+      "bytes": 3172,
+      "sha256": "5635b9b5483484aac352d195f3aca8321c69ec205488a77fb51afe1d9cb7c0da",
+      "junit": {
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/perf-sweep-tp4-v1/hardware.xml",
+      "bytes": 542,
+      "sha256": "66c89a4400d254e4743dabc5620863535cb7fd7bb8a529686eeffbac55abaee6",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/perf-sweep-tp4-v1/index.html",
+      "bytes": 122035,
+      "sha256": "cd39b09aa9210d805ebb096013c7419801dbe0095b02815a81647b87d37bdf7c"
+    },
+    {
+      "path": "galaxy-evidence/perf-sweep-tp4-v1/sweep.csv",
+      "bytes": 4039,
+      "sha256": "106a43bf2fee01ba82e65c9b71a44a4b3857af3c3c858371f06033634b86019c"
+    },
+    {
+      "path": "galaxy-evidence/perf-sweep-tp4-v1/sweep.json",
+      "bytes": 123417,
+      "sha256": "d81d65cdaadadaf23e9b2f538e2ebb348f756c486f282c4e6f1c4c373bcb39e9",
+      "state": "completed",
+      "created_at": "2026-10-07T03:08:38.326156+00:00",
+      "updated_at": "2026-10-07T05:39:30.365653+00:00",
+      "cell_status_counts": {
+        "completed": 27,
+        "capacity_guard": 3
+      }
+    },
+    {
+      "path": "galaxy-evidence/perf-sweep-tp4-v1/sweep.pdf",
+      "bytes": 38036,
+      "sha256": "4c60c8426990ec065529177ad55d1913ce83ec6edfc4a7c600eab3a5e7391cc5"
+    },
+    {
+      "path": "galaxy-evidence/perf-sweep-tp4-v1/sweep.png",
+      "bytes": 238266,
+      "sha256": "4e81c8b913a2446a6d6a22b245b3b076d5e40a691c1d19f786237cafa79eb4c4"
+    },
+    {
+      "path": "galaxy-evidence/perf-sweep-tp4-v1/sweep.svg",
+      "bytes": 116977,
+      "sha256": "2c1d570911ae72bab06bbe18717c206b323152128c279e2d2c6e515137793810"
+    },
+    {
+      "path": "galaxy-evidence/profile-harness-host-v4.xml",
+      "bytes": 3818,
+      "sha256": "dd31e9135bd7f9eb5fa4b1372e80f90a1520ddb2e2b3645d7bd4924e691643ed",
+      "junit": {
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/profile-queue-host.xml",
+      "bytes": 1217,
+      "sha256": "c714dd40a40b40edfe1ac4af1df84a122516182cf101f808487ca347ec40a8fa",
+      "junit": {
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-v1/launch-profile-recovery-v1.json",
+      "bytes": 1404,
+      "sha256": "43fdcac571b3aaca38d499ceb080d24e175cff6198c044f0479d9c0600e8b320"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-v1/profile-recovery-unit-v1.xml",
+      "bytes": 2423,
+      "sha256": "1543cf83624631145793abea5959af096a3bf16221cda93e51de2cf6cd38c552",
+      "junit": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-v1/profile-v5-outcome.json",
+      "bytes": 1030,
+      "sha256": "1201d4d0bae31503e9df93ac8ca876da70d9492ffcc4ae5d9cf35687dbce36c0",
+      "scope": "Do not publish stage timings from this incomplete capture"
+    },
+    {
+      "path": "galaxy-evidence/replica-timing-host.xml",
+      "bytes": 2455,
+      "sha256": "288c177b8fc0096c4375bf37ed3fb3586f4464a8367152a97953f3efde623128",
+      "junit": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/replicas-v1-failed.xml",
+      "bytes": 12857,
+      "sha256": "77da81ff82d2fdb49d887c8b2c8b5a0c09b87d00a0cf3d0e2c3ceec1f2973741",
+      "junit": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/serving-launch-host.xml",
+      "bytes": 13043,
+      "sha256": "9a36d327b117da76cb0a4b7b67eb963dee8e847b6af69db5396d1032b59fb81e",
+      "junit": {
+        "tests": 41,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/storage-recovery-20261007/checkpoint-local-copy.json",
+      "bytes": 5597,
+      "sha256": "1321e412b046f46bfe7f3babc23bce10b211118083c7643ce4fa940bac63e6f9",
+      "passed": true,
+      "started_utc": "2026-10-07T08:13:05Z"
+    },
+    {
+      "path": "galaxy-evidence/storage-recovery-20261007/checkpoint-recovered.json",
+      "bytes": 5513,
+      "sha256": "2a270bf80e722a7be872a03b9a6c9cf3cb9b70ba23f151ebdc5f4f05c4410232",
+      "passed": true,
+      "started_utc": "2026-10-07T07:51:08Z"
+    },
+    {
+      "path": "galaxy-evidence/storage-recovery-20261007/jit-quarantine.json",
+      "bytes": 2509,
+      "sha256": "af57f98e857940c473157b625e430c85991b1b870ea57fb08c1dfa931eda08dc"
+    },
+    {
+      "path": "galaxy-evidence/storage-recovery-20261007/launch-serving-v8.json",
+      "bytes": 1430,
+      "sha256": "92e874bcabe33ac65fcaf65c4118e10e3af127c96806942fe80f1ec3cefdef77"
+    },
+    {
+      "path": "galaxy-evidence/storage-recovery-20261007/launch-serving-v9.json",
+      "bytes": 1159,
+      "sha256": "ba46439d138903d086244c669acc628f82d1167cb09ec0438686a04c1a5743e1"
+    },
+    {
+      "path": "galaxy-evidence/storage-recovery-20261007/recovery-map-v2.json",
+      "bytes": 632,
+      "sha256": "dd4720f89e483e4760aa38853ef65cef6042c582241b1f8b512d0decfeb08834"
+    },
+    {
+      "path": "galaxy-evidence/storage-recovery-20261007/relocation.jsonl",
+      "bytes": 9295,
+      "sha256": "9ae853200785b494cc0c363cad0e66a23a0f0e32a2c762e71aa3db4ade24fffc"
+    },
+    {
+      "path": "galaxy-evidence/storage-recovery-20261007/storage-guards-unit.xml",
+      "bytes": 7068,
+      "sha256": "29f7446256165f70115a449875390c0e497eea66feadd5b0f964a5ed58d6987c",
+      "junit": {
+        "tests": 21,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/sweep-report-tests.xml",
+      "bytes": 1818,
+      "sha256": "6e1b9a936ab81ec70d9623a6747b7387c8dbefbcdb01eaabaaea95339441ac25",
+      "junit": {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/unit.xml",
+      "bytes": 22699,
+      "sha256": "37caa2373700d20ea0748fd3bd103ba3851f1904834ce6796a91498775e6feb7",
+      "junit": {
+        "tests": 106,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    }
+  ]
+}

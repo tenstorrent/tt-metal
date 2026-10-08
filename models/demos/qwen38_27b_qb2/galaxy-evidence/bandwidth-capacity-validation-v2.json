@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "checks": [
+    "Capacity samples, repeatability, precision/source/configuration and clean-OOM recovery independently revalidated",
+    "All 36 placement median timings recomputed from raw samples",
+    "All placement case accuracy flags match per-rank acceptance",
+    "Useful KV bandwidth recomputed from byte counts and elapsed time",
+    "All five reader variants completed and closed cleanly",
+    "Native fastest in all six reader geometry comparisons"
+  ],
+  "source_sha256": {
+    "attention-placement-v2/placement.json": "583e0d7338e3096be8b2bef3a44aa377aff0e7bf676b37d1d8d98de6e9acdb27",
+    "long-context-capacity-v1/results/capacity/sweep.json": "63fe670672e1c4102ca9d568d23666ecf5e5c74af2d2a93653a22613bdabb8ee",
+    "attention-reader-v2/queue.json": "8b39b3ee314ceb3750b0d70fa0874cb4580c8583f1fa8bbc30d839a38bf29512"
+  },
+  "scope": "Artifact accounting, not extra hardware execution or full-model qualification"
+}

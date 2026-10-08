@@ -1,0 +1,209 @@
+{
+  "scope": "Git publication/change times, not experiment execution times; history through bb67e5e0939",
+  "commits": [
+    {
+      "revision": "956d0088a81493e963759ea270a854a77539d045",
+      "authored_at": "2026-10-06T19:43:10-07:00",
+      "committed_at": "2026-10-06T19:43:10-07:00",
+      "subject": "Enable Qwen TP4 Galaxy replicas with consistent topology selection"
+    },
+    {
+      "revision": "983998f55c64f5ffb89f3e5b52919af8f899aba1",
+      "authored_at": "2026-10-06T19:49:56-07:00",
+      "committed_at": "2026-10-06T19:49:56-07:00",
+      "subject": "Add bounded concurrent Galaxy replica qualification"
+    },
+    {
+      "revision": "0dcf6d2a2de9494aa3f533318d69ea1fb4bfcea5",
+      "authored_at": "2026-10-06T19:53:50-07:00",
+      "committed_at": "2026-10-06T19:53:50-07:00",
+      "subject": "Build Galaxy cabling qualification in an isolated tree"
+    },
+    {
+      "revision": "1bfcc082c61d53ca83918b6320a67a8316c16f4e",
+      "authored_at": "2026-10-06T19:56:55-07:00",
+      "committed_at": "2026-10-06T19:56:55-07:00",
+      "subject": "Record passing full-model Galaxy baseline and warm timings"
+    },
+    {
+      "revision": "6e51cc4a6d2b11a0a89d6a608eea6654ae562bd3",
+      "authored_at": "2026-10-06T19:59:03-07:00",
+      "committed_at": "2026-10-06T19:59:03-07:00",
+      "subject": "Queue bounded torus link tests behind Galaxy replica validation"
+    },
+    {
+      "revision": "a39746ac7d6586dabdae5d53ad4e652e5b4e5f86",
+      "authored_at": "2026-10-06T20:12:19-07:00",
+      "committed_at": "2026-10-06T20:12:19-07:00",
+      "subject": "Add persistent measured ISL and concurrency sweep with graph artifacts"
+    },
+    {
+      "revision": "9ae60a1c4b475afc2bf0efdca0fe437ac46fb461",
+      "authored_at": "2026-10-06T20:25:36-07:00",
+      "committed_at": "2026-10-06T20:25:36-07:00",
+      "subject": "Support full GPQA qualification and isolated Galaxy serving setup"
+    },
+    {
+      "revision": "f53bd3adbad0b19123829cb8d67ad1de12aea781",
+      "authored_at": "2026-10-06T20:34:14-07:00",
+      "committed_at": "2026-10-06T20:34:14-07:00",
+      "subject": "Prepare full GPQA from a verified copy of the pinned dataset"
+    },
+    {
+      "revision": "3e08a7df9997469c25da244f1fd1d56c397860f4",
+      "authored_at": "2026-10-06T20:40:43-07:00",
+      "committed_at": "2026-10-06T20:40:43-07:00",
+      "subject": "Fix Galaxy qualification prompt preflight and fabric test selection"
+    },
+    {
+      "revision": "d6142bc3a48adbf4ccdecd40bfa567ad298fb6f0",
+      "authored_at": "2026-10-06T20:47:20-07:00",
+      "committed_at": "2026-10-06T20:47:20-07:00",
+      "subject": "Publish the first six measured TP4 sweep cells and graphs"
+    },
+    {
+      "revision": "c1270467a8bf31dd2d1de44934e911d51a48e197",
+      "authored_at": "2026-10-06T20:47:55-07:00",
+      "committed_at": "2026-10-06T20:47:55-07:00",
+      "subject": "Include the sweep CSV linked by the performance artifact"
+    },
+    {
+      "revision": "58a3bfac48322df2de9487211f026c2129d19909",
+      "authored_at": "2026-10-06T20:58:36-07:00",
+      "committed_at": "2026-10-06T20:58:36-07:00",
+      "subject": "Publish thirteen TP4 sweep cells and queue reduced layer profiling"
+    },
+    {
+      "revision": "70d93c81f6268350b439d2617a69f1db80214968",
+      "authored_at": "2026-10-06T21:30:25-07:00",
+      "committed_at": "2026-10-06T21:30:25-07:00",
+      "subject": "Queue qualified Galaxy serving, full GPQA and HTTP sweeps"
+    },
+    {
+      "revision": "3caebf59cff41a288fcadf294d12ad638bbbe05a",
+      "authored_at": "2026-10-06T21:50:14-07:00",
+      "committed_at": "2026-10-06T21:50:14-07:00",
+      "subject": "Prioritize long-context Galaxy profiling and publish 23 sweep points"
+    },
+    {
+      "revision": "bad943790ef924d46a723cdc28f9ca79a1e536e4",
+      "authored_at": "2026-10-06T22:06:55-07:00",
+      "committed_at": "2026-10-06T22:06:55-07:00",
+      "subject": "Queue long-context attention chunk tuning with numerical gates"
+    },
+    {
+      "revision": "ae594a35c8edb83879f6204d0021771ba5d5c50f",
+      "authored_at": "2026-10-06T22:52:49-07:00",
+      "committed_at": "2026-10-06T22:52:49-07:00",
+      "subject": "Preserve successful fabric test exit status without a rank file"
+    },
+    {
+      "revision": "04a5dd521c808e8758f70a71a20ac7574eb1b11d",
+      "authored_at": "2026-10-06T22:53:09-07:00",
+      "committed_at": "2026-10-06T22:53:09-07:00",
+      "subject": "Add isolated FP32 single-step GDN candidate and complete TP4 sweep"
+    },
+    {
+      "revision": "5b0cf8abe7fc88328b965bbfe790049e6227b49b",
+      "authored_at": "2026-10-06T23:38:29-07:00",
+      "committed_at": "2026-10-06T23:38:29-07:00",
+      "subject": "Measure Galaxy replica completion independently and close profiled submesh first"
+    },
+    {
+      "revision": "842da1efb1dc1ed29ea26457f7f80b298f814b85",
+      "authored_at": "2026-10-06T23:43:31-07:00",
+      "committed_at": "2026-10-06T23:43:31-07:00",
+      "subject": "Record TP4 GDN candidate accuracy pass and latency shortfall"
+    },
+    {
+      "revision": "45bc00c2e8c7d672c8e8cc28393059cf7d051c48",
+      "authored_at": "2026-10-07T00:00:56-07:00",
+      "committed_at": "2026-10-07T00:00:56-07:00",
+      "subject": "Bound Qwen profiler collection and retry before persistent serving"
+    },
+    {
+      "revision": "08cb8bce47b847f4cb13716a44bd3465f7684380",
+      "authored_at": "2026-10-07T00:14:42-07:00",
+      "committed_at": "2026-10-07T00:14:42-07:00",
+      "subject": "Partition experimental GDN value columns and overlap state writeback"
+    },
+    {
+      "revision": "86488af03c8d6ec6d4f715f2f42e900ec50ac5eb",
+      "authored_at": "2026-10-07T00:38:27-07:00",
+      "committed_at": "2026-10-07T00:38:27-07:00",
+      "subject": "Record passing eight-replica Galaxy timing qualification"
+    },
+    {
+      "revision": "5493e1a2da958945f7b4a4bfefa4c61d23b7a510",
+      "authored_at": "2026-10-07T07:17:59-07:00",
+      "committed_at": "2026-10-07T07:17:59-07:00",
+      "subject": "Guard Qwen profiling storage and record recovered evaluation results"
+    },
+    {
+      "revision": "b7084820716cc062af27f684f830a99735d441ae",
+      "authored_at": "2026-10-07T08:01:10-07:00",
+      "committed_at": "2026-10-07T08:01:35-07:00",
+      "subject": "Add validated GDN input buffering and attention precision diagnostics"
+    },
+    {
+      "revision": "e663e4d6d18edd09af8f48b828e9ca4e3ebbac72",
+      "authored_at": "2026-10-07T08:55:44-07:00",
+      "committed_at": "2026-10-07T08:55:44-07:00",
+      "subject": "Validate accurate decode attention and measure GDN model adapter"
+    },
+    {
+      "revision": "e2415db86a3334626a74cde3e5417c13faf3b25d",
+      "authored_at": "2026-10-07T09:28:27-07:00",
+      "committed_at": "2026-10-07T09:28:27-07:00",
+      "subject": "Publish persistent accurate-attention qualification launcher"
+    },
+    {
+      "revision": "4888e9d28139abaadb843b7b25965e61e3833d8e",
+      "authored_at": "2026-10-07T11:00:02-07:00",
+      "committed_at": "2026-10-07T11:00:02-07:00",
+      "subject": "Integrate opt-in FP32 GDN decode and qualify normalization on Galaxy"
+    },
+    {
+      "revision": "649e471cffe4e4a81fe833f54c77496774449fd5",
+      "authored_at": "2026-10-07T16:15:23-07:00",
+      "committed_at": "2026-10-07T16:15:23-07:00",
+      "subject": "Resume Qwen perf sweeps after clean DRAM allocation failures"
+    },
+    {
+      "revision": "2cda7edc4b13fe08e8a229ee96bb39d14f5de997",
+      "authored_at": "2026-10-07T16:39:15-07:00",
+      "committed_at": "2026-10-07T16:39:15-07:00",
+      "subject": "Publish completed TP4 input and output throughput sweep"
+    },
+    {
+      "revision": "62ce14d104e115a5a141e0617ed1f29956336cd5",
+      "authored_at": "2026-10-07T17:25:21-07:00",
+      "committed_at": "2026-10-07T17:25:21-07:00",
+      "subject": "Bound batched prefill memory for long-context throughput experiments"
+    },
+    {
+      "revision": "ec06ca4853790b812bb59f52ab355237f0dbd51a",
+      "authored_at": "2026-10-07T17:41:26-07:00",
+      "committed_at": "2026-10-07T17:41:26-07:00",
+      "subject": "Add fixed-precision long-context attention placement diagnostic"
+    },
+    {
+      "revision": "65d69b7c7b714a7f0f3ce23a8708e25d6c67e0a0",
+      "authored_at": "2026-10-07T17:52:02-07:00",
+      "committed_at": "2026-10-07T17:52:02-07:00",
+      "subject": "Queue isolated fixed-precision paged KV reader bandwidth tests"
+    },
+    {
+      "revision": "5c4029da9c1a23c61237d6ec2b6931f959c9e552",
+      "authored_at": "2026-10-07T20:49:11-07:00",
+      "committed_at": "2026-10-07T20:49:11-07:00",
+      "subject": "Publish completed matched Qwen GDN performance sweeps and graphs"
+    },
+    {
+      "revision": "bb67e5e0939a0c3501a8539724b904aeea19caa5",
+      "authored_at": "2026-10-07T21:05:22-07:00",
+      "committed_at": "2026-10-07T21:05:22-07:00",
+      "subject": "Fix Qwen attention diagnostics for the reported worker grid"
+    }
+  ]
+}

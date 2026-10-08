@@ -1,0 +1,45 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-capacity-pairs-v1-20261007",
+    "--property=RuntimeMaxSec=14h",
+    "--property=TimeoutStopSec=180",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=128G",
+    "--property=CPUQuota=1600%",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1.log",
+    "--working-directory=/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-source-v1",
+    "--setenv=PATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-source-v1:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tools",
+    "--setenv=LD_LIBRARY_PATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-build/lib",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "--setenv=MPLCONFIGDIR=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/matplotlib-cache",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-source-v1/models/demos/qwen38_27b_qb2/demo/run_capacity_pairs.py",
+    "--task",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "--source",
+    "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-source-v1",
+    "--weights",
+    "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "--results",
+    "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1",
+    "--after-unit",
+    "qwen38-attention-reader-v2-20261007.service",
+    "--after-results",
+    "/home/ttuser/qwen38-artifacts-20261007/attention-reader-v2"
+  ],
+  "source_manifest": {
+    "base_revision": "bb67e5e0939a0c3501a8539724b904aeea19caa5",
+    "parent": "attention-reader-source-v2",
+    "patch_sha256": {
+      "models/demos/qwen38_27b_qb2/demo/run_capacity_pairs.py": "2ed7d7dd94da8710251bab2f40f8f16bfa0329566eb60d0acaa04f96505822d9",
+      "models/demos/qwen38_27b_qb2/tests/compare_gdn_sweeps.py": "5237a5cd864aafd47c461240e6e7040939c04f0277e3fdbbdcfe157a0ce3079c"
+    },
+    "precision_change": false
+  },
+  "qualification_scope": "Fresh process per geometry and recurrence; precision unchanged",
+  "validation": "254 unit tests and one-cell historical receipt recomputation/render passed"
+}

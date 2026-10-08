@@ -4,6 +4,13 @@ TP4 implementation of `Qwen/Qwen3.8-27B` on four Blackhole devices with a
 `(1, 4)` mesh. It supports prefill, traced decode, device sampling, and vLLM
 serving.
 
+The current Galaxy work is tracked in the
+[experiment logbook](experiments/LOGBOOK.md), with a timestamped timeline,
+failed attempts, raw-receipt index, revision history and outstanding gates.
+The bring-up and queue descriptions below are historical snapshots; consult the
+logbook and current service state before treating a deployment as live or a
+candidate as qualified.
+
 ## Experimental Galaxy bring-up
 
 **2026-10-07 07:32 UTC:** the eight-replica concurrency gate passes on

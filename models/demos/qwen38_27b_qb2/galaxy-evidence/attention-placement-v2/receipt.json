@@ -1,0 +1,12 @@
+{
+  "raw_file": "placement.json",
+  "raw_sha256": "583e0d7338e3096be8b2bef3a44aa377aff0e7bf676b37d1d8d98de6e9acdb27",
+  "raw_bytes": 634870,
+  "compressed_file": "placement.json.gz",
+  "state": "completed",
+  "cleanup_completed": true,
+  "cases": 36,
+  "passing": 28,
+  "failing": 8,
+  "scope": "Completed experiment; eight alternative-layout cases fail numerical gates, no model promotion"
+}

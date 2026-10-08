@@ -1,0 +1,9 @@
+{
+  "base_revision": "bb67e5e0939a0c3501a8539724b904aeea19caa5",
+  "parent": "attention-reader-source-v2",
+  "patch_sha256": {
+    "models/demos/qwen38_27b_qb2/demo/run_capacity_pairs.py": "2ed7d7dd94da8710251bab2f40f8f16bfa0329566eb60d0acaa04f96505822d9",
+    "models/demos/qwen38_27b_qb2/tests/compare_gdn_sweeps.py": "5237a5cd864aafd47c461240e6e7040939c04f0277e3fdbbdcfe157a0ce3079c"
+  },
+  "precision_change": false
+}

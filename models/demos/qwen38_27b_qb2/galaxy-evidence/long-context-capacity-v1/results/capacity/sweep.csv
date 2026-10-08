@@ -1,0 +1,106 @@
+input_tokens,concurrency,batch_per_replica,status,tokens_per_second_per_user,aggregate_decode_tokens_per_second,ttft_p50_s,aggregate_input_tokens_per_second,aggregate_e2e_tokens_per_second,ttft_p90_s,tpot_ms,reason
+32768,16,16,completed,13.081600360372535,209.30560576596056,86.29148636199534,6086.680306223993,21.333381919611384,86.29327378934249,76.44324642642746,
+32768,32,32,completed,7.813036755991669,250.0171761917334,202.50856452109292,5184.750431817731,18.72342020260015,202.51785172196105,127.99120639399516,
+131072,16,16,oom,,,,,,,,"TT_FATAL @ /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tt_metal/impl/allocator/bank_manager.cpp:495: false
+info:
+Out of Memory: Not enough space to allocate 570982400 B DRAM buffer across 8 banks, where each bank needs to store 71372800 B, but bank size is 4247339392 B (allocated: 3610057920 B, free: 637281472 B, largest free block: 46448640 B)
+backtrace:
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so(+0xa78231) [0x70f34c078231]
+ --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, tt::tt_metal::CoreRangeSet const&, std::optional<unsigned int>, ttsl::StrongType<unsigned int, tt::tt_metal::AllocatorIDTag>, std::vector<std::pair<unsigned long, unsigned long>, std::allocator<std::pair<unsigned long, unsigned long> > > const&, std::optional<std::unordered_set<unsigned int, std::hash<unsigned int>, std::equal_to<unsigned int>, std::allocator<unsigned int> > > const&)
+ --- tt::tt_metal::AllocatorImpl::allocate_buffer(tt::tt_metal::Buffer*)
+ --- tt::tt_metal::BufferImpl::allocate_impl(tt::tt_metal::Buffer&)
+ --- tt::tt_metal::BufferImpl::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)
+ --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)
+ --- tt::tt_metal::tensor_impl::allocate_device_buffer(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)
+ --- tt::tt_metal::allocate_mesh_tensor_on_device_with_topology(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::TensorSpec, tt::tt_metal::TensorTopology)
+ --- tt::tt_metal::non_uniform_data_movement::enqueue_write_tensor(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::HostTensor const&, tt::tt_metal::distributed::MeshDevice&, ttsl::optional_reference<tt::tt_metal::MemoryConfig const>)
+ --- tt::tt_metal::to_device(ttnn::Tensor const&, tt::tt_metal::distributed::MeshDevice*, ttsl::optional_reference<tt::tt_metal::MemoryConfig const>, std::optional<ttsl::StrongType<unsigned char, ttnn::QueueIdTag> >)
+ --- ttnn::Tensor::to_device(tt::tt_metal::distributed::MeshDevice*, ttsl::optional_reference<tt::tt_metal::MemoryConfig const>, std::optional<ttsl::StrongType<unsigned char, ttnn::QueueIdTag> >) const
+ --- ttnn::Tensor ttnn::full_impl<float>(tt::tt_metal::Shape const&, float, std::optional<tt::tt_metal::DataType> const&, std::optional<tt::tt_metal::Layout> const&, tt::tt_metal::distributed::MeshDevice*, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::Tensor>)
+ --- ttnn::zeros(tt::tt_metal::Shape const&, std::optional<tt::tt_metal::DataType> const&, std::optional<tt::tt_metal::Layout> const&, std::optional<std::reference_wrapper<tt::tt_metal::distributed::MeshDevice> >, std::optional<tt::tt_metal::MemoryConfig> const&)
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/_ttnn.so(+0x7dee5f) [0x70f3505dee5f]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/_ttnn.so(+0x7df343) [0x70f3505df343]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/_ttnn.so(+0x3bc65d) [0x70f3501bc65d]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x58382d6d6c65]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x58382d70ab46]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x58382d63887c]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x58382d6d6c65]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x58382d70ab46]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd2a2) [0x58382d6652a2]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x58382d6325ff]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x58382d6650b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x58382d632778]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x58382d5db350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x58382d6650b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x58382d6325ff]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x58382d5db350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x58382d6650b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x58382d6325ff]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x58382d6650b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x58382d632778]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x58382d5db350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x58382d6650b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x58382d6325ff]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x58382d637034]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x58382d636c17]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x58382d636c17]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x58382d638aef]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x58382d5db350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x58382d638aef]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x58382d6d6c65]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x58382d70ab46]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd2a2) [0x58382d6652a2]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x58382d6325ff]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x58382d637034]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x58382d636c17]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x58382d638aef]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x58382d5db350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x58382d638aef]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x58382d6d6c65]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x58382d70ab46]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x58382d63887c]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x58382d6650b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x58382d632778]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x58382d5db350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x58382d6650b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x58382d6325ff]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x58382d6650b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x58382d632778]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x58382d6650b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x58382d6325ff]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x58382d636c17]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x58382d638aef]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x58382d5db350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x58382d638aef]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x58382d6d6c65]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x58382d70ab46]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd2a2) [0x58382d6652a2]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x58382d6325ff]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x58382d5d9352]
+"
+262016,8,8,completed,11.247879847833872,89.98303878267097,568.5969187049195,3687.010076506526,1.7658584247767402,568.6056605512276,88.90564386608212,

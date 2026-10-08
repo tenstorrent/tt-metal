@@ -1,0 +1,6 @@
+Observed after launch on 2026-10-08 UTC; this is a running-state snapshot, not a terminal result.
+MainPID=2502739
+Result=success
+ExecMainStartTimestamp=Thu 2026-10-08 04:28:01 UTC
+ActiveState=active
+SubState=running

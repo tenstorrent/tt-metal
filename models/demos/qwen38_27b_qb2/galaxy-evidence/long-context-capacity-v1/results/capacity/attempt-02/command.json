@@ -1,0 +1,17 @@
+[
+  "timeout",
+  "--signal=TERM",
+  "--kill-after=180",
+  "19794",
+  "/bin/bash",
+  "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/source/scripts/run_safe_pytest.sh",
+  "/home/ttuser/qwen38-artifacts-20261007/long-context-source-v1/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+  "--rootdir=/home/ttuser/qwen38-artifacts-20261007/long-context-source-v1",
+  "-c",
+  "/home/ttuser/qwen38-artifacts-20261007/long-context-source-v1/pytest.ini",
+  "-vv",
+  "-s",
+  "--tb=short",
+  "--timeout=19674",
+  "--junitxml=/home/ttuser/qwen38-artifacts-20261007/long-context-capacity-v1/capacity/attempt-02/hardware.xml"
+]
