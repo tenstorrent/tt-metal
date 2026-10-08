@@ -383,16 +383,17 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
             switch (p.op) {
                 case RecipeOp::Dense:
                 case RecipeOp::Joint: {
-                    // run_recipe_segments: one KV-forwarding chain per batch/head, jobs split evenly.
+                    // run_recipe_segments: one KV-forwarding chain per batch/head, jobs split evenly; with more
+                    // batch/heads than cores, every head's Q chunks split evenly over the grid.
                     const uint32_t cores = p.grid.x * p.grid.y;
                     const uint32_t jobs_per_head = div_up(p.q_rows + p.joint_q_rows, q_chunk);
                     const uint32_t chain =
                         std::min({jobs_per_head, cores / batch_heads, p.max_cores_per_head_batch});
-                    if (chain == 0) {
+                    if (chain == 0 && p.max_cores_per_head_batch == 0) {
                         break;
                     }
                     admit(
-                        div_up(jobs_per_head, chain),
+                        chain == 0 ? div_up(batch_heads * jobs_per_head, cores) : div_up(jobs_per_head, chain),
                         div_up(p.k_rows + p.joint_k_rows, k_chunk),
                         p.grid,
                         RecipeL1Context{.mask_page_bytes = p.mask_page_bytes});
@@ -586,7 +587,8 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     const Tensor* joint_q,
     const Tensor* joint_k,
     const std::optional<SDPAProgramConfig>& program_config,
-    const Tensor* attn_mask) {
+    const Tensor* attn_mask,
+    uint64_t reserved_l1_bytes) {
     if (!recipe_blocking_requested(program_config) || q.storage_type() != StorageType::DEVICE) {
         return program_config;
     }
@@ -602,7 +604,8 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     problem.k_rows = k.padded_shape()[2];
     problem.joint_q_rows = joint_q ? joint_q->padded_shape()[2] : 0;
     problem.joint_k_rows = joint_k ? joint_k->padded_shape()[2] : 0;
-    problem.l1_bytes = free_l1_below_live_buffers(*device);
+    const uint64_t free_l1 = free_l1_below_live_buffers(*device);
+    problem.l1_bytes = free_l1 > reserved_l1_bytes ? free_l1 - reserved_l1_bytes : 0;
     problem.mask_page_bytes = attn_mask ? attn_mask->buffer()->page_size() : 0;
     const auto choice = invalid_fixed(config) ? std::nullopt : choose_recipe_blocking(problem);
     return apply_choice(config, choice, problem, joint_q ? "joint" : "dense");

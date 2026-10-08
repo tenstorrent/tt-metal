@@ -59,9 +59,14 @@ ttnn::Tensor scaled_dot_product_attention(
             !is_causal && !sliding_window_size && !attention_sink && !cu_window_seqlens &&
                 windowed_q_token_offset == 0 && !windowed_q_token_offset_tensor && !output_concat_heads,
             "Named SDPA recipes currently support dense noncausal attention with an optional additive attn_mask only");
-        TT_FATAL(!memory_config || *memory_config == DRAM_MEMORY_CONFIG, "SDPA recipes require DRAM output");
+        const auto output_memory_config = memory_config.value_or(DRAM_MEMORY_CONFIG);
+        TT_FATAL(
+            output_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "SDPA recipes require an interleaved (DRAM or L1) output memory config");
         const auto policy = numeric::resolve_recipe_policy(
             input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, program_config);
+        const float recipe_scale =
+            scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1])));
         // Same mask contract as legacy SDPA below: the recipe kernels fold the softmax scale into
         // the exponent, so the additive mask is pre-multiplied by 1/scale (0 and -inf are exact).
         // FP32-state recipes (BALANCED/ACCURATE) hold FP32 scores, so their mask is pre-scaled in FP32
@@ -70,24 +75,35 @@ ttnn::Tensor scaled_dot_product_attention(
         if (attn_mask) {
             // Reject an unsupported mask before the pre-scale dispatches anything.
             numeric::validate_recipe_mask(input_tensor_q, input_tensor_k, *attn_mask, policy);
-            const float recipe_scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
-            recipe_mask = ttnn::multiply(
-                policy.fp32_destination && attn_mask->dtype() != DataType::FLOAT32
-                    ? ttnn::typecast(*attn_mask, DataType::FLOAT32)
-                    : *attn_mask,
-                1.0f / recipe_scale);
+            if (policy.fp32_destination && attn_mask->dtype() != DataType::FLOAT32) {
+                recipe_mask = ttnn::typecast(*attn_mask, DataType::FLOAT32);
+            }
+            if (recipe_scale != 1.0f) {
+                recipe_mask = ttnn::multiply(*recipe_mask, 1.0f / recipe_scale);
+            }
         }
+        // The kernels read BF16 Q and write BF16; a BFP8/BFP4 Q is widened first (exactly) and the output comes
+        // back in Q's dtype like legacy SDPA. The BF16 intermediate then stays in DRAM.
+        const auto query = numeric::recipe_bf16_query(input_tensor_q);
+        const bool narrow_output = input_tensor_q.dtype() != DataType::BFLOAT16;
+        const auto kernel_memory_config = narrow_output ? DRAM_MEMORY_CONFIG : output_memory_config;
+        const auto& qs = input_tensor_q.padded_shape();
         // Op-selected blocking when program_config leaves chunks unset; the chooser budgets the
-        // mask CB (at least one row group) so a masked call never picks a blocking that overflows L1.
+        // mask CB (at least one row group) so a masked call never picks a blocking that overflows L1,
+        // and an L1 output's share of each core's L1 (it is allocated after the choice).
         const auto blocking = numeric::resolve_dense_recipe_blocking(
             policy,
-            input_tensor_q,
+            query,
             input_tensor_k,
             nullptr,
             nullptr,
             program_config,
-            recipe_mask ? &*recipe_mask : nullptr);
-        return numeric::run_recipe(input_tensor_q, input_tensor_k, input_tensor_v, policy, blocking, recipe_mask);
+            recipe_mask ? &*recipe_mask : nullptr,
+            numeric::recipe_output_l1_bytes(
+                query, uint64_t{qs[0]} * qs[1] * (qs[2] / 32) * (qs[3] / 32), 2048, kernel_memory_config));
+        auto output = numeric::run_recipe(
+            query, input_tensor_k, input_tensor_v, policy, blocking, recipe_mask, recipe_scale, kernel_memory_config);
+        return narrow_output ? ttnn::typecast(output, input_tensor_q.dtype(), output_memory_config) : output;
     }
     operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -238,17 +254,28 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
         TT_FATAL(joint_strategy == "rear", "SDPA recipes require rear joint strategy");
         const auto policy = numeric::resolve_recipe_policy(
             input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, program_config);
+        // BF16 kernel I/O; BFP8/BFP4 Q round-trip as in the dense branch.
+        const auto query = numeric::recipe_bf16_query(input_tensor_q);
+        const auto joint_query = numeric::recipe_bf16_query(joint_tensor_q);
         const auto blocking = numeric::resolve_dense_recipe_blocking(
-            policy, input_tensor_q, input_tensor_k, &joint_tensor_q, &joint_tensor_k, program_config);
-        return numeric::run_joint_recipe(
-            input_tensor_q,
+            policy, query, input_tensor_k, &joint_query, &joint_tensor_k, program_config);
+        auto [output, joint_output] = numeric::run_joint_recipe(
+            query,
             input_tensor_k,
             input_tensor_v,
-            joint_tensor_q,
+            joint_query,
             joint_tensor_k,
             joint_tensor_v,
             policy,
-            blocking);
+            blocking,
+            scale);
+        if (input_tensor_q.dtype() != DataType::BFLOAT16) {
+            output = ttnn::typecast(output, input_tensor_q.dtype());
+        }
+        if (joint_tensor_q.dtype() != DataType::BFLOAT16) {
+            joint_output = ttnn::typecast(joint_output, joint_tensor_q.dtype());
+        }
+        return {output, joint_output};
     }
     operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
     auto output_tensors = ttnn::prim::joint_scaled_dot_product_attention(
@@ -342,7 +369,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         TT_FATAL(
             is_cross || input_tensor_q.logical_shape()[2] == input_tensor_k.logical_shape()[2],
             "Named ring recipes do not yet support chunked prefill; use is_cross for noncausal cross attention");
-        // Read only by the op perf model; the recipe kernels fix their own fidelities.
+        // The recipe fixes its exp: an exp_approx_mode=False is ignored (resolve_recipe_policy). Read only by the op
+        // perf model; the recipe kernels fix their own fidelities, so a caller's compute config is replaced.
+        program_config.exp_approx_mode = std::nullopt;
         compute_kernel_config = BlackholeComputeKernelConfig{
             .math_fidelity = policy.pv_fidelity,
             .math_approx_mode = true,
@@ -516,8 +545,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     const uint32_t num_buffers_per_channel,
     std::optional<SDPAPrecision> precision) {
     if (precision) {
-        // resolve_recipe_policy rejects an explicit compute_kernel_config, exp_approx_mode=False, a
-        // non-default scale; the recipe owns those numerical decisions.
+        // The recipe owns the numerics: resolve_recipe_policy accepts and ignores compute_kernel_config and
+        // exp_approx_mode=False, and validates the scale.
         const auto policy = operations::transformer::sdpa::detail::resolve_recipe_policy(
             input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, program_config);
         program_config = operations::transformer::sdpa::detail::resolve_exp_ring_recipe_blocking(
@@ -547,7 +576,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
         TT_FATAL(
             input_tensor_q.dtype() == DataType::BFLOAT16 && input_tensor_k.dtype() == input_tensor_v.dtype(),
             "Named exp ring recipes require BF16 Q and matching KV types");
-        // Read only by the op perf model; the recipe kernels fix their own fidelities.
+        // The recipe fixes its exp: an exp_approx_mode=False is ignored (resolve_recipe_policy). Read only by the op
+        // perf model; the recipe kernels fix their own fidelities, so a caller's compute config is replaced.
+        program_config.exp_approx_mode = std::nullopt;
         compute_kernel_config = BlackholeComputeKernelConfig{
             .math_fidelity = policy.pv_fidelity,
             .math_approx_mode = true,

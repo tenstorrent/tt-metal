@@ -372,7 +372,7 @@ void bind_sdpa(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
-            precision (ttnn.SDPAPrecision, optional): Named numerical recipe: FAST, STANDARD, BALANCED or ACCURATE. Omit for the legacy kernel. Cannot be combined with compute_kernel_config or exp_approx_mode=False. FAST expects inputs rounded by prepare_sdpa_input.
+            precision (ttnn.SDPAPrecision, optional): Named numerical recipe: FAST, STANDARD, BALANCED or ACCURATE. Omit for the legacy kernel. The recipe owns the numerics: compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored. FAST expects inputs rounded by prepare_sdpa_input.
             attention_sink (ttnn.Tensor, optional): Defaults to `None`. [1 x nqh x 1 x 1]. Single attention sink value per head. The kernel will efficiently replicate this value across all query positions.
             cu_window_seqlens (ttnn.Tensor, optional): Defaults to `None`. 1D int32/uint32 ROW_MAJOR tensor of cumulative window boundaries [0, w1, w1+w2, ..., s]. When provided, computes block-diagonal (windowed) attention where each token attends only within its window; the mask is built on-device. With `is_causal=False` a token attends to its whole window; with `is_causal=True` token t in window [cu[i], cu[i+1]) attends to cu[i]..t (packed variable-length causal sequences). Mutually exclusive with attn_mask/sliding_window_size.
             windowed_q_token_offset (int): Defaults to `0`. Windowed mode only. Global row index of Q row 0, for a Q holding a contiguous slice of a longer sequence: Q and the output are indexed locally while `cu_window_seqlens` and K/V stay global, so this locates the slice among the windows. Must be a multiple of TILE_HEIGHT, and `offset + Sq` must not exceed `Sk`. Use it to split the Q dimension across devices under sequence parallelism.
@@ -757,7 +757,7 @@ void bind_sdpa(nb::module_& mod) {
             precision (ttnn.SDPAPrecision, optional): Named numerical recipe (see
                 tech_reports/FlashAttention/SDPAPrecisionRecipes.md). Noncausal only, without cache, window or
                 sink features; logical_n/logical_l may be scalars or device tensors. Omit for the legacy kernel.
-                Cannot be combined with compute_kernel_config or exp_approx_mode=False.
+                compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -955,8 +955,8 @@ void bind_sdpa(nb::module_& mod) {
             precision (ttnn.SDPAPrecision, optional): Named numerical recipe (see
                 tech_reports/FlashAttention/SDPAPrecisionRecipes.md). Each Q chunk's online-softmax state stays
                 in L1 across ring steps and is normalized once, on the last. logical_n may be a scalar or a
-                device tensor. Omit for the legacy kernel. Cannot be combined with compute_kernel_config or
-                exp_approx_mode=False.
+                device tensor. Omit for the legacy kernel. compute_kernel_config and exp_approx_mode are
+                accepted and ignored; scale is honored.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):

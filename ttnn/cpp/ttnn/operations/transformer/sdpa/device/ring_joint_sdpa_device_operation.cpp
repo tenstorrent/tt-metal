@@ -619,8 +619,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 !kv_pad_rotation_active(args, tensor_args) && !tensor_args.attention_sink,
             "Unsupported feature for named ring recipes");
         TT_FATAL(
-            !args.scale || *args.scale == 1.0f / std::sqrt(static_cast<float>(q_shape[3])),
-            "Named ring recipes require the default 1/sqrt(head_dim) scale");
+            !args.scale || (std::isfinite(*args.scale) && *args.scale > 0.0f),
+            "Named ring recipes require a finite positive scale, got {}",
+            args.scale.value_or(0.0f));
     } else if ((!args.is_causal && !is_chunked) || args.is_cross) {
         for (const auto& tensor : sdpa_input_tensors) {
             TT_FATAL(
