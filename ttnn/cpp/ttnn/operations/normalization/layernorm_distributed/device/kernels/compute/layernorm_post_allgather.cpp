@@ -12,6 +12,8 @@
 
 #include <cstdint>
 
+#define CKL_CHAIN_PACK_PER_TILE
+
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
