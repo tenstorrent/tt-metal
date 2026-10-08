@@ -424,8 +424,6 @@ def _build_program_for_device(
     cb1_descs = sram_cts[0].cb_descriptor_from_compressed_tensor(cb_in1, device_coord=coord) if sram_cts else []
     if not sram_use_compression:
         # Plain custom_mm steps by the CB page, so declare one uniform bfp4_b tile, as the fused MoE op does
-        from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import _TILE_SIZES
-
         bfp4_tile_size = _TILE_SIZES[1]
         for desc in cb1_descs:
             desc.total_size = bfp4_tile_size
