@@ -353,9 +353,10 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
             set_ttsync_enables<TRACK_GPR | TRACK_TENSIX_INSTRUCTIONS>();
             unpack_matmul_ttsync_on = 1;
         }
-        // the RISC's config writes land before the first UNPACR, and no earlier op's TRISC_CFG stall can wait on a GPR
-        // store that Auto TTSync holds behind that op's own GPR instructions
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        // the RISC's config writes land before the first UNPACR, and no TRISC_CFG stall (an earlier op's, or this one
+        // still latched) can wait on a GPR store that Auto TTSync holds; the NOP keeps tensix_sync until the stall clears
+        TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::TRISC_CFG);
+        TTI_NOP;
         tensix_sync();
     }
 }
