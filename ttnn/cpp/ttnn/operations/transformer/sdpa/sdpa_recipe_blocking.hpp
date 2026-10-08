@@ -113,6 +113,12 @@ struct RecipeBlockingProblem {
     uint32_t fixed_q_tiles = 0;
     uint32_t fixed_k_tiles = 0;
     bool exp_mux_on_bottom_row = false;
+    // Dense key ranges (sdpa_recipe.hpp: RecipeKeyRange): a Q chunk processes only the K chunks its rows see, and
+    // all heads' Q chunks are dealt over the whole grid. Windowed segments (unknown on the host) cost every K chunk.
+    bool key_range = false;
+    bool causal = false;
+    uint32_t sliding_window = 0;
+    uint32_t q_offset = 0;
 };
 
 struct RecipeBlocking {

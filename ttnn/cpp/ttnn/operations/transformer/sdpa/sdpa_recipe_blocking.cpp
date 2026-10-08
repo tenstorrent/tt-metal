@@ -6,9 +6,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <tuple>
+#include <vector>
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
@@ -105,14 +107,16 @@ double block_cost(
     uint32_t k_tiles,
     uint32_t d_tiles,
     const RecipeBuild& build,
-    bool dense) {
+    bool dense,
+    bool keyed = false) {
     const auto m = block_cost_model(policy);
     const double d = d_tiles / 4.0;
     // The q*k*d term is the QK and PV matmuls in equal parts; each pays its own subblock-width penalty
     // (a one-tile K chunk narrows QK only, so it does not slow PV or the softmax state work).
     const double matmul = 0.5 * (qk_subblock_penalty(policy, build.qk_width) + subblock_penalty(build.pv_width));
-    // Dense/joint unfused STANDARD computes an odd Q chunk with one padding row (recipe_compute_q_tiles).
-    const uint32_t rows = dense ? recipe_compute_q_tiles(policy, q_tiles, k_tiles) : q_tiles;
+    // Dense/joint unfused STANDARD, and paired recipes with a key range, compute an odd Q chunk with one padding row
+    // (recipe_compute_q_tiles).
+    const uint32_t rows = dense ? recipe_compute_q_tiles(policy, q_tiles, k_tiles, keyed, keyed) : q_tiles;
     const double compute = m.c * (static_cast<double>(rows) * k_tiles * d * matmul + m.ck * rows * d);
     return std::max(compute, m.bw * k_tiles * d);
 }
@@ -201,7 +205,11 @@ using ProblemKey = std::tuple<
     uint32_t,
     uint32_t,
     uint32_t,
-    bool>;
+    bool,
+    bool,
+    bool,
+    uint32_t,
+    uint32_t>;
 
 ProblemKey key_of(const RecipeBlockingProblem& p) {
     return {
@@ -225,7 +233,11 @@ ProblemKey key_of(const RecipeBlockingProblem& p) {
         p.extra_l1_bytes,
         p.fixed_q_tiles,
         p.fixed_k_tiles,
-        p.exp_mux_on_bottom_row};
+        p.exp_mux_on_bottom_row,
+        p.key_range,
+        p.causal,
+        p.sliding_window,
+        p.q_offset};
 }
 
 std::vector<uint32_t> tile_range(uint32_t fixed, uint32_t lo, uint32_t hi) {
@@ -335,6 +347,72 @@ RecipeL1Estimate recipe_l1_bytes(
     TT_THROW("Unknown SDPA recipe op");
 }
 
+namespace {
+// Key-range work beyond the block roofline, fitted on one P150b (op time of 120 blockings, Q128-640 x K128-640:
+// causal 10 heads D128, 16 heads D64, 32/8 heads D128; sliding window 1024 with 10 heads D128 and 16/8 heads D256;
+// 8192 rows; STANDARD, ACCURATE, FAST BFP8; the pick is within 1.19x of the best measured blocking everywhere,
+// within 1.11x but for one shape): each K chunk also costs kKeyRangeStream x c x k_tiles x d_tiles / 4 (streaming
+// its K/V, which key-range cores read for themselves or pass along), each edge K chunk kKeyRangeEdge x c x q_tiles x
+// k_tiles (the additive mask; STANDARD and FAST also lose the fused chunk), each Q chunk kKeyRangeJob x c (its first
+// K chunk on the unfused path, Q load and normalization).
+constexpr double kKeyRangeStream = 2.0;
+constexpr double kKeyRangeEdge = 1.0;
+constexpr double kKeyRangeJob = 200.0;
+
+// Modeled work of the busiest core of a key-range call: each Q chunk costs its K chunks (mirroring
+// RecipeKeyRange::chunks in dataflow/recipe_key_range.hpp: causal and sliding-window rows at q_offset + row), and all
+// heads' Q chunks are dealt to `cores` in snake order by cost (run_recipe_segments: recipe_snake_count).
+double key_range_makespan(
+    const RecipeBlockingProblem& p, uint32_t q_tiles, uint32_t k_tiles, uint32_t cores, double block, double c) {
+    const uint32_t q_chunk = q_tiles * kTile, k_chunk = k_tiles * kTile;
+    const uint32_t k_chunks = div_up(p.k_rows, k_chunk);
+    auto keys = [&](uint32_t q) {
+        uint32_t lo = 0, hi = p.k_rows;
+        if (p.causal) {
+            hi = std::min(hi, q + 1);
+        }
+        if (p.sliding_window > 0) {
+            if (p.causal) {
+                lo = q + 1 >= p.sliding_window ? q + 1 - p.sliding_window : 0;
+            } else {
+                const uint32_t half = p.sliding_window / 2;
+                lo = q >= half ? q - half : 0;
+                hi = std::min(hi, q + half + 1);
+            }
+        }
+        return std::pair{std::min(lo, hi), hi};
+    };
+    std::vector<double> jobs;
+    for (uint32_t row0 = 0; row0 < p.q_rows; row0 += q_chunk) {
+        const uint32_t row_end = std::min(row0 + q_chunk, p.q_rows);
+        const auto [lo_first, hi_first] = keys(p.q_offset + row0);
+        const auto [lo_last, hi_last] = keys(p.q_offset + row_end - 1);
+        const uint32_t first = std::min(lo_first / k_chunk, k_chunks - 1);
+        const uint32_t end = std::max(div_up(hi_last, k_chunk), first + 1);
+        uint32_t full_begin = div_up(lo_last, k_chunk);
+        uint32_t full_end = hi_first / k_chunk;
+        if (full_end < full_begin || hi_first <= lo_last) {
+            full_end = full_begin;
+        }
+        full_begin = std::clamp(full_begin, first, end);
+        full_end = std::clamp(full_end, full_begin, end);
+        const uint32_t edges = (end - first) - (full_end - full_begin);
+        const double k_block = block + kKeyRangeStream * c * k_tiles * p.d_tiles / 4.0;
+        jobs.push_back((end - first) * k_block + edges * kKeyRangeEdge * c * q_tiles * k_tiles + kKeyRangeJob * c);
+    }
+    // Every head has the same Q chunk costs: sorted entry s is job s / heads of the descending list.
+    std::sort(jobs.begin(), jobs.end(), std::greater<>());
+    const uint32_t heads = p.batch * p.q_heads;
+    const uint64_t total = uint64_t{heads} * jobs.size();
+    std::vector<double> load(cores, 0.0);
+    for (uint64_t s = 0; s < total; ++s) {
+        const uint64_t round = s / cores, position = s % cores;
+        load[round % 2 == 0 ? position : cores - 1 - position] += jobs[s / heads];
+    }
+    return *std::max_element(load.begin(), load.end());
+}
+}  // namespace
+
 std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProblem& p) {
     std::vector<RecipeBlocking> candidates;
     const uint32_t batch_heads = p.batch * p.q_heads;
@@ -348,7 +426,10 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
     // work (saturation check, fold, PV pieces) over longer K chunks: up to K1024 when L1 allows.
     const uint32_t k_cap = p.policy.selection.recipe == Recipe::E ? 2 * kRecipeSearchMaxKTiles : kRecipeSearchMaxKTiles;
     const uint32_t q_floor = std::min(kRecipeSearchMinQTiles, div_up(p.q_rows + p.joint_q_rows, kTile));
-    const uint32_t k_floor = std::min(kRecipeSearchMinKTiles, div_up(p.k_rows + p.joint_k_rows, kTile));
+    // A sliding window bounds each Q chunk's keys, so K chunks down to 128 rows waste fewer masked keys (fitted with
+    // the key-range terms, kKeyRangeEdge).
+    const uint32_t k_min = p.key_range && p.sliding_window > 0 ? kRecipeSearchMinKTiles / 2 : kRecipeSearchMinKTiles;
+    const uint32_t k_floor = std::min(k_min, div_up(p.k_rows + p.joint_k_rows, kTile));
     const auto q_range = tile_range(p.fixed_q_tiles, q_floor, q_cap);
     const auto k_range = tile_range(p.fixed_k_tiles, k_floor, k_cap);
     for (auto qi = q_range.rbegin(); qi != q_range.rend(); ++qi) {  // ascending Q
@@ -380,15 +461,23 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
             const uint32_t q_chunk = qt * kTile;
             const uint32_t k_chunk = kt * kTile;
             const RecipeBuild build = recipe_build(p.policy, qt, kt, p.d_tiles, dense ? p.vd_tiles : 0);
-            const double block = block_cost(p.policy, qt, kt, p.d_tiles, build, dense);
+            const double block = block_cost(p.policy, qt, kt, p.d_tiles, build, dense, p.key_range);
             // K tiles of a Q chunk's first K/V block: the chunk, or the whole (primary) sequence when shorter.
             const uint32_t first_k_tiles = std::min(kt, std::max(1u, div_up(p.k_rows, kTile)));
-            auto admit = [&](uint32_t jobs, uint32_t k_blocks, CoreCoord grid, const RecipeL1Context& context) {
+            // `blocks`: the busiest core's (Q chunk, K chunk) blocks (jobs x K chunks unless a key range says less).
+            // `blocks`: the busiest core's (Q chunk, K chunk) blocks (jobs x K chunks unless a key range says less);
+            // `extra`: key-range work outside the blocks.
+            auto admit = [&](uint32_t jobs,
+                             uint32_t k_blocks,
+                             CoreCoord grid,
+                             const RecipeL1Context& context,
+                             std::optional<double> blocks = std::nullopt,
+                             double extra = 0.0) {
                 const auto l1 = recipe_l1_bytes(p.op, p.policy, qt, kt, p.d_tiles, context);
                 if (l1.minimum > p.l1_bytes) {
                     return;
                 }
-                double cost = static_cast<double>(jobs) * k_blocks * block +
+                double cost = blocks.value_or(static_cast<double>(jobs) * k_blocks) * block + extra +
                               block_overhead(p.policy, qt, first_k_tiles, p.d_tiles, jobs);
                 if (l1.preferred > p.l1_bytes) {
                     cost *= kFallbackPenalty;
@@ -404,6 +493,31 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
                     const uint32_t jobs_per_head = div_up(p.q_rows + p.joint_q_rows, q_chunk);
                     const uint32_t chain =
                         std::min({jobs_per_head, cores / batch_heads, p.max_cores_per_head_batch});
+                    if (p.key_range) {
+                        // run_recipe_segments: all heads' Q chunks dealt over the grid in snake order by cost.
+                        const uint32_t total_jobs = batch_heads * jobs_per_head;
+                        const uint32_t used = std::min(cores, total_jobs);
+                        const uint32_t k_blocks = div_up(p.k_rows, k_chunk);
+                        const uint32_t jobs = div_up(total_jobs, used);
+                        const double c = block_cost_model(p.policy).c;
+                        // Windowed segments (unknown on the host) cost every K chunk.
+                        const double work =
+                            p.causal || p.sliding_window > 0
+                                ? key_range_makespan(p, qt, kt, used, block, c)
+                                : jobs * (k_blocks * (block + kKeyRangeStream * c * kt * p.d_tiles / 4.0) +
+                                          kKeyRangeJob * c);
+                        admit(
+                            jobs,
+                            k_blocks,
+                            p.grid,
+                            RecipeL1Context{
+                                .mask_page_bytes = p.mask_page_bytes,
+                                .extra_bytes = p.extra_l1_bytes,
+                                .vd_tiles = p.vd_tiles},
+                            0.0,
+                            work);
+                        break;
+                    }
                     if (chain == 0 && p.max_cores_per_head_batch == 0) {
                         break;
                     }
@@ -635,6 +749,10 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     if (key_range && key_range->active()) {
         problem.mask_page_bytes = 576;  // BFP4 mask tiles
         problem.extra_l1_bytes = recipe_key_range_extra_bytes(*key_range);
+        problem.key_range = true;
+        problem.causal = key_range->causal;
+        problem.sliding_window = key_range->sliding_window;
+        problem.q_offset = key_range->q_offset;
     }
     if (options) {
         problem.extra_l1_bytes += recipe_dense_options_extra_bytes(*options);
