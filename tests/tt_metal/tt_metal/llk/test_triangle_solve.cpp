@@ -80,6 +80,7 @@ struct TriangleSolveCase {
     uint32_t num_tiles = 1;
     uint32_t l_tiles_per_block = 1;  // L tiles the kernel front-waits together (used last-first)
     uint32_t l_cb_tiles = 1;         // L CB capacity in tiles
+    bool l_cached = true;            // L read through the math RISC's L1 data cache
     bool require_exact = false;      // bit-exact X == RHS instead of the tolerance check
     float atol = 1e-6f;
     float rtol = 1e-5f;
@@ -323,7 +324,8 @@ CaseResult run_case(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
             .fp32_dest_acc_en = true,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = false,
-            .compile_args = {c.num_tiles, c.l_tiles_per_block, l_bf16 ? 1u : 0u, c.l_negated ? 1u : 0u}});
+            .compile_args = {
+                c.num_tiles, c.l_tiles_per_block, l_bf16 ? 1u : 0u, c.l_negated ? 1u : 0u, c.l_cached ? 1u : 0u}});
 
     distributed::WriteShard(cq, l_buffer, l_tiled, zero_coord);
     distributed::WriteShard(cq, rhs_buffer, rhs_tiled, zero_coord);
@@ -471,6 +473,32 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTriangleSolveMultiTile) {
              .l_tiles_per_block = 2,
              .l_cb_tiles = 2,
              .seed = 53}});
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixTriangleSolveUncachedL) {
+    unit_tests::compute::sfpu::triangle_solve::run_cases(
+        this->devices_.at(0),
+        {TriangleSolveCase{
+             .name = "uncached_identity_fp32_l",
+             .l_kind = LKind::Identity,
+             .rhs_kind = RhsKind::Random,
+             .l_cached = false,
+             .require_exact = true,
+             .seed = 61},
+         TriangleSolveCase{
+             .name = "uncached_fp32_l_4_tiles_l_cb_1",
+             .l_scale = 0.5f,
+             .num_tiles = 4,
+             .l_cb_tiles = 1,
+             .l_cached = false,
+             .seed = 62},
+         TriangleSolveCase{
+             .name = "uncached_bf16_negated_l_uniform_0.5_rhs_random",
+             .l_format = tt::DataFormat::Float16_b,
+             .l_negated = true,
+             .l_scale = 0.5f,
+             .l_cached = false,
+             .seed = 63}});
 }
 
 }  // namespace tt::tt_metal
