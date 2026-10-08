@@ -132,6 +132,18 @@ void* memmove(void* d, const void* s, size_t n);
 int memcmp(const void* a, const void* b, size_t n);
 size_t strlen(const char* s);
 
+/* ---- pmp.c (README "PMP policy") ---------------------------------------------------------------- */
+#define FW_PMP_R 0x01u
+#define FW_PMP_W 0x02u
+#define FW_PMP_X 0x04u
+#define FW_PMP_L 0x80u
+/* Every firmware hart, first thing in fw_main: apply / verify the policy. Returns L2CPU_PMP_STATE_* or -1 (bad
+ * table, or the locked set differs from it; the hart's resident record then holds 0x100 | entry). */
+int fw_pmp_init(uint32_t hart, uint8_t* region);
+int fw_pmp_on(void);
+/* 1 if the policy allows an M-mode access (always 1 with the policy off). */
+int fw_pmp_allows(uint64_t addr, uint64_t len, uint32_t perm);
+
 /* ---- main.c ----------------------------------------------------------------------------------- */
 void fw_park_all(void) __attribute__((noreturn)); /* hart 0: park the workers, then itself (MB_PARK) */
 uint64_t fw_mtime_ticks(uint64_t us);

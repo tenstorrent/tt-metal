@@ -89,6 +89,18 @@ static void check_inject(uint32_t hart) {
     } else if (k == L2CPU_INJECT_WFIPARK) {
         fw_log("inject: wfi park with interrupts off");
         __asm__ volatile("csrw mie, zero\n csrci mstatus, 8\n 1: wfi\n j 1b" ::: "memory");
+    } else if ((k == L2CPU_INJECT_LOAD || k == L2CPU_INJECT_STORE || k == L2CPU_INJECT_JUMP) && fw_pmp_on()) {
+        /* PMP fault tests: unguarded on purpose, the policy must turn them into a trap (error park) */
+        uint64_t a = rd64((uint8_t*)&g_hdr->inject[hart] + L2CPU_INJECT_ADDR);
+        fw_log("inject: %s 0x%lx", k == L2CPU_INJECT_LOAD ? "load" : k == L2CPU_INJECT_STORE ? "store" : "jump", a);
+        if (k == L2CPU_INJECT_LOAD) {
+            (void)*(volatile uint64_t*)(uintptr_t)a;
+        } else if (k == L2CPU_INJECT_STORE) {
+            *(volatile uint64_t*)(uintptr_t)a = 0x5A5A5A5A5A5A5A5Aull;
+        } else {
+            ((void (*)(void))(uintptr_t)a)();
+        }
+        fw_log("inject: access at 0x%lx did not trap", a);
     }
 }
 
@@ -339,6 +351,13 @@ void fw_main(uint64_t hartid, uint8_t* region, uint64_t epoch) {
         g_resident = ok ? res : 0;
         g_boot_epoch = (uint32_t)epoch;
         g_boot_mode = ok && rd32(res + L2CPU_RES_BOOT_MODE) == L2CPU_BOOT_WARM ? L2CPU_BOOT_WARM : L2CPU_BOOT_COLD;
+    }
+    /* PMP policy (boot record flag): before this hart touches anything outside the region. A bad table or a locked
+     * set that differs from it parks the hart (resident record: pmp = 0x100 | entry). */
+    if (fw_pmp_init(hart, region) < 0) {
+        csr_write(mcause, 0);
+        csr_write(mepc, 0);
+        fw_park();
     }
 
     /* A COLD boot zeroes [region, region + 2 MiB): the region is a fresh DRAM buffer and the loader does not clear

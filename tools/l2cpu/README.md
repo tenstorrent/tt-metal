@@ -52,6 +52,7 @@ documentation (`tt-isa-documentation`, `BlackholeA0/L2CPUTile`) or in tt-bh-linu
 | **Several tiles, one release.** `L2CPU_RESET` reads 0x0f after a chip reset (no tile harvested); one read-modify-write setting bits 4..7 inside one PLL 200 -> 1750 MHz dance releases all four tiles (READY within 1 ms of the release); one PLL clocks all four tiles (each runs at 1750 MHz). The once-per-reset rule holds per tile bit. | measured |
 | **Reader slots are per tile.** The uncached-read collapse (3+ harts reading at once) is per tile; two harts on each of the four tiles read concurrently at 69-71 us per 303,872 B row (tiles 2 and 3, sharing D7, ~2 % slower): 8 reader slots per chip, 33.9 GB/s. | measured |
 | `mcycle` does not advance while a hart sleeps in `wfi`; use `mtime` for wall clock. | measured |
+| **PMP.** 8 entries (`pmpaddr0-7`; `pmpaddr8-15` read 0, `pmpaddr16+`, `pmpcfg4+` and odd `pmpcfg` numbers are illegal instructions), granule 4 KiB (G = 10, NAPOT minimum 4 KiB), `pmpaddr` bits 44..0 (NAPOT all-ones = 0x1fff_ffff_ffff covers every PA). Every `pmpcfg` bit is writable. **No Smepmp** (`mseccfg` 0x747 is an illegal instruction). A LOCKED entry also checks M-mode (load fault 5, store fault 7, fetch fault 1, precise, `mtval` = address), ignores later writes to its `pmpcfg` byte and `pmpaddr`, a locked TOR entry locks the `pmpaddr` below it, and the entries stay across a software restart. A chip reset clears the L and A fields (the locked entries are gone) but not `pmpaddr` and R/W/X (random after power-up, the previous epoch's values afterwards). | measured (hart 0; every hart reads its locked set back at boot) |
 | other boards (P150), multi-chip opens | not established |
 
 Read speed of one 303,872 B buffer (one Qwen3 logits row), one hart unless noted:
@@ -98,20 +99,23 @@ as V, its own QEMU test driver); its images get the suffix `-<APP_NAME>` (e.g. `
 
 `l2cpu_run.sh` takes the lock, resets the chips (without `TT_VISIBLE_DEVICES`, the reset addresses the board) and
 runs the command: the harts of a tile leave reset once per chip reset, so every run that starts the firmware gets
-its own reset. Keep the clock holder alive for as long as the firmware should run (the CLI's `hold SECONDS`).
+its own reset. Keep the clock holder alive for as long as the firmware should run (the CLI's `hold SECONDS`). The
+PMP policy (section "PMP policy") is on by default; `L2CPU_PMP=0` (or the CLI's `--pmp off`) starts without it.
 
 ## API (`host/l2cpu`)
 
     from l2cpu import L2cpuHw, L2cpuCtl, L2cpuMonitor, TtnnClusterBackend, make_backend, layout
     hw = L2cpuHw(TtnnClusterBackend(0), tile=0, guard=True)   # or make_backend("umd") without a tt-metal device
-    ctl = L2cpuCtl(hw, region_pa)
-    ctl.start(image)                 # fresh chip reset only; writes image, resident page, RNMI handlers, releases
+    ctl = L2cpuCtl(hw, region_pa, region_size=8 << 20)   # region_size: what the firmware + application use (PMP)
+    ctl.start(image, pmp=None)       # fresh chip reset only; image, resident page, RNMI handlers, PMP flag, release
+                                     # pmp: None = L2CPU_PMP (default on), False = off, True / pmp.build(...) = policy
     start_tiles([ctl0, ctl1, ...], image)   # several tiles (one L2CPU_RESET write); then one ctl per tile as above
     ctl.stop()                       # L1 (mailbox PARK), then L2 (RNMI) for harts that did not park -> records
-    ctl.restart(image=None, warm=True, slot=None)   # stop, (load), go; ~0.6-1.2 ms
+    ctl.restart(image=None, warm=True, slot=None, pmp=None)   # stop, (load), go; ~0.6-1.2 ms; refuses another policy
     ctl.rnmi(mask, mode)             # raw RNMI: COUNT (resume) or PARK
     ctl.status(), ctl.is_alive(), ctl.log_text(), ctl.error(), ctl.hart_state(h), ctl.record(h), ctl.mb(cmd, ...)
     ctl.inject(hart, kind)           # test hook: illegal instruction, or a hart only an RNMI can reach
+    ctl.mb(L2CPU_MB_INJECT, hart, L2CPU_INJECT_LOAD|STORE|JUMP, pa)   # PMP fault tests (policy on only)
     ctl.ensure_clock()               # re-apply the target clock after a power-state change
     L2cpuMonitor(ctl).start()        # heartbeat / error watch thread
 
@@ -131,7 +135,9 @@ first-error word; heartbeats; hart states with trap records; counters; inject / 
 the region before `fw_status == READY`.
 
 Boot record (external-peripherals scratch, PA 0x2001_0100, written by the loader): +0x00 image PA, +0x08
-"L2CPBOOT", +0x10 region PA. The image takes the region from it, so it can run from either slot.
+"L2CPBOOT", +0x10 region PA, +0x18 PMP flag ("PMP1" = apply the policy, anything else = no PMP), rest 0. The image
+takes the region from it, so it can run from either slot. The PMP table (8 x {pmpaddr, pmpcfg}) sits in the
+resident page at +0xA00, inside its locked R+X half.
 
 ## Restart protocol
 
@@ -149,6 +155,66 @@ Boot record (external-peripherals scratch, PA 0x2001_0100, written by the loader
    clears its IPI, and reports READY with the new `boot_epoch`. A WARM boot acknowledges a mailbox command still
    pending from before the restart with `L2CPU_MB_ERR_STALE` instead of running it (e.g. the L1 PARK that `stop()`
    sent to a hung hart 0 before falling back to RNMI would otherwise park the new image right after READY).
+
+## PMP policy
+
+Goal: a wild x280 access (bad pointer, overrun, a stray NoC access through an unprogrammed TLB window) traps
+precisely (mcause 1 / 5 / 7, `mtval` = address) and parks the hart in the resident error park, where a restart
+revives it, instead of hanging the NoC / AHB or overwriting what restart and recovery depend on.
+
+Design: one fixed policy per chip epoch. The host computes it (`host/l2cpu/pmp.py`, `pmp.build(region,
+region_size)`), writes the table into the resident page with the page and sets the boot record flag before the
+release. Every hart, first thing in `fw_main` (`fw/pmp.c`, before it touches anything outside the region), writes
+the 8 entries with the L bit, then reads them back and compares with the table. Locked entries check M-mode and
+stay until the next chip reset, so a restart finds them in place: the writes are ignored, the read-back proves the
+table still describes them (hart record `pmp` = APPLIED at the first boot, REUSED after a restart, 0x100 | entry and
+an error park if they differ). The x280 has no Smepmp (no `mseccfg`, so no RLB to edit locked entries and no MMWP
+for a default deny): the locked set with an explicit last deny-all entry is the only way to constrain M-mode.
+
+The x280 has 8 entries, so the ranges are merged (priority = index; every entry locked):
+
+| # | Range | Perm | Covers |
+|---|---|---|---|
+| 0 | TOR [0, 0x2000_1000) | R W | core complex: CLINT 0x0200_0000, L3 controller 0x0201_0000 (WAYENABLE, FLUSH64), L2 prefetchers 0x0203_0000, PLIC 0x0C00_0000 (internal buses, not the NoC), and the TLB window config page 0x2000_0000 |
+| 1 | TOR [0x2000_1000, 0x2008_0000) | R | external peripherals read only: control page (reset vectors, boot record, hart status, RNMI trigger and handler addresses), watchdogs, NIUs, MSI catcher (the doorbell drain is a read); the register survey read every word here without a fault or a hang |
+| 2 | NAPOT resident page [+0, +4 KiB) | R X | resident code, control words and the PMP table (the per-hart records in the upper 4 KiB stay writable) |
+| 3, 4 | TOR [region, region + size) | R W X | the region (cached Memory Port): header, mailbox, log, image slots, stacks, heaps, application windows |
+| 5 | NAPOT around the uncached alias of the region | R | the uncached reads of the applications (sampling: logits rows); smallest aligned block that contains the alias, required to stay in the local DRAM |
+| 6 | NAPOT TLB windows 0..31 (uncached) | R W | the runtime's 16 mapping slots (`plat_noc_map`: tensor reads, token writes, mailbox NoC commands) |
+| 7 | NAPOT all-ones | none | everything else: other TLB windows, cached TLB windows, the DMA controller 0x2008_0000 and every unlisted PA |
+
+Rule: **the region, its size, the TLB windows and the on/off state are fixed for the chip epoch.** `ctl.restart`
+refuses a policy that differs from the one locked at `start` (and an entry outside the region's image slots) before
+it touches the tile, with "PMP policy is locked for this chip epoch"; a different region or window set needs a chip
+reset and a new `start`. `ctl.start(..., pmp=False)` or `L2CPU_PMP=0` starts without a policy: no CSR is written and
+the firmware behaves as before (the flag word is 0, as every earlier loader wrote it).
+
+The mailbox checks PEEK / POKE / COPY / FILL / MEMCMP against the same table (`fw_pmp_allows`, the hardware's
+first-match rule) and answers `L2CPU_MB_ERR_DENIED` without an access; `CSR_WRITE` (PMP CSRs only, for the probe)
+cannot change a locked entry. Fault-injection kinds `L2CPU_INJECT_LOAD / STORE / JUMP` (address in the inject line)
+are refused while the policy is off.
+
+Left open by the policy (8 entries): the region itself (code, header, stacks and records are writable by any hart),
+the core-complex devices (a wild store can disturb the timer, interrupts or cache configuration, but these sit on
+the core's internal buses and answer), the TLB window config page (a wild store can re-point one of windows 0..31,
+and an access through it then goes wherever it points), the NoC targets behind windows 0..31 (`NOC_READ32 /
+NOC_WRITE32` take any tile), reads of the external peripherals (a read pops the MSI FIFO) and reads of local DRAM
+around the region through the uncached alias. The Tensix link responder is a separate image without the policy.
+
+Cost: the checks are in the core's access path; measured with the policy on and off (same commands, two chip
+epochs) in the table below.
+
+| P300 chip 0, medians (`L2CPU_PMP=1` / `=0`, one chip epoch each) | policy on | policy off |
+|---|---|---|
+| batch 32 replay, uncached zone, read phase (8 rows of 303,872 B per hart, 4 harts) | 591.2 us | 591.2 us |
+| batch 32 replay x280 step, 1 / 4 tiles (bench setting) | 1137.4 / 342.3 us | 1137.6 / 342.3 us |
+| batch 1 replay x280 total, greedy / T0.7 k50 p0.9 | 32.3 / 90.9 us | 32.2 / 90.9 us |
+| Qwen3-8B batch 32, 4 tiles: x280 read / wait for the Tensix push per step | 458.8 / 584.0 us | 459.1 / 584.5 us |
+| Qwen3-8B batch 32, 4 tiles: ms/token | 30.311 | 30.312 |
+| WARM restart, L1 / L2 (median of 200) | 0.71 / 0.62 ms | 0.69 / 0.61 ms (PR 1 smoke) |
+
+No measurable cost: the check is part of the access path, and Tensix pushes into the region are NoC writes that PMP
+does not see.
 
 ## Waits and their bounds
 
@@ -168,7 +234,7 @@ Numbers are the defaults in `include/l2cpu_boot.h` and `host/l2cpu`.
 | log ring lock | 10^6 tries (10^5 in a trap) | logs without the lock | n/a | n/a |
 | mailbox COPY / FILL / MEMCMP | 16 MiB per command | `L2CPU_MB_ERR_ARG` | status | n/a |
 | mailbox access to a bad address | precise fault | `L2CPU_MB_ERR_FAULT` + mcause, hart 0 alive | status | n/a |
-| mailbox / NoC access to a target that never answers | **not bounded** (a load that never returns has no instruction boundary; RNMI cannot take it) | host mailbox timeout | `ctl.mb` raises after 1 s; heartbeat stall | chip reset |
+| mailbox / NoC access to a target that never answers | **not bounded** (a load that never returns has no instruction boundary; RNMI cannot take it). With the PMP policy, PEEK / POKE / COPY / FILL / MEMCMP outside the policy are refused before any access (`L2CPU_MB_ERR_DENIED`) and a wild x280 access outside it traps; what stays reachable is the policy's own ranges, i.e. NoC targets behind the allowed TLB windows (`NOC_READ32` / `NOC_WRITE32`, applications) | host mailbox timeout | `ctl.mb` raises after 1 s; heartbeat stall | chip reset |
 | resident park loop waits for `go_epoch` | **intentionally unbounded** (the host decides when to go) | n/a | record PARKED | RNMI still reaches the hart (NMIE = 1) |
 | resident waits for its trigger bit to clear (RNMI) | until the host clears it | n/a | record IN_RNMI | `ctl.rnmi` always clears after its own timeout |
 | host: `bringup` READY poll | 5 s | `RuntimeError` | exception | chip reset + start |
@@ -193,9 +259,16 @@ worker -> `WORKER_DEAD`, resident error park, WARM restart revives it.
   test-driver hart that plays the host): boot from a garbage-filled region, mailbox incl. guarded faults, 200 work
   items, WARM restart into another slot and at the same address, a work item published while parked and served
   after the restart, COLD restart, 1000 restart cycles, trap + worker-dead + restart, the forced bounds above.
-  QEMU has no RNMI: the L2 path is tested on the chip only.
+  QEMU has no RNMI: the L2 path is tested on the chip only. PMP (QEMU `virt` implements it; the driver hart plays
+  the host and is not bound by the harts' entries): 8 locked entries applied at the first boot with the flag,
+  mailbox DENIED outside the policy, locked CSRs ignore writes, a wild load (mcause 5), a store into the resident
+  page (7), a jump into a data range (1) and a hart 0 store each trap and take the error park, restart + 100
+  restarts re-use the locked set, a changed table is refused by every hart; the trap and bound tests after it run
+  under the policy.
 - `tests/test_boot_mirror.py`, `tests/test_qemu.py` (pytest, skipped without the toolchain),
   `tests/test_chip_smoke.py` (pytest, runs only with `L2CPU_CHIP_TESTS=1`; resets the chips).
+- Chip, PMP: `scripts/pmp_probe.py` (policy off: entry count, granule, Smepmp, lock behaviour through the mailbox
+  CSR read / write), `scripts/pmp_faults.py` (policy on: section "PMP policy").
 - Chip: `scripts/bringup_smoke.py` (bring-up, heartbeats, mailbox, echo work items, trap test, N restarts
   alternating L1 / L2).
 
@@ -204,7 +277,9 @@ worker -> `WORKER_DEAD`, resident error park, WARM restart revives it.
 - Verified on one P300 chip opened as a single chip: tile 0 throughout, tiles 1-3 with the bring-up, the link and
   the sampling firmware (one release for all four). P150, multi-chip opens and other kernel-driver / firmware
   versions are not established. Which PLL4 postdivider feeds which tile is not established (all four are set equal).
-- No PMP: a wild x280 access is not trapped by the core (planned as a separate change).
+- PMP: 8 entries cover the ranges, not their contents (section "PMP policy": the region itself, the core-complex
+  devices and the allowed TLB windows stay open to a wild access). The Tensix link test responder
+  (`tensix/responder`) is a separate image without the policy (unprotected).
 - A restart needs a live clock holder and a cooperative or RNMI-reachable hart; a hart stalled inside a NoC access
   that never completes needs a chip reset.
 - The region must stay reserved for the whole session: with a ttnn buffer, keep the tensor alive.

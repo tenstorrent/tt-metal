@@ -347,6 +347,195 @@ static void restart_suite(void) {
 
 static uint64_t hb(uint32_t h) { return rd64(&H->heartbeat[h].count); }
 
+/* ---- PMP policy (README "PMP policy"): the QEMU analogue of host/l2cpu/pmp.py's 8 locked entries --------------- */
+#define PMP_R 0x01u
+#define PMP_W 0x02u
+#define PMP_X 0x04u
+#define PMP_OFF 0x00u
+#define PMP_TOR 0x08u
+#define PMP_NAPOT 0x18u
+#define PMP_L 0x80u
+#define QEMU_PMP_REGION_SIZE 0x1000000ull /* 16 MiB: image slots, stacks, resident page, heaps, APP_HIGH start */
+static uint64_t pmp_addr[8];
+static uint8_t pmp_cfg[8];
+static uint64_t napot_enc(uint64_t base, uint64_t size) { return (base >> 2) | ((size >> 3) - 1); }
+
+static void pmp_table_write(void) {
+    uint8_t* t = res(L2CPU_RES_PMP);
+    wr32(t, L2CPU_PMP_MAGIC);
+    wr32(t + 4, 8);
+    for (uint32_t i = 0; i < 8; i++) {
+        wr64(res(L2CPU_RES_PMP_ADDR) + 8 * i, pmp_addr[i]);
+        *(volatile uint8_t*)(res(L2CPU_RES_PMP_CFG) + i) = pmp_cfg[i];
+    }
+    fence();
+}
+
+static void go_parked(uint32_t slot) { /* the harts are parked: new epoch, no READY wait */
+    uint32_t ep = rd32(res(L2CPU_RES_BOOT_EPOCH)) + 1;
+    wr32(R + L2CPU_OFF_FW_STATUS, 0);
+    wr64(res(L2CPU_RES_ENTRY), (uint64_t)(uintptr_t)R + slot);
+    wr32(res(L2CPU_RES_BOOT_MODE), L2CPU_BOOT_WARM);
+    wr32(res(L2CPU_RES_BOOT_EPOCH), ep);
+    fence();
+    wr32(res(L2CPU_RES_GO_EPOCH), rd32(res(L2CPU_RES_GO_EPOCH)) + 1);
+    fence();
+}
+
+static void check_pmp_state(uint32_t want, const char* what) {
+    for (uint32_t h = 0; h < 4; h++) {
+        CHECK(
+            rec32(h, L2CPU_REC_PMP) == want,
+            "%s: hart %u pmp state 0x%x, want 0x%x",
+            what,
+            h,
+            rec32(h, L2CPU_REC_PMP),
+            want);
+    }
+}
+
+static void wait_trap(uint32_t h, uint64_t mcause, uint64_t mtval, const char* what) {
+    uint64_t deadline = plat_mtime() + ticks_ms(2000);
+    while (rec32(h, L2CPU_REC_STATE) != L2CPU_STATE_PARKED || rd32(&H->hart_state[h].status) != L2CPU_HART_PARKED) {
+        CHECK(plat_mtime() < deadline, "%s: hart %u not parked", what, h);
+    }
+    l2cpu_hart_state_t* hs = &H->hart_state[h];
+    CHECK(
+        hs->error == L2CPU_ERR_TRAP && hs->mcause == mcause && hs->mtval == mtval &&
+            rec32(h, L2CPU_REC_KIND) == L2CPU_KIND_ERROR,
+        "%s: hart %u error %u mcause %lu mtval 0x%lx kind %u",
+        what,
+        h,
+        hs->error,
+        hs->mcause,
+        hs->mtval,
+        rec32(h, L2CPU_REC_KIND));
+}
+
+static void pmp_tests(void) {
+    uint64_t r[7], mask;
+    uint64_t base = (uint64_t)(uintptr_t)R, resid = base + L2CPU_OFF_RESIDENT;
+    const uint64_t wild = 0xA0000000ull; /* RAM outside every allowed range */
+    const uint64_t noc = L2CPU_QEMU_FAKE_NOC_BASE;
+    check_pmp_state(L2CPU_PMP_STATE_OFF, "before the policy");
+    /* implemented pmpaddr bits: this hart's own entry 0 (OFF, unlocked: no effect on M-mode) */
+    __asm__ volatile("csrw pmpaddr0, %1\n\tcsrr %0, pmpaddr0\n\tcsrw pmpaddr0, zero" : "=&r"(mask) : "r"(~0ull));
+    const uint64_t a[8] = {
+        0x10001000ull >> 2,                        /* [0, 0x1000_1000): test finisher, RTC, CLINT, PLIC, UART */
+        napot_enc(L2CPU_QEMU_BOOT_RECORD, 0x1000), /* boot record (the chip's control page): read only */
+        napot_enc(resid, L2CPU_RES_PROTECTED),
+        base >> 2,
+        (base + QEMU_PMP_REGION_SIZE) >> 2,
+        napot_enc(noc, 0x10000000ull), /* fake NoC (the chip's TLB windows) */
+        0,
+        mask, /* deny everything else */
+    };
+    const uint8_t c[8] = {
+        PMP_L | PMP_TOR | PMP_R | PMP_W,
+        PMP_L | PMP_NAPOT | PMP_R,
+        PMP_L | PMP_NAPOT | PMP_R | PMP_X,
+        PMP_L | PMP_OFF,
+        PMP_L | PMP_TOR | PMP_R | PMP_W | PMP_X,
+        PMP_L | PMP_NAPOT | PMP_R | PMP_W,
+        PMP_L | PMP_OFF,
+        PMP_L | PMP_NAPOT,
+    };
+    for (int i = 0; i < 8; i++) {
+        pmp_addr[i] = a[i];
+        pmp_cfg[i] = c[i];
+    }
+    pmp_table_write();
+    wr32((void*)(uintptr_t)(L2CPU_QEMU_BOOT_RECORD + L2CPU_BOOT_PMP), L2CPU_PMP_MAGIC);
+    fence();
+    uint32_t ep = restart(L2CPU_SLOT_B, 1, 0);
+    check_pmp_state(L2CPU_PMP_STATE_APPLIED, "first boot with the policy");
+    uint64_t cfg0 = 0;
+    for (int i = 0; i < 8; i++) {
+        cfg0 |= (uint64_t)c[i] << (8 * i);
+        CHECK(
+            mb(L2CPU_MB_CSR_READ, 0x3b0 + i, 0, 0, 0, r, 1) == L2CPU_MB_OK && r[0] == a[i], "pmpaddr%d 0x%lx", i, r[0]);
+    }
+    CHECK(mb(L2CPU_MB_CSR_READ, 0x3a0, 0, 0, 0, r, 1) == L2CPU_MB_OK && r[0] == cfg0, "pmpcfg0 0x%lx", r[0]);
+    echo(20000, "with the policy");
+    tprintf("PASS pmp: 8 locked entries applied by every hart at its first boot with the flag (epoch %u)\n", ep);
+
+    /* mailbox: refused before any access outside the policy; locked entries ignore CSR writes */
+    uint32_t st = mb(L2CPU_MB_PEEK32, wild, 0, 0, 0, r, 1);
+    CHECK(st == L2CPU_MB_ERR_DENIED, "peek outside the policy: st %u", st);
+    CHECK(mb(L2CPU_MB_PEEK64, resid, 0, 0, 0, r, 1) == L2CPU_MB_OK, "peek of the resident page");
+    CHECK(mb(L2CPU_MB_POKE32, resid + 0x10, 0, 0, 0, r, 1) == L2CPU_MB_ERR_DENIED, "poke into the resident code");
+    CHECK(
+        mb(L2CPU_MB_PEEK32, L2CPU_QEMU_BOOT_RECORD + L2CPU_BOOT_PMP, 0, 0, 0, r, 1) == L2CPU_MB_OK &&
+            r[0] == L2CPU_PMP_MAGIC,
+        "peek of the boot record");
+    CHECK(
+        mb(L2CPU_MB_POKE32, L2CPU_QEMU_BOOT_RECORD + L2CPU_BOOT_PMP, 0, 0, 0, r, 1) == L2CPU_MB_ERR_DENIED,
+        "poke into the boot record");
+    CHECK(mb(L2CPU_MB_POKE32, base + L2CPU_OFF_SCRATCH, 7, 0, 0, r, 1) == L2CPU_MB_OK, "poke into the region");
+    CHECK(mb(L2CPU_MB_COPY32, base + L2CPU_OFF_SCRATCH, wild, 64, 0, r, 1) == L2CPU_MB_ERR_DENIED, "copy from outside");
+    CHECK(mb(L2CPU_MB_FILL32, resid, 0, 64, 0, r, 1) == L2CPU_MB_ERR_DENIED, "fill into the resident code");
+    CHECK(
+        mb(L2CPU_MB_PEEK32, base + QEMU_PMP_REGION_SIZE - 2, 0, 0, 0, r, 1) == L2CPU_MB_ERR_DENIED,
+        "peek straddling the region end");
+    CHECK(mb(L2CPU_MB_CSR_WRITE, 0x3a0, 0, 0, 0, r, 1) == L2CPU_MB_OK && r[0] == cfg0, "locked pmpcfg0 rewritten");
+    CHECK(mb(L2CPU_MB_CSR_WRITE, 0x3b3, 0, 0, 0, r, 1) == L2CPU_MB_OK && r[0] == a[3], "locked pmpaddr3 rewritten");
+    tprintf("PASS pmp: mailbox PEEK/POKE/COPY/FILL outside the policy -> DENIED, nothing accessed; locked CSRs keep\n");
+
+    /* unguarded wild accesses trap and take the error park; the other harts keep serving */
+    CHECK(mb(L2CPU_MB_INJECT, 1, L2CPU_INJECT_LOAD, wild, 0, r, 1) == L2CPU_MB_OK, "inject load");
+    wait_trap(1, 5, wild, "wild load");
+    CHECK(H->error.code == L2CPU_ERR_TRAP && H->error.hart == 1 && H->error.arg == 5, "global error word");
+    CHECK(mb(L2CPU_MB_INJECT, 2, L2CPU_INJECT_STORE, resid + 0x10, 0, r, 1) == L2CPU_MB_OK, "inject store");
+    wait_trap(2, 7, resid + 0x10, "store into the resident page");
+    CHECK(mb(L2CPU_MB_INJECT, 3, L2CPU_INJECT_JUMP, noc, 0, r, 1) == L2CPU_MB_OK, "inject jump");
+    wait_trap(3, 1, noc, "jump into a data range");
+    CHECK(mb(L2CPU_MB_PING, 0, 0, 0, 0, r, 1) == L2CPU_MB_OK, "hart 0 alive");
+    CHECK(rd32(res(0x10)) != 0x5A5A5A5Au, "resident code intact");
+    CHECK(mb(L2CPU_MB_INJECT, 0, L2CPU_INJECT_STORE, wild, 0, r, 1) == L2CPU_MB_OK, "inject store hart 0");
+    wait_trap(0, 7, wild, "hart 0 wild store");
+    tprintf(
+        "PASS pmp: wild load (mcause 5), store into the resident page (7), jump into data (1), hart 0 store (7):\n"
+        "          each traps, records mtval and parks in the resident error park\n");
+
+    /* restart re-uses the locked set */
+    ep = restart(L2CPU_SLOT_B, 1, 1);
+    check_pmp_state(L2CPU_PMP_STATE_REUSED, "restart after the faults");
+    echo(21000, "after the PMP faults");
+    for (uint32_t i = 0; i < 100; i++) {
+        restart((i & 1) ? SLOT_C : L2CPU_SLOT_B, (i % 10) != 9, 0);
+        check_pmp_state(L2CPU_PMP_STATE_REUSED, "restart cycle");
+        echo(22000 + i, "restart cycle with the policy");
+    }
+    tprintf("PASS pmp: restart after the faults + 100 restarts (WARM/COLD, slots B/C) re-use the locked set\n");
+
+    /* a table that no longer describes the locked set is detected by every hart */
+    CHECK(mb(L2CPU_MB_PARK, 0, 0, 0, 0, r, 1) == L2CPU_MB_OK, "MB_PARK");
+    wait_parked(0xF, "table change");
+    pmp_addr[5] = napot_enc(noc, 0x20000000ull);
+    pmp_table_write();
+    go_parked(L2CPU_SLOT_B);
+    uint64_t deadline = plat_mtime() + ticks_ms(2000);
+    for (uint32_t h = 0; h < 4; h++) {
+        while (rec32(h, L2CPU_REC_PMP) != (0x100u | 5u) || rec32(h, L2CPU_REC_STATE) != L2CPU_STATE_PARKED) {
+            CHECK(
+                plat_mtime() < deadline,
+                "hart %u: pmp 0x%x state %u",
+                h,
+                rec32(h, L2CPU_REC_PMP),
+                rec32(h, L2CPU_REC_STATE));
+        }
+    }
+    CHECK(r32(L2CPU_OFF_FW_STATUS) != L2CPU_FW_STATUS_READY, "READY with a changed table");
+    pmp_addr[5] = napot_enc(noc, 0x10000000ull);
+    pmp_table_write();
+    ep = restart(L2CPU_SLOT_B, 1, 1);
+    check_pmp_state(L2CPU_PMP_STATE_REUSED, "table restored");
+    echo(23000, "table restored");
+    tprintf(
+        "PASS pmp: a changed table is refused by every hart (pmp = 0x105, parked), restored table boots (epoch %u)\n",
+        ep);
+}
+
 static void trap_and_restart_tests(void) {
     uint64_t r[7], before[4];
     CHECK(mb(L2CPU_MB_INJECT, 2, 0, 0, 0, r, 1) == L2CPU_MB_OK, "inject");
@@ -474,6 +663,7 @@ void test_driver_main(void) {
     }
     tprintf("PASS echo: 200 work items over 4 harts (doorbell + dispatch)\n");
     restart_suite();
+    pmp_tests(); /* from here on every firmware hart runs under the locked policy */
     trap_and_restart_tests();
     hang_tests();
     tprintf("ALL PASS (%s notify)\n", L2CPU_NOTIFY_POLL ? "poll" : "irq");

@@ -67,7 +67,7 @@ endif
 CFLAGS := -march=rv64gc $(ARCH) $(COMMON) $(DEFS) -I$(HERE) -I$(INC) $(APP_INC)
 LDFLAGS := -nostdlib -nostartfiles -Wl,--gc-sections -Wl,--no-warn-rwx-segments -Wl,--defsym=BASE=$(BASE) -T $(HERE)link.ld
 
-SRCS := main.c mailbox.c trap.c log.c libc.c $(PLAT_SRC) $(if $(filter 1,$(TEST)),$(if $(APP_TEST_DRIVER),,test_driver.c))
+SRCS := main.c mailbox.c trap.c log.c libc.c pmp.c $(PLAT_SRC) $(if $(filter 1,$(TEST)),$(if $(APP_TEST_DRIVER),,test_driver.c))
 VOBJS := $(patsubst %.c,$(B)/v_%.o,$(notdir $(APP_VSRCS)))
 OBJS := $(B)/start.o $(patsubst %.c,$(B)/%.o,$(SRCS)) $(B)/app.o $(VOBJS) \
 	$(if $(and $(filter 1,$(TEST)),$(APP_TEST_DRIVER)),$(B)/app_test_driver.o)

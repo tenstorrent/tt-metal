@@ -24,6 +24,8 @@ void plat_hart_init(uint32_t hart);
 /* Hart 0, once, before READY: doorbell interrupt routing. */
 void plat_boot_init(void);
 uint32_t plat_build_flags(void);
+/* Address of the loader's boot record (chip: the external-peripherals scratch; QEMU: a RAM stand-in). */
+uint64_t plat_boot_record(void);
 
 uint64_t plat_mtime(void);
 uint32_t plat_mtime_hz(void);

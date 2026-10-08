@@ -6,14 +6,16 @@
     from l2cpu import L2cpuHw, L2cpuCtl, make_backend
     ctl = L2cpuCtl(L2cpuHw(make_backend("umd"), tile=0, guard=True), region_pa)
     ctl.start(open("fw.bin", "rb").read())             # or start_tiles([ctl0, ctl1, ...], image): one release
+    # PMP policy (pmp.py) on by default: ctl.start(..., pmp=False) or L2CPU_PMP=0 turns it off
 """
-from . import layout
+from . import layout, pmp
 from .ctl import L2cpuCtl, L2cpuCtlError, start_tiles
 from .hw import ClockGuard, L2cpuHw, TtnnClusterBackend, UmdBackend, make_backend
 from .monitor import L2cpuMonitor
 
 __all__ = [
     "layout",
+    "pmp",
     "L2cpuCtl",
     "L2cpuCtlError",
     "start_tiles",

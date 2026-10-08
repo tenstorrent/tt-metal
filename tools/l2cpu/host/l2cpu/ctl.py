@@ -11,6 +11,7 @@
     ctl.status(); ctl.is_alive(); ctl.log_text(); ctl.ensure_clock()
 
 Levels: L1 = mailbox PARK (cooperative), L2 = RNMI (host trigger bits), L3 = chip reset (outside this module).
+PMP: start() locks a per-epoch policy (pmp.py, README "PMP policy"); restart() keeps it and refuses another one.
 Layout: ../../include/l2cpu_boot.h (mirror: layout.py). Every wait below is bounded (README "Waits and their bounds").
 """
 from __future__ import annotations
@@ -20,6 +21,7 @@ import struct
 import time
 
 from . import layout as A
+from . import pmp as P
 from .hw import ClockGuard, L2cpuHw
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -40,6 +42,7 @@ REC_FIELDS = (
     "mtval",
     "mstatus",
 )
+PMP_STATE = {0: "OFF", 1: "APPLIED", 2: "REUSED"}
 STATE = {0: "RUNNING", 1: "IN_RNMI", 2: "PARKED", 3: "LEAVING"}
 KIND = {0: "-", 1: "SOFT", 2: "RNMI", 3: "RNMI_EXC", 4: "ERROR"}
 
@@ -49,7 +52,7 @@ class L2cpuCtlError(RuntimeError):
 
 
 class L2cpuCtl:
-    def __init__(self, hw: L2cpuHw, base: int, log=print, mhz: int = 1750):
+    def __init__(self, hw: L2cpuHw, base: int, log=print, mhz: int = 1750, region_size: int = A.L2CPU_REGION_MIN_SIZE):
         if not isinstance(hw.b, ClockGuard):  # every access to the tile goes through the clock guard
             hw.b = ClockGuard(hw.b, (hw.x, hw.y))
         self.hw = hw
@@ -58,6 +61,21 @@ class L2cpuCtl:
         self.log = log or (lambda *a, **k: None)
         self.mhz = mhz
         self.mbreq = None
+        self.region_size = region_size
+        self.policy = None  # the PMP policy locked in this chip epoch (start), None = off
+
+    def make_policy(self, pmp=None):
+        """pmp: None = environment default (L2CPU_PMP, on), False = off, True = the default policy for this region,
+        or a pmp.Policy for this region."""
+        if pmp is None:
+            pmp = P.default_enabled()
+        if pmp is False:
+            return None
+        if pmp is True:
+            return P.build(self.base, self.region_size)
+        if pmp.region != self.base:
+            raise L2cpuCtlError(f"PMP policy for region 0x{pmp.region:x}, this tile's region is 0x{self.base:x}")
+        return pmp
 
     # ---- low level ----
     def r32(self, pa):
@@ -87,10 +105,14 @@ class L2cpuCtl:
         return out
 
     def record(self, h):
-        d = self.hw.pa_read(self.res + A.L2CPU_RES_REC + A.L2CPU_REC_SIZE * h, A.L2CPU_REC_PARK_COUNT + 4)
+        d = self.hw.pa_read(self.res + A.L2CPU_RES_REC + A.L2CPU_REC_SIZE * h, A.L2CPU_REC_PMP + 4)
         v = struct.unpack_from("<4I7Q", d, 0)
         rec = dict(zip(REC_FIELDS, v))
         rec["park_count"] = struct.unpack_from("<I", d, A.L2CPU_REC_PARK_COUNT)[0]
+        rec["pmp"] = struct.unpack_from("<I", d, A.L2CPU_REC_PMP)[0]
+        rec["pmp_name"] = PMP_STATE.get(
+            rec["pmp"], f"ERROR entry {rec['pmp'] & 0xFF}" if rec["pmp"] >> 8 else rec["pmp"]
+        )
         rec["state_name"] = STATE.get(rec["state"], rec["state"])
         rec["kind_name"] = KIND.get(rec["kind"], rec["kind"])
         return rec
@@ -108,10 +130,13 @@ class L2cpuCtl:
         return mhz
 
     # ---- resident page ----
-    def write_resident(self, entry_pa, blob=None):
+    def write_resident(self, entry_pa, blob=None, policy=None):
         blob = blob if blob is not None else open(RESIDENT_BLOB, "rb").read()
         assert len(blob) == A.L2CPU_RES_SIZE, len(blob)
         b = bytearray(blob)
+        if policy is not None:
+            t = policy.table()
+            b[A.L2CPU_RES_PMP : A.L2CPU_RES_PMP + len(t)] = t
         struct.pack_into("<Q", b, A.L2CPU_RES_ENTRY, entry_pa)
         struct.pack_into("<II", b, A.L2CPU_RES_BOOT_MODE, A.L2CPU_BOOT_COLD, 1)
         struct.pack_into("<I", b, A.L2CPU_RES_GO_EPOCH, 0)
@@ -210,11 +235,14 @@ class L2cpuCtl:
         return out.decode("latin1"), wr
 
     # ---- API ----
-    def _pre_release(self, entry, probe):
+    def _pre_release(self, entry, probe, policy=None):
         def pre(hw):
             probe["trigger_reset_value"] = self.trigger()
             probe["handlers_reset_value"] = self.handler_addrs()
-            self.write_resident(entry)
+            self.write_resident(entry, policy=policy)
+            if policy is not None:  # boot record flag (bringup.prepare wrote 0 there): every hart applies the table
+                hw.write_scratch_u64(A.L2CPU_BOOT_PMP, A.L2CPU_PMP_MAGIC)
+            probe["pmp_entries"] = len(policy.entries) if policy is not None else 0
             got, want = self.write_rnmi_handlers()
             probe["handlers_written"] = got
             probe["handlers_ok"] = got == want
@@ -224,14 +252,16 @@ class L2cpuCtl:
 
         return pre
 
-    def start(self, image: bytes, slot=A.L2CPU_SLOT_A, ready_timeout=5.0):
-        """Cold bring-up in a fresh chip epoch (tile not yet released): image, resident page, RNMI handler addresses,
-        release. Returns a dict incl. the reset values of the RNMI registers seen before they were written."""
+    def start(self, image: bytes, slot=A.L2CPU_SLOT_A, ready_timeout=5.0, pmp=None):
+        """Cold bring-up in a fresh chip epoch (tile not yet released): image, resident page (with the PMP table),
+        RNMI handler addresses, boot record PMP flag, release. pmp: see make_policy (default on). Returns a dict incl.
+        the reset values of the RNMI registers seen before they were written."""
         from .bringup import bringup
 
         entry = self.base + slot
         probe = {}
-        pre = self._pre_release(entry, probe)
+        policy = self.make_policy(pmp)
+        pre = self._pre_release(entry, probe, policy)
         info = bringup(
             image,
             entry,
@@ -244,8 +274,46 @@ class L2cpuCtl:
             ready_timeout=ready_timeout,
         )
         self.mbreq = self.r32(self.base + A.L2CPU_OFF_MB_ACK)
+        self.policy = policy
+        self.check_pmp(A.L2CPU_PMP_STATE_APPLIED if policy is not None else A.L2CPU_PMP_STATE_OFF)
         info["probe"] = probe
         return info
+
+    def locked_table(self):
+        """The PMP table the harts locked in this chip epoch (boot record flag set), as bytes; None = policy off."""
+        if self.hw.read_scratch()[A.L2CPU_BOOT_PMP : A.L2CPU_BOOT_PMP + 4] != struct.pack("<I", A.L2CPU_PMP_MAGIC):
+            return None
+        n = len(P.Policy(0, 0, (), False, ()).table())
+        return self.hw.pa_read(self.res + A.L2CPU_RES_PMP, n)
+
+    def check_pmp(self, want):
+        """After READY: every hart reports the PMP state `want` (APPLIED after start, REUSED after a restart); with the
+        policy off, OFF. Raises otherwise."""
+        recs = self.records()
+        got = [r["pmp"] for r in recs]
+        if any(g != want for g in got):
+            raise L2cpuCtlError(f"PMP state {[r['pmp_name'] for r in recs]}, expected {PMP_STATE[want]} on every hart")
+        return got
+
+    def check_restart_policy(self, image, entry, pmp=None):
+        """Restart rule (README "PMP policy"): the locked set stays until the next chip reset, so a restart keeps the
+        region, its size, the TLB windows and the policy; the image must lie in one of the region's image slots.
+        Returns the locked table (None = policy off)."""
+        locked = self.locked_table()
+        if pmp is not None:
+            want = self.make_policy(pmp)
+            if (want.table() if want is not None else None) != locked:
+                raise L2cpuCtlError(
+                    "PMP policy is locked for this chip epoch: a restart cannot change the region, its size, the TLB "
+                    "windows or turn the policy on/off (chip reset + start with the new policy instead)"
+                )
+        if self.policy is not None and locked != self.policy.table():
+            raise L2cpuCtlError("resident PMP table or boot record flag differs from the policy locked at start")
+        if entry not in (self.base + A.L2CPU_SLOT_A, self.base + A.L2CPU_SLOT_B):
+            raise L2cpuCtlError(f"entry 0x{entry:x} is not an image slot of region 0x{self.base:x}")
+        if image is not None and len(image) > A.L2CPU_SLOT_SIZE:
+            raise L2cpuCtlError("image larger than a slot")
+        return locked
 
     def stop(self, timeout_l1=0.05, timeout_l2=0.1, force=True):
         """Park every hart in the resident page. L1 (mailbox PARK) first if the firmware is READY, then L2 (RNMI)
@@ -297,17 +365,15 @@ class L2cpuCtl:
                     break
         return [self.record(h)["rnmi_count"] - before[h] for h in range(4)]
 
-    def restart(self, image: bytes | None = None, warm=True, slot=None, timeout=5.0):
-        """stop -> (load image) -> go. Never touches L2CPU_RESET. Returns timing and the stop records."""
+    def restart(self, image: bytes | None = None, warm=True, slot=None, timeout=5.0, pmp=None):
+        """stop -> (load image) -> go. Never touches L2CPU_RESET. Returns timing and the stop records. pmp: the policy
+        the caller expects; a restart refuses one that differs from the policy locked at start."""
         t0 = time.time()
+        entry = self.base + slot if slot is not None else self.r64(self.res + A.L2CPU_RES_ENTRY)
+        locked = self.check_restart_policy(image, entry, pmp)
         recs, used = self.stop()
         t1 = time.time()
-        entry = self.r64(self.res + A.L2CPU_RES_ENTRY)
-        if slot is not None:
-            entry = self.base + slot
         if image is not None:
-            if len(image) > A.L2CPU_SLOT_SIZE:
-                raise L2cpuCtlError("image larger than a slot")
             self.hw.load_image(image, entry)
         ep = self.r32(self.res + A.L2CPU_RES_BOOT_EPOCH) + 1
         self.w32(self.base + A.L2CPU_OFF_FW_STATUS, 0)
@@ -320,6 +386,7 @@ class L2cpuCtl:
         t2 = time.time()
         self.wait_ready(ep, timeout)
         t3 = time.time()
+        self.check_pmp(A.L2CPU_PMP_STATE_REUSED if locked is not None else A.L2CPU_PMP_STATE_OFF)
         return dict(
             epoch=ep,
             entry=entry,
@@ -354,16 +421,18 @@ class L2cpuCtl:
         return all(b[h] > a[h] for h in range(4) if recs[h]["state"] != A.L2CPU_STATE_PARKED)
 
 
-def start_tiles(ctls, image, slot=A.L2CPU_SLOT_A, ready_timeout=5.0, mhz=None, log=print):
+def start_tiles(ctls, image, slot=A.L2CPU_SLOT_A, ready_timeout=5.0, mhz=None, log=print, pmp=None):
     """Cold bring-up of several tiles of one chip in a fresh chip epoch: per tile (its own L2cpuCtl, hw.tile and
     region) image, resident page and RNMI handler addresses, then ONE L2CPU_RESET write releasing all of them, then
-    each tile's READY. image: bytes for every tile, or {tile: bytes}. Returns one info dict per ctl."""
+    each tile's READY. image: bytes for every tile, or {tile: bytes}. pmp: as L2cpuCtl.make_policy, for every tile
+    (each gets its own policy for its own region). Returns one info dict per ctl."""
     from .bringup import bringup_tiles
 
-    specs, probes = [], []
+    specs, probes, policies = [], [], []
     for c in ctls:
         probe = {}
         entry = c.base + slot
+        policies.append(c.make_policy(pmp))
         img = image[c.hw.tile] if isinstance(image, dict) else image
         specs.append(
             dict(
@@ -371,14 +440,16 @@ def start_tiles(ctls, image, slot=A.L2CPU_SLOT_A, ready_timeout=5.0, mhz=None, l
                 image=img,
                 load_pa=entry,
                 region_pa=c.base,
-                pre_release=c._pre_release(entry, probe),
+                pre_release=c._pre_release(entry, probe, policies[-1]),
                 ready=lambda hw, c=c: c.ready(1),
             )
         )
         probes.append(probe)
     infos = bringup_tiles(specs, high_mhz=mhz or ctls[0].mhz, ready_timeout=ready_timeout, log=log)
-    for c, info, probe in zip(ctls, infos, probes):
+    for c, info, probe, pol in zip(ctls, infos, probes, policies):
         c.mbreq = c.r32(c.base + A.L2CPU_OFF_MB_ACK)
+        c.policy = pol
+        c.check_pmp(A.L2CPU_PMP_STATE_APPLIED if pol is not None else A.L2CPU_PMP_STATE_OFF)
         info["probe"] = probe
         info["tile"] = c.hw.tile
     return infos

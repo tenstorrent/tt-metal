@@ -139,6 +139,7 @@
 #define L2CPU_ERR_WORKER_DEAD 3  /* hart 0: a worker needed for a work item is parked */
 #define L2CPU_ERR_WORK_TIMEOUT 4 /* hart 0: a worker did not finish a work item in time (arg = hart) */
 #define L2CPU_ERR_BOOT_TIMEOUT 5 /* a worker waited too long for hart 0 to prepare the region (arg = hart) */
+#define L2CPU_ERR_PMP 6          /* PMP policy table invalid or the locked set differs from it (arg = entry) */
 #define L2CPU_ERR_APP 16
 
 /* ident.build_flags */
@@ -154,6 +155,11 @@
 #define L2CPU_INJECT_PARK 2    /* enter the resident park loop (used by MB_PARK) */
 #define L2CPU_INJECT_SPIN 3    /* spin forever with interrupts off (RNMI tests) */
 #define L2CPU_INJECT_WFIPARK 5 /* mie = 0, MIE = 0, wfi loop (RNMI tests) */
+/* PMP fault tests (refused while the PMP policy is off: without it such an access may hang the chip) */
+#define L2CPU_INJECT_LOAD 6    /* unguarded 8-byte load from the inject address */
+#define L2CPU_INJECT_STORE 7   /* unguarded 8-byte store to the inject address */
+#define L2CPU_INJECT_JUMP 8    /* jump to the inject address (instruction fetch) */
+#define L2CPU_INJECT_ADDR 0x08 /* u64 at inject[h] + 8: the address for LOAD / STORE / JUMP */
 
 /* ---- mailbox (L2CPU_OFF_MAILBOX) --------------------------------------------------------------------------------
  * Host: write cmd + args, fence, req = req + 1, optionally ring the doorbell. Firmware (hart 0): sees req != ack,
@@ -172,10 +178,11 @@
 #define L2CPU_MB_COPY32 6       /* dst, src, bytes (multiple of 4) */
 #define L2CPU_MB_FILL32 7       /* dst, value32, bytes */
 #define L2CPU_MB_CSR_READ 8     /* csr number -> value (allow-list) */
+#define L2CPU_MB_CSR_WRITE 9    /* PMP csr number (pmpcfg*, pmpaddr*), value -> read-back value */
 #define L2CPU_MB_MEMCMP32 10    /* a, b, bytes -> first differing byte offset or ~0 */
 #define L2CPU_MB_NOC_READ32 11  /* x, y, NoC address -> value */
 #define L2CPU_MB_NOC_WRITE32 12 /* x, y, NoC address, value */
-#define L2CPU_MB_INJECT 13      /* hart, kind (0 = illegal instruction, or L2CPU_INJECT_*) */
+#define L2CPU_MB_INJECT 13      /* hart, kind (0 = illegal instruction, or L2CPU_INJECT_*), address (LOAD/STORE/JUMP) */
 #define L2CPU_MB_TIME 14        /* -> mtime, mcycle */
 #define L2CPU_MB_PARK 16        /* every hart enters the resident park loop (after the reply) */
 #define L2CPU_MB_APP 64         /* first application command */
@@ -183,7 +190,8 @@
 #define L2CPU_MB_ERR_CMD 1
 #define L2CPU_MB_ERR_FAULT 2 /* reply1 = mcause */
 #define L2CPU_MB_ERR_ARG 3
-#define L2CPU_MB_ERR_STALE 4 /* issued before a restart: a WARM boot acknowledges it without running it */
+#define L2CPU_MB_ERR_STALE 4  /* issued before a restart: a WARM boot acknowledges it without running it */
+#define L2CPU_MB_ERR_DENIED 5 /* PMP policy on: the address is outside the policy, nothing was accessed */
 
 /* ---- resident page (L2CPU_OFF_RESIDENT; offsets inside the page) ------------------------------------------------
  * Written by the host once per chip-reset epoch before the release; never written by an image. */
@@ -199,7 +207,15 @@
 #define L2CPU_RES_ENTRY 0x8C0    /* u64 PA the park loop jumps to */
 #define L2CPU_RES_BOOT_MODE 0x8C8
 #define L2CPU_RES_BOOT_EPOCH 0x8CC
-#define L2CPU_RES_REC 0x1000 /* + 0x100*h: per-hart record */
+/* PMP policy table (README "PMP policy"): written by the host with the page; inside the locked R+X half. */
+#define L2CPU_RES_PMP 0xA00      /* u32 L2CPU_PMP_MAGIC */
+#define L2CPU_RES_PMP_N 0xA04    /* u32 number of entries (1..L2CPU_PMP_MAX) */
+#define L2CPU_RES_PMP_ADDR 0xA08 /* u64 pmpaddr[i] (the value it reads back) */
+#define L2CPU_RES_PMP_CFG 0xA88  /* u8 pmpcfg byte of entry i */
+#define L2CPU_PMP_MAX 16
+#define L2CPU_PMP_MAGIC 0x31504D50 /* "PMP1" */
+#define L2CPU_RES_PROTECTED 0x1000 /* [0, this) is R+X under the policy; the records above stay writable */
+#define L2CPU_RES_REC 0x1000       /* + 0x100*h: per-hart record */
 #define L2CPU_REC_SIZE 0x100
 #define L2CPU_REC_STATE 0x00
 #define L2CPU_REC_PARKED_EPOCH 0x04
@@ -214,6 +230,7 @@
 #define L2CPU_REC_MSTATUS 0x40
 #define L2CPU_REC_SAVE 0x48
 #define L2CPU_REC_PARK_COUNT 0x60
+#define L2CPU_REC_PMP 0x64            /* u32, written by the image: L2CPU_PMP_STATE_* of this hart */
 #define L2CPU_RES_MAGIC_LO 0x5043324C /* "L2CP" */
 #define L2CPU_RES_MAGIC_HI 0x31534552 /* "RES1" */
 #define L2CPU_RES_VER 1
@@ -225,16 +242,21 @@
 #define L2CPU_KIND_RNMI 2
 #define L2CPU_KIND_RNMI_EXC 3
 #define L2CPU_KIND_ERROR 4
-#define L2CPU_RNMI_COUNT 1 /* count, wait for the trigger bit to clear, mnret (resume) */
-#define L2CPU_RNMI_PARK 2  /* park */
+#define L2CPU_PMP_STATE_OFF 0
+#define L2CPU_PMP_STATE_APPLIED 1 /* first boot in the chip epoch: this hart wrote and locked the entries */
+#define L2CPU_PMP_STATE_REUSED 2  /* the entries were already locked (restart): verified equal to the table */
+#define L2CPU_RNMI_COUNT 1        /* count, wait for the trigger bit to clear, mnret (resume) */
+#define L2CPU_RNMI_PARK 2         /* park */
 #define L2CPU_BOOT_COLD 1
 #define L2CPU_BOOT_WARM 2
 
 /* Boot record in the external-peripherals scratch (x280 PA 0x2001_0100, 64 B), written by the loader before the
- * release: +0x00 u64 image load PA, +0x08 u64 L2CPU_BOOT_RECORD_MAGIC, +0x10 u64 region PA. Restartable images take
- * the region from it (so an image may run from slot A or slot B). */
+ * release: +0x00 u64 image load PA, +0x08 u64 L2CPU_BOOT_RECORD_MAGIC, +0x10 u64 region PA, +0x18 u32 PMP flag
+ * (L2CPU_PMP_MAGIC: every hart applies the resident page's PMP table at boot; anything else: no PMP), rest 0.
+ * Restartable images take the region from it (so an image may run from slot A or slot B). */
 #define L2CPU_BOOT_RECORD_PA 0x20010100
 #define L2CPU_BOOT_RECORD_MAGIC 0x544F4F425043324C /* "L2CPBOOT" */
+#define L2CPU_BOOT_PMP 0x18
 
 /* RNMI registers (x280 PA; host: + 0xFFFFF7FEDFF00000 through the (8,3) high alias), level-triggered */
 #define L2CPU_RNMI_TRIGGER 0x20010414 /* u32, bit h = RNMI request for hart h; the host sets and clears it */

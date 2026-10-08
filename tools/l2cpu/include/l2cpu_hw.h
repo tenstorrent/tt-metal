@@ -121,5 +121,7 @@
 #define L2CPU_QEMU_FAKE_NOC_MAX_Y 4u
 /* Region placement in the QEMU tests (image at region + L2CPU_OFF_FW). */
 #define L2CPU_QEMU_REGION_BASE 0x80000000ull
+/* Stand-in for the chip's scratch boot record (only its PMP flag is used): last page of the 1 GiB RAM. */
+#define L2CPU_QEMU_BOOT_RECORD 0xBFFFF000ull
 
 #endif /* L2CPU_HW_H */

@@ -37,6 +37,7 @@ typedef struct {
 static slot_state_t slots[NSLOTS];
 
 uint32_t plat_build_flags(void) { return 0; }
+uint64_t plat_boot_record(void) { return L2CPU_BOOT_RECORD_PA; }
 
 void plat_hart_init(uint32_t hart) {
     plat_ipi_clear(hart); /* an IPI left pending by the previous image */

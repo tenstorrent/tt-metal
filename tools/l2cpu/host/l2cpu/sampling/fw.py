@@ -279,7 +279,11 @@ def boot_tiles(device, tiles=(0,), image_path=DEFAULT_IMAGE, mhz=1750, log=print
         reg = regions[1] if (t == 3 and len(regions) > 1) else regions[0]
         ctls.append(
             L2cpuCtl(
-                L2cpuHw(backend, tile=t, guard=True, log=None), region_base_pa(reg.buffer_address()), log=log, mhz=mhz
+                L2cpuHw(backend, tile=t, guard=True, log=None),
+                region_base_pa(reg.buffer_address()),
+                log=log,
+                mhz=mhz,
+                region_size=S.L2S_REGION_SIZE,
             )
         )
     t0 = time.time()
@@ -297,7 +301,9 @@ def boot(device, image_path=DEFAULT_IMAGE, region=None, mhz=1750, log=print):
 
     region = region if region is not None else allocate_region(device)
     base = region_base_pa(region.buffer_address())
-    ctl = L2cpuCtl(L2cpuHw(TtnnClusterBackend(0), guard=True, log=None), base, log=log, mhz=mhz)
+    ctl = L2cpuCtl(
+        L2cpuHw(TtnnClusterBackend(0), guard=True, log=None), base, log=log, mhz=mhz, region_size=S.L2S_REGION_SIZE
+    )
     t0 = time.time()
     info = ctl.start(open(image_path, "rb").read())
     info["boot_s"] = time.time() - t0

@@ -41,6 +41,10 @@ def main():
     ap.add_argument("--tile", type=int_list, default=[0], help="L2CPU tile(s) 0-3 (default 0)")
     ap.add_argument("--backend", default=None, help="umd (default) or ttnn")
     ap.add_argument("--mhz", type=int, default=1750)
+    ap.add_argument(
+        "--region-size", type=lambda v: int(v, 0), default=L.L2CPU_REGION_MIN_SIZE, help="bytes (PMP policy)"
+    )
+    ap.add_argument("--pmp", choices=("on", "off"), default=None, help="start: PMP policy (default: L2CPU_PMP, on)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("start")
     s.add_argument("image")
@@ -58,10 +62,14 @@ def main():
     if len(a.region) != len(a.tile):
         ap.error("--region needs one PA per --tile")
     backend = make_backend(a.backend)
-    ctls = [L2cpuCtl(L2cpuHw(backend, tile=t, guard=True), r, mhz=a.mhz) for t, r in zip(a.tile, a.region)]
+    ctls = [
+        L2cpuCtl(L2cpuHw(backend, tile=t, guard=True), r, mhz=a.mhz, region_size=a.region_size)
+        for t, r in zip(a.tile, a.region)
+    ]
     slot = {"A": L.L2CPU_SLOT_A, "B": L.L2CPU_SLOT_B, None: None}
     if a.cmd == "start":
-        infos = start_tiles(ctls, open(a.image, "rb").read(), slot=slot[a.slot])
+        pmp = None if a.pmp is None else a.pmp == "on"
+        infos = start_tiles(ctls, open(a.image, "rb").read(), slot=slot[a.slot], pmp=pmp)
         outs = [{k: v for k, v in i.items() if k != "hw"} for i in infos]
         print(
             json.dumps(
