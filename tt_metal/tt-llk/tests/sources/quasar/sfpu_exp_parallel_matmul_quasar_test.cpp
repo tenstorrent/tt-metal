@@ -174,7 +174,7 @@ static_assert(!SFPU_ISSUE_LOADMACRO, "SFPLOADMACRO is disabled; only the Sfpi va
 
 // The exp op type depends on the SrcS layout, known only at runtime: each phase dispatches once and
 // uses the same type for init and the tile loop.
-template <class Layout>
+template <typename Layout>
 using ExpOp = ExpSrcs<true /*APPROXIMATION_MODE*/, Layout::layout, EXP_ISSUE>;
 
 void run_kernel(RUNTIME_PARAMETERS params)

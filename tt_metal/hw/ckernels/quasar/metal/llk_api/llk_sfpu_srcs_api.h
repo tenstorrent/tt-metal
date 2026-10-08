@@ -252,7 +252,7 @@ namespace ckernel::sfpu {
  * @tparam INSTRN_COUNT: Pack instructions per SrcS auto-loop (see llk_srcs.h).
  * @note Call @ref SfpuSrcsUnaryOp::run with the same Op and INSTRN_COUNT after this function.
  */
-template <class Op>
+template <typename Op>
 template <std::uint8_t INSTRN_COUNT>
 inline void SfpuSrcsUnaryOp<Op>::init(
     const std::uint32_t l1_in_addr_16B,
@@ -284,7 +284,7 @@ inline void SfpuSrcsUnaryOp<Op>::init(
  * @param unpack_S_dst_format: SrcS format used to derive geometry; must match Op's layout.
  * @note Call @ref SfpuSrcsUnaryOp::init with the same Op before this function.
  */
-template <class Op>
+template <typename Op>
 template <std::uint8_t INSTRN_COUNT>
 inline void SfpuSrcsUnaryOp<Op>::run(const std::uint32_t num_tiles, const DataFormat unpack_S_dst_format) {
     llk_sfpu_srcs_unary_impl<INSTRN_COUNT, !Op::hw_clears_valids>(
@@ -299,7 +299,7 @@ inline void SfpuSrcsUnaryOp<Op>::run(const std::uint32_t num_tiles, const DataFo
  * @tparam INSTRN_COUNT: Pack instructions per SrcS auto-loop (see llk_srcs.h).
  * @note Call @ref SfpuSrcsBinaryOp::run with the same Op and INSTRN_COUNT after this function.
  */
-template <class Op>
+template <typename Op>
 template <std::uint8_t INSTRN_COUNT>
 inline void SfpuSrcsBinaryOp<Op>::init(
     const std::uint32_t l1_in0_addr_16B,
@@ -333,7 +333,7 @@ inline void SfpuSrcsBinaryOp<Op>::init(
  * @param unpack_S_dst_format: SrcS format used to derive geometry; must match Op's layout.
  * @note Call @ref SfpuSrcsBinaryOp::init with the same Op before this function.
  */
-template <class Op>
+template <typename Op>
 template <std::uint8_t INSTRN_COUNT>
 inline void SfpuSrcsBinaryOp<Op>::run(const std::uint32_t num_tiles, const DataFormat unpack_S_dst_format) {
     llk_sfpu_srcs_binary_impl<INSTRN_COUNT, !Op::hw_clears_valids>(

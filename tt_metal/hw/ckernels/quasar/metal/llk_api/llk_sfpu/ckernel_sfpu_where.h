@@ -7,12 +7,8 @@
 #include <cstdint>
 #include <type_traits>
 
-#include "ckernel.h"
-#include "ckernel_addrmod.h"
-#include "ckernel_defs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_operand.h"
 
@@ -25,7 +21,7 @@ namespace sfpu {
  * Advances explicit indices only; the caller owns setup and synchronization. Each input range must
  * coincide with the output or be disjoint.
  */
-template <int ITERATIONS, class Condition, class TrueInput, class FalseInput, class Output>
+template <int ITERATIONS, typename Condition, typename TrueInput, typename FalseInput, typename Output>
 sfpi_inline void calculate_where_operands(
     const Condition& condition, const TrueInput& true_input, const FalseInput& false_input, const Output& output) {
     static_assert(ITERATIONS > 0, "WHERE requires at least one SFPI access");

@@ -165,7 +165,13 @@ jobs:
         # weights-cache-mode field comes from .github/sku_config.yaml via
         # prepare_test_matrix.py. The same ro/rw toggle applies to either source.
         - ${{ (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
-      options: "--device /dev/tenstorrent"
+      # Since vLLM 0.27, each DP engine requires 160 MiB free in /dev/shm for its
+      # message queue (10 x 16 MiB). Docker's default /dev/shm is 64 MiB.
+      # DP=8 needs up to 8 x 160 MiB = 1.25 GiB, so 2g leaves room to spare.
+      # The size is only a limit: RAM is used as data is written, not reserved upfront.
+      # Affected jobs: Llama-3.1-8B-Instruct DP=4 and Gemma3-27B DP=4 [wh_galaxy_perf],
+      # Llama-3.1-8B-Instruct with sampling-tests (P150x8, DP=8) [bh_loudbox].
+      options: "--device /dev/tenstorrent --shm-size=2g"
     defaults:
       run:
         shell: bash

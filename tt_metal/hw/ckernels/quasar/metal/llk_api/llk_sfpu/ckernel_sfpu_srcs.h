@@ -57,7 +57,7 @@ struct SrcsLayout {
  * @tparam Op: The derived op type.
  * @note Include llk_sfpu_srcs_api.h; call init() once, then run() for the tiles.
  */
-template <class Op>
+template <typename Op>
 struct SfpuSrcsUnaryOp {
     /// calculate() leaves the SrcS valids to the base. Set to true in ops whose last instruction
     /// hands the banks back itself, so the base does not clear them again.
@@ -92,12 +92,12 @@ struct SfpuSrcsUnaryOp {
  * @tparam ISSUE: Issue mechanism, values = <Sfpi/LoadMacro>; resolve it with
  *         @ref resolve_sfpu_issue.
  */
-template <class MATH, sfpi::DataLayout LAYOUT, SfpuIssue ISSUE>
+template <typename MATH, sfpi::DataLayout LAYOUT, SfpuIssue ISSUE>
 struct SrcsUnary {
     static_assert(sizeof(MATH) == 0, "This SFPU op has no SrcS implementation for the requested SfpuIssue");
 };
 
-template <class MATH, sfpi::DataLayout LAYOUT>
+template <typename MATH, sfpi::DataLayout LAYOUT>
 struct SrcsUnary<MATH, LAYOUT, SfpuIssue::Sfpi> : SfpuSrcsUnaryOp<SrcsUnary<MATH, LAYOUT, SfpuIssue::Sfpi>> {
     // Reads the in0 slot and writes the out slot of the current slice (@ref SrcsLayout).
     sfpi_inline static void calculate() {
@@ -118,7 +118,7 @@ struct SrcsUnary<MATH, LAYOUT, SfpuIssue::Sfpi> : SfpuSrcsUnaryOp<SrcsUnary<MATH
  * @tparam Op: The derived op type.
  * @note Include llk_sfpu_srcs_api.h; call init() once, then run() for the tiles.
  */
-template <class Op>
+template <typename Op>
 struct SfpuSrcsBinaryOp {
     static constexpr bool hw_clears_valids = false;
 
@@ -149,12 +149,12 @@ struct SfpuSrcsBinaryOp {
  *         source formats must match.
  * @tparam ISSUE: Issue mechanism, values = <Sfpi>; resolve it with @ref resolve_sfpu_issue.
  */
-template <class MATH, sfpi::DataLayout LAYOUT, SfpuIssue ISSUE>
+template <typename MATH, sfpi::DataLayout LAYOUT, SfpuIssue ISSUE>
 struct SrcsBinary {
     static_assert(sizeof(MATH) == 0, "This SFPU op has no SrcS implementation for the requested SfpuIssue");
 };
 
-template <class MATH, sfpi::DataLayout LAYOUT>
+template <typename MATH, sfpi::DataLayout LAYOUT>
 struct SrcsBinary<MATH, LAYOUT, SfpuIssue::Sfpi> : SfpuSrcsBinaryOp<SrcsBinary<MATH, LAYOUT, SfpuIssue::Sfpi>> {
     // Reads the in0 and in1 slots and writes the out slot of the current slice (@ref SrcsLayout).
     sfpi_inline static void calculate() {
@@ -170,7 +170,7 @@ struct SrcsBinary<MATH, LAYOUT, SfpuIssue::Sfpi> : SfpuSrcsBinaryOp<SrcsBinary<M
  * Pass the register format (unpack_S_dst / pack_S_src), not the L1 format; MX inputs use their
  * unpacked register format.
  */
-template <class Op>
+template <typename Op>
 sfpi_inline void dispatch_sfpu_srcs_format(const DataFormat format, Op&& op) {
     switch (format) {
         case DataFormat::Float32: op(SrcsLayout<sfpi::DataLayout::F32>{}); break;
