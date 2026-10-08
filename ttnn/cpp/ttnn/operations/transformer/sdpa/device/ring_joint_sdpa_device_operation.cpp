@@ -603,8 +603,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 "Named ring recipe joint types must match their primary Q/K/V types");
         }
         TT_FATAL(
-            tensor_args.input_k.logical_shape()[3] == q_shape[3] && tensor_args.input_v->logical_shape()[3] == q_shape[3],
-            "Named ring recipes require matching Q/K/V head dims");
+            tensor_args.input_k.logical_shape()[3] == q_shape[3] && tensor_args.input_v->logical_shape()[3] <= q_shape[3] &&
+                tensor_args.input_v->logical_shape()[3] % tt::constants::TILE_WIDTH == 0,
+            "Named ring recipes require K's head dim to be Q's and a tile-aligned V head dim of at most Q's");
         // Supported geometry lives in recipe_geometry_rejection (shared with the blocking chooser); L1 fit is
         // checked when the program is built.
         ttnn::operations::transformer::sdpa::detail::validate_recipe_geometry(
@@ -618,8 +619,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             !args.has_sliding_window(),
             "Named ring recipes do not support sliding_window_size yet; omit precision for the legacy kernel");
         TT_FATAL(
-            !has_indexed_kv_cache && !kv_pad_rotation_active(args, tensor_args) && !tensor_args.attention_sink,
-            "Unsupported feature for named ring recipes");
+            !kv_pad_rotation_active(args, tensor_args) && !args.circular_kv_cache && !tensor_args.attention_sink,
+            "Named ring recipes do not support KV-pad rotation (kv_actual_isl, or the metadata tensors on chunked "
+            "prefill), circular KV caches or attention sinks");
         TT_FATAL(
             !args.scale || (std::isfinite(*args.scale) && *args.scale > 0.0f),
             "Named ring recipes require a finite positive scale, got {}",

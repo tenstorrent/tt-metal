@@ -18,7 +18,35 @@ struct RecipeRingCausal {
     bool diagonal;        // K is this device's shard: key k is visible to query q iff k <= q
     bool skip_early;      // the early half's Q chunks see none of this step's K
     bool early_last;      // no later step reaches the early half's Q chunks
+#ifdef SDPA_RECIPE_RING_CHUNKED
+    // Chunked prefill (Q is the current chunk group's slab, K/V the cache of every group so far): every step masks in
+    // the sequence's frame (recipe_tail.hpp: recipe_chunked_k_tile). The reader sends a K chunk while its first
+    // global tile is before logical_nt (the first chunk) or live_end_nt (the rest: the device's last Q row with the
+    // dense causal skip, else logical_nt).
+    uint32_t q_tile0;  // global tile of this device's first Q row
+    uint32_t ring_id;  // the K shard's device
+    uint32_t logical_nt;
+    uint32_t live_end_nt;
+    uint32_t local_tiles;  // K tiles per device
+#endif
 };
+#endif
+
+// A K/V chunk the reader sent that compute does not read (fully masked, or phase-alignment padding).
+template <uint32_t k_chunk_tiles, uint32_t v_chunk_tiles>
+ALWI void recipe_ring_pop_chunk() {
+    CircularBuffer(1).wait_front(k_chunk_tiles);
+    CircularBuffer(1).pop_front(k_chunk_tiles);
+    CircularBuffer(2).wait_front(v_chunk_tiles);
+    CircularBuffer(2).pop_front(v_chunk_tiles);
+}
+
+#ifdef SDPA_RECIPE_RING_CHUNKED
+// Whether the reader sends the K chunk starting at local tile `tile` (ring_joint_reader_impl.hpp: chunked_kv_chunk_is_live).
+ALWI bool recipe_ring_chunk_sent(const RecipeRingCausal& causal, uint32_t tile, bool first) {
+    return tile < causal.local_tiles &&
+           recipe_chunked_k_tile(causal.ring_id, tile) < (first ? causal.logical_nt : causal.live_end_nt);
+}
 #endif
 
 // QK/PV subblock widths come from the host (recipe_subblock_width in sdpa_recipe.cpp, shared with the dense
@@ -27,7 +55,8 @@ struct RecipeRingCausal {
 #define SDPA_RECIPE_PV_W 4
 #endif
 
-template <uint32_t q_tiles, uint32_t scale, uint32_t subblock_h, uint32_t k_tiles, uint32_t d_tiles>
+// d_tiles: Q/K head dim; vd_tiles: V and output head dim (MLA: vd_tiles < d_tiles).
+template <uint32_t q_tiles, uint32_t scale, uint32_t subblock_h, uint32_t k_tiles, uint32_t d_tiles, uint32_t vd_tiles>
 void sdpa_recipe_ring_segment(
     RecipeAccumulatorState& resident,
     uint32_t q_begin,
@@ -43,7 +72,7 @@ void sdpa_recipe_ring_segment(
     const RecipeRingCausal& causal
 #endif
 ) {
-    static_assert(k_tiles % SDPA_RECIPE_QK_W == 0 && d_tiles % SDPA_RECIPE_PV_W == 0);
+    static_assert(k_tiles % SDPA_RECIPE_QK_W == 0 && vd_tiles % SDPA_RECIPE_PV_W == 0);
     const bool staged = q_end - q_begin > 1;
     constexpr uint32_t chunk_rows = k_tiles * 32;
     recipe_k_chunk_rows = chunk_rows;
@@ -60,11 +89,24 @@ void sdpa_recipe_ring_segment(
         if (early && causal.skip_early) {
             continue;
         }
-        pushed_chunks += valid_chunks;
         const bool q_last_ring = last_ring || (early && causal.early_last);
+#ifdef SDPA_RECIPE_RING_CHUNKED
+        // K chunks the reader sends, and the ones with a key some row of this Q chunk sees (a prefix of them:
+        // global K positions grow with the local index); the rest are popped unread.
+        const uint32_t q_first = causal.q_tile0 + q_chunk * q_tiles;
+        uint32_t live_chunks = 0;
+        for (uint32_t k = 0; k < local_chunks; ++k) {
+            if (recipe_ring_chunk_sent(causal, k * k_tiles, k == 0)) {
+                ++pushed_chunks;
+                live_chunks += recipe_chunked_k_tile(causal.ring_id, k * k_tiles) < q_first + q_tiles ? 1 : 0;
+            }
+        }
+#else
+        pushed_chunks += valid_chunks;
         // On the diagonal, K chunks starting past the Q chunk's last row are masked whole: popped unread.
         const uint32_t k_end = causal.diagonal ? (q_chunk * q_tiles + q_tiles - 1) / k_tiles + 1 : total_chunks;
         const uint32_t live_chunks = valid_chunks < k_end ? valid_chunks : k_end;
+#endif
 #else
         const bool q_last_ring = last_ring;
         const uint32_t live_chunks = valid_chunks;
@@ -74,7 +116,7 @@ void sdpa_recipe_ring_segment(
 #ifdef SDPA_RING_STREAM_STATE
             recipe_checkpoint_restore_stream<q_tiles, 17, 18>(state, q);
 #else
-            recipe_checkpoint<q_tiles, 17, 18, d_tiles>(state, q, true);
+            recipe_checkpoint<q_tiles, 17, 18, vd_tiles>(state, q, true);
 #endif
         }
         uint32_t processed = 0;
@@ -84,12 +126,23 @@ void sdpa_recipe_ring_segment(
             if (origin >= rows) {
                 continue;
             }
-#ifdef SDPA_RECIPE_RING_CAUSAL
+#ifdef SDPA_RECIPE_RING_CHUNKED
+            if (!recipe_ring_chunk_sent(causal, k * k_tiles, k == 0)) {
+                continue;
+            }
+            // Masked when its last key reaches the Q chunk's first row; whole when its first key is past the last.
+            const uint32_t k_last = (k + 1) * k_tiles < causal.local_tiles ? (k + 1) * k_tiles : causal.local_tiles;
+            if (recipe_chunked_k_tile(causal.ring_id, k * k_tiles) >= q_first + q_tiles) {
+                recipe_ring_pop_chunk<k_tiles * d_tiles, k_tiles * vd_tiles>();
+                continue;
+            }
+            recipe_causal_k_tile0 = k * k_tiles;
+            recipe_causal_ring_id = causal.ring_id;
+            recipe_causal_tile_delta = -static_cast<int32_t>(q_first);
+            recipe_causal_edge = recipe_chunked_k_tile(causal.ring_id, k_last - 1) >= q_first;
+#elif defined(SDPA_RECIPE_RING_CAUSAL)
             if (k >= k_end) {
-                CircularBuffer(1).wait_front(k_tiles * d_tiles);
-                CircularBuffer(1).pop_front(k_tiles * d_tiles);
-                CircularBuffer(2).wait_front(k_tiles * d_tiles);
-                CircularBuffer(2).pop_front(k_tiles * d_tiles);
+                recipe_ring_pop_chunk<k_tiles * d_tiles, k_tiles * vd_tiles>();
                 continue;
             }
             recipe_causal_tile_delta = static_cast<int32_t>(k * k_tiles) - static_cast<int32_t>(q_chunk * q_tiles);
@@ -108,7 +161,7 @@ void sdpa_recipe_ring_segment(
                 q_tiles,
                 k_tiles,
                 d_tiles,
-                d_tiles,
+                vd_tiles,
                 scale,
                 subblock_h,
                 SDPA_RECIPE_QK_W,
@@ -131,7 +184,7 @@ void sdpa_recipe_ring_segment(
             // The next block of the first ring iteration reuses the banks without a restore.
             recipe_checkpoint_save_tail<q_tiles, 17, 18>(state, q, first_ring && q + 1 < q_end);
 #else
-            recipe_checkpoint<q_tiles, 17, 18, d_tiles>(state, q, false);
+            recipe_checkpoint<q_tiles, 17, 18, vd_tiles>(state, q, false);
 #endif
         }
         if (!staged) {
@@ -143,9 +196,6 @@ void sdpa_recipe_ring_segment(
 #else
     if (dummy_kv_chunks_for_phase_alignment<false>((q_end - q_begin) * valid_chunks)) {
 #endif
-        CircularBuffer(1).wait_front(k_tiles * d_tiles);
-        CircularBuffer(1).pop_front(k_tiles * d_tiles);
-        CircularBuffer(2).wait_front(k_tiles * d_tiles);
-        CircularBuffer(2).pop_front(k_tiles * d_tiles);
+        recipe_ring_pop_chunk<k_tiles * d_tiles, k_tiles * vd_tiles>();
     }
 }

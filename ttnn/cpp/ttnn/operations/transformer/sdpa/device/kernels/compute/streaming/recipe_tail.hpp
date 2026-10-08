@@ -71,6 +71,18 @@ static uint32_t recipe_k_chunk_rows = 512;
 static bool recipe_causal_edge;
 static int32_t recipe_causal_tile_delta;
 static uint32_t recipe_causal_row0;
+#ifdef SDPA_RECIPE_RING_CHUNKED
+// Chunked prefill (streaming/recipe_ring.hpp): every step masks in the sequence's frame. A device's K cache holds its
+// slab of each chunk group (SDPA_RECIPE_RING_CHUNKED Q tiles per device, SDPA_RECIPE_RING_GROUP_TILES per group)
+// back to back, so local K tile t of device d is global tile (t / slab) * group + d * slab + t % slab. The tile delta
+// above is then minus the Q chunk's global first tile, plus this K chunk's first local tile and its device.
+static uint32_t recipe_causal_k_tile0;
+static uint32_t recipe_causal_ring_id;
+ALWI uint32_t recipe_chunked_k_tile(uint32_t ring_id, uint32_t tile) {
+    constexpr uint32_t slab = SDPA_RECIPE_RING_CHUNKED;
+    return (tile / slab) * SDPA_RECIPE_RING_GROUP_TILES + ring_id * slab + tile % slab;
+}
+#endif
 #endif
 
 ALWI uint32_t recipe_valid_k_columns(uint32_t tile) {
@@ -114,7 +126,13 @@ void mask_recipe_tail(uint32_t col_offset, uint32_t width, uint32_t height) {
         for (uint32_t col = 0; col < width; ++col) {
             uint32_t valid = recipe_valid_k_columns(recipe_k_tile_offset + col_offset + col);
 #ifdef SDPA_RECIPE_RING_CAUSAL
-            const int32_t delta = recipe_causal_edge ? recipe_causal_tile_delta + static_cast<int32_t>(col_offset + col) -
+#ifdef SDPA_RECIPE_RING_CHUNKED
+            const uint32_t k_tile =
+                recipe_chunked_k_tile(recipe_causal_ring_id, recipe_causal_k_tile0 + col_offset + col);
+#else
+            const uint32_t k_tile = col_offset + col;
+#endif
+            const int32_t delta = recipe_causal_edge ? recipe_causal_tile_delta + static_cast<int32_t>(k_tile) -
                                                            static_cast<int32_t>(recipe_causal_row0 + row)
                                                      : -1;
             valid = delta > 0 ? 0 : valid;
