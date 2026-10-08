@@ -169,7 +169,12 @@ inline void matmul_load_replay_no_mop(const std::uint32_t ct_dim, const std::uin
     matmul_emit_replay_program_no_mop<math_fidelity>(ct_dim, rt_dim);
 }
 
-template <MathFidelity math_fidelity>
+// PHASES overrides the number of fidelity phases replayed (high-fidelity replay image only): a HiFi2 image
+// replayed once is a LoFi matmul, so one recorded image serves matmuls of both fidelities.
+// INNER_HALF replays only the first half of the high-fidelity image: its first 8 MVMULs (B0A0, B0A1, B2A0,
+// B2A1) cover every output face with inner indices 0-15, so a matmul whose in0 columns 16-31 (in1 rows 16-31)
+// are zero needs no more. A partial image leaves the A/B/D counters mid-tile, so they are reset after it.
+template <MathFidelity math_fidelity, int PHASES = to_underlying(math_fidelity), bool INNER_HALF = false>
 inline void matmul_execute_replay_no_mop(const std::uint32_t replay_buf_len, const bool reuse_a, const std::uint32_t t_dim)
 {
     if constexpr (!is_high_fidelity(math_fidelity))
@@ -181,15 +186,22 @@ inline void matmul_execute_replay_no_mop(const std::uint32_t replay_buf_len, con
     // HiFi paths replay the same full-tile program multiple times, then repair
     // the A/B/F counter state to match what the next outer-loop iteration
     // expects.
-    constexpr std::uint32_t num_replay = to_underlying(math_fidelity);
-    for (std::uint32_t replay = 0; replay < num_replay; replay++)
+    const std::uint32_t phase_len = INNER_HALF ? replay_buf_len / 2 : replay_buf_len;
+    for (std::uint32_t replay = 0; replay < static_cast<std::uint32_t>(PHASES); replay++)
     {
-        lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+        lltt::replay(ckernel::math::replay_buf_offset, phase_len);
     }
 
     if (t_dim > 1)
     {
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_F);
+        if constexpr (INNER_HALF)
+        {
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+        }
+        else
+        {
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_F);
+        }
     }
     else if (reuse_a)
     {
@@ -201,36 +213,36 @@ inline void matmul_execute_replay_no_mop(const std::uint32_t replay_buf_len, con
     }
 }
 
-template <MathFidelity math_fidelity>
+template <MathFidelity math_fidelity, int PHASES, bool INNER_HALF>
 inline void matmul_run_no_mop_tdim1_reuse_a(const std::uint32_t dst_index, const std::uint32_t rut_dim, const std::uint32_t replay_buf_len)
 {
     for (std::uint32_t rut = 0; (rut + 1) < rut_dim; rut++)
     {
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + rut);
-        matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, true, 1);
+        matmul_execute_replay_no_mop<math_fidelity, PHASES, INNER_HALF>(replay_buf_len, true, 1);
     }
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + rut_dim - 1);
-    matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, true, 1);
+    matmul_execute_replay_no_mop<math_fidelity, PHASES, INNER_HALF>(replay_buf_len, true, 1);
     TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
 }
 
-template <MathFidelity math_fidelity>
+template <MathFidelity math_fidelity, int PHASES, bool INNER_HALF>
 inline void matmul_run_no_mop_tdim1_reuse_b(
     const std::uint32_t dst_index, const std::uint32_t ct_dim, const std::uint32_t rut_dim, const std::uint32_t replay_buf_len)
 {
     for (std::uint32_t rut = 0; (rut + 1) < rut_dim; rut++)
     {
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + rut * ct_dim);
-        matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, false, 1);
+        matmul_execute_replay_no_mop<math_fidelity, PHASES, INNER_HALF>(replay_buf_len, false, 1);
     }
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + (rut_dim - 1) * ct_dim);
-    matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, false, 1);
+    matmul_execute_replay_no_mop<math_fidelity, PHASES, INNER_HALF>(replay_buf_len, false, 1);
     TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
 }
 
-template <MathFidelity math_fidelity>
+template <MathFidelity math_fidelity, int PHASES, bool INNER_HALF>
 inline void matmul_run_no_mop_tdim_gt1_reuse_a(
     const std::uint32_t dst_index, const std::uint32_t ct_dim, const std::uint32_t t_dim, const std::uint32_t rut_dim, const std::uint32_t replay_buf_len)
 {
@@ -242,13 +254,13 @@ inline void matmul_run_no_mop_tdim_gt1_reuse_a(
         for (std::uint32_t rut = 0; (rut + 1) < rut_dim; rut++)
         {
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + ct_dim * t + rut);
-            matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, true, t_dim);
+            matmul_execute_replay_no_mop<math_fidelity, PHASES, INNER_HALF>(replay_buf_len, true, t_dim);
 
             if ((t + 1) < t_dim)
             {
                 TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
                 math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + ct_dim * (t + 1) + rut);
-                matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, true, t_dim);
+                matmul_execute_replay_no_mop<math_fidelity, PHASES, INNER_HALF>(replay_buf_len, true, t_dim);
             }
 
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
@@ -256,13 +268,13 @@ inline void matmul_run_no_mop_tdim_gt1_reuse_a(
 
         const std::uint32_t rut = rut_dim - 1;
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + ct_dim * t + rut);
-        matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, true, t_dim);
+        matmul_execute_replay_no_mop<math_fidelity, PHASES, INNER_HALF>(replay_buf_len, true, t_dim);
 
         if ((t + 1) < t_dim)
         {
             TTI_CLEARDVALID(p_setrwc::CLR_B, 0);
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + ct_dim * (t + 1) + rut);
-            matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, true, t_dim);
+            matmul_execute_replay_no_mop<math_fidelity, PHASES, INNER_HALF>(replay_buf_len, true, t_dim);
         }
 
         TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
@@ -270,7 +282,7 @@ inline void matmul_run_no_mop_tdim_gt1_reuse_a(
     }
 }
 
-template <MathFidelity math_fidelity>
+template <MathFidelity math_fidelity, int PHASES, bool INNER_HALF>
 inline void matmul_run_no_mop_tdim_gt1_reuse_b(
     const std::uint32_t dst_index, const std::uint32_t ct_dim, const std::uint32_t t_dim, const std::uint32_t rut_dim, const std::uint32_t replay_buf_len)
 {
@@ -282,13 +294,13 @@ inline void matmul_run_no_mop_tdim_gt1_reuse_b(
         for (std::uint32_t rut = 0; (rut + 1) < rut_dim; rut++)
         {
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + t + rut * ct_dim);
-            matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, false, t_dim);
+            matmul_execute_replay_no_mop<math_fidelity, PHASES, INNER_HALF>(replay_buf_len, false, t_dim);
 
             if ((t + 1) < t_dim)
             {
                 TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
                 math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + t + 1 + rut * ct_dim);
-                matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, false, t_dim);
+                matmul_execute_replay_no_mop<math_fidelity, PHASES, INNER_HALF>(replay_buf_len, false, t_dim);
             }
 
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
@@ -296,13 +308,13 @@ inline void matmul_run_no_mop_tdim_gt1_reuse_b(
 
         const std::uint32_t rut = rut_dim - 1;
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + t + rut * ct_dim);
-        matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, false, t_dim);
+        matmul_execute_replay_no_mop<math_fidelity, PHASES, INNER_HALF>(replay_buf_len, false, t_dim);
 
         if ((t + 1) < t_dim)
         {
             TTI_CLEARDVALID(p_setrwc::CLR_A, 0);
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + t + 1 + rut * ct_dim);
-            matmul_execute_replay_no_mop<math_fidelity>(replay_buf_len, false, t_dim);
+            matmul_execute_replay_no_mop<math_fidelity, PHASES, INNER_HALF>(replay_buf_len, false, t_dim);
         }
 
         TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
@@ -354,7 +366,7 @@ inline void _llk_math_matmul_uninit_no_mop_()
     _llk_math_matmul_uninit_();
 }
 
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, int PHASES = to_underlying(math_fidelity), bool INNER_HALF = false>
 inline void _llk_math_matmul_no_mop_(
     std::uint32_t dst_index,
     const std::uint32_t ct_dim         = 1,
@@ -380,21 +392,21 @@ inline void _llk_math_matmul_no_mop_(
     {
         if (reuse_a)
         {
-            matmul_run_no_mop_tdim1_reuse_a<math_fidelity>(dst_index, rut_dim, replay_buf_len);
+            matmul_run_no_mop_tdim1_reuse_a<math_fidelity, PHASES, INNER_HALF>(dst_index, rut_dim, replay_buf_len);
         }
         else
         {
-            matmul_run_no_mop_tdim1_reuse_b<math_fidelity>(dst_index, ct_dim, rut_dim, replay_buf_len);
+            matmul_run_no_mop_tdim1_reuse_b<math_fidelity, PHASES, INNER_HALF>(dst_index, ct_dim, rut_dim, replay_buf_len);
         }
         return;
     }
 
     if (reuse_a)
     {
-        matmul_run_no_mop_tdim_gt1_reuse_a<math_fidelity>(dst_index, ct_dim, t_dim, rut_dim, replay_buf_len);
+        matmul_run_no_mop_tdim_gt1_reuse_a<math_fidelity, PHASES, INNER_HALF>(dst_index, ct_dim, t_dim, rut_dim, replay_buf_len);
     }
     else
     {
-        matmul_run_no_mop_tdim_gt1_reuse_b<math_fidelity>(dst_index, ct_dim, t_dim, rut_dim, replay_buf_len);
+        matmul_run_no_mop_tdim_gt1_reuse_b<math_fidelity, PHASES, INNER_HALF>(dst_index, ct_dim, t_dim, rut_dim, replay_buf_len);
     }
 }
