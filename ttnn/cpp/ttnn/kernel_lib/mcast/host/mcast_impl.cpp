@@ -188,18 +188,6 @@ void McastImpl::Group::prepare_(
     dataflow_kernel_lib::TransferMode transfer_mode,
     const CoreRangeSet* handshake_cores) const {
     auto& state = prepared_.emplace(PreparedState{});
-    // Map the normalized logical rectangles: non-worker NoC rows/columns are transparent to multicast.
-    // Preserve holes in the logical receiver set, and count actual workers rather than NoC area.
-    for (const auto& logical : receivers_.ranges()) {
-        const auto start = device.worker_core_from_logical_core(logical.start_coord);
-        const auto end = device.worker_core_from_logical_core(logical.end_coord);
-        state.rectangles.push_back({logical, CoreRange(start, end)});
-    }
-    TT_FATAL(
-        state.rectangles.size() <= dataflow_kernel_lib::MAX_MCAST_RECTANGLES,
-        "McastImpl::prepare_arguments: requires {} logical worker rectangles; at most {} are supported",
-        state.rectangles.size(),
-        dataflow_kernel_lib::MAX_MCAST_RECTANGLES);
     detail::append_sender_coords(state.sender_coords, device, senders_);
     if (transfer_mode == TransferMode::ChainUnicast) {
         TT_FATAL(!rotating(), "McastImpl::prepare_arguments: chain forwarding requires one fixed sender");
@@ -211,6 +199,17 @@ void McastImpl::Group::prepare_(
             "supported");
         state.transport = prepare_chain_(device, state);
     } else {
+        // Map logical rectangles only for multicast; chain arguments have no rectangle storage.
+        for (const auto& logical : receivers_.ranges()) {
+            const auto start = device.worker_core_from_logical_core(logical.start_coord);
+            const auto end = device.worker_core_from_logical_core(logical.end_coord);
+            state.rectangles.push_back({logical, CoreRange(start, end)});
+        }
+        TT_FATAL(
+            state.rectangles.size() <= dataflow_kernel_lib::MAX_MCAST_RECTANGLES,
+            "McastImpl::prepare_arguments: requires {} logical worker rectangles; at most {} are supported",
+            state.rectangles.size(),
+            dataflow_kernel_lib::MAX_MCAST_RECTANGLES);
         state.transport = prepare_multicast_(cfg, state, handshake_cores);
         // Sender-coordinate encoding is independent of receiver membership.
         // Exact reconstruction and size checks select ranges or explicit pairs.

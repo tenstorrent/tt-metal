@@ -107,7 +107,7 @@ Mcast::Mcast(
         }
         // The implementation owns schedule uniqueness/length and cross-group footprint
         // validation. Do not replace either receiver membership or sender order.
-        impl_->add_group(std::move(group_receivers), std::move(senders));
+        impl_->add_group(group_receivers, std::move(senders));
     }
     impl_->prepare_arguments_();
 }

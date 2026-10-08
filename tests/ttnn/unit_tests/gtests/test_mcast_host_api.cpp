@@ -485,6 +485,7 @@ TEST_F(McastFixture, OperationCommunicationFeasibility) {
             McastSenderConfig sender_config;
             if (pattern.senders.front().size() == 1) {
                 std::vector<CoreCoord> fixed_senders;
+                fixed_senders.reserve(pattern.senders.size());
                 for (const auto& group : pattern.senders) {
                     fixed_senders.push_back(group.front());
                 }

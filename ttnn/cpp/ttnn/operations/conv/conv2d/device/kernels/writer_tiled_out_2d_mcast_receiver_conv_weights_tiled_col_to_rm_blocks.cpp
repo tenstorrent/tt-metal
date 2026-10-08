@@ -65,8 +65,6 @@ void kernel_main() {
         (split_reader_cb_shared) ? dfb_act_second_obj.get_write_ptr() + act_write_offset_last : 0;
     const uint32_t split_reader_cb_write_addr_sum = split_reader_cb_write_addr + split_reader_cb_write_addr_last;
 
-    constexpr auto s_weight_args = TensorAccessorArgs<36>();
-    constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
     constexpr auto weights_mcast_args = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("weights_mcast_ct_offset"),
         get_named_compile_time_arg_val("weights_mcast_rt_offset")>();

@@ -49,8 +49,6 @@ void kernel_main() {
     constexpr bool need_to_push_remaining_tiles = get_compile_time_arg_val(37) == 1;
     constexpr bool single_core_processes_multiple_batches = get_compile_time_arg_val(38) == 1;
 
-    constexpr auto s_weight_args = TensorAccessorArgs<39>();
-    constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
     uint32_t i = 0;
     const uint32_t noop = get_arg_val<uint32_t>(i++);
     const uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(i++);

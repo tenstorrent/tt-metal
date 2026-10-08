@@ -231,6 +231,13 @@ def test_chain_smoke(device):
 
 
 @pytest.mark.parametrize("noc", [0, 1])
+def test_chain_more_than_three_rectangles(device, noc):
+    # Four isolated receivers exceed multicast's rectangle capacity but need no chain rectangles.
+    receivers = [(0, 0), (2, 0), (0, 2), (2, 2)]
+    run_mcast_groups_case(device, [(receivers, [(0, 0)])], chain_link=True, noc=noc)
+
+
+@pytest.mark.parametrize("noc", [0, 1])
 @pytest.mark.parametrize("counter", [False, True])
 @pytest.mark.parametrize("mixed_events", [False, True])
 def test_chain_large_payload_and_backpressure(device, noc, counter, mixed_events):
