@@ -59,7 +59,6 @@ void kernel_main() {
         rt_args_idx++;  // my_device_id (unused in this kernel)
         dst_device_id = get_arg_val<uint32_t>(rt_args_idx++);
         dst_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);
-        rt_args_idx++;  // mesh_ew_dim (unused in this kernel)
     }
 
     auto test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_address);
