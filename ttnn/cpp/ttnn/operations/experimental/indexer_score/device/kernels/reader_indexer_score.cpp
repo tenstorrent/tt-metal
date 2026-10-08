@@ -640,14 +640,30 @@ void kernel_main() {
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     constexpr uint32_t group_stride = schedule_group_rows;
     constexpr uint32_t num_groups = schedule_groups;
-    const auto schedule = indexer_schedule::for_core<fused_ring_enabled>(
+    // Persistent-cache args remain common and are re-applied on every dispatch.
+    const uint32_t k_batch_page_offset = get_common_arg_val<uint32_t>(
+        indexer_common::reader::BatchOffset);  // indexed-cache page offset; 0 when not indexed
+    uint32_t kv_len_tiles =
+        get_common_arg_val<uint32_t>(indexer_common::reader::KvLength);  // valid KV length in tiles (full when unset)
+    // Unfused: deal only the bands of the runtime valid prefix (compute/writer derive the same split from the
+    // same common KvLength). The fused ring keeps its compiled lane schedule (metadata kv_len is derived later).
+    const auto schedule = indexer_schedule::for_core_bounded<fused_ring_enabled>(
         core_id,
         group_stride,
-        {schedule_ring_size, schedule_units, 0, 0, schedule_blocks, schedule_cols, schedule_rotate});
+        {schedule_ring_size, schedule_units, 0, 0, schedule_blocks, schedule_cols, schedule_rotate},
+        kv_len_tiles,
+        k_tiles_per_unit);
     const uint32_t row_group0 = schedule.row_group;
     const uint32_t band0 = schedule.band_start;
     const uint32_t num_bands = schedule.band_count;
-    constexpr uint32_t max_bands = schedule_max_bands;
+    // Head-streaming q-mcast pad target: the widest cell of THIS dispatch's split (<= schedule_max_bands).
+    const uint32_t max_bands =
+        fused_ring_enabled ? schedule_max_bands
+                           : indexer_schedule::widest_cell_bands(
+                                 indexer_schedule::dealt_units(
+                                     schedule_units, schedule_blocks, schedule_cols, kv_len_tiles, k_tiles_per_unit),
+                                 schedule_blocks,
+                                 schedule_cols);
     constexpr uint32_t fused_common_base = indexer_common::reader::Count + fused_physical_sp;
     constexpr uint32_t x_base =
         fused_ring_enabled ? fused_common_base + indexer_rt::reader::FusedRingWidth : indexer_common::reader::Count;
@@ -690,12 +706,6 @@ void kernel_main() {
         x(diag),
         y(row),
         schedule_cols - 1};
-    // Persistent-cache args remain common and are re-applied on every dispatch.
-    const uint32_t k_batch_page_offset = get_common_arg_val<uint32_t>(
-        indexer_common::reader::BatchOffset);  // indexed-cache page offset; 0 when not indexed
-    uint32_t kv_len_tiles =
-        get_common_arg_val<uint32_t>(indexer_common::reader::KvLength);  // valid KV length in tiles (full when unset)
-
     const auto q_acc = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);
     const auto w_acc = TensorAccessor(w_args, w_addr, bf16_tile_bytes);

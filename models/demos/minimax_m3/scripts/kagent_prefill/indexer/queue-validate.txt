@@ -1,0 +1,16 @@
+# Silicon validation of the indexer_score_msa valid-prefix schedule (run: ./queue.sh queue-validate.txt).
+# Stops on 75/76. Each job is < 20 min.
+# 1) op level: new vs base kernels, 1M-allocated K vs fitted, ranks 0 and 3, outputs dumped for a bit-exact compare
+./run-ops.sh idx1 1200 runs/idx1.cmds
+# 2) unit tests that exercise the runtime kv_len / mcast / streaming / block-pool paths of the unfused schedule
+./run-pytest.sh idx-pytest 1200 -- /mnt/data/kernel-agent/dev/prefill-indexer/tt-metal/tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py -k "kv_len or qmcast or block_pool or indexed_cache or genmcast or block_split or determinism or m3 or msa or shapes or knobs" /mnt/data/kernel-agent/dev/prefill-indexer/tt-metal/models/demos/minimax_m3/tests/unit/test_indexer_score_msa_accuracy.py
+# 3) full request, best gated config at production capacity: new kernels (+ logits + KV dump for the bit-exact gate)
+./run-bench.sh new-cap1m 1500 LOGURU_LEVEL=ERROR TT_METAL_SHM_TRACKING_DISABLED=1 M3_FABRIC=1d BENCH_CHUNK=5120 BENCH_LAYER_ACK=event M3_KA_ROPE_FUSED=1 M3_KA_SKIP_IDX_SPLIT=1 M3_KA_MOE_SINGLE_RS=1 BENCH_PER_LAYER=0 BENCH_CAPACITY=1044480 BENCH_ITERS=7 BENCH_LOGITS=1 BENCH_DUMP_DIR=/mnt/data/kernel-agent/dev/prefill-indexer/runs/new-cap1m/dump
+# 4) same config, unmodified kernels (before, same time window)
+./run-bench.sh base-cap1m 1200 LOGURU_LEVEL=ERROR TT_METAL_SHM_TRACKING_DISABLED=1 M3_FABRIC=1d BENCH_CHUNK=5120 BENCH_LAYER_ACK=event M3_KA_ROPE_FUSED=1 M3_KA_SKIP_IDX_SPLIT=1 M3_KA_MOE_SINGLE_RS=1 BENCH_PER_LAYER=0 BENCH_CAPACITY=1044480 BENCH_ITERS=7 TT_METAL_HOME=/mnt/data/kernel-agent/dev/prefill-indexer/base-root TT_METAL_RUNTIME_ROOT=/mnt/data/kernel-agent/dev/prefill-indexer/base-root TT_METAL_CACHE=/mnt/data/kernel-agent/dev/prefill-indexer/jit-cache-base
+# 5) repeats (cross-process)
+./run-bench.sh new-cap1m-r2 1200 LOGURU_LEVEL=ERROR TT_METAL_SHM_TRACKING_DISABLED=1 M3_FABRIC=1d BENCH_CHUNK=5120 BENCH_LAYER_ACK=event M3_KA_ROPE_FUSED=1 M3_KA_SKIP_IDX_SPLIT=1 M3_KA_MOE_SINGLE_RS=1 BENCH_PER_LAYER=0 BENCH_CAPACITY=1044480 BENCH_ITERS=7
+./run-bench.sh base-cap1m-r2 1200 LOGURU_LEVEL=ERROR TT_METAL_SHM_TRACKING_DISABLED=1 M3_FABRIC=1d BENCH_CHUNK=5120 BENCH_LAYER_ACK=event M3_KA_ROPE_FUSED=1 M3_KA_SKIP_IDX_SPLIT=1 M3_KA_MOE_SINGLE_RS=1 BENCH_PER_LAYER=0 BENCH_CAPACITY=1044480 BENCH_ITERS=7 TT_METAL_HOME=/mnt/data/kernel-agent/dev/prefill-indexer/base-root TT_METAL_RUNTIME_ROOT=/mnt/data/kernel-agent/dev/prefill-indexer/base-root TT_METAL_CACHE=/mnt/data/kernel-agent/dev/prefill-indexer/jit-cache-base
+./run-bench.sh new-cap1m-r3 1200 LOGURU_LEVEL=ERROR TT_METAL_SHM_TRACKING_DISABLED=1 M3_FABRIC=1d BENCH_CHUNK=5120 BENCH_LAYER_ACK=event M3_KA_ROPE_FUSED=1 M3_KA_SKIP_IDX_SPLIT=1 M3_KA_MOE_SINGLE_RS=1 BENCH_PER_LAYER=0 BENCH_CAPACITY=1044480 BENCH_ITERS=7
+# 6) fitted capacity with the new kernels (must equal the 506 ms fitted baseline)
+./run-bench.sh new-cap61440 1200 LOGURU_LEVEL=ERROR TT_METAL_SHM_TRACKING_DISABLED=1 M3_FABRIC=1d BENCH_CHUNK=5120 BENCH_LAYER_ACK=event M3_KA_ROPE_FUSED=1 M3_KA_SKIP_IDX_SPLIT=1 M3_KA_MOE_SINGLE_RS=1 BENCH_PER_LAYER=0 BENCH_CAPACITY=61440 BENCH_ITERS=7

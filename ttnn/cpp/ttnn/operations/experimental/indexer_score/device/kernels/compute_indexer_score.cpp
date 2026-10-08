@@ -486,17 +486,27 @@ void kernel_main() {
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     constexpr uint32_t group_stride = schedule_group_rows;
     constexpr uint32_t num_groups = schedule_groups;
-    const auto schedule = indexer_schedule::for_core<fused_ring_enabled>(
-        core_id,
-        group_stride,
-        {schedule_ring_size, schedule_units, 0, 0, schedule_blocks, schedule_cols, schedule_rotate});
-    const uint32_t row_group0 = schedule.row_group;
-    const uint32_t band0 = schedule.band_start;
-    const uint32_t num_bands = schedule.band_count;
-    constexpr uint32_t max_bands = schedule_max_bands;
     // Valid KV length in tiles: caps each cell's valid cols (mask suffix grows over the tail). Full when
     // unset (dense path unchanged). Hash-excluded.
     uint32_t kv_len_tiles = get_common_arg_val<uint32_t>(indexer_common::compute::KvLength);
+    // Unfused: the same valid-prefix-bounded split as the reader/writer (same common KvLength).
+    const auto schedule = indexer_schedule::for_core_bounded<fused_ring_enabled>(
+        core_id,
+        group_stride,
+        {schedule_ring_size, schedule_units, 0, 0, schedule_blocks, schedule_cols, schedule_rotate},
+        kv_len_tiles,
+        k_tiles_per_unit);
+    const uint32_t row_group0 = schedule.row_group;
+    const uint32_t band0 = schedule.band_start;
+    const uint32_t num_bands = schedule.band_count;
+    // Head-streaming pad target, matching the reader's (widest cell of this dispatch's split).
+    const uint32_t max_bands =
+        fused_ring_enabled ? schedule_max_bands
+                           : indexer_schedule::widest_cell_bands(
+                                 indexer_schedule::dealt_units(
+                                     schedule_units, schedule_blocks, schedule_cols, kv_len_tiles, k_tiles_per_unit),
+                                 schedule_blocks,
+                                 schedule_cols);
     // Per-device chunk-start offset (tiles); runtime so distinct values reuse one program.
     uint32_t chunk_start_tiles = get_common_arg_val<uint32_t>(indexer_common::compute::ChunkStart);
     // Mid-slab boundary-chip diagonal straddle (tiles): q-rows >= straddle_q_tile jump by straddle_jump_tiles.

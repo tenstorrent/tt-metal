@@ -48,6 +48,9 @@ def main():
     ap.add_argument("--q-dtype", default="bf16", choices=["bf16", "bf8"])
     ap.add_argument("--iters", type=int, default=20)
     ap.add_argument("--seed", type=int, default=3)
+    ap.add_argument("--k-chunk", type=int, default=1024, help="IndexerScoreProgramConfig.k_chunk_size")
+    ap.add_argument("--q-chunk", type=int, default=64, help="IndexerScoreProgramConfig.q_chunk_size")
+    ap.add_argument("--dump", default=None, help="save {scores, ids} (valid block columns) to this .pt file")
     a = ap.parse_args()
     S, T, d = a.S, a.T, 128
     TA = a.T_alloc or T
@@ -65,7 +68,7 @@ def main():
         tq = ttnn.from_torch(q.bfloat16(), dtype=qdt, layout=ttnn.TILE_LAYOUT, device=dev)
         k_alloc = torch.cat([k, torch.zeros(1, 1, TA - T, d)], dim=2) if TA > T else k
         tk = ttnn.from_torch(k_alloc.bfloat16(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=dev)
-        cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
+        cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=a.q_chunk, k_chunk_size=a.k_chunk, head_group_size=0)
 
         def run():
             return ttnn.experimental.indexer_score_msa(
@@ -76,6 +79,10 @@ def main():
         ids = ttnn.experimental.topk_large_indices(out, k=16, valid_length=T // BLK)
         sc = ttnn.to_torch(out).float()[0, 0][:, : T // BLK]  # [S, nblk] (valid blocks only)
         dev_ids = ttnn.to_torch(ids).to(torch.int64)[0, 0] & 0xFFFFFFFF  # [S, 16]
+        if a.dump:
+            raw = ttnn.to_torch(out)[0, 0][:, : T // BLK].contiguous()  # bf16, bit-exact compare
+            torch.save({"scores": raw, "ids": dev_ids.clone(), "args": vars(a)}, a.dump)
+            print(f"IDX_DUMP {a.dump}", flush=True)
         qq = ttnn.to_torch(tq).float()[0, 0]
         kq = ttnn.to_torch(tk).float()[0, 0][:T]
         full = (qq @ kq.T) * scale  # [S, T]
