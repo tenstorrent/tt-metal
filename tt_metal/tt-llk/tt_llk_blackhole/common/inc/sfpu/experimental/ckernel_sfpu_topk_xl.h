@@ -4111,6 +4111,132 @@ inline void _topk_xl_split_rebuild_build_(const std::uint32_t tile_offset, const
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
+// The Classic K = 512 chunk: the fused stamp and local sort above, then the row-major index split into a value tile and
+// an index tile, the unfused merge and the unfused rebuild. Its segments interleave with the other chunk's, so the
+// unfused ones first set the state the single-thread code has there (index tracking, ADDR_MODs, Sequence words, MOP).
+
+// _topk_xl_separate_indices_row_major_reinit_, _topk_xl_separate_indices_row_major_<512> and the chunk base advance.
+inline void _topk_xl_split_separate_512_(const std::uint32_t tile_offset)
+{
+    _topk_xl_separate_indices_row_major_reinit_();
+    _topk_xl_split_begin_(tile_offset);
+    _topk_xl_separate_indices_row_major_<512>();
+    _topk_xl_separate_indices_row_major_advance_chunk_base_<512>();
+}
+
+// The SFPU config reset of the LLK init, then _topk_xl_init_<512, false>.
+inline void _topk_xl_split_unfused_init_512_()
+{
+    _init_sfpu_config_reg();
+    _topk_xl_init_<512, false>();
+}
+
+// _topk_xl_merge_<512, false> with the incoming values `distance` rows past the survivor's at tile_offset.
+template <int distance>
+inline void _topk_xl_split_merge_unfused_512_(const std::uint32_t tile_offset)
+{
+    static_assert(distance == 128 || distance == 256, "the incoming values sit two or four tiles past the survivor's");
+    constexpr int indices_offset = 64;
+    constexpr int n_iters        = 4;
+    _topk_xl_split_unfused_init_512_();
+    _topk_xl_split_begin_(tile_offset);
+#if TOPK_XL_UNFUSED_MACRO
+    topk_xl_unfused_macro::program_templates<false>();
+    load_replay_buf<Exec>(0, 16, [] { topk_xl_unfused_macro::ce_full<indices_offset, distance, 8, false>(); });
+#else
+    load_replay_buf<Exec>(
+        0,
+        18,
+        []
+        {
+            load8_rows_x2_unfused<indices_offset, distance>();
+            bitonic_sort_len_k<false>(false);
+            store8_rows_x2_unfused<indices_offset, distance, 8>();
+        });
+#endif
+    ckernel_unpack_template::run(n_iters - 1);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    set_dst_write_addr_offset(tile_offset + 2);
+    ckernel_unpack_template::run(n_iters);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    set_dst_write_addr_offset(tile_offset);
+}
+
+// The unfused rebuild's stride-8 sort_16_alt build of both columns, between its two transposes.
+inline void _topk_xl_split_rebuild_build_unfused_512_(const std::uint32_t tile_offset, const bool dir)
+{
+    constexpr int indices_offset = 64;
+    _topk_xl_split_unfused_init_512_();
+    _topk_xl_split_begin_(tile_offset);
+    load_replay_buf<Exec>(0, 8, [] { load8_rows_x2_unfused<indices_offset, 8>(); });
+    bitonic_sort_len_16_alt<false>(dir);
+    load_replay_buf<Exec>(8, 8, [] { store8_rows_x2_unfused<indices_offset, 8, 16>(); });
+    lltt::replay(0, 8);
+    bitonic_sort_len_16_alt<false>(dir);
+    lltt::replay(8, 8);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    set_dst_write_addr_offset(tile_offset + 2);
+    for (int i = 0; i < 2; i++)
+    {
+        lltt::replay(0, 8);
+        bitonic_sort_len_16_alt<false>(dir);
+        lltt::replay(8, 8);
+    }
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    set_dst_write_addr_offset(tile_offset + 0);
+}
+
+// The unfused rebuild's per-column passes after its second transpose.
+inline void _topk_xl_split_rebuild_columns_unfused_512_(const std::uint32_t tile_offset, const bool dir)
+{
+    constexpr int indices_offset = 64;
+    _topk_xl_split_unfused_init_512_();
+    _topk_xl_split_begin_(tile_offset);
+#if TOPK_XL_UNFUSED_MACRO
+    if (dir)
+    {
+        topk_xl_unfused_macro::program_templates<true>();
+    }
+    else
+    {
+        topk_xl_unfused_macro::program_templates<false>();
+    }
+#endif
+    for (int col = 0; col < 2; col++)
+    {
+#if TOPK_XL_UNFUSED_MACRO
+        topk_xl_unfused_macro::record_ce_full<indices_offset, 16, 8>(dir);
+        lltt::replay(0, 15);
+        topk_xl_unfused_macro::ce_tail<indices_offset, 16, 24>();
+#else
+        load_replay_buf<Exec>(0, 8, [] { load8_rows_x2_unfused<indices_offset, 16>(); });
+        bitonic_sort_len_k<false>(dir);
+        load_replay_buf<Exec>(8, 8, [] { store8_rows_x2_unfused<indices_offset, 16, 8>(); });
+        load8_rows_x2_unfused<indices_offset, 16>();
+        bitonic_sort_len_k<false>(dir);
+        store8_rows_x2_unfused<indices_offset, 16, 24>();
+#endif
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        load_replay_buf<Exec>(0, 8, [] { load8_rows_x2_unfused<indices_offset, 8>(); });
+        bitonic_sort_len_16_alt<false>(dir);
+        load_replay_buf<Exec>(8, 8, [] { store8_rows_x2_unfused<indices_offset, 8, 16>(); });
+        lltt::replay(0, 8);
+        bitonic_sort_len_16_alt<false>(dir);
+        lltt::replay(8, 8);
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
+    }
+}
+
+// MATH: one transpose of the unfused K = 512 survivor at tile_offset, its value faces and index faces.
+inline void _topk_xl_split_transpose_unfused_512_(const std::uint32_t tile_offset)
+{
+    TTI_STALLWAIT(p_stall::STALL_CFG | p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+    set_dst_write_addr_offset(tile_offset);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    transpose_N_faces<2, false, 64, false>();
+}
+
 // MATH: one transpose of the K-word run at tile_offset; the caller holds the transpose CFG block open.
 template <std::uint32_t K>
 inline void _topk_xl_split_transpose_(const std::uint32_t tile_offset)
