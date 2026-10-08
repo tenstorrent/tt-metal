@@ -48,20 +48,14 @@ FORCE_INLINE void read_and_publish_value_slice(
     buffer.push_back(rows * Vt);
 }
 
-template <uint32_t Tiles>
-FORCE_INLINE void seed_zero(DataflowBuffer& state, Noc& noc) {
-    state.reserve_back(Tiles);
-    noc.async_write_zeros(state, Tiles * state.get_entry_size());
-    noc.write_zeros_l1_barrier();
-    state.push_back(Tiles);
-}
-
+// The summary's paired state [B | A + B] starts at [0 | I]: each tile row holds Vt zero-state tiles, then this value
+// block's Vt identity columns.
 template <uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void seed_identity(DataflowBuffer& buffer, Noc& noc, uint32_t value_block) {
+FORCE_INLINE void seed_summary_pair(DataflowBuffer& buffer, Noc& noc, uint32_t value_block) {
     constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
     constexpr uint32_t face_elements = tt::constants::FACE_HW;
     constexpr uint32_t tile_elements = tt::constants::TILE_HW;
-    constexpr uint32_t tile_count = Kt * Vt;
+    constexpr uint32_t tile_count = Kt * 2 * Vt;
 
     buffer.reserve_back(tile_count);
     noc.async_write_zeros(buffer, tile_count * buffer.get_entry_size());
@@ -72,7 +66,7 @@ FORCE_INLINE void seed_identity(DataflowBuffer& buffer, Noc& noc, uint32_t value
         for (uint32_t local_col = 0; local_col < Vt; ++local_col) {
             const uint32_t global_col = value_block * Vt + local_col;
             if (global_col < Kt) {
-                auto tile = state_ptr + (global_col * Vt + local_col) * tile_elements;
+                auto tile = state_ptr + (global_col * 2 * Vt + Vt + local_col) * tile_elements;
                 for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; ++row) {
                     tile[row * tt::constants::FACE_WIDTH + row] = one_fp32;
                     tile[3 * face_elements + row * tt::constants::FACE_WIDTH + row] = one_fp32;
@@ -116,7 +110,6 @@ TT_KERNEL void reader(
     DataflowBuffer kd(dfb::kd);
     DataflowBuffer q_decay(dfb::q_decay);
     DataflowBuffer intra(dfb::intra);
-    DataflowBuffer summary_seed(dfb::summary_seed);
     DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
     DataflowBuffer final_decay(dfb::final_decay);
     DataflowBuffer tail_entry_states(dfb::tail_entry_states);
@@ -168,9 +161,7 @@ TT_KERNEL void reader(
     constexpr uint32_t key_value_tiles = Kt * Vt;
 
     if constexpr (summary) {
-        seed_zero<key_value_tiles>(state, noc);
-        seed_identity<Kt, Vt>(summary_seed, noc, value_block);
-
+        seed_summary_pair<Kt, Vt>(state, noc, value_block);
     } else {
         const auto group_entry_states_accessor = TensorAccessor(tensor::group_entry_states);
         read_and_publish_value_slice<Vt, Vt_full>(
@@ -186,8 +177,7 @@ TT_KERNEL void reader(
         // whenever it is non-zero, so chunk 0 has always been consumed by now.
         if constexpr (summary) {
             if (reset_chunk != 0 && chunk == reset_chunk) {
-                seed_zero<key_value_tiles>(state, noc);
-                seed_identity<Kt, Vt>(summary_seed, noc, value_block);
+                seed_summary_pair<Kt, Vt>(state, noc, value_block);
             }
         } else {
             if (reset_chunk != 0 && chunk == reset_chunk) {

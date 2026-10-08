@@ -53,7 +53,10 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const uint32_t cv = Ct * Vt;
     const uint32_t kv = Kt * Vt;
     const uint32_t kc = Kt * Ct;
-    const uint32_t scratch_entries = std::max({cc, ck, cv, kv, kc});
+    // The summary advances its zero- and identity-seeded states side by side as one [Kt, 2 * Vt] state.
+    const uint32_t paths = summary ? 2 : 1;
+    const uint32_t state_tiles = paths * kv;
+    const uint32_t scratch_entries = std::max({cc, ck, paths * cv, kv, kc});
 
     const tt::tt_metal::experimental::KernelSpecName reader_kernel_name{"reader"};
     const tt::tt_metal::experimental::KernelSpecName writer_kernel_name{"writer"};
@@ -74,9 +77,6 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const tt::tt_metal::experimental::DFBSpecName state_temporary_dfb_name{"state_temporary"};
     const tt::tt_metal::experimental::DFBSpecName final_state_dfb_name{"final_state"};
     const tt::tt_metal::experimental::DFBSpecName scratch_dfb_name{"scratch"};
-    const tt::tt_metal::experimental::DFBSpecName summary_raw_dfb_name{"summary_raw"};
-    const tt::tt_metal::experimental::DFBSpecName summary_seed_dfb_name{"summary_seed"};
-    const tt::tt_metal::experimental::DFBSpecName summary_ring_dfb_name{"summary_ring"};
     const tt::tt_metal::experimental::DFBSpecName summary_head_output_dfb_name{"summary_head_output"};
     const tt::tt_metal::experimental::DFBSpecName summary_head_state_dfb_name{"summary_head_state"};
     const tt::tt_metal::experimental::DFBSpecName tail_entry_states_dfb_name{"tail_entry_states"};
@@ -115,26 +115,23 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const uint32_t split_head_tiles = summary ? Vt : 1;
     const uint32_t tail_entry_states_tiles = !summary ? kv : 1;
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
-        make_dfb(state_dfb_name, kv, fp32),
+        make_dfb(state_dfb_name, state_tiles, fp32),
         make_dfb(t_inv_dfb_name, 2 * cc, input_format(in.t_inv)),
         make_dfb(v_beta_dfb_name, 2 * cv, input_format(in.v_beta)),
         make_dfb(kd_dfb_name, 2 * ck, input_format(in.kd)),
         make_dfb(q_decay_dfb_name, summary ? 1 : 2 * ck, summary ? fp32 : input_format(in.q_decay)),
         make_dfb(intra_dfb_name, summary ? 1 : 2 * cc, summary ? fp32 : input_format(in.intra)),
-        make_dfb(state_ring_dfb_name, 2 * kv, fp32),
-        make_dfb(value_new_dfb_name, cv, fp32),
+        make_dfb(state_ring_dfb_name, 2 * state_tiles, fp32),
+        make_dfb(value_new_dfb_name, paths * cv, fp32),
         make_dfb(final_decay_dfb_name, 2 * Kt, input_format(in.final_decay)),
         make_dfb(output_dfb_name, summary ? kv : 2 * cv, output_format),
         make_dfb(output_intermediate_dfb_name, summary ? 1 : cv, fp32),
         make_dfb(k_decay_transposed_dfb_name, 2 * kc, input_format(in.k_dec_t)),
-        make_dfb(state_update_dfb_name, kv, fp32),
-        make_dfb(state_temporary_dfb_name, kv, fp32),
-        make_dfb(final_state_dfb_name, kv, fp32),
+        make_dfb(state_update_dfb_name, state_tiles, fp32),
+        make_dfb(state_temporary_dfb_name, state_tiles, fp32),
+        make_dfb(final_state_dfb_name, state_tiles, fp32),
         make_dfb(transport_state_dfb_name, summary ? kv : 1, tt::DataFormat::Float16_b),
         make_dfb(scratch_dfb_name, scratch_entries, fp32),
-        make_dfb(summary_raw_dfb_name, kv, fp32),
-        make_dfb(summary_seed_dfb_name, kv, fp32),
-        make_dfb(summary_ring_dfb_name, 2 * kv, fp32),
         // ProgramSpec names must exist even when if-constexpr discards their
         // users. Give inactive-mode buffers one tile instead of reserving every
         // summary and recurrent restart payload simultaneously.
@@ -158,7 +155,6 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 tt::tt_metal::experimental::ProducerOf(kd_dfb_name, "kd"),
                 tt::tt_metal::experimental::ProducerOf(q_decay_dfb_name, "q_decay"),
                 tt::tt_metal::experimental::ProducerOf(intra_dfb_name, "intra"),
-                tt::tt_metal::experimental::ProducerOf(summary_seed_dfb_name, "summary_seed"),
                 tt::tt_metal::experimental::ProducerOf(tail_entry_states_dfb_name, "tail_entry_states"),
                 tt::tt_metal::experimental::ProducerOf(k_decay_transposed_dfb_name, "k_decay_transposed"),
                 tt::tt_metal::experimental::ProducerOf(final_decay_dfb_name, "final_decay"),
@@ -271,9 +267,6 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
           state_temporary_dfb_name,
           final_state_dfb_name,
           scratch_dfb_name,
-          summary_raw_dfb_name,
-          summary_seed_dfb_name,
-          summary_ring_dfb_name,
           summary_head_output_dfb_name,
           summary_head_state_dfb_name,
           tail_entry_states_dfb_name}) {
@@ -309,11 +302,6 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 tt::tt_metal::experimental::ProducerOf(transport_state_dfb_name, "transport_state"),
                 tt::tt_metal::experimental::ProducerOf(scratch_dfb_name, "scratch"),
                 tt::tt_metal::experimental::ConsumerOf(scratch_dfb_name, "scratch"),
-                tt::tt_metal::experimental::ProducerOf(summary_raw_dfb_name, "summary_raw"),
-                tt::tt_metal::experimental::ConsumerOf(summary_raw_dfb_name, "summary_raw"),
-                tt::tt_metal::experimental::ConsumerOf(summary_seed_dfb_name, "summary_seed"),
-                tt::tt_metal::experimental::ProducerOf(summary_ring_dfb_name, "summary_ring"),
-                tt::tt_metal::experimental::ConsumerOf(summary_ring_dfb_name, "summary_ring"),
                 tt::tt_metal::experimental::ProducerOf(summary_head_output_dfb_name, "summary_head_output"),
                 tt::tt_metal::experimental::ProducerOf(summary_head_state_dfb_name, "summary_head_state"),
                 tt::tt_metal::experimental::ConsumerOf(tail_entry_states_dfb_name, "tail_entry_states"),
