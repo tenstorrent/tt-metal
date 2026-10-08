@@ -313,6 +313,10 @@ inline void _llk_pack_untilize_strided_init_(const std::uint8_t buf_desc_id, con
  * @note Call @ref _llk_pack_untilize_strided_init_ with matching template args before this function.
  * @note Keep TILE_SEL on the index instructions: this path issues PACR_STRIDE, not PACR_UNTILIZE (which is unsupported
  *       in Dest Strided Read Mode), so the ISA rule that Untilize/Tilize use the Face Idx as Z counter does not apply.
+ * @note Pass src_tile_idx relative to the current dest bank and add no dest_register_offset term, unlike
+ *       @ref _llk_pack_untilize_: PACR_STRIDE reads Dest relative to THCON_PACKER0_REG0_SRC_ADDR_OFFSET, which
+ *       @ref _llk_pack_dest_semaphore_section_done_ moves per SyncHalf bank, while PACR_UNTILIZE ignores it. The ISA does
+ *       not document this; test_pack_untilize_semaphore_sync_quasar.py establishes it.
  */
 template <std::uint32_t FULL_CT_DIM>
 inline void _llk_pack_untilize_strided_(

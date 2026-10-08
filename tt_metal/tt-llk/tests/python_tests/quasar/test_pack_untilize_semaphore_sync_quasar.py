@@ -28,8 +28,8 @@ from helpers.test_variant_parameters import (
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
-# Three dest sections, so the DestSync.Half bank sequence is 0 -> 1 -> 0.
-NUM_SECTIONS = 3
+# Even section count: DestSync.Half packs banks 0 -> 1 -> 0 -> 1 and leaves SRC_ADDR_OFFSET on bank 0 for later tests.
+NUM_SECTIONS = 4
 BLOCK_CT_DIM = 1
 
 SEMAPHORE_SYNC_FORMATS = input_output_formats(
@@ -143,9 +143,11 @@ def test_pack_untilize_semaphore_sync_strided_quasar(
     formats=SEMAPHORE_SYNC_FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dest_sync=[DestSync.Half, DestSync.Full],
-    tile_dimensions=[(32, 32)],
+    rows_per_section=[1, 2],
 )
 def test_pack_untilize_semaphore_sync_contiguous_quasar(
-    formats, dest_acc, dest_sync, tile_dimensions
+    formats, dest_acc, dest_sync, rows_per_section
 ):
-    run_pack_untilize_semaphore_sync(formats, dest_acc, dest_sync, tile_dimensions)
+    run_pack_untilize_semaphore_sync(
+        formats, dest_acc, dest_sync, (32, 32), rows_per_section
+    )
