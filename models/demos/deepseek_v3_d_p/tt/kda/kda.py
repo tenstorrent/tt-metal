@@ -15,10 +15,12 @@ from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA,
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
+    KDA_DECAY_L1_BYTES_PER_CORE,
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
     decay_projection_program_config,
+    l1_when_it_fits,
     tuned_projection_matmul_configs,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
@@ -182,6 +184,10 @@ class ttKDA:
             self.config.head_k_dim,
             decay_width,
             ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID) if self._bounded_gate else None,
+        )
+        # The prepared chunk terms read the decay gate; L1 spares its DRAM round trip.
+        self.decay_memory_config = l1_when_it_fits(
+            mesh_device, self.active_seq_len_local * decay_width * 2, KDA_DECAY_L1_BYTES_PER_CORE
         )
         # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
         # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
@@ -364,7 +370,7 @@ class ttKDA:
             weights.decay_output_projection,
             bias=weights.decay_bias_flat,
             program_config=self.decay_program_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.decay_memory_config,
             compute_kernel_config=self.compute_config,
             in0_column_offset=decay_rank_offset,
         )
@@ -504,6 +510,7 @@ class ttKDA:
             actual_start=actual_start,
             actual_end=actual_end,
         )
+        ttnn.deallocate(gate)
         output = self._kda_rms_norm(result.output, projected.output_gate, projected.output_gate_offset)
         output = self._project_output(output)
         return output, KdaState(recurrent=result.final_state, convolution=new_convolution)
