@@ -21,7 +21,6 @@
 #include <vector>
 #include <llrt/tt_cluster.hpp>
 #include <tt_stl/assert.hpp>
-#include "impl/context/metal_context.hpp"
 #include <fmt/format.h>
 
 #include "protobuf/physical_grouping_descriptor.pb.h"
@@ -790,6 +789,7 @@ void PhysicalGroupingDescriptor::validate_grouping_structure(
 }
 
 std::optional<PhysicalGroupingDescriptor> PhysicalGroupingDescriptor::find_and_load(
+    const tt::Cluster& cluster,
     const std::optional<std::filesystem::path>& pgd_path,
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
     // Physical grouping descriptor textprotos ship in two different trees depending on how tt-metal is
@@ -866,8 +866,6 @@ std::optional<PhysicalGroupingDescriptor> PhysicalGroupingDescriptor::find_and_l
     }
 
     // 2. Arch / cluster-type-specific.
-    auto& context = tt::tt_metal::MetalContext::instance();
-    const auto& cluster = context.get_cluster();
     const tt::tt_metal::ClusterType cluster_type = cluster.get_cluster_type();
     const tt::ARCH arch = cluster.arch();
     std::optional<std::string> arch_cluster_filename;
