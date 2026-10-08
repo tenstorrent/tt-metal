@@ -715,11 +715,8 @@ inline void program_packer_destination(std::uint32_t addr)
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
 
-    if constexpr (keep_output_addr)
-    {
-        TT_SETDMAREG(0, UPPER_HALFWORD(addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
-    }
-    TTI_DMANOP; // the instruction right after WRCFG must not consume the value it writes
+    TT_SETDMAREG(0, UPPER_HALFWORD(addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
+    TTI_DMANOP; // One NOP should be enough for WRCFG due to SETDMAREG above.
 }
 
 // RT: If multiple contexts are used, for issue #https://github.com/tenstorrent/tt-llk-bh/issues/20
