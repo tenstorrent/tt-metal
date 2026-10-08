@@ -42,8 +42,9 @@ _STEPS = 1
 _PRODUCTION_PERF_MARGIN = 0.05
 _SMALL_CASE = _Case("bh2-k32-v64", batch_heads=2, key_dim=32, value_dim=64)
 _PRODUCTION_PERF_CASE = _Case("p1-bh24-k128-v128", batch_heads=24, key_dim=128, value_dim=128)
-# Measured on the bh_p150b_civ2_viommu CI runner; a Blackhole Galaxy chip reads about 6% slower.
-_PRODUCTION_PERF_EXPECTED_DURATION_NS = 30_700
+# Calibrated for the bh_p150b_civ2_viommu CI runner; a Blackhole Galaxy chip reads about 6% slower (24.5-25.1 us
+# measured there with the value-block split).
+_PRODUCTION_PERF_EXPECTED_DURATION_NS = 23_400
 
 
 def _chain_affine_transforms_ops(
