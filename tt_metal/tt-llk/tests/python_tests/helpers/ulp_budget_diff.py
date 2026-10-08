@@ -27,6 +27,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from xml.etree import ElementTree
 
 import yaml
 
@@ -410,7 +411,7 @@ def _classify(was: _Held, now: _Held) -> Optional[str]:
             return "tightened"
         return None
     # Neither side gates, but the cell is still held to something: the eltwise drivers
-    # compare it with the declared atol/rtol, and the nightly's headroom report with the
+    # compare it with the declared atol/rtol, and PR Gate's headroom report with the
     # measurement and the non-finite count its row records. Loosening either needs the
     # same re-measurement a raised budget does.
     if _widened(was.declared, now.declared):
@@ -634,7 +635,7 @@ def recorded_max(row: Row) -> Optional[int]:
     """The measurement a row records, or ``None`` if there is none to judge against.
 
     Only a row that pins both ``in`` and ``out`` is a baseline: the emitter writes every
-    row that way, and its figure is the whole-format worst lane the nightly re-measures.
+    row that way, and its figure is the whole-format worst lane the sweep re-measures.
     A hand-written broader row lists a sampled driver's figure, or one per format
     ("max 868220929 ULP Float32 / 13249 Float16_b / ..."), and judging a cell against
     either would report a regression the kernel never had."""
@@ -649,10 +650,62 @@ def _headroom_line(cell: Cell, worst: int, reference: int, verdict: str) -> str:
     return f"| `{_cell_name(*cell)}` | {worst} | {reference} | {verdict} |"
 
 
+#: The sweep's test id (test_unary_sfpu_ulp.py's parametrize ids), read back into the
+#: cell it ran: ``test_unary_sfpu_ulp_sweep[Abs-in:Float16_b-out:Float16_b-approx:No-
+#: dest_acc:Yes]``.
+_SWEEP_ID = re.compile(r"\[(\w+)-in:(\w+)-out:(\w+)-approx:(\w+)-dest_acc:(\w+)\]$")
+
+#: A failure message longer than this is cut: the first line of an assertion already
+#: names the cell and the figure, and a PR comment has a size limit.
+_MESSAGE_CHARS = 300
+
+
+@dataclass(frozen=True)
+class Failure:
+    """One test the sweep failed, from its JUnit report."""
+
+    test: str  # the parametrize id: the combination of parameters that failed
+    message: str  # the first line of the failure, which carries the measured figure
+    #: ``(op, in, out, approx, dest)`` when the id is the sweep's, else ``None``.
+    cell: Optional[Tuple[str, str, str, str, str]] = None
+
+
+def junit_failures(text: str) -> List[Failure]:
+    """Every failed or errored test case in a JUnit report. The measurements say which
+    cells went over a budget; this says which tests failed for any other reason -- a
+    gated cell with no measurable lane, a stale known-lane excuse, a crash -- which
+    write no measurement at all."""
+    failures = []
+    for case in ElementTree.fromstring(text).iter("testcase"):
+        bad = case.find("failure")
+        if bad is None:
+            bad = case.find("error")
+        if bad is None:
+            continue
+        name = case.get("name", "")
+        lines = (bad.get("message") or bad.text or "").strip().splitlines()
+        found = _SWEEP_ID.search(name)
+        failures.append(
+            Failure(
+                test=name[name.find("[") :] if "[" in name else name,
+                message=(lines[0] if lines else "")[:_MESSAGE_CHARS],
+                cell=found.groups() if found else None,
+            )
+        )
+    return failures
+
+
+def _same_cell(cell: Cell) -> Tuple[str, ...]:
+    """A measured cell as a failure's ``(op, in, out, approx, dest)``."""
+    key = dict(cell[1])
+    return (cell[0], *(key.get(k) for k in ("in", "out", "approx", "dest")))
+
+
 def render_headroom(
     table: Dict[Cell, Row],
     measured: Dict[Cell, int],
     nonfinite: Optional[Dict[Cell, int]] = None,
+    failures: Iterable[Failure] = (),
 ) -> Tuple[str, int]:
     """The report, and the regression count the workflow fails on.
 
@@ -662,12 +715,17 @@ def render_headroom(
     judged against the measurement its own row records, and only this report sees it.
     The same holds for a cell the sweep could not measure: an overflow is recorded as a
     lane count, and more such lanes than its row accounts for is a regression too.
+
+    *failures* are the sweep's failed tests (:func:`junit_failures`). One whose cell is
+    already listed as over budget or regressed is not repeated; the rest -- failures no
+    measurement describes -- get a section of their own and count as regressions.
     """
     over: List[str] = []
     regressed: List[str] = []
     tight: List[str] = []
     slack: List[str] = []
     unjudged = 0
+    listed = set()  # the cells a section above already names, as failures key them
     for cell, count in sorted((nonfinite or {}).items()):
         row = _resolve(table, *cell)
         if row is None or count <= recorded_nonfinite(row):
@@ -675,6 +733,7 @@ def render_headroom(
         regressed.append(
             _headroom_line(cell, count, recorded_nonfinite(row), "non-finite lanes")
         )
+        listed.add(_same_cell(cell))
     for cell, worst in sorted(measured.items()):
         row = _resolve(table, *cell)
         if row is None:
@@ -685,8 +744,10 @@ def render_headroom(
                 unjudged += 1
             elif worst > was:
                 regressed.append(_headroom_line(cell, worst, was, "regressed"))
+                listed.add(_same_cell(cell))
         elif worst > row.max_ulp:
             over.append(_headroom_line(cell, worst, row.max_ulp, "over budget"))
+            listed.add(_same_cell(cell))
         elif worst == row.max_ulp and row.max_ulp > 0:
             # `0 == 0` is an exact-by-construction op doing what it claims, enrolled so
             # that any drift fails; reporting it as "no headroom" buried the real ones.
@@ -694,8 +755,14 @@ def render_headroom(
         elif row.max_ulp >= _SLACK_MIN_BUDGET and worst < _SLACK_FRACTION * row.max_ulp:
             slack.append(_headroom_line(cell, worst, row.max_ulp, "could tighten"))
 
+    failed = [
+        f"| `{f.test}` | {f.message.replace('|', '&#124;')} |"
+        for f in failures
+        if f.cell is None or f.cell not in listed
+    ]
+
     out = ["### SFPU ULP sweep vs the declared budgets", ""]
-    if not measured:
+    if not measured and not failed:
         return "\n".join(out + ["No measurements recorded.", ""]), 0
     out += [f"{len(measured)} cell(s) measured.", ""]
     if unjudged:
@@ -714,7 +781,7 @@ def render_headroom(
             "last measured",
             False,
         ),
-        ("No headroom left", tight, "budget", False),
+        ("No headroom left", tight, "budget", True),
         (
             f"Carrying slack (measured under {_SLACK_FRACTION:.0%} of budget)",
             slack,
@@ -734,13 +801,20 @@ def render_headroom(
         ]
         if collapsed:
             out += ["</details>", ""]
-    if not (over or regressed or tight or slack):
+    if failed:
+        out += [
+            f"**Failed in the sweep without a measurement above — {len(failed)}**",
+            "",
+            *_md_table(("test (op, in, out, approx, dest_acc)", "failure"), failed),
+            "",
+        ]
+    if not (over or regressed or tight or slack or failed):
         out += [
             "Every gated cell is inside its budget with headroom to spare, and no "
             "judged tolerance cell is past its recorded measurement.",
             "",
         ]
-    return "\n".join(out), len(over) + len(regressed)
+    return "\n".join(out), len(over) + len(regressed) + len(failed)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -762,13 +836,17 @@ def _diff(args) -> Tuple[str, int]:
 
 def _headroom(args) -> Tuple[str, int]:
     table = parse_table(args.table.read_text(encoding="utf-8"))
-    rows = [
-        json.loads(line)
-        for line in args.measured.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    # A sweep that died before its first cell writes no file; the report then says it
+    # measured nothing, and the JUnit failures say why.
+    text = args.measured.read_text(encoding="utf-8") if args.measured.exists() else ""
+    rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+    failures = (
+        junit_failures(args.junit.read_text(encoding="utf-8"))
+        if args.junit is not None and args.junit.exists()
+        else []
+    )
     report, regressions = render_headroom(
-        table, _measured_cells(rows), _nonfinite_cells(rows)
+        table, _measured_cells(rows), _nonfinite_cells(rows), failures
     )
     return report, 1 if regressions else 0
 
@@ -793,6 +871,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     h = sub.add_parser("headroom", help="compare a --ulp-measure run against the table")
     h.add_argument("--table", type=Path, required=True)
     h.add_argument("--measured", type=Path, required=True)
+    h.add_argument(
+        "--junit",
+        type=Path,
+        help="the sweep's JUnit report; its failed tests no measurement describes are "
+        "listed and fail the comparison (a missing file is no failures)",
+    )
     h.add_argument("--out", type=Path)
 
     args = parser.parse_args(argv)

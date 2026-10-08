@@ -21,6 +21,7 @@ from helpers.ulp_budget_diff import (
     _nonfinite_cells,
     _resolve,
     compare,
+    junit_failures,
     main,
     parse_table,
     recorded_max,
@@ -208,7 +209,7 @@ def test_a_tie_between_equally_specific_rows_is_refused_rather_than_ordered():
         compare(parse_table(_BASE), table)
 
 
-# ── Tolerance cells: what the nightly holds them to ───────────────────────────
+# ── Tolerance cells: what the sweep holds them to ─────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -233,7 +234,7 @@ def test_a_tie_between_equally_specific_rows_is_refused_rather_than_ordered():
     ids=["max-raised", "nonfinite-appears", "figure-deleted", "max-lowered"],
 )
 def test_a_tolerance_rows_recorded_measurement_is_a_baseline(head_row, kind):
-    """The headroom report fails the nightly on a tolerance cell past the "max N ULP" or
+    """The headroom report fails the sweep on a tolerance cell past the "max N ULP" or
     the non-finite count its row records, so raising either is loosening that check,
     and dropping the figure stops it altogether. Lowering it is a re-measurement."""
     changes = _changes(_BASE, _edited(2, head_row))
@@ -243,7 +244,7 @@ def test_a_tolerance_rows_recorded_measurement_is_a_baseline(head_row, kind):
 
 def test_deleting_a_tolerance_row_with_a_baseline_drops_it():
     """Before, a vanished tolerance row was "no loss": it gated nothing. It did hold the
-    nightly's figure, and an op block on tolerance everywhere going away took every
+    sweep's figure, and an op block on tolerance everywhere going away took every
     cell's out of the headroom report without a line in this one."""
     kinds = _kinds(_BASE, _head(_BASE_ROWS[0], _BASE_ROWS[1], _BASE_ROWS[3]))
     assert kinds[(("in", "Bfp8_b"), ("out", "Bfp8_b"))] == "baseline_dropped"
@@ -616,7 +617,7 @@ def test_the_workflow_invokes_the_tool_by_path_not_as_a_module():
     `-m helpers.ulp_budget_diff` would fail there however clean this module's own
     imports are."""
     repo = Path(__file__).resolve().parents[4]
-    workflow = repo / ".github/workflows/llk-sfpu-ulp-budget-guard.yaml"
+    workflow = repo / ".github/workflows/llk-sfpu-accuracy.yaml"
     if not workflow.exists():  # pragma: no cover - the guard ships with the workflow
         pytest.skip("workflow not in this checkout")
     # Comments stripped: the workflow explains in prose why it does *not* use `-m`.
@@ -638,28 +639,69 @@ def test_the_key_dimensions_are_the_registrys():
     assert KEY_FIELDS == tuple(_KEY_FIELDS)
 
 
-def test_the_guard_is_part_of_the_required_pr_gate():
-    """A red guard in a workflow of its own blocked nothing: no branch rule requires it,
-    and a path-filtered check cannot be required. It counts because PR Gate calls it and
-    "PR Gate Status" -- a required check -- fails when it fails."""
+def test_both_checks_are_part_of_the_required_pr_gate():
+    """A red check in a workflow of its own blocked nothing: no branch rule requires it,
+    and a path-filtered check cannot be required. Both count because PR Gate calls them
+    and "PR Gate Status" -- a required check -- fails when either fails. The sweep runs
+    only when an SFPU kernel or the SFPI pin changed."""
     import yaml
 
     repo = Path(__file__).resolve().parents[4]
     gate = repo / ".github/workflows/pr-gate.yaml"
-    if not gate.exists():  # pragma: no cover - the guard ships with the workflow
+    if not gate.exists():  # pragma: no cover - the checks ship with the workflow
         pytest.skip("workflow not in this checkout")
     jobs = yaml.safe_load(gate.read_text(encoding="utf-8"))["jobs"]
-    guard = jobs["llk-sfpu-ulp-budget-guard"]
-    assert guard["uses"] == "./.github/workflows/llk-sfpu-ulp-budget-guard.yaml"
     status = jobs["workflow-status"]
-    assert "llk-sfpu-ulp-budget-guard" in status["needs"]
     (check,) = [
         step
         for step in status["steps"]
         if step.get("uses") == "./.github/actions/workflow-status"
     ]
     listed = check["with"]["required-jobs"] + "," + check["with"]["optional-jobs"]
-    assert "llk-sfpu-ulp-budget-guard" in {job.strip() for job in listed.split(",")}
+    listed = {job.strip() for job in listed.split(",")}
+    for name, mode in (
+        ("llk-sfpu-ulp-budget-guard", "guard"),
+        ("llk-sfpu-ulp-sweep", "sweep"),
+    ):
+        job = jobs[name]
+        assert job["uses"] == "./.github/workflows/llk-sfpu-accuracy.yaml"
+        assert job["with"]["check"] == mode
+        assert name in status["needs"] and name in listed
+    assert "llk-sfpu-kernels-changed == 'true'" in jobs["llk-sfpu-ulp-sweep"]["if"]
+    outputs = jobs["find-changed-files"]["outputs"]
+    assert "llk-sfpu-kernels-changed" in outputs
+
+
+def test_the_sweep_runs_the_sweep_and_the_comparison_and_fails_on_either():
+    """It must run the sweep with --ulp-measure *and* the headroom comparison over it,
+    with the JUnit report so failures no measurement describes reach the PR comment, and
+    exit with either's failure: a cmd that stopped after a red sweep would publish no
+    report, and one that ignored headroom would pass every tolerance-cell regression."""
+    import yaml
+
+    repo = Path(__file__).resolve().parents[4]
+    matrix = repo / "tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml"
+    if not matrix.exists():  # pragma: no cover - the entry ships with the matrix
+        pytest.skip("matrix not in this checkout")
+    (entry,) = yaml.safe_load(matrix.read_text(encoding="utf-8"))
+    cmd = entry["cmd"]
+    junit = "ulp_sweep_junit.xml"
+    assert "--ulp-measure=ulp_measurements.jsonl" in cmd
+    assert "test_unary_sfpu_ulp.py || status=$?" in cmd
+    assert "helpers/ulp_budget_diff.py headroom" in cmd
+    assert "--measured ulp_measurements.jsonl" in cmd
+    assert f"--junitxml={junit}" in cmd and f"--junit {junit}" in cmd
+    # The workflow comments this file on the PR.
+    assert "--out ulp_headroom_report.md" in cmd
+    assert cmd.count("|| status=$?") == 2 and 'exit "$status"' in cmd
+    assert "set -e" not in cmd.replace("set -uo", ""), "-e would skip the report"
+    assert set(entry["skus"]) == {"wh_n150_civ2"}
+    # verify-changed-tests would run the cmd from the repo root, where it cannot work.
+    verify = (repo / ".github/workflows/verify-changed-tests.yaml").read_text(
+        encoding="utf-8"
+    )
+    unsupported = yaml.safe_load(verify)["env"]["UNSUPPORTED_YAMLS"].split()
+    assert "llk_sfpu_accuracy_tests.yaml" in unsupported
 
 
 def test_this_parse_agrees_with_the_registry_loader_on_the_live_table():
@@ -747,7 +789,7 @@ def test_this_resolution_agrees_with_the_registry_on_every_swept_cell():
 def test_the_headroom_report_fails_an_overflow_the_row_does_not_account_for():
     """A "not measurable" row records how many lanes went non-finite; the sweep skips
     such a tolerance cell but records the count, and more lanes than the row names --
-    or any on a row that names none -- is a regression the nightly must fail on."""
+    or any on a row that names none -- is a regression the sweep must fail on."""
     table = parse_table(
         "Exp:\n"
         '  - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance}'
@@ -849,3 +891,75 @@ def test_headroom_exit_status(tmp_path, worst, status):
     )
     argv = ["headroom", "--table", _write(tmp_path, "t.yaml", _BASE)]
     assert main([*argv, "--measured", measured]) == status
+
+
+# ── The sweep's failed tests, for the PR comment ──────────────────────────────
+
+_JUNIT = """<testsuites><testsuite name="pytest">
+<testcase classname="test_unary_sfpu_ulp"
+  name="test_unary_sfpu_ulp_sweep[Abs-in:Float16_b-out:Float16_b-approx:No-dest_acc:Yes]">
+  <failure message="AssertionError: Abs Float16_b-&gt;Float16_b approx=No dest_acc=Yes: failed a 1-step budget over 65279 swept lanes; Raw maximum 9 ULP&#10;assert False">trace</failure>
+</testcase>
+<testcase classname="test_unary_sfpu_ulp"
+  name="test_unary_sfpu_ulp_sweep[Exp-in:Float16-out:Float16-approx:No-dest_acc:No]">
+  <failure message="AssertionError: Exp Float16-&gt;Float16 approx=No dest_acc=No: 3 lane(s) disagreeing with the golden about being finite (golden -&gt; result: x=11.1: 65504 -&gt; inf)">trace</failure>
+</testcase>
+<testcase classname="test_unary_sfpu_ulp"
+  name="test_unary_sfpu_ulp_sweep[Neg-in:Float16_b-out:Float16_b-approx:No-dest_acc:No]"/>
+</testsuite></testsuites>"""
+
+
+def test_a_failed_sweep_test_is_named_by_its_parameters_and_its_figure():
+    """The PR comment has to say which combination failed and with what value. The
+    test id is the combination; the assertion's first line carries the value."""
+    first, second = junit_failures(_JUNIT)
+    assert first.test == "[Abs-in:Float16_b-out:Float16_b-approx:No-dest_acc:Yes]"
+    assert first.cell == ("Abs", "Float16_b", "Float16_b", "No", "Yes")
+    assert "Raw maximum 9 ULP" in first.message and "assert False" not in first.message
+    assert second.cell == ("Exp", "Float16", "Float16", "No", "No")
+
+
+def test_a_failure_the_measurements_already_list_is_not_repeated():
+    """An over-budget gated cell fails its test and is in the measurements too: listed
+    once, with measured and budget. A failure no measurement describes -- here an
+    overflow on a gated cell -- gets its own section and fails the comparison."""
+    table = parse_table(
+        "Abs:\n  - {in: Float16_b, out: Float16_b, max_ulp: 1}  # max 1 ULP\n"
+    )
+    rows = [
+        {
+            "op": "Abs",
+            "in": "Float16_b",
+            "out": "Float16_b",
+            "approx": "No",
+            "dest": "Yes",
+            "arch": "WORMHOLE",
+            "max": 9,
+        }
+    ]
+    report, regressions = render_headroom(
+        table, _measured_cells(rows), _nonfinite_cells(rows), junit_failures(_JUNIT)
+    )
+    assert "| 9 | 1 | over budget |" in report
+    assert "[Abs-in:Float16_b" not in report  # already in the over-budget row
+    assert "[Exp-in:Float16-out:Float16-approx:No-dest_acc:No]" in report
+    assert "65504 -> inf" in report
+    assert regressions == 2
+
+
+def test_headroom_reads_the_junit_report_and_survives_no_measurements(tmp_path):
+    """A sweep that died before its first cell writes no measurements file; the report
+    still names the failures, and the comparison fails."""
+    argv = [
+        "headroom",
+        "--table",
+        _write(tmp_path, "t.yaml", _BASE),
+        "--measured",
+        str(tmp_path / "missing.jsonl"),
+        "--junit",
+        _write(tmp_path, "r.xml", _JUNIT),
+        "--out",
+        str(tmp_path / "r.md"),
+    ]
+    assert main(argv) == 1
+    assert "Raw maximum 9 ULP" in (tmp_path / "r.md").read_text(encoding="utf-8")
