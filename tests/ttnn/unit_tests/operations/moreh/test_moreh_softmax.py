@@ -46,7 +46,8 @@ OPS = [
 ]
 OP_IDS = ["softmax", "softmin", "logsoftmax"]
 
-# The reduced dim spans three tiles, the last one partly filled, so the readers mask it.
+# The reduced dim spans three tiles, the last one partly filled, so the mask the compute kernel applies cuts the last
+# tile short (the mask width is a runtime arg; aligned shapes get a full-width mask).
 UNALIGNED = [
     ([1, 1, 10, 74], 3, Strategy.SMALL_W, BackwardStrategy.SMALL_W),
     ([1, 1, 10, 74], 3, Strategy.LARGE_W, BackwardStrategy.LARGE_W),
@@ -62,7 +63,7 @@ def run_moreh_softmax_nan_pad_test(shape, dim, strategy, device, provide_output=
     torch_input = torch.randint(0, 4, shape).to(torch.bfloat16) + 100
     torch_output = torch.softmax(torch_input, dim)
 
-    # NaN, so an output the op never writes fails: every softmax value here is within the tolerance of zero.
+    # NaN, so an output the op never writes fails.
     tt_output = (
         create_ttnn_tilized_tensor(torch.full(shape, float("nan")), device, ttnn.bfloat16) if provide_output else None
     )
@@ -76,7 +77,9 @@ def run_moreh_softmax_nan_pad_test(shape, dim, strategy, device, provide_output=
     # With a provided output, check that buffer itself: the op must write into it.
     actual = ttnn.to_torch(tt_output if provide_output else result)
 
-    passing, output_pcc = comp_allclose_and_pcc(torch_output, actual, rtol=0.05, atol=0.05)
+    # Every softmax value here is under ~0.04: with atol 0.05 an all-zero output would pass, since the PCC check falls
+    # back to allclose when one side is all zero.
+    passing, output_pcc = comp_allclose_and_pcc(torch_output, actual, rtol=0.05, atol=0.005)
     assert passing, output_pcc
 
 
@@ -101,7 +104,8 @@ def run_moreh_softmax_backward_nan_pad_test(shape, dim, strategy, device, provid
     # With a provided input_grad, check that buffer itself: the op must write into it.
     actual = ttnn.to_torch(tt_input_grad if provide_output else result)
 
-    passing, output_pcc = comp_allclose_and_pcc(torch_input.grad, actual, rtol=0.05, atol=0.05)
+    # As in forward: the gradients are under ~0.05, so atol 0.05 would pass an all-zero output.
+    passing, output_pcc = comp_allclose_and_pcc(torch_input.grad, actual, rtol=0.05, atol=0.005)
     assert passing, output_pcc
 
 

@@ -174,13 +174,16 @@
 # moreh_dot, moreh_dot_backward and moreh_bmm (#58422); moreh_sum, moreh_mean, moreh_group_norm (#58424);
 # moreh_matmul, moreh_linear (#58427). Their other backward ops stay covered until they are removed, except
 # moreh_cumsum_backward, which only calls ttnn.cumsum.
+#
+# Timeouts: with a cold kernel cache the selection took ~6.5 min of wall-clock pytest on an N150 and ~4 min on a
+# P150b (which skips the Tilized getitem cases and the large layer_norm backward, see #12349).
 - name: "ttnn moreh ops"
   cmd: >-
     pytest --timeout 60 -xv -m merge_gate
     tests/ttnn/unit_tests/operations/moreh
   skus:
     wh_n150_civ2:
-      timeout: 5
+      timeout: 10
     bh_p150b_civ2_viommu:
       timeout: 5
   team: ttnn

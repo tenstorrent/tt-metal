@@ -99,7 +99,8 @@ def test_moreh_norm_provided_output(device):
     "p, dim, keepdim, fp32_dest_acc_en",
     [
         # The reduced dim decides which tile broadcasts output_grad needs (compile-time args): W, H, both, none.
-        # A fractional p takes the decimal-exponent path; a negative p sets the power helpers' sign flags.
+        # A fractional p gives the exp(log(|x|) * fraction) step a nonzero fraction; a negative p sets the power
+        # helpers' sign flags.
         (2.5, 3, True, False),
         (-2.5, 2, True, False),
         (2.0, [2, 3], True, False),

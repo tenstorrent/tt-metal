@@ -13,11 +13,12 @@ pytestmark = pytest.mark.use_module_device
 
 # Nightly has no clip_grad_norm helper (its logic is inline in test_* functions), so this file has its own.
 # step1 runs one core per input (Sum[|x|^p]), step2 one core (Sum^(1/p)), step3 one core per input (x *= clip_coef).
-# Nothing is a compile-time define: p and 1/p are split into integer part, fraction and sign at runtime.
+# p and 1/p reach the kernels only as runtime args (integer part, fraction and sign), so every norm_type runs the same
+# compiled kernels.
 
 
 def run_moreh_clip_grad_norm_test(
-    input_shapes, norm_type, device, clip_ratio=0.5, max_norm=None, error_if_nonfinite=False, provide_total_norm=False
+    input_shapes, norm_type, device, clip_ratio=0.5, error_if_nonfinite=False, provide_total_norm=False
 ):
     torch_params = []
     tt_inputs = []
@@ -27,11 +28,10 @@ def run_moreh_clip_grad_norm_test(
         torch_params.append(param)
         tt_inputs.append(create_ttnn_tilized_tensor(param.grad.bfloat16(), device, ttnn.bfloat16))
 
-    # By default max_norm is relative to the actual norm, so every norm_type clips by the same factor and the scaled
-    # gradients stay near 1, where a wrong clip coefficient shows. clip_ratio >= 1 leaves the gradients unchanged.
-    if max_norm is None:
-        norm = torch.linalg.vector_norm(torch.cat([param.grad.flatten() for param in torch_params]), ord=norm_type)
-        max_norm = clip_ratio * norm.item()
+    # max_norm is relative to the actual norm, so every norm_type clips by the same factor and the scaled gradients
+    # stay near 1, where a wrong clip coefficient shows. clip_ratio >= 1 leaves the gradients unchanged.
+    norm = torch.linalg.vector_norm(torch.cat([param.grad.flatten() for param in torch_params]), ord=norm_type)
+    max_norm = clip_ratio * norm.item()
     torch_total_norm = torch.nn.utils.clip_grad_norm_(
         torch_params, max_norm, norm_type, error_if_nonfinite=error_if_nonfinite
     )

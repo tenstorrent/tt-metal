@@ -16,26 +16,17 @@ pytestmark = pytest.mark.use_module_device
 
 # A ROW_MAJOR input runs the Rm factory, which can't index the last (W) dim. A TILE input runs the Tilized factory,
 # which builds separate kernels when W is indexed, and a ROW_MAJOR_INDEX or TILIZE_INDEX variant per index layout.
-# Every nightly getitem test is skipped on Blackhole (#12349); the Tilized cases here are too.
+# Every nightly getitem device test is skipped on Blackhole (#12349); the Tilized cases here are too.
 
 
-def run_moreh_getitem_test(
-    input_shape, layout, device, index_dims=(0,), index_size=4, dtype=ttnn.bfloat16, row_major_index=True
-):
+def run_moreh_getitem_test(input_shape, layout, device, index_dims):
     # Not the nightly helpers: they take one index dim only.
-    torch_dtype = torch.int32 if dtype == ttnn.int32 else torch.bfloat16
-    torch_input = torch.randint(0, 10, input_shape, dtype=torch_dtype)
-    torch_indices = [torch.randint(-input_shape[dim], input_shape[dim] - 1, (index_size,)) for dim in index_dims]
+    torch_input = torch.randint(0, 10, input_shape, dtype=torch.bfloat16)
+    torch_indices = [torch.randint(-input_shape[dim], input_shape[dim] - 1, (4,)) for dim in index_dims]
     torch_output = torch_input[(slice(None),) * index_dims[0] + tuple(torch_indices)]
 
-    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device, pad_value=float("nan"))
-    if row_major_index:
-        tt_indices = [ttnn.from_torch(index, dtype=ttnn.int32, device=device) for index in torch_indices]
-    else:
-        tt_indices = [
-            ttnn.from_torch(index.reshape(1, index_size), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-            for index in torch_indices
-        ]
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=layout, device=device, pad_value=float("nan"))
+    tt_indices = [ttnn.from_torch(index, dtype=ttnn.int32, device=device) for index in torch_indices]
     tt_output = ttnn.to_torch(ttnn.moreh_getitem(tt_input, tt_indices, list(index_dims)))
 
     if layout == ttnn.TILE_LAYOUT:

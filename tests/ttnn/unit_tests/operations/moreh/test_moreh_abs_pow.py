@@ -16,7 +16,7 @@ pytestmark = pytest.mark.use_module_device
 
 
 def run_moreh_abs_pow_test(input_shape, p, device, fp32_dest_acc_en=False, provide_output=False):
-    # Magnitudes in [0.5, 2) with random signs: exercises abs() and keeps log(|x|) away from 0.
+    # Magnitudes in [0.5, 2) with random signs: exercises abs() and keeps |x| away from 0, where log(|x|) diverges.
     magnitude = torch.rand(input_shape) * 1.5 + 0.5
     sign = torch.randint(0, 2, input_shape) * 2 - 1
     torch_input = (magnitude * sign).to(torch.bfloat16)
@@ -47,7 +47,7 @@ def run_moreh_abs_pow_test(input_shape, p, device, fp32_dest_acc_en=False, provi
     [
         # Integer and fractional power both active.
         2.5,
-        # Fraction 0: exp(log(|x|) * 0) must come out as exactly 1.
+        # Fraction 0: the fraction step still runs, multiplying by exp(log(|x|) * 0) = 1.
         3.0,
         # floor(p) = 0: the integer power runs with exponent 0.
         0.5,
