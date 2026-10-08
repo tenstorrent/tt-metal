@@ -2786,15 +2786,15 @@ ALWI void elem_apply_compute(
     }
 }
 
-template <bool AnyPackRelu, uint32_t PrevPack, uint32_t LastPackCb, bool PackHetero>
+template <bool AnyPackRelu, uint32_t PrevPack, uint32_t LastPackCb, bool PackHetero, uint32_t BlockLaneWidth>
 struct PackFacts {};
 
 ALWI void elem_apply_pack(
     UnselectedElement, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) {}
 
-template <class ElemT, bool AnyPackRelu, uint32_t PrevPack, uint32_t LastPackCb, bool PackHetero>
+template <class ElemT, bool AnyPackRelu, uint32_t PrevPack, uint32_t LastPackCb, bool PackHetero, uint32_t BlockLaneWidth>
 ALWI void elem_apply_pack(
-    SelectedElement<ElemT, PackFacts<AnyPackRelu, PrevPack, LastPackCb, PackHetero>> selected,
+    SelectedElement<ElemT, PackFacts<AnyPackRelu, PrevPack, LastPackCb, PackHetero, BlockLaneWidth>> selected,
     [[maybe_unused]] uint32_t i_flat,
     [[maybe_unused]] uint32_t ht,
     [[maybe_unused]] uint32_t wt,
@@ -2818,10 +2818,18 @@ ALWI void elem_apply_pack(
         elem.configure_relu();
     }
     if constexpr (!eltwise_chain_skip_compute_v) {
+#if defined(ARCH_BLACKHOLE) && !defined(CKL_ELTWISE_CHAIN_PACK_PER_TILE)
+        if constexpr (
+            BlockLaneWidth == 1 && ElemT::Addressing == TileAddressing::Direct && !ElemT::uses_l1_accumulation) {
+            pack_block_mop(to_u32(ElemT::pack_dst_slot), ElemT::dfb, inner_count);
+        } else
+#endif
+        {
 #pragma GCC unroll 0
-        for (uint32_t j = 0; j < inner_count; ++j) {
-            const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
-            elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
+            for (uint32_t j = 0; j < inner_count; ++j) {
+                const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
+                elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
+            }
         }
     }
     if constexpr (ElemT::Push == PushPolicy::PerTile) {
@@ -3203,7 +3211,8 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                                  detail::ChainTraits<Es...>::any_pack_relu,
                                  detail::ChainTraits<Es...>::prev.pack[Is],
                                  detail::ChainTraits<Es...>::last_pack_cb,
-                                 detail::ChainTraits<Es...>::pack_hetero>>(elts),
+                                 detail::ChainTraits<Es...>::pack_hetero,
+                                 chain_supports_block_v<Chain> ? chain_lane_w : 0>>(elts),
                          i_flat,
                          ht,
                          wt_base,
@@ -3228,7 +3237,8 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                          detail::ChainTraits<Es...>::any_pack_relu,
                          detail::ChainTraits<Es...>::prev.pack[Is],
                          detail::ChainTraits<Es...>::last_pack_cb,
-                         detail::ChainTraits<Es...>::pack_hetero>>(elts),
+                         detail::ChainTraits<Es...>::pack_hetero,
+                         0>>(elts),
                  row_base,
                  ht,
                  0,
@@ -3264,7 +3274,8 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                      detail::ChainTraits<Es...>::any_pack_relu,
                      detail::ChainTraits<Es...>::prev.pack[Is],
                      detail::ChainTraits<Es...>::last_pack_cb,
-                     detail::ChainTraits<Es...>::pack_hetero>>(elts),
+                     detail::ChainTraits<Es...>::pack_hetero,
+                     0>>(elts),
              0,
              0,
              0,

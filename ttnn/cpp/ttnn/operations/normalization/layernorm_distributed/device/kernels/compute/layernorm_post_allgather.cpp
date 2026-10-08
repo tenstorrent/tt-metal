@@ -14,6 +14,9 @@
 #define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 
+// The eltwise chain packs its blocks per tile here: its block pack measured slower in this kernel.
+#define CKL_ELTWISE_CHAIN_PACK_PER_TILE
+
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
@@ -149,8 +152,12 @@ void kernel_main() {
         dfb_stats.pop_front(stats_tiles_cols);
         dfb_stats_reduced.reserve_back(stats_tile_stride);
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, dfb::stats_reduced, 2);
+#else
         pack_tile(0, dfb::stats_reduced);
         pack_tile(1, dfb::stats_reduced);
+#endif
         tile_regs_release();
         dfb_stats_reduced.push_back(stats_tile_stride);
         reduce_uninit();

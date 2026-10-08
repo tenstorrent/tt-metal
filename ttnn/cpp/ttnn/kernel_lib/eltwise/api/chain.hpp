@@ -189,6 +189,8 @@ enum class InitReconfigOwner {
 #define CKL_ELTWISE_CHAIN_SKIP_COMPUTE 0
 #endif
 
+// Defining CKL_ELTWISE_CHAIN_PACK_PER_TILE before this header keeps a block's packs per tile on Blackhole too.
+
 // =============================================================================
 // 1b. Input and output CB synchronization policies
 // =============================================================================
