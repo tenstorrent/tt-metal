@@ -19,6 +19,7 @@ from .operations import (
     split_qkv_heads_prefill,
 )
 from .ring_prefill import (
+    global_query_dtype,
     global_ring_prefill_attention,
     sliding_ring_prefill_attention,
     write_chunk_to_global_ring_cache,
@@ -219,6 +220,11 @@ class Gemma4Attention:
         sliding_window_size = self.config.sliding_window_size
         if is_global:
             packed_q = tt_q
+            query_dtype = global_query_dtype(tt_q.shape[-2])
+            if query_dtype is not None and tt_q.dtype != query_dtype:
+                packed_q = ttnn.typecast(tt_q, query_dtype)
+                tt_q.deallocate(True)
+                tt_q = packed_q
             packed_kv = pack_global_kv_device(
                 tt_v,
                 self.weights.k_norm_rotary_weight,

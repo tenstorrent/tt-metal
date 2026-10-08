@@ -242,10 +242,20 @@ def global_ring_prefill_attention(
 # Whole-tile q chunks tried, smallest first, for unsplit global attention. q 160 overflows L1 beside k 256.
 _GLOBAL_Q_CHUNKS = (96, 128)
 
+# The slab whose global attention runs 4-tile Q chunks over five K-split bands. Its bf16 Q chunk leaves the ring SDPA's
+# circular buffers 35 KB over L1; a bfp8 one is 61 KB smaller. Global Q@K^T runs at LoFi, which reads only the high
+# mantissa bits anyway.
+_BFP8_QUERY_SLAB_TOKENS = 256
+
+
+def global_query_dtype(q_slab_tokens):
+    """dtype the global ring SDPA takes Q in for this per-rank slab, or None to keep it."""
+    return ttnn.bfloat8_b if q_slab_tokens == _BFP8_QUERY_SLAB_TOKENS else None
+
 
 # What each chunk size gets at CP8 / TP4:
 #                  q_chunk  k_chunk  K-split bands  segmented accumulation
-#   global  2048        64      256              3  yes
+#   global  2048       128      256              5  yes (bfp8 Q)
 #   global  4096       128      256              3  yes
 #   global  8192        96      256              1  yes
 #   global 16384        96      256              1  no (too many Q chunks for the cores)
@@ -262,6 +272,11 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, num_cores=110):
         q_chunk = 128
         k_splits = 3 if num_heads * -(-q_slab_tokens // q_chunk) * 3 <= num_cores else 1
         return q_chunk, 128, k_splits, False
+    # A 256-row slab (chunk 2048): two 4-tile Q chunks per head are 16 units, two grid rows per band, so five
+    # bands fill 80 cores. Per Q row a 4-tile chunk does about 1.3x the work of a 2-tile one in the same time, which
+    # beats q64's three bands over 96 cores once the prefix is long. It needs the bfp8 Q of global_query_dtype.
+    if q_slab_tokens == _BFP8_QUERY_SLAB_TOKENS:
+        return 128, 256, 5, True
     # Short slabs: 4 Q chunks per head are too few to fill the grid, so K is split over 3 bands.
     if q_slab_tokens <= 512:
         q_chunk = q_slab_tokens // 4

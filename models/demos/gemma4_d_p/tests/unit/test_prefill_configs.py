@@ -20,7 +20,8 @@ GRID = SimpleNamespace(x=11, y=10)
 @pytest.mark.parametrize(
     "slab, sliding, expected",
     [
-        (256, False, (64, 256, 3, True)),
+        # Chunk 2048: 4-tile Q chunks over five K-split bands (with a bfp8 Q).
+        (256, False, (128, 256, 5, True)),
         (512, False, (128, 256, 3, True)),
         (1024, False, (96, 256, 1, True)),
         (256, True, (128, 128, 3, False)),

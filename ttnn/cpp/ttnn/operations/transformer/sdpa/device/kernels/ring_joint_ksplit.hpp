@@ -15,8 +15,8 @@
 
 namespace ttnn::operations::transformer::sdpa::ring_joint {
 
-// Bounds the reducer's serial merge, one pass per sender.
-constexpr uint32_t kKSplitMaxCount = 4;
+// Bounds the reducer's serial merge, one pass per sender. The writer's ready semaphore holds one bit per sender.
+constexpr uint32_t kKSplitMaxCount = 8;
 
 struct KSplitRange {
     uint32_t begin;
