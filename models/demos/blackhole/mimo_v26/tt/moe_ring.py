@@ -22,6 +22,9 @@ import torch
 os.environ.setdefault("MOE_COMPUTE_BFP8_WEIGHTS", "1")
 os.environ.setdefault("MOE_COMPUTE_FP32_ACC", "1")
 os.environ.setdefault("MOE_COMPUTE_FIDELITY", "HiFi3")
+os.environ.setdefault(
+    "MOE_COMPUTE_FID_W2", "0"
+)  # W2 (down proj) matmul at LoFi: numerics identical to HiFi2, within noise of HiFi3, -11% ring MoE time (needs a lib with the per-matmul fidelity knob, else ignored)
 
 import ttnn  # noqa: E402
 from models.common.modules.moe.tt_moe_decode import (  # noqa: E402
