@@ -34,6 +34,12 @@ def _shared_pool_ceiling():
     return spare // budget["kv_cache_per_page"] * 32
 
 
+# Shortest prefix worth stopping a prefill for. Restoring one costs ~55 ms and splitting the
+# prefill that saves it ~200 ms, against ~2.5 tokens/ms of prefill avoided on a hit, so a prefix
+# repays its own split about fivefold at this length and not at all a block or two above zero.
+MIN_SNAPSHOT_TOKENS = 4096
+
+
 class Qwen38ForCausalLM:
     _MAX_CONTEXT = 262144
     # Leave room for every output position and the final traced increment.
@@ -275,12 +281,18 @@ class Qwen38ForCausalLM:
         the sampling pass that follows.
 
         The boundary is strictly below ``end`` so that pass always has tokens to run.
+
+        Splitting costs a second prefill, and a prefill's cost is mostly the traversal of 64
+        layers rather than the tokens in it, so the tail pass is nearly as expensive as a short
+        whole one: measured at ~165-200 ms against ~15 ms for the snapshot itself. A boundary
+        below MIN_SNAPSHOT_TOKENS cannot repay that even if it is hit, so those rows prefill
+        whole and keep nothing.
         """
         starts = list(starts)
         for row in rows:
             boundary = (ends[row] - 1) // block * block
-            if boundary <= starts[row]:
-                # Nothing whole beyond what this slot already holds.
+            if boundary <= starts[row] or boundary < MIN_SNAPSHOT_TOKENS:
+                # Nothing whole beyond what this slot already holds, or not worth the split.
                 continue
             self.generator.prefill_forward(
                 tokens[row : row + 1, starts[row] : boundary],
