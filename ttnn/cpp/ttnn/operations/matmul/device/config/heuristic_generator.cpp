@@ -156,7 +156,7 @@ std::optional<Blocking> block_2d(
 // writes saves once K takes more than one block (WH sweeps: split blocks 1.11x slower in geomean, 1.2x with
 // over 32 K blocks). If keeping the full multicast extent only fits with single-tile K steps, both dimensions
 // are searched as in 2D (largest in0_block_w * area; ties avoid 1-tile dimensions, then prefer the larger,
-// squarer block).
+// squarer block), among the blocks whose subblocks are as large as the full block's.
 std::optional<Blocking> block_1d(
     const HeuristicBlocking::Params& params,
     const MatmulDesc& p,
@@ -230,11 +230,25 @@ std::optional<Blocking> block_1d(
             area,
             -std::abs(static_cast<int64_t>(b.out_block_h) - static_cast<int64_t>(b.out_block_w)));
     };
+    // A split block must keep the full block's subblock area: the K depth doesn't make up for smaller subblocks
+    // (WH designed: 1 x 6 per-core outputs split to 1 x 2 blocks at K 3, 1.4-1.5x slower than the full block at K 1)
+    auto subblock_area = [&](const Blocking& b) {
+        uint32_t area = 1;
+        for (uint32_t h : divisors_desc(b.out_block_h)) {
+            for (uint32_t w : divisors_desc(b.out_block_w)) {
+                if (h * w <= max_subblock_area(p, family)) {
+                    area = std::max(area, h * w);
+                }
+            }
+        }
+        return area;
+    };
+    const uint32_t full_subblock_area = subblock_area(*best);
     std::optional<Blocking> alt;
     for (uint32_t fixed : divisors_desc(fixed_full)) {
         for (uint32_t cheap : divisors_desc(cheap_full)) {
             const auto b = fit(is_tall ? cheap : fixed, is_tall ? fixed : cheap);
-            if (b && (!alt || rank_of(*b) > rank_of(*alt))) {
+            if (b && subblock_area(*b) >= full_subblock_area && (!alt || rank_of(*b) > rank_of(*alt))) {
                 alt = b;
             }
         }

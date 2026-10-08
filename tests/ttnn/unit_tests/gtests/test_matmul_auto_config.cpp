@@ -417,6 +417,21 @@ TEST(MatmulAutoConfig, OneDOutputBlockWhole) {
     }
 }
 
+// With single-tile K steps, a 1D output block is split for a deeper K only where the split keeps the subblock area:
+// a 1 x 6 per-core output stays whole at K 1 (Kt 699 = 3 x 233), while 8 x 4 splits to 8 x 2 at K 3 (Kt 501)
+TEST(MatmulAutoConfig, OneDSplitKeepsSubblockArea) {
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    auto chosen = choose(make_matmul(1, 1, 32, 22368, 11232, tt::DataFormat::Bfp8_b), hw);
+    ASSERT_TRUE(chosen.has_value());
+    EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast1DIn0));
+    EXPECT_EQ(chosen->blocking.out_block_w, chosen->blocking.per_core_N);
+    chosen = choose(make_matmul(1, 1, 256, 16032, 8192), hw);
+    ASSERT_TRUE(chosen.has_value());
+    EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast1DIn0));
+    EXPECT_LT(chosen->blocking.out_block_w, chosen->blocking.per_core_N);
+    EXPECT_GT(chosen->blocking.in0_block_w, 1u);
+}
+
 // Large 2D output blocks may use K blocks up to 16 deep; small ones stay at 8
 TEST(MatmulAutoConfig, CostlyKBlocksExamples) {
     // Llama-70B TP8 w1 prefill (bf16 x bfp4, LoFi), with the L1 budget the device reported: block-float B, so 2D
