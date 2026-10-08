@@ -24,6 +24,8 @@ Restrictions of block-sharded concat:
   - groups > 1 not supported for block sharding
 """
 
+import math
+
 import pytest
 import torch
 import ttnn
@@ -865,18 +867,17 @@ def _run_width_concat_u32(device, widths, grid_cols, grid_rows, height=64, orien
     ShardSpec takes the shard shape literally, unlike create_sharded_memory_config,
     which swaps it for COL_MAJOR.
     """
-    div_up = lambda a, b: -(-a // b)
     grid = _ragged_width_grid(grid_cols, grid_rows)
     col_major = orientation == ttnn.ShardOrientation.COL_MAJOR
     shard_grid_h = grid_cols if col_major else grid_rows
     shard_grid_w = grid_rows if col_major else grid_cols
-    shard_h = div_up(height, shard_grid_h)
+    shard_h = math.ceil(height / shard_grid_h)
 
     def mem(w):
         return ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(grid, (shard_h, div_up(w, shard_grid_w)), orientation),
+            ttnn.ShardSpec(grid, (shard_h, math.ceil(w / shard_grid_w)), orientation),
         )
 
     tensors = [
