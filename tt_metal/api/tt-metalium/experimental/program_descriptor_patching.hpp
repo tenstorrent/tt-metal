@@ -185,9 +185,10 @@ void apply_dynamic_runtime_args(Program& program, std::span<const DynamicRuntime
 // TT_FATAL naming the op, kernel, core, arg, and both values, turning silent PCC garbage into a loud,
 // pinpointed failure.  The rebuild is the oracle, so no per-op assertions have to be hand-maintained.
 //
-// Intended to be called only under -DTT_DESCRIPTOR_PATCHING_PARITY_CHECK (CI/debug); it is a no-cost
-// helper otherwise since the caller guards the call site.  The check makes the in-place fast path a
-// verified framework invariant rather than a per-op trust assertion.
+// Called on a cache hit when ttnn::device_operation::descriptor_parity_check_enabled() holds: always in a
+// build with -DTT_DESCRIPTOR_PATCHING_PARITY_CHECK (CI/debug), else only when the process starts with
+// TT_METAL_DESCRIPTOR_PARITY_CHECK=1, so a test run can turn it on without a separately compiled ttnn.  The check makes
+// the in-place fast path a verified framework invariant rather than a per-op trust assertion.
 void assert_fastpath_parity(
     const Program& fast, const Program& rebuilt, const ProgramDescriptor& desc, std::string_view op_name);
 
