@@ -20,6 +20,9 @@ struct PrepareChunkRecurrenceParams {
     uint32_t output_bf16_mask = 0;
     // Multiplies the per-key log decay before its within-chunk cumulative sum.
     float gate_scale = 1.0F;
+    // When set, beta holds pre-sigmoid logits read in place from these columns of a token-major BF16 tensor, and
+    // preparation applies the sigmoid.
+    std::optional<uint32_t> beta_logits_column_offset;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
