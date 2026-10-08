@@ -46,6 +46,12 @@ def pytest_addoption(parser):
         help="Debug: report model device tensors (KV cache excluded) whose contents change between model build and decode.",
     )
     g.addoption(
+        "--qwen-dump-decode-ops",
+        action="store_true",
+        default=False,
+        help="Debug: save every top-level op output of the decode steps to decode_ops.pt.",
+    )
+    g.addoption(
         "--qwen-resume-prefill",
         default=None,
         help="Skip vision and prefill: decode from the prefill_snapshot.pt of an earlier run folder (same config).",
