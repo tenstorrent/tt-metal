@@ -8,7 +8,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "impl/metal2_host_api/helpers.hpp"
-#include "impl/metal2_host_api/program_spec_validation/validate_spec.hpp"
+#include "impl/metal2_host_api/program_spec_validation/placement/placement.hpp"
 
 namespace tt::tt_metal::experimental {
 

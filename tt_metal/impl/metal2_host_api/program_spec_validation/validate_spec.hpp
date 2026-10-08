@@ -60,26 +60,13 @@ void ValidateProgramSpec(
 // Per-domain validators, called by ValidateProgramSpec
 // ----------------------------------------------------------------------------
 //
-// resource/ declares its own validators in resource/resource.hpp.
+// resource/ and placement/ declare their own validators in resource/resource.hpp and
+// placement/placement.hpp.
 
 struct ValidationContext {
     const ProgramSpec& spec;
     const CollectedSpecData& collected;
 };
-
-// placement/work_unit.cpp
-void ValidateWorkUnitFields(const ValidationContext& ctx, const CoreCoord& compute_grid_size);
-void ValidateWorkUnitSpec(const WorkUnitSpec& work_unit, const ValidationContext& ctx, tt::ARCH arch);
-
-// placement/dfb.cpp
-void ValidateDFBSlotsPerNode(
-    const WorkUnitSpec& work_unit, const ValidationContext& ctx, uint32_t max_slots_per_core, tt::ARCH arch);
-
-// placement/kernel.cpp
-void ValidateGen1DMPlacement(const ValidationContext& ctx, tt::ARCH arch);
-
-// placement/scratchpad.cpp
-void ValidateScratchpadBindersPerNode(const ValidationContext& ctx);
 
 // kernel_spec.cpp
 void ValidateKernelSpec(const KernelSpec& kernel, const ValidationContext& ctx, tt::ARCH arch);

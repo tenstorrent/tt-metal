@@ -7,6 +7,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "impl/metal2_host_api/helpers.hpp"
+#include "impl/metal2_host_api/program_spec_validation/placement/placement.hpp"
 #include "impl/metal2_host_api/program_spec_validation/resource/resource.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
 #include "impl/context/metal_env_accessor.hpp"
@@ -73,15 +74,7 @@ void ValidateProgramSpec(
     }
     ValidateResourceSpecs(ctx, arch, get_l1_alignment(hal), make_num_banks_from_buffer_type_fun(allocator));
     ValidateResourceUsage(ctx, arch);
-
-    for (const auto& work_unit : spec.work_units) {
-        ValidateWorkUnitSpec(work_unit, ctx, arch);
-        ValidateDFBSlotsPerNode(work_unit, ctx, max_slots_per_core, arch);
-    }
-    // Checked over every node at once rather than per WorkUnitSpec: WorkUnitSpecs with the same name
-    // are exempt from the overlap check, so a node's kernels can come from more than one WorkUnitSpec.
-    ValidateGen1DMPlacement(ctx, arch);
-    ValidateScratchpadBindersPerNode(ctx);
+    ValidateNodeCapacity(ctx, arch, max_slots_per_core);
 
     // NOTE:
     // Placement consistency between kernels, DFBs, and WorkUnitSpecs is now structural,

@@ -74,6 +74,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/kernel_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/placement/dfb.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/placement/kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/placement/placement.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/placement/scratchpad.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/placement/work_unit.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/program_spec.cpp
