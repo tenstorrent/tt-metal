@@ -7,8 +7,28 @@
 from __future__ import annotations
 
 import math
+import sys
+from typing import Any
 
 from loguru import logger
+
+
+class _OptionalModule:
+    """Attribute access reads a module already in sys.modules, else Any."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    def __getattr__(self, attr: str) -> Any:
+        module = sys.modules.get(self._name)
+        if module is None:
+            return Any
+        return getattr(module, attr, Any)
+
+
+# No module-level torch import: scripts/validate_no_global_torch_imports.py
+_ttnn = _OptionalModule("ttnn")
+_torch = _OptionalModule("torch")
 
 
 def _comp_nonfinite(golden, calculated):
@@ -135,7 +155,7 @@ def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     return cal_pcc >= pcc, cal_pcc
 
 
-def ulp(x: ttnn.Tensor | torch.Tensor) -> ttnn.Tensor | torch.Tensor:
+def ulp(x: _ttnn.Tensor | _torch.Tensor) -> _ttnn.Tensor | _torch.Tensor:
     "Return Unit of Least Precision for each element of a given tensor"
 
     import torch
