@@ -96,8 +96,7 @@ static inline void run_gate()
 {
     GMG_SFPU_CALL(generalized_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
 
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init_<false>();
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_<is_fp32_dest_acc_en, false>();
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_direct_<is_fp32_dest_acc_en>();
 
     if constexpr (PERF_STAGE == 1)
     {
@@ -107,30 +106,23 @@ static inline void run_gate()
     if constexpr (GMG_GROUPED)
     {
         GMG_SFPU_CALL(generalized_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init_<false>();
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_<is_fp32_dest_acc_en, false>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_direct_<is_fp32_dest_acc_en>();
         GMG_SFPU_CALL(generalized_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), GMG_EPS, GMG_SCALE);
     }
     else
     {
-        _llk_math_generalized_moe_gate_copy4rows_init_<4, 8, false, 16>();
-        _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false>();
+        _llk_math_generalized_moe_gate_copy4rows_direct_<is_fp32_dest_acc_en, 4, 8, 16>();
 
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init_<0, 0, false>();
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_<is_fp32_dest_acc_en, false>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_direct_<is_fp32_dest_acc_en, 0, 0>();
         GMG_SFPU_CALL(generalized_moe_gate_merge4_top8, (APPROX_MODE, is_fp32_dest_acc_en, 0, 0, 2));
 
-        _llk_math_generalized_moe_gate_copy4rows_init_<0, 12, false, 20>();
-        _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false>();
-        _llk_math_generalized_moe_gate_copy4rows_init_<8, 4, false, 24>();
-        _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false>();
+        _llk_math_generalized_moe_gate_copy4rows_direct_<is_fp32_dest_acc_en, 0, 12, 20>();
+        _llk_math_generalized_moe_gate_copy4rows_direct_<is_fp32_dest_acc_en, 8, 4, 24>();
 
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init_<4, 0, false>();
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_<is_fp32_dest_acc_en, false>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_direct_<is_fp32_dest_acc_en, 4, 0>();
         GMG_SFPU_CALL(generalized_moe_gate_merge4_top8, (APPROX_MODE, is_fp32_dest_acc_en, 0, 4, 6));
 
-        _llk_math_generalized_moe_gate_copy4rows_init_<12, 0, false, 28>();
-        _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false>();
+        _llk_math_generalized_moe_gate_copy4rows_direct_<is_fp32_dest_acc_en, 12, 0, 28>();
 
         GMG_SFPU_CALL(generalized_moe_gate_finalize_ungrouped, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TOPK, GMG_SOFTMAX), GMG_EPS, GMG_SCALE);
     }

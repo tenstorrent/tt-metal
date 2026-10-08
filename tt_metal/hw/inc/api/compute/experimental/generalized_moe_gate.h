@@ -113,6 +113,51 @@ ALWI void generalized_moe_gate_relocate_run() {
         VectorMode::RC_custom)));
 }
 
+// The gate's FPU steps: Blackhole issues each step's words directly, Wormhole records them and replays the record.
+template <bool is_fp32_dest_acc_en, bool is_32bit>
+ALWI void generalized_moe_gate_fpu_step0() {
+#ifdef ARCH_BLACKHOLE
+    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step0_direct<is_fp32_dest_acc_en, is_32bit>()));
+#else
+    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init<is_32bit>()));
+    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step0<is_fp32_dest_acc_en, is_32bit>()));
+#endif
+}
+
+template <bool is_fp32_dest_acc_en, bool is_32bit>
+ALWI void generalized_moe_gate_fpu_step1() {
+#ifdef ARCH_BLACKHOLE
+    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_direct<is_fp32_dest_acc_en, is_32bit>()));
+#else
+    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init<is_32bit>()));
+    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1<is_fp32_dest_acc_en, is_32bit>()));
+#endif
+}
+
+template <uint32_t d2b_dst, uint32_t b2d_base, bool is_fp32_dest_acc_en, bool is_32bit>
+ALWI void generalized_moe_gate_fpu_step1_hi() {
+#ifdef ARCH_BLACKHOLE
+    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_direct<
+          is_fp32_dest_acc_en,
+          d2b_dst,
+          b2d_base,
+          is_32bit>()));
+#else
+    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init<d2b_dst, b2d_base, is_32bit>()));
+    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi<is_fp32_dest_acc_en, is_32bit>()));
+#endif
+}
+
+template <uint32_t src, uint32_t dst, uint32_t srcb, bool is_fp32_dest_acc_en, bool is_32bit>
+ALWI void generalized_moe_gate_fpu_copy4rows() {
+#ifdef ARCH_BLACKHOLE
+    MATH((llk_math_generalized_moe_gate_copy4rows_direct<is_fp32_dest_acc_en, src, dst, srcb, is_32bit>()));
+#else
+    MATH((llk_math_generalized_moe_gate_copy4rows_init<src, dst, is_32bit, srcb>()));
+    MATH((llk_math_generalized_moe_gate_copy4rows<is_fp32_dest_acc_en, is_32bit>()));
+#endif
+}
+
 // ungrouped_top8: REQUIRED path select, NO default on purpose. true = ungrouped global top-k (every
 // non-DeepSeek model); false = grouped DeepSeek gate (8 groups x 32 -> top-2-sum -> top-4 groups -> top-8).
 // It used to be the GMG_UNGROUPED_TOP8 compile define with a silent grouped fallthrough, which is wrong
@@ -179,8 +224,7 @@ ALWI void generalized_moe_gate(
         0,
         VectorMode::RC_custom)));
     // Transpose dest step 0 (FPU) — always runs; puts each group g at DEST row g.
-    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init<is_32bit>()));
-    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step0<is_fp32_dest_acc_en, is_32bit>()));
+    generalized_moe_gate_fpu_step0<is_fp32_dest_acc_en, is_32bit>();
     // Path select — the defaultless ungrouped_top8 template parameter (see the doc above the template).
     if constexpr (ungrouped_top8) {
         // TRUE GLOBAL TOP-8 over all 256 experts (ungrouped). post-step0: group g at DEST row g.
@@ -190,11 +234,9 @@ ALWI void generalized_moe_gate(
         // later MOVB2D can't read a previous (back-to-back) copy's SrcB leftover.
         //
         // save groups 4-7 source (rows 4-7) -> rows 8-11 (step1<0> below clobbers rows 0-7).
-        MATH((llk_math_generalized_moe_gate_copy4rows_init<4, 8, is_32bit, 16>()));
-        MATH((llk_math_generalized_moe_gate_copy4rows<is_fp32_dest_acc_en, is_32bit>()));
+        generalized_moe_gate_fpu_copy4rows<4, 8, 16, is_fp32_dest_acc_en, is_32bit>();
         // topA = top8(groups 0-3): step1<d2b_dst=0> -> run at rows 0-7 -> merge -> topA at {0,2}.
-        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init<0, 0, is_32bit>()));
-        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi<is_fp32_dest_acc_en, is_32bit>()));
+        generalized_moe_gate_fpu_step1_hi<0, 0, is_fp32_dest_acc_en, is_32bit>();
         MATH((GMG_SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
@@ -203,13 +245,10 @@ ALWI void generalized_moe_gate(
             0,
             VectorMode::RC_custom)));
         // park topA (rows 0-3) -> rows 12-15; restore groups 4-7 (rows 8-11) -> rows 4-7.
-        MATH((llk_math_generalized_moe_gate_copy4rows_init<0, 12, is_32bit, 20>()));
-        MATH((llk_math_generalized_moe_gate_copy4rows<is_fp32_dest_acc_en, is_32bit>()));
-        MATH((llk_math_generalized_moe_gate_copy4rows_init<8, 4, is_32bit, 24>()));
-        MATH((llk_math_generalized_moe_gate_copy4rows<is_fp32_dest_acc_en, is_32bit>()));
+        generalized_moe_gate_fpu_copy4rows<0, 12, 20, is_fp32_dest_acc_en, is_32bit>();
+        generalized_moe_gate_fpu_copy4rows<8, 4, 24, is_fp32_dest_acc_en, is_32bit>();
         // topB = top8(groups 4-7): step1_hi<d2b_dst=4> -> run at rows 0-7 -> merge -> topB at {4,6}.
-        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init<4, 0, is_32bit>()));
-        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi<is_fp32_dest_acc_en, is_32bit>()));
+        generalized_moe_gate_fpu_step1_hi<4, 0, is_fp32_dest_acc_en, is_32bit>();
         MATH((GMG_SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
@@ -218,8 +257,7 @@ ALWI void generalized_moe_gate(
             0,
             VectorMode::RC_custom)));
         // restore topA (rows 12-15) -> rows 0-3; now topA@{0,2} (rows 0-3), topB@{4,6} (rows 4-7).
-        MATH((llk_math_generalized_moe_gate_copy4rows_init<12, 0, is_32bit, 28>()));
-        MATH((llk_math_generalized_moe_gate_copy4rows<is_fp32_dest_acc_en, is_32bit>()));
+        generalized_moe_gate_fpu_copy4rows<12, 0, 28, is_fp32_dest_acc_en, is_32bit>();
         if constexpr (produce_run) {
             // Multi-block: emit this block's top-8 as a re-mergeable RUN at {run_store_lo, run_store_hi}
             // (idx += idx_offset for global ids). No normalize/step2 here — the combine does that.
@@ -252,8 +290,7 @@ ALWI void generalized_moe_gate(
             (APPROX, is_fp32_dest_acc_en),
             0,
             VectorMode::RC_custom)));
-        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init<is_32bit>()));
-        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1<is_fp32_dest_acc_en, is_32bit>()));
+        generalized_moe_gate_fpu_step1<is_fp32_dest_acc_en, is_32bit>();
         if constexpr (do_extra_scale) {
             MATH((SFPU_UNARY_CALL(
                 DST_SYNC_MODE,

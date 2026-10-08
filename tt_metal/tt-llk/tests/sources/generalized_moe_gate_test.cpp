@@ -253,18 +253,94 @@ static inline void gmg_sanitize_scratch()
     }
 }
 
+// The gate's FPU steps as generalized_moe_gate.h issues them: directly on Blackhole, recorded and replayed elsewhere.
+// dest_reset puts the DEST offset back to tile 0 (MOVE and RUN modes) before the step issues its words.
+template <bool dest_reset = false>
+static inline void gmg_step0()
+{
+#ifdef ARCH_BLACKHOLE
+    if constexpr (dest_reset)
+    {
+        mop_dest_reset();
+    }
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_direct_<is_fp32_dest_acc_en>();
+#else
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init_<false /* is_32bit */>();
+    if constexpr (dest_reset)
+    {
+        mop_dest_reset();
+    }
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_<is_fp32_dest_acc_en, false /* is_32bit */>();
+#endif
+}
+
+template <bool dest_reset = false>
+static inline void gmg_step1()
+{
+#ifdef ARCH_BLACKHOLE
+    if constexpr (dest_reset)
+    {
+        mop_dest_reset();
+    }
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_direct_<is_fp32_dest_acc_en>();
+#else
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init_<false /* is_32bit */>();
+    if constexpr (dest_reset)
+    {
+        mop_dest_reset();
+    }
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_<is_fp32_dest_acc_en, false /* is_32bit */>();
+#endif
+}
+
+template <std::uint32_t d2b_dst, std::uint32_t b2d_base, bool dest_reset = false>
+static inline void gmg_step1_hi()
+{
+#ifdef ARCH_BLACKHOLE
+    if constexpr (dest_reset)
+    {
+        mop_dest_reset();
+    }
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_direct_<is_fp32_dest_acc_en, d2b_dst, b2d_base>();
+#else
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init_<d2b_dst, b2d_base, false /* is_32bit */>();
+    if constexpr (dest_reset)
+    {
+        mop_dest_reset();
+    }
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_<is_fp32_dest_acc_en, false /* is_32bit */>();
+#endif
+}
+
+template <std::uint32_t src, std::uint32_t dst, std::uint32_t srcb, bool dest_reset = false>
+static inline void gmg_copy4rows()
+{
+#ifdef ARCH_BLACKHOLE
+    if constexpr (dest_reset)
+    {
+        mop_dest_reset();
+    }
+    _llk_math_generalized_moe_gate_copy4rows_direct_<is_fp32_dest_acc_en, src, dst, srcb>();
+#else
+    _llk_math_generalized_moe_gate_copy4rows_init_<src, dst, false /* is_32bit */, srcb>();
+    if constexpr (dest_reset)
+    {
+        mop_dest_reset();
+    }
+    _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false /* is_32bit */>();
+#endif
+}
+
 static inline void run_gate()
 {
     GMG_SFPU_PASS(generalized_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
 
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init_<false /* is_32bit */>();
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_<is_fp32_dest_acc_en, false /* is_32bit */>();
+    gmg_step0();
 
     if constexpr (GMG_GROUPED)
     {
         GMG_SFPU_PASS(generalized_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init_<false /* is_32bit */>();
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_<is_fp32_dest_acc_en, false /* is_32bit */>();
+        gmg_step1();
         if constexpr (GMG_DO_EXTRA_SCALE)
         {
             GMG_SFPU_CALL(generalized_moe_gate_top8_scaled, (APPROX_MODE, is_fp32_dest_acc_en), GMG_EPS, GMG_SCALE, GMG_EXTRA_SCALE);
@@ -279,24 +355,18 @@ static inline void run_gate()
         // Groups 4-7 are parked in rows 8-11 while the low half is merged, because step1_hi with
         // d2b_dst=0 writes its run over rows 0-7. Each copy4rows takes its own SrcB window so a
         // later MOVB2D cannot read the previous copy's leftover.
-        _llk_math_generalized_moe_gate_copy4rows_init_<4 /* src */, 8 /* dst */, false /* is_32bit */, 16 /* srcb */>();
-        _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false /* is_32bit */>();
+        gmg_copy4rows<4 /* src */, 8 /* dst */, 16 /* srcb */>();
 
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init_<0 /* d2b_dst */, 0 /* b2d_base */, false /* is_32bit */>();
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_<is_fp32_dest_acc_en, false /* is_32bit */>();
+        gmg_step1_hi<0 /* d2b_dst */, 0 /* b2d_base */>();
         GMG_SFPU_PASS(generalized_moe_gate_merge4_top8, (APPROX_MODE, is_fp32_dest_acc_en, 0 /* read_base */, 0 /* store_lo */, 2 /* store_hi */));
 
-        _llk_math_generalized_moe_gate_copy4rows_init_<0 /* src */, 12 /* dst */, false /* is_32bit */, 20 /* srcb */>();
-        _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false /* is_32bit */>();
-        _llk_math_generalized_moe_gate_copy4rows_init_<8 /* src */, 4 /* dst */, false /* is_32bit */, 24 /* srcb */>();
-        _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false /* is_32bit */>();
+        gmg_copy4rows<0 /* src */, 12 /* dst */, 20 /* srcb */>();
+        gmg_copy4rows<8 /* src */, 4 /* dst */, 24 /* srcb */>();
 
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init_<4 /* d2b_dst */, 0 /* b2d_base */, false /* is_32bit */>();
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_<is_fp32_dest_acc_en, false /* is_32bit */>();
+        gmg_step1_hi<4 /* d2b_dst */, 0 /* b2d_base */>();
         GMG_SFPU_PASS(generalized_moe_gate_merge4_top8, (APPROX_MODE, is_fp32_dest_acc_en, 0 /* read_base */, 4 /* store_lo */, 6 /* store_hi */));
 
-        _llk_math_generalized_moe_gate_copy4rows_init_<12 /* src */, 0 /* dst */, false /* is_32bit */, 28 /* srcb */>();
-        _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false /* is_32bit */>();
+        gmg_copy4rows<12 /* src */, 0 /* dst */, 28 /* srcb */>();
 
         if constexpr (GMG_PRODUCE_RUN)
         {
@@ -321,21 +391,15 @@ static inline void run_move()
 {
     if constexpr (GMG_SUB_OP == MOVE_STEP0)
     {
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init_<false /* is_32bit */>();
-        mop_dest_reset();
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_<is_fp32_dest_acc_en, false /* is_32bit */>();
+        gmg_step0<true>();
     }
     else if constexpr (GMG_SUB_OP == MOVE_STEP1)
     {
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init_<false /* is_32bit */>();
-        mop_dest_reset();
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_<is_fp32_dest_acc_en, false /* is_32bit */>();
+        gmg_step1<true>();
     }
     else if constexpr (GMG_SUB_OP == MOVE_STEP1_HI)
     {
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init_<GMG_D2B_DST, GMG_B2D_BASE, false /* is_32bit */>();
-        mop_dest_reset();
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_<is_fp32_dest_acc_en, false /* is_32bit */>();
+        gmg_step1_hi<GMG_D2B_DST, GMG_B2D_BASE, true>();
     }
     else if constexpr (GMG_SUB_OP == MOVE_STEP2)
     {
@@ -345,14 +409,10 @@ static inline void run_move()
     }
     else
     {
-        _llk_math_generalized_moe_gate_copy4rows_init_<GMG_ROW_SRC, GMG_ROW_DST, false /* is_32bit */, GMG_SRCB>();
-        mop_dest_reset();
-        _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false /* is_32bit */>();
+        gmg_copy4rows<GMG_ROW_SRC, GMG_ROW_DST, GMG_SRCB, true>();
         if constexpr (GMG_SECOND_COPY)
         {
-            _llk_math_generalized_moe_gate_copy4rows_init_<GMG_ROW_SRC_2, GMG_ROW_DST_2, false /* is_32bit */, GMG_SRCB_2>();
-            mop_dest_reset();
-            _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false /* is_32bit */>();
+            gmg_copy4rows<GMG_ROW_SRC_2, GMG_ROW_DST_2, GMG_SRCB_2, true>();
         }
     }
 }
@@ -363,9 +423,7 @@ static inline void run_placement()
     {
         // An FPU MOP leaves the Dst RWC advanced by +64 per tile. The SFPU ops below each reset it
         // on entry; without a MOP in front of them that reset is never needed and never tested.
-        _llk_math_generalized_moe_gate_copy4rows_init_<GMG_ROW_SRC, GMG_ROW_DST, false /* is_32bit */, GMG_SRCB>();
-        mop_dest_reset();
-        _llk_math_generalized_moe_gate_copy4rows_<is_fp32_dest_acc_en, false /* is_32bit */>();
+        gmg_copy4rows<GMG_ROW_SRC, GMG_ROW_DST, GMG_SRCB, true>();
     }
 
     if constexpr (GMG_SUB_OP == RUN_MERGE4_TOP8)

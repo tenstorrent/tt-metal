@@ -267,6 +267,82 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_()
     }
 }
 
+// Direct forms of steps 0 and 1, step1_hi and copy4rows: each region's words are issued as they are, with no record and
+// no replay; the same FPU stream as the init and runner pair.
+template <bool is_fp32_dest_acc_en, bool is_32bit = false>
+inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step0_direct_()
+{
+    static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit and fp32 dest accum enable are not supported for single face transpose");
+    math::_configure_preserve_zero_flag_state_();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
+    for (std::uint32_t tile = 0; tile < gmg_step0_tiles; ++tile)
+    {
+        TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 0);
+        TTI_MOVD2B(0, 18, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 1);
+        TTI_MOVD2B(0, 20, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 2);
+        TTI_MOVD2B(0, 22, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 3);
+        TTI_MOVD2B(0, 24, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 4);
+        TTI_MOVD2B(0, 26, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 5);
+        TTI_MOVD2B(0, 28, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 6);
+        TTI_MOVD2B(0, 30, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 7);
+        TTI_TRNSPSRCB;
+        TTI_MOVB2D(0, 16, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 0);
+        TTI_MOVB2D(0, 18, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 1);
+        TTI_MOVB2D(0, 20, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 2);
+        TTI_MOVB2D(0, 22, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 3);
+        TTI_MOVB2D(0, 24, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 4);
+        TTI_MOVB2D(0, 26, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 5);
+        TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 6);
+        TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 7);
+    }
+}
+
+template <bool is_fp32_dest_acc_en, std::uint32_t d2b_dst, std::uint32_t b2d_base, bool is_32bit = false>
+inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_direct_()
+{
+    static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit and fp32 dest accum enable are not supported for single face transpose");
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
+    for (std::uint32_t tile = 0; tile < gmg_step_tiles; ++tile)
+    {
+        TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, d2b_dst);
+        TTI_MOVD2B(0, 28, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, d2b_dst);
+        TTI_TRNSPSRCB;
+        TTI_MOVB2D(0, 16, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 0);
+        TTI_MOVB2D(0, 18, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 1);
+        TTI_MOVB2D(0, 20, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 2);
+        TTI_MOVB2D(0, 22, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 3);
+        TTI_MOVB2D(0, 24, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 4);
+        TTI_MOVB2D(0, 26, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 5);
+        TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 6);
+        TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, b2d_base + 7);
+    }
+}
+
+// step1 records the same words as step1_hi<0, 0>.
+template <bool is_fp32_dest_acc_en, bool is_32bit = false>
+inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_direct_()
+{
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_direct_<is_fp32_dest_acc_en, 0, 0, is_32bit>();
+}
+
+template <bool is_fp32_dest_acc_en, std::uint32_t src, std::uint32_t dst, std::uint32_t srcb = 16, bool is_32bit = false>
+inline void _llk_math_generalized_moe_gate_copy4rows_direct_()
+{
+    static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit / fp32 dest accum not supported");
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
+    for (std::uint32_t tile = 0; tile < gmg_step_tiles; ++tile)
+    {
+        TTI_MOVD2B(0, srcb, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, src);
+        TTI_MOVB2D(0, srcb + 0, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 0);
+        TTI_MOVB2D(0, srcb + 1, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 1);
+        TTI_MOVB2D(0, srcb + 2, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 2);
+        TTI_MOVB2D(0, srcb + 3, ADDR_MOD_2, p_movb2d::MOV_1_ROW, dst + 3);
+    }
+}
+
 // Perform in-place transpose on face 0 (rows 0-15) of a single tile in DEST
 // dst_index: The tile index in DEST register buffer (0, 1, 2, ...)
 //            The function transposes face 0 of the specified tile
