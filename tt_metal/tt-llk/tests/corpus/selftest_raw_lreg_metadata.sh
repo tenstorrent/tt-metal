@@ -66,18 +66,33 @@ if [[ ${1:-} == --target-cxx ]]; then
         for scheduling in default scheduled; do
             schedule_flags=()
             [[ $scheduling == scheduled ]] && schedule_flags+=(-fschedule-insns -fschedule-insns2)
-            for scheme in 0 1 2; do
+            for scheme in 0 1 2 3; do
+                pass_flags=()
+                # The working alternative must not borrow protection from
+                # the pass whose necessity this comparison is evaluating.
+                [[ $scheme == 3 ]] && pass_flags+=(-fdisable-rtl-rvtt_lreg_livein)
                 "$target_cxx" -O2 -mcpu=tt-bh-tensix "${issue_flags[@]}" "${schedule_flags[@]}" \
+                    "${pass_flags[@]}" \
                     "-DSCHEME=$scheme" -S "$here/raw_lreg_full_annotation.cpp" -o "$scratch/gap.s"
                 if grep -Eq 'SFPLOAD[[:space:]]+L0, 1, 0, 0' "$scratch/gap.s"; then
                     echo "OBSERVED: $issue $scheduling scheme=$scheme temporary overwrites L0"
-                    [[ $scheme != 2 ]] || { echo "FAIL: effect reservation lost raw L0" >&2; exit 1; }
+                    [[ $scheme != 2 && $scheme != 3 ]] || { echo "FAIL: inspect preservation of raw L0 in scheme=$scheme" >&2; exit 1; }
                 elif grep -Eq 'SFPLOAD[[:space:]]+L[1-7], 1, 0, 0' "$scratch/gap.s"; then
                     echo "OBSERVED: $issue $scheduling scheme=$scheme temporary avoids L0"
                 else
                     echo "FAIL: unrecognized allocation; inspect comparator assembly" >&2; exit 1
                 fi
             done
+            if [[ $# == 4 ]]; then
+                "$target_cxx" -std=c++17 -O2 -mcpu=tt-bh-tensix \
+                    "${issue_flags[@]}" "${schedule_flags[@]}" \
+                    -fdisable-rtl-rvtt_lreg_livein -I"$4" -DUSE_SFPI_API -DSCHEME=3 \
+                    -S "$here/raw_lreg_full_annotation.cpp" -o "$scratch/gap.s"
+                grep -Eq 'SFPLOAD[[:space:]]+L[1-7], 1, 0, 0' "$scratch/gap.s" || {
+                    echo "FAIL: inspect public LRegFile lifetime comparator assembly" >&2; exit 1;
+                }
+                echo "PASS: $issue $scheduling public LRegFile threaded lifetime, pass disabled (assembly check)"
+            fi
         done
     done
     if [[ $# == 4 ]]; then
