@@ -135,6 +135,41 @@ constexpr uint32_t is_h_variant = IS_H_VARIANT;
 constexpr uintptr_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uintptr_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
 
+// The alias the prefetcher polls fetch queue entries through. Host writes on Quasar skip the DM caches, so
+// entries are read uncached unless PREFETCH_Q_CACHED, where the prefetcher reads them through its cache and
+// invalidates queue lines itself to pick up new host writes.
+#if defined(PREFETCH_Q_CACHED)
+constexpr uintptr_t prefetch_q_view_base = prefetch_q_base;
+#else
+constexpr uintptr_t prefetch_q_view_base = l1_uncached_addr(prefetch_q_base);
+#endif
+constexpr uintptr_t prefetch_q_view_end = prefetch_q_view_base + prefetch_q_size;
+
+#if defined(PREFETCH_Q_CACHED)
+static_assert(sizeof(prefetch_q_entry_type) == 4, "Cached fetch queue entries carry a phase bit in a 4-byte entry");
+static_assert(
+    prefetch_q_base % L2_CACHE_LINE_SIZE == 0 && prefetch_q_size % L2_CACHE_LINE_SIZE == 0,
+    "Fetch queue lines are invalidated without writeback, so they must not hold anything else");
+// Phase the current lap's entries carry. Slots still holding the previous lap's phase are not ready yet.
+static uint32_t prefetch_q_expected_phase = 1U;
+#endif
+
+// With PREFETCH_Q_CACHED, a slot from the previous lap reads as empty and a ready slot has its phase bit
+// stripped, so callers see the same encoding as the clearing scheme. A stale cached line only ever reads
+// as empty this way.
+FORCE_INLINE uint32_t prefetch_q_read_slot(volatile tt_l1_ptr prefetch_q_entry_type* slot) {
+    const uint32_t entry = *slot;
+#if defined(PREFETCH_Q_CACHED)
+    constexpr uint32_t phase_bit = tt::tt_metal::PrefetchConstants::PREFETCH_Q_PHASE_BIT;
+    if (((entry >> phase_bit) & 1U) != prefetch_q_expected_phase) {
+        return 0U;
+    }
+    return entry & ~(1U << phase_bit);
+#else
+    return entry;
+#endif
+}
+
 // Read and store telemetry values via local variables to avoid L1 reads
 static uint32_t command_counter = 0;
 static uint32_t upstream_blocked_counter = 0;
@@ -558,21 +593,38 @@ FORCE_INLINE uint32_t read_from_pcie(
         fence);
 #endif
 
+#if defined(PREFETCH_Q_CACHED)
+    // Nothing to clear: next lap the slot still carries this lap's phase, which reads as empty.
+    const uintptr_t consumed_entry_addr = reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr);
+#else
     *prefetch_q_rd_ptr = 0U;
+    const uintptr_t consumed_entry_addr = l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
+#endif
 
     // Tell host we read. Store the cached-form pointer value so host comparisons against
     // prefetch_q_dev_ptrs (which are cached offsets) match. Write through the uncached L1 alias
     // so the value lands in L1 SRAM directly (otherwise it sits in DM0's L1 D$ and the host's
     // NOC poll reads stale). l1_uncached_addr/l1_cached_addr are identity on WH/BH.
-    *uncached_l1_ptr<uint32_t>(prefetch_q_rd_ptr_addr) = l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
+    *uncached_l1_ptr<uint32_t>(prefetch_q_rd_ptr_addr) = consumed_entry_addr;
 
     ++prefetch_q_rd_ptr;
-
-    // Wrap prefetch_q. prefetch_q_rd_ptr lives in the uncached alias on Quasar, so compare and
-    // reset via l1_uncached_addr (identity on WH/BH, so no change there).
-    if (reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) == l1_uncached_addr(prefetch_q_end)) {
-        prefetch_q_rd_ptr = uncached_l1_ptr<prefetch_q_entry_type>(prefetch_q_base);
+    if (reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) == prefetch_q_view_end) {
+        prefetch_q_rd_ptr = reinterpret_cast<volatile tt_l1_ptr prefetch_q_entry_type*>(prefetch_q_view_base);
+#if defined(PREFETCH_Q_CACHED)
+        prefetch_q_expected_phase ^= 1U;
+#endif
     }
+#if defined(PREFETCH_Q_CACHED)
+    // On entering a line, drop the next one from the cache, so its first read comes fresh from TL1 and the rest
+    // of it hits. Skipping the fences is fine since the invalidate has a whole line of entries to land first.
+    if ((reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) & (L2_CACHE_LINE_SIZE - 1)) == 0) {
+        uintptr_t next_line = reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) + L2_CACHE_LINE_SIZE;
+        if (next_line == prefetch_q_view_end) {
+            next_line = prefetch_q_view_base;
+        }
+        invalidate_l2_cache_line_async(next_line);
+    }
+#endif
     return pending_read_size;
 }
 
@@ -628,12 +680,11 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
     // End of reserved (possibly-not-yet-committed) region in cmddat_q for issued reads.
     // `fence` remains the committed boundary used for cmd_ready checks.
     static uintptr_t issue_fence = cmddat_q_base;
-    // On Quasar prefetch_q_rd_ptr lives in the uncached L1 alias so every deref bypasses the DM core's
-    // L1 D$/L2. l1_uncached_addr is identity on non-Quasar, so this is unchanged on WH/BH. The bare
-    // reinterpret_cast (rather than uncached_l1_ptr) keeps this a constant initializer; the kernel
-    // environment disallows dynamic initialization of static storage.
+    // prefetch_q_rd_ptr points into prefetch_q_view_base's alias, uncached on Quasar unless PREFETCH_Q_CACHED.
+    // The bare reinterpret_cast keeps this a constant initializer; the kernel environment
+    // disallows dynamic initialization of static storage.
     static volatile tt_l1_ptr prefetch_q_entry_type* prefetch_q_rd_ptr =
-        reinterpret_cast<volatile tt_l1_ptr prefetch_q_entry_type*>(l1_uncached_addr(prefetch_q_base));
+        reinterpret_cast<volatile tt_l1_ptr prefetch_q_entry_type*>(prefetch_q_view_base);
     static constexpr uint32_t prefetch_q_msb_mask = 1u << (sizeof(prefetch_q_entry_type) * CHAR_BIT - 1U);
 
     if (stall_state == StallState::STALLED) {
@@ -694,7 +745,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
         }
 
         // Local helper for reading the current prefetch_q entry.
-        uint32_t prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
+        uint32_t prefetch_q_rd_ptr_local = prefetch_q_read_slot(prefetch_q_rd_ptr);
         uint32_t fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
         bool stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
 
@@ -800,7 +851,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 }
 
                 // Refresh host state for potential next issue.
-                prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
+                prefetch_q_rd_ptr_local = prefetch_q_read_slot(prefetch_q_rd_ptr);
                 fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
                 stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
             }
@@ -876,12 +927,20 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 WAYPOINT("HQW");
                 uint32_t heartbeat = 0U;
 
-                if ((fetch_size = *prefetch_q_rd_ptr) == 0U) {
+#if defined(PREFETCH_Q_CACHED)
+                // The host may have written this slot after its line was cached. Nothing else to do, so wait
+                // for the invalidate before rereading.
+                invalidate_l2_cache_line(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
+#endif
+                if ((fetch_size = prefetch_q_read_slot(prefetch_q_rd_ptr)) == 0U) {
                     PrefetchTelemetryBlockGuard block_guard;
                     do {
                         invalidate_l1_cache();
+#if defined(PREFETCH_Q_CACHED)
+                        invalidate_l2_cache_line(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
+#endif
                         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-                    } while ((fetch_size = *prefetch_q_rd_ptr) == 0U);
+                    } while ((fetch_size = prefetch_q_read_slot(prefetch_q_rd_ptr)) == 0U);
                 }
                 // Host has work now; restart without recursion.
                 continue;
@@ -3212,6 +3271,11 @@ void kernel_main() {
     noc_v3_cq_state_reset();
 #endif
     set_l1_data_cache<true>();
+#if defined(PREFETCH_Q_CACHED)
+    // Lines of the queue can still be cached from an earlier run on this core. Invalidating a clean L2 line also
+    // drops its L1 D$ copy, and the prefetcher never writes the queue, so the L2 invalidate covers both levels.
+    invalidate_l2_cache_range(prefetch_q_view_base, prefetch_q_size);
+#endif
 #if defined(FABRIC_RELAY)
     DPRINT("prefetcher_{}{}: start (fabric relay. 2d = {})\n", is_h_variant, is_d_variant, is_2d_fabric);
 #else

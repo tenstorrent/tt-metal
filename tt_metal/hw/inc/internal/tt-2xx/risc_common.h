@@ -246,6 +246,13 @@ inline __attribute__((always_inline)) void invalidate_l2_cache_line(uintptr_t ad
     __asm__ __volatile__("fence" ::: "memory");
 }
 
+// Same as invalidate_l2_cache_line without the fences, so it returns before the line is dropped and is not
+// ordered with the caller's other accesses. Only for clean lines whose readers tolerate the old contents for a while.
+inline __attribute__((always_inline)) void invalidate_l2_cache_line_async(uintptr_t addr) {
+    volatile uint64_t* inv_reg = (volatile uint64_t*)L2_INVALIDATE_ADDR;
+    *inv_reg = (uint64_t)addr;
+}
+
 // Invalidate a range of addresses from L2 to TL1.
 // Invalidates all cache lines covering [start_addr, start_addr + size).
 // Fence once around the loop (same pattern as flush_l2_cache_full) — per-line
