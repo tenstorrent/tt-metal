@@ -116,10 +116,11 @@ void RunTestOnCore(
         GTEST_SKIP();
     }
     // Under the Quasar address translation tables a bad coordinate never reaches the sanitizer: the
-    // address backend traps on it first. So the two tests about the coordinate itself are skipped, and
-    // the stateful and inline tests below target the buffer's real core with a bad offset instead.
+    // address backend traps on it first. So the test about the coordinate itself is skipped, the
+    // inline-write-to-DRAM test addresses DRAM bank 0 instead of the tile coordinate, and the stateful
+    // and inline tests below target the buffer's real core with a bad offset instead.
     const bool att = is_quasar && tt::tt_metal::MetalContext::instance().rtoptions().get_noc_att_map().has_value();
-    if (att && (feature == SanitizeNOCAddress || feature == SanitizeNOCInlineWriteDram)) {
+    if (att && feature == SanitizeNOCAddress) {
         GTEST_SKIP() << "Coordinates outside the ATT map trap in the address backend before the sanitizer runs";
     }
 
@@ -202,7 +203,13 @@ void RunTestOnCore(
 
     distributed::DeviceLocalBufferConfig local_config{.page_size = buffer_size, .buffer_type = config_buffer_type};
     distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
-    auto input_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
+    // The kernel reads the input buffer by tile coordinates, which an ATT map cannot resolve for a DRAM tile.
+    // Under ATT only the output buffer (the inline write's destination) moves to DRAM.
+    distributed::DeviceLocalBufferConfig input_local_config = local_config;
+    if (att) {
+        input_local_config.buffer_type = tt::tt_metal::BufferType::L1;
+    }
+    auto input_buffer = distributed::MeshBuffer::create(buffer_config, input_local_config, mesh_device.get());
     uint32_t input_buffer_addr = input_buffer->address();
 
     auto output_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
@@ -309,7 +316,8 @@ void RunTestOnCore(
                       "use_write_with_state",
                       "use_inline_dw_write_from_state",
                       "use_inline_dw_write_with_state",
-                      "invalid_txn_id"}},
+                      "invalid_txn_id",
+                      "use_dram_bank_dst"}},
             .hw_config = dm_cfg,
         };
         experimental::WorkUnitSpec wu{
@@ -354,6 +362,7 @@ void RunTestOnCore(
     const uint32_t k_max_user_txn_id = is_quasar ? 7 : 15;
     const uint32_t k_invalid_txn_id = k_max_user_txn_id + 1;
     uint32_t invalid_txn_id = 0;
+    bool use_dram_bank_dst = false;
     switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
@@ -381,7 +390,11 @@ void RunTestOnCore(
             buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX) +
                           hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
             break;
-        case SanitizeNOCInlineWriteDram: use_inline_dw_write = true; break;
+        case SanitizeNOCInlineWriteDram:
+            use_inline_dw_write = true;
+            // Under ATT the destination is addressed as DRAM bank 0 (see the kernel).
+            use_dram_bank_dst = att;
+            break;
         case SanitizeNOCLinkedTransaction: bad_linked_transaction = true; break;
         case SanitizeL1Overflow: l1_overflow_addr = 0xDDDDDDDD; break;
         case SanitizeL1OverflowStraddle:
@@ -511,7 +524,8 @@ void RunTestOnCore(
         use_write_with_state,
         use_inline_dw_write_from_state,
         use_inline_dw_write_with_state,
-        invalid_txn_id};
+        invalid_txn_id,
+        use_dram_bank_dst};
 
     if (is_eth_core) {
         // ETH cores still go through the legacy API.
@@ -542,7 +556,8 @@ void RunTestOnCore(
                  {"use_write_with_state", use_write_with_state},
                  {"use_inline_dw_write_from_state", use_inline_dw_write_from_state},
                  {"use_inline_dw_write_with_state", use_inline_dw_write_with_state},
-                 {"invalid_txn_id", invalid_txn_id}}),
+                 {"invalid_txn_id", invalid_txn_id},
+                 {"use_dram_bank_dst", use_dram_bank_dst}}),
         }};
         experimental::SetProgramRunArgs(program, params);
     }
@@ -697,10 +712,11 @@ void RunTestOnCore(
                 input_buffer_addr);
         } break;
         case SanitizeNOCInlineWriteDram: {
+            // Under ATT the operand names DRAM bank 0 and the watcher reports the bank with the tile.
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write 4 bytes "
-                "from local L1[{:#08x}] to DRAM core w/ virtual coords {} DRAM[addr=0x{:08x}] (inline dw writes do not "
-                "support DRAM destination addresses).",
+                "from local L1[{:#08x}] to DRAM core w/ virtual coords {}{} DRAM[addr=0x{:08x}] (inline dw writes do "
+                "not support DRAM destination addresses).",
                 device->id(),
                 core_name,
                 core.x,
@@ -710,6 +726,7 @@ void RunTestOnCore(
                 risc_name,
                 0,
                 output_core_virtual_coords.str(),
+                att ? " (bank 0)" : "",
                 output_buffer_addr);
         } break;
         case SanitizeNOCLinkedTransaction: {
