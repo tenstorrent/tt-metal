@@ -229,7 +229,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // The record goes through load_replay_buf, which brackets it with
     // disable_gathering()/enable_gathering() when ENABLE_GATHERING is defined
     // and compiles to the bare record otherwise.
-    load_replay_buf<Exec>(0, BODY_LEN, [exp_base_scale_factor] {
+    load_replay_buf<Exec>(0 /*start*/, BODY_LEN, [exp_base_scale_factor] {
         // val = sfpi::dst_reg[0]
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
 
