@@ -5,12 +5,11 @@
 import torch
 import pytest
 import ttnn
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import (
     assert_equal,
     assert_with_ulp,
     assert_allclose,
-    assert_with_pcc,
-    flush_subnormal_values_to_zero,
 )
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_float32_bits,
@@ -307,12 +306,16 @@ def test_trig_ops_out_ftz(device, ttnn_op, low, high, ulp_threshold):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# atanh - uses PCC due to inherently higher SFPU error
+# atanh is finite only on (-1, 1). The largest bfloat16 strictly inside that
+# interval is 1 - 2^-7. On that interval, 50 values are exactly 2 float32 ULPs
+# (two adjacent floats) and none are worse. |x| = 1 is signed inf, |x| > 1 is NaN.
 # ─────────────────────────────────────────────────────────────────────────────
+
+ATANH_INTERIOR = 1.0 - 2.0**-7
 
 
 def test_atanh(device):
-    input_tensor = generate_float32_bits_in_range(-100, 100)
+    input_tensor = generate_float32_bits_in_range(-ATANH_INTERIOR, ATANH_INTERIOR)
 
     tt_in = to_tt_tensor(input_tensor, device)
 
@@ -322,7 +325,30 @@ def test_atanh(device):
     tt_result = ttnn.atanh(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_pcc(golden, result, pcc=0.999)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=2)
+
+
+def test_atanh_outside_domain(device):
+    negative = generate_float32_bits_in_range(-100.0, -1.0)
+    positive = generate_float32_bits_in_range(1.0, 100.0)
+    input_tensor = torch.cat((negative, positive), dim=0)
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.atanh)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.atanh(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    # x = ±1 is signed inf. |x| > 1 is NaN. Both match torch.
+    assert torch.equal(torch.isposinf(result), input_tensor == 1)
+    assert torch.equal(torch.isneginf(result), input_tensor == -1)
+    assert torch.equal(torch.isnan(result), input_tensor.abs() > 1)
+    assert torch.equal(torch.isnan(golden), torch.isnan(result))
+    assert torch.equal(torch.isinf(golden), torch.isinf(result))
+    inf = torch.isinf(golden)
+    assert torch.equal(torch.signbit(golden[inf]), torch.signbit(result[inf]))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -352,7 +378,7 @@ def test_angle_conversion_ops(device, ttnn_op, low, high):
     result = flush_to_zero(result)
     golden = flush_to_zero(golden)
 
-    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -363,13 +389,20 @@ def test_angle_conversion_ops(device, ttnn_op, low, high):
 
 
 @pytest.mark.parametrize(
-    "ttnn_op, low, high",
+    "ttnn_op, low, high, atol, rtol",
     [
-        (ttnn.erfinv, -0.999, 0.999),
-        (ttnn.erfc, -10.0, 10.0),
+        # Worst x=±0.99609375 (2.037 vs 2.040): max |err|=3.37e-3, max |err|/|device|=1.65e-3.
+        (ttnn.erfinv, -0.999, 0.999, 3.4e-3, 1.7e-3),
+        # Wormhole worst x=-2.5: max |err|=9.70e-5, max |err|/|device|=9.5e-5.
+        # Blackhole overrides these below: max |err|=3.88e-3, max |err|/|device|=1.
+        (ttnn.erfc, -10.0, 10.0, 1e-4, 1e-4),
     ],
 )
-def test_error_functions(device, ttnn_op, low, high):
+def test_error_functions(device, ttnn_op, low, high, atol, rtol):
+    if is_blackhole() and ttnn_op is ttnn.erfc:
+        # The relative error of 1 is a small output. Its absolute error is inside this atol.
+        atol, rtol = 3.9e-3, 0
+
     input_tensor = generate_float32_bits_in_range(low, high)
 
     tt_in = to_tt_tensor(input_tensor, device)
@@ -380,17 +413,21 @@ def test_error_functions(device, ttnn_op, low, high):
     tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_pcc(golden, result, 0.999)
+    assert_allclose(expected_result=golden, actual_result=result, atol=atol, rtol=rtol)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # reciprocal: 1/x, swept over the bfloat16 lattice stored as float32
 #
-# Float32 keeps 1/2^126, which is the smallest normal. The bfloat16 sweep
-# flushed that value to zero. Measured on wormhole:
-#   |x| < 2^126   within 1 float32 ULP of torch
-#   |x| = 2^126   exact signed smallest normal
-#   |x| > 2^126   signed zero (the reciprocal is subnormal and is flushed)
+# Float32 on wormhole keeps 1/2^126, the smallest normal. Blackhole flushes
+# that boundary to signed zero, same as every larger magnitude. Measured:
+#   wormhole  |x| < 2^126   within 1 float32 ULP
+#   blackhole |x| < 2^126   allclose rtol=1.1e-2, atol=0
+#                          worst reported point x=±6.9057548e35 is 0.56% off
+#                          (1.43998e-36 vs 1.44807e-36)
+#   wormhole  |x| = 2^126   exact signed smallest normal
+#   blackhole |x| = 2^126   signed zero
+#   both      |x| > 2^126   signed zero (subnormal reciprocal flushed)
 # ─────────────────────────────────────────────────────────────────────────────
 
 RECIPROCAL_FTZ_INPUT = 2.0**126
@@ -421,7 +458,13 @@ def test_reciprocal(device, low, high):
     tt_result = ttnn.reciprocal(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+    if is_blackhole():
+        # 90174 ULPs at x=±6.9057548e35 is 0.56% relative. Across this range a
+        # float32 ULP is at most 2^-23 of the value, so that ULP cap is a
+        # relative error under 1.09%. atol stays 0: every output here is normal.
+        assert_allclose(expected_result=golden, actual_result=result, atol=0, rtol=1.1e-2)
+    else:
+        assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -450,7 +493,11 @@ def test_reciprocal_flushes_to_zero(device, low, high):
     flushed = input_tensor.abs() > RECIPROCAL_FTZ_INPUT
     assert at_boundary.any() and flushed.any()
 
-    assert_equal(golden[at_boundary], result[at_boundary])
+    if is_blackhole():
+        # 1/2^126 is flushed too. Wormhole returns the signed smallest normal.
+        flushed = at_boundary | flushed
+    else:
+        assert_equal(golden[at_boundary], result[at_boundary])
 
     flushed_result = result[flushed]
     assert (flushed_result == 0).all(), "subnormal reciprocals must flush to zero"
@@ -569,9 +616,9 @@ def test_exp_allclose(device):
 
     The ULP sweep in test_exp_ops covers (-87.0, 88.5); this extends into the
     underflow tail where exp(x) approaches the smallest normals. 1020 of 1024
-    bf16 values here are bit-exact; the remaining 4 are flushed to zero by the
-    device (golden ~1e-38, device 0). atol is set just above the largest
-    flushed golden value.
+    values are bit-exact. The other 4 (x = -87.5, -88, -88.5, -89) are flushed
+    to zero. Largest |err| is 9.98e-39 at x=-87.5, so atol sits just above that
+    and rtol stays 0.
     """
     input_tensor = generate_float32_bits_in_range(-89, -87)
 
@@ -583,7 +630,7 @@ def test_exp_allclose(device):
     tt_result = ttnn.exp(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_allclose(expected_result=golden, actual_result=result, atol=1.1e-38, rtol=0)
+    assert_allclose(expected_result=golden, actual_result=result, atol=1.0e-38, rtol=0)
 
 
 def test_exp2_allclose(device):
@@ -591,9 +638,9 @@ def test_exp2_allclose(device):
 
     The ULP sweep in test_exp_ops covers (-126.0, 127.0); this extends into the
     underflow tail where exp2(x) approaches the smallest normals. 1022 of 1024
-    bf16 values here are bit-exact; the remaining 2 are flushed to zero by the
-    device (golden ~8.4e-39, device 0). atol is set just above the largest
-    flushed golden value.
+    values are bit-exact. The other 2 (x = -126.5, -127) are flushed to zero.
+    Largest |err| is 8.31e-39 at x=-126.5, so atol sits just above that and
+    rtol stays 0.
     """
     input_tensor = generate_float32_bits_in_range(-127, -126)
 
@@ -605,7 +652,7 @@ def test_exp2_allclose(device):
     tt_result = ttnn.exp2(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_allclose(actual_result=result, expected_result=golden, atol=8.5e-39, rtol=0)
+    assert_allclose(actual_result=result, expected_result=golden, atol=8.4e-39, rtol=0)
 
 
 @pytest.mark.parametrize(
@@ -621,9 +668,9 @@ def test_expm1_allclose(low, high, expected_atol, expected_rtol, device):
 
     The ULP sweep in test_exp_ops covers [-87.0, 88.5]; this test extends the
     negative tail to -1.6e38 and checks three subdomains. Each is within 1
-    float32 ULP. Max |err|/|device| is 1.19e-7, so rtol sits just above that
-    and atol stays 0. Exact zeros in the middle range make the reported
-    relative delta NaN and still pass.
+    float32 ULP. Max |err|/|device| is 1.19e-7 on [-0.285, 0.691], so rtol sits
+    just above that and atol stays 0. The 5.07e30 absolute error at x=87 is one
+    ULP of that output and is covered by rtol.
     """
     input_tensor = generate_float32_bits_in_range(low, high)
 
@@ -725,7 +772,8 @@ def test_lgamma(device):
     tt_result = ttnn.lgamma(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_pcc(golden, result, 0.999)
+    # Worst x=0.51171875 (0.499 vs 0.550): max |err| = 5.04e-2, max |err|/|device| = 1.01e-1.
+    assert_allclose(expected_result=golden, actual_result=result, atol=5.1e-2, rtol=1.1e-1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
