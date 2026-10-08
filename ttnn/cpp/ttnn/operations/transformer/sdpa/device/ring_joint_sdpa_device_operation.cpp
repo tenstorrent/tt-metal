@@ -615,8 +615,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             args.get_k_chunk_size(),
             q_shape[3]);
         TT_FATAL(
-            !args.is_causal && !args.is_balanced && !args.has_sliding_window() && !has_indexed_kv_cache &&
-                !kv_pad_rotation_active(args, tensor_args) && !tensor_args.attention_sink,
+            !args.has_sliding_window(),
+            "Named ring recipes do not support sliding_window_size yet; omit precision for the legacy kernel");
+        TT_FATAL(
+            !has_indexed_kv_cache && !kv_pad_rotation_active(args, tensor_args) && !tensor_args.attention_sink,
             "Unsupported feature for named ring recipes");
         TT_FATAL(
             !args.scale || (std::isfinite(*args.scale) && *args.scale > 0.0f),
