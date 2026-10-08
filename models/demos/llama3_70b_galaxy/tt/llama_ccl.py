@@ -936,7 +936,13 @@ class TT_CCL:
 
         else:
             if self.use_qwen_prefill_ff2_gather_reduce and buffer_key == "FF2":
-                return self._prefill_ff2_gather_reduce(input_tensor_mesh, cluster_axis, memory_config)
+                # Qwen FF2 above the traced lengths (> max(support_seqlens) = 4096): bf16 ring
+                # reduce-scatter + all-gather (the generic path below, same as WO at > 4096; no FF2
+                # persistent buffers exist at these lengths). Traced lengths keep the rank-ordered
+                # gather + local sum.
+                total_len = input_tensor_mesh.shape[1] * input_tensor_mesh.shape[-2]
+                if total_len <= max(self.support_seqlens):
+                    return self._prefill_ff2_gather_reduce(input_tensor_mesh, cluster_axis, memory_config)
             if buffer_key == "WO_AG" or lm_head:
                 ttnn_tensor_gathered = self.line_all_gather(
                     input_tensor_mesh,
