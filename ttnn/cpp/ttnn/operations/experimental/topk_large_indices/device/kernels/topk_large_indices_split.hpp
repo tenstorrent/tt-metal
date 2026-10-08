@@ -14,8 +14,9 @@
 //   1..6     transpose the chunk's tile    sort pass after that transpose (6: last pass, then the merge)
 //   7, 8     transpose the survivor        rebuild build pass, rebuild column pass
 //
-// Fused body (K = 512 and K = 2048 rows of up to 32 chunks): a chunk is one sequence of fused keys, one tile at K = 512
-// and two at K = 2048; chunk 0 is sorted in place in sequence 0, chunk c > 0 goes to sequence 1 (odd c) or 2 (even c).
+// Fused body (K = 512 rows and K = 2048 rows of up to 32 chunks, or one segment of 32 of a longer K = 2048 row): a
+// chunk is one sequence of fused keys, one tile at K = 512 and two at K = 2048; chunk 0 is sorted in place in sequence
+// 0, chunk c > 0 goes to sequence 1 (odd c) or 2 (even c).
 // Classic body (K = 512 rows of any width): stage 6 also splits the chunk's indices into the next tile, and the merge
 // and rebuild are the unfused ones; the survivor's values and indices sit in tiles 0 and 1, chunk c > 0 in tiles 2 and
 // 3 (odd c) or 4 and 5 (even c). MATH posts F2S after each stage's FPU part; PACK takes one before each SFPU part and
@@ -171,8 +172,10 @@ inline void wait_start() {
     _llk_packer_set_math_semaphore_<ckernel::p_stall::NONE>();
 }
 
+// rebuild_dir: the direction of stages 7 and 8 (ascending for the last chunk of a mirrored segment).
 template <std::uint32_t K, bool classic>
-inline __attribute__((noinline)) void sfpu_stage(const std::uint32_t chunk, const std::uint32_t stage) {
+inline __attribute__((always_inline)) void sfpu_stage_body(
+    const std::uint32_t chunk, const std::uint32_t stage, const bool rebuild_dir) {
     static_assert(supported_split<K, classic>, "the split takes fused K = 512 and 2048 rows and Classic K = 512 rows");
     using namespace ckernel::sfpu;
     constexpr int chunk_rows = 64 * chunk_tiles<K, classic>;
@@ -224,22 +227,33 @@ inline __attribute__((noinline)) void sfpu_stage(const std::uint32_t chunk, cons
             if constexpr (classic) {
                 _topk_xl_split_rebuild_build_unfused_512_(0, false);
             } else {
-                _topk_xl_split_rebuild_build_<K>(0, false);
+                _topk_xl_split_rebuild_build_<K>(0, rebuild_dir);
             }
             break;
         default:
             if constexpr (classic) {
                 _topk_xl_split_rebuild_columns_unfused_512_(0, false);
             } else {
-                _topk_xl_split_columns_<K, 0>(0, false);
+                _topk_xl_split_columns_<K, 0>(0, rebuild_dir);
             }
             break;
     }
 }
 
-// Every SFPU part of one row, survivor left in tile 0, then epilogue(). PACK takes the SFPU over (its state and
-// row_init()) after its first token, once MATH's last SFPU instruction has run.
-template <std::uint32_t K, bool classic, typename RowInit, typename Epilogue>
+template <std::uint32_t K, bool classic>
+inline __attribute__((noinline)) void sfpu_stage(const std::uint32_t chunk, const std::uint32_t stage) {
+    sfpu_stage_body<K, classic>(chunk, stage, false);
+}
+
+template <std::uint32_t K>
+inline __attribute__((noinline)) void sfpu_stage_mirrored(
+    const std::uint32_t chunk, const std::uint32_t stage, const bool last_chunk) {
+    sfpu_stage_body<K, false>(chunk, stage, last_chunk);
+}
+
+// Every SFPU part of one row, survivor left in tile 0 (ascending if mirror_last), then epilogue(). PACK takes the SFPU
+// over (its state and row_init()) after its first token, once MATH's last SFPU instruction has run.
+template <std::uint32_t K, bool classic, bool mirror_last = false, typename RowInit, typename Epilogue>
 inline void pack_row(const std::uint32_t num_chunks, RowInit&& row_init, Epilogue&& epilogue) {
     bool first = true;
     for (std::uint32_t c1 = 0; c1 <= num_chunks; c1++) {
@@ -255,7 +269,11 @@ inline void pack_row(const std::uint32_t num_chunks, RowInit&& row_init, Epilogu
                 TTI_STALLWAIT(ckernel::p_stall::STALL_SFPU, ckernel::p_stall::MATH);
                 first = false;
             }
-            sfpu_stage<K, classic>(chunk, stage);
+            if constexpr (mirror_last) {
+                sfpu_stage_mirrored<K>(chunk, stage, chunk + 1 == num_chunks);
+            } else {
+                sfpu_stage<K, classic>(chunk, stage);
+            }
             ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
         }
     }
@@ -264,6 +282,25 @@ inline void pack_row(const std::uint32_t num_chunks, RowInit&& row_init, Epilogu
     ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
 }
 
+// A segmented row's later segment: after MATH's token (its unfused merge and rebuild done, or the previous segment's
+// epilogue), move_acc() moves the accumulator out of Dst; MATH copies into tile 0 after the token that follows.
+template <typename MoveAcc>
+inline void hold_accumulator(MoveAcc&& move_acc) {
+    take_math_token();
+    move_acc();
+    ckernel::t6_semaphore_post<ckernel::p_stall::NONE>(S2F);
+}
+
 #endif  // TRISC_PACK
+
+#ifdef TRISC_MATH
+
+// MATH's side of hold_accumulator.
+inline void release_accumulator() {
+    ckernel::t6_semaphore_post<ckernel::p_stall::MATH | ckernel::p_stall::WAIT_SFPU>(F2S);
+    take_pack_token();
+}
+
+#endif  // TRISC_MATH
 
 }  // namespace topk_large_indices_split
