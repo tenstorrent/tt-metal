@@ -134,7 +134,9 @@ public:
     void dump_metrics() const;
 
     // A capture aggregates what every token records, from any thread, between begin_capture() and
-    // end_capture(). Captures may nest or overlap and do not affect the process-wide values.
+    // end_capture(). Captures may nest or overlap and do not affect the process-wide values. Values
+    // recorded concurrently with begin_capture() or end_capture() may or may not be included.
+    // "jit_build_window" is a process-wide span and is not captured.
     uint64_t begin_capture();
     // Returns the tokens that recorded into the capture. Throws if `capture_id` is not open.
     std::vector<experimental::jit_telemetry::TokenStats> end_capture(uint64_t capture_id);
@@ -144,6 +146,8 @@ public:
 private:
     BuildCacheTelemetry();
     ~BuildCacheTelemetry();
+    // Sets "jit_build_window" from the current endpoints. Caller holds impl_->token_registry_mutex.
+    void refresh_build_window() const;
     std::unique_ptr<BuildCacheTelemetryImpl> impl_;
     std::vector<std::unique_ptr<TelemetryToken>> owned_tokens_;
     // Name -> token index into owned_tokens_; guarded by owned_tokens_mutex_ alongside the vector.

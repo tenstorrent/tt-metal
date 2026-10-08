@@ -24,6 +24,8 @@ struct TokenStats {
 /**
  * Start a capture: until end_capture(), every token also aggregates what it records, from any
  * thread, into the capture. Captures may nest or overlap and do not affect the process-wide values.
+ * Values recorded concurrently with begin_capture() or end_capture() may or may not be included;
+ * "jit_build_window" (a process-wide span) is not captured.
  *
  * Return value: the capture id.
  */

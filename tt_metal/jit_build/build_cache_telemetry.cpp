@@ -375,6 +375,11 @@ std::vector<experimental::jit_telemetry::TokenStats> BuildCacheTelemetry::end_ca
 }
 
 std::vector<experimental::jit_telemetry::TokenStats> BuildCacheTelemetry::snapshot_all() const {
+    if (impl_) {
+        // Not nested with owned_tokens_mutex_: get_or_register_metric() takes the two the other way round.
+        std::lock_guard reg_lk(impl_->token_registry_mutex);
+        refresh_build_window();
+    }
     std::lock_guard lk(owned_tokens_mutex_);
     std::vector<experimental::jit_telemetry::TokenStats> stats;
     stats.reserve(owned_tokens_.size());
@@ -384,6 +389,15 @@ std::vector<experimental::jit_telemetry::TokenStats> BuildCacheTelemetry::snapsh
     return stats;
 }
 
+void BuildCacheTelemetry::refresh_build_window() const {
+    // Replaces the single sample rather than appending, so repeated refreshes do not double-count.
+    const int64_t first_ns = impl_->build_window_first_ns.load(std::memory_order_relaxed);
+    const int64_t last_ns = impl_->build_window_last_ns.load(std::memory_order_relaxed);
+    if (build_window_token_ != nullptr && last_ns >= first_ns) {
+        build_window_token_->set_single_sample(static_cast<double>(last_ns - first_ns) / 1e6);
+    }
+}
+
 void BuildCacheTelemetry::dump_metrics() const {
     if (!impl_) {
         return;
@@ -391,15 +405,8 @@ void BuildCacheTelemetry::dump_metrics() const {
 
     log_compile_summary();
 
-    // Serialize dumps before reading the endpoints so an older snapshot cannot overwrite a
-    // newer one. Replace the single window sample: appending it would count the same build
-    // activity again on each explicit dump and once more at process exit.
     std::lock_guard lk(impl_->token_registry_mutex);
-    const int64_t first_ns = impl_->build_window_first_ns.load(std::memory_order_relaxed);
-    const int64_t last_ns = impl_->build_window_last_ns.load(std::memory_order_relaxed);
-    if (build_window_token_ != nullptr && last_ns >= first_ns) {
-        build_window_token_->set_single_sample(static_cast<double>(last_ns - first_ns) / 1e6);
-    }
+    refresh_build_window();
 
     log_info(tt::LogBuildKernels, "JIT telemetry: {} registered TelemetryTokens", impl_->registered_tokens.size());
 

@@ -31,7 +31,10 @@ class Capture:
 
 @contextlib.contextmanager
 def capture():
-    """Collect what every token records inside the block, from any thread. Captures may nest."""
+    """Collect what every token records inside the block, from any thread. Captures may nest.
+
+    Work still recording on other threads when the block exits may or may not be included.
+    """
     cap = Capture()
     capture_id = ttnn._ttnn.jit_telemetry.begin_capture()
     try:

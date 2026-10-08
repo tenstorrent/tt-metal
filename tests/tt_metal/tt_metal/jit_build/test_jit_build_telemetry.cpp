@@ -512,4 +512,24 @@ TEST_F(BuildCacheTelemetryTest, SnapshotAllReportsProcessWideValues) {
     EXPECT_DOUBLE_EQ(empty->max, 0.0);
 }
 
+TEST_F(JitBuildWindowTest, SnapshotReportsTheCurrentWindowAndCapturesExcludeIt) {
+    using namespace std::chrono_literals;
+    auto& tel = BuildCacheTelemetry::inst();
+    const auto t0 = std::chrono::steady_clock::now();
+    const uint64_t id = tel.begin_capture();
+
+    tel.note_build_window(t0, t0 + 5ms);
+    auto window = find_token(tel.snapshot_all(), "jit_build_window");
+    ASSERT_TRUE(window.has_value());
+    EXPECT_EQ(window->count, 1u);
+    EXPECT_NEAR(window->total, 5.0, 1.0);
+
+    tel.note_build_window(t0, t0 + 9ms);  // a later build widens the window
+    window = find_token(tel.snapshot_all(), "jit_build_window");
+    EXPECT_EQ(window->count, 1u);
+    EXPECT_NEAR(window->total, 9.0, 1.0);
+
+    EXPECT_FALSE(find_token(tel.end_capture(id), "jit_build_window").has_value());
+}
+
 }  // namespace tt::tt_metal
