@@ -149,12 +149,8 @@ inline void combine_welford_partials(
     tile_regs_commit();
     dfb_combined.reserve_back(2);
     tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-    pack_block_mop(mean_acc_dst, dfb_combined.get_id(), 2);
-#else
     pack_tile(mean_acc_dst, dfb_combined.get_id());
     pack_tile(m2_acc_dst, dfb_combined.get_id());
-#endif
     tile_regs_release();
 }
 
