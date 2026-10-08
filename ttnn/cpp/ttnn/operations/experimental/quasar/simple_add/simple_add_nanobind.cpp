@@ -19,7 +19,8 @@ void bind_simple_add(nb::module_& mod) {
     ttnn::bind_function<"simple_add", "ttnn.experimental.quasar.">(
         mod,
         R"doc(
-            Element-wise C = A + B on a single node: one reader, one compute and one writer thread.
+            Element-wise C = A + B on a single node: one reader thread, one writer thread, and a compute thread on
+            every Tensix engine of the node (4 on a Quasar Neo cluster, 1 on Wormhole/Blackhole).
 
             Both inputs must be bfloat16, TILE layout and DRAM interleaved, with the same shape (no broadcast).
 

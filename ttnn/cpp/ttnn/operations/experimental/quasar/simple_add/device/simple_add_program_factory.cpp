@@ -21,7 +21,8 @@ using ttnn::device_operation::ProgramArtifacts;
 
 namespace {
 constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/experimental/quasar/simple_add/device/kernels/";
-constexpr uint32_t kEntriesPerDfb = 2;  // double buffering
+constexpr uint32_t kEntriesPerThread = 2;      // per Tensix tile counter: double buffering
+constexpr uint32_t kQuasarComputeThreads = 4;  // every Tensix engine of a Neo cluster
 }  // namespace
 
 ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_program_artifacts(
@@ -40,18 +41,23 @@ ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_prog
     const m2::KernelSpecName WRITER{"writer"};
     const m2::KernelSpecName COMPUTE{"compute"};
 
-    // One Neo cluster: the whole op runs on node (0, 0).
+    // One Neo cluster: the whole op runs on node (0, 0). On Quasar the compute kernel runs on all 4 Tensix
+    // engines of that cluster; Wormhole/Blackhole compute kernels are single-threaded.
     const m2::NodeCoord node{0, 0};
+    const bool is_quasar = tensor_args.input_a.device()->arch() == tt::ARCH::QUASAR;
+    const uint32_t compute_threads = is_quasar ? kQuasarComputeThreads : 1u;
 
     const DataFormat data_format = datatype_to_dataformat_converter(a.dtype());
     const uint32_t tile_bytes = tile_size(data_format);
     const uint32_t num_tiles = a.physical_volume() / a.tensor_spec().tile().get_tile_hw();
 
+    // Each DFB has one DM endpoint and compute_threads Tensix endpoints, so it is split into compute_threads
+    // tile counters of kEntriesPerThread slots each: num_entries must be divisible by max(producers, consumers).
     auto make_dfb = [&](const m2::DFBSpecName& name) {
         return m2::DataflowBufferSpec{
             .unique_id = name,
             .entry_size = tile_bytes,
-            .num_entries = kEntriesPerDfb,
+            .num_entries = kEntriesPerThread * compute_threads,
             .data_format_metadata = data_format,
         };
     };
@@ -80,6 +86,7 @@ ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_prog
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::filesystem::path{std::string(kKernelDir) + "compute/simple_add.cpp"},
+        .num_threads = compute_threads,
         .dfb_bindings =
             {m2::ConsumerOf(IN0_DFB, "in0"), m2::ConsumerOf(IN1_DFB, "in1"), m2::ProducerOf(OUT_DFB, "out")},
         .compile_time_args = {{"num_tiles", num_tiles}},

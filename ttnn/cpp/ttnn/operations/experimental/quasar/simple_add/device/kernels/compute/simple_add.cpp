@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// simple_add compute: C = A + B, one tile at a time, on one Tensix engine.
-// The Metal 2.0 counterpart of programming_examples/eltwise_binary/kernels/compute/tiles_add.cpp.
+// simple_add compute: C = A + B, one tile at a time. Runs as num_threads threads, one per Tensix engine
+// (4 on a Quasar Neo cluster, 1 on Wormhole/Blackhole). The DFBs are STRIDED, so thread t of N gets tiles
+// t, t+N, t+2N, ... of the num_tiles the single reader pushes; it only needs to know how many that is.
 
 #include <cstdint>
 
@@ -11,10 +12,15 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/pack.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
     constexpr uint32_t num_tiles = get_arg(args::num_tiles);
+    // This thread's share of the strided sub-stream {t, t+N, ...}: floor(num_tiles/N), plus one for the
+    // first num_tiles % N threads. Dropping the remainder would leave the writer waiting forever.
+    const uint32_t num_threads = get_num_threads();
+    const uint32_t my_tiles = num_tiles / num_threads + (get_my_thread_id() < num_tiles % num_threads ? 1u : 0u);
     constexpr uint32_t dst_reg = 0;
 
     compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
@@ -24,7 +30,7 @@ void kernel_main() {
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);
 
-    for (uint32_t i = 0; i < num_tiles; ++i) {
+    for (uint32_t i = 0; i < my_tiles; ++i) {
         dfb_in0.wait_front(1);
         dfb_in1.wait_front(1);
 

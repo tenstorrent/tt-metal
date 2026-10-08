@@ -4,7 +4,8 @@
 
 """
 Functional test for `ttnn.experimental.quasar.simple_add`: C = A + B on a single node, one reader, one
-compute and one writer thread, with bfloat16 TILE-layout DRAM-interleaved tensors.
+compute thread per Tensix engine (4 on a Quasar Neo cluster, 1 on Wormhole/Blackhole) and one writer thread,
+with bfloat16 TILE-layout DRAM-interleaved tensors.
 
 The op is built with the Metal 2.0 host API, so the same test runs on Wormhole/Blackhole (CB-backed DFBs)
 and on Quasar (overlay-backed DFBs):
@@ -21,7 +22,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "shape",
     [
-        (1, 1, 32, 32),  # one tile
+        (1, 1, 32, 32),  # one tile: on Quasar, 3 of the 4 Tensix threads get none
+        (1, 1, 32, 160),  # 5 tiles: not a multiple of 4, thread 0 takes the extra one
+        (1, 1, 64, 96),  # 6 tiles: threads 0 and 1 take one extra each
         (1, 1, 256, 256),  # 64 tiles
         (2, 3, 64, 128),  # 48 tiles over batch dims
     ],

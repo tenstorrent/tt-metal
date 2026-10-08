@@ -4,6 +4,7 @@
 //
 // simple_add reader: one thread reads tile i of A into dfb::in0 and tile i of
 // B into dfb::in1, for i in [0, num_tiles), from DRAM-interleaved tensors. Explicit sync, as on Blackhole.
+// Each push_back rotates to the next tile counter, so tile i goes to compute thread i % num_compute_threads.
 
 #include <cstdint>
 

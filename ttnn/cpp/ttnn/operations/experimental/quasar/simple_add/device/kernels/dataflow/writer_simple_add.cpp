@@ -4,6 +4,7 @@
 //
 // simple_add writer: one thread writes tile i of dfb::out to page i of the
 // DRAM-interleaved output tensor C, for i in [0, num_tiles). Explicit sync, as on Blackhole.
+// Each pop_front rotates to the next tile counter, so tile i comes from compute thread i % num_compute_threads.
 
 #include <cstdint>
 
