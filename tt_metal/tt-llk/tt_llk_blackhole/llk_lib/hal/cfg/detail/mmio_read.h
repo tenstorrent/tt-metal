@@ -15,18 +15,35 @@ namespace hal::cfg::detail
 
 // These duplicate ckernel::reg_read, reg_write, and wait.
 // TODO(njokovic) issue #58443: Remove ckernel:: implementations when HAL is applied to all kernels.
+/**
+ * @brief Read a 32-bit register through RISC MMIO.
+ *
+ * @param addr: Absolute byte address of the register.
+ * @return Register value read through a volatile access.
+ */
 inline std::uint32_t reg_read(const std::uint32_t addr)
 {
     volatile std::uint32_t tt_reg_ptr* reg = reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(addr);
     return reg[0];
 }
 
+/**
+ * @brief Write a 32-bit register through RISC MMIO.
+ *
+ * @param addr: Absolute byte address of the register.
+ * @param data: Complete register value to store.
+ */
 inline void reg_write(const std::uint32_t addr, const std::uint32_t data)
 {
     volatile std::uint32_t tt_reg_ptr* reg = reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(addr);
     reg[0]                                 = data;
 }
 
+/**
+ * @brief Poll the wall clock until the requested interval has elapsed.
+ *
+ * @param cycles: Delay measured in wall-clock cycles.
+ */
 inline void wait(const std::uint32_t cycles)
 {
     volatile std::uint32_t tt_reg_ptr* clock_lo = reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
@@ -39,6 +56,12 @@ inline void wait(const std::uint32_t cycles)
     } while (now < start + cycles);
 }
 
+/**
+ * @brief Resolve a thread-CFG target to its hardware thread index at compile time.
+ *
+ * @tparam Target: ThreadTarget::T0, T1, T2, or Current. Current requires COMPILE_FOR_TRISC define.
+ * @return Thread index in [0, 2].
+ */
 template <ThreadTarget Target>
 inline constexpr std::uint32_t compute_thread_index()
 {
@@ -58,6 +81,17 @@ inline constexpr std::uint32_t compute_thread_index()
     }
 }
 
+/**
+ * @brief Read a thread-CFG word through the shared debug CREG selector and readback registers.
+ *
+ * Select the target word, wait one wall-clock cycle, then read the debug result.
+ * The public read interface masks the result to the thread word's low 16 bits.
+ *
+ * @tparam Target: ThreadTarget::T0, T1, T2, or Current. Current requires COMPILE_FOR_TRISC define.
+ * @tparam Addr: Word address within the selected thread's CFG bank, validated by the public interface.
+ * @return Unmasked 32-bit debug readback value.
+ * @note Coordinate competing users of the shared selector at the caller across the complete read sequence.
+ */
 template <ThreadTarget Target, std::uint32_t Addr>
 inline __attribute__((always_inline)) std::uint32_t read_thread_word_mmio()
 {
@@ -71,7 +105,10 @@ inline __attribute__((always_inline)) std::uint32_t read_thread_word_mmio()
 }
 
 /**
- * @brief Read one complete state-CFG word from the active bank.
+ * @brief Read one complete state-CFG word from the bank returned by @ref state_cfg_bank.
+ *
+ * @tparam Addr: Word address within the state-CFG bank, validated by the public interface.
+ * @return Complete 32-bit register value.
  */
 template <std::uint32_t Addr>
 inline std::uint32_t read_state_word_mmio()

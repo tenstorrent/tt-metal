@@ -14,17 +14,29 @@
 namespace hal::cfg::detail
 {
 
+/**
+ * @brief Describe one write operand using only information available from its type.
+ *
+ * Runtime field values and GPR identities remain in the original operands.
+ * Constant field values are encoded here for use by @ref build_write_plan.
+ */
 struct WriteOperandMeta
 {
-    RegisterScope scope;
-    std::uint32_t addr;
-    std::uint32_t mask;
-    std::uint32_t words;
-    bool is_gpr;
-    bool is_constant;
-    std::uint32_t data;
+    RegisterScope scope; ///< State or thread register space containing the destination.
+    std::uint32_t addr;  ///< First destination word address within scope.
+    std::uint32_t mask;  ///< Written bits in each destination word. GPR transfers use all bits.
+    std::uint32_t words; ///< Destination span in words. Field assignments occupy one word.
+    bool is_gpr;         ///< Whether this operand transfers GPR contents instead of a field value.
+    bool is_constant;    ///< Whether data contains a compile-time field value.
+    std::uint32_t data;  ///< Positioned constant field value, or zero for other operands.
 };
 
+/**
+ * @brief Extract destination metadata and any constant field data from a write operand type.
+ *
+ * @tparam Operation: FieldAssignment, ConstantFieldAssignment, or GprWrite specialization.
+ * @return Metadata used to group fields and detect overlapping destination bits or spans.
+ */
 template <typename Operation>
 inline constexpr WriteOperandMeta write_operand_meta()
 {
@@ -50,40 +62,66 @@ inline constexpr WriteOperandMeta write_operand_meta()
     }
 }
 
+/**
+ * @brief Plan one group of field assignments to a word, or one standalone GPR transfer.
+ *
+ * Field groups combine constant data here and accumulate runtime data at emission.
+ * GPR entries always have one operand and do not use the field-data accumulator.
+ */
 struct WriteGroup
 {
-    RegisterScope scope {};
-    std::uint32_t addr         = 0;
-    std::uint32_t mask         = 0;
-    std::uint32_t data         = 0;
-    std::uint32_t runtime_mask = 0;
-    bool all_constant          = true;
-    std::size_t first          = 0;
-    std::size_t count          = 0;
+    RegisterScope scope {};            ///< Destination register space.
+    std::uint32_t addr         = 0;    ///< Destination word address, or first word of a GPR transfer.
+    std::uint32_t mask         = 0;    ///< Union of destination bits written by the group's operands.
+    std::uint32_t data         = 0;    ///< OR of already positioned constant field values.
+    std::uint32_t runtime_mask = 0;    ///< Runtime field bits. GPR entries use the full word mask.
+    bool all_constant          = true; ///< True only when every operand is a constant field assignment.
+    std::size_t first          = 0;    ///< Input operand index at which this group emits.
+    std::size_t count          = 0;    ///< Number of input operands assigned to this group.
 };
 
+/**
+ * @brief Map an ordered batch of operands to destination groups and record whether they overlap.
+ *
+ * @tparam Count: Number of input operands and maximum number of output groups.
+ */
 template <std::size_t Count>
 struct WritePlan
 {
-    // Append each field destination on first use across the entire call.
-    // Each GPR transfer gets its own entry in first-occurrence order.
-    std::array<WriteGroup, Count> groups {};
-    // Direct mapping from each input operand to its output group.
-    std::array<std::size_t, Count> group_of {};
-    std::size_t group_count = 0;
-    bool disjoint           = true;
+    std::array<WriteGroup, Count> groups {};    ///< Field groups and standalone GPR transfers in first-occurrence order.
+    std::array<std::size_t, Count> group_of {}; ///< Group index for each input operand.
+    std::size_t group_count = 0;                ///< Number of populated entries in groups.
+    bool disjoint           = true;             ///< False if any operands write overlapping bits in the same register space.
 };
 
-// Each scope has its own fixed word space. Group tracks field operands only
-// and is one-based; zero means unseen. Mask also includes GPR writes.
+/**
+ * @brief Track field grouping and occupied bits for one word while constructing a plan.
+ *
+ * State and thread register spaces have separate slot arrays. GPR transfers
+ * occupy bits in every word of their span but do not join field groups.
+ */
 struct WriteWordSlot
 {
-    std::size_t group  = 0;
-    std::uint32_t mask = 0;
+    std::size_t group  = 0; ///< Field group index plus one. Zero means no field group has been assigned.
+    std::uint32_t mask = 0; ///< Bits occupied by field assignments or GPR transfers.
 };
 
-// O(Count + StateCfgWordCount + ThreadCfgWordCount) constexpr work. GPR spans
-// have at most four words. No table or search is needed in the emitted code.
+/**
+ * @brief Group field destinations across a batch and detect all overlapping writes.
+ *
+ * Preserve first-occurrence order and give each GPR transfer its own entry.
+ * Field grouping spans the entire batch, including operands separated by GPR
+ * transfers. Invalid destination spans prevent constant evaluation. Overlapping
+ * destinations set WritePlan::disjoint to false for the caller to reject.
+ *
+ * Construction takes O(Count + StateCfgWordCount + ThreadCfgWordCount) work.
+ * When evaluated through @ref write_plan_v, no lookup tables or searches remain
+ * in the emitted code.
+ *
+ * @tparam Count: Number of write operands.
+ * @param operands: Metadata in the original call order.
+ * @return Destination groups, operand-to-group mapping, and the overlap result.
+ */
 template <std::size_t Count>
 inline constexpr WritePlan<Count> build_write_plan(const std::array<WriteOperandMeta, Count>& operands)
 {
@@ -144,6 +182,11 @@ inline constexpr WritePlan<Count> build_write_plan(const std::array<WriteOperand
     return plan;
 }
 
+/**
+ * @brief Compile-time write plan shared by batches with the same ordered operand types.
+ *
+ * @tparam Operations: Field-assignment and GPR-transfer types in call order.
+ */
 template <typename... Operations>
 inline constexpr auto write_plan_v = build_write_plan(std::array<WriteOperandMeta, sizeof...(Operations)> {{write_operand_meta<Operations>()...}});
 

@@ -22,6 +22,14 @@ namespace hal::cfg::detail
 
 // Hardware emission: runtime values, MMIO arrays, and constant Tensix instructions.
 
+/**
+ * @brief Replace a complete thread-CFG word with an immediate SETC16 instruction.
+ *
+ * @tparam F: Thread-CFG field identifying the destination word; must start at bit zero.
+ * @param section: Section index within F.count.
+ * @param value: Complete 16-bit word, already packed into its bit positions.
+ * @note Pass section and value that become compile-time constants through inlining.
+ */
 template <const Field& F>
 inline __attribute__((always_inline)) void write_thread_word(const std::uint32_t section, const std::uint32_t value)
 {
@@ -30,14 +38,31 @@ inline __attribute__((always_inline)) void write_thread_word(const std::uint32_t
     TTI_SETC16(F.addr32(static_cast<Sec>(section)), value & ThreadCfgWordMask);
 }
 
+/**
+ * @brief Reject the state-reset register as an RMWCIB destination at compile time.
+ *
+ * @tparam Addr: State-CFG word address, relative to the selected bank.
+ * @note Use MMIO or a GPR transfer for state-reset writes, which RMWCIB ignores.
+ */
 template <std::uint32_t Addr>
 inline constexpr void rmwcib_check_address()
 {
     static_assert(Addr != STATE_RESET_EN_ADDR32, "RMWCIB writes to the state-reset register are ignored by hardware; use Access::MMIO or from_gpr");
 }
 
-// Runtime values are shifted into position before emitting the selected byte lanes.
-// ConstantData is already positioned. Bytes without runtime bits use immediate emission.
+/**
+ * @brief Update selected state-CFG bits with RMWCIB instructions, one per affected byte.
+ *
+ * Bytes containing runtime fields use TT_RMWCIB. Constant-only bytes use
+ * TTI_RMWCIB. Both paths preserve bits outside Mask and emit bytes from low to high.
+ *
+ * @tparam Addr: Destination word address, relative to the selected state-CFG bank.
+ * @tparam Shamt: Left shift applied to value. Use zero for an already packed group.
+ * @tparam Mask: Destination bits to update.
+ * @tparam RuntimeMask: Destination bits supplied at runtime. Defaults to Mask.
+ * @tparam ConstantData: Already positioned data for constant-only bytes. Defaults to zero.
+ * @param value: Data before Shamt, including constant fields in bytes that also contain runtime fields.
+ */
 template <std::uint32_t Addr, std::uint32_t Shamt, std::uint32_t Mask, std::uint32_t RuntimeMask = Mask, std::uint32_t ConstantData = 0>
 inline __attribute__((always_inline)) void rmw_write_word(const std::uint32_t value)
 {
@@ -91,7 +116,16 @@ inline __attribute__((always_inline)) void rmw_write_word(const std::uint32_t va
     }
 }
 
-// Compile time known data is already shifted into its destination bit positions.
+/**
+ * @brief Update selected state-CFG bits with immediate RMWCIB instructions.
+ *
+ * Emit one instruction per byte touched by Mask, from low to high.
+ * Bits outside Mask are preserved.
+ *
+ * @tparam Addr: Destination word address, relative to the selected state-CFG bank.
+ * @tparam Mask: Destination bits to update.
+ * @tparam Data: Compile-time data already shifted into its destination bit positions.
+ */
 template <std::uint32_t Addr, std::uint32_t Mask, std::uint32_t Data>
 inline __attribute__((always_inline)) void rmw_write_word()
 {
@@ -115,8 +149,22 @@ inline __attribute__((always_inline)) void rmw_write_word()
     }
 }
 
-// Single fields keep their value unshifted until emission; composed words use
-// Shamt == 0. This avoids extending encoded temporary lifetimes across writes.
+/**
+ * @brief Write one CFG word through MMIO, SETC16, or RMWCIB according to access and scope.
+ *
+ * State-CFG writes preserve bits outside Mask. Thread-CFG writes replace the
+ * complete word, clearing bits outside Mask. Single fields remain unshifted until
+ * emission to avoid keeping encoded temporaries live across writes.
+ *
+ * @tparam A: Access::MMIO or Access::TensixCfgUnit. MMIO requires state scope.
+ * @tparam Scope: RegisterScope::State or RegisterScope::Thread.
+ * @tparam Addr: Destination word address within Scope.
+ * @tparam Shamt: Left shift applied to value. Use zero for an already packed group.
+ * @tparam Mask: Destination bits supplied by value after shifting.
+ * @param value: Data before Shamt.
+ * @param cfg: State-CFG bank base for MMIO. Unused for Tensix instructions.
+ * @note Serialize competing MMIO updates at the caller. Partial-word MMIO writes use a non-atomic read/modify/write.
+ */
 template <Access A, RegisterScope Scope, std::uint32_t Addr, std::uint32_t Shamt, std::uint32_t Mask>
 inline __attribute__((always_inline)) void write_word(const std::uint32_t value, volatile std::uint32_t* tt_reg_ptr cfg)
 {
@@ -150,6 +198,14 @@ inline __attribute__((always_inline)) void write_word(const std::uint32_t value,
     }
 }
 
+/**
+ * @brief Emit a compile-time CFG write through SETC16 or RMWCIB.
+ *
+ * @tparam Scope: RegisterScope::Thread selects SETC16. RegisterScope::State selects RMWCIB.
+ * @tparam Addr: Destination word address within Scope.
+ * @tparam Mask: Bits to update for state CFG. Unused for thread CFG, which replaces the complete word.
+ * @tparam Data: Already positioned data. Thread CFG uses its low 16 bits.
+ */
 template <RegisterScope Scope, std::uint32_t Addr, std::uint32_t Mask, std::uint32_t Data>
 inline __attribute__((always_inline)) void write_word()
 {
@@ -163,6 +219,20 @@ inline __attribute__((always_inline)) void write_word()
     }
 }
 
+/**
+ * @brief Copy complete words from an array to consecutive state-CFG locations through MMIO.
+ *
+ * F selects the starting word. Its mask and bit position do not modify the data.
+ * The transfer must fit the bank. If F is wider than one CFG word, the transfer
+ * must also stay within the words F occupies.
+ *
+ * @tparam F: State-CFG field whose addr32(S) selects the first destination word.
+ * @tparam S: Section within F.count.
+ * @tparam Count: Number of words to copy, no greater than ArrayCount.
+ * @tparam ArrayCount: Number of available source words, deduced from values.
+ * @param cfg: Destination state-CFG bank base.
+ * @param values: Source words. Only the first Count entries are written.
+ */
 template <const Field& F, Sec S, std::uint32_t Count, std::size_t ArrayCount>
 inline __attribute__((always_inline)) void write_array_mmio(volatile std::uint32_t* tt_reg_ptr cfg, const std::array<std::uint32_t, ArrayCount>& values)
 {
@@ -181,8 +251,22 @@ inline __attribute__((always_inline)) void write_array_mmio(volatile std::uint32
     }
 }
 
-// GPR transfers use WRCFG through the CFG unit.
-
+/**
+ * @brief Transfer one or four consecutive GPR words to state CFG using WRCFG.
+ *
+ * A compile-time GPR index selects immediate emission. A runtime index selects
+ * instruction-buffer emission. Both source and destination must be four-word
+ * aligned for a 128-bit transfer.
+ *
+ * @tparam A: Access::TensixCfgUnit. Blackhole REG2FLOP access is rejected.
+ * @tparam F: State-CFG field identifying the first destination word; must start at bit zero.
+ * @tparam S: Section within F.count.
+ * @tparam GprIndex: Source GPR index, or hal::detail::DynamicGprIndex for a runtime index.
+ * @tparam Size: GprTransferSize::Bits32 or GprTransferSize::Bits128.
+ * @tparam Completion: WrcfgCompletion::Deferred emits no extra instruction. WrcfgCompletion::Wait appends a NOP.
+ * @param transfer: Validated destination operand carrying the source GPR identity.
+ * @note Establish the required ordering with GPR producers at the caller before issuing the transfer.
+ */
 template <Access A, const Field& F, Sec S, std::uint32_t GprIndex, GprTransferSize Size, WrcfgCompletion Completion>
 inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprIndex, Size, Completion>& transfer)
 {
@@ -224,9 +308,18 @@ inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprInd
     }
 }
 
-// Validate runtime assignments and accumulate fields that share a group.
-// Constants are already combined in the plan; single fields and GPR transfers
-// are handled directly at emission.
+/**
+ * @brief Check a runtime field value and accumulate it when its destination group has multiple fields.
+ *
+ * LLK_ASSERT checks the unshifted value against the field width. Constants are
+ * already combined in Plan. Single fields and GPR transfers are handled at emission.
+ *
+ * @tparam Plan: Compile-time write plan matching the operation sequence.
+ * @tparam Index: Position of operation in that sequence.
+ * @tparam Operation: Field-assignment or GPR-transfer type, deduced from operation.
+ * @param data: Zero-initialized per-group words into which runtime fields are ORed.
+ * @param operation: Input operand at Index.
+ */
 template <const auto& Plan, std::size_t Index, typename Operation>
 inline __attribute__((always_inline)) void accumulate_write_data(std::array<std::uint32_t, Plan.group_count>& data, const Operation& operation)
 {
@@ -240,7 +333,20 @@ inline __attribute__((always_inline)) void accumulate_write_data(std::array<std:
     }
 }
 
-// Only a group's first operand emits it, preserving first-occurrence order.
+/**
+ * @brief Emit an operand's destination group only when the operand is the group's first member.
+ *
+ * Combine precomputed constants with accumulated runtime fields. For state CFG,
+ * mixed groups can use immediate RMWCIB instructions for constant-only bytes.
+ *
+ * @tparam A: Access::MMIO or Access::TensixCfgUnit, validated for the batch.
+ * @tparam Plan: Compile-time write plan matching the operation sequence.
+ * @tparam Index: Position of operation in that sequence.
+ * @tparam Operation: Field-assignment or GPR-transfer type, deduced from operation.
+ * @param cfg: State-CFG bank base for MMIO. Unused for Tensix instructions.
+ * @param data: Runtime group data prepared by @ref accumulate_write_data.
+ * @param operation: Operand at Index, including the value or GPR identity for direct emission.
+ */
 template <Access A, const auto& Plan, std::size_t Index, typename Operation>
 inline __attribute__((always_inline)) void write_planned_operation(
     volatile std::uint32_t* tt_reg_ptr cfg, const std::array<std::uint32_t, Plan.group_count>& data, const Operation& operation)
@@ -280,6 +386,19 @@ inline __attribute__((always_inline)) void write_planned_operation(
     }
 }
 
+/**
+ * @brief Accumulate runtime fields, then emit groups in first-occurrence order.
+ *
+ * The unnamed index-sequence argument pairs each operation with its position in Plan.
+ * All runtime field checks and accumulation precede the first emitted write.
+ *
+ * @tparam A: Access::MMIO or Access::TensixCfgUnit, validated for the batch.
+ * @tparam Plan: Compile-time write plan matching Operations.
+ * @tparam Indices: Consecutive operand positions starting at zero.
+ * @tparam Operations: Field-assignment and GPR-transfer types in call order.
+ * @param cfg: State-CFG bank base for MMIO. Unused for Tensix instructions.
+ * @param operations: Input operands in the order used to construct Plan.
+ */
 template <Access A, const auto& Plan, std::size_t... Indices, typename... Operations>
 inline __attribute__((always_inline)) void write_planned_operations(
     volatile std::uint32_t* tt_reg_ptr cfg, std::index_sequence<Indices...>, const Operations&... operations)
@@ -289,7 +408,18 @@ inline __attribute__((always_inline)) void write_planned_operations(
     (write_planned_operation<A, Plan, Indices>(cfg, data, operations), ...);
 }
 
-// Validate one batch, resolve the MMIO bank once, and emit the plan in order.
+/**
+ * @brief Validate a CFG write batch and execute its compile-time plan.
+ *
+ * Reject overlapping destination bits or spans at compile time. Resolve the MMIO
+ * bank once for the batch. Field assignments to the same word share a group even
+ * when separated by a GPR transfer. Each group emits at its first occurrence.
+ *
+ * @tparam A: Access::MMIO for state-CFG field assignments, or Access::TensixCfgUnit for field assignments and GPR transfers.
+ * @tparam Operations: Operand types produced by @ref set or @ref from_gpr, in call order.
+ * @param operations: Field assignments and GPR transfers to execute.
+ * @note Split writes into separate calls when hardware programming order must prevent grouping across operands.
+ */
 template <Access A, typename... Operations>
 inline __attribute__((always_inline)) void write_operations(const Operations&... operations)
 {
