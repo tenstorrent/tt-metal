@@ -60,6 +60,14 @@ def qwen25_vl_mesh_shape():
     return {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(mesh_device_env, len(ttnn.get_device_ids()))
 
 
+# The windowed vision attention (ttnn scaled_dot_product_attention with cu_window_seqlens) indexes its window
+# boundaries from a single uint32 tile, so an image may have at most 1023 windows. With the HF default of
+# 12,845,056 pixels a tall or wide page reaches ~1360 boundaries; 11,000,000 pixels keeps the worst case
+# (aspect ratios up to the 200:1 the HF resize allows) under 960 and costs ~15% of image tokens only for the
+# very largest inputs.
+MAX_IMAGE_PIXELS = 11_000_000
+
+
 class ModelArgs(TTModelArgs):
     LOCAL_HF_PARAMS = {
         **TTModelArgs.LOCAL_HF_PARAMS,
@@ -83,12 +91,28 @@ class ModelArgs(TTModelArgs):
         # eager prefill upstream used (decode is still traced).
         self.trace_prefill = self.base_model_name not in ("Qwen2.5-VL-32B", "Qwen2.5-VL-72B")
 
+    def create_processor(self):
+        processor = super().create_processor()
+        image_processor = getattr(processor, "image_processor", None)
+        if image_processor is not None:
+            cap_image_processor_pixels(image_processor)
+        return processor
+
     def _lm_head_grid_dims(self):
         # On a full 32-device mesh the LM head is width-sharded over the mesh columns; pick a
         # tile-aligned grid for that per-device width (the base search can reach 0 rows, e.g. dim=3584).
         if self.num_devices == 32:
             return find_qwen_vl_width_grid(self.dim // self.cluster_shape[1], ttnn.TILE_SIZE, max_rows=4, max_cols=8)
         return super()._lm_head_grid_dims()
+
+
+def cap_image_processor_pixels(image_processor, max_pixels=MAX_IMAGE_PIXELS):
+    """Clamp a HF Qwen2-VL image processor's resize budget to ``max_pixels`` (see MAX_IMAGE_PIXELS)."""
+    size = getattr(image_processor, "size", None)
+    if isinstance(size, dict) and size.get("longest_edge", 0) > max_pixels:
+        image_processor.size = {**size, "longest_edge": max_pixels}
+    if getattr(image_processor, "max_pixels", 0) > max_pixels:
+        image_processor.max_pixels = max_pixels
 
 
 class ModelOptimizations:
