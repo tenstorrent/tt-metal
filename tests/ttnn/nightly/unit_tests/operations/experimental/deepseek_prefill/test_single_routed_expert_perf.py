@@ -46,6 +46,7 @@ _LOW_ISL_MARGIN = 0.08
 # each case logs an "RT-CAL" line in this dict's format, so one run regenerates the table.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 0): 3_128,
+    ("kimi_k2_7", 64): 117_132,
     ("kimi_k2_7", 128): 119_261,
     ("kimi_k2_7", 256): 123_408,
     ("kimi_k2_7", 512): 161_361,
@@ -55,6 +56,7 @@ _EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 4096): 1_151_677,
     ("kimi_k2_7", 5120): 1_435_744,
     ("glm_53", 0): 3_093,
+    ("glm_53", 64): 103_666,
     ("glm_53", 128): 105_461,
     ("glm_53", 256): 108_710,
     ("glm_53", 512): 143_111,
@@ -75,6 +77,7 @@ _EXPECTED_NS: dict[tuple[str, int], int] = {
 # entries are the thin ones -- which is what _LOW_ISL_MARGIN is there to absorb.
 _NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 0): 3_028,
+    ("kimi_k2_7", 64): 101_687,
     ("kimi_k2_7", 128): 103_905,
     ("kimi_k2_7", 256): 111_867,
     ("kimi_k2_7", 512): 156_073,
@@ -84,6 +87,7 @@ _NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 4096): 1_148_860,
     ("kimi_k2_7", 5120): 1_437_110,
     ("glm_53", 0): 3_076,
+    ("glm_53", 64): 89_007,
     ("glm_53", 128): 91_694,
     ("glm_53", 256): 98_510,
     ("glm_53", 512): 138_469,
@@ -151,6 +155,10 @@ def _margin_for_k3(active: int) -> float:
     return _CEILING_ONLY if active == 0 else _LOW_ISL_MARGIN if active <= _K3_KNEE_TOKENS else _MARGIN
 
 
+# 64 is perf-only: the shared correctness sweep does not need it.
+_PERF_ISL_SWEEP = sorted({64, *_ISL_EXHAUSTIVE_SWEEP})
+
+
 def _perf_params():
     """Dims and margin per (model, active) over the exhaustive ISL sweep, dims from
     SINGLE_EXPERT_MODELS. The baseline is not carried here -- it is keyed on the weight placement
@@ -160,7 +168,7 @@ def _perf_params():
     for name, config, _extended in SINGLE_EXPERT_MODELS:
         if name not in _ISL_EXHAUSTIVE_MODELS:
             continue
-        for active in _ISL_EXHAUSTIVE_SWEEP:
+        for active in _PERF_ISL_SWEEP:
             params.append(
                 pytest.param(
                     name,
