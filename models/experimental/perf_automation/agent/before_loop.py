@@ -235,14 +235,15 @@ def check_dependencies() -> list[str]:
     tt-perf-report is needed by every profile (stage-2 REFINE runs it even in
     mock-tracy mode); claude-agent-sdk is needed by the discovery sub-agent and
     the lead review gate. Returns actionable messages for anything missing."""
-    import shutil as _shutil
-
-    from .pkgtools import installer_hint
+    from .pkgtools import installer_hint, venv_tool
 
     hint = f"{installer_hint()} -r models/experimental/perf_automation/requirements-agent.txt"
     missing: list[str] = []
-    if _shutil.which("tt-perf-report") is None:
-        missing.append(f"tt-perf-report not on PATH — install the agent deps into your tt-metal venv: {hint}")
+    if venv_tool("tt-perf-report") is None:
+        missing.append(
+            f"tt-perf-report neither beside this interpreter nor on PATH — install the agent deps into your "
+            f"tt-metal venv: {hint}"
+        )
     return missing
 
 

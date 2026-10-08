@@ -357,7 +357,7 @@ def test_check_dependencies_reports_missing(monkeypatch):
     from agent.before_loop import check_dependencies
 
     assert check_dependencies() == []  # this env has both
-    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(shutil, "which", lambda name, path=None, mode=None: None)
     missing = check_dependencies()
     assert any("tt-perf-report" in m for m in missing)
 

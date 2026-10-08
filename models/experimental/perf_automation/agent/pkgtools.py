@@ -63,6 +63,23 @@ def _install_command(package: str) -> list | None:
     return cmd
 
 
+def venv_tool(name: str) -> str | None:
+    """Absolute path of a console script the agent depends on (`tt-perf-report`), or None.
+
+    Looked up beside THIS interpreter first, then on PATH. A venv's console scripts are installed
+    next to its python, so a launcher that never activated the venv -- the dashboard's optimize
+    button, a cron entry, a bare `bash -c` -- still finds what the venv holds; on PATH alone the
+    tool's own preflight refused to start (19 tests, `FileNotFoundError: 'tt-perf-report'`) from
+    exactly those launchers, 2026-10-06 and 2026-10-08, while the same command worked from a shell
+    with the venv active. The lookup still goes through shutil.which, so a test that stubs it out
+    to simulate the missing tool keeps simulating it."""
+    # The venv's bin, UNRESOLVED: python_env/bin/python is a symlink to the interpreter the venv was
+    # made from (a uv-managed CPython here), and the console scripts live beside the link, not beside
+    # its target. sys.prefix/bin is the same directory under a venv and the install prefix otherwise.
+    venv_bins = [os.path.dirname(os.path.abspath(sys.executable)), os.path.join(sys.prefix, "bin")]
+    return shutil.which(name, path=os.pathsep.join([*venv_bins, os.environ.get("PATH", "")]))
+
+
 def ensure_system_tool(binary: str, package: str | None = None, timeout_s: int = 600) -> bool:
     """True when `binary` is on PATH, installing its distro package first when it is missing.
 

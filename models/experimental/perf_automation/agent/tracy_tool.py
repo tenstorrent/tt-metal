@@ -341,8 +341,11 @@ def refine(
     arch: str | None = None,
 ) -> Path:
     """Run tt-perf-report raw.csv -> report.csv (CSV->CSV, no hardware needed)."""
+    from .pkgtools import venv_tool
+
     cmd = [
-        "tt-perf-report",
+        venv_tool("tt-perf-report")
+        or "tt-perf-report",  # beside the interpreter, else PATH, else the bare name's own error
         str(raw_csv),
         "--csv",
         str(out_csv),
