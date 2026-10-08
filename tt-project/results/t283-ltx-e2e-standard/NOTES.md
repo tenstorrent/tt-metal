@@ -1,17 +1,23 @@
 # t283: standard LTX e2e test, 16-bit vs 8-bit, BH 4x8 (blx01)
 
-Test (unmodified, ltx-rt b9f8587ce6c, md5 bb2d68369bbbf2c7af8f15f22fd02ec8):
-`models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k bh_4x8sp1tp0_ring`.
-It prints `print_ltx_timing_table` (utils/ltx.py) after each gen: gen #0 captures traces, gen #1 is pure replay.
+Test: `models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k bh_4x8sp1tp0_ring`,
+unmodified. It prints `print_ltx_timing_table` after each gen: gen #0 captures traces, gen #1 is pure replay.
 
-Tree: blx01 /var/tmp/fasth3/t220/src (ltx-rt b9f8587ce6c build; only diff was the t220 test patch, so the
-pristine test file was copied over it for this task; original saved as /var/tmp/fasth3/t283/test_patched_t220.py,
-restore after both jobs). Precision: 16-bit = test default (LTX_QUANT unset -> bf16/HiFi2); 8-bit =
-LTX_QUANT=all_bf8_lofi. Both on the test's default 8+3 step schedule. RUN_VBENCH=0 RUN_CLIP=0 (perf-only).
+## Attempt 1: ltx-rt HEAD b9f8587ce6c (failed, test broken unmodified)
+blx01 broker job 053 (bf8, 14:53 UTC): `TypeError: LTXPipeline.__init__() got an unexpected keyword argument
+'image_conditioning'` (the ltx-rt test passes it, ltx-rt's pipeline lacks it). Log: logs/ltxrt_bf8_job053_FAILED.log.
+The t220 test patch on blx01 was swapped back afterwards (md5 dbd2b250...).
 
-Driver on blx01: /var/tmp/fasth3/t283/drv283.sh (bf8, then bf16; bf16 cold-fills its DiT cache ~37 GB).
-Marker /var/tmp/fasth3/t283/drv283.done, log drv283.done.log, run logs out_{bf8,bf16}/run.log.
-- 2026-10-08 14:53:22 UTC: bf8 broker job 053 submitted.
+## Attempt 2: t48 (ttp/t48-ltx25-integrated), same test, unmodified
+Python: blx01 /var/tmp/fasth3/t208/tree (t48 5e4e0cd643a overlay; test md5 d9a26aaf... = t48 HEAD 9e20d905481,
+later t48 commits touch only DiffVAE). Build/kernels/JIT cache: /var/tmp/fasth3/t48 (bf7db12a149).
+Test defaults (LTX-2.3, 1088x1920, 145 f, seed 10, 8+3 steps, traced). 16-bit = LTX_QUANT unset (bf16);
+8-bit = LTX_QUANT=all_bf8_lofi. RUN_VBENCH=0 RUN_CLIP=0. Scripts: run283b.sh, drv283b.sh, env48.yaml.
+- jobs 056 (bf16) / 058 (bf8), 15:00 UTC: failed in 21 s, HF_HOME lacked the LTX-2.3 upscaler (log in logs/).
+  Fixed: HF_HOME=/home/sulphur/hf (as t220/t221).
+- 15:03:36 UTC: bf16 job 060 submitted by drv283b.sh; bf8 follows. Marker /var/tmp/fasth3/t283/drv283b.done,
+  run logs /var/tmp/fasth3/t283/out48_{bf16,bf8}/run.log.
 
-Next: when the marker exists, copy out_*/run.log here, quote the gen #0/#1 tables, restore the t220 test
-file, delete the bf16 DiT cache (t220/cache/dit-ltx23/ltx-2.3-22b-distilled-1.1/transformer).
+Next: when the marker exists, copy out48_*/run.log into logs/, quote the gen #0/#1 tables, delete DiT cache
+dirs this task created under /var/tmp/fasth3/t220/cache/dit-ltx23 (find -newermt "2026-10-08 15:03").
+No drops so far.
