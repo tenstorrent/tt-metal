@@ -26,7 +26,9 @@ from models.common.sampling.generator import (
     _hash_request_seed_to_device_seed,
 )
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
+from models.common.sampling.tt_sampling import format_grammar_bitmask
 from models.common.utility_functions import comp_pcc, is_blackhole
+from models.common.warmup.warmup_utils import WarmupForwardMixin
 
 
 @pytest.mark.parametrize("all_configs", [False, True])
@@ -52,7 +54,7 @@ def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all
     )
     compiled = []
 
-    def run_sampling(scratch, *, penalties_on, tt_out_tok, count_tokens):
+    def run_sampling(scratch, *, penalties_on, grammar_on, tt_out_tok, count_tokens):
         assert not count_tokens, "Warmup must not add dummy samples to request history"
         if penalties_on:
             scratch.sub_(2.0)
@@ -102,6 +104,165 @@ def test_sampling_trace_bucket_isolation():
     sampling.set_trace_bucket(None)
     assert sampling._trace_slot(False, False, True)[1] is default_slot
     assert len(sampling._trace_states) == 3
+
+
+def test_grammar_uses_separate_trace():
+    """Masked and unmasked sampling use different cached traces."""
+    sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling._trace_states = {}
+    sampling._active_trace_bucket = None
+
+    _, grammar_off = sampling._trace_slot(False, False, True, False)
+    grammar_key, grammar_on = sampling._trace_slot(False, False, True, True)
+
+    assert grammar_key.grammar_on is True
+    assert grammar_on is not grammar_off
+
+
+def test_precompile_all_configs_selects_supported_grammar_matrix():
+    class StubLogProbs:
+        def __init__(self):
+            self.logprobs_enabled = [False]
+            self.num_logprobs = [0]
+            self.enable_log_probs = False
+
+        def set_log_probs_mode(self, enabled, num_logprobs=0):
+            values = list(enabled) if isinstance(enabled, list) else [enabled]
+            self.logprobs_enabled = values
+            self.enable_log_probs = any(values)
+            self.num_logprobs = list(num_logprobs) if isinstance(num_logprobs, list) else [num_logprobs]
+
+    class StubSampling:
+        def __init__(self):
+            self.log_probs_calculator = StubLogProbs()
+            self._allow_force_argmax_sampling = True
+            self._force_argmax_sampling = False
+            self.grammar_updates = []
+
+        def update_grammar_bitmask(self, mask):
+            self.grammar_updates.append(mask)
+
+    sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling.tt_sampling = StubSampling()
+    sampling._penalties_active = False
+    sampling._log_probs_active = False
+    sampling._copy_warmup_logits = lambda logits: logits
+    penalty_resets = []
+    sampling.tt_penalties = SimpleNamespace(reset_output_tokens=lambda: penalty_resets.append(True))
+    calls = []
+    sampling._run_sampling = lambda _logits, **kwargs: calls.append(
+        (
+            kwargs["penalties_on"],
+            sampling.tt_sampling.log_probs_calculator.enable_log_probs,
+            sampling.tt_sampling._force_argmax_sampling,
+            kwargs["grammar_on"],
+            kwargs["count_tokens"],
+        )
+    )
+
+    sampling.precompile(object(), all_configs=True)
+
+    assert set(calls) == {
+        (penalties, log_probs, force_argmax, False, False)
+        for penalties in (False, True)
+        for log_probs in (False, True)
+        for force_argmax in (False, True)
+    }
+
+    calls.clear()
+    grammar = torch.ones((1, 1), dtype=torch.int32)
+    sampling.precompile(
+        object(),
+        grammar_bitmask=grammar,
+        compile_token_update=True,
+        all_configs=True,
+    )
+
+    assert sampling.tt_sampling.grammar_updates == [grammar]
+    assert set(calls) == {
+        (penalties, False, force_argmax, True, True) for penalties in (False, True) for force_argmax in (False, True)
+    }
+    assert len(penalty_resets) == 2
+    assert sampling._penalties_active is False
+    assert sampling.tt_sampling._force_argmax_sampling is False
+    assert sampling._log_probs_active is False
+
+
+def test_greedy_switch_keeps_cached_traces():
+    """Switching to greedy sampling keeps previously cached variants."""
+
+    class ToggleSampling:
+        force_argmax_sampling = False
+        log_probs_calculator = SimpleNamespace(enable_log_probs=False)
+
+        def reset_params(self, **_kwargs):
+            self.force_argmax_sampling = True
+
+    sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling.tt_sampling = ToggleSampling()
+    sampling.tt_penalties = SimpleNamespace(reset_params=lambda *_args: None)
+    sampling._penalties_active = False
+    sampling._trace_states = {}
+    sampling._active_trace_bucket = None
+    _, stochastic = sampling._trace_slot(False, False, False, True)
+    _, greedy = sampling._trace_slot(False, False, True, True)
+
+    SamplingGenerator.reset_sampling_params(
+        sampling,
+        SamplingParams(
+            temperature=[0.0],
+            top_k=[1],
+            top_p=[1.0],
+        ),
+    )
+
+    assert sampling._trace_slot(False, False, False, True)[1] is stochastic
+    assert sampling._trace_slot(False, False, True, True)[1] is greedy
+
+
+def test_grammar_warmup_excludes_logprobs():
+    """Grammar warmup traces only supported no-logprobs variants."""
+
+    class WarmupHarness(WarmupForwardMixin):
+        def __init__(self):
+            self.calls = []
+
+        def _create_sampling_params(self, can_sample_on_device, batch_size, greedy_only=False):
+            assert can_sample_on_device
+            return [
+                SamplingParams(
+                    temperature=[1.0] * batch_size,
+                    top_k=[8] * batch_size,
+                    top_p=[0.9] * batch_size,
+                    enable_log_probs=[False] * batch_size,
+                ),
+                SamplingParams(
+                    temperature=[1.0] * batch_size,
+                    top_k=[8] * batch_size,
+                    top_p=[0.9] * batch_size,
+                    enable_log_probs=[True] * batch_size,
+                ),
+                None,
+            ]
+
+        def _create_warmup_grammar_bitmask(self, batch_size):
+            return torch.full((batch_size, 2), -1, dtype=torch.int32)
+
+        def decode_forward(self, **kwargs):
+            self.calls.append(kwargs)
+
+    harness = WarmupHarness()
+    harness.warmup_model_decode(
+        kv_cache=None,
+        enable_trace=True,
+        max_batch_size=4,
+        num_blocks=1,
+        can_sample_on_device=True,
+        can_sample_device_grammar=True,
+    )
+
+    grammar_calls = [call for call in harness.calls if call.get("grammar_bitmask") is not None]
+    assert len(grammar_calls) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +645,106 @@ def test_format_sampling_params_uses_device_argmax_sentinel_for_greedy_rows():
     assert params.top_p[0] == 0.0
 
 
+def test_grammar_mask_padding_is_safe():
+    """Formatting clears invalid tokens and leaves unused rows unconstrained."""
+    grammar = torch.tensor(
+        [[-1, (1 << 17) | (1 << 18)]],
+        dtype=torch.int32,
+    )
+
+    formatted = format_grammar_bitmask(
+        grammar,
+        vocab_size=50,
+        padded_vocab_size=96,
+        max_batch_size=4,
+    )
+
+    assert formatted.shape == (4, 3)
+    assert formatted[0].tolist() == [-1, 1 << 17, 0]
+    assert torch.all(formatted[1:] == -1)
+
+
+@pytest.mark.parametrize(
+    ("grammar", "error"),
+    [
+        pytest.param(
+            torch.zeros((1, 2), dtype=torch.int32),
+            "no allowed token",
+            id="empty-row",
+        ),
+        pytest.param(
+            torch.tensor([[0, 1 << 18]], dtype=torch.int32),
+            "no allowed token",
+            id="tail-only",
+        ),
+        pytest.param(
+            torch.ones((1, 1), dtype=torch.int32),
+            "packed width",
+            id="wrong-width",
+        ),
+        pytest.param(
+            torch.ones((5, 2), dtype=torch.int32),
+            "exceeds sampler batch",
+            id="too-many-rows",
+        ),
+    ],
+)
+def test_invalid_grammar_masks_are_rejected(grammar, error, expect_error):
+    """Grammar masks must contain a valid token and fit the sampler shape."""
+    with expect_error(ValueError, error):
+        format_grammar_bitmask(
+            grammar,
+            vocab_size=50,
+            padded_vocab_size=96,
+            max_batch_size=4,
+        )
+
+
+def test_grammar_unpack_uses_local_vocab_shard(monkeypatch):
+    """A vocab-sharded mask unpacks to the per-device logits width, not the global vocab."""
+    sampling = TTSampling.__new__(TTSampling)
+    sampling.max_batch_size = 32
+    sampling.padded_vocab_size = 32768
+    sampling.sub_core_grids = None
+    # One of eight vocab shards: 1024 packed words globally, 128 per device.
+    sampling.grammar_bitmask_tensor = SimpleNamespace(shape=(32, 128))
+    sampling.grammar_bitmask_arange = object()
+
+    reshapes = []
+    monkeypatch.setattr(ttnn, "reshape", lambda tensor, shape, **_: reshapes.append(shape) or tensor)
+    for op in ("bitwise_right_shift", "bitwise_and", "to_layout", "typecast", "where"):
+        monkeypatch.setattr(ttnn, op, lambda tensor, *_, **__: tensor)
+    monkeypatch.setattr(ttnn, "add_", lambda *_, **__: None)
+    monkeypatch.setattr(ttnn, "deallocate", lambda *_: None)
+
+    sampling._apply_grammar_bitmask(SimpleNamespace(shape=(1, 1, 32, 4096)))
+    assert reshapes == [(32, 128, 1), (1, 1, 32, 4096)]
+
+
+@pytest.mark.parametrize(
+    ("cluster_shape", "sampling_all_gather_axis", "padded_vocab_size"),
+    [
+        # 3216 tokens per device = 100.5 mask words.
+        pytest.param((1, 8), 1, 25728, id="1x8"),
+        # 328 tokens per device = 10.25 mask words.
+        pytest.param((4, 8), 0, 1312, id="4x8-rows"),
+    ],
+)
+def test_grammar_requires_word_aligned_vocab_shards(
+    cluster_shape, sampling_all_gather_axis, padded_vocab_size, expect_error
+):
+    """A mask word straddling two vocab shards is rejected before any device allocation."""
+    sampling = TTSampling.__new__(TTSampling)
+    sampling._sampling_dp = 1
+    sampling.cluster_shape = cluster_shape
+    sampling.sampling_all_gather_axis = sampling_all_gather_axis
+    sampling.padded_vocab_size = padded_vocab_size
+    sampling.grammar_bitmask_tensor = None
+
+    with expect_error(ValueError, "whole 32-token mask words"):
+        sampling.enable_device_grammar()
+
+
 # ---------------------------------------------------------------------------
 # Seeded decode reproducibility under async scheduling (#51981).
 # Host-only: the generator is built with __new__ and driven with stub modules.
@@ -506,11 +767,17 @@ class _StubSamplingModule:
     def __init__(self, max_batch_size=SEED_TEST_BATCH):
         self.seed_manager = _RecordingSeedManager(max_batch_size)
         self.tt_sampling = SimpleNamespace(max_batch_size=max_batch_size)
+        self.sample_calls = []
+        self.validated_grammar = []
 
     def apply_decode_state(self, sampling_params_chunks, **kwargs):
         pass
 
+    def validate_grammar_bitmask(self, grammar_bitmask):
+        self.validated_grammar.append(grammar_bitmask)
+
     def sample(self, logits=None, **kwargs):
+        self.sample_calls.append((logits, kwargs))
         return logits
 
 
@@ -519,9 +786,422 @@ def _make_stub_generator(max_batch_size=SEED_TEST_BATCH):
 
     generator = Generator.__new__(Generator)
     generator.data_parallel = 1
+    generator._pending_deferred_decode_sampling = None
+    generator._deferred_decode_sampling_failed = False
+    generator.trace_inputs_decode = {True: None}
     sampling = _StubSamplingModule(max_batch_size)
     generator.model = [SimpleNamespace(sampling=sampling, sampling_dp=1)]
     return generator, sampling
+
+
+@pytest.mark.parametrize(
+    ("sampling", "sampling_dp"),
+    [
+        pytest.param(None, 1, id="missing-sampler"),
+        pytest.param(
+            SimpleNamespace(enable_device_grammar=lambda: None),
+            2,
+            id="row-sharded",
+        ),
+    ],
+)
+def test_incompatible_sampler_disables_grammar(sampling, sampling_dp):
+    """Incompatible sampler layouts keep device grammar disabled."""
+    from models.tt_transformers.tt.generator import Generator
+
+    class GrammarGenerator(Generator):
+        model_capabilities = {"supports_device_grammar": True}
+
+    generator = GrammarGenerator(
+        model=[SimpleNamespace(sampling=sampling, sampling_dp=sampling_dp)],
+        model_args=[SimpleNamespace()],
+        mesh_device=None,
+    )
+
+    assert generator.device_grammar_enabled is False
+    assert generator.enable_device_grammar() is False
+    generator.model = []
+
+
+def test_grammar_activation_is_lazy():
+    """Grammar buffers allocate only when the runtime activates them."""
+    from models.tt_transformers.tt.generator import Generator
+
+    events = []
+
+    class GrammarGenerator(Generator):
+        model_capabilities = {"supports_device_grammar": True}
+
+    generator = GrammarGenerator(
+        model=[
+            SimpleNamespace(
+                sampling=SimpleNamespace(enable_device_grammar=lambda: events.append("activate")),
+                sampling_dp=1,
+            )
+        ],
+        model_args=[SimpleNamespace()],
+        mesh_device=None,
+    )
+    generator._any_trace_captured = lambda: False
+
+    assert generator.device_grammar_enabled is False
+    assert events == []
+    assert generator.enable_device_grammar() is True
+    assert generator.device_grammar_enabled is True
+    assert events == ["activate"]
+    generator.model = []
+
+
+def test_grammar_activation_requires_no_traces(expect_error):
+    """Grammar activation fails after any model trace is captured."""
+    from models.tt_transformers.tt.generator import Generator
+
+    events = []
+
+    class GrammarGenerator(Generator):
+        model_capabilities = {"supports_device_grammar": True}
+
+    generator = GrammarGenerator(
+        model=[
+            SimpleNamespace(
+                sampling=SimpleNamespace(enable_device_grammar=lambda: events.append("activate")),
+                sampling_dp=1,
+            )
+        ],
+        model_args=[SimpleNamespace()],
+        mesh_device=None,
+    )
+    generator._any_trace_captured = lambda: True
+
+    with expect_error(RuntimeError, "before any model trace"):
+        generator.enable_device_grammar()
+
+    assert generator.device_grammar_enabled is False
+    assert events == []
+    generator.model = []
+
+
+def test_deferred_sampling_uses_owned_state_once(
+    expect_error,
+):
+    """A deferred payload supplies its owned state exactly once."""
+    from models.tt_transformers.tt.generator import DeferredDecodeSampling
+
+    generator, sampling = _make_stub_generator()
+    positions = torch.arange(SEED_TEST_BATCH, dtype=torch.int32)
+    deferred = DeferredDecodeSampling(
+        tt_logits=[object()],
+        start_pos=[positions],
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=None,
+        enable_trace=True,
+        skip_precompile=True,
+        reload_inputs=True,
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+    )
+    generator._pending_deferred_decode_sampling = deferred
+    params = SamplingParams(
+        temperature=[1.0] * SEED_TEST_BATCH,
+        top_k=[1] * SEED_TEST_BATCH,
+        top_p=[1.0] * SEED_TEST_BATCH,
+        seed=[None] * SEED_TEST_BATCH,
+    )
+    grammar = torch.full((SEED_TEST_BATCH, 2), -1, dtype=torch.int32)
+
+    sampled = generator.sample_deferred_decode(
+        deferred,
+        sampling_params=params,
+        grammar_bitmask=grammar,
+    )
+
+    assert sampled == deferred.tt_logits
+    _, sample_kwargs = sampling.sample_calls[-1]
+    assert sample_kwargs["grammar_bitmask"] is grammar
+    assert sample_kwargs["enable_trace"] is True
+    assert sample_kwargs["skip_precompile"] is True
+    assert generator._pending_deferred_decode_sampling is None
+    assert generator._deferred_decode_sampling_failed is False
+
+    with expect_error(RuntimeError, "stale or was already consumed"):
+        generator.sample_deferred_decode(
+            deferred,
+            sampling_params=params,
+            grammar_bitmask=grammar,
+        )
+    assert generator._deferred_decode_sampling_failed is False
+
+    sample_count = len(sampling.sample_calls)
+    with expect_error(TypeError, "sample_deferred_decode"):
+        generator.sample_decode_on_device(
+            deferred,
+            sampling_params=params,
+            reload_sampling_params=True,
+            reset_sampling_state=False,
+        )
+    assert len(sampling.sample_calls) == sample_count
+    generator.model = []
+
+
+def test_deferred_sampling_remaps_before_seeding():
+    """Deferred sampling moves slot state before advancing request seeds."""
+    from models.tt_transformers.tt.generator import DeferredDecodeSampling, Generator
+
+    events = []
+
+    class OrderedSeedManager:
+        max_batch_size = SEED_TEST_BATCH * 2
+
+        def deactivate_slots_except(self, slots):
+            events.append(("deactivate", list(slots)))
+
+        def reset_seed_from_slots(self, _seeds, slots):
+            events.append(("seed-reset", list(slots)))
+
+        def align_seed_counters_to_positions(self, _seeds, slots, _positions):
+            events.append(("seed-align", list(slots)))
+
+        def get_new_values(self, slots):
+            events.append(("seed-advance", list(slots)))
+
+    class OrderedSampling:
+        seed_manager = OrderedSeedManager()
+        tt_sampling = SimpleNamespace(max_batch_size=SEED_TEST_BATCH)
+
+        def apply_slot_remap(self, remap):
+            events.append(("remap", list(map(int, remap))))
+
+        def validate_grammar_bitmask(self, _grammar):
+            events.append(("validate", None))
+
+        def apply_decode_state(self, _chunks, **_kwargs):
+            events.append(("sampling-state", None))
+
+        def sample(self, logits=None, **_kwargs):
+            events.append(("sample", None))
+            return logits
+
+    generator = Generator.__new__(Generator)
+    generator.data_parallel = 1
+    generator._deferred_decode_sampling_failed = False
+    generator.trace_inputs_decode = {True: None}
+    generator.model = [SimpleNamespace(sampling=OrderedSampling(), sampling_dp=1)]
+    remap = torch.arange(SEED_TEST_BATCH, dtype=torch.int32)
+    remap[0] = 1
+    deferred = DeferredDecodeSampling(
+        tt_logits=[object()],
+        start_pos=[torch.arange(SEED_TEST_BATCH, dtype=torch.int32)],
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=remap,
+        enable_trace=False,
+        skip_precompile=False,
+        reload_inputs=True,
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+    )
+    generator._pending_deferred_decode_sampling = deferred
+    params = SamplingParams(
+        temperature=[1.0] * SEED_TEST_BATCH,
+        top_k=[1] * SEED_TEST_BATCH,
+        top_p=[1.0] * SEED_TEST_BATCH,
+        seed=[None] * SEED_TEST_BATCH,
+    )
+
+    generator.sample_deferred_decode(
+        deferred,
+        sampling_params=params,
+        grammar_bitmask=torch.full(
+            (SEED_TEST_BATCH, 2),
+            -1,
+            dtype=torch.int32,
+        ),
+    )
+
+    event_names = [name for name, _payload in events]
+    assert event_names.index("remap") < event_names.index("seed-advance")
+    assert event_names.index("seed-advance") < event_names.index("sample")
+    assert events[event_names.index("remap")][1][0] == 1
+    generator.model = []
+
+
+@pytest.mark.parametrize(
+    ("failure_stage", "error_type", "message"),
+    [
+        pytest.param("mask-type", TypeError, "must be a torch.Tensor", id="mask-type"),
+        pytest.param("validation", ValueError, "bad grammar", id="invalid-mask"),
+        pytest.param("sampling", RuntimeError, "sampling failed", id="sampling-error"),
+    ],
+)
+def test_deferred_failure_stops_future_work(
+    failure_stage,
+    error_type,
+    message,
+    expect_error,
+):
+    """A failed deferred step consumes its payload and blocks later work."""
+    from models.tt_transformers.tt.generator import DeferredDecodeSampling, Generator
+
+    generator, sampling = _make_stub_generator()
+    deferred = DeferredDecodeSampling(
+        tt_logits=[object()],
+        start_pos=[torch.arange(SEED_TEST_BATCH, dtype=torch.int32)],
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=None,
+        enable_trace=False,
+        skip_precompile=False,
+        reload_inputs=True,
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+    )
+    generator._pending_deferred_decode_sampling = deferred
+    grammar = torch.full((SEED_TEST_BATCH, 2), -1, dtype=torch.int32)
+    if failure_stage == "mask-type":
+        grammar = grammar.tolist()
+    elif failure_stage == "validation":
+        sampling.validate_grammar_bitmask = lambda _mask: (_ for _ in ()).throw(ValueError("bad grammar"))
+    else:
+        sampling.sample = lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("sampling failed"))
+    params = SamplingParams(
+        temperature=[1.0] * SEED_TEST_BATCH,
+        top_k=[1] * SEED_TEST_BATCH,
+        top_p=[1.0] * SEED_TEST_BATCH,
+        seed=[None] * SEED_TEST_BATCH,
+    )
+
+    with expect_error(error_type, message):
+        generator.sample_deferred_decode(
+            deferred,
+            sampling_params=params,
+            grammar_bitmask=grammar,
+        )
+
+    assert generator._pending_deferred_decode_sampling is None
+    assert generator._deferred_decode_sampling_failed is True
+    with expect_error(RuntimeError, "prior deferred device-sampling step failed"):
+        Generator.decode_forward(
+            generator,
+            torch.zeros((1, 1), dtype=torch.int32),
+            torch.zeros((1,), dtype=torch.int32),
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+    generator.model = []
+
+
+def test_poisoned_generator_rejects_sampling(expect_error):
+    """A poisoned generator rejects sampling before touching the sampler."""
+    generator, sampling = _make_stub_generator()
+    generator._deferred_decode_sampling_failed = True
+    params = SamplingParams(
+        temperature=[1.0] * SEED_TEST_BATCH,
+        top_k=[1] * SEED_TEST_BATCH,
+        top_p=[1.0] * SEED_TEST_BATCH,
+        seed=[None] * SEED_TEST_BATCH,
+    )
+
+    with expect_error(RuntimeError, "prior deferred device-sampling step failed"):
+        generator.sample_decode_on_device(
+            [object()],
+            sampling_params=params,
+            reload_sampling_params=True,
+            reset_sampling_state=False,
+        )
+
+    assert sampling.sample_calls == []
+    generator.model = []
+
+
+def test_pending_payload_rejects_raw_logits(expect_error):
+    """Raw logits cannot bypass an outstanding deferred payload."""
+    from models.tt_transformers.tt.generator import DeferredDecodeSampling
+
+    generator, sampling = _make_stub_generator()
+    generator._pending_deferred_decode_sampling = DeferredDecodeSampling(
+        tt_logits=[object()],
+        start_pos=[torch.arange(SEED_TEST_BATCH, dtype=torch.int32)],
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=None,
+        enable_trace=False,
+        skip_precompile=False,
+        reload_inputs=True,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
+    )
+    params = SamplingParams(
+        temperature=[1.0] * SEED_TEST_BATCH,
+        top_k=[1] * SEED_TEST_BATCH,
+        top_p=[1.0] * SEED_TEST_BATCH,
+        seed=[None] * SEED_TEST_BATCH,
+    )
+
+    with expect_error(RuntimeError, "payload is pending"):
+        generator.sample_decode_on_device(
+            [object()],
+            sampling_params=params,
+            reload_sampling_params=True,
+            reset_sampling_state=False,
+        )
+
+    assert sampling.sample_calls == []
+    generator.model = []
+
+
+def test_grammar_mask_splits_per_model():
+    """A global grammar mask splits by each model's local slot capacity."""
+    from models.tt_transformers.tt.generator import Generator
+
+    generator = Generator.__new__(Generator)
+    generator.data_parallel = 2
+    generator._pending_deferred_decode_sampling = None
+    generator._deferred_decode_sampling_failed = False
+    generator.trace_inputs_decode = {True: None}
+    samplers = [_StubSamplingModule(), _StubSamplingModule()]
+    generator.model = [
+        SimpleNamespace(sampling=samplers[0], sampling_dp=1),
+        SimpleNamespace(sampling=samplers[1], sampling_dp=1),
+    ]
+    generator.model_args = [
+        SimpleNamespace(max_batch_size=SEED_TEST_BATCH),
+        SimpleNamespace(max_batch_size=SEED_TEST_BATCH),
+    ]
+    total_batch = 2 * SEED_TEST_BATCH
+    params = SamplingParams(
+        temperature=[1.0] * total_batch,
+        top_k=[1] * total_batch,
+        top_p=[1.0] * total_batch,
+        seed=[None] * total_batch,
+    )
+    grammar = torch.full((total_batch, 2), -1, dtype=torch.int32)
+    grammar[:SEED_TEST_BATCH, 0] = 1
+    grammar[SEED_TEST_BATCH:, 0] = 2
+
+    generator.sample_decode_on_device(
+        [object(), object()],
+        sampling_params=params,
+        start_pos=[
+            torch.arange(SEED_TEST_BATCH),
+            torch.arange(SEED_TEST_BATCH),
+        ],
+        reload_sampling_params=True,
+        reset_sampling_state=False,
+        grammar_bitmask=grammar,
+    )
+
+    assert torch.equal(
+        samplers[0].sample_calls[-1][1]["grammar_bitmask"],
+        grammar[:SEED_TEST_BATCH],
+    )
+    assert torch.equal(
+        samplers[1].sample_calls[-1][1]["grammar_bitmask"],
+        grammar[SEED_TEST_BATCH:],
+    )
+    generator.model = []
 
 
 def _decode_sampling_step(generator, seeds, positions, reload_inputs, max_batch_size=SEED_TEST_BATCH):
