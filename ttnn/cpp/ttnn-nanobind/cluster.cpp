@@ -7,9 +7,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <vector>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <tt-metalium/tt_metal.hpp>
 #include <internal/cluster_noc_helpers.hpp>
@@ -182,6 +184,49 @@ void bind_ttnn_cluster(nb::module_& mod) {
             UC-path register read: returns one u32 from ``addr`` on the
             target tile via UMD's UC TLB window with Strict ordering.
             Companion to ``write_to_core_immediate``.
+        )doc");
+
+    mod.def(
+        "get_ethernet_train_speed",
+        &tt::tt_metal::internal::get_ethernet_train_speed,
+        nb::arg("device_id"),
+        nb::arg("eth_channel"),
+        R"doc(
+            Trained link speed of an ethernet channel.
+
+            Args:
+                device_id (int): Logical chip id.
+                eth_channel (int): Logical ethernet channel, after harvesting.
+                    Channels are dense: 0 to N-1 for N unharvested channels.
+
+            Returns:
+                int or None: Speed in Gbps. None if the link is not up, or not
+                supported (Wormhole, simulation, mock).
+
+            Raises:
+                RuntimeError: On an invalid ``device_id`` or ``eth_channel``.
+        )doc");
+
+    mod.def(
+        "get_ethernet_target_speed",
+        &tt::tt_metal::internal::get_ethernet_target_speed,
+        nb::arg("device_id"),
+        nb::arg("eth_channel"),
+        R"doc(
+            Target link speed of an ethernet channel. This is the requested
+            speed from the ethernet boot params. Present in any port state.
+
+            Args:
+                device_id (int): Logical chip id.
+                eth_channel (int): Logical ethernet channel, after harvesting.
+                    Channels are dense: 0 to N-1 for N unharvested channels.
+
+            Returns:
+                int or None: Speed in Gbps. None if not supported
+                (Wormhole, simulation, mock).
+
+            Raises:
+                RuntimeError: On an invalid ``device_id`` or ``eth_channel``.
         )doc");
 
     // Per-bank DRAM NOC routing table, mirroring what

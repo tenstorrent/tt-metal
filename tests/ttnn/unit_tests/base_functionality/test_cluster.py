@@ -4,6 +4,8 @@
 
 
 import pytest
+from loguru import logger
+
 import ttnn
 
 
@@ -32,3 +34,32 @@ def test_cluster_serialize_descriptor():
     except Exception as e:
         # Non-critical, might not be available in all environments
         pytest.skip(f"Cluster descriptor serialization not available: {e}")
+
+
+# Allowed Blackhole ethernet link speeds, in Gbps.
+BH_ETH_SPEEDS_GBPS = {40, 100, 200, 330, 350, 370, 400}
+
+
+@pytest.mark.skipif(ttnn.cluster.get_cluster_type() != ttnn.cluster.ClusterType.P300, reason="Requires P300")
+def test_cluster_ethernet_train_speed_p300():
+    """At least one ethernet link on a P300 reports a valid trained speed"""
+    # Logical channels are dense; out-of-range ones raise
+    up_links = []
+    for device_id in range(ttnn.GetNumAvailableDevices()):
+        for eth_channel in range(14):
+            try:
+                speed = ttnn.cluster.get_ethernet_train_speed(device_id, eth_channel)
+            except RuntimeError:
+                break
+            if speed is None:
+                continue
+            target = ttnn.cluster.get_ethernet_target_speed(device_id, eth_channel)
+            link = f"Device {device_id} channel {eth_channel}"
+            assert speed in BH_ETH_SPEEDS_GBPS, f"{link}: speed {speed} not in {BH_ETH_SPEEDS_GBPS}"
+            assert target is not None, f"{link}: no target speed"
+            # Target 0 requests auto-train, so it does not bound the trained speed
+            assert target == 0 or speed <= target, f"{link}: speed {speed} > target {target}"
+            up_links.append((device_id, eth_channel, speed))
+
+    assert up_links, "No ethernet links up on P300"
+    logger.info(f"Ethernet links up: {up_links}")

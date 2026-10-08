@@ -16,6 +16,7 @@
 - name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
   cmd: |
     pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
+    pytest tests/ttnn/unit_tests/base_functionality/test_cluster.py::test_cluster_ethernet_train_speed_p300
     # Disabled due to issue https://github.com/tenstorrent/tt-metal/issues/41040
     # pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
   skus:
