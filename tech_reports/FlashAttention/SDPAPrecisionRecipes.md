@@ -171,38 +171,46 @@ The DEST mode is read from `compute_kernel_config` as before (`fp32_dest_acc_en`
 | `exp_ring_joint_scaled_dot_product_attention` | streaming kernel; STANDARD for a blocking the streaming kernel cannot build (QK subblock taller than two tiles, K chunk not a multiple of the subblock row, one Q subblock), which failed to compile before | ACCURATE (failed to compile before) |
 | `ring_distributed_scaled_dot_product_attention` | legacy loop (no recipe path yet) | legacy loop |
 
-- A routed call is the named recipe, bit for bit, when its chunk sizes are kept. `compute_kernel_config` and
+- A routed call is the named recipe, bit for bit, with the blocking below. `compute_kernel_config` and
   `exp_approx_mode` are ignored as for any recipe call. ACCURATE is the recipe that keeps FP32 scores and state, the
   closest match to an FP32-DEST request; FP32 DEST was often a shared linear config rather than an SDPA choice.
-- `program_config` chunk sizes are hints, since they were tuned for the legacy kernels: kept when the recipe
-  supports the geometry and (dense, joint) it fits L1 next to the call's mask and outputs, otherwise the op chooses
-  the blocking ([Blocking](#blocking)). The grid and `max_cores_per_head_batch` are kept; `sub_core_grids`, which
-  prefill ignored, is dropped. Zero chunk sizes still need an explicit `precision`; no `program_config` means
-  op-chosen blocking.
+- Routed dense, chunked and MLA calls choose their blocking on the whole compute grid
+  ([Blocking](#blocking)): `program_config` chunk sizes and grids were tuned for the legacy kernels, and the chooser
+  beats them (table below). One exception: when the keys fit
+  one K chunk (up to 512, no causal / window / chunked key range), a caller's Q chunk larger than the chosen one is
+  kept, with the keys as one K chunk, when it fits; the chooser's per-core model does not see the K/V each extra Q
+  chunk reads again from DRAM (bge_m3 B8 S512: Q256/K512 0.454 ms, chosen Q128/K512 0.490). Joint, ring, exp ring
+  and ring-distributed calls keep the caller's chunks and grid when the recipe supports them (and, joint, they fit
+  L1; otherwise the op chooses): the chooser gains nothing measurable on the joint callers, and can pick an odd
+  STANDARD Q chunk whose packed-K/V joint program overflows the kernel config buffer.
+  `max_cores_per_head_batch` is kept; `sub_core_grids`, which prefill ignored, is dropped. Zero chunk sizes still
+  need an explicit `precision`.
 - Routed ring calls return the recipe's scratch as the third output, not an LSE (no caller reads it).
 - Wormhole keeps the legacy loops until the recipes run there.
 
-Op time on a P150 (ms, full grid unless noted, median of five batches of five calls; the routed column is what the same call runs now,
-the legacy column the same call before routing):
+Op time on a P150 (ms, median of five batches of five calls; the routed column is what the same call runs now, with
+the blocking above, the legacy column the same call before routing):
 
-| Caller (shape, caller's chunks) | Before (legacy) | Routed | Routed, op-chosen chunks |
-|---|---|---|---|
-| tt_transformers prefill: causal, 32/8 heads, D128, BFP8 Q/K/V, S4096, Q256/K256 on 8x8, HiFi4 + FP32 | 7.62 | 3.92 | 3.29 |
-| same, S8192 | 29.38 | 14.41 | 9.78 |
-| tt_transformers chunked prefill: Q2048 at 6144, paged BFP8 cache (64-row blocks), tensor start | 12.75 | 6.20 | 5.33 |
-| Gemma-style: causal + window 1024, scale 1, 16/8 heads, D256, S8192, Q128/K128 | 12.61 | 3.65 | 4.44 |
-| bge_m3: 16 heads, D64, S8192, padding mask, Q128/K256, LoFi + FP32 | 10.02 | 8.72 | 7.66 |
-| bge_m3: B8, S512, padding mask, Q256/K256, HiFi4 + FP32 | 0.464 | 0.545 | 0.589 |
-| nomic embed v2: 12 heads, D64, S512, padding mask, scale 1, HiFi3 + FP32 | 0.104 | 0.261 | 0.250 |
-| Qwen3-VL text: causal, 32/8 heads, D128, S4096, Q128/K512 | 4.99 | 3.57 | 3.61 |
-| Qwen3-VL vision: 16 heads, D96, S4096, Q128/K128 | 4.63 | 3.57 | 2.06 |
-| qwen_image joint: 24 heads, D128, N4096 + L128, Q512/K256, HiFi2 + FP32 (ACCURATE) | 10.60 | 3.57 | 3.52 |
-| qwen_image joint, BF16 DEST (STANDARD) | 6.16 | 1.41 | 1.44 |
-| Flux-style joint: 24 heads, D128, N4096 + L512, Q256/K512, BF16 DEST (STANDARD) | 5.30 | 1.65 | 1.61 |
+| Caller (shape, caller's chunks) | Before (legacy) | Routed |
+|---|---|---|
+| tt_transformers prefill: causal, 32/8 heads, D128, BFP8 Q/K/V, S4096, Q256/K256 on 8x8, HiFi4 + FP32 | 7.60 | 2.38 |
+| same, S8192 | 29.40 | 7.78 |
+| tt_transformers chunked prefill: Q2048 at 6144, paged BFP8 cache (64-row blocks), tensor start | 12.74 | 5.52 |
+| Gemma-style: causal + window 1024, scale 1, 16/8 heads, D256, S8192, Q128/K128 | 12.65 | 2.62 |
+| bge_m3: 16 heads, D64, S8192, padding mask, Q128/K256, LoFi + FP32 | 10.03 | 7.61 |
+| bge_m3: B8, S512, padding mask, Q256/K256, HiFi4 + FP32 | 0.470 | 0.468 |
+| nomic embed v2: 12 heads, D64, S512, padding mask, scale 1, HiFi3 + FP32 | 0.095 | 0.087 |
+| Qwen3-VL text: causal, 32/8 heads, D128, S4096, Q128/K512 | 4.99 | 2.17 |
+| Qwen3-VL vision: 16 heads, D96, S4096, Q128/K128 | 4.63 | 2.03 |
+| qwen_image joint: 24 heads, D128, N4096 + L128, Q512/K256, HiFi2 + FP32 (ACCURATE) | 10.63 | 3.48 |
+| qwen_image joint, BF16 DEST (STANDARD) | 6.18 | 1.36 |
+| Flux-style joint: 24 heads, D128, N4096 + L512, Q256/K512, BF16 DEST (STANDARD) | 5.33 | 1.60 |
 
-The routed FP32-DEST calls are faster than the legacy FP32 loop except the small encoder shapes (bge_m3 B8 S512
-1.17x, nomic S512 2.5x: few heads at S512 put a recipe's per-call floor, about 0.23 ms here, above the legacy
-op). For reference, the BF16-DEST streaming kernel (unchanged) runs the tt_transformers rows in 2.28 / 8.72 ms.
+The routed FP32-DEST calls are faster than the legacy FP32 loop, the small encoders included (nomic S512) or level
+with it (bge_m3 B8 S512: the same device time, 0.452 ms traced, bound by reading the head-broadcast mask once per
+head). Recipe calls are a cached device operation, about 0.02 ms of host time per call; while every call rebuilt
+its program on the host these two rows ran 0.545 and 0.261 ms. For reference, the BF16-DEST streaming kernel
+(unchanged) runs the tt_transformers rows in 2.28 / 8.72 ms.
 
 ## Causal, sliding-window, chunked and windowed attention
 
@@ -282,7 +290,7 @@ or a chunk size of 0 in `SDPAProgramConfig`. For exp ring it also chooses the SD
 It uses a roofline cost model fitted to Blackhole timings, plus pipeline fill/drain terms that dominate
 short-K cross attention. Causal, sliding-window and chunked calls cost the K chunks each Q chunk actually processes,
 dealt over the grid as the kernels deal them, plus fitted per-K-chunk streaming, per-edge-chunk and per-Q-chunk
-terms; sliding windows also consider 128-row K chunks. Explicit chunk sizes are honored (a [routed](#routing) call's only when they fit). Blocking never changes a recipe's
+terms; sliding windows also consider 128-row K chunks. Explicit chunk sizes are honored ([routed](#routing) calls choose theirs). Blocking never changes a recipe's
 arithmetic, only its rounding order. Without a recipe, chunk sizes must be explicit.
 
 ## Ring and exp ring attention
