@@ -14,6 +14,8 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
+#include <cstdlib>
+#include <string>
 #include <algorithm>
 
 #include <tt-metalium/constants.hpp>
@@ -279,6 +281,10 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         }
     }
 
+    // LOCAL EXPERIMENT: G4X_AG_FACTORY=mcast|ucast forces the algorithm where the limitations above allow it.
+    if (const char* f = std::getenv("G4X_AG_FACTORY"); f != nullptr && !args.is_true_2d()) {
+        use_unicast = std::string(f) == "ucast";
+    }
     return use_unicast ? program_factory_t{AllGatherUnicastFactory{}} : program_factory_t{AllGatherMulticastFactory{}};
 }
 

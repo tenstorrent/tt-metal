@@ -268,6 +268,12 @@ def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
     """All-gather across TP devices."""
     if mesh_config is None or mesh_config.tp_degree <= 1:
         return tensor
+    if os.environ.get("G4X_SKIP_CCL"):  # LOCAL EXPERIMENT: timing probe only, wrong output
+        reps = [1, 1, 1, 1]
+        reps[dim] = mesh_config.tp_degree
+        out = ttnn.repeat(tensor, ttnn.Shape(reps), memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG)
+        tensor.deallocate(True)
+        return out
 
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
     tp_axis = mesh_config.tp_axis
@@ -327,6 +333,12 @@ def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None
     """
     if mesh_config is None or mesh_config.tp_degree <= 1:
         return tensor
+    if os.environ.get("G4X_SKIP_CCL"):  # LOCAL EXPERIMENT: timing probe only, wrong output
+        rows = tensor.padded_shape[-2] // mesh_config.tp_degree
+        shape = tuple(tensor.padded_shape)
+        out = ttnn.slice(tensor, (0, 0, 0, 0), shape[:-2] + (rows, shape[-1]), memory_config=memory_config or ttnn.L1_MEMORY_CONFIG)
+        tensor.deallocate(True)
+        return out
     if memory_config is None and os.environ.get("G4X_RS_SHARDED"):  # LOCAL EXPERIMENT: land in the norm's layout
         from models.demos.gemma4_d_p.tt.rms_norm import _block_shard_geometry, _block_sharded_memory_config
 
@@ -364,4 +376,8 @@ def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None
             tensor, dim=2, cluster_axis=mesh_config.tp_axis, memory_config=memory_config, **transport
         )
     tensor.deallocate(True)
+    if os.environ.get("G4X_RS_BFP8") and result.dtype == ttnn.bfloat8_b:  # LOCAL EXPERIMENT: back to bf16
+        bf16 = ttnn.typecast(result, ttnn.bfloat16, memory_config=result.memory_config())
+        result.deallocate(True)
+        result = bf16
     return result

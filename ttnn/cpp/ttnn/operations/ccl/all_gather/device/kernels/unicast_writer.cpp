@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "tools/profiler/kernel_profiler.hpp"  // LOCAL EXPERIMENT zones
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -160,6 +161,8 @@ void kernel_main() {
     OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices> it;
 
     uint32_t stripe = initial_stripe;
+    {
+    DeviceZoneScopedN("AGW-MAIN");
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         const bool last = (iter == num_iters - 1);
         const uint32_t start = last ? final_start : slice_start;
@@ -212,6 +215,8 @@ void kernel_main() {
         }
         stripe = (stripe + stripe_step) % num_devices;
     }
+    }
+    DeviceZoneScopedN("AGW-CLEAN");
 
     ///////////////////////////////////////////////////
     // CLEANUP

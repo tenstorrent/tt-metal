@@ -284,6 +284,8 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, num_cores=110):
         # Split K three ways when the cores hold three bands of every (head, Q chunk) unit.
         q_chunk = 128
         k_splits = 3 if num_heads * -(-q_slab_tokens // q_chunk) * 3 <= num_cores else 1
+        if os.environ.get("G4X_SLIDING_KSPLIT"):  # LOCAL EXPERIMENT
+            k_splits = int(os.environ["G4X_SLIDING_KSPLIT"])
         return q_chunk, 128, k_splits, False
     # LOCAL EXPERIMENT: G4X_GLOBAL_QKS=q,k,splits[,seg] overrides the global choice.
     if os.environ.get("G4X_GLOBAL_QKS"):

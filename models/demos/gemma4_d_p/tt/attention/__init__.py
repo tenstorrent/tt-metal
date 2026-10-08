@@ -262,7 +262,8 @@ class Gemma4Attention:
 
         sdpa_compute_config = ttnn.init_device_compute_kernel_config(
             tt_q.device().arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            # LOCAL EXPERIMENT: G4X_SDPA_CK_LOFI=1 makes the kernel's MATH_FIDELITY LoFi too.
+            math_fidelity=ttnn.MathFidelity.LoFi if os.environ.get("G4X_SDPA_CK_LOFI") else ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,

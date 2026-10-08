@@ -95,6 +95,8 @@ def project(hidden_states, weight, memory_config=None, into_reduce_scatter=False
         memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
+        # LOCAL EXPERIMENT: G4X_RS_BFP8=1 sends the row-parallel partials through the reduce-scatter as bfp8.
+        dtype=ttnn.bfloat8_b if into_reduce_scatter and os.environ.get("G4X_RS_BFP8") else None,
     )
     if x is not hidden_states:
         x.deallocate(True)

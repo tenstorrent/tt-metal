@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "tools/profiler/kernel_profiler.hpp"  // LOCAL EXPERIMENT zones
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -71,6 +72,7 @@ void kernel_main() {
     // Startup barrier: wait for downstream remote device to be ready.
     // A sink direction (num_iters == 0) has no upstream here and is never signalled, so it must not wait.
     if constexpr (do_init_barrier) {
+        DeviceZoneScopedN("AGR-BARRIER");
         if (num_iters > 0) {
             auto* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
             noc_semaphore_wait_min(barrier_ptr, 1);
@@ -80,6 +82,7 @@ void kernel_main() {
 
     uint32_t stripe = initial_stripe;
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
+        DeviceZoneScopedN("AGR-ITER");
         if (iter == 0) {
             // Local data (our own input tensor)
             uint32_t page = input_page_id_start;
@@ -139,6 +142,7 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     // Completion: wait for every chunk upstream delivers (relayed + sink), then reset for reuse.
+    DeviceZoneScopedN("AGR-DONE");
     noc_semaphore_wait_min(data_valid_ptr, total_chunks);
     noc_semaphore_set(data_valid_ptr, 0);
 }

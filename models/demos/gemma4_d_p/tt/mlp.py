@@ -91,7 +91,13 @@ class MLP:
         )
         # LOCAL EXPERIMENT: G4X_FUSED_GATEUP=1 runs gate and up as one N=2*intermediate matmul.
         self.gateup_proj = None
-        if os.environ.get("G4X_FUSED_GATEUP"):
+        if os.environ.get("G4X_GEGLU_OP"):
+            from models.demos.gemma4_d_p.tt.experimental.geglu_shard import interleave_gate_up
+
+            self.gateup_proj = interleave_gate_up(self.gate_proj, self.up_proj)
+            self.gate_proj.deallocate(True)
+            self.up_proj.deallocate(True)
+        elif os.environ.get("G4X_FUSED_GATEUP"):
             self.gateup_proj = ttnn.concat([self.gate_proj, self.up_proj], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         self.down_proj = ttnn.as_tensor(
             down_proj_weight,
@@ -141,6 +147,8 @@ class MLP:
             core_grid=None if program_config is not None else self.core_grid,
             activation="gelu_tanh" if gelu and program_config is None else None,
             memory_config=memory_config,
+            # LOCAL EXPERIMENT: G4X_RS_BFP8=1 (down only) sends the partials through the reduce-scatter as bfp8.
+            dtype=ttnn.bfloat8_b if (weight is self.down_proj and os.environ.get("G4X_RS_BFP8")) else None,
         )
 
     def __call__(self, hidden_states):
@@ -153,8 +161,20 @@ class MLP:
         # share one sharded copy.
         short_m = is_short_m(hidden_states)
         x = to_l1_width_sharded(hidden_states) if short_m else hidden_states
-        gate_up_mc = short_m_output_memcfg(x, self.gate_proj) if short_m else act_mc
-        if self.gateup_proj is not None:
+        gate_up_mc = (
+            short_m_output_memcfg(x, self.gate_proj) if short_m and self.gateup_proj is None else act_mc
+        )
+        if self.gateup_proj is not None and os.environ.get("G4X_GEGLU_OP") and short_m:
+            from models.demos.gemma4_d_p.tt.experimental.geglu_shard import geglu_shard
+
+            fused_mc = short_m_output_memcfg(x, self.gateup_proj, per_core_n=4)
+            fused = self._project(x, self.gateup_proj, fused_mc, per_core_n=4)
+            hidden_states.deallocate(True)
+            if x is not hidden_states:
+                x.deallocate(True)
+            hidden = geglu_shard(fused, self.mesh_device)
+            fused.deallocate(True)
+        elif self.gateup_proj is not None:
             fused = self._project(x, self.gateup_proj, act_mc, per_core_n=4)
             n = fused.padded_shape[-1] // 2
             shape = tuple(fused.padded_shape)
@@ -173,8 +193,9 @@ class MLP:
             if x is not hidden_states:
                 x.deallocate(True)
             hidden = ttnn.mul(gate, up, memory_config=act_mc)
-        gate.deallocate(True)
-        up.deallocate(True)
+        if "gate" in locals():
+            gate.deallocate(True)
+            up.deallocate(True)
         # Short M: down runs 4 columns per core (the 1D config only applies there) and writes its output width-sharded
         # straight into the reduce-scatter, which reads it as fast as DRAM. Taller slabs write the output to DRAM.
         down_mc = ttnn.DRAM_MEMORY_CONFIG
