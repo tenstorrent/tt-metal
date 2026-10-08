@@ -82,6 +82,8 @@ def main():
         CSV_PATH.unlink()
 
     device = ttnn.open_device(device_id=args.device_id)
+    grid = device.compute_with_storage_grid_size()
+    total_cores = grid.x * grid.y
     results = []
     try:
         factories = wl.make_factories(device, args.seq, args.hidden, args.ffn, args.heads)
@@ -92,7 +94,7 @@ def main():
             b = batches[idx - 1] if idx - 1 < len(batches) else 1
             while True:
                 try:
-                    fn, _ = factory(b)
+                    fn, _, _ = factory(b)
                     break
                 except Exception:
                     if b == 1:
@@ -115,10 +117,10 @@ def main():
         ttnn.close_device(device)
 
     print()
-    print(f"{'op':<16} {'batch':>6} {'cores':>6} {'% of 110':>9}")
+    print(f"{'op':<16} {'batch':>6} {'cores':>6} {'% of ' + str(total_cores):>9}")
     print("-" * 42)
     for name, b, n in results:
-        print(f"{name:<16} {b:>6} {n:>6} {100*n/110:>8.0f}%")
+        print(f"{name:<16} {b:>6} {n:>6} {100*n/total_cores:>8.0f}%")
 
 
 if __name__ == "__main__":
