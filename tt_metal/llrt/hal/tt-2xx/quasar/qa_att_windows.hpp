@@ -48,12 +48,14 @@ constexpr const MapInfo* find_map(std::string_view name) {
     return nullptr;
 }
 
-/// @brief How many bytes of DRAM a bank can address under this map: the size
-/// of the DRAM window's offset field. The allocator caps the DRAM bank size at
-/// this so top-down allocations (kernel binaries) stay reachable.
+/// @brief The DRAM a bank may use under this map: the size of the DRAM window's
+/// local-address field. The allocator caps the DRAM bank size at this so every
+/// allocation, top-down kernel binaries included, stays inside the DRAM that exists.
 ///
-/// - quasar_aether_2x3: 64 MiB, smaller than the DRAM the descriptor
-///   advertises, so the cap matters there.
+/// - quasar_aether_2x3 and horizon_2x3: 64 MiB. The emulator's DRAM tile backs
+///   64 MiB per channel. Its soc descriptor advertises 1 GiB, but an offset at or
+///   above 64 MiB wraps onto the low 64 MiB, so the cap keeps tt-metal inside the
+///   real DRAM.
 /// - grendel_qsr1: 8 GiB, larger than the descriptor's DRAM view, so the cap
 ///   changes nothing there.
 constexpr std::uint64_t dram_window_local_address_limit(const MapInfo& info) {
@@ -62,7 +64,10 @@ constexpr std::uint64_t dram_window_local_address_limit(const MapInfo& info) {
 
 static_assert(
     dram_window_local_address_limit(*find_map("quasar_aether_2x3")) == (std::uint64_t{64} << 20),
-    "quasar_aether_2x3 DRAM window expected to carry 64 MiB of local address");
+    "quasar_aether_2x3 DRAM window must carry 64 MiB of local address, the size of the emulator's DRAM tile");
+static_assert(
+    dram_window_local_address_limit(*find_map("horizon_2x3")) == (std::uint64_t{64} << 20),
+    "horizon_2x3 DRAM window must carry 64 MiB of local address, the size of the emulator's DRAM tile");
 static_assert(
     dram_window_local_address_limit(*find_map("grendel_qsr1")) == (std::uint64_t{8} << 30),
     "grendel_qsr1 DRAM window expected to carry 8 GiB of local address");

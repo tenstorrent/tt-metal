@@ -80,6 +80,10 @@ constexpr noc_att::Window LOCAL_WINDOW{
 // at 0x18_0000_0000 (windows must not overlap - hardware would resolve the
 // overlap by first-match priority, which the software model deliberately does
 // not reproduce).
+// endpoint_shift 26 leaves a 26-bit local-address field: 64 MiB per endpoint. For the DRAM tiles
+// that is the whole tile. The emulator's DRAM model backs 64 MiB per channel and wraps higher
+// offsets onto the low 64 MiB, so the host allocator clamps the DRAM bank size to this field
+// (qa_att_windows.hpp).
 constexpr noc_att::Window REMOTE_WINDOW{
     .compare = 0x1000000000ull,
     .mask_bits = 32,
