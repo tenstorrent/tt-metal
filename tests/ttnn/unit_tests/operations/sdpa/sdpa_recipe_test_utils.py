@@ -337,35 +337,111 @@ def check_windowed(device, variant, cu, *, causal, q_rows=None, q_offset=0, offs
     assert l2_pct(ttnn.to_torch(out), expected) < L2_PCT_BOUND[variant]
 
 
-class ChunkedCase:
-    """Chunked prefill: Q rows [start, start + sq) of each sequence over a K/V cache of one block per sequence;
-    the page table maps batch b to block blocks[b]."""
+def sink_reference(q, k, v, sink, mask=None, scale=None):
+    """FP64 attention with per-head sink logits [1, H, 1, 1] (legacy attention_sink: unscaled logits whose
+    exp(scale * sink) joins each row's softmax denominator)."""
+    q, k, v = q.double(), k.double(), v.double()
+    rep = q.shape[1] // k.shape[1]
+    k, v = k.repeat_interleave(rep, 1), v.repeat_interleave(rep, 1)
+    scale = 1 / math.sqrt(q.shape[-1]) if scale is None else scale
+    scores = (q @ k.transpose(-1, -2)) * scale
+    if mask is not None:
+        scores = scores + mask.double()
+    sinks = (sink.double() * scale).expand(q.shape[0], -1, q.shape[2], 1)
+    weights = torch.softmax(torch.cat([scores, sinks], -1), -1)[..., :-1]
+    return weights @ v
 
-    def __init__(self, device, variant, *, b=1, nh=2, nkv=2, sq=256, block=1024, d=128, blocks=None, seed=40):
-        self.device, self.variant = device, variant
-        self.blocks = blocks or list(reversed(range(b)))
-        count = max(self.blocks) + 1
+
+class ChunkedCase:
+    """Chunked prefill: Q rows [start, start + sq) of each sequence over a paged K/V cache of blocks_per_seq blocks of
+    `block` rows per sequence. With one block per sequence the page table maps batch b to block blocks[b]; with more,
+    to a shuffled set. `cache_shape` (heads, rows, head dim) declares the cache in another layer's geometry of the
+    same elements per block; the call then passes its view as paged_cache_geometry. head_dim_v (MLA): run
+    chunked_flash_mla_prefill, V being K's first head_dim_v columns. sink: per-head attention sink logits."""
+
+    def __init__(
+        self,
+        device,
+        variant,
+        *,
+        b=1,
+        nh=2,
+        nkv=2,
+        sq=256,
+        block=1024,
+        d=128,
+        blocks=None,
+        blocks_per_seq=1,
+        cache_shape=None,
+        head_dim_v=None,
+        sink=False,
+        seed=40,
+    ):
+        self.device, self.variant, self.head_dim_v = device, variant, head_dim_v
+        if blocks_per_seq == 1:
+            table = [[x] for x in (blocks or list(reversed(range(b))))]
+        else:
+            order = torch.randperm(b * blocks_per_seq + 1, generator=torch.Generator().manual_seed(seed))
+            table = order[: b * blocks_per_seq].reshape(b, blocks_per_seq).tolist()
+        self.table = torch.tensor(table)
+        count = int(self.table.max()) + 1
         self.q = randn(b, nh, sq, d, seed=seed)
         self.k, self.v = randn(count, nkv, block, d, seed=seed + 1), randn(count, nkv, block, d, seed=seed + 2)
-        self.inputs = inputs_for(device, variant, self.q, self.k, self.v)
-        self.page_table = int_tensor(device, [[x] for x in self.blocks])
+        if head_dim_v:
+            self.v = self.k[..., :head_dim_v]
+        stored_k, stored_v = self.k, self.v
+        self.geometry = None
+        if cache_shape:
+            stored_k, stored_v = (x.reshape(count, *cache_shape) for x in (self.k, self.v))
+            self.geometry = ttnn.PagedCacheGeometryOverride(block_size=block, num_kv_heads=nkv)
+        self.inputs = inputs_for(device, variant, self.q, stored_k, stored_v)
+        if variant.startswith("fast"):
+            # FAST stores K/V as prepare_sdpa_input packs them: the reference uses those values.
+            self.k, self.v = (ttnn.to_torch(x).reshape(x.shape[0], nkv, block, -1) for x in self.inputs[1:])
+            if head_dim_v:
+                self.v = self.k[..., :head_dim_v]
+        self.page_table = int_tensor(device, table)
+        self.sink = randn(1, nh, 1, 1, seed=seed + 3) * 4 if sink else None
 
     def run(self, start, q_chunk, k_chunk, *, window=None, start_tensor=None):
+        config = program_config(self.device, q_chunk, k_chunk)
+        precision = VARIANTS[self.variant][0]
+        if self.head_dim_v:
+            return ttnn.transformer.chunked_flash_mla_prefill(
+                self.inputs[0],
+                self.inputs[1],
+                self.head_dim_v,
+                self.page_table,
+                start,
+                program_config=config,
+                precision=precision,
+            )
         kwargs = dict(chunk_start_idx_tensor=start_tensor) if start_tensor is not None else dict(chunk_start_idx=start)
+        if self.geometry is not None:
+            kwargs["paged_cache_geometry"] = self.geometry
+        if self.sink is not None:
+            kwargs["attention_sink"] = to_device(self.device, self.sink)
         return ttnn.transformer.chunked_scaled_dot_product_attention(
             *self.inputs,
             self.page_table,
-            program_config=program_config(self.device, q_chunk, k_chunk),
+            program_config=config,
             sliding_window_size=window,
-            precision=VARIANTS[self.variant][0],
+            precision=precision,
             **kwargs,
         )
 
     def expected(self, start, window=None):
         sq = self.q.shape[2]
         keys = start + sq
-        k, v = self.k[self.blocks, :, :keys], self.v[self.blocks, :, :keys]
-        return reference(self.q, k, v, key_mask(sq, keys, causal=True, window=window, q_offset=start))
+        # Sequence b's keys: its blocks in page-table order.
+        k, v = (
+            torch.cat([x[self.table[:, j]] for j in range(self.table.shape[1])], 2)[:, :, :keys]
+            for x in (self.k, self.v)
+        )
+        mask = key_mask(sq, keys, causal=True, window=window, q_offset=start)
+        if self.sink is not None:
+            return sink_reference(self.q, k, v, self.sink, mask)
+        return reference(self.q, k, v, mask)
 
     def check(self, out, start, window=None):
         assert l2_pct(ttnn.to_torch(out), self.expected(start, window)) < L2_PCT_BOUND[self.variant]
@@ -375,6 +451,91 @@ def check_chunked(device, variant, start, *, q_chunk=128, k_chunk=256, window=No
     chunked = ChunkedCase(device, variant, **case)
     start_tensor = int_tensor(device, [start]) if as_tensor else None
     chunked.check(chunked.run(start, q_chunk, k_chunk, window=window, start_tensor=start_tensor), start, window)
+
+
+# MLA prefill (flash_mla_prefill): b, nh, s_q, s_k, QK head dim, V head dim, q_chunk, k_chunk.
+MLA_SHAPES = {
+    "d192_v128": (1, 4, 512, 512, 192, 128, 128, 256),
+    "d576_v512": (1, 2, 256, 256, 576, 512, 64, 128),
+    "d128_v64_tails": (2, 3, 300, 700, 128, 64, 128, 256),
+}
+
+
+def check_mla(device, variant, shape, *, causal=True, v_tensor=False):
+    """flash_mla_prefill: K [b, 1, s, d] shared by every head; V is K's first head_dim_v columns, or (v_tensor) its own
+    tensor [b, 1, s, head_dim_v]."""
+    b, nh, sq, sk, d, dv, q_chunk, k_chunk = shape
+    q, k = randn(b, nh, sq, d, seed=50), randn(b, 1, sk, d, seed=51)
+    v = randn(b, 1, sk, dv, seed=52) if v_tensor else k[..., :dv]
+    tq, tk, tv = inputs_for(device, variant, q, k, v)
+    if variant.startswith("fast"):
+        k = ttnn.to_torch(tk)
+        v = ttnn.to_torch(tv) if v_tensor else k[..., :dv]
+    kwargs = dict(
+        is_causal=causal, program_config=program_config(device, q_chunk, k_chunk), precision=VARIANTS[variant][0]
+    )
+    if v_tensor:
+        out = ttnn.transformer.flash_mla_prefill(tq, tk, tv, **kwargs)
+    else:
+        out = ttnn.transformer.flash_mla_prefill(tq, tk, dv, **kwargs)
+    assert tuple(out.shape) == (b, nh, sq, dv)
+    expected = reference(q, k, v, key_mask(sq, sk, causal=True) if causal else None)
+    assert l2_pct(ttnn.to_torch(out), expected) < L2_PCT_BOUND[variant]
+
+
+def check_sink(
+    device,
+    variant,
+    *,
+    causal=False,
+    window=None,
+    shape=(1, 4, 2, 512, 1024, 128, 256, 512),
+    sink_offset=0.0,
+    sink_dtype=ttnn.bfloat16,
+):
+    """scaled_dot_product_attention with attention_sink [1, H, 1, 1] (unscaled per-head logits, 4 x normal plus
+    sink_offset)."""
+    b, nh, nkv, sq, sk, d, q_chunk, k_chunk = shape
+    q, k, v = randn(b, nh, sq, d, seed=60), randn(b, nkv, sk, d, seed=61), randn(b, nkv, sk, d, seed=62)
+    sink = (randn(1, nh, 1, 1, seed=63) * 4 + sink_offset).bfloat16()
+    tq, tk, tv = inputs_for(device, variant, q, k, v)
+    if variant.startswith("fast"):
+        k, v = ttnn.to_torch(tk), ttnn.to_torch(tv)
+    out = ttnn.transformer.scaled_dot_product_attention(
+        tq,
+        tk,
+        tv,
+        is_causal=causal,
+        sliding_window_size=window,
+        attention_sink=to_device(device, sink, sink_dtype),
+        program_config=program_config(device, q_chunk, k_chunk),
+        precision=VARIANTS[variant][0],
+    )
+    mask = key_mask(sq, sk, causal=causal, window=window) if causal or window else None
+    sink = stored(sink, sink_dtype) if sink_dtype != ttnn.float32 else sink
+    assert l2_pct(ttnn.to_torch(out), sink_reference(q, k, v, sink, mask)) < L2_PCT_BOUND[variant]
+
+
+def check_concat_heads(device, variant, *, causal=False, shape=(2, 4, 2, 300, 640, 64, 128, 256)):
+    """output_concat_heads: the output [b, 1, s, nh * d] holds the heads side by side."""
+    b, nh, nkv, sq, sk, d, q_chunk, k_chunk = shape
+    q, k, v = randn(b, nh, sq, d, seed=70), randn(b, nkv, sk, d, seed=71), randn(b, nkv, sk, d, seed=72)
+    tq, tk, tv = inputs_for(device, variant, q, k, v)
+    if variant.startswith("fast"):
+        k, v = ttnn.to_torch(tk), ttnn.to_torch(tv)
+    out = ttnn.transformer.scaled_dot_product_attention(
+        tq,
+        tk,
+        tv,
+        is_causal=causal,
+        output_concat_heads=True,
+        program_config=program_config(device, q_chunk, k_chunk),
+        precision=VARIANTS[variant][0],
+    )
+    assert tuple(out.shape) == (b, 1, sq, nh * d)
+    expected = reference(q, k, v, key_mask(sq, sk, causal=True) if causal else None)
+    expected = expected.permute(0, 2, 1, 3).reshape(b, 1, sq, nh * d)
+    assert l2_pct(ttnn.to_torch(out), expected) < L2_PCT_BOUND[variant]
 
 
 def check_chunked_trace(device, variant, starts, *, q_chunk=128, k_chunk=256):

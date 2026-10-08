@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """SDPA precision recipes (ttnn.SDPAPrecision): the fast subset that runs in the ttnn sanity sdpa group.
 
-Every recipe once, plus masks, causal / sliding-window / chunked / windowed key ranges, joint attention, op-selected
-blocking, program cache and trace, rejected arguments and prepare_sdpa_input. The sweeps (all shapes, long K, rising maxima, every recipe for masks / joint / blocking)
+Every recipe once, plus masks, causal / sliding-window / chunked / windowed key ranges, paged K/V, MLA, attention
+sinks, concatenated-heads output, joint attention, op-selected blocking, program cache and trace, rejected arguments and
+prepare_sdpa_input. The sweeps (all shapes, long K, rising maxima, every recipe for masks / joint / blocking)
 are in tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_recipes.py.
 """
 
@@ -19,12 +20,17 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     blackhole_only,
     check_accuracy,
     check_attn_mask,
+    check_chunked,
     check_chunked_trace,
+    check_concat_heads,
     check_joint,
     check_key_range,
     check_legacy_arguments,
+    check_mla,
     check_op_selected_blocking,
+    check_sink,
     check_windowed,
+    MLA_SHAPES,
     inputs_for,
     l2_pct,
     program_config,
@@ -60,6 +66,24 @@ def test_sdpa_recipe_sliding_window(device, variant, causal):
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 4194304}], indirect=True)
 def test_chunked_sdpa_recipe_trace(device):
     check_chunked_trace(device, "standard", [512, 96])
+
+
+# Paged K/V: five shuffled cache blocks per sequence, declared in another layer's geometry (paged_cache_geometry).
+def test_chunked_sdpa_recipe_paged(device):
+    check_chunked(device, "balanced", 320, blocks_per_seq=5, block=128, cache_shape=(1, 256, 128))
+
+
+# MLA: V is K's first 128 columns of 192.
+def test_flash_mla_prefill_recipe(device):
+    check_mla(device, "standard", MLA_SHAPES["d192_v128"])
+
+
+def test_sdpa_recipe_attention_sink(device):
+    check_sink(device, "accurate", causal=True, shape=(1, 4, 2, 512, 512, 128, 256, 256))
+
+
+def test_sdpa_recipe_output_concat_heads(device):
+    check_concat_heads(device, "fast_bfp8")
 
 
 def test_windowed_sdpa_recipe(device):
@@ -127,7 +151,7 @@ def test_sdpa_recipe_legacy_arguments(device, variant):
     [
         "causal_sq_ne_sk",
         "causal_with_attn_mask",
-        "attention_sink",
+        "attention_sink_shape",
         "sub_core_grids",
         "zero_scale",
         "sharded_output",
@@ -149,7 +173,7 @@ def test_sdpa_recipe_rejects_unsupported(expect_error, device, invalid):
         kwargs["is_causal"] = True
         tensors[1], tensors[2] = tensors[0], tensors[0]
         kwargs["attn_mask"] = to_device(device, torch.zeros(1, 1, 256, 256))
-    elif invalid == "attention_sink":
+    elif invalid == "attention_sink_shape":
         kwargs["attention_sink"] = tensors[0]
     elif invalid == "sub_core_grids":
         cfg["sub_core_grids"] = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
