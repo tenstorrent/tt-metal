@@ -115,6 +115,12 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
     // it to the compute kernel (via RM_INPUT / RM_VALUE_OUTPUT), so this is
     // 2 × W_value_bytes.  For non-UINT16 dtypes it equals W_value_bytes.
     const uint32_t W_sort_value_bytes = input_shape[3] * tt::datum_size(sort_value_cb_data_format);
+    // On Blackhole a stable bf16 sort in tile layout with uint16 indices keeps each row's fused [value | index] keys in
+    // the 32-bit DEST and a 32-bit buffer from its first local sort to its last merge.
+    const bool stable_fused_keys = attributes.stable && !is_row_major &&
+                                   input_tensor_cb_data_format == tt::DataFormat::Float16_b &&
+                                   index_tensor_cb_data_format == tt::DataFormat::UInt16 &&
+                                   tensor_args.input_tensor.device()->arch() == tt::ARCH::BLACKHOLE;
 
     CoreRangeSet core_range;
     if (Ht >= total_number_of_cores) {
@@ -163,6 +169,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
     const DFBSpecName UINT16_CONV{"uint16_conv"};
     const DFBSpecName RM_UINT16_INPUT_STAGE{"rm_uint16_input_stage"};
     const DFBSpecName RM_UINT16_OUTPUT_STAGE{"rm_uint16_output_stage"};
+    const DFBSpecName FUSED_KEYS{"fused_keys"};
 
     const TensorParamName INPUT_PARAM{"input"};
     const TensorParamName VALUE_PARAM{"value_output"};
@@ -242,6 +249,14 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         .num_entries = 1,
         .data_format_metadata = tt::DataFormat::UInt8,
     });
+    if (stable_fused_keys) {
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = FUSED_KEYS,
+            .entry_size = tile_size(tt::DataFormat::UInt32),
+            .num_entries = Wt,
+            .data_format_metadata = tt::DataFormat::UInt32,
+        });
+    }
 
     if (is_uint16_input && !is_row_major) {
         // TILE path staging DFBs for the UInt16 <-> Float32 software conversion.
@@ -489,6 +504,18 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         .accessor_name = "synchronization",
         .endpoint_type = DFBEndpointType::CONSUMER,
     });
+    if (stable_fused_keys) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = FUSED_KEYS,
+            .accessor_name = "fused_keys",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = FUSED_KEYS,
+            .accessor_name = "fused_keys",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
     if (is_row_major) {
         compute_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = RM_INPUT,
@@ -584,7 +611,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
-    ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = is_32_bit_data};
+    ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = is_32_bit_data || stable_fused_keys};
     // UINT16 keys also route through the fp32 sort path (sort_value_cb_data_format
     // is Float32 for UINT16 — the reader's software conversion writes Float32 into
     // INPUT_TENSOR), so treat UINT16 the same as Float32 here: the value buffers
@@ -606,6 +633,12 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         }
     }
 
+    auto compute_defines = sort_kernel_defines(is_row_major, is_uint16_input);
+    if (stable_fused_keys) {
+        // The keys move between the buffer and DEST as whole 32-bit words.
+        compute_hw_config.unpack_modes.insert({FUSED_KEYS, UnpackMode::UnpackToDest});
+        compute_defines.insert({"SORT_STABLE_FUSED_32B_DEST", "1"});
+    }
     spec.kernels.push_back(KernelSpec{
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/"
@@ -613,8 +646,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         // Compute kernels build at O3; the compiler-options default is O2, so the level is stated
         // explicitly rather than inherited.
         .compiler_options =
-            {.defines = sort_kernel_defines(is_row_major, is_uint16_input),
-             .opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
+            {.defines = std::move(compute_defines), .opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args =
             {
