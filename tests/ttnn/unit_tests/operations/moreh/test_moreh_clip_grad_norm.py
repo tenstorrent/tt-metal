@@ -12,9 +12,6 @@ from tests.ttnn.unit_tests.operations.test_utils import create_ttnn_tilized_tens
 pytestmark = pytest.mark.use_module_device
 
 # Nightly has no clip_grad_norm helper (its logic is inline in test_* functions), so this file has its own.
-# step1 runs one core per input (Sum[|x|^p]), step2 one core (Sum^(1/p)), step3 one core per input (x *= clip_coef).
-# p and 1/p reach the kernels only as runtime args (integer part, fraction and sign), so every norm_type runs the same
-# compiled kernels.
 
 
 def run_moreh_clip_grad_norm_test(
@@ -28,8 +25,7 @@ def run_moreh_clip_grad_norm_test(
         torch_params.append(param)
         tt_inputs.append(create_ttnn_tilized_tensor(param.grad.bfloat16(), device, ttnn.bfloat16))
 
-    # max_norm is relative to the actual norm, so every norm_type clips by the same factor and the scaled gradients
-    # stay near 1, where a wrong clip coefficient shows. clip_ratio >= 1 leaves the gradients unchanged.
+    # max_norm relative to the actual norm, so every norm_type clips by the same factor.
     norm = torch.linalg.vector_norm(torch.cat([param.grad.flatten() for param in torch_params]), ord=norm_type)
     max_norm = clip_ratio * norm.item()
     torch_total_norm = torch.nn.utils.clip_grad_norm_(
@@ -49,8 +45,7 @@ def run_moreh_clip_grad_norm_test(
         compute_kernel_config=get_compute_kernel_options(False),
     )
 
-    # Relative only: a negative norm_type gives a total norm around 1e-5, which an absolute tolerance of 0.1 would
-    # pass whatever the op returned.
+    # Relative only: a negative norm_type gives a total norm around 1e-5.
     actual_total_norm = ttnn.to_torch(tt_total_norm if provide_total_norm else result).reshape(1).float()
     assert torch.allclose(actual_total_norm, torch_total_norm.reshape(1), rtol=0.1, atol=0), (
         actual_total_norm,
@@ -67,13 +62,9 @@ def run_moreh_clip_grad_norm_test(
 @pytest.mark.parametrize(
     "norm_type",
     [
-        # Integer p in step1; step2 raises to 1/p = 0.5, a fraction.
         2.0,
-        # 1/p = 1: step2's fraction is 0.
         1.0,
-        # Fractional p in step1.
         2.2,
-        # Negative p and 1/p: both steps take their reciprocal paths.
         -0.8,
     ],
     ids=["p2", "p1", "p2_2", "p_negative"],
@@ -87,13 +78,9 @@ def test_moreh_clip_grad_norm(norm_type, device):
 @pytest.mark.parametrize(
     "input_shapes, clip_ratio, error_if_nonfinite, provide_total_norm",
     [
-        # Partly filled tiles and several tiles per input: step1 masks the padding and loops over tiles.
         ([[1, 1, 30, 50], [2, 3, 40, 20], [1, 2, 64, 70]], 0.5, False, False),
-        # More inputs than any device has cores: step1 and step3 run in several rounds.
         ([[1, 1, 32, 32]] * 149, 0.5, False, False),
-        # max_norm twice the norm: the clip coefficient clamps to 1 and the gradients stay unchanged.
         ([[1, 1, 32, 32]] * 3, 2.0, False, False),
-        # A finite norm passes the check, which reads the total norm back to the host before step3.
         ([[1, 1, 32, 32]] * 3, 0.5, True, False),
         ([[1, 1, 32, 32]] * 3, 0.5, False, True),
     ],

@@ -31,8 +31,6 @@ pytestmark = pytest.mark.use_module_device
 @pytest.mark.parametrize("dim", [3, 2, 1], ids=["w", "h", "nc"])
 def test_moreh_norm(dim, p, device):
     torch.manual_seed(0)
-    # dim picks the factory (W, H or NC) and p the compute variant. 63 x 63 spans two tiles in H and W without
-    # filling them, so the W and H readers apply their padding masks.
     run_moreh_norm_output_mode(
         [2, 3, 63, 63],
         p,
@@ -50,7 +48,6 @@ def test_moreh_norm(dim, p, device):
 @pytest.mark.parametrize(
     "dim, keepdim, fp32_dest_acc_en",
     [
-        # inf over several dims chains one device call per dim.
         (None, True, False),
         ([0, 1], False, False),
         (3, True, True),
@@ -75,8 +72,7 @@ def test_moreh_norm_corner_cases(dim, keepdim, fp32_dest_acc_en, device):
 @pytest.mark.merge_gate
 def test_moreh_norm_provided_output(device):
     torch.manual_seed(0)
-    # Not run_moreh_norm_output_mode: it pre-fills the output with torch.empty, whose leftover memory can already hold
-    # the expected values (the test before this one computes the same values). NaN makes an unwritten value fail.
+    # Not run_moreh_norm_output_mode: it fills the output with torch.empty, which can already hold the expected values.
     torch_input, torch_output_grad = make_torch_tensors([2, 3, 32, 32], 3, keepdim=True)
     expected, _ = torch_norm(torch_input, torch_output_grad, p=float("inf"), dim=3, keepdim=True)
     tt_output = create_ttnn_tilized_tensor(torch.full(expected.shape, float("nan")), device, ttnn.bfloat16)
@@ -98,9 +94,6 @@ def test_moreh_norm_provided_output(device):
 @pytest.mark.parametrize(
     "p, dim, keepdim, fp32_dest_acc_en",
     [
-        # The reduced dim decides which tile broadcasts output_grad needs (compile-time args): W, H, both, none.
-        # A fractional p gives the exp(log(|x|) * fraction) step a nonzero fraction; a negative p sets the power
-        # helpers' sign flags.
         (2.5, 3, True, False),
         (-2.5, 2, True, False),
         (2.0, [2, 3], True, False),
@@ -121,8 +114,8 @@ def test_moreh_norm_backward(p, dim, keepdim, fp32_dest_acc_en, device):
 @pytest.mark.parametrize("p, dim", [(float("inf"), 3), (float("-inf"), 2)], ids=["inf_w", "minus_inf_h"])
 def test_moreh_norm_backward_p_inf(p, dim, device):
     torch.manual_seed(0)
-    # Not run_moreh_norm_backward: random values can tie on max/min |x| once rounded to bfloat16, and torch and
-    # the kernel then split the gradient differently. The nightly no-tie input keeps the extreme unique.
+    # Not run_moreh_norm_backward: bfloat16 ties on max/min |x| make torch and the kernel split the gradient
+    # differently.
     input_shape = [2, 3, 63, 63]
     torch_input = make_no_tie_inf_input(input_shape, dim)
     output_grad_shape, _ = compute_output_shape(input_shape, dim, keepdim=True)

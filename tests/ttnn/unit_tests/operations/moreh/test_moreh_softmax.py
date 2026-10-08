@@ -26,8 +26,7 @@ pytestmark = pytest.mark.use_module_device
 Strategy = ttnn.operations.moreh.SoftmaxOpParallelizationStrategy
 BackwardStrategy = ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy
 
-# Each factory with the strategy that forces it. Every shape spans several tiles along dim, so the large factories
-# stream more than one pass.
+# Each factory with the strategy that forces it.
 FACTORIES = [
     ([2, 32, 128], 2, Strategy.SMALL_W, BackwardStrategy.SMALL_W),
     ([2, 32, 128], 2, Strategy.LARGE_W, BackwardStrategy.LARGE_W),
@@ -37,7 +36,6 @@ FACTORIES = [
 ]
 FACTORY_IDS = ["w_small", "w_large", "h_small", "h_large", "c_large"]
 
-# The compute kernels pick the op with defines: SOFTMAX or SOFTMIN, plus LOG for logsoftmax.
 # (forward helper, backward helper, forward tolerance, backward tolerance)
 OPS = [
     (run_moreh_softmax_test, run_moreh_softmax_backward_test, 0.05, 0.05),
@@ -46,8 +44,6 @@ OPS = [
 ]
 OP_IDS = ["softmax", "softmin", "logsoftmax"]
 
-# The reduced dim spans three tiles, the last one partly filled, so the mask the compute kernel applies cuts the last
-# tile short (the mask width is a runtime arg; aligned shapes get a full-width mask).
 UNALIGNED = [
     ([1, 1, 10, 74], 3, Strategy.SMALL_W, BackwardStrategy.SMALL_W),
     ([1, 1, 10, 74], 3, Strategy.LARGE_W, BackwardStrategy.LARGE_W),
@@ -57,8 +53,7 @@ UNALIGNED = [
 UNALIGNED_IDS = ["w_small", "w_large", "h_small", "h_large"]
 
 
-# Not the nightly helpers: they pad tiles with 0, which an unmasked softmax sum or backward reduce absorbs, so a
-# broken mask would pass. NaN padding makes it fail. They also can't pass a provided output to the backward op.
+# Not the nightly helpers: their zero padding hides a broken mask, and they can't pass a provided input_grad.
 def run_moreh_softmax_nan_pad_test(shape, dim, strategy, device, provide_output=False):
     torch_input = torch.randint(0, 4, shape).to(torch.bfloat16) + 100
     torch_output = torch.softmax(torch_input, dim)
@@ -74,11 +69,10 @@ def run_moreh_softmax_nan_pad_test(shape, dim, strategy, device, provide_output=
         strategy=strategy,
         compute_kernel_config=get_compute_kernel_options(False),
     )
-    # With a provided output, check that buffer itself: the op must write into it.
+    # Check the provided buffer itself, not the return value.
     actual = ttnn.to_torch(tt_output if provide_output else result)
 
-    # Every softmax value here is under ~0.04: with atol 0.05 an all-zero output would pass, since the PCC check falls
-    # back to allclose when one side is all zero.
+    # Values are under ~0.04, so atol 0.05 would pass an all-zero output.
     passing, output_pcc = comp_allclose_and_pcc(torch_output, actual, rtol=0.05, atol=0.005)
     assert passing, output_pcc
 
@@ -101,10 +95,10 @@ def run_moreh_softmax_backward_nan_pad_test(shape, dim, strategy, device, provid
         strategy=strategy,
         compute_kernel_config=get_compute_kernel_options(False),
     )
-    # With a provided input_grad, check that buffer itself: the op must write into it.
+    # Check the provided buffer itself, not the return value.
     actual = ttnn.to_torch(tt_input_grad if provide_output else result)
 
-    # As in forward: the gradients are under ~0.05, so atol 0.05 would pass an all-zero output.
+    # Gradients are under ~0.05, so atol 0.05 would pass an all-zero output.
     passing, output_pcc = comp_allclose_and_pcc(torch_input.grad, actual, rtol=0.05, atol=0.005)
     assert passing, output_pcc
 
@@ -210,14 +204,14 @@ def test_moreh_softmax_backward_unaligned(unaligned, device):
     "shape",
     [
         [2, 32, 128],
-        # 64 tiles in a row: past the small factory's 512 KB circular-buffer budget, so the op picks the large one.
+        # Past the small factory's circular-buffer budget, so the op picks the large one.
         [1, 1, 32, 2048],
     ],
     ids=["picks_w_small", "picks_w_large"],
 )
 def test_moreh_softmax_auto_strategy(shape, device):
     torch.manual_seed(0)
-    # No strategy: the op picks the factory from dim and size.
+    # No strategy: the op picks the factory.
     run_moreh_softmax_test(
         shape, len(shape) - 1, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, 0.05, 0.05, True, compute_kernel_options=False
     )
