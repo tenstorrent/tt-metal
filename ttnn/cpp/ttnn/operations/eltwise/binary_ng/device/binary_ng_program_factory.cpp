@@ -1473,11 +1473,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
     }
 
-    // Blackhole: a sharded a with a column or scalar broadcast b, into a sharded c, computes a DEST section of tiles per
-    // acquire; without activations an add or sub into bf16 unpacks it with one call.
     if (pre_sections > 1) {
         compute_kernel_defines["BINARY_NG_PRE_SECTIONS"] = std::to_string(pre_sections);
     }
+
+    // Blackhole: a sharded a with a column or scalar broadcast b, into a sharded c, computes a DEST section of tiles per
+    // acquire; without activations an add or sub into bf16 unpacks it with one call.
     if (bcast_sections) {
         compute_kernel_defines["BCAST_OTHER_CHUNK"] = fp32_dest_acc_en ? "4" : "8";
         if (!has_operand_activations && !has_post_activations && unpack_alone_formats &&
