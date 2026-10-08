@@ -1,22 +1,48 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only checks (no device) for Galaxy prefill padding, the prefix-caching heuristic and the
-prefill warmup lengths. Llama (pad_multiple None) must match the power-of-2 functions exactly;
-Qwen (prefill_pad_multiple 8192) pads > 4096 to multiples of 8192 and warms every such bucket."""
+"""Host-only checks (no device opened by the tests) for Galaxy prefill padding, the prefix-caching heuristic
+and the prefill warmup lengths. Llama (pad_multiple None) must match the power-of-2 functions exactly;
+Qwen pads > 4096 to multiples of TtQwenModelArgs.prefill_pad_multiple (8192, pinned below) and warms every
+such bucket. The Qwen value is read from the real model-args class, and the Generator call sites that read
+it (getattr(self.model_args, "prefill_pad_multiple", None)) are exercised with those model args.
+Note: the directory conftest (ensure_devices_tg) enumerates the chips, so run with the devices idle."""
+
+from types import SimpleNamespace
 
 import pytest
+import torch
 
+import models.demos.llama3_70b_galaxy.tt.generator as generator_module
+from models.demos.llama3_70b_galaxy.tests.qwen_host_model_args import qwen_model_args
 from models.demos.llama3_70b_galaxy.tt.generator import (
     MAX_TRACED_PREFILL_LEN,
+    Generator,
     _should_skip_prefix_caching,
     get_padded_prefill_len,
     get_prefill_warmup_sequence_lengths,
 )
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import PREFILL_SUPPORT_SEQLENS
 
-QWEN_PAD_MULTIPLE = 8192  # TtQwenModelArgs.prefill_pad_multiple
+# User decision (2026-10-08, keep 01b): Qwen prefill > 4096 pads to multiples of 8192 and the warmup
+# compiles every such bucket. A change of TtQwenModelArgs.prefill_pad_multiple must fail here.
+USER_QWEN_PAD_MULTIPLE = 8192
+QWEN_WARMUP_40960 = [128, 1024, 2048, 4096, 8192, 16384, 24576, 32768, 40960]
 MAX_LEN = 262144
+
+
+@pytest.fixture(scope="module")
+def qwen_args():
+    return qwen_model_args(max_seq_len=40960)
+
+
+@pytest.fixture(scope="module")
+def qwen_pad_multiple(qwen_args):
+    return qwen_args.prefill_pad_multiple
+
+
+class _StopAtCallSite(Exception):
+    pass
 
 
 # Reference: the functions as they were before pad_multiple (tt-metal main@8bdf164e, generator.py).
@@ -75,8 +101,61 @@ def test_llama_skip_prefix_caching_unchanged():
             )
 
 
-def test_qwen_padding_exhaustive():
-    m = QWEN_PAD_MULTIPLE
+def test_qwen_pad_multiple_is_user_choice(qwen_pad_multiple):
+    assert qwen_pad_multiple == USER_QWEN_PAD_MULTIPLE
+
+
+def test_generator_warmup_sweep_reads_qwen_pad_multiple(qwen_args, monkeypatch, expect_error):
+    # Generator._prefill_warmup_sweep (generator.py, phase 1) passes getattr(model_args, "prefill_pad_multiple")
+    # to get_prefill_warmup_sequence_lengths. Stop at that call and check the arguments and the 9 buckets.
+    calls = []
+
+    def spy(max_seq_len, pad_multiple=None):
+        calls.append((max_seq_len, pad_multiple))
+        raise _StopAtCallSite("stopped at the call site")
+
+    monkeypatch.setattr(generator_module, "get_prefill_warmup_sequence_lengths", spy)
+    gen = Generator.__new__(Generator)  # no device: only model_args and model.args are read before the call
+    gen.model_args = qwen_args
+    gen.model = SimpleNamespace(args=qwen_args, switch_mode=lambda mode: None)
+    with expect_error(_StopAtCallSite, "stopped at the call site"):
+        gen._prefill_warmup_sweep(None, None, False, None, None)
+    assert calls == [(40960, qwen_args.prefill_pad_multiple)]
+    warm = get_prefill_warmup_sequence_lengths(*calls[0])
+    assert len(warm) == 9 and warm == QWEN_WARMUP_40960
+
+
+def test_generator_prefill_reads_qwen_pad_multiple(qwen_args, monkeypatch, expect_error):
+    # Generator.prefill_forward_text passes getattr(model_args, "prefill_pad_multiple") to the prefix-caching
+    # heuristic and to get_padded_prefill_len. Stop at the padding call: 40928 must pad to 40960.
+    skip_calls, pad_calls = [], []
+
+    def skip_spy(seq_len, num_cached, pad_multiple=None):
+        skip_calls.append((seq_len, num_cached, pad_multiple))
+        return False
+
+    def pad_spy(seq_len, pad_multiple=None):
+        pad_calls.append((seq_len, pad_multiple))
+        raise _StopAtCallSite("stopped at the call site")
+
+    monkeypatch.setattr(generator_module, "_should_skip_prefix_caching", skip_spy)
+    monkeypatch.setattr(generator_module, "get_padded_prefill_len", pad_spy)
+    gen = Generator.__new__(Generator)
+    gen.model_args = qwen_args
+    gen.model = SimpleNamespace(args=qwen_args, is_prefill_setup=True)
+    gen.already_warmed_up_prefill = True
+    gen.warming_up_prefill = False
+    tokens = torch.zeros(1, 40928, dtype=torch.long)
+    with expect_error(_StopAtCallSite, "stopped at the call site"):
+        gen.prefill_forward_text(tokens, kv_cache=[None], prompt_lens=[40928], start_pos=[0])
+    m = qwen_args.prefill_pad_multiple
+    assert skip_calls == [(40928, 0, m)]
+    assert pad_calls == [(40928, m)]
+    assert get_padded_prefill_len(*pad_calls[0]) == 40960
+
+
+def test_qwen_padding_exhaustive(qwen_pad_multiple):
+    m = qwen_pad_multiple
     for s in range(1, MAX_LEN + 1):
         padded = get_padded_prefill_len(s, m)
         if s <= MAX_TRACED_PREFILL_LEN:
@@ -106,15 +185,15 @@ def test_pad_multiple_must_divide_8192(bad_multiple, expect_error):
         (20000, [128, 1024, 2048, 4096, 8192, 16384]),
     ],
 )
-def test_qwen_warmup_lengths(max_seq_len, expected):
-    assert get_prefill_warmup_sequence_lengths(max_seq_len, QWEN_PAD_MULTIPLE) == expected
+def test_qwen_warmup_lengths(max_seq_len, expected, qwen_pad_multiple):
+    assert get_prefill_warmup_sequence_lengths(max_seq_len, qwen_pad_multiple) == expected
 
 
 @pytest.mark.parametrize("max_seq_len", [4096, 8192, 20000, 40960, 65536, 131072])
-def test_qwen_warmup_covers_every_bucket(max_seq_len):
+def test_qwen_warmup_covers_every_bucket(max_seq_len, qwen_pad_multiple):
     # Every padded length a prompt of <= max_seq_len tokens can get is warmed (no first-request compile),
     # and each warmup length pads to itself.
-    m = QWEN_PAD_MULTIPLE
+    m = qwen_pad_multiple
     warm = get_prefill_warmup_sequence_lengths(max_seq_len, m)
     for length in warm:
         assert get_padded_prefill_len(length, m) == length
@@ -123,11 +202,49 @@ def test_qwen_warmup_covers_every_bucket(max_seq_len):
     assert set(ref_warmup_lengths(max_seq_len)) <= set(warm)  # superset of the power-of-2 list
 
 
-@pytest.mark.parametrize("max_seq_len", [40960, 131072])
-def test_qwen_prefix_cached_buckets_are_powers_of_two(max_seq_len):
+def _sp1_pow2_bound(pad_multiple):
+    """(L, max_safe): L is the smallest non-power-of-2 bucket above the traced ones (24576 for 8192).
+    The heuristic keeps a cached prefix only when the padded total is >= 8x the padded new tokens, so the
+    first prefix-cached (sp1) prefill with a non-power-of-2 bucket L needs a padded total of 8 * L. A prompt
+    pads to 8 * L once it is longer than 8 * L - pad_multiple, so max_safe = 8 * L - pad_multiple
+    (188416 for 8192), not 8 * L."""
+    first = (MAX_TRACED_PREFILL_LEN // pad_multiple + 1) * pad_multiple
+    smallest = next(b for b in range(first, 1 << 30, pad_multiple) if b & (b - 1))
+    return smallest, 8 * smallest - pad_multiple
+
+
+def test_qwen_sp1_pow2_warmup_bound_is_tight(qwen_pad_multiple):
+    # generator.py _prefill_warmup_sweep phase 2 (sp1) warms powers of 2 only (comment at generator.py:437-441).
+    # One token past max_safe, a block-aligned cached prefix leaves new tokens that pad to L (not a power of 2).
+    m = qwen_pad_multiple
+    smallest, max_safe = _sp1_pow2_bound(m)
+    seq_len = max_safe + 1
+    num_cached = -(-(seq_len - smallest) // 128) * 128  # SDPA_CHUNK_ALIGN-aligned prefix
+    assert smallest & (smallest - 1)
+    assert get_padded_prefill_len(seq_len, m) == 8 * smallest
+    assert not _should_skip_prefix_caching(seq_len, num_cached, m)
+    assert get_padded_prefill_len(seq_len - num_cached, m) == smallest
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="known gap (found 2026-10-08): TtQwenModelArgs.max_context_len 190190 > 188416, the longest "
+    "max_seq_len whose prefix-cached prefills all use power-of-2 sp1 buckets; Qwen max_seq_len in "
+    "(188416, 190190] can hit an unwarmed sp1 bucket of 24576. Fix in generator.py phase 2 (warm the "
+    "non-power-of-2 sp1 buckets or assert max_seq_len), then drop this xfail.",
+)
+def test_qwen_sp1_pow2_warmup_guard(qwen_args, qwen_pad_multiple):
+    # Guard: every Qwen max_seq_len (up to max_context_len) stays within the sp1 power-of-2 reasoning.
+    _, max_safe = _sp1_pow2_bound(qwen_pad_multiple)
+    assert qwen_args.max_context_len <= max_safe, (qwen_args.max_context_len, max_safe)
+
+
+# 188416 = 8 * 24576 - 8192, the longest max_seq_len the sp1 power-of-2 reasoning covers (_sp1_pow2_bound).
+@pytest.mark.parametrize("max_seq_len", [40960, 131072, 188416])
+def test_qwen_prefix_cached_buckets_are_powers_of_two(max_seq_len, qwen_pad_multiple):
     # The sp1 (prefix-cached) warmup keeps the power-of-2 list: the heuristic never keeps a cached
-    # prefix whose new tokens pad to a non-power-of-2 bucket while max_seq_len < 8 * 24576.
-    m = QWEN_PAD_MULTIPLE
+    # prefix whose new tokens pad to a non-power-of-2 bucket while max_seq_len <= 8 * 24576 - 8192.
+    m = qwen_pad_multiple
     pow2 = set(ref_warmup_lengths(max_seq_len))
     for seq_len in range(129, max_seq_len + 1, 53):
         for num_cached in range(128, seq_len, 128):
