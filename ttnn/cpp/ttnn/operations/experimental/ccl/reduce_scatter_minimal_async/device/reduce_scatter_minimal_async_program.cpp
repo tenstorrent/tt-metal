@@ -356,12 +356,6 @@ namespace {
 template <typename ProgramOrDesc>
 inline constexpr bool is_legacy_program_v = std::is_same_v<std::decay_t<ProgramOrDesc>, tt::tt_metal::Program>;
 
-tt::tt_metal::CoreRangeSet as_core_range_set(const tt::tt_metal::CoreCoord& core) {
-    return tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(core, core));
-}
-tt::tt_metal::CoreRangeSet as_core_range_set(const tt::tt_metal::CoreRange& cores) {
-    return tt::tt_metal::CoreRangeSet(cores);
-}
 tt::tt_metal::CoreRangeSet as_core_range_set(const tt::tt_metal::CoreRangeSet& cores) { return cores; }
 
 template <typename ProgramOrDesc>
@@ -411,8 +405,7 @@ uint32_t add_semaphore(
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
                     const tt::tt_metal::CoreCoord core(x, y);
                     for (const auto& semaphore : target.semaphores) {
-                        if (semaphore.core_type == tt::tt_metal::CoreType::WORKER &&
-                            semaphore.core_ranges.contains(core)) {
+                        if (semaphore.core_type == tt::CoreType::WORKER && semaphore.core_ranges.contains(core)) {
                             used_semaphore_ids.set(semaphore.id);
                         }
                     }
@@ -429,7 +422,7 @@ uint32_t add_semaphore(
         TT_FATAL(semaphore_id.has_value(), "No available semaphore ID");
         target.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
             .id = semaphore_id.value(),
-            .core_type = tt::tt_metal::CoreType::WORKER,
+            .core_type = tt::CoreType::WORKER,
             .core_ranges = cores,
             .initial_value = initial_value,
         });
