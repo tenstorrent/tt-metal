@@ -368,7 +368,9 @@ def _device_step(mesh, spec, layer, step, loader, cfg):
     if step == "experts":
         from models.demos.glm53_flash_d_p.tt.experts import build_experts
 
-        return _experts_host_fn(mesh, build_experts(mesh, loader, cfg, layer, max(_chunks(spec))))
+        return _experts_host_fn(
+            mesh, build_experts(mesh, loader, cfg, layer, max(_chunks(spec)), weights_dtype=experts_dtype(spec))
+        )
     if step == "moe_add":
         from models.demos.glm53_flash_d_p.tt.moe_add import build_moe_add
 
@@ -494,7 +496,14 @@ class GlmDeviceModel:
         t0 = time.time()
         self.mesh, self.spec = mesh, spec
         self.path = hf_path(spec)
-        self.model = TtGlmModel(mesh, self.path, max_seq=_max_seq(spec), chunks=_chunks(spec), layers=list(layers))
+        self.model = TtGlmModel(
+            mesh,
+            self.path,
+            max_seq=_max_seq(spec),
+            chunks=_chunks(spec),
+            layers=list(layers),
+            experts_dtype=experts_dtype(spec),
+        )
         self.cfg = self.model.cfg
         self.n = self.cfg.hc_mult
         self.blocks = {b.i: b for b in self.model.blocks}
@@ -566,6 +575,13 @@ class GlmDeviceModel:
         from models.demos.glm53_flash_d_p.tt.residual import residual_mix_mode
 
         return {"residual_mix": residual_mix_mode(), "residual_layout": self.model.layout}
+
+
+def experts_dtype(spec):
+    """Routed-expert weight dtype from the spec (device.experts_dtype, a ttnn dtype name); default bfp8."""
+    import ttnn
+
+    return getattr(ttnn, spec.get("device.experts_dtype") or "bfloat8_b")
 
 
 def device_model(mesh, spec, layers, lm_head=True):

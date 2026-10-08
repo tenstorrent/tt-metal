@@ -46,7 +46,6 @@ class TtMLA:
         self.mesh = mesh
         self.nh, self.dqk, self.dv, self.r = cfg.num_attention_heads, cfg.qk_head_dim, cfg.v_head_dim, cfg.kv_lora_rank
         assert self.dqk == self.dv == 256 and self.r == 512, "GLM-5.3 NoPE MLA geometry"
-        assert tuple(mesh.shape) == (2, 2), "query split assumes a 2x2 mesh (chip d = 2 r + c)"
         self.ndev = mesh.get_num_devices()
         self.scale = self.dqk**-0.5
         assert float(torch.tensor(self.scale, dtype=torch.float32)) == self.scale, "scale must be fp32-exact"
@@ -208,7 +207,7 @@ def idx_to_device(mesh, topk: torch.Tensor) -> ttnn.Tensor:
     out[:, :w] = t
     nd = mesh.get_num_devices()
     d = ttnn.from_torch(
-        out.reshape(2, 2, s // nd, IDX_W).contiguous(),
+        out.reshape(*tuple(mesh.shape), s // nd, IDX_W).contiguous(),
         dtype=ttnn.int32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh,
