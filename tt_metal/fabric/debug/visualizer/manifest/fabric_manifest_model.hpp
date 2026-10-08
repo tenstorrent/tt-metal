@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <hostdevcommon/fabric_common.h>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
@@ -20,9 +21,9 @@
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
 
-// The fabric manifest's model. The collector fills in what the router builders know, and the writer
-// (write_fabric_manifest) adds what only ControlPlane and the cluster know (routing plane, peer, cross-host,
-// wrap, cores) and serializes the manifest.
+// The fabric manifest's model. The collector fills in what the router builders know, the chip pass (join_chip) adds
+// what only ControlPlane, the cluster and the chip's other routers know (keys, peers, cross-host, wrap, cores,
+// sibling producers), and the writer serializes it.
 namespace tt::tt_fabric::manifest {
 
 // A capturable range of L1.
@@ -75,6 +76,13 @@ struct SiblingRouterRef {
     eth_chan_directions direction = eth_chan_directions::EAST;
 };
 
+// A router on another chip, named by its chip and its key there.
+struct PeerRouterRef {
+    FabricNodeId node{MeshId{0}, 0};
+    eth_chan_directions direction = eth_chan_directions::EAST;
+    routing_plane_id_t routing_plane = 0;
+};
+
 // The chip's local worker, as the producer of a sender channel.
 struct LocalWorker {};
 
@@ -119,13 +127,21 @@ struct L1CreditCounters {
 // High level information about a particular router.
 struct RouterIdentity {
     uint32_t eth_chan = 0;
+    // ControlPlane's, which make the router's key.
+    eth_chan_directions direction = eth_chan_directions::EAST;
+    routing_plane_id_t routing_plane = 0;
+    tt::tt_metal::CoreCoord logical_core;
+    tt::tt_metal::CoreCoord virtual_core;
 };
 
 // Ethernet link information about a particular router.
 struct EthLink {
-    eth_chan_directions direction = eth_chan_directions::EAST;
     EdgeCapability edge_capability = EdgeCapability::INTRAMESH_CARDINAL;
     bool is_dispatch_link = false;
+    // Null when ControlPlane connects the channel to nothing, or to a channel with no active router.
+    std::optional<PeerRouterRef> peer;
+    bool cross_host = false;
+    bool wrap = false;
 };
 
 // Information about the "shape" of a router, i.e. the number of VCs, senders, receivers, and active ERISCs.
@@ -251,10 +267,9 @@ struct DownstreamEdge {
     SiblingRouterRef target;
     // On the edge's VC.
     uint32_t landing_channel = 0;
-    // The landing channel's compact index on the sibling. The builder records it only in 2D.
-    std::optional<uint32_t> landing_compact;
     // The NoC core the connection writes to: the sibling's ERISC, or its tensix mux.
     tt::tt_metal::CoreCoord core;
+    bool through_tensix_mux = false;
     std::vector<Field> fields;
 };
 
