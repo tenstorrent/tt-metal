@@ -1,0 +1,1 @@
+ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/compute_kernel.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
