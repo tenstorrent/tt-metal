@@ -424,9 +424,11 @@ def test_decode_matches_upstream(*, decoder):
 )
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
 @pytest.mark.parametrize(
-    ("tp", "stage1_split"), [(False, False), (True, False), (True, True)], ids=["tp_off", "tp4", "tp4_s1split"]
+    ("tp", "stage1_split", "a2a"),
+    [(False, False, False), (True, False, False), (True, True, False), (True, True, True)],
+    ids=["tp_off", "tp4", "tp4_s1split", "tp4_s1split_a2a"],
 )
-def test_decode_full_bricked_matches_replicated(*, mesh_device, tp, stage1_split, monkeypatch):
+def test_decode_full_bricked_matches_replicated(*, mesh_device, tp, stage1_split, a2a, monkeypatch):
     """Full decode with the deterministic stages AND stage 5 on the bricked executor matches the
     replicated decode, on shipped weights.
 
@@ -436,7 +438,8 @@ def test_decode_full_bricked_matches_replicated(*, mesh_device, tp, stage1_split
     puts 4/2/2 heads per chip through the executor's flat (B, NH, S, HD) handoff; ``tp_off`` keeps
     every head on one chip, so the K/V halo stick is at its widest (1024 channels -> 16 sub-columns).
     ``tp4_s1split`` also splits stage 1: W over the size-4 axis, its 32 heads 4 per chip over the
-    size-8 axis.
+    size-8 axis. ``tp4_s1split_a2a`` also splits stages 2-4's tokens over the size-4 axis, with
+    all-to-alls around the attention.
 
     Latent W is 16, not the usual 8: at 8 the stage-2 shard is 2 columns wide against a halo of 3
     and no brick can plan. At 16 the stages sit at W_local 4/4/8 (stage 5 at 16), the tightest
@@ -444,6 +447,7 @@ def test_decode_full_bricked_matches_replicated(*, mesh_device, tp, stage1_split
     """
     _require_checkpoint()
     monkeypatch.setenv("DIFFVAE_DET_S1_SPLIT", "1" if stage1_split else "0")
+    monkeypatch.setenv("DIFFVAE_DET_A2A", "1" if a2a else "0")
     config = decoder_config(CHECKPOINT)
     torch.manual_seed(0)
     latent = torch.randn(1, config["in_channels"], 2, 8, 16)

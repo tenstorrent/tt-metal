@@ -42,6 +42,7 @@ from .diffvae_ops import (
     device_major_qkv,
     mesh_axis_size,
     retile,
+    slice_rows,
     split_qkv,
     to_row_major,
     wshard,
@@ -251,6 +252,7 @@ class NeighborhoodAttention(Module):
         sp_axis: int | None = None,
         tp_axis: int | None = None,
         options: DetBlockOptions = DetBlockOptions(),
+        token_split: bool = False,
     ):
         super().__init__()
         assert dim % head_dim == 0, f"dim={dim} not divisible by head_dim={head_dim}"
@@ -290,6 +292,13 @@ class NeighborhoodAttention(Module):
         # partitions the heads in every projection form.
         self.bricked = self.kernel.w_sharded
         self.heads_local = self.num_heads // self.tp if (self.fused_qkv or self.bricked) else self.num_heads
+        # token_split: x arrives as this chip's quarter of the band's tokens with every channel,
+        # so the qkv weight is whole. An all-to-all over tp_axis then trades tokens for heads, and
+        # a second one trades them back before the out-proj; see token_split_rows.
+        self.token_split = token_split and self.tp > 1
+        if self.token_split:
+            assert self.fused_qkv and self.bricked, "token_split needs fused_qkv on the W-sharded backend"
+            self.colpar_qkv = False
 
         if self.fused_qkv:
             qkv_linear = {"bias": True, "mesh_device": mesh_device}
@@ -392,8 +401,17 @@ class NeighborhoodAttention(Module):
         if self.fused_qkv:
             flat = self.qkv(x)
             ttnn.deallocate(x)
-            qkv = ttnn.reshape(flat, (1, 1, tokens, int(flat.shape[-1])))
-            if not self.colpar_qkv and self.tp > 1:
+            if self.token_split:
+                # The device-major columns put chip i's [q k v] heads in block i, so trading token
+                # rows for column blocks lands each chip on the colpar layout over every token.
+                rows = ttnn.reshape(flat, (1, 1, int(flat.shape[-2]), int(flat.shape[-1])))
+                every = consume(rows, self._all_to_all, in_dim=2, out_dim=3)
+                qkv = slice_rows(every, 0, tokens)
+                if qkv is not every:
+                    ttnn.deallocate(every)
+            else:
+                qkv = ttnn.reshape(flat, (1, 1, tokens, int(flat.shape[-1])))
+            if not self.colpar_qkv and not self.token_split and self.tp > 1:
                 partitioned = ttnn.mesh_partition(qkv, dim=3, cluster_axis=self.tp_axis)
                 ttnn.deallocate(qkv)
                 qkv = partitioned
@@ -443,10 +461,45 @@ class NeighborhoodAttention(Module):
             tp_axis=self.tp_axis,
             heads_presharded=True,
             device_plan=device_plan,
+            gather_heads=not self.token_split,
         )
+
+    def _all_to_all(self, x: ttnn.Tensor, *, in_dim: int, out_dim: int) -> ttnn.Tensor:
+        return ttnn.experimental.all_to_all_async_generic(
+            x,
+            in_dim=in_dim,
+            out_dim=out_dim,
+            num_links=self.ccl_manager.num_links,
+            topology=self.ccl_manager.topology,
+            cluster_axis=self.tp_axis,
+        )
+
+    @timing_tree.span("mesh_device", "heads-to-tokens a2a", category=timing_tree.ALLGATHER, deep=True)
+    def _heads_to_tokens(self, attended: ttnn.Tensor, tokens: int) -> ttnn.Tensor:
+        """This chip's heads over every token, ROW_MAJOR ``(1, tokens, C/tp)``, to this chip's token
+        rows with every head, ``(rows, C)`` TILE. **Consumes** ``attended``."""
+        channels = int(attended.shape[-1])
+        padded = token_split_rows(tokens, self.tp) * self.tp
+        # Padded while ROW_MAJOR: a TILE pad only extends the tile-padded shape.
+        rows = ttnn.reshape(attended, (1, 1, tokens, channels))
+        if padded != tokens:
+            rows = ttnn.pad(rows, [(0, 0), (0, 0), (0, padded - tokens), (0, 0)], 0.0)
+        tiles = ttnn.to_layout(rows, ttnn.TILE_LAYOUT)
+        if rows is not attended:
+            ttnn.deallocate(rows)
+        ttnn.deallocate(attended)
+        # Rows split in device order and columns concatenated in device order: chip i's heads
+        # land in column block i, global head order.
+        mine = consume(tiles, self._all_to_all, in_dim=3, out_dim=2)
+        return ttnn.reshape(mine, (padded // self.tp, channels * self.tp))
 
     @timing_tree.span("mesh_device", "out-proj", category=timing_tree.PROJ, deep=True)
     def _out_proj(self, attended: ttnn.Tensor, tokens: int) -> ttnn.Tensor:
+        if self.token_split:
+            flat = self._heads_to_tokens(attended, tokens)
+            out = self.proj(flat)
+            ttnn.deallocate(flat)
+            return out
         flat = consume(attended, retile, (tokens, self.dim))
         out = self.proj(flat)
         ttnn.deallocate(flat)
@@ -468,6 +521,7 @@ class NABlock(Module):
         sp_axis: int | None = None,
         tp_axis: int | None = None,
         options: DetBlockOptions = DetBlockOptions(),
+        token_split: bool = False,
     ):
         super().__init__()
         opts = options.resolve(tp_axis)
@@ -484,6 +538,7 @@ class NABlock(Module):
             sp_axis=sp_axis,
             tp_axis=tp_axis,
             options=opts,
+            token_split=token_split,
         )
         self.norm2 = RMSNorm(dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
         self.mlp = SwiGLU(
@@ -603,6 +658,16 @@ class LinearPixelShuffleUpsample(Module):
         return joined, (out_t_total, h * p2, w * p3)
 
 
+def det_a2a_enabled() -> bool:
+    """Whether stages 2-4 split the band's tokens over the head axis: on with DIFFVAE_DET_A2A=1."""
+    return os.environ.get("DIFFVAE_DET_A2A", "0") not in ("0", "false", "False", "")
+
+
+def token_split_rows(tokens: int, parts: int) -> int:
+    """Rows per chip when ``tokens`` are split ``parts`` ways, padded to whole tiles."""
+    return -(-tokens // (parts * 32)) * 32
+
+
 def stage1_split_enabled() -> bool:
     """Whether stage 1 runs split over the whole mesh: on unless DIFFVAE_DET_S1_SPLIT=0."""
     return os.environ.get("DIFFVAE_DET_S1_SPLIT", "1") not in ("0", "false", "False", "")
@@ -659,6 +724,10 @@ class DeterministicStages(Module):
         # W on the TP axis and the heads on the SP axis, so stage 1 runs on every chip instead
         # of replicated, and gathers back before its upsample.
         self.stage1_split = stage1_split_enabled() and self._w_sharded and tp_axis is not None
+        # Stages 2-4 hold the residual as a quarter of the band's tokens per head-axis chip, so
+        # everything outside the attention runs once per token instead of once per head group.
+        self.token_split = det_a2a_enabled() and self._w_sharded and tp_axis is not None
+        self.tp = mesh_axis_size(mesh_device, tp_axis) if tp_axis is not None else 1
         self.conv_in = Linear(in_channels, stage_channels[0], bias=True, mesh_device=mesh_device)
 
         def block_backend(stage: int) -> NAKernel:
@@ -682,6 +751,7 @@ class DeterministicStages(Module):
                             sp_axis=self.stage_axes(stage)[0] if self.stage_axes(stage) else None,
                             tp_axis=self.stage_axes(stage)[1] if self.stage_axes(stage) else None,
                             options=block_options,
+                            token_split=self.token_split and stage > 0,
                         )
                         for _ in range(stage_depths[stage])
                     ]
@@ -819,7 +889,12 @@ class DeterministicStages(Module):
                 sharded = w_axis
         local_dims = (t, h, w // sp)
         cos, sin, plan = self._stage_setup(stage, dims, w_axis)
+        split = self.token_split and stage > 0 and stage_sharded
+        if split:
+            x = self._split_tokens(x)
         x = self._run_blocks(x, stage, local_dims, cos, sin, plan, stage_sharded)
+        if split:
+            x = self._gather_tokens(x, math.prod(local_dims))
         if stage == 0 and stage_sharded:
             # Upsampled, stage 1's output is 4x the tokens; gather the smaller pre-upsample band.
             x = self._wgather(x, dims, w_axis)
@@ -828,6 +903,34 @@ class DeterministicStages(Module):
         out_dims = (out_dims[0], out_dims[1], out_dims[2] * sp)
         log_dram(self.mesh_device, f"det stage {stage} upsampled to {out_dims} sharded={sharded}")
         return x, out_dims, sharded
+
+    @timing_tree.span("mesh_device", "token split", category=timing_tree.RESHAPE)
+    def _split_tokens(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """This chip's slice of the band's ``(tokens, ch)`` rows over the head axis, padded to
+        whole tiles. **Consumes** ``x``."""
+        tokens, ch = int(x.shape[-2]), int(x.shape[-1])
+        padded = token_split_rows(tokens, self.tp) * self.tp
+        if padded != tokens:
+            rows = consume(x, to_row_major, (1, 1, tokens, ch))
+            x = consume(rows, ttnn.pad, [(0, 0), (0, 0), (0, padded - tokens), (0, 0)], 0.0)
+            x = consume(x, ttnn.to_layout, ttnn.TILE_LAYOUT)
+        else:
+            x = ttnn.reshape(x, (1, 1, tokens, ch))
+        mine = consume(x, ttnn.mesh_partition, dim=2, cluster_axis=self.tp_axis)
+        return ttnn.reshape(mine, (padded // self.tp, ch))
+
+    @timing_tree.span("mesh_device", "token gather", category=timing_tree.ALLGATHER)
+    def _gather_tokens(self, x: ttnn.Tensor, tokens: int) -> ttnn.Tensor:
+        """Undo :meth:`_split_tokens`. **Consumes** ``x``."""
+        rows, ch = int(x.shape[-2]), int(x.shape[-1])
+        x = ttnn.reshape(x, (1, 1, rows, ch))
+        every = consume(
+            x, lambda t: self.ccl_manager.all_gather(t, dim=2, mesh_axis=self.tp_axis, use_hyperparams=False)
+        )
+        band = slice_rows(every, 0, tokens)
+        if band is not every:
+            ttnn.deallocate(every)
+        return ttnn.reshape(band, (tokens, ch))
 
     @timing_tree.span(
         "mesh_device",
@@ -976,6 +1079,9 @@ class DiffVAEDecoder(Module):
         if self.stages.stage1_split:
             # Stage 1's qkv is then column-sharded in device-major head order: other bytes, same shapes.
             det = f"s1x-{det}"
+        if self.stages.token_split:
+            # Stages 2-4 then hold their qkv weight whole on every chip instead of column-sharded.
+            det = f"a2a-{det}"
         block = self.stage5.diff_blocks[0]
         stage5 = f"q{1 if block.attn.fused_qkv else 3}m{1 if block.mlp.fused else 2}"
         digest = hashlib.sha1("\n".join(sorted(parameters(self))).encode()).hexdigest()[:8]
