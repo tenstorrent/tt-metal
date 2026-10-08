@@ -279,7 +279,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_pages; ++i) {
             const uint64_t addr =
                 tensor_accessor::transfer_noc_addr<tensor_accessor::TransferDir::Read, true>(ta, i, 0, noc_index);
-            if (addr == tt_addrgen::kAddrInCmdBuf) {
+            if (addr == tt_addrgen::kAddrPushed) {
                 issue_pushed(i);
             } else {
                 noc_async_read(addr, pad_base + i * page_size, page_size, noc_index, kRdVc);
@@ -311,7 +311,7 @@ void kernel_main() {
     uint32_t sequencer_pushes = 0;
     for (uint32_t i = 0; i < num_pages; ++i) {
         sequencer_pushes += tensor_accessor::transfer_noc_addr<tensor_accessor::TransferDir::Read, true>(
-                                ta, i, 0, noc_index) == tt_addrgen::kAddrInCmdBuf;
+                                ta, i, 0, noc_index) == tt_addrgen::kAddrPushed;
     }
 
     volatile tt_l1_ptr uint32_t* report =

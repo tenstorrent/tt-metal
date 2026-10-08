@@ -698,11 +698,11 @@ Noc::async_read(
     noc_async_read_set_trid(txn_id, noc_id_);
     while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
     // DPRINT("Issue the read\n");
-    if constexpr (noc_may_push_v<Src>) {
+    if constexpr (noc_addrgen_push_v<Src>) {
         // The source address may already be in the read command buffer (pushed by the address generator).
-        const uint64_t src_noc_addr = get_src_ptr_or_cmd_buf(src, src_args);
-        if (noc_traits_t<Src>::in_cmd_buf(src_noc_addr)) {
-            noc_traits_t<Src>::read(dst.get_noc_write_addr(), dst.get_entry_size(), noc_id_, NOC_UNICAST_WRITE_VC);
+        const uint64_t src_noc_addr = get_src_noc_addr_or_pushed(src, src_args);
+        if (noc_traits_t<Src>::is_pushed(src_noc_addr)) {
+            noc_traits_t<Src>::issue_pushed_read(dst.get_noc_write_addr(), dst.get_entry_size(), noc_id_, NOC_UNICAST_WRITE_VC);
         } else {
             noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
                 src_noc_addr, dst.get_noc_write_addr(), dst.get_entry_size(), noc_id_, NOC_UNICAST_WRITE_VC);
@@ -733,11 +733,11 @@ Noc::async_write(
     // Use cached addresses for NOC APIs
     auto src_addr = src.get_noc_read_addr();
     uint64_t dst_noc_addr;
-    if constexpr (noc_may_push_v<Dst>) {
+    if constexpr (noc_addrgen_push_v<Dst>) {
         // The destination address may already be in the write command buffer (pushed by the address generator).
-        dst_noc_addr = get_dst_ptr_or_cmd_buf(dst, dst_args);
-        if (noc_traits_t<Dst>::in_cmd_buf(dst_noc_addr)) {
-            noc_traits_t<Dst>::template write</*posted=*/false, /*use_trid=*/true>(
+        dst_noc_addr = get_dst_noc_addr_or_pushed(dst, dst_args);
+        if (noc_traits_t<Dst>::is_pushed(dst_noc_addr)) {
+            noc_traits_t<Dst>::template issue_pushed_write</*posted=*/false, /*use_trid=*/true>(
                 src_addr, src.get_entry_size(), noc_id_, NOC_UNICAST_WRITE_VC, txn_id);
             src.commit_implicit_write();
             return;

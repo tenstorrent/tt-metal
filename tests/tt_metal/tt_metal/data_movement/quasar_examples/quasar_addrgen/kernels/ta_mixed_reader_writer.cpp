@@ -4,8 +4,8 @@
 
 // One kernel that reads three tensors and writes one, page by page: per page p, reads page p of src0..src2 into L1,
 // then writes src0's page to dst0. Reads use the address generators' source sides and writes their destination
-// sides: two of the three read streams get the two source sides (first use keeps them) and the third uses software,
-// while the write stream has a destination side to itself.
+// sides: two of the three read sequences get the two source sides (first use keeps them) and the third uses software,
+// while the write sequence has a destination side to itself.
 //
 // Named RTAs: num_pages, scratch_addr (L1: three page-sized buffers), report_addr (4 stats words, see
 // ta_reader_to_dfb.cpp)
