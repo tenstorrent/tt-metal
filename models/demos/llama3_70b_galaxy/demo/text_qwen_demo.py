@@ -515,6 +515,26 @@ def create_tt_qwen_model(
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
         ),
+        (  # prefill-golden-40k-b1 - 64L, 1 user, 40928-token local prompt: prefill top-5 logits + 32 greedy tokens
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_prefill_40k_local.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            40960,  # max_seq_len (same config as prefill-perf-40k-b1)
+            1,  # batch_size
+            32,  # max_generated_tokens (40928 + 32 = 40960 = max_seq_len)
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # token_accuracy
+            False,  # prefill-only profile
+            64,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
+        ),
     ],
     ids=[
         "batch-32",  # throughput
@@ -533,6 +553,7 @@ def create_tt_qwen_model(
         "prefill-perf-40k-b1",  # warmed 64L prefill TTFT at 40k (local prompt, no download)
         "prefill-perf-4k-b1",  # warmed 64L prefill TTFT at 4k (local prompt, no download)
         "profile-1L-prefill-40k-b1",  # 1L prefill-only tracy profile at 40k (id avoids the "prefill-profile" -k substring)
+        "prefill-golden-40k-b1",  # 64L 40k end-to-end golden: prefill top-5 ids/logits + 32 greedy token ids
     ],
 )
 @pytest.mark.parametrize(
@@ -634,6 +655,10 @@ def test_qwen_demo_text(
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
+
+    # Golden capture (harness): keep the prefill logits on host and log the top-5 ids/logits at the
+    # last prompt position, then log the generated ids. No reference model; logs are compared offline.
+    golden_check = "prefill-golden-40k-b1" in request.node.callspec.id
 
     if token_accuracy and pcc_check:
         raise ValueError("Token accuracy and PCC check are separate demo modes")
@@ -849,7 +874,7 @@ def test_qwen_demo_text(
             profiler.start(f"compile_prefill", iteration=batch_idx)
             try:
                 tt_out_logits_all_users = (
-                    torch.zeros(batch_size, 1, model_args.padded_vocab_size) if pcc_check else None
+                    torch.zeros(batch_size, 1, model_args.padded_vocab_size) if (pcc_check or golden_check) else None
                 )
                 toks = generator.prefill_forward_text(
                     input_tokens_prefill_pt,  # Just warmup prefill for 1 user
@@ -871,7 +896,9 @@ def test_qwen_demo_text(
         profiler.start(f"inference_prefill", iteration=batch_idx)
 
         try:
-            tt_out_logits_all_users = torch.zeros(batch_size, 1, model_args.padded_vocab_size) if pcc_check else None
+            tt_out_logits_all_users = (
+                torch.zeros(batch_size, 1, model_args.padded_vocab_size) if (pcc_check or golden_check) else None
+            )
             if prefill_profile:
                 signpost("start")
             toks = generator.prefill_forward_text(
@@ -918,6 +945,13 @@ def test_qwen_demo_text(
             toks = toks[0]
         prefilled_token = toks.view(-1, 1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
+        if golden_check:
+            golden_top5 = torch.topk(tt_out_logits_all_users[0, 0, : model_args.vocab_size].float(), k=5)
+            logger.info(
+                f"GOLDEN prefill_top5_ids={golden_top5.indices.tolist()} "
+                f"prefill_top5_logits=[{', '.join(f'{v:.4f}' for v in golden_top5.values.tolist())}] "
+                f"prefill_token={int(prefilled_token[0].item())}"
+            )
         logger.info(f"Prefill finished")
 
         if prefill_profile:  # If we are profiling prefill, we stop here
@@ -1148,6 +1182,8 @@ def test_qwen_demo_text(
             if not users_decoding and not pcc_check:
                 profiler.start(f"log_saving_file", iteration=batch_idx)
                 logger.info("Finished decoding, printing the final outputs...\n")
+                if golden_check:
+                    logger.info(f"GOLDEN generated_ids={[int(t) for t in all_outputs[0][prefill_lens[0]:]]}")
                 for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
                     text = tokenizer.decode(output)
                     prompt_including_assistant_tags = tokenizer.decode(
