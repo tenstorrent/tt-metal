@@ -13,27 +13,19 @@
 #include "ckernel_helper.h" // Only for WH/BH
 #endif
 #include "boot.h"
+#include "counters.h"
 #include "profiler.h"
 
 #ifdef LLK_PROFILER
 
 namespace llk_profiler
 {
-barrier_ptr_t barrier_ptr          = reinterpret_cast<barrier_ptr_t>(BARRIER_START);
 buffer_ptr_t buffer                = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
 epoch_ptr_t epoch_ptr              = reinterpret_cast<epoch_ptr_t>(EPOCH_ADDR);
 std::uint32_t write_idx            = 0;
 std::uint32_t reserved_words_count = 0;
 
 } // namespace llk_profiler
-
-#if defined(ARCH_QUASAR)
-namespace llk_barrier
-{
-// barrier.h cannot include profiler.h, so the L1 address is supplied from here.
-volatile std::uint32_t* barrier_slots = reinterpret_cast<volatile std::uint32_t*>(llk_profiler::BARRIER_START);
-} // namespace llk_barrier
-#endif
 
 #endif
 
@@ -78,6 +70,10 @@ int main(void)
     *(mailbox_base + 3) = ckernel::RESET_VAL;
 #endif
     device_setup();
+#if defined(ARCH_QUASAR)
+    // No BRISC on Quasar: unpack configures and arms the counters while the other TRISCs are still held in reset.
+    llk_perf::configure_and_arm();
+#endif
     clear_trisc_soft_reset(); // Release the rest of the triscs
 #endif
 
@@ -107,6 +103,8 @@ int main(void)
 
         ckernel::tensix_sync();
     }
+
+    llk_perf::read_last_zone();
 
 #if defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && defined(MATMUL_UNPACK_TTSYNC)
     _llk_unpack_AB_matmul_ttsync_restore_();

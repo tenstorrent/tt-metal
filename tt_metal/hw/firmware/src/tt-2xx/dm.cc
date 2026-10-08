@@ -15,6 +15,7 @@
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #include "hostdev/dev_msgs.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tools/profiler/perf_counters.hpp"
 #include "api/kernel_thread_globals.h"
 #include "internal/tt-2xx/worker_go_signalling.h"
 
@@ -257,6 +258,10 @@ extern "C" uint32_t _start1() {
     // it lives in, so caching it any earlier would just be discarded.
     uint32_t hartid = internal_::read_hw_thread_idx();
     if (hartid == 0) {
+        do {
+            set_deassert_addresses();
+            assert_trisc_reset();
+        } while (READ_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR) != 0b1111);
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
         // Must precede the ready flag below, which releases the other pushers.
@@ -278,7 +283,11 @@ extern "C" uint32_t _start1() {
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[0] != SHARED_GLOBALS_READY_GO) {
     }
     WAYPOINT("I");
-    DPRINT("DM0-FW: initialized\n");
+    if (hartid == 0) {
+        // Reset the shared print lock and announce from DM0 only.
+        DEVICE_PRINT_INITIALIZE_LOCK();
+        DPRINT("DM0-FW: initialized\n");
+    }
 
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
@@ -369,6 +378,8 @@ extern "C" uint32_t _start1() {
                     mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
                 }
 
+                // The counter window runs from here to StopPerfCounters after wait_subordinates.
+                StartPerfCounters();
                 run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
@@ -411,6 +422,10 @@ extern "C" uint32_t _start1() {
                         prepare_worker_completion_signal(mailboxes, launch_msg_address, /*wait_for_go=*/true);
                 }
                 wait_subordinates();
+
+                // Every TRISC is done: the window spans the whole kernel and the TRISC profiler buffers are final.
+                StopPerfCounters();
+                ReadPerfCounters(enables);
 
                 trigger_sync_register_init();
 
