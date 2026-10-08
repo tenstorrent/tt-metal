@@ -2305,3 +2305,184 @@
 - claim: RING MoE fidelity facts (ringk, per-matmul knobs MOE_COMPUTE_FID_W01 / MOE_COMPUTE_FID_W2, 0 LoFi 2 HiFi2 3 HiFi3 4 HiFi4): W0/W1 needs HiFi3 (W01=HiFi2: rel vs dump L5 T=8 0.0221 vs 0.0081, T=32 0.0137 vs 0.0062); HiFi4 == HiFi3 numerics (rel 0.0081, slower 1.194 vs 1.022 ms); HiFi2 plain rel 0.0212 at 0.764 ms; skipping fidelity phase 1 (MOE_COMPUTE_FID_INCR=2 or 3 on a 2-phase loop) gives the same numerics as plain HiFi2 (0.0212), so no cheaper route to HiFi3 accuracy; single-chip ttnn.matmul probe (bf16 x [32,4096] @ [4096,2048], fp32 DEST, rel vs fp64) bfp8 W: LoFi 0.0187, HiFi2 0.0041, HiFi3 0.00031, HiFi4 0.00031 (moe_AK_fidprobe.jsonl)
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AM_w01hi2_w2hi3_h47_7a16eb305aa.log
 - paths: ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute.cpp
+
+## E261008-0534-bd5
+- date: 2026-10-08T05:34:10
+- commit: 17feb8f9173
+- branch: ssinghal/mimo-regate
+- host: 30
+- track: correctness
+- status: verified
+- claim: RE-GATE 2 layer_pcc.dense at 17feb8f9173 (merge of ssinghal/mimo 17feb8f9173, frozen): layer 0 (dense SwiGLU, global attention) WHOLE layer on device (prefill path), teacher forced from dump h_in (mimo-prefill-s128b16, B=16 S=128): h_out PCC vs bf16 CPU dump, min over 16 users = 0.99998 (floor 1.0). Real bfp8 weights. LIB ringk_full_7a16eb305aa (LD_LIBRARY_PATH, harness guard passed), only MIMO_CKPT/LD_LIBRARY_PATH/MIMO_EXPERT_OP=unified (prefill) set so the DEFAULTS run: ring decode MoE (MIMO_MOE_DECODE=ring, 47 ring_L cache loads in the decode logs), fast router, MIMO_DEAD=spread32, MIMO_FEEDBACK=1 device-resident decode loop, W2 HiFi3 (LoFi not enabled). Log /mnt/tt-data/ssinghal/mimo-logs/rg2_chain_17feb8f9173.log (test_chain_dump.py, 1 passed).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/rg2_chain_17feb8f9173.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_chain_dump.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py
+- supersedes: E261007-1642-30c
+- data: {"pcc":0.99998,"layer_type":"dense","layer":0}
+
+## E261008-0534-f94
+- date: 2026-10-08T05:34:10
+- commit: 17feb8f9173
+- branch: ssinghal/mimo-regate
+- host: 30
+- track: correctness
+- status: verified
+- claim: RE-GATE 2 layer_pcc.swa_moe at 17feb8f9173: layers 1..4 (SWA attention + MoE) WHOLE layer on device (prefill path), teacher forced from dump h_in (s128b16): h_out PCC vs bf16 CPU dump, min over 16 users and L1..L4 = 0.99992 (L1 0.99993, L2 0.99992, L3 0.99995, L4 0.99995; floors 0.99994-0.99995). LIB ringk_full_7a16eb305aa (LD_LIBRARY_PATH, harness guard passed), only MIMO_CKPT/LD_LIBRARY_PATH/MIMO_EXPERT_OP=unified (prefill) set so the DEFAULTS run: ring decode MoE (MIMO_MOE_DECODE=ring, 47 ring_L cache loads in the decode logs), fast router, MIMO_DEAD=spread32, MIMO_FEEDBACK=1 device-resident decode loop, W2 HiFi3 (LoFi not enabled).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/rg2_chain_17feb8f9173.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_chain_dump.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py
+- supersedes: E261007-1642-7c4
+- data: {"pcc":0.99992,"layer_type":"swa_moe","layers":[1,2,3,4]}
+
+## E261008-0534-dc6
+- date: 2026-10-08T05:34:10
+- commit: 17feb8f9173
+- branch: ssinghal/mimo-regate
+- host: 30
+- track: correctness
+- status: verified
+- claim: RE-GATE 2 layer_pcc.global_moe at 17feb8f9173: layer 5 (global attention + MoE) WHOLE layer on device (prefill path), teacher forced from dump h_in (s128b16), h_out PCC vs bf16 CPU dump min over 16 users = 0.9999 (floor 0.99994). Only L5 has a dump. LIB ringk_full_7a16eb305aa (LD_LIBRARY_PATH, harness guard passed), only MIMO_CKPT/LD_LIBRARY_PATH/MIMO_EXPERT_OP=unified (prefill) set so the DEFAULTS run: ring decode MoE (MIMO_MOE_DECODE=ring, 47 ring_L cache loads in the decode logs), fast router, MIMO_DEAD=spread32, MIMO_FEEDBACK=1 device-resident decode loop, W2 HiFi3 (LoFi not enabled).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/rg2_chain_17feb8f9173.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_chain_dump.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py
+- supersedes: E261007-1642-f2e
+- data: {"pcc":0.9999,"layer_type":"global_moe","layer":5}
+
+## E261008-0534-b47
+- date: 2026-10-08T05:34:10
+- commit: 17feb8f9173
+- branch: ssinghal/mimo-regate
+- host: 30
+- track: correctness
+- status: verified
+- claim: RE-GATE 2 chain_prefix_pcc at 17feb8f9173: L0..L5 free-running chain on device (device embedding of the dump tokens, each layer fed the previous DEVICE output), h_out PCC after layer 1..6 vs bf16 CPU dump, min over 16 users: 0.99998, 0.99989, 0.99986, 0.99986, 0.99989, 0.99977 (floor >= 0.99994); max drop per layer 0.00012. LIB ringk_full_7a16eb305aa (LD_LIBRARY_PATH, harness guard passed), only MIMO_CKPT/LD_LIBRARY_PATH/MIMO_EXPERT_OP=unified (prefill) set so the DEFAULTS run: ring decode MoE (MIMO_MOE_DECODE=ring, 47 ring_L cache loads in the decode logs), fast router, MIMO_DEAD=spread32, MIMO_FEEDBACK=1 device-resident decode loop, W2 HiFi3 (LoFi not enabled).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/rg2_chain_17feb8f9173.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_chain_dump.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py
+- supersedes: E261007-1642-220
+- data: {"pcc_curve":[0.99998,0.99989,0.99986,0.99986,0.99989,0.99977]}
+
+## E261008-0534-981
+- date: 2026-10-08T05:34:10
+- commit: 17feb8f9173
+- branch: ssinghal/mimo-regate
+- host: 40,43,44,47
+- track: correctness
+- status: verified
+- claim: RE-GATE 2 prefill_phase at 17feb8f9173: traced chunked prefill L0..L5 (6 layers) vs CPU dumps, worst over s128b16 (CH128, host 40), s512b4 (CH256, host 43), s2048b1 (CH512, host 44), s8192b1 (CH2048, host 47): layer_pcc_min = hidden after L5 at every real position, min over users = 0.99953 (s512b4; s128b16 0.99977, s2048b1 0.99974, s8192b1 0.9998); kv_pcc_min = min over L0..L5 of K (post-RoPE) and V cache contents read back from the paged pool = 0.99922 (GA L5 V in s128b16). Replay-identical true on all four; first-token top1 agreement vs CPU 16/16, 4/4, 1/1, 1/1. LIB ringk_full_7a16eb305aa (LD_LIBRARY_PATH, harness guard passed), only MIMO_CKPT/LD_LIBRARY_PATH/MIMO_EXPERT_OP=unified (prefill) set so the DEFAULTS run: ring decode MoE (MIMO_MOE_DECODE=ring, 47 ring_L cache loads in the decode logs), fast router, MIMO_DEAD=spread32, MIMO_FEEDBACK=1 device-resident decode loop, W2 HiFi3 (LoFi not enabled). Logs /mnt/tt-data/ssinghal/mimo-logs/rg2_pf_<dump>_17feb8f9173.jsonl/.log.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/rg2_pf_s128b16_17feb8f9173.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_prefill_handoff.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/attention.py
+- supersedes: E261007-1642-283
+- data: {"layer_pcc_min":0.99953,"kv_pcc_min":0.99922}
+
+## E261008-0534-ce0
+- date: 2026-10-08T05:34:10
+- commit: 17feb8f9173
+- branch: ssinghal/mimo-regate
+- host: 40,43,44,47
+- track: correctness
+- status: verified
+- claim: RE-GATE 2 decode_phase at 17feb8f9173: one-step decode from a prefill-written state at the LAYER level: for each of L0..L5, teacher-forced dump dec_in (3 steps) through Layer.decode reading the paged KV pool written by the traced chunked prefill, vs dump dec_out; min PCC over layers, steps and the four dumps = 0.98732 (L5 step 2 of s128b16, 4 live tokens per row, near-tie routing; all s512b4/s2048b1/s8192b1 >= 0.99957). CAVEAT: test_prefill_handoff calls Layer.decode WITHOUT the live mask, so it uses the legacy (non-ring, non-traced) MoE path, not the ring MoE of the default traced decode (the ring MoE is checked by test_verify_decode/test_decode_reconf entries of the moe agent, not re-run here). Same test as round 1. LIB ringk_full_7a16eb305aa (LD_LIBRARY_PATH, harness guard passed), only MIMO_CKPT/LD_LIBRARY_PATH/MIMO_EXPERT_OP=unified (prefill) set so the DEFAULTS run: ring decode MoE (MIMO_MOE_DECODE=ring, 47 ring_L cache loads in the decode logs), fast router, MIMO_DEAD=spread32, MIMO_FEEDBACK=1 device-resident decode loop, W2 HiFi3 (LoFi not enabled).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/rg2_pf_s128b16_17feb8f9173.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_prefill_handoff.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/attention.py
+- supersedes: E261007-1642-43c
+- data: {"pcc":0.98732}
+
+## E261008-0534-e44
+- date: 2026-10-08T05:34:10
+- commit: 17feb8f9173
+- branch: ssinghal/mimo-regate
+- host: 30,40,43,44
+- track: memory
+- status: verified
+- claim: RE-GATE 2 memory_fit at 17feb8f9173 WITH BOTH WEIGHT COPIES (unified per-expert copy + ring-layout copy, ring loads lazily at the first decode): free DRAM per chip (ttnn memory view, GiB = free MB per bank x 8 / 1024), one process per cell, KV pool sized to the cell, 48 layers, ring path confirmed by 47 ring_L loads in every decode log. AFTER FIRST DECODE (ring copy + decode trace loaded; test_ctx64k decode mode, ISL 4096 with 64 new tokens, ISL 65000 with 1100 new): (4,4096) 860.7 MB/bank = 6.724 GiB (host 43); (16,4096) 818.1 = 6.391 (host 43); (4,65536) 539.8 = 4.217 (host 30); (16,65536) 345.3 = 2.698 (host 40). AFTER PREFILL ONLY (one copy; test_prefill_scale): 18.133, 17.799, 15.627, 14.107 GiB (hosts 30,40,43,44; identical to rounds 1). Table in data = after first decode (the binding number, min 2.698 GiB at B=16/64k, > 1 GiB so ring_enabled keeps the ring); table_after_prefill = one copy. B=128/64k not measured. LIB ringk_full_7a16eb305aa (LD_LIBRARY_PATH, harness guard passed), only MIMO_CKPT/LD_LIBRARY_PATH/MIMO_EXPERT_OP=unified (prefill) set so the DEFAULTS run: ring decode MoE (MIMO_MOE_DECODE=ring, 47 ring_L cache loads in the decode logs), fast router, MIMO_DEAD=spread32, MIMO_FEEDBACK=1 device-resident decode loop, W2 HiFi3 (LoFi not enabled). Logs /mnt/tt-data/ssinghal/mimo-logs/rg2_ctx{4k,64k}_b{4,16}_17feb8f9173.jsonl, rg2_ps48_<B>_<ISL>_17feb8f9173.jsonl
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/rg2_ctx64k_b16_17feb8f9173.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py, models/demos/blackhole/mimo_v26/tests/test_ctx64k.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py
+- supersedes: E261007-1642-04d
+- data: {"table":[{"batch":4,"isl":4096,"free_gib":6.724},{"batch":16,"isl":4096,"free_gib":6.391},{"batch":4,"isl":65536,"free_gib":4.217},{"batch":16,"isl":65536,"free_gib":2.698}],"table_after_prefill":[{"batch":4,"isl":4096,"free_gib":18.133},{"batch":16,"isl":4096,"free_gib":17.799},{"batch":4,"isl":65536,"free_gib":15.627},{"batch":16,"isl":65536,"free_gib":14.107}],"isl_note":"decode cells use ISL 65000 (not 65536) for the 64k rows"}
+
+## E261008-0534-ba3
+- date: 2026-10-08T05:34:10
+- commit: 17feb8f9173
+- branch: ssinghal/mimo-regate
+- host: 30
+- track: perf
+- status: verified
+- claim: RE-GATE 2 perf_prefill at 17feb8f9173 (48 layers, B=4 users one per mesh row, ISL 4096, CH 2048, traced chunked prefill, real GSM8K text, host 30): REAL TTFT warm (second call of the same case: set_step host copies + 2 replays + last-token hidden to host + final norm + lm_head + host copy) = 1437.6 ms (ttft_ms), real warm aggregate 4 x 4096 / 1.4376 s = 11397 tok/s (prefill_tok_s); first call incl. eager warm-up and trace capture = 12754 ms; replay-only = 970 ms (2 x 487.1 ms) = 16899 tok/s. B=16 ISL 4096 (host 40): real warm TTFT 4759.8 ms (13769 tok/s), replay-only 16873 tok/s. 64k: B=4 (host 43) warm 19522.5 ms (13428 tok/s real, replay-only 14662); B=16 (host 44) warm 77240.4 ms (13575 tok/s real, replay-only 14693). Unchanged vs round 1 (replay step 487 ms, the regression vs the old shared-lib 375 ms persists, not investigated). LIB ringk_full_7a16eb305aa (LD_LIBRARY_PATH, harness guard passed), only MIMO_CKPT/LD_LIBRARY_PATH/MIMO_EXPERT_OP=unified (prefill) set so the DEFAULTS run: ring decode MoE (MIMO_MOE_DECODE=ring, 47 ring_L cache loads in the decode logs), fast router, MIMO_DEAD=spread32, MIMO_FEEDBACK=1 device-resident decode loop, W2 HiFi3 (LoFi not enabled).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/rg2_ps48_4_4096_17feb8f9173.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py, models/demos/blackhole/mimo_v26/tests/test_ctx64k.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py
+- supersedes: E261007-1642-751
+- data: {"ttft_ms":1437.6,"prefill_tok_s":11397,"ttft_ms_real_warm":1437.6,"ttft_ms_real_first_call":12753.6,"ttft_ms_replay_only":970,"prefill_tok_s_replay_only":16899,"batch":4,"isl":4096,"b16_isl4096_ttft_ms_real_warm":4759.8,"b4_isl65536_ttft_ms_real_warm":19522.5,"b16_isl65536_ttft_ms_real_warm":77240.4,"replay_only":0}
+
+## E261008-0534-89f
+- date: 2026-10-08T05:34:10
+- commit: 17feb8f9173
+- branch: ssinghal/mimo-regate
+- host: 47
+- track: metric
+- status: verified
+- claim: RE-GATE 2 ctx64k_two_isl at 17feb8f9173 (host 47): 48 layers, 4 users, ISL 64k -> 8k -> 64k in ONE process, prefill only (no decode trace in the process, so the ring copy is not loaded): free DRAM 2000.2 MB/bank after each of the three cases (identical, no leak), no OOM, first-token logits finite (assert in test), replay 17.87 s / 2.00 s / 17.79 s. No accuracy claim. LIB ringk_full_7a16eb305aa (LD_LIBRARY_PATH, harness guard passed), only MIMO_CKPT/LD_LIBRARY_PATH/MIMO_EXPERT_OP=unified (prefill) set so the DEFAULTS run: ring decode MoE (MIMO_MOE_DECODE=ring, 47 ring_L cache loads in the decode logs), fast router, MIMO_DEAD=spread32, MIMO_FEEDBACK=1 device-resident decode loop, W2 HiFi3 (LoFi not enabled).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/rg2_ps48_4_65536_4_8192_4_65536_17feb8f9173.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py, models/demos/blackhole/mimo_v26/tests/test_ctx64k.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py
+- supersedes: E261007-1642-ad3
+- data: {"two_isl_same_process_ok":1}
+
+## E261008-0534-0ff
+- date: 2026-10-08T05:34:11
+- commit: 17feb8f9173
+- branch: ssinghal/mimo-regate
+- host: 30,40
+- track: prefill
+- status: verified
+- claim: RE-GATE 2 ctx64k_prefill_decode at 17feb8f9173 (MILESTONE 1): 48 layers, 4x8, enable_thinking=false chat frame, real text = Frankenstein (Gutenberg, 101982 tokens; user b takes the window from body token b*2400) + 'quote and summarise' question, ISL 65000 per user, chunked traced prefill (CH 2048, paged pool) then traced device-resident decode with the ring MoE, 1100 new tokens. B=4 (host 30): prefill 38.6 s, steady decode 59.29 ms/step median over 1099 steps (p10-p90 58.77-59.89), free DRAM after 539.8 MB/bank (4.2 GiB). B=16 (host 40): prefill 94.0 s, steady 67.13 ms (64.8-68.15), free after 345.3 MB/bank (2.7 GiB). No OOM, no hang. First tokens 8420 ('Here') for all 4 and 15/16 users, 28715 ('Based') for one: sane. Generated text READ (users 0 and 3 of B=4, 0, 10, 15 of B=16, head and tail): coherent Frankenstein summaries followed by verbatim quotes, ntok 616-1100 (EOS earlier for some), text files /mnt/tt-data/ssinghal/mimo-logs/rg2_ctx64k_b4_17feb8f9173_texts.json and ..._b16_..._texts.json. Logits finiteness inferred from argmax tokens/text. Previous round (unified MoE): 109.2 / 120.0 ms. LIB ringk_full_7a16eb305aa (LD_LIBRARY_PATH, harness guard passed), only MIMO_CKPT/LD_LIBRARY_PATH/MIMO_EXPERT_OP=unified (prefill) set so the DEFAULTS run: ring decode MoE (MIMO_MOE_DECODE=ring, 47 ring_L cache loads in the decode logs), fast router, MIMO_DEAD=spread32, MIMO_FEEDBACK=1 device-resident decode loop, W2 HiFi3 (LoFi not enabled).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/rg2_ctx64k_b16_17feb8f9173.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py, models/demos/blackhole/mimo_v26/tests/test_ctx64k.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py
+- supersedes: E261007-1642-118
+- data: {"ctx64k_ok":1,"step_ms_64k_b4":59.29,"step_ms_64k_b16":67.13}
+
+## E261008-0534-0d3
+- date: 2026-10-08T05:34:11
+- commit: 17feb8f9173
+- branch: ssinghal/mimo-regate
+- host: 48,47
+- track: decode
+- status: verified
+- claim: RE-GATE 2 gsm8k at 17feb8f9173: 113/128 correct (88.3%, Wilson95 81.6-92.8) on gsm8k_128_nothink.json, enable_thinking=false, greedy, max_new 512, 48 layers, B=128 (U=32), traced device-resident decode, ring MoE. 113/128 in all four runs (scenario 0 and 1, hosts 48 and 47), margin +4 over the gate >=109. All 128 users finished with EOS. LIB ringk_full_7a16eb305aa (LD_LIBRARY_PATH, harness guard passed), only MIMO_CKPT/LD_LIBRARY_PATH/MIMO_EXPERT_OP=unified (prefill) set so the DEFAULTS run: ring decode MoE (MIMO_MOE_DECODE=ring, 47 ring_L cache loads in the decode logs), fast router, MIMO_DEAD=spread32, MIMO_FEEDBACK=1 device-resident decode loop, W2 HiFi3 (LoFi not enabled). Logs /mnt/tt-data/ssinghal/mimo-logs/rg2_gsm_h48_17feb8f9173.jsonl (host 48), rg2_gsm_h47_17feb8f9173.jsonl (host 47).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/rg2_gsm_h48_17feb8f9173.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_gsm8k_decode.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/decode_common.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py
+- supersedes: E261007-1642-daa
+- data: {"n":128,"correct":113}
+
+## E261008-0534-724
+- date: 2026-10-08T05:34:11
+- commit: 17feb8f9173
+- branch: ssinghal/mimo-regate
+- host: 48,47
+- track: decode
+- status: verified
+- claim: RE-GATE 2 determinism at 17feb8f9173: two identical GSM8K n=128 runs (max_new 512, greedy, 48 layers, 4x8, scenarios 128:512 twice in ONE process per host, test_gsm8k_decode.py, ring MoE + device-resident loop) are TOKEN-IDENTICAL for all 128 users on host 48 (identical_to_previous_run_same_scenario=True, first_diff_user_step=[]) AND on host 47 (same); the completions of host 48 and host 47 are also identical for all 128 users (texts json equal, s0 and s1). 113/128 correct in all four runs. LIB ringk_full_7a16eb305aa (LD_LIBRARY_PATH, harness guard passed), only MIMO_CKPT/LD_LIBRARY_PATH/MIMO_EXPERT_OP=unified (prefill) set so the DEFAULTS run: ring decode MoE (MIMO_MOE_DECODE=ring, 47 ring_L cache loads in the decode logs), fast router, MIMO_DEAD=spread32, MIMO_FEEDBACK=1 device-resident decode loop, W2 HiFi3 (LoFi not enabled). Logs /mnt/tt-data/ssinghal/mimo-logs/rg2_gsm_a_17feb8f9173.log, rg2_gsm_b_17feb8f9173.log.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/rg2_gsm_h48_17feb8f9173.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_gsm8k_decode.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/decode_common.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py
+- supersedes: E261007-1642-287
+- data: {"runs":2,"bit_identical":1,"hosts_identical":2,"n":128,"correct":113}
+
+## E261008-0534-659
+- date: 2026-10-08T05:34:11
+- commit: 17feb8f9173
+- branch: ssinghal/mimo-regate
+- host: 48,47,44
+- track: decode
+- status: verified
+- claim: RE-GATE 2 perf_decode at 17feb8f9173 (device-resident decode loop, ring MoE, fast router, spread32). DEDICATED n=128 max_new 512 run (B=128, U=32, prompts 35..137 tokens, dedicated process, trace on, host-timed, steady steps after step 5): step median 63.37 ms (host 48, both runs), 63.28 ms (host 47, both runs), 15.78 tok/s/user, 2020 tok/s total live (decode_ms_tok, tok_s_user; the median is over a run where users finish early, so live users fall over time). U SWEEP in ONE session (host 44, Generator.reconfigure between scenarios, 128 new tokens, prompts = first N of the 128 so all users stay alive for the whole run, FULL OCCUPANCY): users 4 (U=1) 35.68 ms / 28.03 tok/s/user, 8 (U=2) 40.85 / 24.48, 16 (U=4) 48.16 / 20.77, 32 (U=8) 55.02 / 18.17, 64 (U=16) 64.45 / 15.51, 128 (U=32) 75.01 / 13.33. Reverse-order session (128 down to 4, host 44): 75.00, 64.38, 55.15, 48.15, 40.79, 35.68 ms, i.e. order-independent. The full-occupancy U=32 step is 75.0 ms, NOT the 63.4 ms of the dedicated run. Round 1 (unified MoE): 107.1 ms. LIB ringk_full_7a16eb305aa (LD_LIBRARY_PATH, harness guard passed), only MIMO_CKPT/LD_LIBRARY_PATH/MIMO_EXPERT_OP=unified (prefill) set so the DEFAULTS run: ring decode MoE (MIMO_MOE_DECODE=ring, 47 ring_L cache loads in the decode logs), fast router, MIMO_DEAD=spread32, MIMO_FEEDBACK=1 device-resident decode loop, W2 HiFi3 (LoFi not enabled).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/rg2_sweep_h44_17feb8f9173.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_gsm8k_decode.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/decode_common.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py
+- supersedes: E261007-1642-84e
+- data: {"decode_ms_tok":63.37,"tok_s_user":15.78,"batch":128,"full_occupancy_u32_ms":75.01,"full_occupancy_u32_tok_s_user":13.33,"u_sweep_ms":{"U1":35.68,"U2":40.85,"U4":48.16,"U8":55.02,"U16":64.45,"U32":75.01},"u_sweep_tok_s_user":{"U1":28.03,"U2":24.48,"U4":20.77,"U8":18.17,"U16":15.51,"U32":13.33}}
+
+## E261008-0534-5b2
+- date: 2026-10-08T05:34:11
+- commit: 17feb8f9173
+- branch: ssinghal/mimo-regate
+- host: 30,43,48,47
+- track: decode
+- status: verified
+- claim: RE-GATE 2 spec_exact at 17feb8f9173 (device-resident spec round tt/spec_dev.py, chunk 4, GSM8K enable_thinking=false rows 0.., 256 new tokens, 48 layers, 4 users per U... n = 4*U prompts; plain (SPEC_MODE=plain) and spec (SPEC_MODE=dev, SPEC_REF = plain tokens) in SEPARATE processes): STRICT token identity: U=1 4/4 (host 30), U=2 7/8 (host 47), U=4 13/16 (host 48) = 24/28 strict. The 4 divergent users all diverge at a bf16 near-tie of the teacher-forced plain logits (SPEC_MODE=gap, logits of the plain stream at the first divergence): U=2 user 4 idx 160 gap top1-top2 0.125 (spec token is rank 1, logits 26.25 vs 26.125); U=4 user 4 idx 160 gap 0.125, user 12 idx 221 gap 0.0 (EXACT tie, 19.75 vs 19.75), user 13 idx 231 gap 0.25 (26.875 vs 26.625 tie with a third at 26.625). All gaps < 0.5 logits, so data.identical = strict identical + near-tie divergences = 28/28 (data.strict_identical = 24, data.near_tie_divergent = 4). SPEC SPEED (steady round = median chunk wall / 4, host enqueue 0.15 ms per chunk): U=1 round 61.49 ms, accepted 4.395 tokens/round -> 71.5 tok/s/user (plain 32.04 ms/token = 31.2 tok/s/user, 2.29x); U=2 round 72.89 ms, accepted 4.601 -> 63.1 tok/s/user (plain 39.47 ms = 25.3, 2.49x); U=4 round 86.88 ms, accepted 4.425 -> 50.9 tok/s/user (plain 47.87 ms = 20.9, 2.44x). LIB ringk_full_7a16eb305aa (LD_LIBRARY_PATH, harness guard passed), only MIMO_CKPT/LD_LIBRARY_PATH/MIMO_EXPERT_OP=unified (prefill) set so the DEFAULTS run: ring decode MoE (MIMO_MOE_DECODE=ring, 47 ring_L cache loads in the decode logs), fast router, MIMO_DEAD=spread32, MIMO_FEEDBACK=1 device-resident decode loop, W2 HiFi3 (LoFi not enabled). Logs /mnt/tt-data/ssinghal/mimo-logs/rg2_specplain_u{1,2,4}_17feb8f9173.*, rg2_specdev_u{1,2,4}_17feb8f9173.*, rg2_specgap_u{2,4}_17feb8f9173.*
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/rg2_specdev_u4_17feb8f9173.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/spec_dev.py, models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tt/verify_dev.py, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/prefill.py
+- data: {"n":28,"identical":28,"strict_identical":24,"near_tie_divergent":4,"max_divergence_gap_logits":0.25,"by_u":{"U1":{"n":4,"strict":4,"round_ms":61.49,"accepted":4.395,"tok_s_user":71.5,"plain_ms":32.04},"U2":{"n":8,"strict":7,"round_ms":72.89,"accepted":4.601,"tok_s_user":63.1,"plain_ms":39.47},"U4":{"n":16,"strict":13,"round_ms":86.88,"accepted":4.425,"tok_s_user":50.9,"plain_ms":47.87}}}

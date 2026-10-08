@@ -8,7 +8,7 @@
       "threshold": 0.99,
       "layer_type": "dense",
       "required": true,
-      "evidence": ["E261007-1642-30c"],
+      "evidence": ["E261008-0534-bd5"],
       "note": "teacher-forced: CPU oracle fed the captured REAL hidden state of the device run, one layer at a time"
     },
     {
@@ -17,7 +17,7 @@
       "threshold": 0.99,
       "layer_type": "swa_moe",
       "required": true,
-      "evidence": ["E261007-1642-7c4"],
+      "evidence": ["E261008-0534-f94"],
       "note": "teacher-forced: CPU oracle fed the captured REAL hidden state of the device run, one layer at a time"
     },
     {
@@ -26,7 +26,7 @@
       "threshold": 0.99,
       "layer_type": "global_moe",
       "required": true,
-      "evidence": ["E261007-1642-f2e"],
+      "evidence": ["E261008-0534-dc6"],
       "note": "teacher-forced: CPU oracle fed the captured REAL hidden state of the device run, one layer at a time"
     },
     {
@@ -35,7 +35,7 @@
       "min_final": 0.97,
       "max_drop_per_layer": 0.01,
       "required": true,
-      "evidence": ["E261007-1642-220"],
+      "evidence": ["E261008-0534-b47"],
       "note": "short chained prefix: first 4-8 layers or one of each layer type (NOT the full model)"
     },
     {
@@ -44,7 +44,7 @@
       "min_layer_pcc": 0.99,
       "min_kv_pcc": 0.99,
       "required": true,
-      "evidence": ["E261007-1642-283"],
+      "evidence": ["E261008-0534-981"],
       "note": "layer outputs + KV cache contents after prefill vs CPU oracle"
     },
     {
@@ -52,7 +52,7 @@
       "kind": "decode_check",
       "threshold": 0.98,
       "required": true,
-      "evidence": ["E261007-1642-43c"],
+      "evidence": ["E261008-0534-ce0"],
       "note": "one decode step starting from a reference-prefilled state"
     },
     {
@@ -69,7 +69,7 @@
       "min_n": 128,
       "min_correct": 109,
       "required": true,
-      "evidence": ["E261007-1642-daa"],
+      "evidence": ["E261008-0534-0d3"],
       "note": "REQUIRED. USER-SET 2026-10-07: >=85% (109/128) on gsm8k_128_nothink.json (enable_thinking=false), closed-loop greedy decode, full 48-layer model; catches compounding error beyond the CPU prefix. 85% is the user's number, not a published one for this model."
     },
     {
@@ -77,7 +77,7 @@
       "kind": "determinism",
       "min_runs": 2,
       "required": true,
-      "evidence": ["E261007-1642-287"],
+      "evidence": ["E261008-0534-724"],
       "note": "REQUIRED. two identical runs, bit-identical outputs"
     },
     {
@@ -104,7 +104,7 @@
       ],
       "required": true,
       "evidence": [
-        "E261007-1642-04d"
+        "E261008-0534-e44"
       ],
       "note": "free DRAM per chip after prefill"
     },
@@ -117,7 +117,7 @@
       ],
       "required": true,
       "evidence": [
-        "E261007-1642-751"
+        "E261008-0534-ba3"
       ]
     },
     {
@@ -128,7 +128,7 @@
         "tok_s_user"
       ],
       "required": true,
-      "evidence": ["E261007-1642-84e"]
+      "evidence": ["E261008-0534-659"]
     },
     {
       "id": "hosted_oracle",
@@ -143,7 +143,7 @@
       "kind": "spec_exact",
       "min_frac": 0.95,
       "required": false,
-      "evidence": ["E261007-1705-e20"],
+      "evidence": ["E261008-0534-5b2"],
       "note": "only if speculative decoding is shipped"
     },
     {
@@ -153,7 +153,7 @@
       "op": "==",
       "value": 1,
       "required": true,
-      "evidence": ["E261007-1642-118"],
+      "evidence": ["E261008-0534-0ff"],
       "note": "MILESTONE 1: 64k-context prefill (chunked, paged KV) + decode on all 48 layers, no OOM/hang; data.ctx64k_ok=1 only if first token sane and 1k further decode tokens coherent"
     },
     {
@@ -164,7 +164,7 @@
       "value": 1,
       "required": true,
       "evidence": [
-        "E261007-1642-ad3"
+        "E261008-0534-89f"
       ],
       "note": "two different ISLs in ONE process, no DRAM leak (L-works)"
     }
