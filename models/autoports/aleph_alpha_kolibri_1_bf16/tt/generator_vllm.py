@@ -16,6 +16,11 @@ from .generator import CacheState, KolibriGenerator
 from .model import DRAM, KolibriModel
 from .precision import load_precision_config
 
+# Experiment (tt-agentic-bringup-qb2#75): keep ONE device page table per KV group (sliding, full)
+# instead of one per layer. vLLM hands over 50 per-layer tables that are copies of 2 group tables;
+# refreshing 50 x [32, 8192] int32 tables to four chips per step is pure overhead.
+SHARED_PAGE_TABLES = os.environ.get("KOLIBRI_SHARED_PAGE_TABLES", "0") == "1"
+
 
 class KolibriForCausalLM:
     # Upstream inspection protocol; the TT worker executes the low-level APIs.
@@ -121,12 +126,22 @@ class KolibriForCausalLM:
                 )
             cache.append(unique[tensor_index])
         physical = math.ceil(self.capacity / 512) * 512
-        pages = {i: torch.zeros(self.batch_size, physical // 32, dtype=torch.int32) for i in range(len(cache))}
+        if SHARED_PAGE_TABLES:
+            self._table_groups = ["sliding" if layer.sliding else "full" for layer in self.model.layers]
+            self._group_rep = {}
+            for i, group in enumerate(self._table_groups):
+                self._group_rep.setdefault(group, i)
+            pages = {g: torch.zeros(self.batch_size, physical // 32, dtype=torch.int32) for g in self._group_rep}
+        else:
+            pages = {i: torch.zeros(self.batch_size, physical // 32, dtype=torch.int32) for i in range(len(cache))}
         tables = {i: self.model.tensor(p, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT) for i, p in pages.items()}
         state = CacheState(cache, tables, pages, physical, self.batch_size)
         self.generator = KolibriGenerator(
             self.model, batch_size=self.batch_size, capacity=self.capacity, cache_state=state
         )
+        if SHARED_PAGE_TABLES:
+            # Validate page ids against the group's real (vLLM-allocated) pool, not the standalone formula.
+            self.generator.page_table_pool_pages = {g: cache[rep][0].shape[0] for g, rep in self._group_rep.items()}
         self.generator.event_sink = self.event
         self.event(
             "allocate_cache", specs=per_layer_specs, unique_buffers=len(unique), owns_cache=self.generator.owns_cache
@@ -165,7 +180,12 @@ class KolibriForCausalLM:
     def _tables(self, page_table, page_tables_per_layer, slots=None):
         g = self.generator
         tables = {}
-        for i, index in enumerate(self.model.layer_indices):
+        if SHARED_PAGE_TABLES:
+            # One host table per KV group, taken from a representative layer of that group.
+            targets = [(group, self.model.layer_indices[rep]) for group, rep in self._group_rep.items()]
+        else:
+            targets = list(enumerate(self.model.layer_indices))
+        for i, index in targets:
             src = page_table if page_tables_per_layer is None else page_tables_per_layer[index]
             if slots is None:
                 dst = torch.zeros_like(g.state.host_page_tables[i])
