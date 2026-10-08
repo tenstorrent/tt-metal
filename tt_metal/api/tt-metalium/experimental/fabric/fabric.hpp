@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -14,6 +16,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <optional>
 #include <hostdevcommon/fabric_common.h>

@@ -6,10 +6,10 @@
 
 #include <cstdint>
 #include <memory>
+#include <umd/device/types/core_coordinates.hpp>
 #include <unordered_map>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>

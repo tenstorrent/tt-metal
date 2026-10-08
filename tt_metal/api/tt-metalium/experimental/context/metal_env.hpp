@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -15,6 +16,9 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <hostdevcommon/common_values.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/mesh_config.hpp>
 
 namespace tt::tt_metal {
 
