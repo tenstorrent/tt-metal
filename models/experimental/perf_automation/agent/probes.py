@@ -509,6 +509,22 @@ def detect_marker_drop(log_text: str) -> str | None:
 # `timeout` mark, so a test carrying one still collects. Hangs stay bounded by _execute's watch.
 PYTEST_NO_TIMEOUT = ("-p", "no:timeout")
 
+
+def pytest_argv(*rest) -> list:
+    """The argv every site that clears pytest.ini's addopts starts from -- with the repo's import mode kept.
+
+    The repo's addopts carry `--import-mode=importlib` together with `-vvs ...`; the tool clears addopts
+    wherever it needs flat --collect-only output or its own plugins, and that silently dropped the import
+    mode too. pytest then named the test module from the __init__.py chain above it, so an emitted demo
+    with tests/__init__.py and no demo-root __init__.py became `tests.e2e.<file>` -- shadowed by tt-metal's
+    own top-level `tests` package: `ModuleNotFoundError: No module named 'tests.e2e'`, 0 collected in 0.08 s,
+    "perf test selects no cases" at optimize's final check (Kolibri-1, 2026-10-08), while every other
+    pytest call in the run kept the repo's options and ran the same file. ONE owner for the prefix, so the
+    four sites that clear addopts (collect_cases, preflight_collect, the pcc runner, the pcc gate) cannot
+    disagree on what they dropped. A list, fresh per call: callers append to it."""
+    return [sys.executable, "-m", "pytest", "-o", "addopts=", "--import-mode=importlib", *rest]
+
+
 # The generated perf test drains the device profiler every <this many> wrapped ttnn calls; the
 # profiling env carries it (measure._capacity_scaled_osl sets it), so a retry can change it.
 PERF_FLUSH_EVERY_ENV = "TT_PERF_FLUSH_EVERY"
@@ -1781,7 +1797,7 @@ def collect_cases(
     nor the sub-agent supplied one."""
     # -o addopts= : neutralize pytest.ini verbosity so collect prints FLAT
     # node ids (repo addopts include -v, which turns the listing into a tree).
-    cmd = [sys.executable, "-m", "pytest", "-o", "addopts=", perf_test, "--collect-only", "-q"]
+    cmd = pytest_argv(perf_test, "--collect-only", "-q")
     proc = runner(
         cmd, cwd=Path(tt_metal_root), env=env or dict(os.environ), capture_output=True, text=True, timeout=120
     )
@@ -1864,7 +1880,7 @@ def preflight_collect(
 
     Catches the zero-selection trap ('5 deselected, 0 selected') in seconds.
     Returns the number of selected tests."""
-    cmd = [sys.executable, "-m", "pytest", "-o", "addopts=", perf_test, "--collect-only", "-q"]
+    cmd = pytest_argv(perf_test, "--collect-only", "-q")
     if case:
         cmd += ["-k", case]
     proc = runner(

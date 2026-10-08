@@ -1702,12 +1702,42 @@ def _record_correctness_pass(demo_dir: Path, key: Optional[str], evidence: Optio
         pass
 
 
+def _ensure_package_markers(demo_dir: Path) -> list:
+    """Make the demo a package all the way down to every `__init__.py` the builder left under it: each
+    directory between the demo root and such a marker gets one, the root included. Returns the paths
+    written (empty when the layout already held). Idempotent.
+
+    WHY. The builder chooses its own layout each run: one put the golden under tests/e2e and made it a
+    package (tests/__init__.py, tests/e2e/__init__.py) with nothing at the demo root; another put it under
+    a reference/ package; every upstream demo that carries tests/__init__.py also carries the root marker.
+    A chain that stops short of the root is what pytest's prepend import mode (in force wherever the
+    tool clears addopts) turns into a top-level name -- `tests.e2e.<file>` here -- that the repo's own
+    `tests` package shadows. Completing the chain makes the name unambiguous under every import mode,
+    which is also how a reviewer expects a demo to import. Nothing here names a directory: whatever
+    marker exists, the chain above it is completed."""
+    from ..op_emitter import _SPDX_HEADER
+
+    root = Path(demo_dir)
+    written = []
+    for init in sorted(root.rglob("__init__.py")):
+        d = init.parent
+        while d != root:
+            d = d.parent
+            marker = d / "__init__.py"
+            if not marker.exists():
+                marker.write_text(_SPDX_HEADER)
+                written.append(marker)
+    return written
+
+
 def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: int = 1):
     """Model-agnostic gate runner: G1 native, G2/G3 (run tests/e2e), G4 demo/ structure. Returns (ok, reasons).
 
     batch > 1 is the emit-e2e `--batch` request: the tests are run with it and must report driving it
     (see _batch_gate_reason). The default 1 leaves the tests' own batch unchecked, as before."""
     reasons = []
+    for _marker in _ensure_package_markers(demo_dir):
+        print(f"  [gate] package marker written: {_marker.relative_to(demo_dir)}", flush=True)
     e2e_dir = demo_dir / "tests" / "e2e"
     test_files = sorted(e2e_dir.glob("test_*.py")) if e2e_dir.is_dir() else []
     if not test_files:

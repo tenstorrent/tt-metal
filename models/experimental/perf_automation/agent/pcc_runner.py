@@ -12,7 +12,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
@@ -254,7 +253,7 @@ def run_pcc(ctx) -> dict:
     apply_scope(env, ctx.manifest.get("config", {}))
     probes.wait_for_memory_headroom_before_device_work("check_pcc (full-depth)")
     # -p depth_guard: correctness must run at FULL depth; see agent/depth_guard_plugin.py
-    argv = [sys.executable, "-m", "pytest", "-p", _DEPTH_GUARD, "-o", "addopts=", *probes.PYTEST_NO_TIMEOUT]
+    argv = probes.pytest_argv("-p", _DEPTH_GUARD, *probes.PYTEST_NO_TIMEOUT)
     cmd = [*argv, test, "-sv"]
 
     def _once():

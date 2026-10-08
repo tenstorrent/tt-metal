@@ -76,7 +76,7 @@ def _run_gate(node: str, repo_root: Path, env=None, timeout=None) -> tuple:
     _set_depth(e, None)  # correctness always runs full depth (cap REMOVED, never sent as 0)
     probes.wait_for_memory_headroom_before_device_work("pcc gate (full-depth)")
     # -p depth_guard: correctness must run at FULL depth; see agent/depth_guard_plugin.py
-    argv = [sys.executable, "-m", "pytest", "-p", _DEPTH_GUARD, "-o", "addopts=", *probes.PYTEST_NO_TIMEOUT]
+    argv = probes.pytest_argv("-p", _DEPTH_GUARD, *probes.PYTEST_NO_TIMEOUT)
     try:
         r = probes.run_with_low_memory_fallback(
             lambda: subprocess.run(
