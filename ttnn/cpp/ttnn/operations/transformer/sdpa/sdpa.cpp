@@ -33,6 +33,117 @@ std::optional<ttnn::Tensor> drop_if_empty(const std::optional<ttnn::Tensor>& t) 
     }
     return t;
 }
+
+// The recipe path of scaled_dot_product_attention and chunked_scaled_dot_product_attention: an optional additive
+// attn_mask or a key range (causal, sliding window, chunked prefill, windowed), never both.
+ttnn::Tensor dense_recipe(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const std::optional<ttnn::Tensor>& attn_mask,
+    std::optional<float> scale,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    SDPAPrecision precision,
+    const operations::transformer::sdpa::detail::RecipeKeyRange& key_range) {
+    namespace numeric = operations::transformer::sdpa::detail;
+    const auto output_memory_config = memory_config.value_or(DRAM_MEMORY_CONFIG);
+    TT_FATAL(
+        output_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "SDPA recipes require an interleaved (DRAM or L1) output memory config");
+    const auto policy = numeric::resolve_recipe_policy(
+        input_tensor_q, input_tensor_k, precision, scale, compute_kernel_config, program_config);
+    const float recipe_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1])));
+    // Same mask contract as legacy SDPA: the recipe kernels fold the softmax scale into
+    // the exponent, so the additive mask is pre-multiplied by 1/scale (0 and -inf are exact).
+    // FP32-state recipes (BALANCED/ACCURATE) hold FP32 scores, so their mask is pre-scaled in FP32
+    // (and added exactly); BF16-score recipes keep the legacy mask-dtype pre-scale.
+    std::optional<ttnn::Tensor> recipe_mask = attn_mask;
+    if (attn_mask) {
+        // Reject an unsupported mask before the pre-scale dispatches anything.
+        numeric::validate_recipe_mask(input_tensor_q, input_tensor_k, *attn_mask, policy);
+        if (policy.fp32_destination && attn_mask->dtype() != DataType::FLOAT32) {
+            recipe_mask = ttnn::typecast(*attn_mask, DataType::FLOAT32);
+        }
+        if (recipe_scale != 1.0f) {
+            recipe_mask = ttnn::multiply(*recipe_mask, 1.0f / recipe_scale);
+        }
+    }
+    // The kernels read BF16 Q and write BF16; a BFP8/BFP4 Q is widened first (exactly) and the output comes
+    // back in Q's dtype like legacy SDPA. The BF16 intermediate then stays in DRAM.
+    const auto query = numeric::recipe_bf16_query(input_tensor_q);
+    const bool narrow_output = input_tensor_q.dtype() != DataType::BFLOAT16;
+    const auto kernel_memory_config = narrow_output ? DRAM_MEMORY_CONFIG : output_memory_config;
+    const auto& qs = input_tensor_q.padded_shape();
+    // Op-selected blocking when program_config leaves chunks unset; the chooser budgets the
+    // mask CB (at least one row group) so a masked call never picks a blocking that overflows L1,
+    // and an L1 output's share of each core's L1 (it is allocated after the choice).
+    const auto blocking = numeric::resolve_dense_recipe_blocking(
+        policy,
+        query,
+        input_tensor_k,
+        nullptr,
+        nullptr,
+        program_config,
+        recipe_mask ? &*recipe_mask : nullptr,
+        numeric::recipe_output_l1_bytes(
+            query, uint64_t{qs[0]} * qs[1] * (qs[2] / 32) * (qs[3] / 32), 2048, kernel_memory_config),
+        &key_range);
+    auto output = numeric::run_recipe(
+        query,
+        input_tensor_k,
+        input_tensor_v,
+        policy,
+        blocking,
+        recipe_mask,
+        recipe_scale,
+        kernel_memory_config,
+        key_range);
+    return narrow_output ? ttnn::typecast(output, input_tensor_q.dtype(), output_memory_config) : output;
+}
+
+// Chunked prefill on a named recipe: causal with the Q chunk at chunk_start_idx (scalar, or read on device from
+// chunk_start_idx_tensor), over one K/V cache block per sequence.
+ttnn::Tensor chunked_recipe(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& v,
+    const ttnn::Tensor& page_table,
+    std::optional<int64_t> chunk_start_idx,
+    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor,
+    std::optional<float> scale,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride>& paged_cache_geometry,
+    std::optional<uint32_t> sliding_window_size,
+    const std::optional<ttnn::Tensor>& attention_sink,
+    SDPAPrecision precision) {
+    namespace numeric = operations::transformer::sdpa::detail;
+    TT_FATAL(q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
+    TT_FATAL(
+        !paged_cache_geometry && !attention_sink,
+        "Named SDPA recipes do not yet support paged_cache_geometry or attention_sink in chunked SDPA");
+    if (chunk_start_idx) {
+        TT_FATAL(*chunk_start_idx >= 0, "chunk_start_idx must be non-negative");
+        TT_FATAL(
+            k.logical_shape()[2] >= q.logical_shape()[2] + *chunk_start_idx,
+            "K's sequence length must be >= Q's sequence length + chunk_start_idx. Got K: {}, Q: {}, chunk_start_idx: "
+            "{}",
+            k.logical_shape()[2],
+            q.logical_shape()[2],
+            *chunk_start_idx);
+    }
+    const numeric::RecipeKeyRange key_range{
+        .causal = true,
+        .sliding_window = sliding_window_size.value_or(0),
+        .q_offset = static_cast<uint32_t>(chunk_start_idx.value_or(0)),
+        .q_offset_tensor = chunk_start_idx_tensor,
+        .page_table = page_table};
+    return dense_recipe(
+        q, k, v, std::nullopt, scale, memory_config, program_config, compute_kernel_config, precision, key_range);
+}
 }  // namespace
 
 ttnn::Tensor scaled_dot_product_attention(
@@ -56,54 +167,54 @@ ttnn::Tensor scaled_dot_product_attention(
         namespace numeric = operations::transformer::sdpa::detail;
         TT_FATAL(input_tensor_q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
         TT_FATAL(
-            !is_causal && !sliding_window_size && !attention_sink && !cu_window_seqlens &&
-                windowed_q_token_offset == 0 && !windowed_q_token_offset_tensor && !output_concat_heads,
-            "Named SDPA recipes currently support dense noncausal attention with an optional additive attn_mask only");
-        const auto output_memory_config = memory_config.value_or(DRAM_MEMORY_CONFIG);
+            !attention_sink && !output_concat_heads,
+            "Named SDPA recipes do not yet support attention_sink or output_concat_heads");
+        // Causal, sliding-window and windowed calls run the K-range model (numeric::RecipeKeyRange), with the
+        // legacy op's shape rules: causal and sliding windows need Sq == Sk; a windowed Q may be a slice of the
+        // sequence starting at windowed_q_token_offset.
+        const bool windowed = cu_window_seqlens.has_value();
+        const uint32_t window = sliding_window_size.value_or(0);
+        const uint32_t sq = input_tensor_q.logical_shape()[2], sk = input_tensor_k.logical_shape()[2];
         TT_FATAL(
-            output_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "SDPA recipes require an interleaved (DRAM or L1) output memory config");
-        const auto policy = numeric::resolve_recipe_policy(
-            input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, program_config);
-        const float recipe_scale =
-            scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1])));
-        // Same mask contract as legacy SDPA below: the recipe kernels fold the softmax scale into
-        // the exponent, so the additive mask is pre-multiplied by 1/scale (0 and -inf are exact).
-        // FP32-state recipes (BALANCED/ACCURATE) hold FP32 scores, so their mask is pre-scaled in FP32
-        // (and added exactly); BF16-score recipes keep the legacy mask-dtype pre-scale.
-        std::optional<ttnn::Tensor> recipe_mask = attn_mask;
-        if (attn_mask) {
-            // Reject an unsupported mask before the pre-scale dispatches anything.
-            numeric::validate_recipe_mask(input_tensor_q, input_tensor_k, *attn_mask, policy);
-            if (policy.fp32_destination && attn_mask->dtype() != DataType::FLOAT32) {
-                recipe_mask = ttnn::typecast(*attn_mask, DataType::FLOAT32);
-            }
-            if (recipe_scale != 1.0f) {
-                recipe_mask = ttnn::multiply(*recipe_mask, 1.0f / recipe_scale);
-            }
+            windowed || (windowed_q_token_offset == 0 && !windowed_q_token_offset_tensor),
+            "windowed_q_token_offset requires cu_window_seqlens");
+        TT_FATAL(
+            !attn_mask || (!is_causal && window == 0 && !windowed),
+            "SDPA recipes take either attn_mask or is_causal / sliding_window_size / cu_window_seqlens");
+        if (windowed) {
+            TT_FATAL(window == 0, "Windowed SDPA does not support sliding_window_size");
+            TT_FATAL(sq <= sk, "windowed Q shard has {} rows, more than the K sequence length {}", sq, sk);
+            TT_FATAL(
+                windowed_q_token_offset_tensor || windowed_q_token_offset <= sk - sq,
+                "windowed Q shard [{}, {} + {}) does not fit in the K sequence length {}",
+                windowed_q_token_offset,
+                windowed_q_token_offset,
+                sq,
+                sk);
+        } else if (is_causal || window > 0) {
+            TT_FATAL(
+                sq == sk,
+                "Causal or sliding-window SDPA requires Q and K to have the same sequence length. Got Q: {}, K: {}",
+                sq,
+                sk);
         }
-        // The kernels read BF16 Q and write BF16; a BFP8/BFP4 Q is widened first (exactly) and the output comes
-        // back in Q's dtype like legacy SDPA. The BF16 intermediate then stays in DRAM.
-        const auto query = numeric::recipe_bf16_query(input_tensor_q);
-        const bool narrow_output = input_tensor_q.dtype() != DataType::BFLOAT16;
-        const auto kernel_memory_config = narrow_output ? DRAM_MEMORY_CONFIG : output_memory_config;
-        const auto& qs = input_tensor_q.padded_shape();
-        // Op-selected blocking when program_config leaves chunks unset; the chooser budgets the
-        // mask CB (at least one row group) so a masked call never picks a blocking that overflows L1,
-        // and an L1 output's share of each core's L1 (it is allocated after the choice).
-        const auto blocking = numeric::resolve_dense_recipe_blocking(
-            policy,
-            query,
+        const numeric::RecipeKeyRange key_range{
+            .causal = is_causal,
+            .sliding_window = window,
+            .q_offset = windowed ? windowed_q_token_offset : 0,
+            .q_offset_tensor = windowed_q_token_offset_tensor,
+            .segments = cu_window_seqlens};
+        return dense_recipe(
+            input_tensor_q,
             input_tensor_k,
-            nullptr,
-            nullptr,
+            input_tensor_v,
+            attn_mask,
+            scale,
+            memory_config,
             program_config,
-            recipe_mask ? &*recipe_mask : nullptr,
-            numeric::recipe_output_l1_bytes(
-                query, uint64_t{qs[0]} * qs[1] * (qs[2] / 32) * (qs[3] / 32), 2048, kernel_memory_config));
-        auto output = numeric::run_recipe(
-            query, input_tensor_k, input_tensor_v, policy, blocking, recipe_mask, recipe_scale, kernel_memory_config);
-        return narrow_output ? ttnn::typecast(output, input_tensor_q.dtype(), output_memory_config) : output;
+            compute_kernel_config,
+            *precision,
+            key_range);
     }
     operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -170,7 +281,25 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> sliding_window_size,
-    const std::optional<ttnn::Tensor>& attention_sink) {
+    const std::optional<ttnn::Tensor>& attention_sink,
+    std::optional<SDPAPrecision> precision) {
+    if (precision) {
+        return chunked_recipe(
+            input_tensor_q,
+            input_tensor_k,
+            input_tensor_v,
+            page_table_tensor,
+            chunk_start_idx,
+            std::nullopt,
+            scale,
+            memory_config,
+            program_config,
+            compute_kernel_config,
+            paged_cache_geometry,
+            sliding_window_size,
+            attention_sink,
+            *precision);
+    }
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -210,7 +339,25 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> sliding_window_size,
-    const std::optional<ttnn::Tensor>& attention_sink) {
+    const std::optional<ttnn::Tensor>& attention_sink,
+    std::optional<SDPAPrecision> precision) {
+    if (precision) {
+        return chunked_recipe(
+            input_tensor_q,
+            input_tensor_k,
+            input_tensor_v,
+            page_table_tensor,
+            std::nullopt,
+            chunk_start_idx_tensor,
+            scale,
+            memory_config,
+            program_config,
+            compute_kernel_config,
+            paged_cache_geometry,
+            sliding_window_size,
+            attention_sink,
+            *precision);
+    }
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
