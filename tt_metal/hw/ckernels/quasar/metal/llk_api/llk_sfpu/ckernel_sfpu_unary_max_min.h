@@ -46,6 +46,14 @@ inline void calculate_unary_max_min(const std::uint32_t value) {
         "Unsupported DataFormat for calculate_unary_max_min().");
     static_assert(!SIGN_MAGNITUDE_FORMAT || FMT == DataFormat::Int32, "SIGN_MAGNITUDE_FORMAT applies to Int32 only.");
 
+    const auto select = [](auto x, auto s) {
+        if constexpr (IS_MAX_OP) {
+            return sfpi::max(x, s);
+        } else {
+            return sfpi::min(x, s);
+        }
+    };
+
     if constexpr (FMT == DataFormat::Int32) {
         if constexpr (SIGN_MAGNITUDE_FORMAT) {
             LLK_ASSERT(
@@ -57,16 +65,14 @@ inline void calculate_unary_max_min(const std::uint32_t value) {
         const sfpi::vInt s = static_cast<std::int32_t>(value);
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vInt x = sfpi::dst_reg[0].mode<layout>();
-            sfpi::dst_reg[0].mode<layout>() = IS_MAX_OP ? sfpi::max(x, s) : sfpi::min(x, s);
+            sfpi::dst_reg[0].mode<layout>() = select(sfpi::vInt(sfpi::dst_reg[0].mode<layout>()), s);
             sfpi::dst_reg++;
         }
     } else {
         const sfpi::vFloat s = sfpi::as<sfpi::vFloat>(sfpi::vUInt(value));
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat x = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = IS_MAX_OP ? sfpi::max(x, s) : sfpi::min(x, s);
+            sfpi::dst_reg[0] = select(sfpi::vFloat(sfpi::dst_reg[0]), s);
             sfpi::dst_reg++;
         }
     }
