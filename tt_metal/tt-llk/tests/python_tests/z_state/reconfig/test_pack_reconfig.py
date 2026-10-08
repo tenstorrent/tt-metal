@@ -120,7 +120,8 @@ def test_pack_reconfig(
 
     configuration.run()
     expected = TensixState.fetch(TestConfig.TENSIX_LOCATION)
-    assert expected["gpr"][2]["tile_header"] == _NEXT_TILE_SIZE
+    if TensixState.has_gprs(expected):
+        assert expected["gpr"][2]["tile_header"] == _NEXT_TILE_SIZE
 
     # Only the runtime parameter changes between runs.
     configuration.runtimes = [CONFIGURE_TEST_RUN_IDX(1)]

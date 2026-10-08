@@ -18,6 +18,8 @@ from ttexalens.tt_exalens_lib import (
     get_tensix_state,
 )
 
+# Must match GPRS_PER_THREAD, TENSIX_THREADS and gpr_dump (mailboxes_arr - GPR_DUMP_WORDS)
+# in tests/helpers/src/brisc.cpp.
 GPRS_PER_THREAD = 64
 TENSIX_THREADS = 3
 GPR_DUMP_WORDS = GPRS_PER_THREAD * TENSIX_THREADS
@@ -34,9 +36,15 @@ SCRATCH_GPRS = (
 class TensixState:
     @classmethod
     def fetch(cls, location: str) -> dict[str, Any]:
+        """On silicon, GPRs come from the BRISC firmware, so the kernel must run under BRISC boot."""
         state = asdict(get_tensix_state(location, device_id=0))
+        has_gprs = cls.has_gprs(state)
+        if not has_gprs and TestConfig.TEST_TARGET.run_simulator:
+            # ttsim aborts BRISC's GPR copy on the first thread-1 word
+            # ("UndefinedBehavior: tensix_regfile_rd32: offset=0x100"), so its state has no GPRs.
+            return state
         names = cls._gpr_names(location)
-        if any(state["gpr"]):
+        if has_gprs:
             values = {
                 (thread, index): state["gpr"][thread][name]
                 for (thread, index), name in names.items()
@@ -52,6 +60,10 @@ class TensixState:
             for thread in range(TENSIX_THREADS)
         ]
         return state
+
+    @staticmethod
+    def has_gprs(state: dict) -> bool:
+        return any(state["gpr"])
 
     @classmethod
     def _gpr_names(cls, location: str) -> dict[tuple[int, int], str]:
@@ -69,15 +81,11 @@ class TensixState:
     @classmethod
     def _dump_gprs(cls, location: str) -> dict[tuple[int, int], int]:
         # ttexalens reads GPRs by halting BRISC, which hangs it; BRISC copies them to L1 instead.
-        commit_brisc_command(
-            location,
-            BriscCmd.DUMP_GPRS,
-            timeout=(
-                TestConfig.SIMULATOR_TIMEOUT
-                if TestConfig.TEST_TARGET.run_simulator
-                else 1
-            ),
+        # Keep in step with brisc_cmd_timeout in TestConfig.run_elf_files.
+        timeout = (
+            TestConfig.SIMULATOR_TIMEOUT if TestConfig.TEST_TARGET.run_simulator else 1
         )
+        commit_brisc_command(location, BriscCmd.DUMP_GPRS, timeout=timeout)
         words = read_words_from_device(
             location,
             device_module.Mailboxes.Unpacker.value - GPR_DUMP_WORDS * 4,

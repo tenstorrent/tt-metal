@@ -40,6 +40,7 @@ static const mailbox_t brisc_bread1 = mailboxes_arr + 7;
 
 // Tensix GPR snapshot: 3 threads x 64 GPRs, laid out as REGFILE_BASE + (thread * 64 + index) * 4,
 // placed directly below the mailboxes. The host reads it over NoC, so BRISC never has to be halted.
+// Must match GPR_DUMP_WORDS and its read address in tests/python_tests/helpers/tensix.py.
 constexpr std::uint32_t GPRS_PER_THREAD = 64;
 constexpr std::uint32_t TENSIX_THREADS  = 3;
 constexpr std::uint32_t GPR_DUMP_WORDS  = GPRS_PER_THREAD * TENSIX_THREADS;
