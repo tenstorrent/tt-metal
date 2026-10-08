@@ -43,7 +43,8 @@ _OPS_WITHOUT_DEST_ACC = {
     MathOperation.Cos,
     MathOperation.Elu,
     MathOperation.Exp2,
-    MathOperation.Exp,
+    # Exp is not listed: its fp32-dest accurate path (the Juffa exp) is a separate kernel from the
+    # bf16 TTI one, so dest_acc=Yes measures different code.
     MathOperation.Fill,
     MathOperation.Gelu,
     MathOperation.GeluTanh,
