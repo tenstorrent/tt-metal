@@ -9,7 +9,7 @@ from typing import Dict
 import pytest
 import torch
 from conftest import skip_for_quasar
-from helpers.chip_architecture import ChipArchitecture
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -364,6 +364,22 @@ def _mask_stimuli_specs():
     def mask_face(size, dtype, generator):
         j, _ = _positions_and_ramp(size)
         return torch.where(j % 3 == 0, 0.0, 1.0).to(dtype)  # ~1/3 exact zeros
+
+    return _face_spec(data_face), _face_spec(mask_face)
+
+
+def _mask_negative_zero_stimuli_specs():
+    # Same non-zero 1..8 data as _mask_stimuli_specs, but the mask cycles -0.0, +0.0, 1.0, so a
+    # third of the lanes are masked by a -0.0 the kernel must treat as zero (tt-llk#1701 item 6).
+    def data_face(size, dtype, generator):
+        _, ramp = _positions_and_ramp(size)
+        return ramp.to(dtype)
+
+    def mask_face(size, dtype, generator):
+        j, _ = _positions_and_ramp(size)
+        return torch.tensor([-0.0, 0.0, 1.0], dtype=torch.float32)[j.long() % 3].to(
+            dtype
+        )
 
     return _face_spec(data_face), _face_spec(mask_face)
 
@@ -868,6 +884,33 @@ def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop, **run_kwargs):
     # and ignores the forwarded dst indices, so only the first placement computes anything.
     # [64, 32] is one pair, which is the only one the adapter supports.
     spec_A, spec_B = _mask_stimuli_specs()
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        broadcast_type=LlkBroadcastType.None_,
+        spec_A=spec_A,
+        spec_B=spec_B,
+        input_dimensions=[64, 32],
+        **run_kwargs,
+    )
+
+
+@pytest.mark.skipif(
+    get_chip_architecture() != ChipArchitecture.BLACKHOLE,
+    reason="tt-llk#1701 item 6: only the Blackhole _sfpu_is_fp16_zero_ treats a -0.0 mask as zero so far",
+)
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32], same=True),
+    mathop=[MathOperation.SfpuMask],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_mask_negative_zero(
+    formats, dest_acc, mathop, **run_kwargs
+):
+    # A -0.0 mask element must zero its data element, like +0.0 (golden: mask == 0). Float32 at
+    # dest_acc=Yes only: it unpacks straight to Dest, the one pipeline that delivers -0.0 to the SFPU.
+    spec_A, spec_B = _mask_negative_zero_stimuli_specs()
     sfpu_binary(
         formats,
         dest_acc,
