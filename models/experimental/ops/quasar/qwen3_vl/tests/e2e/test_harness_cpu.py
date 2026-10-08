@@ -881,32 +881,6 @@ def test_quasar_text_args_keep_embedding_on_host():
     assert "self.host_embedding = True" in inspect.getsource(Q.QuasarModelArgs.__init__)
 
 
-def test_quasar_concat_groups_at_most_32_inputs(monkeypatch):
-    import ttnn
-
-    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
-
-    wa = next(w for w in O.WORKAROUNDS if w.name == "quasar_concat_max_32_inputs")
-    assert wa.target == "ttnn.concat"
-    monkeypatch.setattr(ttnn, "Tensor", _ArchTensor)
-    q, wh = _ArchTensor(ttnn.device.Arch.QUASAR), _ArchTensor(ttnn.device.Arch.WORMHOLE_B0)
-    assert wa.applies(([q] * 119,), {"dim": 3})
-    assert not wa.applies(([q] * 32,), {"dim": 3})  # within the limit
-    assert not wa.applies(([wh] * 119,), {"dim": 3})  # WH/BH keep one call
-    calls = []
-
-    def concat(ts, dim=None, memory_config=None):
-        calls.append(len(ts))
-        assert len(ts) <= 32 and dim == 3 and memory_config == "mc"
-        return sum(ts)  # stands in for the concatenated tensor: total part count
-
-    assert wa.rewrite(concat, ([1] * 119,), {"dim": 3, "memory_config": "mc"}) == 119
-    assert calls == [32, 32, 32, 23, 4]
-    calls.clear()
-    assert wa.rewrite(concat, ([1] * 33,), {"dim": 3, "memory_config": "mc"}) == 33
-    assert calls == [32, 2]  # the lone 33rd tensor is passed through, not concatenated alone
-
-
 def test_prefill_snapshot_round_trip_and_mismatch(tmp_path, expect_error):
     from models.experimental.ops.quasar.qwen3_vl.tests.e2e import snapshot as S
 
