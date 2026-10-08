@@ -258,7 +258,7 @@ Poll it with the same discipline as any wait: a background loop every 2–5 min,
 **Every bot comment gets handled, on every push, for the life of the PR.** A CI fix, a review fix, or a
 rebase is a new head SHA, you request the reviews again, and those comments are in scope too.
 ```bash
-$SKILL/scripts/bot_threads.sh <PR>   # THREAD: unresolved threads a bot opened, latest comment from a bot; REVIEW: summaries/comments
+$SKILL/scripts/bot_threads.sh <PR>   # THREAD: unresolved threads a bot opened, latest comment from a bot; REVIEW: <url> <body-hash> summaries/comments
 ```
 Read each in full (no truncation). Bots are not authorities — they are often wrong. For each:
 
@@ -269,9 +269,11 @@ Read each in full (no truncation). Bots are not authorities — they are often w
 - **Partly valid** → fix the valid part, push back on the rest, in one reply.
 - **Design choice / needs hardware not here** → no code change; leave the thread unresolved and put it
   in the report for the user with the options. Use sparingly — most comments are decidable.
-- **No-findings summaries** ("No issues found") need no reply — ack the URL so it drops off the list:
-  `echo <url> >> $MASTER_ISSUE_DIR/acked-<PR>.txt`. Ack a findings summary only after every finding
-  in it is handled.
+- **No-findings summaries** ("No issues found") need no reply — ack it so it drops off the list:
+  `echo '<url> <body-hash>' >> $MASTER_ISSUE_DIR/acked-<PR>.txt`, the pair exactly as the REVIEW line
+  prints it. The hash is of the full body, so a bot that edits its comment in place (the perf gate
+  does) comes back with a new hash and is handled again. Ack a findings summary only after every
+  finding in it is handled.
 
 Reply to a THREAD with `gh api repos/<o>/<r>/pulls/<PR>/comments/<root-rest-id>/replies -f body='…'`
 (the thread's top-level comment id), resolve with the GraphQL `resolveReviewThread` mutation on the
@@ -308,17 +310,23 @@ breakage. A bot finding that arrives while CI is already running is handled, but
 Once bots are quiet on the current head SHA, dispatch on the branch and record run ids. A manual
 dispatch is **not** the nightly by default: every test family the cron schedule turns on is an
 opt-in `workflow_dispatch` input that defaults to false, so a bare dispatch reports success with the
-test jobs skipped. Pass the opt-ins:
+test jobs skipped. "Full Nightly" for this skill is the set of scheduled suites that execute kernels:
 ```bash
 $SKILL/scripts/dispatch.sh "Sanity tests"              <branch> -f run-llk-sanity-tests=true
-$SKILL/scripts/dispatch.sh "Nightly tt-metal L2 tests" <branch> -f run_llk_unit_tests=true -f run_cpp_tests=true \
-    -f additional_test_categories=<the list the workflow's `schedule` branch passes>
+$SKILL/scripts/dispatch.sh "Nightly tt-metal L2 tests" <branch> \
+    -f run_llk_unit_tests=true -f run_cpp_tests=true -f run_p100_sanity_tests=true \
+    -f additional_test_categories=<union of the category lists the `schedule` arms pass>
 $SKILL/scripts/dispatch.sh "LLK e2e Tests"             <branch>     # if tt-llk files changed
 ```
-Take the category list from `.github/workflows/tt-metal-l2-nightly.yaml` (the
-`github.event_name == 'schedule'` arm of `additional_test_categories`) at dispatch time, so the manual
-run covers what the nightly covers. Then **check the run's job list**, not its conclusion: a green
-rollup whose test jobs are all skipped is not a pass. ("PR - Sanity tests" is not dispatchable. On
+Build the category list at dispatch time from `.github/workflows/tt-metal-l2-nightly.yaml`: every
+`github.event_name == 'schedule' && '<list>'` expression feeding an `additional_test_categories`
+(the ops unit-test list, `compute_fused`, `ops_docs_check` — there are several, take the union). The
+scheduled suites **not** dispatched, and why: DIDT (power stress, not correctness), tutorials and
+tt-cnn (ttnn front-end flows already covered by the ops categories), TT-Train unit + perf and
+tt-triage (own stacks; perf jobs are not pass/fail evidence). If the PR touches code one of those
+owns, add its flag (`run_didt_tests`, `run_tutorials_tests`, `run_tt_cnn_unit_tests`,
+`run_tt_train_*`, `run_triage_tests`) and say so in the ledger. Then **check the run's job list**,
+not its conclusion: a green rollup whose test jobs are all skipped is not a pass. ("PR - Sanity tests" is not dispatchable. On
 drafts the PR-Gate llk lanes are skipped; silicon coverage for tt-llk changes comes from Sanity's
 `run-llk-sanity-tests` smoke on WH+BH, Nightly's `run_llk_unit_tests`, and LLK e2e, the whole tt-llk
 suite.) Nightly takes hours — arm the watchers and move on.

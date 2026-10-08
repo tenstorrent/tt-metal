@@ -5,10 +5,13 @@
 #   THREAD <thread-id> <root-comment-rest-id> path:line [bot] text
 #          unresolved inline thread that a bot OPENED and whose latest comment is from a bot
 #          (so a bot follow-up to your reply re-lists it; a thread a human opened never appears)
-#   REVIEW <url> [bot] text
-#          bot review body / issue comment NOT listed in <ackfile> (one URL per line)
-# Ack a REVIEW you handled (or that needs no reply, e.g. "No issues found") by appending its URL to
-# the ackfile, default ${MASTER_ISSUE_DIR:-$HOME/.claude/master-issues}/acked-<pr>.txt.
+#   REVIEW <url> <body-hash> [bot] text
+#          bot review body / issue comment whose "<url> <body-hash>" line is NOT in <ackfile>
+# Ack a REVIEW you handled (or that needs no reply, e.g. "No issues found") by appending its
+# "<url> <body-hash>" pair, exactly as printed, to the ackfile, default
+# ${MASTER_ISSUE_DIR:-$HOME/.claude/master-issues}/acked-<pr>.txt. The hash is of the full body, so a
+# bot that EDITS its comment in place (the perf gate does) re-lists it with a new hash; a bare URL
+# line acks nothing here (bots_pending.sh keeps bare run URLs in the same file for its FAILED line).
 # Reply to a THREAD:   gh api repos/<repo>/pulls/<pr>/comments/<root-rest-id>/replies -f body='...'
 #                      (the replies endpoint takes the thread's top-level comment id)
 # Resolve a THREAD:    gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"<thread-id>"}){thread{isResolved}}}'
@@ -32,9 +35,12 @@ query($owner:String!,$name:String!,$pr:Int!,$endCursor:String){repository(owner:
      | "THREAD \(.id) \($r.databaseId) \(.path):\(.line // "outdated") [\($c.author.login)] \($c.body | gsub("\\s+";" ") | .[0:200])"'
 
 { gh api "repos/$repo/issues/$pr/comments" --paginate \
-     -q '.[]|select(.user.type=="Bot")|"\(.created_at)\t\(.html_url)\t[\(.user.login)]\t\(.body|gsub("\\s+";" ")|.[0:200])"'
+     -q '.[]|select(.user.type=="Bot")|"\(.created_at)\t\(.html_url)\t[\(.user.login)]\t\(.body|@base64)"'
   gh api "repos/$repo/pulls/$pr/reviews" --paginate \
-     -q '.[]|select(.user.type=="Bot")|select(.body!="")|"\(.submitted_at)\t\(.html_url)\t[\(.user.login)]\t\(.body|gsub("\\s+";" ")|.[0:200])"'
-} | sort | while IFS=$'\t' read -r _ url who body; do
-    grep -qxF "$url" "$ack" || printf 'REVIEW %s %s %s\n' "$url" "$who" "$body"
+     -q '.[]|select(.user.type=="Bot")|select(.body!="")|"\(.submitted_at)\t\(.html_url)\t[\(.user.login)]\t\(.body|@base64)"'
+} | sort | while IFS=$'\t' read -r _ url who b64; do
+    body=$(printf '%s' "$b64" | base64 -d)
+    hash=$(printf '%s' "$body" | sha1sum | cut -c1-12)
+    grep -qxF "$url $hash" "$ack" ||
+        printf 'REVIEW %s %s %s %s\n' "$url" "$hash" "$who" "$(printf '%s' "$body" | tr -s '[:space:]' ' ' | cut -c1-200)"
 done
