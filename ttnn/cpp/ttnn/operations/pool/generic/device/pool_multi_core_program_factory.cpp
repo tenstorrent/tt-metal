@@ -917,11 +917,12 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         (params.is_large_kernel && return_indices) || indexes_32_bit       // dst_full_sync_en
     );
 
-    // The pool's only FPU op is its column reduce; a power-of-two scaler keeps HiFi4's bits at HiFi2 on Blackhole.
+    // The only FPU op is the column reduce: a finite power-of-two bf16 scaler gives HiFi4's bits at HiFi2 on Blackhole.
     auto math_fidelity = get_math_fidelity(device_compute_kernel_config);
     const uint32_t scalar_bf16 = bf16_scalar >> 16;
-    if (device_arch == tt::ARCH::BLACKHOLE && params.is_avg_pool && one_scalar_per_core && (scalar_bf16 & 0x7F) == 0 &&
-        (scalar_bf16 & 0x7F80) != 0 && math_fidelity > tt::tt_metal::MathFidelity::HiFi2) {
+    if (device_arch == tt::ARCH::BLACKHOLE && params.is_avg_pool && one_scalar_per_core &&
+        params.data_format == tt::DataFormat::Float16_b && (scalar_bf16 & 0x7F) == 0 && (scalar_bf16 & 0x7F80) != 0 &&
+        (scalar_bf16 & 0x7F80) != 0x7F80 && math_fidelity > tt::tt_metal::MathFidelity::HiFi2) {
         math_fidelity = tt::tt_metal::MathFidelity::HiFi2;
     }
 
