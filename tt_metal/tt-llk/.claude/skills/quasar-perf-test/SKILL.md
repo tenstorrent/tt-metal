@@ -113,10 +113,14 @@ Dest-full tall/wide is the unary throughput case. Skip dest index and SFPU
 Float16_b, and Int8 inputs are LoFi-only; Float16 still sweeps LoFi–HiFi4.
 
 **Check coverage** with
-`compare_test_and_perf.py --dir quasar --arch quasar`. Composite
-splits name `list` as the input matrix and `tuple` as `tile_dimensions`.
-Ignore `DestSync.Full`, `implied_math_format`, `run_types`, `loop_factor`,
-and `is_perf` when judging coverage.
+`compare_test_and_perf.py --dir quasar --arch quasar` for Quasar functional
+versus perf. Cross-arch perf versus perf is
+`compare_test_and_perf.py --cross-arch blackhole quasar --kind perf`;
+functional versus functional is `--kind func`. Composite splits name `list`
+as the input matrix and `tuple` as `tile_dimensions`. The comparer ignores
+`implied_math_format`; it is not a measurement control and not a BH/WH join
+key. Also ignore `DestSync.Full`, `run_types`, `loop_factor`, and `is_perf`
+when judging coverage.
 
 ## C++ structure
 
@@ -196,8 +200,14 @@ Known cases:
 - Row/column broadcast may handshake per face; inspect the MOP.
 - Quasar 32-bit unary datacopy uses ELWADD. Unpack produces real SrcA and
   dummy SrcB, so both mock sides use `<true, true>`.
+- Binary SFPU NONE mocks post a SrcA dvalid plus a SrcB zerosrc dvalid every
+  face, including `dest_acc=No` (`#1230`). Keep that reference on the call.
 - A block kernel commonly needs
   `LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM`.
+- Do not shrink `TILE_COUNT` to change the published per-tile number.
+  `tile_cnt` is also the unpack loop bound and the isolate dvalid count. When
+  it counts both operand tiles, per-tile MATH_ISOLATE is about half a result
+  tile.
 
 Never add a synthetic SET/CLEAR pair to flush the pipeline. An extra token can
 race the final operation and pollute a later run.
@@ -266,8 +276,8 @@ From the `tt-llk` root:
    destination-accumulation variants when applicable.
 6. If tile sizes or dimensions changed, run
    `compare_test_and_perf.py --dir quasar --arch quasar` and confirm the
-   composite `tuple` (tile) and `list` (matrix) axes match
-   **Perf sweep coverage**.
+   composite `tuple` (tile) and `list` (matrix) axes match **Perf sweep
+   coverage**. `implied_math_format` is ignored by that comparer.
 7. Check edited files for lint errors and run `git diff --check`.
 
 Do not:

@@ -36,8 +36,11 @@ Read the perf test — `tests/python_tests/perf_[op].py` or
 
 For Quasar, `compare_test_and_perf.py --dir quasar --arch quasar` is the
 sweep-audit against the functional counterpart (composite `list` = matrix,
-`tuple` = tile shape). Flag stale-report risk when current test axes are absent
-from the CSV.
+`tuple` = tile shape). Cross-arch perf versus perf is
+`compare_test_and_perf.py --cross-arch blackhole quasar --kind perf`.
+Flag stale-report risk when current test axes are absent from the CSV.
+Record the perf schema version with the report: a version change means the
+CSV is not comparable to the previous one.
 
 Decide scope before running. A narrowed sweep (`-k`, `--op`) is right for
 debugging; a report meant for analysis must cover the full intended sweep.
@@ -101,7 +104,10 @@ Rules:
 - The producer phase writes no report and skips combining.
 - The raw CSV holds per-marker means. The `.post.csv` divides the `mean(...)`
   and `std(...)` columns of `TILE_LOOP` rows by `loop_factor * tile_cnt`,
-  giving cycles per tile; `INIT` and `KERNEL` rows are left unnormalized.
+  giving cycles per staged tile. When `tile_cnt` counts both operand tiles,
+  that number is about half a result tile; do not treat the halving as a
+  speedup. A schema version change means this CSV is not comparable to the
+  previous one. `INIT` and `KERNEL` rows are left unnormalized.
   Analysis uses `.post.csv`.
 
 No report at all usually means the consumer phase never reached session

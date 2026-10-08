@@ -35,6 +35,21 @@ generator and, when needed, the C++ kernel to determine:
 Flag stale-report risk when current test axes are absent from the CSV. Never
 claim an independent effect for parameters the test does not vary independently.
 
+Before trending `TILE_LOOP` or `MATH_ISOLATE` across reports, check three
+accounting facts:
+
+- the perf schema version. A version change means the CSV is not comparable
+  to the previous one;
+- whether `tile_cnt` counts operand tiles. The `.post.csv` divides by
+  `loop_factor * tile_cnt`, so two operand tiles per SFPU call publish about
+  half a result tile;
+- whether 16-bit `dest_acc=Yes` doubled dest handshakes relative to
+  `dest_acc=No`. That mixes a datapath change with twice the section-done
+  traffic.
+
+Do not treat `implied_math_format` as a cross-arch factor. It is Quasar-only
+and the sweep comparer ignores it.
+
 ### 2. Filter and audit
 
 Filter exactly on `marker == <requested marker>`. When useful, save the result

@@ -71,6 +71,11 @@ Show the verdict, the top regressions, and the improvements if any. Point at
 - The further apart the two commits are, the more unrelated change is in the delta. For
   "did *this* work regress perf", the merge-base default is the honest baseline.
 - `TILE_LOOP` is the steady-state per-tile cost; `INIT`/`KERNEL` include one-time overheads.
+- A schema version change, or a `tile_cnt` change that starts counting both
+  operand tiles, is an accounting change, not a kernel regression. Compare
+  cycle numbers only inside one schema version. A ~2× drop on MATH_ISOLATE
+  after that accounting change is about half a result tile, not a speedup.
+  At 16-bit, `dest_acc=Yes` can also double dest handshakes.
 
 ## Failure handling
 - `TENSIX TIMED OUT` / device hang: `tt-smi -r`, then re-run the same command — completed
