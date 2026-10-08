@@ -7,7 +7,6 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.sdpa.standard_exp_test_utils import (
     TRUE_PCC_MIN,
     make_fixture,
@@ -24,7 +23,7 @@ from tests.ttnn.unit_tests.operations.sdpa.standard_exp_test_utils import (
 # One K chunk isolates the main exp; two chunks cover explicit -inf and a fully
 # masked later chunk, while every query keeps valid earlier keys. Unit/nonunit scale
 # catch missing or duplicate scaling. Repeated False/True calls check reused state.
-# On Blackhole, FP32 destination accumulation without `precision` runs the ACCURATE recipe instead (precision
+# On Blackhole and Wormhole B0, FP32 destination accumulation without `precision` runs the ACCURATE recipe instead (precision
 # routing), which owns its exp: exp_approx_mode is ignored, so both modes share one program and one output, and
 # both meet the accurate-exp gate.
 @pytest.mark.parametrize("k_chunks", [1, 2], ids=["one-k-chunk", "masked-second-k-chunk"])
@@ -32,7 +31,7 @@ from tests.ttnn.unit_tests.operations.sdpa.standard_exp_test_utils import (
 @pytest.mark.parametrize("fp32_dest_acc_en", [True, False], ids=["fp32-dest", "bf16-dest"])
 def test_standard_sdpa_exp_modes(device, k_chunks, scale, fp32_dest_acc_en, record_property):
     device.enable_program_cache()
-    routed = fp32_dest_acc_en and is_blackhole()
+    routed = fp32_dest_acc_en and ttnn.get_arch_name() in ("blackhole", "wormhole_b0")
     host_inputs = make_fixture(k_chunks)
     golden = reference(*host_inputs, scale)
     # Fail before device execution when a changed fixture makes correlation undefined.
