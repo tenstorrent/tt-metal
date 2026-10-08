@@ -49,12 +49,12 @@ inline void llk_math_mul_reduce_scalar_reduce_init() {
     _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, math_fidelity, enforce_fp32_accumulation>();
 }
 
-template <MathFidelity math_fidelity>
+template <MathFidelity math_fidelity, bool tile_setup = true>
 inline void llk_math_mul_reduce_column(const std::uint32_t dst_index, const std::uint32_t icb0) {
     SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(icb0);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
-    _llk_math_mul_reduce_column_<math_fidelity>(dst_index, tensor_shape);
+    _llk_math_mul_reduce_column_<math_fidelity, tile_setup>(dst_index, tensor_shape);
 }
 
 template <MathFidelity math_fidelity>

@@ -15,6 +15,7 @@
 // into its underlying _llk_* calls so the kernel runs inside the tt-llk harness.
 
 #include <cstdint>
+#include <utility>
 
 #include "ckernel.h"
 #include "llk_defs.h"
@@ -96,6 +97,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // Scaler multiplier applied to the reduction (matches the Compute API default).
 static constexpr float REDUCE_SCALER = 1.0f;
 
+// mul_reduce_scalar_tile's later tiles, unrolled as the API is for a compile-time tile count.
+template <std::uint32_t... I>
+inline void reduce_later_tiles(const ckernel::TensorShape& tensor_shape, std::integer_sequence<std::uint32_t, I...>)
+{
+    ((_llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(I + 1),
+      _llk_math_mul_reduce_column_<MATH_FIDELITY, false>(DST_INDEX, tensor_shape)),
+     ...);
+}
+
+inline void reduce_later_tiles(const std::uint32_t tile_cnt, const ckernel::TensorShape& tensor_shape)
+{
+    switch (tile_cnt)
+    {
+        case 2: reduce_later_tiles(tensor_shape, std::make_integer_sequence<std::uint32_t, 1> {}); break;
+        case 3: reduce_later_tiles(tensor_shape, std::make_integer_sequence<std::uint32_t, 2> {}); break;
+        case 4: reduce_later_tiles(tensor_shape, std::make_integer_sequence<std::uint32_t, 3> {}); break;
+        case 5: reduce_later_tiles(tensor_shape, std::make_integer_sequence<std::uint32_t, 4> {}); break;
+        case 6: reduce_later_tiles(tensor_shape, std::make_integer_sequence<std::uint32_t, 5> {}); break;
+        case 7: reduce_later_tiles(tensor_shape, std::make_integer_sequence<std::uint32_t, 6> {}); break;
+        case 8: reduce_later_tiles(tensor_shape, std::make_integer_sequence<std::uint32_t, 7> {}); break;
+        default: break;
+    }
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -149,11 +174,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Step 6 - column-reduce every tile, accumulating into DEST[0].
     // (narrow_tile / num_faces are derived internally from the TensorShape.)
     _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
-    for (std::uint32_t i = 1; i < tile_cnt; ++i)
-    {
-        _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i);
-        _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
-    }
+    reduce_later_tiles(tile_cnt, tensor_shape);
 
     // Step 7 - collapse DEST[0] to a single scalar.
     _llk_math_mul_reduce_scalar_<MATH_FIDELITY>();

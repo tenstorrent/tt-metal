@@ -194,9 +194,10 @@ inline void _llk_math_mul_reduce_scalar_init_()
  *
  * @tparam MATH_FIDELITY_DESC Math fidelity descriptor (0 = default, higher = more precision)
  * @param dst_index Destination tile index to accumulate into (0-7)
+ * @tparam tile_setup Drain the SFPU and set the DEST address first; a later tile of the same row can skip both
  * @param tensor_shape Shape of the operand tile (4 faces for 32x32, 2 faces for a 16x32 tiny tile)
  */
-template <MathFidelity math_fidelity>
+template <MathFidelity math_fidelity, bool tile_setup = true>
 inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
@@ -206,9 +207,12 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ck
     const std::uint32_t num_row_tiles = tensor_shape.num_faces_r_dim;
 
     // dst[dst_index] may have just been zeroed through the SFPU; GAPOOL accumulates into it, so drain first.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    if constexpr (tile_setup)
+    {
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    }
 
     for (std::uint32_t row_tile = 0; row_tile < num_row_tiles; row_tile++)
     {
