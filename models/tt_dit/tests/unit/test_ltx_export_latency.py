@@ -46,6 +46,10 @@ def _audio(seconds):
     return video.Audio(waveform=torch.zeros(2, int(48000 * seconds)).uniform_(-0.1, 0.1), sampling_rate=48000)
 
 
+def test_default_x264_options_favour_latency():
+    assert video.X264_OPTIONS == {"preset": "ultrafast", "crf": "20"}
+
+
 @pytest.mark.parametrize("layout", ["contiguous", "strided"])
 def test_yuv_export_round_trip(tmp_path, layout):
     clip = _yuv_clip()
