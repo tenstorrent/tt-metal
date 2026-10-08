@@ -18,10 +18,281 @@
 
 namespace ttnn::prim {
 
+// Defined in sparse_sdpa_msa_device_operation.cpp (hashed there): packed group size G, or 0 for legacy kernels.
+uint32_t sparse_sdpa_msa_packed_group(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t);
+
 namespace {
 // emplace_runtime_args' vector overload registers each Buffer* as an address binding at its slot,
 // so the args can be filled by enum index instead of positionally.
 using RtArgs = std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>;
+
+// Packed token groups for 16 query heads per KV group (see sparse_sdpa_msa_packed_{reader,writer,compute}.cpp):
+// two tokens per 32-row Q tile row, up to G tokens per group, each distinct selected block of the group gathered
+// once into a double-buffered K/V slot, per-tile-row running state in its own ping-pong CBs. Same runtime-arg
+// slots and work split as the legacy kernels, so override_runtime_arguments serves both.
+tt::tt_metal::ProgramDescriptor create_packed_descriptor(
+    const SparseSDPAMsaParams& attrs,
+    const SparseSDPAMsaInputs& t,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
+    uint32_t G) {
+    enum PackedCB : uint32_t {
+        cb_q_rm = 0,       // Q rows of the group (16*G row-sticks)
+        cb_q_in,           // Q tiled [G/2, DHt]
+        cb_k_in,           // K tiled, 2 blocks (double-buffered)
+        cb_v_in,           // V tiled, 2 blocks
+        cb_scale,          // reduce identity scaler
+        cb_qk_im,          // scores of one tile row [1, Skt]
+        cb_corr,           // exp(prev_max - cur_max)
+        cb_out_im,         // normalized out of the group [G/2, vDHt]
+        cb_out_rm,         // untilized out [G/2, vDHt]
+        cb_idx,            // reader-internal: G block-id rows + union ids + union masks
+        cb_ctrl,           // reader -> compute: group header + one word per union block (2 pages)
+        cb_col_identity,   // ones-in-col0 for the final row-sum
+        cb_recip_scratch,  // 1/sum scratch
+        cb_kreq,           // reader -> writer {phys_block, is_last, k slot, v slot, g}
+        cb_kack,           // writer -> reader ack
+        cb_neginf,         // all -inf tile
+        cb_halfmask,       // [top-half -inf, bottom-half -inf]
+        cb_vmask,          // per-slot half-tile partial-column mask tiles (G per group, 2 groups)
+        cb_state0,         // per tile row r: cb_state0 + 6r + {max_a, max_b, sum_a, sum_b, out_a, out_b}
+    };
+
+    tt::tt_metal::ProgramDescriptor desc;
+
+    const uint32_t H_total = t.q.logical_shape()[1];
+    const uint32_t n_kv = t.k.logical_shape()[1];
+    const uint32_t H_logical = H_total / n_kv;  // 16
+    const uint32_t S = t.q.logical_shape()[2];
+    const uint32_t topk = t.indices.logical_shape()[3];
+    const uint32_t d = t.q.logical_shape()[3];
+    const uint32_t v_dim = t.v.logical_shape()[3];
+    const uint32_t block_size = attrs.block_size;
+    const uint32_t DHt = d / tt::constants::TILE_WIDTH;
+    const uint32_t vDHt = v_dim / tt::constants::TILE_WIDTH;
+    const uint32_t Skt = block_size / tt::constants::TILE_WIDTH;
+    const uint32_t Sqt = G / 2;
+    const uint32_t k_tiles_per_block = Skt * DHt;
+    const uint32_t v_tiles_per_block = Skt * vDHt;
+    const uint32_t k_half = k_tiles_per_block >> 1;
+    const uint32_t v_half = v_tiles_per_block >> 1;
+    const uint32_t scale_packed = std::bit_cast<uint32_t>(attrs.scale);
+    TT_FATAL(H_logical == 16, "packed sparse_sdpa_msa needs 16 query heads per KV group");
+    TT_FATAL(G >= 2 && G <= 8 && G % 2 == 0, "packed group size must be 2, 4, 6 or 8 (got {})", G);
+    TT_FATAL(Skt <= 15, "packed sparse_sdpa_msa: block_size {} exceeds the mask-stamp encoding", block_size);
+
+    const uint32_t q_elem_bytes = t.q.element_size();
+    const uint32_t idx_elem_bytes = t.indices.element_size();
+    const uint32_t out_elem_bytes = output.element_size();
+    const uint32_t q_row_bytes = d * q_elem_bytes;
+    const uint32_t idx_row_bytes = topk * idx_elem_bytes;
+    constexpr tt::DataFormat bf = tt::DataFormat::Float16_b;
+    constexpr uint32_t tile_bytes = tt::tile_size(bf);
+    const tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(t.k.dtype());
+    const tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(t.v.dtype());
+    const uint32_t k_tile_bytes = tt::tile_size(k_df);
+    const uint32_t v_tile_bytes = tt::tile_size(v_df);
+    const tt::DataFormat q_rm_df = tt::tt_metal::datatype_to_dataformat_converter(t.q.dtype());
+    const bool q_is_fp8 = (t.q.dtype() == DataType::FP8_E4M3);
+    const tt::DataFormat q_in_df = q_is_fp8 ? tt::DataFormat::Bfp8_b : q_rm_df;
+    const uint32_t q_in_tile_bytes = tt::tile_size(q_in_df);
+    const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const uint32_t out_tile_bytes = tt::tile_size(out_df);
+
+    const auto dyn = SparseSDPAMsaOperation::compute_dispatch_args(attrs, t, mesh_dispatch_coordinate);
+    const tt::tt_metal::CoreCoord grid = dyn.grid;
+    auto core_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+    const uint32_t num_cores = dyn.num_cores;
+
+    const auto cb = [&](uint32_t page_size, uint32_t num_pages, tt::DataFormat df) {
+        const uint32_t idx = desc.cbs.size();
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = page_size * num_pages,
+            .core_ranges = core_grid,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(idx), .data_format = df, .page_size = page_size}}},
+        });
+    };
+    const auto round_up = [](uint32_t x, uint32_t a) { return ((x + a - 1) / a) * a; };
+    cb(q_row_bytes, H_logical * G, q_rm_df);          // cb_q_rm
+    cb(q_in_tile_bytes, Sqt * DHt, q_in_df);          // cb_q_in
+    cb(k_tile_bytes, 2 * k_tiles_per_block, k_df);    // cb_k_in (2 slots)
+    cb(v_tile_bytes, 2 * v_tiles_per_block, v_df);    // cb_v_in (2 slots)
+    cb(tile_bytes, 1, bf);                            // cb_scale
+    cb(tile_bytes, Skt, bf);                          // cb_qk_im (exactly one row: the hold-wr-ptr wrap)
+    cb(tile_bytes, 1, bf);                            // cb_corr
+    cb(tile_bytes, Sqt * vDHt, bf);                   // cb_out_im
+    cb(out_tile_bytes, Sqt * vDHt, out_df);           // cb_out_rm
+    cb(round_up(3 * G * topk * 4, 32), 1, bf);        // cb_idx
+    cb(round_up(4 * (2 + G + G * topk), 32), 2, bf);  // cb_ctrl
+    cb(tile_bytes, 1, bf);                            // cb_col_identity
+    cb(tile_bytes, 1, bf);                            // cb_recip_scratch
+    cb(32, 2, bf);                                    // cb_kreq
+    cb(16, 2, bf);                                    // cb_kack
+    cb(tile_bytes, 1, bf);                            // cb_neginf
+    cb(tile_bytes, 2, bf);                            // cb_halfmask
+    cb(tile_bytes, 2 * G, bf);                        // cb_vmask
+    for (uint32_t r = 0; r < Sqt; ++r) {
+        cb(tile_bytes, 1, bf);     // max a
+        cb(tile_bytes, 1, bf);     // max b
+        cb(tile_bytes, 1, bf);     // sum a
+        cb(tile_bytes, 1, bf);     // sum b
+        cb(tile_bytes, vDHt, bf);  // out a
+        cb(tile_bytes, vDHt, bf);  // out b
+    }
+
+    const auto block_cyclic_ct = [&attrs, &t, block_size]() {
+        std::array<uint32_t, 5> args{0, 1, 1, 0, 0};
+        if (!attrs.has_block_cyclic()) {
+            return args;
+        }
+        const auto& bc = attrs.block_cyclic.value();
+        const uint32_t chunk_local_blk = bc.chunk_local / block_size;
+        const uint32_t shard_len_blk = (t.k.logical_shape()[2] / bc.sp) / block_size;
+        args = {1, chunk_local_blk, bc.sp, shard_len_blk - chunk_local_blk, chunk_local_blk * (bc.sp - 1)};
+        return args;
+    }();
+
+    std::vector<uint32_t> reader_ct = {
+        H_logical,         S,       topk,    n_kv,     q_row_bytes,  idx_row_bytes, k_tiles_per_block,
+        v_tiles_per_block, k_half,  v_half,  cb_q_rm,  cb_k_in,      cb_v_in,       cb_idx,
+        cb_ctrl,           cb_kreq, cb_kack, cb_vmask, k_tile_bytes, v_tile_bytes,  attrs.causal_enabled() ? 1u : 0u,
+        block_size,        G};
+    reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
+    std::vector<uint32_t> reader_crt;
+    tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(reader_ct, reader_crt);
+    tt::tt_metal::TensorAccessorArgs(t.k.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(reader_ct, reader_crt);
+    tt::tt_metal::TensorAccessorArgs(t.v.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(reader_ct, reader_crt);
+    tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
+
+    const uint32_t row_bytes = vDHt * tt::constants::TILE_WIDTH * out_elem_bytes;
+    std::vector<uint32_t> writer_ct = {
+        H_logical,
+        S,
+        n_kv,
+        row_bytes,
+        vDHt,
+        k_tiles_per_block,
+        v_tiles_per_block,
+        k_half,
+        v_half,
+        cb_out_rm,
+        cb_scale,
+        cb_col_identity,
+        cb_kreq,
+        cb_kack,
+        k_tile_bytes,
+        v_tile_bytes,
+        cb_neginf,
+        cb_halfmask};
+    std::vector<uint32_t> writer_crt;
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
+    tt::tt_metal::TensorAccessorArgs(t.k.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(writer_ct, writer_crt);
+    tt::tt_metal::TensorAccessorArgs(t.v.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(writer_ct, writer_crt);
+
+    std::vector<uint32_t> compute_ct = {
+        G,           DHt,      vDHt,     Skt,       scale_packed, cb_q_rm, cb_q_in,         cb_k_in,          cb_v_in,
+        cb_scale,    cb_qk_im, cb_corr,  cb_out_im, cb_out_rm,    cb_ctrl, cb_col_identity, cb_recip_scratch, cb_neginf,
+        cb_halfmask, cb_vmask, cb_state0};
+
+    const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/";
+    tt::tt_metal::KernelDescriptor reader_desc;
+    reader_desc.kernel_source = kdir + "dataflow/sparse_sdpa_msa_packed_reader.cpp";
+    reader_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_grid;
+    reader_desc.compile_time_args = reader_ct;
+    reader_desc.common_runtime_args = reader_crt;
+    reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
+
+    tt::tt_metal::KernelDescriptor writer_desc;
+    writer_desc.kernel_source = kdir + "dataflow/sparse_sdpa_msa_packed_writer.cpp";
+    writer_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_grid;
+    writer_desc.compile_time_args = writer_ct;
+    writer_desc.common_runtime_args = writer_crt;
+    writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
+
+    auto [math_fidelity, math_approx, fp32_acc, packer_l1_acc, dst_full_sync] =
+        get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), attrs.compute_kernel_config);
+    (void)packer_l1_acc;
+
+    tt::tt_metal::KernelDescriptor compute_desc;
+    compute_desc.kernel_source = kdir + "compute/sparse_sdpa_msa_packed_compute.cpp";
+    compute_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = core_grid;
+    compute_desc.compile_time_args = compute_ct;
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (q_is_fp8) {
+        unpack_to_dest_mode[cb_q_rm] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    compute_desc.config = tt::tt_metal::ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_acc,
+        .dst_full_sync_en = dst_full_sync,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+        .math_approx_mode = math_approx};
+    std::map<std::string, std::string> cdefs{
+        {"EXP_APPROX_MODE", std::to_string(static_cast<int>(math_approx))},
+    };
+    compute_desc.defines = tt::tt_metal::KernelDescriptor::Defines(cdefs.begin(), cdefs.end());
+
+    auto* q_buf = t.q.buffer();
+    auto* k_buf = t.k.buffer();
+    auto* v_buf = t.v.buffer();
+    auto* idx_buf = t.indices.buffer();
+    auto* out_buf = output.buffer();
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
+        uint32_t work_start = i * dyn.base_work + std::min(i, dyn.extra);
+        uint32_t work_count = dyn.base_work + (i < dyn.extra ? 1u : 0u);
+        using RArg = SparseSDPAMsaOperation::ReaderArg;
+        RtArgs reader_rt(RArg::kReaderArgCount);
+        reader_rt[RArg::kReaderQAddr] = q_buf;
+        reader_rt[RArg::kReaderKAddr] = k_buf;
+        reader_rt[RArg::kReaderVAddr] = v_buf;
+        reader_rt[RArg::kReaderIdxAddr] = idx_buf;
+        reader_rt[RArg::kReaderWorkStart] = work_start;
+        reader_rt[RArg::kReaderWorkCount] = work_count;
+        reader_rt[RArg::kReaderKBatchOffset] = dyn.k_batch_tile_offset;
+        reader_rt[RArg::kReaderVBatchOffset] = dyn.v_batch_tile_offset;
+        reader_rt[RArg::kReaderKGroupStride] = dyn.k_group_tile_stride;
+        reader_rt[RArg::kReaderVGroupStride] = dyn.v_group_tile_stride;
+        reader_rt[RArg::kReaderChunkStart] = dyn.causal.chunk_start;
+        reader_rt[RArg::kReaderStraddleRow] = dyn.causal.straddle_row;
+        reader_rt[RArg::kReaderStraddleJump] = dyn.causal.straddle_jump;
+        reader_desc.emplace_runtime_args(core, reader_rt);
+
+        using WArg = SparseSDPAMsaOperation::WriterArg;
+        RtArgs writer_rt(WArg::kWriterArgCount);
+        writer_rt[WArg::kWriterOutAddr] = out_buf;
+        writer_rt[WArg::kWriterWorkStart] = work_start;
+        writer_rt[WArg::kWriterWorkCount] = work_count;
+        writer_rt[WArg::kWriterKAddr] = k_buf;
+        writer_rt[WArg::kWriterVAddr] = v_buf;
+        writer_rt[WArg::kWriterKBatchOffset] = dyn.k_batch_tile_offset;
+        writer_rt[WArg::kWriterVBatchOffset] = dyn.v_batch_tile_offset;
+        writer_rt[WArg::kWriterKGroupStride] = dyn.k_group_tile_stride;
+        writer_rt[WArg::kWriterVGroupStride] = dyn.v_group_tile_stride;
+        writer_desc.emplace_runtime_args(core, writer_rt);
+
+        using CArg = SparseSDPAMsaOperation::ComputeArg;
+        RtArgs compute_rt(CArg::kComputeArgCount);
+        compute_rt[CArg::kComputeWorkStart] = work_start;
+        compute_rt[CArg::kComputeWorkCount] = work_count;
+        compute_desc.emplace_runtime_args(core, compute_rt);
+    }
+
+    // Kernel order matches the legacy descriptor (reader 0, writer 1, compute 2) for override_runtime_arguments.
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+    return desc;
+}
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFactory::create_descriptor(
@@ -29,6 +300,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     const SparseSDPAMsaInputs& t,
     Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    if (const uint32_t G = sparse_sdpa_msa_packed_group(attrs, t); G > 0) {
+        return create_packed_descriptor(attrs, t, output, mesh_dispatch_coordinate, G);
+    }
     // Fixed CB ids shared with the kernels. Function scope avoids unity-build collisions with sparse_sdpa.
     // K/V are separate pre-tiled caches. Reader and writer co-gather each block into shared K/V CBs.
     enum SparseCB : uint32_t {

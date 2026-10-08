@@ -14,8 +14,32 @@
 #include <tt-metalium/program.hpp>
 #include <algorithm>
 #include <bit>
+#include <cstdlib>
 
 namespace ttnn::prim {
+
+// Packed token groups (sparse_sdpa_msa_packed_*): with 16 query heads per KV group the legacy kernels run one
+// token per 32-row Q tile (half of it zero padding) and gather that token's selected K/V blocks for it alone.
+// The packed kernels put two tokens in each tile row and up to G consecutive tokens in one group whose union
+// of selected blocks is gathered once. Returns G (2..8, even), or 0 for the legacy kernels. Other head counts
+// always use the legacy kernels. TT_MSA_PACKED_GROUP overrides the default (0 = legacy; for A/B and sweeps).
+uint32_t sparse_sdpa_msa_packed_group(const SparseSDPAMsaParams& /*attrs*/, const SparseSDPAMsaInputs& t) {
+    const uint32_t H_total = t.q.logical_shape()[1];
+    const uint32_t n_kv = t.k.logical_shape()[1];
+    if (n_kv == 0 || H_total % n_kv != 0 || H_total / n_kv != 16) {
+        return 0;
+    }
+    constexpr uint32_t kDefaultGroup = 8;
+    uint32_t g = kDefaultGroup;
+    if (const char* env = std::getenv("TT_MSA_PACKED_GROUP"); env != nullptr && *env != '\0') {
+        g = static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+    }
+    if (g == 0) {
+        return 0;
+    }
+    g = std::min<uint32_t>(8, g + (g & 1u));  // even, <= 8
+    return g;
+}
 
 namespace {
 // The SP-sharded read of a block-cyclic chunked-prefill cache: the global positions of this device's query rows
@@ -256,7 +280,8 @@ ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
         t.indices.logical_shape(),
-        t.indices.dtype());
+        t.indices.dtype(),
+        sparse_sdpa_msa_packed_group(attrs, t));
 }
 
 SparseSDPAMsaOperation::CausalGeometry SparseSDPAMsaOperation::compute_causal_geometry(

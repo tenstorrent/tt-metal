@@ -43,13 +43,14 @@ def _natural_to_block_cyclic(t, sp, n_chunks, chunk_local):
 @pytest.mark.parametrize("mesh_device", [(1, 2), (1, 4)], indirect=True)  # SP along cols; fixture skips if absent
 @pytest.mark.parametrize("n_chunks", [8])
 @pytest.mark.parametrize("causal", [False, True])  # True: diagonal-block mask must stay on the logical id
-def test_msa_native_block_cyclic_sp_gt1_matches_plain(mesh_device, n_chunks, causal):
+@pytest.mark.parametrize("H", [32, 16], ids=["h32", "h16_packed"])  # 16 heads/KV group -> packed token groups
+def test_msa_native_block_cyclic_sp_gt1_matches_plain(mesh_device, n_chunks, causal, H):
     rows, cols = tuple(mesh_device.shape)
     sp_axis, sp = 1, cols
     if sp < 2:
         pytest.skip(f"needs sp>1 (mesh shape {(rows, cols)})")
 
-    H, n_kv, S, d = 32, 1, 2 * BLK_KV, 128  # S = 2 blocks -> chunk_local spans >1 block (non-trivial invP divide)
+    n_kv, S, d = 1, 2 * BLK_KV, 128  # S = 2 blocks -> chunk_local spans >1 block (non-trivial invP divide)
     chunk_local = S  # tp=1 (pure-SP mesh) -> guard requires chunk_local == q_isl (= S)
     T = sp * n_chunks * chunk_local
     nblk = T // BLK_KV
@@ -147,7 +148,8 @@ def _diag_plus_past_indices(positions, n_kv, topk, n_past, gen):
     [0, 32, 128, 256, 352],
     ids=["slab_aligned", "mid_block_straddle", "block_aligned_straddle", "rotated", "rotated_straddle"],
 )
-def test_msa_block_cyclic_mid_slab_causal(mesh_device, start_offset):
+@pytest.mark.parametrize("H", [32, 16], ids=["h32", "h16_packed"])  # 16 heads/KV group -> packed token groups
+def test_msa_block_cyclic_mid_slab_causal(mesh_device, start_offset, H):
     """Causal sparse_sdpa_msa over a block-cyclic cache when the chunk starts mid-slab (a multi-turn resume at
     a 32-token boundary). Each SP rank's query rows sit at the KV writer's rotated positions, not the linear
     chunk_start + rank*S; the op must derive them (compute_causal_geometry) so the diagonal-block mask lands on
@@ -157,7 +159,7 @@ def test_msa_block_cyclic_mid_slab_causal(mesh_device, start_offset):
     if rows != 1 or sp < 2:
         pytest.skip(f"needs a (1, sp>1) mesh (got {(rows, cols)})")
 
-    H, n_kv, d = 32, 1, 128
+    n_kv, d = 1, 128
     chunk_local = S = 2 * BLK_KV  # one rank's query rows == the block-cyclic per-shard chunk
     chunk_global = sp * chunk_local
     n_slabs = 4
@@ -229,7 +231,8 @@ def test_msa_block_cyclic_mid_slab_causal(mesh_device, start_offset):
 @run_for_blackhole()
 @pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4)], indirect=True)  # SP along cols, TP sub-shard along rows
 @pytest.mark.parametrize("start_offset", [0, 32, 288], ids=["slab_aligned", "mid_block_straddle", "rotated_straddle"])
-def test_msa_block_cyclic_mid_slab_causal_tp_subshard(mesh_device, start_offset):
+@pytest.mark.parametrize("H", [32, 16], ids=["h32", "h16_packed"])  # 16 heads/KV group -> packed token groups
+def test_msa_block_cyclic_mid_slab_causal_tp_subshard(mesh_device, start_offset, H):
     """Causal sparse_sdpa_msa with q seq-sharded over BOTH mesh axes (block_cyclic_chunk_local == tp*S): device
     (tp r, sp c) holds rows [r*S, (r+1)*S) of SP rank c's chunk_local rotated rows. The mask must use that
     [SP, TP] position (as indexer_score does with seq_shard_axes=[SP, TP]), not chunk_start + sp_rank*S."""
@@ -238,7 +241,7 @@ def test_msa_block_cyclic_mid_slab_causal_tp_subshard(mesh_device, start_offset)
     if tp < 2 or sp < 2:
         pytest.skip(f"needs a (tp>1, sp>1) mesh (got {(rows, cols)})")
 
-    H, n_kv, d = 32, 1, 128
+    n_kv, d = 1, 128
     S = BLK_KV
     chunk_local = tp * S
     chunk_global = sp * chunk_local

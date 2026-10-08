@@ -13,7 +13,12 @@ unit tests' pattern, no locality).
 
 Prints (one line each, machine-parsable):
   MSA_PCC min=<min over sampled tokens> mean=<..>      (vs the fp32 torch reference, causal, sampled tokens)
+  MSA_REF_ALL pcc_min=<> pcc_mean=<> rel_l2=<>          (--ref-all: every query row vs the fp32 reference)
+  MSA_VS_BASE pcc=<> rel_l2=<> max_abs=<> bitexact=<>   (--compare <dump>: vs a saved baseline output, same inputs)
   MSA_OP_US median=<device kernel us> min=<> max=<> n=<iters>
+
+--dump-out <file> saves the device output (bf16 [1,H,S,d]) + indices, so a candidate kernel can be compared with
+the baseline build on identical inputs (--compare <file>).
 
 Device time comes from the device profiler's C++ post-process (no tracy, no IOMMU needed):
 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 are set below
@@ -95,6 +100,9 @@ def main():
     ap.add_argument("--iters", type=int, default=20)
     ap.add_argument("--pcc-tokens", type=int, default=64)
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--ref-all", action="store_true", help="PCC/relL2 of every query row vs the fp32 reference")
+    ap.add_argument("--dump-out", help="save the device output + indices here (torch.save)")
+    ap.add_argument("--compare", help="baseline dump (--dump-out of the reference build) to compare against")
     a = ap.parse_args()
     S, T, H, d = a.S, a.T, a.H, 128
     gen = torch.Generator().manual_seed(a.seed)
@@ -152,6 +160,32 @@ def main():
             x, y = out[0, :, s].flatten(), ref[:, j].flatten()
             pccs.append(torch.corrcoef(torch.stack([x, y]))[0, 1].item())
         print(f"MSA_PCC min={min(pccs):.6f} mean={statistics.mean(pccs):.6f} tokens={len(toks)}", flush=True)
+        if a.ref_all:
+            full = reference(q.bfloat16(), kq, vq, idx, scale, list(range(S)), q_start)  # [H, S, d]
+            dev_all = out[0, :, :S].float()
+            pa = [
+                torch.corrcoef(torch.stack([dev_all[:, s].flatten(), full[:, s].flatten()]))[0, 1].item()
+                for s in range(S)
+            ]
+            rel = ((dev_all - full).norm() / full.norm()).item()
+            print(
+                f"MSA_REF_ALL pcc_min={min(pa):.6f} pcc_mean={statistics.mean(pa):.6f} rel_l2={rel:.6e} tokens={S}",
+                flush=True,
+            )
+        if a.dump_out:
+            torch.save({"out": out.to(torch.bfloat16), "idx": idx, "q_start": q_start, "src": src}, a.dump_out)
+            print(f"[msa-op] dumped output to {a.dump_out}", flush=True)
+        if a.compare:
+            base = torch.load(a.compare)
+            assert torch.equal(base["idx"], idx), "baseline dump was made with different indices"
+            b, c = base["out"].float(), out.to(torch.bfloat16).float()
+            bp = torch.corrcoef(torch.stack([b.flatten(), c.flatten()]))[0, 1].item()
+            rel = ((c - b).norm() / b.norm()).item()
+            print(
+                f"MSA_VS_BASE pcc={bp:.8f} rel_l2={rel:.6e} max_abs={(c - b).abs().max().item():.6e} "
+                f"bitexact={int(torch.equal(b, c))} nan={int(torch.isnan(c).any().item())}",
+                flush=True,
+            )
 
         ttnn.synchronize_device(dev)
         ttnn.ReadDeviceProfiler(dev)

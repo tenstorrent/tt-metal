@@ -37,6 +37,23 @@ struct TridRing {
         }
     }
 
+    // Same, into an absolute L1 address (the packed-group writer fills the reader-reserved K/V slot, whose
+    // address it receives in the request, since its own view of the double-buffered CB never advances).
+    template <typename Accessor>
+    FORCE_INLINE void read_to(const Accessor& t, uint32_t l1_addr, uint32_t tile_bytes, uint32_t page_id) {
+        if constexpr (K_TRID_RING == 0) {
+            noc.async_read(t, CoreLocalMem<uint32_t>(l1_addr), tile_bytes, {.page_id = page_id}, {});
+        } else {
+            const uint32_t trid = (issued % TRID_MOD) + 1;
+            if (issued >= K_TRID_RING) {
+                experimental::async_read_barrier_with_trid(noc, trid);  // free this slot before reuse
+            }
+            experimental::set_read_trid(noc, trid);
+            noc.async_read(t, CoreLocalMem<uint32_t>(l1_addr), tile_bytes, {.page_id = page_id}, {});
+            ++issued;
+        }
+    }
+
     FORCE_INLINE void drain() {
         if constexpr (K_TRID_RING == 0) {
             noc.async_read_barrier();

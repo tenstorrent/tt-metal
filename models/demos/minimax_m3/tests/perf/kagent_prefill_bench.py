@@ -43,7 +43,9 @@ Env (defaults = the deployed 16p16d prefill config):
   BENCH_PROFILE       1 -> device-profiler zones: the timed request runs once inside the `profiled_chunk` zone
                       (run under `python -m tracy -r -p -v --no-web-server`); BENCH_ITERS forced to 1     [0]
   BENCH_SWEEP         interleaved in-process A/B after the main timing: "name:ack=sync;name2:ack=event,ROPE_FUSED=1"
-                      (keys: ack, ROPE_FUSED, SKIP_IDX_SPLIT, MOE_SINGLE_RS); BENCH_SWEEP_ROUNDS repeats   [unset]
+                      (keys: ack, ROPE_FUSED, SKIP_IDX_SPLIT, MOE_SINGLE_RS, MM_FIDELITY, MSA_GROUP = the
+                      sparse_sdpa_msa packed group size TT_MSA_PACKED_GROUP, 0 = legacy kernels);
+                      BENCH_SWEEP_ROUNDS repeats   [unset]
   BENCH_FINAL         sweep variant the per-layer / logits / dump passes run with      [the env config]
   BENCH_FINALS        comma list of sweep variants: for each, re-fill the prefix under it, then the logits pass
                       and the KV dump into BENCH_DUMP_DIR/<variant> (several gated dumps from one model build)
@@ -321,6 +323,7 @@ def main():
         flag_defaults = {f: getattr(kagent_flags, f) for f in flag_names}
 
         mm_default = set(kagent_flags.MM_FIDELITY)
+        msa_group_default = os.environ.get("TT_MSA_PACKED_GROUP")  # read by the op factory (hashed) per program
 
         def apply_variant(d):
             set_ack(d.get("ack", ack_mode))
@@ -330,6 +333,12 @@ def main():
             kagent_flags.MM_FIDELITY = (
                 set(filter(None, d["MM_FIDELITY"].split("+"))) if "MM_FIDELITY" in d else set(mm_default)
             )
+            if "MSA_GROUP" in d:
+                os.environ["TT_MSA_PACKED_GROUP"] = d["MSA_GROUP"]
+            elif msa_group_default is None:
+                os.environ.pop("TT_MSA_PACKED_GROUP", None)
+            else:
+                os.environ["TT_MSA_PACKED_GROUP"] = msa_group_default
 
         variants = []
         for spec in filter(None, os.getenv("BENCH_SWEEP", "").split(";")):
