@@ -14,11 +14,9 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_blackhole
-
-blackhole_only = pytest.mark.skipif(
-    not is_blackhole() or os.environ.get("TT_METAL_SIMULATOR") is not None,
-    reason="SDPA precision recipes run on Blackhole hardware (the simulator disables SFPLOADMACRO)",
+recipe_hardware = pytest.mark.skipif(
+    ttnn.get_arch_name() not in ("blackhole", "wormhole_b0") or os.environ.get("TT_METAL_SIMULATOR") is not None,
+    reason="SDPA precision recipes run on Blackhole and Wormhole B0 hardware (the simulator disables SFPLOADMACRO)",
 )
 
 # Recipe and K/V storage. FAST inputs go through prepare_sdpa_input.
@@ -115,6 +113,14 @@ SHAPES = {
 }
 
 
+def fit_q_chunk(variant, q_chunk, wormhole_cap):
+    """Wormhole's smaller L1 (1464 KiB) does not fit some FP32-state (BALANCED, ACCURATE) layouts that Blackhole
+    does; cap their Q chunk there."""
+    if variant in ("balanced", "accurate") and ttnn.get_arch_name() == "wormhole_b0":
+        return min(q_chunk, wormhole_cap)
+    return q_chunk
+
+
 def check_accuracy(device, variant, shape):
     b, nh, nkv, sq, sk, d, q_chunk, k_chunk = shape
     q, k, v = randn(b, nh, sq, d, seed=1), randn(b, nkv, sk, d, seed=2), randn(b, nkv, sk, d, seed=3)
@@ -132,7 +138,7 @@ def check_attn_mask(device, variant, mask_kind):
         mask = torch.zeros(1, 1, 512, 1500)
         mask[..., 1100:] = -math.inf
     mask = mask.bfloat16()
-    actual = ttnn.to_torch(sdpa(device, variant, q, k, v, 256, 512, mask))
+    actual = ttnn.to_torch(sdpa(device, variant, q, k, v, fit_q_chunk(variant, 256, 128), 512, mask))
     assert l2_pct(actual, reference(q, k, v, mask)) < L2_PCT_BOUND[variant]
 
 
@@ -308,7 +314,7 @@ def check_key_range(device, variant, shape, *, causal, window=None, grid=None):
         *inputs_for(device, variant, q, k, v),
         is_causal=causal,
         sliding_window_size=window,
-        program_config=program_config(device, q_chunk, k_chunk, grid),
+        program_config=program_config(device, fit_q_chunk(variant, q_chunk, 256), k_chunk, grid),
         precision=VARIANTS[variant][0],
     )
     expected = reference(q, k, v, key_mask(s, s, causal=causal, window=window))
