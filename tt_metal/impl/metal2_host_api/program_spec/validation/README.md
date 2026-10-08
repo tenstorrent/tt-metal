@@ -12,7 +12,7 @@ This folder is organized by domain of validation.
 
 | Directory / file | What it checks |
 |---|---|
-| `resource/` | Validate resources (e.g. dfb/ scratchpad) associated with a `ProgramSpec`, e.g. binding |
+| `resource/` | Validate resources (e.g. dfb, scratchpad) associated with a `ProgramSpec`, e.g. binding |
 | `placement/` | Validate placements of kernels and resources |
 | `kernel_spec.cpp`, `hardware_config.cpp` | Validate properties of `KernelSpec` that are not listed above |
 | `program_spec.cpp` | Validate properties of `ProgramSpec` that are not listed above |

@@ -39,7 +39,7 @@ void ValidateResourceUsage(const ValidationContext& ctx, tt::ARCH arch);
 // These are the individual validator
 // ----------------------------------------------------------------------------
 
-// dfb/dfb.cpp
+// dfb.cpp
 void ValidateDFBSpec(
     const DataflowBufferSpec& dfb,
     const CollectedSpecData& collected,
@@ -47,26 +47,18 @@ void ValidateDFBSpec(
     tt::ARCH arch,
     const NumBanksFromBufferType& num_banks_from_buffer_type);
 void ValidateDFBBindings(const KernelSpec& kernel, const ValidationContext& ctx);
-
-// dfb/endpoints.cpp
 void ValidateDFBEndpoints(const ValidationContext& ctx, tt::ARCH arch);
-
-// dfb/aliasing.cpp
 void ValidateDFBAliasing(const ValidationContext& ctx);
 
-// prefetcher_pipe/prefetcher_pipe.cpp
+// prefetcher_pipe.cpp
 void ValidatePrefetcherPipeParameter(const PrefetcherPipeParameter& pipe, uint32_t l1_alignment);
 void ValidatePrefetcherPipeBindings(const KernelSpec& kernel);
 void ValidatePrefetcherPipesUsed(const ValidationContext& ctx);
-
-// prefetcher_pipe/roles.cpp
 struct PrefetcherPipeRoles {
     std::unordered_map<PrefetcherPipeParamName, NodeRangeSet> pipe_receiver_set;
     std::unordered_map<PrefetcherPipeParamName, const KernelSpec*> receiver_kernel_of;
 };
 PrefetcherPipeRoles ValidatePrefetcherPipeRoles(const ValidationContext& ctx);
-
-// prefetcher_pipe/lanes_and_relays.cpp
 void ValidatePrefetcherPipeLanesAndRelays(
     const ValidationContext& ctx, const PrefetcherPipeRoles& roles, tt::ARCH arch);
 
