@@ -19,7 +19,8 @@ using namespace ckernel::unpacker;
 // CUSTOM_MM
 // Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
 // in0 tile shape: [{1, 2, 4, 8}, 32]
-// in1 tile shape: [32, 32]
+// in1 tile shape: [32, 32]. With narrow_in1 each in1 tile holds 64 K rows x 16 N columns
+//   (face f = K rows 16f..16f+15), so one in1 tile consumes two in0 tiles and ct_dim must be 1
 // rt_dim: 1
 // ct_dim: any integer from 1 to 16
 // kt_dim: any integer from 1 to 256 (inclusive)
@@ -71,6 +72,33 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
         // And first instruction in next iteration is unpack into SrcA which uses this value
         TTI_NOP;
     }
+}
+
+// narrow_in1: one in1 tile (4 K-stacked faces in SrcA rows 0/16/32/48) against the four faces of
+// two consecutive in0 tiles, unpacked into SrcB rows 0/16/32/48. Four CH1 Y increments of 16 rows
+// wrap the 6-bit SrcB counter back to 0; the L1 face counter alternates CH0 Y and Z as above.
+inline void _llk_unpack_AB_custom_mm_narrow_iter_insns()
+{
+    TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
+    TTI_UNPACR_COMMON(SrcB, 0b00010001, 0); // in0 tile 2k, face 0 -> SrcB 0
+    TTI_UNPACR_COMMON(SrcB, 0b00010100, 0); // in0 tile 2k, face 1 -> SrcB 16
+    TTI_UNPACR_COMMON(SrcB, 0b00010001, 0); // in0 tile 2k+1, face 0 -> SrcB 32
+    // Increment UnpA L1 address; the last SrcB unpack covers its 2-cycle latency
+    TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
+    TTI_UNPACR_COMMON(SrcB, 0b00010100, 1); // in0 tile 2k+1, face 1 -> SrcB 48, also set dvalid
+}
+
+constexpr std::uint32_t custom_mm_narrow_full_unpack_insns = 6;
+
+inline void _llk_unpack_AB_custom_mm_narrow_mop_config_()
+{
+    load_replay_buf(0, custom_mm_narrow_full_unpack_insns, [] { _llk_unpack_AB_custom_mm_narrow_iter_insns(); });
+
+    // ct_dim == 1 only: every mop iteration is two full unpacks (two kt).
+    const std::uint32_t full    = lltt::replay_insn(0, custom_mm_narrow_full_unpack_insns);
+    ckernel_unpack_template tmp = ckernel_unpack_template(true, false, full, 0, 0, 0, 0, full, 0);
+    tmp.program();
+    TTI_MOP_CFG(0);
 }
 
 inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, const bool post1)
@@ -182,12 +210,13 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
     TTI_MOP_CFG(0);
 }
 
-template <bool transpose = false>
+template <bool transpose = false, bool narrow_in1 = false>
 inline void _llk_unpack_AB_custom_mm_init_(const std::uint32_t unpB_face_r_dim, const std::uint32_t unpA_dst_format, const std::uint32_t ct_dim = 1)
 {
+    static_assert(!(transpose && narrow_in1), "custom_mm: transpose is not supported with a narrow [32, 16] in1 tile");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose ? 1 : 0);
 
-    // UnpA unpacks full tiles
+    // UnpA unpacks full [32, 32] tiles (narrow_in1 only changes which K rows the faces hold)
     constexpr std::uint32_t unpA_x_end = TILE_NUM_FACES * FACE_R_DIM * FACE_C_DIM - 1;
     // UnpB unpacks [{1, 2, 4, 8}, 32] tiles which only have top two faces and only a single face per instruction
     // so a single instruction only unpacks unpB_face_r_dim rows
@@ -199,13 +228,21 @@ inline void _llk_unpack_AB_custom_mm_init_(const std::uint32_t unpB_face_r_dim, 
     // More details under tt-metal#38518
     const bool post1 = unpA_dst_format == to_underlying(DataFormat::Bfp4_b);
 
-    _llk_unpack_AB_custom_mm_mop_config_(ct_dim, post1);
+    if constexpr (narrow_in1)
+    {
+        _llk_unpack_AB_custom_mm_narrow_mop_config_();
+    }
+    else
+    {
+        _llk_unpack_AB_custom_mm_mop_config_(ct_dim, post1);
+    }
 
     // Reset counters here since reset in the execute API is at the end
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
+template <bool narrow_in1 = false>
 inline void _llk_unpack_AB_custom_mm_run_(
     volatile std::uint32_t* cfg,
     std::uint32_t address_a,
@@ -213,7 +250,8 @@ inline void _llk_unpack_AB_custom_mm_run_(
     const std::uint32_t block_increment,
     const std::uint32_t inner_increment,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim) {
+    const std::uint32_t ct_dim)
+{
     // Program SrcB address once, its updated using counters for up to 256 kt_dim
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
     // Program SrcA address once, its updated using CFGSHIFTMASK
@@ -231,7 +269,7 @@ inline void _llk_unpack_AB_custom_mm_run_(
     constexpr std::uint32_t mop_template_0 = 0;
     constexpr std::uint32_t no_skip_zmask = 0;
     constexpr std::uint32_t replay_buffer_size = 32;
-    constexpr std::uint32_t full_unpack_instruction_count = 5;
+    constexpr std::uint32_t full_unpack_instruction_count = narrow_in1 ? custom_mm_narrow_full_unpack_insns : 5;
     constexpr std::uint32_t reuse_instruction_count = 3;
 
     const std::uint32_t kt_pairs = kt_dim / 2;
@@ -263,7 +301,7 @@ inline void _llk_unpack_AB_custom_mm_run_(
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
-template <bool read_transposed = false, bool clear_src = true>
+template <bool read_transposed = false, bool clear_src = true, bool narrow_in1 = false>
 inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -272,7 +310,9 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim) {
+    const std::uint32_t ct_dim)
+{
+    static_assert(!(read_transposed && narrow_in1), "custom_mm: narrow_in1 does not support transposed reads");
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
     const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
@@ -292,5 +332,5 @@ inline void _llk_unpack_AB_custom_mm_(
         TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
     }
 
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
+    _llk_unpack_AB_custom_mm_run_<narrow_in1>(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
 }
