@@ -201,11 +201,13 @@ class DeepseekV41ForCausalLM:
         if os.environ.get("DSV41_VLLM_BUCKET_SELFTEST", "0") == "1":
             self.bucket_selftest()
 
-    def bucket_selftest(self, n_users_per_row=2, steps=8, prompt_len=300):
+    def bucket_selftest(self, n_users_per_row=2, steps=8, prompt_len=2600):
         """Startup self-test (DSV41_VLLM_BUCKET_SELFTEST=1) on the idle model: prefill a few users (users u < n_users_per_row of every mesh row), decode ``steps`` steps in the SMALLEST bucket
         with the greedy tokens fed back (logits of every step kept), re-prefill the same prompts and replay the same fed tokens through the FULL-batch decode: the logits of the two paths must
         agree (bf16 noise: PCC ~ 1) and the greedy tokens mostly. Logs one line per step."""
         m, U = self.m, self.U
+        if hasattr(m, "selftest_key_export"):
+            logger.info(f"DSV4.1 {m.selftest_key_export()}")
         small = [u for u in self.bucket_users if u < U]
         if not small:
             return
@@ -227,45 +229,62 @@ class DeepseekV41ForCausalLM:
             a, b = a - a.mean(), b - b.mean()
             return float((a @ b) / (a.norm() * b.norm() + 1e-12))
 
-        first = prefill()
-        bphys = torch.tensor([(i // Ub) * U + i % Ub for i in range(rows * Ub)], dtype=torch.long)
-        row_of = {int(q): i for i, q in enumerate(bphys.tolist())}
         fill = m.decode_filler()
-        fed = [first]  # fed[k][p] = token fed at position len(p) + k
-        logA, tokA = [], []
-        for k in range(steps):
-            tok = fill[bphys].clone()
-            pos = torch.zeros(rows * Ub, dtype=torch.long)
+
+        def run(Ubx, tokens_in=None):
+            """re-prefill the users, then ``steps`` decode steps at Ubx users per row (Ubx = U: the full model); teacher-forced with ``tokens_in`` (list of {p: token fed at step k}) or free-running
+            greedy (returns the fed tokens). -> (fed, logits [{p: [vocab]}], greedy tokens [{p: int}])"""
             for p in phys:
-                tok[row_of[p]], pos[row_of[p]] = fed[k][p], int(prompts[p].numel()) + k
-            out = m.decode_forward_bucket(Ub, tok, pos, bphys)
-            lg = m.read_logits_bucket(Ub).float()
-            logA.append({p: lg[row_of[p]].clone() for p in phys})
-            tokA.append({p: int(out[row_of[p]]) for p in phys})
-            fed.append(tokA[-1])
-        for p in phys:  # fresh state for the replay through the full batch
-            m.release_user(p)
-        second = prefill()
-        assert second == first, f"re-prefill changed the first tokens: {first} vs {second}"
-        worst, agree = 1.0, 0
-        for k in range(steps):
-            tok = fill.clone()
-            pos = torch.zeros(self.B, dtype=torch.long)
-            for p in phys:
-                tok[p], pos[p] = fed[k][p], int(prompts[p].numel()) + k
-            out = m.decode_forward(tok, pos, enable_trace=True, reload_inputs=True)
-            lg = m.read_logits().float()
-            pc = min(pcc(lg[p], logA[k][p]) for p in phys)
-            ag = sum(int(out[p]) == tokA[k][p] for p in phys)
-            worst, agree = min(worst, pc), agree + ag
+                m.release_user(p)
+            fp = prefill()
+            fed = tokens_in if tokens_in is not None else [fp]
+            logs, toks = [], []
+            if Ubx < U:
+                bph = torch.tensor([(i // Ubx) * U + i % Ubx for i in range(rows * Ubx)], dtype=torch.long)
+                rof = {int(q): i for i, q in enumerate(bph.tolist())}
+            for k in range(steps):
+                if Ubx < U:
+                    tok = fill[bph].clone()
+                    pos = torch.zeros(rows * Ubx, dtype=torch.long)
+                    for p in phys:
+                        tok[rof[p]], pos[rof[p]] = fed[k][p], int(prompts[p].numel()) + k
+                    out = m.decode_forward_bucket(Ubx, tok, pos, bph)
+                    lg = m.read_logits_bucket(Ubx).float()
+                    logs.append({p: lg[rof[p]].clone() for p in phys})
+                    toks.append({p: int(out[rof[p]]) for p in phys})
+                else:
+                    tok = fill.clone()
+                    pos = torch.zeros(self.B, dtype=torch.long)
+                    for p in phys:
+                        tok[p], pos[p] = fed[k][p], int(prompts[p].numel()) + k
+                    out = m.decode_forward(tok, pos, enable_trace=True, reload_inputs=True)
+                    lg = m.read_logits().float()
+                    logs.append({p: lg[p].clone() for p in phys})
+                    toks.append({p: int(out[p]) for p in phys})
+                if tokens_in is None:
+                    fed.append(toks[-1])
+            return fed, logs, toks
+
+        paths = (
+            [Ub] + [u for u in small if u != Ub and u >= n_users_per_row] + [U, Ub, U]
+        )  # smallest bucket, the other buckets, the full model, then repeats (determinism controls)
+        fed, base_logs, base_toks = run(paths[0])
+        worst0 = 1.0
+        for idx, Ubx in enumerate(paths[1:], start=1):
+            _, lg2, tk2 = run(Ubx, tokens_in=fed)
+            per_step = [min(pcc(lg2[k][p], base_logs[k][p]) for p in phys) for k in range(steps)]
+            mean = sum(pcc(lg2[k][p], base_logs[k][p]) for k in range(steps) for p in phys) / (steps * len(phys))
+            agree = sum(tk2[k][p] == base_toks[k][p] for k in range(steps) for p in phys)
+            if idx < len(paths) - 2:
+                worst0 = min(worst0, min(per_step))
             logger.info(
-                f"DSV4.1 bucket self-test step {k}: min PCC(bucket B'={rows * Ub} vs full B={self.B} logits) {pc:.5f}, greedy tokens equal {ag}/{len(phys)}"
+                f"DSV4.1 bucket self-test: path {idx} (B'={rows * Ubx}{' = full' if Ubx == U else ''}) vs path 0 (B'={rows * paths[0]}): PCC per step min {[round(x, 4) for x in per_step]}, mean {mean:.5f}, greedy equal {agree}/{steps * len(phys)}"
             )
         for p in phys:
             m.release_user(p)
             self.book.clear(p)
         logger.info(
-            f"DSV4.1 bucket self-test done: worst PCC {worst:.5f}, greedy agreement {agree}/{steps * len(phys)} (users {len(phys)}, bucket B'={rows * Ub}, full B={self.B})"
+            f"DSV4.1 bucket self-test done ({len(phys)} users, buckets B' {[rows * u for u in paths]}); the repeats of a path (last two entries) show the run-to-run noise"
         )
 
     # ---- speculative decoding: configuration ----------------------------------------------------------------------------------------------

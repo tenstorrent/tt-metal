@@ -908,44 +908,183 @@ class Model:
         self.pool.sync_page_table()
         getattr(self, "pf_resume", {}).pop(b, None)
 
+    def _export_state(self, NA, UD):
+        """Persistent device tensors of the key hand-off for slab length ``NA`` / ``UD`` users per row (allocated before any trace capture by ``warm_key_export``; the values are rewritten
+        per call): gather indices [1, NA], entry mask [1,1,NA,1], (mesh row, user) mask [rows * UD,1,1,1]."""
+        st = self.__dict__.setdefault("_exp_state", {})
+        if (NA, UD) not in st:
+            rep = ttnn.ReplicateTensorToMesh(self.md)
+            st[(NA, UD)] = dict(
+                idx=ttnn.from_torch(
+                    torch.zeros(1, NA, dtype=torch.int32),
+                    device=self.md,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=rep,
+                ),
+                emask=ttnn.from_torch(
+                    torch.zeros(1, 1, NA, 1),
+                    device=self.md,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=rep,
+                ),
+                umask=ttnn.from_torch(
+                    torch.zeros(self.rows * UD, 1, 1, 1),
+                    device=self.md,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=self._mp(),
+                ),
+            )
+        return st[(NA, UD)]
+
     def _export_user_keys(self, ix, k_cache, i_src, u_dst, rows_sel, off, n):
         """Hand-off of the index keys of the users held by prefill slot ``i_src`` of the mesh rows ``rows_sel`` (decode user ``u_dst`` of each of those rows) only: slab
-        slots [off, off + n) of the prefill key FIFO -> decode key slab entries [0, n). The other mesh rows keep their decode keys (they hold a decoding user at in-row
-        index u_dst): selected on the device with a per-row mask (bfp8 -> bf16 -> bfp8 is exact).
-        The decode key slab ``k_cache`` is referenced by the CAPTURED decode trace, so it must be updated IN PLACE: ``ttnn.experimental.slice_write`` re-allocates the
-        tensor (its buffer address changes: the decode trace would keep reading / writing the freed old buffer, and the new one is clobbered by the next replay of
-        another trace), so the whole slab is rebuilt from its parts (a few MB per device) and copied into the existing buffer with ``ttnn.copy``.
+        slots [off, off + n) of the prefill key FIFO -> decode key slab entries [0, n). The other mesh rows / users / entries keep their decode keys (bfp8 -> bf16 -> bfp8 is exact).
+        The decode key slab ``k_cache`` is referenced by the CAPTURED decode traces, so it is updated IN PLACE (``ttnn.copy`` of the rebuilt slab; ``slice_write`` re-allocates).
+        Every op has a SHAPE that depends only on (slot, slab) and every per-call value (gather indices, entry / user masks) lives in a persistent tensor: no new program, no new device
+        buffer after the traces are captured (the first version sliced at value dependent offsets: each new prompt length created programs whose buffers were allocated under live traces,
+        found by TT_METAL_TRACE_ALLOC_TRACKING; ``warm_key_export`` compiles the few programs before the captures).
         """
-        IDIM, NA, UD = ix.keys.shape[3], k_cache.shape[2], k_cache.shape[0]
-        new = ttnn.slice(ix.keys, [i_src, 0, off, 0], [i_src + 1, 1, off + n, IDIM])
+        IDIM, NA, UD, KL = ix.keys.shape[3], k_cache.shape[2], k_cache.shape[0], ix.keys.shape[2]
+        st = self._export_state(NA, UD)
+        idx = torch.zeros(1, NA, dtype=torch.int32)
+        idx[0, :n] = torch.arange(off, off + n, dtype=torch.int32)
+        em = torch.zeros(1, 1, NA, 1)
+        em[..., :n, :] = 1.0
+        um = torch.zeros(self.rows, UD, 1, 1, 1)
+        for r in rows_sel:
+            um[r, u_dst] = 1.0
+        rep = ttnn.ReplicateTensorToMesh(self.md)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(idx, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep), st["idx"]
+        )
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(em, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep), st["emask"]
+        )
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                um.reshape(self.rows * UD, 1, 1, 1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=self._mp(),
+            ),
+            st["umask"],
+        )
+        tmp = []
+        fifo = ttnn.slice(
+            ix.keys, [i_src, 0, 0, 0], [i_src + 1, 1, KL, IDIM]
+        )  # (a full-extent slice may alias ix.keys: never freed, see below)
+        tmp.append(fifo)
+        table = ttnn.to_layout(fifo, ttnn.ROW_MAJOR_LAYOUT)
+        tmp.append(table)
+        emb = ttnn.embedding(st["idx"], ttnn.reshape(table, [1, 1, KL, IDIM]), layout=ttnn.TILE_LAYOUT)  # [1, NA, IDIM]
+        tmp.append(emb)
+        emb = ttnn.reshape(emb, [1, 1, NA, IDIM])
+        emb_full = ttnn.repeat(emb, ttnn.Shape([UD, 1, 1, 1]))
+        tmp.append(emb_full)
+        cond = ttnn.multiply(st["umask"], st["emask"])  # [UD, 1, NA, 1]
+        tmp.append(cond)
         old_all = k_cache if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(k_cache, ttnn.bfloat16)
-        old_u = ttnn.slice(old_all, [u_dst, 0, 0, 0], [u_dst + 1, 1, NA, IDIM])
-        if len(rows_sel) < self.rows:
-            m = torch.zeros(self.rows, 1, 1, 1)
-            m[list(rows_sel)] = 1.0
-            mask = ttnn.from_torch(
-                m, device=self.md, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mp()
-            )
-            new = ttnn.where(mask, new, ttnn.slice(old_u, [0, 0, 0, 0], [1, 1, n, IDIM]))
-            ttnn.deallocate(mask)
-        blk = ttnn.concat([new, ttnn.slice(old_u, [0, 0, n, 0], [1, 1, NA, IDIM])], dim=2) if n < NA else new
-        parts = []
-        if u_dst > 0:
-            parts.append(ttnn.slice(old_all, [0, 0, 0, 0], [u_dst, 1, NA, IDIM]))
-        parts.append(blk)
-        if u_dst < UD - 1:
-            parts.append(ttnn.slice(old_all, [u_dst + 1, 0, 0, 0], [UD, 1, NA, IDIM]))
-        full = ttnn.concat(parts, dim=0) if len(parts) > 1 else blk
-        out = full if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(full, k_cache.dtype)
+        tmp.append(old_all)
+        new_all = ttnn.where(cond, emb_full, old_all)
+        tmp.append(new_all)
+        out = new_all if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(new_all, k_cache.dtype)
+        tmp.append(out)
         ttnn.copy(out, k_cache)
-        if out is not full:  # (typecast output)
-            ttnn.deallocate(out)
-        if len(parts) > 1:  # (concat output; with a single part ``full`` IS ``blk``)
-            ttnn.deallocate(full)
-        if n < NA:  # (concat output; else ``blk`` is the slice ``new`` of the prefill key FIFO, which may alias it)
-            ttnn.deallocate(blk)
-        if old_all is not k_cache:
-            ttnn.deallocate(old_all)
+        protect = {ix.keys.buffer_unique_id(), k_cache.buffer_unique_id()}
+        seen = set(protect)
+        for t in tmp:
+            if not t.is_allocated():
+                continue
+            uid = t.buffer_unique_id()
+            if uid in seen:
+                continue
+            seen.add(uid)
+            ttnn.deallocate(t)
+
+    def selftest_key_export(self):
+        """Device self-test of ``_export_user_keys`` on the idle model: random content in the prefill key FIFO of the first key-owner layer, an export of FIFO[off, off + n) into user ``u`` of
+        mesh rows 1 and 3 only, and a check of the decode key slab on the host (exported entries equal up to bfp8 rounding, every other row / user / entry unchanged). Returns the report string.
+        """
+        if not self.use_indexer or not getattr(self, "prefill_sparse", None):
+            return "no decode indexer: nothing to check"
+        for L, dec in self.dec_idx.items():
+            if L not in self.index_owner:
+                continue
+            sp = self.attns[L].prefill.sparse
+            ix = None if sp is None else sp.indexer
+            if ix is not None and ix.key_owner is None and ix.keys is not None:
+                break
+        else:
+            return "no key owner"
+        rows, cols = self.rows, self.cols
+        Up, KL, IDIM = ix.keys.shape[0], ix.keys.shape[2], ix.keys.shape[3]
+        k = dec.k_cache
+        UD, NA = k.shape[0], k.shape[2]
+
+        def slab():
+            ttnn.synchronize_device(self.md)
+            devs = ttnn.get_device_tensors(k)
+            return torch.stack([ttnn.to_torch(devs[r * cols]).float().reshape(UD, NA, -1) for r in range(rows)])
+
+        g = torch.Generator().manual_seed(7)
+        fifo = torch.randn(rows * Up, 1, KL, IDIM, generator=g)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                fifo.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mp()
+            ),
+            ix.keys,
+        )
+        before = slab()
+        n, off, u, i_src, sel = min(NA, 96), 32, min(2, UD - 1), Up - 1, [1, 3]
+        self._export_user_keys(ix, k, i_src, u, sel, off, n)
+        after = slab()
+        want = fifo.reshape(rows, Up, KL, IDIM)[:, i_src, off : off + n].float()
+
+        def pcc(a, b):
+            a, b = a.flatten(), b.flatten()
+            a, b = a - a.mean(), b - b.mean()
+            return float((a @ b) / (a.norm() * b.norm() + 1e-12))
+
+        ok_rows = [pcc(after[r, u, :n], want[r]) for r in sel]
+        unchanged = after.clone()
+        changed = torch.zeros_like(unchanged, dtype=torch.bool)
+        for r in sel:
+            changed[r, u, :n] = True
+        untouched = bool((unchanged[~changed] == before[~changed]).all())
+        res = f"key export self-test (layer {L}, slot {i_src}, user {u}, rows {sel}, off {off}, n {n}): PCC of the exported entries {[round(x, 5) for x in ok_rows]}, everything else untouched: {untouched}"
+        # restore: the slab and the FIFO of an idle model carry no state, but leave zeros
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.zeros_like(fifo).to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=self._mp(),
+            ),
+            ix.keys,
+        )
+        return res
+
+    def warm_key_export(self):
+        """Allocate the persistent key-export tensors and compile the export programs of every key-owner layer for every prefill slot (a no-change export: empty user mask), before any
+        trace is captured."""
+        if not self.use_indexer or not getattr(self, "prefill_sparse", None):
+            return
+        for L, dec in self.dec_idx.items():
+            if L not in self.index_owner:
+                continue
+            sp = self.attns[L].prefill.sparse
+            ix = None if sp is None else sp.indexer
+            if ix is None or ix.key_owner is not None or ix.keys is None:
+                continue
+            for i_src in range(ix.keys.shape[0]):
+                self._export_user_keys(ix, dec.k_cache, i_src, 0, [], 0, 1)
+        ttnn.synchronize_device(self.md)
 
     def _export_keys_users(self, users, ends, s_end, slot_of):
         """Index-key hand-off (prefill key FIFOs -> decode key slabs) of the users whose prompt ended inside the window that ended at ``s_end``;
@@ -1326,8 +1465,11 @@ class Model:
             ttnn.synchronize_device(self.md)
             self.dec.restore_states(snaps)
             self._set_loop_state(tokens, current_pos)
+        from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import corruptible
+
         self.trace_id = ttnn.begin_trace_capture(self.md, cq_id=0)
-        self.last_logits = self.dec.forward()
+        with corruptible(self.md):
+            self.last_logits = self.dec.forward()
         ttnn.end_trace_capture(self.md, self.trace_id, cq_id=0)
         ttnn.synchronize_device(self.md)
         self.dec.restore_states(snaps)
@@ -1374,6 +1516,7 @@ class Model:
             self._hooks_set = pm
         pm.timing = {}
         compiled = pm.compile_dyn(chunk, s_pad)
+        self.warm_key_export()
         t1 = time.perf_counter()
         from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import DecodeBucket
 
