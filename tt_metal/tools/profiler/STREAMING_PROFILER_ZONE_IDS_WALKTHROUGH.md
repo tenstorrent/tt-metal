@@ -76,6 +76,17 @@ the end. It is the sixth of the kernel's ten zones, `T1_Zone0` … `T1_Zone9`.
 
 Label name: **`__tt_zone_0_6`**. Two different sites must not share a name; nothing else depends on it.
 
+> **This step is not strictly required; it is an optimization.** The id would work without a fixed name: a site could
+> give its handle an anonymous local label and still get a correct, unique id. What the name buys is
+> deduplication. When the compiler expands one zone site many times (a zone inside an `inline` function or a
+> template called from ten places), every copy of the site's asm carries the same label name, and the `.ifndef`
+> from step 3 emits the handle and the record only for the first copy. So the zone gets **one id, one record and
+> one name entry** however many copies of its code exist, instead of one per copy. That saves id space and keeps
+> the host's table to one entry per site.
+>
+> The deduplication works within one source file. A zone in a header that two sources include still gets two ids,
+> one per source: `TT_PROFILER_TU_ID` is part of the name precisely to keep those two apart.
+
 ## 3. Compile: directives plus two instructions
 
 The compiler copies the site's asm into the kernel's assembler text verbatim (shown with `-fno-lto`; under LTO it is
