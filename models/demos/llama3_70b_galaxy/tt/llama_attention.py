@@ -1070,7 +1070,19 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
 
-        if self.use_prefetcher:
+        if self.is_qwen and self.use_prefetcher and not self.is_blackhole and batch_size == 1 and seq_len > 8192:
+            # Qwen long prefill on Wormhole: minimal_matmul (fp32-dest-safe subblock, 7x10 grid) is faster than
+            # ttnn.linear with XQKV_PREFILL_PROGCFG and bit-identical. Same HiFi2 config and output dtype.
+            xqkv = ttnn.experimental.minimal_matmul(
+                input_tensor=ttnn.reshape(x_11SH, [1, 1, seq_len, x_11SH.shape[-1]]),
+                weight_tensor=self.wqkv_interleaved,
+                config=self.model_config["XQKV_PREFILL_MINIMAL_PROGCFG"](seq_len),
+                dtype=self.ccl_dtype,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            xqkv = ttnn.reshape(xqkv, [1, seq_len // 2048, 2048, xqkv.shape[-1]])
+        elif self.use_prefetcher:
             xqkv = ttnn.linear(
                 x_11SH,
                 self.wqkv_interleaved,
