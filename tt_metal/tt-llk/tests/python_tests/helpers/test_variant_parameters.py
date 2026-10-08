@@ -33,6 +33,7 @@ from .llk_params import (
     ReducePool,
     SdpaFwOp,
     SdpaOp,
+    SfpuIssue,
     StableSort,
     StochasticRounding,
     Tilize,
@@ -409,6 +410,18 @@ class APPROX_MODE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool APPROX_MODE = {self.approx_mode.cpp_enum_value};"
+
+
+@dataclass
+class SFPU_ISSUE(TemplateParameter):
+    """Emitted as a bool: ckernel::sfpu::SfpuIssue exists only in the Quasar tree, while this
+    header is generated for every architecture. The kernel maps it back to SfpuIssue."""
+
+    sfpu_issue: SfpuIssue
+
+    def convert_to_cpp(self) -> str:
+        load_macro = str(self.sfpu_issue == SfpuIssue.LoadMacro).lower()
+        return f"constexpr bool SFPU_ISSUE_LOADMACRO = {load_macro};"
 
 
 @dataclass

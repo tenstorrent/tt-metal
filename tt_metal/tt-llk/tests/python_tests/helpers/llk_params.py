@@ -510,6 +510,13 @@ class ApproximationMode(Enum):
         return str(self.value).lower()
 
 
+class SfpuIssue(Enum):
+    """How an SFPU op's instructions are issued (ckernel::sfpu::SfpuIssue); never changes the math."""
+
+    Sfpi = "Sfpi"
+    LoadMacro = "LoadMacro"
+
+
 class DstRoundingMode(Enum):
     """Mirrors ckernel::DstRoundingMode — how a float32 SFPU result is narrowed
     on store into a bf16 DEST."""

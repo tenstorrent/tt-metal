@@ -1386,7 +1386,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
                 DST_SYNC,
                 is_fp32_dest_acc_en,
                 calculate_add_int,
-                (false, ITERATIONS, DataFormat::Int32, 0, false),
+                (false, ITERATIONS, DataFormat::Int32, 0, SIGN_MAGNITUDE_FORMAT),
                 src0_tile,
                 src1_tile,
                 dst_tile,

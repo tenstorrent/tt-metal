@@ -1,4 +1,3 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -7,83 +6,66 @@
 
 #include <cstdint>
 
-#include "ckernel_instr_params.h"
-#include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "llk_assert.h"
+#include "sfpi.h"
+#include "sfpu/ckernel_sfpu_operand.h"
 
 namespace ckernel {
 namespace sfpu {
 
-// Calculates ADD for one pair of rows (Quasar SFPU ops cover 2 rows)
-inline void calculate_add_rows(
-    const int in0_addr,
-    const int in1_addr,
-    const int store_addr,
-    const std::uint32_t load_sfpmem,
-    const std::uint32_t store_sfpmem) {
-    TT_SFPLOAD(p_sfpu::LREG0, load_sfpmem, ADDR_MOD_7, 0, in0_addr);
-    TT_SFPLOAD(p_sfpu::LREG1, load_sfpmem, ADDR_MOD_7, 0, in1_addr);
-    TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0x0);
-    TT_SFPSTORE(p_sfpu::LREG2, store_sfpmem, ADDR_MOD_7, 0, store_addr);
-}
+/// Math policy for ADD: a + b. Shared by the Dest and SrcS paths via @ref calculate_binary_operands;
+/// any rounding is the output operand's store policy.
+struct AddMath {
+    sfpi_inline static sfpi::vFloat apply(sfpi::vFloat a, sfpi::vFloat b) { return a + b; }
+};
 
-// Addresses select Dest (bit 10 = 0) or SrcS (bit 10 = 1). Float16 needs an explicit FP16A.
-inline void calculate_add(
-    const int in0_base_addr,
-    const int in1_base_addr,
-    const int store_base_addr,
-    const int num_sfpu_iterations,
-    const std::uint32_t load_sfpmem,
-    const std::uint32_t store_sfpmem) {
-#pragma GCC unroll 8
-    for (int d = 0; d < num_sfpu_iterations; d++) {
-        calculate_add_rows(
-            in0_base_addr + (d << 1), in1_base_addr + (d << 1), store_base_addr + (d << 1), load_sfpmem, store_sfpmem);
+/// Math policy for Int32 ADD: a + b on the integer adder. Dest holds Int32 as 2's complement
+/// (UNP_DEST / Int32 L1) or sign-magnitude (copy_tile Int8 + fp32_dest_acc FPU); with
+/// SIGN_MAGNITUDE_FORMAT the operands are cast to 2's complement around the add.
+template <bool SIGN_MAGNITUDE_FORMAT>
+struct AddIntMath {
+    sfpi_inline static sfpi::vInt apply(sfpi::vInt a, sfpi::vInt b) {
+        if constexpr (SIGN_MAGNITUDE_FORMAT) {
+            a = sfpi::impl_::smag_to_int(sfpi::as<sfpi::vSMag>(a));
+            b = sfpi::impl_::smag_to_int(sfpi::as<sfpi::vSMag>(b));
+        }
+        sfpi::vInt sum = a + b;
+        if constexpr (SIGN_MAGNITUDE_FORMAT) {
+            sum = sfpi::as<sfpi::vInt>(sfpi::impl_::int_to_smag(sum));
+        }
+        return sum;
     }
-}
+};
 
+/**
+ * @brief Int32 ADD over Dest tiles: dest[out] = dest[in0] + dest[in1], one face per call.
+ *
+ * Loads and stores use the explicit I32 layout: implied formats with unpack-to-Dest are broken
+ * for integers on Quasar (TEN-4674).
+ *
+ * @tparam ITERATIONS: Number of SFPU passes (each covers 2 rows).
+ * @tparam FMT: Dest format, values = <Int32>.
+ * @tparam SIGN_MAGNITUDE_FORMAT: See @ref AddIntMath.
+ * @tparam TILE_SHAPE: Destination tile shape used to calculate operand offsets.
+ */
 template <
-    bool APPROXIMATION_MODE,
+    bool APPROXIMATION_MODE /*maybe_unused*/,
     int ITERATIONS = SFPU_ITERATIONS,
     DataFormat FMT = DataFormat::Int32,
-    int INSTRUCTION_MODE = 0,
+    int INSTRUCTION_MODE /*maybe_unused*/ = 0,
     bool SIGN_MAGNITUDE_FORMAT = false,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void calculate_add_int(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(FMT == DataFormat::Int32, "Only Int32 currently supported for SFPU integer add on Quasar");
 
-    constexpr bool is_int = (FMT == DataFormat::Int32);
-    // There is a Quasar bug with implied formats + unpack to dest, so use explicit types for
-    // integer SFPULOAD/SFPSTORE (TEN-4674).
-    constexpr auto instr_mod = is_int ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::DEFAULT;
-    constexpr std::uint32_t tile_stride = 1U << trisc::get_dest_tile_size_log2(TILE_SHAPE);
-    const std::uint32_t in0_offset = dst_index_in0 * tile_stride;
-    const std::uint32_t in1_offset = dst_index_in1 * tile_stride;
-    const std::uint32_t out_offset = dst_index_out * tile_stride;
-
-    for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(p_sfpu::LREG0, instr_mod, ADDR_MOD_7, 0, in0_offset + (d << 1));
-        TT_SFPLOAD(p_sfpu::LREG1, instr_mod, ADDR_MOD_7, 0, in1_offset + (d << 1));
-
-        // Dest layout depends on how operands reached dest:
-        //   UNP_DEST / Int32 L1 with 2's-comp tiles -> 2's-comp Int32
-        //   copy_tile Int8 + fp32_dest_acc FPU -> sign-mag Int32
-        if constexpr (SIGN_MAGNITUDE_FORMAT) {
-            TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC);
-            TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC);
-        }
-
-        TTI_SFPIADD(0x0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::sfp_binary_mod::SFPIADD_DISABLE_CC);
-
-        if constexpr (SIGN_MAGNITUDE_FORMAT) {
-            TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::sfp_sfpcast_mod::TWO_SC_TO_SM);
-        }
-
-        TT_SFPSTORE(p_sfpu::LREG1, instr_mod, ADDR_MOD_7, 0, out_offset + (d << 1));
-    }
+    using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::I32, sfpi::vInt>>;
+    constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);
+    calculate_binary_operands<AddIntMath<SIGN_MAGNITUDE_FORMAT>, ITERATIONS>(
+        Operand{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
+        Operand{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)},
+        Operand{static_cast<int>(dst_index_out * dst_tile_size_sfpi)});
 }
 
 }  // namespace sfpu

@@ -1293,8 +1293,8 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {"perf_reduce_quasar": "perf_reduce_quasar"},
     },
-    "perf_sfpu_exp_parallel_matmul_quasar": {
-        "version": 2,
+    "perf_sfpu_add_parallel_matmul_quasar": {
+        "version": 1,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -1322,6 +1322,43 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpack_transpose_faces",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_sfpu_add_parallel_matmul_quasar": "perf_sfpu_add_parallel_matmul_quasar"
+        },
+    },
+    "perf_sfpu_exp_parallel_matmul_quasar": {
+        "version": 4,
+        "columns": [
+            "c_dimm",
+            "dest_acc",
+            "dest_sync",
+            "enable_2x_format",
+            "enable_direct_indexing",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "implied_math_format",
+            "k_dimm",
+            "loop_factor",
+            "marker",
+            "math_fidelity",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "r_dimm",
+            "sfpu_issue",
+            "tile_cnt",
+            "unpack_to_dest",
+            "unpack_transpose_faces",
+        ],
+        "aliases": {
+            "formats.sfpu_math": "formats.sfpu_src",
+            "sfpu_srcs_impl": "sfpu_issue",
+        },
         "test_name_aliases": {
             "perf_sfpu_exp_parallel_matmul_quasar": "perf_sfpu_exp_parallel_matmul_quasar"
         },

@@ -115,6 +115,7 @@ def _run_sfpu_binary_llk_golden(
     dst_rounding_mode=DstRoundingMode.Default,
     format_variant=None,
     max_ulp=None,
+    sign_magnitude=False,
 ):
     """Shared driver for the LLK-golden binary SFPU ops.
 
@@ -147,6 +148,11 @@ def _run_sfpu_binary_llk_golden(
     golden_tensor = golden_full[dst_start : dst_start + MAX_TILE_ELEMENTS].to(
         torch_format_out
     )
+    if sign_magnitude:
+        # The SIGN_MAGNITUDE_FORMAT path reads and writes Dest as SMAG32: stage the operands
+        # and encode the 2's-comp golden the same way (as the quant family does).
+        src_A = _int32_to_smag32(src_A)
+        golden_tensor = _int32_to_smag32(golden_tensor)
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -166,8 +172,8 @@ def _run_sfpu_binary_llk_golden(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
-            # 2's-complement datapath (default); only the quant family reads this.
-            SIGN_MAGNITUDE_FORMAT(False),
+            # 2's-complement datapath (default); read by the quant family and int ADD.
+            SIGN_MAGNITUDE_FORMAT(sign_magnitude),
             SFPU_DST_ROUNDING_MODE(dst_rounding_mode),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
@@ -268,11 +274,13 @@ INT_SWEEP = dict(
     **INT_SWEEP,
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
+@pytest.mark.parametrize("sign_magnitude", [False, True], ids=["2sc", "smag"])
 def test_eltwise_binary_sfpu_int_quasar(
     formats,
     dest_acc,
     mathop,
     tile_indices,
+    sign_magnitude,
     *,
     approx_mode=ApproximationMode.No,
     run_types=(PerfRunType.L1_TO_L1,),
@@ -280,9 +288,15 @@ def test_eltwise_binary_sfpu_int_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest), Int32."""
+    """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest), Int32.
+
+    sign_magnitude drives ADD's SIGN_MAGNITUDE_FORMAT path (the add_int_tile encoding): operands
+    are staged in Dest as SMAG32 and the golden is SMAG32-encoded. Only ADD reads the flag.
+    """
     binary_op = mathop.cpp_enum_value
     clamp_inputs = 1000 if mathop == MathOperation.SfpuElwmulInt else None
+    if sign_magnitude and binary_op != "ADD":
+        pytest.skip("SIGN_MAGNITUDE_FORMAT is only read by the int ADD kernel")
     _run_sfpu_binary_llk_golden(
         formats,
         dest_acc,
@@ -298,6 +312,7 @@ def test_eltwise_binary_sfpu_int_quasar(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
+        sign_magnitude=sign_magnitude,
     )
 
 

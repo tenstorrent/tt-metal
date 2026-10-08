@@ -107,6 +107,7 @@ DB_SCHEMA = [
     Column("r_dimm", "int64", True, "configuration"),
     Column("relu_config", "int64", True, "configuration"),
     Column("reuse_dest_type", "string", True, "configuration"),
+    Column("sfpu_issue", "string", True, "configuration"),
     Column("sign_magnitude", "bool", True, "configuration"),
     Column("src0_tile_idx", "int64", True, "configuration"),
     Column("src1_tile_idx", "int64", True, "configuration"),

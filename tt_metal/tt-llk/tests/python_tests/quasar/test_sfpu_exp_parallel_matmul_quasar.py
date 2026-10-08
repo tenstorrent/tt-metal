@@ -9,6 +9,8 @@ TRISC3: UNP_S -> SrcS -> exp -> PACK1 -> buffer_Res.
 Both outputs verified after a single configuration.run().
 """
 
+import os
+
 import pytest
 import torch
 from helpers.data_format_inference import data_formats
@@ -25,6 +27,7 @@ from helpers.llk_params import (
     MathFidelity,
     MathOperation,
     PerfRunType,
+    SfpuIssue,
     Transpose,
     format_dict,
 )
@@ -48,6 +51,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
+    SFPU_ISSUE,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
@@ -65,6 +69,11 @@ DIMENSION_PROFILES = (
 )
 
 
+# ttsim has no SFPLOADMACRO, so under --disable-sfploadmacro only the SFPI implementation is built.
+LOADMACRO_AVAILABLE = os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") != "1"
+ALL_SFPU_ISSUES = tuple(SfpuIssue) if LOADMACRO_AVAILABLE else (SfpuIssue.Sfpi,)
+
+
 def _matmul_output_fits_dest(
     input_A_dimensions: list[int],
     input_B_dimensions: list[int],
@@ -78,7 +87,10 @@ def _matmul_output_fits_dest(
 
 
 def generate_parallel_matmul_exp_combinations(
-    formats_list: list[FormatConfig], *, is_perf: bool = False
+    formats_list: list[FormatConfig],
+    *,
+    is_perf: bool = False,
+    impls: tuple[SfpuIssue, ...] = (SfpuIssue.Sfpi,),
 ):
     combinations = []
     for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
@@ -105,22 +117,29 @@ def generate_parallel_matmul_exp_combinations(
                         dest_sync,
                     ):
                         continue
-                    combinations.append(
-                        (
-                            fmt,
-                            dest_acc,
-                            dest_sync,
-                            implied_math_format,
-                            runtime(exp_input_dimensions),
-                            runtime(input_A_dimensions),
-                            runtime(input_B_dimensions),
+                    for sfpu_issue in impls:
+                        combinations.append(
+                            (
+                                fmt,
+                                dest_acc,
+                                dest_sync,
+                                implied_math_format,
+                                sfpu_issue,
+                                runtime(exp_input_dimensions),
+                                runtime(input_A_dimensions),
+                                runtime(input_B_dimensions),
+                            )
                         )
-                    )
     return combinations
 
 
+# Regular run: SFPI implementation only. The SFPLOADMACRO implementation runs in the nightly
+# function below, so a nightly session covers both.
 PARALLEL_MATMUL_EXP_COMBINATIONS = generate_parallel_matmul_exp_combinations(
-    SFPU_UNARY_FORMATS
+    SFPU_UNARY_FORMATS, impls=(SfpuIssue.Sfpi,)
+)
+PARALLEL_MATMUL_EXP_LOADMACRO_COMBINATIONS = generate_parallel_matmul_exp_combinations(
+    SFPU_UNARY_FORMATS, impls=(SfpuIssue.LoadMacro,)
 )
 
 
@@ -140,6 +159,7 @@ def test_sfpu_exp_parallel_matmul_quasar(
         dest_acc,
         dest_sync,
         implied_math_format,
+        sfpu_issue,
         exp_input_dimensions,
         input_A_dimensions,
         input_B_dimensions,
@@ -253,6 +273,7 @@ def test_sfpu_exp_parallel_matmul_quasar(
             ENABLE_DIRECT_INDEXING(False),
             DEST_SYNC(dest_sync),
             UNPACK_TRANS_FACES(Transpose.No),
+            SFPU_ISSUE(sfpu_issue),
         ],
         "runtimes": [
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
@@ -286,3 +307,16 @@ def test_sfpu_exp_parallel_matmul_quasar(
     assert len(res_matmul) == len(golden_matmul), "matmul"
     assert passed_test(golden_exp, res_exp, formats.output_format), "exp"
     assert passed_test(golden_matmul, res_matmul, formats.output_format), "matmul"
+
+
+@pytest.mark.nightly
+@pytest.mark.quasar
+@pytest.mark.skipif(
+    not LOADMACRO_AVAILABLE,
+    reason="ttsim has no SFPLOADMACRO; only the SFPI implementation is built",
+)
+@parametrize(
+    format_dest_acc_sync_implied_math=PARALLEL_MATMUL_EXP_LOADMACRO_COMBINATIONS,
+)
+def test_sfpu_exp_parallel_matmul_loadmacro_quasar(format_dest_acc_sync_implied_math):
+    test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math)
