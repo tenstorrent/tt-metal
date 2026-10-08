@@ -86,8 +86,16 @@ void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(input_tensor.layout() == Layout::TILE, "interleaved input_tensor must be TILE layout");
         TT_FATAL(w == 256, "interleaved input_tensor must have 256 columns, one block per token row");
         TT_FATAL(
-            h >= bias_tensor.shard_spec()->grid.num_cores(),
-            "interleaved input_tensor needs a token row for every core of the bias shard grid");
+            in_shape.volume() == static_cast<uint64_t>(h) * w,
+            "interleaved input_tensor must be [1, ..., 1, tokens, 256]");
+        TT_FATAL(
+            h == bias_tensor.shard_spec()->grid.num_cores(),
+            "interleaved input_tensor needs exactly one token row per core of the bias shard grid");
+        // Token row i goes to the i-th core in row major order, where output shard i also has to land.
+        TT_FATAL(
+            bias_tensor.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR &&
+                output_tensor.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR,
+            "interleaved input_tensor needs ROW_MAJOR bias and output shard specs");
     } else {
         TT_FATAL(bias_shape == in_shape, "Bias and input tensors must have the same shape");
         TT_FATAL(h * w == 256, "Input tensor must have 256 elements per block (last two dims = one 256-block)");
