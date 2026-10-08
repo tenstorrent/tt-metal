@@ -91,6 +91,54 @@ jobs:
       # they're installed on machines with no /opt/tenstorrent/sfpi to fall back to.
       use-system-sfpi: false
 
+  # ===========================================================================
+  # Profiler (tracy) build -- additive, for buckets that need instrumentation.
+  # ===========================================================================
+  #
+  # Second build of the SAME commit with tracy on. Nothing about the non-profiler
+  # `build-artifact` above changes: build-artifact.yaml already appends `_profiler` /
+  # `-profiler` to every artifact name when tracy=true (set_build_artifact_name,
+  # set-artifact-name, wheels.yaml), so the existing names external scripts grep for
+  # are untouched and the two builds cannot collide on the run.
+  #
+  # continue-on-error: a profiler build failure must NOT cost us the release. This
+  # workflow has no status-aggregation job, so GitHub derives its conclusion from its
+  # jobs -- without this, a failure here would fail the caller's `build-test-publish`
+  # and SKIP `publish-to-pypi`. PyPI ships the non-profiler wheel and never consumes
+  # anything built here, so it must not hinge on this build. The failure still shows
+  # red, and `blaze-merge-gate` below still skips (a failed `needs` skips dependents
+  # even when the failure is tolerated), so nothing silently runs against a build that
+  # was never produced.
+  #
+  # Main platform only: tt-blaze consumes the 22.04/Release artifacts specifically,
+  # and the 24.04 leg does not even build the manylinux image that the wheel needs
+  # (build-docker-artifact.yaml's build-manylinux is false there).
+  build-artifact-profiler:
+    needs: [check-harbor, parse-platform]
+    if: ${{ !cancelled() && needs.parse-platform.result == 'success' && inputs.platform == inputs.main-platform }}
+    continue-on-error: true
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      tracy: true
+      # Manylinux, NOT build-inplace-wheel. External repos consume this wheel
+      # interchangeably with the released non-profiler one, and the in-place wheel is
+      # repaired against Ubuntu 22.04 glibc (manylinux_2_35, "in-family only" per
+      # build-artifact.yaml), so it would not install on the AlmaLinux 9 / glibc 2.34
+      # hosts the released wheel supports. Same manylinux_2_34 base = drop-in swap.
+      build-wheel: true
+      fetch-depth: 0
+      skip-tt-train: false
+      enable-lto: false
+      # Mirror `build-artifact` exactly so the two differ ONLY in tracy.
+      wheel-ref: ${{ inputs.dry-run && github.sha || format('refs/tags/{0}', inputs.tag-version) }}
+      use-system-sfpi: false
+
   determine-test-skus:
     runs-on: ubuntu-slim
     outputs:
@@ -185,8 +233,18 @@ jobs:
   # pins that in the artifact name), and the other legs of this matrix publish
   # tarballs it cannot use. If main-platform ever moves off 22.04 this fails loudly
   # on "no plain 22.04/Release build artifact" rather than silently skipping.
+  # needs build-artifact-profiler, NOT build-artifact: tt-blaze now resolves the
+  # PROFILER tarball+wheel off this run (its ci.yaml passes require-profiler: true).
+  # Without that edge this job would dispatch as soon as the plain build finished and
+  # tt-blaze would look for profiler artifacts that are still compiling, failing with
+  # "Could not find a profiler-enabled build artifact". build-artifact stays in needs
+  # for dev-docker-image, which is commit-scoped rather than tracy-scoped.
+  #
+  # The profiler build is continue-on-error, but a failed `needs` still skips its
+  # dependents -- so if the profiler build dies, this gate is skipped rather than
+  # dispatched against artifacts that do not exist.
   blaze-merge-gate:
-    needs: [build-artifact]
+    needs: [build-artifact, build-artifact-profiler]
     if: ${{ inputs.platform == inputs.main-platform }}
     permissions:
       contents: read

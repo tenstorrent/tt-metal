@@ -176,37 +176,6 @@ jobs:
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
       ops-test-categories: ${{ inputs.ops-test-categories || needs.release-precheck.outputs.default-ops-test-categories }}
 
-  # Harbor pull-through cache for the profiler build's base images. The release
-  # build gets this via release-build-test-publish.yaml's own check-harbor; the
-  # profiler build sits outside that workflow, so it needs its own.
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
-
-  # ===========================================================================
-  # Profiler (tracy) build -- additive, for new buckets that need it.
-  # ===========================================================================
-  #
-  build-artifact-profiler:
-    # create-tag already depends on release-precheck, so that edge is transitive.
-    needs: [create-tag, check-harbor]
-    if: ${{ !cancelled() && needs.create-tag.result == 'success' }}
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      contents: read
-      packages: write
-    secrets: inherit
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      platform: "Ubuntu 22.04"
-      tracy: true
-      build-wheel: true
-      fetch-depth: 0
-      skip-tt-train: false
-      enable-lto: false
-      # Mirror the release build so the profiler artifacts differ ONLY in tracy.
-      wheel-ref: ${{ inputs.dry-run && github.sha || format('refs/tags/{0}', needs.create-tag.outputs.version) }}
-      use-system-sfpi: false
-
   publish-to-pypi:
     needs: [build-test-publish, create-tag]
     runs-on: ubuntu-latest
