@@ -48,8 +48,8 @@ def prepare_decode_kernel():
     kernel = (DECODE / "compute/sdpa_flash_decode.cpp").read_text()
     kernel = replace_checked(
         kernel,
-        '#include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"\n',
-        '#include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"\n'
+        '#include "ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_block_ops.hpp"\n',
+        '#include "ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_block_ops.hpp"\n'
         '#include "accurate_decode.hpp"\n',
         1,
     )

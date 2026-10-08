@@ -9,9 +9,9 @@
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/tile_move_copy.h"
-// compute_streaming.hpp needs declarations from compute_common.hpp (LightweightMaskContext, reduce helpers,
+// compute_streaming.hpp needs declarations from sdpa_block_ops.hpp (LightweightMaskContext, reduce helpers,
 // DEST_AUTO_LIMIT); include it first. Only compute_streaming primitives are used.
-#include "compute_common.hpp"
+#include "sdpa_block_ops.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_msa_common.hpp"  // ctrl record
 #include "compute_streaming.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
