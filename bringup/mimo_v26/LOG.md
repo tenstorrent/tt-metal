@@ -2249,3 +2249,27 @@
 - claim: RING MoE with W2=LoFi (default): 48-layer deep trace, 1000 replays, no hang: T=8 0.865 ms/layer (HiFi3 for both: 0.957), T=32 live 32 1.112 ms/layer (1.181); lib artifacts/ringk_full_7a16eb305aa/lib, hosts 30 (T=8) and 48 (T=32), logs moe_AR_deep48_t{8,32}_*
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AR_deep48_t32_h48_8da907cb394.log
 - paths: ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute.cpp, models/demos/blackhole/mimo_v26/tt/moe_ring.py
+
+## E261008-0247-d40
+- date: 2026-10-08T02:47:51
+- commit: 05573c7cd8c
+- branch: ssinghal/mimo-ringk
+- host: DC16-2-BG-0204-u20-44
+- track: moe
+- status: verified
+- claim: RING MoE DEFAULT PATH (HiFi3 for W0/W1 AND W2; W2 LoFi is opt-in) at 05573c7cd8c, library artifacts/ringk_full_7a16eb305aa/lib, only LD_LIBRARY_PATH (+MIMO_EXPERT_OP=unified for prefill) set, with the post-fix generator.py (release_ring_buffers on reconfigure): test_verify_decode 48 layers U=1,2,4: argmax 100% token-exact vs sequential, features bit-identical, verify repeat bit-identical; 4-layer oracle reconfigure U=32,1,4: tokens equal oracle 100%, step logits PCC min 0.99871/0.99969/0.99934, DRAM identical on return (moe_AS_reconf4.jsonl); 48-layer deep trace 1000 replays no hang: T=8 1.000 ms/layer, T=32 1.276 ms/layer (hosts 48, loaded; earlier 0.957/1.181)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AS_verify48.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/generator.py
+- supersedes: E261008-0225-e82, E261008-0227-87a
+
+## E261008-0247-cfd
+- date: 2026-10-08T02:47:52
+- commit: 05573c7cd8c
+- branch: ssinghal/mimo-ringk
+- host: DC16-2-BG-0204-u20-44
+- track: moe
+- status: verified
+- claim: OPTIONAL TRADE-OFF for the user, NOT the default (a math-fidelity reduction): ring MoE with the W2 (down proj) matmul at LoFi, opt-in env MOE_COMPUTE_FID_W2=0 (W0/W1 stay HiFi3; needs artifacts/ringk_full_7a16eb305aa/lib): -11 pct ring MoE time (ms/layer T=1 0.416->0.384, T=8 0.964->0.851, T=32 1.189->1.061; deep trace 48 layers T=8 0.865 vs 0.957, T=32 1.112 vs 1.181), full-model GSM8K n=128 112/128 on two hosts (HiFi3 113/128, not resolvable), step median 57.6/58.9 ms vs 63.4 ms, verify 48 layers U=1,2,4 exact and 4-layer oracle exact. COST: moves the scale: alpha vs the dump at L5 T=32 0.9964 (HiFi3 0.9993, outside the 0.998-1.002 band), T=8 1.0002 (1.0034), L16 1.0062 (1.0108); ring vs unified rel L2 0.0058-0.0072 (0.0045-0.0060). Not enabled anywhere by default
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AP_gsm_ringw2lofi_a_h30_7a16eb305aa.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute.cpp
+- supersedes: E261008-0205-61e, E261008-0205-993
