@@ -20,3 +20,8 @@
    cherry-pick code commits onto a -land branch from origin/ttp/t48-ltx25-integrated, `ttp push --detach`.
 3. If the def arm timed out on cold JIT: rerun the job (cache is warm now).
 4. Rank next levers from the def deep tree.
+
+## Job 869 result (2026-10-08 light wake)
+- def: 4.488/4.490 s (mean 4.489), host-noise PCC 0.99996, PSNR 55.6/55.2 dB vs ref. Deep tree: out/stage_tree_def.txt.
+- lean: CRASHED after 64 s, TT_THROW storage.cpp:164 (run.log ~line 3672-3713). No timing, no output.
+- Next: debug the lean path (likely a layout/storage mismatch from a skipped tilize/untilize), then rerun A/B.
