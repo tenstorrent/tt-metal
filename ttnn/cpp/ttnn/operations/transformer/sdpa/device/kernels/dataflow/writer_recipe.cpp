@@ -64,9 +64,10 @@ void kernel_main() {
 #ifdef SDPA_RECIPE_Q_SLAB_JOBS
     const RecipeQSlabs slabs{{get_arg_val<uint32_t>(6), get_arg_val<uint32_t>(7)}};
 #endif
-    // Walk positions [first_job, first_job + jobs) of the heads' zigzag orders (reader_recipe.cpp).
-    for (uint32_t z = first_job; z < first_job + jobs; ++z) {
-        const uint32_t job = z - z % SDPA_RECIPE_Q_JOBS + recipe_zigzag_job(z % SDPA_RECIPE_Q_JOBS, SDPA_RECIPE_Q_JOBS);
+    // This core's Q chunks in the snake deal (runtime arg 1: the core's index; reader_recipe.cpp).
+    for (uint32_t qi = 0; qi < jobs; ++qi) {
+        const uint32_t job =
+            recipe_snake_job(first_job, qi, SDPA_RECIPE_CORES, SDPA_RECIPE_BATCH_HEADS, SDPA_RECIPE_Q_JOBS);
 #ifdef SDPA_RECIPE_Q_SLAB_JOBS
         // Rows of the whole sequence; slab chunks are whole.
         const uint32_t q_row0 = slabs.chunk(job % SDPA_RECIPE_Q_JOBS) * q_tiles * 32;
@@ -77,10 +78,9 @@ void kernel_main() {
 #endif
         const RecipeChunkRange range = keys.chunks(q_row0, q_row_end, SDPA_K_CHUNK_TILES * 32, SDPA_RECIPE_K_CHUNKS);
         recipe_push_chunk_range(rcb, range);
-        for (uint32_t ki = range.first; ki < range.end; ++ki) {
-            if (ki < range.full_begin || ki >= range.full_end) {
-                generate_mask_chunk<q_tiles>(noc, keys, mcb, mask_cache, q_row0, ki * SDPA_K_CHUNK_TILES * 32);
-            }
+        // The edge chunks come first in processing order (RecipeChunkRange::at).
+        for (uint32_t i = 0; i < range.edges(); ++i) {
+            generate_mask_chunk<q_tiles>(noc, keys, mcb, mask_cache, q_row0, range.at(i) * SDPA_K_CHUNK_TILES * 32);
         }
 #else
     for (uint32_t job = first_job; job < first_job + jobs; ++job) {
