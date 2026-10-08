@@ -89,6 +89,7 @@ inline void _llk_math_eltwise_binary_uninit_custom_()
 // @param dst_index    Absolute dest tile slot where this block-row's ct_dim tiles begin. Multi-tile-row
 //                     callers (e.g. the fuser LoopBlockRow driver) advance this per block-row so each row
 //                     lands on its own dest slots; single-tile-row callers leave it at 0.
+// Call _llk_math_eltwise_binary_init_custom_ first; re-run it after any op that leaves the Src zero flag at keep.
 inline void _llk_math_sub_bcast_cols_reuse_custom_(
     const std::uint32_t ct_dim = 1, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
