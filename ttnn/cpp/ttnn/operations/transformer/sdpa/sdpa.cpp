@@ -99,15 +99,12 @@ void drop_unsupported_routed_chunks(
 }
 
 // Why ring_joint_scaled_dot_product_attention cannot run the ring recipe yet (nullopt: it can). A routed FP32-DEST
-// call with one of these features keeps the legacy sdpa_ring loop until the ring recipe gains it; causal and
-// balanced come with the ring causal recipe, the others have no FP32 caller in models/. The legacy loop cannot be
-// deleted while this returns anything.
+// call with one of these features keeps the legacy sdpa_ring loop until the ring recipe gains it; none has an FP32
+// caller in models/. The legacy loop cannot be deleted while this returns anything.
 std::optional<std::string_view> ring_recipe_gap(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
     const ttnn::Tensor& v,
-    bool is_causal,
-    bool is_balanced,
     bool is_cross,
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<uint32_t> sliding_window_size,
@@ -116,9 +113,6 @@ std::optional<std::string_view> ring_recipe_gap(
     std::optional<uint32_t> kv_actual_isl,
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor) {
-    if (is_causal || is_balanced) {
-        return "causal / balanced";
-    }
     if (attention_sink || sliding_window_size.value_or(0) > 0) {
         return "attention sink / sliding window";
     }
@@ -720,8 +714,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
                 input_tensor_q,
                 input_tensor_k,
                 input_tensor_v,
-                is_causal,
-                is_balanced,
                 is_cross,
                 attention_sink,
                 sliding_window_size,
