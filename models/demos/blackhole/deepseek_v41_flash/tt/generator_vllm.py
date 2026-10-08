@@ -198,6 +198,75 @@ class DeepseekV41ForCausalLM:
         self.m.warm_serving(chunk, s_pad, [u for u in self.bucket_users if u < self.U])
         self._warm = True
         logger.info(f"DSV4.1 vLLM: warm-up done in {time.perf_counter() - t0:.1f} s")
+        if os.environ.get("DSV41_VLLM_BUCKET_SELFTEST", "0") == "1":
+            self.bucket_selftest()
+
+    def bucket_selftest(self, n_users_per_row=2, steps=8, prompt_len=300):
+        """Startup self-test (DSV41_VLLM_BUCKET_SELFTEST=1) on the idle model: prefill a few users (users u < n_users_per_row of every mesh row), decode ``steps`` steps in the SMALLEST bucket
+        with the greedy tokens fed back (logits of every step kept), re-prefill the same prompts and replay the same fed tokens through the FULL-batch decode: the logits of the two paths must
+        agree (bf16 noise: PCC ~ 1) and the greedy tokens mostly. Logs one line per step."""
+        m, U = self.m, self.U
+        small = [u for u in self.bucket_users if u < U]
+        if not small:
+            return
+        Ub = small[0]
+        assert n_users_per_row <= Ub
+        rows = VS.MESH_ROWS
+        phys = [r * U + u for r in range(rows) for u in range(n_users_per_row)]
+        g = torch.Generator().manual_seed(1234)
+        chunk = self._interleave_chunk()
+        prompts = {p: torch.randint(1000, 100000, (prompt_len + 7 * i,), generator=g) for i, p in enumerate(phys)}
+
+        def prefill():
+            items = [(p, prompts[p], 0, int(prompts[p].numel())) for p in phys]
+            res = m.prefill_interleaved(items, chunk, s_pad_max=self.s_pad_cur, want_logits=False)
+            return {p: int(res[p][0]) for p in phys}
+
+        def pcc(a, b):
+            a, b = a.float().flatten(), b.float().flatten()
+            a, b = a - a.mean(), b - b.mean()
+            return float((a @ b) / (a.norm() * b.norm() + 1e-12))
+
+        first = prefill()
+        bphys = torch.tensor([(i // Ub) * U + i % Ub for i in range(rows * Ub)], dtype=torch.long)
+        row_of = {int(q): i for i, q in enumerate(bphys.tolist())}
+        fill = m.decode_filler()
+        fed = [first]  # fed[k][p] = token fed at position len(p) + k
+        logA, tokA = [], []
+        for k in range(steps):
+            tok = fill[bphys].clone()
+            pos = torch.zeros(rows * Ub, dtype=torch.long)
+            for p in phys:
+                tok[row_of[p]], pos[row_of[p]] = fed[k][p], int(prompts[p].numel()) + k
+            out = m.decode_forward_bucket(Ub, tok, pos, bphys)
+            lg = m.read_logits_bucket(Ub).float()
+            logA.append({p: lg[row_of[p]].clone() for p in phys})
+            tokA.append({p: int(out[row_of[p]]) for p in phys})
+            fed.append(tokA[-1])
+        for p in phys:  # fresh state for the replay through the full batch
+            m.release_user(p)
+        second = prefill()
+        assert second == first, f"re-prefill changed the first tokens: {first} vs {second}"
+        worst, agree = 1.0, 0
+        for k in range(steps):
+            tok = fill.clone()
+            pos = torch.zeros(self.B, dtype=torch.long)
+            for p in phys:
+                tok[p], pos[p] = fed[k][p], int(prompts[p].numel()) + k
+            out = m.decode_forward(tok, pos, enable_trace=True, reload_inputs=True)
+            lg = m.read_logits().float()
+            pc = min(pcc(lg[p], logA[k][p]) for p in phys)
+            ag = sum(int(out[p]) == tokA[k][p] for p in phys)
+            worst, agree = min(worst, pc), agree + ag
+            logger.info(
+                f"DSV4.1 bucket self-test step {k}: min PCC(bucket B'={rows * Ub} vs full B={self.B} logits) {pc:.5f}, greedy tokens equal {ag}/{len(phys)}"
+            )
+        for p in phys:
+            m.release_user(p)
+            self.book.clear(p)
+        logger.info(
+            f"DSV4.1 bucket self-test done: worst PCC {worst:.5f}, greedy agreement {agree}/{steps * len(phys)} (users {len(phys)}, bucket B'={rows * Ub}, full B={self.B})"
+        )
 
     # ---- speculative decoding: configuration ----------------------------------------------------------------------------------------------
     @staticmethod
@@ -316,6 +385,13 @@ class DeepseekV41ForCausalLM:
             VS.decode_buckets(self.U, spec=os.environ.get("DSV41_VLLM_BUCKETS")) if self.bucketing else [self.U]
         )
         self.bucket_calls = {}
+        # compaction (DSV41_VLLM_COMPACT=1, default off): a straggler at a high in-row index pins a big bucket after the other requests finished; once the live set would fit a smaller
+        # bucket for COMPACT_STEPS consecutive decode steps its context is re-prefilled into a free low user (cost: one prefill of the context, the request's state is then the prefill's)
+        self.compact = os.environ.get("DSV41_VLLM_COMPACT", "0") == "1" and self.bucketing
+        self.compact_steps = int(os.environ.get("DSV41_VLLM_COMPACT_STEPS", "32"))
+        self.compact_ctx = int(os.environ.get("DSV41_VLLM_COMPACT_CTX", "4096"))
+        self._compact_wait = 0
+        self.compact_moves = 0
 
     # vLLM inspects this protocol (``is_text_generation_model``: __init__(vllm_config), embed_input_ids, forward(input_ids, positions), compute_logits) to resolve
     # ``--runner generate`` while building the ModelConfig, BEFORE the TT plugin loads the model; the architecture is the TT-only ``TTDeepseekV41ForCausalLM`` (no upstream
@@ -568,6 +644,8 @@ class DeepseekV41ForCausalLM:
         if slot_remap is not None:
             self.slots.apply_remap(slot_remap)
         W = int(tokens.shape[0])
+        if self.compact:
+            self._maybe_compact()
         parked = self.inprog.parked() if self.interleave else None
         Ub, phys = self.U, None
         if self.bucketing:
@@ -632,6 +710,51 @@ class DeepseekV41ForCausalLM:
             self.m.read_logits_bucket(Ub).float() if self.bucketing else self.m.read_logits().float()
         )  # [B', vocab] host
         return VS.scatter_rows(logits.reshape(logits.shape[0], 1, -1), rows, W)
+
+    def _maybe_compact(self):
+        """Move stragglers into the lowest free users when the live set fits a smaller decode bucket (see ``compact``). At most one user per mesh row per call."""
+        U, slots = self.U, self.slots
+        parked = set(self.inprog.parked())
+        live = sorted(slots.live)
+        need = VS.pick_bucket(slots.users_needed(U, extra=parked), self.bucket_users)
+        want = VS.pick_bucket(-(-max(len(live), 1) // VS.MESH_ROWS), self.bucket_users)
+        if need <= want:
+            self._compact_wait = 0
+            return
+        self._compact_wait += 1
+        if self._compact_wait < self.compact_steps:
+            return
+        movers = [p for p in live if p % U >= want and p not in parked and 0 < int(self.book.n[p]) <= self.compact_ctx]
+        done_rows = set()
+        chunk = self._interleave_chunk()
+        for p in movers:
+            if p // U in done_rows:
+                continue
+            free = [q for q in range(self.B) if q not in slots.live and q % U < want]
+            if not free:
+                break
+            live_row = {}
+            for q in slots.live:
+                live_row[q // U] = live_row.get(q // U, 0) + 1
+            q = min(free, key=lambda x: (x % U, live_row.get(x // U, 0), x))
+            ctx = self.book.context(p).clone()
+            n = int(ctx.numel())
+            t0 = time.perf_counter()
+            self.m.prefill_interleaved([(q, ctx, 0, n)], chunk, s_pad_max=self.s_pad_cur, want_logits=False)
+            j = slots.phys.index(p)
+            slots.live.add(q)
+            slots.bind(j, q)  # logical slot j now maps to the new user (the slot that mapped to q gets p)
+            slots.live.discard(p)
+            self.book.set_prompt(q, ctx)
+            self.book.clear(p)
+            self.m.release_user(p)
+            self.inprog.drop(q)
+            self.compact_moves += 1
+            done_rows.add(p // U)
+            logger.info(
+                f"DSV4.1 compaction: user {p} (in-row {p % U}) -> user {q} (in-row {q % U}) by re-prefill of {n} tokens in {time.perf_counter() - t0:.2f} s; live {len(slots.live)}, bucket users {need} -> {want}"
+            )
+        self._compact_wait = 0
 
     def _decode_stats(self, t_in, t_out, bucket=None):
         """Every DSV41_VLLM_STATS_EVERY (default 256) decode calls log the mean adapter time per call (host prep + device step + read, ``model:`` breakdown) next to the mean wall time

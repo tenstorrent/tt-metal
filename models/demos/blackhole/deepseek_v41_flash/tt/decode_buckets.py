@@ -25,6 +25,37 @@ import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.decoder import DSV41Decoder
 
 
+def check_trace_allocations(md, trace_id, name, seen=set()):
+    """TT_METAL_TRACE_ALLOC_TRACKING=1 (+ TT_METAL_TRACE_ALLOC_TRACEBACKS=1): log (once per trace and buffer set) the live buffers that were allocated after ``trace_id`` was captured and can
+    be clobbered by its replay: the evidence of a device allocation under a captured trace. Cheap no-op without the env.
+    """
+    if not (hasattr(ttnn, "trace_allocation_tracking_enabled") and ttnn.trace_allocation_tracking_enabled()):
+        return
+    try:
+        if hasattr(
+            trace_id, "prog"
+        ):  # tt/moe_overlap.SegTrace: the segment traces (a sub-device manager must be active for its own ids: best effort on the first)
+            ids = {}
+            for kind, tid in trace_id.prog:
+                if kind == "trace":
+                    ids.update(ttnn.get_unsafe_tracked_ids(md, tid))
+        else:
+            ids = ttnn.get_unsafe_tracked_ids(md, trace_id)
+    except Exception as e:  # noqa: BLE001
+        if (name, "err") not in seen:
+            seen.add((name, "err"))
+            print(f"TRACE-ALLOC check not possible for {name}: {e!r}", flush=True)
+        return
+    key = (name, tuple(sorted(ids)))
+    if ids and key not in seen:
+        seen.add(key)
+        first = next(iter(ids.values()))
+        print(
+            f"TRACE-ALLOC {name}: {len(ids)} live buffer(s) allocated after the capture can be clobbered by the replay; first traceback:\n{first}",
+            flush=True,
+        )
+
+
 def view_rows(t, n):
     """[1,1,U,W] tile tensor viewed as [1,1,n,W] over the SAME buffer (U, n <= 32: both are padded to one 32-row tile)."""
     w = int(t.shape[-1])
@@ -215,6 +246,7 @@ class DecodeBucket:
             self.upload_rows(host_rows)
         t2 = time.perf_counter()
         if enable_trace:
+            check_trace_allocations(m.md, self.trace_id, f"decode bucket B'={self.B}")
             ttnn.execute_trace(m.md, self.trace_id, cq_id=0, blocking=False)
         else:
             self.last_logits = self.dec.forward()

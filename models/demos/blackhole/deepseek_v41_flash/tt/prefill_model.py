@@ -701,6 +701,9 @@ class DSV41PrefillModel:
         self.upload_inputs(self.prep_inputs(tokens, hashes, act), self._bufs[C])
         self.begin_chunk(s0, C)
         t1 = time.perf_counter()
+        from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import check_trace_allocations
+
+        check_trace_allocations(self.md, self.dyn_trace, "prefill chunk")
         ttnn.execute_trace(self.md, self.dyn_trace, cq_id=0, blocking=False)
         ttnn.synchronize_device(self.md)
         t2 = time.perf_counter()
