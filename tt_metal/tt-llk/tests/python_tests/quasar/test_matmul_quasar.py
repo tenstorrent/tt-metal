@@ -271,7 +271,6 @@ NON_MX_MATMUL_FORMATS = [
     if not format.input_format.is_mx_format()
     and not format.output_format.is_mx_format()
 ]
-TINY_MATMUL_FORMATS = NON_MX_MATMUL_FORMATS
 
 
 _ARCH = get_chip_architecture()
@@ -591,7 +590,7 @@ def test_matmul(
 @pytest.mark.quasar
 @parametrize(
     input_tile_dimensions=runtime(TINY_MATMUL_SHAPE_CASES),
-    format=TINY_MATMUL_FORMATS,
+    format=NON_MX_MATMUL_FORMATS,
     math_fidelity=[MathFidelity.LoFi],
     dest_sync_mode=[DestSync.Half],
     dest_acc=matmul_dest_acc_modes,

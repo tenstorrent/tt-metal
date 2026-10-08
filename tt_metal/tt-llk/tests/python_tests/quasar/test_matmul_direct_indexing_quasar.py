@@ -3,13 +3,14 @@
 
 import pytest
 from helpers.constraints import get_valid_math_fidelities
-from helpers.llk_params import ImpliedMathFormat, PerfRunType
+from helpers.llk_params import PerfRunType
 from helpers.param_config import parametrize, runtime
 from quasar.test_matmul_quasar import (
     FULL_MATMUL_SHAPES,
     NON_MX_MATMUL_FORMATS,
     matmul_dest_acc_modes,
     matmul_dest_sync_modes,
+    matmul_implied_math_formats,
     matmul_tile_dimensions,
     matmul_transpose_modes,
 )
@@ -42,11 +43,9 @@ def matmul_direct_indexing_tile_dimensions(dest_acc, dest_sync_mode):
     dest_sync_mode=lambda: matmul_dest_sync_modes(),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(matmul_direct_indexing_tile_dimensions),
-    implied_math_format=[ImpliedMathFormat.Yes],
+    implied_math_format=lambda format: matmul_implied_math_formats(format),
     register_format_hint=[None],
     transpose=matmul_transpose_modes,
-    run_types=[[PerfRunType.L1_TO_L1]],
-    loop_factor=[1],
 )
 def test_matmul_direct_indexing(
     input_tile_dimensions,
@@ -58,8 +57,6 @@ def test_matmul_direct_indexing(
     implied_math_format,
     register_format_hint,
     transpose,
-    run_types,
-    loop_factor,
 ):
     run_matmul(
         input_tile_dimensions,
@@ -72,6 +69,6 @@ def test_matmul_direct_indexing(
         register_format_hint,
         enable_direct_indexing=True,
         transpose=transpose,
-        run_types=run_types,
-        loop_factor=loop_factor,
+        run_types=[PerfRunType.L1_TO_L1],
+        loop_factor=1,
     )
