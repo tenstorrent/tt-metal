@@ -94,6 +94,7 @@ def test_matmul(
     format_dest_acc_and_dims,
     boot_mode=BootMode.DEFAULT,
     row_mop=False,
+    transpose=False,
 ):
     torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
 
@@ -115,10 +116,20 @@ def test_matmul(
     # Calculate all matmul dimensions using helper function
     matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
 
+    # with transpose the unpacker transposes every in1 tile (faces and within faces); the golden multiplies by that
+    golden_B = src_B
+    if transpose:
+        k_dim, n_dim = input_B_dimensions
+        golden_B = (
+            src_B.reshape(k_dim // 32, 32, n_dim // 32, 32)
+            .permute(0, 3, 2, 1)
+            .reshape(-1)
+        )
+
     generate_golden = get_golden_generator(MatmulGolden)
     golden_tensor = generate_golden(
         src_A,
-        src_B,
+        golden_B,
         formats.output_format,
         math_fidelity,
         input_A_dimensions=input_A_dimensions,
@@ -156,7 +167,7 @@ def test_matmul(
             TILE_COUNT(matmul_dims.output_tile_cnt),
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
             LOOP_FACTOR(1),
-            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_FACES(Transpose.Yes if transpose else Transpose.No),
         ],
         variant_stimuli=StimuliConfig(
             tilized_A.flatten(),
@@ -206,6 +217,45 @@ ROW_MOP_COMBINATIONS = generate_format_aware_matmul_combinations(
 )
 def test_matmul_row_mop(math_fidelity, format_dest_acc_and_dims):
     test_matmul(math_fidelity, format_dest_acc_and_dims, row_mop=True)
+
+
+# in1 transposed tile by tile (SDPA's Q K^T), with the per-tile MOP and with the row MOP.
+TRANSPOSE_DIMS_16 = [
+    ([32, 32], [32, 32]),  # 1x1, k 1
+    ([32, 64], [64, 256]),  # 1x8, k 2
+    ([64, 128], [128, 128]),  # 2x4, k 4
+    ([256, 64], [64, 32]),  # 8x1, k 2 (in0 streamed)
+    ([64, 32], [32, 64]),  # 2x2, k 1
+]
+TRANSPOSE_DIMS_32 = [
+    ([32, 32], [32, 32]),
+    ([32, 64], [64, 128]),  # 1x4, k 2
+    ([64, 128], [128, 64]),  # 2x2, k 4
+    ([128, 64], [64, 32]),  # 4x1, k 2
+]
+TRANSPOSE_COMBINATIONS = [
+    (fmt, acc, dims)
+    for fmt in input_output_formats(
+        [DataFormat.Float16_b, DataFormat.Float32], same=True
+    )
+    for acc in DEST_ACC_MODES
+    if not (fmt.input_format == DataFormat.Float32 and acc == DestAccumulation.No)
+    for dims in (
+        TRANSPOSE_DIMS_32 if acc == DestAccumulation.Yes else TRANSPOSE_DIMS_16
+    )
+]
+
+
+@skip_for_wormhole
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
+    format_dest_acc_and_dims=TRANSPOSE_COMBINATIONS,
+    row_mop=[False, True],
+)
+def test_matmul_transpose(math_fidelity, format_dest_acc_and_dims, row_mop):
+    test_matmul(
+        math_fidelity, format_dest_acc_and_dims, row_mop=row_mop, transpose=True
+    )
 
 
 # Full-sync DEST blocks with rows of more than 8 streamed tiles, run in both config contexts (kt_dim 2): the unpack

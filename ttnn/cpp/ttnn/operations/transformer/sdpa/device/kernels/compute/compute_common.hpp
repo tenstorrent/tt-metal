@@ -1056,6 +1056,7 @@ __attribute__((optimize("Os"))) void sub_block(uint32_t in0_cb, uint32_t in1_cb,
 /**
  * out_cb = in0_cb @ in1_cb
  */
+template <bool row_mop = false>
 ALWI void matmul_blocks(
     const uint32_t& in0_cb,
     const uint32_t& in1_cb,
@@ -1083,7 +1084,7 @@ ALWI void matmul_blocks(
     CircularBuffer cb_mask(mask_cb);
     CircularBuffer cb_zero(zero_cb);
 
-    matmul_block_init(
+    matmul_block_init<row_mop>(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     const uint32_t output_num_tiles = M * N;
@@ -1110,7 +1111,7 @@ ALWI void matmul_blocks(
             uint32_t in1_index = in1_index_offset;
 
             for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                matmul_block(
+                matmul_block<row_mop>(
                     in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
                 in0_index++;
                 in1_index += N;
@@ -1124,7 +1125,7 @@ ALWI void matmul_blocks(
                     add_tiles(zero_cb, mask_cb, 0, i, i);
                 }
                 reconfig_data_format(in1_cb, in0_cb);
-                matmul_block_init(in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);
+                matmul_block_init<row_mop>(in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -1607,7 +1608,9 @@ template <
     uint32_t chunked_q_local_padded_Nt = 0,
     uint32_t chunked_chunk_size_t = 0,
     bool use_windowed_narrowing = false,
-    uint32_t cb_windowed_k_range = 0>
+    uint32_t cb_windowed_k_range = 0,
+    bool qk_row_mop = false,
+    bool out_row_mop = false>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1789,7 +1792,7 @@ void sdpa_inner_loop(
              */
             reconfig_data_format(cb_k_in, cb_q_in);
             pack_reconfig_data_format(cb_qk_im);
-            matmul_blocks(
+            matmul_blocks<qk_row_mop>(
                 cb_q_in,
                 cb_k_in,
                 cb_qk_im,
@@ -1951,7 +1954,7 @@ void sdpa_inner_loop(
             pack_reconfig_data_format(alias_mm2_cur_out);
 
             /* OUT_IM = QK @ V_CHUNK */
-            matmul_blocks(
+            matmul_blocks<out_row_mop>(
                 cb_qk_im,
                 cb_v_in,
                 alias_mm2_cur_out,
@@ -2308,7 +2311,9 @@ template <
     uint32_t Sk_chunk_t,
     uint32_t DHt,
     bool use_joint_mask,
-    uint32_t scale_fp32>
+    uint32_t scale_fp32,
+    bool qk_row_mop = false,
+    bool out_row_mop = false>
 void sdpa_joint(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2360,7 +2365,15 @@ void sdpa_joint(
         use_joint_mask,
         false,  // is_chunked (not used)
         scale_fp32,
-        0>(  // sliding_window_size (not used)
+        0,      // sliding_window_size (not used)
+        false,  // lightweight_mask_enabled (not used)
+        false,  // chunked_enabled (not used)
+        0,      // chunked_q_local_padded_Nt (not used)
+        0,      // chunked_chunk_size_t (not used)
+        false,  // use_windowed_narrowing (not used)
+        0,      // cb_windowed_k_range (not used)
+        qk_row_mop,
+        out_row_mop>(
         Skt,
         qk_in0_block_w,
         qk_subblock_w,
