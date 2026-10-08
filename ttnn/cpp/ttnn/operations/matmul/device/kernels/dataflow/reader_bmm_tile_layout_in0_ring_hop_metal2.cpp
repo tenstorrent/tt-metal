@@ -52,7 +52,7 @@ void kernel_main() {
             shard_size_bytes,
             next_core_noc_x,
             next_core_noc_y,
-            in0_shard_is_empty(slot, shard_width_in_tiles, k_tiles));
+            in0_shard_k_tiles(slot, shard_width_in_tiles, k_tiles) == 0);
     }
 
     noc.async_atomic_barrier();

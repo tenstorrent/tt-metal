@@ -14,13 +14,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-
-// Whether the activation's in0 shard for ring position `ring_pos` holds any K tiles. Shards are
-// `shard_width_in_tiles` wide and cover K in ring order, so when K does not fill the ring the last
-// shards are short or empty.
-FORCE_INLINE bool in0_shard_is_empty(uint32_t ring_pos, uint32_t shard_width_in_tiles, uint32_t k_tiles) {
-    return ring_pos * shard_width_in_tiles >= k_tiles;
-}
+#include "ttnn/operations/matmul/device/kernels/gather_in0_shard_k.hpp"
 
 // Writes the shard at `addr` to the same address on the next core, unless it is empty, then signals that
 // core's ring semaphore. The next core counts shards by the semaphore, so an empty shard is still

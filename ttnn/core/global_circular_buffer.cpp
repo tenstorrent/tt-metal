@@ -256,19 +256,14 @@ uint32_t validate_recv_contig_weight_for_matmul_1d(
 
     const auto& wp = weight.padded_shape();
     TT_FATAL(wp.rank() >= 2, "weight must be at least 2D; got rank {}", wp.rank());
-    if (slab_depth == SlabDepth::PaddedForPipeGather && program_config.gather_in0) {
-        TT_FATAL(
-            shard_K >= static_cast<uint32_t>(wp[-2]),
-            "receiver-contiguous shard K ({}) must cover the weight's K ({}); each shard spans the full K dimension",
-            shard_K,
-            static_cast<uint32_t>(wp[-2]));
-    } else {
-        TT_FATAL(
-            shard_K == static_cast<uint32_t>(wp[-2]),
-            "receiver-contiguous shard K ({}) must equal full weight K ({}); each shard spans the full K dimension",
-            shard_K,
-            static_cast<uint32_t>(wp[-2]));
-    }
+    const auto weight_K = static_cast<uint32_t>(wp[-2]);
+    const bool slab_may_pad = slab_depth == SlabDepth::PaddedForPipeGather;
+    TT_FATAL(
+        slab_may_pad ? shard_K >= weight_K : shard_K == weight_K,
+        "receiver-contiguous shard K ({}) must {} the weight's K ({}); each shard spans the full K dimension",
+        shard_K,
+        slab_may_pad ? "cover" : "equal",
+        weight_K);
 
     const auto& bds = weight.buffer()->buffer_distribution_spec();
     TT_FATAL(bds.has_value(), "receiver-contiguous weight buffer must have a BufferDistributionSpec");
@@ -464,7 +459,10 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
         "receiver its own (full K, N/receiver_count) DRAM shard. The legacy K-row-major WIDTH_SHARDED layout needs a "
         "sender that slices one bank's shard across its receivers, which this transport does not do.");
     return validate_recv_contig_weight_for_matmul_1d(
-        program_config, weight, receiver_count, SlabDepth::PaddedForPipeGather);
+        program_config,
+        weight,
+        receiver_count,
+        program_config.gather_in0 ? SlabDepth::PaddedForPipeGather : SlabDepth::WeightK);
 }
 
 // Builds the GCB for a legacy K-row-major (WIDTH_SHARDED) weight: one shard per DRAM bank, the

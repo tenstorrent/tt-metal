@@ -22,6 +22,8 @@ void kernel_main() {
     constexpr auto out_block_num_tiles = get_arg(args::out_block_num_tiles);
     // Whether the producer sends this worker's K-blocks in ring order, its own first, or in K order.
     constexpr bool in1_in_ring_order = get_arg(args::in1_in_ring_order);
+    // In K order: the K-blocks of the pipe's ring past the layer.
+    constexpr auto rest_of_ring_blocks = get_arg(args::rest_of_ring_blocks);
     // This worker's position in the gather ring.
     const uint32_t ring_idx = get_arg(args::ring_idx);
 
@@ -45,21 +47,15 @@ void kernel_main() {
         // Compute walks it in ring order by stepping over what it does not need yet: publish the layer
         // as it lands, and then, unless this worker's own K-block is the layer's first, the rest of
         // the ring, which holds none of the layer, and the layer's first ring_idx K-blocks again, which
-        // compute reaches by coming back round.
+        // compute reaches by coming back round. One K-block at a time: in1's ring holds whole K-blocks,
+        // so no single push then runs past its end.
         for (uint32_t block = 0; block < num_blocks; ++block) {
             in1_relay.reserve_back(in1_block_num_tiles);
             pipe.wait_front(block + 1);
             in1_relay.push_back(in1_block_num_tiles);
         }
         if (ring_idx > 0) {
-            // bind_relay() sized in1 to the pipe's ring.
-            const uint32_t rest_of_ring_tiles =
-                DataflowBuffer(dfb::in1).get_total_num_entries() - num_blocks * in1_block_num_tiles;
-            if (rest_of_ring_tiles > 0) {
-                in1_relay.reserve_back(rest_of_ring_tiles);
-                in1_relay.push_back(rest_of_ring_tiles);
-            }
-            for (uint32_t block = 0; block < ring_idx; ++block) {
+            for (uint32_t block = 0; block < rest_of_ring_blocks + ring_idx; ++block) {
                 in1_relay.reserve_back(in1_block_num_tiles);
                 in1_relay.push_back(in1_block_num_tiles);
             }

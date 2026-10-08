@@ -75,7 +75,7 @@ void kernel_main() {
                 shard_size_bytes,
                 next_core_noc_x,
                 next_core_noc_y,
-                in0_shard_is_empty((ring_idx + shard_cnt) % ring_size, shard_width_in_tiles, k_tiles));
+                in0_shard_k_tiles((ring_idx + shard_cnt) % ring_size, shard_width_in_tiles, k_tiles) == 0);
         }
 
         if (shard_cnt > 0) {

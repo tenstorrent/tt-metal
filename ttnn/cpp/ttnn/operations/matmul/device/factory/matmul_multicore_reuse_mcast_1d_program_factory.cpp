@@ -4662,15 +4662,17 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
 
 // gather_in0 over PrefetcherPipes. The ring is the activation's shard grid in shard order (range by
 // range, which is row-major only within a range): worker i holds in0 shard i and computes output
-// column block i. Each step it forwards the in0 shard it holds to the previous worker, so at step s
-// worker i holds shard (i + s) % ring_size and needs that in1 K-block; the pipes' producer streams
-// each worker its K-blocks in exactly that order (the Tensor prefetcher's identity rotation). in1 is
-// then consumed front to back as it arrives, the same one-block-lookahead loop as mcast_in0 over
-// pipes.
+// column block i. Each step it forwards the in0 shard it holds to the previous worker (worker 0 to the
+// last, through the hop cores when there are any), so at step s worker i holds shard (i + s) %
+// ring_size and needs that in1 K-block. With stream_in1 the pipes' producer streams each worker its
+// K-blocks in exactly that order (the Tensor prefetcher's identity rotation), and in1 is consumed front
+// to back as it arrives, the same one-block-lookahead loop as mcast_in0 over pipes. Without it they
+// arrive in K order into a ring that holds the whole layer, and compute steps over in1 to walk the
+// layer in ring order.
 //
 // The legacy MeshWorkload builder keeps every other gather_in0 transport (DRAM, L1-sharded and
-// GlobalCircularBuffer in1), hop cores, several weights and the fused reduce-scatter signaler;
-// validation confines this body to what it builds.
+// GlobalCircularBuffer in1), several weights and the fused reduce-scatter signaler; validation confines
+// this body to what it builds.
 static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifacts(
     const tt_metal::distributed::MeshDevice& device,
     const DeviceComputeKernelConfig& compute_kernel_config,
@@ -4797,6 +4799,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
         in1_data_format,
         in1_tile);
     dataflow_buffers.push_back(in1_pipe_relay.relay_dfb);
+    // In K order the pipe ring holds the layer (validation checked) and then K-blocks of none of it,
+    // which compute steps over to come back round to the layer's first.
+    const uint32_t rest_of_ring_blocks =
+        stream_in1 ? 0 : in1_pipe_relay.relay_dfb.num_entries / in1_block_num_tiles - num_blocks;
 
     // The output stays in the sharded output tensor. When the partials take the output's format they
     // share its region: the two are aliases of each other and both borrow the output. (An untilized
@@ -4839,6 +4845,22 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
     const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
+    // The ring workers' in0 reader and the hop cores' forwarder share in0_ring_forward.hpp, so they take
+    // the same ring geometry and move in0 on the same RISC and NOC.
+    const KernelSpec::CompileTimeArgs in0_forward_cta = {
+        {"shard_width_in_tiles", in0_block_w},
+        {"shard_height_in_tiles", per_core_M},
+        {"ring_size", ring_size},
+        {"k_tiles", k_tiles},
+    };
+    const DataMovementHardwareConfig in0_forward_hw{
+        .config_1xx =
+            DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = in0_noc,
+            },
+    };
+
     Group<KernelSpec> kernels;
 
     kernels.push_back(KernelSpec{
@@ -4854,22 +4876,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
             },
         .semaphore_bindings = {SemaphoreBinding{
             .semaphore_spec_name = RING_SIGNAL_SEM, .accessor_name = "in0_ring_signal"}},
-        .compile_time_args =
-            {
-                {"shard_width_in_tiles", in0_block_w},
-                {"shard_height_in_tiles", per_core_M},
-                {"ring_size", ring_size},
-                {"k_tiles", k_tiles},
-            },
+        .compile_time_args = in0_forward_cta,
         .runtime_arg_schema = {.runtime_arg_names = {"ring_idx", "next_core_noc_x", "next_core_noc_y"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .config_1xx =
-                    DataMovementHardwareConfig::DataMovement1XXConfig{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                        .noc = in0_noc,
-                    },
-            },
+        .hw_config = in0_forward_hw,
     });
 
     kernels.push_back(KernelSpec{
@@ -4889,6 +4898,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
                 {"num_blocks", num_blocks},
                 {"out_block_num_tiles", out_block_num_tiles},
                 {"in1_in_ring_order", static_cast<uint32_t>(stream_in1)},
+                {"rest_of_ring_blocks", rest_of_ring_blocks},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"ring_idx"}},
         .hw_config =
@@ -4903,6 +4913,20 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
         .advanced_options =
             {.prefetcher_pipe_bindings = {{.pipe_parameter_names = in1_pipe_relay.names, .accessor_name = "in1"}}},
     });
+
+    // Metal 2.0 requires an unpack mode for every Float32 buffer a compute kernel consumes with 32-bit
+    // DEST. fp32 K-partials are reloaded into DEST between blocks; marking them UnpackToDest sends the
+    // reload straight to DEST instead of through SrcA, which would truncate them to TF32. The rest get
+    // UnpackToSrc.
+    const auto add_float32_unpack_mode = [&](tt::tt_metal::experimental::ComputeHardwareConfig& hw,
+                                             const DFBSpecName& name,
+                                             tt::DataFormat fmt) {
+        if (!fp32_dest_acc_en || fmt != tt::DataFormat::Float32) {
+            return;
+        }
+        hw.unpack_modes.emplace(
+            name, name == INTERM0_DFB ? tt::tt_metal::UnpackMode::UnpackToDest : tt::tt_metal::UnpackMode::UnpackToSrc);
+    };
 
     {
         std::map<std::string, std::string> mm_kernel_defines;
@@ -4919,6 +4943,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
             // stream_in1 delivers each worker's K-blocks in ring order, its own first; otherwise they
             // arrive in K order and the pipe ring holds the whole layer.
             {"in1_in_ring_order", static_cast<uint32_t>(stream_in1)},
+            {"rest_of_ring_blocks", rest_of_ring_blocks},
             {"out_subblock_h", out_subblock_h},
             {"out_subblock_w", out_subblock_w},
             {"out_subblock_num_tiles", out_subblock_num_tiles},
@@ -4950,25 +4975,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
             device.arch(), ring_size, mm_kernel_defines, throttle_level);
 
         auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
-        // fp32 K-partials are reloaded into DEST between blocks; marking them UnpackToDest sends the
-        // reload straight to DEST instead of through SrcA, which would truncate them to TF32. Metal
-        // 2.0 also requires an entry for every Float32 buffer this kernel consumes with 32-bit DEST,
-        // so the rest get UnpackToSrc.
-        if (fp32_dest_acc_en) {
-            auto add_if_float32 = [&](const DFBSpecName& name, tt::DataFormat fmt) {
-                if (fmt != tt::DataFormat::Float32) {
-                    return;
-                }
-                compute_hw.unpack_modes.emplace(
-                    name,
-                    name == INTERM0_DFB ? tt::tt_metal::UnpackMode::UnpackToDest
-                                        : tt::tt_metal::UnpackMode::UnpackToSrc);
-            };
-            add_if_float32(IN0_DFB, in0_data_format);
-            add_if_float32(IN2_DFB, in0_data_format);
-            add_if_float32(IN1_DFB, in1_data_format);
-            add_if_float32(INTERM0_DFB, interm0_data_format);
-        }
+        add_float32_unpack_mode(compute_hw, IN0_DFB, in0_data_format);
+        add_float32_unpack_mode(compute_hw, IN2_DFB, in0_data_format);
+        add_float32_unpack_mode(compute_hw, IN1_DFB, in1_data_format);
+        add_float32_unpack_mode(compute_hw, INTERM0_DFB, interm0_data_format);
 
         kernels.push_back(KernelSpec{
             .unique_id = COMPUTE,
@@ -5016,30 +5026,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
                 .dfb_spec_name = IN2_DFB, .accessor_name = "in2", .endpoint_type = DFBEndpointType::PRODUCER}},
             .semaphore_bindings = {SemaphoreBinding{
                 .semaphore_spec_name = RING_SIGNAL_SEM, .accessor_name = "in0_ring_signal"}},
-            .compile_time_args =
-                {
-                    {"shard_width_in_tiles", in0_block_w},
-                    {"shard_height_in_tiles", per_core_M},
-                    {"ring_size", ring_size},
-                    {"k_tiles", k_tiles},
-                },
+            .compile_time_args = in0_forward_cta,
             .runtime_arg_schema = {.runtime_arg_names = {"next_core_noc_x", "next_core_noc_y"}},
-            .hw_config =
-                DataMovementHardwareConfig{
-                    .config_1xx =
-                        DataMovementHardwareConfig::DataMovement1XXConfig{
-                            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                            .noc = in0_noc,
-                        },
-                },
+            .hw_config = in0_forward_hw,
         });
 
-        // in2's consumer on the hop cores, as compute is on the workers (see the kernel). Like the
-        // workers' compute, it lists an unpack mode for in2 when in2 is Float32 under 32-bit DEST.
+        // in2's consumer on the hop cores, as compute is on the workers (see the kernel).
         auto hop_sink_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
-        if (fp32_dest_acc_en && in0_data_format == tt::DataFormat::Float32) {
-            hop_sink_hw.unpack_modes.emplace(IN2_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
-        }
+        add_float32_unpack_mode(hop_sink_hw, IN2_DFB, in0_data_format);
         kernels.push_back(KernelSpec{
             .unique_id = HOP_SINK,
             .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/gather_in0_hop_sink_metal2.cpp",

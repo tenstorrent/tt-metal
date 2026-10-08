@@ -572,9 +572,11 @@ Whoever changes prefetcher or receiver code must preserve these:
   `bmm_large_block_zm_fused_bias_activation_gathered_metal2.cpp`), the hop-core kernels
   (`reader_bmm_tile_layout_in0_ring_hop_metal2.cpp`, `gather_in0_hop_sink_metal2.cpp`, sharing
   `kernels/dataflow/in0_ring_forward.hpp` with the ring reader) and the pipe-only in1 reader
-  `reader_bmm_tile_layout_in1_prefetcher_pipe_metal2.cpp`.
-- Both in1 readers drain the pipes through `kernels/dataflow/prefetcher_pipe_in1_window.hpp`, which
-  holds the one-block lookahead window the host sizes the ring for.
+  `reader_bmm_tile_layout_in1_prefetcher_pipe_metal2.cpp`. How much of K each padded in0 shard holds
+  is in `kernels/gather_in0_shard_k.hpp`, shared by the ring's dataflow and compute kernels.
+- Both in1 readers drain ring-order pipes through `kernels/dataflow/prefetcher_pipe_in1_window.hpp`,
+  which holds the one-block lookahead window the host sizes the ring for. A K-order gather layer is
+  published by the gather reader itself and handed back whole.
 - Worker-core prefetcher:
   `ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/dram_prefetcher_program_factory.cpp`,
   `kernels/reader_dram.cpp`, `kernels/writer_l1.cpp`.

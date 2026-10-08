@@ -1330,10 +1330,14 @@ void validate_prefetcher_pipes_gather_in0_geometry(
     // worker-sender pipe's producer is the caller's, and lays out its entries itself.) Checked ahead of
     // the shared weight checks, whose K-blocking rule a padded ring with an unpadded slab would trip
     // first; a weight that is not a 2D receiver-contiguous one is left to them.
-    if (ttnn::prefetcher_pipe_refs(prefetcher_pipes).front().get().sender_core_type() ==
-            tt::tt_metal::experimental::SenderCoreType::Dram &&
-        input_tensor_b.nd_shard_spec().has_value() && input_tensor_b.nd_shard_spec()->shard_shape.rank() == 2) {
-        const uint32_t slab_K_tiles = input_tensor_b.nd_shard_spec()->shard_shape[0] / in1_tile.get_height();
+    const auto pipes = ttnn::prefetcher_pipe_refs(prefetcher_pipes);
+    const tt::tt_metal::experimental::PrefetcherPipe& first_pipe = pipes.front();
+    const auto& weight_nd_shard_spec = input_tensor_b.nd_shard_spec();
+    const bool tensor_prefetcher_2d_slab =
+        first_pipe.sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram &&
+        weight_nd_shard_spec.has_value() && weight_nd_shard_spec->shard_shape.rank() == 2;
+    if (tensor_prefetcher_2d_slab) {
+        const uint32_t slab_K_tiles = weight_nd_shard_spec->shard_shape[0] / in1_tile.get_height();
         const uint32_t weight_K_tiles = b_shape_padded[-2] / in1_tile.get_height();
         TT_FATAL(
             slab_K_tiles == ring_size * in0_shard_width_tiles,
@@ -1353,17 +1357,17 @@ void validate_prefetcher_pipes_gather_in0_geometry(
         prefetcher_pipes, input_tensor_b, program_config, in1_block_size_bytes, "gather_in0");
 
     if (!program_config.stream_in1) {
-        const uint32_t pipe_ring_size = ttnn::prefetcher_pipe_refs(prefetcher_pipes).front().get().ring_size();
+        const uint32_t pipe_ring_blocks = first_pipe.ring_size() / in1_block_size_bytes;
         TT_FATAL(
-            pipe_ring_size / in1_block_size_bytes >= ring_size,
+            pipe_ring_blocks >= ring_size,
             "gather_in0 prefetcher_pipes with stream_in1=false delivers each worker its {} in1 K-blocks in K order "
             "and reads them in ring order, its own first, so the pipe ring has to hold the whole layer: {} K-blocks "
             "of {} B, but its {} B hold {}. Grow the ring, or set stream_in1=true and deliver them in ring order.",
             ring_size,
             ring_size,
             in1_block_size_bytes,
-            pipe_ring_size,
-            pipe_ring_size / in1_block_size_bytes);
+            first_pipe.ring_size(),
+            pipe_ring_blocks);
     }
 }
 
