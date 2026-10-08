@@ -199,6 +199,7 @@ def test_ssm_prefix_scan_with_program_cache(device):
 )
 def test_ssm_prefix_scan_shard_grid_not_at_origin(shard_grid, device):
     grid = device.compute_with_storage_grid_size()
-    if grid.x < 8 or grid.y < 8:
-        pytest.skip(f"needs an 8x8 compute grid, got {grid.x}x{grid.y}")
+    last_core = shard_grid.bounding_box().end
+    if last_core.x >= grid.x or last_core.y >= grid.y:
+        pytest.skip(f"shard grid needs {last_core.x + 1}x{last_core.y + 1} cores, got {grid.x}x{grid.y}")
     run_ssm_prefix_scan(32, 32, 64, shard_grid.num_cores(), ttnn.bfloat8_b, device, shard_grid=shard_grid)
