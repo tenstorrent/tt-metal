@@ -548,7 +548,7 @@ def test_kv_ring_is_bit_identical(mesh_device, owned_width, monkeypatch):
     """DIFFVAE_NA_KV_RING only changes where K/V tiles come from, never which tiles compute sees or
     in what order, so its output must equal the default path's bit for bit."""
     monkeypatch.setenv("DIFFVAE_NA_CHUNK_BRICKS", "2,1,1")
-    monkeypatch.delenv("DIFFVAE_NA_KV_RING", raising=False)
+    monkeypatch.setenv("DIFFVAE_NA_KV_RING", "0")
     plain = []
     _run_interior_table_case(mesh_device, owned_width, None, (24, 24, 24), outputs=plain)
     monkeypatch.setenv("DIFFVAE_NA_KV_RING", "1")
