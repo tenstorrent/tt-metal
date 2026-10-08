@@ -8,6 +8,9 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
+#if defined(ARCH_BLACKHOLE)
+#include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
+#endif
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/addcmul.h"
 #include "api/compute/eltwise_unary/addcdiv.h"
@@ -36,13 +39,20 @@ void kernel_main() {
         tile_regs_acquire();
 
         copy_init(dfb_in0.get_id());
-        copy_tile(dfb_in0.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
+#if defined(ARCH_BLACKHOLE)
+        if constexpr (operands_to_dest<tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2>()) {
+            copy_operands_to_dest<3>({dfb_in0.get_id(), dfb_in1.get_id(), dfb_in2.get_id()}, {0, 0, 0}, 0, 1);
+        } else
+#endif
+        {
+            copy_tile(dfb_in0.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_init(dfb_in1.get_id());
-        copy_tile(dfb_in1.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
+            copy_init(dfb_in1.get_id());
+            copy_tile(dfb_in1.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        copy_init(dfb_in2.get_id());
-        copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
+            copy_init(dfb_in2.get_id());
+            copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
+        }
 
         TERNARY_SFPU_OP_INIT();
         TERNARY_SFPU_OP_FUNC(0, 1, 2, 0, scalar_arg);

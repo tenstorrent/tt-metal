@@ -38,10 +38,14 @@ void kernel_main() {
         copy_init(dfb_pre_in1.get_id());
         copy_tile(dfb_pre_in1.get_id(), 0, 0);  // Copy to dst reg 0
 
-        copy_init(dfb_pre_in2.get_id());
+        if constexpr (!same_copy_init<tt::CBIndex::c_0, tt::CBIndex::c_1>()) {
+            copy_init(dfb_pre_in2.get_id());
+        }
         copy_tile(dfb_pre_in2.get_id(), 0, 1);  // Copy to dst reg 1
 
-        copy_init(dfb_pre_in3.get_id());
+        if constexpr (!same_copy_init<tt::CBIndex::c_1, tt::CBIndex::c_2>()) {
+            copy_init(dfb_pre_in3.get_id());
+        }
         copy_tile(dfb_pre_in3.get_id(), 0, 2);  // Copy to dst reg 2
 
         TERNARY_SFPU_OP_INIT();

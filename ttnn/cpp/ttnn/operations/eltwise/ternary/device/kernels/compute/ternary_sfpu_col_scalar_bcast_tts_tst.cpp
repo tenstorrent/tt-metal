@@ -13,6 +13,7 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 
+template <bool operand_pair = false>
 ALWI void process_tile(
     uint32_t predicate_cb_id,
     uint32_t tensor_cb_id,
@@ -52,18 +53,11 @@ ALWI void process_tile(
 
         // Copy predicate to destination register 0
         copy_init(predicate_dfb.get_id());
-        copy_tile(predicate_dfb.get_id(), 0, 0);
-
-        // Fill scalar and copy tensor based on variant
-        fill_tile_init();
-        copy_init(tensor_dfb.get_id());
-
-        // TTS: scalar=false (reg 2), tensor=true (reg 1)
-        // TST: scalar=true (reg 1), tensor=false (reg 2)
-        if constexpr (get_compile_time_arg_val(1) == 0) {  // TTS: scalar is false
-            // Copy true tensor to reg 1
-            copy_tile(tensor_dfb.get_id(), 0, 1);
-            // Fill false scalar to reg 2
+#if defined(ARCH_BLACKHOLE)
+        if constexpr (operand_pair) {
+            // Both tensors under one handshake
+            copy_operands_to_dest<2>({predicate_dfb.get_id(), tensor_dfb.get_id()}, {0, 0}, 0, 1);
+            fill_tile_init();
 #ifdef FILL_WITH_VALUE_FLOAT
             const auto scalar_val = reinterpret_cast<const float*>(&scalar);
             FILL_LLK(2, *scalar_val);
@@ -71,17 +65,40 @@ ALWI void process_tile(
 #ifdef FILL_WITH_VALUE_INT
             FILL_LLK(2, scalar);
 #endif
-        } else {  // TST: scalar is true
-                  // Fill true scalar to reg 1
+        } else
+#endif
+        {
+            copy_tile(predicate_dfb.get_id(), 0, 0);
+
+            // Fill scalar and copy tensor based on variant
+            fill_tile_init();
+            copy_init(tensor_dfb.get_id());
+
+            // TTS: scalar=false (reg 2), tensor=true (reg 1)
+            // TST: scalar=true (reg 1), tensor=false (reg 2)
+            if constexpr (get_compile_time_arg_val(1) == 0) {  // TTS: scalar is false
+                // Copy true tensor to reg 1
+                copy_tile(tensor_dfb.get_id(), 0, 1);
+                // Fill false scalar to reg 2
 #ifdef FILL_WITH_VALUE_FLOAT
-            const auto scalar_val = reinterpret_cast<const float*>(&scalar);
-            FILL_LLK(1, *scalar_val);
+                const auto scalar_val = reinterpret_cast<const float*>(&scalar);
+                FILL_LLK(2, *scalar_val);
 #endif
 #ifdef FILL_WITH_VALUE_INT
-            FILL_LLK(1, scalar);
+                FILL_LLK(2, scalar);
 #endif
-            // Copy false tensor to reg 2
-            copy_tile(tensor_dfb.get_id(), 0, 2);
+            } else {  // TST: scalar is true
+                      // Fill true scalar to reg 1
+#ifdef FILL_WITH_VALUE_FLOAT
+                const auto scalar_val = reinterpret_cast<const float*>(&scalar);
+                FILL_LLK(1, *scalar_val);
+#endif
+#ifdef FILL_WITH_VALUE_INT
+                FILL_LLK(1, scalar);
+#endif
+                // Copy false tensor to reg 2
+                copy_tile(tensor_dfb.get_id(), 0, 2);
+            }
         }
 
         // Perform the ternary operation
@@ -135,6 +152,13 @@ void kernel_main() {
     constexpr auto tensor_cb_id = tt::CBIndex::c_1;  // Either true (TTS) or false (TST) tensor
     constexpr auto cb_out_id = tt::CBIndex::c_3;
 
+#if defined(ARCH_BLACKHOLE)
+    // TTS only: the tensor's slot follows the condition's (mac reads fixed slots, so TST keeps its layout)
+    constexpr bool operand_pair = get_compile_time_arg_val(1) == 0 && operands_to_dest<predicate_cb_id, tensor_cb_id>();
+#else
+    constexpr bool operand_pair = false;
+#endif
+
     compute_kernel_hw_startup(predicate_cb_id, cb_out_id);
     copy_init(predicate_cb_id);
 
@@ -142,12 +166,12 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(
+        process_tile<operand_pair>(
             predicate_cb_id, tensor_cb_id, cb_out_id, tile_freq, tile_start, num_tiles_per_cycle, scalar_value);
     }
 
     if (remaining_iterations > 0) {
-        process_tile(
+        process_tile<operand_pair>(
             predicate_cb_id,
             tensor_cb_id,
             cb_out_id,

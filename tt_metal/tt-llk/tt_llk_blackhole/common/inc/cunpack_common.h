@@ -188,6 +188,40 @@ inline void reset_config_context()
     TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
 }
 
+// switch_config_context from the caller's copy of the context, so the global is not reloaded after the volatile stores.
+inline void switch_config_context_from(const std::uint32_t context_used)
+{
+    unp_cfg_context = 1 - context_used;
+    if (context_used == 0)
+    {
+        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0101);
+    }
+    else
+    {
+        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
+    }
+}
+
+// Which block body the replay buffer holds: the inits clear it (the tilize init records its body and sets it), the unpack A block
+// call records the half of its context. An unpack A value is the face count, with a half bit while only that half is held.
+enum class BlockReplayBody : std::uint8_t
+{
+    None      = 0,
+    UnpackA_1 = 1,
+    UnpackA_2 = 2,
+    UnpackA_4 = 4,
+    Tilize    = 8,
+};
+constexpr std::uint8_t BLOCK_REPLAY_HALF_0 = 0x10;
+constexpr std::uint8_t BLOCK_REPLAY_HALF_1 = 0x20;
+
+// Internal linkage: a kernel that never reads the record (no block call) drops the variable and the inits' stores to it.
+static inline BlockReplayBody& block_replay_body()
+{
+    static BlockReplayBody body = BlockReplayBody::None;
+    return body;
+}
+
 // Sync on unpacker idle via waiting busy contexts counter 0
 inline void wait_for_idle()
 {
@@ -964,9 +998,46 @@ inline void config_unpacker_x_end(const std::uint32_t face_r_dim)
     }
 }
 
+// Wait for the math thread's MATH_DONE post for this tile (math_unpack_to_dest_math_ready) and consume it: the unpack stall holds the
+// MOP's UNPACRs until then and the sync stall keeps the SEMGET behind the wait. The count alternates between 0 and 1.
 inline void wait_for_dest_available()
 {
-    t6_semaphore_wait_on_max<p_stall::STALL_UNPACK>(semaphore::UNPACK_TO_DEST);
+    TTI_SEMWAIT(p_stall::STALL_SYNC | p_stall::STALL_UNPACK, semaphore::t6_sem(semaphore::MATH_DONE), p_stall::STALL_ON_ZERO);
+    TTI_SEMGET(semaphore::t6_sem(semaphore::MATH_DONE));
+}
+
+// The srcA Z stride stays at canonical_unpA_z_stride of the operand's dst format, which its configure or srca reconfig programmed.
+inline void unpack_to_dest_tile_done(std::uint32_t &context_id)
+{
+    t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
+    // Restore config context
+    if (context_id == 0)
+    {
+        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx0_RMW>(0);
+        cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx0_address_RMW>(4 * 16);
+    }
+    else
+    {
+        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx1_RMW>(0);
+        cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx1_address_RMW>(4 * 16);
+    }
+    TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4); // re-enable address bit swizzle
+}
+
+inline void set_dst_write_addr(const std::uint32_t &context_id)
+{
+    std::uint32_t dst_byte_addr = 16 * (4 + mailbox_read(ThreadId::MathThreadId)); // Apply fixed offset of 4*16 to dest address
+    TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0);                                         // Disable address bit swizzle
+    if (context_id == 0)
+    {
+        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx0_RMW>(1);
+        cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx0_address_RMW>(dst_byte_addr);
+    }
+    else
+    {
+        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx1_RMW>(1);
+        cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx1_address_RMW>(dst_byte_addr);
+    }
 }
 
 // Restore srcA channel-1 Z-stride to the canonical baseline derived from unpack_dst_format.

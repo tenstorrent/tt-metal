@@ -6,11 +6,15 @@
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/tile_move_copy.h"
+#if defined(ARCH_BLACKHOLE)
+#include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
+#endif
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/add_int_sfpu.h"
 #include "api/dataflow/dataflow_buffer.h"
 
+template <bool operand_triple = false>
 ALWI void process_tile(
     tt::CBIndex cb_in0_id,
     tt::CBIndex cb_in1_id,
@@ -56,13 +60,20 @@ ALWI void process_tile(
 
         // Load all three inputs into DST registers
         copy_init(dfb_in0.get_id());
-        copy_tile(dfb_in0.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
+#if defined(ARCH_BLACKHOLE)
+        if constexpr (operand_triple) {
+            copy_operands_to_dest<3>({dfb_in0.get_id(), dfb_in1.get_id(), dfb_in2.get_id()}, {0, 0, 0}, 0, 1);
+        } else
+#endif
+        {
+            copy_tile(dfb_in0.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_init(dfb_in1.get_id());
-        copy_tile(dfb_in1.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
+            copy_init(dfb_in1.get_id());
+            copy_tile(dfb_in1.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        copy_init(dfb_in2.get_id());
-        copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
+            copy_init(dfb_in2.get_id());
+            copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
+        }
 
         fill_tile_init();
         fill_tile_int<ADDCMUL_DATA_FORMAT>(3, scalar_arg);
@@ -125,6 +136,12 @@ void kernel_main() {
     constexpr auto cb_in2_id = tt::CBIndex::c_2;  // input_c
     constexpr auto cb_out_id = tt::CBIndex::c_3;  // output
 
+#if defined(ARCH_BLACKHOLE)
+    constexpr bool operand_triple = operands_to_dest<cb_in0_id, cb_in1_id, cb_in2_id>();
+#else
+    constexpr bool operand_triple = false;
+#endif
+
     compute_kernel_hw_startup(cb_in0_id, cb_out_id);
     copy_init(cb_in0_id);
 
@@ -132,12 +149,12 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(
+        process_tile<operand_triple>(
             cb_in0_id, cb_in1_id, cb_in2_id, cb_out_id, tile_freq, tile_start, num_tiles_per_cycle, scalar_arg);
     }
 
     if (remaining_iterations > 0) {
-        process_tile(
+        process_tile<operand_triple>(
             cb_in0_id,
             cb_in1_id,
             cb_in2_id,
