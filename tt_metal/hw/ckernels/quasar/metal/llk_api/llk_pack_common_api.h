@@ -132,7 +132,8 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
  * @brief Signals that the packer has finished consuming the current Destination Register section.
  * Posts to the math–pack semaphore and clears/zeros the dest bank(s) used by the packer;
  *
- * @tparam EN_32BIT_DEST True if math destination is in 32-bit mode, false for 16-bit mode.
+ * @tparam EN_32BIT_DEST True if math destination is in 32-bit mode, false for 16-bit mode. On the unpack-to-dest
+ * path it must equal DST_ACCUM_MODE (enforced by a static_assert), see the body.
  *
  * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
@@ -141,6 +142,12 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
 template <bool EN_32BIT_DEST>
 inline void llk_pack_dest_section_done() {
     if constexpr (UnpackToDestEn) {
+        // The unpack side sizes its SyncHalf bank flip from DST_ACCUM_MODE (llk_unpack_A / llk_unpack_A_block). The two
+        // strides must agree or unpack and pack address different DEST halves, and the compute API lets callers
+        // override is_fp32_dest_acc_en (tile_regs_release, release_dst, tilize_block, ...), so pin it here.
+        static_assert(
+            EN_32BIT_DEST == DST_ACCUM_MODE,
+            "unpack-to-dest: EN_32BIT_DEST must equal DST_ACCUM_MODE, the stride the unpack side flips banks with");
         _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
         if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
             _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::PACK0>();

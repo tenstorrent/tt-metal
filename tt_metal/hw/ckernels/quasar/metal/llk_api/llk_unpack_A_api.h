@@ -140,7 +140,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
         if constexpr (unpack_to_dest) {
             // EN_32BIT_DEST sizes the SyncHalf bank flip. It must agree with the pack side
             // (llk_pack_dest_section_done) or unpack and pack address different DEST halves; both derive it from
-            // DST_ACCUM_MODE.
+            // DST_ACCUM_MODE, and the pack side static_asserts that its caller did not override it.
             _llk_unpack_unary_operand_to_dest_<DST_SYNC_MODE, DST_ACCUM_MODE>(l1_tile_idx);
         } else {
             const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
