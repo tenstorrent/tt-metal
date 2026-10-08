@@ -93,6 +93,15 @@ inline void sdpa_custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim
     tmp.program();
 }
 
+/**
+ * @brief Configure the math thread for sdpa_custom_mm: programs address mods and the MVMUL MOP.
+ *
+ * @tparam transpose: Transpose in1 faces during the multiply.
+ * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
+ * @param ct_dim: Number of output column tiles.
+ * @note Establishes the operand-driven default Src zero-substitution state, which @ref _llk_math_sdpa_custom_mm_
+ *       asserts under LLK asserts. Re-run this init after any math op that leaves the flag at keep (a copy init does).
+ */
 template <bool transpose = false>
 inline void _llk_math_sdpa_custom_mm_init_(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim = 1)
 {
@@ -100,6 +109,9 @@ inline void _llk_math_sdpa_custom_mm_init_(const std::uint32_t operandB_face_r_d
     sdpa_custom_mm_configure_mop(operandB_face_r_dim, ct_dim);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // A preceding datacopy leaves the Src zero flag at keep; MVMUL needs the operand-driven value.
+    math::_configure_default_zero_flag_state_();
 }
 
 inline void _llk_math_sdpa_custom_mm_mask_dest_(const std::uint32_t dst_index, const std::uint32_t ct_dim, bool mask_chunk = false)
@@ -141,6 +153,10 @@ inline void _llk_math_sdpa_custom_mm_(
     const bool mask_chunk      = false)
 {
     static_assert(signal_granularity >= 1, "signal_granularity must be >= 1");
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "sdpa_custom_mm: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
+        "this call left it at keep, so denormal Src operands would not be flushed");
     LLK_ASSERT(ct_dim % signal_granularity == 0, "ct_dim must be divisible by signal_granularity for FPU->SFPU signal counts to balance");
     // dst offset initialized by _llk_math_sdpa_custom_mm_mask_dest_
     _llk_math_sdpa_custom_mm_mask_dest_(dst_index, ct_dim, mask_chunk);
