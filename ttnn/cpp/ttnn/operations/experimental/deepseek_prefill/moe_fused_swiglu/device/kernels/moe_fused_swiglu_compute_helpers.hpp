@@ -202,13 +202,9 @@ ALWI void add_silu_elementwise(
         silu_tile_pack(tile);
     }
     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-#ifdef ARCH_BLACKHOLE
-    pack_block_mop(0, out_cb, tiles);
-#else
     for (uint32_t tile = 0; tile < tiles; ++tile) {
         pack_tile(tile, out_cb);
     }
-#endif
     tile_regs_release();
     partials.pop_front(tiles);
     out.push_back(tiles);
