@@ -207,12 +207,6 @@ inline void _calculate_typecast_arith_sfp_rows_() {
  */
 template <DataFormat SRC_FMT, DataFormat DST_FMT, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_typecast() {
-    if constexpr (SRC_FMT == DataFormat::Int32 && DST_FMT == DataFormat::Float16_b) {
-        // Production Int32 L1 is two's-complement through Unpack-to-Dest. The dedicated TTI
-        // kernel converts 2SC → SM before the int→fp32 cast and names the FP16B store.
-        _calculate_typecast_int32_to_fp16b_<ITERATIONS>();
-        return;
-    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         _calculate_typecast_arith_sfp_rows_<SRC_FMT, DST_FMT>();
