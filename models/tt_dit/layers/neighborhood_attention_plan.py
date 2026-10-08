@@ -752,9 +752,9 @@ def lean_layout_enabled() -> bool:
 
 def gather_rephase_enabled() -> bool:
     """Whether the key-phase rebrick of K/V is one row gather (``ttnn.embedding`` over a cached
-    index) instead of to_natural, slice, zero-frame concat, to_bricked and tilize. Opt-in with
-    ``DIFFVAE_NA_GATHER_REPHASE=1``."""
-    return os.environ.get("DIFFVAE_NA_GATHER_REPHASE") == "1"
+    index) instead of to_natural, slice, zero-frame concat, to_bricked and tilize. On by default,
+    off with ``DIFFVAE_NA_GATHER_REPHASE=0``; the values are unchanged."""
+    return os.environ.get("DIFFVAE_NA_GATHER_REPHASE") != "0"
 
 
 def key_phase_gather_index(resident, phased, brick, front, cut_h, cut_w) -> torch.Tensor:
