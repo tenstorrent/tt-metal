@@ -62,3 +62,17 @@ Tray-2 incident 2026-10-07 19:49 UTC (bridge-reset chips 8-15, broker job 417/41
 - probe_ready.sh missed power-cycle/hold rows; fixed. New probe_blx03.sh = blx03 only, 30 min clean.
 - Next wake: `ssh g14blx03 bash ~/fasth3/runner/runner-start.sh`, then wait on
   `ssh g14blx03 'bash ~/fasth3/runner/probe.sh t220-time-r2'`.
+
+## 2026-10-08 02:45 UTC (#251, blx01; blx03 skipped after 2 drops per config)
+- Setup on blx01 (all under /var/tmp/fasth3/t220, nothing in /home): src = copy of blx03 ~/fasth3/t220 (tree
+  d791f4e949 = ltx-rt b9f8587ce6c + test patch, Release build; COMMIT file, no .git), caches copied from blx03
+  (ltx-2.3 VAE/connectors/audio, bf8 DiT 23G, upscaler, JIT 1.4G) + gemma cache from blx01's
+  /home/sulphur/tt_dit_cache (read only). venv /var/tmp/fasth3/t48/python_env. Run: run220.sh (= run220_blx01.sh),
+  broker env env.yaml (= env_blx01.yaml). CPU import check OK. Footprint ~63 GB on blx01 /var/tmp (199G free after).
+- Fill = broker job 901 (submitted 02:38:52 UTC, -t 600, seed 0 gen0 capture + gen1 replay), out_fill/run.log.
+- Driver drv251.sh (blx01 pid 1390395, own session) waits for 901; if completed, submits the timed job
+  (T220_SEEDS=1,2,3,4, -t 600) once no hold/upgrade/smarton job is running or queued, waits, writes
+  /var/tmp/fasth3/t220/drv251.done (FILL_NOT_OK / TIME_NOT_SUBMITTED / TIME_DONE job=.. status=..), log drv251.done.log.
+- Next wake: read drv251.done. FILL_NOT_OK: check out_fill/run.log (timeout while JIT compiling -> submit the
+  timed job by hand; drop -> rerun fill once). TIME_DONE: parse out_time/run.log E2E_WALL_S gen=1..5 (gen0 = capture).
+  After a drop mid-timed run, rerun with T220_SEEDS = seeds not yet saved (ltx_av_fast_1920x1088_<gen>.mp4).

@@ -1,0 +1,8 @@
+TT_METAL_HOME: /var/tmp/fasth3/t220/src
+PYTHON_ENV_DIR: /var/tmp/fasth3/t48/python_env
+PYTHONPATH: /var/tmp/fasth3/t220/src:/var/tmp/fasth3/t220/src/ttnn:/var/tmp/fasth3/t220/src/tools
+TT_METAL_CACHE: /var/tmp/fasth3/t220/cache/tt-metal-cache-ltx23
+HOME: /var/tmp/fasth3/home
+XDG_CACHE_HOME: /var/tmp/fasth3/home/.cache
+TMPDIR: /var/tmp/fasth3/t220/tmp
+HF_HUB_OFFLINE: "1"
