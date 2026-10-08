@@ -248,9 +248,51 @@ inline void row_pack(const std::uint32_t dst_slot, const std::uint32_t row_addre
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
 }
 
+// weighted_reduce_pack_block: one DEST base and one destination for the section's rows, two PACRs per chunk
+inline void block_pack(const std::uint32_t address)
+{
+    set_dst_write_addr(0);
+    program_packer_destination(address);
+    for (std::uint32_t i = 0; i < 2 * NUM_CHUNKS - 1; i++)
+    {
+        TTI_PACR(
+            p_pacr::CFG_CTXT_0,
+            p_pacr::NO_ROW_PAD_ZERO,
+            p_pacr::DST_ACCESS_NORMAL_MODE,
+            ADDR_MOD_3,
+            p_pacr::ADDR_CNT_CTXT_0,
+            p_pacr::P_ZERO_OUTPUT_DISABLED,
+            p_pacr::SINGLE_INTF_ACTIVE,
+            0,
+            0,
+            0,
+            0,
+            0);
+    }
+    TTI_PACR(
+        p_pacr::CFG_CTXT_0,
+        p_pacr::NO_ROW_PAD_ZERO,
+        p_pacr::DST_ACCESS_NORMAL_MODE,
+        ADDR_MOD_1,
+        p_pacr::ADDR_CNT_CTXT_0,
+        p_pacr::P_ZERO_OUTPUT_DISABLED,
+        p_pacr::SINGLE_INTF_ACTIVE,
+        0,
+        0,
+        0,
+        0,
+        1);
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+}
+
 inline void pack_chunks(RUNTIME_PARAMETERS params)
 {
     constexpr std::uint32_t row_1x32_size_words = 4;
+    if constexpr (BLOCK_PACK)
+    {
+        block_pack(L1_ADDRESS(params.buffer_Res[0]));
+        return;
+    }
     for (std::uint32_t c = 0; c < NUM_CHUNKS; ++c)
     {
         row_pack(c, L1_ADDRESS(params.buffer_Res[0]) + c * row_1x32_size_words);
@@ -277,6 +319,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             .z_dst = {.incr = 0, .clr = 0},
         }
             .set(ADDR_MOD_3);
+        // The DEST-read strides sdpa_custom_mm's pack init leaves for the row packs: faces 8 rows apart, slots 16
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * 8 * 2);
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2);
         PROFILER_SYNC();
     }
     {

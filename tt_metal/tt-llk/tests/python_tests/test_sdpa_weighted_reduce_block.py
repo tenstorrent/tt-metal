@@ -37,9 +37,13 @@ WEIGHT = 1.0
 @dataclass
 class WEIGHTED_REDUCE_BLOCK(TemplateParameter):
     weighted_reduce_chunks: int = 1
+    weighted_reduce_row_pack: bool = False
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t NUM_CHUNKS = {self.weighted_reduce_chunks};"
+        return (
+            f"constexpr std::uint32_t NUM_CHUNKS = {self.weighted_reduce_chunks};\n"
+            f"constexpr bool ROW_PACK = {str(self.weighted_reduce_row_pack).lower()};"
+        )
 
 
 class WeightedReduceBlockStimuli(StimuliConfig):
@@ -66,9 +70,7 @@ class WeightedReduceBlockStimuli(StimuliConfig):
         write_to_device(location, self.buf_b_addr, self.packed_qk)
 
 
-@skip_for_coverage
-@pytest.mark.parametrize("num_chunks", [1, 2, 4])
-def test_sdpa_weighted_reduce_block(num_chunks):
+def _run_block(num_chunks, row_pack):
     torch_format = format_dict[BF16]
     weights_tile = torch.zeros((TILE, TILE), dtype=torch_format)
     weights_tile[0, :NUM_HEADS] = WEIGHT
@@ -86,7 +88,11 @@ def test_sdpa_weighted_reduce_block(num_chunks):
     configuration = TestConfig(
         "sources/sdpa_weighted_reduce_block_test.cpp",
         InputOutputFormat(BF16, BF16),
-        templates=[WEIGHTED_REDUCE_BLOCK(weighted_reduce_chunks=num_chunks)],
+        templates=[
+            WEIGHTED_REDUCE_BLOCK(
+                weighted_reduce_chunks=num_chunks, weighted_reduce_row_pack=row_pack
+            )
+        ],
         runtimes=[NUM_FACES(num_faces=4, num_faces_A=4, num_faces_B=2)],
         variant_stimuli=WeightedReduceBlockStimuli(
             packed_weights, packed_qk, num_chunks
@@ -95,6 +101,14 @@ def test_sdpa_weighted_reduce_block(num_chunks):
         dest_acc=DestAccumulation.No,
     )
     res = torch.tensor(configuration.run().result, dtype=torch_format)
+    return q_values, res
+
+
+@skip_for_coverage
+@pytest.mark.parametrize("num_chunks", [1, 2, 4])
+def test_sdpa_weighted_reduce_block(num_chunks):
+    torch_format = format_dict[BF16]
+    q_values, res = _run_block(num_chunks, row_pack=False)
     out = untilize_block(res, BF16, [TILE, TILE])
 
     # Chunk c's first MVMUL row lands in face c's first row: rows 0 and 16, columns 0 to 15 and 16 to 31.
@@ -103,4 +117,17 @@ def test_sdpa_weighted_reduce_block(num_chunks):
         golden = torch.full((FACE,), NUM_HEADS * WEIGHT * q, dtype=torch_format)
         assert passed_test(
             golden, out[row, col : col + FACE], BF16
+        ), f"chunk {c} of {num_chunks}"
+
+
+@skip_for_coverage
+@pytest.mark.parametrize("num_chunks", [1, 2, 4, 8])
+def test_sdpa_weighted_reduce_block_row_pack(num_chunks):
+    """weighted_reduce_pack_block: chunk c's 32 outputs (both MVMULs) land in row c of the result, 32 values per row."""
+    torch_format = format_dict[BF16]
+    q_values, res = _run_block(num_chunks, row_pack=True)
+    for c, q in enumerate(q_values):
+        golden = torch.full((TILE,), NUM_HEADS * WEIGHT * q, dtype=torch_format)
+        assert passed_test(
+            golden, res[c * TILE : (c + 1) * TILE], BF16
         ), f"chunk {c} of {num_chunks}"

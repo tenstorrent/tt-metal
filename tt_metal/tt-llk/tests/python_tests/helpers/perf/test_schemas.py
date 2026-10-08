@@ -80,8 +80,9 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_face_compressed_mm": "perf_face_compressed_mm"},
     },
     "perf_sdpa_weighted_reduce": {
-        "version": 1,
+        "version": 2,
         "columns": [
+            "block_pack",
             "block_unpack",
             "chunks_per_section",
             "dest_acc",

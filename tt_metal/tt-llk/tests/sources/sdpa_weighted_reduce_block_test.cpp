@@ -5,7 +5,8 @@
 // Batched SDPA weighted reduce (api/compute/experimental/sdpa_weighted_reduce.h, weighted_reduce_block): NUM_CHUNKS qk
 // tiles of two 16x16 faces each (buffer_B) against one weights tile (buffer_A) through one unpack context transaction
 // (_llk_unpack_AB_sdpa_weighted_reduce_block_), the header's two MVMULs per chunk into DEST slot c (16 rows apart), then
-// a standard pack of DEST tile 0. Slot c's first row is face c's first row of that tile, which the driver checks.
+// a standard pack of DEST tile 0. Slot c's first row is face c's first row of that tile, which the driver checks. With
+// ROW_PACK the pack is weighted_reduce_pack_block's instead: chunk c's output row lands in row c of the result.
 
 #include <cstdint>
 
@@ -117,8 +118,58 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    _llk_packer_wait_for_math_done_();
-    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(params.buffer_Res[0]));
+    if constexpr (ROW_PACK)
+    {
+        // weighted_reduce_pack_block: the DEST-read strides sdpa_custom_mm's pack init leaves (faces 8 rows apart, slots
+        // 16), weighted_reduce_addrmod_init's ADDR_MOD_3, then one destination and two PACRs per chunk into rows 0 onwards.
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * 8 * 2);
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2);
+        addr_mod_pack_t {
+            .y_src = {.incr = 0, .clr = 0, .cr = 0},
+            .y_dst = {.incr = 1, .clr = 0, .cr = 0},
+            .z_src = {.incr = 1, .clr = 0},
+            .z_dst = {.incr = 0, .clr = 0},
+        }
+            .set(ADDR_MOD_3);
+        _llk_packer_wait_for_math_done_();
+        set_dst_write_addr(0);
+        program_packer_destination(L1_ADDRESS(params.buffer_Res[0]));
+        for (std::uint32_t i = 0; i < 2 * NUM_CHUNKS - 1; i++)
+        {
+            TTI_PACR(
+                p_pacr::CFG_CTXT_0,
+                p_pacr::NO_ROW_PAD_ZERO,
+                p_pacr::DST_ACCESS_NORMAL_MODE,
+                ADDR_MOD_3,
+                p_pacr::ADDR_CNT_CTXT_0,
+                p_pacr::P_ZERO_OUTPUT_DISABLED,
+                p_pacr::SINGLE_INTF_ACTIVE,
+                0,
+                0,
+                0,
+                0,
+                0);
+        }
+        TTI_PACR(
+            p_pacr::CFG_CTXT_0,
+            p_pacr::NO_ROW_PAD_ZERO,
+            p_pacr::DST_ACCESS_NORMAL_MODE,
+            ADDR_MOD_1,
+            p_pacr::ADDR_CNT_CTXT_0,
+            p_pacr::P_ZERO_OUTPUT_DISABLED,
+            p_pacr::SINGLE_INTF_ACTIVE,
+            0,
+            0,
+            0,
+            0,
+            1);
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+    }
+    else
+    {
+        _llk_packer_wait_for_math_done_();
+        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(params.buffer_Res[0]));
+    }
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 

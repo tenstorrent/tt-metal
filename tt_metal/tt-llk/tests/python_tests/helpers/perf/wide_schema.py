@@ -88,6 +88,7 @@ DB_SCHEMA = [
     Column("binop_mathop", "string", True, "configuration"),
     Column("block_ct_dim", "int64", True, "configuration"),
     Column("block_rt_dim", "int64", True, "configuration"),
+    Column("block_pack", "bool", True, "configuration"),
     Column("block_unpack", "bool", True, "configuration"),
     Column("broadcast_type", "string", True, "configuration"),
     Column("c_dimm", "int64", True, "configuration"),
