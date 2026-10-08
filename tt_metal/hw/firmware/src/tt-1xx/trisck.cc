@@ -28,6 +28,9 @@ uint32_t pack_sync_tile_dst_ptr = 0;
 uint32_t math_sync_tile_dst_index = 0;
 uint32_t gl_alu_format_spec_reg = 0;
 uint32_t op_info_offset = 0;
+#if defined(ARCH_BLACKHOLE) && defined(UCK_CHLKC_UNPACK)
+uint32_t llk_ttsync_on = 0;
+#endif
 
 #if defined(LLK_SAN_ENABLE)
 namespace llk::san {
@@ -90,6 +93,15 @@ uint32_t _start() {
     EARLY_RETURN_FOR_DEBUG
     WAYPOINT("K");
     run_kernel();
+#if defined(ARCH_BLACKHOLE) && defined(UCK_CHLKC_UNPACK)
+    if (llk_ttsync_on) {
+        // restore Auto TTSync and the MOP and REPLAY declarations the matmul unpack changed, for the next kernel
+        TTI_RESOURCEDECL(2, 0x1FF, 13);
+        TTI_RESOURCEDECL(2, 0x1FF, 14);
+        TTI_SETC16(TENSIX_TRISC_SYNC_TrackGlobalCfg_ADDR32, 0);
+        ckernel::tensix_sync();
+    }
+#endif
     WAYPOINT("KD");
     EARLY_RETURN_FOR_DEBUG_EXIT;
 #endif
