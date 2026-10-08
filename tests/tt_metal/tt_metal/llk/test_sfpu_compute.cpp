@@ -16,6 +16,7 @@
 #include <cmath>
 #include <functional>
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -62,6 +63,9 @@ namespace unit_tests::sfpu_util {
 const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = {
     // FIXME: #1157
     {"relu", {{"SFPU_OP_CHAIN_0", "relu_tile_init(); relu_tile(0);"}}},
+    // No SFPU chain: copy_tile / copy_block then pack_tile only, golden = input. Used by the DEST-index tests, whose
+    // tiles sit at non-zero DEST indices that the tile-0 chains above would not touch.
+    {"datacopy", {}},
     {"relu_min", {{"SFPU_OP_CHAIN_0", "relu_min_tile_init(); relu_min_tile(0, 0x40A33333u);"}}},  // 5.1f
     {"relu_max", {{"SFPU_OP_CHAIN_0", "relu_max_tile_init(); relu_max_tile(0, 0x40A33333u);"}}},  // 5.1f
     {"exponential", {{"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}},
@@ -138,6 +142,9 @@ bool is_int8_binary_sfpu_op(const std::string& op_name) {
 // Float32 consumes it directly. Keeping the math in one place is what lets the
 // two data-format paths stay in sync.
 float sfpu_function(const std::string& op_name, float input) {
+    if (op_name == "datacopy") {
+        return input;
+    }
     if (op_name == "relu") {
         return fmaxf(input, 0.0f);
     }
@@ -664,6 +671,13 @@ struct SfpuConfig {
     bool unpack_to_dest = false;       // route input DFB to Dest (unpack_modes=UnpackToDest); pair with en_32bit_dest for 32-bit Dest
     bool en_32bit_dest = false;
     size_t out_dfb_entries = 0;        // 0 = num_tiles; fewer entries make the packer wait on the writer (pack back-pressure)
+    // DEST placement (unary path of eltwise_sfpu_2_0.cpp). dst_tile_start: DEST index the tile(s) land at and are
+    // packed back from. section_ntiles > 0: one DEST section of that many tiles per tile_regs_acquire instead of one
+    // tile, placed with one copy_block, or with one copy_tile per tile when section_use_copy_tile is set. Section
+    // mode needs sfpu_op = "datacopy": the SFPU chains all target DEST tile 0.
+    size_t dst_tile_start = 0;
+    size_t section_ntiles = 0;
+    bool section_use_copy_tile = false;
 };
 
 // Builds a DataflowBufferSpec. `entry_size` is derived from `fmt` so that input and output
@@ -806,11 +820,31 @@ std::vector<uint32_t> run_sfpu_pipeline(
         };
     }
 
+    // DEST placement knobs, see SfpuConfig. In section mode the compute kernel handles section_ntiles tiles per
+    // tile_regs_acquire, so it loops num_tiles / section_ntiles times.
+    std::map<std::string, std::string> compute_defines = defines;
+    if (test_config.dst_tile_start != 0) {
+        compute_defines["DST_TILE_START"] = std::to_string(test_config.dst_tile_start);
+    }
+    if (test_config.section_ntiles != 0) {
+        TT_FATAL(
+            test_config.num_tiles % test_config.section_ntiles == 0,
+            "num_tiles ({}) must be a multiple of section_ntiles ({})",
+            test_config.num_tiles,
+            test_config.section_ntiles);
+        compute_defines["SECTION_NTILES"] = std::to_string(test_config.section_ntiles);
+        if (test_config.section_use_copy_tile) {
+            compute_defines["SECTION_USE_COPY_TILE"] = "1";
+        }
+    }
+    const uint32_t per_core_block_cnt = static_cast<uint32_t>(
+        test_config.section_ntiles != 0 ? test_config.num_tiles / test_config.section_ntiles : test_config.num_tiles);
+
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu_2_0.cpp",
         .num_threads = 1,
-        .compiler_options = {.defines = to_kernel_defines(defines)},
+        .compiler_options = {.defines = to_kernel_defines(compute_defines)},
         .dfb_bindings =
             {{
                  .dfb_spec_name = IN_DFB,
@@ -824,8 +858,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
                  .endpoint_type = experimental::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_args =
-            {{"per_core_block_cnt", static_cast<uint32_t>(test_config.num_tiles)}, {"per_core_block_size", 1u}},
+        .compile_time_args = {{"per_core_block_cnt", per_core_block_cnt}, {"per_core_block_size", 1u}},
         .hw_config = compute_hw_config,
     };
 
@@ -895,7 +928,9 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     // format-generic, so this is the single place that pins the supported-op set for Float32.
     const bool is_relu_family =
         test_config.sfpu_op == "relu" || test_config.sfpu_op == "relu_min" || test_config.sfpu_op == "relu_max";
-    TT_FATAL(!is_fp32 || is_relu_family, "Float32 SFPU path supports relu / relu_min / relu_max only in v1");
+    TT_FATAL(
+        !is_fp32 || is_relu_family || test_config.sfpu_op == "datacopy",
+        "Float32 SFPU path supports relu / relu_min / relu_max / datacopy only in v1");
     const bool relu_threshold_op = test_config.sfpu_op == "relu_min" || test_config.sfpu_op == "relu_max";
     const size_t element_size = is_fp32 ? sizeof(float) : sizeof(bfloat16);
     const size_t numel = byte_size / element_size;
@@ -1597,6 +1632,47 @@ void run_quasar_sfpu_unpack_to_dest_16b(
     EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_all_same_buffer(dev, cfg));
 }
 
+// DEST-index coverage for Quasar unpack-to-dest: pure datacopy (golden = input) with the tile(s) placed at
+// dst_tile_start, one tile per acquire (section_ntiles = 0) or one section of section_ntiles tiles per acquire,
+// placed with copy_block or, with section_use_copy_tile, with one copy_tile per tile.
+void run_quasar_unpack_to_dest_dest_index(
+    distributed::MeshDevice& dev,
+    bool fp32_dest,
+    size_t num_tiles,
+    bool dst_full_sync_en,
+    size_t dst_tile_start,
+    size_t section_ntiles,
+    bool section_use_copy_tile) {
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+    const tt::DataFormat fmt = fp32_dest ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    unit_tests::compute::sfpu::SfpuConfig cfg{
+        .num_tiles = num_tiles,
+        .tile_byte_size = (fp32_dest ? 4u : 2u) * 32 * 32,
+        .l1_input_data_format = fmt,
+        .l1_output_data_format = fmt,
+        .cores = core_range_set,
+        .sfpu_op = "datacopy",
+        .approx_mode = false,
+        .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest = true,
+        .en_32bit_dest = fp32_dest,
+        .dst_tile_start = dst_tile_start,
+        .section_ntiles = section_ntiles,
+        .section_use_copy_tile = section_use_copy_tile,
+    };
+    log_info(
+        tt::LogTest,
+        "Quasar unpack-to-dest DEST index: {} num_tiles={} {} dst_tile_start={} section_ntiles={} copy_tile={}",
+        fp32_dest ? "FP32" : "16b",
+        num_tiles,
+        dst_full_sync_en ? "SyncFull" : "SyncHalf",
+        dst_tile_start,
+        section_ntiles,
+        section_use_copy_tile);
+    EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_all_same_buffer(dev, cfg));
+}
+
 // Unary SFPU ops with no Quasar compute-API implementation yet: their
 // compute_kernel_api.h / eltwise_unary headers are wrapped in #ifndef ARCH_QUASAR,
 // so building the kernel would fail with "not declared in this scope". Skip them on
@@ -2018,6 +2094,36 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuUnpackToDest16b) {
                     num_tiles,
                     dst_full_sync_en ? "SyncFull" : "SyncHalf");
                 run_quasar_sfpu_unpack_to_dest_16b(this->device(), num_tiles, sfpu_op, dst_full_sync_en);
+            }
+        }
+    }
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUnpackToDestDestIndex) {
+    // Under unpack-to-dest the unpacker places the tiles, so the DEST index has to survive copy_tile / copy_block and
+    // the packer has to read the tiles back from the same indices. Per DEST width and sync mode, within the section
+    // capacity (get_dest_max_tiles: 16 / 8 tiles for a 16-bit DEST, 8 / 4 for a 32-bit DEST, SyncFull / SyncHalf):
+    // one copy_tile per acquire at index 1 and at the last index; one copy_block of 2 and 4 tiles per acquire at
+    // start 0 and at the top of the section; and several copy_tile per acquire, at start 0 and at the top.
+    for (const bool fp32_dest : {false, true}) {
+        for (const bool dst_full_sync_en : {true, false}) {
+            const uint32_t capacity = (fp32_dest ? 8u : 16u) / (dst_full_sync_en ? 1u : 2u);
+            const std::string mode =
+                std::string(fp32_dest ? "FP32" : "16b") + (dst_full_sync_en ? " SyncFull" : " SyncHalf");
+            for (const uint32_t dst : {1u, capacity - 1}) {
+                SCOPED_TRACE(mode + " copy_tile dst=" + std::to_string(dst));
+                run_quasar_unpack_to_dest_dest_index(this->device(), fp32_dest, 2, dst_full_sync_en, dst, 0, false);
+            }
+            for (const bool use_copy_tile : {false, true}) {
+                for (const uint32_t ntiles : {2u, 4u}) {
+                    for (const uint32_t start : std::set<uint32_t>{0u, capacity - ntiles}) {
+                        SCOPED_TRACE(
+                            mode + (use_copy_tile ? " copy_tile x" : " copy_block ") + std::to_string(ntiles) +
+                            " start=" + std::to_string(start));
+                        run_quasar_unpack_to_dest_dest_index(
+                            this->device(), fp32_dest, 2 * ntiles, dst_full_sync_en, start, ntiles, use_copy_tile);
+                    }
+                }
             }
         }
     }

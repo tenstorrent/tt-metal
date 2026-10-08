@@ -20,6 +20,7 @@
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
+#include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -82,8 +83,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
 
-        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, TRANSPOSE_EN, is_fp32_dest_acc_en>(
-            ckernel::trisc::bfd_current<unp_res>(), tensor_shape_A, TILE_CNT);
+        if constexpr (unpack_to_dest)
+        {
+            // Placer API under the dest-dvalid scheme set up above: the placers carry no synchronization, and the
+            // bank tile offset reset to 0 keeps every section at DEST tile 0, as the bare UNP_DEST MOP had it.
+            _llk_unpack_dest_init_();
+            _llk_unpack_unary_operand_to_dest_init_(ckernel::trisc::bfd_current<unp_res>());
+        }
+        else
+        {
+            _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, TRANSPOSE_EN, is_fp32_dest_acc_en>(
+                ckernel::trisc::bfd_current<unp_res>(), tensor_shape_A, TILE_CNT);
+        }
         PROFILER_SYNC();
     }
     {
@@ -112,10 +123,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, tensor_shape_A);
-                if constexpr (unpack_to_dest && (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION))
+                if constexpr (unpack_to_dest)
                 {
-                    _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                    // One section of TILE_CNT tiles at DEST tile 0, then the dest-dvalid hand-off to the packer.
+                    _llk_unpack_unary_operand_to_dest_block_(0 /*l1_tile_idx*/, 0 /*dst_tile_idx*/, TILE_CNT);
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+                    {
+                        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                    }
+                }
+                else
+                {
+                    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, tensor_shape_A);
                 }
             }
         }
