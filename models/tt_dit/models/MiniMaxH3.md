@@ -474,6 +474,11 @@ matmul throughput) rounds the weight to 5 significant bits while the activation 
 The knobs are named `FAST_H3_*` rather than `MINIMAX_H3_*` to keep the opt-in speed tier apart from the model's
 configuration knobs.
 
+Measured on a 4x8 at the HyperFlow working point (`MiniMaxH3_fp8.md`, section 8): `FAST_H3_FP8=1` takes about
+6 % off the denoise time at 5 s and 10 % at 15 s, where the longer rows make the linears byte-bound; the first
+forward's predicted velocity moves by 4–8 % relative L2 (a different sample of the same scene after the 8
+forwards), and `FAST_H3_FP8_BLOCKS=2-46` trims about a quarter of that error for a tenth of the gain.
+
 Programmatic use: `MiniMaxH3Pipeline.create_pipeline(..., quant_config=MiniMaxH3QuantConfig.preset("w8a8"))`, or
 `apply_quant_config(transformer, config)` on a built transformer or a single block (`models/tt_dit/models/transformers/minimax_h3/quant_config.py`).
 

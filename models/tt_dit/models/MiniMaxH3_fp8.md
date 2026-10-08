@@ -352,18 +352,132 @@ un-fused `to_out` is worth 0.7 points of first-forward error on the second promp
 accurate form per matmul. Frame by frame the LoFi clips are, like the HiFi2 ones, the same scene at the same quality
 with different details.
 
-### 8.7 Conclusion
+### 8.7 Clip length: 15 s (same prompt and seed; bucket rung 111 616 = 13 952 rows per device)
+
+The target is the step time at any clip length, so the shipped knob and the HiFi2 preset were re-measured on a 15 s
+clip, where every block linear sees 2.9x the rows of the 5 s run against the same weight bytes:
+
+| config | denoise 8 forwards | steady ms/forward | total clip | vs default | forward 0 velocity rel-L2 / SQNR | video PSNR | audio PSNR |
+|---|---|---|---|---|---|---|---|
+| default (bf16, HiFi2) | 36.54 s | 4543 | 39.09 s | – | – | – | – |
+| `w8a8` (HiFi2) | 33.85 s | 4200 | 36.38 s | −7.4 % | 4.41 % / 27.1 dB | 16.2 dB | 17.0 dB |
+| **`FAST_H3_FP8=1`** (`w8a8_lofi`, `to_out` un-fused) | **32.85 s** | **4078** | 35.37 s | **−10.1 %** | 7.57 % / 22.4 dB | 16.2 dB | 24.4 dB |
+
+The VAE (2.1 s) and audio (0.08 s) decodes are unchanged. The first-forward error is the same as at 5 s (it is the
+model's error and does not depend on the length), while the clip PSNR against the bf16 run is lower because a
+longer trajectory has more room to diverge; frames at 3 s and 12 s of the three clips show the same scene, subject
+and motion with differences in pose and texture detail, as at 5 s.
+
+Per matmul at this shape (teacher-forced on captured inputs of blocks 0, 25 and 49 at forwards 0 and 4, program
+cache cleared per config):
+
+| config | `to_qkv` | `to_out` | `ff1` | `ff2` | whole block |
+|---|---|---|---|---|---|
+| bf16 | 8.44 ms | 3.85 ms | 10.61 ms | 5.02 ms | 90.0 ms |
+| `w8` | 5.36 (0.64x) | 3.90 (1.01x) | 7.26 (0.69x) | 4.48 (0.89x) | 82.6 (0.92x) |
+| `w8a8` | 4.88 (0.58x) | 3.51 (0.91x) | 6.61 (0.62x) | 4.25 (0.85x) | 81.2 (0.90x) |
+| `w8a8_lofi`, fused `to_out` | 4.84 (0.57x) | 3.49 (0.90x) | 6.30 (0.59x) | 3.91 (0.78x) | 80.2 (0.89x) |
+| `w8a8_lofi`, un-fused `to_out` (= `FAST_H3_FP8=1`) | 4.86 (0.58x) | 2.78 (0.72x) | 6.29 (0.59x) | 3.85 (0.77x) | 79.6 (0.88x) |
+
+Unlike the 5 s shape, bytes matter here: weights-only `w8` already takes `to_qkv` to 0.64x and `ff1` to 0.69x, the
+activation cast takes another tenth, and LoFi adds only a few percent on `ff1` and `ff2`. The errors are the same as
+at 5 s (mean [worst] block-output rel-L2 over the six captures: `w8` 1.35 % [2.22], `w8a8` 1.63 % [2.66],
+`w8a8_lofi` un-fused 1.70 % [2.57]; the fused `to_out` at LoFi 3.05 % [5.07] with block 0 at 5 %), with block 25
+near 0.9 % and block 49 near 2.5 %.
+
+### 8.8 Per-op device time of one block (Tracy device profiler)
+
+Block 25 was run in isolation on its captured input (one warm iteration, then three timed ones between signposts),
+with the profiler's per-device op rows merged like tt-perf-report (mean for the collectives, max otherwise). In this
+tree the firmware spans of consecutive ops overlap: the dispatcher launches the next program's kernels while the
+previous one is still running and they wait at their start, so the raw span of, e.g., the concat-heads after the
+ring SDPA covers the whole SDPA (51.7 ms at 15 s). The tables below count each op only from the end of the previous
+op's span, i.e. what it adds to the device's critical path; the raw span sums are given for reference.
+
+5 s shape (4 864 rows per device), per block iteration:
+
+| op (calls per block) | bf16 | `w8a8` | `FAST_H3_FP8=1` | `w8a8` vs bf16 | `FAST_H3_FP8=1` vs bf16 |
+|---|---|---|---|---|---|
+| ring joint SDPA (1) | 8.03 ms | 8.03 | 8.02 | 1.00x | 1.00x |
+| all-gather matmuls `to_qkv`, `to_out`, `ff1` (3) | 4.72 | 4.37 | 3.22 | 0.93x | 0.68x |
+| matmul + reduce-scatter `ff2` (1) | 1.04 | 0.94 | 0.80 | 0.91x | 0.77x |
+| adaLN modulation gathers, `ttnn.embedding` (6) | 1.83 | 1.83 | 1.83 | 1.00x | 1.00x |
+| fused distributed RMSNorm (4) | 0.60 | 0.60 | 0.59 | 1.00x | 0.99x |
+| `adaln_proj` matmul (1) | 0.55 | 0.55 | 0.55 | 1.00x | 1.00x |
+| binary ops (4) | 0.23 | 0.23 | 0.23 | 1.00x | 1.01x |
+| typecasts (2) | 0.01 | 0.19 | 0.19 | – | – |
+| un-fused `to_out` addcmul (1) | – | – | 0.15 | – | – |
+| create / concat heads (2) | 0.20 | 0.20 | 0.19 | 0.96x | 0.95x |
+| untilize / tilize / slice / reshape / unary (28) | 0.12 | 0.11 | 0.11 | 0.98x | 0.98x |
+| **four block linears** | **5.76** | **5.31** | **4.02** | 0.92x | 0.70x |
+| **block, serialized device time** | **17.32** | **17.04** | **15.89** | 0.98x | 0.92x |
+| block, raw span sum | 31.72 | 31.30 | 28.86 | 0.99x | 0.91x |
+
+15 s shape (13 952 rows per device):
+
+| op (calls per block) | bf16 | `w8a8` | `FAST_H3_FP8=1` | `w8a8` vs bf16 | `FAST_H3_FP8=1` vs bf16 |
+|---|---|---|---|---|---|
+| ring joint SDPA (1) | 51.53 ms | 51.53 | 51.54 | 1.00x | 1.00x |
+| all-gather matmuls `to_qkv`, `to_out`, `ff1` (3) | 13.66 | 10.99 | 9.24 | 0.80x | 0.68x |
+| matmul + reduce-scatter `ff2` (1) | 2.60 | 2.42 | 1.92 | 0.93x | 0.74x |
+| adaLN modulation gathers, `ttnn.embedding` (6) | 5.11 | 4.87 | 5.12 | 0.95x | 1.00x |
+| fused distributed RMSNorm (4) | 1.52 | 1.53 | 1.50 | 1.00x | 0.99x |
+| `adaln_proj` matmul (1) | 0.55 | 0.55 | 0.55 | 1.00x | 1.00x |
+| binary ops (4) | 0.61 | 0.61 | 0.61 | 1.00x | 1.00x |
+| typecasts (2) | 0.01 | 0.50 | 0.51 | – | – |
+| un-fused `to_out` addcmul (1) | – | – | 0.37 | – | – |
+| create / concat heads (2) | 0.60 | 0.58 | 0.57 | 0.96x | 0.95x |
+| untilize / tilize / slice / reshape / unary (28) | 0.12 | 0.11 | 0.12 | 0.98x | 0.99x |
+| **four block linears** | **16.26** | **13.41** | **11.16** | 0.82x | 0.69x |
+| **block, serialized device time** | **76.31** | **73.69** | **72.04** | 0.97x | 0.94x |
+| block, raw span sum | 148.26 | 142.97 | 139.76 | 0.96x | 0.94x |
+
+Reading the tables: the four linears are 33 % of the block's device time at 5 s and 21 % at 15 s, the ring
+attention 46 % and 67 %. The 8-bit mode takes the linears to 0.70x at both shapes (1.7 ms and 5.1 ms per block)
+and pays 0.3 ms / 0.9 ms of it back in the two activation typecasts and the un-fused addcmul; nothing else in the
+block moves. At 5 s bytes alone (`w8a8` at HiFi2) are worth 0.45 ms per block and LoFi the rest; at 15 s bytes are
+worth 2.85 ms and LoFi 2.25 ms more. The serialized device time is not the wall-clock step (17.3 vs 18.7 ms per
+block at 5 s, 76 vs 91 ms at 15 s): the dispatch gaps and the cross-device waits around the collectives are outside
+it, and at 15 s they also shrink with the halved all-gather payloads, which is where the measured 10 % step saving
+exceeds the 6 % of this table.
+
+### 8.9 Sol-H3's block policy (blocks 2–46 only)
+
+NVlabs' Sol-H3 engine runs its MXFP8 compute on the attention and FFN linears of transformer blocks 2–46 and keeps
+blocks 0–1 and 47–49 in bf16 (section 5). `FAST_H3_FP8_BLOCKS=2-46` reproduces that policy on this path (the five
+boundary blocks keep bf16 weights and activations and HiFi2):
+
+| length | config | denoise | ms/forward | vs default | forward 0 velocity rel-L2 / SQNR | video / audio PSNR |
+|---|---|---|---|---|---|---|
+| 5 s | `FAST_H3_FP8=1` (all 50 blocks) | 7.15–7.26 s | 886–893 | −4.5 to −6.0 % | 7.85 % / 22.1 dB | 24.5 / 19.9 dB |
+| 5 s | `FAST_H3_FP8=1` + `FAST_H3_FP8_BLOCKS=2-46` | 7.23 s | 881 | −4.9 % | 6.06 % / 24.4 dB | 23.5 / 21.9 dB |
+| 15 s | `FAST_H3_FP8=1` (all 50 blocks) | 32.85 s | 4078 | −10.1 % | 7.57 % / 22.4 dB | 16.2 / 24.4 dB |
+| 15 s | `FAST_H3_FP8=1` + `FAST_H3_FP8_BLOCKS=2-46` | 33.12 s | 4111 | −9.4 % | 5.32 % / 25.5 dB | 16.4 / 22.9 dB |
+
+Keeping the five boundary blocks in bf16 removes about a quarter to a third of the first-forward error (7.9 → 6.1 %
+at 5 s, 7.6 → 5.3 % at 15 s) for about a tenth of the gain, in line with the per-block harness, where blocks 0 and
+49 carry the largest block-output errors (1.9 % and 2.6 % against 0.9 % at block 25 at 15 s). The clip PSNRs do not
+separate the two variants, as expected once the two trajectories have diverged into different samples. The policy is
+a documented option; `FAST_H3_FP8=1` keeps quantizing every block, since the gain is what the knob is for and the
+per-forward error is the budget to decide against.
+
+### 8.10 Conclusion
 
 `FAST_H3_FP8` stays opt-in and off by default; `1` selects `w8a8_lofi` with `to_out` un-fused, the fastest point
-measured. What the 8-bit mode buys and costs at the 5 s HyperFlow working point on a 4x8:
+measured; `FAST_H3_FP8_BLOCKS=2-46` adds Sol-H3's boundary-block policy for about a quarter less first-forward
+error at a tenth less gain. What the 8-bit mode buys and costs on a 4x8 at the HyperFlow working point:
 
-- **Speed:** about 6 % of the denoise time (933 → 886–905 ms per forward), all of it from LoFi on `to_qkv` and
-  `ff1` with block-float activations. Bytes alone (`w8`, `w8a8`) buy under 1 %: at 4 864 rows per device the
-  all-gather and reduce-scatter matmuls are not bound by operand bytes, `ff2` is bound by its reduce-scatter, and the
-  linears are only 44 % of a block to begin with.
-- **Error:** 4–8 % relative L2 (22–27 dB) on the first forward's predicted velocity, i.e. a different sample of the
-  same scene after 8 forwards (20–25 dB video PSNR against the bf16 clip). The HiFi2 presets halve the error for a
-  sub-1 % speed gain. Per matmul, weights round at 0.4–1 %, the activation cast costs most on `ff1` (channel
-  outliers), LoFi adds 0.1–0.3 % per matmul, and the fused addcmul epilogue must not run at LoFi.
-- **What to try next if more is wanted:** the attention (56 % of the block, out of scope here; #59522's recipes),
-  un-fusing `to_out`'s epilogue in the bf16 default as well (about 2 %), and smoothing `ff1`'s input before the cast.
+- **Speed:** about 6 % of the denoise time at 5 s (933 → 886–905 ms per forward) and 10 % at 15 s (4543 → 4078
+  ms), and the gain grows with the clip length: at 4 864 rows per device the linears are not byte-bound and LoFi
+  with block-float activations is the whole lever, while at 13 952 rows weights-only `bfloat8_b` already takes
+  `to_qkv` and `ff1` to 0.64–0.69x and the HiFi2 preset `w8a8` gets three quarters of the gain (−7.4 %) at half the
+  error. The lever is bounded by where the time goes: the four linears are 33 % of a block's device time at 5 s and
+  21 % at 15 s, the ring attention 46 % and 67 % (8.8), and 0.70x on the linears is the measured 6–10 %.
+- **Error:** 4–8 % relative L2 (22–27 dB) on the first forward's predicted velocity, independent of the clip length,
+  i.e. a different sample of the same scene after 8 forwards (24 dB video PSNR against the bf16 clip at 5 s, 16 dB at
+  15 s as the trajectories diverge further). Per matmul, weights round at 0.4–1 %, the activation cast costs most on
+  `ff1` (channel outliers), LoFi adds 0.1–0.3 % per matmul, and the fused addcmul epilogue must not run at LoFi.
+- **What to try next if more is wanted:** the attention (46–67 % of the block, out of scope here; #59522's
+  recipes), un-fusing `to_out`'s epilogue in the bf16 default as well (about 2 %), smoothing `ff1`'s input before
+  the cast, and, outside the matmuls, the six per-token adaLN modulation gathers (10 % of the block's device time at
+  5 s, 7 % at 15 s).
