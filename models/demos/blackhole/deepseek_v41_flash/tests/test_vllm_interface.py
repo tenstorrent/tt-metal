@@ -47,12 +47,12 @@ def expect_error():
 
 
 # ---- vllm_state ------------------------------------------------------------------------------------------------------------------------------
-@pytest.mark.parametrize("n,expect", [(1, 4), (4, 4), (5, 8), (16, 16), (126, 128), (128, 128)])
+@pytest.mark.parametrize("n,expect", [(1, 4), (4, 4), (5, 8), (16, 16), (60, 60), (61, 64), (64, 64)])
 def test_padded_batch(n, expect):
     assert VS.padded_batch(n) == expect
 
 
-@pytest.mark.parametrize("n", [0, 129, 256])
+@pytest.mark.parametrize("n", [0, 65, 128, 256])
 def test_padded_batch_rejects(n, expect_error):
     with expect_error(ValueError, ".*"):
         VS.padded_batch(n)

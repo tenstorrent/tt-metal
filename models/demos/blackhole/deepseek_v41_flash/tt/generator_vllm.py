@@ -61,7 +61,7 @@ def _interleave_on():
     v = os.environ.get("DSV41_VLLM_INTERLEAVE")
     if v is not None:
         return v == "1"
-    return not any(a.startswith("--speculative") for a in sys.argv)
+    return True  # (also with --speculative-config: the drafter is seeded lazily at the first verify round of a request, see ``_spec_seed_active``)
 
 
 def _resolve_weights_dir(hf_config):
@@ -199,7 +199,9 @@ class DeepseekV41ForCausalLM:
                     logger.info(f"DSV4.1 vLLM: spec decode bucket B'={VS.MESH_ROWS * Ub} compiled")
             logger.info(f"DSV4.1 vLLM: speculative decoding ON, {generator.spec_choice.describe()}")
         self = cls(generator, max_batch_size, max_seq_len)
-        if self.bucketing and os.environ.get("DSV41_VLLM_WARM", "1") == "1":
+        if (self.bucketing or (self.spec is not None and self.interleave)) and os.environ.get(
+            "DSV41_VLLM_WARM", "1"
+        ) == "1":
             self.warm_serving()
         return self
 
@@ -217,6 +219,26 @@ class DeepseekV41ForCausalLM:
         logger.info(f"DSV4.1 vLLM: warm-up (chunk {chunk}, S_pad {s_pad}, decode buckets U' {self.bucket_users})")
         t0 = time.perf_counter()
         self.m.warm_serving(chunk, s_pad, [u for u in self.bucket_users if u < self.U])
+        if self.spec is not None:
+            # every spec runner was compiled at load (before any trace exists): capture their traces NOW, after the prefill chunk trace and the decode traces, and never release them:
+            # no prefill / decode call allocates device memory afterwards, so nothing needs a recapture per request
+            import ttnn
+            from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import corruptible
+
+            for r_ in [self.spec] + list(self.spec_buckets.values()):
+                with corruptible(self.m.md):
+                    r_.snaps = r_.dec.snapshot_states()
+                    r_.capture_trace()
+                for (
+                    _,
+                    snap,
+                ) in (
+                    r_.snaps
+                ):  # (restore point of the capture only: do not keep a buffer allocated after the prefill trace was captured)
+                    if snap is not None:
+                        ttnn.deallocate(snap)
+                r_.snaps = None
+            logger.info(f"DSV4.1 vLLM: spec traces captured ({1 + len(self.spec_buckets)} runner(s))")
         self._warm = True
         logger.info(f"DSV4.1 vLLM: warm-up done in {time.perf_counter() - t0:.1f} s")
         if os.environ.get("DSV41_VLLM_BUCKET_BENCH", "0") == "1":
@@ -401,10 +423,6 @@ class DeepseekV41ForCausalLM:
         self.s_pad_policy = os.environ.get("DSV41_VLLM_S_PAD", "bucket")
         self.kv_cache = None
         self.spec = getattr(generator, "spec", None)  # fixed-k SpecRunner (speculative_config) or None (plain decode)
-        if self.spec is not None and self.interleave:
-            raise ValueError(
-                "speculative decoding (speculative_config) and DSV41_VLLM_INTERLEAVE=1 are not combined: the drafter seeding needs whole-prompt prefill hand-off states"
-            )
         self.spec_k = self.spec.k if self.spec is not None else 0
         self.spec_bucket_calls = {}
         self.spec_buckets = dict(
@@ -662,6 +680,8 @@ class DeepseekV41ForCausalLM:
         for i, p in enumerate(phys):
             self.book.set_prompt(p, toks[i, : ends[i]].reshape(-1))
             self.inprog.update(p, ends[i], toks[i])
+            if self.spec is not None:
+                self.spec_has[p] = False  # the drafter is seeded at the first verify round of this request
         self.timing["prefill"] = time.perf_counter() - t0
         self._calls["prefill"] += 1
         logger.info(f"DSV4.1 prefill (interleave) done in {self.timing['prefill']:.2f} s (model: {self.m.timing})")
@@ -895,6 +915,32 @@ class DeepseekV41ForCausalLM:
             f"DSV4.1 spec seeding of {len(act)} rows took {time.perf_counter() - t0:.2f} s (replayed first token != prefill first token on {bad} rows)"
         )
 
+    def _spec_seed_active(self, items):
+        """Interleaved prefill + speculative decode: seed the drafter at the FIRST verify round of a request. ``items`` [(model user, position of the fed token, the token fed now)] of every row of
+        the step: the prompt / history of each (``TokenBook``) is replayed through the captured verify trace (last 128 tokens, forced accepts: idempotent for the users that already decode, which
+        keeps their state; idle rows replay one dummy token), and the proposals of the replay are kept."""
+        B, K = self.B, self.spec.k
+        L = max(pos for _, pos, _ in items)
+        tokens = torch.zeros(B, max(L, 1), dtype=torch.long)
+        lens = torch.ones(B, dtype=torch.long)
+        first = torch.zeros(B, dtype=torch.long)
+        for p, pos, tok in items:
+            ctx = self.book.context(p)
+            assert int(ctx.numel()) == pos, f"user {p}: {int(ctx.numel())} tokens in the history, verify position {pos}"
+            tokens[p, :pos] = ctx
+            lens[p] = pos
+            first[p] = tok
+        t0 = time.perf_counter()
+        self.spec.seed(tokens, lens, first)
+        d = self.spec.d_final
+        act = torch.tensor([p for p, _, _ in items], dtype=torch.long)
+        self.spec_drafts[act] = d[act, :K].to(torch.int32)
+        self.spec_last[act] = first[act]
+        self.spec_has[act] = True
+        logger.info(
+            f"DSV4.1 spec seeding of {len(items)} rows (interleaved prefill) took {time.perf_counter() - t0:.2f} s"
+        )
+
     def _spec_verify(
         self, tokens, start_pos, num_valid_drafts=None, accepted_counts=None, spec_mode=None, slot_remap=None, **kwargs
     ):
@@ -936,6 +982,8 @@ class DeepseekV41ForCausalLM:
             base[r] = pos
             force[r] = -1.0 if nv > 0 else 0.0
             rows.append((i, p, pos, r))
+        if any(not bool(self.spec_has[p]) for _, p, _, _ in rows):
+            self._spec_seed_active([(p, pos, int(tokens[i, 0])) for i, p, pos, _ in rows])
         t0 = time.perf_counter()
         a, mm, d = runner._round(X, base, force)
         t1 = time.perf_counter()
