@@ -78,7 +78,16 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t bloc
     // tile y and z dims for both unpackers
     TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
 
-    TTI_SETDMAREG(0, 4 /* y_dim */, 0, LO_16(p_gpr_unpack::TMP0));
+    // y_dim = number of faces (4 for a 32x32 tile, 2 for a 16x32 tiny tile). The Z increment between block
+    // tiles strides y_dim faces, so hardcoding 4 makes a 16x32 operand read every other tile.
+    if (tensor_shape.num_faces_r_dim == 1)
+    {
+        TTI_SETDMAREG(0, 2 /* y_dim: 2 faces (16x32 tiny tile) */, 0, LO_16(p_gpr_unpack::TMP0));
+    }
+    else
+    {
+        TTI_SETDMAREG(0, 4 /* y_dim: 4 faces (32x32 tile) */, 0, LO_16(p_gpr_unpack::TMP0));
+    }
     TTI_SETDMAREG(0, 1 /* z_dim */, 0, HI_16(p_gpr_unpack::TMP0));
     TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
 
