@@ -26,15 +26,17 @@
 #include "api/tensor/page.h"
 #include "api/tensor/tensor_accessor.h"
 
+// The hardware path: Quasar DM cores with the ATT address backend. TT_TA_ADDRGEN_DISABLE (a per-kernel define) compiles
+// it out so every transfer address is software; it exists only to build the software baseline of the address-generator
+// microbenchmarks (TensorAccessorAddrgenPerf, TensorAccessorAddrgenShardedPerf) and is not set in production.
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM) && defined(NOC_ATT_ENABLED) && !defined(TT_TA_ADDRGEN_DISABLE)
 #define TT_TA_ADDRGEN_ACTIVE 1
 #endif
 
 // Push: on a sequence hit, the address generator writes the remote address straight into the command buffer the NoC API
-// issues on, instead of returning it (Noc::async_read / async_write, api/tensor/noc_traits.h). Off where software must
-// see every address: watcher NoC sanitizing and NoC event profiling. TT_TA_ADDRGEN_NO_PUSH turns it off.
-#if defined(TT_TA_ADDRGEN_ACTIVE) && !defined(TT_TA_ADDRGEN_NO_PUSH) && \
-    !(defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE)) && !defined(PROFILE_NOC_EVENTS)
+// issues on, instead of returning it (Noc::async_read / async_write, api/tensor/noc_traits.h). On wherever the hardware
+// path is; TT_TA_ADDRGEN_NO_PUSH turns it off (every hardware address is then popped back to the RISC-V).
+#if defined(TT_TA_ADDRGEN_ACTIVE) && !defined(TT_TA_ADDRGEN_NO_PUSH)
 #define TT_TA_ADDRGEN_PUSH 1
 #endif
 
