@@ -678,6 +678,9 @@ def case_faithful_destacc():
             .numpy()
             .astype(np.float32)
         )
+        # The harness golden is evaluated at the delivered pattern; the leg evaluates
+        # at what the SFPU receives, where every bf16 NaN is already a signed inf.
+        # Compare like with like here, and check the substitution itself below.
         mine_hp = np.asarray(spec.evaluate(xs), dtype=np.float64)
         mine = tg.format_golden_f32_acc(mine_hp)
         mb = mine.view(np.uint32).copy(); rb = ref.view(np.uint32).copy()
@@ -690,6 +693,30 @@ def case_faithful_destacc():
             mine[d], ref[d], np.isnan(mine_hp[d]), spec.atol, spec.rtol
         )
         check(f"faithful-destacc[{op}]", ok, f"{d.size}/65536 differ: " + parts)
+
+    # The unpack model: on the dest_acc=Yes 2-byte-input rows the accumulator must
+    # grade each NaN pattern against f(same-signed inf), and nothing else may move.
+    xu = tg.unpack_bf16_nan_to_inf(xs)
+    nan_in = np.isnan(xs)
+    sb = np.signbit(xs)
+    check(
+        "unpack-nan-to-signed-inf",
+        int(nan_in.sum()) == 254
+        and bool(np.all(np.isinf(xu[nan_in])))
+        and bool(np.all(np.signbit(xu[nan_in]) == sb[nan_in]))
+        and bool(np.array_equal(xu[~nan_in].view(np.uint32), xs[~nan_in].view(np.uint32))),
+        "254 NaN patterns -> same-signed inf, the other 65282 bit-identical",
+    )
+    for op in ("sigmoid-destacc", "softplus-destacc", "i0-destacc", "i1-destacc", "expm1cw-destacc"):
+        spec = tg.get_spec(op)
+        acc = tg.CorrectnessAccumulator(spec, in_bytes=2, out_bytes=4)
+        want = tg.format_golden_f32_acc(np.asarray(spec.evaluate(xu), dtype=np.float64))
+        acc.update(0, 65536, want.astype("<f4").tobytes())
+        check(
+            f"destacc-grades-at-unpacked-input[{op}]",
+            acc.n_out_of_tol == 0,
+            f"device == f(unpacked input) must grade 0/65536 out; got {acc.n_out_of_tol}",
+        )
 
     # The arithmetic behind SIGMOID_SUBNORMAL_NOTE, asserted rather than asserted-in-prose:
     # widening Dest cannot rescue the value, because fp32 and bf16 share a min NORMAL.

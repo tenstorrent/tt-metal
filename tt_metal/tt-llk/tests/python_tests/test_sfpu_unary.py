@@ -1973,6 +1973,30 @@ def test_causal_lift_fresh_cpp(mathop, fresh_cpp_impl):
 
 
 @pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+@pytest.mark.parametrize(
+    "dest_acc", [DestAccumulation.No, DestAccumulation.Yes], ids=["dest_acc:No", "dest_acc:Yes"]
+)
+@pytest.mark.parametrize("mathop", [MathOperation.Expm1Cw], ids=lambda m: m.name)
+def test_causal_lift_fresh_cpp_bf16_in(mathop, dest_acc, fresh_cpp_impl):
+    """The causal-lift A/B on a Float16_b input with a Float32 output, at both
+    Dest widths. A 2-byte input makes one 65536-pattern stream band the whole bf16
+    input space, so the stream sweep is exhaustive for each (impl, dest_acc)."""
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32),
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
 @pytest.mark.parametrize("edge_values", [False, True], ids=["functional", "edges"])
 def test_cast_fp32_to_fp16a_fresh_cpp(fresh_cpp_impl, edge_values):
     """A/B the fresh cast body against the production sfpi::convert kernel on

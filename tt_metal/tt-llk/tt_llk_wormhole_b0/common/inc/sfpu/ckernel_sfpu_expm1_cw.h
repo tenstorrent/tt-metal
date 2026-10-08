@@ -54,6 +54,16 @@ sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x)
     // Cody-Waite range reduction: x = k*ln(2) + r
     const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
     sfpi::vFloat tmp        = x * CW_INV_LN2 + c231;
+    if constexpr (FULL_RANGE)
+    {
+        // Cap k at 127. For x in (127.5*ln2, 88.5] round-nearest picks k = 128,
+        // 2^k is not a finite fp32, setexp writes the inf/NaN exponent field and
+        // (2^k - 1) + 2^k*h is inf - inf = NaN at x = 88.5. With k = 127 there,
+        // r reaches 0.4703, past the [-ln2/2, ln2/2] fit; the fits' error at that
+        // r is 2.3e-7 (fp32 arm) / 4.1e-6 (bf16 arm) relative -- under half a bf16
+        // ulp, and every x with k <= 127 is untouched. One min, no branch.
+        tmp = sfpi::min(tmp, Converter::as_float(0x4B40007FU)); // c231 + 127
+    }
     sfpi::vFloat k_f        = tmp - c231;
     sfpi::vFloat r          = k_f * CW_NEG_LN2_HI + x;
     r                       = r + k_f * CW_NEG_LN2_LO;
@@ -71,19 +81,6 @@ sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x)
     constexpr int kC231Bias = 0x4B3FFF81;
     sfpi::vFloat two_k      = sfpi::setexp(1.0f, sfpi::as<sfpi::vInt>(tmp) - kC231Bias);
     sfpi::vFloat result     = (two_k - 1.0f) + two_k * h;
-    if constexpr (FULL_RANGE)
-    {
-        // k = 128 for x in (88.376, 88.5]: setexp writes the inf/NaN exponent field,
-        // two_k = +inf, and (inf - 1) + inf*h with h < 0 is inf - inf = NaN at
-        // x = 88.5 where expm1 = 2.72e38 is finite. Rebuild from 2^(k-1) and double;
-        // the doubling is exact because nothing here is near the subnormal range.
-        v_if (k_f >= 128.0f)
-        {
-            sfpi::vFloat half_k = sfpi::setexp(1.0f, sfpi::as<sfpi::vInt>(tmp) - (kC231Bias + 1));
-            result              = ((half_k - 0.5f) + half_k * h) * 2.0f;
-        }
-        v_endif;
-    }
     v_if (x_in > CW_EXPM1_MAX)
     {
         result = Converter::as_float(0x7F800000U); // +inf
@@ -91,17 +88,12 @@ sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x)
     v_endif;
     if constexpr (FULL_RANGE)
     {
-        // NaN in, NaN out. max() above sends a negative NaN to -87 (=> -1.0) and
-        // min() a positive one to 88.5 (=> +inf); classify by the exponent and
-        // fraction bits, since an FP compare with NaN is not reliable here.
-        const sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(x_raw);
-        v_if ((bits & 0x7F800000u) == 0x7F800000u)
+        // NaN in, NaN out (max/min above send a NaN to -87 or 88.5). Clear the sign
+        // with an integer AND -- SFPABS leaves a NaN's sign alone -- and one integer
+        // compare: |bits| > 0x7F800000 holds for exactly the NaN patterns.
+        v_if ((sfpi::as<sfpi::vInt>(x_raw) & 0x7FFFFFFF) > 0x7F800000)
         {
-            v_if ((bits & 0x007FFFFFu) != 0u)
-            {
-                result = x_raw;
-            }
-            v_endif;
+            result = x_raw;
         }
         v_endif;
     }

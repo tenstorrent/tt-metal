@@ -315,6 +315,22 @@ SDPA_EXP_SCALE = 1.0
 BF16_TINY = 2.0**-126  # FTZ threshold for Float16_b / Float32 (finfo.tiny)
 
 
+def unpack_bf16_nan_to_inf(x: np.ndarray) -> np.ndarray:
+    """A bf16 NaN as the SFPU receives it on a Float16_b input with dest_acc=Yes.
+
+    Measured on Blackhole (evidence ulp-nan-unpack-expm1-fresh-20261008), every
+    one of the 254 bf16 NaN patterns arrives as the SAME-SIGNED infinity, payload
+    discarded, BEFORE the SFPU runs: Identity returns +-inf for all 127 payloads of
+    each sign, and expm1 with an explicit NaN pass-through returns -1.0 = expm1(-inf)
+    for every negative NaN. The fp32 packer is not the cause -- on an fp32 input at
+    dest_acc=Yes the same kernel returns the NaN payload intact. At dest_acc=No a
+    bf16 NaN does reach the SFPU (expm1 returns NaN -> the packer's signed inf), so
+    this applies to the dest_acc=Yes 2-byte-input rows only.
+    """
+    xf = np.asarray(x, dtype=np.float32)
+    return np.where(np.isnan(xf), np.copysign(np.float32(np.inf), xf), xf).astype(np.float32)
+
+
 def input_ftz(x: np.ndarray) -> np.ndarray:
     """The operand the SFPU actually computes on: subnormals flushed to a signed zero.
 
@@ -1880,7 +1896,11 @@ class CorrectnessAccumulator:
         # CLASSIFICATION is about what was delivered); `xop` is what the datapath
         # computes on. See input_ftz for the per-op silicon evidence.
         xop = xin if self.spec.op in INPUT_FTZ_EXEMPT else input_ftz(xin)
-        hp = self.spec.evaluate(xin)  # fp64 true math at the operand the SFPU sees
+        # A 2-byte input into a 32-bit Dest reaches the SFPU with every NaN already a
+        # signed inf (unpack_bf16_nan_to_inf). `xin` keeps the delivered pattern for
+        # the input classes; the math is evaluated at what the SFPU received.
+        xev = unpack_bf16_nan_to_inf(xin) if (self.spec.dst_acc and self.in_bytes == 2) else xin
+        hp = self.spec.evaluate(xev)  # fp64 true math at the operand the SFPU sees
         fmt = format_golden_f32_acc if self.spec.dst_acc else format_golden_f32_noacc
         golden = fmt(hp)  # fp32-container reference
         if self.out_bytes == 2:

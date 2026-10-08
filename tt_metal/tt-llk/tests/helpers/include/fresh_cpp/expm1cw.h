@@ -8,6 +8,7 @@
 // depends on fresh_round_nearest, which stays in
 // fresh_cpp_operations.h (shared with the legacy remainder-family bodies).
 #include <cstdint>
+#include <limits>
 
 namespace ckernel::sfpu
 {
@@ -22,13 +23,22 @@ __attribute__((noinline)) void calculate_expm1_cw_fresh_cpp()
     constexpr float INV_LN2    = 1.4426950408889634f;
     constexpr float LN2_HI_NEG = -0.6931152343750000f;
     constexpr float LN2_LO_NEG = -3.19461832987e-05f;
+    // Largest x whose expm1 is a finite fp32 (exp(88.7229) = FLT_MAX); above it
+    // the value is +inf, stated rather than computed (the reduction has no upper
+    // bound and setexp's 8-bit field wraps instead of saturating).
+    constexpr float EXPM1_MAX  = 88.5f;
     for (int d = 0; d < ITERATIONS; ++d)
     {
-        sfpi::vFloat x = sfpi::dst_reg[0];
-        x              = sfpi::max(x, -87.0f);
+        const sfpi::vFloat x_raw = sfpi::dst_reg[0];
+        sfpi::vFloat x           = sfpi::max(x_raw, -87.0f);
+        x                        = sfpi::min(x, EXPM1_MAX);
 
         sfpi::vInt k_int;
-        const sfpi::vFloat k = fresh_round_nearest(x * INV_LN2, k_int);
+        // Cap k at 127: round-nearest gives k = 128 on (127.5*ln2, 88.5], where 2^k
+        // is not a finite fp32 (inf - inf = NaN at 88.5). There r reaches 0.4703,
+        // past the fit range; the fits' error is 2.3e-7 / 4.1e-6 relative, under
+        // half a bf16 ulp. One min, no branch; k <= 127 lanes are untouched.
+        const sfpi::vFloat k = fresh_round_nearest(sfpi::min(x * INV_LN2, 127.0f), k_int);
         sfpi::vFloat r       = k * LN2_HI_NEG + x;
         r                    = r + k * LN2_LO_NEG;
 
@@ -50,7 +60,21 @@ __attribute__((noinline)) void calculate_expm1_cw_fresh_cpp()
         h = r * h;
 
         const sfpi::vFloat two_k = sfpi::setexp(sfpi::vFloat(1.0f), k_int + 127);
-        sfpi::dst_reg[0]         = (two_k - 1.0f) + two_k * h;
+        sfpi::vFloat result      = (two_k - 1.0f) + two_k * h;
+        v_if (x_raw > EXPM1_MAX)
+        {
+            result = std::numeric_limits<float>::infinity();
+        }
+        v_endif;
+        // NaN in, NaN out (max/min above send a NaN to -87 or 88.5). Clear the sign
+        // with an integer AND -- SFPABS leaves a NaN's sign alone -- and one integer
+        // compare: |bits| > 0x7F800000 holds for exactly the NaN patterns.
+        v_if ((sfpi::as<sfpi::vInt>(x_raw) & 0x7FFFFFFF) > 0x7F800000)
+        {
+            result = x_raw;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
