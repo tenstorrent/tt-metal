@@ -2,7 +2,7 @@
 # (0.75 reads per multiply), both POWER_CASE=0 on the same board and shape. Produces
 # matmul/regular and matmul/regular_b2x4.
 name: paper_fig2_blocked
-workload: high_power_matmul
+workload: long_matmul
 app_args: [1024, 2048, 2048, 160]
 telemetry_freq_hz: 50
 trim_ms: 1.0

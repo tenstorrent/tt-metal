@@ -3,7 +3,7 @@
 # 4 and 5 each idle exactly one engine against it. The paper's published Fig. 1 used case 0 as
 # the writer stand-in before case 5 existed; add 0 to power_cases to reproduce that variant.
 name: paper_fig1_stage_breakdown
-workload: high_power_matmul
+workload: long_matmul
 app_args: [1024, 2048, 2048, 160]
 telemetry_freq_hz: 50
 trim_ms: 1.0

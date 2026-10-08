@@ -12,20 +12,20 @@ command:
 
     python3 run_sweep.py --config sweeps/paper_fig1_stage_breakdown.yaml \\
         --telemetry-exe $TT_METAL_HOME/build_Release/tools/umd/telemetry \\
-        --app-exe $TT_METAL_HOME/build_Release/programming_examples/metal_example_high_power_matmul \\
+        --app-exe $TT_METAL_HOME/build_Release/programming_examples/metal_example_long_matmul \\
         --tt-venv-activate ~/venv/bin/activate --tt-metal-root $TT_METAL_HOME \\
         --output-root ./out_fig1
 
 Config keys:
 
     name:              free text, recorded in PROVENANCE.md
-    workload:          high_power_matmul | ttnn_ops
-    app_args:          positional args for the workload (M N K iters [fixed_tiles_per_core] for
-                       high_power_matmul; the ttnn_ops_workload.py flags for ttnn_ops)
+    workload:          long_matmul | ttnn_ops
+    app_args:          positional args for the workload (M N K iters [fixed_blocks_per_core] for
+                       long_matmul; the ttnn_ops_workload.py flags for ttnn_ops)
     telemetry_freq_hz: sampling rate, default 50
     trim_ms, slot_ms:  passed to parser.py, defaults 1.0 and 1
     aiclk_mhz:         optional; pin AICLK to this after every reset (Blackhole, via aiclk/set_aiclk.py)
-    runs:              high_power_matmul: {power_cases: [..], ops: [..], blocks: [[M, N], ..]} --
+    runs:              long_matmul: {power_cases: [..], ops: [..], blocks: [[M, N], ..]} --
                        one run per combination, into <op>/<case>[_b<M>x<N>]
                        ttnn_ops: {subdir: <name>} -- one run
     analyses:          list of step names, or {name: {options}}; see ANALYSES below
@@ -61,7 +61,7 @@ from analysis import power_cases as pc  # noqa: E402
 RESET_COOLDOWN_S = 10
 AICLK_SETTLE_S = 5
 
-WORKLOADS = ("high_power_matmul", "ttnn_ops")
+WORKLOADS = ("long_matmul", "ttnn_ops")
 
 
 @dataclass
@@ -112,7 +112,7 @@ def load_sweep(path: Path) -> Sweep:
     if not isinstance(raw, dict):
         raise SystemExit(f"{path}: top level must be a mapping")
 
-    workload = raw.get("workload", "high_power_matmul")
+    workload = raw.get("workload", "long_matmul")
     if workload not in WORKLOADS:
         raise SystemExit(f"{path}: workload must be one of {WORKLOADS}, got {workload!r}")
 
@@ -122,7 +122,7 @@ def load_sweep(path: Path) -> Sweep:
     ops: List[str] = []
     cases: List[Tuple[str, str]] = []
 
-    if workload == "high_power_matmul":
+    if workload == "long_matmul":
         power_cases = [int(c) for c in runs_cfg.get("power_cases", [0])]
         for c in power_cases:
             if c not in pc.POWER_CASE_SPECS:
@@ -141,10 +141,10 @@ def load_sweep(path: Path) -> Sweep:
                 case_name, _label = pc.POWER_CASE_SPECS[c]
                 for bm, bn in blocks:
                     suffix = "" if (bm, bn) == (1, 1) else f"_b{bm}x{bn}"
-                    env = {"POWER_CASE": str(c), "HIGH_POWER_OP": op}
+                    env = {"POWER_CASE": str(c), "LONG_MATMUL_OP": op}
                     if (bm, bn) != (1, 1):
-                        env["HIGH_POWER_BLOCK_M"] = str(bm)
-                        env["HIGH_POWER_BLOCK_N"] = str(bn)
+                        env["LONG_MATMUL_BLOCK_M"] = str(bm)
+                        env["LONG_MATMUL_BLOCK_N"] = str(bn)
                     runs.append(
                         RunSpec(
                             subdir=f"{op}/{case_name}{suffix}",
@@ -246,10 +246,10 @@ def pin_aiclk(mhz: int, activate: Path, log: Log, dry_run: bool) -> int:
 
 
 def auto_py_command(args: argparse.Namespace, sweep: Sweep, spec: RunSpec, output_root: Path) -> List[str]:
-    if sweep.workload == "high_power_matmul":
+    if sweep.workload == "long_matmul":
         app_exe = args.app_exe
         if app_exe is None:
-            raise SystemExit("--app-exe is required for the high_power_matmul workload")
+            raise SystemExit("--app-exe is required for the long_matmul workload")
     else:
         app_exe = args.app_exe or (HERE / "op_power_breakdown" / "ttnn_ops_workload.py")
 
@@ -625,7 +625,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--app-exe",
         type=Path,
         default=None,
-        help="Workload executable. Required for high_power_matmul; defaults to op_power_breakdown/ttnn_ops_workload.py for ttnn_ops.",
+        help="Workload executable. Required for long_matmul; defaults to op_power_breakdown/ttnn_ops_workload.py for ttnn_ops.",
     )
     ap.add_argument("--parser-script", type=Path, default=HERE / "parser.py")
     ap.add_argument(

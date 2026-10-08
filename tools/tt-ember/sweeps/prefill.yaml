@@ -2,7 +2,7 @@
 # config per shape keeps the <op>/<case> layout; run this file three times with a different
 # --output-root, or edit app_args. Kept for parity with the earlier Wormhole runs.
 name: prefill_1024_2048_2048_160
-workload: high_power_matmul
+workload: long_matmul
 app_args: [1024, 2048, 2048, 160]
 telemetry_freq_hz: 50
 trim_ms: 1.0
