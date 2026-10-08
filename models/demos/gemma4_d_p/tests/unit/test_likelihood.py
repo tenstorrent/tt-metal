@@ -11,6 +11,7 @@ from models.demos.gemma4_d_p.tt.runners import likelihood
 from models.demos.gemma4_d_p.tt.runners.likelihood import (
     HiddenSampler,
     Samples,
+    check_limits,
     load_samples,
     sample_positions,
     save_samples,
@@ -102,8 +103,14 @@ def test_gpu_trace_samples_follow_the_prepared_copy(tmp_path, expect_error):
     samples = load_samples(prepared, positions=[1, 5, 6, 11])
     assert torch.equal(samples.hidden, hidden[[1, 5, 6, 11]])
     assert samples.next_tokens.tolist() == [2, 6, 7, -1]
-    with expect_error(ValueError, "covers 12 positions"):
+    with expect_error(ValueError, "no rows for 1 requested positions, from 12"):
         load_samples(prepared, positions=[12])
+    # A gap in the stream must fail rather than score uninitialized rows.
+    (source / "index.json").write_text(
+        json.dumps({"tensor_streams": {"decoder_output_layer_1": dict(stream, chunks=streams[1:])}})
+    )
+    with expect_error(ValueError, "no rows for 2 requested positions, from 1"):
+        load_samples(prepared, positions=[1, 5, 6, 11])
 
     save_samples(tmp_path / "run.safetensors", samples.positions, samples.hidden, samples.next_tokens)
     assert torch.equal(load_samples(tmp_path / "run.safetensors").hidden, samples.hidden)
@@ -119,3 +126,20 @@ def test_compare_scores_positions_both_runs_hold(tmp_path, monkeypatch):
     # Stride positions 0, 16, 32, 48 plus a's last chunk 56..63, all of which b also holds.
     assert report["all"]["positions"] == 4 + 8 and report["last_position"]["position"] == 63
     assert report["all"]["delta_nll"] == 0
+
+
+def test_limits_fail_a_bin_without_gold_tokens(monkeypatch):
+    monkeypatch.setattr(likelihood, "DEPTH_BINS", ((0, 8), (8, 64)))
+    head = LinearHead(hidden=16, vocab=32)
+    positions = torch.tensor(sample_positions(context_len=32, chunk_size=8, stride=4))
+    gold = torch.where(positions < 8, -1, positions % 32)
+    hidden = torch.randn(len(positions), 16).bfloat16()
+    report = summarize(score_positions(head, Samples(positions, hidden, gold), Samples(positions, hidden, gold)))
+    assert report["bins"][0]["delta_nll"] is None
+
+    # Rows are top-1, ΔNLL and KL for the first bin, then the same for the second.
+    rows = [
+        (achieved, passed) for _, _, achieved, passed in check_limits(report, {0: (0.9, 0.1, 0.1), 8: (0.9, 0.1, 0.1)})
+    ]
+    assert rows[:3] == [(1.0, True), (None, False), (0.0, True)]
+    assert rows[3:] == [(1.0, True), (0.0, True), (0.0, True)]

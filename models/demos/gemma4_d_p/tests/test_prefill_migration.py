@@ -27,7 +27,13 @@ from models.demos.gemma4_d_p.tt.runners.kv_validation import (
     compare_slot_cache,
     read_cache_tensor,
 )
-from models.demos.gemma4_d_p.tt.runners.likelihood import HIDDEN_SAMPLES, HiddenSampler, compare, format_report
+from models.demos.gemma4_d_p.tt.runners.likelihood import (
+    HIDDEN_SAMPLES,
+    HiddenSampler,
+    check_limits,
+    compare,
+    format_report,
+)
 from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime
 
 MIN_PER_HEAD_PCC = 0.928
@@ -190,23 +196,19 @@ def test_prefill_migration(migration_environment, context_len):
         f"\nNext-token likelihood vs GPU reference ({time.perf_counter() - started:.0f} s)\n{format_report(likelihood)}",
         flush=True,
     )
-    likelihood_criteria = []
-    for entry in likelihood["bins"]:
-        min_top1, max_delta_nll, max_kl = LIKELIHOOD_LIMITS[entry["start"]]
-        depth = f"{entry['start'] // 1024}-{entry['end'] // 1024}K"
-        likelihood_criteria += [
-            (f"Top-1 {depth}", f">= {min_top1:.6f}", entry["top1_agreement"], entry["top1_agreement"] >= min_top1),
-            (f"ΔNLL {depth}", f"<= {max_delta_nll:.6f}", entry["delta_nll"], entry["delta_nll"] <= max_delta_nll),
-            (f"Top-20 KL {depth}", f"<= {max_kl:.6f}", entry["topk_kl"], entry["topk_kl"] <= max_kl),
-        ]
+    likelihood_criteria = check_limits(likelihood, LIKELIHOOD_LIMITS)
     criteria += tuple(likelihood_criteria)
+
+    def value(achieved):
+        return "n/a" if achieved is None else f"{achieved:.6f}"
+
     print("\nAccuracy criteria")
     print("┌──────────────────────┬─────────────┬──────────┬────────┐")
     print("│ Criterion            │ Required    │ Achieved │ Result │")
     print("├──────────────────────┼─────────────┼──────────┼────────┤")
     for name, required, achieved, passed in criteria:
         status = "PASS" if passed else "FAIL"
-        print(f"│ {name:<20} │ {required:<11} │ {achieved:>8.6f} │ {status:<6} │")
+        print(f"│ {name:<20} │ {required:<11} │ {value(achieved):>8} │ {status:<6} │")
     print("└──────────────────────┴─────────────┴──────────┴────────┘", flush=True)
     failures = []
     if not per_head_pcc_passed:
@@ -221,7 +223,7 @@ def test_prefill_migration(migration_environment, context_len):
             f"Overall RRMSE failed: actual={overall['relative_rmse']:.6f}, required < {MAX_OVERALL_RRMSE:.6f}"
         )
     failures += [
-        f"{name} failed: actual={achieved:.6f}, required {required}"
+        f"{name} failed: actual={value(achieved)}, required {required}"
         for name, required, achieved, passed in likelihood_criteria
         if not passed
     ]
@@ -260,10 +262,13 @@ def run_migration_case(gate, context_len, output_dir):
     sampler = HiddenSampler(context_len, Gemma4ServiceConfig.CHUNK_SIZE, metadata["token_ids"])
     original_prefill_chunk = Gemma4PrefillRuntime.prefill_chunk
 
-    def sampled_prefill_chunk(runtime, *args, **kwargs):
-        original_prefill_chunk(runtime, *args, **kwargs)
-        if kwargs["slot_id"] == 0:
-            sampler.add_chunk(runtime.output, kwargs["actual_start"], kwargs["actual_end"])
+    def sampled_prefill_chunk(runtime, *args, slot_id, actual_start, actual_end, **kwargs):
+        # Mirrors prefill_chunk's keyword-only arguments, so a signature change fails here with a TypeError.
+        original_prefill_chunk(
+            runtime, *args, slot_id=slot_id, actual_start=actual_start, actual_end=actual_end, **kwargs
+        )
+        if slot_id == 0:
+            sampler.add_chunk(runtime.output, actual_start, actual_end)
 
     def checked_loop(runtime, kv_cache, *args, **kwargs):
         with (output_dir / "producer.log").open("w") as log:

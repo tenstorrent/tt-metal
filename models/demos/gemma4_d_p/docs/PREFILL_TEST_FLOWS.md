@@ -180,7 +180,7 @@ Compare any two runs, for example build A against build B or one chunk size agai
 python -m models.demos.gemma4_d_p.tt.runners.likelihood RUN_A_DIR RUN_B_DIR
 ```
 
-Either argument may be a GPU trace directory instead of a run. A CPU fp32 reference over the capture's first tokens gives short-context ground truth. It takes about 30 minutes for 32K tokens on a 64-core host and needs about 130 GB of RAM:
+The first argument, the reference, may instead be a GPU trace directory. The second must be a run, because its saved positions decide which ones are scored. A CPU fp32 reference over the capture's first tokens gives short-context ground truth. It takes about 30 minutes for 32K tokens on a 64-core host and needs about 130 GB of RAM:
 
 ```bash
 python -m models.demos.gemma4_d_p.tt.runners.prepare_cpu_reference /path/to/cpu_fp32_32k --context-len 32768
