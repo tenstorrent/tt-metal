@@ -740,6 +740,8 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         operation_attributes.a_shard_volume = shard_volumes->a_shard_volume;
         operation_attributes.b_shard_volume = shard_volumes->b_shard_volume;
         operation_attributes.c_shard_volume = shard_volumes->c_shard_volume;
+        operation_attributes.operand_pass_sections =
+            ttnn::operations::binary_ng::operand_pass_sections(operation_attributes, tensor_args, output_spec);
     } else {
         // Accessor regime: the output is reached through the writer's TensorAccessor, so its shape in
         // pages must enter the key -- attributes.memory_config carries the shard spec but not the shape.
@@ -851,6 +853,8 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
             operation_attributes.a_shard_volume = shard_volumes->a_shard_volume;
             operation_attributes.b_shard_volume = shard_volumes->b_shard_volume;
             operation_attributes.c_shard_volume = shard_volumes->c_shard_volume;
+            operation_attributes.operand_pass_sections =
+                ttnn::operations::binary_ng::operand_pass_sections(operation_attributes, tensor_args, output_spec);
         } else {
             // Accessor regime: see the tensor-tensor overload above.
             operation_attributes.c_tensor_shape_in_pages =

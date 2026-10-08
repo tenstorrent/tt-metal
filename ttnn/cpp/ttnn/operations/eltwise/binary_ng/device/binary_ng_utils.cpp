@@ -5,6 +5,8 @@
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/hal.hpp>
+#include "ttnn/operations/core/program_cache_l1.hpp"
+#include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 
 #include <fmt/core.h>
@@ -882,6 +884,85 @@ NativeBlockBroadcast native_block_broadcast(
 // the check is based on user facing information, input tensors and output memory config
 // more info may be checked in other places, such as actual output is uneven or not
 // this function is called in both earlier and later stages of the program execution
+
+uint32_t operand_pass_sections(
+    const BinaryNgDeviceOperation::operation_attributes_t& attributes,
+    const BinaryNgDeviceOperation::tensor_args_t& tensor_args,
+    const tt::tt_metal::TensorSpec& c) {
+    using tt::DataFormat;
+    using tt::tt_metal::DataType;
+    const auto& a = tensor_args.input_tensor_a;
+    const auto& b = tensor_args.input_tensor_b;
+    const auto op_type = attributes.binary_op_type;
+    const bool multi_tile = !b.has_value() || (attributes.subtile_broadcast_type == SubtileBroadcastType::NONE &&
+                                               attributes.b_shard_volume.has_value());
+    if (tt::tt_metal::hal::get_arch() != tt::ARCH::BLACKHOLE || attributes.is_sfpu || attributes.is_where_op ||
+        !multi_tile || !attributes.a_shard_volume.has_value() || !attributes.c_shard_volume.has_value()) {
+        return 0;
+    }
+    const DataType a_dtype = a.dtype();
+    const OpConfig op_config(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype, attributes.op_params);
+    const auto& post = attributes.post_activations;
+    const auto first_post = op_config.postprocess.has_value() ? std::optional{op_config.postprocess->type()}
+                            : post.empty()                    ? std::nullopt
+                                                              : std::optional{post.front().type()};
+    if (!std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) ||
+        first_post == unary::UnaryOpType::ZERO_POINT) {
+        return 0;
+    }
+    // The activations on c_0 and c_1, as the program factory places them.
+    const bool scalar_first = attributes.scalar_is_lhs;
+    const bool rhs_act = !(scalar_first ? attributes.lhs_activations : attributes.rhs_activations).empty() ||
+                         (scalar_first ? op_config.process_lhs : op_config.process_rhs).has_value();
+    const bool lhs_act = !(scalar_first ? attributes.rhs_activations : attributes.lhs_activations).empty() ||
+                         (scalar_first ? op_config.process_rhs : op_config.process_lhs).has_value() ||
+                         (rhs_act && op_type == BinaryOpType::LDEXP &&
+                          (a_dtype == DataType::BFLOAT8_B || a_dtype == DataType::BFLOAT4_B));
+    if (!lhs_act && !rhs_act) {
+        return 0;
+    }
+    const auto a_format = tt::tt_metal::cb_dataformat_for(a_dtype);
+    const auto b_format =
+        tt::tt_metal::datatype_to_dataformat_converter(b.has_value() ? b->dtype() : DataType::BFLOAT16);
+    const auto c_format = tt::tt_metal::datatype_to_dataformat_converter(c.data_type());
+    const bool fp32_dest = c_format == DataFormat::UInt32 || c_format == DataFormat::Int32 ||
+                           c_format == DataFormat::Float32 || a_format == DataFormat::Float32 ||
+                           b_format == DataFormat::Float32 ||
+                           (a_format == DataFormat::Int32 && b_format == DataFormat::Int32) ||
+                           (a_format == DataFormat::UInt32 && b_format == DataFormat::UInt32);
+    const uint32_t section_tiles = fp32_dest ? 4 : 8;
+    const uint32_t c_shard_tiles = *attributes.c_shard_volume;
+    const uint32_t shard_sections = tt::div_up(c_shard_tiles, section_tiles);
+    const bool both = lhs_act && rhs_act;
+    const bool one_section_pass = b.has_value() && (c_shard_tiles < section_tiles || both);
+    if (c_shard_tiles == 0 || (shard_sections < 2 && !one_section_pass)) {
+        return 0;
+    }
+    uint32_t sections = std::min(shard_sections, (both || !b.has_value()) ? 8u : 4u);
+    if (sections > 1) {
+        // The intermediate CBs hold the sections; the Python scalar's CB is the only other one outside a tensor.
+        const bool has_exp =
+            op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
+        const uint64_t section_bytes =
+            section_tiles * ((lhs_act ? tt::tile_size(has_exp ? DataFormat::Float16_b : a_format) : 0) +
+                             (rhs_act ? tt::tile_size(has_exp ? DataFormat::Float16_b : b_format) : 0));
+        const uint64_t fixed_bytes = b.has_value() ? 0 : tt::tile_size(b_format);
+        uint64_t available = ttnn::operations::core::available_program_l1_capacity(a.device());
+        if (!tensor_args.output_tensor.has_value() && c.memory_config().buffer_type() == tt::tt_metal::BufferType::L1) {
+            const uint64_t c_bytes = tt::round_up(
+                static_cast<uint64_t>(c_shard_tiles) * tt::tile_size(tt::tt_metal::cb_dataformat_for(c.data_type())),
+                tt::tt_metal::hal::get_l1_alignment());
+            available = available > c_bytes ? available - c_bytes : 0;
+        }
+        const uint64_t usable = available * ttnn::operations::core::kProgramL1UsagePercent / 100;
+        while (sections > 1 && fixed_bytes + section_bytes * sections > usable) {
+            --sections;
+        }
+        sections = sections > 1 ? sections : 0;
+    }
+    return sections;
+}
+
 bool is_native_L1_sharding(
     const tt::tt_metal::TensorSpec& a,
     const std::optional<tt::tt_metal::TensorSpec>& b,
