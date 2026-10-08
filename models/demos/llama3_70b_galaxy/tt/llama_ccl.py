@@ -21,6 +21,10 @@ USE_LINE_AG = {
     # "LAYERNORM",
 }
 
+# Prefill seqlens with preallocated CCL buffers (TT_CCL.support_seqlens); the generator traces these
+# and takes the largest as the end of power-of-2 prefill padding (generator.MAX_TRACED_PREFILL_LEN).
+PREFILL_SUPPORT_SEQLENS = (4096, 2048, 1024, 128)
+
 
 class TT_CCL:
     @staticmethod
@@ -195,7 +199,7 @@ class TT_CCL:
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
-            self.support_seqlens = [4096, 2048, 1024, 128]
+            self.support_seqlens = list(PREFILL_SUPPORT_SEQLENS)
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
