@@ -638,6 +638,20 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     if (options) {
         problem.extra_l1_bytes += recipe_dense_options_extra_bytes(*options);
     }
+    if (key_range && key_range->q_slab_rows) {
+        // Ring-distributed SDPA: two Q slabs, each of whole Q chunks.
+        problem.q_rows = 2 * key_range->q_slab_rows;
+        std::optional<RecipeBlocking> choice;
+        if (!invalid_fixed(config)) {
+            for (const auto& candidate : recipe_blocking_candidates(problem)) {
+                if (key_range->q_slab_rows % candidate.q_chunk_size == 0) {
+                    choice = candidate;
+                    break;
+                }
+            }
+        }
+        return apply_choice(config, choice, problem, "ring-distributed");
+    }
     const auto choice = invalid_fixed(config) ? std::nullopt : choose_recipe_blocking(problem);
     return apply_choice(config, choice, problem, joint_q ? "joint" : "dense");
 }

@@ -1146,6 +1146,11 @@ void bind_sdpa(nb::module_& mod) {
             page_table (ttnn.Tensor, optional): Page table tensor for paged KV cache access [b x num_pages]. Defaults to `None`.
             chunk_start_idx (int, optional): Absolute position in the sequence where this chunk starts (for prefix caching).
                 Must be a multiple of program_config.q_chunk_size. Defaults to `None`.
+            precision (ttnn.SDPAPrecision, optional): Named numerical recipe, as for scaled_dot_product_attention:
+                FAST, STANDARD, BALANCED or ACCURATE. Omit for the legacy kernel. The recipe owns the numerics:
+                compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored. Q chunk sizes
+                must divide the per-device slab (s / (2 * ring_size)); with program_config chunk sizes of 0 the op
+                chooses them. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
@@ -1168,6 +1173,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("page_table") = nb::none(),
-        nb::arg("chunk_start_idx") = nb::none());
+        nb::arg("chunk_start_idx") = nb::none(),
+        nb::arg("precision") = nb::none());
 }
 }  // namespace ttnn::operations::transformer

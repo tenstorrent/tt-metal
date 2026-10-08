@@ -10,6 +10,7 @@
 #include <set>
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 #include <tt-metalium/experimental/kernel_build_options.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -332,6 +333,10 @@ constexpr uint8_t kRecipeKeyRangeCb = 17;
 constexpr uint8_t kRecipeMaskedTileCb = 18;
 constexpr uint8_t kRecipeKeyScratchCb = 19;
 constexpr uint32_t kRecipeKeyRangePage = 32;
+// Ring-distributed Q slabs (RecipeKeyRange::q_slab_rows): the reader's and writer's runtime args holding the two
+// slabs' first Q chunks.
+constexpr uint32_t kRecipeReaderSlabArg = 16;
+constexpr uint32_t kRecipeWriterSlabArg = 6;
 // Generated mixed mask tiles the writer reuses (causal diagonal, window edges), after the all-masked template.
 constexpr uint32_t kRecipeMaskCacheTiles = 4;
 // Key-range masks are BFP4 tiles: {0, -2^100} is exact there (dataflow/recipe_key_range.hpp).
@@ -406,6 +411,21 @@ void validate_key_range(const Tensor& q, const RecipeKeyRange& key_range) {
             shape.rank() == 1 && shape[0] >= 2 && shape[0] <= 1024,
             "cu_window_seqlens must be 1-D with 2 to 1024 entries, got {}",
             shape);
+    }
+    if (key_range.q_slab_rows) {
+        TT_FATAL(key_range.causal, "SDPA recipe Q slabs (ring-distributed SDPA) are causal");
+        TT_FATAL(!key_range.q_slab_starts.empty(), "SDPA recipe Q slabs need their start rows");
+        for (const auto& [devices, starts] : key_range.q_slab_starts) {
+            for (const uint32_t start : starts) {
+                TT_FATAL(
+                    start % 32 == 0 && start + key_range.q_slab_rows <= q.logical_shape()[2],
+                    "SDPA recipe Q slab [{}, {} + {}) must be tile-aligned and inside Q's {} rows",
+                    start,
+                    start,
+                    key_range.q_slab_rows,
+                    q.logical_shape()[2]);
+            }
+        }
     }
     if (key_range.page_table) {
         const auto& table = *key_range.page_table;
@@ -568,6 +588,10 @@ static std::vector<Tensor> run_recipe_segments(
         TT_FATAL(!attn_mask, "SDPA recipes take either an attn_mask or a causal / window / chunked key range");
         validate_key_range(q, key_range);
     }
+    if (key_range.q_slab_rows) {
+        // Ring-distributed SDPA computes two slabs of Q's rows (RecipeKeyRange::q_slab_rows).
+        q_length = 2 * key_range.q_slab_rows;
+    }
     const uint32_t joint_q_rows = segments.size() == 2 ? segments[1][0].logical_shape()[2] : 0;
     const uint32_t joint_k_rows = segments.size() == 2 ? segments[1][1].logical_shape()[2] : 0;
     const auto hardware = q.device()->compute_with_storage_grid_size();
@@ -582,6 +606,13 @@ static std::vector<Tensor> run_recipe_segments(
     TT_FATAL(qs[3] % 32 == 0 && qs[3] > 0, "SDPA recipes support tile-aligned head dims, got {}", qs[3]);
     const uint32_t d_tiles = qs[3] / 32;
     const uint32_t vd_tiles = head_dim_v / 32;
+    TT_FATAL(
+        key_range.q_slab_rows % q_chunk == 0,
+        "SDPA recipe Q slabs of {} rows must hold whole Q chunks of {} rows",
+        key_range.q_slab_rows,
+        q_chunk);
+    // Reader runtime args 16-17 hold the slabs (kRecipeReaderSlabArg), where a keyed call's sink address would go.
+    TT_FATAL(!key_range.q_slab_rows || !options.attention_sink, "SDPA recipe Q slabs do not take an attention sink");
     if (program_config) {
         TT_FATAL(!program_config->sub_core_grids.has_value(), "SDPA recipes do not yet support sub_core_grids");
         TT_FATAL(program_config->max_cores_per_head_batch > 0, "SDPA max_cores_per_head_batch must be positive");
@@ -617,6 +648,9 @@ static std::vector<Tensor> run_recipe_segments(
     for (const auto& segment : segments) {
         auto shape = segment[0].logical_shape();
         shape[3] = head_dim_v;
+        if (key_range.q_slab_rows) {
+            shape[2] = 2 * key_range.q_slab_rows;
+        }
         if (options.output_concat_heads) {
             shape = ttnn::Shape({shape[0], 1, shape[2], shape[1] * shape[3]});
         }
@@ -774,6 +808,11 @@ static std::vector<Tensor> run_recipe_segments(
             kernel->defines.emplace_back("SDPA_RECIPE_SCRATCH_CB", std::to_string(kRecipeKeyScratchCb));
         }
         writer.defines.emplace_back("SDPA_RECIPE_Q_JOBS", std::to_string(jobs_per_head));
+        if (key_range.q_slab_rows) {
+            for (auto* kernel : {&reader, &writer}) {
+                kernel->defines.emplace_back("SDPA_RECIPE_Q_SLAB_JOBS", std::to_string(key_range.q_slab_rows / q_chunk));
+            }
+        }
         writer.defines.emplace_back("SDPA_RECIPE_K_ROWS", std::to_string(k_rows));
         writer.defines.emplace_back("SDPA_RECIPE_K_CHUNKS", std::to_string(k_chunks));
         writer.defines.emplace_back("SDPA_K_CHUNK_TILES", std::to_string(k_tiles));
@@ -879,6 +918,11 @@ static std::vector<Tensor> run_recipe_segments(
                     key_range.q_offset,
                     key_range.q_offset_tensor ? key_range.q_offset_tensor->buffer()->address() : 0,
                     key_range.segments ? key_range.segments->buffer()->address() : 0});
+            if (key_range.q_slab_rows) {
+                // Reader args 16-17, writer args 6-7: the slabs' first Q chunks, set per device below.
+                reader.runtime_args.back().second.resize(kRecipeReaderSlabArg + 2);
+                writer.runtime_args.back().second.resize(kRecipeWriterSlabArg + 2);
+            }
             compute.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{z_count});
             continue;
         }
@@ -933,7 +977,30 @@ static std::vector<Tensor> run_recipe_segments(
         ttsl::hash::hash_combine(hash, key_range.q_offset);
         program.custom_program_hash = hash;
     }
-    ttnn::generic_op(io, program);
+    if (!key_range.q_slab_rows) {
+        ttnn::generic_op(io, program);
+        return outputs;
+    }
+    // Ring-distributed SDPA: one program per range of devices, differing only in the Q slabs' first chunks (runtime
+    // args, so folded into the program hash like the Q offset).
+    tt::tt_metal::experimental::MeshProgramDescriptor mesh_program;
+    for (const auto& [devices, starts] : key_range.q_slab_starts) {
+        auto device_program = program;
+        for (auto& [core, args] : device_program.kernels[0].runtime_args) {
+            args[kRecipeReaderSlabArg] = starts[0] / q_chunk;
+            args[kRecipeReaderSlabArg + 1] = starts[1] / q_chunk;
+        }
+        for (auto& [core, args] : device_program.kernels[1].runtime_args) {
+            args[kRecipeWriterSlabArg] = starts[0] / q_chunk;
+            args[kRecipeWriterSlabArg + 1] = starts[1] / q_chunk;
+        }
+        auto hash = *program.custom_program_hash;
+        ttsl::hash::hash_combine(hash, starts[0]);
+        ttsl::hash::hash_combine(hash, starts[1]);
+        device_program.custom_program_hash = hash;
+        mesh_program.mesh_programs.emplace_back(devices, std::move(device_program));
+    }
+    ttnn::generic_op(io, mesh_program);
     return outputs;
 }
 

@@ -20,7 +20,8 @@
 // masks (as legacy SDPA's writer generates windowed masks), so mask work never stalls the K/V stream.
 //
 // Compile-time switches (host: run_recipe_segments): SDPA_RECIPE_CAUSAL, SDPA_RECIPE_WINDOW (sliding window
-// tokens, 0 = none), SDPA_RECIPE_SEGMENTS (cu_window_seqlens entries, windowed mode).
+// tokens, 0 = none), SDPA_RECIPE_SEGMENTS (cu_window_seqlens entries, windowed mode), SDPA_RECIPE_Q_SLAB_JOBS
+// (ring-distributed Q slabs).
 
 #include <cstdint>
 
@@ -54,6 +55,17 @@ constexpr uint32_t kRecipeMaskedNibbles = 0xCCCCCCCC;
 FORCE_INLINE uint32_t recipe_zigzag_job(uint32_t z, uint32_t jobs_per_head) {
     return z % 2 == 0 ? z / 2 : jobs_per_head - 1 - z / 2;
 }
+
+#ifdef SDPA_RECIPE_Q_SLAB_JOBS
+// Ring-distributed SDPA (host: RecipeKeyRange::q_slab_rows): a head's Q chunks are two slabs of
+// SDPA_RECIPE_Q_SLAB_JOBS whole chunks of the sequence, starting at its chunks first[0] and first[1].
+struct RecipeQSlabs {
+    uint32_t first[2];
+    FORCE_INLINE uint32_t chunk(uint32_t job) const {
+        return job < SDPA_RECIPE_Q_SLAB_JOBS ? first[0] + job : first[1] + job - SDPA_RECIPE_Q_SLAB_JOBS;
+    }
+};
+#endif
 
 struct RecipeChunkRange {
     uint32_t first, end;            // K chunks to process
