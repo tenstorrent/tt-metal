@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <limits>
+
 namespace ckernel::sfpu
 {
 
@@ -51,6 +53,17 @@ namespace ckernel::sfpu
 // equal-or-better-than-hand accuracy bar on [-8, 8] is unaffected below the
 // knee and improved above it.
 //
+// NaN (2026-10-08): that min does not propagate NaN. SFPSWAP orders by
+// sign-magnitude encoding, so a positive NaN sorts above +inf and
+// min(NaN, 0.5) is 0.5; the sign of a NaN out of SFPMAD is unspecified, so
+// this caught NaN inputs of both signs: +NaN came out as 1.0 (the full-2^32
+// sweep's one newly divergent band, [0x7f800000, 0x80000000)) and -NaN as
+// 0.0, where the golden is NaN and the hand kernel propagates it. A test on
+// x's encoding after the bound passes every NaN input through unchanged.
+// +/-inf are not NaN and keep the bound's 1.0 / 0.0, which is sigmoid at
+// +/-inf; the hand kernel's ramp returns +inf for both. Any min/max form of
+// the bound swallows one NaN sign or the other, hence the encoding test.
+//
 // (The previous licensed arm — a 4-region poly-leaf tree, laneGI — was
 // accuracy-passing but MEASURED WORSE than the exact body (+570.60 vs
 // +289.78): predicated poly trees lose without LUT formation.  This
@@ -88,8 +101,16 @@ __attribute__((noinline)) void calculate_sigmoid_lut_licensed_cpp()
         }
         v_endif;
         // sigmoid(|x|) - 0.5 is bounded above by 0.5 (see the header note).
-        s                = sfpi::min(s, 0.5f);
-        sfpi::dst_reg[0] = sfpi::copysgn(s, x) + 0.5f;
+        s              = sfpi::min(s, 0.5f);
+        sfpi::vFloat r = sfpi::copysgn(s, x) + 0.5f;
+        // The bound must not swallow a NaN (see the NaN note above).
+        const sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
+        v_if (sfpi::as<sfpi::vInt>(sfpi::setsgn(x, 0)) > sfpi::as<sfpi::vInt>(infinity))
+        {
+            r = x;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
     }
 }
