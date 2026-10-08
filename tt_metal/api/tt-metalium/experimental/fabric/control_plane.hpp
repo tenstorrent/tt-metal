@@ -380,19 +380,19 @@ public:
 
     // Non-null only when a factory descriptor was ingested. Prefer the forwarders below for the common
     // queries; this is for callers that need the full query surface.
-    const LinkHealth* get_link_health() const;
+    const experimental::LinkHealth* get_link_health() const;
 
     // Whether fabric routed around a factory-expected cable that is not there. Distinct from
     // has_factory_descriptor(): a descriptor whose cables are all present does not reroute.
     bool fsd_rerouting_active() const;
 
     bool is_link_healthy(FabricNodeId fabric_node_id, chan_id_t chan) const;
-    const std::vector<LinkInfo>& get_downed_links() const;
-    const std::vector<LinkInfo>& get_unused_downed_links() const;
+    const std::vector<experimental::LinkInfo>& get_downed_links() const;
+    const std::vector<experimental::LinkInfo>& get_unused_downed_links() const;
 
     // The downed links on this host that the cluster also reports ethernet-down for. A record here is one
     // this rank confirmed with the hardware rather than only inferred from the descriptors.
-    const std::vector<LinkInfo>& get_locally_unhealthy_links() const;
+    const std::vector<experimental::LinkInfo>& get_locally_unhealthy_links() const;
 
     // Recompute the comparison against the current live descriptor. No-op without a factory descriptor.
     // Invalidates every reference handed out by the accessors above.
@@ -473,10 +473,15 @@ private:
     std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
     std::unique_ptr<MeshGraph> mesh_graph_;
+    // The live view re-discovered by refresh_connectivity_diff(). Held as a member because
+    // link_health_ keeps a pointer to it between refreshes; physical_system_descriptor_ cannot be
+    // replaced instead, since the topology mapper still references it.
+    std::unique_ptr<tt_metal::PhysicalSystemDescriptor> refreshed_live_descriptor_;
+
     // Declared after everything it points into -- both descriptors and the mapper -- so it is destroyed
     // first. Null when no factory descriptor is configured.
-    std::unique_ptr<LinkHealth> link_health_;
-    std::vector<LinkInfo> locally_unhealthy_;
+    std::unique_ptr<experimental::LinkHealth> link_health_;
+    std::vector<experimental::LinkInfo> locally_unhealthy_;
 
     std::map<FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
 

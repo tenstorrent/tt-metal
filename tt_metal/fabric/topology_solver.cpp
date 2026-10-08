@@ -4,6 +4,7 @@
 
 #include <unordered_set>
 
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/physical_node_id.hpp>
@@ -121,14 +122,14 @@ std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(con
     return adjacency_map;
 }
 
-std::map<MeshId, AdjacencyGraph<tt::tt_metal::PhysicalNodeId>> build_adjacency_graph_physical(
+std::map<MeshId, AdjacencyGraph<tt::tt_metal::experimental::PhysicalNodeId>> build_adjacency_graph_physical(
     tt::tt_metal::ClusterType /*cluster_type*/,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank) {
-    std::map<MeshId, AdjacencyGraph<tt::tt_metal::PhysicalNodeId>> adjacency_map;
+    const std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank) {
+    std::map<MeshId, AdjacencyGraph<tt::tt_metal::experimental::PhysicalNodeId>> adjacency_map;
 
     // Build a set of nodes for each mesh based on mesh rank mapping
-    std::map<MeshId, std::unordered_set<tt::tt_metal::PhysicalNodeId>> mesh_nodes;
+    std::map<MeshId, std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>> mesh_nodes;
     for (const auto& [mesh_id, node_map] : physical_node_id_to_mesh_rank) {
         for (const auto& [node_id, _] : node_map) {
             mesh_nodes[mesh_id].insert(node_id);
@@ -136,15 +137,19 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::PhysicalNodeId>> build_adjacency_g
     }
 
     for (const auto& [mesh_id, mesh_node_ids] : mesh_nodes) {
-        auto get_local_adjacents = [&](const tt::tt_metal::PhysicalNodeId& node_id,
-                                       const std::unordered_set<tt::tt_metal::PhysicalNodeId>& mesh_node_ids) {
-            std::vector<tt::tt_metal::PhysicalNodeId> adjacents;
+        auto get_local_adjacents = [&](const tt::tt_metal::experimental::PhysicalNodeId& node_id,
+                                       const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& mesh_node_ids) {
+            std::vector<tt::tt_metal::experimental::PhysicalNodeId> adjacents;
 
             const auto asic_id_opt = physical_system_descriptor.find_asic_id(node_id);
-            if (!asic_id_opt.has_value()) {
-                // The rank map named an address the descriptor does not describe; it has no edges.
-                return adjacents;
-            }
+            // Reject rather than tolerate: an unknown address would still enter the graph as an
+            // isolated node, and a 1x1 mesh can seat on an isolated node -- a mapping onto hardware
+            // the descriptor does not contain.
+            TT_FATAL(
+                asic_id_opt.has_value(),
+                "Mesh {} rank bindings name ASIC address {}, which the physical system descriptor does not describe.",
+                mesh_id,
+                node_id);
             const tt::tt_metal::AsicID asic_id = *asic_id_opt;
 
             for (const auto& neighbor : physical_system_descriptor.get_asic_neighbors(asic_id)) {
@@ -163,11 +168,11 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::PhysicalNodeId>> build_adjacency_g
             return adjacents;
         };
 
-        AdjacencyGraph<tt::tt_metal::PhysicalNodeId>::AdjacencyMap physical_adjacency_map;
+        AdjacencyGraph<tt::tt_metal::experimental::PhysicalNodeId>::AdjacencyMap physical_adjacency_map;
         for (const auto& node_id : mesh_node_ids) {
             physical_adjacency_map[node_id] = get_local_adjacents(node_id, mesh_node_ids);
         }
-        adjacency_map[mesh_id] = AdjacencyGraph<tt::tt_metal::PhysicalNodeId>(physical_adjacency_map);
+        adjacency_map[mesh_id] = AdjacencyGraph<tt::tt_metal::experimental::PhysicalNodeId>(physical_adjacency_map);
     }
 
     return adjacency_map;

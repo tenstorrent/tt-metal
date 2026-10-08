@@ -50,9 +50,9 @@ void fill_hosts_from_psd(TopologyMappingConfig& config, const tt::tt_metal::Phys
     }
 }
 
-std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> unset_asic_ranks(
+std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>> unset_asic_ranks(
     const tt::tt_metal::PhysicalSystemDescriptor& psd, MeshId mesh = MeshId{0}) {
-    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> ranks;
+    std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>> ranks;
     for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
         ranks[mesh][desc.physical_node_id] = ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
     }
@@ -77,8 +77,8 @@ std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_ranks_for_host_g
 void verify_each_rank_on_one_host(
     const TopologyMappingResult& result,
     const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank,
-    const std::map<std::string, std::set<tt::tt_metal::PhysicalNodeId>>& hostname_to_asics) {
-    std::map<tt::tt_metal::PhysicalNodeId, std::string> asic_to_host;
+    const std::map<std::string, std::set<tt::tt_metal::experimental::PhysicalNodeId>>& hostname_to_asics) {
+    std::map<tt::tt_metal::experimental::PhysicalNodeId, std::string> asic_to_host;
     for (const auto& [hostname, asics] : hostname_to_asics) {
         for (const auto& asic : asics) {
             asic_to_host[asic] = hostname;
@@ -406,7 +406,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_Sp4Glx_Blitz2x4) {
     EXPECT_EQ(mapping_result.fabric_node_to_physical.size(), chip_count(mesh_graph));
     std::set<std::string> hosts;
     for (const auto& [_, asic_id] : mapping_result.fabric_node_to_physical) {
-        hosts.insert(std::string(tt::tt_metal::cluster_id_view(asic_id)));
+        hosts.insert(std::string(tt::tt_metal::experimental::cluster_id_view(asic_id)));
     }
     EXPECT_GE(hosts.size(), 1u);
     EXPECT_LE(hosts.size(), 4u);
@@ -430,7 +430,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_Sp4Glx_Blitz2x4_11Stage) 
     EXPECT_EQ(mapping_result.fabric_node_to_physical.size(), chip_count(mesh_graph));
     std::set<std::string> hosts;
     for (const auto& [_, asic_id] : mapping_result.fabric_node_to_physical) {
-        hosts.insert(std::string(tt::tt_metal::cluster_id_view(asic_id)));
+        hosts.insert(std::string(tt::tt_metal::experimental::cluster_id_view(asic_id)));
     }
     EXPECT_GE(hosts.size(), 1u);
     EXPECT_LE(hosts.size(), 5u);
@@ -454,7 +454,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_Sp4Glx_Blitz2x4_32Stage) 
     EXPECT_EQ(mapping_result.fabric_node_to_physical.size(), chip_count(mesh_graph));
     std::set<std::string> hosts;
     for (const auto& [_, asic_id] : mapping_result.fabric_node_to_physical) {
-        hosts.insert(std::string(tt::tt_metal::cluster_id_view(asic_id)));
+        hosts.insert(std::string(tt::tt_metal::experimental::cluster_id_view(asic_id)));
     }
     EXPECT_EQ(hosts.size(), 8u);
 }

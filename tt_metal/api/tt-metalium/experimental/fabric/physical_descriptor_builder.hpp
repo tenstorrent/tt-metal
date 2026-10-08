@@ -65,7 +65,7 @@ struct FilterReport {
 // eth_connections to match (connections touching a filtered-out host are dropped). Useful for carving a single
 // pod out of a superpod/datacenter FSD before building. Empty hostnames returns the FSD unchanged.
 //
-// Names are matched through `tt::tt_metal::canonical_cluster_id_for_node_id` on both sides, because the requested
+// Names are matched through `tt::tt_metal::experimental::canonical_cluster_id_for_node_id` on both sides, because the requested
 // names come from a live descriptor whose host keys may be FQDNs while the descriptor's author wrote short
 // names, or the reverse. Matching raw strings silently retains nothing in that case. This is the same
 // canonicalization the mapper keys addresses on, which it has to be: the filter and the address join must

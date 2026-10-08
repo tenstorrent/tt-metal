@@ -34,7 +34,7 @@ using namespace tt::tt_fabric;
 
 // Flatten a hierarchical PGD grouping, then enumerate the first embedding the same way SAT column
 // generation and the matcher PSD gate do.
-static std::vector<MappingResult<LogicalChipId, tt::tt_metal::PhysicalNodeId>> enumerate_grouping_on_psd(
+static std::vector<MappingResult<LogicalChipId, tt::tt_metal::experimental::PhysicalNodeId>> enumerate_grouping_on_psd(
     const PhysicalGroupingDescriptor& pgd,
     const GroupingInfo& grouping,
     const tt::tt_metal::PhysicalSystemDescriptor& psd) {
@@ -2610,10 +2610,10 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Dual8x2) {
     EXPECT_EQ(tray_ref_count, 2u) << "Should reference exactly 2 trays";
 }
 
-static size_t count_distinct_hosts_for_asics(const std::unordered_set<tt::tt_metal::PhysicalNodeId>& asics) {
+static size_t count_distinct_hosts_for_asics(const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics) {
     std::set<std::string> hosts;
     for (const auto& asic : asics) {
-        hosts.insert(std::string(tt::tt_metal::cluster_id_view(asic)));
+        hosts.insert(std::string(tt::tt_metal::experimental::cluster_id_view(asic)));
     }
     return hosts.size();
 }
@@ -3586,9 +3586,9 @@ std::vector<std::set<std::pair<uint32_t, uint32_t>>> host_slots(const std::vecto
     return slots;
 }
 
-std::map<std::pair<uint32_t, uint32_t>, tt::tt_metal::PhysicalNodeId> asic_by_slot(
+std::map<std::pair<uint32_t, uint32_t>, tt::tt_metal::experimental::PhysicalNodeId> asic_by_slot(
     const tt::tt_metal::PhysicalSystemDescriptor& psd) {
-    std::map<std::pair<uint32_t, uint32_t>, tt::tt_metal::PhysicalNodeId> asic_at_slot;
+    std::map<std::pair<uint32_t, uint32_t>, tt::tt_metal::experimental::PhysicalNodeId> asic_at_slot;
     for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
         asic_at_slot.emplace(std::pair{*descriptor.tray_id, *descriptor.asic_location}, descriptor.physical_node_id);
     }
@@ -3648,7 +3648,7 @@ void expect_ranks_survive_placement(
         for (LogicalChipId chip : ranks[rank]) {
             const auto& position = placements.front().placement.mesh_node_to_asic_position.at(chip);
             hosts.insert(
-                std::string(tt::tt_metal::cluster_id_view(asic_at_slot.at({*position.first, *position.second}))));
+                std::string(tt::tt_metal::experimental::cluster_id_view(asic_at_slot.at({*position.first, *position.second}))));
         }
         EXPECT_EQ(hosts.size(), 1u) << "placement seated declared rank " << rank << " across " << hosts.size()
                                     << " hosts";
@@ -3659,7 +3659,7 @@ void expect_ranks_survive_placement(
         std::set<std::string> hosts;
         for (LogicalChipId chip : ranks[rank]) {
             hosts.insert(std::string(
-                tt::tt_metal::cluster_id_view(mapping.fabric_node_to_physical.at(FabricNodeId(MeshId{0}, chip)))));
+                tt::tt_metal::experimental::cluster_id_view(mapping.fabric_node_to_physical.at(FabricNodeId(MeshId{0}, chip)))));
         }
         EXPECT_EQ(hosts.size(), 1u) << "the mapper put declared rank " << rank << " on " << hosts.size() << " hosts";
     }
@@ -4240,7 +4240,7 @@ TEST(PhysicalGroupingDescriptorTestsSatJointPlacement, StrainManyMeshesPlacesInO
         EXPECT_TRUE(stats.master_solve_success) << label << "\n" << stats.to_string();
         EXPECT_GE(stats.master_candidates_enumerated, expected_meshes) << label << "\n" << stats.to_string();
         EXPECT_FALSE(stats.candidate_lists_complete) << label << "\n" << stats.to_string();
-        std::set<tt::tt_metal::PhysicalNodeId> seen;
+        std::set<tt::tt_metal::experimental::PhysicalNodeId> seen;
         for (const auto& placed : placements) {
             EXPECT_EQ(placed.placement.asics.size(), mesh_rows * mesh_cols) << label;
             for (const auto& asic : placed.placement.asics) {
@@ -4372,7 +4372,7 @@ TEST(PhysicalGroupingDescriptorTestsHostSplit, AlignedSplitOnASymmetricTorusComm
     expect_ranks_survive_placement(psd, pgd, mgd, ranks);
 
     const auto asic_at_slot = asic_by_slot(psd);
-    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank;
+    std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank;
     for (const auto& [chip, position] : phase1.front().mesh_node_to_asic_position) {
         physical_node_id_to_mesh_rank[MeshId{0}][asic_at_slot.at({*position.first, *position.second})] =
             MeshHostRankId{phase1.front().mesh_node_to_host_group.at(chip)};

@@ -249,7 +249,7 @@ TopologyMappingParts run_topology_mapping(
 std::vector<RankBindingConfig> extract_rank_bindings(
     const PhysicalSystemDescriptor& psd, const TopologyMappingResult& mapping_result, const MeshGraph& mesh_graph) {
     struct AsicGrouping {
-        std::vector<tt::tt_metal::PhysicalNodeId> physical_node_ids;
+        std::vector<tt::tt_metal::experimental::PhysicalNodeId> physical_node_ids;
         std::vector<tt::ChipId> chip_ids;
         std::optional<MeshHostRankId> mesh_host_rank;
     };

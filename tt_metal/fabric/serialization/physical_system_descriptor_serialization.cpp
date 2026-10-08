@@ -284,7 +284,7 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
             proto_asic_desc.has_umd_unique_id() ? proto_asic_desc.umd_unique_id() : static_cast<ChipId>(-1);
         asic_desc.host_name = proto_asic_desc.host_name();
         asic_desc.physical_node_id =
-            make_physical_node_id(asic_desc.host_name, asic_desc.tray_id, asic_desc.asic_location);
+            experimental::make_physical_node_id(asic_desc.host_name, asic_desc.tray_id, asic_desc.asic_location);
 
         descriptor->add_asic_descriptor(asic_id, std::move(asic_desc));
     }

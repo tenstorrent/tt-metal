@@ -486,7 +486,7 @@ std::string PhysicalSystemDescriptor::get_host_name_for_asic(AsicID asic_id) con
 void PhysicalSystemDescriptor::add_asic_descriptor(AsicID asic_id, ASICDescriptor descriptor) {
     if (is_unset(descriptor.physical_node_id)) {
         descriptor.physical_node_id =
-            make_physical_node_id(descriptor.host_name, descriptor.tray_id, descriptor.asic_location);
+            experimental::make_physical_node_id(descriptor.host_name, descriptor.tray_id, descriptor.asic_location);
     }
     if (const auto existing = asic_descriptors_.find(asic_id); existing != asic_descriptors_.end()) {
         node_id_to_asic_id_.erase(existing->second.physical_node_id);
@@ -502,7 +502,7 @@ void PhysicalSystemDescriptor::add_asic_descriptor(AsicID asic_id, ASICDescripto
     asic_descriptors_[asic_id] = std::move(descriptor);
 }
 
-std::optional<AsicID> PhysicalSystemDescriptor::find_asic_id(const PhysicalNodeId& node_id) const {
+std::optional<AsicID> PhysicalSystemDescriptor::find_asic_id(const experimental::PhysicalNodeId& node_id) const {
     const auto it = node_id_to_asic_id_.find(node_id);
     if (it == node_id_to_asic_id_.end()) {
         return std::nullopt;
@@ -510,13 +510,13 @@ std::optional<AsicID> PhysicalSystemDescriptor::find_asic_id(const PhysicalNodeI
     return it->second;
 }
 
-AsicID PhysicalSystemDescriptor::get_asic_id(const PhysicalNodeId& node_id) const {
+AsicID PhysicalSystemDescriptor::get_asic_id(const experimental::PhysicalNodeId& node_id) const {
     const auto asic_id = find_asic_id(node_id);
     TT_FATAL(asic_id.has_value(), "No ASIC at address {}", node_id);
     return *asic_id;
 }
 
-std::optional<PhysicalNodeId> PhysicalSystemDescriptor::find_physical_node_id(AsicID asic_id) const {
+std::optional<experimental::PhysicalNodeId> PhysicalSystemDescriptor::find_physical_node_id(AsicID asic_id) const {
     const auto it = asic_descriptors_.find(asic_id);
     if (it == asic_descriptors_.end() || is_unset(it->second.physical_node_id)) {
         return std::nullopt;
@@ -524,7 +524,7 @@ std::optional<PhysicalNodeId> PhysicalSystemDescriptor::find_physical_node_id(As
     return it->second.physical_node_id;
 }
 
-PhysicalNodeId PhysicalSystemDescriptor::get_physical_node_id(AsicID asic_id) const {
+experimental::PhysicalNodeId PhysicalSystemDescriptor::get_physical_node_id(AsicID asic_id) const {
     const auto node_id = find_physical_node_id(asic_id);
     TT_FATAL(node_id.has_value(), "No ASIC descriptor found for asic_id {}", asic_id);
     return *node_id;

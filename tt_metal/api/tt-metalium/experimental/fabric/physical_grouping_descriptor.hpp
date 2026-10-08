@@ -137,7 +137,7 @@ inline int effective_torus_variant_priority(const GroupingInfo& grouping) {
 // empty when the grouping had no MGD pairing, where callers assume row-major identity). Only the pinning map is
 // retained, not the full GroupingInfo, to avoid deep-copying its items + adjacency_graph per placement.
 struct PsdPlacement {
-    std::unordered_set<tt::tt_metal::PhysicalNodeId> asics;
+    std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId> asics;
     std::map<LogicalChipId, tt::tt_metal::ASICPosition> mesh_node_to_asic_position;
 };
 
@@ -295,7 +295,7 @@ public:
     // Enumerate distinct embeddings of an already-flat grouping on the PSD (same helper SAT column
     // generation and the matcher PSD gate use). Flatten a hierarchical PGD grouping with
     // build_flattened_adjacency_mesh first. Returns up to `max_solutions` mappings; empty if none fit.
-    std::vector<MappingResult<LogicalChipId, tt::tt_metal::PhysicalNodeId>> enumerate_distinct_placements_for_grouping(
+    std::vector<MappingResult<LogicalChipId, tt::tt_metal::experimental::PhysicalNodeId>> enumerate_distinct_placements_for_grouping(
         const GroupingInfo& grouping,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         std::size_t max_solutions = 1) const;
@@ -445,11 +445,11 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         PlacementSolveStats* stats,
         const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt,
-        const std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank =
+        const std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank =
             {},
         bool unique_shapes = false,
         const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {},
-        const std::set<tt::tt_metal::PhysicalNodeId>& placement_asic_allowlist = {});
+        const std::set<tt::tt_metal::experimental::PhysicalNodeId>& placement_asic_allowlist = {});
 
     // No PGD: seat from MGD placement fallbacks.
     SatPlacementEnumerationSession(
@@ -457,10 +457,10 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         PlacementSolveStats* stats,
         const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt,
-        const std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank =
+        const std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank =
             {},
         bool unique_shapes = false,
-        const std::set<tt::tt_metal::PhysicalNodeId>& placement_asic_allowlist = {});
+        const std::set<tt::tt_metal::experimental::PhysicalNodeId>& placement_asic_allowlist = {});
 
     SatPlacementEnumerationSession(const SatPlacementEnumerationSession&) = delete;
     SatPlacementEnumerationSession& operator=(const SatPlacementEnumerationSession&) = delete;
@@ -471,9 +471,9 @@ public:
     AssignedMeshes next();
     std::vector<AssignedMeshes> all();
 
-    bool add_forbidden_constraint(MeshId mesh_id, const std::unordered_set<tt::tt_metal::PhysicalNodeId>& asics);
+    bool add_forbidden_constraint(MeshId mesh_id, const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics);
     bool add_forbidden_constraint(const PlacedMesh& placed);
-    bool add_required_constraint(MeshId mesh_id, const std::unordered_set<tt::tt_metal::PhysicalNodeId>& asics);
+    bool add_required_constraint(MeshId mesh_id, const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics);
     bool add_required_constraint(const PlacedMesh& placed);
     bool exclude_mapping(const AssignedMeshes& assigned);
 
@@ -481,7 +481,7 @@ private:
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor_ = nullptr;
     PlacementSolveStats* stats_ = nullptr;
     AdjacencyGraph<MeshId> mesh_level_graph_;
-    AdjacencyGraph<tt::tt_metal::PhysicalNodeId> physical_graph_;
+    AdjacencyGraph<tt::tt_metal::experimental::PhysicalNodeId> physical_graph_;
     std::map<MeshId, std::vector<GroupingInfo>> global_mesh_groupings_;
     std::map<MeshId, GroupingInfo> mgd_fallback_by_mesh_;
     std::map<MeshId, ConnectionValidationMode> sat_intra_mesh_mode_by_mesh_;
@@ -497,9 +497,9 @@ private:
     bool solved_ = false;
     std::vector<AssignedMeshes> pending_;
     std::size_t pending_index_ = 0;
-    std::vector<std::pair<MeshId, std::unordered_set<tt::tt_metal::PhysicalNodeId>>> extra_forbidden_;
-    std::vector<std::pair<MeshId, std::unordered_set<tt::tt_metal::PhysicalNodeId>>> extra_required_;
-    std::vector<std::map<MeshId, std::unordered_set<tt::tt_metal::PhysicalNodeId>>> yielded_footprints_;
+    std::vector<std::pair<MeshId, std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>> extra_forbidden_;
+    std::vector<std::pair<MeshId, std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>> extra_required_;
+    std::vector<std::map<MeshId, std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>> yielded_footprints_;
 
     // Live SAT session. next() is another model from it when the mode and host cap still match.
     // The placement session resets it when the pools grow; next() rebuilds only then, or when the cap changes.
@@ -533,11 +533,11 @@ private:
     // `physical_node_id_to_mesh_rank` names each rank-bound mesh's exact chips (seat footprint and allowed set);
     // `placement_asic_allowlist` only narrows where any mesh may sit.
     void finish_init(
-        const std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank,
-        const std::set<tt::tt_metal::PhysicalNodeId>& placement_asic_allowlist);
+        const std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank,
+        const std::set<tt::tt_metal::experimental::PhysicalNodeId>& placement_asic_allowlist);
     void invalidate_pending_solve();
     std::set<const Candidate*> seats_matching(
-        MeshId mesh_id, const std::unordered_set<tt::tt_metal::PhysicalNodeId>& asics) const;
+        MeshId mesh_id, const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics) const;
     bool apply_extra_constraints(MappingConstraints<MeshId, const Candidate*>& constraints) const;
     std::vector<std::map<MeshId, const Candidate*>> excluded_seat_maps() const;
     void remember_yielded(const AssignedMeshes& assigned);

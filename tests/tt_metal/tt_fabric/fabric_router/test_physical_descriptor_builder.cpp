@@ -337,11 +337,11 @@ TEST(PhysicalDescriptorBuilder, IntegrationHostFilterRestrictsToSubset) {
 // so an FSD-built graph and a live-discovered one describe the same nodes.
 
 // The three ASICs make_two_host_fsd() wires up, as addresses rather than file-order labels.
-std::map<PhysicalNodeId, std::pair<std::string, uint32_t>> two_host_expected_node_ids() {
+std::map<experimental::PhysicalNodeId, std::pair<std::string, uint32_t>> two_host_expected_node_ids() {
     return {
-        {make_physical_node_id("hostA", TrayID{0}, ASICLocation{0}), {"hostA", 0}},
-        {make_physical_node_id("hostA", TrayID{0}, ASICLocation{1}), {"hostA", 1}},
-        {make_physical_node_id("hostB", TrayID{0}, ASICLocation{0}), {"hostB", 0}},
+        {experimental::make_physical_node_id("hostA", TrayID{0}, ASICLocation{0}), {"hostA", 0}},
+        {experimental::make_physical_node_id("hostA", TrayID{0}, ASICLocation{1}), {"hostA", 1}},
+        {experimental::make_physical_node_id("hostB", TrayID{0}, ASICLocation{0}), {"hostB", 0}},
     };
 }
 
@@ -361,11 +361,11 @@ TEST(PhysicalDescriptorBuilder, DescriptorsCarryPositionAddressesNotFileOrderLab
     // is the FSD hostname packed with tray and loc -- never the label above. The builder copies
     // hostnames out of the FSD verbatim, so the id holds the canonical form of that string: this
     // FSD spells its hosts "hostA"/"hostB" and the ids carry "hosta"/"hostb".
-    std::map<PhysicalNodeId, std::pair<std::string, uint32_t>> actual;
+    std::map<experimental::PhysicalNodeId, std::pair<std::string, uint32_t>> actual;
     for (const auto& [_, desc] : asics) {
-        const PhysicalNodeId node_id = desc.physical_node_id;
-        const auto fields = decode_physical_node_id(node_id);
-        EXPECT_EQ(fields.cluster_id, canonical_cluster_id_for_node_id(desc.host_name));
+        const experimental::PhysicalNodeId node_id = desc.physical_node_id;
+        const auto fields = experimental::decode_physical_node_id(node_id);
+        EXPECT_EQ(fields.cluster_id, experimental::canonical_cluster_id_for_node_id(desc.host_name));
         EXPECT_EQ(fields.tray, desc.tray_id);
         EXPECT_EQ(fields.loc, desc.asic_location);
         actual[node_id] = {desc.host_name, *desc.asic_location};
@@ -397,7 +397,7 @@ TEST(PhysicalDescriptorBuilder, FsdAndLiveIdSpacesAgreeOnPhysicalNodeIds) {
     const std::vector<uint64_t> umd_like = {
         0x9a3f'0000'0000'0001ULL, 0x15e8'0000'0000'0002ULL, 0x4c71'0000'0000'0003ULL};
     std::unordered_map<AsicID, ASICDescriptor> live_descs;
-    std::map<PhysicalNodeId, AsicID> node_id_to_live_id;
+    std::map<experimental::PhysicalNodeId, AsicID> node_id_to_live_id;
     {
         std::size_t i = 0;
         // Iterate in FSD label order so the assignment is deterministic.
@@ -427,7 +427,7 @@ TEST(PhysicalDescriptorBuilder, FsdAndLiveIdSpacesAgreeOnPhysicalNodeIds) {
 
     // ...yet the adjacency maps they produce, keyed by address, are equal.
     auto adjacency_by_node_id = [](const std::unordered_map<AsicID, ASICDescriptor>& descs, const auto& neighbors_of) {
-        std::map<PhysicalNodeId, std::vector<PhysicalNodeId>> adjacency;
+        std::map<experimental::PhysicalNodeId, std::vector<experimental::PhysicalNodeId>> adjacency;
         for (const auto& [asic_id, desc] : descs) {
             auto& neighbors = adjacency[desc.physical_node_id];
             for (const AsicID neighbor : neighbors_of(asic_id)) {
@@ -464,12 +464,12 @@ TEST(PhysicalDescriptorBuilder, IntegrationQuietboxNodeIdsAreUniqueAndDecodeBack
     const auto& asics = psd.get_asic_descriptors();
     ASSERT_GT(asics.size(), 0u);
 
-    std::set<PhysicalNodeId> node_ids;
+    std::set<experimental::PhysicalNodeId> node_ids;
     for (const auto& [_, desc] : asics) {
-        const PhysicalNodeId node_id = desc.physical_node_id;
+        const experimental::PhysicalNodeId node_id = desc.physical_node_id;
         EXPECT_TRUE(node_ids.insert(node_id).second) << "two ASICs packed to " << node_id;
 
-        const auto fields = decode_physical_node_id(node_id);
+        const auto fields = experimental::decode_physical_node_id(node_id);
         EXPECT_EQ(fields.cluster_id, desc.host_name) << "quietbox hostnames are already canonical, so they round-trip";
         EXPECT_EQ(fields.tray, desc.tray_id);
         EXPECT_EQ(fields.loc, desc.asic_location);
@@ -479,7 +479,7 @@ TEST(PhysicalDescriptorBuilder, IntegrationQuietboxNodeIdsAreUniqueAndDecodeBack
     // Every host in the FSD shows up in the packed ids, spelled exactly as the FSD spells it.
     std::set<std::string> hosts_in_ids;
     for (const auto& node_id : node_ids) {
-        hosts_in_ids.insert(std::string(cluster_id_view(node_id)));
+        hosts_in_ids.insert(std::string(experimental::cluster_id_view(node_id)));
     }
     const auto hostnames = psd.get_all_hostnames();
     EXPECT_EQ(hosts_in_ids, std::set<std::string>(hostnames.begin(), hostnames.end()));

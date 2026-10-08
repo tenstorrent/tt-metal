@@ -108,10 +108,10 @@ private:
 std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(const MeshGraph& mesh_graph);
 std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(const MeshGraphDescriptor& mgd);
 
-std::map<MeshId, AdjacencyGraph<tt::tt_metal::PhysicalNodeId>> build_adjacency_graph_physical(
+std::map<MeshId, AdjacencyGraph<tt::tt_metal::experimental::PhysicalNodeId>> build_adjacency_graph_physical(
     tt::tt_metal::ClusterType cluster_type,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank);
+    const std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank);
 
 /**
  * @brief Unified constraint system for topology mapping

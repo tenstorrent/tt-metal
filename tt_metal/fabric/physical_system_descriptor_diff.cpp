@@ -21,7 +21,7 @@ namespace {
 // One end of a cable: the chip's address plus the channel it leaves through. This, and not an
 // AsicID, is what two independently labelled descriptors can agree on.
 struct CableEnd {
-    PhysicalNodeId node{};
+    experimental::PhysicalNodeId node{};
     uint8_t chan = 0;
 
     friend bool operator==(const CableEnd&, const CableEnd&) = default;
@@ -44,9 +44,9 @@ struct CableKeyHash {
         auto mix = [](std::size_t seed, std::size_t value) {
             return seed ^ (value + 0x9e3779b9 + (seed << 6) + (seed >> 2));
         };
-        std::size_t seed = std::hash<PhysicalNodeId>{}(key.lo.node);
+        std::size_t seed = std::hash<experimental::PhysicalNodeId>{}(key.lo.node);
         seed = mix(seed, std::hash<uint8_t>{}(key.lo.chan));
-        seed = mix(seed, std::hash<PhysicalNodeId>{}(key.hi.node));
+        seed = mix(seed, std::hash<experimental::PhysicalNodeId>{}(key.hi.node));
         seed = mix(seed, std::hash<uint8_t>{}(key.hi.chan));
         return seed;
     }
@@ -145,9 +145,9 @@ void sort_links(AsicTopology& topology) {
 
 }  // namespace
 
-PhysicalSystemDelta diff_physical_system_descriptors(
+experimental::PhysicalSystemDelta experimental::diff_physical_system_descriptors(
     const PhysicalSystemDescriptor& golden, const PhysicalSystemDescriptor& candidate) {
-    PhysicalSystemDelta delta;
+    experimental::PhysicalSystemDelta delta;
 
     for (const auto& [node_id, golden_asic] : golden.physical_node_to_asic_id()) {
         const auto candidate_asic = candidate.find_asic_id(node_id);

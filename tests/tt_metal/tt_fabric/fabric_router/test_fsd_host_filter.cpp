@@ -22,6 +22,7 @@
 #include <tt-metalium/experimental/fabric/physical_descriptor_builder.hpp>
 #include <tt-metalium/experimental/fabric/physical_node_id.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include "llrt/tt_target_device.hpp"
 #include "protobuf/factory_system_descriptor.pb.h"
 #include "protobuf/physical_system_descriptor.pb.h"
 #include "tt_metal/fabric/fsd_host_filter.hpp"
@@ -193,7 +194,7 @@ TEST(FsdHostFilter, AllAbsentHostsAreReportedTogether) {
 TEST(FsdHostFilter, LiveHostsThatCanonicalizeAlikeAreRejected) {
     const FsdFile file(make_fsd({"hosta"}), "fhf_ambiguous_live.textproto");
 
-    PhysicalSystemDescriptor live(tt::TargetDevice::Silicon);
+    PhysicalSystemDescriptor live{tt::TargetDevice::Silicon};
     auto& graph = live.get_system_graph().asic_connectivity_graph;
     uint64_t label = 1;
     for (const std::string host : {"hosta.dc1.example.com", "hosta.dc2.example.com"}) {
@@ -208,7 +209,7 @@ TEST(FsdHostFilter, LiveHostsThatCanonicalizeAlikeAreRejected) {
                 id,
                 static_cast<ChipId>(label),
                 host,
-                make_physical_node_id(host, tray, ASICLocation{0})});
+                experimental::make_physical_node_id(host, tray, ASICLocation{0})});
         graph[host][id];
         ++label;
     }
@@ -263,7 +264,7 @@ TEST(FsdHostFilter, CablesLeavingTheAllocationAreNotDowned) {
 
     // Live still has the hostb<->hostc cable; the filtered factory descriptor does not.
     const auto live_with_boundary = descriptor_for({"hosta", "hostb", "hostc"});
-    const auto delta = ::tt::tt_metal::diff_physical_system_descriptors(expected, live_with_boundary);
+    const auto delta = ::tt::tt_metal::experimental::diff_physical_system_descriptors(expected, live_with_boundary);
 
     EXPECT_TRUE(delta.missing_links.empty());
     EXPECT_TRUE(delta.missing_asics.empty());

@@ -177,7 +177,7 @@ ChipId physical_chip_id(const ControlPlane& control_plane, tt::tt_metal::AsicID 
 
 bool has_cable(
     const ControlPlane& control_plane,
-    const std::vector<LinkInfo>& links,
+    const std::vector<experimental::LinkInfo>& links,
     ChipId src_chip,
     chan_id_t src_chan,
     ChipId dst_chip,
@@ -191,9 +191,9 @@ bool has_cable(
     return false;
 }
 
-const LinkInfo* find_cable(
+const experimental::LinkInfo* find_cable(
     const ControlPlane& control_plane,
-    const std::vector<LinkInfo>& links,
+    const std::vector<experimental::LinkInfo>& links,
     ChipId src_chip,
     chan_id_t src_chan,
     ChipId dst_chip,
@@ -257,7 +257,7 @@ void expect_distinct_intermesh(const ControlPlane& control_plane, bool relaxed) 
     EXPECT_EQ(counts.size(), 4u);
 }
 
-std::size_t count_direction(const std::vector<LinkInfo>& links, const LinkInfo& sample) {
+std::size_t count_direction(const std::vector<experimental::LinkInfo>& links, const experimental::LinkInfo& sample) {
     std::size_t count = 0;
     for (const auto& link : links) {
         if (link.src_node == sample.src_node && link.src_direction == sample.src_direction) {

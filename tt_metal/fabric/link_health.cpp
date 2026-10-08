@@ -15,12 +15,12 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt_stl/assert.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_fabric::experimental {
 
 namespace {
 
 using tt::tt_metal::AsicID;
-using tt::tt_metal::PhysicalNodeId;
+using tt::tt_metal::experimental::PhysicalNodeId;
 using tt::tt_metal::PhysicalSystemDescriptor;
 
 // Which way out of each end the cable leaves, for an intra-mesh link. The two ends almost never
@@ -137,8 +137,11 @@ void LinkHealth::refresh(const TopologyMapper* mapper, const PhysicalSystemDescr
     // descriptor's ASIC labels against the live one's would match nothing on the factory path,
     // where one side counts from one and the other carries UMD chip ids, and every expected link
     // would read as down.
+    // The whole cable per endpoint, not endpoint presence alone: health has to see that A:1 reaches
+    // the peer the expected descriptor says it reaches. Presence of A:1 by itself would read a
+    // miswired cable (expected A:1 <-> B:2, live A:1 <-> C:3) as healthy.
     auto collect_endpoints = [](const PhysicalSystemDescriptor& descriptor) {
-        std::unordered_set<EndpointKey, EndpointKey::Hash> endpoints;
+        std::unordered_map<EndpointKey, EndpointKey, EndpointKey::Hash> endpoints;
         for (const auto& [host, topology] : descriptor.get_system_graph().asic_connectivity_graph) {
             for (const auto& [asic, edges] : topology) {
                 const auto address = descriptor.find_physical_node_id(asic);
@@ -146,8 +149,14 @@ void LinkHealth::refresh(const TopologyMapper* mapper, const PhysicalSystemDescr
                     continue;
                 }
                 for (const auto& [peer, connections] : edges) {
+                    const auto peer_address = descriptor.find_physical_node_id(peer);
+                    if (!peer_address.has_value()) {
+                        continue;
+                    }
                     for (const auto& connection : connections) {
-                        endpoints.insert(EndpointKey{*address, connection.src_chan});
+                        endpoints.insert_or_assign(
+                            EndpointKey{*address, connection.src_chan},
+                            EndpointKey{*peer_address, connection.dst_chan});
                     }
                 }
             }
@@ -157,7 +166,7 @@ void LinkHealth::refresh(const TopologyMapper* mapper, const PhysicalSystemDescr
     fsd_expected_ = collect_endpoints(expected);
     live_present_ = collect_endpoints(*live_);
 
-    const auto delta = tt::tt_metal::diff_physical_system_descriptors(expected, *live_);
+    const auto delta = tt::tt_metal::experimental::diff_physical_system_descriptors(expected, *live_);
 
     // Reserved up front because the indexes below hold pointers into this vector.
     downed_.reserve(count_directed(delta.missing_links));
@@ -179,11 +188,11 @@ void LinkHealth::refresh(const TopologyMapper* mapper, const PhysicalSystemDescr
                 // Physical identity from the expected side, which is the side that knows what
                 // should be there. The ASIC label, though, is the live UMD id where that chip
                 // exists, since that is the id anything outside this module can act on.
-                record.src_cluster_id = std::string(tt::tt_metal::cluster_id_view(*src_address));
+                record.src_cluster_id = std::string(tt::tt_metal::experimental::cluster_id_view(*src_address));
                 record.src_tray = src_address->tray;
                 record.src_loc = src_address->loc;
                 record.src_chan = connection.src_chan;
-                record.dst_cluster_id = std::string(tt::tt_metal::cluster_id_view(*dst_address));
+                record.dst_cluster_id = std::string(tt::tt_metal::experimental::cluster_id_view(*dst_address));
                 record.dst_tray = dst_address->tray;
                 record.dst_loc = dst_address->loc;
                 record.dst_chan = connection.dst_chan;
@@ -245,7 +254,7 @@ void LinkHealth::rebuild_indexes() {
 
     for (const LinkInfo& record : downed_) {
         const LinkInfo* pointer = &record;
-        by_src_address_[tt::tt_metal::make_physical_node_id(record.src_cluster_id, record.src_tray, record.src_loc)]
+        by_src_address_[tt::tt_metal::experimental::make_physical_node_id(record.src_cluster_id, record.src_tray, record.src_loc)]
             .push_back(pointer);
         by_host_[record.src_cluster_id].push_back(pointer);
         if (!record.logical_resolved) {
@@ -395,7 +404,7 @@ std::optional<LinkHealth::EndpointKey> LinkHealth::endpoint_for(const FabricNode
     return EndpointKey{*address, chan};
 }
 
-std::optional<PhysicalNodeId> LinkHealth::address_of(AsicID asic) const {
+std::optional<experimental::PhysicalNodeId> LinkHealth::address_of(AsicID asic) const {
     if (live_ != nullptr) {
         if (const auto live = live_->find_physical_node_id(asic); live.has_value()) {
             return live;
@@ -408,13 +417,18 @@ std::optional<PhysicalNodeId> LinkHealth::address_of(AsicID asic) const {
 }
 
 bool LinkHealth::healthy(const EndpointKey& endpoint) const {
-    if (!fsd_expected_.contains(endpoint)) {
+    const auto expected = fsd_expected_.find(endpoint);
+    if (expected == fsd_expected_.end()) {
         throw std::out_of_range(fmt::format(
             "Channel {} on {} is not expected by the factory system descriptor, so it has no health to report.",
             endpoint.chan,
             endpoint.node));
     }
-    return live_present_.contains(endpoint);
+    // Healthy means the live cable from this endpoint reaches the expected peer. Mere presence of
+    // the endpoint is not enough: a miswired cable keeps the endpoint live while the expected link
+    // is down.
+    const auto live = live_present_.find(endpoint);
+    return live != live_present_.end() && live->second == expected->second;
 }
 
 std::vector<LinkInfo> LinkHealth::copy_records(const std::vector<const LinkInfo*>& records) {
@@ -437,7 +451,7 @@ bool LinkHealth::is_link_healthy(const FabricNodeId& node, chan_id_t chan) const
 
 bool LinkHealth::is_link_healthy(
     const std::string& cluster_id, tt::tt_metal::TrayID tray, tt::tt_metal::ASICLocation loc, chan_id_t chan) const {
-    return healthy(EndpointKey{tt::tt_metal::make_physical_node_id(cluster_id, tray, loc), chan});
+    return healthy(EndpointKey{tt::tt_metal::experimental::make_physical_node_id(cluster_id, tray, loc), chan});
 }
 
 bool LinkHealth::is_link_healthy(AsicID asic, chan_id_t chan) const {
@@ -584,7 +598,7 @@ std::vector<FabricNodeId> LinkHealth::get_exit_nodes_with_downed_links(MeshId sr
 }
 
 std::vector<LinkInfo> LinkHealth::get_downed_links_for_host(const std::string& cluster_id) const {
-    const auto records = by_host_.find(tt::tt_metal::canonical_cluster_id_for_node_id(cluster_id));
+    const auto records = by_host_.find(tt::tt_metal::experimental::canonical_cluster_id_for_node_id(cluster_id));
     return records == by_host_.end() ? std::vector<LinkInfo>{} : copy_records(records->second);
 }
 
@@ -599,8 +613,8 @@ std::vector<LinkInfo> LinkHealth::get_downed_links_for_asic(AsicID asic) const {
 
 std::vector<LinkInfo> LinkHealth::get_downed_links_between_hosts(
     const std::string& a_cluster_id, const std::string& b_cluster_id) const {
-    const auto a = tt::tt_metal::canonical_cluster_id_for_node_id(a_cluster_id);
-    const auto b = tt::tt_metal::canonical_cluster_id_for_node_id(b_cluster_id);
+    const auto a = tt::tt_metal::experimental::canonical_cluster_id_for_node_id(a_cluster_id);
+    const auto b = tt::tt_metal::experimental::canonical_cluster_id_for_node_id(b_cluster_id);
 
     // Both directions, since each cable is stored once per end and a caller asking about a host pair
     // wants the cable, not one arbitrary half of it.
@@ -623,4 +637,4 @@ std::vector<LinkInfo> LinkHealth::get_downed_links_between_hosts(
     return between;
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::experimental
