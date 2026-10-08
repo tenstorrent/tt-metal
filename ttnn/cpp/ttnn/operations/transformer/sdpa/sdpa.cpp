@@ -43,8 +43,9 @@ std::optional<ttnn::Tensor> drop_if_empty(const std::optional<ttnn::Tensor>& t) 
 // that would reach a legacy compute_common.hpp loop runs a recipe instead: ACCURATE when its compute config asks
 // for FP32 DEST accumulation, STANDARD on the routes that have no streaming kernel (non-ring joint, exp ring
 // blockings its streaming kernel cannot build). BF16-dest dense, chunked and ring calls keep the streaming kernels
-// (compute_streaming.hpp). Routed calls treat program_config chunk sizes as hints (they were chosen for the legacy
-// kernels): kept when the recipe supports them and they fit, otherwise the op chooses the blocking.
+// (compute_streaming.hpp). Routed dense, chunked and MLA calls choose their blocking (the program_config chunk sizes
+// were tuned for the legacy kernels; resolve_dense_recipe_blocking); joint, ring, exp ring and ring-distributed calls
+// keep them when the recipe supports them.
 // TODO(SDPA recipes on Wormhole): the recipes run on Blackhole only, so Wormhole keeps the legacy loops until the
 // Wormhole port lands; remove this arch gate (one use per entry point) with it.
 bool routes_to_recipes(const ttnn::Tensor& q) {
