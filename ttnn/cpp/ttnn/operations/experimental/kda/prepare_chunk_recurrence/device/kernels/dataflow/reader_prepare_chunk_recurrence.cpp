@@ -225,8 +225,13 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
                 {.offset_bytes = tile * buffer.get_entry_size()});
         }
     };
-    fill_constant_tiles(eye, tril, ones, block_masks);
-    fill_gate_tiles<GATE_SCALE_BITS>(gate_tril, gate_ones);
+    // The constants are filled while the first work item's reads are in flight.
+    bool constants_pending = true;
+    const auto fill_constants = [&]() {
+        fill_constant_tiles(eye, tril, ones, block_masks);
+        fill_gate_tiles<GATE_SCALE_BITS>(gate_tril, gate_ones);
+        constants_pending = false;
+    };
 
     auto enqueue_head_chunk_read =
         [&](const auto& accessor, DataflowBuffer& buffer, uint32_t head_chunk_index, uint32_t width_tiles) {
@@ -269,6 +274,9 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         } else {
             enqueue_contiguous_read(beta_accessor, beta, head_chunk_index * Ct, Ct);
         }
+        if (constants_pending) {
+            fill_constants();
+        }
         // All five inputs are independent reads on the same NoC. One barrier lets them overlap, then publishes
         // the complete work item atomically to compute.
         noc.async_read_barrier();
@@ -299,5 +307,8 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         v.push_back(chunk_value_tiles);
         g.push_back(chunk_key_tiles);
         beta.push_back(Ct);
+    }
+    if (constants_pending) {
+        fill_constants();
     }
 }

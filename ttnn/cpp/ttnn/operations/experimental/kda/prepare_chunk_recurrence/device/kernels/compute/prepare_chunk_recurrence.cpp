@@ -152,6 +152,9 @@ inline void square_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
     o.push_back(n);
 }
 
+// Mode and Iterations restrict the exponential to a row vector for row-replicated inputs (one iteration covers
+// row 0 of faces 0 and 1); the rest of each output tile is then unspecified.
+template <VectorMode Mode = VectorMode::RC, int Iterations = 8>
 inline void exponential_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
     const uint32_t in_id = in.get_id();
     const uint32_t o_id = o.get_id();
@@ -165,7 +168,7 @@ inline void exponential_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n)
         tile_regs_acquire();
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             copy_tile(in_id, block_start + tile, tile);
-            exp_tile(tile);
+            exp_tile<false, false, InputClamping::ClampToNegative, Iterations>(tile, Mode);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -260,6 +263,31 @@ inline void multiply_by_column(DataflowBuffer& a, DataflowBuffer& col, DataflowB
         tile_regs_release();
     }
     o.push_back(Mt * Nt);
+}
+
+// out[n] = A[n] * row[n]  (broadcast row 0 of each `row` tile down its tile)
+inline void multiply_by_row(DataflowBuffer& a, DataflowBuffer& row, DataflowBuffer& o, uint32_t n) {
+    const uint32_t a_id = a.get_id();
+    const uint32_t row_id = row.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(n);
+    reconfig_data_format(a_id, row_id);  // bcast(a_id,row_id): a_id->srcA, row_id->srcB
+    mul_bcast_rows_init(a_id, row_id);
+    for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
+        const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
+        tile_regs_acquire();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            mul_tiles_bcast_rows(a_id, row_id, block_start + tile, block_start + tile, tile);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            pack_tile(tile, o_id, block_start + tile);
+        }
+        tile_regs_release();
+    }
+    o.push_back(n);
 }
 
 // Invert (I-N) for the strictly lower N by nesting three block levels, so every matmul keeps
@@ -438,7 +466,6 @@ inline void prepare_gate_factors(
     DataflowBuffer& g,
     DataflowBuffer& prefix_sum_mask,
     DataflowBuffer& sum_broadcast_matrix,
-    DataflowBuffer& decay,
     DataflowBuffer& centered_decay,
     DataflowBuffer& centered_inverse_decay,
     DataflowBuffer& g_last,
@@ -453,8 +480,6 @@ inline void prepare_gate_factors(
     // unchanged, while realistic KDA gates no longer overflow exp(-G).
     matmul_blocks<Ct, Ct, Kt, false>(prefix_sum_mask, g, centered_decay);
     centered_decay.wait_front(chunk_key_tiles);
-    exponential_tiles(centered_decay, decay, chunk_key_tiles);  // exp(G), for scan-facing q_decay/kd
-    decay.wait_front(chunk_key_tiles);
 
     matmul_blocks<Ct, Ct, Kt, false>(sum_broadcast_matrix, g, g_last);  // replicated G_last
     g_last.wait_front(chunk_key_tiles);
@@ -475,7 +500,8 @@ inline void prepare_gate_factors(
         centered_g.pop_front(chunk_key_tiles);
     }
 
-    exponential_tiles(anchor_g, anchor_decay, chunk_key_tiles);  // exp(G_last/2)
+    // exp(G_last/2) is row-replicated; only row 0 is computed and read.
+    exponential_tiles<VectorMode::R>(anchor_g, anchor_decay, chunk_key_tiles);
     anchor_decay.wait_front(chunk_key_tiles);
     anchor_g.pop_front(chunk_key_tiles);
 }
@@ -485,7 +511,7 @@ inline void prepare_scan_and_pairwise_inputs(
     DataflowBuffer& normalized_q,
     DataflowBuffer& normalized_k,
     DataflowBuffer& beta,
-    DataflowBuffer& decay,
+    DataflowBuffer& anchor_decay,
     DataflowBuffer& centered_decay,
     DataflowBuffer& q_decay,
     DataflowBuffer& kd,
@@ -497,33 +523,30 @@ inline void prepare_scan_and_pairwise_inputs(
         DataflowBuffer& beta_k = q_pairwise;
         multiply_by_column(normalized_k, beta, beta_k, Ct, Kt);
         beta_k.wait_front(chunk_key_tiles);
-    }
-    beta.pop_front(Ct);
-
-    // Preserve exact scan-facing factors, and use anchored factors only for pairwise products.
-    pack_reconfig_data_format(q_pairwise.get_id(), q_decay.get_id());
-    elementwise_binary<ElementwiseBinaryOp::Multiply>(normalized_q, decay, q_decay, chunk_key_tiles);
-    {
-        DataflowBuffer& beta_k = q_pairwise;
-        pack_reconfig_data_format(q_decay.get_id(), kd.get_id());
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(beta_k, decay, kd, chunk_key_tiles);
-        pack_reconfig_data_format(kd.get_id(), k_beta_pairwise.get_id());
         elementwise_binary<ElementwiseBinaryOp::Multiply>(beta_k, centered_decay, k_beta_pairwise, chunk_key_tiles);
         k_beta_pairwise.wait_front(chunk_key_tiles);  // beta*k*exp(G-anchor)
         beta_k.pop_front(chunk_key_tiles);
     }
+    beta.pop_front(Ct);
     elementwise_binary<ElementwiseBinaryOp::Multiply>(normalized_q, centered_decay, q_pairwise, chunk_key_tiles);
     q_pairwise.wait_front(chunk_key_tiles);  // q*exp(G-anchor)
     normalized_q.pop_front(chunk_key_tiles);
     centered_decay.pop_front(chunk_key_tiles);
-    decay.pop_front(chunk_key_tiles);
+
+    // The scan-facing factors exp(G) = exp(G-anchor) * exp(anchor) reuse the anchored products.
+    pack_reconfig_data_format(q_pairwise.get_id(), q_decay.get_id());
+    multiply_by_row(q_pairwise, anchor_decay, q_decay, chunk_key_tiles);
+    pack_reconfig_data_format(q_decay.get_id(), kd.get_id());
+    multiply_by_row(k_beta_pairwise, anchor_decay, kd, chunk_key_tiles);
+    pack_reconfig_data_format(kd.get_id(), k_beta_pairwise.get_id());
 }
 
 template <uint32_t Ct, uint32_t Kt>
 inline void prepare_final_decay_rows(DataflowBuffer& g_last, DataflowBuffer& final_decay_rows) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
-    exponential_tiles(g_last, final_decay_rows, chunk_key_tiles);  // exp(G_last)
+    // exp(G_last) is row-replicated; only row 0 is computed, which the transpose turns into dl's column 0.
+    exponential_tiles<VectorMode::R>(g_last, final_decay_rows, chunk_key_tiles);
     final_decay_rows.wait_front(chunk_key_tiles);
     g_last.pop_front(chunk_key_tiles);
 }
@@ -626,7 +649,7 @@ inline void prepare_decay_outputs(
 
         // k_dec_t = (kr * exp(G_last))^T.
         pack_reconfig_data_format(final_decay.get_id(), k_dec.get_id());
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(k_pairwise, anchor_decay, k_dec, chunk_key_tiles);
+        multiply_by_row(k_pairwise, anchor_decay, k_dec, chunk_key_tiles);
         k_dec.wait_front(chunk_key_tiles);
         k_pairwise.pop_front(chunk_key_tiles);
         anchor_decay.pop_front(chunk_key_tiles);
@@ -672,7 +695,6 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     DataflowBuffer final_decay(dfb::final_decay);
 
     // Semantic intermediates.
-    DataflowBuffer scan_decay(dfb::scan_decay);
     DataflowBuffer centered_inverse_decay(dfb::centered_inverse_decay);
     DataflowBuffer anchor_decay(dfb::anchor_decay);
     DataflowBuffer normalized_q(dfb::normalized_q);
@@ -738,7 +760,6 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
             g,
             gate_tril,
             gate_ones,
-            scan_decay,
             centered_decay,
             centered_inverse_decay,
             g_last,
@@ -748,7 +769,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         DataflowBuffer& k_beta_pairwise = workspace_1;
         DataflowBuffer& q_pairwise = workspace_2;
         prepare_scan_and_pairwise_inputs<Ct, Kt>(
-            normalized_q, normalized_k, beta, scan_decay, centered_decay, q_decay, kd, k_beta_pairwise, q_pairwise);
+            normalized_q, normalized_k, beta, anchor_decay, centered_decay, q_decay, kd, k_beta_pairwise, q_pairwise);
 
         DataflowBuffer& final_decay_rows = workspace_0;
         prepare_final_decay_rows<Ct, Kt>(g_last, final_decay_rows);
