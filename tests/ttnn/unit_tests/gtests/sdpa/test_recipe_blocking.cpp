@@ -101,6 +101,21 @@ TEST(SDPARecipeBlocking, L1LimitsTheChoice) {
     }
 }
 
+TEST(SDPARecipeBlocking, MoreHeadsThanCoresSplitsJobsOverTheGrid) {
+    // 8 x 24 batch/heads on 110 cores (an encoder batch): every head's Q chunks share the grid, and fewer Q
+    // chunks per head never costs more.
+    for (const auto& selection : kSelections) {
+        auto p = problem(RecipeOp::Dense, selection, 24, 512, 512, 2);
+        p.batch = 8;
+        const auto choice = choose_recipe_blocking(p);
+        ASSERT_TRUE(choice.has_value());
+        expect_valid(p, *choice);
+        EXPECT_EQ(
+            choice->jobs_per_core,
+            (p.batch * p.q_heads * ((512 + choice->q_chunk_size - 1) / choice->q_chunk_size) + 109) / 110);
+    }
+}
+
 TEST(SDPARecipeBlocking, ExplicitChunksAreHonored) {
     auto p = problem(RecipeOp::Dense, {Recipe::B}, 10, 8192, 8192);
     p.fixed_q_tiles = 7;

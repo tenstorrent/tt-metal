@@ -13,7 +13,8 @@
 // For singleton chains, rank=0, length=1, downstream_Q_jobs=0; coordinates unused.
 //
 // Host invariants:
-// - One head per core; one chain per head; positive, nonincreasing Q-job counts.
+// - Chains (length > 1): one head per core; one chain per head; positive, nonincreasing Q-job counts.
+//   Singleton chains may hold several heads' jobs (more batch/heads than cores); each job reads its own head.
 // - Identical CB allocation/format/capacity on every core, including K/V slots.
 // - No dummy or skipped K/V rounds; all active links traverse K then V for each
 //   (local_Q_ordinal, K_chunk) in the same order. Global Q offsets may differ.
@@ -159,7 +160,7 @@ void kernel_main() {
     const uint32_t next_jobs = get_arg_val<uint32_t>(11);
     const uint32_t head = first_job / queries_per_head;
     ASSERT(jobs > 0 && chain_length > 0 && rank < chain_length);
-    ASSERT((first_job + jobs - 1) / queries_per_head == head);
+    ASSERT(chain_length == 1 || (first_job + jobs - 1) / queries_per_head == head);
     ASSERT(next_jobs <= jobs);
     ASSERT((rank + 1 == chain_length) ? next_jobs == 0 : next_jobs > 0);
 
@@ -199,13 +200,14 @@ void kernel_main() {
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     generate_bcast_col_scalar_zeroed(CircularBuffer(4), 0x3f803f80);
 
-#ifdef SDPA_RECIPE_Q_PER_KV_HEAD
-    const uint32_t kv_head = head / SDPA_RECIPE_Q_PER_KV_HEAD;
-#else
-    const uint32_t kv_head = head;
-#endif
-    const uint32_t kvbase = kv_head * k_chunks * kv_tiles;
     for (uint32_t qi = 0; qi < jobs; ++qi) {
+        const uint32_t job_head = (first_job + qi) / queries_per_head;
+#ifdef SDPA_RECIPE_Q_PER_KV_HEAD
+        const uint32_t kv_head = job_head / SDPA_RECIPE_Q_PER_KV_HEAD;
+#else
+        const uint32_t kv_head = job_head;
+#endif
+        const uint32_t kvbase = kv_head * k_chunks * kv_tiles;
         const uint32_t qbase = (first_job + qi) * q_tiles * SDPA_RECIPE_DHT;
         // Paired recipes pad an odd chunk with SDPA_RECIPE_Q_PAD_TILES zero rows (host: recipe_compute_q_tiles).
         constexpr uint32_t q_push_tiles = (q_tiles + SDPA_RECIPE_Q_PAD_TILES) * SDPA_RECIPE_DHT;
@@ -262,7 +264,7 @@ void kernel_main() {
 #ifdef SDPA_RECIPE_MASK
             // Mask after K, before V: QK (phase one) consumes it; PV (phase two) needs only V.
             read_mask_chunk<q_tiles>(
-                noc, mask, mcb, head, ((first_job + qi) % queries_per_head) * q_tiles, ki * SDPA_K_CHUNK_TILES);
+                noc, mask, mcb, job_head, ((first_job + qi) % queries_per_head) * q_tiles, ki * SDPA_K_CHUNK_TILES);
 #endif
 
             vcb.reserve_back(kv_tiles);

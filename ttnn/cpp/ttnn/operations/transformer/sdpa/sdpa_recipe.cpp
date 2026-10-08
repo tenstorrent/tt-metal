@@ -14,6 +14,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/generic/generic_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -113,7 +114,8 @@ ProgramDescriptor recipe_compute_program(
     uint32_t k_chunks,
     uint32_t q_tiles,
     uint32_t k_tiles,
-    uint32_t d_tiles) {
+    uint32_t d_tiles,
+    std::optional<float> scale) {
     TT_FATAL(q_tiles >= 1 && k_tiles >= 1 && d_tiles >= 1, "SDPA recipes require tile-aligned chunks and head dims");
     const bool fp32 = policy.fp32_destination;
     // STANDARD and FAST keep a reference-max state in Float32 L1 (O in CB 9, l in CB 13).
@@ -196,7 +198,7 @@ ProgramDescriptor recipe_compute_program(
         .core_ranges = grid,
         .named_compile_time_args =
             {{"k_chunks", k_chunks},
-             {"scale", std::bit_cast<uint32_t>(1.0f / std::sqrt(static_cast<float>(d_tiles * 32)))},
+             {"scale", std::bit_cast<uint32_t>(scale.value_or(1.0f / std::sqrt(static_cast<float>(d_tiles * 32))))},
              {"q_tiles", q_tiles},
              {"k_tiles", k_tiles},
              {"d_tiles", d_tiles}},
@@ -237,28 +239,37 @@ PrecisionPolicy resolve_recipe_policy(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<SDPAProgramConfig>& program_config) {
     TT_FATAL(q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
-    const float head_dim = static_cast<float>(q.logical_shape()[-1]);
+    // The exps take scale * (s - m) with s - m <= 0, so the scale must be positive; it is folded into the exp
+    // (and the attn_mask is pre-multiplied by 1/scale), never into Q.
     TT_FATAL(
-        !scale || *scale == 1.0f / std::sqrt(head_dim),
-        "SDPA recipes currently require the default 1/sqrt(head_dim) scale represented as FP32");
+        !scale || (std::isfinite(*scale) && *scale > 0.0f),
+        "SDPA recipes require a finite positive scale, got {}",
+        scale.value_or(0.0f));
     TT_FATAL(q.device()->arch() == tt::ARCH::BLACKHOLE, "SDPA precision recipes support Blackhole only");
-    // A recipe fixes every compute-config field, so an explicit config would be silently ignored.
-    TT_FATAL(!compute_kernel_config, "Specify either an SDPA precision recipe or a compute kernel config, not both");
-    TT_FATAL(
-        !program_config || program_config->exp_approx_mode.value_or(true),
-        "exp_approx_mode=False conflicts with SDPA precision recipes, which fix their own exp");
+    // The recipe owns the numerics: an explicit compute_kernel_config (math fidelity, approx mode, FP32 dest,
+    // packer L1 accumulation) and exp_approx_mode are accepted and ignored, so a caller that passes a shared
+    // config (or its legacy exp choice) gets the recipe it named. See SDPAPrecisionRecipes.md.
+    (void)compute_kernel_config;
+    (void)program_config;
     return resolve_precision_policy(select_recipe(precision, k.dtype()));
 }
 
-// Reject a recipe CB layout that cannot fit the device's unreserved L1 (a fused layout first falls back to the
+// L1 per core below the lowest live L1 buffer (L1 inputs, the output, global semaphores): static CBs must not
+// overlap them.
+static uint64_t recipe_free_l1(IDevice& device) {
+    const auto lowest = device.lowest_occupied_compute_l1_address();
+    const uint64_t top = lowest.has_value() ? static_cast<uint64_t>(*lowest) : device.l1_size_per_core();
+    return top - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+}
+
+// Reject a recipe CB layout that cannot fit the device's free L1 (a fused layout first falls back to the
 // unfused kernel).
 static void check_recipe_l1_fit(ProgramDescriptor& program, IDevice& device, uint32_t q_chunk, uint32_t k_chunk) {
     uint64_t bytes = 0;
     for (const auto& cb : program.cbs) {
         bytes += cb.total_size;
     }
-    const uint64_t available =
-        device.l1_size_per_core() - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint64_t available = recipe_free_l1(device);
     if (bytes > available) {
         bytes -= recipe_drop_fused(program.cbs, program.kernels.front().defines, q_chunk / 32);
     }
@@ -278,7 +289,8 @@ void validate_recipe_mask(const Tensor& q, const Tensor& k, const Tensor& mask, 
     TT_FATAL(mask.layout() == Layout::TILE, "SDPA recipe attn_mask must be tilized");
     TT_FATAL(mask.tensor_spec().tile() == Tile({32, 32}), "SDPA recipe attn_mask requires 32x32 tiles");
     TT_FATAL(
-        mask.memory_config() == DRAM_MEMORY_CONFIG, "SDPA recipe attn_mask must be interleaved DRAM");
+        mask.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "SDPA recipe attn_mask must be interleaved (DRAM or L1)");
     TT_FATAL(
         mask.dtype() == DataType::BFLOAT16 || mask.dtype() == DataType::BFLOAT8_B ||
             mask.dtype() == DataType::BFLOAT4_B || (mask.dtype() == DataType::FLOAT32 && policy.fp32_destination),
@@ -306,7 +318,9 @@ static std::vector<Tensor> run_recipe_segments(
     const std::vector<std::array<Tensor, 3>>& segments,
     const PrecisionPolicy& policy,
     const std::optional<SDPAProgramConfig>& program_config,
-    const std::optional<Tensor>& attn_mask = std::nullopt) {
+    const std::optional<Tensor>& attn_mask,
+    std::optional<float> scale,
+    const MemoryConfig& output_memory_config) {
     const auto& [q, k, v] = segments.front();
     std::vector<Tensor> io;
     for (const auto& segment : segments) {
@@ -318,7 +332,9 @@ static std::vector<Tensor> run_recipe_segments(
         TT_FATAL(tensor->device() == q.device(), "SDPA recipe inputs must belong to the same device");
         TT_FATAL(tensor->device()->arch() == tt::ARCH::BLACKHOLE, "SDPA recipes currently support Blackhole only");
         TT_FATAL(tensor->layout() == Layout::TILE, "SDPA recipes require tiled inputs");
-        TT_FATAL(tensor->memory_config() == DRAM_MEMORY_CONFIG, "SDPA recipes require interleaved DRAM inputs");
+        TT_FATAL(
+            tensor->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "SDPA recipes require interleaved (DRAM or L1) inputs");
         TT_FATAL(tensor->logical_shape().rank() == 4, "SDPA recipes require rank-four inputs");
         const auto& shape = tensor->logical_shape();
         const auto& padded = tensor->padded_shape();
@@ -373,16 +389,20 @@ static std::vector<Tensor> run_recipe_segments(
     }
     const uint32_t jobs_per_head = (q_length + q_chunk - 1) / q_chunk;
     const uint32_t k_chunks = (k_length + k_chunk - 1) / k_chunk;
-    TT_FATAL(
-        qs[1] <= grid_size.x * grid_size.y && qs[0] <= grid_size.x * grid_size.y / qs[1],
-        "SDPA recipes require at least one compute core per batch/query head");
     const uint32_t batch_heads = qs[0] * qs[1];
-    const uint32_t chain = std::min<uint32_t>(
-        {jobs_per_head,
-         static_cast<uint32_t>(grid_size.x * grid_size.y / batch_heads),
-         program_config ? program_config->max_cores_per_head_batch : 16u});
+    const uint32_t grid_cores = grid_size.x * grid_size.y;
+    // Up to one batch/head per core: a K/V-forwarding chain of up to max_cores_per_head_batch cores per head.
+    // More batch/heads than cores: every Q chunk of every head is one job, split evenly over the grid without
+    // chains (a core's jobs may span heads; the reader follows each job's head).
+    const bool global_jobs = batch_heads > grid_cores;
+    const uint32_t chain = global_jobs ? 1u
+                                       : std::min<uint32_t>(
+                                             {jobs_per_head,
+                                              grid_cores / batch_heads,
+                                              program_config ? program_config->max_cores_per_head_batch : 16u});
     TT_FATAL(chain > 0, "SDPA recipes require at least one compute core per head");
-    const uint32_t cores = chain * batch_heads;
+    const uint32_t total_jobs = batch_heads * jobs_per_head;
+    const uint32_t cores = global_jobs ? std::min(grid_cores, total_jobs) : chain * batch_heads;
     std::vector<CoreCoord> coordinates;
     std::set<CoreRange> ranges;
     for (uint32_t i = 0; i < cores; ++i) {
@@ -391,13 +411,20 @@ static std::vector<Tensor> run_recipe_segments(
         ranges.emplace(core, core);
     }
     const CoreRangeSet grid(ranges);
+    TT_FATAL(
+        output_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "SDPA recipes require an interleaved (DRAM or L1) output memory config");
     std::vector<Tensor> outputs;
     for (const auto& segment : segments) {
-        outputs.push_back(create_device_tensor(segment[0].tensor_spec(), q.device()));
+        outputs.push_back(create_device_tensor(
+            TensorSpec(
+                segment[0].logical_shape(),
+                TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), output_memory_config)),
+            q.device()));
     }
     const auto& output = outputs.front();
     const uint32_t compute_q_tiles = recipe_compute_q_tiles(policy, q_tiles, k_tiles, attn_mask.has_value());
-    auto program = recipe_compute_program(policy, grid, k_chunks, compute_q_tiles, k_tiles, d_tiles);
+    auto program = recipe_compute_program(policy, grid, k_chunks, compute_q_tiles, k_tiles, d_tiles, scale);
     // QK row-group height the compute consumes the mask in: FP32 recipes single rows, paired BF16 recipes row pairs.
     const uint32_t mask_group_rows = policy.fp32_destination ? 1 : 2;
     if (attn_mask) {
@@ -411,8 +438,7 @@ static std::vector<Tensor> run_recipe_segments(
         for (const auto& cb : program.cbs) {
             used += cb.total_size;
         }
-        const uint64_t available = q.device()->l1_size_per_core() -
-                                   q.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        const uint64_t available = recipe_free_l1(*q.device());
         const uint32_t groups = used + 2 * group_bytes <= available ? 2 : 1;
         program.cbs.push_back(CBDescriptor{
             .total_size = groups * group_bytes,
@@ -483,9 +509,13 @@ static std::vector<Tensor> run_recipe_segments(
     for (uint32_t i = 0; i < cores; ++i) {
         const auto core = coordinates[i];
         const uint32_t head = i / chain, rank = i % chain;
-        const uint32_t count = jobs_per_head / chain + (rank < jobs_per_head % chain);
-        const uint32_t offset =
-            head * jobs_per_head + rank * (jobs_per_head / chain) + std::min(rank, jobs_per_head % chain);
+        // Jobs of one head split over its chain, or (global_jobs, chain 1) all jobs split over the cores.
+        const uint32_t split_jobs = global_jobs ? total_jobs : jobs_per_head;
+        const uint32_t split_ways = global_jobs ? cores : chain;
+        const uint32_t part = global_jobs ? i : rank;
+        const uint32_t count = split_jobs / split_ways + (part < split_jobs % split_ways);
+        const uint32_t offset = (global_jobs ? 0 : head * jobs_per_head) + part * (split_jobs / split_ways) +
+                                std::min(part, split_jobs % split_ways);
         const auto prev = rank ? q.device()->worker_core_from_logical_core(coordinates[i - 1]) : CoreCoord(0, 0);
         const auto next =
             rank + 1 < chain ? q.device()->worker_core_from_logical_core(coordinates[i + 1]) : CoreCoord(0, 0);
@@ -533,8 +563,10 @@ Tensor run_recipe(
     const Tensor& v,
     const PrecisionPolicy& policy,
     const std::optional<SDPAProgramConfig>& program_config,
-    const std::optional<Tensor>& attn_mask) {
-    return run_recipe_segments({{q, k, v}}, policy, program_config, attn_mask).front();
+    const std::optional<Tensor>& attn_mask,
+    std::optional<float> scale,
+    const MemoryConfig& output_memory_config) {
+    return run_recipe_segments({{q, k, v}}, policy, program_config, attn_mask, scale, output_memory_config).front();
 }
 
 std::tuple<Tensor, Tensor> run_joint_recipe(
@@ -545,9 +577,33 @@ std::tuple<Tensor, Tensor> run_joint_recipe(
     const Tensor& joint_k,
     const Tensor& joint_v,
     const PrecisionPolicy& policy,
-    const std::optional<SDPAProgramConfig>& program_config) {
-    auto outputs = run_recipe_segments({{q, k, v}, {joint_q, joint_k, joint_v}}, policy, program_config);
+    const std::optional<SDPAProgramConfig>& program_config,
+    std::optional<float> scale) {
+    auto outputs = run_recipe_segments(
+        {{q, k, v}, {joint_q, joint_k, joint_v}}, policy, program_config, std::nullopt, scale, DRAM_MEMORY_CONFIG);
     return {outputs[0], outputs[1]};
+}
+
+Tensor recipe_bf16_query(const Tensor& q) {
+    if (q.dtype() == DataType::BFLOAT16) {
+        return q;
+    }
+    TT_FATAL(
+        q.dtype() == DataType::BFLOAT8_B || q.dtype() == DataType::BFLOAT4_B,
+        "SDPA recipes take a BF16, BFP8 or BFP4 Q, got {}",
+        q.dtype());
+    return ttnn::typecast(q, DataType::BFLOAT16, DRAM_MEMORY_CONFIG);
+}
+
+uint64_t recipe_output_l1_bytes(
+    const Tensor& q, uint64_t pages, uint32_t page_bytes, const MemoryConfig& memory_config) {
+    if (memory_config.buffer_type() != BufferType::L1) {
+        return 0;
+    }
+    const uint64_t banks = q.device()->allocator()->get_num_banks(BufferType::L1);
+    const uint64_t alignment = q.device()->allocator()->get_alignment(BufferType::L1);
+    const uint64_t bytes = ((pages + banks - 1) / banks) * page_bytes;
+    return (bytes + alignment - 1) / alignment * alignment;
 }
 
 }  // namespace ttnn::operations::transformer::sdpa::detail
