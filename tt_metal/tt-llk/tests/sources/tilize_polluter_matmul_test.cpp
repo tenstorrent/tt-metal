@@ -59,8 +59,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t mm_num_faces = 4; // regular matmul operands
 
     // ---- Run 0: tilize "polluter" (output discarded) ----
+    // Two tiles wide so the leaked tilize row pitch differs from one tile's row. On Blackhole a one-tile-wide
+    // tilize leaves a pitch equal to the tile row, which reads a tilized tile unchanged, so the leak would not show.
+    // The wider pitch makes the polluter read past buffer_A[0]; only reads, and its output is discarded.
+    constexpr std::uint32_t pol_ct_dim   = 2;
     int run                              = 0;
-    const std::uint32_t pol_block_ct_dim = _llk_unpack_tilize_block_ct_dim_wrapper_(1);
+    const std::uint32_t pol_block_ct_dim = _llk_unpack_tilize_block_ct_dim_wrapper_(pol_ct_dim);
     const std::uint32_t pol_tilize_nf    = pol_num_faces;
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -73,7 +77,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         pol_num_faces,
         pol_num_faces);
     _llk_unpack_tilize_init_wrapper_(
-        formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, 1 /* ct_dim */, pol_face_r_dim, false /* narrow_tile */, pol_tilize_nf);
+        formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, pol_ct_dim, pol_face_r_dim, false /* narrow_tile */, pol_tilize_nf);
     _llk_unpack_tilize_wrapper_(
         L1_ADDRESS(params.buffer_A[0]),
         0 /* tile_index */,

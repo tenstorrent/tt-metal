@@ -35,7 +35,6 @@ from dataclasses import dataclass
 
 import pytest
 import torch
-from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
@@ -73,9 +72,6 @@ class DO_RESTORE(TemplateParameter):
         return f"constexpr bool DO_RESTORE = {str(self.do_restore).lower()};"
 
 
-# On Blackhole every do_restore=False case matches golden, so the negative control fails: a one-tile-wide
-# polluter leaves a row pitch that reads a tilized tile unchanged.
-@skip_for_blackhole
 @parametrize(
     # Same format for both runs so skipping the restore (do_restore=False) does not
     # introduce a data-format mismatch — isolating the unpacker-stride leak.
