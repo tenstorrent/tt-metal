@@ -150,6 +150,7 @@ def test_quasar_padded_slice_rm_last_dim_pad_rejected(device, expect_error):
 
 # The row-major pad writer zero-filled its scratch page only for 2- and 4-byte elements, so a uint8
 # output copied stale L1 into the padding columns.
+@pytest.mark.requires_grid_size((8, 1))
 def test_padded_slice_rm_uint8_pads_with_zeros(device):
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
     begins, ends, shard_shape = [0, 0, 0, 0], [1, 1, 64, 40], (8, 64)
