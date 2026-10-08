@@ -313,13 +313,16 @@ void kernel_main() {
             const uint32_t num_tokens_block = std::min(tile_height, active_tokens - chunk * tile_height);
             if constexpr (local_output) {
                 // Fetch this chunk's (token id, k slot) e_t entries; the read completes under the ring
-                // A2A below and is waited for right before the output writes.
-                const auto e_t_accessor = TensorAccessor(LoArgs::e_t_args, e_t_addr);
-                noc_async_read(
-                    e_t_accessor.get_noc_addr(expert_id, chunk * tile_height * e_t_entry_size, /*noc=*/1),
-                    local_output_map_addr,
-                    num_tokens_block * e_t_entry_size,
-                    /*noc=*/1);
+                // A2A below and is waited for right before the output writes. A core with an empty w2
+                // slice (hidden_tiles < ring size) owns no output columns and neither reads nor writes.
+                if (output_width_tiles_core > 0) {
+                    const auto e_t_accessor = TensorAccessor(LoArgs::e_t_args, e_t_addr);
+                    noc_async_read(
+                        e_t_accessor.get_noc_addr(expert_id, chunk * tile_height * e_t_entry_size, /*noc=*/1),
+                        local_output_map_addr,
+                        num_tokens_block * e_t_entry_size,
+                        /*noc=*/1);
+                }
             }
 
             // Device 2.0 migration: legacy primitives retained: state-machine setup
@@ -430,20 +433,22 @@ void kernel_main() {
                 // Final output rows: row bt of this chunk belongs to token (t, k) of the expert's e_t
                 // page; this core's slice of it lands in page k * T + t of [k, T, H] at the core's
                 // column offset. Non-posted writes; the flush before pop_front below frees the source.
-                noc_async_read_barrier(/*noc=*/1);
-                volatile tt_l1_ptr uint32_t* map =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_output_map_addr);
-                const auto output_accessor = TensorAccessor(LoArgs::out_args, local_output_addr);
-                for (uint32_t bt = 0; bt < num_tokens_block; ++bt) {
-                    const uint32_t token_id = map[bt * e_t_entry_words];
-                    const uint32_t k_slot = map[bt * e_t_entry_words + 1];
-                    const uint64_t dst_noc_addr = output_accessor.get_noc_addr(
-                        k_slot * total_tokens + token_id, local_output_col_offset_bytes, /*noc=*/1);
-                    noc_async_write(
-                        source_base_l1_addr + bt * source_width_tiles * tile_width_size_bytes,
-                        dst_noc_addr,
-                        local_output_row_bytes,
-                        /*noc=*/1);
+                if (output_width_tiles_core > 0) {
+                    noc_async_read_barrier(/*noc=*/1);
+                    volatile tt_l1_ptr uint32_t* map =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_output_map_addr);
+                    const auto output_accessor = TensorAccessor(LoArgs::out_args, local_output_addr);
+                    for (uint32_t bt = 0; bt < num_tokens_block; ++bt) {
+                        const uint32_t token_id = map[bt * e_t_entry_words];
+                        const uint32_t k_slot = map[bt * e_t_entry_words + 1];
+                        const uint64_t dst_noc_addr = output_accessor.get_noc_addr(
+                            k_slot * total_tokens + token_id, local_output_col_offset_bytes, /*noc=*/1);
+                        noc_async_write(
+                            source_base_l1_addr + bt * source_width_tiles * tile_width_size_bytes,
+                            dst_noc_addr,
+                            local_output_row_bytes,
+                            /*noc=*/1);
+                    }
                 }
             } else {
                 // Staging ring rows for the fused combine (or the kernel-less combine cores' L1 in

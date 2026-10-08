@@ -1244,12 +1244,13 @@ def test_moe_compute_single_card_full_local_b1(mesh_device, mesh_shape):
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "trace_region_size": 500000}],
     indirect=True,
 )
+@pytest.mark.parametrize("hidden_size", [2048, 224], ids=["h2048", "h224"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_single_card_explicit_axis0(mesh_device, mesh_shape):
-    """cluster_axis=0 on a 1x1 mesh names an axis of extent 1: the fabric path degenerates to the
-    local combine and matches the implicit cluster_axis=None call."""
-    hidden_size = 2048
-    ring_n = effective_matmul_ring_size(mesh_device)
+def test_moe_compute_single_card_explicit_axis0(mesh_device, mesh_shape, hidden_size):
+    """cluster_axis=0 on a 1x1 mesh names an axis of extent 1: the op takes the SingleCluster path,
+    dm1 writes the final output, and it must match the golden like the cluster_axis=None call. Hidden
+    224 is 7 tiles, fewer than the ring cores of an 8-bank Blackhole ring or the 12-core Wormhole
+    ring, so there some ring cores own no output columns."""
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -1259,7 +1260,7 @@ def test_moe_compute_single_card_explicit_axis0(mesh_device, mesh_shape):
         N=512,
         hidden_size=hidden_size,
         output_height_shard_dim=4,
-        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SILU,
         has_bias=False,
@@ -1310,7 +1311,7 @@ def test_moe_compute_single_card_explicit_axis0_height_sharded_output(mesh_devic
         N=512,
         hidden_size=hidden_size,
         output_height_shard_dim=4,
-        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SILU,
         has_bias=False,
@@ -1341,7 +1342,6 @@ def test_moe_compute_multi_device_local_axis(mesh_device, mesh_shape, expect_err
     if mesh_device.get_num_devices() < 2:
         pytest.skip("multi-device local combine needs at least two devices")
     hidden_size = 2048
-    ring_n = effective_matmul_ring_size(mesh_device)
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -1351,7 +1351,7 @@ def test_moe_compute_multi_device_local_axis(mesh_device, mesh_shape, expect_err
         N=512,
         hidden_size=hidden_size,
         output_height_shard_dim=4,
-        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SILU,
         has_bias=False,
@@ -1377,7 +1377,6 @@ def test_moe_compute_multi_device_local_axis_writes_owned_rows_only(mesh_device,
     if mesh_device.get_num_devices() < 2:
         pytest.skip("the owned-row check needs at least two devices")
     hidden_size = 2048
-    ring_n = effective_matmul_ring_size(mesh_device)
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -1387,7 +1386,7 @@ def test_moe_compute_multi_device_local_axis_writes_owned_rows_only(mesh_device,
         N=512,
         hidden_size=hidden_size,
         output_height_shard_dim=4,
-        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SILU,
         has_bias=False,
