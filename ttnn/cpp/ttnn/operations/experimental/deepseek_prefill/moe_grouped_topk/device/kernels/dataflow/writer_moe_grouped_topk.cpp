@@ -169,7 +169,8 @@ template <
     uint32_t cb_winning_group_indices,
     uint32_t width_tiles,
     uint32_t topk_groups,
-    uint32_t num_group_tiles>
+    uint32_t num_group_tiles,
+    bool by_id = false>
 FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
     CircularBuffer biased_cb(cb_biased_scores);
     CircularBuffer expert_idx_cb(cb_expert_index_template);
@@ -192,7 +193,41 @@ FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
     volatile tt_l1_ptr uint16_t* sorted_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sorted_order_cb.get_read_ptr());
 
-    for (uint32_t k = 0; k < topk_groups; k++) {
+    // by_id: each token's winning groups go to tiles 0..topk_groups-1 in ascending group id, so the final top-k
+    // sees its candidates in expert order.
+    for (uint32_t t = 0; by_id && t < tokens_per_tile; t++) {
+        const uint32_t t_pos = (t < rows_per_face) ? t : elements_per_face + (t - rows_per_face);
+        uint16_t ids[topk_groups];
+        for (uint32_t k = 0; k < topk_groups; k++) {
+            const uint32_t col = (k < rows_per_face) ? k * rows_per_face
+                                                     : 2 * elements_per_face + (k - rows_per_face) * rows_per_face;
+            const uint16_t v = sorted_indices_ptr[col + t_pos];
+            uint32_t j = k;
+            for (; j > 0 && ids[j - 1] > v; j--) {
+                ids[j] = ids[j - 1];
+            }
+            ids[j] = v;
+        }
+        const uint32_t row = (t < rows_per_face) ? t : t - rows_per_face;
+        const uint32_t score_row_fl1 =
+            ((t < rows_per_face) ? 0 : 2 * score_tile::face_size_bytes) + row * score_tile::face_line_bytes;
+        const uint32_t score_row_fl2 = score_tile::face_size_bytes + score_row_fl1;
+        const uint32_t index_row_fl1 =
+            ((t < rows_per_face) ? 0 : 2 * index32_tile::face_size_bytes) + row * index32_tile::face_line_bytes;
+        const uint32_t index_row_fl2 = index32_tile::face_size_bytes + index_row_fl1;
+        for (uint32_t k = 0; k < topk_groups; k++) {
+            const uint64_t score_src = scores_base_noc_addr + ids[k] * score_tile::tile_size_bytes;
+            const uint64_t index_src = indices_base_noc_addr + ids[k] * index32_tile::tile_size_bytes;
+            const uint32_t scores_dest_addr = scores_dest_base_addr + k * score_tile::tile_size_bytes;
+            const uint32_t indices_dest_addr = indices_dest_base_addr + k * index32_tile::tile_size_bytes;
+            noc_async_read(score_src + score_row_fl1, scores_dest_addr + score_row_fl1, score_tile::face_line_bytes);
+            noc_async_read(index_src + index_row_fl1, indices_dest_addr + index_row_fl1, index32_tile::face_line_bytes);
+            noc_async_read(score_src + score_row_fl2, scores_dest_addr + score_row_fl2, score_tile::face_line_bytes);
+            noc_async_read(index_src + index_row_fl2, indices_dest_addr + index_row_fl2, index32_tile::face_line_bytes);
+        }
+    }
+
+    for (uint32_t k = 0; !by_id && k < topk_groups; k++) {
         uint32_t scores_dest_addr = scores_dest_base_addr + k * score_tile::tile_size_bytes;
         uint32_t indices_dest_addr = indices_dest_base_addr + k * index32_tile::tile_size_bytes;
 
@@ -306,6 +341,7 @@ void kernel_main() {
     constexpr uint32_t tile_height = get_named_compile_time_arg_val("tile_height");
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
     constexpr uint32_t topk_groups = get_named_compile_time_arg_val("topk_groups");
+    constexpr bool winning_groups_by_id = get_named_compile_time_arg_val("winning_groups_by_id") != 0;
     constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
     constexpr uint32_t summed_experts_per_group = get_named_compile_time_arg_val("summed_experts_per_group");
     constexpr uint32_t num_group_tiles = get_named_compile_time_arg_val("num_group_tiles");
@@ -399,7 +435,8 @@ void kernel_main() {
                 cb_winning_group_indices,
                 width_tiles,
                 topk_groups,
-                num_group_tiles>(tokens_per_tile);
+                num_group_tiles,
+                winning_groups_by_id>(tokens_per_tile);
         }
 
         out_indices_cb.wait_front(1);

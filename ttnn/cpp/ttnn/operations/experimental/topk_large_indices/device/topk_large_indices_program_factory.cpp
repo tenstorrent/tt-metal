@@ -242,6 +242,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k, static_cast<uint32_t>(body_mode)};
     compute_compile_args.push_back(has_meta ? 1u : 0u);
     compute_compile_args.push_back(has_meta ? cb_meta : 0u);
+    compute_compile_args.push_back(tt::div_up(input.logical_shape()[-1], llk_k) >= 2 ? 1u : 0u);
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",
