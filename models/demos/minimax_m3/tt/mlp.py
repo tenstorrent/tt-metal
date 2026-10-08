@@ -68,8 +68,13 @@ class MLP:
         use_ep_moe=False,
         ep_seq_len_per_chip=1024,
         overlap_shared_expert=True,
+        layer_idx=None,
     ):
         self.mesh_device = mesh_device
+        # M3_KA_EXPERT_PLACEMENT (utils/expert_placement.py): this layer's expert relabelling, or None.
+        from models.demos.minimax_m3.utils import expert_placement
+
+        self.expert_perm = expert_placement.perm_for_layer(kagent_flags.EXPERT_PLACEMENT, layer_idx)
         self.mesh_config = mesh_config
         self.ccl = ccl_manager
         # Residual-stream layout (tt/residual.py). Sharded => this block CONSUMES full emb (the layer's
@@ -93,6 +98,7 @@ class MLP:
             # Tokens per device per forward — lets the router size the fused gate's wide bias at init.
             num_tokens=ep_seq_len_per_chip,
             mesh_config=mesh_config,
+            expert_perm=self.expert_perm,
         )
 
         # Cache-only loading: an empty state_dict means "load every tilized weight from the on-disk
@@ -212,6 +218,7 @@ class MLP:
             route_scale=getattr(hf_config, "routed_scaling_factor", 1.0),
             reduce_scatter_fn=moe_reduce_scatter,
             overlap_shared_expert=self.overlap_shared,
+            expert_perm=self.expert_perm,
         )
         self.ep_num_links = ccl_manager.num_links
 

@@ -98,6 +98,7 @@ class DecoderLayer:
                 use_ep_moe=use_ep_moe,
                 ep_seq_len_per_chip=ep_seq_len_per_chip,
                 overlap_shared_expert=overlap_shared_expert,
+                layer_idx=layer_idx,
             )
 
         # MiniMax-M3 lists per-layer attention types in `attn_type_list` (all 1 =
