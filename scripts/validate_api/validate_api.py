@@ -42,6 +42,9 @@ ALLOWED_UMD_HEADERS = {
     "umd/device/types/cluster_descriptor_types.hpp",
     "umd/device/types/core_coordinates.hpp",
     "umd/device/types/xy_pair.hpp",
+    # PhysicalSystemDescriptor holds a tt::umd::SemVer by value. semver.hpp already reached the
+    # API through cluster_descriptor_types.hpp; it is listed so the header can include it directly.
+    "umd/device/utils/semver.hpp",
 }
 
 ALLOWED_PREFIXES = {

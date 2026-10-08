@@ -7,7 +7,6 @@
 #include <mutex>
 #include <set>
 #include <string>
-#include <sys/types.h>
 
 namespace tt::tt_metal::distributed {
 
@@ -50,8 +49,6 @@ private:
     ShmResourceTracker();
 
     void flush_manifest();
-    static std::string manifest_path_for_pid(pid_t pid);
-    static bool is_pid_alive(pid_t pid);
 
     std::mutex mutex_;
     std::set<std::string> shm_names_;
