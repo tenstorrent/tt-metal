@@ -189,6 +189,28 @@ def test_topk_large_indices_program_cache_separates_compute_body_modes(device):
         device.clear_program_cache()
 
 
+@pytest.mark.parametrize("k", [512, 2048])
+def test_topk_large_indices_program_cache_separates_one_chunk_rows(device, k):
+    # Rows of one chunk compile a kernel without the multi-chunk path; wider rows must not reuse it.
+    one_chunk_input = _make_large_index_input(num_rows=1, n=k, k=k)
+    two_chunk_input = _make_large_index_input(num_rows=1, n=2 * k, k=k)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        one_chunk = ttnn.experimental.topk_large_indices(_to_device(one_chunk_input, device), k=k)
+        entries_after_one_chunk = device.num_program_cache_entries()
+        two_chunk = ttnn.experimental.topk_large_indices(_to_device(two_chunk_input, device), k=k)
+        entries_after_two_chunk = device.num_program_cache_entries()
+
+        assert entries_after_one_chunk > 0
+        assert entries_after_two_chunk == entries_after_one_chunk + 1
+        _assert_topk_matches_torch(one_chunk_input, one_chunk, k)
+        _assert_topk_matches_torch(two_chunk_input, two_chunk, k)
+    finally:
+        device.clear_program_cache()
+
+
 @pytest.mark.parametrize(
     "shape,k",
     [
@@ -262,8 +284,8 @@ TOPK_LARGE_INDICES_PERF_MARGIN = 0.01
 # regressions and unexpected speedups that should trigger baseline review.
 TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS = [
     # (case_id, num_rows, allocated_length, valid_length, k, expected_duration_ns)
-    ("prefill", 640, 51200, None, 1536, 1_286_400),
-    ("bounded_cache", 2, 102400, 56320, 1536, 242_560),
+    ("prefill", 640, 51200, None, 1536, 984_200),
+    ("bounded_cache", 2, 102400, 56320, 1536, 185_900),
 ]
 
 
