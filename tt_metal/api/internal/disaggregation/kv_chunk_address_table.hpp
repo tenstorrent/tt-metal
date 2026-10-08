@@ -167,6 +167,19 @@ public:
     // Replace a config's map with a compressed representation (import path).
     void install_strided_map(uint32_t config_id, StridedRowMap map);
 
+    // Author one (slot, layer) row of a STRIDED_ROWS config in place: chunk c resolves to
+    // bases[c % step] + (c / step) * strides[c % step] on device_group_indices[c % step].
+    // The builder-side counterpart of install_strided_map(): a periodic layout is authored
+    // per row without ever materializing the unrolled grid.
+    void set_strided_row(
+        uint32_t layer,
+        uint32_t slot,
+        uint32_t size_bytes,
+        std::vector<uint64_t> bases,
+        std::vector<int64_t> strides,
+        std::vector<DeviceGroupIndex> device_group_indices,
+        uint32_t config_id = 0);
+
     // Register a mapping from FabricNodeId to its host name.
     void set_fabric_node_host(const tt::tt_fabric::FabricNodeId& node_id, const std::string& host_name);
 

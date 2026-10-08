@@ -307,6 +307,44 @@ void KvChunkAddressTable::install_strided_map(uint32_t config_id, StridedRowMap 
     maps_[config_id] = std::move(map);
 }
 
+void KvChunkAddressTable::set_strided_row(
+    uint32_t layer,
+    uint32_t slot,
+    uint32_t size_bytes,
+    std::vector<uint64_t> bases,
+    std::vector<int64_t> strides,
+    std::vector<DeviceGroupIndex> device_group_indices,
+    uint32_t config_id) {
+    validate_config_id(config_id);
+    auto* map = std::get_if<StridedRowMap>(&maps_[config_id]);
+    TT_FATAL(
+        map != nullptr, "set_strided_row() on an UNROLLED config {} — construct the config as STRIDED_ROWS", config_id);
+    TT_FATAL(layer < map->num_layers, "layer {} out of range [0, {})", layer, map->num_layers);
+    TT_FATAL(slot < map->num_slots, "slot {} out of range [0, {})", slot, map->num_slots);
+    const size_t step = bases.size();
+    TT_FATAL(
+        step > 0 && step <= map->num_position_chunks,
+        "strided row step {} must be in [1, {}] (config {})",
+        step,
+        map->num_position_chunks,
+        config_id);
+    TT_FATAL(
+        strides.size() == step && device_group_indices.size() == step,
+        "strided row has bases {} / strides {} / device groups {}; all must match",
+        step,
+        strides.size(),
+        device_group_indices.size());
+    for (const auto& dg : device_group_indices) {
+        TT_FATAL(*dg < device_groups_.size(), "device group index {} not registered", *dg);
+    }
+    auto& row = map->rows[static_cast<size_t>(slot) * map->num_layers + layer];
+    row.step = static_cast<uint32_t>(step);
+    row.size_bytes = size_bytes;
+    row.bases = std::move(bases);
+    row.strides = std::move(strides);
+    row.device_group_indices = std::move(device_group_indices);
+}
+
 void KvChunkAddressTable::set_fabric_node_host(
     const tt::tt_fabric::FabricNodeId& node_id, const std::string& host_name) {
     fabric_node_to_host_[node_id] = host_name;
