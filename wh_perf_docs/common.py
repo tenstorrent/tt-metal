@@ -1,5 +1,4 @@
-import json
-import os
+import json, os, re
 
 D = os.path.dirname(os.path.abspath(__file__))
 A = json.load(open(f"{D}/assets.json"))

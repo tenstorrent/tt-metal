@@ -1,13 +1,10 @@
 from common import *
 
 D = dict(
-    id="WH-02",
-    short="L1 Accesses While Packing",
+    id="WH-02", short="L1 Accesses While Packing",
     summary="One L1 access by any agent other than the packers, at the wrong cycle while they run, moves the packers into the slow rhythm of WH-01. When the access comes at a random cycle (the host polling L1), the same build gives a different value on every run.",
-    status="Fixed at #58068 head",
-    status_cls="st-ok",
-    depends=["WH-01"],
-    used_by=["WH-04", "WH-05"],
+    status="Fixed at #58068 head", status_cls="st-ok",
+    depends=["WH-01"], used_by=["WH-04", "WH-05"],
     problem="re-measure (random cycle) and no-work change (fixed cycle)",
     what="""<ul>
 <li>On main, a full Wormhole run gives the same value on rerun for only 68.7% of points.</li>
@@ -16,6 +13,7 @@ D = dict(
 </ul>""",
     hw=f"""<ul>
 <li>L1 has 16 banks behind 16 access ports, and clients share ports through round-robin muxes ({isa("TensixTile/L1.md", "ISA doc: L1")}). The packers' writes, the TRISCs' loads, stores and code fetches, and the NoC's reads of L1 all go through these ports.</li>
+<li><b>Which L1 port each packer writes through</b> (WH RTL): packer 0 has its own port ({rtl("tensix/rtl/tt_tensix.sv", 1631)}); packer 1 shares port 1 with the scrubber and unpacker 1 ({rtl("tensix/rtl/tt_tensix.sv", 1211)}); packers 2 and 3 go through the two TDMA round-robin arbiters ({rtl("tdma/rtl/tt_tdma.sv", 3848)}, {rtl("tdma/rtl/tt_tdma.sv", 3855)}), whose outputs share <b>port 2</b> with NCRISC, TRISC0 (unpack) and BRISC ({rtl("tensix/rtl/tt_tensix.sv", 1304)}) and <b>port 3</b> with TRISC1 (math) and TRISC2 (pack) ({rtl("tensix/rtl/tt_tensix.sv", 1398)}). So every L1 access of a TRISC, including its code fetches, competes with packer 2 or packer 3 for a port. The public port diagram is in {isa("TensixTile/L1.md", "ISA doc: L1")}.</li>
 <li>A TRISC load or store is a narrow access; a code fetch is a 128-bit read ({isa("TensixTile/L1.md", "L1, RISCV bandwidth")}).</li>
 <li>One accepted access by another client can make a packer's L1 write wait one cycle. That is the push in WH-01 step 3.</li>
 </ul>""",
@@ -54,7 +52,7 @@ D = dict(
 <tr><td>config885 PACK_ISOLATE, 5 runs / 2 runs</td><td class="n">71,873 … 88,263</td><td class="n">71,873, 71,873</td></tr>
 <tr><td>Rerun, 323 test cases (1,346 values)</td><td class="n">on main: 68.7% identical (full suite)</td><td class="n">0 values move</td></tr>
 <tr><td>184 test cases, two identical runs</td><td class="n">49 of 736 move (host poll back)</td><td class="n">0</td></tr></table></div>""",
-    open="""<ul><li>The arbiter detail (one of two packer packets taken) is read from the waveform signal <code>l1_arbiter_packet_accept</code>; the RTL arbitration code was not traced.</li>
+    open="""<ul><li>The port sharing is traced in the RTL (section 2). The host reads L1 over the NoC through other ports (4–7, 12–15), so they meet the packers at the banks, not at a port; that bank-level step is not traced.</li>
 <li>Any new harness or firmware L1 access during a kernel brings this back. A CI check of rerun identity on a sample would catch it.</li></ul>""",
     repro="""<ul><li>Branch <code>nstojictt/p58-versim</code>: <code>LLK_HOST_POLL_L1=1</code> (host polls L1 again), <code>LLK_BRISC_OLD_POLL=1</code> (1 µs BRISC poll), <code>LLK_ZONE_OLD=1</code> (start record in the window).</li>
 <li>Test: <code>perf_math_matmul.py::test_perf_math_matmul[MathFidelity.LoFi-matmul_config885-5-1]</code>, <code>LLK_PERF_RUN_TYPES=PACK_ISOLATE</code>, run 5 times.</li>

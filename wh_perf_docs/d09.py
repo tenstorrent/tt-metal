@@ -1,13 +1,10 @@
 from common import *
 
 D = dict(
-    id="WH-09",
-    short="Previous Kernel State",
+    id="WH-09", short="Previous Kernel State",
     summary="On an earlier version of #58068 the first kernel of a test depended on the kernel that ran before it on the core, so the result depended on test order and on how pytest split the tests. At #58068 head this no longer happens, and the warm-up pass can be removed.",
-    status="Fixed at #58068 head",
-    status_cls="st-ok",
-    depends=[],
-    used_by=[],
+    status="Fixed at #58068 head", status_cls="st-ok",
+    depends=[], used_by=[],
     problem="re-measure (test order)",
     what="""<ul>
 <li>eltwise_binary X (Float16_b → Float16, Elwmul, HiFi2, dest_acc Yes), L1_TO_L1: 12,347 cycles after a kernel that ran only L1_TO_L1, 10,573 after a full test whose last kernel is L1_CONGESTION (17-commit #58068, warm-up off).</li>
@@ -32,7 +29,8 @@ D = dict(
 <p>Recommendation: remove the warm-up pass (about 5% run time).</p>""",
     ba="""<div class="tw"><table><tr><th>Card</th><th class="n">Before (17-commit, no warm-up)</th><th class="n">After (#58068 head, no warm-up)</th></tr>
 <tr><td>X after a full test / after L1_TO_L1 only</td><td class="n">10,573 / 12,347</td><td class="n">12,345 / 12,345</td></tr>
-<tr><td>323 cases, forward vs reverse order</td><td class="n">–</td><td class="n">0 values move</td></tr></table></div>""",
+<tr><td>323 cases, forward vs reverse order</td><td class="n">–</td><td class="n">0 values move</td></tr>
+<tr><td>Full suite (CI, 842,256 points), warm-up off for Wormhole, run vs rerun</td><td class="n">–</td><td class="n">all TILE_LOOP values identical; 44 KERNEL values differ (head with warm-up: 40)</td></tr></table></div>""",
     open="""<ul><li>Which change between the 17-commit version and the head removes it with the barrier off.</li>
 <li>No Versim proof.</li></ul>""",
     repro="""<ul><li>17-commit: branch <code>nstojictt/p58-v17-nowarm</code>, <code>LLK_PERF_NO_WARMUP=1</code>; run P then X in one pytest call, with and without <code>LLK_PERF_RUN_TYPES=L1_TO_L1</code>.</li>

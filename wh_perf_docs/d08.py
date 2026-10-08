@@ -1,13 +1,10 @@
 from common import *
 
 D = dict(
-    id="WH-08",
-    short="Instruction Cache Sets",
+    id="WH-08", short="Instruction Cache Sets",
     summary="The math TRISC's instruction cache is 512 bytes: 2 ways of 16 sets of 16-byte lines. If three hot code lines of a loop sit 256 bytes apart, they share a set and evict each other on every pass, and the loop reads code from L1 on every pass. One matmul config runs 27% slower this way.",
-    status="Avoided by layout pads",
-    status_cls="st-ok",
-    depends=[],
-    used_by=[],
+    status="Avoided by layout pads", status_cls="st-ok",
+    depends=[], used_by=[],
     problem="no-work change",
     what="""<ul>
 <li>math_matmul config936, MATH_ISOLATE, at #58068 head: 88,211 cycles with the layout pads, 111,741 without, on the card and in Versim.</li>

@@ -1,13 +1,10 @@
 from common import *
 
 D = dict(
-    id="WH-06",
-    short="Pack Branch Predictor",
+    id="WH-06", short="Pack Branch Predictor",
     summary="The TRISC branch predictor has 16 entries and no tag. If two branches of the pack loop map to the same entry, both mispredict on every pass, the pack core becomes slower than the packers, and the kernel loses about 1 cycle per tile. Which branches share an entry depends only on their addresses.",
-    status="Fixed for code outside the loop",
-    status_cls="st-ok",
-    depends=[],
-    used_by=[],
+    status="Fixed for code outside the loop", status_cls="st-ok",
+    depends=[], used_by=[],
     problem="no-work change",
     what="""<ul>
 <li>Repro (PACK_ISOLATE, other threads idle): 9,070 cycles with 0 nops in <code>_llk_pack_init_</code>, 9,317 with +1 nop (card), 9,313 (Versim).</li>

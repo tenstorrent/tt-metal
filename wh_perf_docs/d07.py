@@ -1,13 +1,10 @@
 from common import *
 
 D = dict(
-    id="WH-07",
-    short="Branch-Type Cache",
+    id="WH-07", short="Branch-Type Cache",
     summary="Before the branch predictor is used, a small cache remembers which addresses hold a branch. It replaces entries at random, and the random number comes from a counter that steps on every clock. A loop with more branch addresses than the cache holds mispredicts a different number of times if it starts a few cycles earlier or later.",
-    status="Partly fixed",
-    status_cls="st-part",
-    depends=[],
-    used_by=[],
+    status="Partly fixed", status_cls="st-part",
+    depends=[], used_by=[],
     problem="no-work change (through start timing)",
     what="""<ul>
 <li>MATH_ISOLATE, matmul 2×1, Float16_b → Float32: 113,830 or 111,290 cycles, depending on one nop in the pack init. The pack thread does no work in MATH_ISOLATE.</li>

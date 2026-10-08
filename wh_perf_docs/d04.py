@@ -15,6 +15,7 @@ D = dict(
 </ul>""",
     hw=f"""<ul>
 <li>The barrier invalidates all TRISC instruction caches before it releases the threads ({code("tt_metal/tt-llk/tests/helpers/src/brisc.cpp", 165, "brisc.cpp")}), so every thread starts the zone with an empty cache ({isa("TensixTile/BabyRISCV/InstructionCache.md", "ISA doc: instruction cache, invalidation")}).</li>
+<li><b>Which L1 port each packer writes through</b> (WH RTL): packer 0 has its own port ({rtl("tensix/rtl/tt_tensix.sv", 1631)}); packer 1 shares port 1 with the scrubber and unpacker 1 ({rtl("tensix/rtl/tt_tensix.sv", 1211)}); packers 2 and 3 go through the two TDMA round-robin arbiters ({rtl("tdma/rtl/tt_tdma.sv", 3848)}, {rtl("tdma/rtl/tt_tdma.sv", 3855)}), whose outputs share <b>port 2</b> with NCRISC, TRISC0 (unpack) and BRISC ({rtl("tensix/rtl/tt_tensix.sv", 1304)}) and <b>port 3</b> with TRISC1 (math) and TRISC2 (pack) ({rtl("tensix/rtl/tt_tensix.sv", 1398)}). So every L1 access of a TRISC, including its code fetches, competes with packer 2 or packer 3 for a port. The public port diagram is in {isa("TensixTile/L1.md", "ISA doc: L1")}.</li>
 <li>Code fetches are 128-bit L1 reads on the same L1 ports as the packers' writes ({isa("TensixTile/L1.md", "ISA doc: L1")}).</li>
 <li>Isolate run types have no exit barrier ({code("tt_metal/tt-llk/tests/helpers/include/counters.h", 549, "counters.h exit_barrier_for")}); the idle threads leave TILE_LOOP at once, for example unpack in PACK_ISOLATE: <code>return;</code> ({code("tt_metal/tt-llk/tests/sources/math_matmul_test.cpp", 85, "math_matmul_test.cpp")}). They park again only after <code>run_kernel</code> ({code("tt_metal/tt-llk/tests/helpers/src/trisc.cpp", 116, "trisc.cpp")}).</li>
 </ul>""",
@@ -47,7 +48,9 @@ D = dict(
     ba="""<div class="tw"><table><tr><th>Card, #58068 head</th><th class="n">Before</th><th class="n">After (settle 2,000)</th></tr>
 <tr><td>All code +4 bytes per function: values that move (1,346)</td><td class="n">75, max 28.6%</td><td class="n">25, max 6.2%</td></tr>
 <tr><td>… of them in isolate run types</td><td class="n">50</td><td class="n">0</td></tr>
-<tr><td>config12601 PACK_ISOLATE, 0 / +4 bytes</td><td class="n">71,873 / 92,263</td><td class="n">71,791 / 71,791</td></tr></table></div>
+<tr><td>config12601 PACK_ISOLATE, 0 / +4 bytes</td><td class="n">71,873 / 92,263</td><td class="n">71,791 / 71,791</td></tr>
+<tr><td><b>Full suite</b> (CI, 842,256 points), +4 bytes per function: PACK_ISOLATE TILE_LOOP values that move &gt; 2%</td><td class="n">13,537 (up to 28.4%)</td><td class="n">0 (largest 0.8%)</td></tr></table></div>
+<p>Full-suite arms: #58068 head 3ff45cbd1c7 against branch <code>nstojictt/p58-final</code> b0d4d554446 (head + this settle + the two removals of WH-09 and the fixed address), each with and without one nop before every function, two CI runs each. One time, head → final: 22,560 PACK_ISOLATE values get faster by more than 2% and 454 slower (median −1.5%), because the packers no longer start in the slow rhythm.</p>
 <p>The 25 that still move are L1_TO_L1 and L1_CONGESTION, where unpack and math really run the moved code. The settle changes 133 values once (up to 22.4%): it moves the measured loop and its start.</p>""",
     open="""<ul><li>The settle count (2,000 nops) is a first value, not tuned.</li>
 <li>UNPACK_ISOLATE and MATH_ISOLATE: only 2 values moved, so pack as the idle thread is not a problem in this set; not proven for every module.</li></ul>""",
