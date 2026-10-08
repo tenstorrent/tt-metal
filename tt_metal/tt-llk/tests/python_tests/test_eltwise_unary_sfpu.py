@@ -4,7 +4,7 @@
 
 import os
 import struct
-from itertools import chain, product
+from itertools import product
 
 import pytest
 import torch
@@ -153,7 +153,9 @@ FORMATS_BFP4_B = [
 # WITH_COVERAGE is set. Membership is measured, never inferred: run the op under
 # `--coverage` on the arch in question before adding it here.
 #
-# Reciprocal on Blackhole is the only entry the sweep has. 46 of its 153 Blackhole
+# Reciprocal on Blackhole is the only entry the sweep has. The counts below were measured when the
+# sweep still ran 12 more Reciprocal ids per arch (dest_acc:No twins of promoted dest_acc:Yes ids).
+# 46 of its 153 Blackhole
 # variants come back with alternate elements stale while its sfp* instruction stream
 # stays byte-identical to the non-coverage build, which is what makes it a timing fault
 # rather than a codegen one. Two things are needed to reproduce it, and neither predicts
@@ -211,34 +213,28 @@ def _sweep_params(formats, mathops, approx_modes, input_dimensions):
     """
     fast_ops = [op for op in mathops if op in SUPPORTED_FAST_MODE_OPS]
     non_fast_ops = [op for op in mathops if op not in SUPPORTED_FAST_MODE_OPS]
-    return list(
-        chain.from_iterable(
-            chain(
-                product(
-                    [fmt],
-                    approx_modes,
-                    fast_ops,
-                    [FastMode.No, FastMode.Yes],
-                    dest_accs,
-                    input_dimensions,
-                ),
-                product(
-                    [fmt],
-                    approx_modes,
-                    non_fast_ops,
-                    [FastMode.No],
-                    dest_accs,
-                    input_dimensions,
-                ),
-            )
-            for fmt in formats
-            for dest_accs in [
-                distinct_dest_accumulation_modes(
-                    fmt, [DestAccumulation.No, DestAccumulation.Yes]
-                )
-            ]
+    params = []
+    for fmt in formats:
+        dest_accs = distinct_dest_accumulation_modes(
+            fmt, [DestAccumulation.No, DestAccumulation.Yes]
         )
-    )
+        params += product(
+            [fmt],
+            approx_modes,
+            fast_ops,
+            [FastMode.No, FastMode.Yes],
+            dest_accs,
+            input_dimensions,
+        )
+        params += product(
+            [fmt],
+            approx_modes,
+            non_fast_ops,
+            [FastMode.No],
+            dest_accs,
+            input_dimensions,
+        )
+    return params
 
 
 def _assert_broad_profile_valid():
