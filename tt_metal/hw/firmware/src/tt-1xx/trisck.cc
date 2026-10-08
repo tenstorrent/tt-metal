@@ -78,7 +78,7 @@ uint32_t _start() {
 
 #if defined(UCK_CHLKC_UNPACK)
     // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed
-    memory_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
+    memory_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1u << 3);  // r3 measurement: L1 arbiter LFSR grant on
 #endif
 #if !defined(UCK_CHLKC_MATH) and defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
