@@ -604,8 +604,8 @@ class LinearPixelShuffleUpsample(Module):
 
 
 def stage1_split_enabled() -> bool:
-    """Whether stage 1 runs split over the whole mesh: off unless DIFFVAE_DET_S1_SPLIT=1."""
-    return os.environ.get("DIFFVAE_DET_S1_SPLIT", "0") not in ("0", "false", "False", "")
+    """Whether stage 1 runs split over the whole mesh: on unless DIFFVAE_DET_S1_SPLIT=0."""
+    return os.environ.get("DIFFVAE_DET_S1_SPLIT", "1") not in ("0", "false", "False", "")
 
 
 class DeterministicStages(Module):
