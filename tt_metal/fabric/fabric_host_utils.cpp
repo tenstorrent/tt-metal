@@ -41,7 +41,7 @@ HostName hostname_for_mapping_export(const HostName& hostname, bool mock_enabled
     if (!mock_enabled) {
         return hostname;
     }
-    static constexpr std::string_view kRankMarker = "__rank";
+    constexpr std::string_view kRankMarker = tt::tt_metal::kHostRankSuffixMarker;
     const auto pos = hostname.rfind(kRankMarker);
     if (pos == std::string::npos || pos + kRankMarker.size() == hostname.size()) {
         return hostname;

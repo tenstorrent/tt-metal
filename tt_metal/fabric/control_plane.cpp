@@ -1016,6 +1016,12 @@ void ControlPlane::validate_system_health_against_mesh_graph_policy() const {
     if (this->fabric_reliability_mode_ != tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
         return;
     }
+    // STRICT-vs-RELAXED semantics govern how factory-descriptor holes are classified. Without a
+    // factory descriptor there is no hole set for the policy to disagree about, and a relaxed mesh
+    // graph under the default (STRICT) mode has always been a legal, fully specified configuration.
+    if (!this->rtoptions_.get().has_factory_system_descriptor_path()) {
+        return;
+    }
     TT_FATAL(this->mesh_graph_ != nullptr, "Mesh graph is not initialized");
     bool relaxed =
         this->mesh_graph_->is_inter_mesh_policy_specified() && this->mesh_graph_->is_inter_mesh_policy_relaxed();

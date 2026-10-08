@@ -680,7 +680,7 @@ PhysicalSystemDescriptor run_local_discovery(
     // deliberately distinctive: the mapping export strips exactly this suffix, and a plain "_<digits>"
     // could also be the tail of a genuine cluster id (e.g. "rack_1"), which must never be truncated.
     auto hostname_key = (*(distributed_context->size()) > 1 && !all_hostnames_unique)
-                            ? (hostname + "__rank" + std::to_string(my_rank))
+                            ? (hostname + std::string(kHostRankSuffixMarker) + std::to_string(my_rank))
                             : hostname;
 
     // Set local hostname and rank (friend access allows direct access to private members)
