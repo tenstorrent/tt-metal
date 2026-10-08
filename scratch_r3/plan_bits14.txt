@@ -1,0 +1,3 @@
+bits14 head test_lf21_prof.py - lf_512_4k_256_lofi or lf_512_4k_256_fp32 or lf_512_4k_256_b8in0
+bits14 c5 test_lf21_prof.py - lf_512_4k_256_lofi or lf_512_4k_256_fp32 or lf_512_4k_256_b8in0
+bits14 c4 test_lf21_prof.py - lf_512_4k_256_lofi or lf_512_4k_256_fp32 or lf_512_4k_256_b8in0
