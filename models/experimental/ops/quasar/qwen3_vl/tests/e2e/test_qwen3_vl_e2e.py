@@ -10,6 +10,7 @@ import torch
 import ttnn
 
 from models.experimental.ops.quasar.qwen3_vl.tests.e2e import pcc as P
+from models.experimental.ops.quasar.qwen3_vl.tests.e2e import snapshot as S
 from models.experimental.ops.quasar.qwen3_vl.tests.e2e.config import HF_MODEL_ID
 from models.experimental.ops.quasar.qwen3_vl.tests.e2e.host_reference import load_hf_model, run_reference
 from models.experimental.ops.quasar.qwen3_vl.tests.e2e.op_overrides import OverrideSession
@@ -48,8 +49,24 @@ def test_qwen3_vl_e2e(mesh_device, qwen_run_config, monkeypatch, request):
     recorder = StageRecorder(progress)
     session = OverrideSession(mesh_device, cfg.host_ops, cfg.disable_wa, cfg.allow_uncertified)
     session.install(monkeypatch)
+    resume_from = request.config.getoption("--qwen-resume-prefill")
+    resume = None
+    if resume_from:
+        resume = S.load(resume_from, S.meta_for(cfg, (grid.x, grid.y), goldens.teacher_tokens))
+        notes.append(f"Vision and prefill skipped: decode resumed from the prefill snapshot in {resume_from}.")
     with progress.installed():
-        run_tt(cfg, preset, inputs, hf_model, goldens, mesh_device, recorder, monkeypatch)
+        run_tt(
+            cfg,
+            preset,
+            inputs,
+            hf_model,
+            goldens,
+            mesh_device,
+            recorder,
+            monkeypatch,
+            snapshot_out=None if resume else cfg.run_dir / S.SNAPSHOT_NAME,
+            resume=resume,
+        )
     host_ops, hits = session.host_ops_active, dict(session.hits)
 
     if request.config.getoption("--qwen-dump-stages"):
