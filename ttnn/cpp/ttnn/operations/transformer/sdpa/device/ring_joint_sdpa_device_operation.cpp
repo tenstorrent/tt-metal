@@ -634,15 +634,20 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             args.get_k_chunk_size(),
             args.scale);
         TT_FATAL(
-            tensor_args.input_k.logical_shape()[3] == q_shape[3] &&
-                tensor_args.input_v->logical_shape()[3] == q_shape[3],
-            "Named ring recipes require matching Q/K/V head dims");
+            tensor_args.input_k.logical_shape()[3] == q_shape[3] && tensor_args.input_v->logical_shape()[3] <= q_shape[3] &&
+                tensor_args.input_v->logical_shape()[3] % tt::constants::TILE_WIDTH == 0,
+            "Named ring recipes require K's head dim to be Q's and a tile-aligned V head dim of at most Q's");
         TT_FATAL(
             !args.has_sliding_window(),
             "Named ring recipes do not support sliding_window_size yet; omit precision for the legacy kernel");
         TT_FATAL(
-            !has_indexed_kv_cache && !kv_pad_rotation_active(args, tensor_args) && !tensor_args.attention_sink,
-            "Unsupported feature for named ring recipes");
+            !kv_pad_rotation_active(args, tensor_args) && !args.circular_kv_cache && !tensor_args.attention_sink,
+            "Named ring recipes do not support KV-pad rotation (kv_actual_isl, or the metadata tensors on chunked "
+            "prefill), circular KV caches or attention sinks");
+        // The recipe compute reads is_balanced directly; the reader and writer apply it only to causal calls.
+        TT_FATAL(
+            !(is_chunked && args.is_balanced),
+            "Named ring recipes do not support is_balanced with chunked prefill; pass is_balanced=false");
     } else if ((!args.is_causal && !is_chunked) || args.is_cross) {
         for (const auto& tensor : sdpa_input_tensors) {
             TT_FATAL(
