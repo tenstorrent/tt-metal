@@ -34,6 +34,7 @@ host_seeds = [int(s) for s in os.environ.get("HOST_SEEDS", "").split(",") if s]
 ARMS = {
     "base": {"DIFFVAE_NA_APPROX_EXP": "1"},
     "c1": {"DIFFVAE_NA_APPROX_EXP": "1", "DIFFVAE_NA_CHUNK_BRICKS": "1,1,1"},
+    "c4": {"DIFFVAE_NA_APPROX_EXP": "1", "DIFFVAE_NA_CHUNK_BRICKS": "4,1,1"},
 }
 arms = os.environ.get("ARMS", "base").split(",")
 assert len(arms) == 1, "one arm per process: the NA program cache ignores the compute config"

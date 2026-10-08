@@ -1,5 +1,5 @@
 #!/bin/bash
-# t249 driver on blx01: NA query-chunk A/B, ONE python process per arm.
+# t249 driver on blx01: NA query-chunk A/B (run 2: base vs c4 = chunk (4,1,1)), ONE python process per arm.
 # Job AB (run249.sh "base c1", -t 360): two processes, each load + warm-up + 2 timed seeds + host-noise seeds 0,1.
 # Score each arm vs the #214 host-noise refs (diffvae/ref) and c1 vs base. Waits for t247's driver to end first.
 # Health/drop logic from t244's driver: a drop reruns the job after two clean health passes, a second drop skips it.
@@ -77,15 +77,15 @@ job() {
 log "start; disk: $(df -h / | tail -1)"
 STAGE=build
 [ "$(git -C $F/t238/b rev-parse --short=11 HEAD)" = $CODE ] || { log "t238/b is not at $CODE; refusing"; exit 10; }
-O=$T/outAB
-job AB "base c1" $O 360
+O=$T/outAB4
+job AB4 "base c4" $O 330
 log "AB: status=$S rc=$JRC $(grep -hE 'DECODE_MEAN|process wall' $O/run.log 2> /dev/null | tr '\n' ' ')"
 [ "$S" = skipped ] && exit 11
 STAGE=score
-for arm in base c1; do
+for arm in base c4; do
   [ -e $O/$arm/decode_times.json ] && $PY $T/drv/cmp241.py $F/diffvae/ref $O/$arm $O/cmp_$arm.json 0,1 >> $L 2>&1
 done
-[ -e $O/c1/decode_times.json ] && $PY $T/drv/cmp241.py $O/base $O/c1 $O/cmp_c1_vs_base.json 0,1 >> $L 2>&1
+[ -e $O/c4/decode_times.json ] && $PY $T/drv/cmp241.py $O/base $O/c4 $O/cmp_c4_vs_base.json 0,1 >> $L 2>&1
 grep -h "cached_bricked_plan" $O/run.log | sed 's/.*neighborhood\] //' | sort | uniq -c >> $L
 grep -q 'T249_EXIT=0' $O/run.log || exit 12
 STAGE=done
