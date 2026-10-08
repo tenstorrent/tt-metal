@@ -17,7 +17,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     OP_SELECTED_SHAPES,
     SHAPES,
     VARIANTS,
-    blackhole_only,
+    recipe_hardware,
     check_accuracy,
     check_attn_mask,
     check_chunked,
@@ -39,7 +39,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     to_device,
 )
 
-pytestmark = blackhole_only
+pytestmark = recipe_hardware
 
 
 @pytest.mark.parametrize("variant", VARIANTS)

@@ -259,7 +259,9 @@ PrecisionPolicy resolve_recipe_policy(
         !scale || (std::isfinite(*scale) && *scale > 0.0f),
         "SDPA recipes require a finite positive scale, got {}",
         scale.value_or(0.0f));
-    TT_FATAL(q.device()->arch() == tt::ARCH::BLACKHOLE, "SDPA precision recipes support Blackhole only");
+    TT_FATAL(
+        q.device()->arch() == tt::ARCH::BLACKHOLE || q.device()->arch() == tt::ARCH::WORMHOLE_B0,
+        "SDPA precision recipes support Blackhole and Wormhole B0 only");
     // The recipe owns the numerics: an explicit compute_kernel_config (math fidelity, approx mode, FP32 dest,
     // packer L1 accumulation) and exp_approx_mode are accepted and ignored, so a caller that passes a shared
     // config (or its legacy exp choice) gets the recipe it named. See SDPAPrecisionRecipes.md.
@@ -484,7 +486,9 @@ static std::vector<Tensor> run_recipe_segments(
         const Tensor* tensor = &input;
         TT_FATAL(tensor->storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
         TT_FATAL(tensor->device() == q.device(), "SDPA recipe inputs must belong to the same device");
-        TT_FATAL(tensor->device()->arch() == tt::ARCH::BLACKHOLE, "SDPA recipes currently support Blackhole only");
+        TT_FATAL(
+            tensor->device()->arch() == tt::ARCH::BLACKHOLE || tensor->device()->arch() == tt::ARCH::WORMHOLE_B0,
+            "SDPA recipes support Blackhole and Wormhole B0 only");
         TT_FATAL(tensor->layout() == Layout::TILE, "SDPA recipes require tiled inputs");
         TT_FATAL(
             tensor->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
