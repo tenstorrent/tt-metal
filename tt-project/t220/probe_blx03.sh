@@ -17,5 +17,5 @@ for m in re.finditer(r"^(\d\d) (\d\d):(\d\d):(\d\d)\s+\S+\s+\S+\s+(bridge-reset|
 '
 }
 ok g14blx03 && exit 0
-ok blx01 && exit 0
+
 exit 1

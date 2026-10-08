@@ -52,3 +52,13 @@ Tray-2 incident 2026-10-07 19:49 UTC (bridge-reset chips 8-15, broker job 417/41
 - Next wake: if blx03 clear -> `ssh g14blx03 bash ~/fasth3/runner/runner-start.sh` (reruns fill-r2 = rerun after
   drop 1). If fill-r2 drops again on blx03 -> skip blx03 (2 drops), move to blx01 (needs /var/tmp/fasth3/t220
   build + cache first). If only blx01 clear: blx01 setup (setup.sh paths -> /var/tmp/fasth3) is the next step.
+
+## 2026-10-08 00:45 UTC (attempt 1, standard run 4)
+- Runner (pid 22962, started 22:14 UTC) is dead: it waited through a broker upgrade (22:53-23:30 UTC), then blx03
+  had another tray-2 incident: chips 8,10-15 off PCIe, broker 483-485 health-gate/bridge-reset failed ~00:30 UTC,
+  power-cycle 487 at 00:39 UTC, hold 488 ended and broker restarted 00:41 UTC. Not our job (runner was not running
+  a job); not counted as a drop of this config. Config drops on blx03 so far: 1 (job 459, 21:57 UTC).
+- fill-r2 still in running/ (resumes first), time-r2 queued. Nothing submitted this run.
+- probe_ready.sh missed power-cycle/hold rows; fixed. New probe_blx03.sh = blx03 only, 30 min clean.
+- Next wake: `ssh g14blx03 bash ~/fasth3/runner/runner-start.sh`, then wait on
+  `ssh g14blx03 'bash ~/fasth3/runner/probe.sh t220-time-r2'`.
