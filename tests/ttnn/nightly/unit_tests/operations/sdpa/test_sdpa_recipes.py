@@ -293,3 +293,35 @@ def test_sdpa_recipe_attention_sink(device, variant, case):
 def test_sdpa_recipe_output_concat_heads(device, variant, causal):
     shape = (2, 4, 2, 640, 640, 64, 128, 256) if causal else (2, 4, 2, 300, 640, 64, 128, 256)
     check_concat_heads(device, variant, causal=causal, shape=shape)
+
+
+# Odd Q chunks (a single-row tail group) at D64 with logits about 8x the unit-variance case (Q scaled by 8): the
+# reference max moves in middle K chunks, so the unfused chunk (QK subblock width 1: K160, K32; or every chunk with
+# an attn_mask) rescales the tail group's O and l from their own row. Q96/K128 is the QK/PV width 4/2 build that
+# used to stop the SFPI compiler. FAST's LoFi QK error grows with the logits (about 5.6% here at every chunk size,
+# vs 2.9% unscaled); a wrong tail row gives 50% to 1e10%.
+ODD_Q_LARGE_LOGIT_BOUND = {"standard": 5.0, "fast_bf16": 7.0, "fast_bfp8": 7.0}
+
+
+@pytest.mark.parametrize("q_chunk, k_chunk", [(96, 160), (96, 32), (160, 160), (96, 128)])
+@pytest.mark.parametrize("variant", ODD_Q_LARGE_LOGIT_BOUND)
+def test_sdpa_recipe_odd_q_large_logits(device, variant, q_chunk, k_chunk):
+    q, k, v = randn(1, 2, 288, 64, seed=1), randn(1, 2, 640, 64, seed=2), randn(1, 2, 640, 64, seed=3)
+    q = (q * 8).bfloat16()
+    actual = ttnn.to_torch(sdpa(device, variant, q, k, v, q_chunk, k_chunk))
+    assert l2_pct(actual, reference(q, k, v)) < ODD_Q_LARGE_LOGIT_BOUND[variant]
+
+
+# Odd Q chunks with an attn_mask that hides every key of a row's first K chunks (a causal sliding window, masked
+# with -2^100 so such rows start from a finite maximum): the reference max jumps in a middle chunk.
+@pytest.mark.parametrize("q_chunk, k_chunk", [(96, 160), (96, 128), (160, 96)])
+@pytest.mark.parametrize("variant", ["standard", "fast_bf16"])
+def test_sdpa_recipe_odd_q_masked_first_chunk(device, variant, q_chunk, k_chunk):
+    s, window = 864, 300
+    q, k, v = randn(1, 1, s, 64, seed=33), randn(1, 1, s, 64, seed=34), randn(1, 1, s, 64, seed=35)
+    row, col = torch.arange(s)[:, None], torch.arange(s)[None, :]
+    mask = torch.zeros(1, 1, s, s)
+    mask[..., (col > row) | (col < row - window)] = -(2.0**100)
+    mask = mask.bfloat16()
+    actual = ttnn.to_torch(sdpa(device, variant, q, k, v, q_chunk, k_chunk, mask))
+    assert l2_pct(actual, reference(q, k, v, mask)) < L2_PCT_BOUND[variant]

@@ -101,6 +101,17 @@ ALWI void recipe_mm_reinit(uint32_t in0, uint32_t in1, bool transpose, uint32_t 
 #endif
 }
 
+// Workaround for an SFPI compiler ICE (sfpi 7.85, gimple-rvtt-synth.cc:485 in rvtt_synth_renumber, MATH's
+// blocked_matmul_and_pack): FAST with an odd Q chunk (single-row tail group) and QK/PV subblock widths 4/2 or 2/4
+// (D64 with K128, D128 with K64, ...). Hiding the unfused PV loop's row count from constant propagation avoids it
+// (no ICE over a Q 1-15 x K 1-30 x D 1-8 tile sweep); even chunks compile unchanged.
+template <bool tail>
+ALWI void recipe_opaque_tail_rows(uint32_t& rows) {
+    if constexpr (tail) {
+        MATH(asm volatile("" : "+r"(rows));)
+    }
+}
+
 // Q chunks up to 1024 rows (32 tiles).
 constexpr uint32_t kRecipeMaxQTiles = 32;
 // Any tile-aligned K chunk: the QK subblock width (SDPA_RECIPE_QK_W, host-chosen to divide
@@ -1679,10 +1690,11 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
         [[maybe_unused]] auto pv_accumulates = [&](uint32_t g) -> bool { return group_unchanged(g); };
         // Fold group g (rows Q tile rows) into the Float32 state: l (CB 13) from the chunk-local sums
         // (CB 12), and for changed groups O = O * c + PV (plane 1). In the last chunk, normalization pops
-        // each group, so reads index from the current front.
+        // each group, so reads index from the current front. Group g starts at Q tile row g * qkt_subblock_h,
+        // also for an odd chunk's single-row tail group.
         auto fold_group = [&](uint32_t g, uint32_t rows, bool first, bool ident) {
             constexpr uint32_t lsum_cb = kRefMaxChunkSumCb;
-            const uint32_t read_row = is_last_iter ? 0 : g * rows;
+            const uint32_t read_row = is_last_iter ? 0 : g * qkt_subblock_h;
             CircularBuffer(lsum_cb).push_back(rows);
             CircularBuffer(lsum_cb).wait_front(rows);
             if (first || ident) {
@@ -2052,7 +2064,8 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
         exp_packthread_tile_init<EXP_APPROX_MODE>();
         for (uint32_t q_subblock = 1; q_subblock < total_v_row_groups; ++q_subblock) {
             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
-            const uint32_t cur_h = pv_rows(q_subblock);
+            uint32_t cur_h = pv_rows(q_subblock);
+            recipe_opaque_tail_rows<q_tail_row>(cur_h);
             uint32_t salad_row = q_subblock - 1;
             uint32_t w_salad = salad_row - pushed_rows;
             uint32_t w_q = q_subblock - pushed_rows;
