@@ -84,6 +84,12 @@ def compute_config(compute_kernel_config, *tensors: ttnn.Tensor) -> ttnn.Compute
     )
 
 
+def _leading_ct_args(width_tiles: int) -> list[int]:
+    """The compile-time args every kernel starts with (ct_arg in kernels/toy_scaled_add_args.hpp): the tiles per
+    row. A kernel's tensor accessor args follow them."""
+    return [width_tiles]
+
+
 def _accessor_args(tensor) -> list[int]:
     """Tensor accessor compile-time args; a placeholder of the same layout when the tensor is absent."""
     accessor = ttnn.TensorAccessorArgs(tensor) if tensor is not None else ttnn.TensorAccessorArgs()
@@ -108,7 +114,7 @@ def _compute_kernel(cores, width_tiles, defines, compute_rt_args, alpha, config)
     return ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "compute.cpp"),
         core_ranges=cores,
-        named_compile_time_args=[("Wt", width_tiles)],
+        compile_time_args=_leading_ct_args(width_tiles),
         defines=defines,
         runtime_args=compute_rt_args,
         common_runtime_args=[alpha_bits(alpha)],
@@ -134,7 +140,8 @@ def create_interleaved_descriptor(a, b, gamma, output, alpha, compute_kernel_con
             row_start += rows
 
     defines = [GAMMA_DEFINE] if gamma is not None else []
-    reader_ct_args = list(ttnn.TensorAccessorArgs(a).get_compile_time_args())
+    reader_ct_args = _leading_ct_args(width_tiles)
+    reader_ct_args += ttnn.TensorAccessorArgs(a).get_compile_time_args()
     reader_ct_args += ttnn.TensorAccessorArgs(b).get_compile_time_args()
     reader_ct_args += _accessor_args(gamma)
 
@@ -150,7 +157,6 @@ def create_interleaved_descriptor(a, b, gamma, output, alpha, compute_kernel_con
         kernel_source=str(KERNEL_DIR / "reader_interleaved.cpp"),
         core_ranges=all_cores,
         compile_time_args=reader_ct_args,
-        named_compile_time_args=[("Wt", width_tiles)],
         defines=defines,
         runtime_args=reader_rt_args,
         common_runtime_args=[
@@ -163,8 +169,7 @@ def create_interleaved_descriptor(a, b, gamma, output, alpha, compute_kernel_con
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "writer_interleaved.cpp"),
         core_ranges=all_cores,
-        compile_time_args=list(ttnn.TensorAccessorArgs(output).get_compile_time_args()),
-        named_compile_time_args=[("Wt", width_tiles)],
+        compile_time_args=_leading_ct_args(width_tiles) + list(ttnn.TensorAccessorArgs(output).get_compile_time_args()),
         runtime_args=writer_rt_args,
         common_runtime_args=[output.buffer_address()],
         config=ttnn.WriterConfigDescriptor(),
@@ -211,8 +216,7 @@ def create_height_sharded_descriptor(a, b, gamma, output, alpha, compute_kernel_
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "reader_sharded.cpp"),
         core_ranges=shard_cores,
-        compile_time_args=_accessor_args(gamma),
-        named_compile_time_args=[("Wt", width_tiles)],
+        compile_time_args=_leading_ct_args(width_tiles) + _accessor_args(gamma),
         defines=defines,
         runtime_args=reader_rt_args,
         common_runtime_args=[gamma.buffer_address() if gamma is not None else 0],
@@ -221,7 +225,7 @@ def create_height_sharded_descriptor(a, b, gamma, output, alpha, compute_kernel_
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "writer_sharded.cpp"),
         core_ranges=shard_cores,
-        named_compile_time_args=[("Wt", width_tiles)],
+        compile_time_args=_leading_ct_args(width_tiles),
         runtime_args=writer_rt_args,
         config=ttnn.WriterConfigDescriptor(),
     )
