@@ -183,6 +183,16 @@ def approx_exp_enabled() -> bool:
     return os.environ.get("DIFFVAE_NA_APPROX_EXP") != "0"
 
 
+def bf8_operands_enabled() -> bool:
+    """Whether the op reads Q, K and V as bfloat8_b. Off by default; ``DIFFVAE_NA_BF8=1`` turns it on.
+
+    The op re-reads every key and value brick once per query chunk whose window covers it, so at
+    stage 5 its DRAM reads are dominated by K/V; bfloat8_b halves them. The op takes one dtype for
+    all three operands and returns it, so the output is cast back to bfloat16.
+    """
+    return os.environ.get("DIFFVAE_NA_BF8") == "1"
+
+
 def _compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
     """HiFi2 with the approximate exp (see ``approx_exp_enabled``).
 
@@ -856,6 +866,18 @@ def neighborhood_attention_3d_bricked_w_sharded(
             query_op = ttnn.to_layout(site_major, ttnn.TILE_LAYOUT)
             _tp_trace(device, f"q: bricked owned region -> {tuple(query_op.shape)}")
 
+    # The op takes one dtype for Q, K and V, so Q narrows too. Q may be the caller's own tensor
+    # (packed lanes pass it through), so only K and V, which were made here, are freed.
+    bf8_operands = bf8_operands_enabled() and query_op.dtype == ttnn.bfloat16
+    if bf8_operands:
+        with timing_tree.span(device, "qkv-to-bf8", category=timing_tree.RESHAPE, deep=True):
+            query_op = ttnn.typecast(query_op, ttnn.bfloat8_b)
+            narrowed_key = ttnn.typecast(key_op, ttnn.bfloat8_b)
+            ttnn.deallocate(key_op)
+            narrowed_value = ttnn.typecast(value_op, ttnn.bfloat8_b)
+            ttnn.deallocate(value_op)
+            key_op, value_op = narrowed_key, narrowed_value
+
     with timing_tree.span(device, "neighborhood-sdpa", category=timing_tree.SDPA, deep=True):
         attended = ttnn.transformer.neighborhood_scaled_dot_product_attention(
             query_op,
@@ -879,6 +901,12 @@ def neighborhood_attention_3d_bricked_w_sharded(
             tiles_per_kv_chunk=_tiles_per_kv_chunk(plan["gather_brick_count"]),
             compute_kernel_config=_compute_kernel_config(),
         )
+    if bf8_operands:
+        with timing_tree.span(device, "output-to-bf16", category=timing_tree.RESHAPE, deep=True):
+            ttnn.deallocate(query_op)
+            widened_output = ttnn.typecast(attended, ttnn.bfloat16)
+            ttnn.deallocate(attended)
+            attended = widened_output
 
     _tp_trace(device, f"op returned -> {tuple(attended.shape)}")
     if tp_axis is not None and already_bricked and single_head_tiles:
