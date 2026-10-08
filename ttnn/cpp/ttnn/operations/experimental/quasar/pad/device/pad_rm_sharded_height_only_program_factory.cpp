@@ -56,12 +56,9 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     Tensor& output_tensor,
     const ttnn::Shape& input_tensor_start,
     uint32_t num_cores_padded,
-    bool row_major,
     uint32_t shard_height_padded,
     uint32_t shard_height_unpadded,
-    const CoreCoord& unpadded_grid_start,
-    uint32_t num_cores_x_unpadded,
-    uint32_t num_cores_y_unpadded) {
+    const std::vector<CoreCoord>& unpadded_cores) {
     tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     auto input_shape = input_tensor.padded_shape();
@@ -125,39 +122,32 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         start_dim_offset = {0, curr_h, curr_c, curr_n};
 
         // figure out the stick id in a shard, and the core id for the stick.
-        std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> core_stick_map;
-        auto first_core = device->worker_core_from_logical_core(unpadded_grid_start);
-        std::pair<uint32_t, uint32_t> prev_xy_pair = std::make_pair(first_core.x, first_core.y);
+        // Kept in traversal (output-stick) order, since the reader consumes the chunks sequentially.
+        // A new entry is started whenever the source core changes.
+        using NocXY = std::pair<uint32_t, uint32_t>;  // (noc x, noc y)
+        std::vector<std::pair<NocXY, std::vector<uint32_t>>> core_stick_map;
+        auto first_core = device->worker_core_from_logical_core(unpadded_cores.front());
+        NocXY prev_xy_pair = {first_core.x, first_core.y};
+        auto append_stick = [&](const NocXY& xy, uint32_t value) {
+            if (core_stick_map.empty() || core_stick_map.back().first != xy) {
+                core_stick_map.push_back({xy, {}});
+            }
+            core_stick_map.back().second.push_back(value);
+        };
         for (uint32_t j = 0; j < num_sticks_per_core_padded; ++j) {
             int stick_id = stick_ids_per_core[j];
 
             // if it is pad stick, we need to leave a gap between the previous non-pad stick and next non-pad stick.
             if (stick_id == -2 || stick_id == -1) {  // front or end padding
-                core_stick_map[prev_xy_pair].push_back(stick_id);
+                append_stick(prev_xy_pair, stick_id);
             } else {
                 uint32_t shard_id = stick_id / num_sticks_per_core_unpadded;
                 uint32_t stick_id_in_shard = stick_id - (shard_id * num_sticks_per_core_unpadded);
 
-                uint32_t shard_grid_inner_dim = row_major ? num_cores_x_unpadded : num_cores_y_unpadded;
-                uint32_t shard_grid_outer_dim_id = shard_id / shard_grid_inner_dim;
-                uint32_t shard_grid_inner_dim_id = shard_id - (shard_grid_outer_dim_id * shard_grid_inner_dim);
-
-                uint32_t worker_y_logical =
-                    unpadded_grid_start.y + (row_major ? shard_grid_outer_dim_id : shard_grid_inner_dim_id);
-                uint32_t worker_x_logical =
-                    unpadded_grid_start.x + (row_major ? shard_grid_inner_dim_id : shard_grid_outer_dim_id);
-
-                // worker_*_logical are absolute logical coordinates. Compare against absolute unpadded-grid bounds.
-                uint32_t unpadded_grid_end_x = unpadded_grid_start.x + num_cores_x_unpadded;
-                uint32_t unpadded_grid_end_y = unpadded_grid_start.y + num_cores_y_unpadded;
-                if (worker_x_logical < unpadded_grid_end_x and worker_y_logical < unpadded_grid_end_y) {
-                    auto core_physical =
-                        device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
-                    // save stick id in a shard, and core coord into a map
-                    std::pair<uint32_t, uint32_t> xy_pair = row_major
-                                                                ? std::make_pair(core_physical.y, core_physical.x)
-                                                                : std::make_pair(core_physical.x, core_physical.y);
-                    core_stick_map[xy_pair].push_back(stick_id_in_shard);
+                if (shard_id < unpadded_cores.size()) {
+                    auto core_physical = device->worker_core_from_logical_core(unpadded_cores[shard_id]);
+                    NocXY xy_pair = {core_physical.x, core_physical.y};
+                    append_stick(xy_pair, stick_id_in_shard);
                     prev_xy_pair = xy_pair;
                 }
             }
@@ -171,14 +161,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         reader_kernel_args.push_back(core_stick_map.size());  // num_cores
 
         for (const auto& core_stick_pair : core_stick_map) {
-            auto xy_pair = core_stick_pair.first;
-            if (row_major) {
-                reader_kernel_args.push_back((std::uint32_t)xy_pair.second);  // noc x
-                reader_kernel_args.push_back((std::uint32_t)xy_pair.first);   // noc y
-            } else {
-                reader_kernel_args.push_back((std::uint32_t)xy_pair.first);   // noc x
-                reader_kernel_args.push_back((std::uint32_t)xy_pair.second);  // noc y
-            }
+            reader_kernel_args.push_back((std::uint32_t)core_stick_pair.first.first);   // noc x
+            reader_kernel_args.push_back((std::uint32_t)core_stick_pair.first.second);  // noc y
         }
 
         // coalesce the sticks into chunks
@@ -252,12 +236,9 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
     uint32_t shard_height_unpadded = shard_spec_unpadded.shape[0];
     bool row_major = shard_spec_unpadded.orientation == ShardOrientation::ROW_MAJOR;
 
-    auto bbox_unpadded = shard_spec_unpadded.grid.bounding_box();
-    CoreCoord grid_size_unpadded = {
-        bbox_unpadded.end_coord.x - bbox_unpadded.start_coord.x + 1,
-        bbox_unpadded.end_coord.y - bbox_unpadded.start_coord.y + 1};
-    uint32_t num_cores_x_unpadded = grid_size_unpadded.x;
-    uint32_t num_cores_y_unpadded = grid_size_unpadded.y;
+    // Real cores of the input shard grid, in shard order (not the bounding box, which may contain holes).
+    const std::vector<CoreCoord> unpadded_cores =
+        corerange_to_cores(shard_spec_unpadded.grid, shard_spec_unpadded.num_cores(), row_major);
 
     // output shard spec
     auto shard_spec_padded = output.shard_spec().value();
@@ -265,12 +246,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
 
     auto& all_cores_padded = shard_spec_padded.grid;
     uint32_t num_cores_padded = shard_spec_padded.num_cores();
-    auto bbox_padded = shard_spec_padded.grid.bounding_box();
-    CoreCoord grid_size_padded = {
-        bbox_padded.end_coord.x - bbox_padded.start_coord.x + 1,
-        bbox_padded.end_coord.y - bbox_padded.start_coord.y + 1};
-    uint32_t num_cores_x_padded = grid_size_padded.x;
-    uint32_t num_cores_y_padded = grid_size_padded.y;
+    const std::vector<CoreCoord> padded_cores = corerange_to_cores(all_cores_padded, num_cores_padded, row_major);
 
     TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
@@ -373,16 +349,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
     // num_cores_read and the per-core chunk counts), so trailing zeros are never accessed.
     // ------------------------------------------------------------------------
     auto all_runtime_args = get_pad_runtime_args_rm_sharded(
-        a,
-        output,
-        input_tensor_start,
-        num_cores_padded,
-        row_major,
-        shard_height_padded,
-        shard_height_unpadded,
-        bbox_unpadded.start_coord,
-        num_cores_x_unpadded,
-        num_cores_y_unpadded);
+        a, output, input_tensor_start, num_cores_padded, shard_height_padded, shard_height_unpadded, unpadded_cores);
 
     uint32_t max_reader_varargs = 0;
     for (uint32_t i = 0; i < num_cores_padded; i++) {
@@ -394,15 +361,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
     KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
 
     for (uint32_t i = 0; i < num_cores_padded; i++) {
-        CoreCoord core;
-        if (row_major) {
-            core = {
-                bbox_padded.start_coord.x + i % num_cores_x_padded, bbox_padded.start_coord.y + i / num_cores_x_padded};
-        } else {
-            core = {
-                bbox_padded.start_coord.x + i / num_cores_y_padded, bbox_padded.start_coord.y + i % num_cores_y_padded};
-        }
-        const NodeCoord node = core;
+        const NodeCoord node = padded_cores[i];
 
         const auto& reader_args = all_runtime_args[i].first;
         const auto& writer_args = all_runtime_args[i].second;
