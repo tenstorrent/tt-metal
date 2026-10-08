@@ -1,0 +1,2 @@
+bits9 head test_bitid.py,test_bitid2.py,test_r3c_prof.py,test_in0_prof.py,test_a23_prof.py
+bits9 ts2 test_bitid.py,test_bitid2.py,test_r3c_prof.py,test_in0_prof.py,test_a23_prof.py

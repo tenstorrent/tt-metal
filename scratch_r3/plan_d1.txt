@@ -1,0 +1,15 @@
+d1 head test_mm_r3_prof.py,test_jsdpa_prof.py
+d1 rX2 test_mm_r3_prof.py
+d1 jsd2 test_jsdpa_prof.py
+d1 head test_rn50m_prof.py conf
+d1 cv2 test_rn50m_prof.py conf
+d1 rX2 test_mm_r3_prof.py
+d1 jsd2 test_jsdpa_prof.py
+d1 head test_mm_r3_prof.py,test_jsdpa_prof.py
+d1 cv2 test_rn50m_prof.py conf
+d1 head test_rn50m_prof.py conf
+d1 head test_mm_r3_prof.py,test_jsdpa_prof.py
+d1 rX2 test_mm_r3_prof.py
+d1 jsd2 test_jsdpa_prof.py
+d1 head test_rn50m_prof.py conf
+d1 cv2 test_rn50m_prof.py conf
