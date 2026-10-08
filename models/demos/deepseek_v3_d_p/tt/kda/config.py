@@ -18,10 +18,12 @@ KDA_RECURRENT_STATE_DTYPE = ttnn.float32
 KDA_AFFINE_SUMMARY_DTYPE = ttnn.bfloat16
 KDA_SCAN_OUTPUT_DTYPE = ttnn.bfloat16
 KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
-# The chunk terms, the SP scan output and the normalized heads stay in L1 for their consumers.
+# The chunk terms, the SP scan output, the normalized heads and the TP partial outputs stay in L1 for their
+# consumers.
 KDA_PREPARATION_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_SCAN_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_NORM_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
+KDA_PARTIAL_OUTPUT_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG

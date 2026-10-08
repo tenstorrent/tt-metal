@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
     KDA_NORM_MEMORY_CONFIG,
     KDA_OUTPUT_MEMORY_CONFIG,
+    KDA_PARTIAL_OUTPUT_MEMORY_CONFIG,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
     decay_projection_config,
@@ -426,7 +427,10 @@ class ttKDA:
         output = ttnn.linear(
             output,
             weights.output_projection,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # The reduce-scatter reads the TP partial sums from L1; without TP this is the layer output.
+            memory_config=KDA_PARTIAL_OUTPUT_MEMORY_CONFIG
+            if self.tensor_parallel_size > 1
+            else ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.output_projection_program_config,
             compute_kernel_config=self.output_projection_compute_config,
         )
