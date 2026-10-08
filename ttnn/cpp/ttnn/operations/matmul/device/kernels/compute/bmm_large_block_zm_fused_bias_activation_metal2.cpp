@@ -240,8 +240,14 @@ void kernel_main() {
         (row_mop_fidelity || out_subblock_w >= 6 || (out_subblock_num_tiles >= 8 && in0_block_w > 1)) &&
         (DST_ACCUM_MODE || (unpack_src_format[out_dfb_id] != (uint8_t)DataFormat::Float32 &&
                             unpack_src_format[mm_partials_dfb_id] != (uint8_t)DataFormat::Float32));
-    // each row's base addresses through GPRs under Auto TTSync where a row streams one or two tiles
-    constexpr bool unpack_ttsync = out_subblock_w <= 2 && out_subblock_h <= 2;
+#ifdef PACKER_L1_ACC
+    constexpr bool reload_every_block = false;
+#else
+    constexpr bool reload_every_block = num_blocks_inner_dim > 1;
+#endif
+    // each row's base addresses through GPRs under Auto TTSync where a row streams one or two tiles, unless the partials
+    // are reloaded every block (each matmul init after the reload then drains the unpack thread)
+    constexpr bool unpack_ttsync = out_subblock_w <= 2 && out_subblock_h <= 2 && !reload_every_block;
 #else
     constexpr bool row_mop = false;
     constexpr bool unpack_ttsync = false;
