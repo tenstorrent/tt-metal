@@ -51,6 +51,7 @@ void kernel_main() {
     // in the chunk shares a single query group, hence a single window -- which is why the mask
     // is one tile per gather slot and broadcasts down the rows rather than being stored per row.
     constexpr uint32_t query_tile_rows = get_compile_time_arg_val(kernel_args::compute_arg::query_tile_rows);
+    constexpr bool ablate_math = get_compile_time_arg_val(kernel_args::compute_arg::ablate_math) != 0;
     // 0 = the broadcast above. tiles_per_kv_chunk = one mask per brick, which a chunk wider than
     // the stride requires: its bricks each centre a different window.
     constexpr uint32_t mask_subblock_stride = get_compile_time_arg_val(kernel_args::compute_arg::mask_subblock_stride);
@@ -73,6 +74,21 @@ void kernel_main() {
 
     for (uint32_t work_item = 0; work_item < work_item_count; ++work_item) {
         cb_query.wait_front(query_tile_rows * head_dim_tiles);
+
+        if constexpr (ablate_math) {
+            for (uint32_t kv_chunk_index = 0; kv_chunk_index < kv_chunk_count; ++kv_chunk_index) {
+                cb_key.wait_front(tiles_per_kv_chunk * head_dim_tiles);
+                cb_mask.wait_front(mask_tiles_per_kv_chunk);
+                cb_value.wait_front(tiles_per_kv_chunk * head_dim_tiles);
+                cb_key.pop_front(tiles_per_kv_chunk * head_dim_tiles);
+                cb_mask.pop_front(mask_tiles_per_kv_chunk);
+                cb_value.pop_front(tiles_per_kv_chunk * head_dim_tiles);
+            }
+            cb_output.reserve_back(query_tile_rows * head_dim_tiles);
+            cb_output.push_back(query_tile_rows * head_dim_tiles);
+            cb_query.pop_front(query_tile_rows * head_dim_tiles);
+            continue;
+        }
 
         // Ping-pong buffers for the running statistics. Swapped rather than copied each chunk.
         uint32_t current_max = kernel_args::cb_row_max_current;

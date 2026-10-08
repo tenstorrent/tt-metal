@@ -526,6 +526,7 @@ void kernel_main() {
     constexpr uint32_t kv_ring_columns = get_compile_time_arg_val(kernel_args::reader_arg::kv_ring_columns);
     constexpr bool ring_keys = kv_ring_mode >= 1;
     constexpr bool ring_values = kv_ring_mode == 2;
+    constexpr bool ablate_kv_reads = get_compile_time_arg_val(kernel_args::reader_arg::ablate_kv_reads) != 0;
     constexpr uint32_t gather_width = gather_bricks.width();
     const uint32_t key_ring_base = ring_keys ? CircularBuffer(kernel_args::cb_key_ring).get_write_ptr() : 0;
     const uint32_t value_ring_base = ring_values ? CircularBuffer(kernel_args::cb_value_ring).get_write_ptr() : 0;
@@ -760,6 +761,9 @@ void kernel_main() {
                                      ? mask_gen::BrickCoverage::NoneVisible
                                      : mask_gen::classify_brick(chunk_origin_site, key_origins[slot], extents);
 
+                if constexpr (ablate_kv_reads) {
+                    continue;
+                }
                 if constexpr (ring_keys) {
                     if (!slot_is_padding) {
                         const uint32_t column = window_first_column + slot_offset.width();

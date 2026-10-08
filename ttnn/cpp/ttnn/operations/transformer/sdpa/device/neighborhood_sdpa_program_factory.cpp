@@ -274,6 +274,8 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     reader_compile_args[kernel_args::reader_arg::relative_mask] = relative_mask ? 1u : 0u;
     reader_compile_args[kernel_args::reader_arg::kv_ring_mode] = kv_ring_mode;
     reader_compile_args[kernel_args::reader_arg::kv_ring_columns] = ring_columns;
+    reader_compile_args[kernel_args::reader_arg::ablate_kv_reads] =
+        NeighborhoodSDPAOperation::ablation_requested() == 1 ? 1u : 0u;
 
     // Accessor args come after the named block, in the order the reader constructs them.
     tt::tt_metal::TensorAccessorArgs(tensors.query_tensor.buffer()).append_to(reader_compile_args);
@@ -323,6 +325,8 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     compute_compile_args[kernel_args::compute_arg::output_subblock_width] = output_subblock_width;
     compute_compile_args[kernel_args::compute_arg::output_subblock_count] = head_dim_tiles / output_subblock_width;
     compute_compile_args[kernel_args::compute_arg::mask_subblock_stride] = per_brick_mask ? tiles_per_kv_chunk : 0u;
+    compute_compile_args[kernel_args::compute_arg::ablate_math] =
+        NeighborhoodSDPAOperation::ablation_requested() == 2 ? 1u : 0u;
 
     // ---- kernels ----
     const std::string kernel_directory = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/";
