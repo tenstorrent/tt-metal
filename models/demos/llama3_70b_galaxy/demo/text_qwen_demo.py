@@ -560,17 +560,17 @@ def create_tt_qwen_model(
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
         ),
-        (  # profile-2L-prefill-40k-b32-window - prefill-perf-40k-b32 (32 distinct prompts via --input_prompts, all KV
-            # resident, same warmup) with 2 layers and signposts around the 32-user prefill call. After warmup the
-            # device profiler buffers are read and the warmup device logs discarded (see profile_window_case).
+        (  # profile-2L-prefill-40k-b1-window - as profile-1L-prefill-40k-b1 (same prompt, same warmup: generator sweep
+            # + one 40960 prefill) with 2 layers. After warmup the device profiler buffers are read and the warmup
+            # device logs discarded, so the device logs hold only the signposted prefill (see profile_window_case).
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_prefill_40k_local.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            40960,  # max_seq_len (same config as prefill-perf-40k-b32)
-            32,  # batch_size
-            2,  # max_generated_tokens
+            40960,  # max_seq_len (same config as prefill-perf-40k-b1)
+            1,  # batch_size
+            1,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 5120},  # page_params (as prefill-perf-40k-b32)
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             False,  # apc_test
@@ -602,7 +602,7 @@ def create_tt_qwen_model(
         "profile-1L-prefill-40k-b1",  # 1L prefill-only tracy profile at 40k (id avoids the "prefill-profile" -k substring)
         "prefill-golden-40k-b1",  # 64L 40k end-to-end golden: prefill top-5 ids/logits + 32 greedy token ids
         "prefill-perf-40k-b32",  # warmed 64L prefill of 32 users x 40k in one call (all KV resident, column-local pages)
-        "profile-2L-prefill-40k-b32-window",  # 2L tracy profile of the b32 x 40k call; device logs hold only the window
+        "profile-2L-prefill-40k-b1-window",  # 2L prefill-only tracy profile at 40k; device logs hold only the window
     ],
 )
 @pytest.mark.parametrize(
@@ -710,11 +710,11 @@ def test_qwen_demo_text(
     golden_check = "prefill-golden-40k-b1" in request.node.callspec.id
     # Batch-32 x 40k perf case (harness): column-local page table so all users' KV is resident, a one-user
     # warmup prefill (same 40960 programs; the timed call then prefills all users), DRAM usage logged.
-    # 2-layer windowed profile of the b32 case (harness): b32 setup and warmup unchanged; after warmup
-    # ttnn.ReadDeviceProfiler drains the device profiler buffers and the warmup device logs are deleted, so the final
-    # read at device close writes only the signposted 32-user prefill. The measured call runs the same programs.
-    profile_window_case = "profile-2L-prefill-40k-b32-window" in request.node.callspec.id
-    b32_case = "prefill-perf-40k-b32" in request.node.callspec.id or profile_window_case
+    b32_case = "prefill-perf-40k-b32" in request.node.callspec.id
+    # 2-layer windowed profile case (harness): warmup unchanged; after it ttnn.ReadDeviceProfiler drains the device
+    # profiler buffers and the warmup device logs are deleted, so the final read at device close writes only the
+    # signposted prefill. The measured prefill runs the same programs; only host-side profiler I/O moves.
+    profile_window_case = "profile-2L-prefill-40k-b1-window" in request.node.callspec.id
 
     if token_accuracy and pcc_check:
         raise ValueError("Token accuracy and PCC check are separate demo modes")
