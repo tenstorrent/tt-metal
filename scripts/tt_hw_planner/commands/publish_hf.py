@@ -1407,7 +1407,9 @@ def _verify_published_package(args, slug: str, servable: bool) -> None:
     if pull_ok:
         print(f"  [publish-hf] verify: starting `tt serve {repo}` (first start compiles kernels) …")
         try:
-            _tt("serve", repo, timeout=300)  # launches the container and returns
+            # serve is a TOP-LEVEL subcommand for BOTH CLIs (tt serve / tt-model serve),
+            # not `tt model serve` -- only pull lives under `tt model`.
+            subprocess.run([tt, "serve", repo], capture_output=True, text=True, timeout=300)
         except Exception:  # noqa: BLE001
             pass
         key = slug.split("/")[-1].replace("-", "_")[:12]
