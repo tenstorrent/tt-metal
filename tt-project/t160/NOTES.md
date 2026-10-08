@@ -95,3 +95,10 @@ bh-glx-120-b0{2,3,4,5}u{02,08}, all in partition bh_sc5_B2B9_D12. Each one is a 
   Only 30-37 are missing (pcopy.done has 0-29, 38, 39). ETA ~45-60 min incl. sha256 checks.
 - Probe retry_when.sh now points at run 851. On wake: PCOPY_OK and >= 230 GB free -> step 3 (submit e2e).
 - Allocations this run: none.
+
+## Run 981 (2026-10-08, after host reboot)
+- Tunnel up. sacct is disabled on exabox; squeue -u smarton empty, so job 127829 has ended, nothing left running.
+- Job 127829 (bh-glx-120-b05u08, 14:36:23Z-14:37:46Z) failed JOB_RC=4 before touching the device:
+  conftest import -> ttnn/ttnn/graph.py `import graphviz` -> ModuleNotFoundError. Log /data/smarton/fasth3/t160/slurm-127829.out.
+- Fix not applied yet: no python_env*/.venv* under /data/smarton/fasth3/t48; find which python the sbatch script
+  uses (see the t160 sbatch/run script), `pip install graphviz` into it, then re-check idle-2h and resubmit step 3.
