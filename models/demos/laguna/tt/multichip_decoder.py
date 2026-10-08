@@ -75,10 +75,6 @@ TOKEN_DISPATCH_METADATA_LEN = 5
 # in L1. The largest footprint qualified on hardware is XS on one chip (256 x 32 x (1024 + 4096) x 2 B =
 # 83.9 MB); S on one chip (134.2 MB) clashes with the static circular buffers. Above this bound decode uses
 # DRAM instead. S on P150x4 needs 33.5 MB and keeps L1.
-# The routed-expert op picks a "short sequence" grid from the ALLOCATED rows per expert; token dispatch allocates the
-# whole sequence per expert (1K bucket = 32 tile rows) while each expert really gets ~2, so that layout lost ~110 ms
-# per 1K prefill. 0 keeps the general layout (with its two-NoC weight read) at every length.
-os.environ.setdefault("TT_ROUTED_EXPERT_SHORT_SEQ_MAX_M_TILES", "0")
 MOE_DECODE_L1_MAX_BYTES = 256 * TILE * (2 * 512 + 2 * 2048) * 2
 
 
@@ -1011,15 +1007,11 @@ class MultichipDecoder(OptimizedDecoder):
             offsets,
             state["dispatch_table"],
         )
-        dispatched_tiled = ttnn.to_layout(
-            ttnn.squeeze(ttnn.squeeze(dispatched, 0), 0),
-            ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-        )
-        ttnn.deallocate(dispatched)
-
+        # All 64 local experts in ONE routed-expert program over the stacked gate|up and down weights (upstream
+        # unified_routed_expert_moe + Laguna's stacked mode). It reads the row-major bf16 dispatch buffer at each
+        # expert's region offset, tilizes it in-op and writes a TILE bf8 buffer that combine reads.
         expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe_stacked(
-            dispatched_tiled,
+            ttnn.squeeze(ttnn.squeeze(dispatched, 0), 0),
             region_offsets,
             counts,
             state["global_expert_idx"],
@@ -1027,12 +1019,8 @@ class MultichipDecoder(OptimizedDecoder):
             self.w["exp_down"],
             seq_len,
             compute_kernel_config=self._ck_moe,
-            chunk_m_tiles_override=TOKEN_DISPATCH_CHUNK_M_TILES,
-            # S p150x4: no zero-fill of the shared expert-output buffer; combine forwards only counted rows, proven by a
-            # NaN fill giving identical fp32-reference results. XS keeps the fill. Override: TT_LAGUNA_EXPERT_OUT_INIT.
-            output_init=os.environ.get("TT_LAGUNA_EXPERT_OUT_INIT", "none" if self.D == 4 else "zero"),
         )
-        ttnn.deallocate(dispatched_tiled)
+        ttnn.deallocate(dispatched)
 
         combined_slots = bucket["combine"](
             ttnn.unsqueeze(ttnn.unsqueeze(expert_outputs, 0), 0),

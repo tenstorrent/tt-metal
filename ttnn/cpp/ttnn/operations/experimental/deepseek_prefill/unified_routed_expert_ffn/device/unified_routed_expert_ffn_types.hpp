@@ -5,8 +5,10 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <tuple>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 
@@ -16,78 +18,156 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
 
+// The worker rectangle this op always runs on, independent of the device grid. Fixed rather than
+// derived: the K-axis split, the activated L1 multicast pattern and the padded per_core_N all
+// assume it, and the program factory asserts the device is at least this large.
+//
+// Exported because a hybrid routed-expert forward has to hand moe_fused_swiglu the SAME grid --
+// that op defaults to the full device grid instead -- or the two halves block differently and the
+// measured token-count crossover between them stops applying. Read it, do not restate it.
+inline constexpr uint32_t kCoreGridX = 11;
+inline constexpr uint32_t kCoreGridY = 8;
+
 // Maximum number of global experts the op supports.
 //
 // The reader fetches the per-global-expert `counts` vector (and the
 // local->global `global_expert_idx_table`) into an L1 scratch CB with a
-// single noc_async_read_page, then indexes counts[global_expert_id]. The CB is
-// sized to the input tensor's aligned page; this constant caps the supported
-// index space at 1024 UINT32 entries (4 KB), covering DeepSeek V3 (256), Kimi
-// (384), and models up to 1024 routed experts. Raising it requires widening
-// the device-op validation and re-checking the per-core L1 budget.
+// single noc_async_read_page, then indexes counts[global_expert_id] for
+// global_expert_id in [0, num_global_experts). The L1 scratch is sized to
+// hold this many UINT32 entries — 1024 entries = 4 KB ("4 tiles" of 1 KB) —
+// which covers DeepSeek V3 (256 experts), Kimi (384 experts) and any model up
+// to 1024 routed experts with headroom. A single ROW_MAJOR DRAM page already
+// holds the whole vector, so the read stays a single page fetch; bumping this
+// past TILE_HW would additionally require widening the device-op validation
+// below and re-checking the per-core L1 budget.
 inline constexpr uint32_t MAX_GLOBAL_EXPERTS = tt::constants::TILE_HW;  // 1024
+
+// Per-expert FFN activation variant. Selected at the op boundary and baked into
+// the compute kernel via a compile-time define, so each variant caches as a
+// distinct program. For SwiGluOai the alpha/limit are baked to the M3/gpt-oss
+// values (1.702 / 7.0, SwiGLUConfigGPTOSS) in the kernel — no extra params.
+// Likewise SituGlu bakes the Kimi K3 betas (beta_gate=4.0, beta_up=25.0,
+// SituGluConfigKimi).
+enum class RoutedExpertActivation : uint8_t {
+    Silu = 0,  // plain SiLU SwiGLU: silu(gate) * up                      (DeepSeek default)
+    SwiGluOai =
+        1,  // clamped swigluoai: (clamp(up,±L)+1)·clamp(gate,max=L)·σ(α·clamp(gate,max=L))  (MiniMax-M3 / gpt-oss)
+    // SiTU-GLU: (beta_gate*tanh(gate/beta_gate)*sigmoid(gate)) * (beta_up*tanh(up/beta_up))  (Kimi K3)
+    SituGlu = 2,
+};
 
 // Attributes (the constants known at host time).
 struct UnifiedRoutedExpertFfnParams {
-    // The compute kernel chunks the M axis into pieces of this many tiles so a
-    // single matmul fits in per-core L1. 64 (= 2048 tokens) is the maximum that
-    // keeps DeepSeek V3 routed-expert dims inside Blackhole L1.
-    uint32_t chunk_M_tiles = 64;
+    // Per-expert M dimension in tiles — the row count the matmul grid, chunk
+    // loop, and CB sizes are built for. Every local expert shares this value
+    // (= max_dispatched_tokens_per_expert / TILE), and x is the shared
+    // dispatched buffer wider than one expert's region: the reader/writer index
+    // into it at each expert's region offset while the op sizes its per-expert
+    // work to this M.
+    uint32_t m_tiles = 0;
 
-    // Local expert id used to index `global_expert_idx_table` at runtime
-    // (kernel reads global_id = idx_table[local_expert_id], then count =
-    // counts[global_id]).
-    uint32_t local_expert_id = 0;
+    // Number of local experts this chip owns. The reader/compute/writer kernels
+    // loop over local_expert in [0, experts_per_chip).
+    uint32_t experts_per_chip = 1;
 
-    // When true, gate_proj/up_proj refer to the same packed tensor with
-    // logical shape [1, local_experts, K, 2*N], and down_proj has shape
-    // [1, local_experts, N, K]. The reader selects local_expert_id directly
-    // from those stacked tensors and treats the first/second halves of the
-    // packed last dimension as gate/up. This lets EP model weights stay in
-    // their production representation instead of creating one Tensor handle
-    // (and one duplicate allocation) per local expert.
-    bool stacked_packed_weights = false;
+    // When true, x is a ROW_MAJOR bf16 buffer: the reader streams row-major
+    // sticks and the compute kernel tilizes them (bf16 -> bf8_b) before the
+    // gate/up matmul, fusing the standalone to_layout. False => x is already
+    // TILE bf8_b (the reader reads tile pages directly).
+    bool x_is_row_major = false;
+
+    // Per-expert FFN activation variant. Baked into the compute kernel as a
+    // compile-time define, so each variant caches as a distinct program — hence
+    // it is part of the program-cache key below.
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu;
+
+    // Whether the (optional) gate/up/down expert biases are fused. Derived from
+    // the presence of the bias tensors in the inputs. Drives a compile-time
+    // FUSE_BIAS define in the compute/reader kernels, so a bias vs no-bias
+    // program caches distinctly — hence it is part of the program-cache key.
+    // (gpt-oss experts have gate/up/down biases; DeepSeek / MiniMax-M3 do not.)
+    bool fuse_bias = false;
 
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    // compute_kernel_config affects the compiled kernel (at minimum fidelity
-    // and approximation mode), so it must participate in the program-cache
-    // key. Omitting it silently reused a LoFi program for a later HiFi call.
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("chunk_M_tiles", "local_expert_id", "stacked_packed_weights", "compute_kernel_config");
+    // Active-token band this op owns. An expert whose count falls outside it is dropped
+    // like a zero count, which is how a hybrid dispatch splits the experts between this op
+    // and moe_fused_swiglu over ONE shared counts vector -- no masked tensors, no host sync.
+    // Compile-time in the kernels, so it belongs to the program-cache key.
+    uint32_t min_active_tokens = 0;
+    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max();
+
+    // Laguna stacked weights: every gate/up/down list entry is the SAME tensor, gate_up = [1, E, K, 2N] (expert e's
+    // gate in columns 0..N-1 of each row, its up in N..2N-1) and down = [1, E, N, K]. The factory passes each expert's
+    // slice as a virtual base address (slice start tile / DRAM banks * page size) and the kernels read gate/up rows
+    // with stride 2N (up at column offset N). Compile-time in the kernels, so part of the program-cache key.
+    bool stacked_packed_weights = false;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "m_tiles",
+        "experts_per_chip",
+        "x_is_row_major",
+        "activation",
+        "fuse_bias",
+        "min_active_tokens",
+        "max_active_tokens",
+        "stacked_packed_weights");
     auto attribute_values() const {
-        return std::forward_as_tuple(chunk_M_tiles, local_expert_id, stacked_packed_weights, compute_kernel_config);
+        return std::forward_as_tuple(
+            m_tiles,
+            experts_per_chip,
+            x_is_row_major,
+            activation,
+            fuse_bias,
+            min_active_tokens,
+            max_active_tokens,
+            stacked_packed_weights);
     }
 };
 
 // Tensors fed into the op.
 //
-// x is the (M_max, K=emb) per-expert token buffer for this expert. Only the
-// first `counts[global_expert_idx_table[local_expert_id]]` rows are valid;
-// the rest is padding the FFN kernels must skip. Reader/writer always start
-// at tile row 0 — the FFN op operates on an already-extracted per-expert
-// tensor; a separate ttnn::extract / ttnn::insert pair handles slicing into
-// / out of any shared dispatched buffer.
+// x is the (M_max, K=emb) shared dispatched buffer holding every local
+// expert's tokens back to back. Expert `local_expert`'s rows begin at
+// expert_region_offsets[global_id] and only its first counts[global_id] rows
+// are valid; the kernels read each expert's slice at its region offset.
 //
-// gate_proj/up_proj/down_proj are the (K=emb, N=hidden), (K=emb, N=hidden),
-// and (K=hidden, N=emb) weight tensors.
+// gate_projs/up_projs/down_projs are per-local-expert weight lists (one entry
+// per expert, all identical shape): (K=emb, N=hidden), (K=emb, N=hidden), and
+// (K=hidden, N=emb). Each expert has its own DRAM buffer; the program factory
+// passes every buffer's base address as a runtime-arg array and the kernels
+// build a fresh accessor per expert from one shared layout descriptor.
 //
-// counts/global_expert_idx_table are the device-side count buffers; the
-// kernel reads them at runtime to skip unused chunks.
+// counts / global_expert_idx_table / expert_region_offsets are the device-side
+// per-global-expert vectors; the kernels index them per local expert at
+// runtime to size each expert's chunk loop and place its output.
+//
+// output is the shared destination buffer; each expert's result is written
+// directly into its region at expert_region_offsets[global_id]/TILE tile-rows.
 struct UnifiedRoutedExpertFfnInputs {
     Tensor x;
-    Tensor gate_proj;
-    Tensor up_proj;
-    Tensor down_proj;
+    std::vector<Tensor> gate_projs;
+    std::vector<Tensor> up_projs;
+    std::vector<Tensor> down_projs;
     Tensor counts;
     Tensor global_expert_idx_table;
-    std::optional<Tensor> optional_output;
-    // Direct-write mode: per-global-expert region start offsets (UINT32, the
-    // same `start` tensor ttnn::insert consumes). When present, the writer
-    // places this expert's output directly into `optional_output` (the shared
-    // buffer) at start[global_id]/TILE tile-rows, fusing the ttnn::insert step.
-    // Requires optional_output to also be set.
+    // Caller-provided shared destination buffer (always provided). Each expert
+    // writes its region at expert_region_offsets[global_id]. Whether it aliases
+    // x (in-place) is the caller's choice — the op just writes into it.
+    Tensor output;
+    // Per-global-expert region start offsets (UINT32, the same `start` tensor
+    // ttnn::insert consumes). Required: the reader offsets each expert's x reads
+    // and the writer places each expert's output at start[global_id]/TILE.
     std::optional<Tensor> expert_region_offsets;
+    // Optional per-local-expert projection biases (gpt-oss). Either all three
+    // lists are populated (one bias per local expert, same length/order as the
+    // weight lists) or all three are empty. gate/up bias: (1, N=hidden); down
+    // bias: (1, N=emb). When set, the fused kernel adds gate/up bias before the
+    // activation and down bias after the down matmul. Empty for the bias-free
+    // DeepSeek / MiniMax-M3 path (byte-identical).
+    std::vector<Tensor> gate_biases;
+    std::vector<Tensor> up_biases;
+    std::vector<Tensor> down_biases;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn

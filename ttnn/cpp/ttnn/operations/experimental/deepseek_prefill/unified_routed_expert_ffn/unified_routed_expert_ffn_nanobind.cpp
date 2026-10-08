@@ -4,10 +4,13 @@
 
 #include "unified_routed_expert_ffn_nanobind.hpp"
 
+#include <limits>
+
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
+
+#include <tt-metalium/core_coord.hpp>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "unified_routed_expert_ffn.hpp"
@@ -15,92 +18,33 @@
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail {
 
 void bind_unified_routed_expert_ffn(nb::module_& mod) {
-    ttnn::bind_function<"unified_routed_expert_ffn", "ttnn.experimental.deepseek_prefill.">(
-        mod,
-        R"doc(
-        Single-op fused per-expert FFN for DeepSeek V3 prefill (Blackhole).
+    // Activation variant for the fused routed-expert FFN. Registered before the
+    // function bindings so it can serve as a default kwarg value.
+    nb::enum_<RoutedExpertActivation>(mod, "RoutedExpertActivation")
+        .value("Silu", RoutedExpertActivation::Silu)
+        .value("SwiGluOai", RoutedExpertActivation::SwiGluOai)
+        .value("SituGlu", RoutedExpertActivation::SituGlu);
 
-        Computes the entire SwiGLU FFN sequence in ONE device program:
-            gate = matmul(x, gate_proj)
-            up   = matmul(x, up_proj)
-            y    = matmul(silu(gate) * up, down_proj)
-
-        The kernel reads the device-resident token count
-        ``counts[global_expert_idx_table[local_expert_id]]`` at runtime and
-        skips M-chunks beyond that count. x is the already-extracted per-expert
-        tokens tensor (rows start at 0); use ``unified_routed_expert_moe`` below
-        if you need the extract/insert glue.
-
-        Tensor requirements (enforced in validate_on_program_cache_miss):
-            * dtype: x may be BFLOAT8_B (compact BFP8 intermediates/output)
-              or BFLOAT16 (BF16 intermediates/output); gate/up/down may use
-              any matmul-compatible weight dtype.
-            * layout: all tensors TILE.
-            * memory_config: all tensors DRAM-interleaved.
-            * Blackhole-only — host expects 11x8 compute grid.
-
-        PCC target: >= 0.97 vs PyTorch reference (matches the sibling
-        routed_expert_ffn subsystem norm; the existing test_unified_routed_expert
-        cases land at ~0.98 on DS-V3 dims with LoFi math fidelity).
-
-        Args:
-            x (ttnn.Tensor): (M_max, K=emb) DRAM-interleaved tile-layout input.
-            gate_proj (ttnn.Tensor): (K=emb, N=hidden).
-            up_proj (ttnn.Tensor): (K=emb, N=hidden).
-            down_proj (ttnn.Tensor): (K=hidden, N=emb).
-            counts (ttnn.Tensor): UINT32, per-global-expert token counts.
-            global_expert_idx_table (ttnn.Tensor): UINT32, maps local id -> global.
-            local_expert_id (int): index into global_expert_idx_table.
-
-        Keyword Args:
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
-            output (ttnn.Tensor, optional): pre-allocated output buffer.
-                Must match x.dtype() and x.shape() unless expert_region_offsets
-                is set (direct-write mode), in which case it is the larger
-                shared destination buffer.
-            expert_region_offsets (ttnn.Tensor, optional): UINT32
-                per-global-expert region start offsets. When set, the writer
-                places this expert's output directly into ``output`` at
-                start[global_id]/TILE tile-rows (direct-write mode), fusing the
-                ttnn::insert step. Requires ``output`` to be set. Defaults to
-                None (standalone per-expert output, rows start at 0).
-            chunk_m_tiles_override (int, optional): Force the M chunk size to
-                one of 16, 24, 32, 40, 48, 56, or 64 tiles. Defaults to the
-                existing automatic picker.
-
-        Returns:
-            ttnn.Tensor: (M_max, K=emb).
-        )doc",
-        &unified_routed_expert_ffn,
-        nb::arg("x").noconvert(),
-        nb::arg("gate_proj").noconvert(),
-        nb::arg("up_proj").noconvert(),
-        nb::arg("down_proj").noconvert(),
-        nb::arg("counts").noconvert(),
-        nb::arg("global_expert_idx_table").noconvert(),
-        nb::arg("local_expert_id"),
-        nb::kw_only(),
-        nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("output") = nb::none(),
-        nb::arg("expert_region_offsets") = nb::none(),
-        nb::arg("chunk_m_tiles_override") = nb::none());
+    // The worker rectangle this op fixes regardless of device grid. Exported so a hybrid forward can
+    // pass moe_fused_swiglu the same grid -- that op defaults to the whole device instead -- without
+    // a second copy of the numbers on the Python side.
+    mod.attr("UNIFIED_ROUTED_EXPERT_CORE_GRID") = CoreCoord{kCoreGridX, kCoreGridY};
 
     ttnn::bind_function<"unified_routed_expert_moe", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
-        MoE-level composite: takes the full dispatched buffer + ALL local
-        experts' weights and loops over local experts in C++, launching one
-        ``unified_routed_expert_ffn`` device program per expert preceded by
-        ``ttnn::extract`` (input slice). The FFN runs in direct-write mode:
-        its writer places each expert's output straight into the shared
-        output buffer at the expert's region offset, so NO separate
-        ``ttnn::insert`` op (and no per-expert temp-buffer DRAM round-trip)
-        is needed. This is NOT a single fused device op across experts —
-        per-expert FFN entries still appear in tt-perf-report.
+        Single-op fused routed-expert MoE FFN (Blackhole). Takes the dispatched
+        buffer + ALL local experts' weights and runs in ONE device program. The
+        reader/compute/writer kernels loop over the local experts: each expert
+        reads its slice of the shared dispatched buffer at its region offset
+        (fusing ``ttnn::extract``), runs gate/up/down, and writes its output
+        straight into the shared output buffer at that offset (fusing
+        ``ttnn::insert``). NO per-expert temp buffer, no per-expert dispatch, and
+        no inter-expert dispatch gap.
 
-        The unified FFN reads device-resident counts/idx and bounds its
-        chunk loop to the actually-occupied chunks per expert. The host
-        does NOT sync to read counts.
+        The kernels read device-resident counts/idx and bound each expert's
+        chunk loop to the actually-occupied chunks. The host does NOT sync to
+        read counts.
 
         Args:
             dispatched_buffer (ttnn.Tensor): (max_dispatch, emb).
@@ -114,9 +58,13 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
 
         Keyword Args:
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
-            chunk_m_tiles_override (int, optional): Force the per-expert M
-                chunk size to one of 16, 24, 32, 40, 48, 56, or 64 tiles.
-                Defaults to the existing automatic picker.
+            activation (ttnn.RoutedExpertActivation, optional):
+                Silu (default, DeepSeek), SwiGluOai (clamped, MiniMax-M3 / gpt-oss),
+                or SituGlu (tanh-capped, Kimi K3; Blackhole only).
+
+        Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
+        RUNTIME from the device-resident token count, so there is no expected-token
+        argument — the work scales to each expert's actual load automatically.
 
         Returns:
             ttnn.Tensor: expert outputs, same shape as dispatched_buffer.
@@ -132,37 +80,19 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("max_dispatched_tokens_per_expert"),
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("chunk_m_tiles_override") = nb::none());
+        nb::arg("activation") = RoutedExpertActivation::Silu,
+        nb::arg("gate_biases") = nb::none(),
+        nb::arg("up_biases") = nb::none(),
+        nb::arg("down_biases") = nb::none(),
+        nb::arg("min_active_tokens") = 0,
+        nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max());
 
     ttnn::bind_function<"unified_routed_expert_moe_stacked", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
-        MoE composite for production EP-stacked weights.
-
-        This has the same dispatch/extract/direct-write behavior as
-        ``unified_routed_expert_moe``, but consumes the model's existing
-        expert-sharded tensors directly instead of a Python list of tensors:
-        ``gate_up_projs`` has shape ``[1, local_experts, emb, 2*hidden]``
-        with gate/up in the two halves of the last dimension, and
-        ``down_projs`` has shape ``[1, local_experts, hidden, emb]``.
-        Each per-expert program indexes its local expert slice in the reader;
-        no weight copy, slice, or host synchronization is performed.
-
-        Args:
-            dispatched_buffer (ttnn.Tensor): (max_dispatch, emb), TILE.
-            expert_region_offsets (ttnn.Tensor): UINT32 per-expert starts.
-            expert_token_counts (ttnn.Tensor): UINT32 per-expert counts.
-            global_expert_idx_table (ttnn.Tensor): UINT32 local->global IDs.
-            gate_up_projs (ttnn.Tensor): [1, LE, emb, 2*hidden].
-            down_projs (ttnn.Tensor): [1, LE, hidden, emb].
-            max_dispatched_tokens_per_expert (int): rows returned by extract.
-
-        Keyword Args:
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
-            chunk_m_tiles_override (int, optional): one of 16..64 in steps of 8.
-
-        Returns:
-            ttnn.Tensor: expert outputs, same shape as dispatched_buffer.
+        unified_routed_expert_moe over stacked weights in one program: gate_up_projs [1, E, K, 2N] holds each expert's
+        gate (columns 0..N-1) and up (N..2N-1) per row, down_projs [1, E, N, K]. A ROW_MAJOR bf16 dispatched buffer is
+        tilized in-op and gives a fresh TILE bf8 output; a TILE bf8 buffer is written in place.
         )doc",
         &unified_routed_expert_moe_stacked,
         nb::arg("dispatched_buffer").noconvert(),
@@ -173,9 +103,7 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("down_projs").noconvert(),
         nb::arg("max_dispatched_tokens_per_expert"),
         nb::kw_only(),
-        nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("chunk_m_tiles_override") = nb::none(),
-        nb::arg("output_init") = "zero");
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail
