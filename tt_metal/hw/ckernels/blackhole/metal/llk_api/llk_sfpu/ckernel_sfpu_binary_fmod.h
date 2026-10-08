@@ -106,15 +106,92 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     return result;
 }
 
+#ifndef DISABLE_SFPLOADMACRO
+sfpi_inline void fmod_int32_lm_head(const uint in0, const uint in1) {
+    // macro 0: L1 = float(L3) after 1 issue; L1 = -L4 * L1 + 1.0 after 6 issues
+    TT_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG1 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, in1 | (p_sfpu::LREG1 >> 2));
+    TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG3, sfpi::SFPABS_MOD1_INT);
+    TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, in0);
+    TTI_SFPGT(0, p_sfpu::LREG1, p_sfpu::LCONST_0, 1);
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x4f00);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
+    TTI_SFPARECIP(0, p_sfpu::LREG1, p_sfpu::LREG4, sfpi::SFPARECIP_MOD1_RECIP);
+    TTI_SFPABS(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPABS_MOD1_INT);
+    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG6, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::LREG5, 0);
+    TTI_SFPGT(0, p_sfpu::LREG6, p_sfpu::LCONST_0, 1);
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0x4f00);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LREG12, p_sfpu::LREG4, 0);
+    // macro 1: L6 = float(L6) after 5 issues
+    TT_SFPLOADMACRO((1 << 2) | (p_sfpu::LREG6 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, in1 | (p_sfpu::LREG6 >> 2));
+    TTI_SFPEXMAN(0, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPEXMAN_MOD1_PAD9);
+    TTI_SFPMUL24(p_sfpu::LREG4, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG1, sfpi::SFPMUL24_MOD1_LOWER);
+    TTI_SFPSHFT(10, p_sfpu::LREG1, p_sfpu::LREG1, 7);
+    TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG6, sfpi::SFPABS_MOD1_INT);
+    // macro 2: L7 = L0 * L7 (low bits) after 6 issues
+    TT_SFPLOADMACRO((2 << 2) | (p_sfpu::LREG7 & 3), InstrModLoadStore::INT32, ADDR_MOD_7, in1 | (p_sfpu::LREG7 >> 2));
+    TTI_SFPGT(0, p_sfpu::LREG6, p_sfpu::LCONST_0, 1);
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0x4f00);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
+    TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TTI_SFPSHFT(-23 & 0xfff, p_sfpu::LREG3, p_sfpu::LREG7, 5);
+    TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+    TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG6, 2);
+    TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG5, sfpi::SFPMUL24_MOD1_UPPER);
+    TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG0, sfpi::SFPMUL24_MOD1_LOWER);
+    TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSHFT(23, p_sfpu::LREG5, p_sfpu::LREG5, 7);
+}
+
+sfpi_inline void fmod_int32_lm_tail(const uint out) {
+    TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+    TTI_SFPSETCC(0, p_sfpu::LREG4, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+    TTI_SFPIADD(
+        0, p_sfpu::LCONST_0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG6, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPCOMPC(0, 0, 0, 0);
+    TTI_SFPSETCC(0, p_sfpu::LREG6, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    TTI_SFPMOV(0, p_sfpu::LREG6, p_sfpu::LREG0, 0);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
+    TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+    TTI_SFPIADD(
+        0, p_sfpu::LCONST_0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
+    TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, out);
+    sfpi::dst_reg++;
+}
+#endif
+
 // Force inlining so the scheduled reciprocal callbacks do not make SFPI outline
 // this loop and lose constant tile indices at the caller.
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 sfpi_inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+#ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_fmod_int32_body(dst_index_in0, dst_index_in1, dst_index_out);
         sfpi::dst_reg++;
     }
+#else
+    // SFPLOADMACRO schedule of calculate_fmod_int32_body: 49 issues per row instead of 51.
+    // Pace-independent: no scheduled op shares data, lane flags or a sub-unit with the issue after it.
+    const uint in0 = dst_index_in0 * 64, in1 = dst_index_in1 * 64, out = dst_index_out * 64;
+    lltt::record<lltt::Exec>(0, 32);
+    fmod_int32_lm_head(in0, in1);
+    fmod_int32_lm_tail(out);
+#pragma GCC unroll 8
+    for (int d = 1; d < ITERATIONS; d++) {
+        lltt::replay(0, 32);
+        fmod_int32_lm_tail(out);
+    }
+#endif
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
@@ -135,6 +212,72 @@ inline void calculate_sfpu_binary_fmod(const uint dst_index_in0, const uint dst_
 template <bool APPROXIMATION_MODE>
 inline void fmod_int32_init() {
     div_floor_init<APPROXIMATION_MODE>();
+#ifndef DISABLE_SFPLOADMACRO
+    // A disabled unit uses delay 7 so it cancels no pending instruction.
+    constexpr std::uint32_t disabled = 7 << 3;
+    // InstructionTemplate[0]: VD = float(L3).
+    {
+        constexpr std::uint32_t insn = TT_OP_SFPCAST(p_sfpu::LREG3, 0, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, insn & 0xffff);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, insn >> 16);
+        TTI_SFPCONFIG(0, 0, 0);
+    }
+    // InstructionTemplate[1]: VD = -L4 * VD + 1.0.
+    {
+        constexpr std::uint32_t insn = TT_OP_SFPMAD(p_sfpu::LREG4, 0, p_sfpu::LCONST_1, 0, 1);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, insn & 0xffff);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, insn >> 16);
+        TTI_SFPCONFIG(0, 1, 0);
+    }
+    // InstructionTemplate[2]: VD = float(VD).
+    {
+        constexpr std::uint32_t insn = TT_OP_SFPCAST(0, 0, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, insn & 0xffff);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, insn >> 16);
+        TTI_SFPCONFIG(0, 2, 0);
+    }
+    // InstructionTemplate[3]: VD = L0 * VD (low bits).
+    {
+        constexpr std::uint32_t insn = TT_OP_SFPMUL24(p_sfpu::LREG0, 0, p_sfpu::LCONST_0, 0, sfpi::SFPMUL24_MOD1_LOWER);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, insn & 0xffff);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, insn >> 16);
+        TTI_SFPCONFIG(0, 3, 0);
+    }
+    // Macro 0: load of b; Simple after 1 issue, MAD after 6 issues.
+    {
+        constexpr std::uint32_t simple_bits = 0x80 | (1 << 3) | (4 + 0);
+        constexpr std::uint32_t mad_bits = 0x80 | (6 << 3) | (4 + 1);
+        constexpr std::uint32_t round_bits = disabled;
+        constexpr std::uint32_t store_bits = disabled;
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 0, 0);
+    }
+    // Macro 1: dummy load; Simple after 5 issues.
+    {
+        constexpr std::uint32_t simple_bits = (5 << 3) | (4 + 2);
+        constexpr std::uint32_t mad_bits = disabled;
+        constexpr std::uint32_t round_bits = disabled;
+        constexpr std::uint32_t store_bits = disabled;
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 1, 0);
+    }
+    // Macro 2: dummy load; MAD after 6 issues.
+    {
+        constexpr std::uint32_t simple_bits = disabled;
+        constexpr std::uint32_t mad_bits = 0x80 | (6 << 3) | (4 + 3);
+        constexpr std::uint32_t round_bits = disabled;
+        constexpr std::uint32_t store_bits = disabled;
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 2, 0);
+    }
+    // Misc: every unit counts issued instructions; no scheduled store.
+    TTI_SFPCONFIG(0xf00, 8, 1);
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+#endif
 }
 
 template <bool APPROXIMATION_MODE>
