@@ -83,10 +83,10 @@ class POLLUTER_CT_DIM(TemplateParameter):
     polluter then reads past buffer_A[0] into buffer_B[0] (reads only; output discarded).
     """
 
-    ct_dim: int = 2
+    polluter_ct_dim: int = 2
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t POLLUTER_CT_DIM = {self.ct_dim};"
+        return f"constexpr std::uint32_t POLLUTER_CT_DIM = {self.polluter_ct_dim};"
 
 
 @parametrize(
