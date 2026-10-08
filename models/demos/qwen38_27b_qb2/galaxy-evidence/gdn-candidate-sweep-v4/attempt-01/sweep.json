@@ -1,0 +1,2215 @@
+{
+  "state": "allocation_failed",
+  "created_at": "2026-10-07T22:54:30.094016+00:00",
+  "replicas": 1,
+  "chips": 4,
+  "batches": [
+    8,
+    4,
+    16,
+    1,
+    2,
+    32,
+    64
+  ],
+  "input_lengths": [
+    131072,
+    262016,
+    32768,
+    8192,
+    128
+  ],
+  "output_tokens": 128,
+  "warmup_runs": 1,
+  "measured_runs": 3,
+  "methodology": "Full 64-layer native generator; fresh full prefills, no prefix reuse; fixed 128-token output including tokens beyond EOS. Warm measurements exclude weight loading and first-use compilation. TTFT includes request-state reset, prefill and first token readback. Decode uses device sampling and deferred history readback; HTTP and router overhead are not included. Input throughput times prefill_forward through device synchronization, excluding reset, sampling and readback. This native harness submits replica prefills sequentially; its aggregate input rate reflects that schedule, not ideal parallel prefill capacity. Whole-Galaxy throughput is measured only when replicas=8, never multiplied from TP4 results.",
+  "capacity_note": "Capacity and implementation guards are not tested; they are not measured OOM failures.",
+  "cells": [
+    {
+      "input_tokens": 131072,
+      "batch_per_replica": 8,
+      "concurrency": 8,
+      "pool_tokens_per_replica": 1049600,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "1dd257d53195e6ec29c250c5f0542ee399345a8bbc14d4f0bf943ecf5be6e38a",
+      "warmup": {
+        "ttft_s": [
+          211.25059470906854,
+          211.25059470906854,
+          211.25059470906854,
+          211.25059470906854,
+          211.25059470906854,
+          211.25059470906854,
+          211.25059470906854,
+          211.25059470906854
+        ],
+        "prefill_s": 210.88795810425654,
+        "prefill_s_per_replica": [
+          210.88795810425654
+        ],
+        "decode_s": 9.793689204379916,
+        "elapsed_s": 221.0442884103395,
+        "output_sha256_per_replica": [
+          "e96343a8315d7e52fcfda5a8c1b93ef740f30acb04f3d04892e6374605adacc5"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "batched_prefill_calls": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "samples": [
+        {
+          "ttft_s": [
+            210.52784653101116,
+            210.52784653101116,
+            210.52784653101116,
+            210.52784653101116,
+            210.52784653101116,
+            210.52784653101116,
+            210.52784653101116,
+            210.52784653101116
+          ],
+          "prefill_s": 210.4275256562978,
+          "prefill_s_per_replica": [
+            210.4275256562978
+          ],
+          "decode_s": 8.200249867048115,
+          "elapsed_s": 218.72809906164184,
+          "output_sha256_per_replica": [
+            "e96343a8315d7e52fcfda5a8c1b93ef740f30acb04f3d04892e6374605adacc5"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            210.5185291687958,
+            210.5185291687958,
+            210.5185291687958,
+            210.5185291687958,
+            210.5185291687958,
+            210.5185291687958,
+            210.5185291687958,
+            210.5185291687958
+          ],
+          "prefill_s": 210.42898692935705,
+          "prefill_s_per_replica": [
+            210.42898692935705
+          ],
+          "decode_s": 8.200133491773158,
+          "elapsed_s": 218.7186656659469,
+          "output_sha256_per_replica": [
+            "e96343a8315d7e52fcfda5a8c1b93ef740f30acb04f3d04892e6374605adacc5"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            210.52204375294968,
+            210.52204375294968,
+            210.52204375294968,
+            210.52204375294968,
+            210.52204375294968,
+            210.52204375294968,
+            210.52204375294968,
+            210.52204375294968
+          ],
+          "prefill_s": 210.43239250406623,
+          "prefill_s_per_replica": [
+            210.43239250406623
+          ],
+          "decode_s": 8.199909052811563,
+          "elapsed_s": 218.7219551987946,
+          "output_sha256_per_replica": [
+            "e96343a8315d7e52fcfda5a8c1b93ef740f30acb04f3d04892e6374605adacc5"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 15.487552748673378,
+        "aggregate_decode_tokens_per_second": 123.90042198938703,
+        "aggregate_e2e_tokens_per_second": 4.6817430791037635,
+        "tpot_ms": 64.56798025018234,
+        "ttft_p50_s": 210.52204375294968,
+        "ttft_p90_s": 210.52784653101116,
+        "decode_s": 8.200133491773158,
+        "elapsed_s": 218.7219551987946,
+        "samples": 3,
+        "prefill_s": 210.42898692935705,
+        "aggregate_input_tokens_per_second": 4983.039719485114,
+        "aggregate_e2e_input_tokens_per_second": 4794.104913002254
+      }
+    },
+    {
+      "input_tokens": 131072,
+      "batch_per_replica": 4,
+      "concurrency": 4,
+      "pool_tokens_per_replica": 524800,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "1dd257d53195e6ec29c250c5f0542ee399345a8bbc14d4f0bf943ecf5be6e38a",
+      "warmup": {
+        "ttft_s": [
+          106.05977131286636,
+          106.05977131286636,
+          106.05977131286636,
+          106.05977131286636
+        ],
+        "prefill_s": 105.96842204919085,
+        "prefill_s_per_replica": [
+          105.96842204919085
+        ],
+        "decode_s": 8.211615061853081,
+        "elapsed_s": 114.27139094192535,
+        "output_sha256_per_replica": [
+          "67b8c92e47aa1137dcc25b60b9059cce86a7053cf2db96afee731f4ebdb33120"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "batched_prefill_calls": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "samples": [
+        {
+          "ttft_s": [
+            105.83595509873703,
+            105.83595509873703,
+            105.83595509873703,
+            105.83595509873703
+          ],
+          "prefill_s": 105.76765292696655,
+          "prefill_s_per_replica": [
+            105.76765292696655
+          ],
+          "decode_s": 6.26642861077562,
+          "elapsed_s": 112.10238622361794,
+          "output_sha256_per_replica": [
+            "67b8c92e47aa1137dcc25b60b9059cce86a7053cf2db96afee731f4ebdb33120"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            105.84317500889301,
+            105.84317500889301,
+            105.84317500889301,
+            105.84317500889301
+          ],
+          "prefill_s": 105.7705098693259,
+          "prefill_s_per_replica": [
+            105.7705098693259
+          ],
+          "decode_s": 6.266508049331605,
+          "elapsed_s": 112.10968516115099,
+          "output_sha256_per_replica": [
+            "67b8c92e47aa1137dcc25b60b9059cce86a7053cf2db96afee731f4ebdb33120"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            105.84904365008697,
+            105.84904365008697,
+            105.84904365008697,
+            105.84904365008697
+          ],
+          "prefill_s": 105.76811342826113,
+          "prefill_s_per_replica": [
+            105.76811342826113
+          ],
+          "decode_s": 6.26652646670118,
+          "elapsed_s": 112.11557278083637,
+          "output_sha256_per_replica": [
+            "67b8c92e47aa1137dcc25b60b9059cce86a7053cf2db96afee731f4ebdb33120"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 20.266470417052446,
+        "aggregate_decode_tokens_per_second": 81.06588166820978,
+        "aggregate_e2e_tokens_per_second": 4.566956006200807,
+        "tpot_ms": 49.34258306560319,
+        "ttft_p50_s": 105.84317500889301,
+        "ttft_p90_s": 105.84904365008697,
+        "decode_s": 6.266508049331605,
+        "elapsed_s": 112.10968516115099,
+        "samples": 3,
+        "prefill_s": 105.76811342826113,
+        "aggregate_input_tokens_per_second": 4956.957092324488,
+        "aggregate_e2e_input_tokens_per_second": 4676.562950349627
+      }
+    },
+    {
+      "input_tokens": 131072,
+      "batch_per_replica": 16,
+      "concurrency": 16,
+      "pool_tokens_per_replica": 2099200,
+      "status": "capacity_guard",
+      "reason": "Exceeds the current per-replica context or KV allocation guard"
+    },
+    {
+      "input_tokens": 131072,
+      "batch_per_replica": 1,
+      "concurrency": 1,
+      "pool_tokens_per_replica": 131200,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "1dd257d53195e6ec29c250c5f0542ee399345a8bbc14d4f0bf943ecf5be6e38a",
+      "warmup": {
+        "ttft_s": [
+          28.007399783004075
+        ],
+        "prefill_s": 27.982614433858544,
+        "prefill_s_per_replica": [
+          27.982614433858544
+        ],
+        "decode_s": 6.240727195050567,
+        "elapsed_s": 34.248130473308265,
+        "output_sha256_per_replica": [
+          "e9e424306baf87f4f681dec0122f3a76dadf4f903f6d98452297136f90fb838b"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "samples": [
+        {
+          "ttft_s": [
+            27.766886994242668
+          ],
+          "prefill_s": 27.753031995147467,
+          "prefill_s_per_replica": [
+            27.753031995147467
+          ],
+          "decode_s": 5.2213651281781495,
+          "elapsed_s": 32.98825406515971,
+          "output_sha256_per_replica": [
+            "e9e424306baf87f4f681dec0122f3a76dadf4f903f6d98452297136f90fb838b"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            27.76789856189862
+          ],
+          "prefill_s": 27.753946036100388,
+          "prefill_s_per_replica": [
+            27.753946036100388
+          ],
+          "decode_s": 5.220837360713631,
+          "elapsed_s": 32.98873824579641,
+          "output_sha256_per_replica": [
+            "e9e424306baf87f4f681dec0122f3a76dadf4f903f6d98452297136f90fb838b"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            27.77084211073816
+          ],
+          "prefill_s": 27.754968313034624,
+          "prefill_s_per_replica": [
+            27.754968313034624
+          ],
+          "decode_s": 5.221262936946005,
+          "elapsed_s": 32.99210786167532,
+          "output_sha256_per_replica": [
+            "e9e424306baf87f4f681dec0122f3a76dadf4f903f6d98452297136f90fb838b"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 24.323617012531496,
+        "aggregate_decode_tokens_per_second": 24.323617012531496,
+        "aggregate_e2e_tokens_per_second": 3.8801120263006843,
+        "tpot_ms": 41.11230659012602,
+        "ttft_p50_s": 27.76789856189862,
+        "ttft_p90_s": 27.77025340097025,
+        "decode_s": 5.221262936946005,
+        "elapsed_s": 32.98873824579641,
+        "samples": 3,
+        "prefill_s": 27.753946036100388,
+        "aggregate_input_tokens_per_second": 4722.643757738476,
+        "aggregate_e2e_input_tokens_per_second": 3973.2347149319007
+      }
+    },
+    {
+      "input_tokens": 131072,
+      "batch_per_replica": 2,
+      "concurrency": 2,
+      "pool_tokens_per_replica": 262400,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "1dd257d53195e6ec29c250c5f0542ee399345a8bbc14d4f0bf943ecf5be6e38a",
+      "warmup": {
+        "ttft_s": [
+          53.275597653351724,
+          53.275597653351724
+        ],
+        "prefill_s": 53.21810887567699,
+        "prefill_s_per_replica": [
+          53.21810887567699
+        ],
+        "decode_s": 7.505849365144968,
+        "elapsed_s": 60.781451034359634,
+        "output_sha256_per_replica": [
+          "f7e38d442c05c61ba6387ca4a9f49bfe015837610ffd0fbce968a350cbb27e29"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "batched_prefill_calls": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "samples": [
+        {
+          "ttft_s": [
+            53.06419346481562,
+            53.06419346481562
+          ],
+          "prefill_s": 53.01956754690036,
+          "prefill_s_per_replica": [
+            53.01956754690036
+          ],
+          "decode_s": 5.6371718011796474,
+          "elapsed_s": 58.70136748999357,
+          "output_sha256_per_replica": [
+            "f7e38d442c05c61ba6387ca4a9f49bfe015837610ffd0fbce968a350cbb27e29"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            53.06651693629101,
+            53.06651693629101
+          ],
+          "prefill_s": 53.019822464324534,
+          "prefill_s_per_replica": [
+            53.019822464324534
+          ],
+          "decode_s": 5.637041944079101,
+          "elapsed_s": 58.70356125431135,
+          "output_sha256_per_replica": [
+            "f7e38d442c05c61ba6387ca4a9f49bfe015837610ffd0fbce968a350cbb27e29"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            53.05780054721981,
+            53.05780054721981
+          ],
+          "prefill_s": 53.01952702505514,
+          "prefill_s_per_replica": [
+            53.01952702505514
+          ],
+          "decode_s": 5.637231164611876,
+          "elapsed_s": 58.69503443595022,
+          "output_sha256_per_replica": [
+            "f7e38d442c05c61ba6387ca4a9f49bfe015837610ffd0fbce968a350cbb27e29"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 22.529027760591525,
+        "aggregate_decode_tokens_per_second": 45.05805552118305,
+        "aggregate_e2e_tokens_per_second": 4.361056836429554,
+        "tpot_ms": 44.38717953684762,
+        "ttft_p50_s": 53.06419346481562,
+        "ttft_p90_s": 53.06651693629101,
+        "decode_s": 5.6371718011796474,
+        "elapsed_s": 58.70136748999357,
+        "samples": 3,
+        "prefill_s": 53.01956754690036,
+        "aggregate_input_tokens_per_second": 4944.287781451841,
+        "aggregate_e2e_input_tokens_per_second": 4465.722200503863
+      }
+    },
+    {
+      "input_tokens": 131072,
+      "batch_per_replica": 32,
+      "concurrency": 32,
+      "pool_tokens_per_replica": 4198400,
+      "status": "capacity_guard",
+      "reason": "Exceeds the current per-replica context or KV allocation guard"
+    },
+    {
+      "input_tokens": 131072,
+      "batch_per_replica": 64,
+      "concurrency": 64,
+      "pool_tokens_per_replica": 8396800,
+      "status": "implementation_guard",
+      "reason": "Batches above 32 require wider token buffers and a projection supporting multiple tile rows"
+    },
+    {
+      "input_tokens": 262016,
+      "batch_per_replica": 8,
+      "concurrency": 8,
+      "pool_tokens_per_replica": 2097152,
+      "status": "capacity_guard",
+      "reason": "Exceeds the current per-replica context or KV allocation guard"
+    },
+    {
+      "input_tokens": 262016,
+      "batch_per_replica": 4,
+      "concurrency": 4,
+      "pool_tokens_per_replica": 1048576,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "9463f8abcceeaf55ca75891cfc7cccf13010fbe7700d2618551c771f8bc33873",
+      "warmup": {
+        "ttft_s": [
+          284.9236419838853,
+          284.9236419838853,
+          284.9236419838853,
+          284.9236419838853
+        ],
+        "prefill_s": 284.882536704652,
+        "prefill_s_per_replica": [
+          284.882536704652
+        ],
+        "decode_s": 8.801399535033852,
+        "elapsed_s": 293.7250439329073,
+        "output_sha256_per_replica": [
+          "2c5022a4535524661cfda9574cc28e00fafe07da74b6c8aa75d336ceef13b0da"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "batched_prefill_calls": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "samples": [
+        {
+          "ttft_s": [
+            284.96016000397503,
+            284.96016000397503,
+            284.96016000397503,
+            284.96016000397503
+          ],
+          "prefill_s": 284.8938366291113,
+          "prefill_s_per_replica": [
+            284.8938366291113
+          ],
+          "decode_s": 7.8470690520480275,
+          "elapsed_s": 292.8072316199541,
+          "output_sha256_per_replica": [
+            "2c5022a4535524661cfda9574cc28e00fafe07da74b6c8aa75d336ceef13b0da"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            284.95210137497634,
+            284.95210137497634,
+            284.95210137497634,
+            284.95210137497634
+          ],
+          "prefill_s": 284.89297751616687,
+          "prefill_s_per_replica": [
+            284.89297751616687
+          ],
+          "decode_s": 7.8473151959478855,
+          "elapsed_s": 292.79941891506314,
+          "output_sha256_per_replica": [
+            "2c5022a4535524661cfda9574cc28e00fafe07da74b6c8aa75d336ceef13b0da"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            284.9341233270243,
+            284.9341233270243,
+            284.9341233270243,
+            284.9341233270243
+          ],
+          "prefill_s": 284.89337328309193,
+          "prefill_s_per_replica": [
+            284.89337328309193
+          ],
+          "decode_s": 7.847289513330907,
+          "elapsed_s": 292.7814153339714,
+          "output_sha256_per_replica": [
+            "2c5022a4535524661cfda9574cc28e00fafe07da74b6c8aa75d336ceef13b0da"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 16.183932016813387,
+        "aggregate_decode_tokens_per_second": 64.73572806725355,
+        "aggregate_e2e_tokens_per_second": 1.7486373500916126,
+        "tpot_ms": 61.78968120732997,
+        "ttft_p50_s": 284.95210137497634,
+        "ttft_p90_s": 284.96016000397503,
+        "decode_s": 7.847289513330907,
+        "elapsed_s": 292.79941891506314,
+        "samples": 3,
+        "prefill_s": 284.89337328309193,
+        "aggregate_input_tokens_per_second": 3678.7938867169196,
+        "aggregate_e2e_input_tokens_per_second": 3579.460655637531
+      }
+    },
+    {
+      "input_tokens": 262016,
+      "batch_per_replica": 16,
+      "concurrency": 16,
+      "pool_tokens_per_replica": 4194304,
+      "status": "capacity_guard",
+      "reason": "Exceeds the current per-replica context or KV allocation guard"
+    },
+    {
+      "input_tokens": 262016,
+      "batch_per_replica": 1,
+      "concurrency": 1,
+      "pool_tokens_per_replica": 262144,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "9463f8abcceeaf55ca75891cfc7cccf13010fbe7700d2618551c771f8bc33873",
+      "warmup": {
+        "ttft_s": [
+          73.62700026715174
+        ],
+        "prefill_s": 73.61572351818904,
+        "prefill_s_per_replica": [
+          73.61572351818904
+        ],
+        "decode_s": 7.0206302856095135,
+        "elapsed_s": 80.64763317676261,
+        "output_sha256_per_replica": [
+          "9af74b981a0719b3ba1b7be9b9a25597643aee44ce5fc4375ded311839e755e6"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "samples": [
+        {
+          "ttft_s": [
+            73.62029413087294
+          ],
+          "prefill_s": 73.60602342104539,
+          "prefill_s_per_replica": [
+            73.60602342104539
+          ],
+          "decode_s": 6.271778602153063,
+          "elapsed_s": 79.89207564713433,
+          "output_sha256_per_replica": [
+            "9af74b981a0719b3ba1b7be9b9a25597643aee44ce5fc4375ded311839e755e6"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            73.61676754429936
+          ],
+          "prefill_s": 73.6058344929479,
+          "prefill_s_per_replica": [
+            73.6058344929479
+          ],
+          "decode_s": 6.271588261704892,
+          "elapsed_s": 79.88835779903457,
+          "output_sha256_per_replica": [
+            "9af74b981a0719b3ba1b7be9b9a25597643aee44ce5fc4375ded311839e755e6"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            73.61483823414892
+          ],
+          "prefill_s": 73.60358504904434,
+          "prefill_s_per_replica": [
+            73.60358504904434
+          ],
+          "decode_s": 6.271943395026028,
+          "elapsed_s": 79.88678429322317,
+          "output_sha256_per_replica": [
+            "9af74b981a0719b3ba1b7be9b9a25597643aee44ce5fc4375ded311839e755e6"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 20.249439282885668,
+        "aggregate_decode_tokens_per_second": 20.249439282885668,
+        "aggregate_e2e_tokens_per_second": 1.6022359643691018,
+        "tpot_ms": 49.38408348152018,
+        "ttft_p50_s": 73.61676754429936,
+        "ttft_p90_s": 73.61958881355822,
+        "decode_s": 6.271778602153063,
+        "elapsed_s": 79.88835779903457,
+        "samples": 3,
+        "prefill_s": 73.6058344929479,
+        "aggregate_input_tokens_per_second": 3559.717810482856,
+        "aggregate_e2e_input_tokens_per_second": 3279.7770190635515
+      }
+    },
+    {
+      "input_tokens": 262016,
+      "batch_per_replica": 2,
+      "concurrency": 2,
+      "pool_tokens_per_replica": 524288,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "9463f8abcceeaf55ca75891cfc7cccf13010fbe7700d2618551c771f8bc33873",
+      "warmup": {
+        "ttft_s": [
+          142.41809066804126,
+          142.41809066804126
+        ],
+        "prefill_s": 142.39290385087952,
+        "prefill_s_per_replica": [
+          142.39290385087952
+        ],
+        "decode_s": 7.539350270293653,
+        "elapsed_s": 149.95744375232607,
+        "output_sha256_per_replica": [
+          "8b423cde9b318588badb89079808fc86e0e8020c209236cad0233f56756d7df1"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "batched_prefill_calls": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "samples": [
+        {
+          "ttft_s": [
+            142.41710300417617,
+            142.41710300417617
+          ],
+          "prefill_s": 142.39123164210469,
+          "prefill_s_per_replica": [
+            142.39123164210469
+          ],
+          "decode_s": 6.689852570183575,
+          "elapsed_s": 149.10695785703138,
+          "output_sha256_per_replica": [
+            "8b423cde9b318588badb89079808fc86e0e8020c209236cad0233f56756d7df1"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            142.43455033702776,
+            142.43455033702776
+          ],
+          "prefill_s": 142.3920413982123,
+          "prefill_s_per_replica": [
+            142.3920413982123
+          ],
+          "decode_s": 6.68984356103465,
+          "elapsed_s": 149.12439629109576,
+          "output_sha256_per_replica": [
+            "8b423cde9b318588badb89079808fc86e0e8020c209236cad0233f56756d7df1"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            142.42947283387184,
+            142.42947283387184
+          ],
+          "prefill_s": 142.39202616922557,
+          "prefill_s_per_replica": [
+            142.39202616922557
+          ],
+          "decode_s": 6.689623144920915,
+          "elapsed_s": 149.11909863259643,
+          "output_sha256_per_replica": [
+            "8b423cde9b318588badb89079808fc86e0e8020c209236cad0233f56756d7df1"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 18.984001470485538,
+        "aggregate_decode_tokens_per_second": 37.968002940971076,
+        "aggregate_e2e_tokens_per_second": 1.7167485744447768,
+        "tpot_ms": 52.67593355145394,
+        "ttft_p50_s": 142.42947283387184,
+        "ttft_p90_s": 142.43455033702776,
+        "decode_s": 6.68984356103465,
+        "elapsed_s": 149.11909863259643,
+        "samples": 3,
+        "prefill_s": 142.39202616922557,
+        "aggregate_input_tokens_per_second": 3680.206076829155,
+        "aggregate_e2e_input_tokens_per_second": 3514.184331888458
+      }
+    },
+    {
+      "input_tokens": 262016,
+      "batch_per_replica": 32,
+      "concurrency": 32,
+      "pool_tokens_per_replica": 8388608,
+      "status": "capacity_guard",
+      "reason": "Exceeds the current per-replica context or KV allocation guard"
+    },
+    {
+      "input_tokens": 262016,
+      "batch_per_replica": 64,
+      "concurrency": 64,
+      "pool_tokens_per_replica": 16777216,
+      "status": "implementation_guard",
+      "reason": "Batches above 32 require wider token buffers and a projection supporting multiple tile rows"
+    },
+    {
+      "input_tokens": 32768,
+      "batch_per_replica": 8,
+      "concurrency": 8,
+      "pool_tokens_per_replica": 263168,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "fc8a22c242dc46d1194ec49d6fee1e3ef73cabf8b3a313455e017e04d5bfd4d6",
+      "warmup": {
+        "ttft_s": [
+          39.22984011890367,
+          39.22984011890367,
+          39.22984011890367,
+          39.22984011890367,
+          39.22984011890367,
+          39.22984011890367,
+          39.22984011890367,
+          39.22984011890367
+        ],
+        "prefill_s": 39.1581840403378,
+        "prefill_s_per_replica": [
+          39.1581840403378
+        ],
+        "decode_s": 6.7880480280146,
+        "elapsed_s": 46.01789057068527,
+        "output_sha256_per_replica": [
+          "d65c62d2afd48eb9e084964c6868fb4bf7c8b7b668309f333790f56312b528d3"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "batched_prefill_calls": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "samples": [
+        {
+          "ttft_s": [
+            39.22748482041061,
+            39.22748482041061,
+            39.22748482041061,
+            39.22748482041061,
+            39.22748482041061,
+            39.22748482041061,
+            39.22748482041061,
+            39.22748482041061
+          ],
+          "prefill_s": 39.15819668583572,
+          "prefill_s_per_replica": [
+            39.15819668583572
+          ],
+          "decode_s": 5.901118993759155,
+          "elapsed_s": 45.12860643817112,
+          "output_sha256_per_replica": [
+            "d65c62d2afd48eb9e084964c6868fb4bf7c8b7b668309f333790f56312b528d3"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            39.25350344320759,
+            39.25350344320759,
+            39.25350344320759,
+            39.25350344320759,
+            39.25350344320759,
+            39.25350344320759,
+            39.25350344320759,
+            39.25350344320759
+          ],
+          "prefill_s": 39.15864978916943,
+          "prefill_s_per_replica": [
+            39.15864978916943
+          ],
+          "decode_s": 5.901270120870322,
+          "elapsed_s": 45.154775857925415,
+          "output_sha256_per_replica": [
+            "d65c62d2afd48eb9e084964c6868fb4bf7c8b7b668309f333790f56312b528d3"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            39.24999460764229,
+            39.24999460764229,
+            39.24999460764229,
+            39.24999460764229,
+            39.24999460764229,
+            39.24999460764229,
+            39.24999460764229,
+            39.24999460764229
+          ],
+          "prefill_s": 39.15744956070557,
+          "prefill_s_per_replica": [
+            39.15744956070557
+          ],
+          "decode_s": 5.901219272054732,
+          "elapsed_s": 45.15121592301875,
+          "output_sha256_per_replica": [
+            "d65c62d2afd48eb9e084964c6868fb4bf7c8b7b668309f333790f56312b528d3"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 21.520976283902794,
+        "aggregate_decode_tokens_per_second": 172.16781027122235,
+        "aggregate_e2e_tokens_per_second": 22.679344931615667,
+        "tpot_ms": 46.46629348074592,
+        "ttft_p50_s": 39.24999460764229,
+        "ttft_p90_s": 39.25350344320759,
+        "decode_s": 5.901219272054732,
+        "elapsed_s": 45.15121592301875,
+        "samples": 3,
+        "prefill_s": 39.15819668583572,
+        "aggregate_input_tokens_per_second": 6694.486012805145,
+        "aggregate_e2e_input_tokens_per_second": 5805.912302493611
+      }
+    },
+    {
+      "input_tokens": 32768,
+      "batch_per_replica": 4,
+      "concurrency": 4,
+      "pool_tokens_per_replica": 131584,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "fc8a22c242dc46d1194ec49d6fee1e3ef73cabf8b3a313455e017e04d5bfd4d6",
+      "warmup": {
+        "ttft_s": [
+          19.785931271966547,
+          19.785931271966547,
+          19.785931271966547,
+          19.785931271966547
+        ],
+        "prefill_s": 19.744490523822606,
+        "prefill_s_per_replica": [
+          19.744490523822606
+        ],
+        "decode_s": 6.058498410973698,
+        "elapsed_s": 25.8444320759736,
+        "output_sha256_per_replica": [
+          "dfc2c3c9e0fd05a0d2e191b85e8f219b42f3d17b1bc326e59fa50817cd618b87"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "batched_prefill_calls": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "samples": [
+        {
+          "ttft_s": [
+            19.809435141738504,
+            19.809435141738504,
+            19.809435141738504,
+            19.809435141738504
+          ],
+          "prefill_s": 19.741855659056455,
+          "prefill_s_per_replica": [
+            19.741855659056455
+          ],
+          "decode_s": 5.100569346919656,
+          "elapsed_s": 24.91000683279708,
+          "output_sha256_per_replica": [
+            "dfc2c3c9e0fd05a0d2e191b85e8f219b42f3d17b1bc326e59fa50817cd618b87"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            19.801169480662793,
+            19.801169480662793,
+            19.801169480662793,
+            19.801169480662793
+          ],
+          "prefill_s": 19.740713886916637,
+          "prefill_s_per_replica": [
+            19.740713886916637
+          ],
+          "decode_s": 5.100441991817206,
+          "elapsed_s": 24.901614226866513,
+          "output_sha256_per_replica": [
+            "dfc2c3c9e0fd05a0d2e191b85e8f219b42f3d17b1bc326e59fa50817cd618b87"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            19.7819751878269,
+            19.7819751878269,
+            19.7819751878269,
+            19.7819751878269
+          ],
+          "prefill_s": 19.741453445982188,
+          "prefill_s_per_replica": [
+            19.741453445982188
+          ],
+          "decode_s": 5.100366705097258,
+          "elapsed_s": 24.882344687823206,
+          "output_sha256_per_replica": [
+            "dfc2c3c9e0fd05a0d2e191b85e8f219b42f3d17b1bc326e59fa50817cd618b87"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 24.89980284135178,
+        "aggregate_decode_tokens_per_second": 99.59921136540711,
+        "aggregate_e2e_tokens_per_second": 20.560916064935256,
+        "tpot_ms": 40.16096056548981,
+        "ttft_p50_s": 19.801169480662793,
+        "ttft_p90_s": 19.809435141738504,
+        "decode_s": 5.100441991817206,
+        "elapsed_s": 24.901614226866513,
+        "samples": 3,
+        "prefill_s": 19.741453445982188,
+        "aggregate_input_tokens_per_second": 6639.430088501208,
+        "aggregate_e2e_input_tokens_per_second": 5263.5945126234255
+      }
+    },
+    {
+      "input_tokens": 32768,
+      "batch_per_replica": 16,
+      "concurrency": 16,
+      "pool_tokens_per_replica": 526336,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "fc8a22c242dc46d1194ec49d6fee1e3ef73cabf8b3a313455e017e04d5bfd4d6",
+      "warmup": {
+        "ttft_s": [
+          80.21956928819418,
+          80.21956928819418,
+          80.21956928819418,
+          80.21956928819418,
+          80.21956928819418,
+          80.21956928819418,
+          80.21956928819418,
+          80.21956928819418,
+          80.21956928819418,
+          80.21956928819418,
+          80.21956928819418,
+          80.21956928819418,
+          80.21956928819418,
+          80.21956928819418,
+          80.21956928819418,
+          80.21956928819418
+        ],
+        "prefill_s": 80.02075636386871,
+        "prefill_s_per_replica": [
+          80.02075636386871
+        ],
+        "decode_s": 9.050031891092658,
+        "elapsed_s": 89.26960553601384,
+        "output_sha256_per_replica": [
+          "4f60faabbca093b2a71e03f698ddb85c359dba5749a3ca2437b56d3659c2c77d"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "batched_prefill_calls": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "samples": [
+        {
+          "ttft_s": [
+            79.9486265568994,
+            79.9486265568994,
+            79.9486265568994,
+            79.9486265568994,
+            79.9486265568994,
+            79.9486265568994,
+            79.9486265568994,
+            79.9486265568994,
+            79.9486265568994,
+            79.9486265568994,
+            79.9486265568994,
+            79.9486265568994,
+            79.9486265568994,
+            79.9486265568994,
+            79.9486265568994,
+            79.9486265568994
+          ],
+          "prefill_s": 79.82110289018601,
+          "prefill_s_per_replica": [
+            79.82110289018601
+          ],
+          "decode_s": 7.838980126194656,
+          "elapsed_s": 87.78760897694156,
+          "output_sha256_per_replica": [
+            "4f60faabbca093b2a71e03f698ddb85c359dba5749a3ca2437b56d3659c2c77d"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            79.98183664632961,
+            79.98183664632961,
+            79.98183664632961,
+            79.98183664632961,
+            79.98183664632961,
+            79.98183664632961,
+            79.98183664632961,
+            79.98183664632961,
+            79.98183664632961,
+            79.98183664632961,
+            79.98183664632961,
+            79.98183664632961,
+            79.98183664632961,
+            79.98183664632961,
+            79.98183664632961,
+            79.98183664632961
+          ],
+          "prefill_s": 79.82614426128566,
+          "prefill_s_per_replica": [
+            79.82614426128566
+          ],
+          "decode_s": 7.838873284868896,
+          "elapsed_s": 87.82071222504601,
+          "output_sha256_per_replica": [
+            "4f60faabbca093b2a71e03f698ddb85c359dba5749a3ca2437b56d3659c2c77d"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            79.95905099902302,
+            79.95905099902302,
+            79.95905099902302,
+            79.95905099902302,
+            79.95905099902302,
+            79.95905099902302,
+            79.95905099902302,
+            79.95905099902302,
+            79.95905099902302,
+            79.95905099902302,
+            79.95905099902302,
+            79.95905099902302,
+            79.95905099902302,
+            79.95905099902302,
+            79.95905099902302,
+            79.95905099902302
+          ],
+          "prefill_s": 79.83038675691932,
+          "prefill_s_per_replica": [
+            79.83038675691932
+          ],
+          "decode_s": 7.838906207121909,
+          "elapsed_s": 87.79795974027365,
+          "output_sha256_per_replica": [
+            "4f60faabbca093b2a71e03f698ddb85c359dba5749a3ca2437b56d3659c2c77d"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 16.20123989806336,
+        "aggregate_decode_tokens_per_second": 259.21983836901376,
+        "aggregate_e2e_tokens_per_second": 23.32628236531293,
+        "tpot_ms": 61.72367092221975,
+        "ttft_p50_s": 79.95905099902302,
+        "ttft_p90_s": 79.98183664632961,
+        "decode_s": 7.838906207121909,
+        "elapsed_s": 87.79795974027365,
+        "samples": 3,
+        "prefill_s": 79.82614426128566,
+        "aggregate_input_tokens_per_second": 6567.873280762614,
+        "aggregate_e2e_input_tokens_per_second": 5971.52828552011
+      }
+    },
+    {
+      "input_tokens": 32768,
+      "batch_per_replica": 1,
+      "concurrency": 1,
+      "pool_tokens_per_replica": 32896,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "fc8a22c242dc46d1194ec49d6fee1e3ef73cabf8b3a313455e017e04d5bfd4d6",
+      "warmup": {
+        "ttft_s": [
+          5.236225050408393
+        ],
+        "prefill_s": 5.222624786198139,
+        "prefill_s_per_replica": [
+          5.222624786198139
+        ],
+        "decode_s": 4.81030581286177,
+        "elapsed_s": 10.046533577144146,
+        "output_sha256_per_replica": [
+          "d05ca94f2b65ab2168b1b305da040ed7c62f8df6d2624fe9635f2bde3ea63bfd"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "samples": [
+        {
+          "ttft_s": [
+            5.236874877009541
+          ],
+          "prefill_s": 5.222168602049351,
+          "prefill_s_per_replica": [
+            5.222168602049351
+          ],
+          "decode_s": 4.057395976036787,
+          "elapsed_s": 9.29427300626412,
+          "output_sha256_per_replica": [
+            "d05ca94f2b65ab2168b1b305da040ed7c62f8df6d2624fe9635f2bde3ea63bfd"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            5.237715779803693
+          ],
+          "prefill_s": 5.222759859170765,
+          "prefill_s_per_replica": [
+            5.222759859170765
+          ],
+          "decode_s": 4.0574402483180165,
+          "elapsed_s": 9.295158211141825,
+          "output_sha256_per_replica": [
+            "d05ca94f2b65ab2168b1b305da040ed7c62f8df6d2624fe9635f2bde3ea63bfd"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            5.232704896014184
+          ],
+          "prefill_s": 5.221863728016615,
+          "prefill_s_per_replica": [
+            5.221863728016615
+          ],
+          "decode_s": 4.057456276379526,
+          "elapsed_s": 9.290163656231016,
+          "output_sha256_per_replica": [
+            "d05ca94f2b65ab2168b1b305da040ed7c62f8df6d2624fe9635f2bde3ea63bfd"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 31.300522553017746,
+        "aggregate_decode_tokens_per_second": 31.300522553017746,
+        "aggregate_e2e_tokens_per_second": 13.771921689166117,
+        "tpot_ms": 31.948348411952885,
+        "ttft_p50_s": 5.236874877009541,
+        "ttft_p90_s": 5.237547599244863,
+        "decode_s": 4.0574402483180165,
+        "elapsed_s": 9.29427300626412,
+        "samples": 3,
+        "prefill_s": 5.222168602049351,
+        "aggregate_input_tokens_per_second": 6274.787831848394,
+        "aggregate_e2e_input_tokens_per_second": 3525.611952426526
+      }
+    },
+    {
+      "input_tokens": 32768,
+      "batch_per_replica": 2,
+      "concurrency": 2,
+      "pool_tokens_per_replica": 65792,
+      "status": "completed",
+      "reason": null,
+      "prompt_sha256": "fc8a22c242dc46d1194ec49d6fee1e3ef73cabf8b3a313455e017e04d5bfd4d6",
+      "warmup": {
+        "ttft_s": [
+          9.919804517179728,
+          9.919804517179728
+        ],
+        "prefill_s": 9.89352347701788,
+        "prefill_s_per_replica": [
+          9.89352347701788
+        ],
+        "decode_s": 5.322748558595777,
+        "elapsed_s": 15.242555759847164,
+        "output_sha256_per_replica": [
+          "46354790cbca5bb7c51f9f879ad0a639196cab382979f84b0569142c9365eff8"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "batched_prefill_calls": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "trace_captures": 2,
+            "model_replays": 127,
+            "sampling_replays": 127,
+            "history_appends": 127,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 2
+      },
+      "samples": [
+        {
+          "ttft_s": [
+            9.941405467223376,
+            9.941405467223376
+          ],
+          "prefill_s": 9.8921833881177,
+          "prefill_s_per_replica": [
+            9.8921833881177
+          ],
+          "decode_s": 4.473643712233752,
+          "elapsed_s": 14.415051623247564,
+          "output_sha256_per_replica": [
+            "46354790cbca5bb7c51f9f879ad0a639196cab382979f84b0569142c9365eff8"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            9.928755104076117,
+            9.928755104076117
+          ],
+          "prefill_s": 9.891958886291832,
+          "prefill_s_per_replica": [
+            9.891958886291832
+          ],
+          "decode_s": 4.473694266751409,
+          "elapsed_s": 14.402451694011688,
+          "output_sha256_per_replica": [
+            "46354790cbca5bb7c51f9f879ad0a639196cab382979f84b0569142c9365eff8"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        },
+        {
+          "ttft_s": [
+            9.916560976300389,
+            9.916560976300389
+          ],
+          "prefill_s": 9.89134677592665,
+          "prefill_s_per_replica": [
+            9.89134677592665
+          ],
+          "decode_s": 4.473951844032854,
+          "elapsed_s": 14.390515053179115,
+          "output_sha256_per_replica": [
+            "46354790cbca5bb7c51f9f879ad0a639196cab382979f84b0569142c9365eff8"
+          ],
+          "counters_per_replica": [
+            {
+              "seed_refreshes": 1,
+              "history_cursor_refreshes": 1,
+              "batched_prefill_calls": 1,
+              "token_readbacks": 1,
+              "token_refreshes": 1,
+              "position_refreshes": 1,
+              "rope_refreshes": 1,
+              "model_replays": 127,
+              "sampling_replays": 127,
+              "history_appends": 127,
+              "history_readbacks": 1
+            }
+          ],
+          "trace_captures": 0
+        }
+      ],
+      "summary": {
+        "tokens_per_second_per_user": 28.388171481423466,
+        "aggregate_decode_tokens_per_second": 56.77634296284693,
+        "aggregate_e2e_tokens_per_second": 17.774751510289097,
+        "tpot_ms": 35.22593910827881,
+        "ttft_p50_s": 9.928755104076117,
+        "ttft_p90_s": 9.941405467223376,
+        "decode_s": 4.473694266751409,
+        "elapsed_s": 14.402451694011688,
+        "samples": 3,
+        "prefill_s": 9.891958886291832,
+        "aggregate_input_tokens_per_second": 6625.179173643663,
+        "aggregate_e2e_input_tokens_per_second": 4550.336386634009
+      }
+    },
+    {
+      "input_tokens": 32768,
+      "batch_per_replica": 32,
+      "concurrency": 32,
+      "pool_tokens_per_replica": 1052672,
+      "status": "oom",
+      "reason": "TT_FATAL @ /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tt_metal/impl/allocator/bank_manager.cpp:495: false\ninfo:\nOut of Memory: Not enough space to allocate 1342177280 B DRAM buffer across 8 banks, where each bank needs to store 167772160 B, but bank size is 4247339392 B (allocated: 3913448192 B, free: 333891200 B, largest free block: 162392960 B)\nbacktrace:\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so(+0xa78231) [0x700b59a78231]\n --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, tt::tt_metal::CoreRangeSet const&, std::optional<unsigned int>, ttsl::StrongType<unsigned int, tt::tt_metal::AllocatorIDTag>, std::vector<std::pair<unsigned long, unsigned long>, std::allocator<std::pair<unsigned long, unsigned long> > > const&, std::optional<std::unordered_set<unsigned int, std::hash<unsigned int>, std::equal_to<unsigned int>, std::allocator<unsigned int> > > const&)\n --- tt::tt_metal::AllocatorImpl::allocate_buffer(tt::tt_metal::Buffer*)\n --- tt::tt_metal::BufferImpl::allocate_impl(tt::tt_metal::Buffer&)\n --- tt::tt_metal::BufferImpl::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)\n --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)\n --- tt::tt_metal::tensor_impl::allocate_device_buffer(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)\n --- tt::tt_metal::allocate_mesh_tensor_on_device_with_topology(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::TensorSpec, tt::tt_metal::TensorTopology)\n --- ttnn::create_device_tensor(tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, std::optional<tt::tt_metal::TensorTopology>)\n --- ttnn::experimental::prim::MinimalMatmulDeviceOperation::create_output_tensors(ttnn::experimental::prim::MinimalMatmulParams const&, ttnn::experimental::prim::MinimalMatmulInputs const&)\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim28MinimalMatmulDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x98) [0x700b5c916ca8]\n --- ttnn::prim::minimal_matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::operations::unary::BasicUnaryWithParam<float> >, std::optional<ttnn::experimental::prim::MinimalMatmulConfig const> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<tt::tt_metal::DataType const>, std::optional<ttnn::ComputeKernelConfig>, int)\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/_ttnncpp.so(_ZN4ttnn12experimental14minimal_matmulERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_RKSt8optionalIS2_ESB_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSB_IKNS0_4prim19MinimalMatmulConfigEERKSB_IN2tt8tt_metal12MemoryConfigEESB_IKNSR_8DataTypeEESB_INS_19ComputeKernelConfigEEb+0x440) [0x700b5c912d10]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/_ttnn.so(+0x4bcb6c) [0x700b5dcbcb6c]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/_ttnn.so(+0x4bc54c) [0x700b5dcbc54c]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/_ttnn.so(+0x3bc65d) [0x700b5dbbc65d]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x6030d836ac65]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x6030d839eb46]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x6030d82cc87c]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x6030d836ac65]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x6030d839eb46]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd2a2) [0x6030d82f92a2]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x6030d82cb034]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x6030d82cb034]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x6030d82f8e59]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x6030d82f8e59]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x6030d82c6778]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x6030d82cac17]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x6030d82cac17]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x6030d836ac65]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x6030d839eb46]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd2a2) [0x6030d82f92a2]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x6030d82cb034]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x6030d82cac17]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x6030d836ac65]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x6030d839eb46]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x6030d82cc87c]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x6030d82c6778]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x6030d82c6778]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n",
+      "prompt_sha256": "fc8a22c242dc46d1194ec49d6fee1e3ef73cabf8b3a313455e017e04d5bfd4d6",
+      "error": {
+        "type": "RuntimeError",
+        "message": "TT_FATAL @ /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tt_metal/impl/allocator/bank_manager.cpp:495: false\ninfo:\nOut of Memory: Not enough space to allocate 1342177280 B DRAM buffer across 8 banks, where each bank needs to store 167772160 B, but bank size is 4247339392 B (allocated: 3913448192 B, free: 333891200 B, largest free block: 162392960 B)\nbacktrace:\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so(+0xa78231) [0x700b59a78231]\n --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, tt::tt_metal::CoreRangeSet const&, std::optional<unsigned int>, ttsl::StrongType<unsigned int, tt::tt_metal::AllocatorIDTag>, std::vector<std::pair<unsigned long, unsigned long>, std::allocator<std::pair<unsigned long, unsigned long> > > const&, std::optional<std::unordered_set<unsigned int, std::hash<unsigned int>, std::equal_to<unsigned int>, std::allocator<unsigned int> > > const&)\n --- tt::tt_metal::AllocatorImpl::allocate_buffer(tt::tt_metal::Buffer*)\n --- tt::tt_metal::BufferImpl::allocate_impl(tt::tt_metal::Buffer&)\n --- tt::tt_metal::BufferImpl::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)\n --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)\n --- tt::tt_metal::tensor_impl::allocate_device_buffer(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)\n --- tt::tt_metal::allocate_mesh_tensor_on_device_with_topology(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::TensorSpec, tt::tt_metal::TensorTopology)\n --- ttnn::create_device_tensor(tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, std::optional<tt::tt_metal::TensorTopology>)\n --- ttnn::experimental::prim::MinimalMatmulDeviceOperation::create_output_tensors(ttnn::experimental::prim::MinimalMatmulParams const&, ttnn::experimental::prim::MinimalMatmulInputs const&)\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim28MinimalMatmulDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x98) [0x700b5c916ca8]\n --- ttnn::prim::minimal_matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::operations::unary::BasicUnaryWithParam<float> >, std::optional<ttnn::experimental::prim::MinimalMatmulConfig const> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<tt::tt_metal::DataType const>, std::optional<ttnn::ComputeKernelConfig>, int)\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/_ttnncpp.so(_ZN4ttnn12experimental14minimal_matmulERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_RKSt8optionalIS2_ESB_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSB_IKNS0_4prim19MinimalMatmulConfigEERKSB_IN2tt8tt_metal12MemoryConfigEESB_IKNSR_8DataTypeEESB_INS_19ComputeKernelConfigEEb+0x440) [0x700b5c912d10]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/_ttnn.so(+0x4bcb6c) [0x700b5dcbcb6c]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/_ttnn.so(+0x4bc54c) [0x700b5dcbc54c]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/_ttnn.so(+0x3bc65d) [0x700b5dbbc65d]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x6030d836ac65]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x6030d839eb46]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x6030d82cc87c]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x6030d836ac65]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x6030d839eb46]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd2a2) [0x6030d82f92a2]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x6030d82cb034]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x6030d82cb034]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x6030d82f8e59]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x6030d82f8e59]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x6030d82c6778]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x6030d82cac17]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x6030d82cac17]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x6030d836ac65]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x6030d839eb46]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd2a2) [0x6030d82f92a2]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x6030d82cb034]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x6030d82cac17]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x6030d836ac65]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x6030d839eb46]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x6030d82cc87c]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x6030d82c6778]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x6030d82c6778]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n"
+      }
+    },
+    {
+      "input_tokens": 32768,
+      "batch_per_replica": 64,
+      "concurrency": 64,
+      "pool_tokens_per_replica": 2105344,
+      "status": "implementation_guard",
+      "reason": "Batches above 32 require wider token buffers and a projection supporting multiple tile rows"
+    },
+    {
+      "input_tokens": 8192,
+      "batch_per_replica": 8,
+      "concurrency": 8,
+      "pool_tokens_per_replica": 66560,
+      "status": "not_run",
+      "reason": null
+    },
+    {
+      "input_tokens": 8192,
+      "batch_per_replica": 4,
+      "concurrency": 4,
+      "pool_tokens_per_replica": 33280,
+      "status": "not_run",
+      "reason": null
+    },
+    {
+      "input_tokens": 8192,
+      "batch_per_replica": 16,
+      "concurrency": 16,
+      "pool_tokens_per_replica": 133120,
+      "status": "not_run",
+      "reason": null
+    },
+    {
+      "input_tokens": 8192,
+      "batch_per_replica": 1,
+      "concurrency": 1,
+      "pool_tokens_per_replica": 8320,
+      "status": "not_run",
+      "reason": null
+    },
+    {
+      "input_tokens": 8192,
+      "batch_per_replica": 2,
+      "concurrency": 2,
+      "pool_tokens_per_replica": 16640,
+      "status": "not_run",
+      "reason": null
+    },
+    {
+      "input_tokens": 8192,
+      "batch_per_replica": 32,
+      "concurrency": 32,
+      "pool_tokens_per_replica": 266240,
+      "status": "not_run",
+      "reason": null
+    },
+    {
+      "input_tokens": 8192,
+      "batch_per_replica": 64,
+      "concurrency": 64,
+      "pool_tokens_per_replica": 532480,
+      "status": "implementation_guard",
+      "reason": "Batches above 32 require wider token buffers and a projection supporting multiple tile rows"
+    },
+    {
+      "input_tokens": 128,
+      "batch_per_replica": 8,
+      "concurrency": 8,
+      "pool_tokens_per_replica": 2048,
+      "status": "not_run",
+      "reason": null
+    },
+    {
+      "input_tokens": 128,
+      "batch_per_replica": 4,
+      "concurrency": 4,
+      "pool_tokens_per_replica": 1024,
+      "status": "not_run",
+      "reason": null
+    },
+    {
+      "input_tokens": 128,
+      "batch_per_replica": 16,
+      "concurrency": 16,
+      "pool_tokens_per_replica": 4096,
+      "status": "not_run",
+      "reason": null
+    },
+    {
+      "input_tokens": 128,
+      "batch_per_replica": 1,
+      "concurrency": 1,
+      "pool_tokens_per_replica": 256,
+      "status": "not_run",
+      "reason": null
+    },
+    {
+      "input_tokens": 128,
+      "batch_per_replica": 2,
+      "concurrency": 2,
+      "pool_tokens_per_replica": 512,
+      "status": "not_run",
+      "reason": null
+    },
+    {
+      "input_tokens": 128,
+      "batch_per_replica": 32,
+      "concurrency": 32,
+      "pool_tokens_per_replica": 8192,
+      "status": "not_run",
+      "reason": null
+    },
+    {
+      "input_tokens": 128,
+      "batch_per_replica": 64,
+      "concurrency": 64,
+      "pool_tokens_per_replica": 16384,
+      "status": "implementation_guard",
+      "reason": "Batches above 32 require wider token buffers and a projection supporting multiple tile rows"
+    }
+  ],
+  "recurrence_variant": "single-step",
+  "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
+  "updated_at": "2026-10-08T00:43:34.418841+00:00",
+  "configuration": {
+    "topology": "linear",
+    "num_links": 2,
+    "native_layers": 64,
+    "environment": {
+      "QWEN_COMPACT_DECODE_RESIDUAL": "1",
+      "QWEN_BATCHED_PREFILL": "1",
+      "QWEN_PREFILL_SKIP_INTERMEDIATE_HEAD": "1",
+      "QWEN_SWEEP_RESUME_FROM": "[]",
+      "QWEN_COMPACT_DECODE_ATTENTION": "1",
+      "QWEN_DECODE_BUCKETS": "0",
+      "QWEN_SWEEP_RESULTS": "/home/ttuser/qwen38-artifacts-20261007/gdn-perf-sweeps-v4/single-step/attempt-01",
+      "QWEN_COMPACT_DECODE_MLP": "1",
+      "QWEN_PREFILL_BATCHED_HEAD": "1",
+      "QWEN_PREFILL_STARTUP_WARMUP": "1",
+      "QWEN_PREFILL_RESIDUAL_LAYOUT": "sharded_replicated_norm",
+      "QWEN_GALAXY_SWEEP": "1",
+      "QWEN_BATCHED_DECODE_ROPE": "1",
+      "QWEN_PRECISION_CONFIG": "/home/ttuser/qwen38-artifacts-20261007/gdn-integration-source-v9/models/demos/qwen38_27b_qb2/config/precision_single_step_gdn.json"
+    }
+  },
+  "source_sha256": {
+    "tt/__init__.py": "501d5b563ca412fa21db82bf39117b5480ecf99bcaf11996b9c3d5f1093bb9a8",
+    "tt/decode_attention.py": "233021a907845fb954d689934cecd57b6879a6b9343b19c5e74888351637a6f8",
+    "tt/decode_conv.py": "7a80916276118500e04798f3de08058f2074552cbafb7d2a07ced16a67292e52",
+    "tt/decoder.py": "bd2e1c040eb9e27e02a8762ee5ae342d051c751e085020b90702e43517c633fa",
+    "tt/decoder_tp.py": "1c8815b901c1e6de4d28bf1249b528d6ed44185e39f6e2165556e283c013c283",
+    "tt/gdn_step/__init__.py": "c94ebc138e25c01aae5a492beeebe5fca1f7bbbb3a0be4c55c8d6198cba2f48f",
+    "tt/gdn_step/compute.cpp": "eb5bdec63e5c49f4e7f750865d629aecda2dda32dea0552cb0f88c4b20bd65ee",
+    "tt/gdn_step/model_adapter.py": "e750c66370691114ac8bbb015957b50047ac007b1b27f81048d71d819664f62d",
+    "tt/gdn_step/op.py": "f428b429cf909e0711e5c8af8cbab7984b2a8790a7152b7edf5839d761afa81f",
+    "tt/gdn_step/reader.cpp": "2589e5ca345e9e93521b1b1025b6552ef300959983f7a8a8b07f4c5ee81a694c",
+    "tt/gdn_step/workspace.py": "cd86b8da8ccd1d603150a7242a550e76609519aabcf106a1e5b34e3414d784d9",
+    "tt/gdn_step/writer.cpp": "2632705ff4fc977076094b537ff67175f819f78d996f550d78d9955277b7698d",
+    "tt/generator.py": "c30d9967baeaac24f55fe2be689fb6590106fc3e7711d02754664d8e15306bba",
+    "tt/generator_vllm.py": "2761aa20a8f939a42353780deb294d491fa59caff8fe434a936fa985716119b0",
+    "tt/model.py": "5a30843e69d55cc21b66fe8a182772a154b72ca5e990b88c98bf5a0e31418c28",
+    "tt/precision.py": "7eabece6dd41f7537ae35997d87bed545ce8fdcd7334b69c39bf48fd77b3f435",
+    "tt/topology.py": "915668bdd65c9fb5c7454273840324877b700d088dcca362d7b936cfcebbb37f",
+    "config/precision.json": "33a8fa95c118a85ceb53e6ba707ae4d6eb74631263d5120c1842afa6605628d1",
+    "effective_precision_override": "0ba2c08e9bd246d31acf38bbc2074d82726d0cb6c2fc17a5ab08502ab1380cd0"
+  },
+  "setup_s_per_replica": [
+    298.700550199952
+  ],
+  "precision": {
+    "config_id": "head_bfp4_lofi_accurate_decode_single_step_gdn",
+    "weight_groups": {
+      "attention": "bfloat4_b",
+      "output": "bfloat4_b",
+      "gate": "bfloat4_b",
+      "up": "bfloat4_b",
+      "down": "bfloat4_b",
+      "head": "bfloat4_b"
+    },
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "output": "LoFi",
+      "gate": "LoFi",
+      "up": "LoFi",
+      "down": "LoFi",
+      "head": "LoFi"
+    },
+    "fp32_dest_acc_en": true,
+    "layer_exceptions": {},
+    "activation_dtype": {
+      "attention": "bfloat16",
+      "mlp": "bfloat16"
+    },
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "recurrent_dtype": "float32",
+    "convolution_dtype": "bfloat16",
+    "sensitive_compute_fidelity": "HiFi4",
+    "token_dtype": "uint32",
+    "max_context": 262144,
+    "final_norm_compute_fidelity": "HiFi2",
+    "decode_attention": "accurate_full_tile",
+    "decode_recurrence": "single_step"
+  },
+  "error": {
+    "type": "RuntimeError",
+    "message": "TT_FATAL @ /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tt_metal/impl/allocator/bank_manager.cpp:495: false\ninfo:\nOut of Memory: Not enough space to allocate 1342177280 B DRAM buffer across 8 banks, where each bank needs to store 167772160 B, but bank size is 4247339392 B (allocated: 3913448192 B, free: 333891200 B, largest free block: 162392960 B)\nbacktrace:\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so(+0xa78231) [0x700b59a78231]\n --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, tt::tt_metal::CoreRangeSet const&, std::optional<unsigned int>, ttsl::StrongType<unsigned int, tt::tt_metal::AllocatorIDTag>, std::vector<std::pair<unsigned long, unsigned long>, std::allocator<std::pair<unsigned long, unsigned long> > > const&, std::optional<std::unordered_set<unsigned int, std::hash<unsigned int>, std::equal_to<unsigned int>, std::allocator<unsigned int> > > const&)\n --- tt::tt_metal::AllocatorImpl::allocate_buffer(tt::tt_metal::Buffer*)\n --- tt::tt_metal::BufferImpl::allocate_impl(tt::tt_metal::Buffer&)\n --- tt::tt_metal::BufferImpl::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)\n --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)\n --- tt::tt_metal::tensor_impl::allocate_device_buffer(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)\n --- tt::tt_metal::allocate_mesh_tensor_on_device_with_topology(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::TensorSpec, tt::tt_metal::TensorTopology)\n --- ttnn::create_device_tensor(tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, std::optional<tt::tt_metal::TensorTopology>)\n --- ttnn::experimental::prim::MinimalMatmulDeviceOperation::create_output_tensors(ttnn::experimental::prim::MinimalMatmulParams const&, ttnn::experimental::prim::MinimalMatmulInputs const&)\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim28MinimalMatmulDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x98) [0x700b5c916ca8]\n --- ttnn::prim::minimal_matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::operations::unary::BasicUnaryWithParam<float> >, std::optional<ttnn::experimental::prim::MinimalMatmulConfig const> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<tt::tt_metal::DataType const>, std::optional<ttnn::ComputeKernelConfig>, int)\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/_ttnncpp.so(_ZN4ttnn12experimental14minimal_matmulERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_RKSt8optionalIS2_ESB_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSB_IKNS0_4prim19MinimalMatmulConfigEERKSB_IN2tt8tt_metal12MemoryConfigEESB_IKNSR_8DataTypeEESB_INS_19ComputeKernelConfigEEb+0x440) [0x700b5c912d10]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/_ttnn.so(+0x4bcb6c) [0x700b5dcbcb6c]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/_ttnn.so(+0x4bc54c) [0x700b5dcbc54c]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/_ttnn.so(+0x3bc65d) [0x700b5dbbc65d]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x6030d836ac65]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x6030d839eb46]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x6030d82cc87c]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x6030d836ac65]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x6030d839eb46]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd2a2) [0x6030d82f92a2]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x6030d82cb034]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x6030d82cb034]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x6030d82f8e59]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x6030d82f8e59]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x6030d82c6778]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x6030d82cac17]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x6030d82cac17]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x6030d836ac65]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x6030d839eb46]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd2a2) [0x6030d82f92a2]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x6030d82cb034]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x6030d82cac17]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x6030d836ac65]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x6030d839eb46]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x6030d82cc87c]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x6030d82c6778]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x6030d82c6778]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]\n --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]\n"
+  },
+  "cleanup_completed": true
+}

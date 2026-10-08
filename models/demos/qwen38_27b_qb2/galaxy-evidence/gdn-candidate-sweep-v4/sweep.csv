@@ -1,0 +1,137 @@
+input_tokens,concurrency,batch_per_replica,status,tokens_per_second_per_user,aggregate_decode_tokens_per_second,ttft_p50_s,aggregate_input_tokens_per_second,aggregate_e2e_tokens_per_second,ttft_p90_s,tpot_ms,reason
+131072,8,8,completed,15.487552748673378,123.90042198938703,210.52204375294968,4983.039719485114,4.6817430791037635,210.52784653101116,64.56798025018234,
+131072,4,4,completed,20.266470417052446,81.06588166820978,105.84317500889301,4956.957092324488,4.566956006200807,105.84904365008697,49.34258306560319,
+131072,16,16,capacity_guard,,,,,,,,Exceeds the current per-replica context or KV allocation guard
+131072,1,1,completed,24.323617012531496,24.323617012531496,27.76789856189862,4722.643757738476,3.8801120263006843,27.77025340097025,41.11230659012602,
+131072,2,2,completed,22.529027760591525,45.05805552118305,53.06419346481562,4944.287781451841,4.361056836429554,53.06651693629101,44.38717953684762,
+131072,32,32,capacity_guard,,,,,,,,Exceeds the current per-replica context or KV allocation guard
+131072,64,64,implementation_guard,,,,,,,,Batches above 32 require wider token buffers and a projection supporting multiple tile rows
+262016,8,8,capacity_guard,,,,,,,,Exceeds the current per-replica context or KV allocation guard
+262016,4,4,completed,16.183932016813387,64.73572806725355,284.95210137497634,3678.7938867169196,1.7486373500916126,284.96016000397503,61.78968120732997,
+262016,16,16,capacity_guard,,,,,,,,Exceeds the current per-replica context or KV allocation guard
+262016,1,1,completed,20.249439282885668,20.249439282885668,73.61676754429936,3559.717810482856,1.6022359643691018,73.61958881355822,49.38408348152018,
+262016,2,2,completed,18.984001470485538,37.968002940971076,142.42947283387184,3680.206076829155,1.7167485744447768,142.43455033702776,52.67593355145394,
+262016,32,32,capacity_guard,,,,,,,,Exceeds the current per-replica context or KV allocation guard
+262016,64,64,implementation_guard,,,,,,,,Batches above 32 require wider token buffers and a projection supporting multiple tile rows
+32768,8,8,completed,21.520976283902794,172.16781027122235,39.24999460764229,6694.486012805145,22.679344931615667,39.25350344320759,46.46629348074592,
+32768,4,4,completed,24.89980284135178,99.59921136540711,19.801169480662793,6639.430088501208,20.560916064935256,19.809435141738504,40.16096056548981,
+32768,16,16,completed,16.20123989806336,259.21983836901376,79.95905099902302,6567.873280762614,23.32628236531293,79.98183664632961,61.72367092221975,
+32768,1,1,completed,31.300522553017746,31.300522553017746,5.236874877009541,6274.787831848394,13.771921689166117,5.237547599244863,31.948348411952885,
+32768,2,2,completed,28.388171481423466,56.77634296284693,9.928755104076117,6625.179173643663,17.774751510289097,9.941405467223376,35.22593910827881,
+32768,32,32,oom,,,,,,,,"TT_FATAL @ /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tt_metal/impl/allocator/bank_manager.cpp:495: false
+info:
+Out of Memory: Not enough space to allocate 1342177280 B DRAM buffer across 8 banks, where each bank needs to store 167772160 B, but bank size is 4247339392 B (allocated: 3913448192 B, free: 333891200 B, largest free block: 162392960 B)
+backtrace:
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so(+0xa78231) [0x700b59a78231]
+ --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, tt::tt_metal::CoreRangeSet const&, std::optional<unsigned int>, ttsl::StrongType<unsigned int, tt::tt_metal::AllocatorIDTag>, std::vector<std::pair<unsigned long, unsigned long>, std::allocator<std::pair<unsigned long, unsigned long> > > const&, std::optional<std::unordered_set<unsigned int, std::hash<unsigned int>, std::equal_to<unsigned int>, std::allocator<unsigned int> > > const&)
+ --- tt::tt_metal::AllocatorImpl::allocate_buffer(tt::tt_metal::Buffer*)
+ --- tt::tt_metal::BufferImpl::allocate_impl(tt::tt_metal::Buffer&)
+ --- tt::tt_metal::BufferImpl::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)
+ --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)
+ --- tt::tt_metal::tensor_impl::allocate_device_buffer(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)
+ --- tt::tt_metal::allocate_mesh_tensor_on_device_with_topology(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::TensorSpec, tt::tt_metal::TensorTopology)
+ --- ttnn::create_device_tensor(tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, std::optional<tt::tt_metal::TensorTopology>)
+ --- ttnn::experimental::prim::MinimalMatmulDeviceOperation::create_output_tensors(ttnn::experimental::prim::MinimalMatmulParams const&, ttnn::experimental::prim::MinimalMatmulInputs const&)
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim28MinimalMatmulDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x98) [0x700b5c916ca8]
+ --- ttnn::prim::minimal_matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::operations::unary::BasicUnaryWithParam<float> >, std::optional<ttnn::experimental::prim::MinimalMatmulConfig const> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<tt::tt_metal::DataType const>, std::optional<ttnn::ComputeKernelConfig>, int)
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/_ttnncpp.so(_ZN4ttnn12experimental14minimal_matmulERKSt7variantIJNS_6TensorESt6vectorIS2_SaIS2_EEEERKS2_RKSt8optionalIS2_ESB_INS_10operations5unary19BasicUnaryWithParamIJfEEEERKSB_IKNS0_4prim19MinimalMatmulConfigEERKSB_IN2tt8tt_metal12MemoryConfigEESB_IKNSR_8DataTypeEESB_INS_19ComputeKernelConfigEEb+0x440) [0x700b5c912d10]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/_ttnn.so(+0x4bcb6c) [0x700b5dcbcb6c]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/_ttnn.so(+0x4bc54c) [0x700b5dcbc54c]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/_ttnn.so(+0x3bc65d) [0x700b5dbbc65d]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x6030d836ac65]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x6030d839eb46]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x6030d82cc87c]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x6030d836ac65]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x6030d839eb46]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd2a2) [0x6030d82f92a2]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x6030d82cb034]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x6030d82cb034]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x6030d82f8e59]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x6030d82f8e59]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x6030d82c6778]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x6030d82cac17]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x6030d82cac17]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x6030d836ac65]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x6030d839eb46]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd2a2) [0x6030d82f92a2]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x6030d82cb034]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x6030d82cac17]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x6030d82ccaef]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x6030d836ac65]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x3a2b46) [0x6030d839eb46]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x6030d82cc87c]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x6030d82c6778]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x273350) [0x6030d826f350]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x6030d82c6778]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(+0x2fd0b9) [0x6030d82f90b9]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x6030d82c65ff]
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x6030d826d352]
+"
+32768,64,64,implementation_guard,,,,,,,,Batches above 32 require wider token buffers and a projection supporting multiple tile rows
+8192,8,8,completed,23.81582566139613,190.52660529116903,9.041752366349101,7322.805266150392,71.23803694882776,9.044818853028119,41.98888647480039,
+8192,4,4,completed,26.40310445828253,105.61241783313012,4.5731801758520305,7260.578695030366,54.56547267361246,4.57649934804067,37.87433411779366,
+8192,16,16,completed,18.93052511453222,302.8884018325155,18.446006284095347,7163.6035885456995,81.41604024988244,18.452629677020013,52.82473644813684,
+8192,1,1,completed,33.70678569263961,33.70678569263961,1.219995783176273,6795.975301118767,25.66269229439101,1.220958403032273,29.667616755826266,
+8192,2,2,completed,30.359539185438003,60.719078370876005,2.3056579059921205,7258.824405150552,39.452231780466164,2.3060458851978183,32.93857636942169,
+8192,32,32,completed,13.566174337551946,434.11757880166226,36.84584681177512,7167.028233159981,88.64396728895562,36.84586241375655,73.71274871736999,
+8192,64,64,implementation_guard,,,,,,,,Batches above 32 require wider token buffers and a projection supporting multiple tile rows
+128,8,8,completed,24.72341590022282,197.78732720178257,0.3649706509895623,3446.6341415657166,186.1172806714319,0.39439781894907355,40.447485251865515,
+128,4,4,completed,27.13240968611945,108.5296387444778,0.25963268894702196,2330.319589992711,103.63568707146793,0.2822238840162754,36.85629148197573,
+128,16,16,completed,20.120403712581886,321.9264594013102,0.6906023877672851,3672.1836688749554,292.4765089145626,0.6909547317773104,49.70079200620961,
+128,1,1,completed,34.869063916242645,34.869063916242645,0.1493387520313263,921.3622770261088,33.7576476405394,0.15008186586201192,28.6787165380193,
+128,2,2,completed,31.282525557280174,62.56505111456035,0.2040871880017221,1432.9674380484487,60.04004996349609,0.23589228885248303,31.966728458958347,
+128,32,32,completed,14.702939429385799,470.49406174034556,1.3623830839060247,3702.5793033747323,409.5953186951657,1.3804948753677309,68.01361080229752,
+128,64,64,implementation_guard,,,,,,,,Batches above 32 require wider token buffers and a projection supporting multiple tile rows

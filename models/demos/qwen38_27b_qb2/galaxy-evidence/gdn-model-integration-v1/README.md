@@ -169,7 +169,25 @@ unattempted capacity/implementation guards. Automatic recovery closed the
 failed process cleanly and finished the other cells in a second process.
 The complete baseline graphs and raw attempts are in
 [`../gdn-native-sweep-v4/`](../gdn-native-sweep-v4/README.md). The candidate
-sweep has started at 128K / B8; full-Galaxy scaling remains pending.
+has also completed with 24 measured cells, the B32/32K allocator OOM and ten
+untested guards. At 32K/B16 it improves output throughput from 209.28 to
+259.22 tok/s (+23.86%); the largest measured batches at 128K/near256K remain
+approximately flat or slightly slower. See the
+[complete comparison](../gdn-matched-comparison-v4/README.md), including the
+smaller-batch regressions and raw evidence. Full-Galaxy scaling and reference
+evaluation qualification remain pending. The capacity controller automatically
+started its hardware sweep after clean completion at 2026-10-08 00:59 UTC.
+
+The next GDN graph-cleanup opportunity is the output layout boundary:
+`writer.cpp` already has FP32 output tiles in L1, but writes a compact row-major
+vector that `model_adapter.py` immediately tilizes for the epilogue. Direct
+tiled FP32 output could eliminate that conversion; it needs a verified padding
+contract and persistent scratch addresses before promotion. The epilogue itself
+currently computes RMSNorm times sigmoid(z), followed by a separate multiply
+by z to obtain the SiLU gate. That last factor must not simply be removed.
+Fusing the entire epilogue into the recurrence also requires reducing across
+the four value-column partitions of each head. These are scoped opportunities,
+not implemented or measured speedups in this sweep.
 
 ## Fixed-precision long-context bandwidth work
 

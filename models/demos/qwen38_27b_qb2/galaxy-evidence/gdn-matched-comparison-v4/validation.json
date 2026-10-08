@@ -1,0 +1,36 @@
+{
+  "original_receipts_pass": true,
+  "negative_checks": [
+    {
+      "case": "source",
+      "rejected": true,
+      "error": "Unmatched model sources"
+    },
+    {
+      "case": "precision",
+      "rejected": true,
+      "error": "Precision differs beyond recurrence selection"
+    },
+    {
+      "case": "runtime",
+      "rejected": true,
+      "error": "Unmatched runtime settings"
+    },
+    {
+      "case": "prompt",
+      "rejected": true,
+      "error": "Unmatched prompts or concurrency"
+    },
+    {
+      "case": "raw_timing_summary_mismatch",
+      "rejected": true,
+      "error": "Cannot resume /home/ttuser/qwen38-artifacts-20261007/qwen-comparison-validation-hghilk9x/altered.json: measurement accounting differs"
+    },
+    {
+      "case": "cleanup",
+      "rejected": true,
+      "error": "Comparison requires clean terminal native/candidate sweeps"
+    }
+  ],
+  "validation_note": "The first test altered only one sample, which can preserve the median. The corrected probe changes all decode samples to force a summary mismatch; the original measurements were never edited."
+}

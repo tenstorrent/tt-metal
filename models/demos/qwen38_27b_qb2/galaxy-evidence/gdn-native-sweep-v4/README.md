@@ -23,9 +23,10 @@ Batch 64 remains unsupported by the full model's projections/token buffers.
 
 These are the **native recurrence control**, with accurate full-tile decode
 attention and the common compact decode/prefill knobs. The single-step
-candidate is running afterward under the same workload and settings; no
-candidate full-model speedup is established by this artifact. These are
-one-replica measurements, not extrapolated whole-Galaxy throughput.
+candidate has now completed under the same workload and settings; see the
+[matched comparison](../gdn-matched-comparison-v4/README.md) for its gains and
+regressions. These are one-replica measurements, not extrapolated whole-Galaxy
+throughput.
 
 The first 12 measurements are reused from the immutable v1 baseline after
 validating source/policy hashes, runtime configuration, prompt token hashes,
