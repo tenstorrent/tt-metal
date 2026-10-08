@@ -26,6 +26,51 @@
 #include "ckernel_sfpu_gelu.h"
 #endif
 
+// Per-matmul math fidelity (experiment): MM_FID_W01 / MM_FID_W2 (0 LoFi, 2 HiFi2, 3 HiFi3, 4 HiFi4) override the
+// kernel's MATH_FIDELITY for the W0/W1 and the W2 matmul.
+// (both defines are always set by the program factory: the env override, else the kernel's math fidelity)
+namespace ckernel {
+constexpr MathFidelity kFidW01 = static_cast<MathFidelity>(MM_FID_W01);
+constexpr MathFidelity kFidW2 = static_cast<MathFidelity>(MM_FID_W2);
+
+template <MathFidelity F>
+ALWI void mm_init_f(
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    const std::uint32_t transpose,
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    std::uint32_t kt_dim,
+    std::uint32_t call_line = __builtin_LINE()) {
+    state_configure(in1_cb_id, in0_cb_id, call_line);
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_init<F, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+    MATH((throttled_mop_status = 0));
+}
+
+template <MathFidelity F>
+ALWI void mm_block_f(
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t in0_tile_index,
+    std::uint32_t in1_tile_index,
+    std::uint32_t idst,
+    const std::uint32_t transpose,
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    std::uint32_t kt_dim,
+    std::uint32_t call_line = __builtin_LINE()) {
+    state_configure(in1_cb_id, in0_cb_id, call_line);
+    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul<F, MM_THROTTLE>(idst, ct_dim, rt_dim)));
+}
+}  // namespace ckernel
+
+using ckernel::kFidW01;
+using ckernel::kFidW2;
+using ckernel::mm_block_f;
+using ckernel::mm_init_f;
+
 namespace detail {
 
 FORCE_INLINE
@@ -316,7 +361,7 @@ void kernel_main() {
             }
 
             // Initialize matmul for W0
-            matmul_block_init(
+            mm_init_f<kFidW01>(
                 cb_s2c_in_id, cb_r2c_w0_w1_id, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
             // Wait for next chunk of tiles to arrive from the tilize cores
@@ -347,7 +392,7 @@ void kernel_main() {
                         if constexpr (has_bias) {
                             if (k_tracker == num_w0_w1_tiles_h) {
                                 // Bias addition: matmul(ones_tile, bias_row)
-                                matmul_block(
+                                mm_block_f<kFidW01>(
                                     cb_c2c_ones_tile_id,
                                     cb_r2c_w0_w1_id,
                                     0,
@@ -370,7 +415,7 @@ void kernel_main() {
                                 continue;  // skip padding K slots
                             }
                         }
-                        matmul_block(
+                        mm_block_f<kFidW01>(
                             cb_s2c_in_id,
                             cb_r2c_w0_w1_id,
                             in0_index++,
@@ -434,6 +479,11 @@ void kernel_main() {
 
             cb_c2s_out.reserve_back(num_w0_w1_tiles_h);
 
+            if constexpr (kFidW2 != kFidW01) {
+                mm_init_f<kFidW2>(
+                    cb_s2c_in2_id, cb_r2c_w2_id, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
+            }
+
             // Init pack_untilize ONCE before the iter loop (hoisted, mirrors moe_gpt pattern).
             // Cycling init/uninit per-iter triggers BH's MATH reconfig_remap workaround
             // (pack_untilize.h:66-80, tt-metal#17132) which races with in-flight PACR/MOP
@@ -458,7 +508,7 @@ void kernel_main() {
                         if constexpr (has_bias) {
                             if (w2_k_tracker == num_w2_tiles_h) {
                                 // Bias addition: matmul(ones_tile, bias_row); padding K slots do not consume in2/dm1.
-                                matmul_block(
+                                mm_block_f<kFidW2>(
                                     cb_c2c_ones_tile_id,
                                     cb_r2c_w2_id,
                                     0,
@@ -485,7 +535,7 @@ void kernel_main() {
                         }
                         dm1_tiles_remaining--;
 
-                        matmul_block(
+                        mm_block_f<kFidW2>(
                             cb_s2c_in2_id,
                             cb_r2c_w2_id,
                             in2_index++,

@@ -43,7 +43,10 @@ inline void matmul_configure_addrmod(
     const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
     const bool partial_face            = false)
 {
-    constexpr std::uint32_t fidelity_increment = is_high_fidelity(math_fidelity) ? 1 : 0;
+#ifndef MM_FIDELITY_INCR
+#define MM_FIDELITY_INCR 1
+#endif
+    constexpr std::uint32_t fidelity_increment = is_high_fidelity(math_fidelity) ? MM_FIDELITY_INCR : 0;
     // 16x16 inputs not supported - no dedicated math path; falls to 32x32 default which is incorrect for < 4 faces
     LLK_ASSERT(
         !((in0_tile_r_dim == FACE_R_DIM) && (in0_tile_c_dim == FACE_C_DIM) && (in1_tile_r_dim == FACE_R_DIM) && (in1_tile_c_dim == FACE_C_DIM)),

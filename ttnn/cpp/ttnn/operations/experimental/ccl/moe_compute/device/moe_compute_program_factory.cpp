@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <array>
+#include <map>
+#include <string>
 #include <numeric>
 #include <tuple>
 #include <utility>
@@ -1299,6 +1301,20 @@ MoEComputeMeshWorkloadFactory::create_at(
             .defines = dm1_defines,
             .named_compile_args = matmul_named_compile_time_args});
 
+    // MOE_COMPUTE_FID_INCR=N: fidelity-phase increment of the matmul (default 1 = phases 0,1,2..; 2 with HiFi2 = phases
+    // 0 and 2 only: HiFi3 accuracy for bfp8 weights at HiFi2 cost)
+    std::map<std::string, std::string> matmul_compute_defines;
+    if (const char* fi = std::getenv("MOE_COMPUTE_FID_INCR")) {
+        matmul_compute_defines["MM_FIDELITY_INCR"] = fi;
+    }
+    {
+        const char* f1 = std::getenv(
+            "MOE_COMPUTE_FID_W01");  // 0 LoFi, 2 HiFi2, 3 HiFi3, 4 HiFi4; default = the kernel's math fidelity
+        const char* f2 = std::getenv("MOE_COMPUTE_FID_W2");
+        const std::string kf = std::to_string(static_cast<int>(moe_compute_env_fidelity()));
+        matmul_compute_defines["MM_FID_W01"] = f1 ? f1 : kf;
+        matmul_compute_defines["MM_FID_W2"] = f2 ? f2 : kf;
+    }
     auto matmul_compute_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute.cpp",
@@ -1312,6 +1328,7 @@ MoEComputeMeshWorkloadFactory::create_at(
             .bfp8_pack_precise = false,
             .math_approx_mode = moe_compute_env_flag("MOE_COMPUTE_APPROX", true),
             .compile_args = matmul_compile_time_args,
+            .defines = matmul_compute_defines,
             .named_compile_args = matmul_named_compile_time_args});
 
     //-------------------------------------------------------------------------
