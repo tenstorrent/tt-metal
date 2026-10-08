@@ -4,16 +4,13 @@
 # Source:       tests/tt_metal/tt_metal/llk/
 #
 # Every entry is emu-quasar-1x3 with slow dispatch. 1x3 has no dispatch
-# engine, and QuasarMeshDeviceSingleCardFixture refuses to run unless
-# TT_METAL_SLOW_DISPATCH_MODE is set. LLKMeshDeviceFixture and
-# LLKQuasarMeshDeviceSingleCardFixture run under that same mode.
+# engine, so TT_METAL_SLOW_DISPATCH_MODE is required.
 #
 # Selection is "executes on Quasar", not "fixture name contains Quasar".
 # Shared fixtures (LLKMeshDeviceFixture, LLKMeshDeviceSingleCardFixture,
 # LLKMeshDeviceFixtureSlowDispatchOnly) are included when the test body
-# does not GTEST_SKIP on Quasar. QuasarMeshDeviceSingleCardFixture and
-# LLKQuasarMeshDeviceSingleCardFixture are covered by *Quasar* because
-# the fixture name is part of the gtest id.
+# does not GTEST_SKIP on Quasar. Quasar-only tests use
+# LLKQuasarMeshDeviceSingleCardFixture and are selected by that fixture name.
 #
 # Left out on purpose (they skip on this config):
 #   - LLKBlackholeSingleCardFixture (Blackhole-only)
@@ -25,6 +22,8 @@
 #     row bcast, top32)
 #   - stochastic rounding (UnitMeshCQFixture, fast dispatch only)
 #   - DISABLED_TensixComputeCopyBlockSingle
+#   - mul_reduce_scalar and sum_reduce_scalar (reader/writer still use
+#     DataMovementKernel, which Quasar rejects)
 #   - SFPU typecast pairs that skip inside the test (any UInt8 or Int16
 #     endpoint, and non-Float32 inputs widened to Int32)
 #
@@ -33,11 +32,11 @@
 # whole combined --gtest_filter.
 
 unit_tests_llk:
-  # QuasarMeshDeviceSingleCardFixture and LLKQuasarMeshDeviceSingleCardFixture:
+  # LLKQuasarMeshDeviceSingleCardFixture:
   # mailboxes, BFD datacopy, MX fp4/fp6/fp8/int typecast, DFB broadcast,
   # transpose-dest, pack/unpack tilize, reconfig, matmul no-MOP and MxFp4x2,
   # column reduce MxFp4x2, SFPU reduce, Quasar SFPU relu / unpack-to-dest.
-  - filter: "*Quasar*"
+  - filter: "LLKQuasarMeshDeviceSingleCardFixture*"
     config: 1x3
     back2back: true
     env:
@@ -75,7 +74,7 @@ unit_tests_llk:
 
   # Tilize / untilize on LLKMeshDeviceFixture. Exact ids so the Quasar skips
   # (UnpackTilizeA_B, PackUntilizeDstTinyTile) and the Blackhole format
-  # sweeps stay out. Quasar-only untilize cases are under *Quasar*.
+  # sweeps stay out. Quasar-only untilize cases are on LLKQuasarMeshDeviceSingleCardFixture.
   - filter: "LLKMeshDeviceFixture.TensixComputeUnpackTilize:LLKMeshDeviceFixture.TensixComputeFastTilize:LLKMeshDeviceFixture.TensixComputePackUntilize:LLKMeshDeviceFixture.TensixComputePackUntilizeDst:LLKMeshDeviceFixture.TensixComputeFastUntilize"
     config: 1x3
     back2back: true
@@ -83,7 +82,7 @@ unit_tests_llk:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
   # Transpose WH on LLKMeshDeviceFixture. TransposeWHDest skips on Quasar;
-  # the dest variants are QuasarTransposeWHDest* under *Quasar*.
+  # the dest variants are QuasarTransposeWHDest* on LLKQuasarMeshDeviceSingleCardFixture.
   - filter: "LLKMeshDeviceFixture.TensixComputeTransposeWH:LLKMeshDeviceFixture.TensixComputeTransposeWHShortInit"
     config: 1x3
     back2back: true
@@ -91,7 +90,7 @@ unit_tests_llk:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
   # Reduce on LLKMeshDeviceSingleCardFixture. Runs on Blackhole and Quasar.
-  # ReduceWTinyTiles skips on Quasar. MxFp4 column reduce is under *Quasar*.
+  # ReduceWTinyTiles skips on Quasar. MxFp4 column reduce is on LLKQuasarMeshDeviceSingleCardFixture.
   - filter: "LLKMeshDeviceSingleCardFixture.TensixComputeReduceH:LLKMeshDeviceSingleCardFixture.TensixComputeReduceW:LLKMeshDeviceSingleCardFixture.TensixComputeReduceHW:LLKMeshDeviceSingleCardFixture.TensixComputeReduceHMathOnly:LLKMeshDeviceSingleCardFixture.TensixComputeReduceWMathOnly:LLKMeshDeviceSingleCardFixture.TensixComputeReduceHWMathOnly"
     config: 1x3
     back2back: true
@@ -108,7 +107,7 @@ unit_tests_llk:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
   # Matmul cases on LLKMeshDeviceFixture that do not skip on Quasar.
-  # No-MOP and MxFp4x2 are under *Quasar*. Single-tile and single-block
+  # No-MOP and MxFp4x2 are on LLKQuasarMeshDeviceSingleCardFixture. Single-tile and single-block
   # single-tile matmul skip on Quasar.
   - filter: "LLKMeshDeviceFixture.TensixTestSingleCoreMultiBlockSpillReloadComputeMatmul:LLKMeshDeviceFixture.TensixTestSingleCoreMultiBlockL1AccComputeMatmul"
     config: 1x3
@@ -125,14 +124,6 @@ unit_tests_llk:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "LLKMeshDeviceFixture.TensixComputeCumsumColumnwise:LLKMeshDeviceFixture.TensixComputeCumsumRowwise"
-    config: 1x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  # LLKMeshDeviceSingleCardFixture. The one-tile suites are Blackhole-only
-  # and are not matched here.
-  - filter: "*MulReduceScalarTests*:*MulReduceScalarTinyTileTests*:*SumReduceScalar*"
     config: 1x3
     back2back: true
     env:

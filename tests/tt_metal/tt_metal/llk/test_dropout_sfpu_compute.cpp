@@ -272,7 +272,7 @@ void test_dropout(const std::shared_ptr<distributed::MeshDevice>& mesh_device, c
 
 TEST_F(LLKMeshDeviceFixture, TensixComputeDropout) {
     if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP() << "not supported on Quasar";
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
     }
     srand(0);
     int num_tests = 5;

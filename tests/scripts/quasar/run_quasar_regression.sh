@@ -16,6 +16,10 @@ BUILD_DIR="$TT_METAL_HOME/build"
 LOG_DIR="$SCRIPT_DIR/logs"
 DRY_RUN=false
 BACK2BACK=true
+# Per gtest case, measured from the "[ RUN      ]" line. 0 disables.
+# A case that exceeds this is failed, the emulator is torn down, and the
+# remaining cases in that invocation are relaunched.
+TEST_TIMEOUT=0
 # Retry gtest when ZeBu reports a hostname reservation conflict in the local
 # emu_<date>_<time>_.log file (gtest hangs waiting for the device in this case).
 # Set QUASAR_EMU_HOSTNAME_MAX_RETRIES=0 to disable retries (still fails fast).
@@ -61,6 +65,12 @@ Options:
   --build-dir <path>               Path to build directory (default: $BUILD_DIR)
   --log-dir <path>                 Save per-test results (gtest JSON / pytest JUnit XML)
   --no-back2back                   Run each test in a separate process
+  --timeout <seconds>              Fail a gtest case that runs longer than this,
+                                   then relaunch the cases that have not finished.
+                                   Timing starts at gtest's "[ RUN      ]" line
+                                   (emulator boot before that is not counted).
+                                   Pytest is capped for the whole invocation.
+                                   0 disables (default)
   --dry-run                        Print commands without executing
   -h, --help                       Show this help message
 
@@ -82,6 +92,7 @@ while [[ $# -gt 0 ]]; do
         --build-dir)   need_arg "$1" "${2:-}"; BUILD_DIR="$2"; shift 2 ;;
         --log-dir)     need_arg "$1" "${2:-}"; LOG_DIR="$2"; shift 2 ;;
         --no-back2back) BACK2BACK=false; shift ;;
+        --timeout)     need_arg "$1" "${2:-}"; TEST_TIMEOUT="$2"; shift 2 ;;
         --dry-run)     DRY_RUN=true; shift ;;
         -h|--help)     usage ;;
         *) echo "Unknown option: $1"; usage ;;
@@ -90,6 +101,11 @@ done
 
 if [[ -n "$FILTER_CONFIG" && "$FILTER_CONFIG" != "1x3" && "$FILTER_CONFIG" != "2x3" && "$FILTER_CONFIG" != "2x3_DISPATCH" ]]; then
     echo "ERROR: invalid --config value '$FILTER_CONFIG'. Supported: 1x3, 2x3, 2x3_DISPATCH"
+    exit 1
+fi
+
+if [[ ! "$TEST_TIMEOUT" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: --timeout must be a non-negative integer (seconds)"
     exit 1
 fi
 
@@ -251,6 +267,9 @@ if [[ "$EMU_HOSTNAME_MAX_RETRIES" -gt 0 ]]; then
     echo "Emu:    monitor emu_<date>_<time>_.log, retry on hostname conflict (max ${EMU_HOSTNAME_MAX_RETRIES} retries, ${EMU_HOSTNAME_RETRY_DELAY}s delay)"
 else
     echo "Emu:    monitor emu_<date>_<time>_.log, fail fast on hostname conflict"
+fi
+if [[ "$TEST_TIMEOUT" -gt 0 ]]; then
+    echo "Timeout: ${TEST_TIMEOUT}s per gtest case (from [ RUN ]; remaining cases relaunch)"
 fi
 echo ""
 
@@ -463,23 +482,175 @@ cleanup_emu_attempt() {
     refresh_emu_logs_baseline
 }
 
+# Append exact gtest names to the negative half of a --gtest_filter.
+# An empty positive side becomes "*" (gtest's rule when the filter starts with '-').
+append_gtest_exclusions() {
+    local filter="$1"
+    shift
+    local joined="" name
+    for name in "$@"; do
+        [[ -z "$name" ]] && continue
+        if [[ -z "$joined" ]]; then
+            joined="$name"
+        else
+            joined="${joined}:${name}"
+        fi
+    done
+    [[ -z "$joined" ]] && { printf '%s' "$filter"; return; }
+    if [[ "$filter" == *-* ]]; then
+        printf '%s:%s' "$filter" "$joined"
+    elif [[ -z "$filter" ]]; then
+        printf -- '-%s' "$joined"
+    else
+        printf '%s-%s' "$filter" "$joined"
+    fi
+}
+
+# gtest flushes the "[ RUN      ]" / result lines. Capture them so a per-case
+# timeout can name the hung test and so finished cases are not relaunched.
+note_gtest_output_line() {
+    local line="$1" name="" elapsed=""
+    line="${line//$'\r'/}"
+    # --gtest_color=yes wraps the bracket tag in CSI SGR sequences.
+    line=$(sed $'s/\033\\[[0-9;]*m//g' <<< "$line")
+
+    if [[ "$line" =~ ^\[[[:space:]]+RUN[[:space:]]+\][[:space:]]*(.+)$ ]]; then
+        gtest_current_test="${BASH_REMATCH[1]}"
+        gtest_current_test="${gtest_current_test%"${gtest_current_test##*[![:space:]]}"}"
+        gtest_case_start=$SECONDS
+        gtest_saw_case=1
+        return 0
+    fi
+
+    if [[ "$line" =~ ^\[[[:space:]]+OK[[:space:]]+\][[:space:]]*([^[:space:]]+) ]]; then
+        name="${BASH_REMATCH[1]}"
+        elapsed=""
+        if [[ "$line" =~ \(([0-9]+)[[:space:]]ms\) ]]; then
+            elapsed="${BASH_REMATCH[1]} ms"
+        fi
+        gtest_stream_names+=("$name")
+        gtest_stream_statuses+=(PASS)
+        gtest_stream_times+=("$elapsed")
+        gtest_current_test=""
+        gtest_case_start=-1
+        return 0
+    fi
+
+    if [[ "$line" =~ ^\[[[:space:]]+SKIPPED[[:space:]]+\][[:space:]]*([^[:space:]]+) ]]; then
+        name="${BASH_REMATCH[1]}"
+        [[ "$name" == *.* ]] || return 0
+        elapsed=""
+        if [[ "$line" =~ \(([0-9]+)[[:space:]]ms\) ]]; then
+            elapsed="${BASH_REMATCH[1]} ms"
+        fi
+        gtest_stream_names+=("$name")
+        gtest_stream_statuses+=(SKIP)
+        gtest_stream_times+=("$elapsed")
+        gtest_current_test=""
+        gtest_case_start=-1
+        return 0
+    fi
+
+    if [[ "$line" =~ ^\[[[:space:]]+FAILED[[:space:]]+\][[:space:]]*([^[:space:]]+) ]]; then
+        name="${BASH_REMATCH[1]}"
+        # Skip the end-of-run summary ("[  FAILED  ] 2 tests, listed below:").
+        [[ "$name" == *.* ]] || return 0
+        elapsed=""
+        if [[ "$line" =~ \(([0-9]+)[[:space:]]ms\) ]]; then
+            elapsed="${BASH_REMATCH[1]} ms"
+        fi
+        gtest_stream_names+=("$name")
+        gtest_stream_statuses+=(FAIL)
+        gtest_stream_times+=("$elapsed")
+        gtest_current_test=""
+        gtest_case_start=-1
+        return 0
+    fi
+    return 0
+}
+
+drain_gtest_output() {
+    local new_size=0 chunk="" combined="" line=""
+    [[ -n "$gtest_output_file" && -f "$gtest_output_file" ]] || return 0
+    new_size=$(stat -c %s "$gtest_output_file" 2>/dev/null || echo 0)
+    if [[ "$new_size" -le "$gtest_output_offset" ]]; then
+        return 0
+    fi
+    # $(...) strips trailing newlines. A sentinel keeps a chunk that is exactly
+    # one flushed gtest line (the usual "[ RUN ]" then later "[ OK ]") intact,
+    # so those two lines are not concatenated.
+    chunk=$({ dd if="$gtest_output_file" iflag=skip_bytes,count_bytes skip="$gtest_output_offset" \
+        count=$((new_size - gtest_output_offset)) status=none 2>/dev/null || true; printf x; })
+    chunk="${chunk%x}"
+    gtest_output_offset=$new_size
+    combined="${gtest_output_partial}${chunk}"
+    gtest_output_partial=""
+    if [[ -n "$combined" && "$combined" != *$'\n' ]]; then
+        gtest_output_partial="${combined##*$'\n'}"
+        if [[ "$combined" == *$'\n'* ]]; then
+            combined="${combined%$'\n'*}"
+            combined+=$'\n'
+        else
+            combined=""
+        fi
+    fi
+    [[ -z "$combined" ]] && return 0
+    # Replay bytes as gtest wrote them, including ANSI color from --gtest_color=yes.
+    printf '%s' "$combined"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        note_gtest_output_line "$line"
+    done <<< "$combined"
+    return 0
+}
+
 # Run a test command in the background and poll emu_<date>_<time>_.log for hostname
 # conflicts. Command argv is taken from emu_run_cmd; env from gtest_cmd_env.
 # Sets gtest_emu_hostname_conflict=1 when the emulator log reports a conflict.
-# Returns the command exit code (1 when terminated due to conflict).
+# When TEST_TIMEOUT > 0, sets gtest_test_timeout=1 and gtest_timed_out_test to the
+# gtest case that exceeded the limit (empty for a pytest invocation cap).
+# Returns the command exit code (1 when terminated due to conflict or timeout).
 # Tracks active_gtest_pid / active_tracked_sim_pid for INT cleanup (setsid isolates
 # the process group from the terminal's Ctrl-C).
 run_cmd_with_emu_monitor() {
     local cmd_pid rc=0
     local emu_log="" emu_offset=0 metal_offset=0 conflict_lines=""
     local tracked_sim_pid=""
+    local per_case_timeout=0 invocation_timeout=0
+    local poll_sleep="$EMU_MONITOR_POLL_INTERVAL"
+    local last_emu_poll=0
 
     gtest_emu_hostname_conflict=0
     gtest_emu_conflict_lines=""
+    gtest_test_timeout=0
+    gtest_timed_out_test=""
+    gtest_current_test=""
+    gtest_case_start=-1
+    gtest_saw_case=0
+    gtest_stream_names=()
+    gtest_stream_statuses=()
+    gtest_stream_times=()
+    gtest_output_file=""
+    gtest_output_offset=0
+    gtest_output_partial=""
     refresh_emu_logs_baseline
     snapshot_simulator_pids
 
-    if command -v setsid &>/dev/null; then
+    if [[ "$TEST_TIMEOUT" -gt 0 && "${emu_run_cmd[0]}" == "pytest" ]]; then
+        invocation_timeout=1
+        gtest_case_start=$SECONDS
+    elif [[ "$TEST_TIMEOUT" -gt 0 ]]; then
+        per_case_timeout=1
+        poll_sleep=0.5
+        gtest_output_file=$(mktemp)
+    fi
+
+    if [[ -n "$gtest_output_file" ]]; then
+        if command -v setsid &>/dev/null; then
+            setsid "${gtest_cmd_env[@]}" "${emu_run_cmd[@]}" >"$gtest_output_file" 2>&1 &
+        else
+            "${gtest_cmd_env[@]}" "${emu_run_cmd[@]}" >"$gtest_output_file" 2>&1 &
+        fi
+    elif command -v setsid &>/dev/null; then
         setsid "${gtest_cmd_env[@]}" "${emu_run_cmd[@]}" &
     else
         "${gtest_cmd_env[@]}" "${emu_run_cmd[@]}" &
@@ -489,35 +660,75 @@ run_cmd_with_emu_monitor() {
     active_tracked_sim_pid=""
 
     while kill -0 "$cmd_pid" 2>/dev/null; do
-        if [[ -n "$log_file" ]]; then
-            poll_metal_log_for_simulator_pid "$log_file" metal_offset tracked_sim_pid || true
-            active_tracked_sim_pid="$tracked_sim_pid"
-        fi
-
-        if [[ -z "$emu_log" ]]; then
-            emu_log="$(find_newest_emu_log_since_baseline)"
-            emu_offset=0
-        fi
-
-        if [[ -n "$emu_log" ]]; then
-            if conflict_lines="$(poll_emu_log_for_hostname_conflict "$emu_log" emu_offset)"; then
-                gtest_emu_hostname_conflict=1
-                gtest_emu_conflict_lines="$conflict_lines"
-                echo "  EMU HOSTNAME CONFLICT in $emu_log (terminating hung test)"
+        if [[ "$per_case_timeout" -eq 1 ]]; then
+            drain_gtest_output
+            if [[ "$gtest_case_start" -ge 0 && $((SECONDS - gtest_case_start)) -ge "$TEST_TIMEOUT" ]]; then
+                gtest_test_timeout=1
+                gtest_timed_out_test="$gtest_current_test"
+                if [[ -n "$gtest_timed_out_test" ]]; then
+                    echo "  TIMEOUT: $gtest_timed_out_test exceeded ${TEST_TIMEOUT}s (terminating)"
+                else
+                    echo "  TIMEOUT: gtest exceeded ${TEST_TIMEOUT}s before printing a test name (terminating)"
+                fi
                 cleanup_emu_attempt "$cmd_pid" "$tracked_sim_pid"
                 active_gtest_pid=""
                 active_tracked_sim_pid=""
                 break
             fi
+        elif [[ "$invocation_timeout" -eq 1 && "$gtest_case_start" -ge 0 \
+                && $((SECONDS - gtest_case_start)) -ge "$TEST_TIMEOUT" ]]; then
+            gtest_test_timeout=1
+            gtest_timed_out_test=""
+            echo "  TIMEOUT: pytest invocation exceeded ${TEST_TIMEOUT}s (terminating)"
+            cleanup_emu_attempt "$cmd_pid" "$tracked_sim_pid"
+            active_gtest_pid=""
+            active_tracked_sim_pid=""
+            break
         fi
 
-        sleep "$EMU_MONITOR_POLL_INTERVAL"
+        if (( SECONDS - last_emu_poll >= EMU_MONITOR_POLL_INTERVAL )); then
+            last_emu_poll=$SECONDS
+            if [[ -n "$log_file" ]]; then
+                poll_metal_log_for_simulator_pid "$log_file" metal_offset tracked_sim_pid || true
+                active_tracked_sim_pid="$tracked_sim_pid"
+            fi
+
+            if [[ -z "$emu_log" ]]; then
+                emu_log="$(find_newest_emu_log_since_baseline)"
+                emu_offset=0
+            fi
+
+            if [[ -n "$emu_log" ]]; then
+                if conflict_lines="$(poll_emu_log_for_hostname_conflict "$emu_log" emu_offset)"; then
+                    gtest_emu_hostname_conflict=1
+                    gtest_emu_conflict_lines="$conflict_lines"
+                    echo "  EMU HOSTNAME CONFLICT in $emu_log (terminating hung test)"
+                    cleanup_emu_attempt "$cmd_pid" "$tracked_sim_pid"
+                    active_gtest_pid=""
+                    active_tracked_sim_pid=""
+                    break
+                fi
+            fi
+        fi
+
+        sleep "$poll_sleep"
     done
 
-    if [[ $gtest_emu_hostname_conflict -eq 0 ]]; then
-        wait "$cmd_pid" || rc=$?
-    else
+    if [[ "$per_case_timeout" -eq 1 ]]; then
+        drain_gtest_output
+        if [[ -n "$gtest_output_partial" ]]; then
+            printf '%s\n' "$gtest_output_partial"
+            note_gtest_output_line "$gtest_output_partial"
+            gtest_output_partial=""
+        fi
+        rm -f "$gtest_output_file"
+        gtest_output_file=""
+    fi
+
+    if [[ $gtest_test_timeout -eq 1 || $gtest_emu_hostname_conflict -eq 1 ]]; then
         rc=1
+    else
+        wait "$cmd_pid" || rc=$?
     fi
     active_gtest_pid=""
     active_tracked_sim_pid=""
@@ -897,80 +1108,150 @@ run_test_invocation() {
     local attempt=1
     local rc=0
     local test_start=$SECONDS
+    local original_filter="$combined_filter"
+    local -a timeout_exclusions=()
+    local timeout_stop=0
+    local i name status tm already ex
 
-    while [[ $attempt -le $max_attempts ]]; do
-        if [[ $attempt -gt 1 ]]; then
-            echo "  RETRY: attempt $attempt/$max_attempts after emulator hostname conflict"
-        fi
-
-        emu_run_cmd=()
-        result_file=""
-        log_file=""
-        if [[ -n "$LOG_DIR" ]]; then
-            local log_base="$LOG_DIR/${config}_${group_stem}_${log_stem}"
-            local count="${log_base_counts["$log_base"]-0}"
-            count=$((count + 1))
-            log_base_counts["$log_base"]=$count
-            if [[ $count -gt 1 ]]; then
-                log_base="${log_base}_${count}"
+    while true; do
+        attempt=1
+        while [[ $attempt -le $max_attempts ]]; do
+            if [[ $attempt -gt 1 ]]; then
+                echo "  RETRY: attempt $attempt/$max_attempts after emulator hostname conflict"
             fi
-            log_file="${log_base}.log"
-            echo "  TT_METAL_LOGGER_FILE=${log_file}"
+
+            emu_run_cmd=()
+            result_file=""
+            log_file=""
+            if [[ -n "$LOG_DIR" ]]; then
+                local log_base="$LOG_DIR/${config}_${group_stem}_${log_stem}"
+                local count="${log_base_counts["$log_base"]-0}"
+                count=$((count + 1))
+                log_base_counts["$log_base"]=$count
+                if [[ $count -gt 1 ]]; then
+                    log_base="${log_base}_${count}"
+                fi
+                log_file="${log_base}.log"
+                echo "  TT_METAL_LOGGER_FILE=${log_file}"
+                if [[ "$runner" == "pytest" ]]; then
+                    result_file="${log_base}.xml"
+                else
+                    result_file="${log_base}.json"
+                fi
+            fi
+            build_gtest_cmd_env "$log_file"
+
             if [[ "$runner" == "pytest" ]]; then
-                result_file="${log_base}.xml"
+                emu_run_cmd=(pytest -vv)
+                emu_run_cmd+=("${node_ids[@]}")
+                if [[ -n "$result_file" ]]; then
+                    emu_run_cmd+=(--junitxml="$result_file")
+                fi
             else
-                result_file="${log_base}.json"
+                emu_run_cmd=("$BUILD_DIR/test/tt_metal/$group")
+                if [[ -n "$combined_filter" ]]; then
+                    emu_run_cmd+=(--gtest_filter="$combined_filter")
+                fi
+                emu_run_cmd+=("${gtest_repeat_args[@]}")
+                if [[ -n "$result_file" ]]; then
+                    emu_run_cmd+=("--gtest_output=json:${result_file}")
+                fi
+                # Per-case timeout captures stdout to a file, so gtest's auto
+                # color sees a non-tty and stays off. Force color; the monitor
+                # replays the ANSI codes to this terminal.
+                if [[ "$TEST_TIMEOUT" -gt 0 ]]; then
+                    emu_run_cmd+=(--gtest_color=yes)
+                fi
             fi
-        fi
-        build_gtest_cmd_env "$log_file"
 
-        if [[ "$runner" == "pytest" ]]; then
-            emu_run_cmd=(pytest -vv)
-            emu_run_cmd+=("${node_ids[@]}")
-            if [[ -n "$result_file" ]]; then
-                emu_run_cmd+=(--junitxml="$result_file")
+            if [[ ${#timeout_exclusions[@]} -gt 0 ]]; then
+                echo "  CMD: continuing after timeout, ${#timeout_exclusions[@]} case(s) excluded"
             fi
-        else
-            emu_run_cmd=("$BUILD_DIR/test/tt_metal/$group")
-            if [[ -n "$combined_filter" ]]; then
-                emu_run_cmd+=(--gtest_filter="$combined_filter")
-            fi
-            emu_run_cmd+=("${gtest_repeat_args[@]}")
-            if [[ -n "$result_file" ]]; then
-                emu_run_cmd+=("--gtest_output=json:${result_file}")
-            fi
-        fi
 
-        rc=0
-        gtest_emu_hostname_conflict=0
-        run_cmd_with_emu_monitor || rc=$?
+            rc=0
+            gtest_emu_hostname_conflict=0
+            run_cmd_with_emu_monitor || rc=$?
 
-        if [[ $gtest_emu_hostname_conflict -eq 1 ]]; then
-            if [[ $attempt -lt $max_attempts ]]; then
-                echo "  EMU HOSTNAME CONFLICT (retrying in ${EMU_HOSTNAME_RETRY_DELAY}s):"
+            if [[ $gtest_emu_hostname_conflict -eq 1 ]]; then
+                if [[ $attempt -lt $max_attempts ]]; then
+                    echo "  EMU HOSTNAME CONFLICT (retrying in ${EMU_HOSTNAME_RETRY_DELAY}s):"
+                    while IFS= read -r line || [[ -n "$line" ]]; do
+                        [[ -z "$line" ]] && continue
+                        echo "    $line"
+                    done <<< "$gtest_emu_conflict_lines"
+                    sleep "$EMU_HOSTNAME_RETRY_DELAY"
+                    attempt=$((attempt + 1))
+                    continue
+                fi
+                echo "  EMU HOSTNAME CONFLICT (no retries remaining):"
                 while IFS= read -r line || [[ -n "$line" ]]; do
                     [[ -z "$line" ]] && continue
                     echo "    $line"
                 done <<< "$gtest_emu_conflict_lines"
-                sleep "$EMU_HOSTNAME_RETRY_DELAY"
-                attempt=$((attempt + 1))
-                continue
+                rc=1
             fi
-            echo "  EMU HOSTNAME CONFLICT (no retries remaining):"
-            while IFS= read -r line || [[ -n "$line" ]]; do
-                [[ -z "$line" ]] && continue
-                echo "    $line"
-            done <<< "$gtest_emu_conflict_lines"
-            rc=1
+            break
+        done
+
+        if [[ $gtest_test_timeout -ne 1 ]]; then
+            break
         fi
-        break
+
+        # Cases that finished before the hang are not in the killed process's
+        # JSON. Record them here and drop them from the relaunched filter.
+        for i in "${!gtest_stream_names[@]}"; do
+            name="${gtest_stream_names[$i]}"
+            status="${gtest_stream_statuses[$i]}"
+            tm="${gtest_stream_times[$i]}"
+            [[ -z "$tm" ]] && tm="n/a"
+            case "$status" in
+                PASS) passed=$((passed + 1)) ;;
+                SKIP) skipped=$((skipped + 1)) ;;
+                *) status=FAIL; failed=$((failed + 1)) ;;
+            esac
+            results+=("$status  [$config] $group $name  ($tm)")
+            timeout_exclusions+=("$name")
+        done
+
+        if [[ -z "$gtest_timed_out_test" ]]; then
+            failed=$((failed + 1))
+            results+=("FAIL  $label  (timeout ${TEST_TIMEOUT}s)")
+            rc=1
+            timeout_stop=1
+            break
+        fi
+
+        already=0
+        for ex in "${timeout_exclusions[@]}"; do
+            [[ "$ex" == "$gtest_timed_out_test" ]] && already=1 && break
+        done
+        if [[ "$already" -eq 1 ]]; then
+            echo "  TIMEOUT: $gtest_timed_out_test still matched the filter; not relaunching"
+            failed=$((failed + 1))
+            results+=("FAIL  [$config] $group $gtest_timed_out_test  (timeout ${TEST_TIMEOUT}s)")
+            rc=1
+            timeout_stop=1
+            break
+        fi
+
+        failed=$((failed + 1))
+        results+=("FAIL  [$config] $group $gtest_timed_out_test  (timeout ${TEST_TIMEOUT}s)")
+        timeout_exclusions+=("$gtest_timed_out_test")
+        combined_filter="$(append_gtest_exclusions "$original_filter" "${timeout_exclusions[@]}")"
+        echo "  relaunching remaining cases (excluded ${#timeout_exclusions[@]})"
     done
 
     local elapsed=$((SECONDS - test_start))
-    if [[ "$runner" == "pytest" ]]; then
-        record_pytest_result "$config" "$group" "$label" "$elapsed" "$rc" "$result_file" "${filters[@]}"
-    else
-        record_gtest_result "$config" "$group" "$label" "$elapsed" "$rc" "$result_file" "${filters[@]}"
+    if [[ "$timeout_stop" -eq 0 ]]; then
+        # After a timeout relaunch, gtest exits 0 with zero cases once every
+        # remaining case has been excluded. That is not a skipped run.
+        if [[ ${#timeout_exclusions[@]} -gt 0 && "${gtest_saw_case:-0}" -eq 0 && "$rc" -eq 0 ]]; then
+            echo "  no remaining cases"
+        elif [[ "$runner" == "pytest" ]]; then
+            record_pytest_result "$config" "$group" "$label" "$elapsed" "$rc" "$result_file" "${filters[@]}"
+        else
+            record_gtest_result "$config" "$group" "$label" "$elapsed" "$rc" "$result_file" "${filters[@]}"
+        fi
     fi
     if [[ $rc -ne 0 && -n "$log_file" ]]; then
         echo "  LOG: $log_file"
@@ -1060,6 +1341,10 @@ on_interrupt() {
         cleanup_emu_attempt "$active_gtest_pid" "${active_tracked_sim_pid:-}"
         active_gtest_pid=""
         active_tracked_sim_pid=""
+    fi
+    if [[ -n "${gtest_output_file:-}" ]]; then
+        rm -f "$gtest_output_file"
+        gtest_output_file=""
     fi
 
     print_summary

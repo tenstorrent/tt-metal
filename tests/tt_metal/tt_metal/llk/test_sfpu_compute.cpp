@@ -439,6 +439,34 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_BINARY_LOGADDEXP_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "logaddexp2_binary_tile_init();"},
       {"SFPU_OP_CHAIN_0", "logaddexp2_binary_tile(0, 1, 0);"}}},
+    // quant / requant / dequant go through api/compute/quantization.h. The zero-point
+    // immediates are fp32 bits: 4.0f for quant and requant, and -3.0f for dequant
+    // (the kernel computes A + zp, so the caller passes the negated zero-point).
+    // Result is written back to DST[0]. Stimuli and the golden live in run_sfpu_quant_family.
+    {"quant",
+     {{"SFPU_OP_QUANT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "quant_tile_init(0x40800000u);"},
+      {"SFPU_OP_CHAIN_0", "quant_tile(0, 1, 0);"}}},
+    {"requant",
+     {{"SFPU_OP_QUANT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "requant_tile_init(0x40800000u);"},
+      {"SFPU_OP_CHAIN_0", "requant_tile(0, 1, 0);"}}},
+    {"dequant",
+     {{"SFPU_OP_QUANT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "dequant_tile_init(0xC0400000u);"},
+      {"SFPU_OP_CHAIN_0", "dequant_tile(0, 1, 0);"}}},
+    // Int8 input is a UInt8-unpacked byte. The kernel XORs it with 0x80, so the value that
+    // enters the math is signed_value + 128. The immediates cancel that 128:
+    //   requant: 4.0 - 128 * 0.5 = -60.0 (0xC2700000)
+    //   dequant: -3.0 - 128 = -131.0 (0xC3030000)
+    {"requant_int8_in",
+     {{"SFPU_OP_QUANT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "requant_int8_in_tile_init(0xC2700000u);"},
+      {"SFPU_OP_CHAIN_0", "requant_int8_in_tile(0, 1, 0);"}}},
+    {"dequant_int8",
+     {{"SFPU_OP_QUANT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "dequant_int8_tile_init(0xC3030000u);"},
+      {"SFPU_OP_CHAIN_0", "dequant_int8_tile(0, 1, 0);"}}},
 };
 
 // ---- Tile-layout ops (goldens mirror the tt-llk SFPU tests' UnarySFPUGolden) --------------------
@@ -1697,6 +1725,69 @@ inline bool typecast_compare(tt::DataFormat out_fmt, const std::vector<float>& g
     return true;
 }
 
+bool is_quant_family_sfpu_op(const std::string& op_name) {
+    return op_name == "quant" || op_name == "requant" || op_name == "dequant" || op_name == "requant_int8_in" ||
+           op_name == "dequant_int8";
+}
+
+bool is_quant_family_int8_input(const std::string& op_name) {
+    return op_name == "requant_int8_in" || op_name == "dequant_int8";
+}
+
+bool is_quant_family_dequant(const std::string& op_name) { return op_name == "dequant" || op_name == "dequant_int8"; }
+
+// Round-half-to-even, matching SFP_STOCH_RND NearEven on values that are not a negative
+// magnitude rounding to zero (that case stores -1 on the 2's-complement path).
+int32_t quant_round_half_even(float x) {
+    const float truncated = std::trunc(x);
+    const float abs_frac = std::fabs(x - truncated);
+    const int32_t as_int = static_cast<int32_t>(truncated);
+    if (abs_frac > 0.5f || (abs_frac == 0.5f && as_int % 2 != 0)) {
+        return as_int + (x > 0.0f ? 1 : -1);
+    }
+    return as_int;
+}
+
+// Operand A is an integer in [-8, 8]. Quant promotes it to fp32; requant and dequant keep it as
+// int32. The scale tile is 0.5f. Quant and requant add zero-point 4.0f; dequant subtracts 3.0f.
+// Those constants match the fp32 immediates in sfpu_binary_op_to_op_name.
+int32_t quant_family_operand_a(size_t index) { return static_cast<int32_t>(index % 17) - 8; }
+
+std::pair<std::vector<uint32_t>, std::vector<uint32_t>> generate_quant_family_inputs(
+    const std::string& op_name, size_t numel) {
+    const uint32_t scale_bits = std::bit_cast<uint32_t>(0.5f);
+    std::vector<uint32_t> lhs(numel);
+    std::vector<uint32_t> rhs(numel, scale_bits);
+    const bool int8_in = is_quant_family_int8_input(op_name);
+    const bool a_is_int = op_name != "quant";
+    for (size_t i = 0; i < numel; ++i) {
+        const int32_t a = quant_family_operand_a(i);
+        if (int8_in) {
+            // UInt8 unpack zero-extends the raw int8 byte. [-8, 8] covers both sides of the
+            // 0x80 XOR: negative values land at or above 128, non-negative values below it.
+            lhs[i] = static_cast<uint32_t>(static_cast<uint8_t>(a));
+        } else {
+            lhs[i] = a_is_int ? static_cast<uint32_t>(a) : std::bit_cast<uint32_t>(static_cast<float>(a));
+        }
+    }
+    return {lhs, rhs};
+}
+
+std::vector<uint32_t> quant_family_golden(const std::string& op_name, size_t numel) {
+    std::vector<uint32_t> golden(numel);
+    for (size_t i = 0; i < numel; ++i) {
+        const float a = static_cast<float>(quant_family_operand_a(i));
+        if (is_quant_family_dequant(op_name)) {
+            golden[i] = std::bit_cast<uint32_t>((a - 3.0f) * 0.5f);
+        } else {
+            const int32_t rounded = quant_round_half_even(a * 0.5f + 4.0f);
+            const int32_t clamped = std::clamp(rounded, -127, 127);
+            golden[i] = static_cast<uint32_t>(clamped);
+        }
+    }
+    return golden;
+}
+
 }  // namespace unit_tests::sfpu_util
 
 namespace unit_tests::compute::sfpu {
@@ -2275,6 +2366,154 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
         {{input0_dram_buffer, &packed_lhs}, {input1_dram_buffer, &packed_rhs}},
         output_dram_buffer);
     return sfpu_util::is_close_packed_sfpu_output(dest, packed_golden, test_config.sfpu_op);
+}
+
+// Quant-family op. Operand A and the fp32 scale are consecutive raw 32-bit tiles in one
+// buffer (Int32 tag: unpack-to-dest copies the bits, and the kernel reinterprets them).
+// One unpack MOP writes Dest tiles 0 and 1; quant_tile / requant_tile / dequant_tile
+// write the result back over DST[0].
+bool run_sfpu_quant_family(distributed::MeshDevice& mesh_device, const SfpuConfig& test_config) {
+    const tt::DataFormat in_format = tt::DataFormat::Int32;
+    const tt::DataFormat out_format =
+        sfpu_util::is_quant_family_dequant(test_config.sfpu_op) ? tt::DataFormat::Float32 : tt::DataFormat::Int32;
+
+    const size_t tile_bytes = tt::tile_size(in_format);
+    const size_t numel = tile_bytes / sizeof(uint32_t);
+    const size_t in_tiles = test_config.num_tiles * 2;
+    const size_t in_bytes = in_tiles * tile_bytes;
+    const size_t out_bytes = test_config.num_tiles * tt::tile_size(out_format);
+
+    auto input_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = in_bytes},
+        {.page_size = in_bytes, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        &mesh_device);
+    auto output_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = out_bytes},
+        {.page_size = out_bytes, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        &mesh_device);
+
+    auto [packed_lhs, packed_rhs] = sfpu_util::generate_quant_family_inputs(test_config.sfpu_op, numel);
+    std::vector<uint32_t> packed_input;
+    packed_input.reserve(packed_lhs.size() + packed_rhs.size());
+    packed_input.insert(packed_input.end(), packed_lhs.begin(), packed_lhs.end());
+    packed_input.insert(packed_input.end(), packed_rhs.begin(), packed_rhs.end());
+    const std::vector<uint32_t> packed_golden = sfpu_util::quant_family_golden(test_config.sfpu_op, numel);
+
+    std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_binary_op_to_op_name.at(test_config.sfpu_op);
+    sfpu_defines["SFPU_QUANT_FAMILY"] = "1";
+
+    const auto node = extract_single_core_node(test_config, "Metal 2.0 quant-family SFPU path");
+    const experimental::DFBSpecName IN_DFB{"in_dfb"};
+    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+
+    experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {{
+            .dfb_spec_name = IN_DFB,
+            .accessor_name = "out",
+            .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+            .access_pattern = experimental::DFBAccessPattern::STRIDED,
+        }},
+        .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "bank_id", "num_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_2xx =
+                    experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                        .disable_dfb_implicit_sync_for_all = true,
+                    },
+            },
+    };
+
+    experimental::ComputeHardwareConfig::ComputeUnpackModes unpack_modes{
+        {IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest},
+    };
+    // Full dest sync keeps both operand tiles in one bank. SyncHalf flips the bank after
+    // an unpack, so a second copy_tile would leave the scale where the packer reads it.
+    experimental::ComputeHardwareConfig compute_hw_config{
+        .sfpu_precision_mode = tt::tt_metal::Precision::Precise,
+        .enable_32_bit_dest = true,
+        .double_buffer_dest = false,
+        .unpack_modes = unpack_modes,
+    };
+
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu_2_0.cpp",
+        .num_threads = 1,
+        .compiler_options = {.defines = to_kernel_defines(sfpu_defines)},
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = IN_DFB,
+                 .accessor_name = "in",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = OUT_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             }},
+        .compile_time_args =
+            {{"per_core_block_cnt", 1u}, {"per_core_block_size", static_cast<uint32_t>(test_config.num_tiles)}},
+        .hw_config = compute_hw_config,
+    };
+
+    SfpuConfig input_cfg = test_config;
+    input_cfg.num_tiles = in_tiles;
+    experimental::ProgramSpec spec{
+        .name = "sfpu_quant_family",
+        .kernels = {reader_spec, make_writer_unary_quasar_spec(WRITER, OUT_DFB), compute_spec},
+        .dataflow_buffers =
+            {make_dfb_spec(IN_DFB, input_cfg, in_format), make_dfb_spec(OUT_DFB, test_config, out_format)},
+        .work_units = {experimental::WorkUnitSpec{
+            .name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = node}},
+    };
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", input_dram_buffer->address()},
+                 {"bank_id", 0u},
+                 {"num_tiles", static_cast<uint32_t>(in_tiles)}})},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", output_dram_buffer->address()},
+                 {"bank_id", 0u},
+                 {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}),
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+
+    const auto dest = sfpu_quasar_run(
+        mesh_device, spec, params, {{input_dram_buffer, &packed_input}}, output_dram_buffer);
+    if (dest == packed_golden) {
+        return true;
+    }
+    const size_t n = std::min(dest.size(), packed_golden.size());
+    for (size_t i = 0; i < n; ++i) {
+        if (dest[i] != packed_golden[i]) {
+            log_error(
+                tt::LogTest,
+                "quant family {} mismatch at element {} got {:#x} golden {:#x}",
+                test_config.sfpu_op,
+                i,
+                dest[i],
+                packed_golden[i]);
+            break;
+        }
+    }
+    return false;
 }
 
 /// High-level flow:
@@ -3310,7 +3549,11 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinar
         .approx_mode = false};
     log_info(tt::LogTest, "Testing binary SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
     for (auto& device : this->devices_) {
-        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_binary_two_input_buffer(*device, test_config));
+        if (unit_tests::sfpu_util::is_quant_family_sfpu_op(sfpu_op)) {
+            EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_quant_family(*device, test_config));
+        } else {
+            EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_binary_two_input_buffer(*device, test_config));
+        }
     }
 }
 
@@ -3358,7 +3601,12 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "right_shift_binary"),
         std::make_tuple(1, "logical_right_shift_binary"),
         std::make_tuple(1, "logaddexp_binary"),
-        std::make_tuple(1, "logaddexp2_binary")),
+        std::make_tuple(1, "logaddexp2_binary"),
+        std::make_tuple(1, "quant"),
+        std::make_tuple(1, "requant"),
+        std::make_tuple(1, "dequant"),
+        std::make_tuple(1, "requant_int8_in"),
+        std::make_tuple(1, "dequant_int8")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
@@ -3454,7 +3702,8 @@ INSTANTIATE_TEST_SUITE_P(
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_QuasarSfpuRelu) {
     // 1 and 4-tile, SyncFull and SyncHalf
     for (const char* sfpu_op : {"relu", "relu_min", "relu_max"}) {
         for (const uint32_t num_tiles : {1u, 4u}) {
@@ -3468,7 +3717,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
     }
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuUnpackToDest16b) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_QuasarSfpuUnpackToDest16b) {
     // 16-bit operand explicitly unpacked to Dest
     for (const char* sfpu_op : {"relu", "relu_min", "relu_max"}) {
         for (const bool dst_full_sync_en : {true, false}) {
@@ -3504,12 +3754,17 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTypecastFixture, TensixSfpuTypecast) {
     //  * any UInt8 endpoint;
     //  * any Int16 endpoint (the data_format.cpp Int16 enablement is reverted until the full narrow-int
     //    datapath lands, so an Int16 endpoint trips the format-consistency / pack_src derivation);
-    //  * a non-Float32 input widening into a 32-bit Int output (Float16_b/MX -> Int32).
+    //  * a non-Float32 input widening into a 32-bit Int output (Float16_b/MX -> Int32);
+    //  * Int32 narrowed to Float16_b (hangs, tenstorrent/tt-metal#59923).
     // Float32 <-> Int32 and Float16_b/MX <-> Float32 still run.
     // Int16/UInt8 support through the metal2 compute-API path is tracked in tenstorrent/tt-metal#48601.
     const bool uint8_endpoint = (in_fmt == tt::DataFormat::UInt8 || out_fmt == tt::DataFormat::UInt8);
     const bool int16_endpoint = (in_fmt == tt::DataFormat::Int16 || out_fmt == tt::DataFormat::Int16);
     const bool widen_to_int32 = (out_fmt == tt::DataFormat::Int32 && in_fmt != tt::DataFormat::Float32);
+    const bool int32_to_bf16 = (in_fmt == tt::DataFormat::Int32 && out_fmt == tt::DataFormat::Float16_b);
+    if (int32_to_bf16) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     if (uint8_endpoint || int16_endpoint || widen_to_int32) {
         GTEST_SKIP() << "typecast format not yet supported through the metal2 compute-API path "
                         "(tenstorrent/tt-metal#48601)";

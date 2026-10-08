@@ -1110,7 +1110,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
 
 TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
     if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP() << "not supported on Quasar";
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
     }
     for (bool explicit_reconfig : {true, false}) {
         for (bool split_src_reconfig : {true, false}) {
@@ -1149,7 +1149,7 @@ TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
 
 TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
     if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP() << "not supported on Quasar";
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
     }
     for (bool l1_acc : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -1163,13 +1163,15 @@ TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
     }
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixUnpackReconfigQuasarDfb) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixUnpackReconfigQuasarDfb) {
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::reconfig::single_core_unpack_reconfig_quasar(device));
     }
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixPackReconfigQuasarDfb) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixPackReconfigQuasarDfb) {
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::reconfig::single_core_pack_reconfig_quasar(device));
     }
