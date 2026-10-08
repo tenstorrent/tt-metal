@@ -113,6 +113,33 @@
 #define MaybeDeviceZoneScope(name)
 #endif
 
+// Profile-only wait/MAC accounting on every TRISC (cb_wait_front spins on UNPACK, cb_reserve_back on
+// PACK; the other threads time a no-op). The matmul zones already exclude their CB waits
+// (cmp_gu_wait / cmp_d_wait); the activation zones (cmp_silu, cmp_mul, cmp_act) wait inside, so those
+// waits are timed off the wall clock and summed, and every matmul_block adds its tile-MAC count.
+// Emitted as two DeviceTimestampedData records per TRISC at the end, which stays inside the record
+// budget where a zone per wait would not.
+#if defined(PROFILE_KERNEL)
+namespace urf_prof {
+inline uint32_t act_wait_cyc;
+inline uint32_t tmacs;
+FORCE_INLINE uint32_t clk() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); }
+}  // namespace urf_prof
+#define URF_PROF_ACT_WAIT(...)                                \
+    do {                                                      \
+        const uint32_t prof_t0_ = urf_prof::clk();            \
+        __VA_ARGS__;                                          \
+        urf_prof::act_wait_cyc += urf_prof::clk() - prof_t0_; \
+    } while (0)
+#define URF_PROF_TMACS(n) (urf_prof::tmacs += (n))
+#else
+#define URF_PROF_ACT_WAIT(...) \
+    do {                       \
+        __VA_ARGS__;           \
+    } while (0)
+#define URF_PROF_TMACS(n) ((void)0)
+#endif
+
 namespace {
 
 // Packer-completion barrier for the K-block boundary of a PACKER_L1_ACC phase.
@@ -273,6 +300,7 @@ FORCE_INLINE void matmul_phase(
                                 in0_index += 1;
                                 in1_index += in1_per_core_w;
                             }
+                            URF_PROF_TMACS(k_steps * this_w * out_subblock_h);
                         }
                         tile_regs_commit();
                         tile_regs_wait();
@@ -580,6 +608,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                             in0_index += 1;
                             in1_index += in1_per_core_w;
                         }
+                        URF_PROF_TMACS(in0_block_w * out_subblock_w * out_subblock_h);
                     }
                     tile_regs_commit();
                     tile_regs_wait();
@@ -607,6 +636,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                             in0_index += 1;
                             in1_index += in1_per_core_w;
                         }
+                        URF_PROF_TMACS(in0_block_w * out_subblock_w * out_subblock_h);
                     }
                     tile_regs_commit();
                     tile_regs_wait();
@@ -669,7 +699,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
     copy_init(partials_gu_cb_id);
     for (uint32_t sb = 0; sb < (EFF_OUT / out_subblock_num_tiles); ++sb) {
         tile_regs_acquire();
-        partials_gu_cb.wait_front(out_subblock_num_tiles);
+        URF_PROF_ACT_WAIT(partials_gu_cb.wait_front(out_subblock_num_tiles));
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
             copy_tile(partials_gu_cb_id, i, i);
         }
@@ -680,7 +710,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
         }
         tile_regs_commit();
         tile_regs_wait();
-        gate_intermed_cb.reserve_back(out_subblock_num_tiles);
+        URF_PROF_ACT_WAIT(gate_intermed_cb.reserve_back(out_subblock_num_tiles));
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
             pack_tile(i, gate_intermed_cb_id);
         }
@@ -693,9 +723,9 @@ FORCE_INLINE void matmul_phase_fused_gu(
     {
         const uint32_t pad = EFF_OUT_MAX - EFF_OUT;
         if (pad > 0) {
-            partials_gu_cb.wait_front(pad);
+            URF_PROF_ACT_WAIT(partials_gu_cb.wait_front(pad));
             partials_gu_cb.pop_front(pad);
-            gate_intermed_cb.reserve_back(pad);
+            URF_PROF_ACT_WAIT(gate_intermed_cb.reserve_back(pad));
             gate_intermed_cb.push_back(pad);
         }
     }
@@ -773,8 +803,8 @@ FORCE_INLINE void binary_activation_phase(
     CircularBuffer up_partials_cb(up_partials_cb_id);
     CircularBuffer activated_cb(activated_cb_id);
 
-    gate_partials_cb.wait_front(EFF_OUT_MAX);
-    up_partials_cb.wait_front(EFF_OUT_MAX);
+    URF_PROF_ACT_WAIT(gate_partials_cb.wait_front(EFF_OUT_MAX));
+    URF_PROF_ACT_WAIT(up_partials_cb.wait_front(EFF_OUT_MAX));
 
     pack_reconfig_data_format(activated_cb_id);
     // SrcA was last configured for the up matmul's in1 weights (prev_srcA_cb_id,
@@ -826,7 +856,7 @@ FORCE_INLINE void binary_activation_phase(
         }
         tile_regs_commit();
         tile_regs_wait();
-        activated_cb.reserve_back(c);
+        URF_PROF_ACT_WAIT(activated_cb.reserve_back(c));
         for (uint32_t j = 0; j < c; ++j) {
             pack_tile(j, activated_cb_id);
         }
@@ -838,7 +868,7 @@ FORCE_INLINE void binary_activation_phase(
     {
         const uint32_t pad = EFF_OUT_MAX - EFF_OUT;
         if (pad > 0) {
-            activated_cb.reserve_back(pad);
+            URF_PROF_ACT_WAIT(activated_cb.reserve_back(pad));
             activated_cb.push_back(pad);
         }
     }
@@ -863,8 +893,8 @@ FORCE_INLINE void multiply_phase(
     // only the multiply work below is bounded by the runtime EFF_OUT.
     constexpr uint32_t EFF_OUT_MAX = out_block_num_tiles;
 
-    gate_cb.wait_front(EFF_OUT_MAX);
-    up_cb.wait_front(EFF_OUT_MAX);
+    URF_PROF_ACT_WAIT(gate_cb.wait_front(EFF_OUT_MAX));
+    URF_PROF_ACT_WAIT(up_cb.wait_front(EFF_OUT_MAX));
 
     // Reconfigure packer for activated format and unpacker for both
     // gate_cb (SrcA) and up_cb (SrcB). After phase 2's second pass the
@@ -886,7 +916,7 @@ FORCE_INLINE void multiply_phase(
         }
         tile_regs_commit();
         tile_regs_wait();
-        activated_cb.reserve_back(out_subblock_num_tiles);
+        URF_PROF_ACT_WAIT(activated_cb.reserve_back(out_subblock_num_tiles));
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
             pack_tile(i, activated_cb_id);
         }
@@ -899,7 +929,7 @@ FORCE_INLINE void multiply_phase(
     {
         const uint32_t pad = EFF_OUT_MAX - EFF_OUT;
         if (pad > 0) {
-            activated_cb.reserve_back(pad);
+            URF_PROF_ACT_WAIT(activated_cb.reserve_back(pad));
             activated_cb.push_back(pad);
         }
     }
@@ -910,6 +940,9 @@ FORCE_INLINE void multiply_phase(
 }  // namespace
 
 void kernel_main() {
+#if defined(PROFILE_KERNEL)
+    urf_prof::act_wait_cyc = urf_prof::tmacs = 0;
+#endif
     // Per-core valid N-subblock counts. per_core_N is the GRID-ceil'd width, so the
     // highest-gx cores own phantom output columns whose weights were never fetched;
     // these bound the MAC to the subblocks holding real columns. Runtime (not
@@ -1202,4 +1235,9 @@ void kernel_main() {
         CircularBuffer(cb_down_bias).pop_front(d_in1_per_core_w);
 #endif
     }  // end per-local-expert loop
+#if defined(PROFILE_KERNEL)
+    // Whole-launch sums: CB-wait cycles inside the activation zones, tile-MACs issued (x 2*32^3 flop).
+    DeviceTimestampedData("prof_act_wait_cyc", urf_prof::act_wait_cyc);
+    DeviceTimestampedData("prof_mm_tmacs", urf_prof::tmacs);
+#endif
 }

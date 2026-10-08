@@ -697,13 +697,14 @@ void kernel_main() {
                         // it DIRECTLY into `dst`; cb_tilize_done is only a one-page completion channel, so
                         // the reader remains the sole owner of cb_x_tiles' push/write-pointer state.
                         if (!staged_early) {
+                            cb_reserve_back(cb_x_in, TILE_H);
                             {
+                                // Issue -> barrier only (the reserve stays outside): a pure DRAM window.
                                 MaybeDeviceZoneScope("reader_x_read");
-                                cb_reserve_back(cb_x_in, TILE_H);
                                 issue_x_row(row, get_write_ptr(cb_x_in));
                                 noc.async_read_barrier();
-                                cb_push_back(cb_x_in, TILE_H);
                             }
+                            cb_push_back(cb_x_in, TILE_H);
                         }
 
                         {
@@ -895,13 +896,25 @@ void kernel_main() {
                     if (row >= M_T_MAX) {
                         row = M_T_MAX - 1;
                     }
-                    noc_async_read_set_trid(NEXT_X_TRID);
                     if constexpr (INPUT_FORMAT == 0) {
                         cb_reserve_back(cb_x_in, TILE_H);
+                    }
+#ifdef MOE_FUSED_SWIGLU_STAGE_PROFILE
+                    // Profile-only: barrier the prefetch where it is issued, so issue -> barrier is a
+                    // pure DRAM window for blocks >= 1 (it otherwise lands somewhere under phase 2 and
+                    // its deferred barrier, reader_nextx_wait, measures nothing). Costs one X-row read
+                    // of latency ahead of this block's reduce; reader_nextx_wait then returns at once.
+                    MaybeDeviceZoneScope("reader_nextx_read");
+#endif
+                    noc_async_read_set_trid(NEXT_X_TRID);
+                    if constexpr (INPUT_FORMAT == 0) {
                         issue_x_row(row, get_write_ptr(cb_x_in));
                     } else {
                         issue_x_row(row, next_x_base + t * X_ROW_BYTES);
                     }
+#ifdef MOE_FUSED_SWIGLU_STAGE_PROFILE
+                    noc_async_read_barrier_with_trid(NEXT_X_TRID);
+#endif
                     noc_async_read_set_trid(P2_READ_TRID);
                 }
             }

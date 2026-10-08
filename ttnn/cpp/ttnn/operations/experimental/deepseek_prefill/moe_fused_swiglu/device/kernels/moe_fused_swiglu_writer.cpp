@@ -245,6 +245,9 @@ void kernel_main() {
     // It spans the EXPERT boundary too: SEM_PHASE_FREE is published from inside that drain, and the
     // next expert's block 0 reader waits on it.
     uint32_t out_pending = 0;
+#ifdef MOE_FUSED_SWIGLU_STAGE_PROFILE
+    uint32_t prof_out_bytes = 0;  // profile-only: output bytes this core wrote (one record at the end)
+#endif
     constexpr uint32_t WU_BLOCK_TILES = KR_PAD * HN_PAD;
     // The N-chunk width of the gate/up weight stream. 1 is the whole block.
     constexpr uint32_t GU_CHUNK_W = HN_PAD / GU_CHUNKS;
@@ -575,13 +578,22 @@ void kernel_main() {
                         if (dst_row >= OUT_M_T) {
                             break;
                         }
-                        BR::write(
-                            out_acc,
-                            dst_row * EMB_T,
-                            out_jstart,
-                            out_jstart + out_ec,
-                            rp + t * out_ec_max * OUT_TILE,
-                            OUT_TILE);
+                        {
+                            // Profile-only: barrier each row where it is issued, so the zone is a pure
+                            // issue -> DRAM-ack window with the compute wait (wait_front above) outside it.
+                            MaybeDeviceZoneScope("writer_out_wr");
+                            BR::write(
+                                out_acc,
+                                dst_row * EMB_T,
+                                out_jstart,
+                                out_jstart + out_ec,
+                                rp + t * out_ec_max * OUT_TILE,
+                                OUT_TILE);
+#ifdef MOE_FUSED_SWIGLU_STAGE_PROFILE
+                            noc.async_write_barrier();
+                            prof_out_bytes += out_ec * OUT_TILE;
+#endif
+                        }
                     }
                 }
                 // Issued only — the barrier and the pop happen at the top of the NEXT M-block (or in the
@@ -596,4 +608,7 @@ void kernel_main() {
         noc.async_write_barrier();
         out_buf.pop_front(out_pending);
     }
+#ifdef MOE_FUSED_SWIGLU_STAGE_PROFILE
+    DeviceTimestampedData("prof_out_bytes", prof_out_bytes);
+#endif
 }

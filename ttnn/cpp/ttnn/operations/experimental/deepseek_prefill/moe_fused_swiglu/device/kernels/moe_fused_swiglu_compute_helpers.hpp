@@ -12,6 +12,36 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
 
+// Profile-only wait/MAC accounting. Compiled in only when the including kernel defines
+// MOE_FUSED_SWIGLU_PROF_ACC (moe_fused_swiglu_compute.cpp does under MOE_FUSED_SWIGLU_STAGE_PROFILE).
+// Every CB wait inside a matmul or activation zone is timed off the wall clock and summed per slot on
+// each TRISC (cb_wait_front spins on UNPACK, cb_reserve_back on PACK; the other threads time a no-op),
+// and every matmul_block adds its tile-MAC count, so the host subtracts exact wait time from the zone
+// time instead of estimating it. A per-wait zone would not fit the 125-record budget; the kernel emits
+// the sums as three DeviceTimestampedData records per TRISC at the end.
+#if defined(MOE_FUSED_SWIGLU_PROF_ACC)
+namespace moe_fused_swiglu::prof {
+constexpr uint32_t MM = 0;
+constexpr uint32_t ACT = 1;
+inline uint32_t wait_cyc[2];
+inline uint32_t tmacs;
+ALWI uint32_t clk() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); }
+}  // namespace moe_fused_swiglu::prof
+#define MOE_PROF_WAIT(slot, ...)                                                            \
+    do {                                                                                    \
+        const uint32_t prof_t0_ = moe_fused_swiglu::prof::clk();                            \
+        __VA_ARGS__;                                                                        \
+        moe_fused_swiglu::prof::wait_cyc[slot] += moe_fused_swiglu::prof::clk() - prof_t0_; \
+    } while (0)
+#define MOE_PROF_TMACS(n) (moe_fused_swiglu::prof::tmacs += (n))
+#else
+#define MOE_PROF_WAIT(slot, ...) \
+    do {                         \
+        __VA_ARGS__;             \
+    } while (0)
+#define MOE_PROF_TMACS(n) ((void)0)
+#endif
+
 namespace moe_fused_swiglu::compute {
 
 struct MatmulShape {
@@ -93,15 +123,15 @@ ALWI void matmul_row_major(
     bool reload_partials = false;
     for (uint32_t k_block = 0; k_block < shape.k_blocks; ++k_block) {
         const bool is_last = k_block + 1 == shape.k_blocks;
-        pre_k(k_block, shape.k_blocks, is_last);
+        MOE_PROF_WAIT(0, pre_k(k_block, shape.k_blocks, is_last));
         const uint32_t inner_steps = k_steps(k_block, shape.k_tiles);
         if constexpr (!retain_in0) {
-            in0.wait_front(in0_block_tiles);
+            MOE_PROF_WAIT(0, in0.wait_front(in0_block_tiles));
         } else if (!shape.wait_in0_per_m_subblock) {
-            in0.wait_front(in0_block_tiles);
+            MOE_PROF_WAIT(0, in0.wait_front(in0_block_tiles));
         }
         if constexpr (!retain_in1) {
-            in1.wait_front(in1_block_tiles);
+            MOE_PROF_WAIT(0, in1.wait_front(in1_block_tiles));
         }
         if constexpr (target == MatmulTarget::Out) {
             if (reload_partials) {
@@ -113,7 +143,7 @@ ALWI void matmul_row_major(
         for (uint32_t m_subblock = 0; m_subblock < shape.m_subblocks; ++m_subblock) {
             if constexpr (retain_in0) {
                 if (shape.wait_in0_per_m_subblock) {
-                    in0.wait_front((m_subblock + 1) * in0_subblock_tiles);
+                    MOE_PROF_WAIT(0, in0.wait_front((m_subblock + 1) * in0_subblock_tiles));
                 }
             }
             uint32_t in1_index = in1_offset(k_block);
@@ -141,6 +171,7 @@ ALWI void matmul_row_major(
                     ++in0_index;
                     in1_index += in1_width;
                 }
+                MOE_PROF_TMACS(inner_steps * n_width * shape.subblock_h);
 
                 const uint32_t column =
                     m_subblock * row_group_tiles + n_subblock * shape.subblock_w + out_column_offset;
@@ -188,8 +219,8 @@ ALWI void add_silu_elementwise(
     reconfig_data_format_srcb(bias_cb);
     pack_reconfig_data_format(out_cb);
     add_tiles_init(partials_cb, bias_cb);
-    partials.wait_front(tiles);
-    out.reserve_back(tiles);
+    MOE_PROF_WAIT(1, partials.wait_front(tiles));
+    MOE_PROF_WAIT(1, out.reserve_back(tiles));
     tile_regs_acquire();
     for (uint32_t tile = 0; tile < tiles; ++tile) {
         add_tiles(partials_cb, bias_cb, tile, bias_offset + tile, tile);

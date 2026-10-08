@@ -43,6 +43,9 @@
 #ifdef SITU_GLU
 #include "api/compute/situ_glu.h"
 #endif
+#ifdef MOE_FUSED_SWIGLU_STAGE_PROFILE
+#define MOE_FUSED_SWIGLU_PROF_ACC 1  // profile-only wait/MAC accounting in the helpers (UNPACK only)
+#endif
 #include "moe_fused_swiglu_compute_helpers.hpp"
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
@@ -242,9 +245,9 @@ ALWI void mul_blocked(uint32_t n) {
     reconfig_data_format(A, B);
     pack_reconfig_data_format(OUT);
     mul_tiles_init(A, B);
-    a_buf.wait_front(n);
-    b_buf.wait_front(n);
-    out_buf.reserve_back(n);
+    MOE_PROF_WAIT(1, a_buf.wait_front(n));
+    MOE_PROF_WAIT(1, b_buf.wait_front(n));
+    MOE_PROF_WAIT(1, out_buf.reserve_back(n));
     for (uint32_t base = 0; base < n; base += ELTWISE_BLK) {
         uint32_t width = n - base;
         if (width > ELTWISE_BLK) {
@@ -433,6 +436,9 @@ void kernel_main() {
     // but because it programs the UNPACK/MATH/PACK config and must precede every compute API call,
     // including the activation init below. Nothing may be inserted above it.
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_tiles, cb_w_gate, cb_gate_acc);
+#if defined(MOE_FUSED_SWIGLU_PROF_ACC)
+    moe_fused_swiglu::prof::wait_cyc[0] = moe_fused_swiglu::prof::wait_cyc[1] = moe_fused_swiglu::prof::tmacs = 0;
+#endif
 
     (void)get_arg_val<uint32_t>(0);  // retained runtime slot for cache-compatible argument layout
     const uint32_t kr_rows = get_arg_val<uint32_t>(1);
@@ -718,12 +724,16 @@ void kernel_main() {
                     // a slice can exceed one DEST window (slice_tiles is m_eff*HN_PAD/workers, e.g. 9 at
                     // HN_PAD 9); each chunk pairs the partial with its corresponding final gate tile.
                     gg_buf.wait_front(slice_tiles);
-                    for (uint32_t t0 = 0; t0 < slice_tiles; t0 += DEST_LIMIT) {
-                        uint32_t w = slice_tiles - t0;
-                        if (w > DEST_LIMIT) {
-                            w = DEST_LIMIT;
+                    {
+                        // Profile-only split: the SiLU pass alone, after the last contributor landed.
+                        MaybeDeviceZoneScope("compute_act_silu");
+                        for (uint32_t t0 = 0; t0 < slice_tiles; t0 += DEST_LIMIT) {
+                            uint32_t w = slice_tiles - t0;
+                            if (w > DEST_LIMIT) {
+                                w = DEST_LIMIT;
+                            }
+                            add_silu_elementwise(sg_buf, gg_buf, silu_buf, w, t0);
                         }
-                        add_silu_elementwise(sg_buf, gg_buf, silu_buf, w, t0);
                     }
                     gg_buf.pop_front(slice_tiles);
 
@@ -748,7 +758,10 @@ void kernel_main() {
 #else
                     // Inherits phase 1's hoisted cb_gate_acc pack format, which is correct exactly
                     // because cb_h_slice is bfp8 — the epilogue's single dtype boundary.
-                    mul_blocked<cb_gate_silu, cb_slice_up, cb_h_slice>(slice_tiles);
+                    {
+                        MaybeDeviceZoneScope("compute_act_mul");  // profile-only: the multiply pass alone
+                        mul_blocked<cb_gate_silu, cb_slice_up, cb_h_slice>(slice_tiles);
+                    }
 #endif
                     // Drain the landing CBs' padding tail so the pop total equals the reader's
                     // WHOLE-CB push. That is not tidiness: the whole-CB push is what returns the
@@ -798,7 +811,7 @@ void kernel_main() {
                     // eight consecutive 1xHID_T activation rows.  Each call has one K-block, so the
                     // result never leaves DEST for an intermediate BF16 accumulation spill.
                     constexpr uint32_t WD_RESIDENT_TILES = HGROUPS * HN_PAD * WD_EC_MAX;
-                    wd_buf.wait_front(WD_RESIDENT_TILES);
+                    MOE_PROF_WAIT(0, wd_buf.wait_front(WD_RESIDENT_TILES));
                     matmul_block_init(cb_h, cb_w_down, false, down_ec, 1, HID_T);
                     const MatmulShape row_shape = MatmulShape::of(1, 1, 1, down_ec, HID_T, 1);
                     for (uint32_t r = 0; r < down_rows; ++r) {
@@ -821,7 +834,7 @@ void kernel_main() {
                         out_tiles_buf.push_back(out_ec_max);
                     }
                     if (!wd_mgroup) {
-                        h_buf.wait_front(HID_T);
+                        MOE_PROF_WAIT(0, h_buf.wait_front(HID_T));
                         h_buf.pop_front(HID_T);  // ordinary path's payload-free alignment slot
                     }
                     wd_buf.pop_front(WD_RESIDENT_TILES);
@@ -935,4 +948,11 @@ void kernel_main() {
             h_buf.pop_front(h_pad);
         }
     }
+#if defined(MOE_FUSED_SWIGLU_PROF_ACC)
+    // Whole-launch sums: CB-wait cycles inside the matmul zones (compute_up/gate_matmul, compute_down)
+    // and the activation zones (compute_act_silu/mul), and the tile-MACs issued (x 2*32^3 flop).
+    DeviceTimestampedData("prof_mm_wait_cyc", moe_fused_swiglu::prof::wait_cyc[0]);
+    DeviceTimestampedData("prof_act_wait_cyc", moe_fused_swiglu::prof::wait_cyc[1]);
+    DeviceTimestampedData("prof_mm_tmacs", moe_fused_swiglu::prof::tmacs);
+#endif
 }

@@ -54,6 +54,9 @@ constexpr uint32_t TILE_HEIGHT = 32;
 
 void kernel_main() {
     Noc noc;
+#ifdef PROFILE_KERNEL
+    uint32_t prof_out_bytes = 0;  // profile-only: output bytes this core wrote (one record at the end)
+#endif
 
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t my_mt = get_arg_val<uint32_t>(0);
@@ -456,6 +459,9 @@ void kernel_main() {
                         MaybeDeviceZoneScope("wr_out_wait");
                         cb_out_buf.wait_front(this_tiles);
                     }
+                    // Profile-only: issue -> DRAM-ack window for this subblock, compute wait outside.
+                    // The barrier below makes it a write-completion time (not just departure).
+                    MaybeDeviceZoneScope("wr_out_wr");
                     uint32_t subblock_tile_offset = 0;
                     for (uint32_t i = 0; i < d_out_subblock_h; ++i) {
                         for (uint32_t j = 0; j < this_w; ++j) {
@@ -496,6 +502,9 @@ void kernel_main() {
                                 // no-op there).
                                 ASSERT(dst_row < dst_M_tiles);
                                 if (dst_row < dst_M_tiles) {
+#ifdef PROFILE_KERNEL
+                                    prof_out_bytes += out_tile_bytes;
+#endif
                                     const uint32_t tile_idx = dst_row * N_down_tiles_full + col;
                                     noc.async_write(
                                         cb_out_buf,
@@ -513,6 +522,9 @@ void kernel_main() {
                     // slot now — the NoC has captured the data. ~10x faster than
                     // noc_async_write_barrier per subblock at small per_core_M.
                     noc.async_writes_flushed();
+#ifdef PROFILE_KERNEL
+                    noc.async_write_barrier();
+#endif
                     cb_out_buf.pop_front(this_tiles);
                 }
             }
@@ -520,6 +532,9 @@ void kernel_main() {
     }  // end per-local-expert loop
     // Ensure all outstanding writes complete at the destination before the
     // kernel returns (the next dispatched op may read this output).
+#ifdef PROFILE_KERNEL
+    DeviceTimestampedData("prof_out_bytes", prof_out_bytes);
+#endif
     MaybeDeviceZoneScope("wr_out_barrier");
     noc.async_write_barrier();
     // UP_SPLIT issues only per-K-block-barriered NoC-1 `up` reads (no NoC-1
