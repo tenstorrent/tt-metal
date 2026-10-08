@@ -105,14 +105,14 @@ ALWI void process_tile(
         reconfig_data_format_srca(cb_right, cb_left);
         copy_init(cb_left);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            BINARY_NG_COPY_TILE(cb_left, i, i * 2);
+            copy_tile(cb_left, i, i * 2);
         }
         reconfig_data_format_srca(cb_left, cb_right);
         if constexpr (rhs_copy_init) {
             copy_init(cb_right);
         }
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            BINARY_NG_COPY_TILE(cb_right, i, i * 2 + 1);
+            copy_tile(cb_right, i, i * 2 + 1);
 
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT
