@@ -315,6 +315,9 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
+    // Channel-1 (L1 output) X/Y strides are zero for every pack mode: the pack addrmods advance
+    // y_dst and rely on it. Only the fast-untilize strided pack sets a Y stride, in its own init.
+    TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
     TTI_NOP;
     TTI_NOP;
 
