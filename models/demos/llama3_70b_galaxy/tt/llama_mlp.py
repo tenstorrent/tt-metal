@@ -465,27 +465,6 @@ class TtLlamaMLP(LightweightModule):
                 program_config=short_lens_pc_2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        elif self.args.is_qwen and seq_len > 4096:
-            # Qwen long prefill: gather w2_in in bf8 (it is bf8 out of ttnn.mul, so a bf16 copy adds no bits)
-            # on the 4-link ring, then matmul to the bf16 output. The fused op would gather in its output dtype.
-            w2_in_gathered = self.tt_ccl.ring_all_gather(
-                w2_in,
-                dim=3,
-                cluster_axis=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                num_links=prefill_num_links,
-                buffer_key="FF3",
-            )
-            ttnn.deallocate(w2_in)
-            w2_out = ttnn.experimental.minimal_matmul(
-                input_tensor=w2_in_gathered,
-                weight_tensor=self.w2_interleaved,
-                dtype=self.prefill_output_dtype,
-                config=self.model_config["PREFILL_FF2_UNFUSED_MINIMAL_MATMUL_CONFIG"],
-                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            ttnn.deallocate(w2_in_gathered)
         else:
             # Match the input format before communicating its bytes.
             if w2_in.dtype != self.prefill_output_dtype:
