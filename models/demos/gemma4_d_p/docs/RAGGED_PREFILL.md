@@ -150,11 +150,14 @@ This uses all 60 layers by default; set `GEMMA4_RAGGED_TEST_LAYERS=6` for a shor
 run. Edit the consecutive `run_batch(lengths, starts=[...])` calls in the test.
 Each list index selects its KV slot, and the printed token range is
 `[start, start + length)`. Start zero replaces a slot's request; a nonzero start
-continues its preceding full 8192-token chunk. The examples include unequal
-lengths, three/four-request batches, full chunks and populated-prefix continuations.
+continues its preceding full 8192-token chunk. Most examples fill an 8192-token
+batch, split across one to four requests, including populated-prefix continuations.
+Two additional workloads use 4096 and 1058 useful tokens to show underfilled
+behavior. Each workload has a capture call followed by a replay.
 
-Each call invokes `prefill_batch` once. Output shows useful tokens/s for the batch
-and completion latency for each request. All requests share the batch's completion
+Each call invokes `prefill_batch` once. Output shows useful tokens/s and fill
+percentage against the 8192-token batch target, plus completion latency for each
+request. All requests share the batch's completion
 time. New shapes are labeled `capture+replay` (including warmup/capture); matching
 consecutive shapes are labeled `replay`. Timings include packing, staging, device
 execution and synchronization, excluding model loading, random token generation,

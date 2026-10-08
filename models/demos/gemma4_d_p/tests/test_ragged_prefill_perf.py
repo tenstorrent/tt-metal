@@ -64,6 +64,7 @@ def run_batch(mesh_device):
     next_request_id = 0
     print(
         f"\nRAGGED PERF: {num_layers} layers, CP8/TP4, chunk={config.chunk_size}, slots={config.num_users}\n"
+        f"Fill = useful tokens / {config.chunk_size}-token batch target.\n"
         "Wall time includes packing, staging, execution and synchronization.\n"
         "capture+replay also includes warmup/capture; replay uses the resident trace.\n"
         "Excludes model loading, random token generation, output downloads and external KV transfer.\n"
@@ -106,6 +107,7 @@ def run_batch(mesh_device):
         batch_number += 1
         print(
             f"Batch {batch_number:02d} | {phase:14s} | {sum(lengths):,} useful / {plan.packed_size:,} packed tokens"
+            f" | fill={sum(lengths) / config.chunk_size:.1%}"
             f" | {elapsed * 1000:,.2f} ms | {sum(lengths) / elapsed:,.0f} useful tok/s\n"
             "  request  slot      start        end   tokens  completion_ms",
             flush=True,
@@ -129,11 +131,18 @@ def run_batch(mesh_device):
 def test_ragged_prefill_perf(run_batch):
     # List index = slot. Token ranges are [start, start + length).
     # New shapes capture; consecutive matching shapes replay the resident trace.
-    run_batch([543, 2012, 998, 123], starts=[0, 0, 0, 0])
-    run_batch([543, 2012, 998, 123], starts=[0, 0, 0, 0])
-    run_batch([7012, 643, 22], starts=[0, 0, 0])
-    run_batch([7012, 643, 22], starts=[0, 0, 0])
-    run_batch([8192, 8192], starts=[0, 0])
-    run_batch([8192, 8192], starts=[8192, 8192])
-    run_batch([1025, 33], starts=[16384, 0])
-    run_batch([1055, 63], starts=[0, 0])
+    # Full 8192-token batches, split across four, three, one and two requests.
+    run_batch([544, 2016, 1024, 4608], starts=[0, 0, 0, 0])
+    run_batch([544, 2016, 1024, 4608], starts=[0, 0, 0, 0])
+    run_batch([7040, 672, 480], starts=[0, 0, 0])
+    run_batch([7040, 672, 480], starts=[0, 0, 0])
+    run_batch([8192], starts=[0])
+    run_batch([8192], starts=[8192])
+    run_batch([6144, 2048], starts=[16384, 0])
+    run_batch([6144, 2048], starts=[0, 0])
+
+    # Two underfilled workloads: 50% and ~13% of the 8192-token batch target.
+    run_batch([1024, 3072], starts=[0, 0])
+    run_batch([1024, 3072], starts=[0, 0])
+    run_batch([1025, 33], starts=[0, 0])
+    run_batch([1025, 33], starts=[0, 0])
