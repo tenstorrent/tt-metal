@@ -143,12 +143,42 @@ json stream_json(const manifest::content::Stream& stream) {
     return out;
 }
 
+// ============ Architecture ============
+
+json heartbeat_json(const manifest::Heartbeat& heartbeat) {
+    json out = l1_json(heartbeat.word);
+    out["magic"] = heartbeat.magic;
+    out["magic_mask"] = heartbeat.magic_mask;
+    out["period_iters"] = heartbeat.period_iters;
+    return out;
+}
+
+// Keyed by architecture, which run.arch names.
+json make_archs_json(const manifest::Arch& arch) {
+    const auto& areas = arch.areas;
+    json areas_json;
+    areas_json["heartbeat"] = heartbeat_json(areas.heartbeat);
+    areas_json["fabric_telemetry"] = l1_json(areas.fabric_telemetry);
+    areas_json["routing_table"] = l1_json(areas.routing_table);
+    areas_json["go_msg"] = l1_json(areas.go_msg);
+    areas_json["launch"] = l1_json(areas.launch);
+    areas_json["launch_msg_rd_ptr"] = l1_json(areas.launch_msg_rd_ptr);
+    areas_json["eth_fw_mailbox"] = optional_l1_json(areas.eth_fw_mailbox);
+    json archs;
+    archs[lower_enum_name(arch.arch)]["areas"] = std::move(areas_json);
+    return archs;
+}
+
 // ============ Paths ============
 
 // One part of the manifest refers to a router elsewhere by its path, e.g. "M0/C7/E0".
 std::string router_path(FabricNodeId node, eth_chan_directions direction, routing_plane_id_t routing_plane) {
     return fmt::format(
         "{}/{}/{}", mesh_key(node.mesh_id), chip_key(node.chip_id), router_key(direction, routing_plane));
+}
+
+std::string router_path(const manifest::RouterRef& router) {
+    return router_path(router.node, router.direction, router.routing_plane);
 }
 
 // A sibling is on the same chip and routing plane as the router that refers to it.
@@ -174,9 +204,7 @@ json router_identity_json(const manifest::RouterIdentity& identity) {
 json eth_link_json(const manifest::EthLink& link) {
     json out;
     out["edge_capability"] = lower_enum_name(link.edge_capability);
-    out["peer"] = link.peer.has_value()
-                      ? json(router_path(link.peer->node, link.peer->direction, link.peer->routing_plane))
-                      : json(nullptr);
+    out["peer"] = link.peer.has_value() ? json(router_path(*link.peer)) : json(nullptr);
     out["cross_host"] = link.cross_host;
     out["wrap"] = link.wrap;
     out["dispatch_link"] = link.is_dispatch_link;
@@ -407,8 +435,9 @@ json make_router_json(const manifest::Router& router, FabricNodeId node) {
 // ============ Chip and mesh ============
 
 json local_sync_json(const manifest::LocalSync& local_sync) {
+    TT_FATAL(local_sync.master.has_value(), "Fabric manifest: the chip pass did not resolve the local sync master");
     json out;
-    out["master_eth_chan"] = local_sync.master_eth_chan;
+    out["master"] = router_path(*local_sync.master);
     out["num_routers"] = local_sync.num_routers;
     out["router_channels_mask"] = local_sync.router_channels_mask;
     return out;
@@ -455,14 +484,14 @@ json make_chip_json(
     const manifest::Chip& collected = builder_context.has_manifest_chip(*physical_chip_id)
                                           ? builder_context.get_manifest_chip(*physical_chip_id)
                                           : no_routers;
+    const manifest::Chip joined = join_chip(collected, control_plane, cluster, fabric_type, node, *physical_chip_id);
     chip["physical_chip_id"] = *physical_chip_id;
     // Hex string: the value exceeds what JSON numbers represent exactly.
     chip["asic_id"] = fmt::format("0x{:016x}", *control_plane.get_asic_id_from_fabric_node_id(node));
     chip["is_local"] = true;
-    chip["z_port_role"] = lower_enum_name(collected.z_port_role);
-    chip["local_sync"] = collected.local_sync ? local_sync_json(*collected.local_sync) : json(nullptr);
-    chip["routers"] = make_chip_routers_json(
-        join_chip(collected, control_plane, cluster, fabric_type, node, *physical_chip_id), node);
+    chip["z_port_role"] = lower_enum_name(joined.z_port_role);
+    chip["local_sync"] = joined.local_sync ? local_sync_json(*joined.local_sync) : json(nullptr);
+    chip["routers"] = make_chip_routers_json(joined, node);
     return chip;
 }
 
@@ -521,6 +550,7 @@ void serialize_fabric_manifest_to_file(
     manifest["run"] = make_run_json(control_plane, cluster);
     manifest["fabric_context"] = make_fabric_context_json(fabric_context);
     manifest["vocabulary"] = make_vocabulary_json();
+    manifest["archs"] = make_archs_json(describe_arch(tt::tt_metal::MetalContext::instance().hal()));
 
     auto mesh_ids = control_plane.get_mesh_graph().get_all_mesh_ids();
     std::ranges::sort(mesh_ids, {}, [](const MeshId& mesh_id) { return *mesh_id; });
