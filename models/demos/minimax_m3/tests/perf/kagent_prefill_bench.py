@@ -49,6 +49,13 @@ Env (defaults = the deployed 16p16d prefill config):
                       and the KV dump into BENCH_DUMP_DIR/<variant> (several gated dumps from one model build)
   BENCH_RESULTS_JSONL append one JSON line with every number                         [unset]
   EXPERT_DTYPE        bf4 | bf8                                                      [bf4]
+  BENCH_TRACE         1 -> E1 (20-prefill-megakernel.md section 2.6): after the timed request, interleaved eager
+                      rounds of the request with ack sync / event / none (host-enqueue-return H and wall), then a
+                      fixed-offset trace of the single request chunk (BENCH_NEW == BENCH_CHUNK): capture once,
+                      replay BENCH_TRACE_REPS times, each fenced by synchronize_device -> device-only time D, trace bytes.
+                      The mesh opens with BENCH_TRACE_REGION bytes of trace region (default 1 GiB)       [0]
+  BENCH_TRACE_DUMP    dir: KV dump right after the trace replays (the replays rewrite the request rows, so a
+                      correct trace leaves the cache bit-identical to the eager one)                     [unset]
 """
 
 import json
@@ -88,7 +95,7 @@ def _raise_nproc_limit():
             pass
 
 
-def open_mesh(rows, cols):
+def open_mesh(rows, cols, trace_region_size=0):
     """Production bring-up (models/demos/common/prefill/runners/runner_utils.open_mesh_device)."""
     fabric = fabric_config_from_env(default="2d")
     router = ttnn._ttnn.fabric.FabricRouterConfig()
@@ -103,7 +110,7 @@ def open_mesh(rows, cols):
         router,
     )
     mesh = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(rows, cols), l1_small_size=L1_SMALL_SIZE, trace_region_size=0
+        mesh_shape=ttnn.MeshShape(rows, cols), l1_small_size=L1_SMALL_SIZE, trace_region_size=trace_region_size
     )
     log(f"mesh {tuple(mesh.shape)} ndev={mesh.get_num_devices()} fabric={fabric} ccl={ccl_topology_from_env()}")
     return mesh
@@ -166,7 +173,8 @@ def main():
         f"ack={ack_mode} layers={layer_ids or os.getenv('BENCH_NUM_LAYERS', '60')} env={env_echo}"
     )
 
-    mesh = open_mesh(rows, cols)
+    want_trace = os.getenv("BENCH_TRACE", "0") == "1" and not profile
+    mesh = open_mesh(rows, cols, int(os.getenv("BENCH_TRACE_REGION", str(1 << 30))) if want_trace else 0)
     result = {
         "tag": os.getenv("BENCH_TAG"),
         "chunk": chunk,
@@ -419,10 +427,10 @@ def main():
                 )
             log(msg)
 
-        def gated_pass(dump_dir):
+        def gated_pass(dump_dir, logits=None):
             """Logits pass + KV dump of the current variant (prefix must already be filled under it)."""
             # ---- logits pass (LM head on the request rows) --------------------------------------------------------
-            if want_logits:
+            if want_logits if logits is None else logits:
                 sp = rows
                 top_ids, top_vals, positions, nlls = [], [], [], []
                 vocab = hf_config.vocab_size
@@ -536,6 +544,93 @@ def main():
                 result["dump_dir"] = dump_dir
                 log(f"KV dump [0, {total}) x {num_layers} layers -> {dump_dir} in {time.perf_counter()-t0:.1f} s")
                 json.dump(result, open(Path(dump_dir) / "bench_result.json", "w"), indent=1)
+
+        # ---- E1: eager ack modes + fixed-offset trace replay of the single request chunk ------------------------
+        if want_trace:
+            maybe_stop("trace")
+            assert new == chunk and prefix % ttnn.TILE_SIZE == 0, "E1 traces ONE full request chunk"
+            rounds = int(os.getenv("BENCH_TRACE_ROUNDS", "5"))
+            reps = int(os.getenv("BENCH_TRACE_REPS", "10"))
+            e1 = {"eager": {m: {"host_ms": [], "wall_ms": []} for m in ("sync", "event", "none")}}
+            for r in range(rounds + 1):  # round 0 = warm-up
+                for m in ("sync", "event", "none"):
+                    set_ack(m)
+                    t0 = time.perf_counter()
+                    run_span(prefix, total)
+                    t1 = time.perf_counter()
+                    sync()
+                    t2 = time.perf_counter()
+                    if r:
+                        e1["eager"][m]["host_ms"].append((t1 - t0) * 1e3)
+                        e1["eager"][m]["wall_ms"].append((t2 - t0) * 1e3)
+            for m, d in e1["eager"].items():
+                d["host_median_ms"] = statistics.median(d["host_ms"])
+                d["wall_median_ms"] = statistics.median(d["wall_ms"])
+                log(
+                    f"E1 eager ack={m:<5} wall median {d['wall_median_ms']:.1f} ms [min {min(d['wall_ms']):.1f}, "
+                    f"max {max(d['wall_ms']):.1f}]; host enqueue-return median {d['host_median_ms']:.1f} ms"
+                )
+            set_ack("none")
+            # Persistent chunk input: prefill_chunk embeds then deallocates its input; keep THIS one alive so the
+            # trace's embedding reads a stable address on every replay.
+            inp = runtime.make_chunk_input(tokens[prefix:total], prefix)
+            real_dealloc = ttnn.deallocate
+
+            def keep_input(t, *a, **k):
+                if t is inp:
+                    return None
+                return real_dealloc(t, *a, **k)
+
+            def fwd():
+                ttnn.deallocate = keep_input
+                try:
+                    runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=prefix, actual_end=total)
+                finally:
+                    ttnn.deallocate = real_dealloc
+
+            fwd()  # warm: identical arguments, so every program of the capture is already cached
+            sync()
+            t0 = time.perf_counter()
+            tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+            try:
+                fwd()
+            finally:
+                ttnn.end_trace_capture(mesh, tid, cq_id=0)
+            sync()
+            e1["capture_s"] = time.perf_counter() - t0
+            mv = ttnn.get_memory_view(mesh, ttnn.BufferType.TRACE)
+            e1["trace_bytes_per_device"] = mv.total_bytes_allocated_per_bank * mv.num_banks
+            ttnn.execute_trace(mesh, tid, cq_id=0, blocking=False)  # warm replay
+            ttnn.synchronize_device(mesh)
+            blk = []
+            for _ in range(reps):
+                t0 = time.perf_counter()
+                ttnn.execute_trace(mesh, tid, cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh)
+                blk.append((time.perf_counter() - t0) * 1e3)
+            # No back-to-back (unsynchronized) replays: the CCL ping-pong semaphore sequence is baked into the
+            # capture, so with an odd number of CCL calls per chunk two consecutive replays would hand the same
+            # semaphore to adjacent ops without the alternation eager mode guarantees. Every replay is fenced.
+            e1.update(trace_ms=blk, trace_median_ms=statistics.median(blk))
+            log(
+                f"E1 TRACE replay (fixed offsets {prefix}..{total}): median {statistics.median(blk):.1f} ms "
+                f"[min {min(blk):.1f}, max {max(blk):.1f}] over {reps} (each replay + synchronize_device); "
+                f"capture {e1['capture_s']:.1f} s; trace {e1['trace_bytes_per_device']/2**20:.1f} MiB/device"
+            )
+            D = e1["trace_median_ms"]
+            ev = e1["eager"]
+            log(
+                f"E1 SUMMARY D={D:.1f} ms; X_sync=T_sync-T_none={ev['sync']['wall_median_ms']-ev['none']['wall_median_ms']:.1f} ms; "
+                f"X_host=T_none-D={ev['none']['wall_median_ms']-D:.1f} ms; event-fence cost=T_event-T_none="
+                f"{ev['event']['wall_median_ms']-ev['none']['wall_median_ms']:.1f} ms; "
+                f"H(none)={ev['none']['host_median_ms']:.1f} ms"
+            )
+            if os.getenv("BENCH_TRACE_DUMP"):
+                gated_pass(os.getenv("BENCH_TRACE_DUMP"), logits=False)
+            ttnn.release_trace(mesh, tid)
+            real_dealloc(inp)
+            set_ack(ack_mode)
+            result["e1"] = e1
 
         finals = [x for x in os.getenv("BENCH_FINALS", "").split(",") if x]
         if finals:
