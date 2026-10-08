@@ -211,14 +211,16 @@ constexpr bool validate_tensor_shape_sub_bcast_col_custom_(const TensorShape& te
 }
 
 /**
- * @brief Whether a tile shape is supported by the block reduce_max_row unpack and math paths.
+ * @brief Whether a tile shape is supported by the Wormhole/Blackhole block reduce_max_row unpack inits.
  *
  * The unpacker steps between block tiles by y_dim faces (2 for 16x32, 4 for 32x32) of full 16-row
  * faces, and the math assumes full faces, so only a 2-face-column grid of full faces works - 32x32
  * (2x2 faces) or 16x32 (1x2 faces). One face column (16x16, 32x16) or short faces (face_r_dim < 16)
  * would read the wrong block tiles.
  *
- * One predicate for the compile-time and runtime unpack inits on every arch, instead of hand-synced copies.
+ * One predicate for the compile-time and runtime unpack inits on Wormhole and Blackhole, instead of
+ * hand-synced copies. Kept separate from @ref validate_tensor_shape_sub_bcast_col_custom_: the two ops
+ * accept the same shapes today, but their limits come from different code and may diverge.
  **/
 constexpr bool validate_tensor_shape_reduce_block_max_row_(const TensorShape& tensor_shape)
 {
