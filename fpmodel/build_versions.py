@@ -218,6 +218,8 @@ index = []
 for vid, meta in V.items():
     cv, _ = cv_block(CVPRED[vid])
     doc = dict(id=vid, commit=commit.get(vid), **meta, cv=cv, rules_cv=rules, device=DEV.get(vid, []))
+    if os.path.exists(f"{OUT}/coverage_{vid}.json"):  # written by coverage.py
+        doc["coverage"] = f"data/coverage_{vid}.json"
     json.dump(doc, open(f"{OUT}/{vid}.json", "w"), separators=(",", ":"))
     index.append(dict(id=vid, title=meta["title"], file=f"data/{vid}.json"))
 json.dump(dict(versions=index, latest="v6"), open(f"{OUT}/index.json", "w"), indent=1)
