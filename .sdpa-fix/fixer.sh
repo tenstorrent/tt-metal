@@ -147,6 +147,15 @@ slack_sig() {
 
 run_url() { echo "https://github.com/$REPO/actions/runs/$1"; }
 
+# Rules learned from past mistakes (LESSONS.md), filtered for one agent role
+# and appended to its prompt, so a correction made once reaches every run.
+lessons_for() {  # $1 role: triage | fix | judge | skeptic
+  local f="$FIX_HOME/LESSONS.md" out
+  [[ -f "$f" ]] || return 0
+  out=$(grep -E "^- \[[a-z,]*\b$1\b[a-z,]*\] " "$f" | sed -E 's/^- \[[a-z,]+\] /- /')
+  [[ -n "$out" ]] && printf '\n\n# Lessons from past mistakes (follow these)\n%s\n' "$out"
+}
+
 # Who owns a PR, for "by @author" labels on PRs that are not ours.
 pr_author() { gh pr view "$1" -R "$REPO" --json author --jq '.author.login' 2>/dev/null || true; }
 
@@ -578,7 +587,7 @@ $(job_log_excerpt "$jid")
     done < <(jq -r '.[] | "\(.id)\t\(.name)"' <<<"$new_failed")
     # Appended per batch: Phase C reads the latest failing run's excerpts here.
     printf '%s' "$logs" >> "$FIX_HOME/runs/$run_id.logs.txt"
-    prompt="$(cat "$FIX_HOME/prompts/triage.txt")
+    prompt="$(cat "$FIX_HOME/prompts/triage.txt")$(lessons_for triage)
 
 # Context
 Pipeline: $display ($workflow)
@@ -634,7 +643,7 @@ failure_log() {  # $1 failure json
 
 judge_candidate() {  # $1 failure json, $2 candidate text → verdict JSON (or nothing)
   local prompt out
-  prompt="$(cat "$FIX_HOME/prompts/judge.txt")
+  prompt="$(cat "$FIX_HOME/prompts/judge.txt")$(lessons_for judge)
 
 # Failure
 $(jq -r '"test: \(.test)\njob: \(.job) (\(.workflow))\ntriage summary (may contain guesses): \(.summary)"' <<<"$1")
@@ -654,7 +663,7 @@ $2"
 # only when the skeptic cannot.
 skeptic_candidate() {  # $1 failure json, $2 candidate text, $3 judge verdict → {refuted, reason}
   local prompt out
-  prompt="$(cat "$FIX_HOME/prompts/judge_skeptic.txt")
+  prompt="$(cat "$FIX_HOME/prompts/judge_skeptic.txt")$(lessons_for skeptic)
 
 # Claim
 $(jq -r .reason <<<"$3")
@@ -880,7 +889,7 @@ while IFS= read -r grp; do
   hint=$(printf '%s\n' "${PIPELINES[@]}" | awk -F'|' -v w="$workflow" '$1==w {print $3}')
   pipe_name=$(printf '%s\n' "${PIPELINES[@]}" | awk -F'|' -v w="$workflow" '$1==w {print $2}')
 
-  prompt="$(cat "$FIX_HOME/prompts/fix.txt")
+  prompt="$(cat "$FIX_HOME/prompts/fix.txt")$(lessons_for fix)
 
 # Failure context
 Pipeline workflow: $workflow

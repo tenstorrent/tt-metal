@@ -182,7 +182,14 @@ Failure log excerpt (truncated to last ~40k chars):
 $logs
 EOF
 )
-  prompt="$(cat "$PROMPT_TEMPLATE")
+  # Rules learned from past mistakes, shared with the autofix bot
+  # (~/.sdpa-fix/LESSONS.md, lines tagged "watcher").
+  local lessons=""
+  if [[ -f "$HOME/.sdpa-fix/LESSONS.md" ]]; then
+    lessons=$(grep -E '^- \[[a-z,]*\bwatcher\b[a-z,]*\] ' "$HOME/.sdpa-fix/LESSONS.md" | sed -E 's/^- \[[a-z,]+\] /- /')
+    [[ -n "$lessons" ]] && lessons=$'\n\n# Lessons from past mistakes (follow these)\n'"$lessons"
+  fi
+  prompt="$(cat "$PROMPT_TEMPLATE")$lessons
 
 # Context
 $ctx"

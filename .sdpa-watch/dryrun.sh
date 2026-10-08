@@ -53,7 +53,13 @@ Commits since last analyzed run: (dry run — not tracked)
 Failure log excerpt (truncated to last ~40k chars):
 $logs"
 
-prompt="$(cat "$PROMPT_TEMPLATE")
+# Same lessons as watch.sh (~/.sdpa-fix/LESSONS.md, lines tagged "watcher").
+lessons=""
+if [[ -f "$HOME/.sdpa-fix/LESSONS.md" ]]; then
+  lessons=$(grep -E '^- \[[a-z,]*\bwatcher\b[a-z,]*\] ' "$HOME/.sdpa-fix/LESSONS.md" | sed -E 's/^- \[[a-z,]+\] /- /' || true)
+  [[ -n "$lessons" ]] && lessons=$'\n\n# Lessons from past mistakes (follow these)\n'"$lessons"
+fi
+prompt="$(cat "$PROMPT_TEMPLATE")$lessons
 
 # Context
 $ctx"
