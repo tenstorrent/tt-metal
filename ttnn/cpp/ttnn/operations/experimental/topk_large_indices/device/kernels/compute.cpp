@@ -356,8 +356,8 @@ FORCE_INLINE void reduce_split_row(
     }
 }
 
-// A K = 2048 row of more than 32 chunks, every segment of two or more chunks split as above. A later segment needs
-// tiles 0 to 5, so the unfused accumulator (tiles 0 to 3) waits in acc_cb's L1 until its merge with the segment.
+// A K = 2048 row of more than 32 chunks, its segments split as above. A later segment needs tiles 0 to 5, so the
+// unfused accumulator (tiles 0 to 3) waits in acc_cb's L1 until its merge with the segment.
 template <uint32_t K>
 FORCE_INLINE void reduce_split_segmented_row(
     CircularBuffer& input, uint32_t acc_cb, uint32_t indices_cb, uint32_t num_chunks, uint32_t tail_elements) {
@@ -366,6 +366,9 @@ FORCE_INLINE void reduce_split_segmented_row(
     constexpr uint32_t segment_capacity = 32;
     constexpr uint32_t accumulator_slot = 0;
     constexpr uint32_t segment_slot = 2 * tiles_per_sequence;
+    constexpr uint32_t chunk_slot = segment_slot + tiles_per_sequence;
+    // A shorter last segment runs on one thread: the accumulator's two copies cost more than its split saves.
+    constexpr uint32_t min_split_later_chunks = 18;
     const uint32_t input_cb = input.get_cb_id();
     const uint32_t num_segments = (num_chunks + segment_capacity - 1) / segment_capacity;
     const uint32_t acc_addr = get_tile_address(acc_cb, 0);
@@ -375,10 +378,18 @@ FORCE_INLINE void reduce_split_segmented_row(
             num_chunks - first_chunk < segment_capacity ? num_chunks - first_chunk : segment_capacity;
         const uint32_t seg_tail = first_chunk + seg_chunks == num_chunks ? tail_elements : K;
         const bool later = segment != 0;
+        const bool split = !later || seg_chunks >= min_split_later_chunks;
 
-        if (seg_chunks == 1) {
-            sort_fused_chunk<K, true>(input, segment_slot, seg_tail, false, 0);
-            topk_xl_rebuild<K, true>(segment_slot, true);
+        if (!split) {
+            sort_fused_chunk<K, true>(input, segment_slot, seg_chunks == 1 ? seg_tail : K, false, 0);
+            if (seg_chunks == 1) {
+                topk_xl_rebuild<K, true>(segment_slot, true);
+            }
+            for (uint32_t chunk = 1; chunk < seg_chunks; ++chunk) {
+                sort_fused_chunk<K, false>(input, chunk_slot, chunk + 1 == seg_chunks ? seg_tail : K, true, chunk);
+                topk_xl_merge<K, true>(segment_slot);
+                topk_xl_rebuild<K, true>(segment_slot, chunk + 1 == seg_chunks);
+            }
         } else {
             if (later) {
 #ifdef TRISC_MATH
@@ -434,7 +445,7 @@ FORCE_INLINE void reduce_split_segmented_row(
         }
 
         if (later) {
-            if (seg_chunks == 1) {
+            if (!split) {
                 topk_xl_separate_indices_row_major_global_init();
                 topk_xl_separate_indices_row_major_global_base<K>(segment_slot, segment * (segment_capacity * K));
             }
