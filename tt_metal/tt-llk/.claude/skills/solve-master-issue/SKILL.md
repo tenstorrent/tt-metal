@@ -89,7 +89,7 @@ file(s), claimed defect, arch(es), what hardware a test needs, and an initial cl
 | class | meaning |
 |---|---|
 | `local` | testable on this box |
-| `arch-other` | needs an arch/board not here — compile-only here + the CI lane that has the board (§3) |
+| `arch-other` | needs an arch/board not here — compile-only here + probe/fix A/B on the CI lane that has the board (§3) |
 | `test-only` | the issue asks for coverage, not a code fix — deliverable is the test; evidence = it detects an injected regression |
 | `assert-only` / `api-hardening` | no runtime behavior change; look for a test that *can* observe it before parking |
 | `race/timing` | needs a forced repro (`perturb` skill, NOP injection) — but see the repro gate |
@@ -152,12 +152,36 @@ Synthetic mechanism-only kernels and injection-only failures are evidence, not a
 
 **Before parking an item as "can't repro", try every feasible path:**
 - an existing full build on the box (a gtest target may already exist in another worktree);
-- the other arch's code path compiles here — compile-only test + the CI lane that has that board
-  (`LLK e2e Tests` runs WH+BH; tt-llk tests are auto-selected by llk-smoke on both arches);
+- the other arch's code path compiles here — compile-only test here, then **CI silicon as the
+  missing board** (below); a board you don't have is a slower gate, not a reason to park;
 - data that actually hits the edge (denormals, bounds around 2^31, odd tile dims, max/min pads);
 - a seed sweep / repeated runs for nondeterministic bugs; the `perturb` skill for timing;
 - a test that observes the assert-only/API-only change at compile time (static_assert, a
   `requires`-style check), if the repo has that idiom.
+
+**CI silicon as the missing board.** When the test needs a board this box lacks, the A/B runs on a
+CI runner and the gate still holds — both arms, not just pass-with:
+1. **Find the lane.** `grep -l '<sku label>' .github/workflows/*.yaml` for the board's `runs-on`
+   label (`wh_n150`, `wh_n300`, `bh_p150b`, `wh_galaxy`, …), keep the workflows that have
+   `workflow_dispatch`, and read their inputs: the job you need is usually behind an opt-in flag, and
+   a bare dispatch runs nothing. Known lanes: `Nightly tt-metal L2 tests` with `run_llk_unit_tests`
+   (`unit_tests_llk` on wh_n150 + wh_n300), `run_cpp_tests`, `run_wormhole` / `run_blackhole`;
+   `LLK e2e Tests` (tt-llk pytest on wh_n150 + bh_p150b; its "failure" conclusion is a junit-report
+   action crash unless a test job failed — read the job list).
+2. **Two branches.** Fix branch = test + fix. **Probe branch** = the same test on shipped code
+   (`<me>/probe-<item>-shipped`), pushed with no PR. Keep the split as `item<N>-test-only.patch` /
+   `item<N>-fix-only.patch` in the ledger dir.
+3. **Before spending the round**, compile the other arch's header in the harness here and check
+   whatever is arch-neutral on the present board (golden layout, test plumbing), so the ~1 h CI round
+   is not lost to a compile error or a wrong golden.
+4. **Dispatch both arms at once** with `dispatch.sh`, record both run ids in the ledger's pending
+   table, arm a watcher, and advance another item (§2). Fail-without = the probe run fails or hangs
+   on the target SKU(s) for the bug's reason; pass-with = the fix run passes and the lane's full
+   suite stays green.
+5. **Evidence and cleanup.** The PR body names the SKUs, links both runs, and says no local board
+   existed. Delete the probe branch once the fix run is recorded (`git push origin --delete`).
+Another box with the board, if one is reachable, is the same thing with the device lock (§0) on that
+host — but CI is the default because it leaves a link anyone can check.
 
 **Fix:** `mkwt.sh <issue>-<item> <me>/<branch>`. Minimal fix derived from the codebase's correct
 sibling usage. **Check the sibling arch** for the same defect — same line is not the same bug, but a
@@ -341,7 +365,8 @@ Record it, update the PR body's "tested on" section if it changed, and leave the
 
 Whenever the scheduler finds nothing else unblocked, re-read each parked item with fresh eyes against
 §3's list. Things learned on other items (a build now exists, a test idiom found, a CI lane that has
-the other arch) often unblock them.
+the other arch, a probe-branch A/B already proven on one item) often unblock them. An item parked
+only because its board is not on this box is not parked — it is waiting on a CI round (§3).
 
 ## 8. Final report (and the end state of the ledger)
 
