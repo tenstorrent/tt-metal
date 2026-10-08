@@ -8,6 +8,7 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_quasar_matmul_unified_subblock.cpp
     test_to_and_from_json.cpp
     test_sliding_window_infra.cpp
+    kda/test_value_block_distribution.cpp
     test_async_runtime.cpp
     conv/test_conv2d.cpp
     test_multi_cq_multi_dev.cpp
