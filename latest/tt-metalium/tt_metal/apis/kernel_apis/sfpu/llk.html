@@ -1012,7 +1012,8 @@ may be <code class="docutils literal notranslate"><span class="pre">All</span></
 </div>
 <p>Scale <code class="docutils literal notranslate"><span class="pre">in</span></code> by 2^``scale``. You may select an <code class="docutils literal notranslate"><span class="pre">LdexpMode::Fast</span></code>,
 which for the vector case can be slightly faster at the expense of not
-dealing with exponent overflow or underflow.</p>
+dealing with exponent overflow or underflow. Values of <code class="docutils literal notranslate"><span class="pre">scale</span></code>
+outside of [-127,127] produce unspecified results.</p>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="n">vUInt</span><span class="w"> </span><span class="nf">shft</span><span class="p">(</span><span class="n">vUInt</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">amt</span><span class="p">,</span><span class="w"> </span><span class="n">ShiftMode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ShiftMode</span><span class="o">::</span><span class="n">Logical</span><span class="p">);</span>
 <span class="n">vUInt</span><span class="w"> </span><span class="nf">shft</span><span class="p">(</span><span class="n">vUInt</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="n">vInt</span><span class="w"> </span><span class="n">amt</span><span class="p">,</span><span class="w"> </span><span class="n">ShiftMode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ShiftMode</span><span class="o">::</span><span class="n">Logical</span><span class="p">);</span>
@@ -1186,7 +1187,9 @@ to convey type information implicitly to the <code class="docutils literal notra
 routine.  It may be ignored, with the loss of consistency checking, if
 one uses the cookieless evaluator.</p>
 <p>Note that the 8- and 16-bit formats use a bespoke representation, and
-the 8 bit format in particular has a range of (-2.0, +2.0).</p>
+the 8 bit format in particular has a range of (-2.0, +2.0). Also, as
+its zero representation coincides with a small negative value, small
+values below that threshold are flushed to zero to avoid a discontinuity.</p>
 <p>On Quasar, use of these routines conflicts with use of the <code class="docutils literal notranslate"><span class="pre">vConst</span></code>
 constants.</p>
 <div class="highlight-c++ notranslate">
