@@ -28,6 +28,13 @@ void check_input_tensor(const Tensor& t, std::string_view name, const Tensor& re
         name);
     TT_FATAL(
         t.logical_shape().rank() == 4, "modulated_deform_im2col: {} must be rank 4, got {}", name, t.logical_shape());
+    // The kernels address one page per row and read its first bytes, so a row must not carry padding.
+    TT_FATAL(
+        t.padded_shape()[-1] == t.logical_shape()[-1],
+        "modulated_deform_im2col: {} rows must not be padded, got logical {} padded {}",
+        name,
+        t.logical_shape(),
+        t.padded_shape());
 }
 
 }  // namespace
@@ -65,6 +72,19 @@ Im2colShapes derive_shapes(
     const int64_t padded_w = static_cast<int64_t>(s.in_w) + 2 * attrs.padding[1];
     TT_FATAL(
         padded_h >= span_h && padded_w >= span_w, "modulated_deform_im2col: the kernel does not fit the padded input");
+    const uint32_t span_limit = kOffsetClampPixels;
+    TT_FATAL(
+        s.in_h <= span_limit && s.in_w <= span_limit && attrs.padding[0] <= span_limit &&
+            attrs.padding[1] <= span_limit && span_h <= span_limit && span_w <= span_limit,
+        "modulated_deform_im2col: input size, padding and dilated kernel span must each be at most {}, got input "
+        "{}x{}, padding {}x{}, span {}x{}",
+        span_limit,
+        s.in_h,
+        s.in_w,
+        attrs.padding[0],
+        attrs.padding[1],
+        span_h,
+        span_w);
     s.out_h = static_cast<uint32_t>((padded_h - span_h) / attrs.stride[0] + 1);
     s.out_w = static_cast<uint32_t>((padded_w - span_w) / attrs.stride[1] + 1);
     s.kernel_positions = k_h * k_w;

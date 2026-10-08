@@ -7,7 +7,6 @@
 #include <string>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -24,11 +23,6 @@ using namespace tt::tt_metal;
 namespace {
 
 constexpr std::string_view kKernelDir = "ttnn/cpp/ttnn/operations/experimental/modulated_deform_im2col/device/kernels/";
-
-uint32_t aligned_page_size(uint32_t raw_bytes, BufferType buffer_type) {
-    const uint32_t alignment = buffer_type == BufferType::DRAM ? hal::get_dram_alignment() : hal::get_l1_alignment();
-    return tt::round_up(raw_bytes, alignment);
-}
 
 }  // namespace
 
@@ -51,11 +45,10 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     const auto tile_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
     const uint32_t tile_nbytes = tt::tile_size(tile_format);
 
-    const uint32_t input_stick_nbytes = input.buffer()->page_size();
-    const uint32_t offset_stick_nbytes =
-        aligned_page_size(2 * s.kernel_positions * offset.element_size(), offset.buffer()->buffer_type());
-    const uint32_t mask_stick_nbytes =
-        aligned_page_size(s.kernel_positions * mask.element_size(), mask.buffer()->buffer_type());
+    // Page strides as the buffers lay the pages out; validation guarantees no row padding.
+    const uint32_t input_page_nbytes = input.buffer()->aligned_page_size();
+    const uint32_t offset_page_nbytes = offset.buffer()->aligned_page_size();
+    const uint32_t mask_page_nbytes = mask.buffer()->aligned_page_size();
 
     const auto compute_grid = input.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, blocks_per_core_1, blocks_per_core_2] =
@@ -81,8 +74,8 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
         });
     };
     // Reader-only arenas, one stick per row of a block.
-    push_cb(offset_arena_cb, TILE_ROWS, offset_stick_nbytes);
-    push_cb(mask_arena_cb, TILE_ROWS, mask_stick_nbytes);
+    push_cb(offset_arena_cb, TILE_ROWS, offset_page_nbytes);
+    push_cb(mask_arena_cb, TILE_ROWS, mask_page_nbytes);
     // The four corners of a kernel position, row-major in tile-sized pages, double-buffered so
     // the reader lands the next position while compute tilizes this one.
     push_cb(corner_block_cb, 2 * CORNERS * channel_tiles, tile_nbytes);
@@ -109,9 +102,10 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
         attrs.padding[1],
         attrs.dilation[0],
         attrs.dilation[1],
-        input_stick_nbytes,
-        offset_stick_nbytes,
-        mask_stick_nbytes,
+        input_page_nbytes,
+        offset_page_nbytes,
+        mask_page_nbytes,
+        kOffsetClampPixels,
     };
     TensorAccessorArgs(*input.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*offset.buffer()).append_to(reader_ct);

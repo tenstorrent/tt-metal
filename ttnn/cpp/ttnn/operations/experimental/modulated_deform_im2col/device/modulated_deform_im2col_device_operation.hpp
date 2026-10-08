@@ -16,6 +16,11 @@
 
 namespace ttnn::operations::experimental::modulated_deform_im2col {
 
+// The reader computes sample positions in Q16.16 (range +-32768) and saturates offsets at this
+// many pixels. Input sizes, padding and the kernel span are validated below it, so every
+// coordinate stays in range and a saturated offset still lands outside the input.
+constexpr uint32_t kOffsetClampPixels = 4096;
+
 // Problem geometry, derived once from the tensor shapes and the conv attributes
 // and shared by validation, the output spec and the program factory.
 struct Im2colShapes {

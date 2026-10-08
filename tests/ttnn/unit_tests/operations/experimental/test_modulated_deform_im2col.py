@@ -32,6 +32,16 @@ def reference_im2col(x, offset, mask, kernel_size, stride, padding, dilation):
     return torch.cat(columns, dim=-1).reshape(batch * out_h * out_w, -1)
 
 
+def assert_close(expected, actual):
+    """PCC, plus the mean error along the sign of the reference: PCC cannot see a uniform scale
+    error, such as coefficients truncated instead of rounded to bfloat16 (about -0.2%)."""
+    passed, pcc = comp_pcc(expected, actual, 0.999)
+    assert passed, f"PCC {pcc}"
+    assert torch.isfinite(actual).all()
+    bias = ((actual - expected) * expected.sign()).mean() / expected.abs().mean()
+    assert abs(bias) < 1e-3, f"relative bias {bias:.2e}"
+
+
 def run_im2col(device, batch, in_h, in_w, channels, kernel_size, stride, padding, dilation, offset_scale):
     torch.manual_seed(0)
     k_h, k_w = kernel_size
@@ -68,6 +78,7 @@ def run_im2col(device, batch, in_h, in_w, channels, kernel_size, stride, padding
         (1, 9, 11, 32, (3, 3), (2, 2), (1, 1), (1, 1), 1.0),
         (1, 12, 12, 32, (3, 3), (1, 1), (2, 2), (2, 2), 1.0),
         (1, 6, 10, 96, (1, 3), (1, 1), (0, 1), (1, 1), 1.0),
+        (1, 24, 24, 32, (3, 3), (1, 1), (1, 1), (1, 1), 20.0),  # many corners far outside
         (6, 58, 100, 256, (3, 3), (1, 1), (1, 1), (1, 1), 4.0),  # BEVFormer-base layer3
         (6, 29, 50, 512, (3, 3), (1, 1), (1, 1), (1, 1), 4.0),  # BEVFormer-base layer4
     ],
@@ -78,10 +89,7 @@ def test_modulated_deform_im2col(
     x, offset, mask, columns, _ = run_im2col(
         device, batch, in_h, in_w, channels, kernel_size, stride, padding, dilation, offset_scale
     )
-    expected = reference_im2col(x, offset, mask, kernel_size, stride, padding, dilation)
-    passed, pcc = comp_pcc(expected, columns, 0.999)
-    assert passed, f"PCC {pcc}"
-    assert torch.isfinite(columns).all()
+    assert_close(reference_im2col(x, offset, mask, kernel_size, stride, padding, dilation), columns)
 
 
 def test_modulated_deform_im2col_conv(device):
