@@ -917,6 +917,14 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         (params.is_large_kernel && return_indices) || indexes_32_bit       // dst_full_sync_en
     );
 
+    // The pool's only FPU op is its column reduce; a power-of-two scaler keeps HiFi4's bits at HiFi2 on Blackhole.
+    auto math_fidelity = get_math_fidelity(device_compute_kernel_config);
+    const uint32_t scalar_bf16 = bf16_scalar >> 16;
+    if (device_arch == tt::ARCH::BLACKHOLE && params.is_avg_pool && one_scalar_per_core && (scalar_bf16 & 0x7F) == 0 &&
+        (scalar_bf16 & 0x7F80) != 0 && math_fidelity > tt::tt_metal::MathFidelity::HiFi2) {
+        math_fidelity = tt::tt_metal::MathFidelity::HiFi2;
+    }
+
     const auto pool_defines_map = get_defines(pool_type);
     KernelDescriptor::Defines compute_defines(pool_defines_map.begin(), pool_defines_map.end());
 
@@ -931,7 +939,7 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
     compute_desc.compile_time_args = std::move(compute_ct_args);
     compute_desc.defines = std::move(compute_defines);
     compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = get_math_fidelity(device_compute_kernel_config),
+        .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
         .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config),
         .math_approx_mode = false,
