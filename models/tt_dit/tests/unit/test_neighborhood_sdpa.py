@@ -8,6 +8,8 @@ index formula already pinned to `neighborhood_permute` by test_neighborhood_perm
 failure here is the OP rather than the ordering.
 """
 
+import math
+
 import pytest
 import torch
 
@@ -723,6 +725,50 @@ def test_key_phase_pins_brick_and_gather(monkeypatch):
                 query_origin=low,
             )
             assert plan["gather_brick_count"] == 112, (h_index, w_index, plan["gather_bricks"])
+
+
+@pytest.mark.parametrize("time_extent", [8, 9])
+def test_key_phase_gather_index_matches_rebrick(time_extent):
+    """The key-phase gather index reproduces to_natural, the phased cut, the zero frames and
+    to_bricked on every frame a window can reach; the zero frames read real sites."""
+    from models.tt_dit.layers.neighborhood_attention_plan import halo_sites, key_phase_gather_index, key_phase_geometry
+
+    volume, context_window, brick = (time_extent, 24, 24), (11, 11, 11), (2, 4, 4)
+    owned_height, owned_width = 8, 8
+    halo = halo_sites(context_window[2], brick[2])
+    resident = (time_extent, owned_height + 2 * halo, owned_width + 2 * halo)
+    phased, (front, low_h, low_w) = key_phase_geometry(volume, context_window, brick, owned_height, owned_width)
+    cut_h, cut_w = halo - low_h, halo - low_w
+    back = phased[0] - front - time_extent
+    assert front == 1 and back == (1 if time_extent % 2 == 0 else 0)
+
+    natural = torch.randn(1, math.prod(resident), 1, 3)
+    resident_bricked = to_bricked(natural, bricked_index_table(resident, brick))
+    cut = natural.reshape(1, *resident, 3)[:, :, cut_h : cut_h + phased[1], cut_w : cut_w + phased[2]]
+    padded = torch.cat(
+        [torch.zeros(1, front, *phased[1:], 3), cut, torch.zeros(1, back, *phased[1:], 3)], dim=1
+    ).reshape(1, -1, 1, 3)
+    expected = to_bricked(padded, bricked_index_table(phased, brick))
+
+    index = key_phase_gather_index(resident, phased, brick, front, cut_h, cut_w).long()
+    gathered = resident_bricked[:, index]
+    real = bricked_index_table(phased, brick) // (phased[1] * phased[2])
+    real = (real >= front) & (real < front + time_extent)
+    assert torch.equal(gathered[:, real], expected[:, real])
+    assert torch.all(gathered[:, ~real].abs().sum(-1) > 0)
+    assert int(index.max()) < resident_bricked.shape[1]
+
+
+def test_key_phase_gather_index_production_geometry():
+    """1080p stage 5: 146 x 80 x 72 phased sites, every one a real row of the 145 x 84 x 76 resident."""
+    from models.tt_dit.layers.neighborhood_attention_plan import key_phase_gather_index, key_phase_geometry
+
+    phased, (front, low_h, low_w) = key_phase_geometry((145, 272, 480), (11, 11, 11), (2, 4, 4), 68, 60)
+    resident = (145, 84, 76)
+    index = key_phase_gather_index(resident, phased, (2, 4, 4), front, 8 - low_h, 8 - low_w)
+    assert index.numel() == math.prod(phased) == 146 * 80 * 72
+    assert int(index.min()) >= 0 and int(index.max()) < 73 * 21 * 19 * SITES_PER_BRICK
+    assert index.unique().numel() == 145 * 80 * 72
 
 
 @pytest.mark.parametrize("flag, expected", [(None, True), ("1", True), ("0", False)])

@@ -39,7 +39,7 @@ import torch
 import ttnn
 
 from ..utils.tensor import from_torch
-from .neighborhood_permute import SITES_PER_BRICK
+from .neighborhood_permute import SITES_PER_BRICK, brick_grid
 from .neighborhood_reference import context_window_origin
 
 # Cap on one tile group's [Nq, Nk] score block; the tile search shrinks axes until the product fits.
@@ -748,6 +748,38 @@ def lean_layout_enabled() -> bool:
     tensor's layout label: V's head split, the tilize between halo exchange and key-phase rebrick,
     and the output's untilize. On by default, off with ``DIFFVAE_S5_LEAN=0``; the values are unchanged."""
     return os.environ.get("DIFFVAE_S5_LEAN") != "0"
+
+
+def gather_rephase_enabled() -> bool:
+    """Whether the key-phase rebrick of K/V is one row gather (``ttnn.embedding`` over a cached
+    index) instead of to_natural, slice, zero-frame concat, to_bricked and tilize. Opt-in with
+    ``DIFFVAE_NA_GATHER_REPHASE=1``."""
+    return os.environ.get("DIFFVAE_NA_GATHER_REPHASE") == "1"
+
+
+def key_phase_gather_index(resident, phased, brick, front, cut_h, cut_w) -> torch.Tensor:
+    """For each site of the key-phase bricked layout (``phased`` volume), its row in the query-grid
+    bricked ``resident`` tensor.
+
+    Phased site ``(t, h, w)`` is resident site ``(t - front, h + cut_h, w + cut_w)``. The ``front``
+    zero frames and any past the resident's last frame have no source; they take the nearest real
+    frame instead, which is exact because no window reaches them, so their keys are always masked.
+    """
+    assert math.prod(brick) == SITES_PER_BRICK
+    brick_t, brick_h, brick_w = brick
+    _, phased_bricks_h, phased_bricks_w = brick_grid(phased, brick)
+    _, resident_bricks_h, resident_bricks_w = brick_grid(resident, brick)
+    site = torch.arange(math.prod(brick_grid(phased, brick)) * SITES_PER_BRICK, dtype=torch.int64)
+    inner, brick_index = site % SITES_PER_BRICK, site // SITES_PER_BRICK
+    t = (brick_index // (phased_bricks_h * phased_bricks_w)) * brick_t + inner // (brick_h * brick_w)
+    h = (brick_index // phased_bricks_w % phased_bricks_h) * brick_h + inner // brick_w % brick_h
+    w = (brick_index % phased_bricks_w) * brick_w + inner % brick_w
+    t = (t - front).clamp(0, resident[0] - 1)
+    h, w = h + cut_h, w + cut_w
+    assert int(h.max()) < resident[1] and int(w.max()) < resident[2]
+    resident_brick = ((t // brick_t) * resident_bricks_h + h // brick_h) * resident_bricks_w + w // brick_w
+    resident_inner = ((t % brick_t) * brick_h + h % brick_h) * brick_w + w % brick_w
+    return (resident_brick * SITES_PER_BRICK + resident_inner).to(torch.int32)
 
 
 def key_phase_geometry(volume, context_window, brick, owned_height, owned_width):
