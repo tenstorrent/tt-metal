@@ -1372,6 +1372,27 @@ def exp_ring_joint_scaled_dot_product_attention_golden(*args, **kwargs):
     return _ring_joint_golden(*args, **kwargs)
 
 
+def _ring_mla_split_kv_global_order(input_tensor_kv, query_length, kv_sources):
+    """Reorder a split-KV cache from source-major shard order into global sequence order.
+
+    Split KV stores global region g, of query_length // kv_sources rows, on source g % kv_sources
+    at local row (g // kv_sources) * region. Composed shards hold whole sources back to back.
+    """
+    import torch
+
+    if query_length % kv_sources != 0:
+        raise ValueError(f"Split-KV query length {query_length} is not divisible by {kv_sources} KV sources")
+    region = query_length // kv_sources
+    rows = input_tensor_kv.shape[-2]
+    if rows % kv_sources != 0 or (rows // kv_sources) % region != 0:
+        raise ValueError(f"Split-KV cache of {rows} rows is not {kv_sources} sources of whole {region}-row regions")
+    source_rows = rows // kv_sources
+    regions = torch.arange(rows // region)
+    starts = (regions % kv_sources) * source_rows + (regions // kv_sources) * region
+    index = (starts.unsqueeze(1) + torch.arange(region)).reshape(-1).to(input_tensor_kv.device)
+    return input_tensor_kv.index_select(-2, index)
+
+
 def ring_mla_golden(
     input_tensor_q,
     input_tensor_kv,
@@ -1385,8 +1406,14 @@ def ring_mla_golden(
     kv_actual_isl_tensor=None,
     kv_cache_num_layers=None,
     kv_cache_layer_idx=None,
+    _ttnn_ring_mla_kv_sources=None,
     **_,
 ):
+    # Split KV: Q composes to the whole chunk in sequence order, while KV composes source-major.
+    if _ttnn_ring_mla_kv_sources is not None:
+        input_tensor_kv = _ring_mla_split_kv_global_order(
+            input_tensor_kv, input_tensor_q.shape[-2], int(_ttnn_ring_mla_kv_sources)
+        )
     input_tensor_kv, _, actual_kv_length = _ring_runtime_cache_selection(
         input_tensor_kv,
         input_tensor_kv,
