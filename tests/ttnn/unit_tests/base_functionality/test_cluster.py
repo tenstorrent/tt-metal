@@ -57,7 +57,8 @@ def test_cluster_ethernet_train_speed_p300():
             link = f"Device {device_id} channel {eth_channel}"
             assert speed in BH_ETH_SPEEDS_GBPS, f"{link}: speed {speed} not in {BH_ETH_SPEEDS_GBPS}"
             assert target is not None, f"{link}: no target speed"
-            assert speed <= target, f"{link}: speed {speed} > target {target}"
+            # Target 0 requests auto-train, so it does not bound the trained speed
+            assert target == 0 or speed <= target, f"{link}: speed {speed} > target {target}"
             up_links.append((device_id, eth_channel, speed))
 
     assert up_links, "No ethernet links up on P300"
