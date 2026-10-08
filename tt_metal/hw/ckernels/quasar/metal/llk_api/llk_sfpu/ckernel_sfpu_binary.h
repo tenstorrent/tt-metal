@@ -36,7 +36,7 @@ namespace sfpu {
  * @tparam TILE_SHAPE: destination tile shape used to calculate operand offsets
  */
 template <
-    bool APPROXIMATION_MODE /*maybe_unused*/,
+    [[maybe_unused]] bool APPROXIMATION_MODE,
     BinaryOp BINOP,
     bool is_fp32_dest_acc_en,
     DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
@@ -57,7 +57,7 @@ inline void calculate_sfpu_binary(
             using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>>;
             constexpr bool round_to_bf16 = !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
             using Output = SfpuOperand<SfpuReg::Dest, DestBf16RneFormat<round_to_bf16>>;
-            calculate_binary_operands<AddMath, 1>(
+            calculate_binary_operands<AddFloatMath, 1>(
                 Operand{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
                 Operand{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)},
                 Output{static_cast<int>(dst_index_out * dst_tile_size_sfpi)});
@@ -116,7 +116,7 @@ inline void calculate_sfpu_binary(
  * @tparam ISSUE: Issue mechanism, values = <Sfpi>.
  */
 template <sfpi::DataLayout LAYOUT, SfpuIssue ISSUE = SfpuIssue::Sfpi>
-using AddSrcs = SrcsBinary<AddMath, LAYOUT, resolve_sfpu_issue<ISSUE, false /*HAS_LOADMACRO*/>()>;
+using AddSrcs = SrcsBinary<AddFloatMath, LAYOUT, resolve_sfpu_issue<ISSUE, false /*HAS_LOADMACRO*/>()>;
 
 /**
  * @brief Initialisation hook for binary SFPU kernels.
@@ -125,7 +125,7 @@ using AddSrcs = SrcsBinary<AddMath, LAYOUT, resolve_sfpu_issue<ISSUE, false /*HA
  * @tparam APPROXIMATION_MODE: forwarded to the op-specific init
  * @tparam BINOP: selects which op's init to run
  */
-template <bool APPROXIMATION_MODE /*maybe_unused*/, BinaryOp BINOP>
+template <[[maybe_unused]] bool APPROXIMATION_MODE, BinaryOp BINOP>
 inline void sfpu_binary_init() {
     if constexpr (BINOP == BinaryOp::DIV) {
         // DIV always runs the Newton-refined _sfpu_reciprocal_<2>, so the Newton constant is

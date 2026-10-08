@@ -144,7 +144,7 @@ struct SfpuSrcsBinaryOp {
  *
  * Only the Sfpi specialization exists today; any other pair fails to compile.
  *
- * @tparam MATH: Math policy, e.g. AddMath.
+ * @tparam MATH: Math policy, e.g. AddFloatMath.
  * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
  *         source formats must match.
  * @tparam ISSUE: Issue mechanism, values = <Sfpi>; resolve it with @ref resolve_sfpu_issue.

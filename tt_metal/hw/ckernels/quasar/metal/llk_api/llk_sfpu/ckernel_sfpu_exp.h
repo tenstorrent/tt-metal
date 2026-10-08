@@ -307,9 +307,9 @@ using ExpAlgo = std::conditional_t<(!FP32_RESULT || APPROXIMATION_MODE), ExpHwLu
 template <
     bool APPROXIMATION_MODE,
     bool EN_32BIT_DEST,
-    bool SCALE_EN /*maybe_unused*/ = false,
+    [[maybe_unused]] bool SCALE_EN = false,
     int ITERATIONS = SFPU_ITERATIONS,
-    bool CLAMP_NEGATIVE /*maybe_unused*/ = true>
+    [[maybe_unused]] bool CLAMP_NEGATIVE = true>
 void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     static_assert(SCALE_EN == false, "Non-default SCALE_EN not supported in Quasar exp");
     static_assert(CLAMP_NEGATIVE == true, "Non-default CLAMP_NEGATIVE not supported in Quasar exp");
@@ -326,10 +326,10 @@ void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_f
 }
 
 template <
-    bool APPROXIMATION_MODE /*maybe_unused*/,
-    std::uint32_t scale /*maybe_unused*/ = 0x3F800000,
-    bool CLAMP_NEGATIVE /*maybe_unused*/ = true,
-    bool EN_32BIT_DEST /*maybe_unused*/>
+    [[maybe_unused]] bool APPROXIMATION_MODE,
+    [[maybe_unused]] std::uint32_t scale = 0x3F800000,
+    [[maybe_unused]] bool CLAMP_NEGATIVE = true,
+    [[maybe_unused]] bool EN_32BIT_DEST>
 void exp_init() {
     static_assert(scale == 0x3F800000, "Non-default scale not supported in Quasar exp");
     static_assert(CLAMP_NEGATIVE == true, "Non-default CLAMP_NEGATIVE not supported in Quasar exp");

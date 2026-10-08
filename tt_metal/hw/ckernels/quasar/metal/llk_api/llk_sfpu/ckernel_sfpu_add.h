@@ -16,7 +16,7 @@ namespace sfpu {
 
 /// Math policy for ADD: a + b. Shared by the Dest and SrcS paths via @ref calculate_binary_operands;
 /// any rounding is the output operand's store policy.
-struct AddMath {
+struct AddFloatMath {
     sfpi_inline static sfpi::vFloat apply(sfpi::vFloat a, sfpi::vFloat b) { return a + b; }
 };
 
@@ -50,10 +50,10 @@ struct AddIntMath {
  * @tparam TILE_SHAPE: Destination tile shape used to calculate operand offsets.
  */
 template <
-    bool APPROXIMATION_MODE /*maybe_unused*/,
+    [[maybe_unused]] bool APPROXIMATION_MODE,
     int ITERATIONS = SFPU_ITERATIONS,
     DataFormat FMT = DataFormat::Int32,
-    int INSTRUCTION_MODE /*maybe_unused*/ = 0,
+    [[maybe_unused]] int INSTRUCTION_MODE = 0,
     bool SIGN_MAGNITUDE_FORMAT = false,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void calculate_add_int(

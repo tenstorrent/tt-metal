@@ -131,7 +131,7 @@ sfpi_inline void calculate_unary_operands(const Input& input, const Output& outp
  * Binary counterpart of @ref calculate_unary_operands; any rounding is the output operand's store
  * policy. Each input range must coincide with the output or be disjoint.
  *
- * @tparam MATH: Math policy with static apply(a, b) -> value, e.g. AddMath.
+ * @tparam MATH: Math policy with static apply(a, b) -> value, e.g. AddFloatMath.
  * @tparam ITERATIONS: Number of SFPI steps.
  */
 template <class MATH, int ITERATIONS, class Input0, class Input1, class Output>
