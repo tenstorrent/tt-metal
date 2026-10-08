@@ -3,8 +3,9 @@
 `ttnn.transformer.scaled_dot_product_attention`, `chunked_scaled_dot_product_attention` and
 `joint_scaled_dot_product_attention` take an optional `precision=ttnn.SDPAPrecision.<RECIPE>`. A recipe fixes every numerical choice in the attention kernel, so
 callers pick an accuracy/throughput point instead of tuning compute-kernel fields. Omitting `precision`
-keeps the streaming kernel and its `compute_kernel_config` / `exp_approx_mode` controls, except where a call would
-reach one of the legacy loops: those calls run a recipe (see [Routing](#routing)). With a recipe both controls are
+keeps the streaming kernel and its `compute_kernel_config` / `exp_approx_mode` controls, except where the streaming
+kernel does not serve the call (FP32 DEST, non-ring joint, ring-distributed): those calls run a recipe (see
+[Routing](#routing)). With a recipe both controls are
 accepted and ignored (see [Legacy arguments](#legacy-arguments-with-a-recipe)).
 
 ```python
@@ -162,16 +163,16 @@ removing them. The rule is: **the recipe owns the numerics.**
 ## Routing
 
 Without `precision`, a call that the BF16-DEST streaming kernels (`compute_streaming.hpp`) do not serve runs a recipe
-(Blackhole and Wormhole B0; `sdpa.cpp`, "Precision routing"). The legacy loops these calls used to reach
-(`sdpa_standard`, `sdpa_joint`) are deleted; only the ring joint FP32 gaps below still reach `sdpa_ring`
-(`sdpa_legacy_loops.hpp`).
+(Blackhole and Wormhole B0; `sdpa.cpp`, "Precision routing"); the legacy FP32 loops these calls used to reach are
+deleted. The block primitives they shared with the streaming kernels, decode and `reduce_to_root` live in
+`kernels/compute/sdpa_block_ops.hpp`.
 The DEST mode is read from `compute_kernel_config` as before (`fp32_dest_acc_en`, default off).
 
 | Entry point | BF16 DEST (default) | `fp32_dest_acc_en=True` |
 |---|---|---|
 | `scaled_dot_product_attention` (any mask / causal / sliding window / windowed / sink / concat heads), `chunked_scaled_dot_product_attention`, `flash_mla_prefill`, `chunked_flash_mla_prefill` | streaming kernel | ACCURATE |
 | `joint_scaled_dot_product_attention` | STANDARD | ACCURATE |
-| `ring_joint_scaled_dot_product_attention` | streaming kernel | ACCURATE; legacy loop only for combinations the legacy FP32 loop rejects too (sink, sliding window, KV-pad rotation, circular cache) or a V wider than Q |
+| `ring_joint_scaled_dot_product_attention` | streaming kernel | ACCURATE; an error with a sink, sliding window, KV-pad rotation or circular cache (rejected by the deleted legacy FP32 loop too) or a V wider than Q |
 | `exp_ring_joint_scaled_dot_product_attention` | streaming kernel; STANDARD for a blocking the streaming kernel cannot build (QK subblock taller than two tiles, K chunk not a multiple of the subblock row, one Q subblock), which failed to compile before | ACCURATE (failed to compile before) |
 | `ring_distributed_scaled_dot_product_attention` | STANDARD | ACCURATE |
 
@@ -325,8 +326,7 @@ pass-outer and ring-inner.
 - Ring: noncausal, `is_causal` and `is_balanced` (see [Causal rings](#causal-rings)), chunked prefill, indexed
   caches (`kv_cache_batch_idx`, or `slot_id` with the metadata tensors outside chunked prefill) and a V head dim
   below Q's (MLA with a separate V); exp ring: noncausal. KV-pad rotation (`kv_actual_isl`, metadata on chunked
-  prefill), circular caches, sinks and sliding windows are rejected (`sliding_window_size` with an explicit error:
-  the legacy FP32 ring kernel ignores it). A BFP8/BFP4 Q is widened to BF16 first and the outputs narrowed back, as on the dense path;
+  prefill), circular caches, sinks and sliding windows are rejected; they run on the streaming kernel (BF16 DEST). A BFP8/BFP4 Q is widened to BF16 first and the outputs narrowed back, as on the dense path;
   K/V may be BF16, BFP8 or BFP4 under every recipe. `scale`, `compute_kernel_config` and `exp_approx_mode` follow
   [Legacy arguments](#legacy-arguments-with-a-recipe).
 - `ring_distributed_scaled_dot_product_attention` takes `precision` too (see
