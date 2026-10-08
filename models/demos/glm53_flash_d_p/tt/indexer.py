@@ -44,7 +44,6 @@ class TtIndexer:
         self.nh, self.hd = cfg.index_n_heads, cfg.index_head_dim
         assert cfg.index_kpool == KP and cfg.index_topk == KP * TOPK_POOLS
         self.ndev = mesh.get_num_devices()
-        assert tuple(mesh.shape) == (2, 2), "query split assumes a 2x2 mesh (chip d = 2 r + c)"
         self.score_mode = SCORE_MODE
         self.mm = hifi4_config()
         self.score_cfg = hifi4_config(fp32_acc=False)  # the score op honours only math_fidelity
@@ -64,10 +63,10 @@ class TtIndexer:
 
     # ---- load-time constants, one set per chunk size (each chip holds its own S/4 rows)
     def _sharded(self, t: torch.Tensor, dtype) -> ttnn.Tensor:
-        """[S, W] host rows in chip order d -> chip (r, c) holds rows (2 r + c) S/4 .. ."""
+        """[S, W] host rows in chip order d -> chip (r, c) holds rows (r C + c) S/n .. (C columns, n chips)."""
         s, wdt = t.shape
         return ttnn.from_torch(
-            t.reshape(2, 2, s // self.ndev, wdt).contiguous(),
+            t.reshape(*tuple(self.mesh.shape), s // self.ndev, wdt).contiguous(),
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh,
