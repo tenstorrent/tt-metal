@@ -296,8 +296,11 @@ std::vector<std::optional<Tensor>> pow_bw(
     power_input.deallocate();
     Tensor final_result = ttnn::multiply(result, grad, std::nullopt, output_mem_config);
     result.deallocate();
-    // Handle negative inputs by returning infinity
-    where(ttnn::lez(input), std::numeric_limits<float>::infinity(), final_result, output_mem_config, input_grad);
+    // Mask strictly negative inputs to infinity. At input == 0 the gradient is finite for
+    // every exponent >= 1 (0 when exponent > 1, 1 when exponent == 1), which is what the
+    // golden in unary_backward.py produces: it masks `input < 0` only. For exponent < 1
+    // the infinity at input == 0 still comes out of the reciprocal above.
+    where(ttnn::ltz(input), std::numeric_limits<float>::infinity(), final_result, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
