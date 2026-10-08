@@ -45,6 +45,8 @@ def test_mm_prof(device, case):
     )
     out = ttnn.matmul(a, b, compute_kernel_config=ckc)
     ttnn.synchronize_device(device)
+    if _os.environ.get("V12_OUT"):
+        torch.save(ttnn.to_torch(out).contiguous().view(torch.int16), _os.path.join(_os.environ["V12_OUT"], f"dec_{name}.pt"))
     out.deallocate()
     a.deallocate()
     b.deallocate()
