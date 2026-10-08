@@ -19,9 +19,9 @@ void bind_simple_add(nb::module_& mod) {
     ttnn::bind_function<"simple_add", "ttnn.experimental.quasar.">(
         mod,
         R"doc(
-            Element-wise C = A + B on a single node. On a Quasar Neo cluster the reader runs on 2 DM cores, the
-            compute kernel on all 4 Tensix engines and the writer on 1 DM core; on Wormhole/Blackhole each is a
-            single thread.
+            Element-wise C = A + B on a single node. On a Quasar Neo cluster the reader and the writer each run on
+            2 DM cores and the compute kernel on all 4 Tensix engines; on Wormhole/Blackhole each is a single
+            thread.
 
             Both inputs must be bfloat16, TILE layout and DRAM interleaved, with the same shape (no broadcast).
 

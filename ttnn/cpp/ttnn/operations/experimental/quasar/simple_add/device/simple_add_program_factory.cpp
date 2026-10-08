@@ -24,11 +24,14 @@ namespace {
 constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/experimental/quasar/simple_add/device/kernels/";
 constexpr uint32_t kEntriesPerThread = 2;      // per tile counter: double buffering
 constexpr uint32_t kQuasarComputeThreads = 4;  // every Tensix engine of a Neo cluster
-// Reader DM cores. Must divide kQuasarComputeThreads so every reader thread round-robins the same number of
-// Tensix tile counters: with 2 readers each one feeds 2 Tensix (reader t -> Tensix t and t + 2). Quasar keeps
-// DM0 (ISR) and DM1 (remapper) for itself, leaving 6 DM cores for the readers and the 1 writer.
+// Reader and writer DM cores. Each must divide kQuasarComputeThreads so every DM thread round-robins the same
+// number of Tensix tile counters: with 2 of each, reader t feeds Tensix t and t + 2, and writer t drains them.
+// Quasar keeps DM0 (ISR) and DM1 (remapper) for itself, leaving 6 DM cores: 2 readers + 2 writers fit.
 constexpr uint32_t kQuasarReaderThreads = 2;
+constexpr uint32_t kQuasarWriterThreads = 2;
 static_assert(kQuasarComputeThreads % kQuasarReaderThreads == 0);
+static_assert(kQuasarComputeThreads % kQuasarWriterThreads == 0);
+static_assert(kQuasarReaderThreads + kQuasarWriterThreads <= 6, "only DM2..DM7 can run user kernels");
 }  // namespace
 
 ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_program_artifacts(
@@ -47,13 +50,13 @@ ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_prog
     const m2::KernelSpecName WRITER{"writer"};
     const m2::KernelSpecName COMPUTE{"compute"};
 
-    // One Neo cluster: the whole op runs on node (0, 0). On Quasar the reader runs on 2 DM cores and the compute
-    // kernel on all 4 Tensix engines; the writer stays on one DM core. Wormhole/Blackhole kernels are
-    // single-threaded.
+    // One Neo cluster: the whole op runs on node (0, 0). On Quasar the reader and the writer each run on 2 DM
+    // cores and the compute kernel on all 4 Tensix engines. Wormhole/Blackhole kernels are single-threaded.
     const m2::NodeCoord node{0, 0};
     const bool is_quasar = tensor_args.input_a.device()->arch() == tt::ARCH::QUASAR;
     const uint32_t compute_threads = is_quasar ? kQuasarComputeThreads : 1u;
     const uint32_t reader_threads = is_quasar ? kQuasarReaderThreads : 1u;
+    const uint32_t writer_threads = is_quasar ? kQuasarWriterThreads : 1u;
 
     const DataFormat data_format = datatype_to_dataformat_converter(a.dtype());
     const uint32_t tile_bytes = tile_size(data_format);
@@ -61,9 +64,9 @@ ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_prog
 
     // A STRIDED DFB is split into max(producers, consumers) tile counters of kEntriesPerThread slots each, so
     // num_entries is kEntriesPerThread * max(producers, consumers): in0/in1 are reader_threads -> compute_threads,
-    // out is compute_threads -> 1 writer.
+    // out is compute_threads -> writer_threads.
     const uint32_t in_counters = std::max(reader_threads, compute_threads);
-    const uint32_t out_counters = compute_threads;
+    const uint32_t out_counters = std::max(compute_threads, writer_threads);
     auto make_dfb = [&](const m2::DFBSpecName& name, uint32_t num_counters) {
         return m2::DataflowBufferSpec{
             .unique_id = name,
@@ -89,6 +92,7 @@ ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_prog
     m2::KernelSpec writer{
         .unique_id = WRITER,
         .source = std::filesystem::path{std::string(kKernelDir) + "dataflow/writer_simple_add.cpp"},
+        .num_threads = writer_threads,
         .dfb_bindings = {m2::ConsumerOf(OUT_DFB, "out")},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = C, .accessor_name = "c"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
