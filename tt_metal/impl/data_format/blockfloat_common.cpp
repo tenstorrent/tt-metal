@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <bit>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
@@ -12,6 +13,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "blockfloat_common.hpp"
+#include "bfp_simd.hpp"
 #include "common/executor.hpp"
 #include "constants.hpp"
 #include "hal_types.hpp"
@@ -370,6 +372,63 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     int num_float_in_tile = tile_HW;
     TT_ASSERT(input_data.size() % num_float_in_tile == 0);
     uint32_t num_tiles = input_data.size() / num_float_in_tile;
+
+    // Encode directly into the final allocation. The old converter allocates
+    // vectors per face row and tile, then concatenates every worker's result.
+    // Restrict the SIMD loads to FP32/BF16 and 16-value face rows. Other input
+    // types, exponent-A formats and geometries retain their existing converter.
+    if constexpr (
+        (std::is_same_v<T, float> || std::is_same_v<T, bfloat16>) &&
+        (BfpFormat == tt::DataFormat::Bfp2_b || BfpFormat == tt::DataFormat::Bfp4_b ||
+         BfpFormat == tt::DataFormat::Bfp8_b)) {
+        if (!is_exp_a && face_W == 16 && std::endian::native == std::endian::little) {
+            constexpr int bits = BfpFormat == tt::DataFormat::Bfp8_b ? 7 : BfpFormat == tt::DataFormat::Bfp4_b ? 3 : 1;
+            const uint32_t rows = tile_HW / 16;
+            const uint32_t exponent_bytes = exponent_padding ? tt::round_up(rows, l1_alignment) : rows;
+            const uint32_t packed_bytes = exponent_bytes + tile_HW * (bits + 1) / 8;
+            std::vector<uint32_t> result(static_cast<size_t>(num_tiles) * packed_bytes / 4, 0);
+            const auto pack_row = tt::tt_metal::bfp_simd::select_row_packer<bits, T>();
+            auto process = [&](uint32_t begin, uint32_t end) {
+                for (uint32_t t = begin; t < end; ++t) {
+                    const T* input = input_data.data() + static_cast<size_t>(t) * tile_HW;
+                    auto* output = reinterpret_cast<uint8_t*>(result.data()) + static_cast<size_t>(t) * packed_bytes;
+                    uint32_t row = 0;
+                    for (uint32_t tr = 0; tr < subtiles_in_tile_row; ++tr) {
+                        for (uint32_t tc = 0; tc < subtiles_in_tile_col; ++tc) {
+                            for (uint32_t r = 0; r < face_H; ++r, ++row) {
+                                const uint32_t offset =
+                                    row_major_input ? (tr * face_H + r) * tile_W + tc * face_W : row * face_W;
+                                pack_row(input + offset, output + row, output + exponent_bytes + row * 2 * (bits + 1));
+                            }
+                        }
+                    }
+                }
+            };
+            // Use Metal's existing bounded pool, including its nested-call and
+            // fork handling. Do not create a second runtime's thread team.
+            if (num_tiles < 256) {
+                process(0, num_tiles);
+                return result;
+            }
+            const uint32_t workers = static_cast<uint32_t>(tt::tt_metal::detail::GetExecutor().num_workers());
+            const uint32_t chunks = std::max(1u, std::min(workers, num_tiles / 128));
+            if (chunks == 1) {
+                process(0, num_tiles);
+            } else {
+                std::vector<std::shared_future<void>> pending;
+                pending.reserve(chunks);
+                for (uint32_t chunk = 0; chunk < chunks; ++chunk) {
+                    const uint32_t begin = static_cast<uint64_t>(num_tiles) * chunk / chunks;
+                    const uint32_t end = static_cast<uint64_t>(num_tiles) * (chunk + 1) / chunks;
+                    pending.emplace_back(tt::tt_metal::detail::async([&, begin, end] { process(begin, end); }));
+                }
+                for (auto& future : pending) {
+                    future.get();
+                }
+            }
+            return result;
+        }
+    }
 
     int num_exponents_in_dword = 4;
     int num_mantissas_in_dword;
