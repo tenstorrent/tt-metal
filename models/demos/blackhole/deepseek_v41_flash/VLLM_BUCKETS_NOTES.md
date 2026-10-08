@@ -1,6 +1,6 @@
 # vLLM adapter: right-sized decode / prefill steps (bucketed batch) - DESIGN NOTE (pre-implementation)
 
-Status: design from code reading; NO device measurement yet (hosts .45/.34 not yet used; the shell host .44 is not ours). Items marked [M] are numbers from existing notes, [C] from code, [?] to be confirmed on device.
+Status: IMPLEMENTED and device-validated at 40 layers (see section 8, the results). Sections 1-7 are the design as written before the implementation; items marked [M] are numbers from existing notes, [C] from code, [?] were to be confirmed (resolved in section 8).
 
 ## 1. Problem
 The adapter always steps all `max_num_seqs` users (`tt/generator_vllm.py` `decode_forward`: `build_decode_inputs(self.B, ...)`, `admit_idle_users`, `m.decode_forward(tok_B,...)`). Step cost follows the BUILD batch: [M] demo B=4 43 ms, 16 43-44, 32 49, 64 65-68, 128 88-95 (BATCH_SCALING_NOTES: growth is mHC ~+390 us/layer from U=4 to 32, moe_compute +~100 us/layer, attention +44 us/layer). B=4/8/16 are within ~1-2 ms: the buckets that matter for decode speed are 16 (floor), 32, 64, 128. Decode runs at 4/8 would only pay off for spec decode rows (U(1+k) <= 32).
@@ -47,3 +47,31 @@ Chosen: A with, per tensor, the cheapest of (zero-copy pass of the max tensor wi
 2. Adapter: bucket choice, lowest-u admission, step sliced to B' (`build_decode_inputs(B')`), per-bucket stats; hardware-free tests in `tests/test_vllm_interface.py`.
 3. Model: per-bucket decode graph + trace store + warm-up order; confirm the [?] items with micro device tests (reshape view of `[1,1,U,1024]` tile, `paged_update_cache` batch, matmul-indexer prefix slice).
 4. 40-layer: B=128 and B=32 builds; steady ms/step per bucket vs demo; TPOT conc 1/4/8/16/32; TTFT 128/1024/4096; exactness (lone request vs demo B=bucket greedy; sequential same-prompt repeats); no-hang mix (>= 30 requests).
+
+
+## 8. Implementation and results (40 layers, hosts .34 / .45, logs under /mnt/tt-data/ssinghal/dsv4-logs/vllm_bench/bkt/)
+
+### What was built
+* `tt/decode_buckets.py` `DecodeBucket`: a second decoder graph per bucket U' < U (shallow copies of the layers / attention / indexer / step states, MoE block via `DSV41MoEBlock.for_batch`) over the SAME pool, weights,
+  experts, router, mHC, head, Engram tables. State by prefix views: `prev_cs` is a zero-copy `ttnn.reshape` view (device-verified: same buffer address, in-place writes eager and in a trace land in the full tensor; the
+  padding rows of the tile are rewritten, hence the rule that a bucket covers EVERY live and parked user), the page table is passed whole, the ring stride stays the full U, the index-key slab keeps its [U,..] shape
+  (one prefix slice per step shared by all index layers of a slab, padded key append). `Model.warm_serving`: allocate all, compile all (prefill chunk, every bucket), then capture all traces; `Model.bench_buckets`.
+* Adapter: smallest bucket >= 1 + highest in-row index of the live set; admission takes the lowest free in-row index (`SlotTable.claim_packed`); optional straggler compaction (`DSV41_VLLM_COMPACT=1`: re-prefill into a low user, 0.42 s measured).
+* Idle rows of a decode step feed token 0 (`DSV41_VLLM_FILLER=diverse` restores diverse ids): diverse ids made every idle row activate its own experts: +9..16 ms per step (bucket B'=16: 55.3 -> 44.1 ms).
+* Index-key hand-off rewritten with value-independent shapes (gather indices / masks in persistent tensors; `warm_key_export`): the old version sliced at prompt dependent offsets, creating program-cache buffers under live
+  traces (found with `TT_METAL_TRACE_ALLOC_TRACKING=1`; the 262 -> 18 -> 0 live-buffer reports are the evidence of the 40-layer hang cause); a device self-test (`DSV41_VLLM_BUCKET_SELFTEST=1`) checks the export (PCC 0.99997),
+  run-to-run determinism (PCC 1.0, 64/64 greedy tokens) and bucket vs full-batch logits.
+* Spec decode: the verify round is compiled at load (before any trace exists); spec runners per bucket (`SpecRunner(..., Ub=)`, first drafter chunks, prefix views) when the build has U > 4 users per row.
+
+### Steady decode step (host loop incl. host prep; token-0 filler), 40 layers
+| build | bucket B'=16 | B'=32 | B'=64 | full |
+|---|---|---|---|---|
+| B=32 | 42.6-44.1 ms | (full) 52.5-53.2 | | 52.5-53.2 |
+| B=128 | 44.3 | 54.1 | 73.2 | 110.9 |
+Demo reference: B=16 44 ms, B=32 49-50 ms; padded baselines before: B=128 build 114-145 ms, B=32 build 57-69 ms.
+
+### Stock `run.py --workflow benchmarks`, B=32 build, commit 18ce46ff02c, host .34 (bench_final_b32.log), 0 failures in 19 points
+conc1 TPOT 48-50 ms, TTFT 417 ms (ISL 128) .. 3.3 s (ISL 4096) .. 26.7 s (ISL 32768); old padded sweep: conc1 TPOT 62-83 ms, ISL 4096 TTFT 19.0 s.
+
+### Spec decode through vLLM vs the demo (same hosts, GSM8K, effective tok/s/user)
+B=4 39.8 vs 40.0, B=8 43.3 vs 46.5, B=16 41.9 vs 43.7 (decode indexer off, as in the demo build; with the indexer on, 36.4), B=32 28.9 vs 29.05. Decode indexer: a build with max_model_len > 512 pays 13-15 ms per spec round (B=16).

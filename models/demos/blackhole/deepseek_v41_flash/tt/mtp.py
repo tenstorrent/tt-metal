@@ -761,6 +761,14 @@ class ChunkedDrafter:
         v.subs = [sub.view_n(n) for sub in self.subs]
         return v
 
+    def first(self, g):
+        """The drafter of the first ``g`` chunks (users u < g * Uc of every mesh row): the SAME weights and rings as this one (a decode bucket of the spec runner, tt/spec_model.py)."""
+        assert 1 <= g <= self.G
+        v = copy.copy(self)
+        v.G, v.U, v.subs = g, self.Uc * g, self.subs[:g]
+        v.attn = [a for sub in v.subs for a in sub.attn]
+        return v
+
     def write_main_full(self, hidden, pos):
         Tc = self.Uc * self.n
         for c, sub in enumerate(self.subs):
