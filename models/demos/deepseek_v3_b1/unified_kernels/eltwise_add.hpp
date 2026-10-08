@@ -152,9 +152,13 @@ struct EltwiseAdd {
             }
             tile_regs_commit();
             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+            pack_block_mop(0, CTArgs::cb_out, num_tiles);
+#else
             for (uint32_t i = 0; i < num_tiles; i++) {
                 pack_tile(i, CTArgs::cb_out);
             }
+#endif
             tile_regs_release();
             cb_push_back(CTArgs::cb_out, num_tiles);
 

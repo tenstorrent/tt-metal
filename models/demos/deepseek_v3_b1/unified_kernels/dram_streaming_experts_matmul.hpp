@@ -382,9 +382,13 @@ struct DRAMStreamingExpertsMatmul {
                     tile_regs_commit();
                     tile_regs_wait();
 
+#ifdef ARCH_BLACKHOLE
+                    pack_block_mop(0, CTArgs::cb_out, CTArgs::subblock_w);
+#else
                     for (uint32_t w = 0; w < CTArgs::subblock_w; w++) {
                         pack_tile(w, CTArgs::cb_out, w);
                     }
+#endif
                     tile_regs_release();
                 }
 
