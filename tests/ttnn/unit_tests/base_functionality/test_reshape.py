@@ -809,9 +809,8 @@ def test_reshape_oob(device):
         return ttnn.from_torch(tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
 
     B, T, H, W, U = 1, 1, 90, 20, 768
-    # The bug (#28678) let the last core write at most one core's share of pages (a few KB per
-    # DRAM bank) past the output, so 8 MiB sentinels on either side are ample. Larger sentinels
-    # only add host<->device traffic (2**15 was 2 GiB each, ~80 GiB over the old 10 iterations).
+    # #28678 let the last core write up to one core's share of pages past the output;
+    # 8 MiB sentinels on either side cover that.
     SENTINEL_TENSOR_SIZE = 2**11
     for i in range(2):
         print(f"running test {i}")
