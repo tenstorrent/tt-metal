@@ -1,0 +1,12 @@
+ttnn/cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/kernels/ssm_eltwise_mul.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/kernels/moreh_clip_grad_norm_step3_kernel.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_h.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_h_large.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gated_delta_rule.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/moreh/moreh_abs_pow/device/kernels/moreh_abs_pow_kernel.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/moreh/moreh_adamw/device/kernels/moreh_adamw.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/moreh_clip_grad_norm_step1_kernel.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/moreh_layer_norm_backward_gamma_beta_grad_kernel.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/moreh_matmul.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
