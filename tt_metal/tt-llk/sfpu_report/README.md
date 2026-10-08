@@ -122,8 +122,9 @@ the harness at a side's tree. A PR can change what runs on the Tensix, never wha
 on the runner. If the merge-base is too old for the current harness, the run falls
 back to rebase mode and the report says so.
 
-**Which ops.** `detect.py` compiles every variant of `perf_eltwise_unary_sfpu.py` and
-`perf_eltwise_unary_typecast.py` on both sides (no device needed) and compares the
+**Which ops.** `detect.py` compiles every variant of `perf_eltwise_unary_sfpu.py`,
+`perf_eltwise_unary_typecast.py` and `perf_eltwise_binary_sfpu.py` on both sides (no
+device needed) and compares the
 `.text` of each variant's math ELF, matched across sides by its generated `build.h`.
 An op is measured when its code changed, which catches ops that only include a
 changed header. Both sides compile through the same symlinked path, because profiler
@@ -134,6 +135,11 @@ zone ids hash `__FILE__`.
 SFPLOADMACRO. The raw CSVs go through the LLK perf gate's own comparer
 (`tt-llk/perf/regression_compare.py`): median vs median, a regression is slower than
 the threshold (BH 2%, WH 8%) and by more than 30 cycles per loop.
+
+Binary rows are per operand tile, the unit the binary perf tests have used since
+#57137: their `tile_cnt` counts both input tiles, so a binary row is about half a
+result tile. The binary float family also sweeps the Dest broadcast; those variants
+get their own rows, labelled like `SfpuElwadd (bcast Row)`.
 
 **Accuracy.** `tests/python_tests/test_sfpu_report_accuracy.py` runs each op over every
 finite input of bf16 and fp16 (fp32: every 65,536th value) and over a tile of special
@@ -171,24 +177,17 @@ The hardware-free tests are `tests/python_tests/test_sfpu_report_hw_free.py`.
 
 ## Testing on GitHub
 
-Nothing of the GitHub side has run yet. To get there:
-
-1. **Push the branch and open a draft PR.** Nothing is pushed today.
-2. **Make `llk-sfpu-report.yaml` runnable before it is on main.** `workflow_dispatch`
-   only works for workflows on the default branch. Either merge that one file first
-   in a small PR and dispatch it with `--ref <branch>`, or add a temporary
-   `pull_request` trigger on the draft PR that measures a fixed PR number (e.g.
-   #54080, #58251), and drop it before merge.
-3. **The two gh-aw workflows only run from main** (`issue_comment` and `workflow_run`
-   use the default branch's file). Test them after merge on a real PR, or in a
-   sandbox fork of the repo with the measuring job stubbed (no hardware there).
-4. **Hardware checks still owed:** the new binary perf tests
-   (`test_perf_eltwise_binary_sfpu_{float,int}_extended`: 86 WH / 85 BH variants,
-   compiled but never run on silicon), Int32 and fp32 binary accuracy (ttsim cannot
-   run them), and every Blackhole leg.
-5. **Repo plumbing:** `owner_id` in `tests/pipeline_reorg/llk_sfpu_report_tests.yaml`
+1. **The measuring side runs before merge through a test branch.**
+   `workflow_dispatch` only works for workflows on the default branch, so
+   `nstamatovic/llk-sfpu-test-ci` carries one extra commit that runs the report
+   through `llk-bit-exact.yaml`:
+   `gh workflow run llk-bit-exact.yaml --ref nstamatovic/llk-sfpu-test-ci -f pr_number=<N>`.
+   The report is in the run's Summary tab and in the `llk-sfpu-report` artifact.
+   That commit never goes into the real PR.
+2. **The two gh-aw workflows only run from main** (`issue_comment` and `workflow_run`
+   use the default branch's file). Test them after merge on a real PR.
+3. **Repo plumbing:** `owner_id` in `tests/pipeline_reorg/llk_sfpu_report_tests.yaml`
    (a Slack ID), the `llk.on_demand` budget in `.github/time_budget.yaml`, lock files
-   regenerated with the repo's gh-aw version (`gh aw compile`, v0.89.21).
-6. **Sign-offs:** infra for the on-demand budget and runner use; security for
-   running fork device code from a comment; the LLK perf owners for the new nightly
-   perf variants; Lazar's P4-P7 merged first (the accuracy side needs them).
+   compiled with gh-aw v0.89.21 (`gh aw compile`), a version main already uses.
+4. **Sign-offs:** infra for the on-demand budget and runner use; security for
+   running fork device code from a comment.
