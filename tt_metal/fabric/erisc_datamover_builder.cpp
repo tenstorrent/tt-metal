@@ -790,8 +790,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     // against, and express gives a router a different sender/downstream shape, so replaying it can
     // disable a channel this router genuinely uses.
     const bool express_routing_enabled =
-        tt::tt_metal::MetalContext::instance().get_control_plane().express_routing_enabled(
-            local_fabric_node_id.mesh_id);
+        fabric_context.get_control_plane().express_routing_enabled(local_fabric_node_id.mesh_id);
     if (channel_trimming_overrides.has_value() && !express_routing_enabled) {
         apply_channel_trimming_overrides(channel_trimming_overrides.value());
     }
@@ -1131,8 +1130,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // The assignment is fabric-scoped and lives in FabricBuilderContext, so every router in the mesh
     // reads the same flat-channel -> register-id map. That agreement is required, since the kernel
     // resolves a downstream router's register through its own table.
-    const StreamAssignment& stream_assignment =
-        control_plane.get_fabric_context().get_builder_context().get_stream_assignment(local_fabric_node_id.mesh_id);
+    const StreamAssignment& stream_assignment = builder_context.get_stream_assignment(local_fabric_node_id.mesh_id);
     const CreditTransportPlan& credit_plan = stream_assignment.plan();
 
     named_args["VC0_USES_COUNTER_CREDITS"] = credit_plan.vc0_uses_counters ? 1 : 0;
