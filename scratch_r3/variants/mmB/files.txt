@@ -1,0 +1,1 @@
+ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute_metal2.cpp

@@ -1,0 +1,2 @@
+bits16w head test_mockall_ci.py,test_bitid.py,test_bitid2.py,test_jsdpa_prof.py,test_rn50m_prof.py,test_sync_prof.py,test_mm_r14_func.py - not gdn
+bits16w main14 test_mockall_ci.py,test_bitid.py,test_bitid2.py,test_jsdpa_prof.py,test_rn50m_prof.py,test_sync_prof.py,test_mm_r14_func.py - not gdn

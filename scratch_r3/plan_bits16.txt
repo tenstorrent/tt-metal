@@ -1,0 +1,4 @@
+bits16 head test_mockall_ci.py,test_bitid.py,test_bitid2.py,test_r3c_prof.py,test_in0_prof.py,test_a23_prof.py,test_v12_prof.py,test_mm_decode_prof.py,test_lf21_prof.py,test_r4_prof.py,test_rk1_prof.py,test_jsdpa_prof.py,test_rn50m_prof.py,test_sync_prof.py,test_mm_r14_func.py - not gdn
+bits16 main14 test_mockall_ci.py,test_bitid.py,test_bitid2.py,test_r3c_prof.py,test_in0_prof.py,test_a23_prof.py,test_v12_prof.py,test_mm_decode_prof.py,test_lf21_prof.py,test_r4_prof.py,test_rk1_prof.py,test_jsdpa_prof.py,test_rn50m_prof.py,test_sync_prof.py,test_mm_r14_func.py - not gdn
+bits16 mmB test_mm_r14_func.py
+bits16 mmoff test_mm_r14_func.py

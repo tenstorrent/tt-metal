@@ -1,0 +1,6 @@
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_matmul_api.h
+tt_metal/hw/inc/api/compute/matmul.h
+tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel_gpr_map.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_matmul.h
+ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation_metal2.cpp
+ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp
