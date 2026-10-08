@@ -38,6 +38,7 @@ case $1 in
   clnh)    for i in 1 2 3; do ab ln_h $O/off_ln_h.txt - "(llama8b_decode and performance) or (sdxl_transformer and d2)"; done ;;
   clnb)    for i in 1 2 3; do ab ln_b $O/off_ln_b.txt - "(llama8b_decode and performance) or (sdxl_transformer and d2)"; done ;;
   csm)     for i in 1 2 3; do ab sm_b $O/off_sm_b.txt - "softmax_cfg"; done ;;
+  csdpa)   for i in 1 2 3; do ab sdpa_b $O/off_sdpa_b.txt - "(llama8b_prefill and performance and 2048) or sdxl_transformer"; done ;;
   smsa)    ab sm_b $O/off_sm_b.txt - "softmax_cfg"
            ab sa_b $O/off_sa_b.txt - "llama8b_sampling" ;;
 esac
