@@ -198,10 +198,10 @@ recurrent state, plus the existing numerical tolerances. The measured TP4
 rates at B16/32K, B8/128K and B4/near256K are 209.28, 123.58 and 65.68 output
 tokens/s. Eight-replica projections are not measured Galaxy throughput.
 
-The running matched sweep varies workload geometry and recurrence variant;
+The completed matched sweep varies workload geometry and recurrence variant;
 it does not vary DRAM reader placement. Prior accurate-attention sweeps tried
-KV chunks 128/256/512 and core caps 16/32. With 110 available cores and one
-local KV head, B8 gets 13 cores/user under either cap; that comparison did
+KV chunks 128/256/512 and core caps 16/32. With the reported 12x10 worker grid
+and one local KV head, B8 gets 15 cores/user under either cap; that comparison did
 not change its allocation. At B4, the caps select different allocations.
 Chunk/core-count tests therefore do not establish that bank-to-core mapping,
 NoC routes or read pipelining have been optimized.
@@ -298,7 +298,7 @@ Each runs the native layout, row-major 64 cores, 64 cores at DeepSeek FlashMLA's
 bank-proximity locations, row-major 80 cores, 80 cores in the outer columns,
 then the native layout again to detect drift. The two equal-core-count pairs
 isolate placement from available core count. Active cores per user are recorded
-explicitly because the native split does not always use all 110 cores.
+explicitly because the native split does not always use all 120 available cores.
 
 KV remains interleaved across DRAM banks. The 64-core candidate borrows
 FlashMLA's physical distribution, not its bank ownership or KV representation.
@@ -400,3 +400,37 @@ Use a new results directory and the saved systemd launch command. Per-variant
 `reader.json` files contain correctness, timing, source and compilation evidence;
 the final `queue.json` contains comparisons. Stopping only this named service
 cancels this experiment without changing earlier queues or the installed runtime.
+
+## Runtime grid correction and v2 diagnostics
+
+The v1 placement attempt stopped before attention execution because its test
+incorrectly required an 11x10 worker grid. The allocated Galaxy reports 12x10,
+also present in earlier accurate-attention receipts. The failure receipt records
+clean device closure. The dependent v1 reader controller stopped before opening
+hardware; neither attempt establishes a placement or reader performance result.
+
+Placement now takes the runtime-reported grid, including its twelfth column.
+At B8 the native assignment is 120 active cores, 15 per user. The 80-core outer
+candidate uses columns 0--3 and 8--11 on this grid. The 64-core FlashMLA reference
+candidate retains that reference's coordinates and is named `flash_mla_64`;
+those coordinates do not establish bank-local access for interleaved Qwen KV.
+The native reader barrier threshold remains two tiles at B8/B16/B32.
+
+New immutable `attention-placement-source-v2` and `attention-reader-source-v2`
+snapshots preserve all v1 sources and receipts. Validation passed 254 tests plus
+40 subtests, and both opt-in hardware tests collected. Fresh persistent units
+`qwen38-attention-placement-v2-20261007.service` and
+`qwen38-attention-reader-v2-20261007.service` run in that order under the existing
+device lock and time/memory bounds. The first depends on the completed capacity
+sweep, and the second requires a completed placement receipt with clean closure.
+No numerical precision, installed native source, runtime library, or weights
+change. Launch commands and validation evidence are in
+[`../attention-grid-v2/`](../attention-grid-v2/).
+
+The immediate sweep axes are equal-core-count placement and intermediate KV
+read-barrier thresholds (native, 4, 8, 16 tiles). A more complete bandwidth
+optimization requires coordinated bank ownership, reader assignment, NoC routes
+and pipelining. DeepSeek FlashMLA, DeepSeek streaming matmul, and the Metalium
+DRAM saturation report provide these reference patterns. Tagged overlapping
+reads, deeper read buffers and bank-sharded KV remain follow-up implementations;
+the current tests do not claim to implement them.

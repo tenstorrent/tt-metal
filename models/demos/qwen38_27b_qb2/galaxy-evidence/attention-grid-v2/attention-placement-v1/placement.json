@@ -1,0 +1,73 @@
+{
+  "state": "failed",
+  "passed": false,
+  "cases": [
+    {
+      "input_tokens": 32768,
+      "batch": 16,
+      "native_capacity": 32896,
+      "aligned_capacity": 33280,
+      "native_chunk": 256,
+      "extra_pool_tokens": 6144,
+      "pool_tokens": 532480,
+      "positions": [
+        32767,
+        32730,
+        32693,
+        32656,
+        32619,
+        32582,
+        32545,
+        32508,
+        32471,
+        32434,
+        32397,
+        32360,
+        32323,
+        32286,
+        32249,
+        32212
+      ],
+      "measurement_index": 0,
+      "placement_name": "native",
+      "seed": 20293790,
+      "state": "cpu_reference",
+      "page_table_sha256": "80d0ebdbebfda9a5feaf6c46597571739ebc49da9eab76f6b4ef312e0caa3c53",
+      "candidates": [],
+      "device_query_heads": 32,
+      "live_query_heads": 6
+    }
+  ],
+  "comparisons": [],
+  "promoted_to_model": false,
+  "scope": "Synthetic TP4 attention placement and common-output-layout timing; no full-model throughput or eval claim",
+  "precision": {
+    "q": "bfloat16",
+    "kv": "bfloat8_b",
+    "fidelity": "HiFi4",
+    "fp32_accumulation": true,
+    "approximate_exp": false
+  },
+  "source_sha256": {
+    "/home/ttuser/qwen38-artifacts-20261007/attention-placement-source-v1/models/demos/qwen38_27b_qb2/tests/test_attention_placement.py": "b333ff45f43e2e903ad869a6a7a97e574408699d0a9718d42507207ffe14923f",
+    "/home/ttuser/qwen38-artifacts-20261007/attention-placement-source-v1/models/demos/qwen38_27b_qb2/tests/test_long_context_attention.py": "d67713e691b4326aa68c9fb6ef4f4495099dca44b22e40cf22dd8d3d1c576411",
+    "/home/ttuser/qwen38-artifacts-20261007/attention-placement-source-v1/models/demos/qwen38_27b_qb2/tests/attention_placement.py": "e733fc06910b913dc975f736cf142db3ad6f5b6fd66aff9e6bd229cfc6e20910",
+    "/home/ttuser/qwen38-artifacts-20261007/attention-placement-source-v1/models/demos/qwen38_27b_qb2/tests/attention_tuning.py": "d3fd2a1eb56555a1d346dc24e98c6cd5cefebb831f91acb4b27416247c9202e0",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp": "f770ccf8ffad855aac3ac5063b43cd4cfab8fd732d3adb512dbee5051d0eda69",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/reader_decode_all.cpp": "2a70c7a0b32f8972efc7d15cbfb735e493838121862ef9faf8fe1ba97845e591"
+  },
+  "measurement": "Five samples of 100 trace replays; includes sharded-output conversion to DRAM, excludes setup/readback",
+  "caveat": "KV remains interleaved across banks; bank-proximity locations do not make reads bank-local",
+  "updated_at": "2026-10-08T02:16:10Z",
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ],
+  "error": {
+    "type": "ValueError",
+    "message": "Placement candidates require the validated 11x10 Blackhole worker grid"
+  },
+  "cleanup_completed": true
+}

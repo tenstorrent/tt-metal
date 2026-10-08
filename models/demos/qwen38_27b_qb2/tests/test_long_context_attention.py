@@ -147,14 +147,13 @@ def run_case(
     expected = reference(query, key_quantized, value_quantized, table, case["positions"])
     del key_quantized, value_quantized
     grid = mesh.compute_with_storage_grid_size()
+    case["worker_grid"] = [grid.x, grid.y]
     placement_options = {}
     output_memory = None
     if core_placement is not None:
         from models.demos.qwen38_27b_qb2.tests.attention_placement import placement
 
-        if (grid.x, grid.y) != (11, 10):
-            raise ValueError("Placement candidates require the validated 11x10 Blackhole worker grid")
-        selected = placement(core_placement, batch)
+        selected = placement(core_placement, batch, (grid.x, grid.y))
         case["placement"] = selected
         grid = ttnn.CoreCoord(*selected["grid"])
         max_cores_per_head_batch = selected["max_cores_per_head_batch"]

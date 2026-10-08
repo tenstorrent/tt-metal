@@ -44,11 +44,11 @@ def test_attention_reader():
     try:
         mesh = parent.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
         grid = mesh.compute_with_storage_grid_size()
-        assert (grid.x, grid.y) == (11, 10), "Reader accounting requires the qualified Blackhole grid"
+        report["worker_grid"] = [grid.x, grid.y]
         report["device_ids"] = list(mesh.get_device_ids())
         for length, batch in CASES:
             case = geometry(length, batch)
-            core_info = placement("native", batch)
+            core_info = placement("native", batch, (grid.x, grid.y))
             native_threshold = ((512 // core_info["active_cores"]) * 1152) // 2048
             case.update(
                 native_chunk=256,

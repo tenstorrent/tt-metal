@@ -50,7 +50,7 @@ def test_attention_placement():
         precision=dict(q="bfloat16", kv="bfloat8_b", fidelity="HiFi4", fp32_accumulation=True, approximate_exp=False),
         source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in files},
         measurement="Five samples of 100 trace replays; includes sharded-output conversion to DRAM, excludes setup/readback",
-        caveat="KV remains interleaved across banks; bank-proximity locations do not make reads bank-local",
+        caveat="KV remains interleaved across banks; FlashMLA reference locations do not make reads bank-local",
     )
     save(path, report)
     torch.set_num_threads(8)
@@ -60,6 +60,9 @@ def test_attention_placement():
     try:
         mesh = parent.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
         report["device_ids"] = list(mesh.get_device_ids())
+        grid = mesh.compute_with_storage_grid_size()
+        report["worker_grid"] = [grid.x, grid.y]
+        save(path, report)
         for length, batch in ((32768, 16), (131072, 8), (262016, 4), (32768, 32), (131072, 16), (262016, 8)):
             rows = []
             for index, name in enumerate((*LAYOUTS, "native")):
@@ -95,7 +98,7 @@ def test_attention_placement():
             valid = [row for row in rows[:-1] if row["passed"] and row["selection"]["timing_comparison_qualified"]]
             fastest = min(valid, key=lambda row: row["traced_call_us"])
             matched = []
-            for left, right in (("row_major_64", "bank_proximity_64"), ("row_major_80", "outer_columns_80")):
+            for left, right in (("row_major_64", "flash_mla_64"), ("row_major_80", "outer_columns_80")):
                 a, b = (next(row for row in rows if row["name"] == name) for name in (left, right))
                 matched.append(
                     dict(
