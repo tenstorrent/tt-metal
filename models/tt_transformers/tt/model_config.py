@@ -700,6 +700,10 @@ class ModelArgs:
         self.sdpa_decode_k_chunk_size = int(os.environ.get("TT_SDPA_DECODE_K_CHUNK", 0))  # EXPERIMENT
         self.sdpa_decode_use_default_compute_config = False
         self.use_hf_rope = use_hf_rope
+        # Subtract the K-projection bias from post-RoPE keys (models with QKV biases, e.g. Qwen2.5).
+        # Mathematically a no-op for softmax; keeps QK^T small enough for the bf16 score
+        # intermediates of the decode SDPA kernel. See Attention._create_k_bias_shift.
+        self.subtract_k_bias_post_rope = os.environ.get("TT_K_BIAS_SHIFT", "1") == "1"  # EXPERIMENT knob
 
         assert not os.getenv(
             "FAKE_DEVICE"
