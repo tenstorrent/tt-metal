@@ -54,10 +54,37 @@ def ring_config(T, mesh):
     return _CFG[key]
 
 
+_WEIGHTS = __import__("weakref").WeakSet()
+
+
+def release_ring_buffers(mesh):
+    """Free every scratch/semaphore set of this mesh (their L1 clashes with the static CBs of prefill programs, e.g. rms_norm, when a prefill follows decode in
+    the same process: Generator.reconfigure calls this after closing the decode trace). Rebuilt lazily on the next decode forward (not traced: needs a warm-up).
+    """
+    import gc
+
+    for k in [k for k in _BUF if k[0] == id(mesh)]:
+        _BUF.pop(k)
+        for w in list(_WEIGHTS):
+            w._decs.pop(k[1], None)
+    gc.collect()
+
+
 def ring_buffers(T, mesh):
     """ONE persistent scratch/semaphore set per (mesh, T), shared by all layers (each set costs ~13 KB of L1 per bank for the rest of the run)."""
     key = (id(mesh), T)
     if key not in _BUF:
+        if os.environ.get("MIMO_RING_KEEP_ALL_T", "0") != "1":
+            # a new T (Generator.reconfigure to another U): release the scratch sets of the other T of this mesh (their L1 would otherwise stay allocated for the rest of the
+            # run and clash with the statically allocated CBs of later programs, e.g. prefill rms_norm). Their traces are closed by reconfigure.
+            for k in [k for k in _BUF if k[0] == id(mesh)]:
+                old = _BUF.pop(k)
+                for w in list(_WEIGHTS):
+                    w._decs.pop(k[1], None)
+                del old
+            import gc
+
+            gc.collect()
         from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
 
         cfg = ring_config(T, mesh)
@@ -98,6 +125,7 @@ class RingExpertWeights:
         self.state = _TTMoEDecodeExpertState(mesh, w0, w1, w2, **cfg.experts.model_dump(), weight_cache_dir=cdir)
         self.warm = warm
         self._decs = {}
+        _WEIGHTS.add(self)
 
     def decode(self, T):
         if T not in self._decs:

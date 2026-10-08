@@ -166,6 +166,9 @@ class Generator:
         self.dec.close()
         del self.dec
         gc.collect()
+        from models.demos.blackhole.mimo_v26.tt.moe_ring import release_ring_buffers
+
+        release_ring_buffers(self.model.mesh)  # ring-MoE L1 scratch would clash with the static CBs of the next prefill
         self.model.reconfigure(layout)
         self.U = U
         self.dec = Decoder(
