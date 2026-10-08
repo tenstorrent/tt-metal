@@ -20,33 +20,46 @@
 #ifdef SORT_STABLE_FUSED_32B_DEST
 #include "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_fused_raw16.hpp"
 
-// The stable path's local sorts on fused [bf16 value | u16 index] keys in a 32-bit DEST section: the plain network gives
-// the comparator's order. The values travel as raw u16 words, so every buffer keeps its format; the merges between them
-// stay on the comparator, which costs less than fusing and splitting a pair.
-FORCE_INLINE void enter_fused_section() {
-    set_fp32_dest_acc<true>();
-    ckernel::topk_tile_init</*fused=*/true>();
-    reconfig_data_format_srca(dfb::index_tensor);
-    PACK((llk_pack_reconfig_data_format<true>(dfb::index_tensor_transposed)));
+// The stable path's row in fused [bf16 value | u16 index] keys, in the 32-bit DEST and a 32-bit buffer from its first
+// local sort to its last merge: the plain network gives the comparator's order. The fuse makes every zero and denormal
+// +0, and a NaN becomes the infinity of its sign after the first local sort, where this kernel's comparator path does
+// both.
+FORCE_INLINE void enter_fused_section() { ckernel::topk_tile_init</*fused=*/true>(); }
+
+FORCE_INLINE void leave_fused_section() { ckernel::topk_tile_init(); }
+
+// transpose_and_pack for u16 tiles in the 32-bit DEST: the datums move to the packer's half before the pack.
+FORCE_INLINE void transpose_and_pack_u16(DataflowBuffer& transposed_dfb, DataflowBuffer& dest_dfb, const uint32_t Wt) {
+    constexpr uint32_t one_tile = 1;
+    reconfig_data_format_srca(transposed_dfb.get_id());
+    transpose_init(transposed_dfb.get_id());
+    pack_reconfig_data_format(dest_dfb.get_id());
+    transposed_dfb.wait_front(Wt);
+    for (uint32_t i = 0; i < Wt; ++i) {
+        tile_regs_acquire();
+        dest_dfb.reserve_back(one_tile);
+        transpose_tile(transposed_dfb.get_id(), i, 0);
+        topk_uint16_move_dest_tile_to_pack_half(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, dest_dfb.get_id());
+        dest_dfb.push_back(one_tile);
+        tile_regs_release();
+    }
+    transposed_dfb.pop_front(Wt);
 }
 
-FORCE_INLINE void leave_fused_section() {
-    restore_fp32_dest_acc<true>();
-    ckernel::topk_tile_init();
-}
-
-// sort_Wt_tiles_row_to_bitonic_sequence on fused keys.
+// The row's tile pairs transposed, fused and sorted in alternating directions into the key buffer.
 template <bool largest>
-void sort_Wt_tiles_row_to_bitonic_sequence_fused(
+void sort_row_pairs_to_keys(
     DataflowBuffer& input_dfb,
     DataflowBuffer& index_dfb,
-    DataflowBuffer& input_transposed_dfb,
-    DataflowBuffer& index_transposed_dfb,
+    DataflowBuffer& keys_dfb,
     const uint32_t Wt,
     const bool ascending) {
-    enter_fused_section();
-    input_transposed_dfb.reserve_back(Wt);
-    index_transposed_dfb.reserve_back(Wt);
+    reconfig_data_format_srca(dfb::index_tensor);
+    pack_reconfig_data_format(dfb::fused_keys);
+    keys_dfb.reserve_back(Wt);
     bool ascending_local = ascending;
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
         tile_regs_acquire();
@@ -65,16 +78,13 @@ void sort_Wt_tiles_row_to_bitonic_sequence_fused(
             VectorMode::RC_custom)));
         ckernel::topk_local_sort</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
             0, (int)ascending_local, /*i_end_phase=*/5);
-        MATH((_llk_math_eltwise_unary_sfpu_params_(
-            topk_fused_raw16::defuse_raw16<largest, true>, 0, VectorMode::RC_custom, 2)));
+        MATH((_llk_math_eltwise_unary_sfpu_params_(topk_fused_raw16::keys_nan_to_inf, 0, VectorMode::RC_custom)));
 
         tile_regs_commit<true>();
         tile_regs_wait();
 
-        pack_tile<true, true>(0, dfb::input_tensor_transposed, wt);
-        pack_tile<true, true>(1, dfb::input_tensor_transposed, wt + 1);
-        pack_tile<true, true>(2, dfb::index_tensor_transposed, wt);
-        pack_tile<true, true>(3, dfb::index_tensor_transposed, wt + 1);
+        pack_tile<true, true>(0, dfb::fused_keys, wt);
+        pack_tile<true, true>(1, dfb::fused_keys, wt + 1);
         input_dfb.pop_front(2);
         index_dfb.pop_front(2);
 
@@ -82,18 +92,24 @@ void sort_Wt_tiles_row_to_bitonic_sequence_fused(
 
         ascending_local = !ascending_local;
     }
-    input_transposed_dfb.push_back(Wt);
-    index_transposed_dfb.push_back(Wt);
-    leave_fused_section();
+    keys_dfb.push_back(Wt);
 }
 
-// The last pass of a merge stage (sub 1: tiles i and i + 1 sorted in place) on fused keys.
-template <bool largest>
-void sort_tile_pairs_fused(
-    DataflowBuffer& synchronization_dfb, const uint32_t Wt, const uint32_t stage, const bool ascending) {
+// One pass of a merge stage on the keys in place: the plain merge network at distance 2^(sub - 1) tiles, or for sub 1
+// the local sort of each tile pair.
+void merge_pass_keys(
+    DataflowBuffer& synchronization_dfb,
+    const uint32_t Wt,
+    const uint32_t stage,
+    const uint32_t sub,
+    const bool ascending) {
     constexpr uint32_t one_tile = 1;
-    enter_fused_section();
-    for (uint32_t i = 0; i < Wt; i += 2) {
+    const uint32_t sub_dist = 1 << (sub - 1);
+    for (uint32_t i = 0; i < Wt; i++) {
+        const uint32_t j = i ^ sub_dist;
+        if (j <= i) {
+            continue;
+        }
         const bool dir = (((i >> stage) & 1) == 0) == ascending;
 
         tile_regs_acquire();
@@ -102,19 +118,55 @@ void sort_tile_pairs_fused(
         synchronization_dfb.pop_front(one_tile);
         synchronization_dfb.reserve_back(one_tile);
 
-        copy_init<true>(dfb::index_tensor_transposed);
-        copy_tile<true>(dfb::input_tensor_transposed, i, 0);
-        copy_tile<true>(dfb::input_tensor_transposed, i + 1, 1);
-        copy_tile<true>(dfb::index_tensor_transposed, i, 2);
-        copy_tile<true>(dfb::index_tensor_transposed, i + 1, 3);
+        copy_init<true>(dfb::fused_keys);
+        copy_tile<true>(dfb::fused_keys, i, 0);
+        copy_tile<true>(dfb::fused_keys, j, 1);
+
+        uint32_t low = 0;
+        uint32_t high = 1;
+        if (sub == 1) {
+            ckernel::topk_local_sort</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
+                0, (int)dir, /*i_end_phase=*/5);
+        } else {
+            ckernel::topk_merge</*idir=*/false, /*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
+                0, stage - 1, /*k=*/64);
+            if (dir) {
+                // The merge leaves the smaller keys in DEST 0 and the larger in DEST 1.
+                low = 1;
+                high = 0;
+            }
+        }
+
+        tile_regs_commit<true>();
+        tile_regs_wait();
+
+        pack_tile<true, true>(low, dfb::fused_keys, i);
+        pack_tile<true, true>(high, dfb::fused_keys, j);
+
+        synchronization_dfb.push_back(one_tile);
+
+        tile_regs_release<true>();
+    }
+}
+
+// The row's keys split back into the transposed value and index buffers.
+template <bool largest>
+void split_keys(
+    DataflowBuffer& keys_dfb,
+    DataflowBuffer& input_transposed_dfb,
+    DataflowBuffer& index_transposed_dfb,
+    const uint32_t Wt) {
+    pack_reconfig_data_format(dfb::index_tensor_transposed);
+    input_transposed_dfb.reserve_back(Wt);
+    index_transposed_dfb.reserve_back(Wt);
+    for (uint32_t i = 0; i < Wt; i += 2) {
+        tile_regs_acquire();
+
+        copy_init<true>(dfb::fused_keys);
+        copy_tile<true>(dfb::fused_keys, i, 0);
+        copy_tile<true>(dfb::fused_keys, i + 1, 1);
         MATH((_llk_math_eltwise_unary_sfpu_params_(
-            topk_fused_raw16::fuse_raw16_slab<largest, topk_fused_raw16::Zeros::ToPositive>,
-            0,
-            VectorMode::RC_custom)));
-        ckernel::topk_local_sort</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
-            0, (int)dir, /*i_end_phase=*/5);
-        MATH((_llk_math_eltwise_unary_sfpu_params_(
-            topk_fused_raw16::defuse_raw16<largest, true>, 0, VectorMode::RC_custom, 2)));
+            topk_fused_raw16::defuse_raw16<largest, false>, 0, VectorMode::RC_custom, 2)));
 
         tile_regs_commit<true>();
         tile_regs_wait();
@@ -124,11 +176,11 @@ void sort_tile_pairs_fused(
         pack_tile<true, true>(2, dfb::index_tensor_transposed, i);
         pack_tile<true, true>(3, dfb::index_tensor_transposed, i + 1);
 
-        synchronization_dfb.push_back(one_tile);
-
         tile_regs_release<true>();
     }
-    leave_fused_section();
+    keys_dfb.pop_front(Wt);
+    input_transposed_dfb.push_back(Wt);
+    index_transposed_dfb.push_back(Wt);
 }
 #endif
 
@@ -204,6 +256,9 @@ void kernel_main() {
     DataflowBuffer input_tensor_transposed_dfb(dfb::input_tensor_transposed);
     DataflowBuffer index_tensor_transposed_dfb(dfb::index_tensor_transposed);
     DataflowBuffer synchronization_dfb(dfb::synchronization);
+#ifdef SORT_STABLE_FUSED_32B_DEST
+    DataflowBuffer fused_keys_dfb(dfb::fused_keys);
+#endif
 #ifndef IS_ROW_MAJOR
     DataflowBuffer value_tensor_dfb(dfb::value_tensor);
     DataflowBuffer index_tensor_output_dfb(dfb::index_tensor_output);
@@ -295,8 +350,27 @@ void kernel_main() {
 #endif
 
 #ifdef SORT_STABLE_FUSED_32B_DEST
-        sort_Wt_tiles_row_to_bitonic_sequence_fused<descending>(
-            input_tensor_dfb, index_tensor_dfb, input_tensor_transposed_dfb, index_tensor_transposed_dfb, Wt, ascending);
+        enter_fused_section();
+        sort_row_pairs_to_keys<descending>(input_tensor_dfb, index_tensor_dfb, fused_keys_dfb, Wt, ascending);
+        fused_keys_dfb.wait_front(Wt);
+
+        uint32_t stages = 0;
+        for (uint32_t i = Wt; i > 1; i >>= 1) {
+            stages++;
+        }
+        synchronization_dfb.reserve_back(one_tile);
+        synchronization_dfb.push_back(one_tile);
+        reconfig_data_format_srca(dfb::fused_keys);
+        for (uint32_t stage = 2; stage <= stages; stage++) {
+            for (uint32_t sub = stage; sub > 0; sub--) {
+                merge_pass_keys(synchronization_dfb, Wt, stage, sub, ascending);
+            }
+        }
+        synchronization_dfb.wait_front(one_tile);
+        synchronization_dfb.pop_front(one_tile);
+
+        split_keys<descending>(fused_keys_dfb, input_tensor_transposed_dfb, index_tensor_transposed_dfb, Wt);
+        leave_fused_section();
 #else
         sort_Wt_tiles_row_to_bitonic_sequence<stable, tie_order>(
             input_tensor_dfb,
@@ -307,7 +381,6 @@ void kernel_main() {
             /*switch_dir=*/true,
             ascending,
             /*end_phase(log2(K))=*/5);
-#endif
 
         // Wait for bitonic sequence of Wt tiles
         input_tensor_transposed_dfb.wait_front(Wt);
@@ -325,12 +398,6 @@ void kernel_main() {
         for (uint32_t stage = 2; stage <= stages; stage++) {
             const uint32_t m_iter = stage - 1;
             for (uint32_t sub = stage; sub > 0; sub--) {
-#ifdef SORT_STABLE_FUSED_32B_DEST
-                if (sub == 1) {
-                    sort_tile_pairs_fused<descending>(synchronization_dfb, Wt, stage, ascending);
-                    continue;
-                }
-#endif
                 uint32_t sub_dist = 1 << (sub - 1);
                 for (uint32_t i = 0; i < Wt; i++) {
                     uint32_t j = i ^ sub_dist;
@@ -426,6 +493,8 @@ void kernel_main() {
         input_tensor_transposed_dfb.push_back(Wt);
         index_tensor_transposed_dfb.push_back(Wt);
 
+#endif
+
         // TILE path: transpose-and-pack to 2-tile streaming buffers so the reader
         // and writer can stream tiles one-by-one to DRAM (existing behaviour).
         //
@@ -437,7 +506,11 @@ void kernel_main() {
         transpose_and_pack(
             input_tensor_transposed_dfb, value_tensor_dfb, Wt, /*prepare_uint16_value_for_pack=*/true);
         // Index tensor → 2-tile streaming buffer (reader drains to DRAM)
+#ifdef SORT_STABLE_FUSED_32B_DEST
+        transpose_and_pack_u16(index_tensor_transposed_dfb, index_tensor_output_dfb, Wt);
+#else
         transpose_and_pack(index_tensor_transposed_dfb, index_tensor_output_dfb, Wt);
+#endif
 #else
         {
             constexpr uint32_t TILE_H = 32;

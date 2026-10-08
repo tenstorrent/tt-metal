@@ -81,6 +81,33 @@ inline void flush_key_denormals() {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
+// Makes a NaN value of the keys in DEST 0,1 the infinity of its sign, index kept, as a pack out of a 16-bit DEST does.
+inline void keys_nan_to_inf() {
+    constexpr int body = 8;
+    TOPK_SFPENCC_ALL_LANES_ON();
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, 0xFF80);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, 0xFFFF);
+    set_dst_write_addr(0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    load_replay_buf<Exec>(0, body, [] {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_NODEBIAS);
+        TTI_SFPIADD(
+            (-255) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+        TTI_SFPAND(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);
+        TOPK_SFPENCC_ALL_LANES_ON();
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_INCRWC(0, 2, 0, 0);
+    });
+    for (int i = 1; i < 64; i++) {
+        lltt::replay(0, body);
+    }
+    set_dst_write_addr(0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    topk_replay_init = 0;
+}
+
 // Splits keys into u16 value and index words in the packer-visible high half (mode 9, as the u16 index pack).
 // nan_to_inf: a NaN value becomes the infinity of its sign, as a pack out of a 16-bit DEST makes it.
 template <bool largest, bool nan_to_inf>
