@@ -1383,8 +1383,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["SCALAR_IS_LHS"] = operation_attributes.scalar_is_lhs ? "1" : "0";
 
     // Blackhole, sharded bf16 FPU ops without activations or broadcast: a DEST section is unpacked with one call
-    // (BINARY_NG_BLOCK) and, from 16 tiles per core, packed with one (BINARY_NG_BLOCK_PACK); below that only add and sub
-    // take the unpack call alone.
+    // (BINARY_NG_BLOCK) and packed with one (BINARY_NG_BLOCK_PACK), from 16 tiles per core and for add and sub at any size.
     const bool block_kernel = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
                               std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) && !has_activations &&
                               num_tiles_per_cycle > 1 && compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
@@ -1395,8 +1394,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                                         OpConfig::FpuBinaryOp::MUL;
     if (block_pack || block_unpack_alone) {
         compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
-    }
-    if (block_pack) {
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
     }
 
