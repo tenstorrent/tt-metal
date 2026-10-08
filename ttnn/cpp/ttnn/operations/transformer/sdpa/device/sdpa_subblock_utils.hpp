@@ -46,6 +46,17 @@ static inline std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
     return {1, 1};
 }
 
+// The legacy exp ring joint kernel (exp_ring_joint_sdpa.cpp) builds only its streaming compute path: BF16 dest,
+// a QK subblock at most two tiles high, a K chunk divisible by the subblock's row of DEST tiles, and more than one
+// Q subblock per chunk. Shared by the program factory and the op's routing (sdpa.cpp), which runs every other
+// blocking on a recipe.
+static inline bool exp_ring_streaming_compute_supported(
+    uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t dst_size, bool fp32_dest_acc_en) {
+    const uint32_t subblock_h = determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size).first;
+    return !fp32_dest_acc_en && subblock_h <= 2 && Sk_chunk_t % (dst_size / subblock_h) == 0 &&
+           Sq_chunk_t / subblock_h > 1;
+}
+
 // Find the largest granularity value that:
 // 1. Is <= max_granularity (typically dst_size or dst_size/2)
 // 2. Evenly divides tile_count (so no tiles are dropped in the kernel loop)

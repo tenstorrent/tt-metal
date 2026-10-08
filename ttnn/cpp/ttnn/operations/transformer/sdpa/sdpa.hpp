@@ -15,8 +15,9 @@
 
 namespace ttnn::transformer {
 
-// Explicit numerical recipes. Omit precision to preserve the legacy API's
-// independent compute/program controls and broader platform/feature support.
+// Explicit numerical recipes. Without precision, a call that would reach a legacy compute_common.hpp loop runs a
+// recipe on Blackhole: FP32 DEST -> ACCURATE, non-ring joint and the exp ring fallback -> STANDARD (sdpa.cpp,
+// "Precision routing"); BF16-DEST calls keep the streaming kernels.
 enum class SDPAPrecision : uint8_t { STANDARD, BALANCED, ACCURATE, FAST };
 
 // Out-of-place rounding for FAST inputs: Q to 7 significant bits, K/V to 5 (BF16/BFP8) or onto
@@ -74,7 +75,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     // and a per-head learned attention sink, both as in scaled_dot_product_attention.
     std::optional<uint32_t> sliding_window_size = std::nullopt,
     const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
-    // Named numerical recipe (as scaled_dot_product_attention); omit for the legacy kernel.
+    // Named numerical recipe (as scaled_dot_product_attention, including its routing when omitted).
     std::optional<SDPAPrecision> precision = std::nullopt);
 
 /// Flexible: chunk start index in device tensor [1] (int32). Read at runtime; use for trace.
