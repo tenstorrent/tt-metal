@@ -1,0 +1,10 @@
+Another reviewer claims that ONE pull request (or commit) fixes ONE failing CI test in the tt-metal repository. Your job is to try hard to REFUTE that claim. Claims like this are often wrong: a PR touches the same file or mentions a similar word ("race", "hang", the test name) but changes something that cannot produce the observed symptom.
+
+Check, from the raw log and the diff:
+1. Does the failure mode in the log (wrong values / assert / hang or timeout / perf band / missing file / infra) match what the diff can change? A race fix does not explain a silent hang; in the LLK-asserts and watcher debug lanes a silent hang usually means a device assert halted the core.
+2. Does the failure appear only in a lane or SKU the diff cannot affect?
+3. Is the claimed mechanism stated in the diff or PR text, or only inferred from a title or a guess in the triage summary?
+
+refuted = true if any check breaks the claim or the chain cannot be established from the evidence. refuted = false only if the diff plainly removes the cause of exactly this symptom.
+reason: one short sentence.
+Return the JSON object matching the schema.

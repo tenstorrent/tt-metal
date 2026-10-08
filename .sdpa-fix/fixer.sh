@@ -620,17 +620,55 @@ done
 # fixed_upstream (verified by the next run that contains it); open fix →
 # fix_pending (the bot does not draft its own fix; merge/close is followed).
 # ======================================================================
+# Raw log excerpt of the failing job(s), from what triage saved for that run.
+failure_log() {  # $1 failure json
+  local f="$1" lf j out=""
+  lf="$FIX_HOME/runs/$(jq -r '.last_run // ""' <<<"$f").logs.txt"
+  [[ -f "$lf" ]] || { echo "(no saved log excerpt)"; return; }
+  while IFS= read -r j; do
+    [[ -z "$j" ]] && continue
+    out+=$(awk -v j="=== JOB: $j ===" 'index($0, j) == 1 {on=1; print; next} /^=== JOB: / {on=0} on' "$lf" | tail -c 6000)
+  done < <(jq -r '.jobs[]?' <<<"$f")
+  printf '%s' "${out:-(no saved log excerpt for this job)}"
+}
+
 judge_candidate() {  # $1 failure json, $2 candidate text → verdict JSON (or nothing)
   local prompt out
   prompt="$(cat "$FIX_HOME/prompts/judge.txt")
 
 # Failure
-$(jq -r '"test: \(.test)\njob: \(.job) (\(.workflow))\nerror: \(.summary)"' <<<"$1")
+$(jq -r '"test: \(.test)\njob: \(.job) (\(.workflow))\ntriage summary (may contain guesses): \(.summary)"' <<<"$1")
+
+Raw log excerpt of the failing job:
+$(failure_log "$1")
 
 # Candidate
 $2"
   out=$(cd "$TT_METAL_DIR" && timeout 300 claude --model "$TRIAGE_MODEL" -p --output-format json \
           --json-schema "$(cat "$FIX_HOME/schemas/judge.json")" --allowedTools "Read" "Grep" \
+          <<<"$prompt" 2>>"$AGENT_ERR") || return 0
+  jq -c '.structured_output // empty' <<<"$out"
+}
+
+# Second opinion on a "yes": a skeptic tries to refute it. A fix is claimed
+# only when the skeptic cannot.
+skeptic_candidate() {  # $1 failure json, $2 candidate text, $3 judge verdict → {refuted, reason}
+  local prompt out
+  prompt="$(cat "$FIX_HOME/prompts/judge_skeptic.txt")
+
+# Claim
+$(jq -r .reason <<<"$3")
+
+# Failure
+$(jq -r '"test: \(.test)\njob: \(.job) (\(.workflow))"' <<<"$1")
+
+Raw log excerpt of the failing job:
+$(failure_log "$1")
+
+# Candidate
+$2"
+  out=$(cd "$TT_METAL_DIR" && timeout 300 claude --model "$FIX_MODEL" -p --output-format json \
+          --json-schema "$(cat "$FIX_HOME/schemas/judge_skeptic.json")" --allowedTools "Read" "Grep" \
           <<<"$prompt" 2>>"$AGENT_ERR") || return 0
   jq -c '.structured_output // empty' <<<"$out"
 }
@@ -724,8 +762,16 @@ $(git -C "$TT_METAL_DIR" show --format= "$csha" | head -c 6000)"
       fixes=$(jq -r .fixes <<<"$v"); conf=$(jq -r .confidence <<<"$v"); reason=$(jq -r .reason <<<"$v")
       log "  scan $short: $id ($kind) → fixes=$fixes symptom_match=$(jq -r .symptom_match <<<"$v") ($conf) $reason"
       # Only a sure verdict is shown to people: high confidence AND the same
-      # failure mode. Anything less stays a cached "no" in the ledger.
+      # failure mode AND a skeptic that cannot refute it. Anything less stays a
+      # cached "no" in the ledger.
       [[ "$fixes" == "true" && "$conf" == "high" && "$(jq -r .symptom_match <<<"$v")" == "true" ]] || continue
+      local sk
+      sk=$(skeptic_candidate "$f" "$text" "$v")
+      $FIXLIB mark --state keep --extra "$(jq -nc --arg i "$id" --argjson v "$v" --argjson k "${sk:-null}" '{checked: {($i): ($v + {skeptic: $k})}}')" "$sig"
+      if [[ -z "$sk" || "$(jq -r .refuted <<<"$sk")" != "false" ]]; then
+        log "  scan $short: $id rejected by the skeptic: $(jq -r '.reason // "no answer"' <<<"${sk:-null}")"
+        continue
+      fi
       n="${id#pr:}"; [[ "$id" == pr:* ]] || n=""
       local who
       if [[ -n "$n" ]]; then who=$(pr_author "$n"); else who=$(git -C "$TT_METAL_DIR" log -1 --format=%an "$csha"); fi

@@ -1,0 +1,6 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["refuted", "reason"],
+  "properties": {"refuted": {"type": "boolean"}, "reason": {"type": "string", "maxLength": 300}}
+}

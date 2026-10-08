@@ -359,7 +359,8 @@ def cmd_scan_list(a):
                         "state": r["state"], "summary": r.get("summary") or r.get("error_key") or "",
                         "first_sha": (r.get("first_seen") or {}).get("sha", ""),
                         "first_at": r.get("created", ""), "paths": paths, "terms": terms[:3],
-                        "fix_pr": r.get("fix_pr"), "checked": r.get("checked", {})})
+                        "fix_pr": r.get("fix_pr"), "checked": r.get("checked", {}),
+                        "last_run": (r.get("last_seen") or {}).get("id", ""), "jobs": r.get("sku_jobs", [])})
         json.dump(out, sys.stdout)
 
 
