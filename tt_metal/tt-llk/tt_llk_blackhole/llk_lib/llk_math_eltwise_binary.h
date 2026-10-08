@@ -95,8 +95,8 @@ inline void eltwise_binary_configure_addrmod()
 
 /**
  * @brief Whether the dest-reuse path consumes each operand tile as one source bank: SrcDvalid::PerTile without a broadcast, or with a row
- *        broadcast of the L1 operand (DEST_TO_SRCA); it does for full 16-row faces, 2 x 2 of them for the row broadcast. The dest-reuse
- *        unpack init applies the same rule (@ref unpack_A_tile_dvalid), so the two threads agree.
+ *        broadcast of the L1 operand (DEST_TO_SRCA); it does for two or more full 16-row faces, 2 x 2 of them for the row broadcast. The
+ *        dest-reuse unpack init applies the same rule (@ref unpack_A_tile_dvalid), so the two threads agree.
  */
 template <BroadcastType bcast_type, EltwiseBinaryReuseDestType binary_reuse_dest, SrcDvalid src_dvalid>
 inline constexpr bool eltwise_binary_tile_dvalid =
@@ -122,13 +122,13 @@ inline bool eltwise_binary_tile_shape(const ckernel::TensorShape tensor_shape)
 }
 
 /**
- * @brief Whether the dest-reuse path takes the whole-tile program for this tile shape (see @ref eltwise_binary_tile_dvalid): full 16-row faces,
- *        2 x 2 of them for a row broadcast. The dest-reuse unpack init applies the same rule.
+ * @brief Whether the dest-reuse path takes the whole-tile program for this tile shape (see @ref eltwise_binary_tile_dvalid): two or more full
+ *        16-row faces, 2 x 2 of them for a row broadcast. A one-face tile keeps the per-face program. The dest-reuse unpack init applies the same rule.
  */
 template <BroadcastType bcast_type>
 inline bool eltwise_binary_reuse_tile_shape(const ckernel::TensorShape tensor_shape)
 {
-    return tensor_shape.face_r_dim == FACE_R_DIM &&
+    return tensor_shape.face_r_dim == FACE_R_DIM && tensor_shape.total_num_faces() > 1 &&
            (bcast_type != BroadcastType::ROW || (tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2));
 }
 
