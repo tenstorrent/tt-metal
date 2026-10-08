@@ -485,6 +485,27 @@ SHAPES = [
     (1152, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # SNG proj_mlp / xc-merged
     (1024, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # DBL ff spatial
     (128, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # DBL ff_context (prompt)
+    # -----------------------------------------------------------------------
+    # Qwen-Image-Edit (2511) on WH Galaxy, CFG-parallel TP=4 x SP=4, Linear topology.
+    # inner_dim = 24 heads x 128 = 3072; FFN mult 4 -> 12288 (/TP4 = 3072 per device).
+    # Topology is Linear and the block pre-gathers the TP activation, so EVERY per-block
+    # matmul takes the plain minimal_matmul path (is_agmm=False) on the full 8x9 grid and
+    # currently misses grid_89_configs -> hardcoded (8, 8, 8) / (2, 8, 8) default.
+    # M = per-SP-device sequence: spatial 2048 (8192 tokens / SP4), prompt 224 (bucketed).
+    # K = full gathered inner_dim (3072) or joint_dim (3584); N = per-TP-device weight width.
+    # Swept on device config wh_4x8_linear; paste winners into grid_89_configs (keyed on M,K,N).
+    # -----------------------------------------------------------------------
+    # Spatial stream (M=2048), x60 blocks each.
+    (2048, 3072, 2304, 8, 9, False, "plain"),  # to_qkv  (3*3072/4 = 2304)
+    (2048, 3072, 3072, 8, 9, False, "plain"),  # ff1 AND ff2 (12288/4 = 3072)
+    (2048, 3072, 768, 8, 9, False, "plain"),  # to_out  (3072/4 = 768)
+    # Prompt stream (M=224), x60 blocks each (currently 2,8,8 default).
+    (224, 3072, 2304, 8, 9, False, "plain"),  # add_qkv (prompt)
+    (224, 3072, 768, 8, 9, False, "plain"),  # to_out  (prompt)
+    (224, 3584, 768, 8, 9, False, "plain"),  # txt_in  (joint_dim 3584 -> 768), x1/forward
+    # Once-per-forward edges.
+    (2048, 64, 768, 8, 9, False, "plain"),  # img_in  (in_channels 64 -> 768)
+    (2048, 3072, 64, 8, 9, False, "plain"),  # proj_out (3072 -> patch^2*out_ch = 64)
 ]
 
 

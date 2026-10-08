@@ -185,6 +185,17 @@ grid_89_configs = {
     (128, 5120, 1280): (2, 16, 2),
     (9472, 5120, 3456): (8, 8, 8),
     (9472, 3456, 5120): (8, 8, 8),
+    # Qwen-Image-Edit (2511) on WH Galaxy 8x9, CFG-parallel TP=4 x SP=4, Linear topology.
+    # Swept with models/tt_dit/utils/sweep_mm_block_sizes.py (plain minimal_matmul).
+    # Spatial M=2048 (x60 blocks), prompt M=224 (x60 blocks), img/txt/proj M edges (x1/fwd).
+    (2048, 3072, 3072): (8, 6, 12, (2, 2)),  # ff1/ff2 (x120/step); 556.7us vs (8,8,8) 708.3us = -21.4%
+    (2048, 3072, 2304): (8, 8, 10, (2, 2)),  # spatial to_qkv; 462.2us
+    (2048, 3072, 768): (8, 4, 3, (4, 1)),  # spatial to_out; 210.1us
+    (224, 3072, 2304): (2, 6, 6, (2, 2)),  # prompt add_qkv; 201.6us
+    (224, 3072, 768): (2, 4, 3, (1, 3)),  # prompt to_out; 76.8us
+    (224, 3584, 768): (2, 7, 3, (1, 3)),  # txt_in; 87.7us
+    (2048, 64, 768): (14, 2, 3, (1, 3)),  # img_in; 30.9us
+    (2048, 3072, 64): (2, 12, 2, (2, 2)),  # proj_out; 170.7us
 }
 
 grid_13_9_configs = {
