@@ -1,0 +1,1 @@
+# the merged head with main's joint_sdpa.cpp (no row MOP in joint SDPA; compute_common.hpp defaults it off)

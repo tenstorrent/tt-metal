@@ -1,0 +1,2 @@
+bits4 head test_rn50m_prof.py
+bits4 cv2 test_rn50m_prof.py
