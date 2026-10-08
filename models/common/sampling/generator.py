@@ -16,6 +16,7 @@ from ttnn.tools import trace_allocation_tracker
 import ttnn
 
 from ._utils import clamp, is_default_value, split_list
+from .tt_log_probs import LogProbsResult
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
 
@@ -25,13 +26,16 @@ DEVICE_SEED_MAX = 1_000_000
 _UINT64_MASK = (1 << 64) - 1
 
 
-def _acknowledge_trace_buffers_corruptible(bucket, value):
-    """Acknowledge bucketed trace I/O that another live trace may overwrite."""
-    if bucket is None or value is None:
+def _acknowledge_trace_io_corruptible(value):
+    """Acknowledge device tensors in trace inputs or outputs that another trace may overwrite."""
+    if value is None:
         return
     if isinstance(value, (list, tuple)):
         for item in value:
-            _acknowledge_trace_buffers_corruptible(bucket, item)
+            _acknowledge_trace_io_corruptible(item)
+        return
+    if isinstance(value, LogProbsResult):
+        _acknowledge_trace_io_corruptible((value.topk_logprobs, value.topk_indices))
         return
     trace_allocation_tracker.acknowledge_corruptible(value)
 
@@ -133,6 +137,7 @@ class SamplingGenerator:
 
         self._trace_states: dict[_TraceKey, dict] = {}
         self._active_trace_bucket = None
+        self._fully_precompiled_trace_buckets: set[int | None] = set()
         seed_batch_size = self.tt_sampling.max_batch_size * self.tt_sampling._sampling_dp
         self.seed_manager = SeedManager(
             self.tt_sampling,
@@ -325,7 +330,6 @@ class SamplingGenerator:
     # Sampling helpers
     # ---------------------------------------------------------------------
     def reset_sampling_params(self, sampling_params, empty_slots: list[int] | None = None):
-        old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
         num_logprobs = getattr(sampling_params, "num_logprobs", None)
         self.tt_sampling.reset_params(
             k=sampling_params.top_k,
@@ -335,8 +339,6 @@ class SamplingGenerator:
             num_logprobs=num_logprobs,
             empty_slots=empty_slots,
         )
-        if self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling:
-            self.reset_trace()
 
         old_penalties_active = self._penalties_active
         self._penalties_active = not (
@@ -497,6 +499,8 @@ class SamplingGenerator:
             log_probs.set_log_probs_mode(saved_enabled, num_logprobs=saved_num_logprobs)
             self._log_probs_active = log_probs.enable_log_probs
 
+        self._fully_precompiled_trace_buckets.add(self._active_trace_bucket)
+
     def capture_trace(
         self,
         logits: ttnn.Tensor,
@@ -506,6 +510,10 @@ class SamplingGenerator:
     ) -> ttnn.Tensor:
         """
         Capture a trace of the sampling pipeline for the given configuration.
+
+        The returned device tensors are reusable trace output buffers. A later trace execution can
+        overwrite them. Consume or copy their contents before executing another trace if they must
+        be retained.
         """
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
@@ -513,35 +521,23 @@ class SamplingGenerator:
 
         key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
 
-        if not skip_precompile:
-            logger.debug(
-                f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax})"
-            )
-            # TTPenalties.apply() rewrites its input in place, so compiling on `logits` itself would
-            # leave the capture buffer already penalized and make the first replay penalize it twice.
-            scratch = self._copy_warmup_logits(logits) if penalties_on else logits
-            self._run_sampling(
-                scratch,
-                penalties_on=penalties_on,
-                tt_out_tok=tt_out_tok,
-                count_tokens=False,
-            )
-            if scratch is not logits:
-                ttnn.deallocate(scratch)
+        if not skip_precompile and self._active_trace_bucket not in self._fully_precompiled_trace_buckets:
+            if any(state["id"] is not None for state in self._trace_states.values()):
+                raise RuntimeError(
+                    "Cannot precompile a new sampling trace configuration after another sampling trace is active. "
+                    "Call precompile(..., all_configs=True) before the first trace capture."
+                )
+            logger.debug("Pre-compiling every sampling path before the first trace capture")
+            self.precompile(logits, tt_out_tok=tt_out_tok, all_configs=True)
 
-        # Whatever sampling allocates inside the capture window (e.g. the argmax output when no
-        # feedback buffer is supplied) belongs to the trace being recorded and must stay allocated
-        # for replay. Acknowledge the window (no-op unless TT_METAL_TRACE_ALLOC_TRACKING=1), as the
-        # model decode capture does; measured: 1 buffer left live across every replay on Qwen2.5-VL.
-        with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
-            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
-            sampled = self._run_sampling(
-                logits,
-                penalties_on=penalties_on,
-                tt_out_tok=tt_out_tok,
-            )
-            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
-            ttnn.synchronize_device(self.mesh_device)
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
+        sampled = self._run_sampling(
+            logits,
+            penalties_on=penalties_on,
+            tt_out_tok=tt_out_tok,
+        )
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
+        ttnn.synchronize_device(self.mesh_device)
 
         if tt_out_tok is not None:
             if isinstance(sampled, tuple):
@@ -555,7 +551,13 @@ class SamplingGenerator:
         slot["input"] = logits
         slot["output"] = output
         slot["kwargs"] = {"tt_out_tok": tt_out_tok}
-        _acknowledge_trace_buffers_corruptible(self._active_trace_bucket, (logits, output))
+        # These reusable output buffers are fully overwritten before each return. Acknowledge their
+        # limited lifetime so another keyed sampling trace can replay while they remain allocated.
+        _acknowledge_trace_io_corruptible(output)
+        if self._active_trace_bucket is not None:
+            # Bucketed callers reuse one underlying decode-output tensor across bucket widths. A
+            # different bucket's trace can overwrite these captured logits before this trace replays.
+            _acknowledge_trace_io_corruptible(logits)
 
         return slot["output"]
 
@@ -584,6 +586,10 @@ class SamplingGenerator:
 
         ``count_tokens`` only applies to the untraced path: the token-count update is recorded into
         the trace at capture time, so a replay always performs it.
+
+        With trace replay, the returned device tensors are reusable trace output buffers. A later
+        trace execution can overwrite them. Consume or copy their contents before executing another
+        trace if they must be retained.
         """
 
         penalties_on = self._penalties_active

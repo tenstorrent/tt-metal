@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 import pytest
 import torch
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
@@ -2005,6 +2006,83 @@ class TestTracedSampling:
             if sg is not None:
                 del sg
             safe_sync(mesh_device)
+
+    def _run_trace_reuses_greedy_and_regular_sampling_slots(self, mesh_device):
+        """Alternating request modes captures each sampling program once.
+
+        Greedy and regular sampling have different program graphs, but both bind the same
+        persistent logits tensor and keep independent output/trace state. Returning to a mode
+        must therefore replay its original trace instead of releasing both traces and capturing
+        again. This uses the default sample() flow so the first capture must compile both programs
+        before it becomes active. The regular path uses top-k=2 over two dominant tokens, so
+        correctness is stable without an explicit seed (explicit seeds intentionally bypass traces).
+        """
+        args = make_sampling_args(mesh_device)
+        args.model_config = {
+            "SAMPLING_AG_CONFIG": {
+                "allow_force_argmax": True,
+                "num_links": 1,
+                "topology": ttnn.Topology.Linear,
+            }
+        }
+        hot_tokens = [3500, 3501]
+        logits = build_hot_logits(args, hot_tokens=hot_tokens)
+        padded = pad_logits_to_max_batch(logits, max_batch_size=BATCH_SIZE)
+        greedy = per_lane_params(temperature=0.0, top_k=1, top_p=1.0)
+        regular = per_lane_params(temperature=1.0, top_k=2, top_p=1.0)
+
+        sg = None
+        tt_input = None
+        try:
+            sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
+            sg.seed_manager.reset_seed(None, list(range(BATCH_SIZE)))
+            tt_input = make_sharded_logits(padded, mesh_device, args)
+
+            trace_ids = {}
+            requests = (("greedy", greedy), ("regular", regular), ("greedy", greedy), ("regular", regular))
+            for label, params in requests:
+                sg.reset_sampling_params(format_sampling_params(params, BATCH_SIZE))
+                sg.seed_manager.get_new_values()
+                tt_tokens, _ = sg.sample(tt_input, enable_trace=True)
+                ttnn.synchronize_device(mesh_device)
+
+                tokens = extract_tokens(tt_tokens)
+                if label == "greedy":
+                    assert tokens == [hot_tokens[0]] * BATCH_SIZE
+                else:
+                    assert set(tokens) <= set(hot_tokens)
+
+                _, slot = sg._trace_slot(False, False, label == "greedy")
+                assert slot["id"] is not None
+                if label in trace_ids:
+                    assert slot["id"] == trace_ids[label], f"{label} sampling trace was recaptured"
+                else:
+                    trace_ids[label] = slot["id"]
+
+            assert len(sg._trace_states) == 2
+            assert trace_ids["greedy"] != trace_ids["regular"]
+        finally:
+            if sg is not None:
+                try:
+                    sg.reset_trace()
+                except Exception:
+                    pass
+            if tt_input is not None:
+                del tt_input
+            if sg is not None:
+                del sg
+            safe_sync(mesh_device)
+
+    def test_trace_reuses_greedy_and_regular_sampling_slots(self, mesh_device, device_params):
+        self._run_trace_reuses_greedy_and_regular_sampling_slots(mesh_device)
+
+    @pytest.mark.skipif(
+        not trace_allocation_tracker.TRACE_ALLOC_TRACKING,
+        reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 at process startup",
+    )
+    def test_trace_reuses_greedy_and_regular_sampling_slots_with_tracker(self, mesh_device, device_params):
+        assert trace_allocation_tracker.TRACE_ALLOC_TRACKING
+        self._run_trace_reuses_greedy_and_regular_sampling_slots(mesh_device)
 
 
 # --- Test: format_sampling_params lane semantics (host-only, no device) ---
