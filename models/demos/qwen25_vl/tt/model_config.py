@@ -66,6 +66,23 @@ class ModelArgs(TTModelArgs):
         "olmOCR-2-7B-1025": "models/tt_transformers/model_params/Qwen2.5-VL-7B-Instruct",
     }
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Qwen2.5-VL's K-projection biases (|b_k| up to ~170) make raw QK^T too large for the bf16 score
+        # intermediates of the decode SDPA kernel; subtract them from the post-RoPE keys (softmax-invariant,
+        # see tt_transformers Attention._create_k_bias_shift). Opt-in flag of the shared config.
+        self.subtract_k_bias_post_rope = True
+
+        # 72B on a 1x8 mesh (T3K, or one Galaxy lane) has only a few hundred MB of DRAM left per chip after
+        # weights + KV cache, less than the MLP working set of a batched prefill; keep the per-user prefill
+        # upstream used for it. The smaller variants batch prefill as usual.
+        if self.base_model_name == "Qwen2.5-VL-72B" and self.num_devices == 8:
+            self.disable_batched_prefill = True
+        # Single-user prefill is replayed from a trace where that pays off (the 3B/7B class); the 32B/72B
+        # prefill traces do not fit the 28 MB trace region those variants are deployed with, so they keep the
+        # eager prefill upstream used (decode is still traced).
+        self.trace_prefill = self.base_model_name not in ("Qwen2.5-VL-32B", "Qwen2.5-VL-72B")
+
     def _lm_head_grid_dims(self):
         # On a full 32-device mesh the LM head is width-sharded over the mesh columns; pick a
         # tile-aligned grid for that per-device width (the base search can reach 0 rows, e.g. dim=3584).
@@ -133,15 +150,6 @@ class VisionModelArgs(ModelArgs):
         )
 
         assert self.vision_n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
-
-        # Enable fused QK ops (rotary embedding + paged cache update) for decode.
-        # The base class disables this for multimodal models, but for Qwen2.5-VL the
-        # fused path only affects decode (not prefill), and M-RoPE differences are
-        # handled in the prefill code path which uses pre-computed rotation matrices.
-        self.use_qk_fused = True
-        # Qwen2.5-VL's K-projection biases (|b_k| up to ~170) make raw QK^T too large for the bf16 score
-        # intermediates of the decode SDPA kernel; subtract them from the post-RoPE keys (softmax-invariant).
-        self.subtract_k_bias_post_rope = True
 
         # Minimal matmul configs for text decoder MLP on N300 (experimental, gated behind env var)
         self.use_minimal_matmul = os.getenv("TT_MINIMAL_MATMUL") == "1" and not self.is_galaxy
