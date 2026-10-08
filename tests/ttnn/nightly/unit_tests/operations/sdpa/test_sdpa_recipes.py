@@ -11,6 +11,7 @@ import torch
 import ttnn
 
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
+    CAUSAL_SHAPES,
     L2_PCT_BOUND,
     OP_SELECTED_SHAPES,
     SHAPES,
@@ -18,9 +19,13 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     blackhole_only,
     check_accuracy,
     check_attn_mask,
+    check_chunked,
+    check_chunked_trace,
     check_joint,
+    check_key_range,
     check_legacy_arguments,
     check_op_selected_blocking,
+    check_windowed,
     l2_pct,
     program_config,
     randn,
@@ -175,3 +180,62 @@ def test_joint_sdpa_recipe_legacy_arguments(device, variant):
     actual = torch.cat([ttnn.to_torch(out), ttnn.to_torch(joint_out)], 2)
     output_rounding = 1.5 * l2_pct(stored(expected.bfloat16(), ttnn.bfloat8_b), expected)
     assert l2_pct(actual, expected) < L2_PCT_BOUND[variant] + output_rounding
+
+
+@pytest.mark.parametrize("shape", CAUSAL_SHAPES.values(), ids=CAUSAL_SHAPES.keys())
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_sdpa_recipe_causal(device, variant, shape):
+    check_key_range(device, variant, shape, causal=True)
+
+
+# Windows narrower than a K chunk (rows with no visible key in a Q chunk's first K chunk), off tile and chunk
+# boundaries, and wider than the sequence's chunks; causal (left) and centred.
+@pytest.mark.parametrize("window", [64, 300, 1100])
+@pytest.mark.parametrize("causal", [True, False], ids=["causal", "centred"])
+@pytest.mark.parametrize("shape", ["q256_k512", "odd_q96_k160_d64", "gqa_batch2"])
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_sdpa_recipe_sliding_window(device, variant, shape, causal, window):
+    check_key_range(device, variant, CAUSAL_SHAPES[shape], causal=causal, window=window)
+
+
+# Chunk offsets on and off chunk boundaries, Q chunks over and under the K chunk, GQA and batch (the page table
+# reverses the cache blocks), a sliding window, and the offset read on device.
+CHUNKED_CASES = {
+    "start0": dict(start=0),
+    "start512": dict(start=512),
+    "start96_off_chunk": dict(start=96),
+    "start700_q256_k128": dict(start=700, q_chunk=256, k_chunk=128),
+    "gqa_batch2": dict(start=384, b=2, nh=8, nkv=2),
+    "tail_sq200": dict(start=320, sq=200, block=640),
+    "window300": dict(start=640, window=300),
+    "more_heads_than_cores": dict(start=128, b=8, nh=24, nkv=8, block=512),
+}
+
+
+@pytest.mark.parametrize("as_tensor", [False, True], ids=["scalar_start", "tensor_start"])
+@pytest.mark.parametrize("case", CHUNKED_CASES.values(), ids=CHUNKED_CASES.keys())
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_chunked_sdpa_recipe(device, variant, case, as_tensor):
+    check_chunked(device, variant, as_tensor=as_tensor, **case)
+
+
+@pytest.mark.parametrize("variant", ["standard", "balanced", "accurate", "fast_bfp8"])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 4194304}], indirect=True)
+def test_chunked_sdpa_recipe_trace(device, variant):
+    check_chunked_trace(device, variant, [512, 0, 96, 768])
+
+
+# Windows of length 1 and off tile boundaries; Q slices at an offset (scalar or per-device tensor).
+WINDOWED_CASES = {
+    "full_q": dict(cu=[0, 100, 356, 357, 800, 1024]),
+    "q_slice": dict(cu=[0, 100, 356, 357, 800, 1024], q_rows=512, q_offset=256),
+    "q_slice_tensor": dict(cu=[0, 100, 356, 357, 800, 1024], q_rows=512, q_offset=512, offset_as_tensor=True),
+    "uniform_q64_k512": dict(cu=list(range(0, 2049, 256)), chunks=(64, 512)),
+}
+
+
+@pytest.mark.parametrize("causal", [False, True], ids=["bidir", "causal"])
+@pytest.mark.parametrize("case", WINDOWED_CASES.values(), ids=WINDOWED_CASES.keys())
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_windowed_sdpa_recipe(device, variant, case, causal):
+    check_windowed(device, variant, causal=causal, **case)

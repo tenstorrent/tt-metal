@@ -264,3 +264,134 @@ def check_legacy_arguments(
     output_rounding = factor * l2_pct(stored(expected.bfloat16(), q_dtype), expected) if factor else 0.0
     assert l2_pct(actual, expected) < L2_PCT_BOUND[variant] + output_rounding
     return out
+
+
+def key_mask(sq, sk, *, causal=False, window=None, q_offset=0, cu=None):
+    """Additive {0, -inf} mask of the recipes' key ranges (ttnn's golden semantics): query row i sits at global
+    position q_offset + i; cu are windowed mode's cumulative window bounds (cu_window_seqlens)."""
+    q_pos = torch.arange(q_offset, q_offset + sq).unsqueeze(1)
+    k_pos = torch.arange(sk).unsqueeze(0)
+    allowed = torch.ones(sq, sk, dtype=torch.bool)
+    if cu is not None:
+        bounds = torch.tensor(cu)
+        allowed &= torch.bucketize(q_pos, bounds, right=True) == torch.bucketize(k_pos, bounds, right=True)
+    if causal:
+        allowed &= k_pos <= q_pos
+    if window:
+        if causal:
+            allowed &= k_pos > q_pos - window
+        else:
+            allowed &= (k_pos >= q_pos - window // 2) & (k_pos <= q_pos + window // 2)
+    return torch.zeros(sq, sk).masked_fill(~allowed, -math.inf)
+
+
+def int_tensor(device, values):
+    return ttnn.from_torch(torch.tensor(values, dtype=torch.int32), dtype=ttnn.int32, device=device)
+
+
+# Causal / sliding-window shapes: b, nh, nkv, s, d, q_chunk, k_chunk (Sq == Sk).
+CAUSAL_SHAPES = {
+    "q256_k512": (1, 2, 2, 2048, 128, 256, 512),
+    "q512_k128": (1, 2, 2, 1024, 128, 512, 128),
+    "subtile_tails": (1, 2, 2, 1000, 128, 256, 512),
+    "odd_q96_k160_d64": (1, 2, 2, 864, 64, 96, 160),
+    "gqa_batch2": (2, 8, 2, 768, 128, 128, 256),
+    "more_heads_than_cores": (8, 24, 8, 512, 64, 128, 128),
+}
+
+
+def check_key_range(device, variant, shape, *, causal, window=None):
+    """Dense causal and/or sliding-window SDPA (scaled_dot_product_attention with is_causal / sliding_window_size)."""
+    b, nh, nkv, s, d, q_chunk, k_chunk = shape
+    q, k, v = randn(b, nh, s, d, seed=33), randn(b, nkv, s, d, seed=34), randn(b, nkv, s, d, seed=35)
+    out = ttnn.transformer.scaled_dot_product_attention(
+        *inputs_for(device, variant, q, k, v),
+        is_causal=causal,
+        sliding_window_size=window,
+        program_config=program_config(device, q_chunk, k_chunk),
+        precision=VARIANTS[variant][0],
+    )
+    expected = reference(q, k, v, key_mask(s, s, causal=causal, window=window))
+    assert l2_pct(ttnn.to_torch(out), expected) < L2_PCT_BOUND[variant]
+
+
+def check_windowed(device, variant, cu, *, causal, q_rows=None, q_offset=0, offset_as_tensor=False, chunks=(128, 256)):
+    """Windowed (block-diagonal) SDPA from cu_window_seqlens, optionally on a Q slice at q_offset."""
+    s, d = cu[-1], 128
+    q, k, v = randn(1, 4, s, d, seed=36), randn(1, 2, s, d, seed=37), randn(1, 2, s, d, seed=38)
+    q_rows = q_rows or s
+    q = q[:, :, q_offset : q_offset + q_rows].contiguous()
+    kwargs = dict(cu_window_seqlens=int_tensor(device, cu))
+    if offset_as_tensor:
+        kwargs["windowed_q_token_offset_tensor"] = int_tensor(device, [q_offset])
+    else:
+        kwargs["windowed_q_token_offset"] = q_offset
+    out = ttnn.transformer.scaled_dot_product_attention(
+        *inputs_for(device, variant, q, k, v),
+        is_causal=causal,
+        program_config=program_config(device, *chunks),
+        precision=VARIANTS[variant][0],
+        **kwargs,
+    )
+    expected = reference(q, k, v, key_mask(q_rows, s, causal=causal, q_offset=q_offset, cu=cu))
+    assert l2_pct(ttnn.to_torch(out), expected) < L2_PCT_BOUND[variant]
+
+
+class ChunkedCase:
+    """Chunked prefill: Q rows [start, start + sq) of each sequence over a K/V cache of one block per sequence;
+    the page table maps batch b to block blocks[b]."""
+
+    def __init__(self, device, variant, *, b=1, nh=2, nkv=2, sq=256, block=1024, d=128, blocks=None, seed=40):
+        self.device, self.variant = device, variant
+        self.blocks = blocks or list(reversed(range(b)))
+        count = max(self.blocks) + 1
+        self.q = randn(b, nh, sq, d, seed=seed)
+        self.k, self.v = randn(count, nkv, block, d, seed=seed + 1), randn(count, nkv, block, d, seed=seed + 2)
+        self.inputs = inputs_for(device, variant, self.q, self.k, self.v)
+        self.page_table = int_tensor(device, [[x] for x in self.blocks])
+
+    def run(self, start, q_chunk, k_chunk, *, window=None, start_tensor=None):
+        kwargs = dict(chunk_start_idx_tensor=start_tensor) if start_tensor is not None else dict(chunk_start_idx=start)
+        return ttnn.transformer.chunked_scaled_dot_product_attention(
+            *self.inputs,
+            self.page_table,
+            program_config=program_config(self.device, q_chunk, k_chunk),
+            sliding_window_size=window,
+            precision=VARIANTS[self.variant][0],
+            **kwargs,
+        )
+
+    def expected(self, start, window=None):
+        sq = self.q.shape[2]
+        keys = start + sq
+        k, v = self.k[self.blocks, :, :keys], self.v[self.blocks, :, :keys]
+        return reference(self.q, k, v, key_mask(sq, keys, causal=True, window=window, q_offset=start))
+
+    def check(self, out, start, window=None):
+        assert l2_pct(ttnn.to_torch(out), self.expected(start, window)) < L2_PCT_BOUND[self.variant]
+
+
+def check_chunked(device, variant, start, *, q_chunk=128, k_chunk=256, window=None, as_tensor=False, **case):
+    chunked = ChunkedCase(device, variant, **case)
+    start_tensor = int_tensor(device, [start]) if as_tensor else None
+    chunked.check(chunked.run(start, q_chunk, k_chunk, window=window, start_tensor=start_tensor), start, window)
+
+
+def check_chunked_trace(device, variant, starts, *, q_chunk=128, k_chunk=256):
+    """chunk_start_idx_tensor is read on device: one captured trace replays at every start offset."""
+    device.enable_program_cache()
+    chunked = ChunkedCase(device, variant)
+    start_tensor = int_tensor(device, [starts[0]])
+    chunked.check(chunked.run(starts[0], q_chunk, k_chunk, start_tensor=start_tensor), starts[0])
+    trace = ttnn.begin_trace_capture(device, cq_id=0)
+    traced = chunked.run(starts[0], q_chunk, k_chunk, start_tensor=start_tensor)
+    ttnn.end_trace_capture(device, trace, cq_id=0)
+    try:
+        for start in starts:
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(torch.tensor([start], dtype=torch.int32), dtype=ttnn.int32), start_tensor
+            )
+            ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
+            chunked.check(traced, start)
+    finally:
+        ttnn.release_trace(device, trace)
