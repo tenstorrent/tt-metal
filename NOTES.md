@@ -57,3 +57,11 @@ Base: origin/ttp/t48-ltx25-integrated 5833f56096f (decode 2.714 s, blx01 job 019
   not during one of our jobs, chips not named in the status line).
 - Relaunched: broker job 042 (base vs edge, ac876509daa, -t 450). Probe: `ssh g15blx01 bash /var/tmp/fasth3/t274/drv/probe.sh`.
 - Next: read out_E as in "Next step" above.
+
+## Job 042 result (blx01, 2026-10-08 ~12:00 UTC, ac876509daa, one process per arm)
+- Stage-5 NA ms/block: base 120.3-121.0, edge (DIFFVAE_NA_EDGE_ORDER=1) 93.8-94.1 (-22%).
+- Decode 1080p 145f seed 0: base 2.715 s, edge 2.483 s (-0.232 s, -8.5%; above the 5% bar).
+- md5 identical across arms (2797bc15ab69a49d945b26d85ff36675). Valid A/B: arms differ in program
+  hash and NA time, and only the work order changes, so output is bit-identical to the default
+  (PCC/PSNR vs ref = the default's: 0.99995, 54.71/54.28 dB).
+- Next (not done, budget): flip default (=0 off), land ac876509daa + flip on t48 per "Next step".
