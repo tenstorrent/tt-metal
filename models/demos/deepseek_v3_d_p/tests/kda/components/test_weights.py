@@ -45,9 +45,12 @@ def _tp_rank(physical_index: int, mesh_columns: int, tensor_parallel_axis: int) 
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
+# A bounded gate (Kimi-K3) folds the per-head decay scale into the decay projection and bias.
+@pytest.mark.parametrize("gate_lower_bound", [None, -5.0], ids=["softplus-gate", "bounded-gate"])
 def test_device_weight_placement(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
+    gate_lower_bound: float | None,
 ) -> None:
     config = KDAConfig(
         hidden_size=64,
@@ -56,6 +59,7 @@ def test_device_weight_placement(
         head_v_dim=32,
         conv_kernel_size=4,
         norm_eps=1e-5,
+        gate_lower_bound=gate_lower_bound,
     )
     state_dict = random_weights(config)
     weights = load_kda_weights(
@@ -68,9 +72,14 @@ def test_device_weight_placement(
     local_heads = config.num_heads // tensor_parallel_size
     gate_projection = state_dict["g_b_proj.weight"].reshape(config.num_heads, config.head_v_dim, config.head_v_dim)
     direct_gate = torch.matmul(gate_projection, state_dict["g_a_proj.weight"]).reshape(config.v_dim, config.hidden_size)
-    decay_scale = -state_dict["A_log"].float().exp()
+    decay_scale = state_dict["A_log"].float().exp()
+    decay_scale = decay_scale if gate_lower_bound is not None else -decay_scale
     decay_scale = decay_scale.expand(-1, -1, -1, config.head_k_dim).reshape(1, 1, config.q_dim)
     decay_bias = state_dict["dt_bias"].reshape(1, 1, config.q_dim)
+    decay_output = state_dict["f_b_proj.weight"].T
+    if gate_lower_bound is not None:
+        decay_output = decay_output.float() * decay_scale.reshape(1, -1)
+        decay_bias = decay_bias.float() * decay_scale
 
     assert weights.tensor_parallel_size == tensor_parallel_size
     assert weights.tensor_parallel_axis == tensor_parallel_axis
@@ -119,7 +128,7 @@ def test_device_weight_placement(
         ).reshape(1, 1, -1)
         expected = {
             "input": torch.cat((expected_qkv, expected_auxiliary), dim=-1),
-            "decay_output": state_dict["f_b_proj.weight"].T[:, key_start:key_stop],
+            "decay_output": decay_output[:, key_start:key_stop],
             "output": state_dict["o_proj.weight"][:, value_start:value_stop].T,
             "decay_scale": decay_scale[..., key_start:key_stop],
             "decay_bias": decay_bias[..., key_start:key_stop],

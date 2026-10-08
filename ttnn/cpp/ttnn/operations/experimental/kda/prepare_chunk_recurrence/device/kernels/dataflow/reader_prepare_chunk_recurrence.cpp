@@ -103,10 +103,61 @@ inline void fill_constant_tiles(
     block_masks.push_back(mask_tile_count);
 }
 
+// The gate's prefix-sum (inclusive lower-triangular) and sum-broadcast (all-ones) matrices carry the gate scale,
+// so the cumulative sum applies it exactly, without a separate pass over the gate. Like fill_constant_tiles, seed
+// one face row and replicate it with local NoC reads.
+template <uint32_t gate_scale_bits>
+inline void fill_gate_tiles(DataflowBuffer& gate_tril, DataflowBuffer& gate_ones) {
+    constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
+    constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
+    constexpr uint32_t faces_per_tile = tt::constants::TILE_HW / tt::constants::FACE_HW;
+    constexpr uint32_t faces_per_tile_row = tt::constants::TILE_WIDTH / face_width;
+    constexpr uint32_t row_bytes = face_width * sizeof(uint32_t);
+    constexpr uint32_t face_bytes = tt::constants::FACE_HW * sizeof(uint32_t);
+
+    gate_tril.reserve_back(1);
+    gate_ones.reserve_back(1);
+    Noc noc;
+    UnicastEndpoint self;
+    noc.async_write_zeros(gate_tril, gate_tril.get_entry_size());
+    auto* ones_tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gate_ones.get_write_ptr());
+    for (uint32_t column = 0; column < face_width; ++column) {
+        ones_tile[column] = gate_scale_bits;
+    }
+    const auto ones_source = noc_traits_t<UnicastEndpoint>::src_args_type{
+        .noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = gate_ones.get_write_ptr()};
+    for (uint32_t row = 1; row < face_height; ++row) {
+        noc.async_read(self, gate_ones, row_bytes, ones_source, {.offset_bytes = row * row_bytes});
+    }
+    noc.async_read_barrier();
+    for (uint32_t face = 1; face < faces_per_tile; ++face) {
+        noc.async_read(self, gate_ones, face_bytes, ones_source, {.offset_bytes = face * face_bytes});
+    }
+    noc.write_zeros_l1_barrier();
+    // The lower-left face is dense; the diagonal faces are lower-triangular.
+    noc.async_read(self, gate_tril, face_bytes, ones_source, {.offset_bytes = faces_per_tile_row * face_bytes});
+    noc.async_read_barrier();
+    auto* tril_tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gate_tril.get_write_ptr());
+    for (uint32_t row = 0; row < face_height; ++row) {
+        for (uint32_t column = 0; column <= row; ++column) {
+            tril_tile[row * face_width + column] = gate_scale_bits;
+        }
+    }
+    const auto tril_source = noc_traits_t<UnicastEndpoint>::src_args_type{
+        .noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = gate_tril.get_write_ptr()};
+    noc.async_read(self, gate_tril, face_bytes, tril_source, {.offset_bytes = 3 * face_bytes});
+    noc.async_read_barrier();
+    gate_tril.push_back(1);
+    gate_ones.push_back(1);
+}
+
 template <
     uint32_t Ct,
     uint32_t Kt,
     uint32_t Vt,
+    uint32_t beta_token_major,
+    uint32_t beta_width_tiles,
+    uint32_t GATE_SCALE_BITS,
     uint32_t has_actual_start,
     uint32_t has_actual_end,
     uint32_t sp_rank,
@@ -129,6 +180,8 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
     DataflowBuffer eye(dfb::eye);
     DataflowBuffer tril(dfb::tril);
     DataflowBuffer ones(dfb::ones);
+    DataflowBuffer gate_tril(dfb::gate_tril);
+    DataflowBuffer gate_ones(dfb::gate_ones);
     DataflowBuffer block_masks(dfb::block_masks);
     Noc noc;
 
@@ -172,6 +225,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         }
     };
     fill_constant_tiles(eye, tril, ones, block_masks);
+    fill_gate_tiles<GATE_SCALE_BITS>(gate_tril, gate_ones);
 
     auto enqueue_head_chunk_read =
         [&](const auto& accessor, DataflowBuffer& buffer, uint32_t head_chunk_index, uint32_t width_tiles) {
@@ -201,10 +255,34 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         enqueue_head_chunk_read(k_accessor, k, head_chunk_index, Kt);
         enqueue_head_chunk_read(v_accessor, v, head_chunk_index, Vt);
         enqueue_head_chunk_read(g_accessor, g, head_chunk_index, Kt);
-        enqueue_contiguous_read(beta_accessor, beta, head_chunk_index * Ct, Ct);
+        const uint32_t head = head_chunk_index / num_chunks;
+        if constexpr (beta_token_major) {
+            // Token-major beta [1, T, H]: the chunk's tile holds every head as a column.
+            static_assert(Ct == 1, "token-major beta supports one tile row per chunk");
+            const uint32_t chunk = head_chunk_index % num_chunks;
+            enqueue_contiguous_read(
+                beta_accessor, beta, chunk * beta_width_tiles + head / tt::constants::TILE_WIDTH, 1);
+        } else {
+            enqueue_contiguous_read(beta_accessor, beta, head_chunk_index * Ct, Ct);
+        }
         // All five inputs are independent reads on the same NoC. One barrier lets them overlap, then publishes
         // the complete work item atomically to compute.
         noc.async_read_barrier();
+        if constexpr (beta_token_major) {
+            // Compute broadcasts column 0; move this head's column there. Each row reads its source before
+            // overwriting column 0, so the in-place move is safe.
+            auto* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(beta.get_write_ptr());
+            const uint32_t column = head % tt::constants::TILE_WIDTH;
+            const uint32_t column_face = column / tt::constants::FACE_WIDTH;
+            const uint32_t column_offset = column % tt::constants::FACE_WIDTH;
+            for (uint32_t row = 0; row < tt::constants::TILE_HEIGHT; ++row) {
+                const uint32_t face_row = row / tt::constants::FACE_HEIGHT;
+                const uint32_t row_base = (row % tt::constants::FACE_HEIGHT) * tt::constants::FACE_WIDTH;
+                const uint32_t source =
+                    (face_row * 2 + column_face) * tt::constants::FACE_HW + row_base + column_offset;
+                tile[face_row * 2 * tt::constants::FACE_HW + row_base] = tile[source];
+            }
+        }
         q.push_back(chunk_key_tiles);
         k.push_back(chunk_key_tiles);
         v.push_back(chunk_value_tiles);
