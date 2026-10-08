@@ -350,13 +350,29 @@ std::optional<MatmulProgramConfig> choose_config(
         why = "empty matmul or grid";
         return std::nullopt;
     }
+    const bool all_interleaved = !p.a.sharded() && !p.b.sharded() && !p.out.sharded();
+    const bool full_tiles = p.in0_tile_h == TILE_DIM && p.in1_tile_w == TILE_DIM;
+    const bool multi_core_runs = all_interleaved && full_tiles && !hw.pinned_origin && !broadcasts_a(p);
     if (const auto chosen = select(specs, p, hw)) {
+        // A one-tile-wide output over unbatched B, from A in DRAM, with at least half the grid's cores busy and K
+        // at least a full K block deep: the non-reusing factory instead of 1D in1-mcast, whose reader takes A in
+        // shorter DRAM bursts (WH: 0.58-0.95x the in1 time on all 11 such cases with 52 or more output rows and Kt 9
+        // or more; with A in L1, 30 rows or fewer, or Kt 4 or less, 1D wins: up to 1.8x at Kt 1). On Blackhole it is
+        // mixed: 1D is 1.06-1.08x legacy's time on the probe's N005a and N006a, where legacy runs the non-reusing
+        // factory, but the non-reusing factory is 1.58x legacy's 1D time on the designed set's w0679
+        const bool narrow_from_dram = chosen->family == Family::Mcast1DIn1 && p.Nt == 1 && p.batch_b == 1 &&
+                                      !p.a.in_l1 && p.batch_a * p.Mt >= hw.grid.x * hw.grid.y / 2 && p.Kt >= 8 &&
+                                      !p.activation && p.bias_tile_bytes == 0;
+        if (narrow_from_dram && multi_core_runs) {
+            MatmulProgramConfig multi_core = MatmulMultiCoreProgramConfig{};
+            if (ttnn::prim::program_config_error(specs, multi_core).empty()) {
+                return multi_core;
+            }
+        }
         return to_program_config(p, *chosen);
     }
     // Nothing blocked fits: the non-reusing factory still runs all-interleaved 32x32 inputs on the device grid
-    const bool all_interleaved = !p.a.sharded() && !p.b.sharded() && !p.out.sharded();
-    const bool full_tiles = p.in0_tile_h == TILE_DIM && p.in1_tile_w == TILE_DIM;
-    if (all_interleaved && full_tiles && !hw.pinned_origin && !broadcasts_a(p)) {
+    if (multi_core_runs) {
         MatmulProgramConfig multi_core = MatmulMultiCoreProgramConfig{};
         why = ttnn::prim::program_config_error(specs, multi_core);
         return why.empty() ? std::optional(multi_core) : std::nullopt;
