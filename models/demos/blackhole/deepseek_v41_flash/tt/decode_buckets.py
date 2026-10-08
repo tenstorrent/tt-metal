@@ -72,8 +72,11 @@ def view_rows(t, n):
 
 
 class DecodeBucket:
-    def __init__(self, model, Ub, log=print):
+    def __init__(self, model, Ub, log=print, ablate=()):
         m = model
+        self.ablate = tuple(
+            ablate
+        )  # diagnostics (DSV41_BUCKET_ABLATE): 'prevcs' = own compressor-state buffer instead of the view, 'slab' = own [Ub] key slab instead of the shared prefix
         self.m, self.U_full, self.U, self.rows, self.cols = m, m.U, int(Ub), m.rows, m.cols
         self.B = self.rows * self.U
         self.log = log
@@ -91,12 +94,17 @@ class DecodeBucket:
             ab.T = self.U
             ab._ucfg = self._ucfg(a)
             if getattr(a, "prev_cs", None) is not None:
-                ab.prev_cs = view_rows(a.prev_cs, self.U)
+                if "prevcs" in self.ablate:
+                    ab.prev_cs = ttnn.zeros(
+                        [1, 1, self.U, 1024], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=md
+                    )
+                else:
+                    ab.prev_cs = view_rows(a.prev_cs, self.U)
             if getattr(a, "source", None) is not None:
                 ab.source = attn_b[id(a.source)]
             if getattr(a, "indexer", None) is not None:
                 if id(a.indexer) not in idx_b:
-                    idx_b[id(a.indexer)] = self._clone_indexer(a.indexer)
+                    idx_b[id(a.indexer)] = self._clone_indexer(a.indexer, idx_b)
                 ab.indexer = idx_b[id(a.indexer)]
             attn_b[id(a)] = ab
             lb = copy.copy(layer)
@@ -134,11 +142,39 @@ class DecodeBucket:
             use_height_and_width_as_shard_shape=True,
         )
 
-    def _clone_indexer(self, ix):
+    def _clone_indexer(self, ix, idx_clones):
         nb = copy.copy(ix)
+        if (
+            "slab" in self.ablate
+        ):  # timing experiment only: a private [Ub] slab (no prefix slice / padded update); the state is NOT shared
+            own = getattr(ix, "_slab_owner", None)
+            if own is not None:
+                nb.k_cache = idx_clones[id(own)].k_cache
+            else:
+                nb.k_cache = ttnn.zeros(
+                    [self.U, 1, ix.k_cache.shape[2], ix.k_cache.shape[3]],
+                    dtype=ix.k_cache.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.m.md,
+                )
+            nb.T, nb.B = self.U, self.rows * self.U
+            if getattr(ix, "_kcfg", None) is not None:
+                nb._kcfg = ttnn.create_sharded_memory_config(
+                    shape=(32, 128),
+                    core_grid=ttnn.num_cores_to_corerangeset(self.U, ttnn.CoreCoord(8, 8), row_wise=True),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+            nb.U_slab = None
+            return nb
         nb.T = self.U
         nb.B = self.rows * self.U
         nb.U_slab = int(ix.k_cache.shape[0])  # the shared key slab keeps its full user dimension
+        nb._kc_view = None
+        own = getattr(ix, "_slab_owner", None)
+        if own is not None:
+            nb._slab_owner = idx_clones[id(own)]  # the clone of the owner (a layer before this one)
         # (``_kcfg``, the key-append shard layout, stays that of the full slab: the update takes one row per slab user)
         # persistent zero rows that pad the key append / update indices of the users outside the bucket (allocated here, before any trace)
         nb._pad_idx = ttnn.from_torch(

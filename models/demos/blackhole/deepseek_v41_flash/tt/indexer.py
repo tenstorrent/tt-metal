@@ -249,6 +249,12 @@ class DSV41DecodeIndexer:
         )  # one tile per user, key in row 0
         k = ttnn.to_memory_config(k, self._kcfg)
         ttnn.experimental.paged_update_cache(self.k_cache, k, update_idxs_tensor=ent, page_table=None)
+        if Us is not None and Us != self.T:
+            # decode bucket: the users u < T of the slab, sliced ONCE per step here (after this layer's append) and shared by every index layer that scores against this slab
+            # (``_slab_owner``): ~20 slices of a few MB per step otherwise
+            self._kc_view = ttnn.slice(
+                self.k_cache, [0, 0, 0, 0], [self.T, 1, self.k_cache.shape[2], self.k_cache.shape[3]]
+            )
         ttnn.deallocate(k)
 
     def project(self, x, qr, st):
@@ -299,8 +305,13 @@ class DSV41DecodeIndexer:
             return out
         kc = self.k_cache
         Us = getattr(self, "U_slab", None)
-        if Us is not None and Us != self.T:  # decode bucket: the users u < T of the shared slab
-            kc = ttnn.slice(kc, [0, 0, 0, 0], [self.T, 1, kc.shape[2], kc.shape[3]])
+        if (
+            Us is not None and Us != self.T
+        ):  # decode bucket: the users u < T of the shared slab (sliced once per step by the owner's key append)
+            own = getattr(self, "_slab_owner", None) or self
+            kc = own.__dict__.get("_kc_view")
+            if kc is None:
+                kc = ttnn.slice(self.k_cache, [0, 0, 0, 0], [self.T, 1, self.k_cache.shape[2], self.k_cache.shape[3]])
         s = ttnn.matmul(q, kc, transpose_b=True, activation="relu", compute_kernel_config=self.ckc)  # [U,1,32,T]
         s = ttnn.matmul(w, s, compute_kernel_config=self.ckc)  # [U,1,1(32),T]
         return ttnn.to_layout(ttnn.slice(s, [0, 0, 0, 0], [self.T, 1, 1, self.n_alloc]), ttnn.ROW_MAJOR_LAYOUT)
