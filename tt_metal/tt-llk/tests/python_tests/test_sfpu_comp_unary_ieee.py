@@ -11,6 +11,14 @@ for example, gt(+NaN, 0) = 1, lt(-0, +0) = 1, ge(-0, +0) = 0, and gt(x, -NaN) = 
 
 The golden is torch's IEEE compare and the check is exact: every lane is 0.0 or 1.0.
 
+Two entry points (``entry``):
+- ``vfloat``: the vFloat overload the fix adds, with the threshold decoded from its fp32 bits, so -0.0, +-inf
+  and +-NaN thresholds are pinned independently of the uint32 overload.
+- ``uint32``: the shipped ``_calculate_comp_unary_(std::uint32_t)`` entry point, threshold +0.0 only. Its
+  numeric decode of the bits (tt-llk#1701 item 16) agrees with the float value for 0x00000000 alone, so these
+  variants compile and run against the unfixed header too: there they fail with gt(+NaN, 0) = 1,
+  ge(+NaN, 0) = 1, ge(-0.0, +0.0) = 0, lt(-NaN, 0) = 1, lt(-0.0, +0.0) = 1 and le(-NaN, 0) = 1.
+
 Two pipelines:
 - Float32 -> Float32 at dest_acc=Yes unpacks straight to Dest, the only path that delivers both -0.0
   and NaN to the SFPU (see ``negative_zero_delivered`` in ``helpers/sfpu_domains.py``).
@@ -40,6 +48,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     MATH_OP,
+    SFPU_COMP_SCALAR_ENTRY,
     SFPU_UNARY_SCALAR,
     VECTOR_MODE,
     generate_input_dim,
@@ -92,6 +101,7 @@ INPUTS = (
 )
 
 # Thresholds: both zeros, both infinities, both NaN signs, and finite values on either side.
+# "+0.0" must stay first: it is the only threshold the uint32 entry point can take (see the module docstring).
 THRESHOLDS = [
     Bits("+0.0", 0x00000000),
     Bits("-0.0", 0x80000000),
@@ -143,9 +153,13 @@ def _fmt(bits: int) -> str:
 @parametrize(
     pipeline=PIPELINES,
     mathop=list(_TORCH_COMPARE),
-    threshold=THRESHOLDS,
+    entry=["vfloat", "uint32"],
+    threshold=lambda entry: THRESHOLDS if entry == "vfloat" else THRESHOLDS[:1],
 )
-def test_sfpu_comp_unary_ieee(pipeline, mathop, threshold):
+def test_sfpu_comp_unary_ieee(pipeline, mathop, entry, threshold):
+    assert (
+        entry == "vfloat" or threshold.bits == 0
+    ), "the uint32 entry point decodes only +0.0 correctly"
     formats, dest_acc = pipeline.formats, pipeline.dest_acc
     unpack_to_dest = formats.input_format.is_32_bit()
     if unpack_to_dest:
@@ -166,6 +180,7 @@ def test_sfpu_comp_unary_ieee(pipeline, mathop, threshold):
             APPROX_MODE(ApproximationMode.No),
             MATH_OP(mathop=mathop),
             SFPU_UNARY_SCALAR(threshold.bits),
+            SFPU_COMP_SCALAR_ENTRY(entry),
             VECTOR_MODE(VectorMode.RC),
         ],
         runtimes=[],
@@ -201,6 +216,7 @@ def test_sfpu_comp_unary_ieee(pipeline, mathop, threshold):
         }
     )
     assert not wrong, (
-        f"{mathop.name}(x, {threshold.name}) disagrees with IEEE-754 on {len(wrong)} input classes:\n"
+        f"{mathop.name}(x, {threshold.name}) via the {entry} entry point disagrees with IEEE-754 on "
+        f"{len(wrong)} input classes:\n"
         + "\n".join(f"  x = {x}: got {got}, expected {want}" for x, got, want in wrong)
     )

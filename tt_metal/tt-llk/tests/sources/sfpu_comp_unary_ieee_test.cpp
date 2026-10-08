@@ -4,12 +4,18 @@
 
 // IEEE-754 coverage for the tt-llk ordered scalar compares (tt-llk#1701 item 3).
 //
-// Drives _calculate_comp_unary_<APPROX, unary_gt|lt|ge|le> over one tile of special values. The threshold
-// goes in through the vFloat overload, decoded with Converter::as_float from the raw fp32 bits in
-// SFPU_UNARY_SCALAR, so the test can pin -0.0, +-inf and +-NaN thresholds independently of how the uint32
-// overload decodes its argument.
+// Drives _calculate_comp_unary_<APPROX, unary_gt|lt|ge|le> over one tile of special values. The threshold is
+// the raw fp32 bit pattern in SFPU_UNARY_SCALAR and reaches the kernel through one of two entry points
+// (COMP_SCALAR_VIA_UINT32):
+//   - the vFloat overload, decoded with Converter::as_float, so the test can pin -0.0, +-inf and +-NaN
+//     thresholds independently of how the uint32 overload decodes its argument;
+//   - the shipped std::uint32_t entry point, so the same compares are also checked through the public API.
+// A header without the vFloat overload (before the fix) still compiles this driver: the vFloat variants then
+// fall back to the uint32 entry point, whose numeric decode of the bits only agrees with the +0.0 threshold.
 
 #include <cstdint>
+#include <type_traits>
+#include <utility>
 
 #include "ckernel.h"
 #include "llk_defs.h"
@@ -58,6 +64,41 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
+// True when the header has the vFloat overload of _calculate_comp_unary_ (added with the item 3 fix).
+template <typename T, typename = void>
+struct has_vfloat_comp_unary : std::false_type
+{
+};
+
+template <typename T>
+struct has_vfloat_comp_unary<
+    T,
+    std::void_t<decltype(ckernel::sfpu::_calculate_comp_unary_<APPROX_MODE, SFPU_UNARY_OPERATION, 8 /* ITERATIONS */>(std::declval<T>()))>>
+    : std::true_type
+{
+};
+
+// Called only when the overload exists; the dependent argument keeps the call out of the base header's build.
+template <typename T>
+sfpi_inline void comp_unary_vfloat(T threshold)
+{
+    ckernel::sfpu::_calculate_comp_unary_<APPROX_MODE, SFPU_UNARY_OPERATION, 8 /* ITERATIONS */>(threshold);
+}
+
+// A template, so the branch not taken is discarded rather than checked against the header in use.
+template <bool VIA_UINT32>
+sfpi_inline void run_comp_unary()
+{
+    if constexpr (VIA_UINT32 || !has_vfloat_comp_unary<sfpi::vFloat>::value)
+    {
+        ckernel::sfpu::_calculate_comp_unary_<APPROX_MODE, SFPU_UNARY_OPERATION, 8 /* ITERATIONS */>(SFPU_UNARY_SCALAR);
+    }
+    else
+    {
+        comp_unary_vfloat(sfpi::vFloat(ckernel::sfpu::Converter::as_float(SFPU_UNARY_SCALAR)));
+    }
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -80,11 +121,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // ITERATIONS=8 per face at VectorMode::RC covers the whole tile.
     _llk_math_eltwise_unary_sfpu_params_(
-        []
-        {
-            const sfpi::vFloat threshold = ckernel::sfpu::Converter::as_float(SFPU_UNARY_SCALAR);
-            ckernel::sfpu::_calculate_comp_unary_<APPROX_MODE, SFPU_UNARY_OPERATION, 8 /* ITERATIONS */>(threshold);
-        },
+        [] { run_comp_unary<COMP_SCALAR_VIA_UINT32>(); },
         DST_INDEX,
         VECTOR_MODE);
 
