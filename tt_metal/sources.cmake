@@ -112,6 +112,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp
     api/tt-metalium/experimental/byte_based_tensor_transfers.hpp
     api/tt-metalium/experimental/tensor_apis_with_pad_values.hpp
+    api/tt-metalium/experimental/host_bfp_conversion.hpp
     api/tt-metalium/experimental/tensor_host_pad_apis.hpp
     api/tt-metalium/experimental/tensor_serialization_support.hpp
     api/tt-metalium/tensor/host_tensor.hpp
