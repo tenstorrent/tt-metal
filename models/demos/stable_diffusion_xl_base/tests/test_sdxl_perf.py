@@ -109,8 +109,8 @@ def test_refiner_unet(
 DEVICE_PERF_EXPECTATIONS = {
     "unet_1024x1024": {
         "wormhole": 191_201_442 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        # bh_p150 run 2026-09-24 (73.75M) on #55698; previous target from scheduled runs 2026-09-19..09-24 (74.85M..74.96M)
-        "blackhole": 73_753_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        # mean of 3 scheduled bh_p150 runs 2026-10-05..10-08 (72.26M..72.31M); previous target 73.75M (2026-09-24, #55698)
+        "blackhole": 72_280_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "unet_512x512": {
         "wormhole": 77_800_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,  # Measured: ~77.7–77.9 ms
