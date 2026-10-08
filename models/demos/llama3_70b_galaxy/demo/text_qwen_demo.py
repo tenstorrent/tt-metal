@@ -124,6 +124,7 @@ def create_tt_qwen_model(
     dtype=ttnn.bfloat8_b,
     use_paged_kv_cache=False,
     prefill_profile=False,
+    prefill_profile_layers=1,
 ):
     from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 
@@ -133,8 +134,8 @@ def create_tt_qwen_model(
         max_seq_len=max_seq_len,
         dummy_weights=dummy_weights,
     )
-    # When running running prefill-only profile, run just 1 layer
-    tt_model_args.n_layers = num_layers if not prefill_profile else 1
+    # When running a prefill-only profile, run just prefill_profile_layers layers (1 by default)
+    tt_model_args.n_layers = num_layers if not prefill_profile else prefill_profile_layers
 
     # NOTE: the warm-ttnn-cache HF-load skip is intentionally DISABLED for qwen3-32b-galaxy.
     # Qwen attention builds its q_norm/k_norm RMSNorms without a weight_cache_path
@@ -559,6 +560,28 @@ def create_tt_qwen_model(
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
         ),
+        (  # profile-2L-prefill-40k-b32-window - prefill-perf-40k-b32 (32 distinct prompts via --input_prompts, all KV
+            # resident, same warmup) with 2 layers and signposts around the 32-user prefill call. After warmup the
+            # device profiler buffers are read and the warmup device logs discarded (see profile_window_case).
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_prefill_40k_local.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            40960,  # max_seq_len (same config as prefill-perf-40k-b32)
+            32,  # batch_size
+            2,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 5120},  # page_params (as prefill-perf-40k-b32)
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # token_accuracy
+            True,  # prefill-only profile
+            64,  # num layers (prefill-only profile overrides to 2 for this case)
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
+        ),
     ],
     ids=[
         "batch-32",  # throughput
@@ -579,6 +602,7 @@ def create_tt_qwen_model(
         "profile-1L-prefill-40k-b1",  # 1L prefill-only tracy profile at 40k (id avoids the "prefill-profile" -k substring)
         "prefill-golden-40k-b1",  # 64L 40k end-to-end golden: prefill top-5 ids/logits + 32 greedy token ids
         "prefill-perf-40k-b32",  # warmed 64L prefill of 32 users x 40k in one call (all KV resident, column-local pages)
+        "profile-2L-prefill-40k-b32-window",  # 2L tracy profile of the b32 x 40k call; device logs hold only the window
     ],
 )
 @pytest.mark.parametrize(
@@ -686,7 +710,11 @@ def test_qwen_demo_text(
     golden_check = "prefill-golden-40k-b1" in request.node.callspec.id
     # Batch-32 x 40k perf case (harness): column-local page table so all users' KV is resident, a one-user
     # warmup prefill (same 40960 programs; the timed call then prefills all users), DRAM usage logged.
-    b32_case = "prefill-perf-40k-b32" in request.node.callspec.id
+    # 2-layer windowed profile of the b32 case (harness): b32 setup and warmup unchanged; after warmup
+    # ttnn.ReadDeviceProfiler drains the device profiler buffers and the warmup device logs are deleted, so the final
+    # read at device close writes only the signposted 32-user prefill. The measured call runs the same programs.
+    profile_window_case = "profile-2L-prefill-40k-b32-window" in request.node.callspec.id
+    b32_case = "prefill-perf-40k-b32" in request.node.callspec.id or profile_window_case
 
     if token_accuracy and pcc_check:
         raise ValueError("Token accuracy and PCC check are separate demo modes")
@@ -808,6 +836,7 @@ def test_qwen_demo_text(
         dtype=ttnn.bfloat8_b,
         use_paged_kv_cache=paged_attention,
         prefill_profile=prefill_profile,
+        prefill_profile_layers=2 if profile_window_case else 1,
     )
 
     logger.info(f"Model loaded with {len(model.layers)} layers")
@@ -956,6 +985,17 @@ def test_qwen_demo_text(
             logger.info("Finished prefill warmup")
             if b32_case:
                 log_dram("after_warmup")
+            if profile_window_case and os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
+                from tracy.common import PROFILER_LOGS_DIR
+
+                logger.info("PROFILE_WINDOW flush_start: reading device profiler buffers after warmup")
+                ttnn.ReadDeviceProfiler(mesh_device)
+                for log_name in ("profile_log_device.csv", "cpp_device_perf_report.csv"):
+                    log_path = PROFILER_LOGS_DIR / log_name
+                    if log_path.is_file():
+                        logger.info(f"PROFILE_WINDOW discarding warmup {log_path} ({log_path.stat().st_size} bytes)")
+                        log_path.unlink()
+                logger.info("PROFILE_WINDOW flush_end")
 
         logger.info(f"Starting prefill...")
 
