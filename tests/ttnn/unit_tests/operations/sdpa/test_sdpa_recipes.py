@@ -20,6 +20,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     blackhole_only,
     check_accuracy,
     check_attn_mask,
+    check_cache_hit_rebinds,
     check_chunked,
     check_chunked_trace,
     check_concat_heads,
@@ -127,6 +128,13 @@ def test_sdpa_recipe_program_cache_and_trace(device, variant):
         ttnn.release_trace(device, trace)
 
 
+# A cache hit with new inputs rebinds every buffer: the dense layout (mask, sink) and the key-range layout (page table,
+# Q offset tensor, sink). Joint and windowed are in the nightly file.
+@pytest.mark.parametrize("case", ["dense_mask_sink", "chunked_paged_sink"])
+def test_sdpa_recipe_cache_hit_rebinds(device, case):
+    check_cache_hit_rebinds(device, case)
+
+
 # What legacy callers pass, on the recipes the legacy routes move to: STANDARD and ACCURATE with BFP8 Q/K/V (the
 # output comes back as BFP8), a custom scale with an attn_mask, L1 inputs and output, an FP32-dest HiFi4
 # compute_kernel_config with exp_approx_mode=False (ignored), and six batch/heads (GQA) on a 2x2 grid, so each
@@ -147,11 +155,19 @@ def test_sdpa_recipe_legacy_arguments(device, variant):
     )
 
 
-# Precision routing (no `precision`): FP32 dest runs ACCURATE (dense causal with BFP8 Q/K/V and a custom scale; an
-# attn_mask call whose Q2048 chunk the recipe does not take, so the op picks the blocking; chunked prefill from a
-# start tensor), non-ring joint runs STANDARD (ACCURATE with FP32 dest).
+# Precision routing (no `precision`): FP32 dest runs ACCURATE at op-chosen blocking (dense causal with BFP8 Q/K/V and
+# a custom scale; an attn_mask call passing Q2048; an attn_mask call whose 500 keys run as one K chunk at the caller's
+# Q384; chunked prefill from a start tensor), non-ring joint runs STANDARD (ACCURATE with FP32 dest) at its chunks.
 @pytest.mark.parametrize(
-    "case", ["dense_causal_bfp8", "dense_mask_q2048", "chunked_tensor_start", "joint_bf16_dest", "joint_fp32_dest"]
+    "case",
+    [
+        "dense_causal_bfp8",
+        "dense_mask_q2048",
+        "dense_mask_short_k",
+        "chunked_tensor_start",
+        "joint_bf16_dest",
+        "joint_fp32_dest",
+    ],
 )
 def test_sdpa_precision_routing(device, case):
     check_routing(device, case)
