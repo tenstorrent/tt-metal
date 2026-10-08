@@ -746,8 +746,8 @@ def key_phase_enabled() -> bool:
 def lean_layout_enabled() -> bool:
     """Whether the keep-bricked W-sharded path skips the untilize/tilize pairs that only change a
     tensor's layout label: V's head split, the tilize between halo exchange and key-phase rebrick,
-    and the output's untilize. On with ``DIFFVAE_S5_LEAN=1``; the values are unchanged."""
-    return os.environ.get("DIFFVAE_S5_LEAN") == "1"
+    and the output's untilize. On by default, off with ``DIFFVAE_S5_LEAN=0``; the values are unchanged."""
+    return os.environ.get("DIFFVAE_S5_LEAN") != "0"
 
 
 def key_phase_geometry(volume, context_window, brick, owned_height, owned_width):

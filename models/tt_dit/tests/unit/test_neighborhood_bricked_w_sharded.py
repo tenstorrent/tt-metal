@@ -268,7 +268,7 @@ def test_bricked_2d_key_phase_lean_matches_default(*, mesh_device, monkeypatch):
         out = ttnn.reshape(out, (1, 1, T * h_local * w_local, channels))
         return to_torch_replicated(out, mesh_axes=[h_axis, sp_axis, None, None]).reshape(hs, ws, -1, channels)
 
-    monkeypatch.delenv("DIFFVAE_S5_LEAN", raising=False)
+    monkeypatch.setenv("DIFFVAE_S5_LEAN", "0")
     default = run()
     monkeypatch.setenv("DIFFVAE_S5_LEAN", "1")
     lean = run()
