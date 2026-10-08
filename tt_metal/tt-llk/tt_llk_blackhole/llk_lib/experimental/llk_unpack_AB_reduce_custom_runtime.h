@@ -86,7 +86,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t bloc
     // y_dim = number of faces (4 for a 32x32 tile, 2 for a 16x32 tiny tile). Hardcoding 4 makes the
     // unpacker stride a full 32x32 tile between block tiles, over-reading the next tile (out-of-bounds
     // / wrong tile) for a genuine 16x32 operand.
-    LLK_ASSERT(tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM, "block reduce_max_row supports only 2-face-wide tiles (16x32, 32x32)");
+    LLK_ASSERT(validate_tensor_shape_reduce_block_max_row_(tensor_shape), "block reduce_max_row supports 32x32 and 16x32 tiles only");
     if (tensor_shape.num_faces_r_dim == 1)
     {
         TTI_SETDMAREG(0, 2 /* y_dim: 2 faces (16x32 tiny tile) */, 0, LO_16(p_gpr_unpack::TMP0));

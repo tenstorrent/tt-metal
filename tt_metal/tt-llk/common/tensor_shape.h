@@ -210,4 +210,20 @@ constexpr bool validate_tensor_shape_sub_bcast_col_custom_(const TensorShape& te
            (tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM || tensor_shape.num_faces_r_dim == 1);
 }
 
+/**
+ * @brief Whether a tile shape is supported by the block reduce_max_row unpack and math paths.
+ *
+ * The unpacker steps between block tiles by y_dim faces (2 for 16x32, 4 for 32x32) of full 16-row
+ * faces, and the math assumes full faces, so only a 2-face-column grid of full faces works - 32x32
+ * (2x2 faces) or 16x32 (1x2 faces). One face column (16x16, 32x16) or short faces (face_r_dim < 16)
+ * would read the wrong block tiles.
+ *
+ * One predicate for the compile-time and runtime unpack inits on every arch, instead of hand-synced copies.
+ **/
+constexpr bool validate_tensor_shape_reduce_block_max_row_(const TensorShape& tensor_shape)
+{
+    return tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.face_c_dim == MAX_FACE_C_DIM && tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM &&
+           (tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM || tensor_shape.num_faces_r_dim == 1);
+}
+
 } // namespace ckernel
