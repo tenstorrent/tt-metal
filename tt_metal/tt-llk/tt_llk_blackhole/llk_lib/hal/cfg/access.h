@@ -62,9 +62,10 @@ inline constexpr ConstantFieldAssignment<F, S, Value> set()
  * @ref write call. Field grouping can span GPR transfers. The transfer occurs
  * when write() consumes the operation.
  *
- * @tparam Anchor: Field, or field group with a Raw anchor, identifying the first destination
- *         register word; it must start at bit zero, and a multi-word anchor must cover the transfer.
- * @tparam S: Register section; must be within the anchor's count.
+ * @tparam Anchor: Field selecting the first destination word, or a field group whose Raw Field is used.
+ *         The selected field must start at bit zero. If wider than one CFG word, it must cover the transfer.
+ *         See @ref detail::word_anchor for selection rules and examples.
+ * @tparam S: Register section; must be within the selected descriptor's count.
  * @tparam Size: Transfer width: GprTransferSize::Bits32 or GprTransferSize::Bits128; defaults to Bits32.
  * @tparam Completion: WRCFG completion policy; defaults to WrcfgCompletion::Deferred.
  * @tparam GprIndex: GPR index deduced from source.
@@ -88,13 +89,15 @@ inline constexpr auto from_gpr(const hal::Gpr<GprIndex> source)
 /**
  * @brief Read a complete CFG register word through RISC MMIO.
  *
- * The field's mask and bit position are ignored.
+ * Anchor identifies the starting register word through a Field or a field group's
+ * Raw descriptor. Return the complete word without applying the field's mask or shift.
  *
  * @tparam A: Access path; must be Access::MMIO.
- * @tparam Anchor: Field, or field group with a Raw anchor, identifying the source register word.
- * @tparam S: Register section; must be within the anchor's count.
- * @tparam WordOffset: Word offset relative to the register word containing the anchor;
- *         must stay within a multi-word anchor.
+ * @tparam Anchor: Field selecting the starting word, or a field group whose Raw Field is used.
+ *         See @ref detail::word_anchor for selection rules and examples.
+ * @tparam S: Register section; must be within the selected descriptor's count.
+ * @tparam WordOffset: Offset from the starting word. Must stay within the bank and,
+ *         for a descriptor wider than one CFG word, within the words that descriptor occupies.
  * @tparam Target: Thread-CFG bank: Current selects the issuing TRISC; BRISC requires
  *         an explicit T0, T1, or T2. Must be Current for state CFG.
  * @return The 32-bit state-CFG register word or zero-extended 16-bit thread-CFG register word.
@@ -217,10 +220,10 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
  * @brief Write a complete prepacked thread-CFG word using immediate SETC16.
  *
  * Both section and value must become compile-time constants through inlining.
- * The field anchors the register word. Its width does not limit the prepacked value.
+ * The field identifies the destination word. Its width does not limit the prepacked value.
  *
  * @tparam A: Access path; must be Access::TensixCfgUnit.
- * @tparam F: Thread-CFG field anchoring the word at bit zero.
+ * @tparam F: Thread-CFG field identifying the destination word; must start at bit zero.
  * @param section: Section index; must be smaller than F.count.
  * @param value: Complete 16-bit register word, already packed into its bit positions.
  */
@@ -298,9 +301,10 @@ inline __attribute__((always_inline)) void write(const First& first, const Rest&
  * @brief Transfer one or four GPR words to complete state-CFG register words.
  *
  * @tparam A: Access path; must be Access::TensixCfgUnit.
- * @tparam Anchor: Field, or field group with a Raw anchor, identifying the first destination
- *         register word; it must start at bit zero, and a multi-word anchor must cover the transfer.
- * @tparam S: Register section; must be within the anchor's count.
+ * @tparam Anchor: Field selecting the first destination word, or a field group whose Raw Field is used.
+ *         The selected field must start at bit zero. If wider than one CFG word, it must cover the transfer.
+ *         See @ref detail::word_anchor for selection rules and examples.
+ * @tparam S: Register section; must be within the selected descriptor's count.
  * @tparam Size: Transfer width: GprTransferSize::Bits32 or GprTransferSize::Bits128; defaults to Bits32.
  * @tparam Completion: WRCFG completion policy; defaults to WrcfgCompletion::Deferred.
  * @tparam GprIndex: GPR index deduced from source.
@@ -328,9 +332,11 @@ inline __attribute__((always_inline)) void write(const hal::Gpr<GprIndex> source
  * @endcode
  *
  * @tparam A: Access path; must be Access::MMIO.
- * @tparam Anchor: Field, or field group with a Raw anchor, identifying the first destination register word.
- * @tparam S: Register section; must be within the anchor's count.
- * @tparam Count: Number of register words to write; must not exceed ArrayCount or a multi-word anchor.
+ * @tparam Anchor: Field selecting the first destination word, or a field group whose Raw Field is used.
+ *         See @ref detail::word_anchor for selection rules and examples.
+ * @tparam S: Register section; must be within the selected descriptor's count.
+ * @tparam Count: Number of register words to write; must fit the source array and destination bank.
+ *         If the selected descriptor is wider than one CFG word, it must also cover all Count words.
  * @tparam ArrayCount: Source array length, deduced from values.
  * @param values: Complete 32-bit register word values; the field's mask and bit position are ignored.
  */

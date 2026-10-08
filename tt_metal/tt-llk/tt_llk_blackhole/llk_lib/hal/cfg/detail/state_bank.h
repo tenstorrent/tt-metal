@@ -12,7 +12,7 @@
 
 namespace ckernel
 {
-// Share the legacy state tracker until its callers migrate to HAL.
+/** @brief Legacy software tracker of the selected state-CFG bank, shared until its callers migrate to HAL. */
 extern std::uint32_t cfg_state_id;
 } // namespace ckernel
 
@@ -23,7 +23,10 @@ namespace hal::cfg::detail
 // TODO(njokovic) issue #58443: Remove ckernel:: implementation when HAL is applied to all kernels.
 
 /**
- * @brief Base of the state-CFG bank selected by the current CFG_STATE_ID.
+ * @brief Return the state-CFG MMIO bank selected by the software state tracker.
+ *
+ * @return Bank base indexed in 32-bit words, selected using ckernel::cfg_state_id.
+ * @note Keep ckernel::cfg_state_id synchronized with the thread's CFG_STATE_ID when changing banks.
  */
 inline volatile std::uint32_t tt_reg_ptr* state_cfg_bank()
 {
