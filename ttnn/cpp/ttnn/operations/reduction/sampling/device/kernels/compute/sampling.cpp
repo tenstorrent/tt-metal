@@ -31,10 +31,14 @@ static void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
 
     DataflowBuffer dfb_obj(static_cast<uint16_t>(dfb_id));
 
-    // The random tile is packed to BF16 before the strict cumulative-probability
-    // comparison. Keep the FP32 endpoint below the BF16 midpoint to 1.0 so the
-    // packed threshold remains strictly less than 1.0.
-    constexpr uint32_t rand_scale = 0x3F7F7FFFU;
+    // FP32 random threshold: the tile is now stored as Float32 so the
+    // writer comparison has full FP32 resolution. Use the standard
+    // [0, 1) range via from=0 and scale=~1.0 (0x3F800000 = 1.0f).
+    // rand_tile produces values in [from, from + scale], so with
+    // scale=1.0 the maximum is 1.0 inclusive; the writer's strict
+    // `cum > rand` still samples correctly and the Float32 grid
+    // removes the previous BF16 255/256 cap and coarse quantization.
+    constexpr uint32_t rand_scale = 0x3F800000U;
     constexpr uint32_t rand_from = 0;
 
     if (seed != 0) {
