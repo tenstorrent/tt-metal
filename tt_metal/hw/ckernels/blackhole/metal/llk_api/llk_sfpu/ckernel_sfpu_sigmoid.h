@@ -40,19 +40,32 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
     return result;
 }
 
+template <bool is_fp32_dest_acc_en>
+sfpi_inline void _sigmoid_row_() {
+    sfpi::vFloat val = sfpi::dst_reg[0];
+    sfpi::vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en>(val);
+    if constexpr (!is_fp32_dest_acc_en) {
+        result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+    }
+
+    sfpi::dst_reg[0] = result;
+    sfpi::dst_reg++;
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sigmoid() {
     if constexpr (!APPROXIMATION_MODE) {
-#pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat val = sfpi::dst_reg[0];
-            sfpi::vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en>(val);
-            if constexpr (!is_fp32_dest_acc_en) {
-                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        if constexpr (is_fp32_dest_acc_en && ITERATIONS == 32) {
+            // the 32-row call with a 32-bit DEST is faster unrolled by 4
+#pragma GCC unroll 4
+            for (int d = 0; d < ITERATIONS; d++) {
+                _sigmoid_row_<is_fp32_dest_acc_en>();
             }
-
-            sfpi::dst_reg[0] = result;
-            sfpi::dst_reg++;
+        } else {
+#pragma GCC unroll 8
+            for (int d = 0; d < ITERATIONS; d++) {
+                _sigmoid_row_<is_fp32_dest_acc_en>();
+            }
         }
     } else {
         calculate_sigmoid_appx<ITERATIONS>();
