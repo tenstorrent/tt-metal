@@ -64,7 +64,6 @@ def load(run_dir: Path):
                 "idle_mj_per_call": (total_w - dyn * vcore) * window / iters / batch * 1e3,
                 "total_mj_per_call": total_w * window / iters / batch * 1e3,
                 "us_per_call": window / iters / batch * 1e6,
-                "tflops": float(r["algo_time_s_reported"]) if False else None,
                 "pj_per_flop": (dyn * vcore * window / (flops * iters) * 1e12) if flops else None,
                 "pj_per_byte": (dyn * vcore * window / (nbytes * iters) * 1e12) if nbytes else None,
                 "intensity": (flops / nbytes) if nbytes else None,
@@ -73,7 +72,7 @@ def load(run_dir: Path):
     return sorted(rows, key=lambda d: d["idx"])
 
 
-def normalised_chart(rows, out_path, dpi=150):
+def normalised_chart(rows, out_path, board, dpi=150):
     """Energy per unit of work, under both denominators.
 
     There is no single one. A compute-bound op should be judged per FLOP and a memory-bound one
@@ -100,7 +99,7 @@ def normalised_chart(rows, out_path, dpi=150):
         ax.grid(axis="y", alpha=0.3)
 
     axes[0].set_title(
-        "Energy per unit of work - transformer decoder block, Blackhole p100a\n"
+        f"Energy per unit of work - transformer decoder block{board}\n"
         "the two denominators rank the ops in opposite orders; intensity says which one applies"
     )
     axes[1].set_xticks(x)
@@ -117,7 +116,7 @@ def normalised_chart(rows, out_path, dpi=150):
     print(f"Wrote: {out_path}")
 
 
-def energy_chart(rows, out_path, dpi=150):
+def energy_chart(rows, out_path, board, dpi=150):
     """Energy per op for one block pass, split into dynamic and idle-floor share.
 
     Dynamic alone answers "what did this op make the chip do extra". Total answers "what did
@@ -148,7 +147,7 @@ def energy_chart(rows, out_path, dpi=150):
     ax.set_xlabel("Operation (transformer decoder block)")
     ax.set_ylabel("Energy for one block pass [mJ]")
     ax.set_title(
-        "Energy per op - transformer decoder block, Blackhole p100a\n"
+        f"Energy per op - transformer decoder block{board}\n"
         f"one block pass = {tot.sum():.0f} mJ total "
         f"({dyn.sum():.0f} mJ dynamic + {idle.sum():.0f} mJ idle floor), "
         f"{sum(r['us_per_call'] for r in rows):.0f} us"
@@ -161,7 +160,7 @@ def energy_chart(rows, out_path, dpi=150):
     print(f"Wrote: {out_path}")
 
 
-def chart(rows, out_path, subtitle, dpi=150):
+def chart(rows, out_path, subtitle, board, dpi=150):
     """Three panels over one shared op axis.
 
     Efficiency (pJ/FLOP) and absolute cost (mJ per block invocation) answer different
@@ -179,7 +178,7 @@ def chart(rows, out_path, subtitle, dpi=150):
     # matmul bars are about a pixel tall and read as missing, so use a log axis and label every
     # bar with its value.
     ax.set_yscale("log")
-    ax.set_ylim(0.5, max(pj) * 3)
+    ax.set_ylim(min(v for v in pj if v) * 0.4, max(pj) * 3)
     for i, v in enumerate(pj):
         ax.annotate(f"{v:.3g}", (i, v), ha="center", va="bottom", fontsize=8, xytext=(0, 2), textcoords="offset points")
     # Matmul FLOP counts are exact; the rest use per-element conventions, so hatch them.
@@ -187,7 +186,7 @@ def chart(rows, out_path, subtitle, dpi=150):
         if not r["name"].startswith(("matmul", "attn")):
             bars[i].set_hatch("//")
     ax.set_ylabel("Energy per FLOP [pJ], log scale")
-    ax.set_title(f"Per-op efficiency and cost - transformer decoder block, Blackhole p100a\n{subtitle}")
+    ax.set_title(f"Per-op efficiency and cost - transformer decoder block{board}\n{subtitle}")
     ax.grid(axis="y", alpha=0.3)
     ax.legend(
         handles=[
@@ -222,7 +221,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dir", type=Path)
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--board", default="", help="Board name for the chart titles, e.g. 'Blackhole p100a'")
     args = ap.parse_args()
+    board = f", {args.board}" if args.board else ""
 
     rows = load(args.run_dir)
     if not rows:
@@ -241,12 +242,12 @@ def main():
     print("-" * 82)
     print(f"idle floor (mean over intervals): {base:.1f} W")
 
-    energy_chart(rows, args.run_dir / "Figures" / "op_energy_breakdown.png")
-    normalised_chart(rows, args.run_dir / "Figures" / "op_energy_normalised.png")
+    energy_chart(rows, args.run_dir / "Figures" / "op_energy_breakdown.png", board)
+    normalised_chart(rows, args.run_dir / "Figures" / "op_energy_normalised.png", board)
     out = args.out or (args.run_dir / "Figures" / "op_power_breakdown.png")
     total = sum(r["dyn_mj_per_call"] for r in rows)
     print(f"total dynamic energy for one block pass: {total:.2f} mJ")
-    chart(rows, out, f"one block pass = {total:.1f} mJ dynamic, idle floor {base:.0f} W")
+    chart(rows, out, f"one block pass = {total:.1f} mJ dynamic, idle floor {base:.0f} W", board)
 
 
 if __name__ == "__main__":
