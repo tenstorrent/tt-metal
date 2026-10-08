@@ -227,11 +227,12 @@ protected:
         }
     }
 
-    // Stores every parameter as fp32, as a run that trains fp32 parameters does. New parameters are bf16.
-    static void store_in_fp32(const ttml::serialization::NamedParameters& params) {
+    // Stores every parameter as `dtype`, as a run that trains in that precision does. New parameters are bf16.
+    static void store_as(const ttml::serialization::NamedParameters& params, ttnn::DataType dtype) {
+        const auto precision = dtype == ttnn::DataType::FLOAT32 ? ttml::autograd::PreferredPrecision::FULL
+                                                                : ttml::autograd::PreferredPrecision::HALF;
         for (const auto& [name, param] : params) {
-            param->set_value(
-                ttnn::typecast(param->get_value(ttml::autograd::PreferredPrecision::NATIVE), ttnn::DataType::FLOAT32));
+            param->set_value(param->get_value(precision));
         }
     }
 
@@ -254,18 +255,14 @@ protected:
     void expect_resume_keeps_the_models_dtype(ttnn::DataType saved, ttnn::DataType resumed) {
         ttml::modules::LinearLayer model(32, 64);
         auto params = model.parameters();
-        if (saved == ttnn::DataType::FLOAT32) {
-            store_in_fp32(params);
-        }
+        store_as(params, saved);
         ttml::optimizers::AdamW optimizer(params, adamw_config());
         step_with_random_grads(params, optimizer, 1);
         const auto path = save("saved", model, optimizer);
 
         ttml::modules::LinearLayer resumed_model(32, 64);
         auto resumed_params = resumed_model.parameters();
-        if (resumed == ttnn::DataType::FLOAT32) {
-            store_in_fp32(resumed_params);
-        }
+        store_as(resumed_params, resumed);
         ttml::optimizers::AdamW resumed_optimizer(resumed_params, adamw_config());
         ttml::serialization::FlatBufferFile file;
         file.deserialize(path.string());
@@ -277,7 +274,9 @@ protected:
         }
         const auto state = resumed_optimizer.get_state_dict();
         for (const std::string key : {"exp_avg", "exp_avg_sq"}) {
-            for (const auto& [name, value] : std::get<ttml::serialization::NamedParameters>(state.at(key))) {
+            const auto& tensors = std::get<ttml::serialization::NamedParameters>(state.at(key));
+            ASSERT_FALSE(tensors.empty()) << key;
+            for (const auto& [name, value] : tensors) {
                 expect_loaded(file, "optimizer/" + key + "/" + name, value, resumed);
             }
         }

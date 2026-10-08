@@ -30,6 +30,12 @@ struct AutocastState {
 
 namespace {
 
+// bf16 or fp32, the dtypes an AutocastTensor casts between. False for an empty tensor.
+bool is_float_tensor(const ttnn::Tensor &tensor) {
+    return core::is_tensor_initialized(tensor) &&
+           (tensor.dtype() == ttnn::DataType::FLOAT32 || tensor.dtype() == ttnn::DataType::BFLOAT16);
+}
+
 // A fresh state holding tensor. Non-float tensors (e.g. UINT32 embedding indices) count as FULL and are returned as
 // stored for every precision: typecast does not apply to them. An empty tensor counts as FULL, as in a
 // default-constructed AutocastTensor.
@@ -40,10 +46,6 @@ detail::AutocastState make_state(const ttnn::Tensor &tensor) {
 }
 
 }  // namespace
-
-bool is_float_dtype(ttnn::DataType dtype) {
-    return dtype == ttnn::DataType::FLOAT32 || dtype == ttnn::DataType::BFLOAT16;
-}
 
 MutableTensorView::MutableTensorView(std::shared_ptr<detail::AutocastState> state) : m_state(std::move(state)) {
 }
@@ -80,6 +82,12 @@ void AutocastTensor::set_tensor(const ttnn::Tensor &tensor) {
     }
 }
 
+void AutocastTensor::assign(const ttnn::Tensor &tensor) {
+    const auto &native = m_state->native;
+    const bool cast = is_float_tensor(native) && is_float_tensor(tensor) && tensor.dtype() != native.dtype();
+    set_tensor(cast ? ttnn::typecast(tensor, native.dtype()) : tensor);
+}
+
 bool AutocastTensor::has_half() const {
     const auto &state = *m_state;
     return (core::is_tensor_initialized(state.native) && state.native.dtype() == ttnn::DataType::BFLOAT16) ||
@@ -99,7 +107,7 @@ uint64_t AutocastTensor::native_version() const {
 const ttnn::Tensor &AutocastTensor::get_tensor(PreferredPrecision preferred_precision) const {
     auto &state = *m_state;
     if (preferred_precision == PreferredPrecision::NATIVE || preferred_precision == state.native_precision ||
-        !core::is_tensor_initialized(state.native) || !is_float_dtype(state.native.dtype())) {
+        !is_float_tensor(state.native)) {
         return state.native;
     }
 

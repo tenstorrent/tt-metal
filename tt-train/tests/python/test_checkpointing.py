@@ -207,11 +207,13 @@ def test_partial_load_skips_absent_groups(tmp_path):
 
 def _store_as(model: TwoLayer, dtype) -> None:
     """Store every parameter as ``dtype``, as a run that trains in that precision does. New parameters are bf16."""
+    precision = (
+        ttml.autograd.PreferredPrecision.FULL
+        if dtype == ttnn.DataType.FLOAT32
+        else ttml.autograd.PreferredPrecision.HALF
+    )
     for t in model.parameters().values():
-        values = ttml.autograd.Tensor.from_numpy(
-            t.to_numpy(ttnn.DataType.FLOAT32), layout=ttnn.Layout.TILE, new_type=dtype
-        )
-        t.set_value(values.get_value(ttml.autograd.PreferredPrecision.NATIVE))
+        t.set_value(t.get_value(precision))
 
 
 @pytest.mark.requires_device

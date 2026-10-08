@@ -45,15 +45,16 @@ def _tensor_meta(tensor: ttml.autograd.Tensor) -> dict:
     return {"layout": "ROW_MAJOR" if val.get_layout() == ttnn.Layout.ROW_MAJOR else "TILE", "dtype": dtype}
 
 
-def _tensor_from_record(meta: dict, data, mapper) -> ttml.autograd.Tensor:
-    """Rebuild a Tensor from header `meta` + its streamed `data`, distributed onto the mesh via `mapper`
-    (None on a unit mesh; see `Sharding.derive_mapper`)."""
+def _load_into(live: ttml.autograd.Tensor, meta: dict, data) -> None:
+    """Load header `meta` + its streamed `data` into the `live` tensor in place. The live tensor decides the sharding
+    (its mapper distributes the data; see `Sharding.derive_mapper`) and the dtype (`assign()` casts to it)."""
     layout = ttnn.Layout.ROW_MAJOR if meta["layout"] == "ROW_MAJOR" else ttnn.Layout.TILE
     if meta["dtype"] == "FLOAT32":
         arr, new_type = data, ttnn.DataType.FLOAT32
     else:
         arr, new_type = data.astype(ml_dtypes.bfloat16), ttnn.DataType.BFLOAT16
-    return ttml.autograd.Tensor.from_numpy(arr, layout=layout, new_type=new_type, mapper=mapper)
+    mapper = Sharding.from_tensor(live).derive_mapper()
+    live.assign(ttml.autograd.Tensor.from_numpy(arr, layout=layout, new_type=new_type, mapper=mapper))
 
 
 def _walk(value) -> tuple:
@@ -82,8 +83,7 @@ def _walk(value) -> tuple:
 
 
 def _rebuild(node, live_node, f, display_progress: bool = False, label: str = "optimizer"):
-    """Reconstruct a skeleton `node` from stream `f`, loading each tensor into its live counterpart in `live_node`,
-    which keeps that tensor's sharding and dtype.
+    """Reconstruct a skeleton `node` from stream `f`, loading each tensor into its live counterpart in `live_node`.
 
     `label` names the current sub-state (e.g. AdamW's `exp_avg`/`exp_avg_sq`) so each leaf's progress bar
     is distinguishable rather than a string of identical "Loading optimizer" bars."""
@@ -93,11 +93,8 @@ def _rebuild(node, live_node, f, display_progress: bool = False, label: str = "o
         named = ttml.NamedParameters()
         leaf = node["named_parameters"]
         for name, meta in _progress(leaf.items(), total=len(leaf), desc=f"Loading {label}", enabled=display_progress):
-            data = pickle.load(f)
-            live = live_node[name]
-            # assign() casts to the live tensor's dtype, so the state keeps matching its parameter's dtype.
-            live.assign(_tensor_from_record(meta, data, Sharding.from_tensor(live).derive_mapper()))
-            named[name] = live
+            _load_into(live_node[name], meta, pickle.load(f))
+            named[name] = live_node[name]
         return named
     return {key: _rebuild(v, live_node[key], f, display_progress, key) for key, v in node.items()}
 
@@ -122,8 +119,7 @@ def _load_params(params: ttml.NamedParameters, skeleton: dict, f, display_progre
         data = pickle.load(f)  # read every record to keep the stream aligned, even when skipping
         if name not in params:
             continue
-        mapper = Sharding.from_tensor(params[name]).derive_mapper()
-        params[name].assign(_tensor_from_record(meta, data, mapper))
+        _load_into(params[name], meta, data)
         restored.add(name)
 
     missing = set(params) - restored  # in model, not restored → left at init (dangerous)

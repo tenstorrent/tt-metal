@@ -30,9 +30,7 @@ public:
     ~Tensor() = default;
 
     void set_value(const ttnn::Tensor &value);
-    // Sets the value cast to the dtype this tensor is stored in, so loading values into an existing tensor (a
-    // checkpoint, a weights file) keeps its precision. The cast applies between bf16 and fp32. Any other value, or
-    // any value for an empty tensor, is taken as is and shares its buffer, as with set_value().
+    // Sets the value in the dtype this tensor is stored in, for loading values into it; see AutocastTensor::assign().
     void assign(const ttnn::Tensor &value);
     void set_grad(const ttnn::Tensor &grad);
     void set_node(const std::optional<NodeId> &node);
