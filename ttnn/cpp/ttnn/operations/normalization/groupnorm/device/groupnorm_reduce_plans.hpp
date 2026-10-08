@@ -8,18 +8,19 @@
 #include "groupnorm_program_utils.hpp"
 #include "kernels/groupnorm_constants.hpp"
 #include <optional>
+#include <cstdint>
 
 namespace ttnn::prim {
 
 struct GroupNormReducePlans {
-    std::vector<uint32_t> calls;
+    std::vector<std::uint32_t> calls;
     // Ordinary blocks use offset 0; the final block uses offset 3. Both
     // offsets select the same compile-time call and its preplanned variants.
-    std::vector<uint32_t> local_runtime_args;
+    std::vector<std::uint32_t> local_runtime_args;
     ttnn::kernel_lib::host::ReduceAuxiliaryPlan local_auxiliary{2, {}};
     ttnn::kernel_lib::host::ReduceAuxiliaryPlan global_auxiliary{4, {}};
 
-    void append_auxiliary_to(std::vector<uint32_t>& args) const {
+    void append_auxiliary_to(std::vector<std::uint32_t>& args) const {
         ttnn::kernel_lib::host::ReduceAuxiliaryArgs(local_auxiliary).append_to(args);
         ttnn::kernel_lib::host::ReduceAuxiliaryArgs(global_auxiliary).append_to(args);
     }
@@ -30,14 +31,14 @@ struct GroupNormReducePlans {
 // Sharded callers use two independent local calls. Interleaved callers set
 // second_is_tail to describe a runtime alternative within one local call.
 inline GroupNormReducePlans make_groupnorm_reduce_plans(
-    uint32_t first_rows,
-    uint32_t first_columns,
-    uint32_t second_rows,
-    uint32_t second_columns,
-    uint32_t global_tiles,
-    uint32_t first_input_cb_tiles,
-    uint32_t second_input_cb_tiles,
-    uint32_t global_input_cb_tiles,
+    std::uint32_t first_rows,
+    std::uint32_t first_columns,
+    std::uint32_t second_rows,
+    std::uint32_t second_columns,
+    std::uint32_t global_tiles,
+    std::uint32_t first_input_cb_tiles,
+    std::uint32_t second_input_cb_tiles,
+    std::uint32_t global_input_cb_tiles,
     float local_scalar,
     float global_scalar,
     tt::tt_metal::DataType dtype,
@@ -45,19 +46,20 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
     compute_kernel_lib::ReduceInputPolicy second_policy = compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
     compute_kernel_lib::ReduceDataFormatReconfigMode first_native_reconfig =
         compute_kernel_lib::ReduceDataFormatReconfigMode::NONE,
-    bool second_is_tail = false) {
+    bool second_is_tail = false,
+    compute_kernel_lib::ReduceInputPolicy first_policy = compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop) {
     using namespace tt::tt_metal;
     namespace rh = ttnn::kernel_lib::host;
     GroupNormReducePlans result;
-    auto append = [&](uint32_t rows,
-                      uint32_t columns,
-                      uint32_t input_cb_tiles,
+    auto append = [&](std::uint32_t rows,
+                      std::uint32_t columns,
+                      std::uint32_t input_cb_tiles,
                       float scalar,
                       compute_kernel_lib::ReduceInputPolicy policy,
                       rh::ReduceAuxiliaryPlan& auxiliary,
                       compute_kernel_lib::ReduceDataFormatReconfigMode native_reconfig =
                           compute_kernel_lib::ReduceDataFormatReconfigMode::NONE,
-                      std::optional<uint32_t> tail_rows = std::nullopt) {
+                      std::optional<std::uint32_t> tail_rows = std::nullopt) {
         auto block = rh::ReduceBlockSpec::tiled(rows * 32, columns * 32, dtype, dtype);
         block.input_cb_tiles = input_cb_tiles;
         if (tail_rows.has_value()) {
@@ -83,7 +85,7 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
         const rh::ReduceCallPlan call{
             .input_cb_id = 0,
             .auxiliary_cb_id = 1,
-            .auxiliary_tile_offset = static_cast<uint32_t>(auxiliary.tiles.size()),
+            .auxiliary_tile_offset = static_cast<std::uint32_t>(auxiliary.tiles.size()),
             .output_cb_id = 2,
             .accumulator_cb_id = std::nullopt,
             .plan = plan};
@@ -98,7 +100,7 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
         first_columns,
         first_input_cb_tiles,
         local_scalar,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+        first_policy,
         result.local_auxiliary,
         first_native_reconfig,
         second_is_tail && second_rows < first_rows ? std::optional{second_rows} : std::nullopt);
@@ -116,28 +118,28 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
 }
 
 inline GroupNormReducePlans make_interleaved_groupnorm_reduce_plans(
-    uint32_t block_h,
-    uint32_t block_w,
-    uint32_t num_out_blocks,
-    uint32_t num_cores,
-    uint32_t single_tile_size,
-    uint32_t reduce_factor,
-    uint32_t local_input_cb_tiles,
-    uint32_t global_input_cb_tiles,
+    std::uint32_t block_h,
+    std::uint32_t block_w,
+    std::uint32_t num_out_blocks,
+    std::uint32_t num_cores,
+    std::uint32_t single_tile_size,
+    std::uint32_t reduce_factor,
+    std::uint32_t local_input_cb_tiles,
+    std::uint32_t global_input_cb_tiles,
     const GroupNormPadCorrection& pad,
     tt::tt_metal::DataType dtype,
     const ttnn::kernel_lib::host::ReduceHardwareConfig& hardware) {
     TT_FATAL(num_out_blocks > 0 && block_h >= num_out_blocks, "Groupnorm reduction blocks must contain rows");
-    const uint32_t normal_rows = block_h / num_out_blocks;
-    uint32_t last_rows = normal_rows;
-    uint32_t padded_blocks = num_out_blocks;
+    const std::uint32_t normal_rows = block_h / num_out_blocks;
+    std::uint32_t last_rows = normal_rows;
+    std::uint32_t padded_blocks = num_out_blocks;
     if (block_h % num_out_blocks != 0) {
-        const uint32_t residual = block_h - num_out_blocks * normal_rows;
+        const std::uint32_t residual = block_h - num_out_blocks * normal_rows;
         padded_blocks += residual / normal_rows + 1;
         last_rows = residual % normal_rows;
     }
     TT_FATAL(last_rows <= normal_rows, "Groupnorm final reduction block must match its full/tail/empty dispatch");
-    const uint32_t global_tiles =
+    const std::uint32_t global_tiles =
         (padded_blocks * num_cores * dfb_ex_external_slot_pitch_bytes + single_tile_size - 1) / single_tile_size;
     const float divisor =
         static_cast<float>(reduce_factor) * (pad.active ? static_cast<float>(pad.logical_hw) / pad.padded_hw : 1.0F);

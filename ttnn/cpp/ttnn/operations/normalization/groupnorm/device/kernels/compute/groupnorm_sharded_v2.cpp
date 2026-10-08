@@ -30,92 +30,93 @@ void kernel_main() {
     constexpr bool is_mcast_sender = get_compile_time_arg_val(0) == 1;
     constexpr bool do_gamma = get_compile_time_arg_val(1) == 1;
     constexpr bool do_beta = get_compile_time_arg_val(2) == 1;
-    constexpr uint32_t num_cores_per_mcast_group = get_compile_time_arg_val(3);
+    constexpr std::uint32_t num_cores_per_mcast_group = get_compile_time_arg_val(3);
     // True when a reconfig-relevant operand is fp32: the per-group reconfig_data_format calls below
     // are then required. All-bf16 compiles them out (no-ops). See program factory.
     constexpr bool enable_fp32_reconfig = get_named_compile_time_arg_val("enable_fp32_reconfig") != 0;
 
-    constexpr uint32_t batch = get_compile_time_arg_val(4);
-    constexpr uint32_t group = get_compile_time_arg_val(5);
+    constexpr std::uint32_t batch = get_compile_time_arg_val(4);
+    constexpr std::uint32_t group = get_compile_time_arg_val(5);
 
-    constexpr uint32_t num_cols_per_group = get_compile_time_arg_val(6);
+    constexpr std::uint32_t num_cols_per_group = get_compile_time_arg_val(6);
 
-    const volatile uint32_t block_h = get_compile_time_arg_val(7);
-    constexpr uint32_t block_w = get_compile_time_arg_val(8);
-    constexpr uint32_t block_hw = get_compile_time_arg_val(9);
+    const volatile std::uint32_t block_h = get_compile_time_arg_val(7);
+    constexpr std::uint32_t block_w = get_compile_time_arg_val(8);
+    constexpr std::uint32_t block_hw = get_compile_time_arg_val(9);
 
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(10);
-    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(11);
+    constexpr std::uint32_t subblock_w = get_compile_time_arg_val(10);
+    constexpr std::uint32_t num_subblocks_w = get_compile_time_arg_val(11);
 
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(12);
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(13);
-    constexpr uint32_t per_core_MN = get_compile_time_arg_val(14);
+    constexpr std::uint32_t per_core_M = get_compile_time_arg_val(12);
+    constexpr std::uint32_t per_core_N = get_compile_time_arg_val(13);
+    constexpr std::uint32_t per_core_MN = get_compile_time_arg_val(14);
 
-    constexpr uint32_t per_core_N_tile_bytes = get_compile_time_arg_val(15);
-    constexpr uint32_t num_groups_per_reset = get_compile_time_arg_val(16);
+    constexpr std::uint32_t per_core_N_tile_bytes = get_compile_time_arg_val(15);
+    constexpr std::uint32_t num_groups_per_reset = get_compile_time_arg_val(16);
 
-    constexpr uint32_t single_tile_size_bytes = get_compile_time_arg_val(17);
-    constexpr uint32_t num_tiles_per_batch = get_compile_time_arg_val(18);
+    constexpr std::uint32_t single_tile_size_bytes = get_compile_time_arg_val(17);
+    constexpr std::uint32_t num_tiles_per_batch = get_compile_time_arg_val(18);
 
-    constexpr uint32_t num_tiles_input_mask = get_compile_time_arg_val(19);
-    constexpr uint32_t block_w_last = get_compile_time_arg_val(20);
+    constexpr std::uint32_t num_tiles_input_mask = get_compile_time_arg_val(19);
+    constexpr std::uint32_t block_w_last = get_compile_time_arg_val(20);
     constexpr bool GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(21) == 1;
     constexpr bool GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(22) == 1;
-    constexpr uint32_t group_row_offset = get_compile_time_arg_val(23);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(24);
+    constexpr std::uint32_t group_row_offset = get_compile_time_arg_val(23);
+    constexpr std::uint32_t tile_width = get_compile_time_arg_val(24);
 
     // Non-tile-aligned H*W; see compute/groupnorm.cpp. logical_hw / padded_hw only keep two shapes
     // padding to the same size out of one cached program; has_row_mask is what this branches on.
-    constexpr uint32_t logical_hw [[maybe_unused]] = get_compile_time_arg_val(25);
-    constexpr uint32_t padded_hw [[maybe_unused]] = get_compile_time_arg_val(26);
+    constexpr std::uint32_t logical_hw [[maybe_unused]] = get_compile_time_arg_val(25);
+    constexpr std::uint32_t padded_hw [[maybe_unused]] = get_compile_time_arg_val(26);
     constexpr bool has_row_mask = get_compile_time_arg_val(27) == 1;
     // Composed-mask protocol: the writer ships ONE row-0-only column-selector set per (batch,
     // group) unconditionally; under has_row_mask this kernel composes the batch's final
     // row-tile's mask on device as rowvalid (c_18) x column selector -> c_19.
-    constexpr uint32_t mask_tiles_per_group = block_w;
+    constexpr std::uint32_t mask_tiles_per_group = block_w;
 
-    constexpr uint32_t block_w_minus_one = block_w - 1;
-    constexpr uint32_t block_w_minus_two = block_w - 2;
-    constexpr uint32_t tile_w_minux_group_size = tile_width - num_cols_per_group;
+    constexpr std::uint32_t block_w_minus_one = block_w - 1;
+    constexpr std::uint32_t block_w_minus_two = block_w - 2;
+    constexpr std::uint32_t tile_w_minux_group_size = tile_width - num_cols_per_group;
     // group_row_offset is the signed difference encoded in uint32_t by the host. Modular
     // addition reconstructs the original group size for both positive and negative offsets.
-    constexpr uint32_t full_group_size = (block_w_minus_one * tile_width) + group_row_offset;
-    constexpr uint32_t group_start_stride = full_group_size % tile_width;
+    constexpr std::uint32_t full_group_size = (block_w_minus_one * tile_width) + group_row_offset;
+    constexpr std::uint32_t group_start_stride = full_group_size % tile_width;
 
     // dst regs
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t scaler0 = 0;
+    constexpr std::uint32_t dst0 = 0;
+    constexpr std::uint32_t scaler0 = 0;
 
     // input cbs
-    constexpr uint32_t dfb_in0_id = tt::CBIndex::c_0;
-    constexpr uint32_t dfb_in_id = tt::CBIndex::c_1;
-    constexpr uint32_t dfb_scaler_id = tt::CBIndex::c_2;
-    constexpr uint32_t dfb_scaler_global_id = tt::CBIndex::c_4;
-    constexpr uint32_t dfb_eps_id = tt::CBIndex::c_3;
-    constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
-    constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
-    constexpr uint32_t dfb_input_mask_id = tt::CBIndex::c_7;
+    constexpr std::uint32_t dfb_in0_id = tt::CBIndex::c_0;
+    constexpr std::uint32_t dfb_in_id = tt::CBIndex::c_1;
+    constexpr std::uint32_t dfb_scaler_id = tt::CBIndex::c_2;
+    constexpr std::uint32_t dfb_scaler_global_id = tt::CBIndex::c_4;
+    constexpr std::uint32_t dfb_eps_id = tt::CBIndex::c_3;
+    constexpr std::uint32_t dfb_gamma_id = tt::CBIndex::c_5;
+    constexpr std::uint32_t dfb_beta_id = tt::CBIndex::c_6;
+    constexpr std::uint32_t dfb_input_mask_id = tt::CBIndex::c_7;
     // Pass-1 operand source: tilized-input CB when the reader tilizes, raw input CB otherwise.
     // (The init calls keep using dfb_in0_id, as before -- only the ops switch.)
 #ifdef TILIZE_IN
-    constexpr uint32_t dfb_pass1_src_id = dfb_in_id;
+    constexpr std::uint32_t dfb_pass1_src_id = dfb_in_id;
 #else
-    constexpr uint32_t dfb_pass1_src_id = dfb_in0_id;
+    constexpr std::uint32_t dfb_pass1_src_id = dfb_in0_id;
 #endif
 
     // interm cbs
-    constexpr uint32_t dfb_repack_id = tt::CBIndex::c_11;
-    constexpr uint32_t dfb_repack_out_id = tt::CBIndex::c_12;
-    constexpr uint32_t dfb_x_id = tt::CBIndex::c_13;
-    constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
-    constexpr uint32_t dfb_ex_id = tt::CBIndex::c_9;
-    constexpr uint32_t dfb_ex_external_id = tt::CBIndex::c_10;
-    constexpr uint32_t dfb_ex_global_id = num_cores_per_mcast_group == 1 ? dfb_ex_partial_id : tt::CBIndex::c_15;
-    constexpr uint32_t dfb_ex2pe_id = tt::CBIndex::c_17;
+    constexpr std::uint32_t dfb_repack_id = tt::CBIndex::c_11;
+    constexpr std::uint32_t dfb_repack_out_id = tt::CBIndex::c_12;
+    constexpr std::uint32_t dfb_x_id = tt::CBIndex::c_13;
+    constexpr std::uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
+    constexpr std::uint32_t dfb_ex_id = tt::CBIndex::c_9;
+    constexpr std::uint32_t dfb_ex_external_id = tt::CBIndex::c_10;
+    constexpr std::uint32_t dfb_ex_global_id = num_cores_per_mcast_group == 1 ? dfb_ex_partial_id : tt::CBIndex::c_15;
+    constexpr std::uint32_t dfb_ex2pe_id = tt::CBIndex::c_17;
+    constexpr std::uint32_t dfb_ones_id = tt::CBIndex::c_26;
     using MeanArgs = ttnn::kernel_lib::ReduceCallArgs<28>;
     using VarianceArgs = ttnn::kernel_lib::ReduceCallArgs<MeanArgs::next_compile_time_args_offset()>;
     using GlobalArgs = ttnn::kernel_lib::ReduceCallArgs<VarianceArgs::next_compile_time_args_offset()>;
-    using MeanCall = ttnn::kernel_lib::BoundReduceCallArgs<MeanArgs, dfb_x_id, dfb_scaler_id, dfb_ex_partial_id>;
+    using MeanCall = ttnn::kernel_lib::BoundReduceCallArgs<MeanArgs, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>;
     using VarianceCall =
         ttnn::kernel_lib::BoundReduceCallArgs<VarianceArgs, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>;
     using GlobalCall =
@@ -123,33 +124,33 @@ void kernel_main() {
 
     // Composed-mask CBs, created only under pad correction (has_row_mask); aliased to
     // always-present CBs otherwise.
-    constexpr uint32_t dfb_rowvalid_id = has_row_mask ? tt::CBIndex::c_18 : tt::CBIndex::c_7;
-    constexpr uint32_t dfb_mask_last_id = has_row_mask ? tt::CBIndex::c_19 : tt::CBIndex::c_7;
+    constexpr std::uint32_t dfb_rowvalid_id = has_row_mask ? tt::CBIndex::c_18 : tt::CBIndex::c_7;
+    constexpr std::uint32_t dfb_mask_last_id = has_row_mask ? tt::CBIndex::c_19 : tt::CBIndex::c_7;
 
     // output cb
-    constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
+    constexpr std::uint32_t dfb_out0_id = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
     // not used in cases of negative mask
-    constexpr uint32_t dfb_out_id = tt::CBIndex::c_30;
+    constexpr std::uint32_t dfb_out_id = tt::CBIndex::c_30;
 #else
     // Exactly one of gamma/beta writes through dfb_in_id; both-or-neither goes to dfb_out0_id.
     constexpr bool only_one_of_gamma_beta = do_gamma != do_beta;
-    constexpr uint32_t dfb_out_id = only_one_of_gamma_beta ? dfb_in_id : dfb_out0_id;
+    constexpr std::uint32_t dfb_out_id = only_one_of_gamma_beta ? dfb_in_id : dfb_out0_id;
 #endif
 
     // tile offset
-    uint32_t index_subblock_w_offset = 0;
-    uint32_t index_h_offset = 0;
-    const uint32_t index_w_offset = 0;
-    uint32_t index_b_offset = 0;
-    uint32_t index_g_offset = 0;
+    std::uint32_t index_subblock_w_offset = 0;
+    std::uint32_t index_h_offset = 0;
+    const std::uint32_t index_w_offset = 0;
+    std::uint32_t index_b_offset = 0;
+    std::uint32_t index_g_offset = 0;
     // data offset
-    const uint32_t num_datum_per_row_offeset = 0;
+    const std::uint32_t num_datum_per_row_offeset = 0;
     // inplace out cbs
     bool copy_or_add = true;
-    uint32_t group_reset_index = 0;
-    uint32_t index_block_w = 0;
-    uint32_t row_offset = num_cols_per_group;
+    std::uint32_t group_reset_index = 0;
+    std::uint32_t index_block_w = 0;
+    std::uint32_t row_offset = num_cols_per_group;
 
 #ifdef UNTILIZE_OUT
 #ifndef FUSE_NEGATIVE_MASK
@@ -183,7 +184,7 @@ void kernel_main() {
 #endif
 
     // Used in cases of negative mask provided
-    constexpr uint32_t dfb_in_negative_mask_id = tt::CBIndex::c_14;
+    constexpr std::uint32_t dfb_in_negative_mask_id = tt::CBIndex::c_14;
 
 #ifdef FUSE_NEGATIVE_MASK
     constexpr bool use_negative_mask = true;
@@ -250,7 +251,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in_id);
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
-    constexpr uint32_t dfb_in_rm_id = dfb_repack_id;
+    constexpr std::uint32_t dfb_in_rm_id = dfb_repack_id;
     compute_kernel_lib::tilize<
         per_core_N,
         dfb_in_rm_id,
@@ -259,7 +260,7 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
-    constexpr uint32_t dfb_in_rm_id = dfb_in0_id;
+    constexpr std::uint32_t dfb_in_rm_id = dfb_in0_id;
     compute_kernel_lib::tilize<
         per_core_N,
         dfb_in_rm_id,
@@ -278,13 +279,13 @@ void kernel_main() {
     }
 
     index_b_offset = 0;
-    for (uint32_t b = 0; b < batch; ++b) {
+    for (std::uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;
-        uint32_t group_start_offset = 0;
-        for (uint32_t g = 0; g < group; ++g) {
-            const uint32_t valid_block_w = (group_start_offset + full_group_size + tile_width - 1) / tile_width;
-            const uint32_t synchronized_block_w = ((valid_block_w + subblock_w - 1) / subblock_w) * subblock_w;
-            const uint32_t math_block_w = synchronized_block_w == block_w ? valid_block_w : block_w;
+        std::uint32_t group_start_offset = 0;
+        for (std::uint32_t g = 0; g < group; ++g) {
+            const std::uint32_t valid_block_w = (group_start_offset + full_group_size + tile_width - 1) / tile_width;
+            const std::uint32_t synchronized_block_w = ((valid_block_w + subblock_w - 1) / subblock_w) * subblock_w;
+            const std::uint32_t math_block_w = synchronized_block_w == block_w ? valid_block_w : block_w;
             const auto valid_group_shape =
                 ckl::IterationShape::grid(block_h, math_block_w).block_size(subblock_w, ckl::BlockTailSync::FullBlock);
 
@@ -303,14 +304,14 @@ void kernel_main() {
                 mul_bcast_rows_init(dfb_rowvalid_id, dfb_input_mask_id);
                 dfb_mask_last.reserve_back(block_w);
                 index_subblock_w_offset = 0;
-                for (uint32_t j = 0; j < num_subblocks_w; ++j) {
+                for (std::uint32_t j = 0; j < num_subblocks_w; ++j) {
                     tile_regs_acquire();
-                    for (uint32_t w = 0; w < subblock_w; ++w) {
+                    for (std::uint32_t w = 0; w < subblock_w; ++w) {
                         mul_tiles_bcast_rows(dfb_rowvalid_id, dfb_input_mask_id, 0, w + index_subblock_w_offset, w);
                     }
                     tile_regs_commit();
                     tile_regs_wait();
-                    for (uint32_t w = 0; w < subblock_w; ++w) {
+                    for (std::uint32_t w = 0; w < subblock_w; ++w) {
                         pack_tile(w, dfb_mask_last_id);
                     }
                     tile_regs_release();
@@ -323,14 +324,14 @@ void kernel_main() {
                 }
             }
             dfb_x.reserve_back(block_hw);
-            const uint32_t bcast_row_tiles = has_row_mask ? block_h - 1 : block_h;
+            const std::uint32_t bcast_row_tiles = has_row_mask ? block_h - 1 : block_h;
             mul_bcast_rows_init(dfb_in0_id, dfb_input_mask_id);
-            for (uint32_t i = 0; i < bcast_row_tiles; ++i) {
+            for (std::uint32_t i = 0; i < bcast_row_tiles; ++i) {
                 index_subblock_w_offset = 0;
-                for (uint32_t j = 0; j < num_subblocks_w; ++j) {
+                for (std::uint32_t j = 0; j < num_subblocks_w; ++j) {
                     tile_regs_acquire();
-                    for (uint32_t w = 0; w < subblock_w; ++w) {
-                        uint32_t index = w + index_subblock_w_offset + index_h_offset;
+                    for (std::uint32_t w = 0; w < subblock_w; ++w) {
+                        std::uint32_t index = w + index_subblock_w_offset + index_h_offset;
                         // When the last group spans fewer than block_w tiles, the index can
                         // exceed the CB tile count. Clamp it so the read stays in bounds;
                         // the input mask guarantees the result from the clamped tile is zeroed.
@@ -342,7 +343,7 @@ void kernel_main() {
                     }
                     tile_regs_commit();
                     tile_regs_wait();
-                    for (uint32_t dst_i = 0; dst_i < subblock_w; ++dst_i) {
+                    for (std::uint32_t dst_i = 0; dst_i < subblock_w; ++dst_i) {
                         pack_tile(dst_i, dfb_x_id);
                     }
                     tile_regs_release();
@@ -356,10 +357,10 @@ void kernel_main() {
                 reconfig_data_format_srcb(dfb_input_mask_id, dfb_mask_last_id);
                 mul_init(dfb_in0_id, dfb_mask_last_id);
                 index_subblock_w_offset = 0;
-                for (uint32_t j = 0; j < num_subblocks_w; ++j) {
+                for (std::uint32_t j = 0; j < num_subblocks_w; ++j) {
                     tile_regs_acquire();
-                    for (uint32_t w = 0; w < subblock_w; ++w) {
-                        uint32_t index = w + index_subblock_w_offset + index_h_offset;
+                    for (std::uint32_t w = 0; w < subblock_w; ++w) {
+                        std::uint32_t index = w + index_subblock_w_offset + index_h_offset;
                         if (index >= per_core_MN) {
                             index = per_core_MN - 1;
                         }
@@ -367,7 +368,7 @@ void kernel_main() {
                     }
                     tile_regs_commit();
                     tile_regs_wait();
-                    for (uint32_t i = 0; i < subblock_w; ++i) {
+                    for (std::uint32_t i = 0; i < subblock_w; ++i) {
                         pack_tile(i, dfb_x_id);
                     }
                     tile_regs_release();
@@ -376,10 +377,30 @@ void kernel_main() {
                 index_h_offset += per_core_N;
             }
             dfb_x.push_back(block_hw);
-            // The planner selects the cross-tile sum algorithm. The scalar
-            // output retains exact zeros outside [0,0], as required by the
-            // reader's packed cross-core statistics protocol.
+            reconfig_data_format_srcb(has_row_mask ? dfb_mask_last_id : dfb_input_mask_id, dfb_ones_id);
+            // Partial-E[x]
             dfb_x.wait_front(block_hw);
+            // Accumulate into dest directly by using mul_tiles (tile * 1 is accumulated into dest)
+            // Alternative is to use reduce_tile multiple times, but this showed to be more precise and faster.
+            ckl::eltwise_chain(
+                valid_group_shape,
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Mul,
+                    x_strided_block_input,
+                    ckl::input(
+                        dfb_ones_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+                    ckl::Dst::D0,
+                    ckl::DestAccumulation::WholeShape>{ckl::StridedTileRange{0, block_w}},
+                ckl::PackTile<ckl::output(
+                    dfb_ex2pe_id,
+                    ckl::ReservePolicy::OneUpfront,
+                    ckl::PushPolicy::OneAtEnd,
+                    ckl::DataFormatReconfig::Disabled,
+                    ckl::TileAddressing::Direct,
+                    ckl::DestAccumulation::WholeShape)>{});
+
+            // Reduce only the one accumulated tile. Its scalar output keeps exact zeros outside [0,0],
+            // as required by the reader's packed cross-core statistics protocol.
             compute_kernel_lib::reduce<MeanCall>();
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
@@ -560,12 +581,12 @@ void kernel_main() {
                     ckl::DataFormatReconfig::Disabled)>(valid_group_shape);
             dfb_x.wait_front(block_hw);
             //  add or copy with previous output results
-            const uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
+            const std::uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
             // if we are using negative mask, we are overlapping tilized in and out, otherwise they are 2 separate
             // buffers.
             if constexpr (!use_negative_mask) {
-                for (uint32_t w = 0; w < block_w_curr; ++w) {
+                for (std::uint32_t w = 0; w < block_w_curr; ++w) {
                     const ckl::StridedTileRange input_range{w, block_w};
                     const ckl::StridedTileRange output_range{index_b_offset + index_g_offset + w, per_core_N};
                     if (copy_or_add) {
