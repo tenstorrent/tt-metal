@@ -60,8 +60,10 @@ def _check(torch_outputs, tt_outputs, input_reference_points, bev_shape, batch_f
         assert torch.isfinite(tensor).all(), f"non-finite values in the decoder {name}"
     for layer, metrics in enumerate(layer_metrics(torch_outputs, tt_outputs, input_reference_points, bev_shape)):
         logger.info(f"layer {layer}: " + ", ".join(f"{key} {value:.5f}" for key, value in metrics.items()))
-    assert_pcc(torch_outputs[0], tt_outputs[0], 0.99)
-    assert_pcc(torch_outputs[1], tt_outputs[1], 0.99)
+    # Per layer: the first layers' accuracy would hide a failing last layer in the stack.
+    for expected, actual in zip(torch_outputs, tt_outputs, strict=True):
+        for expected_layer, actual_layer in zip(expected, actual, strict=True):
+            assert_pcc(expected_layer, actual_layer, 0.99)
 
 
 @torch.no_grad()
