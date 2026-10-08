@@ -27,9 +27,11 @@ before=$(gh api "$q" -q '.workflow_runs[].id')
 gh workflow run "$wf" --repo "$repo" --ref "$ref" "$@"
 for _ in $(seq 1 18); do
     sleep 5
+    # the match goes through grep -E, not awk -v (which turns \b into a backspace); no match is not an error
     new=$(gh api "$q" -q '.workflow_runs[]|"\(.id) \(.html_url) \(.name)"' |
-          awk -v b="$before" -v m="$match" 'BEGIN{n=split(b,a,"\n"); for(i=1;i<=n;i++) seen[a[i]]=1}
-               !seen[$1] && (m=="" || $0 ~ m) {print $1, $2}')
+          awk -v b="$before" 'BEGIN{n=split(b,a,"\n"); for(i=1;i<=n;i++) seen[a[i]]=1} !seen[$1]' |
+          { if [ -n "$match" ]; then grep -E -- "$match" || [ $? -eq 1 ]; else cat; fi; } |
+          awk '{print $1, $2}')
     n=$(printf '%s\n' "$new" | grep -c . || true)
     [ "$n" -eq 1 ] && { echo "$new"; exit 0; }
     [ "$n" -gt 1 ] && { printf 'ambiguous: %s new runs of "%s" @ %s:\n%s\n' "$n" "$wf" "$ref" "$new" >&2; exit 3; }
