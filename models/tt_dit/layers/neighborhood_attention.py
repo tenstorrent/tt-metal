@@ -113,6 +113,7 @@ def neighborhood_attention_3d(
     device_plan: NA3DDevicePlan | None = None,
     h_axis: int | None = None,
     packed_heads: int | None = None,
+    gather_heads: bool = True,
 ) -> ttnn.Tensor:
     """Run the executor ``kernel`` names, with the arguments that executor understands.
 
@@ -141,6 +142,7 @@ def neighborhood_attention_3d(
             stride=stride,
             h_axis=h_axis,
             packed_heads=packed_heads,
+            gather_heads=gather_heads,
         )
     assert h_axis is None, f"{kernel.name} does not split H"
     if kernel.bricked:
@@ -497,6 +499,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
     stride: tuple[int, int, int] | None = None,
     h_axis: int | None = None,
     packed_heads: int | None = None,
+    gather_heads: bool = True,
 ) -> ttnn.Tensor:
     """Spatial-W sharded NA3D. ``q``/``k``/``v`` are this chip's W-shard; ``dims`` is the FULL grid.
 
@@ -525,6 +528,10 @@ def neighborhood_attention_3d_bricked_w_sharded(
 
     ``packed_heads``: Q/K/V are ``(batch, 1, bricked_sites, heads * head_dim)`` tiles holding this
     many heads, the op's own site-major layout, so Q goes in as-is. Needs ``already_bricked``.
+
+    ``gather_heads=False`` under ``tp_axis`` skips the head all-gather and returns this chip's heads
+    as ROW_MAJOR ``(batch, sites, heads_local * head_dim)`` in natural site order, for a caller
+    that redistributes them itself.
 
     ``h_axis`` splits H over a second mesh axis as well (the 2-D split): each chip holds an
     ``H/h x W/w`` tile with all its heads and widens K/V by an H halo first, then a W halo of the
@@ -905,7 +912,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
         # path stays bricked; natural order is restored once at stage exit.
         owned = merged if already_bricked else to_natural(merged, volume=owned_volume, brick=brick)
 
-    if tp_axis is not None:
+    if tp_axis is not None and gather_heads:
         # Device order along tp_axis IS head order, so gathering head-major on dim=1 concatenates
         # [chip0 heads | chip1 heads | ...] = global head order.
         with timing_tree.span(device, "head-allgather", category=timing_tree.ALLGATHER, deep=True):
