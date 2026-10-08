@@ -6,6 +6,8 @@
 #            event, incl. pull_request_target) that is still queued / in progress
 #   DISPATCH an "LLK PR Review" run for this PR (found by name — its run name embeds "PR #<n>"),
 #            or a run id you passed, that has not completed
+#   FAILED   the latest "LLK PR Review" run for this PR did not succeed (infra failure, cancelled):
+#            re-dispatch it once, then ack its URL (same ack file as bot_threads.sh) if it fails again
 #   COPILOT  Copilot is a requested reviewer and has not submitted its review yet
 #   SETTLE   no workflow run has registered for the head SHA yet and the head is < 10 min old —
 #            GitHub takes a minute or two to queue runs after a push; after 10 min with no runs,
@@ -21,10 +23,17 @@ runs=$(gh api "repos/$repo/actions/runs?head_sha=$sha&per_page=100" --paginate \
         -q '.workflow_runs[]|"\(.status)\t\(.name)\t\(.id)\t\(.created_at)"')
 echo "$runs" | awk -F'\t' '$1!="" && $1!="completed" {print "RUN      " $2 " (" $1 ", run " $3 ")"}'
 
+ack=${MASTER_ISSUE_DIR:-$HOME/.claude/master-issues}/acked-$pr.txt
 gh api "repos/$repo/actions/workflows?per_page=100" --paginate -q '.workflows[]|select(.name=="LLK PR Review")|.id' | head -1 |
 while read -r wid; do
-    gh api "repos/$repo/actions/workflows/$wid/runs?per_page=30" \
-        -q ".workflow_runs[]|select(.status!=\"completed\")|select(.name|test(\"PR #$pr\\\\b\"))|\"DISPATCH \(.status) \(.name) (run \(.id))\""
+    mine=$(gh api "repos/$repo/actions/workflows/$wid/runs?per_page=50" \
+        -q ".workflow_runs[]|select(.name|test(\"PR #$pr\\\\b\"))|\"\(.status)\t\(.conclusion)\t\(.id)\t\(.html_url)\t\(.name)\"")
+    echo "$mine" | awk -F'\t' '$1!="" && $1!="completed" {print "DISPATCH " $1 " " $5 " (run " $3 ")"}'
+    latest=$(echo "$mine" | head -1)
+    case $latest in completed$'\t'success*|"") ;; *)
+        url=$(echo "$latest" | cut -f4)
+        grep -qxF "$url" "$ack" 2>/dev/null || echo "FAILED   LLK PR Review $(echo "$latest" | cut -f2) $url — re-dispatch once, then ack";;
+    esac
 done
 
 for rid in "$@"; do

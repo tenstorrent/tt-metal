@@ -194,7 +194,7 @@ $SKILL/scripts/bots_pending.sh <PR>      # empty output = bots quiet on the curr
 ```
 It lists: `RUN` (a run on the head SHA still queued/in progress — reviewers, static checks, PR gate;
 any event, incl. `pull_request_target`), `DISPATCH` (an LLK PR Review run for this PR, or a run id you
-pass, not completed), `COPILOT` (review requested, not submitted), `SETTLE` (no run has registered
+pass, not completed), `FAILED` (the latest LLK PR Review run for this PR did not succeed — re-dispatch once, then ack its URL), `COPILOT` (review requested, not submitted), `SETTLE` (no run has registered
 yet and the head is under 10 min old — GitHub needs a minute or two to queue runs after a push; after
 10 min with nothing registered, nothing is coming), and the `bot_threads.sh` lines.
 
