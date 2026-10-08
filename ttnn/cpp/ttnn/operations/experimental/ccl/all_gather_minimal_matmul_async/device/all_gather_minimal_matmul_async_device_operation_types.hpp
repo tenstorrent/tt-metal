@@ -105,8 +105,13 @@ struct AllGatherMinimalMatmulAsyncParams {
         fsdp_topology(fsdp_topology),
         fuse_swiglu(fuse_swiglu) {}
 
-    // Structural fields that affect program-cache key.
+    // Fields that affect the compiled program, hence the program-cache key: the compute config (fidelity,
+    // accumulation), the output dtype and the fused epilogues select kernel defines and CB formats.
     static constexpr auto attribute_names = std::make_tuple(
+        "compute_kernel_config",
+        "output_dtype",
+        "fused_activation",
+        "fused_ternary_scalar",
         "num_links",
         "ring_size",
         "output_mem_config",
@@ -126,6 +131,10 @@ struct AllGatherMinimalMatmulAsyncParams {
 
     auto attribute_values() const {
         return std::forward_as_tuple(
+            this->compute_kernel_config,
+            this->output_dtype,
+            this->fused_activation,
+            this->fused_ternary_scalar,
             this->num_links,
             this->ring_size,
             this->output_mem_config,
