@@ -47,6 +47,8 @@ inline void llk_pack_fast_untilize_block(
     ckernel::_llk_pack_fast_untilize_block_<block_ct_dim>(output_address, unit_dim, prev_unit_dim);
 }
 
+// output_row_stride_16B must be the output row pitch in 16B units that the init programmed, i.e.
+// SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * TILE_C_DIM) / 16 (see _llk_pack_fast_untilize_block_strided_).
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
 inline void llk_pack_fast_untilize_block_strided_at_address(
     const std::uint32_t address,

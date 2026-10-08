@@ -1564,12 +1564,17 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastUntilize) {
     }
 }
 
-// A Float32 row of 137 tiles is wide enough that 31 output rows span more than the packer's carried
-// Y-offset window, so the strided pack must be given the output row stride. Runs both the compute API
-// path and the llk_pack_fast_untilize_block_strided_at_address entry point.
+// A Float32 row needs the output row stride once 31 rows span the packer's carried Y-offset window
+// (from 67 tiles); 137 tiles is the first width where even 16 rows overflow it, so each phase is rebased
+// in runs of 8. Runs the llk_pack_fast_untilize_block_strided_at_address entry point first, so the output
+// buffer cannot already hold the compute-API result, then the compute API. Random input keeps every row
+// distinct.
 TEST_F(LLKBlackholeSingleCardFixture, TensixComputeFastUntilizeWideFp32Row) {
     constexpr std::uint32_t wide_ct_dim = 137;
-    for (bool at_address : {false, true}) {
+    const auto src_data = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * wide_ct_dim, /*rand_max_float=*/100, /*seed=*/42);
+    for (bool at_address : {true, false}) {
+        SCOPED_TRACE(at_address ? "llk_pack_fast_untilize_block_strided_at_address" : "fast_untilize_block");
         unit_tests::compute::tilize::TestConfig test_config = {
             .fp32_dest_acc_en = true,
             .fast_untilize = true,
@@ -1580,6 +1585,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeFastUntilizeWideFp32Row) {
             .num_tiles_c = wide_ct_dim,
             .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
             .output_fmt = tt::DataFormat::Float32,
+            .src0_data = src_data,
             .golden_function = ::unit_tests::compute::gold_standard_untilize};
         unit_tests::compute::tilize::run_single_core_tilize_program(this->device(), test_config);
     }
