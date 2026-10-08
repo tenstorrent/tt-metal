@@ -219,6 +219,14 @@ class TtQwenModelArgs(TtModelArgs):
 
         self.qk_norm = True
         self.is_qwen = True
+        # Prefill lengths above the traced buckets (> 4096) pad to a multiple of this instead of the
+        # next power of 2 (generator.get_padded_prefill_len), e.g. 40928 -> 40960 instead of 65536.
+        # 2048 is the smallest length every untraced prefill op accepts:
+        # - QKV matmul reshapes S > 2048 into [S // 2048, 2048] rows (llama_attention.forward_prefill);
+        # - ring_distributed SDPA (ring_size 4) needs S / (2 * 4) divisible by q_chunk_size 256
+        #   (SDPA_PROGCFG for S >= 2048; ring_distributed_sdpa_device_operation.cpp validate).
+        # Llama model args do not set it, so Llama keeps power-of-2 padding.
+        self.prefill_pad_multiple = 2048
         # The BH no-prefetch decode norm is the distributed (non-fused) RMSNorm, which does NOT
         # write the residual sum back in place. Relying on the fused residual path there silently
         # drops each layer's ff_out from the residual stream (only visible across >1 layer). Add
