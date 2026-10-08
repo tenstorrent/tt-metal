@@ -47,7 +47,12 @@ inline void sdpa_state_normalize() {
 
 inline void sdpa_state_reciprocal() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+#ifdef ARCH_WORMHOLE
+    // Wormhole's reciprocal seeds from a quadratic in the three programmable constants.
+    sfpu_reciprocal_init<false>();
+#else
     sfpi::vConstFloatPrgm0 = 2.0f;
+#endif
     for (int d = 0; d < 4; ++d) {
         sfpi::dst_reg[0] = sfpu_reciprocal_iter<2>(sfpi::dst_reg[0]);
         sfpi::dst_reg += 2;
