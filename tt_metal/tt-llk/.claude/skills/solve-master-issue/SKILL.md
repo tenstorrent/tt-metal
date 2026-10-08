@@ -62,6 +62,13 @@ so a run can be resumed from another machine. Scripts avoid `gh run list --branc
    the parent's repo. Cross-repo `Fixes` needs the `owner/repo#N` form.
 5. **Check for overlap** — `gh pr list --author <me> --state open` and open PRs touching the same
    files. An overlapping stale draft is a note in your PR, not a blocker.
+   **Stay clear of the Copilot pipeline** (`squad-plan` → `issue-monster` → `copilot-flow-ready` →
+   `pr-sous-chef`, all in `.github/workflows/`): an existing sub-issue labeled `copilot-ready`, assigned
+   to Copilot, or with an open Copilot PR is *taken* — don't work it, note it in the ledger. Never put
+   the `copilot-ready` label on a sub-issue you create, or Issue Monster will hand the same item to
+   the Copilot coding agent while you are on it. That pipeline is for items Copilot can fix from a
+   runner without hardware; this skill exists for the ones that need a card, a local build and a
+   fail-without/pass-with proof.
 6. **Create the ledger** at `$MASTER_ISSUE_DIR/<repo>-<N>/ledger.md` from `$SKILL/ledger-template.md`.
    It must let a *fresh* session continue with no conversation history: worktrees, branches, head SHAs,
    dispatched run ids, what each wait is for, retry counters. **After any context compaction, re-read
