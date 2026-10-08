@@ -129,8 +129,6 @@ void py_module(nb::module_& mod) {
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            are_required_outputs (List[bool], optional): which of the three gradients to compute. An entry set to
-                False returns None in that position and skips its computation. Defaults to `[True, True, True]`.
             are_required_outputs (List[bool], optional): which output gradients to compute. A `False` entry skips that gradient, and the returned list holds `None` in its place. Defaults to `[True, True]`.
             input_a_grad (ttnn.Tensor, optional): preallocated tensor to hold the first of the two results (corresponding to :attr:`input_tensor_b`). Defaults to `None`.
             input_b_grad (ttnn.Tensor, optional): preallocated tensor to hold the second of the two results (corresponding to :attr:`input_tensor_c`). Defaults to `None`.
