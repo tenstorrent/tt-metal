@@ -608,6 +608,9 @@ inline void read_last_zone()
     }
 }
 
+// Long enough for the idle threads' exit path after a cold instruction cache (a few hundred cycles); see perf_counter_scoped.
+constexpr std::uint32_t ISOLATE_SETTLE_ITERATIONS = 2000;
+
 template <PerfRunType RUN_TYPE, bool LOOP_PAD = false>
 struct perf_counter_scoped
 {
@@ -637,6 +640,19 @@ struct perf_counter_scoped
                 }
                 arm_all_counters();
             });
+#if defined(LLK_DBG_BARRIER)
+        // A single thread run type has no exit barrier: the idle threads leave their TILE_LOOP zone at once and run their exit
+        // code, read from L1 because the barrier invalidated their instruction caches. Those reads, landing while the
+        // measured thread's packers start, select the packer phase. The measured thread waits for them to finish before its
+        // zone opens, so the wait is not measured.
+        if constexpr (LOOP_PAD && is_single_thread_runtype(RUN_TYPE) && is_measured_thread(RUN_TYPE))
+        {
+            for (std::uint32_t i = 0; i < ISOLATE_SETTLE_ITERATIONS; ++i)
+            {
+                asm volatile("nop");
+            }
+        }
+#endif
         ckernel::fence_compiler();
     }
 
