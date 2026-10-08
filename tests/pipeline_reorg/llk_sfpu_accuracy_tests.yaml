@@ -22,10 +22,17 @@
 # Nothing here writes the table: --ulp-emit is a deliberate human step, and a table
 # rewritten by CI would be a gate that agrees with itself.
 #
-# Timeout: PR Gate's per-test ceiling is 15 minutes (.github/time_budget.yaml, llk ->
-# pr_gate). The whole job, checkout and SFPI install included, took 9-11 minutes on
-# wh_n150_civ2 (2026-09/10); if it outgrows that, split it with --splits/--group as the
-# Blackhole smoke entries in llk_pr_gate_tests.yaml do.
+# Timeout: the limits PR Gate enforces are verify_time_budget.py's 15-minute ceiling on
+# any one gate entry and llk's pr_gate bucket in .github/time_budget.yaml (40 minutes on
+# wh_n150_civ2, which this entry shares with llk_smoke_wormhole's 15). pr-gate.yaml's
+# header aims every job at under 5 minutes; like the LLK smoke jobs (10-15 minutes),
+# this one does not meet that aim. It took 9-11 minutes on wh_n150_civ2, checkout and
+# SFPI install included (2026-09/10), and runs only on an SFPU kernel or SFPI pin
+# change. To shorten it, split it with --splits/--group as the Blackhole smoke entries
+# in llk_pr_gate_tests.yaml do; each group then holds an N150 for its share.
+#
+# The merge queue runs it on the same regular N150 pool: wh_n150_civ2 has no
+# `merge_queue_sku` in .github/sku_config.yaml, since there is no priority N150 pool.
 
 - name: llk_sfpu_ulp_sweep_wormhole
   split_group: 1
