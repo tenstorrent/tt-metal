@@ -96,14 +96,30 @@ def test_moe_real_layer(mesh_device):
     ums = {}
     for op in OPS:
         t0 = time.time()
-        wts = build_expert_weights(md, lambda e: W[e], nd_sharded=(op not in ("loop", "mm")))
-        ums[op] = MiMoPrefillMoE(
-            md,
-            wts,
-            ckc=make_ckc(fid, fp32acc=(f32 and op != "fused"), packer_l1_acc=(op != "fused")),
-            expert_op=op,
-            cf=cf,
-        )
+        if (
+            op == "unified_ring"
+        ):  # ONE copy: the unified op reads the decode ring-layout weights in place (RING_WEIGHTS mode)
+            from models.demos.blackhole.mimo_v26.tt.moe_ring import RingExpertWeights
+
+            rex = RingExpertWeights(md, LAYER, w_of_expert=lambda e: W[e])
+            ums[op] = MiMoPrefillMoE(
+                md,
+                None,
+                ckc=make_ckc(fid, fp32acc=f32, packer_l1_acc=True),
+                expert_op="unified",
+                cf=cf,
+                ring=(rex.state.tt_w0_w1, rex.state.tt_w2),
+            )
+            ums[op]._rex = rex
+        else:
+            wts = build_expert_weights(md, lambda e: W[e], nd_sharded=(op not in ("loop", "mm")))
+            ums[op] = MiMoPrefillMoE(
+                md,
+                wts,
+                ckc=make_ckc(fid, fp32acc=(f32 and op != "fused"), packer_l1_acc=(op != "fused")),
+                expert_op=op,
+                cf=cf,
+            )
         print(
             f"RESULT op={op}: bfp8 weights on device in {time.time() - t0:.0f}s (fidelity={fid} fp32acc={f32})",
             flush=True,
@@ -178,6 +194,7 @@ def test_moe_real_layer(mesh_device):
     gw, gb = load_gate(LAYER)
     gate = MiMoGate(md, gw.to(torch.bfloat16), gb, bias_shift=0.0, batch_per_device=None)
     failures = []
+    outs_by_op = {}
     for op, um in ums.items():
         outA = run(um, wtd, ixd, keep=True)
         sh = um.shared(N)
@@ -213,8 +230,18 @@ def test_moe_real_layer(mesh_device):
             f"RESULT layer {LAYER} op={op} (B) exact router (set match vs dump {float(eq.float().mean()):.4f}): PCC vs bf16 dump per row {pb} ; vs fp32 dump {pr(outs[0], ref_f)} ; 5 runs bit-identical: {det}",
             flush=True,
         )
+        outs_by_op[op] = (outA, outs[0])
         if min(pa) < 0.999 or min(pb) < 0.999 or not det:
             failures.append((op, pa, pb, det))
+    if "unified_ring" in outs_by_op and "unified" in outs_by_op:
+        for k, nm in ((0, "(A) dump routing"), (1, "(B) exact router")):
+            rc = pr(outs_by_op["unified_ring"][k], outs_by_op["unified"][k])
+            print(
+                f"RESULT layer {LAYER} ring-vs-copy {nm}: PCC unified_ring vs unified (per-expert copy) per row {rc}",
+                flush=True,
+            )
+            if min(rc) < 0.9998:
+                failures.append(("ring_vs_copy", nm, rc))
     if len(ums) > 1:  # paired A/B timing, alternating in one process (hint only)
         iters = int(os.environ.get("MIMO_TIME_ITERS", "5"))
         ts = {op: [] for op in ums}
