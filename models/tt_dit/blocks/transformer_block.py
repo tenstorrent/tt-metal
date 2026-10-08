@@ -203,6 +203,9 @@ class TransformerBlock(Module):
         skip_time_embed_activation_fn: bool = False,
         spatial_time: ttnn.Tensor | None = None,
         prompt_time: ttnn.Tensor | None = None,
+        spatial_time_zero: ttnn.Tensor | None = None,
+        modulate_mask: ttnn.Tensor | None = None,
+        modulate_mask_inv: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Run the model forward.
 
@@ -238,14 +241,41 @@ class TransformerBlock(Module):
             spatial_gate_ff,
         ) = _chunk_time3d(spatial_time, 6)
 
-        spatial_normed = ttnn.squeeze(
-            self.norm1_norm(
-                ttnn.unsqueeze(spatial, 0),
-                dynamic_weight=(1 + spatial_scale_attn),
-                dynamic_bias=spatial_shift_attn,
-            ),
-            0,
-        )
+        # zero_cond_t (2511): the condition-image tokens use the timestep-0 modulation while the noise
+        # tokens use the real timestep. ``modulate_mask`` is 0 on noise tokens and 1 on condition
+        # tokens (SP-sharded like ``spatial``); the fused per-feature adaLN affine can't vary per
+        # token, so we normalize once and blend the real-t and t=0 affine outputs per token.
+        zero_cond_t = modulate_mask is not None
+        if zero_cond_t:
+            (
+                z_shift_attn,
+                z_scale_attn,
+                z_gate_attn,
+                z_shift_ff,
+                z_scale_ff,
+                z_gate_ff,
+            ) = _chunk_time3d(spatial_time_zero, 6)
+
+        if not zero_cond_t:
+            spatial_normed = ttnn.squeeze(
+                self.norm1_norm(
+                    ttnn.unsqueeze(spatial, 0),
+                    dynamic_weight=(1 + spatial_scale_attn),
+                    dynamic_bias=spatial_shift_attn,
+                ),
+                0,
+            )
+        else:
+            spatial_hat = ttnn.squeeze(self.norm1_norm(ttnn.unsqueeze(spatial, 0)), 0)
+            spatial_normed = _adaln_blend(
+                spatial_hat,
+                spatial_scale_attn,
+                spatial_shift_attn,
+                z_scale_attn,
+                z_shift_attn,
+                modulate_mask,
+                modulate_mask_inv,
+            )
 
         if self.context_pre_only:
             prompt_scale_attn, prompt_shift_attn = _chunk_time3d(prompt_time, 2)
@@ -287,28 +317,46 @@ class TransformerBlock(Module):
             prompt_rope=prompt_rope,
             spatial_sequence_length=spatial_sequence_length,
         )
-        spatial_attn = spatial_attn * spatial_gate_attn
+        if not zero_cond_t:
+            spatial_attn = spatial_attn * spatial_gate_attn
+        else:
+            spatial_attn = _gate_blend(spatial_attn, spatial_gate_attn, z_gate_attn, modulate_mask, modulate_mask_inv)
         prompt_attn = prompt_attn * prompt_gate_attn if prompt_gate_attn is not None else None
 
         spatial_plus_attn = spatial + spatial_attn
         if self.add_attention_to_output:
             spatial = spatial_plus_attn
 
-        spatial_normed = ttnn.squeeze(
-            self.norm2(
-                ttnn.unsqueeze(spatial_plus_attn, 0),
-                dynamic_weight=(1 + spatial_scale_ff),
-                dynamic_bias=spatial_shift_ff,
-            ),
-            0,
-        )
+        if not zero_cond_t:
+            spatial_normed = ttnn.squeeze(
+                self.norm2(
+                    ttnn.unsqueeze(spatial_plus_attn, 0),
+                    dynamic_weight=(1 + spatial_scale_ff),
+                    dynamic_bias=spatial_shift_ff,
+                ),
+                0,
+            )
+        else:
+            spatial_hat_ff = ttnn.squeeze(self.norm2(ttnn.unsqueeze(spatial_plus_attn, 0)), 0)
+            spatial_normed = _adaln_blend(
+                spatial_hat_ff,
+                spatial_scale_ff,
+                spatial_shift_ff,
+                z_scale_ff,
+                z_shift_ff,
+                modulate_mask,
+                modulate_mask_inv,
+            )
 
         spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
             spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
         )
 
         spatial_ff = ttnn.squeeze(self.ff(ttnn.unsqueeze(spatial_normed, 0)), 0)
-        spatial_ff = spatial_ff * spatial_gate_ff
+        if not zero_cond_t:
+            spatial_ff = spatial_ff * spatial_gate_ff
+        else:
+            spatial_ff = _gate_blend(spatial_ff, spatial_gate_ff, z_gate_ff, modulate_mask, modulate_mask_inv)
 
         spatial = spatial + spatial_ff
 
@@ -343,3 +391,32 @@ class TransformerBlock(Module):
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
     size = t.shape[-1] // count
     return [t[:, :, i * size : (i + 1) * size] for i in range(count)]
+
+
+def _adaln_blend(
+    x_hat: ttnn.Tensor,
+    scale_r: ttnn.Tensor,
+    shift_r: ttnn.Tensor,
+    scale_z: ttnn.Tensor,
+    shift_z: ttnn.Tensor,
+    mask: ttnn.Tensor,
+    mask_inv: ttnn.Tensor,
+) -> ttnn.Tensor:
+    """Per-token adaLN: ``x_hat`` [1, L, d] normalized (no affine); ``scale*``/``shift*`` are [1, 1, d]
+    for the real timestep (``_r``) and timestep 0 (``_z``). ``mask`` is 1 on condition tokens, 0 on
+    noise tokens (``mask_inv`` is its complement), shape [1, L, 1]. Returns [1, L, d]. All broadcasts
+    are standard (middle dim of the affine, last dim of the mask)."""
+    out_r = x_hat * (1 + scale_r) + shift_r
+    out_z = x_hat * (1 + scale_z) + shift_z
+    return out_r * mask_inv + out_z * mask
+
+
+def _gate_blend(
+    x: ttnn.Tensor,
+    gate_r: ttnn.Tensor,
+    gate_z: ttnn.Tensor,
+    mask: ttnn.Tensor,
+    mask_inv: ttnn.Tensor,
+) -> ttnn.Tensor:
+    """Per-token adaLN output gate: noise tokens use ``gate_r``, condition tokens use ``gate_z``."""
+    return (x * gate_r) * mask_inv + (x * gate_z) * mask

@@ -181,6 +181,7 @@ class _DenoiseBranch:
         tp_axis: int,
         trace: bool,
         use_2cq: bool = False,
+        zero_cond_t: bool = False,
     ) -> None:
         self._tt = tt_model
         # Two command queues: CQ1 carries the per-step latent write and the output read-back,
@@ -193,6 +194,7 @@ class _DenoiseBranch:
         self._sp_axis = sp_axis
         self._tp_axis = tp_axis
         self._trace = trace
+        self._zero_cond_t = zero_cond_t
         self._tracer: Tracer | None = None
         self._sig: tuple | None = None
         self._inputs: dict | None = None
@@ -226,6 +228,7 @@ class _DenoiseBranch:
         combined_seq: int,
         in_channels: int,
         timesteps: torch.Tensor,
+        n_lat: int = 0,
     ) -> None:
         """Write the step-invariant inputs (prompt, RoPE, modulation table); allocate per-step buffers.
 
@@ -261,6 +264,20 @@ class _DenoiseBranch:
                 "spatial_sequence_length": combined_seq,
                 "prompt_sequence_length": prompt.shape[1],
             }
+            if self._zero_cond_t:
+                # Constant timestep-0 image modulation + a per-token mask (0 on the first n_lat noise
+                # tokens, 1 on the trailing condition tokens), SP-sharded like ``spatial``. All three
+                # are step-invariant, so they live in persistent buffers the trace captures once.
+                zero_ts = tensor.from_torch(torch.zeros(1, 1), dtype=ttnn.float32, device=self._device)
+                self._inputs["modulation_zero"] = self._tt.compute_modulation(zero_ts)
+                mask = torch.zeros(1, combined_seq, 1)
+                mask[:, n_lat:, :] = 1.0
+                self._inputs["modulate_mask"] = tensor.from_torch(
+                    mask, dtype=ttnn.bfloat16, device=self._device, mesh_axes=[None, self._sp_axis, None]
+                )
+                self._inputs["modulate_mask_inv"] = tensor.from_torch(
+                    1.0 - mask, dtype=ttnn.bfloat16, device=self._device, mesh_axes=[None, self._sp_axis, None]
+                )
         else:
             _tree_write(host, self._inputs)
 
@@ -438,7 +455,7 @@ class QwenImageEditPipeline:
         # timestep). Applied in the device transformer; see _generate for how the split is passed.
         self._zero_cond_t = bool(getattr(cfg, "zero_cond_t", False))
         if self._zero_cond_t:
-            logger.warning("checkpoint sets zero_cond_t=True; device zero_cond_t handling is Stage 2 (not yet applied)")
+            logger.info("checkpoint sets zero_cond_t=True; condition tokens use timestep-0 modulation")
         self._transformer_config = cfg
         self._pos_embed = hf_transformer.pos_embed
 
@@ -484,7 +501,13 @@ class QwenImageEditPipeline:
         devices = self._submeshes if self._cfg_parallel else (device, device)
         self._branches = [
             _DenoiseBranch(
-                tt_model=m, device=d, sp_axis=sp.mesh_axis, tp_axis=tp.mesh_axis, trace=trace, use_2cq=use_2cq
+                tt_model=m,
+                device=d,
+                sp_axis=sp.mesh_axis,
+                tp_axis=tp.mesh_axis,
+                trace=trace,
+                use_2cq=use_2cq,
+                zero_cond_t=self._zero_cond_t,
             )
             for m, d in zip(models, devices, strict=True)
         ]
@@ -693,6 +716,7 @@ class QwenImageEditPipeline:
                 combined_seq=combined_seq,
                 in_channels=self._transformer_config.in_channels,
                 timesteps=tt_timesteps,
+                n_lat=latents.shape[1],
             )
 
         t = time.time()

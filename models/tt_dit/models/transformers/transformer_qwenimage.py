@@ -196,6 +196,9 @@ class QwenImageTransformer(Module):
         spatial_sequence_length: int,
         prompt_sequence_length: int,
         modulation: ttnn.Tensor | None = None,
+        modulation_zero: ttnn.Tensor | None = None,
+        modulate_mask: ttnn.Tensor | None = None,
+        modulate_mask_inv: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Run the model forward.
 
@@ -213,11 +216,18 @@ class QwenImageTransformer(Module):
             assert timestep is None, "pass either timestep or modulation"
             block_modulation, spatial_time = self._modulation_slices(modulation)
             time_embed = None
+            # zero_cond_t: per-block timestep-0 image modulation (constant across steps). Only the
+            # spatial/img slice is used; the txt stream and final norm_out keep the real timestep.
+            if modulation_zero is not None:
+                block_modulation_zero, _ = self._modulation_slices(modulation_zero)
+            else:
+                block_modulation_zero = [(None, None)] * len(self.transformer_blocks)
         else:
             time_embed = self.time_text_embed(timestep=timestep)
             ttnn.silu(time_embed, output_tensor=time_embed)
             time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
             block_modulation = [(None, None)] * len(self.transformer_blocks)
+            block_modulation_zero = [(None, None)] * len(self.transformer_blocks)
             spatial_time = None
 
         spatial = self.img_in(spatial)
@@ -225,8 +235,8 @@ class QwenImageTransformer(Module):
         prompt = self.txt_norm(prompt)
         prompt = self.txt_in(prompt)
 
-        for i, (block, (block_spatial_time, block_prompt_time)) in enumerate(
-            zip(self.transformer_blocks, block_modulation, strict=True), start=1
+        for i, (block, (block_spatial_time, block_prompt_time), (block_spatial_time_zero, _)) in enumerate(
+            zip(self.transformer_blocks, block_modulation, block_modulation_zero, strict=True), start=1
         ):
             spatial, prompt = block.forward(
                 spatial=spatial,
@@ -238,6 +248,9 @@ class QwenImageTransformer(Module):
                 skip_time_embed_activation_fn=True,
                 spatial_time=block_spatial_time,
                 prompt_time=block_prompt_time,
+                spatial_time_zero=block_spatial_time_zero,
+                modulate_mask=modulate_mask,
+                modulate_mask_inv=modulate_mask_inv,
             )
 
             if i % 6 == 0:
