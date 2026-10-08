@@ -1568,6 +1568,8 @@ FORCE_INLINE uint32_t head_wrap_tile_skip(uint32_t cols, uint32_t row_stride, ui
     return cols - head_rows * row_stride;
 }
 
+// Kept for models/demos/wormhole/bge_m3 (custom_ops/encoder_sdpa/kernels/writer.cpp, its non-streaming drain); the
+// SDPA kernels drain with write_block_row_grouped below.
 template <uint32_t head_rows = 0, typename TensorAccessorType>
 void write_block(
     Noc noc,
