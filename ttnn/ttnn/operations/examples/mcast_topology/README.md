@@ -44,7 +44,7 @@ is negligible next to the transferred operands, so the kernel stays delivery-bou
 | Variant | What it does | Why it should differ |
 |---|---|---|
 | `per_core_dram` *(baseline)* | Every core reads its own `A[M_r, :]` and `B[:, N_c]` from DRAM. No semaphores, no cross-core traffic. | — |
-| `mcast_1d_pair` | An operand is broadcast along the axis it does **not** vary with. `A` is invariant along a grid ROW → column 0 of each row reads it once and multicasts across the row (`Mcast1D(PerRow)`). `B` is invariant down a grid COLUMN → row 0 of each column reads it once and multicasts down (`Mcast1D(PerColumn)`). | Each slice crosses DRAM **once per line** instead of once per core: `8×` fewer DRAM reads on an 8×8 grid. The copies travel core-to-core instead. |
+| `mcast_1d_pair` | An operand is broadcast along the axis it does **not** vary with. `A` is invariant along a grid ROW → column 0 of each row reads it once and multicasts across the row (an `Mcast` with row-major groups). `B` is invariant down a grid COLUMN → row 0 of each column reads it once and multicasts down (an `Mcast` with column-major groups). | Each slice crosses DRAM **once per line** instead of once per core: `8×` fewer DRAM reads on an 8×8 grid. The copies travel core-to-core instead. |
 
 ### The topology inverts, and that is the counter-intuitive part
 
@@ -54,7 +54,7 @@ is the one that needs a **2-D** multicast — a single injector feeding a whole 
 
 "More sharded" therefore does *not* mean "bigger broadcast". It means each operand travels a
 shorter, narrower path, and the grid dimension an operand does not travel along is exactly the one
-carrying the other operand. Two independent `Mcast1D` families ride the same grid on disjoint
+carrying the other operand. Two independent `Mcast` channels ride the same grid on disjoint
 semaphore ids, and each core is a sender on one, both, or neither.
 
 ## CLI — measure your own shapes/params
@@ -96,7 +96,7 @@ The original run did not record busy AICLK, enabled GDDR count, or firmware.
 mcast_topology  box=bh-49-...  arch=BLACKHOLE  grid=11x10 (110 cores)  M=8t N=32t K=4t
                 delivery only (no compute)   N=5 (median of 5-launch windows)
   per_core_dram  split=8x8  cores=64/110 (58%)  per-core DRAM reads               8512 ns ±0.3%  ✓
-  mcast_1d_pair  split=8x8  cores=64/110 (58%)  2x Mcast1D (PerRow + PerColumn)   4450 ns ±1.1%  ✓  → 1.91×
+  mcast_1d_pair  split=8x8  cores=64/110 (58%)  2x Mcast (RowMajor + ColumnMajor) 4450 ns ±1.1%  ✓  → 1.91×
 ```
 
 ### P100a, seven enabled GDDR banks
@@ -107,7 +107,7 @@ mcast_topology  box=bh-49-...  arch=BLACKHOLE  grid=11x10 (110 cores)  M=8t N=32
 mcast_topology  box=bh-43-...  arch=BLACKHOLE  grid=11x10 (110 cores)  M=8t N=32t K=4t
                 delivery only (no compute)   N=5 (median of 5-launch windows)
   per_core_dram  split=8x8  cores=64/110 (58%)  per-core DRAM reads              10958 ns ±0.7%  ✓
-  mcast_1d_pair  split=8x8  cores=64/110 (58%)  2x Mcast1D (PerRow + PerColumn)   4683 ns ±0.4%  ✓  → 2.34×
+  mcast_1d_pair  split=8x8  cores=64/110 (58%)  2x Mcast (RowMajor + ColumnMajor) 4683 ns ±0.4%  ✓  → 2.34×
 ```
 
 **Reading of the results:** delivering the same operands to the same 64 cores is **1.91× faster on
