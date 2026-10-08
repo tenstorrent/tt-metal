@@ -73,9 +73,13 @@ class TTModulatedDeformConv2dPack:
         mask = ttnn.sigmoid(out[:, :, :, self.num_offset_channels :])
         ttnn.deallocate(out)
 
-        # At stride 1 the input has the output's height and width.
+        # At stride 1 the input has the output's height and width. The DCN's reads are many
+        # small scattered sticks, which L1 serves far faster than DRAM; conv_offset's weights
+        # are prepared for a DRAM input, so only the DCN gets the L1 copy.
         x_nhwc = ttnn.reshape(x, (self.batch_size, out_h, out_w, x.shape[-1]))
+        x_nhwc = ttnn.to_memory_config(x_nhwc, ttnn.L1_MEMORY_CONFIG)
         out = self.device_dcn(x_nhwc, offset, mask)
+        ttnn.deallocate(x_nhwc)
         ttnn.deallocate(offset)
         ttnn.deallocate(mask)
         return out, out_h, out_w

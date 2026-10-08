@@ -93,6 +93,8 @@ class TTModulatedDeformConv2dDevice:
             stride=self.stride,
             padding=self.padding,
             dilation=self.dilation,
+            # The columns are K*K times the input, too large for L1 whatever the input's placement.
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         output = ttnn.linear(
             columns,
