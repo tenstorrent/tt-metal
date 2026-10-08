@@ -24,4 +24,4 @@
 ## Job 869 result (2026-10-08 light wake)
 - def: 4.488/4.490 s (mean 4.489), host-noise PCC 0.99996, PSNR 55.6/55.2 dB vs ref. Deep tree: out/stage_tree_def.txt.
 - lean: CRASHED after 64 s, TT_THROW storage.cpp:164 (run.log ~line 3672-3713). No timing, no output.
-- Next: debug the lean path (likely a layout/storage mismatch from a skipped tilize/untilize), then rerun A/B.
+- Next: debug the lean path : "Tensor is not allocated" in neighborhood_attention.py:744 rephased() reshape of K after exchange_only — lean path deallocates the tensor it still reads, then rerun A/B.
