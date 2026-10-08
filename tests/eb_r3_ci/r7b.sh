@@ -4,5 +4,5 @@
 # program (their defines removed) against the head, at the N2 and N11 shapes; three passes.
 cd /work
 for i in 1 2 3; do
-  echo "##### pass $i four: main vs head"; bash tests/eb_r3_ci/ab_off.sh tests/eb_r3_ci/off_r7b.txt tests/eb_r3_ci/test_eb_r3_ops.py -k "test_group_norm_dram_welford or test_layer_norm_welford_large or test_hardswish or test_batch_norm_fpu"
+  echo "##### pass $i four: main vs head"; bash tests/eb_r3_ci/ab_off.sh tests/eb_r3_ci/off_r7b.txt tests/eb_r3_ci/test_eb_r3_ops.py::test_group_norm_dram_welford tests/eb_r3_ci/test_eb_r3_ops.py::test_layer_norm_welford_large tests/eb_r3_ci/test_eb_r3_ops.py::test_hardswish tests/eb_r3_ci/test_eb_r3_ops.py::test_batch_norm_fpu
 done
