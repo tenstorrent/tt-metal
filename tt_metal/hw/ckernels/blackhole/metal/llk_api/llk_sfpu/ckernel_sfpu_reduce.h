@@ -1256,12 +1256,13 @@ inline void configure_addrmod_max_min(std::uint32_t num_cols) {
     // Reduction done on first tile before looping through the rest, so we look at num_cols - 1 tile
     std::uint32_t skip_rows = (num_cols - 1) * ROWS_PER_TILE;
 
+    // ADDR_MOD_7 keeps the SFPU init's zero step; ADDR_MOD_4 advances the column window by its four rows.
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
-        .dest = {.incr = 0},
+        .dest = {.incr = 4},
     }
-        .set(ADDR_MOD_7);
+        .set(ADDR_MOD_4);
 
     addr_mod_t{
         .srca = {.incr = 0},
@@ -1336,8 +1337,8 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     // Note: this LOADMACRO-based path is only used for float/UInt32 formats. UInt16 in 32-bit dest
     // cannot use it because the fused load+swap leaves no place to mask the garbage high bits, so it
     // is routed to the manual calculate_reduce_max_min_uint16() path instead.
-    // The next 4 rows of each face, 4 rows past the counter, which the INCRWC advances in the last swap's idle cycle;
-    // sequences 2 and 3 (written per column call) swap two of them with LREG4 / LREG5 between the issued swaps.
+    // The next 4 rows of each face, 4 rows past the counter, which the second macro's ADDR_MOD_4 advances;
+    // sequences 2 and 3 (written per column call) swap two of them with LREG4 / LREG5 after each issued swap's SFPNOP.
     constexpr std::uint32_t buffer_len = 10;
     lltt::record<lltt::NoExec>(0, buffer_len);
     TTI_SFPLOAD(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, 20);
@@ -1345,9 +1346,9 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG2, 1);
     TTI_SFPNOP;
     TTI_SFPLOAD(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, 22);
-    TTI_SFPLOADMACRO((3 << 2) | p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, 6);
+    TTI_SFPLOADMACRO((3 << 2) | p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_4, 6);
     TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG3, 1);
-    TTI_INCRWC(0, 4, 0, 0);
+    TTI_SFPNOP;
 
     // Dummy loads to increment dest counters
     TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_6, 0);
@@ -1554,9 +1555,9 @@ inline void calculate_reduce_max_min(const std::uint32_t block_height) {
     constexpr std::uint32_t replay_buffer_offset = 8;
     constexpr std::uint32_t replay_buffer_next_face = 9;
 
-    // Sequences 2 and 3 of the window: templates 0 and 1 (srcC LREG4 / LREG5) with a MAD SFPNOP two cycles after the
-    // load; Misc = 0 counts that delay in cycles whatever an earlier SFPU op left there.
-    TTI_SFPCONFIG(0x0000, 8, 1);
+    // Sequences 2 and 3 of the window: templates 0 and 1 (srcC LREG4 / LREG5) with a MAD SFPNOP, two SFPU instructions
+    // after the load; Misc = 0x300 counts those delays in SFPU instructions, so issue gaps cannot move them.
+    TTI_SFPCONFIG(0x0300, 8, 1);
     TTI_SFPCONFIG(0x1294, 6, 1);
     TTI_SFPCONFIG(0x1295, 7, 1);
 
