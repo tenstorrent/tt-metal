@@ -74,6 +74,9 @@ env:
   #   llk_sfpu_accuracy_tests.yaml   runs only through llk-sfpu-accuracy-impl.yaml, which
   #                                  supplies the LLK CI image, SFPI, the tt-llk working
   #                                  directory and ULP_MEASURE_PATH.
+  #   llk_sfpu_accuracy_tests.yaml   runs only through llk-sfpu-accuracy.yaml (check:
+  #                                  sweep), which supplies the LLK CI image, SFPI and the
+  #                                  tt-llk working directory its cmd is relative to.
   #
   # This is not an exemption: the legs still block the PR until an owner approves.
   UNSUPPORTED_YAMLS: >-

@@ -1,41 +1,56 @@
-# LLK SFPU accuracy — the exhaustive 16-bit ULP sweep, as a gate.
+# LLK SFPU accuracy — the exhaustive ULP sweep, held against
+# tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.yaml.
 #
-# Every finite bfloat16 and float16 value against each enrolled op, per format pair,
-# per approximation mode, per dest accumulator. A budget that only held on the few
-# thousand points a functional driver samples fails here.
+# Run by the `sweep` check of .github/workflows/llk-sfpu-accuracy.yaml, which PR Gate
+# calls when a PR changes an SFPU kernel or the SFPI pin; a failure fails the required
+# "PR Gate Status". Every finite bfloat16 and float16 value (and a stride of float32)
+# through every enrolled unary op, per format pair, approximation mode and dest
+# accumulator.
 #
-# The sweep is marked `accuracy`, which every other LLK pipeline deselects, so this
-# file is the only thing that runs it.
+# Two checks, both run whatever the first returns, and the job fails if either does:
+#   * pytest fails a gated cell whose worst lane is over its `max_ulp`;
+#   * `ulp_budget_diff.py headroom` fails a tolerance cell past the `max N ULP` or the
+#     non-finite lane count its row records, and lists every pytest failure no
+#     measurement describes. Its report is what the job comments on the PR.
 #
-# Named by path rather than by `-m accuracy`. The marker is shared with four other
-# files that no pipeline schedules today — `accuracy/test_sfpu_accuracy.py` alone is
-# 558 tests — and one of them is Quasar-only, which a Wormhole card cannot run.
-# Enrolling those is a separate decision with its own budget; this job is the
-# exhaustive ULP sweep.
+# The JUnit file is not named pytest-report-*: the cmd lint (tt-metal#57706) reads any
+# later word `pytest` as a second device run after a recorded failure, and the
+# comparison after the sweep runs nothing on the device.
 #
-# --ulp-measure records every comparison; the workflow folds that into a headroom
-# report. Nothing here writes the budget table: --ulp-emit is a deliberate human
-# tool, and a table rewritten by a nightly is a gate that agrees with itself.
+# Named by path, not by marker: the sweep is marked `accuracy`, which the other LLK
+# pipelines deselect. Wormhole only: the table's budgets are Wormhole measurements.
+# Nothing here writes the table: --ulp-emit is a deliberate human step, and a table
+# rewritten by CI would be a gate that agrees with itself.
 #
-# No -x: this is a report, so it should list every cell that moved rather than stop
-# at the first. For max allowed timeout refer to .github/time_budget.yaml
-# (llk -> accuracy).
+# Timeout: PR Gate's per-test ceiling is 15 minutes (.github/time_budget.yaml, llk ->
+# pr_gate). The whole job, checkout and SFPI install included, took 9-11 minutes on
+# wh_n150_civ2 (2026-09/10); if it outgrows that, split it with --splits/--group as the
+# Blackhole smoke entries in llk_pr_gate_tests.yaml do.
 
-- name: llk_sfpu_accuracy_wormhole
+- name: llk_sfpu_ulp_sweep_wormhole
   split_group: 1
   team: llk
-  budget_type: accuracy
+  budget_type: pr_gate
   coverage: false
   cmd: |
-    set -euo pipefail
+    set -uo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto \
-      --dist=worksteal \
-      --ulp-measure="$ULP_MEASURE_PATH" \
+    status=0
+    pytest -q --override-ini=log_cli=false -n auto --dist=worksteal \
+      --ulp-measure=ulp_measurements.jsonl \
       --timeout=900 \
-      --junitxml=pytest-report-wormhole-1.xml \
-      test_unary_sfpu_ulp.py
+      --junitxml=ulp_sweep_junit.xml \
+      test_unary_sfpu_ulp.py || status=$?
+    python3 helpers/ulp_budget_diff.py headroom \
+      --table helpers/sfpu_accuracy_budget.yaml \
+      --measured ulp_measurements.jsonl \
+      --junit ulp_sweep_junit.xml \
+      --out ulp_headroom_report.md || status=$?
+    if [[ -n "${GITHUB_STEP_SUMMARY:-}" && -s ulp_headroom_report.md ]]; then
+      cat ulp_headroom_report.md >> "$GITHUB_STEP_SUMMARY"
+    fi
+    exit "$status"
   skus:
     wh_n150_civ2:
-      timeout: 45
+      timeout: 15
   owner_id: U09UC143684 # Nemanja Divnic

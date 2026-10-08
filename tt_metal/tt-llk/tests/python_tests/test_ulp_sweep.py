@@ -1095,7 +1095,7 @@ def test_the_sweep_collects_every_keyed_op_whether_gating_or_emitting(monkeypatc
     """The key line is the enrolment and the only place a measurement can land, so both
     runs take exactly the unary ops that have one. Gating used to take only the ops with
     a step budget somewhere, which left every op on tolerance everywhere (Erfc,
-    SigmoidAppx, ...) with recorded figures that no nightly ever re-measured."""
+    SigmoidAppx, ...) with recorded figures that no gate run ever re-measured."""
     import test_unary_sfpu_ulp as sweep
     from helpers import ulp_sweep
     from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET, Metric

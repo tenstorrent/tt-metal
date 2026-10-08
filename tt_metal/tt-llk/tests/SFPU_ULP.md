@@ -276,7 +276,9 @@ does not fail on them, because such a block is hand-maintained by design.
   `--compile-producer` and `--compile-consumer` in one go; if you run a host suite in
   between, recompile.
 - **The sweep is marked `accuracy`**, which `llk-e2e` and the other marker-selected LLK
-  workflows deselect; `llk-sfpu-accuracy.yaml` runs it by path. Run it by name or by
+  workflows deselect; PR Gate runs it by path when an SFPU kernel or the SFPI pin
+  changes (`llk-sfpu-accuracy.yaml`, matrix `tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml`),
+  and comments any failing combination on the PR. Run it by name or by
   `-m accuracy`. `nightly` would *not* have kept it out of `llk-e2e`.
 - **Both runs take the same op set**: every unary op with a key line in the table,
   whatever its rows say. The key line is the enrolment, so an op on tolerance everywhere
@@ -286,7 +288,7 @@ does not fail on them, because such a block is hand-maintained by design.
   consumer build the same set with or without it.
 - **A plain gate run does not judge tolerance cells.** It fails a gated cell over its
   budget and *skips* a tolerance cell, with the measured maximum in the skip reason. To
-  hold those cells to the figures their rows record, as the nightly does:
+  hold those cells to the figures their rows record, as PR Gate does:
 
   ```bash
   CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py -n auto --ulp-measure=ulp.jsonl
