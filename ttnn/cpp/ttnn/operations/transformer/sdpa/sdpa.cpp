@@ -98,9 +98,10 @@ void drop_unsupported_routed_chunks(
     }
 }
 
-// Why ring_joint_scaled_dot_product_attention cannot run the ring recipe yet (nullopt: it can). A routed FP32-DEST
-// call with one of these features keeps the legacy sdpa_ring loop until the ring recipe gains it; none has an FP32
-// caller in models/. The legacy loop cannot be deleted while this returns anything.
+// Why ring_joint_scaled_dot_product_attention cannot run the ring recipe (nullopt: it can). Every feature left here is
+// one the legacy FP32-dest loop rejects too (attention sinks, sliding windows, KV-pad rotation: kv_actual_isl or the
+// metadata tensors on chunked prefill, circular caches), or a V wider than Q, which no caller passes; a routed call
+// with one of them keeps today's behaviour.
 std::optional<std::string_view> ring_recipe_gap(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
@@ -109,21 +110,18 @@ std::optional<std::string_view> ring_recipe_gap(
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<uint32_t> sliding_window_size,
     bool circular_kv_cache,
-    std::optional<uint32_t> kv_cache_batch_idx,
     std::optional<uint32_t> kv_actual_isl,
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor) {
     if (attention_sink || sliding_window_size.value_or(0) > 0) {
         return "attention sink / sliding window";
     }
-    if (circular_kv_cache || kv_cache_batch_idx || kv_actual_isl || slot_id || kv_actual_isl_tensor) {
-        return "indexed / padded KV cache";
+    const bool chunked = !is_cross && q.logical_shape()[2] < k.logical_shape()[2];
+    if (circular_kv_cache || kv_actual_isl || (chunked && (slot_id || kv_actual_isl_tensor))) {
+        return "KV-pad rotation / circular KV cache";
     }
-    if (k.logical_shape()[3] != q.logical_shape()[3] || v.logical_shape()[3] != q.logical_shape()[3]) {
-        return "V head dim != Q head dim";
-    }
-    if (!is_cross && q.logical_shape()[2] != k.logical_shape()[2]) {
-        return "chunked prefill";
+    if (k.logical_shape()[3] != q.logical_shape()[3] || v.logical_shape()[3] > q.logical_shape()[3]) {
+        return "V head dim > Q head dim";
     }
     return std::nullopt;
 }
@@ -718,7 +716,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
                 attention_sink,
                 sliding_window_size,
                 circular_kv_cache,
-                kv_cache_batch_idx,
                 kv_actual_isl,
                 slot_id,
                 kv_actual_isl_tensor)) {
@@ -745,10 +742,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         TT_FATAL(
             !sliding_window_size,
             "Named ring recipes do not support sliding_window_size yet; omit precision for the legacy kernel");
+        // Indexed caches (kv_cache_batch_idx, or slot_id with the metadata tensors outside chunked prefill) are the
+        // shared reader's; KV-pad rotation and circular caches are not (the device operation rejects metadata on
+        // chunked prefill).
         TT_FATAL(
-            !attention_sink && !circular_kv_cache && !kv_cache_batch_idx && !kv_actual_isl && !slot_id &&
-                !kv_actual_isl_tensor,
-            "Named ring recipes do not support indexed/cache or sink features");
+            !attention_sink && !circular_kv_cache && !kv_actual_isl,
+            "Named ring recipes do not support attention sinks, kv_actual_isl (KV-pad rotation) or circular KV caches");
         const bool auto_q_chunk = program_config.q_chunk_size == 0;
         program_config = operations::transformer::sdpa::detail::resolve_ring_recipe_blocking(
             policy,
@@ -761,8 +760,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
             program_config);
         TT_FATAL(
             input_tensor_k.logical_shape()[3] == input_tensor_q.logical_shape()[3] &&
-                input_tensor_v.logical_shape()[3] == input_tensor_q.logical_shape()[3],
-            "Named ring recipes require matching Q/K/V head dims");
+                input_tensor_v.logical_shape()[3] <= input_tensor_q.logical_shape()[3],
+            "Named ring recipes require K's head dim to be Q's and V's at most Q's");
         if (is_balanced && auto_q_chunk) {
             // A balanced ring's Q chunks must not straddle the two halves of a device's sequence.
             const uint32_t half_tiles = input_tensor_q.padded_shape()[2] / 64;
@@ -785,9 +784,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
             program_config.k_chunk_size,
             input_tensor_q.logical_shape()[3]);
         TT_FATAL(input_tensor_k.dtype() == input_tensor_v.dtype(), "Named ring recipes require matching KV types");
-        TT_FATAL(
-            is_cross || input_tensor_q.logical_shape()[2] == input_tensor_k.logical_shape()[2],
-            "Named ring recipes do not yet support chunked prefill; use is_cross for noncausal cross attention");
         // The recipe fixes its exp: an exp_approx_mode=False is ignored (resolve_recipe_policy). Read only by the op
         // perf model; the recipe kernels fix their own fidelities, so a caller's compute config is replaced.
         program_config.exp_approx_mode = std::nullopt;

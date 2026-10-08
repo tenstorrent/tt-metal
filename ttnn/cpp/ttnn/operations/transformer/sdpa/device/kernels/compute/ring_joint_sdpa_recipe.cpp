@@ -50,6 +50,7 @@ namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 void kernel_main() {
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(2);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
     constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(6);
@@ -68,9 +69,19 @@ void kernel_main() {
     constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(43));
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(44);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(45);
-    // Slots 30-32: causal, balanced, the balanced zigzag Q order.
+    // Slots 30-33: causal (off for chunked prefill, which masks in the sequence's frame), balanced, the balanced zigzag
+    // Q order, chunked prefill.
+#ifdef SDPA_RECIPE_RING_CHUNKED
+    static_assert(get_compile_time_arg_val(33) == 1, "SDPA_RECIPE_RING_CHUNKED builds serve chunked prefill");
+    constexpr uint32_t q_local_padded_Nt = get_compile_time_arg_val(5);
+    static_assert(q_local_padded_Nt == SDPA_RECIPE_RING_CHUNKED && get_compile_time_arg_val(34) == SDPA_RECIPE_RING_GROUP_TILES);
+#elif defined(SDPA_RECIPE_RING_CAUSAL)
+    static_assert(get_compile_time_arg_val(33) == 0, "Chunked ring recipes build with SDPA_RECIPE_RING_CHUNKED");
+#endif
 #ifdef SDPA_RECIPE_RING_CAUSAL
-    static_assert(get_compile_time_arg_val(30) == 1, "SDPA_RECIPE_RING_CAUSAL builds serve causal ring attention");
+    static_assert(
+        get_compile_time_arg_val(30) == 1 || get_compile_time_arg_val(33) == 1,
+        "SDPA_RECIPE_RING_CAUSAL builds serve causal ring attention");
     constexpr bool is_balanced = get_compile_time_arg_val(31) == 1;
     constexpr bool zigzag = get_compile_time_arg_val(32) == 1;
     constexpr uint32_t NH = get_compile_time_arg_val(0);
@@ -81,9 +92,9 @@ void kernel_main() {
         "Causal ring recipes build with SDPA_RECIPE_RING_CAUSAL");
 #endif
     static_assert(
-        get_compile_time_arg_val(33) == 0 && get_compile_time_arg_val(35) == 0 && get_compile_time_arg_val(37) == 0 &&
-            get_compile_time_arg_val(38) == 0 && get_compile_time_arg_val(39) == 0,
-        "Named ring recipes reject chunked, KV-pad rotation, sinks and sliding windows");
+        get_compile_time_arg_val(35) == 0 && get_compile_time_arg_val(37) == 0 && get_compile_time_arg_val(38) == 0 &&
+            get_compile_time_arg_val(39) == 0,
+        "Named ring recipes reject KV-pad rotation, sinks and sliding windows");
     // Slots 47-48: logical_n / logical_l arrive as device tensors; the compile-time values are placeholders.
     constexpr bool has_logical_n_tensor = get_compile_time_arg_val(47) == 1;
     constexpr bool has_logical_l_tensor = get_compile_time_arg_val(48) == 1;
@@ -203,9 +214,17 @@ void kernel_main() {
         // column) clipped to this shard, and the joint logical tail clipped to this iteration's joint shard.
         const uint32_t valid_n_rows = logical_nt * 32 - (global_n_partial_col ? 32 - global_n_partial_col : 0);
         const uint32_t n_origin = ring_id * kv_local_padded_Nt * 32;
+#ifdef SDPA_RECIPE_RING_CHUNKED
+        // Chunked prefill: the shard is the device's slab of every chunk group; the reader sends the chunks before
+        // logical_n and the mask covers the rest (recipe_ring.hpp).
+        (void)valid_n_rows;
+        (void)n_origin;
+        uint32_t primary_rows = kv_local_padded_Nt * 32;
+#else
         uint32_t primary_rows = valid_n_rows <= n_origin                            ? 0
                                 : valid_n_rows - n_origin < kv_local_padded_Nt * 32 ? valid_n_rows - n_origin
                                                                                     : kv_local_padded_Nt * 32;
+#endif
 #ifdef SDPA_RECIPE_RING_CAUSAL
         // Balanced, K from an earlier device: only its shard's early half precedes this device's Q (the reader
         // sends the chunks up to the one straddling the half; the tail mask covers the straddle).
@@ -218,7 +237,19 @@ void kernel_main() {
             .zigzag = zigzag,
             .diagonal = ring_id == ring_index,
             .skip_early = is_balanced && ring_index < ring_id,
-            .early_last = is_balanced && ring_iter == early_last_iter};
+            .early_last = is_balanced && ring_iter == early_last_iter,
+#ifdef SDPA_RECIPE_RING_CHUNKED
+            // The current chunk group ends at logical_n; the reader's dense causal skip stops at this device's last
+            // Q row (ring_joint_reader_impl.hpp: causal_end_nt).
+            .q_tile0 = logical_nt - SDPA_RECIPE_RING_GROUP_TILES + ring_index * q_local_padded_Nt,
+            .ring_id = ring_id,
+            .logical_nt = logical_nt,
+            .live_end_nt = get_named_compile_time_arg_val("dense_causal_skip") == 1
+                               ? logical_nt - SDPA_RECIPE_RING_GROUP_TILES + (ring_index + 1) * q_local_padded_Nt
+                               : logical_nt,
+            .local_tiles = kv_local_padded_Nt,
+#endif
+        };
 #endif
         const uint32_t valid_l_rows = logical_lt * 32 - (joint_l_partial_col ? 32 - joint_l_partial_col : 0);
         const uint32_t l_origin = joint_shard_base_tiles * 32;
@@ -234,7 +265,8 @@ void kernel_main() {
             2,
 #endif
             Sk_chunk_t,
-            DHt>(
+            DHt,
+            vDHt>(
             acc_state,
             global_q_start,
             global_q_end,

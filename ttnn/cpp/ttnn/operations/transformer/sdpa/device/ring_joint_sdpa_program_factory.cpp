@@ -367,8 +367,13 @@ RingWorkPlan build_ring_work_plan(
         // tightens this to valid chunks so empty pad slabs can be skipped.
         const bool has_kv_work =
             (derivation.kernel_chunked && !derivation.kv_pad_rotation_enabled) || valid_spatial_kv_chunks > 0;
+        // The recipes' chunked prefill also skips a step whose keys all follow this device's Q rows (the first chunk
+        // group, K from a later device): its compute normalizes on the last step with visible keys.
+        const bool recipe_chunked_masked =
+            args.precision.has_value() && derivation.kernel_chunked && !derivation.kv_pad_rotation_enabled &&
+            derivation.logical_nt <= derivation.q_chunk_group_tile_count && ring_write_plan.tensor_rank < ring_id;
         const bool ring_iter_does_work =
-            (has_kv_work || joint_contributes) &&
+            (has_kv_work || joint_contributes) && !recipe_chunked_masked &&
             !(derivation.kernel_is_causal && ring_write_plan.tensor_rank < ring_id && !is_balanced);
         if (ring_iter_does_work) {
             plan.masks.active_ring_iter_mask |= (1u << ring_iter);

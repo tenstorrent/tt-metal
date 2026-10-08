@@ -58,9 +58,16 @@ public:
             1,
             Sq_chunk_t,
             Sk_chunk_t,
-            DHt);
+            DHt,
+            std::nullopt,
+            tensor_args.v_head_dim(args.latent_v_head_dim) / tt::constants::TILE_WIDTH);
         desc.cbs = program_.cbs;
         causal_ = args.is_causal;
+        // Chunked prefill (Q shorter than the K/V shard): the device's Q slab and the chunk group, in tiles.
+        if (tensor_args.is_chunked() && !args.is_cross) {
+            chunked_q_tiles_ = tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT;
+            chunk_group_tiles_ = chunked_q_tiles_ * args.all_gather_operation_attributes.ring_size;
+        }
         grid_ = grid;
         Sq_chunk_t_ = Sq_chunk_t;
         Sk_chunk_t_ = Sk_chunk_t;
@@ -178,8 +185,13 @@ public:
             defines.emplace_back("SDPA_RING_STREAM_STATE", "1");
         }
         // Causal (and balanced) rings: diagonal masking, skipped K chunks and Q chunks (streaming/recipe_ring.hpp).
-        if (causal_) {
+        if (causal_ || chunked_q_tiles_) {
             defines.emplace_back("SDPA_RECIPE_RING_CAUSAL", "1");
+        }
+        // Chunked prefill masks every step in the sequence's frame (streaming/recipe_ring.hpp).
+        if (chunked_q_tiles_) {
+            defines.emplace_back("SDPA_RECIPE_RING_CHUNKED", std::to_string(chunked_q_tiles_));
+            defines.emplace_back("SDPA_RECIPE_RING_GROUP_TILES", std::to_string(chunk_group_tiles_));
         }
     }
 
@@ -191,6 +203,8 @@ private:
     mutable tt::tt_metal::ProgramDescriptor program_;  // finalize_cbs may drop the fused chunks
     tt::tt_metal::CoreRangeSet grid_;
     bool causal_ = false;
+    uint32_t chunked_q_tiles_ = 0;
+    uint32_t chunk_group_tiles_ = 0;
     uint32_t Sq_chunk_t_ = 0;
     uint32_t Sk_chunk_t_ = 0;
 };
