@@ -23,7 +23,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #if defined(ARCH_BLACKHOLE)
 // Each operand tile goes to math as one source bank (SrcDvalid::PerTile) unless the variant sets per_face_handoff, which the test
-// does for a transposed SrcA; partial faces, and a column or row broadcast without 2 x 2 faces, fall back inside the LLK.
+// does for a transposed SrcA; partial faces (but for a column broadcast of 1 x 2 faces), and a column or row broadcast without 2 x 2
+// faces, fall back inside the LLK.
 #define SRC_DVALID     (per_face_handoff ? ckernel::SrcDvalid::PerFace : ckernel::SrcDvalid::PerTile)
 #define SRC_DVALID_ARG , SRC_DVALID
 #define PER_TILE_MOCK(shape) \
@@ -37,8 +38,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 template <ckernel::BroadcastType BType>
 inline bool tile_handoff(const bool per_tile, const std::uint32_t face_r_dim, const std::uint32_t num_faces_r, const std::uint32_t num_faces_c)
 {
-    const bool needs_2x2 = BType == ckernel::BroadcastType::COL || BType == ckernel::BroadcastType::ROW;
-    return per_tile && face_r_dim == ckernel::FACE_R_DIM && (!needs_2x2 || (num_faces_r == 2 && num_faces_c == 2));
+    const bool needs_2x2   = BType == ckernel::BroadcastType::COL || BType == ckernel::BroadcastType::ROW;
+    const bool partial_col = BType == ckernel::BroadcastType::COL && face_r_dim < ckernel::FACE_R_DIM && num_faces_r == 1 && num_faces_c == 2;
+    return per_tile && ((face_r_dim == ckernel::FACE_R_DIM && (!needs_2x2 || (num_faces_r == 2 && num_faces_c == 2))) || partial_col);
 }
 
 template <bool Produce, ckernel::BroadcastType BType>
