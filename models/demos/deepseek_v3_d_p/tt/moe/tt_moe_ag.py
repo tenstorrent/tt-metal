@@ -6,13 +6,13 @@ Ported from MiMo-V2 d_p (models/demos/mimo_v2_d_p/tt/moe_ag.py), trimmed to the 
 has: routed_x [.., S, Hr] replicated over the TP axis (mesh columns) in, the top-k weighted sum reduce-scattered over the
 columns on the hidden dim out ([1, 1, S, Hr / TP] TILE, what TtReduceModule returns).
 
-    routed_x, top-k (indices, scores)  --high_bw_all_gather over the dispatch axis (mesh rows)-->  every chip of a
+    routed_x, top-k (indices, scores)  --fabric_all_gather over the dispatch axis (mesh rows)-->  every chip of a
     mesh column holds the column's T = rows * S tokens (gathered row g = src_row * S + token)
     -> moe_ag_route_plan (on device): counts / regions (the flat expert's rows), token_index (flat row -> gathered row),
        y_slot (per (token, k) the flat row of its expert output on this chip, or none)
     -> flat_routed_expert in indexed mode (reads gathered x rows through token_index) -> y [rows, Hr] bf16 row major
     -> moe_ag_local_reduce: partial[g] = sum over this chip's local experts of w[g, k] * y[y_slot[g, k]]
-    -> back over the rows: 1 row nothing; 2 rows the peer's partial is exchanged (high_bw_all_gather) and added inside
+    -> back over the rows: 1 row nothing; 2 rows the peer's partial is exchanged (fabric_all_gather) and added inside
        the reduce (fused send-back); > 2 rows a reduce_scatter of the [T, Hr] partials
     -> reduce_scatter over the columns on the hidden dim -> [1, 1, S, Hr / TP] bf16 TILE.
 
@@ -169,6 +169,7 @@ class TtMoeAgRouted:
         col_topology=ttnn.Topology.Linear,
     ):
         self.dev = mesh_device
+        self._fag_sems = None  # fabric_all_gather's ready / data-valid semaphores, created on the first gather
         rows, cols = tuple(mesh_device.shape)
         self.rows, self.cols = rows, cols
         S, H = seq_len_per_chip, hidden
@@ -180,7 +181,7 @@ class TtMoeAgRouted:
         self.row_topology, self.col_topology = row_topology, col_topology
         if rows > 1:
             self.gx = _dram(mesh_device, [1, 1, T, H])
-            # top-k gathered as tiles and untilized after: high_bw_all_gather costs per page, and S rows of K values are
+            # top-k gathered as tiles and untilized after: the gather costs per page, and S rows of K values are
             # S pages where S / 32 tiles move several times faster
             self.gidx_t = _dram(mesh_device, [1, 1, T, k], ttnn.uint16, ttnn.TILE_LAYOUT)
             self.gw_t = _dram(mesh_device, [1, 1, T, k], ttnn.bfloat16, ttnn.TILE_LAYOUT)
@@ -204,8 +205,25 @@ class TtMoeAgRouted:
         )
 
     def _ag(self, x, out, axis):
-        return ttnn.experimental.high_bw_all_gather(
-            x, dim=2, output_tensor=out, cluster_axis=axis, num_links=self.row_links if axis == 0 else self.col_links
+        """Every gather of the block: ttnn.experimental.fabric_all_gather (high_bw_all_gather's contract, a fabric-chunk
+        program: one link worker per ring direction and link, forwarding shard by shard). Caller-owned semaphores,
+        zero and left at zero by every call, so the op allocates and synchronizes nothing per launch."""
+        if self._fag_sems is None:
+            g = self.dev.compute_with_storage_grid_size()
+            crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
+            # The op requires them in L1_SMALL whenever the device has that pool (where its own would go), else L1.
+            # Two for the whole block (128 B / bank), instead of a pair per gather program.
+            l1_small = ttnn.get_memory_view(self.dev, ttnn.BufferType.L1_SMALL).total_bytes_per_bank > 0
+            bt = ttnn.BufferType.L1_SMALL if l1_small else ttnn.BufferType.L1
+            self._fag_sems = [ttnn.create_global_semaphore(self.dev, crs, 0, bt) for _ in range(2)]
+        return ttnn.experimental.fabric_all_gather(
+            x,
+            dim=2,
+            output_tensor=out,
+            cluster_axis=axis,
+            num_links=self.row_links if axis == 0 else self.col_links,
+            ready_semaphore=self._fag_sems[0],
+            data_valid_semaphore=self._fag_sems[1],
         )
 
     def buffers_mb(self):
@@ -239,7 +257,7 @@ class TtMoeAgRouted:
         if self.rows == 1:  # no dispatch axis: the chip's own tokens are the column's
             rm = lambda t: ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT) if t.layout != ttnn.ROW_MAJOR_LAYOUT else t
             return x, rm(idx), rm(w)
-        # high_bw_all_gather reads DRAM (the gate's top-k can come out in L1)
+        # fabric_all_gather reads DRAM (the gate's top-k can come out in L1)
         dram = (
             lambda t: t
             if t.memory_config() == ttnn.DRAM_MEMORY_CONFIG

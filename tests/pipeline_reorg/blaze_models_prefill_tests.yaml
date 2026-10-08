@@ -471,6 +471,30 @@
   sp_config: sc1
 
 
+- name: "fabric_all_gather op (the all-gather MoE block's gathers)"
+  # ttnn.experimental.fabric_all_gather against a torch reference and against high_bw_all_gather (bit-exact), trace-safe
+  # metadata, external semaphores, pages larger than the fabric payload; picks the 8 x 4 mesh by itself.
+  fabric_profile: torus_xy
+  cmd: |
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest tests/ttnn/unit_tests/operations/ccl/test_fabric_all_gather_op.py -vvv --tb=short
+    '
+  test_type: moe_block_fabric_all_gather
+  test_tags: [moe_block]
+  test_group: moe_block  # only when named (its own workflow job): never part of "all"
+  skus:
+    bh_sc1:
+      timeout: 30
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
 - name: "(Kimi-K2.7-1T, Kimi-K3-2.8T, GLM-5.3-744B) all-gather MoE block accuracy 5k"
   # TtMoe moe_block="all_gather" (tt/moe/tt_moe_ag.py) against the torch reference, seeded random weights, one
   # forward per model. The dispatch / combine block's accuracy is the existing kimi_moe / kimi_k3_moe / glm_moe legs.

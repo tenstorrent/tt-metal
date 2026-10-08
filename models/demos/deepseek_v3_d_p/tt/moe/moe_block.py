@@ -24,7 +24,7 @@ MOE_BLOCKS = {
     # Needs the flat routed expert (Blackhole, <= 64 experts per chip); falls back to dispatch_combine otherwise.
     "all_gather": "tt_moe_ag.py",
     # all_gather on meshes with <= AUTO_ALL_GATHER_MAX_ROWS rows, dispatch_combine on taller ones. On a LoudBox
-    # (2 x 4) the all-gather block is 6-15% less device time and ~18% less wall clock for Kimi-K2.7 / K3 / GLM-5.3
+    # (2 x 4) the all-gather block is 8-16% less device time and ~20% less wall clock for Kimi-K2.7 / K3 / GLM-5.3
     # (tests/perf/test_moe_block_perf.py); on the Galaxy (8 x 4) every chip receives 7 mesh rows of tokens instead of 1
     # and the local reduce covers 4x the tokens, which is projected to cancel the gain (K2.7 4.6-5.9 ms against the
     # 4.95 ms dispatch_combine measures there, K3 4.9-5.7 against 4.96): dispatch_combine stays there until the Galaxy

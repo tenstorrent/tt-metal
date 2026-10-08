@@ -57,17 +57,21 @@ def model_case(model, n_chips):
     return "kimi_k3", KimiK3Config, experts, 5, extra
 
 
+# An L1_SMALL pool as the models' legs open (GLM's 1216 B; K2.7's 768 fits inside): the CCLs, the all-gather block's
+# fabric_all_gather semaphores included, put their semaphores there whenever the pool exists.
+L1_SMALL_SIZE = 1216
+
 MESHES = [
     pytest.param(
         (2, 4),
-        fabric2d_device_params(fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE),
+        fabric2d_device_params(fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE, l1_small_size=L1_SMALL_SIZE),
         2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
         id="loudbox-2x4",
     ),
     pytest.param(
         (8, 4),
-        torus_xy_device_params(fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE),
+        torus_xy_device_params(fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE, l1_small_size=L1_SMALL_SIZE),
         2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="galaxy-8x4",

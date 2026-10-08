@@ -44,14 +44,15 @@ MARGIN = 0.05
 OUT_DIR = Path(os.environ.get("MOE_BLOCK_PERF_DIR", "generated/moe_block_perf"))
 
 # (model, moe_block, mesh id) -> device ns (sum over programs). LoudBox only: the Galaxy cases report until calibrated.
-# One BH LoudBox (8 x p150b, fabric 2D, 2 links), 2026-10-08, median of 3 runs (device spread <= 1.0%).
+# One BH LoudBox (8 x p150b, fabric 2D, 2 links, l1_small 1216), 2026-10-08, median of 3 runs (device spread <= 1.2%);
+# the all-gather block on fabric_all_gather.
 EXPECTED_NS = {
-    ("k2_7", "dispatch_combine", "loudbox-2x4"): 5_077_000,
-    ("k2_7", "all_gather", "loudbox-2x4"): 4_591_000,
-    ("glm_5_3", "dispatch_combine", "loudbox-2x4"): 3_439_000,
-    ("glm_5_3", "all_gather", "loudbox-2x4"): 3_225_000,
-    ("k3", "dispatch_combine", "loudbox-2x4"): 6_394_000,
-    ("k3", "all_gather", "loudbox-2x4"): 5_452_000,
+    ("k2_7", "dispatch_combine", "loudbox-2x4"): 5_097_000,
+    ("k2_7", "all_gather", "loudbox-2x4"): 4_551_000,
+    ("glm_5_3", "dispatch_combine", "loudbox-2x4"): 3_432_000,
+    ("glm_5_3", "all_gather", "loudbox-2x4"): 3_151_000,
+    ("k3", "dispatch_combine", "loudbox-2x4"): 6_420_000,
+    ("k3", "all_gather", "loudbox-2x4"): 5_397_000,
 }
 
 
