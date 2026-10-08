@@ -18,11 +18,32 @@ KDA_RECURRENT_STATE_DTYPE = ttnn.float32
 KDA_AFFINE_SUMMARY_DTYPE = ttnn.bfloat16
 KDA_SCAN_OUTPUT_DTYPE = ttnn.bfloat16
 KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
-KDA_PREPARATION_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
+# The chunk terms, the SP scan output, the normalized heads and the TP partial outputs stay in interleaved L1 for
+# their consumers when their share of each worker core fits these budgets; larger geometries keep them in DRAM.
+KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
+KDA_INTERMEDIATE_L1_BYTES_PER_CORE = 128 * 1024
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
+
+
+def l1_when_it_fits(device, nbytes: int, bytes_per_core: int) -> ttnn.MemoryConfig:
+    """Interleaved L1 when ``nbytes`` spread over the worker grid fits ``bytes_per_core`` per core, else DRAM."""
+    grid = device.compute_with_storage_grid_size()
+    return ttnn.L1_MEMORY_CONFIG if nbytes <= bytes_per_core * grid.x * grid.y else ttnn.DRAM_MEMORY_CONFIG
+
+
+def preparation_bytes(batch_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> int:
+    """Bytes of chunk preparation's seven outputs, in the order and formats KDA_PREP_OUTPUT_BF16_MASK selects."""
+    key_tiles, value_tiles = key_dim // ttnn.TILE_SIZE, value_dim // ttnn.TILE_SIZE
+    # v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv tiles per chunk.
+    tiles = (value_tiles, key_tiles, key_tiles, 1, key_tiles, key_tiles, 1)
+    tile_bytes = sum(
+        count * ttnn.TILE_SIZE * ttnn.TILE_SIZE * (2 if KDA_PREP_OUTPUT_BF16_MASK & (1 << index) else 4)
+        for index, count in enumerate(tiles)
+    )
+    return batch_heads * num_chunks * tile_bytes
 
 
 @dataclass(frozen=True)
@@ -52,6 +73,7 @@ class KDAProgramConfig:
     qkv_channel_chunk_size: int = 768
     tp_ccl_topology: ttnn.Topology = ttnn.Topology.Linear
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
+    input_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     # Use the projection matmul schedules tuned at _TUNED_PROJECTION_ROWS; False keeps the
     # auto-selected ttnn.linear configs.
@@ -72,7 +94,11 @@ _TUNED_PROJECTION_ROWS = 640
 
 
 def tuned_projection_matmul_configs(
-    grid: ttnn.CoreCoord, rows: int, output_k: int, output_n: int
+    grid: ttnn.CoreCoord,
+    rows: int,
+    output_k: int,
+    output_n: int,
+    input_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4,
 ) -> tuple[ttnn.MinimalMatmulConfig | None, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None]:
     """Return the tuned input and output projection schedules laid out on ``grid``.
 
@@ -85,10 +111,16 @@ def tuned_projection_matmul_configs(
     per_core_n = math.ceil(output_n // ttnn.TILE_SIZE / grid.x)
     if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8:
         return None, None
+    # HiFi4 is compute-bound with short blocks. At HiFi2 the math halves, and longer K and N blocks
+    # cut the per-block overhead that then dominates (K3 at 640 rows: 829 -> 654 us per device).
+    if input_projection_math_fidelity == ttnn.MathFidelity.HiFi4:
+        k_block, n_block = 8, 3
+    else:
+        k_block, n_block = 16, 12
     input_projection = ttnn.MinimalMatmulConfig(
         M_block_size=2,
-        K_block_size=8,
-        N_block_size=3,
+        K_block_size=k_block,
+        N_block_size=n_block,
         subblock_h=1,
         subblock_w=3,
         compute_with_storage_grid_size=grid,
@@ -126,6 +158,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
+        input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
@@ -140,7 +173,7 @@ def decay_projection_config(grid: ttnn.CoreCoord, rows: int) -> ttnn.MinimalMatm
     return ttnn.MinimalMatmulConfig(
         M_block_size=2,
         K_block_size=4,
-        N_block_size=8,
+        N_block_size=4,
         subblock_h=1,
         subblock_w=4,
         compute_with_storage_grid_size=grid,

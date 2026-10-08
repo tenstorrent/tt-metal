@@ -18,11 +18,14 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
     KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
     KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
+    KDA_INTERMEDIATE_L1_BYTES_PER_CORE,
     KDA_LOCAL_PREFIX_MEMORY_CONFIG,
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_PREP_OUTPUT_BF16_MASK,
-    KDA_PREPARATION_MEMORY_CONFIG,
+    KDA_PREPARATION_L1_BYTES_PER_CORE,
     KDARecurrenceProgramConfig,
+    l1_when_it_fits,
+    preparation_bytes,
 )
 
 
@@ -113,6 +116,7 @@ def _prepare_chunk_terms(
     sequence_parallel_axis: int,
     gate_scale: float,
     beta_logits_column_offset: int | None,
+    memory_config: ttnn.MemoryConfig,
 ) -> _PreparedChunks:
     # Chunk preparation reads each head's column straight from token-major [1, rows, heads] beta.
     outputs = ttnn.experimental.kda.prepare_chunk_recurrence(
@@ -122,7 +126,7 @@ def _prepare_chunk_terms(
         gate,
         beta,
         geometry.heads,
-        memory_config=KDA_PREPARATION_MEMORY_CONFIG,
+        memory_config=memory_config,
         compute_kernel_config=compute_config.preparation,
         output_bf16_mask=KDA_PREP_OUTPUT_BF16_MASK,
         actual_start=actual_start,
@@ -198,12 +202,13 @@ def _scan_chunks(
     sequence_parallel_axis: int,
     compute_config: ttnn.DeviceComputeKernelConfig,
     groups_per_head: int = 1,
+    memory_config: ttnn.MemoryConfig = KDA_OUTPUT_MEMORY_CONFIG,
 ) -> RecurrenceResult:
     output, final_states = ttnn.experimental.kda.recurrent_chunk_scan(
         *prepared.as_kernel_args(),
         group_entry_states,
         groups_per_head=groups_per_head,
-        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+        memory_config=memory_config,
         compute_kernel_config=compute_config,
         actual_start=actual_start,
         actual_end=actual_end,
@@ -456,6 +461,7 @@ def _scan_sp_grouped_chunks(
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
     gather_outputs: dict,
+    scan_memory: ttnn.MemoryConfig = KDA_OUTPUT_MEMORY_CONFIG,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
@@ -528,6 +534,8 @@ def _scan_sp_grouped_chunks(
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
         compute_config=compute_config.scan,
+        # The norm reads the output and the final state is reselected, so neither needs DRAM.
+        memory_config=scan_memory,
     )
     output = ttnn.reshape(
         scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
@@ -595,6 +603,17 @@ class KDARecurrence:
             raise ValueError("recurrence dimensions must be positive")
         self._geometry = _RecurrenceGeometry(
             batch, local_rows, heads, key_dim, value_dim, KDA_CHUNK_SIZE, local_rows // KDA_CHUNK_SIZE
+        )
+        self._preparation_memory = l1_when_it_fits(
+            device,
+            preparation_bytes(batch * heads, local_rows // KDA_CHUNK_SIZE, key_dim, value_dim),
+            KDA_PREPARATION_L1_BYTES_PER_CORE,
+        )
+        # The SP scan's BF16 output and its final states.
+        self._scan_memory = l1_when_it_fits(
+            device,
+            batch * heads * (local_rows * value_dim * 2 + key_dim * value_dim * 4),
+            KDA_INTERMEDIATE_L1_BYTES_PER_CORE,
         )
         self._sequence_parallel_axis = sequence_parallel_axis
         # This mesh's persistent sequence-parallel all-gather outputs.
@@ -667,6 +686,7 @@ class KDARecurrence:
             sequence_parallel_axis=self._sequence_parallel_axis,
             gate_scale=self._gate_scale,
             beta_logits_column_offset=beta_logits_column_offset,
+            memory_config=self._preparation_memory,
         )
         return prepared, state, geometry
 
@@ -770,6 +790,7 @@ class KDARecurrence:
             memory=self._summary_memory,
             compute_config=self._compute_config,
             gather_outputs=self._gather_outputs,
+            scan_memory=self._scan_memory,
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
