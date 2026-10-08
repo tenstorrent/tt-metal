@@ -846,6 +846,27 @@ class OptimizedDecoder(LightweightModule):
         normed = ttnn.rms_norm(flat, weight=weight, epsilon=self.cfg.eps, compute_kernel_config=self._norm_ck)
         return ttnn.reshape(normed, (b, h, s, d))
 
+    def _prefill_sdpa_pc(self, seq):
+        """Single-shot prefill SDPA chunks. q32/k128 (_sdpa_pc) left the cores mostly on per-chunk overhead: at 2048
+        tokens on one chip, full attention (18 q / 2 kv heads, fp32 acc) 1.63 -> 0.40 ms with q256/k256 (PCC .99999 vs
+        q32) and sliding (12 heads, window 512) 0.60 -> 0.20 ms with q128/k128 (bit-identical). Chunks are capped at
+        seq. TT_LAGUNA_PREFILL_SDPA_FULL_QK / _SLIDING_QK = "q,k" override; "0" keeps _sdpa_pc."""
+        key = "TT_LAGUNA_PREFILL_SDPA_SLIDING_QK" if self.cfg.is_sliding else "TT_LAGUNA_PREFILL_SDPA_FULL_QK"
+        qk = os.environ.get(key, "128,128" if self.cfg.is_sliding else "256,256")
+        if qk == "0":
+            return self._sdpa_pc
+        qc, kc = (min(int(v), seq) for v in qk.split(","))
+        cache = self.__dict__.setdefault("_prefill_sdpa_pcs", {})
+        if (qc, kc) not in cache:
+            grid = self.device.compute_with_storage_grid_size()
+            cache[(qc, kc)] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+                q_chunk_size=qc,
+                k_chunk_size=kc,
+                exp_approx_mode=False,
+            )
+        return cache[(qc, kc)]
+
     def _apply_rope(self, x, cos, sin):
         rd = self.cfg.rotary_dim
         hd = self.cfg.head_dim
@@ -1347,7 +1368,7 @@ class OptimizedDecoder(LightweightModule):
             if start_pos == 0:
                 # From-scratch: the whole sequence is local, so a single
                 # self-contained SDPA over q/k/v is correct and cheapest.
-                kw = {"is_causal": True, "program_config": self._sdpa_pc, **base}
+                kw = {"is_causal": True, "program_config": self._prefill_sdpa_pc(seq), **base}
                 if cfg.is_sliding:
                     kw["sliding_window_size"] = cfg.sliding_window
                 return ttnn.transformer.scaled_dot_product_attention(q, k, v, **kw)

@@ -288,7 +288,11 @@ class MultichipDecoder(OptimizedDecoder):
         # Prefill attention gate without head reshapes: a 0/1 [nh, nh*hd] matrix expands the per-head softplus gate
         # to full width (each output = 1.0 x one gate value, fp32 accumulation -> exact), then one flat multiply.
         # The [seq, nh, hd] reshape pads nh to a full tile (12 or 18 -> 32) and copied ~2.7x the attention output.
-        qk = os.environ.get("TT_LAGUNA_PREFILL_SDPA_QK", "64,64")
+        # Chunk starts must be multiples of q and k. A prefix-cache resume starts at any 64-token block; without the
+        # prefix cache every chunk starts at a multiple of PIPE_CHUNK (2048), so 128/128 is valid there (8K warm
+        # prefill 1194 -> 1154 ms, fp32-reference accuracy unchanged).
+        default_qk = "64,64" if os.environ.get("TT_LAGUNA_PREFIX_CACHE", "0") == "1" else "128,128"
+        qk = os.environ.get("TT_LAGUNA_PREFILL_SDPA_QK", default_qk)
         self._prefill_chunked_sdpa_pc = None
         if qk != "0":
             q, k = (int(v) for v in qk.split(","))
@@ -341,12 +345,27 @@ class MultichipDecoder(OptimizedDecoder):
             self.ccl_topology = topologies[topology_name]
             self.num_links = num_links
 
-    def _prefill_chunked_sdpa_kw(self):
+    def _prefill_chunked_sdpa_kw(self, seq=None):
         """Program config for the streamed (paged) prefill SDPA. TTNN's default (no config) runs 32/32 chunks; 64/64
         measured 160.3 -> 143.4 ms (8192 rows) and 85.0 -> 81.7 ms (4096) for layers 0/1/4 on S p150x4. Chunk starts
         are block (64) aligned, so q/k chunks must divide 64. TT_LAGUNA_PREFILL_SDPA_QK="q,k" overrides ("0" = default)."""
         pc = getattr(self, "_prefill_chunked_sdpa_pc", None)  # built in __init__
-        return {"program_config": pc} if pc is not None else {}
+        if pc is None:
+            return {}
+        if seq is not None and (pc.q_chunk_size > seq or pc.k_chunk_size > seq):
+            # short buckets (32, 64 tokens): chunks no longer than the sequence
+            qc, kc = min(pc.q_chunk_size, seq), min(pc.k_chunk_size, seq)
+            cache = self.__dict__.setdefault("_prefill_chunked_sdpa_pcs", {})
+            if (qc, kc) not in cache:
+                grid = self.device.compute_with_storage_grid_size()
+                cache[(qc, kc)] = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+                    q_chunk_size=qc,
+                    k_chunk_size=kc,
+                    exp_approx_mode=False,
+                )
+            pc = cache[(qc, kc)]
+        return {"program_config": pc}
 
     def _gate(self, attn, ln, g=None):
         """Prefill: flat attention [1, seq, nh*hd] times the per-head softplus gate expanded by one matmul."""
@@ -1426,7 +1445,7 @@ class MultichipDecoder(OptimizedDecoder):
                     user_pt,
                     **start_kw,
                     compute_kernel_config=self._sdpa_compute,
-                    **self._prefill_chunked_sdpa_kw(),
+                    **self._prefill_chunked_sdpa_kw(ch),
                 )
             else:
                 # Sliding layers read from the paged window cache (not a local
@@ -1446,7 +1465,7 @@ class MultichipDecoder(OptimizedDecoder):
                     **start_kw,
                     sliding_window_size=win,
                     compute_kernel_config=getattr(self, "_sdpa_compute_sliding", self._sdpa_compute),
-                    **self._prefill_chunked_sdpa_kw(),
+                    **self._prefill_chunked_sdpa_kw(ch),
                 )
             attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             attn = ttnn.reshape(attn, (1, ch, cfg.num_heads * cfg.head_dim))
