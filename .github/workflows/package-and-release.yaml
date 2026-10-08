@@ -267,11 +267,8 @@ jobs:
       # on -- the dev image tag is commit-scoped, not tracy-scoped, so it is the same
       # image the plain build resolves.
       dev-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      # TEMP -- REVERT TO `main` BEFORE MERGING. Points at the tt-blaze branch
-      # carrying `require-profiler: true` (tenstorrent/tt-blaze @ 95e049dca6), which
-      # has not landed on tt-blaze main yet. With `main` here the gate would still
-      # resolve the PLAIN artifacts and prove nothing about the profiler path.
-      blaze-ref: jvega/add_wheel_PnR
+      # Run tt-blaze's full merge gate from its main branch.
+      blaze-ref: main
 
   publish-to-pypi:
     # blaze-merge-gate is in `needs` ONLY to preserve the behaviour it had when it
