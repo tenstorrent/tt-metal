@@ -7,6 +7,8 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 
@@ -94,6 +96,13 @@ bool is_native_transpose_sharding(
     const auto& in_ss = input_spec.memory_config().shard_spec();
     const auto& out_ss = output_memory_config->shard_spec();
     return !(in_ss.has_value() && out_ss.has_value() && in_ss->grid != out_ss->grid);
+}
+
+void copy_experimental_allocation_flags(const MemoryConfig& source, MemoryConfig& dest) {
+    experimental::per_core_allocation::set_per_core_allocation(
+        dest, experimental::per_core_allocation::is_per_core_allocation(source));
+    experimental::range_lockstep_allocation::set_range_lockstep_allocation(
+        dest, experimental::range_lockstep_allocation::is_range_lockstep_allocation(source));
 }
 
 std::optional<ShardSpec> adjust_shard_spec_to_shape(

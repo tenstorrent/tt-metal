@@ -308,6 +308,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = prod_set,
         .compile_time_args = prep_reader_ct,
+        // Size-optimised like the phased prep reader (see chunk_gdn_phased_program_factory.cpp).
+        .opt_level = KernelBuildOptLevel::Os,
         .config = ReaderConfigDescriptor{},
     };
     prep_reader.runtime_args.reserve(P);
@@ -318,7 +320,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .core_ranges = prod_set,
         .compile_time_args = prep_compute_ct,
         // Fused-only perf: hoisted WY-path reconfigs (see chunk_gdn_math.hpp kGdnHoistReconfig).
-        .defines = {{"GDN_HOIST_RECONFIG", "1"}},
+        .defines = gdn_prep_defines(attrs.tinv, true /*hoist_reconfig*/),
         .config = gdn_compute_config(attrs.compute_kernel_config),
     };
     prep_compute.runtime_args.reserve(P);

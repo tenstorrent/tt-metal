@@ -126,6 +126,17 @@
 namespace ckernel::sfpu
 {
 
+// exp_with_base's scale, 0.5 (base b = e^0.5). bf16 for the calculate call's SFPMULI
+// immediate; the same bits shifted into fp32 for exp_init, which bakes the scale into the
+// approximate clamp path's constants. Mirrored as EXP_WITH_BASE_SCALE in
+// sfpu_dispatch_constants.py, which the golden reads.
+constexpr std::uint32_t EXP_WITH_BASE_SCALE_BF16 = 0x3F00u;
+constexpr std::uint32_t EXP_WITH_BASE_SCALE_FP32 = EXP_WITH_BASE_SCALE_BF16 << 16;
+
+// The approximate clamp path of calculate_exponential is hand-unrolled for 8 rows and
+// ignores ITERATIONS (tt-llk#1486), so its callers run it per face over all four faces.
+constexpr int EXP_APPROX_CLAMP_ITERATIONS = 8;
+
 template <bool APPROXIMATION_MODE, bool IS_FP32_DEST_ACC_EN, int ITERATIONS, bool CLAMP_NEGATIVE, std::uint32_t EXP_BASE_SCALE_FACTOR>
 inline __attribute__((always_inline)) void calculate_exponential_const_scale()
 {
@@ -398,6 +409,8 @@ void call_unary_typecast_operation(std::uint32_t dst_index)
  * @tparam APPROX_MODE Whether to use approximation mode for the SFPU operation
  * @tparam is_fp32_dest_acc_en Whether the destination accumulator is in FP32 mode
  * @tparam ITERATIONS Number of SFPU iterations (typically 32 for full tile)
+ * @param math_format Math format of the paired call_unary_sfpu_operation(); pass the same value so a
+ *        format-selected body runs under its own init
  */
 template <
     SfpuType OPERATION,
@@ -410,7 +423,7 @@ template <
     DataFormat TYPECAST_IN  = DataFormat::Invalid,
     DataFormat TYPECAST_OUT = DataFormat::Invalid,
     bool FUSED_SORT         = false>
-void call_unary_sfpu_operation_init()
+void call_unary_sfpu_operation_init(std::uint32_t math_format)
 {
     // Once-per-kernel SFPU init (SFPU config reg + invariant ADDR_MOD_7). In metal this is hoisted into the
     // full-init entry points (compute_kernel_hw_startup / init_sfpu / unary_op_init_common); this standalone
@@ -463,8 +476,11 @@ void call_unary_sfpu_operation_init()
     {
         // "exp with base b" = b^x = exp(x * ln b); implemented as the SCALE_EN path
         // of calculate_exponential (multiplies the input by a bf16 scale before exp).
-        // Init is identical to exponential; the scale is applied in the calculate call.
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(exp_init<APPROX_MODE, 0x3F800000 /* exp_base_scale_factor */, CLAMP_NEGATIVE, is_fp32_dest_acc_en>);
+        // The accurate paths apply the scale in the calculate call. The approximate
+        // clamp path does not read it there: it bakes the scale into the constants this
+        // init programs, so the init carries the same 0.5 -- with 1.0 here it computed
+        // exp(x) against an exp(0.5 * x) golden.
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(exp_init<APPROX_MODE, EXP_WITH_BASE_SCALE_FP32, CLAMP_NEGATIVE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::erfinv)
     {
@@ -492,7 +508,15 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::signbit)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(signbit_init);
+        // calculate_signbit_int32 and calculate_signbit each run the SFPLOADMACRO program their own init writes.
+        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        {
+            llk_math_eltwise_unary_sfpu_init<OPERATION>(signbit_int32_init);
+        }
+        else
+        {
+            llk_math_eltwise_unary_sfpu_init<OPERATION>(signbit_init);
+        }
     }
     else if constexpr (OPERATION == SfpuType::lgamma)
     {
@@ -612,7 +636,12 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
+#ifdef ARCH_WORMHOLE
+        constexpr bool round_to_bf16 = !APPROX_MODE && !is_fp32_dest_acc_en;
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en, round_to_bf16>);
+#else
         llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en>);
+#endif
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
@@ -868,7 +897,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_exponential,
-            (APPROX_MODE, is_fp32_dest_acc_en, false /* scale_en */, 8, CLAMP_NEGATIVE),
+            (APPROX_MODE, is_fp32_dest_acc_en, false /* scale_en */, EXP_APPROX_CLAMP_ITERATIONS, CLAMP_NEGATIVE),
             dst_index,
             VectorMode::RC,
             p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
@@ -885,9 +914,25 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             vector_mode,
             p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
     }
+    // exp_with_base, approximate clamp path: run as Exp's is, EXP_APPROX_CLAMP_ITERATIONS
+    // per face over all four faces. Through one ITERATIONS call it processed 8 of a
+    // tile's 32 rows and left the other 24 holding their input. This path takes its scale
+    // from exp_init's constants (above), not from the call; the call's is passed only
+    // because the adapter's signature carries it.
+    else if constexpr (OPERATION == SfpuType::exp_with_base && APPROX_MODE && CLAMP_NEGATIVE)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_exponential_const_scale,
+            (APPROX_MODE, is_fp32_dest_acc_en, EXP_APPROX_CLAMP_ITERATIONS, CLAMP_NEGATIVE, EXP_WITH_BASE_SCALE_BF16),
+            dst_index,
+            VectorMode::RC);
+    }
     // exp_with_base = b^x = exp(x * ln b): the only op that drives calculate_exponential
-    // with SCALE_EN=true. The bf16 scale 0x3F00 == 0.5 selects base b = e^0.5, so the
-    // golden is exp(0.5*x); 0.5 is exact in bf16 so no scale-rounding error is added.
+    // with SCALE_EN=true. The bf16 scale EXP_WITH_BASE_SCALE_BF16 == 0.5 selects base
+    // b = e^0.5, so the golden is exp(0.5*x); 0.5 is exact in bf16 so no scale-rounding
+    // error is added.
     //
     // The bf16-accurate path (_sfpu_exp_21f_bf16_tti_) lowers the scale via TTI_SFPMULI,
     // whose immediate operand must be a compile-time constant. Pass the scale through the
@@ -898,7 +943,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_exponential_const_scale,
-            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, CLAMP_NEGATIVE, 0x3F00u /* bf16(0.5) exp base scale */),
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, CLAMP_NEGATIVE, EXP_WITH_BASE_SCALE_BF16),
             dst_index,
             vector_mode);
     }
