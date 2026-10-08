@@ -109,8 +109,8 @@ def main():
     if not data:
         raise SystemExit("no op data found under " + str(args.output_root))
 
-    grids = [g for g in load(args.output_root / OPS[0] / ALL_ACTIVE / "program_intervals.csv")]
     ops = [o for o in OPS if o in data]
+    grids = [g for g in load(args.output_root / ops[0] / ALL_ACTIVE / "program_intervals.csv")]
 
     print(f"{'op':9s} {'FLOPs/interval':>15s} {'x vs matmul':>11s} " f"{'pJ/FLOP (last grid)':>20s} {'Sum/meas':>9s}")
     mm = op_flops("matmul", M, N, K, iters)

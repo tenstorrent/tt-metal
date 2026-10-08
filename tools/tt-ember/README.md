@@ -171,10 +171,12 @@ analyses: [compare_runs2, energy_by_engine, energy_per_flop_by_engine, pj_per_fl
 ```
 
 Analysis steps: `compare_runs2` (grouped bar charts per case), `energy_by_engine` and
-`energy_per_flop_by_engine` (reader/writer/compute ablation against `writer_amp`),
-`cross_op` and `cross_op_corrected` (ops side by side, shared or per-op FLOP denominator),
-`pj_per_flop`, `naive_vs_blocked`, `compare_runs`, `op_breakdown`. Options go in a nested
-mapping, e.g. `- naive_vs_blocked: {naive: matmul/regular, blocked: matmul/regular_b2x4}`.
+`energy_per_flop_by_engine` (reader/writer/compute ablation against `writer_amp`, average
+charge, `writer_idle` as the writer case), `pj_per_flop_by_engine` (the published Fig. 1: peak
+charge, `regular` as the writer stand-in), `cross_op` and `cross_op_corrected` (ops side by side,
+shared or per-op FLOP denominator), `pj_per_flop`, `naive_vs_blocked`, `compare_runs`,
+`op_breakdown`. Options go in a nested mapping, e.g.
+`- naive_vs_blocked: {naive: matmul/regular, blocked: matmul/regular_b2x4, board: "Blackhole p100a"}`.
 
 ### `compare_runs.py` — Cross-Run Comparison
 
