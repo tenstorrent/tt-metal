@@ -37,6 +37,18 @@ bf16nf (LTX_FUSE_GATE_ON_DEVICE=0, fills the unfused bf16 cache), bf16 (t48 defa
 bf8nf (LTX_QUANT=all_bf8_lofi + LTX_FUSE_GATE_ON_DEVICE=0). One retry per config only on a pytest Timeout (cold load).
 Marker /var/tmp/fasth3/t283/drv283d.done, log drv283d.done.log, run logs out48d_<P>/run.log.
 
-Next: when the marker exists, copy out48d_*/run.log into logs/, quote the gen #0/#1 tables, delete DiT cache
+Result (drv283d.done: `DONE bf16nf:072:completed bf16:077:completed bf8nf:078:failed`):
+- bf16nf job 072 (15:27 UTC, gate fold off, cold bf16 cache fill): PASSED, gen #1 replay Total 4.78 s, gen #0 29.19 s.
+- bf16 job 077 (15:33 UTC, t48 default fold on, warm cache): PASSED, gen #1 Total 4.67 s, gen #0 30.37 s.
+- bf8nf job 078 (15:35 UTC): FAILED in warmup: the default bf8 activation cast (LTX_QUANT_ACTIVATIONS=1) hands a
+  BFLOAT8_B tensor to dit_fused_distributed_rmsnorm (transformer_ltx.py:90 _norm_adaln), which takes bf16/fp32 only.
+Logs: logs/drv283d_{bf16nf,bf16,bf8nf}.run.log, logs/drv283d.done.log.
+
+## Attempt 5: 8-bit = bf8 weights, bf16 activations
+run283e.sh (exports LTX_QUANT_ACTIVATIONS=0, then run283d.sh bf8wnf) / drv283e.sh (pgid 854093 on blx01, ~15:45 UTC).
+Waits behind another project job on blx01 (080, t286). Marker /var/tmp/fasth3/t283/drv283e.done, run log
+/var/tmp/fasth3/t283/out48d_bf8wnf/run.log. Reuses the existing q-all_bf8_lofi DiT cache (45 GB) if its key matches.
+
+Old next step (attempt 4): when the marker exists, copy out48d_*/run.log into logs/, quote the gen #0/#1 tables, delete DiT cache
 dirs created after 2026-10-08 15:00 UTC under /var/tmp/fasth3/t220/cache/dit-ltx23 (find -newermt), delete
 t283/ltxrt_tree. Follow-up: t48 gate fold breaks cold-cache bf16 save and bf8.
