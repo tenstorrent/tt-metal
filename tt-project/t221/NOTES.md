@@ -13,3 +13,17 @@ Marker: /var/tmp/fasth3/t221/drv221.done; log drv221.done.log (job ids, statuses
 
 Next: when the marker exists, read it; if TIME_DONE completed, parse out_time/run.log (E2E_WALL_S lines + stage
 tables) and cmp.txt and report the table vs #251. If FILL_NOT_OK, read out_fill*/run.log (OOM? timeout? drop?).
+
+## Attempt 1 result (2026-10-08 03:15 UTC): DROP, job 914 killed
+- Fill job 913 completed (03:07-03:12 UTC, 286 s): bf16 DiT cache + JIT built, so bf16 fits on 4x8.
+- Timed job 914 (03:12:39 UTC) killed by broker device recovery at 03:15:13 UTC: tray 4 (chips 16-23,
+  0000:c1..c8) left the PCIe bus during seed 4 (gen 5, stage 1 step 4). Our job; no crash before it.
+  Broker escalated to its own full galaxy reset, then blx01 dropped off the network (~03:20 UTC, likely power cycle).
+- Partial warm walls before the drop (out_time/run.log): gen0 seed0 31.915 (cold), gen1 seed0 7.225,
+  seed1 5.719, seed2 5.655, seed3 5.700 s. Stage 1 step ~275 ms (bf16). Videos out_time/ltx_av_fast_1920x1088_{0..4}.mp4
+  (file index = gen index, not seed).
+- Rerun: drv221b.sh (time2 tag -> out_time2/, marker drv221b.done) started 03:19 UTC; it waits for the broker to be
+  free of hold/health/reset jobs. If blx01 rebooted, the driver is dead: restart it with
+  `ssh g15blx01 'cd /var/tmp/fasth3/t221; setsid nohup bash drv221b.sh > drv221b.out 2>&1 < /dev/null &' < /dev/null`
+  (only after checking `pgrep -u smarton -f "bash drv221b.sh"` is empty and no drv221b.done exists).
+- Same config dropping twice in a row on blx01 -> skip there and report the partial numbers above.
