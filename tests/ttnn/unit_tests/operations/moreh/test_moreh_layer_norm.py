@@ -125,9 +125,9 @@ def test_moreh_layer_norm(input_shape_normalized_dims, device):
 @pytest.mark.parametrize(
     "input_shape, normalized_dims",
     [
-        # 20 is unaligned, so the reader masks W.
+        # 20 is unaligned, so W is masked.
         ([1, 20], 1),
-        # 77 x 109 makes the reader mask both H and W.
+        # 77 x 109 masks both H and W.
         ([2, 77, 109], 2),
     ],
     ids=["lastdim", "hw"],

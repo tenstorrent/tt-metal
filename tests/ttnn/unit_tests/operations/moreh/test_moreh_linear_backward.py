@@ -12,8 +12,9 @@ from tests.ttnn.unit_tests.operations.test_utils import create_ttnn_tilized_tens
 
 pytestmark = pytest.mark.use_module_device
 
-# input_grad and weight_grad come from moreh_matmul calls (plus moreh_sum when the batch dims differ); bias_grad is the
-# op's own device op, with a SingleCore factory for a scalar [1, 1] bias and a MultiCore factory for a [1, N] bias.
+# input_grad and weight_grad come from moreh_matmul calls (weight_grad also goes through moreh_sum when the batch dims
+# differ); bias_grad is the op's own device op, with a SingleCore factory for a scalar [1, 1] bias and a MultiCore
+# factory for a [1, N] bias.
 
 
 def run_moreh_linear_backward_bias_only_test(output_shape, bias_shape, device):

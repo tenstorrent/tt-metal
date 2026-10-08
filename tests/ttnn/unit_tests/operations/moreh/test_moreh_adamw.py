@@ -98,7 +98,7 @@ def test_moreh_adamw(amsgrad, fp32_dest_acc_en, device):
         ([32, 149 * 32], 8, True),
         # Smaller than one tile in H and W, so the single tile is mostly padding.
         ([5, 3], 8, True),
-        # The first optimizer step: bias corrections 1 - beta^1, starting from zero moments.
+        # The first optimizer step: the op starts from zero moments.
         ([32, 32], 1, True),
         # No outputs passed: the op allocates them.
         ([32, 32], 8, False),

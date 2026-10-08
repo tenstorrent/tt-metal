@@ -17,10 +17,11 @@ pytestmark = pytest.mark.use_module_device
 @pytest.mark.parametrize(
     "input_shape, output_size, kernel_size, dilation, padding, stride",
     [
-        # 32-value input rows are DRAM-aligned, so the reader reads them directly.
+        # 32-value input rows are DRAM-aligned, so on Wormhole the reader reads them directly.
         ((1, 9, 32), (6, 10), (3, 3), (1, 1), (0, 0), (1, 1)),
         # 36-value input rows are not DRAM-aligned, so the reader goes through the scratch buffer (always on
-        # Blackhole). 240 output rows give each core several; dilation, padding and stride hit every skip branch.
+        # Blackhole). 240 output rows give each Wormhole core several; dilation, padding and stride hit every skip
+        # branch.
         ((5, 64, 36), (12, 12), (4, 4), (2, 2), (3, 3), (2, 2)),
     ],
     ids=["aligned_row", "unaligned_row"],
