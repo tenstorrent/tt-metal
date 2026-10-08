@@ -22,7 +22,9 @@
 // Optimization: unpack and pack at -O3, math at -O2. Even-row Q chunks (the host rounds a paired recipe's odd Q
 // chunk up) keep every recipe inside the kernel config buffer (70656 B at the default Blackhole worker L1).
 // Watcher builds are size-optimized on every thread.
-#if defined(WATCHER_ENABLED)
+#if defined(WATCHER_ENABLED) || \
+    (defined(ARCH_WORMHOLE) && (defined(TRISC_MATH) || (defined(TRISC_UNPACK) && defined(SDPA_RECIPE_FP32))))
+// Wormhole: math, and the FP32-state recipes' unpack, are size-optimized to fit the kernel config buffer.
 #pragma GCC optimize("Os")
 #elif defined(TRISC_MATH) || defined(SDPA_RECIPE_FUSED) || defined(SDPA_RECIPE_RING_CAUSAL)
 // Fused chunks (STANDARD, FAST) and the causal ring step's masking and skips add enough code that -O3 unpack/pack
