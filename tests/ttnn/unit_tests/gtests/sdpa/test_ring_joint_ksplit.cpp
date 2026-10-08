@@ -33,19 +33,25 @@ TEST(RingJointKSplit, SlicesPartitionValidChunksAndReducerOwnsTheLast) {
     }
 }
 
-// Compute derives which senders have state from the largest valid count alone, which relies on this.
-TEST(RingJointKSplit, NonEmptySliceStaysNonEmptyAsValidChunksGrow) {
+// Bit s of the sender mask is set exactly when sender s owns K chunks; the reducer (the last split) has no bit.
+TEST(RingJointKSplit, SenderMaskMarksNonEmptySenders) {
     for (uint32_t splits = 2; splits <= kKSplitMaxCount; ++splits) {
-        for (uint32_t split = 0; split < splits; ++split) {
-            bool seen_non_empty = false;
-            for (uint32_t valid = 0; valid <= 256; ++valid) {
-                const bool non_empty = !ksplit_range(valid, split, splits).empty();
-                EXPECT_TRUE(non_empty || !seen_non_empty)
+        for (uint32_t valid = 0; valid <= 256; ++valid) {
+            const uint32_t mask = ksplit_senders(valid, splits);
+            for (uint32_t split = 0; split + 1 < splits; ++split) {
+                EXPECT_EQ(((mask >> split) & 1u) != 0, !ksplit_range(valid, split, splits).empty())
                     << "splits=" << splits << " split=" << split << " valid=" << valid;
-                seen_non_empty |= non_empty;
             }
+            EXPECT_EQ(mask >> (splits - 1), 0u) << "splits=" << splits << " valid=" << valid;
         }
     }
+}
+
+// Slices are not monotone in the valid count, so the reducer ORs the mask over ring iterations instead of using the
+// largest count: with five splits, sender 2 owns K chunks at two valid chunks but none at three.
+TEST(RingJointKSplit, SenderMaskIsNotMonotoneInValidChunks) {
+    EXPECT_NE(ksplit_senders(2, 5) & (1u << 2), 0u);
+    EXPECT_EQ(ksplit_senders(3, 5) & (1u << 2), 0u);
 }
 
 TEST(RingJointKSplit, ValidChunkCountIsTheLogicalPrefix) {
