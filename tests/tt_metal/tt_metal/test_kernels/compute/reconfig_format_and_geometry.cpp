@@ -46,7 +46,7 @@ void kernel_main() {
 
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(/*dst_tile_index=*/0, tt::CBIndex::c_16);
+        pack_tile(/*ifrom_dst=*/0, tt::CBIndex::c_16);
 
         cb0.pop_front(onetile);
 #ifdef RECONFIG_SRCB

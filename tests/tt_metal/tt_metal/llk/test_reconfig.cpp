@@ -1210,17 +1210,20 @@ std::vector<std::uint32_t> run_reconfig_format_and_geometry(
         CreateCircularBuffer(program, core, config);
     };
 
+    const bool srcb = src == ReconfiguredSrc::B;
     auto src_buffer = make_dram_buffer();
-    auto zeros_buffer = make_dram_buffer();
     auto dst_buffer = make_dram_buffer();
+    std::shared_ptr<distributed::MeshBuffer> zeros_buffer;
 
     add_cb(tt::CBIndex::c_0, tt::DataFormat::Float32, tiny_tile_size, &tile);
-    add_cb(tt::CBIndex::c_1, tt::DataFormat::Float32, tiny_tile_size, &tile);
+    if (srcb) {
+        zeros_buffer = make_dram_buffer();
+        add_cb(tt::CBIndex::c_1, tt::DataFormat::Float32, tiny_tile_size, &tile);
+    }
     // Only configures the unpacker before the reconfig; never pushed.
     add_cb(tt::CBIndex::c_2, tt::DataFormat::Float16_b, full_tile_size, nullptr);
     add_cb(tt::CBIndex::c_16, tt::DataFormat::Float32, tiny_tile_size, &tile);
 
-    const bool srcb = src == ReconfiguredSrc::B;
     auto reader = CreateKernel(
         program,
         srcb ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp"
@@ -1271,8 +1274,9 @@ TEST_F(LLKMeshDeviceFixture, TensixReconfigFormatAndGeometry) {
     constexpr std::uint32_t seed = 42;
     constexpr float value_range = 10.0f;
     constexpr std::uint32_t k_bf16_representable_mask = 0xFFFF0000u;
-    // srcA 8x32 (a face-size change) is the case the geometry reprogramming is observable on; srcA 16x32 (face
-    // count only) and both srcB cases also pass without it and are kept as controls.
+    // 8x32 changes the face size. Without the geometry reprogramming, srcA 8x32 comes out wrong, and an LLK-assert
+    // build stops at the unpack-config check (srcB 8x32 data still matches with asserts off). 16x32 changes only
+    // the face count and passes either way; both 16x32 cases are controls.
     for (const auto& shape : {std::array<std::uint32_t, 2>{16, 32}, std::array<std::uint32_t, 2>{8, 32}}) {
         const Tile tile(shape);
         std::mt19937 rng(seed);
