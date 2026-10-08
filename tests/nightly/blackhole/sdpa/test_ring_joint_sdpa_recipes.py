@@ -336,8 +336,7 @@ def test_ring_joint_sdpa_recipe_legacy_arguments(ring_mesh, variant):
 
 def test_ring_joint_sdpa_precision_routing(ring_mesh):
     """Without precision, FP32 dest runs ACCURATE when the ring recipe has the call's features: bitwise the explicit
-    ACCURATE call (sharded joint), and BFP8 Q/K/V (Q widened to BF16, outputs narrowed back). A causal FP32 call
-    keeps the legacy loop until the ring recipe takes causal attention."""
+    ACCURATE call (sharded joint), and BFP8 Q/K/V (Q widened to BF16, outputs narrowed back), noncausal and causal."""
     mesh, semaphores, ccl_column = ring_mesh
     fp32 = fp32_dest_config(mesh)
     inputs, joints, backing, logical_n, kwargs, expected, _ = ring_case(mesh, "accurate", "joint_sharded")
@@ -385,8 +384,7 @@ def test_ring_joint_sdpa_precision_routing(ring_mesh):
             mask = key_mask(k_local, rows, causal=True, q_offset=chip * k_local) if causal else None
             want = reference(q.chunk(RING, dim=2)[chip], k, v, mask)
             rounding = 1.5 * l2_pct(stored(want.bfloat16(), ttnn.bfloat8_b), want)
-            # The causal call still runs the legacy FP32 loop (about 2% here): hold it to STANDARD's bound.
-            bound = L2_PCT_BOUND["standard" if causal else "accurate"] + rounding
+            bound = L2_PCT_BOUND["accurate"] + rounding
             assert l2_pct(per_chip(out[0])[chip], want) < bound, f"causal {causal} chip {chip}"
 
 
