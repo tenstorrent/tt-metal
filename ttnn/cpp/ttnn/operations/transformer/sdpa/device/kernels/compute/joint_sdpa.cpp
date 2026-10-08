@@ -95,7 +95,7 @@ void kernel_main() {
         if constexpr (n_partial_tiles + (k_partial_col > 0 ? 1u : 0u) > 0) {
             CircularBuffer(cb_mask_in).wait_front(1 + n_partial_tiles + (k_partial_col > 0 ? 1u : 0u));
         }
-        // The reader and writer walk nb, nq, q_chunk in this order; each (nb, nq) is one q chunk range.
+        // Same nb, nq, q_chunk order as the reader and writer.
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
                 sdpa_standard_v2<

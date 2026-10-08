@@ -333,7 +333,7 @@ ALWI void sdpa_mul_tiles_packthread(uint32_t idst, uint32_t odst) {
 
 #ifdef TRISC_MATH
 namespace ckernel::sfpu {
-// DEST tiles 1..num_tiles *= DEST tile 0, one face per call, reading tile 0 once for all of them.
+// DEST tiles 1..num_tiles *= DEST tile 0, one face per call.
 template <std::uint32_t num_tiles>
 inline void calculate_sdpa_mul_by_dst0() {
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
@@ -461,7 +461,8 @@ ALWI void sdpa_later_batch_sfpu() {
 
 // Moves the approx exp's mantissa error at x = 0 (the row max) up to its octave mean, so the weights do not flatten.
 ALWI void sdpa_center_softmax_exp() {
-    constexpr uint32_t bits = __builtin_bit_cast(uint32_t, 32555.818359375f);  // Schraudolph's 32500.818... + 55 / 256
+    // Schraudolph's 32500.818 plus 55, so the approximate exp does not under-weight the top keys.
+    constexpr uint32_t bits = __builtin_bit_cast(uint32_t, 32555.818359375f);
     PACK((TTI_SFPLOADI(0, 0xA, bits & 0xFFFF)));
     PACK((TTI_SFPLOADI(0, 0x8, bits >> 16)));
     PACK((TTI_SFPCONFIG(0, 13, 0)));

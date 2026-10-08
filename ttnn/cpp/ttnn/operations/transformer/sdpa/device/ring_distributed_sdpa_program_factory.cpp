@@ -346,15 +346,15 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         1,                                             // arg 16: lightweight causal mask
         static_cast<uint32_t>(use_streaming_compute),  // arg 17: row grouped cb_out drain
         drain_group_h,                                 // arg 18: drain group height
-        0,                                             // arg 19: k_partial_col — non-streaming, no partial mask emitted
+        0,                                             // arg 19: k_partial_col
         static_cast<uint32_t>(use_zigzag_balancing),   // arg 20
-        static_cast<uint32_t>(WindowedMode::None),  // arg 21: ring is never windowed
-        0,  // arg 22: out_concat_heads — ring writes the per-head layout
-        0,  // arg 23: sender_semaphore_id, ring has no chains
-        0,  // arg 24: receiver_semaphore_id
-        0,  // arg 25: valid_semaphore_id
-        0,  // arg 26: fwd_done_semaphore_id
-        0,  // arg 27: kv chain mode
+        static_cast<uint32_t>(WindowedMode::None),     // arg 21: ring is never windowed
+        0,                                             // arg 22: out_concat_heads — ring writes the per-head layout
+        0,                                             // arg 23: sender_semaphore_id, ring has no chains
+        0,                                             // arg 24: receiver_semaphore_id
+        0,                                             // arg 25: valid_semaphore_id
+        0,                                             // arg 26: fwd_done_semaphore_id
+        0,                                             // arg 27: kv chain mode
     };
     // out accessor, then the cu_window and Q-offset accessors chained right after it (mirrors the regular
     // factory so the writer's accessor offset chain stays intact). Ring is never windowed → placeholders.
@@ -390,9 +390,9 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0,                                                  //(std::uint32_t)use_attention_sink,
         static_cast<std::uint32_t>(use_streaming_compute),  // arg 24
         valid_Skt,                                          // arg 25: unpadded K tiles for streaming padded_k_tiles
-        0u,                                           // arg 26: k_partial_col - unused on ring's non-streaming path
-        static_cast<uint32_t>(use_zigzag_balancing),  // arg 27: unified zigzag remap
-        static_cast<uint32_t>(WindowedMode::None),    // arg 28: windowed mode — ring is never windowed
+        0u,                                                 // arg 26: k_partial_col
+        static_cast<uint32_t>(use_zigzag_balancing),        // arg 27: unified zigzag remap
+        static_cast<uint32_t>(WindowedMode::None),          // arg 28: windowed mode — ring is never windowed
     };
     std::map<std::string, std::string> defines_map;
     defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
