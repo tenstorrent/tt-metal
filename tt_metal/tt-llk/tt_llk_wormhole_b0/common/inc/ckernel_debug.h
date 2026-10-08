@@ -159,9 +159,7 @@ inline void dbg_thread_unhalt()
 // Reads the config from the RISC, so queued config writes must have landed first.
 inline InstrModLoadStore dbg_dest_row_save_mode()
 {
-    const std::uint32_t sfpu_fp32 =
-        (get_cfg_pointer()[ALU_ACC_CTRL_SFPU_Fp32_enabled_ADDR32] & ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK) >> ALU_ACC_CTRL_SFPU_Fp32_enabled_SHAMT;
-    return sfpu_fp32 ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+    return (cfg_read(ALU_ACC_CTRL_SFPU_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK) ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
 }
 
 inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t row_addr, std::uint32_t *rd_data)
