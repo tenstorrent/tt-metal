@@ -76,8 +76,6 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const tt::tt_metal::experimental::DFBSpecName output_dfb_name{"output"};
     const tt::tt_metal::experimental::DFBSpecName output_intermediate_dfb_name{"output_intermediate"};
     const tt::tt_metal::experimental::DFBSpecName k_decay_transposed_dfb_name{"k_decay_transposed"};
-    const tt::tt_metal::experimental::DFBSpecName state_update_dfb_name{"state_update"};
-    const tt::tt_metal::experimental::DFBSpecName state_temporary_dfb_name{"state_temporary"};
     const tt::tt_metal::experimental::DFBSpecName final_state_dfb_name{"final_state"};
     const tt::tt_metal::experimental::DFBSpecName scratch_dfb_name{"scratch"};
     const tt::tt_metal::experimental::DFBSpecName summary_head_output_dfb_name{"summary_head_output"};
@@ -132,8 +130,6 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         make_dfb(output_dfb_name, summary ? kv : 2 * cv, output_format),
         make_dfb(output_intermediate_dfb_name, summary ? 1 : cv, fp32),
         make_dfb(k_decay_transposed_dfb_name, 2 * kc, input_format(in.k_dec_t)),
-        make_dfb(state_update_dfb_name, state_tiles, fp32),
-        make_dfb(state_temporary_dfb_name, state_tiles, fp32),
         make_dfb(final_state_dfb_name, state_tiles, fp32),
         make_dfb(transport_state_dfb_name, summary ? kv : 1, tt::DataFormat::Float16_b),
         make_dfb(scratch_dfb_name, scratch_entries, fp32),
@@ -291,8 +287,6 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
           output_dfb_name,
           output_intermediate_dfb_name,
           k_decay_transposed_dfb_name,
-          state_update_dfb_name,
-          state_temporary_dfb_name,
           final_state_dfb_name,
           scratch_dfb_name,
           summary_head_output_dfb_name,
@@ -322,10 +316,6 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 tt::tt_metal::experimental::ProducerOf(output_intermediate_dfb_name, "output_intermediate"),
                 tt::tt_metal::experimental::ConsumerOf(output_intermediate_dfb_name, "output_intermediate"),
                 tt::tt_metal::experimental::ConsumerOf(k_decay_transposed_dfb_name, "k_decay_transposed"),
-                tt::tt_metal::experimental::ProducerOf(state_update_dfb_name, "state_update"),
-                tt::tt_metal::experimental::ConsumerOf(state_update_dfb_name, "state_update"),
-                tt::tt_metal::experimental::ProducerOf(state_temporary_dfb_name, "state_temporary"),
-                tt::tt_metal::experimental::ConsumerOf(state_temporary_dfb_name, "state_temporary"),
                 tt::tt_metal::experimental::ProducerOf(final_state_dfb_name, "final_state"),
                 tt::tt_metal::experimental::ProducerOf(transport_state_dfb_name, "transport_state"),
                 tt::tt_metal::experimental::ProducerOf(scratch_dfb_name, "scratch"),
