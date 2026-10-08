@@ -43,6 +43,8 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
         for layer_idx in range(num_layers):
             cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
 
+            # Zero-initialised: nothing worth caching on disk (a cold 4-lane Galaxy start otherwise dumps
+            # ~11 GB of zeros to the shared cache volume from four engines at once).
             model_inst.layers[layer_idx].attention.layer_past = [
                 ttnn.as_tensor(
                     cache_kv,
@@ -51,33 +53,59 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
                     layout=model_args_inst.model_config["ATTN_W_LAYOUT_TILE"],
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(model_inst.mesh_device),
-                    cache_file_name=f"{tt_cache_path}/{kv}cache_{kv_cache_shape}",
                 )
-                for kv in ["k", "v"]
+                for _ in ["k", "v"]
             ]
 
         kv_cache.append([l.attention.layer_past for l in model_inst.layers])
     return kv_cache
 
 
-def _dp_rank_and_cache_marker():
-    """(data-parallel rank of this engine process, marker file rank 0 touches once its tensor cache is complete)."""
-    rank = int(os.environ.get("VLLM_DP_RANK", "0") or 0)
-    cache_root = os.environ.get("TT_CACHE_PATH")
-    marker = Path(cache_root) / ".dp_rank0_tensor_cache_ready" if cache_root else None
-    return rank, marker
+class _ColdCacheLock:
+    """Serialise model loading across data-parallel engine processes while the tensor cache is cold.
 
+    Every engine converts and writes the same cache files on a first run; with four of them racing on a
+    shared volume the Galaxy release bring-ups lost all engines. The lock is only taken when the cache
+    directory has no tensor files yet, so warm starts stay fully parallel.
+    """
 
-def _wait_for_rank0_cache(marker, rank, timeout_s=3600, poll_s=5):
-    if marker is None or marker.exists():
-        return
-    logger.info(f"DP rank {rank}: waiting for rank 0 to finish generating the tensor cache ({marker})")
-    waited = 0
-    while not marker.exists() and waited < timeout_s:
-        time.sleep(poll_s)
-        waited += poll_s
-    if not marker.exists():
-        logger.warning(f"DP rank {rank}: no tensor cache marker after {timeout_s}s; loading anyway")
+    def __init__(self):
+        root = os.environ.get("TT_CACHE_PATH")
+        self.path = Path(root) / ".tensor_cache.lock" if root else None
+        self.fd = None
+
+    def __enter__(self):
+        if self.path is None:
+            return self
+        root = self.path.parent
+        try:
+            warm = any(root.rglob("*.tensorbin"))
+        except OSError:
+            warm = True
+        if warm:
+            return self
+        import fcntl
+
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o666)
+            logger.info(f"Tensor cache at {root} is cold; serialising model load across engine processes")
+            fcntl.flock(self.fd, fcntl.LOCK_EX)
+        except OSError as e:  # read-only mounts etc.: load without the lock
+            logger.warning(f"Could not take the tensor cache lock {self.path}: {e}")
+            if self.fd is not None:
+                os.close(self.fd)
+                self.fd = None
+        return self
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            import fcntl
+
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+            os.close(self.fd)
+            self.fd = None
+        return False
 
 
 def get_platform_specific_optimizations(model_name):
@@ -227,12 +255,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 f"max_seq_len {max_seq_len} is not supported for {hf_model_id}, using {max_seq_len_native} instead"
             )
             max_seq_len = max_seq_len_native
-        # With multi-process data parallelism every engine converts and caches the same weights; on a
-        # cold cache the ranks race on the shared cache files. Let rank 0 populate it first.
-        dp_rank, cache_marker = _dp_rank_and_cache_marker()
-        if dp_rank > 0:
-            _wait_for_rank0_cache(cache_marker, dp_rank)
-
+        cache_lock = _ColdCacheLock().__enter__()
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
             tt_data_parallel,
@@ -258,12 +281,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
         visual_model = DropInVisionTransformer(get_hf_visual(reference_model), vision_model_args)
-        if dp_rank == 0 and cache_marker is not None:
-            try:
-                cache_marker.parent.mkdir(parents=True, exist_ok=True)
-                cache_marker.touch()
-            except OSError as e:  # read-only cache mounts: the other ranks fall back to the wait timeout
-                logger.warning(f"Could not write tensor cache marker {cache_marker}: {e}")
+        cache_lock.__exit__(None, None, None)
 
         return cls(
             tt_model,
