@@ -102,7 +102,7 @@ tt::tt_metal::CoreCoord router_virtual_core(const tt::Cluster& cluster, ChipId p
 bool flag_field(const std::vector<manifest::Field>& fields, std::string_view key) {
     const auto it = std::ranges::find(fields, key, &manifest::Field::key);
     TT_FATAL(it != fields.end(), "Fabric manifest: no field keyed {}", key);
-    const auto* flag = std::get_if<manifest::content::Flag>(&it->content);
+    const auto* flag = it->content.has_value() ? std::get_if<manifest::content::Flag>(&*it->content) : nullptr;
     TT_FATAL(flag != nullptr, "Fabric manifest: field {} is not a flag", key);
     return flag->value;
 }

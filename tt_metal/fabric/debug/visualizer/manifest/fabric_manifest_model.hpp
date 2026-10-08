@@ -177,6 +177,7 @@ enum class FieldCategory : uint8_t {
     KERNEL_PARAMS,
     FLOW_CONTROL,
     CONTROL_INFO,
+    DIAGNOSTICS,
 };
 
 // A fact the router kernel is fed, read through the field tables (fabric_manifest_fields.hpp).
@@ -184,8 +185,9 @@ struct Field {
     std::string_view key;
     // Tag used for logical grouping of information in decode / visualizer.
     FieldCategory category = FieldCategory::LIFECYCLE;
-    // Underlying content that the value the kernel is fed points to.
-    Content content;
+    // Underlying content that the value the kernel is fed points to. Null when the field is a buffer the builder did
+    // not allocate, which the kernel is fed as address 0.
+    std::optional<Content> content;
 };
 
 // The credits a sender channel receives back from the peer's receiver.
@@ -268,6 +270,8 @@ struct Router {
     std::vector<Field> fields;
     // Indexed by ERISC id.
     std::vector<Erisc> eriscs;
+    // The L1 past the channel buffers. Null when the router has no leftover L1.
+    std::optional<content::L1> leftover_l1;
 };
 
 // How the chip's routers sync at startup through their local_sync words, as the router kernels are fed it
