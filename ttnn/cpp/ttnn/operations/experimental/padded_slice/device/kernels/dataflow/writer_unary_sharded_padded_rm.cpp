@@ -36,7 +36,14 @@ void kernel_main() {
     DPRINT("Output Elem Size {}\n", output_elem_size);
 #endif
 
-    if constexpr (output_elem_size == 2) {
+    static_assert(
+        output_elem_size == 1 || output_elem_size == 2 || output_elem_size == 4, "Unsupported output_elem_size");
+    if constexpr (output_elem_size == 1) {
+        volatile tt_l1_ptr uint8_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(pad_addr);
+        for (uint32_t i = 0; i < num_elements_per_row; ++i) {
+            pad_ptr[i] = 0;
+        }
+    } else if constexpr (output_elem_size == 2) {
         volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pad_addr);
         for (uint32_t i = 0; i < num_elements_per_row; ++i) {
             pad_ptr[i] = 0;

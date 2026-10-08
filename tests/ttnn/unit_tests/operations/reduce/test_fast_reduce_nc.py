@@ -229,3 +229,12 @@ def test_fast_reduce_nc_split_invalid_width(device, split, expect_error):
     x, _, _ = get_tensors([1, 1, 32, 256], [1, 1, 32, 256], device, with_padding=False)
     with expect_error(RuntimeError, "tile-aligned"):
         ttnn.experimental.fast_reduce_nc_split(x, dim=1, split_output_width=split)
+
+
+# dim was bounded only by the rank, so dims=[2] or [3] were accepted and the reader treated shape[dim]
+# as a count of H*W tile planes, reading far past the input.
+@pytest.mark.parametrize("dims", [[2], [3]], ids=["H", "W"])
+def test_fast_reduce_nc_rejects_hw_dims(device, dims, expect_error):
+    x, _, _ = get_tensors([1, 1, 32, 128], [1, 1, 32, 128], device, with_padding=False)
+    with expect_error(RuntimeError, "FastReduceNC reduces only outer dims"):
+        ttnn.experimental.fast_reduce_nc(x, dims=dims)

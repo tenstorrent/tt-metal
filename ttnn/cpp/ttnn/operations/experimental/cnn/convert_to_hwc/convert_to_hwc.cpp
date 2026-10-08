@@ -61,6 +61,11 @@ ttnn::Tensor convert_to_hwc(
             output_memory_config = infer_hwc_output_memory_config(input);
         }
     }
+    TT_FATAL(
+        output_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+            output_memory_config.shard_spec().has_value(),
+        "Output memory config must be height sharded with a shard spec, got {}",
+        output_memory_config);
     const auto alignment_elements = ttnn::experimental::prim::compute_alignment_requirement_in_elements(input);
     TT_FATAL(alignment_elements != 0, "Number of alignment elements cannot be 0");
     TT_FATAL(

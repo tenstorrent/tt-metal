@@ -19,7 +19,7 @@ def sequential_prefix_scan(a, bx, h_prev):
     return hidden_states
 
 
-def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
+def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device, shard_grid=None):
     torch.manual_seed(0)
 
     a = torch.randn((1, 1, L, E * N))
@@ -35,7 +35,8 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
     if num_availible_cores < num_cores:
         pytest.skip(f"Not enough cores availible (was {num_availible_cores} but need {num_cores})")
 
-    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
+    if shard_grid is None:
+        shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
     shard_spec = ttnn.ShardSpec(
         shard_grid,
         [L, E * N // num_cores],
@@ -184,3 +185,20 @@ def test_ssm_prefix_scan_with_program_cache(device):
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, dummy_memory_config)
 
     assert device.num_program_cache_entries() == 1
+
+
+# Runtime args used to go to the first num_cores device cores, whatever the shard grid, so a grid that
+# does not start at (0, 0) ran its kernels with no args.
+@pytest.mark.parametrize(
+    "shard_grid",
+    [
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(7, 1))}),
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
+    ],
+    ids=["row_1", "column_0"],
+)
+def test_ssm_prefix_scan_shard_grid_not_at_origin(shard_grid, device):
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 8 or grid.y < 8:
+        pytest.skip(f"needs an 8x8 compute grid, got {grid.x}x{grid.y}")
+    run_ssm_prefix_scan(32, 32, 64, shard_grid.num_cores(), ttnn.bfloat8_b, device, shard_grid=shard_grid)

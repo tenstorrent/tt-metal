@@ -971,3 +971,34 @@ def test_attn_matmul_with_program_cache_exhaustive(
     assert_numeric_metrics(
         tt_output_tensor, golden_output_tensor, check_allclose=False, check_frobenius=False, check_ulp=False
     )
+
+
+# Runtime args were enumerated over the device core count but mapped with the op grid's y, so a grid
+# shorter than the device sent args to off-grid coordinates and left real cores without any.
+def test_attn_matmul_compute_grid_shorter_than_device(device):
+    grid = device.compute_with_storage_grid_size()
+    if grid.y < 2:
+        pytest.skip("needs at least two rows of cores")
+    torch.manual_seed(0)
+    input_tensor_a = torch.randn([1, 8, 32, 64]).bfloat16()
+    input_tensor_b = torch.randn([32, 1, 64, 128]).bfloat16()
+    tt_a = ttnn.from_torch(input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_b = ttnn.from_torch(input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def run(grid_size):
+        return ttnn.to_torch(
+            ttnn_attn_matmul(
+                tt_a,
+                tt_b,
+                compute_with_storage_grid_size=grid_size,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+            )
+        )
+
+    full_grid_output = run(ttnn.CoreCoord(grid.x, grid.y))
+    sub_grid_output = run(ttnn.CoreCoord(grid.x, grid.y // 2))
+
+    golden = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
+    assert_numeric_metrics(golden, sub_grid_output, pcc_threshold=0.999, check_allclose=False, check_frobenius=False)
+    assert torch.equal(sub_grid_output, full_grid_output)

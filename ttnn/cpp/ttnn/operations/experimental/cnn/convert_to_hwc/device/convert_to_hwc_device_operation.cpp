@@ -34,6 +34,11 @@ void ConvertToHWCDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         args.memory_config.is_sharded() && args.memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Output tensor must be height sharded");
+    TT_FATAL(
+        args.dtype == input.dtype(),
+        "convert_to_hwc does not convert dtypes: output dtype ({}) must match the input dtype ({})",
+        args.dtype,
+        input.dtype());
 }
 
 tt::tt_metal::TensorSpec ConvertToHWCDeviceOperation::compute_output_specs(

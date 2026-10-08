@@ -104,9 +104,7 @@ tt::tt_metal::ProgramDescriptor PrefixScanProgramFactory::create_descriptor(
         cb_tilize_scratch_id,
         static_cast<uint32_t>(partial_row)};
 
-    auto device_compute_with_storage_grid_size = a.device()->compute_with_storage_grid_size();
-    std::vector<CoreCoord> cores = grid_to_cores(
-        all_cores.num_cores(), device_compute_with_storage_grid_size.x, device_compute_with_storage_grid_size.y, true);
+    const std::vector<CoreCoord> cores = corerange_to_cores(all_cores, std::nullopt, /*row_wise=*/true);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build ProgramDescriptor

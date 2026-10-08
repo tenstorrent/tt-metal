@@ -146,3 +146,41 @@ def test_quasar_padded_slice_rm_last_dim_pad_rejected(device, expect_error):
     tt_input, output_mem_config, _ = _last_dim_padded_slice_setup(device, begins, ends, shard_shape, core_grid)
     with expect_error(RuntimeError, r"pad-row path \(output_row > slice_row\) not yet ported"):
         ttnn.experimental.quasar.padded_slice(tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config)
+
+
+# The row-major pad writer zero-filled its scratch page only for 2- and 4-byte elements, so a uint8
+# output copied stale L1 into the padding columns.
+def test_padded_slice_rm_uint8_pads_with_zeros(device):
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    begins, ends, shard_shape = [0, 0, 0, 0], [1, 1, 64, 40], (8, 64)
+
+    # Leave non-zero data behind in L1 for a pad page that is never cleared to pick up.
+    for _ in range(2):
+        poison = ttnn.from_torch(
+            torch.full([1, 1, 512, 512], 0x7B7B, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(ttnn.add(poison, poison))
+        ttnn.deallocate(poison)
+
+    torch.manual_seed(0)
+    torch_input = torch.randint(1, 256, [1, 1, 64, 64], dtype=torch.uint8)
+    expected = torch.nn.functional.pad(torch_input[..., :40], (0, shard_shape[1] - 40))
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    actual = ttnn.experimental.padded_slice(tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config)
+    passed, message = assert_equal(expected, ttnn.to_torch(actual))
+    assert passed, message
