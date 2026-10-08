@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""DRAM height-sharded unary: the work queue (DramHeightFlow::WorkQueue) and the one-page static flow
-(DramHeightFlow::StaticOnePage) must match the same op on a DRAM interleaved copy bit for bit."""
+"""DRAM height-sharded unary must match the same op on DRAM interleaved bit for bit in every flow: bursts, one page
+in flight (heavy ops on small tensors) and work queue (large tensors)."""
 
 import pytest
 import torch
@@ -37,8 +37,7 @@ def run_against_interleaved(device, op, shape, num_shards):
     assert_equal(ttnn.to_torch(op(interleaved)), ttnn.to_torch(out))
 
 
-# Single-op chains on the work-queue list (memory- or tail-bound on Blackhole).
-QUEUE_OPS = {
+OPS = {
     "identity": ttnn.identity,
     "relu": ttnn.relu,
     "silu": ttnn.silu,
@@ -48,43 +47,37 @@ QUEUE_OPS = {
     "sigmoid": ttnn.sigmoid,
     "softcap": lambda t: ttnn.softcap(t, 10.0),
     "gelu_fast_lut": lambda t: ttnn.gelu(t, variant=ttnn.GeluVariant.FastLut),
-}
-# Compute-bound ops: static split, one page per barrier on small tensors.
-COMPUTE_BOUND_OPS = {
     "gelu_accurate": lambda t: ttnn.gelu(t, variant=ttnn.GeluVariant.Accurate),
-    "logit": lambda t: ttnn.logit(t, eps=1e-6),
     "mish_fast": lambda t: ttnn.mish(t, fast_and_approximate_mode=True),
     "elu": ttnn.elu,
+    "logit": lambda t: ttnn.logit(t, eps=1e-6),
+    "log_sigmoid": ttnn.log_sigmoid,
 }
 
-# About 594 pages per core on a 110-core grid: above the 512-page threshold for the queue.
-QUEUE_SHAPE = [1, 1, 7 * 9344, 1024]
+
+def large_rows(device, num_shards):
+    """Rows of a [1, 1, rows, 1024] tensor with about 600 pages per core, above the work-queue threshold."""
+    grid = device.compute_with_storage_grid_size()
+    step = 32 * num_shards
+    return -(-600 * grid.x * grid.y // step) * step
 
 
-@pytest.mark.parametrize("op_name", list(QUEUE_OPS))
-@pytest.mark.parametrize(
-    "shape, num_shards",
-    [
-        (QUEUE_SHAPE, 7),
-        ([1, 1, 7 * 9344 - 64, 1024], 7),  # short last shard
-        ([1, 1, 4 * 16352, 1024], 4),
-    ],
-)
-def test_work_queue_matches_interleaved(device, op_name, shape, num_shards):
-    run_against_interleaved(device, QUEUE_OPS[op_name], shape, num_shards)
-
-
-@pytest.mark.parametrize("op_name", list(COMPUTE_BOUND_OPS))
-@pytest.mark.parametrize("shape", [[1, 1, 7 * 1024, 1024], QUEUE_SHAPE])
-def test_compute_bound_static_matches_interleaved(device, op_name, shape):
-    run_against_interleaved(device, COMPUTE_BOUND_OPS[op_name], shape, 7)
+@pytest.mark.parametrize("op_name", list(OPS))
+@pytest.mark.parametrize("case", ["small", "large", "large_short_last_shard", "large_four_shards"])
+def test_matches_interleaved(device, op_name, case):
+    num_shards = 4 if case == "large_four_shards" else 7
+    rows = 7 * 1024 if case == "small" else large_rows(device, num_shards)
+    if case == "large_short_last_shard":
+        rows -= 64
+    run_against_interleaved(device, OPS[op_name], [1, 1, rows, 1024], num_shards)
 
 
 def test_work_queue_program_cache_reuse(device):
     """Two queue shapes with the same shard spec share one program: the cache-hit path must rewrite
     the total page count and the last shard's size."""
     device.cache_entries_counter.reset()
-    for rows in (7 * 9344, 7 * 9344 - 64):
+    large = large_rows(device, 7)
+    for rows in (large, large - 64):
         torch.manual_seed(rows)
         shape = [1, 1, rows, 1024]
         a = (torch.rand(shape) * 0.9 + 0.05).to(torch.bfloat16)
