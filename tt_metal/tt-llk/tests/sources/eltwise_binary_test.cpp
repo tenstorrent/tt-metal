@@ -38,9 +38,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 template <ckernel::BroadcastType BType>
 inline bool tile_handoff(const bool per_tile, const std::uint32_t face_r_dim, const std::uint32_t num_faces_r, const std::uint32_t num_faces_c)
 {
-    const bool needs_2x2   = BType == ckernel::BroadcastType::COL || BType == ckernel::BroadcastType::ROW;
-    const bool partial_col = BType == ckernel::BroadcastType::COL && face_r_dim < ckernel::FACE_R_DIM && num_faces_r == 1 && num_faces_c == 2;
-    return per_tile && ((face_r_dim == ckernel::FACE_R_DIM && (!needs_2x2 || (num_faces_r == 2 && num_faces_c == 2))) || partial_col);
+    const bool needs_2x2 = BType == ckernel::BroadcastType::COL || BType == ckernel::BroadcastType::ROW;
+    return per_tile && face_r_dim == ckernel::FACE_R_DIM && (!needs_2x2 || (num_faces_r == 2 && num_faces_c == 2));
 }
 
 template <bool Produce, ckernel::BroadcastType BType>
