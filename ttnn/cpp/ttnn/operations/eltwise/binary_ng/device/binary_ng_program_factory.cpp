@@ -1147,12 +1147,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                  operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B);
     const uint32_t bcast_section_tiles = fp32_dest_acc_en ? 4 : 8;
     // Blackhole: with an operand activation the operand pass runs over up to four DEST sections before one binary init; one
-    // section takes it when partial, or in the no-broadcast kernel with block-float operands or both operands activated.
+    // section takes it in the no-broadcast kernel when partial or with both operands activated.
     const uint32_t c_shard_tiles = c_num_tiles_per_shard.value_or(0);
     const uint32_t shard_sections = tt::div_up(c_shard_tiles, num_tiles_per_cycle);
     const bool one_section_pass =
-        c_shard_tiles < num_tiles_per_cycle ||
-        (b.has_value() && (both_operand_activations || (is_block_float(a_dtype) && is_block_float(b_dtype))));
+        b.has_value() && (c_shard_tiles < num_tiles_per_cycle || both_operand_activations);
     const uint32_t pre_sections = bh_fpu_op && has_operand_activations && num_tiles_per_cycle > 1 && c_shard_tiles > 0 &&
                                           (shard_sections > 1 || one_section_pass)
                                       ? std::min(shard_sections, 4u)
