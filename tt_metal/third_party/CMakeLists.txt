@@ -191,23 +191,13 @@ add_custom_target(
         tracy-capture
 )
 
-# Tracy profiler WASM viewer (Emscripten).
-# emsdk only ships prebuilt Emscripten toolchains for x86_64 and aarch64 Linux hosts, so the
-# viewer is skipped on other host architectures (e.g. riscv64) unless explicitly forced on.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|aarch64|arm64)$")
-    set(_tt_tracy_wasm_default ON)
-else()
-    set(_tt_tracy_wasm_default OFF)
-endif()
-option(
-    TT_BUILD_TRACY_WASM_VIEWER
-    "Build the Tracy profiler WASM viewer (requires emsdk support for the host)"
-    ${_tt_tracy_wasm_default}
-)
-unset(_tt_tracy_wasm_default)
-
+# Tracy profiler WASM viewer (Emscripten). TT_BUILD_TRACY_WASM_VIEWER is declared in
+# cmake/project_options.cmake, where it defaults off on build hosts emsdk has no toolchain for.
 if(NOT TT_BUILD_TRACY_WASM_VIEWER)
-    message(STATUS "Skipping Tracy WASM viewer (TT_BUILD_TRACY_WASM_VIEWER=OFF, host ${CMAKE_SYSTEM_PROCESSOR})")
+    message(
+        STATUS
+        "Skipping Tracy WASM viewer (TT_BUILD_TRACY_WASM_VIEWER=OFF, build host ${CMAKE_HOST_SYSTEM_PROCESSOR})"
+    )
 else()
     CPMAddPackage(
         NAME emsdk
