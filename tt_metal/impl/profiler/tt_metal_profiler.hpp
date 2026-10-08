@@ -27,9 +27,12 @@ void ClearProfilerControlBuffer(IDevice* device);
 // context.
 void ProfilerSync(MetalContext& ctx, ProfilerSyncState state);
 
-// Apply to the device profilers of the devices in the given mesh device.
+// Set the output directory of the device profilers of the devices in the given mesh device.
 void SetDeviceProfilerDir(distributed::MeshDevice& mesh_device, const std::string& output_dir = "");
 
+// Delete the device log and perf report in the output directory of each device profiler in the given mesh device. All
+// device profilers share the process-wide profiler log directory unless SetDeviceProfilerDir gave them their own, so by
+// default this also deletes output written by other meshes.
 void FreshProfilerDeviceLog(distributed::MeshDevice& mesh_device);
 
 DeviceProgramId DecodePerDeviceProgramID(uint32_t device_program_id);
