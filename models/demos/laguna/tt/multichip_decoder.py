@@ -64,7 +64,10 @@ FOLD_GATE_QKV_ENV = "TT_LAGUNA_FOLD_GATE_QKV"  # 0 = separate 1-core g_proj matm
 ROPE_PERMUTE_ENV = "TT_LAGUNA_ROPE_PERMUTE"  # 0 = partial RoPE via rot/pass slices + concat
 MOE_PREFILL_TILE_SPARSE_ENV = "TT_LAGUNA_MOE_PREFILL_TILE_SPARSE"
 TOKEN_DISPATCH_BUCKETS = frozenset({1024, 2048, 4096, 8192})
-TOKEN_DISPATCH_MOE_LAYERS = frozenset(range(1, 40))
+TOKEN_DISPATCH_MOE_LAYERS = frozenset(range(1, 48))  # XS routes layers 1-39, S layers 1-47
+# (mesh devices, global experts, local experts, hidden, moe intermediate, top-k) the dispatch path was measured on:
+# Laguna-XS-2.1 on p150x2 and Laguna-S-2.1 on p150x4.
+TOKEN_DISPATCH_GEOMETRIES = frozenset({(2, 256, 128, 2048, 512, 8), (4, 256, 64, 3072, 1024, 10)})
 TOKEN_DISPATCH_CHUNK_M_TILES = 16
 TOKEN_DISPATCH_METADATA_LEN = 5
 # Decode keeps the routed-expert intermediates (gate/up, GLU, down, weighted: ~LE x 32 rows x (2I + 2H) bf16)
@@ -120,13 +123,13 @@ def _token_dispatch_eligibility(
     checks = (
         (enabled, "feature flag is disabled"),
         (layer_idx in TOKEN_DISPATCH_MOE_LAYERS and is_moe, "layer is not a Laguna routed-MoE layer"),
-        (mesh_devices == 2, "only the qualified p150x2 mesh is supported"),
+        (mesh_devices in (2, 4), "only the p150x2 and p150x4 meshes are supported"),
         (seq_len in TOKEN_DISPATCH_BUCKETS, "prefill bucket is not supported"),
         (not sharded, "decode/sharded activations are not supported"),
         (pack_gate_up, "stacked packed gate/up weights are required"),
         (
-            (global_experts, local_experts, hidden, intermediate, top_k) == (256, 128, 2048, 512, 8),
-            "model or expert-partition dimensions do not match Laguna-XS-2.1 p150x2",
+            (mesh_devices, global_experts, local_experts, hidden, intermediate, top_k) in TOKEN_DISPATCH_GEOMETRIES,
+            "model or expert-partition dimensions match neither Laguna-XS-2.1 p150x2 nor Laguna-S-2.1 p150x4",
         ),
         (activation_dtype == ttnn.bfloat16, "BF16 token-dispatch activations are required"),
         (

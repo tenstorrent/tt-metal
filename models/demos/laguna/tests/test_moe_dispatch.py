@@ -129,8 +129,8 @@ def test_moe_experimental_flags_are_strict_and_default_off(monkeypatch, env_name
 
 def test_token_dispatch_supported_bucket_and_layer_matrix():
     assert TOKEN_DISPATCH_BUCKETS == {1024, 2048, 4096, 8192}
-    assert TOKEN_DISPATCH_MOE_LAYERS == set(range(1, 40))
-    for layer_idx in range(40):
+    assert TOKEN_DISPATCH_MOE_LAYERS == set(range(1, 48))
+    for layer_idx in range(48):
         for seq_len in (32, 64, 128, 256, 512, 1024, 2048, 4096, 8192):
             eligible, _ = _token_dispatch_eligibility(
                 **_qualified_dispatch_kwargs(
@@ -140,6 +140,20 @@ def test_token_dispatch_supported_bucket_and_layer_matrix():
                 )
             )
             assert eligible is (layer_idx in TOKEN_DISPATCH_MOE_LAYERS and seq_len in TOKEN_DISPATCH_BUCKETS)
+
+
+def test_token_dispatch_accepts_laguna_s_on_p150x4():
+    eligible, detail = _token_dispatch_eligibility(
+        **_qualified_dispatch_kwargs(
+            layer_idx=47, mesh_devices=4, local_experts=64, hidden=3072, intermediate=1024, top_k=10
+        )
+    )
+    assert eligible, detail
+    # S's dimensions on two chips (128 local experts) were never measured
+    eligible, detail = _token_dispatch_eligibility(
+        **_qualified_dispatch_kwargs(mesh_devices=2, local_experts=128, hidden=3072, intermediate=1024, top_k=10)
+    )
+    assert not eligible and "dimensions" in detail
 
 
 @pytest.mark.parametrize(

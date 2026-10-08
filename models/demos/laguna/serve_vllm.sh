@@ -75,6 +75,10 @@ case "$HF_MODEL" in
     # 2026-10-01 with the trace region below, 131072 leaves 29.95% DRAM free after the decode trace.
     MODEL_HYBRID_DEFAULT=1
     MODEL_HYBRID_PROFILES="p150x4"
+    # MoE prefill packs each token's routes per local expert (token dispatch) instead of running every local
+    # expert over every 256-row slice: measured 2026-10-08 on p150x4, layer output PCC >= 0.99999 vs the
+    # dense-slice path and ~2x faster per routed layer at 2048-4096 rows.
+    MODEL_MOE_TOKEN_DISPATCH_PROFILES="p150x4"
     MODEL_HYBRID_MAX_MODEL_LEN=1048576
     MODEL_MAX_MODEL_LEN_CAP=131072
     # trace_region_size is reserved in EVERY DRAM bank (tt_metal allocator.cpp init_one_bank_per_channel), but
@@ -98,6 +102,7 @@ case "$HF_MODEL" in
     MODEL_PROFILES="p150 p150x2 p150x4"
     MODEL_HYBRID_DEFAULT=0
     MODEL_HYBRID_PROFILES="p150x2"
+    MODEL_MOE_TOKEN_DISPATCH_PROFILES=
     MODEL_HYBRID_MAX_MODEL_LEN=
     MODEL_MAX_MODEL_LEN_CAP=
     MODEL_TRACE_REGION_SIZE=1500000000
@@ -351,7 +356,11 @@ case "$TT_LAGUNA_DFLASH" in
   *) die "TT_LAGUNA_DFLASH must be 0 or 1" ;;
 esac
 TT_LAGUNA_STREAMING_PREFILL="${TT_LAGUNA_STREAMING_PREFILL:-1}"
-TT_LAGUNA_MOE_TOKEN_DISPATCH="${TT_LAGUNA_MOE_TOKEN_DISPATCH:-0}"
+MOE_TOKEN_DISPATCH_DEFAULT=0
+case " $MODEL_MOE_TOKEN_DISPATCH_PROFILES " in
+  *" $LAGUNA_PROFILE "*) MOE_TOKEN_DISPATCH_DEFAULT=1 ;;
+esac
+TT_LAGUNA_MOE_TOKEN_DISPATCH="${TT_LAGUNA_MOE_TOKEN_DISPATCH:-$MOE_TOKEN_DISPATCH_DEFAULT}"
 TT_LAGUNA_MOE_PREFILL_TILE_SPARSE="${TT_LAGUNA_MOE_PREFILL_TILE_SPARSE:-0}"
 case "$TT_LAGUNA_STREAMING_PREFILL:$TT_LAGUNA_MOE_TOKEN_DISPATCH:$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" in
   [01]:[01]:[01]) ;;
@@ -439,7 +448,11 @@ record_if_nondefault TT_LAGUNA_DFLASH 0
 record_if_nondefault TT_LAGUNA_CONTEXT_PROBE 0
 record_if_nondefault TT_LAGUNA_MULTI_SEQ_POOL 0
 record_if_nondefault TT_LAGUNA_STREAMING_PREFILL 1
-record_if_nondefault TT_LAGUNA_MOE_TOKEN_DISPATCH 0
+# Enabling dispatch where it is not the default is diagnostic-only; disabling it where it is the default is the
+# dense-slice rollback and needs no acknowledgement.
+if [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 1 ] && [ "$MOE_TOKEN_DISPATCH_DEFAULT" -eq 0 ]; then
+  EXPERIMENTAL_OVERRIDES+=("TT_LAGUNA_MOE_TOKEN_DISPATCH=1 (qualified=0)")
+fi
 record_if_nondefault TT_LAGUNA_MOE_PREFILL_TILE_SPARSE 0
 # Enabled caching on a non-qualified profile remains diagnostic-only. A disable is intentionally not
 # recorded: TT_LAGUNA_PREFIX_CACHE=0 is the emergency rollback for a qualified/default-on profile and
@@ -557,8 +570,17 @@ if [ "$LAGUNA_PROFILE" = p150x2 ] || { [ "$LAGUNA_PROFILE" = p150x4 ] && [ "$HF_
 else
   STREAMING_PREFILL_STATUS=topology_inactive
 fi
-if [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 1 ]; then
+# Only a non-default dispatch is an experimental path; the qualified default composes with the other features.
+MOE_TOKEN_DISPATCH_EXPERIMENTAL=0
+if [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 1 ] && [ "$MOE_TOKEN_DISPATCH_DEFAULT" -eq 0 ]; then
+  MOE_TOKEN_DISPATCH_EXPERIMENTAL=1
+fi
+if [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 1 ] && [ "$MOE_TOKEN_DISPATCH_DEFAULT" -eq 1 ]; then
+  MOE_TOKEN_DISPATCH_STATUS=production_qualified
+elif [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 1 ]; then
   MOE_TOKEN_DISPATCH_STATUS=experimental_unqualified
+elif [ "$MOE_TOKEN_DISPATCH_DEFAULT" -eq 1 ]; then
+  MOE_TOKEN_DISPATCH_STATUS=operator_rollback_dense
 else
   MOE_TOKEN_DISPATCH_STATUS=production_safe_disabled
 fi
@@ -567,7 +589,10 @@ if [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 1 ]; then
 else
   MOE_TILE_SPARSE_STATUS=production_safe_disabled
 fi
-if [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 1 ]; then
+if [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 1 ] && [ "$MOE_TOKEN_DISPATCH_DEFAULT" -eq 1 ]; then
+  [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
+    die "Laguna MoE token dispatch and tile-sparse prefill are separate, unstacked paths"
+elif [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 1 ]; then
   [ "$LAGUNA_PROFILE" = p150x2 ] ||
     die "Laguna MoE token dispatch is restricted to LAGUNA_PROFILE=p150x2"
   [ "$MAX_NUM_SEQS" -eq 1 ] ||
@@ -610,7 +635,7 @@ if [ "$TT_LAGUNA_HYBRID_KV" -eq 1 ]; then
   esac
   [ "$TT_LAGUNA_STREAMING_PREFILL" -eq 1 ] ||
     die "Laguna hybrid KV qualification requires TT_LAGUNA_STREAMING_PREFILL=1"
-  [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
+  [ "$MOE_TOKEN_DISPATCH_EXPERIMENTAL" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
     die "Laguna hybrid KV qualification does not support sparse-MoE experimental paths"
   if [ "$HYBRID_KV_DEFAULT" -eq 1 ]; then
     HYBRID_KV_STATUS=production_qualified
@@ -650,7 +675,7 @@ if [ "$TT_LAGUNA_DFLASH" -eq 1 ]; then
     die "Laguna DFlash serving does not support TT_LAGUNA_SPEC_DECODE"
   [ "$TT_LAGUNA_STREAMING_PREFILL" -eq 1 ] ||
     die "Laguna DFlash serving requires TT_LAGUNA_STREAMING_PREFILL=1"
-  [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
+  [ "$MOE_TOKEN_DISPATCH_EXPERIMENTAL" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
     die "Laguna DFlash serving does not support sparse-MoE experimental paths"
   # A proposal round pads up to 64 rows past the context, inside the draft's RoPE horizon. An unset context
   # (the hybrid default equals that horizon) is lowered by those 64 tokens; an explicit one must fit.
@@ -678,7 +703,7 @@ if [ "$TT_LAGUNA_CONTEXT_PROBE" -eq 1 ]; then
     die "TT_LAGUNA_CONTEXT_PROBE=1 requires cache-off hybrid KV and LAGUNA_MAX_NUM_SEQS=1"
   [ "$TT_LAGUNA_STREAMING_PREFILL" -eq 1 ] && [ "$TT_LAGUNA_DFLASH" -eq 0 ] ||
     die "TT_LAGUNA_CONTEXT_PROBE=1 requires streaming prefill and TT_LAGUNA_DFLASH=0"
-  [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
+  [ "$MOE_TOKEN_DISPATCH_EXPERIMENTAL" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
     die "TT_LAGUNA_CONTEXT_PROBE=1 does not support sparse-MoE experimental paths"
 fi
 if [ "$TT_LAGUNA_MULTI_SEQ_POOL" -eq 1 ]; then
@@ -686,7 +711,7 @@ if [ "$TT_LAGUNA_MULTI_SEQ_POOL" -eq 1 ]; then
     die "TT_LAGUNA_MULTI_SEQ_POOL=1 requires the 131K-or-smaller uniform-KV cache-off path"
   [ "$TT_LAGUNA_STREAMING_PREFILL" -eq 1 ] && [ "$TT_LAGUNA_DFLASH" -eq 0 ] ||
     die "TT_LAGUNA_MULTI_SEQ_POOL=1 requires streaming prefill and TT_LAGUNA_DFLASH=0"
-  [ "$TT_LAGUNA_MOE_TOKEN_DISPATCH" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
+  [ "$MOE_TOKEN_DISPATCH_EXPERIMENTAL" -eq 0 ] && [ "$TT_LAGUNA_MOE_PREFILL_TILE_SPARSE" -eq 0 ] ||
     die "TT_LAGUNA_MULTI_SEQ_POOL=1 does not support sparse-MoE experimental paths"
 fi
 if [ "$TT_LAGUNA_PREFIX_CACHE" -eq 1 ]; then

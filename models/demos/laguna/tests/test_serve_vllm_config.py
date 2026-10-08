@@ -634,6 +634,8 @@ def test_s_is_the_default_model_and_selects_p150x4(tmp_path):
     assert "streaming_prefill_status=production_qualified\n" in result.stdout
     assert "max_model_len=1048576\n" in result.stdout
     assert "trace_region_size=128000000\n" in result.stdout
+    assert "moe_token_dispatch=1\n" in result.stdout
+    assert "moe_token_dispatch_status=production_qualified\n" in result.stdout
     assert "max_num_seqs=1\n" in result.stdout
     assert ("chunked_prefill_cli_args=--enable-chunked-prefill " "--max-num-batched-tokens 8192\n") in result.stdout
     assert 'chat_template_kwargs={"enable_thinking": true}\n' in result.stdout
@@ -811,3 +813,23 @@ def test_xs_dflash_stays_restricted_to_p150x2(tmp_path):
     )
     assert result.returncode == 2
     assert f"Laguna DFlash serving for {XS} is restricted to LAGUNA_PROFILE=p150x2" in result.stderr
+
+
+def test_s_token_dispatch_rollback_needs_no_acknowledgement(tmp_path):
+    result = _config(
+        tmp_path, HF_MODEL=None, LAGUNA_PROFILE=None, TT_VISIBLE_DEVICES=None, TT_LAGUNA_MOE_TOKEN_DISPATCH="0"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "moe_token_dispatch=0\n" in result.stdout
+    assert "moe_token_dispatch_status=operator_rollback_dense\n" in result.stdout
+    assert "experimental_overrides=<none>\n" in result.stdout
+
+
+def test_s_token_dispatch_composes_with_dflash_and_multi_sequence(tmp_path):
+    for extra in ({"TT_LAGUNA_DFLASH": "1", "LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES": "1"}, {"LAGUNA_MAX_NUM_SEQS": "32"}):
+        result = _config(tmp_path, HF_MODEL=None, LAGUNA_PROFILE=None, TT_VISIBLE_DEVICES=None, **extra)
+
+        assert result.returncode == 0, result.stderr
+        assert "moe_token_dispatch=1\n" in result.stdout
+        assert "moe_token_dispatch_status=production_qualified\n" in result.stdout
