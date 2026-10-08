@@ -932,8 +932,8 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilize) {
 // A is row-major, B is a constant, so every output datum is the tilized A datum plus that constant. Small
 // integer inputs keep the bf16 sum exact.
 TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilizeA_BNarrowTile) {
-    if (MetalContext::instance().get_cluster().arch() != ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "only the Wormhole tilizeA_B has a narrow-tile path";
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        GTEST_SKIP() << "tilizeA_B + eltwise binary is not supported on Quasar";
     }
     constexpr std::uint32_t tile_w = 16;
     constexpr std::uint32_t face_dim = 16;
