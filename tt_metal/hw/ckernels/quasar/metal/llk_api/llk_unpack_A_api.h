@@ -140,6 +140,14 @@ inline void llk_unpack_A(
         local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx + tile_index;
     if constexpr (BType == BroadcastType::NONE) {
         if constexpr (unpack_to_dest) {
+            // The unpacker places the tile itself, so the DEST index is checked here against the section capacity for
+            // this sync mode and DEST width (4 tiles for SyncHalf with a 32-bit DEST): an out-of-range index would land
+            // in the other bank while pack may still be draining it.
+            constexpr std::uint32_t dest_section_tiles = ckernel::trisc::
+                get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::trisc::DstTileShape::Tile32x32>();
+            LLK_ASSERT(
+                dst_tile_index < dest_section_tiles,
+                "unpack-to-dest: dst_tile_index exceeds the DEST section capacity for this sync mode and DEST width");
             // EN_32BIT_DEST sizes the SyncHalf bank flip. It must agree with the pack side
             // (llk_pack_dest_section_done) or unpack and pack address different DEST halves; both derive it from
             // DST_ACCUM_MODE.
@@ -190,6 +198,13 @@ inline void llk_unpack_A_block(
     const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx;
     if constexpr (BType == BroadcastType::NONE && unpack_to_dest) {
         WAYPOINT("UPAW");
+        // The block is one DEST section, so its last tile is checked against the section capacity, see llk_unpack_A.
+        constexpr std::uint32_t dest_section_tiles = ckernel::trisc::
+            get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::trisc::DstTileShape::Tile32x32>();
+        LLK_ASSERT(
+            start_dst_tile_index + ntiles <= dest_section_tiles,
+            "unpack-to-dest: start_dst_tile_index + ntiles exceeds the DEST section capacity for this sync mode and "
+            "DEST width");
         // EN_32BIT_DEST must match the pack side, see llk_unpack_A.
         _llk_unpack_unary_operand_to_dest_block_<DST_SYNC_MODE, DST_ACCUM_MODE>(
             rd_entry_idx + start_tile_index, start_dst_tile_index, ntiles);
