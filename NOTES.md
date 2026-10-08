@@ -63,3 +63,8 @@ qkv-lanes slice+norm+rope 48, halo+brick-permute (k,v) 46. Det stage 1 (21,34,60
 of which linear-order attention 299 (gather + dense masked SDPA), qkv-to-volume 93, MLP 102 (replicated).
 Stage-1 bricked replicated NA would be slower (full volume per chip). The real fix is P6(b): split stage 1
 over the mesh (e.g. sp on mesh axis 0, W 60/4 = 15, plus heads TP on axis 1) with the W-sharded bricked kernel.
+
+## Result chunk (4,1,1) (blx01 job 905, 2026-10-08 02:56 UTC, no drops)
+base 3.374 s, c4 6.142 s (+82%). Quality same (PCC 0.99995, PSNR 55.04/54.59 vs refs; c4 vs base 58 dB).
+Rejected. Both (1,1,1) and (4,1,1) are much slower: the (2,1,1) default is the optimum; chunk size is not a lever.
+Next: stage-1 de-replication / P6(b) (see above).
