@@ -1,0 +1,4 @@
+tests/eb_r3_ci/twins/test_eb_twins.py::test_twin_srs[ring4-broadcast-k1]
+tests/eb_r3_ci/twins/test_eb_twins.py::test_twin_srs[ring4-broadcast-k16]
+tests/eb_r3_ci/twins/test_eb_twins.py::test_twin_srs[ring8-broadcast-k1]
+tests/eb_r3_ci/twins/test_eb_twins.py::test_twin_srs[ring8-broadcast-k16]

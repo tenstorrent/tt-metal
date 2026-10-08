@@ -1,0 +1,6 @@
+# ci5 58f85ff15ae (activation sections stop at the end of the intermediate CB): broadcast sections with one activation, rows
+# of 5, 13, 21 and 32 tiles (column) and 5, 13, 21, 32, 33 (scalar): main's program against the head, then the head with the
+# activation sections off against the head; the sections without activations at the new widths
+EB_R3_NO_BLOCK=1,EB_R3_NO_BCAST_CHUNK=1,EB_R3_MAIN_REINIT=1,EB_R3_PER_FACE=1|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "test_bcast_sec_act"
+EB_R3_NO_BCAST_ACT=1|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "test_bcast_sec_act"
+EB_R3_NO_BLOCK=1,EB_R3_NO_BCAST_CHUNK=1,EB_R3_MAIN_REINIT=1,EB_R3_PER_FACE=1|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "test_bcast_sec and not act and (_w5- or _w13- or _w21c-)"

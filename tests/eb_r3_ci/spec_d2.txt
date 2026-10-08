@@ -1,0 +1,6 @@
+# item 2: per-tile against per-face multiply at LoFi, HiFi2, HiFi3, HiFi4 (and HiFi3 against HiFi4 per-tile), no broadcast:
+# bf16 x bfp8/bfp4 as test_eb_hifi2_dump, bf16 x the special and normal set (full cross), add and sub per-tile against per-face
+EB_R3_FIDELITY=LoFi|EB_R3_FIDELITY=HiFi4|||tests/eb_r3_ci/test_eb_dump_bng.py -k "test_nob_partial and bf16-bfp8-bf16-ab"
+EB_R3_PER_FACE=1,EB_R3_FIDELITY=LoFi|EB_R3_FIDELITY=LoFi;EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi2|EB_R3_FIDELITY=HiFi2;EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi3|EB_R3_FIDELITY=HiFi3;EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi4|EB_R3_FIDELITY=HiFi4;EB_R3_FIDELITY=HiFi4|EB_R3_FIDELITY=HiFi3|||tests/eb_r3_ci/test_eb_dump_bng.py -k "test_nob_partial and (bf16-bfp8 or bf16-bfp4)"
+EB_R3_PER_FACE=1,EB_R3_FIDELITY=LoFi|EB_R3_FIDELITY=LoFi;EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi2|EB_R3_FIDELITY=HiFi2;EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi3|EB_R3_FIDELITY=HiFi3;EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi4|EB_R3_FIDELITY=HiFi4;EB_R3_FIDELITY=HiFi4|EB_R3_FIDELITY=HiFi3|||tests/eb_r3_ci/test_eb_dump_bng.py -k "test_nob_cross and b16set and mul"
+EB_R3_PER_FACE=1|default|||tests/eb_r3_ci/test_eb_dump_bng.py -k "test_nob_cross and b16set and (add or sub)"

@@ -1,0 +1,2 @@
+# item 4: dest-reuse forms (DEST_TO_SRCA, DEST_TO_SRCB, bge_m3's row broadcast DEST_TO_SRCA), per-tile against per-face, generic_op
+default|default|||tests/eb_r3_ci/test_eb_dump_reuse.py -k "test_control or test_reuse"

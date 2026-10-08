@@ -1,0 +1,6 @@
+ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/layernorm_pre_allgather.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/layernorm_pre_allgather_2d.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/transformer/fused_recurrent_gated_delta_rule/device/kernels/compute/fused_recurrent_gated_delta_rule.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/compute/rotary_embedding_hf.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/compute_indexer_score.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/compute/softmax.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true

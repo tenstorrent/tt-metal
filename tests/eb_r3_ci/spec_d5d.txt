@@ -1,0 +1,2 @@
+# item 5: post activations through add, PR (init kept) against main (re-init per chunk): scalar broadcast and Python scalar
+EB_R3_MAIN_REINIT=1|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "test_post_act and scalar_"

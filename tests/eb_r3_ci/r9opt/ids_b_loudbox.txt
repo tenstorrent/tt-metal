@@ -1,0 +1,2 @@
+tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py::test_matches_torch[silicon_arch_name=blackhole-plain-fabric2d-mesh-2x4]
+tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py::test_matches_torch[silicon_arch_name=blackhole-settle-fabric2d-mesh-2x4]
