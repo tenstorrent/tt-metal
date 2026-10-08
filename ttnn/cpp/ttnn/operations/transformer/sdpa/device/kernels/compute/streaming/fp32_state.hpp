@@ -111,18 +111,26 @@ ALWI void rescale_and_accumulate(
     tile_regs_release();
 }
 
+// A per-row step between loading the denominator (dest tile 0) and taking its reciprocal: load(1) runs before the
+// commit and may fill dest tile 1, apply() after the wait (SFPU on PACK). The default does nothing.
+struct NoDenominatorHook {
+    ALWI void load(uint32_t) const {}
+    ALWI void apply() const {}
+};
+
 // Consume numerator and first-column denominator rows, publish normalized rows.
 // scratch_cb must be a one-tile FP32 CB with unpack-to-destination enabled.
 // A zero or nonfinite denominator goes through the reciprocal unchanged (no epsilon or clamp);
 // fully masked rows have no defined output.
-template <uint32_t head_dim_tiles, uint32_t identity_cb = 32>
+template <uint32_t head_dim_tiles, uint32_t identity_cb = 32, typename DenominatorHook = NoDenominatorHook>
 ALWI void normalize_rows(
     uint32_t sum_cb,
     uint32_t numerator_cb,
     uint32_t scratch_cb,
     uint32_t output_cb,
     uint32_t rows,
-    Fp32PackConfig& pack) {
+    Fp32PackConfig& pack,
+    const DenominatorHook& hook = {}) {
     static_assert(head_dim_tiles > 0);
     PACK((llk_pack_reconfig_l1_acc(0)));
     for (uint32_t row = 0; row < rows; ++row) {
@@ -137,8 +145,10 @@ ALWI void normalize_rows(
         unary_bcast_init<BroadcastType::NONE>(sum_cb);
         unary_bcast<BroadcastType::NONE>(sum_cb, 0, 0);
         unary_bcast_uninit<BroadcastType::NONE>(sum_cb);
+        hook.load(1);
         tile_regs_commit();
         tile_regs_wait();
+        hook.apply();
         PACK(
             (SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, sdpa_state_reciprocal, 0, VectorMode::C)));
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
