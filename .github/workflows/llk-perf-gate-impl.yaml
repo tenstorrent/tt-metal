@@ -64,8 +64,8 @@ on:
         type: string
       measure_result:
         description: >-
-          Results of the measuring jobs, comma-separated. Anything other than
-          success or skipped means the suite is incomplete, so nothing is compared.
+          Results of the measuring jobs, comma-separated. They decide only when the
+          measured run has no legs of this arch; otherwise those legs must all pass.
         required: false
         default: ""
         type: string
@@ -142,16 +142,24 @@ jobs:
         id: measured
         env:
           MEASURE_RESULT: ${{ inputs.measure_result }}
+          MEASURED_RUN: ${{ inputs.perf_run_id || github.run_id }}
+          ARCH: ${{ inputs.arch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          COMPLETE=true
-          IFS=',' read -ra RESULTS <<< "$MEASURE_RESULT"
-          for R in "${RESULTS[@]}"; do
-            R=$(echo "$R" | xargs)
-            case "$R" in ""|success|skipped) ;; *) COMPLETE=false ;; esac
-          done
-          echo "complete=$COMPLETE" >> "$GITHUB_OUTPUT"
-          if [ "$COMPLETE" != "true" ]; then
-            echo "::error::The measurement did not complete (${MEASURE_RESULT}), so the gate compares nothing."
+          # This arch's own legs decide, so a leg lost on the other arch does not skip this one.
+          JOBS_ARG=()
+          if gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${MEASURED_RUN}/jobs?per_page=100" \
+              --jq '.jobs[] | {name, conclusion} | @json' > measure_jobs.jsonl; then
+            JOBS_ARG=(--jobs measure_jobs.jsonl)
+          else
+            echo "::warning::Could not list the jobs of run ${MEASURED_RUN}; using the job results only."
+          fi
+          python3 ${{ env.LLK_PATH }}/perf/measure_complete.py \
+            --arch "$ARCH" --results "$MEASURE_RESULT" "${JOBS_ARG[@]}" > measured.txt
+          cat measured.txt
+          grep '^complete=' measured.txt >> "$GITHUB_OUTPUT"
+          if ! grep -qx 'complete=true' measured.txt; then
+            echo "::error::The measurement did not complete ($(sed -n 's/^reason=//p' measured.txt)), so the gate compares nothing."
           fi
 
       - name: Read the baseline from the warehouse
@@ -399,6 +407,7 @@ jobs:
           GATE_EXIT_CODE: ${{ steps.compare.outputs.gate_exit_code }}
           COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
           MEASURE_RESULT: ${{ inputs.measure_result }}
+          MEASURE_COMPLETE: ${{ steps.measured.outputs.complete }}
           ARCH: ${{ inputs.arch }}
           RUN_TYPES: ${{ inputs.run_types }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -460,6 +469,7 @@ jobs:
             --exit-code "${GATE_EXIT_CODE:-0}" \
             --comparison-finished "${COMPARISON_FINISHED:-true}" \
             --measure-result "$MEASURE_RESULT" \
+            --measure-complete "$MEASURE_COMPLETE" \
             --channel "$SLACK_CHANNEL_ID" \
             --pr-number "$PR_NUMBER" \
             --pr-url "$PR_URL" \
