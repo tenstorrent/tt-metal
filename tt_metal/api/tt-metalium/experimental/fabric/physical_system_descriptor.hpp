@@ -40,6 +40,13 @@ namespace discovery_impl {
 class DiscoverySetter;
 }
 
+// The marker discovery appends (with the MPI rank) to a host key when several ranks report the same
+// discovery hostname. One definition for every producer and consumer: discovery builds the key,
+// my_host_name() reconstructs it, and the mapping export strips exactly this marker. Deliberately
+// distinctive — a plain "_<digits>" tail can belong to a genuine cluster id (e.g. "rack_1"), which
+// must never be treated as a rank suffix.
+inline constexpr std::string_view kHostRankSuffixMarker = "__rank";
+
 // Live Ethernet Link Metrics
 struct EthernetMetrics {
     uint32_t retrain_count = 0;

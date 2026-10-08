@@ -454,9 +454,10 @@ std::vector<std::string> PhysicalSystemDescriptor::get_all_hostnames() const {
 std::string PhysicalSystemDescriptor::my_host_name() const {
     if (!local_hostname_.empty()) {
         // Discovery has set local_hostname_ and local_rank_. When multiple MPI ranks share the same
-        // discovery hostname (mock descriptor basename or colliding OS hostname), suffix with rank.
+        // discovery hostname (mock descriptor basename or colliding OS hostname), suffix with rank,
+        // using the same marker discovery used for the PSD host keys.
         if (!all_hostnames_unique_) {
-            return local_hostname_ + "_" + std::to_string(local_rank_);
+            return local_hostname_ + std::string(kHostRankSuffixMarker) + std::to_string(local_rank_);
         }
         return local_hostname_;
     }
