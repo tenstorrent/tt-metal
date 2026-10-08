@@ -482,6 +482,7 @@ inline void _llk_unpack_tilizeA_B_init_(
     const bool narrow_tile              = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(!narrow_tile || num_faces <= 2, "a narrow tile has at most 2 faces");
     // Sets the block_c_dim for unpack to use to increment the L1 address
     const std::uint32_t c_dim_size = SCALE_DATUM_SIZE(unpack_src_format, ct_dim * ((narrow_tile || (num_faces == 1)) ? FACE_C_DIM : TILE_C_DIM)) >> 4;
 
@@ -538,7 +539,8 @@ inline void _llk_unpack_tilizeA_B_(
     const bool narrow_tile  = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    // Offset in 16B words: tile_index_a * tile width (TILE_C_DIM, or FACE_C_DIM for a narrow tile) / 16
+    LLK_ASSERT(!narrow_tile || num_faces <= 2, "a narrow tile has at most 2 faces");
+    // Offset in 16B words: tile_index_a * tile width (TILE_C_DIM, or FACE_C_DIM for a narrow tile) * datum size (bytes) / 16
     const std::uint32_t offset_address_a = SCALE_DATUM_SIZE(unpA_src_format, tile_index_a) << (narrow_tile ? 0 : 1);
     const std::uint32_t address_a        = base_address_a + offset_address_a;
 
