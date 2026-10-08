@@ -31,3 +31,8 @@ Read driver.log (DECODE_MEAN per arm, cmp_*.json). Pass = faster, PCC >= 0.9999,
 (base ~55.0/54.6 dB vs refs). If pass: change `_query_chunk_bricks` stride-1 default to (1,1,1)
 (DIFFVAE_NA_CHUNK_BRICKS=2,1,1 restores old), add a default test, land on t48 via ttp/t249-land + ttp push --detach.
 If mixed (s5 vs det): add a per-volume keyed DIFFVAE_NA_CHUNK_BRICKS like DIFFVAE_NA_BRICK and A/B per stage.
+
+## Result (blx01 job 900, 2026-10-08 02:36 UTC, no drops)
+- base (2,1,1): DECODE_MEAN_S 3.378 s; c1 (1,1,1): 5.762 s (+71%). Quality equal (PCC 0.99995, PSNR 54.6-55.0 dB both).
+- REJECTED: doubled K/V gather reads and per-chunk overhead outweigh the 15-31% fewer score tiles. Do not redo. No code change.
+- Next: pick another lever (fused stage-5 blocks / stage-5 conv+norm path; profile first). Bigger chunks (e.g. (4,1,1) or (2,2,1)) may be worth one A/B given this direction.
