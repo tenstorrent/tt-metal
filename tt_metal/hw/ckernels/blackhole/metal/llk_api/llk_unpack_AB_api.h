@@ -69,14 +69,8 @@ inline void llk_unpack_AB_init(
         StateVal<Operand<Exu::Unpack>::NumFacesB>(get_operand_num_faces(operandB_id))));
 
     if constexpr (src_dvalid == SrcDvalid::PerTile && (BType == BroadcastType::COL || BType == BroadcastType::ROW)) {
-        // Its SrcB layout reads B as 16-row faces: a row or column broadcast from a smaller B tile stays per face,
-        // except a column broadcast of partial faces from a B tile of A's shape
-        const std::uint32_t b_face_r_dim = get_operand_face_r_dim(operandB_id);
-        const std::uint32_t b_num_faces = get_operand_num_faces(operandB_id);
-        const bool b_like_a_partial_col = BType == BroadcastType::COL && tensor_shape.face_r_dim < FACE_R_DIM &&
-                                          b_face_r_dim == tensor_shape.face_r_dim &&
-                                          b_num_faces == tensor_shape.total_num_faces();
-        if ((b_face_r_dim != FACE_R_DIM || b_num_faces != 4) && !b_like_a_partial_col) {
+        // Its SrcB layout reads B as 16-row faces: a row or column broadcast from a smaller B tile stays per face
+        if (get_operand_face_r_dim(operandB_id) != FACE_R_DIM || get_operand_num_faces(operandB_id) != 4) {
             llk_unpack_AB_init_impl<BType, SrcDvalid::PerFace>(tensor_shape, transpose);
             return;
         }
@@ -135,16 +129,13 @@ inline void llk_unpack_AB(
     llk_unpack_AB_impl<BType>(address_a, address_b, bcast_row_idx, unpack_src_format[operandB_id]);
 }
 
-// ntiles tile pairs from one config context: one context acquire per block instead of per tile. Tile i of A is
-// start_tile_index_a + i * step_a, of B start_tile_index_b + i * step_b; a step of 0 reuses one tile.
+// ntiles consecutive tile pairs from one config context: one context acquire per block instead of per tile.
 inline void llk_unpack_AB_block(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
     const std::uint32_t start_tile_index_a,
     const std::uint32_t start_tile_index_b,
-    const std::uint32_t ntiles,
-    const std::uint32_t step_a = 1,
-    const std::uint32_t step_b = 1) {
+    const std::uint32_t ntiles) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const std::uint32_t page_a = get_local_cb_interface(operandA_id).fifo_page_size;
@@ -153,10 +144,10 @@ inline void llk_unpack_AB_block(
     const std::uint32_t address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1 + page_b * start_tile_index_b;
 
     LLK_ASSERT(
-        cb_access_within_bounds(operandA_id, start_tile_index_a, step_a * (ntiles - 1) + 1),
+        cb_access_within_bounds(operandA_id, start_tile_index_a, ntiles),
         "Block tile read exceeds CB boundary");
     LLK_ASSERT(
-        cb_access_within_bounds(operandB_id, start_tile_index_b, step_b * (ntiles - 1) + 1),
+        cb_access_within_bounds(operandB_id, start_tile_index_b, ntiles),
         "Block tile read exceeds CB boundary");
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
@@ -185,6 +176,6 @@ inline void llk_unpack_AB_block(
         StateDiscard<std::uint32_t>(ntiles)));
 
     WAYPOINT("UABW");
-    _llk_unpack_AB_block_<BroadcastType::NONE>(address_a, address_b, ntiles, page_a * step_a, page_b * step_b);
+    _llk_unpack_AB_block_<BroadcastType::NONE>(address_a, address_b, ntiles, page_a, page_b);
     WAYPOINT("UABD");
 }

@@ -954,10 +954,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["ISCLOSE_ATOL_RT_ARG_IDX"] = "4";
     }
 
-    // FPU op's activations, for the Blackhole block sections and operand pass
-    bool has_operand_activations = false;
-    bool has_post_activations = false;
-    bool post_zero_point = false;
+    bool has_activations = false;  // Blackhole block sections
     {
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
@@ -1023,9 +1020,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             });
         }
 
-        has_operand_activations = !lhs_activations.empty() || !rhs_activations.empty();
-        has_post_activations = !post_activations.empty();
-        post_zero_point = has_post_activations && post_activations[0].type() == unary::UnaryOpType::ZERO_POINT;
+        has_activations = !lhs_activations.empty() || !rhs_activations.empty() || !post_activations.empty();
 
         add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype);
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
@@ -1099,12 +1094,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
-    // Blackhole FPU op, for the block sections and the operand pass (below)
-    const bool bh_fpu_op = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
-                           std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) && !post_zero_point;
-    // Blackhole: the operand pass covers these DEST sections, then one init (operand_pass_sections, at invoke).
-    const uint32_t pre_sections = operation_attributes.operand_pass_sections;
-    TT_ASSERT(pre_sections == 0 || (bh_fpu_op && has_operand_activations && num_tiles_per_cycle > 1));
     bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
     const bool inputs_row_major =
@@ -1131,7 +1120,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                                   : a_data_format;
         uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
-            .total_size = a_intermediate_single_tile_size * num_tiles_per_cycle * std::max(pre_sections, 1u),
+            .total_size = a_intermediate_single_tile_size * num_tiles_per_cycle,
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
@@ -1162,7 +1151,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                                   : b_data_format;
         uint32_t b_intermediate_single_tile_size = tt::tile_size(b_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
-            .total_size = b_intermediate_single_tile_size * num_tiles_per_cycle * std::max(pre_sections, 1u),
+            .total_size = b_intermediate_single_tile_size * num_tiles_per_cycle,
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
@@ -1399,48 +1388,22 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
     compute_kernel_defines["SCALAR_IS_LHS"] = operation_attributes.scalar_is_lhs ? "1" : "0";
 
-    // Blackhole, sharded FPU ops: a DEST section is unpacked with one call (BINARY_NG_BLOCK) and packed with one
-    // (BINARY_NG_BLOCK_PACK) into bf16 from 16 tiles per core, into fp32 (4-tile sections) from 32. Without the block pack,
-    // the unpack call alone is faster only for add and sub with equal input formats into bf16 or a block-float format.
-    const uint32_t c_tiles_per_core = c_num_tiles_per_shard.value_or(0);
-    const auto fpu_binary_op =
-        bh_fpu_op ? std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) : OpConfig::FpuBinaryOp::MUL;
-    const bool add_or_sub =
-        fpu_binary_op == OpConfig::FpuBinaryOp::ADD || fpu_binary_op == OpConfig::FpuBinaryOp::SUB;
-    const bool unpack_alone_formats =
-        add_or_sub && a_data_format == b_data_format &&
-        (c_data_format == tt::DataFormat::Float16_b || c_data_format == tt::DataFormat::Bfp8_b ||
-         c_data_format == tt::DataFormat::Bfp4_b);
-    const bool block_kernel = bh_fpu_op && !has_operand_activations && num_tiles_per_cycle > 1 &&
-                              (compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast ||
-                               compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar);
-    const bool block_pack = block_kernel && ((c_data_format == tt::DataFormat::Float16_b && c_tiles_per_core >= 16) ||
-                                             (c_data_format == tt::DataFormat::Float32 && c_tiles_per_core >= 32));
-    const bool block_unpack_alone = block_kernel &&
-                                    compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
-                                    !has_post_activations && unpack_alone_formats;
+    // Blackhole, sharded bf16 FPU ops without activations or broadcast: a DEST section is unpacked with one call
+    // (BINARY_NG_BLOCK) and, from 16 tiles per core, packed with one (BINARY_NG_BLOCK_PACK); below that only add and sub
+    // take the unpack call alone.
+    const bool block_kernel = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
+                              std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) && !has_activations &&
+                              num_tiles_per_cycle > 1 && compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
+                              a_data_format == tt::DataFormat::Float16_b && b_data_format == tt::DataFormat::Float16_b &&
+                              c_data_format == tt::DataFormat::Float16_b;
+    const bool block_pack = block_kernel && c_num_tiles_per_shard.value_or(0) >= 16;
+    const bool block_unpack_alone = block_kernel && std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) !=
+                                                        OpConfig::FpuBinaryOp::MUL;
     if ((block_pack || block_unpack_alone) && !eb_r3_env("EB_R3_NO_BLOCK")) {
         compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
     }
     if (block_pack && !eb_r3_env("EB_R3_NO_BLOCK")) {
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
-    }
-
-    if (pre_sections > 0) {
-        compute_kernel_defines["BINARY_NG_PRE_SECTIONS"] = std::to_string(pre_sections);
-    }
-
-    // Blackhole: a multiply with operand and post activations (logical_and), whose init runs per tile, keeps the
-    // per-face program; no Blackhole caller runs one.
-    if (bh_fpu_op && fpu_binary_op == OpConfig::FpuBinaryOp::MUL && has_operand_activations && has_post_activations) {
-        compute_kernel_defines["BINARY_NG_MUL_PER_FACE"] = "1";
-    }
-
-    if (eb_r3_env("EB_R3_MAIN_REINIT")) {
-        compute_kernel_defines["EB_R3_MAIN_REINIT"] = "1";
-    }
-    if (eb_r3_env("EB_R3_PER_FACE")) {
-        compute_kernel_defines["EB_R3_PER_FACE"] = "1";
     }
     if (const char* eb_log = std::getenv("EB_R3_LOG_CALLS")) {  // CI only: one line per program built
         auto eb_def = [&](const char* k) {
@@ -1464,16 +1427,17 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             return r.empty() ? std::string("-") : r;
         };
         if (FILE* f = std::fopen(eb_log, "a")) {
-            std::fprintf(f, "EB_CALL op=%s kern=%d bcast=%s a=%s b=%s c=%s lhs=%s rhs=%s post=%s scalar=%d block=%s pack=%s pre=%u mulpf=%s ntpc=%u tiles=%u\n",
+            std::fprintf(f, "EB_CALL op=%s kern=%d sfpu=%d bcast=%s a=%s b=%s c=%s lhs=%s rhs=%s post=%s scalar=%d block=%s pack=%s ntpc=%u tiles=%u\n",
                 std::string(enchantum::to_string(operation_attributes.binary_op_type)).c_str(), static_cast<int>(compute_kernel),
-                std::string(enchantum::to_string(operation_attributes.subtile_broadcast_type)).c_str(), eb_t(a).c_str(),
+                static_cast<int>(is_sfpu_op), std::string(enchantum::to_string(operation_attributes.subtile_broadcast_type)).c_str(), eb_t(a).c_str(),
                 b.has_value() ? eb_t(*b).c_str() : "-", eb_t(c).c_str(), eb_acts(operation_attributes.lhs_activations).c_str(),
                 eb_acts(operation_attributes.rhs_activations).c_str(), eb_acts(operation_attributes.post_activations).c_str(),
                 static_cast<int>(!b.has_value()), eb_def("BINARY_NG_BLOCK").c_str(), eb_def("BINARY_NG_BLOCK_PACK").c_str(),
-                pre_sections, eb_def("BINARY_NG_MUL_PER_FACE").c_str(), num_tiles_per_cycle, c_tiles_per_core);
+                num_tiles_per_cycle, c_num_tiles_per_shard.value_or(0));
             std::fclose(f);
         }
     }
+
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;

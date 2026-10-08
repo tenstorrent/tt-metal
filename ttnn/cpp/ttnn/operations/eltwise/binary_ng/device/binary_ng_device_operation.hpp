@@ -70,8 +70,6 @@ struct BinaryNgDeviceOperation {
         std::optional<tt::tt_metal::Shape> c_tensor_shape_in_pages;
         // Parameters of the op being run, for ops that take any; empty for ops that do not.
         std::optional<binary::BinaryOpParams> op_params;
-        // Blackhole: DEST sections per operand pass, set at invoke from L1 occupancy (0: a pass per section).
-        uint32_t operand_pass_sections = 0;
 
         DataType get_dtype() const;
 
@@ -102,8 +100,7 @@ struct BinaryNgDeviceOperation {
             "b_shard_volume",
             "c_shard_volume",
             "c_tensor_shape_in_pages",
-            "op_params",
-            "operand_pass_sections");
+            "op_params");
 
         auto attribute_values() const {
             return std::make_tuple(
@@ -129,8 +126,7 @@ struct BinaryNgDeviceOperation {
                 b_shard_volume,
                 c_shard_volume,
                 c_tensor_shape_in_pages,
-                binary_op_type == BinaryOpType::BIAS_GELU ? op_params : std::optional<binary::BinaryOpParams>{},
-                operand_pass_sections);
+                binary_op_type == BinaryOpType::BIAS_GELU ? op_params : std::optional<binary::BinaryOpParams>{});
         }
     };
 

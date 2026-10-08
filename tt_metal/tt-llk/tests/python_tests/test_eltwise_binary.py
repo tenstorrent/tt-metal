@@ -291,19 +291,9 @@ def _runs_per_tile(tile_dimensions, broadcast_type, *, dest_reuse):
         if dest_reuse
         else (BroadcastType.Column, BroadcastType.Row)
     )
-    partial_col = (
-        not dest_reuse
-        and broadcast_type == BroadcastType.Column
-        and face_r_dim < 16
-        and num_faces_r_dim == 1
-        and num_faces_c_dim == 2
-    )
-    return partial_col or (
-        face_r_dim == 16
-        and (
-            broadcast_type not in needs_2x2
-            or (num_faces_r_dim == 2 and num_faces_c_dim == 2)
-        )
+    return face_r_dim == 16 and (
+        broadcast_type not in needs_2x2
+        or (num_faces_r_dim == 2 and num_faces_c_dim == 2)
     )
 
 

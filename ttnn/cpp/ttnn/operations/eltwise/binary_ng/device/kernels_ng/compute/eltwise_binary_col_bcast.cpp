@@ -4,18 +4,6 @@
 
 #include <cstdint>
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#ifndef BINARY_NG_BLOCK
-#define BINARY_NG_BLOCK 0
-#endif
-// Blackhole: ELWMUL, which binary_ng runs at HiFi4, takes the per-tile hand-off unless BINARY_NG_MUL_PER_FACE; add and
-// sub keep the per-face one, except in the block sections (BINARY_NG_BLOCK), whose block unpack takes it for every op.
-#ifndef BINARY_NG_MUL_PER_FACE
-#define BINARY_NG_MUL_PER_FACE 0
-#endif
-#ifndef EB_R3_PER_FACE
-#define EB_R3_PER_FACE 0
-#endif
-#define ELTWISE_BINARY_PER_TILE_HANDOFF ((((BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL && !BINARY_NG_MUL_PER_FACE && !EB_R3_PER_FACE) || BINARY_NG_BLOCK)))
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 
@@ -82,7 +70,7 @@ ALWI void process_tile(
         num_tiles_per_cycle);
     EXP_CB_POST_BCAST.wait_front(num_tiles_per_cycle);
 
-#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_POST_REINIT)
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
     binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
 
@@ -97,7 +85,7 @@ ALWI void process_tile(
 
         exp_dfb_out.reserve_back(num_tiles_per_cycle);
 
-#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_POST_REINIT
+#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
         tile_regs_acquire();
@@ -151,7 +139,7 @@ void kernel_main() {
     pack_relu_config(ReluConfig::zero());
 #endif
 
-#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_POST_REINIT)
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
     binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
 
