@@ -26,6 +26,10 @@ case $1 in
   x)       ab f6x - EB_R3_PER_FACE=1 "sdxl_refiner_geglu or test_mul_tg or mul_bfp8"
            ab f1x - EB_R3_NO_BLOCK=1 "sdxl_refiner_geglu"
            ab f4x - EB_R3_NO_PRE_SECTIONS=1 "test_mul_tg" ;;
+  x2)      for i in 1 2 3; do
+             ab f6x2 - EB_R3_PER_FACE=1 "test_mul_tg or mul_bfp8 or (sdxl_refiner_geglu and d1)"
+             ab f4x2 - EB_R3_NO_PRE_SECTIONS=1 "test_mul_tg or mul_bfp8"
+           done ;;
   smsa)    ab sm_b $O/off_sm_b.txt - "softmax_cfg"
            ab sa_b $O/off_sa_b.txt - "llama8b_sampling" ;;
 esac
