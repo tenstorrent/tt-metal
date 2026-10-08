@@ -7,6 +7,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"  // GeluDerivative
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "operand_reconfig.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -34,7 +35,7 @@ void kernel_main() {
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
-                ckl::DataFormatReconfig::Disabled),
+                operand_reconfig),
             ckl::Dst::D0>{},
         ckl::CopyTile<
             ckl::input(
@@ -42,7 +43,7 @@ void kernel_main() {
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
-                ckl::DataFormatReconfig::Disabled),
+                operand_reconfig),
             ckl::Dst::D1>{},
         ckl::GeluDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},     // dest[1] = GELU'(input)
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},  // dest[0] = grad_out * GELU'(input)

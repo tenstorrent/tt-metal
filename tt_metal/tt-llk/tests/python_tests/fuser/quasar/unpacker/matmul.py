@@ -15,6 +15,7 @@ from fuser.operand import BfdResource
 
 
 class MatmulUnpacker(Unpacker):
+    reverse_operands = True
     granularity = InvocationGranularity.BLOCK
     per_block_init = True
 

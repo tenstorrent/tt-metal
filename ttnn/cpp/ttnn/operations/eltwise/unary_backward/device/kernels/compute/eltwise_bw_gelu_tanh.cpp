@@ -9,6 +9,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
+#include "operand_reconfig.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -31,17 +32,16 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(num_tiles),
         ckl::CopyTile<
-            ckl::input(
-                dfb_grad_out_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_grad_out_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, operand_reconfig),
             ckl::Dst::D0>{},
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, operand_reconfig),
             ckl::Dst::D1>{},
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, operand_reconfig),
             ckl::Dst::D2>{},
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, operand_reconfig),
             ckl::Dst::D5>{},
         ckl::Square<ckl::Dst::D1>{},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},

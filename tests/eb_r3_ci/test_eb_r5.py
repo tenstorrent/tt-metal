@@ -267,3 +267,48 @@ L1P = [(op, t) for op in ("logical_and", "rsub_s", "rsub") for t in (128, 144, 1
 def test_l1probe(device, op, t):
     ONE4_MEMS[f"hs8_t{t}"] = ((1, 1, 32 * t, 256), 2, 4, ttnn.ShardStrategy.HEIGHT)
     test_one4(device, op, f"hs8_t{t}", "bf16")
+
+
+# sixth pass, L1 at invoke (#58725, #58726): a filler of n tiles per core allocated first leaves less L1 below it; one process
+# from roomy to tight, so a program cached with more L1 free meets less. The operand pass of logical_and (two passes, 8
+# sections) and of the Python-scalar rsub, and the broadcast sections' operand CB of an add with relu on a and a column b.
+L1F = [("logical_and", n) for n in range(296, 444, 4)] + [("rsub_s", n) for n in range(424, 512, 4)]
+L1F += [("add_arelu_col", n) for n in range(470, 512, 2)]
+
+
+@pytest.mark.parametrize("op, n", L1F, ids=[f"{op}-n{n}" for op, n in L1F])
+def test_l1fill(device, op, n):
+    grid = ttnn.CoreGrid(y=2, x=4)
+    hs = ttnn.ShardStrategy.HEIGHT
+    fshape = (1, 1, 256 * n, 32)
+    fmc = ttnn.create_sharded_memory_config(fshape, core_grid=grid, strategy=hs)
+    filler = ttnn.from_torch(torch.zeros(fshape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                             device=device, memory_config=fmc)
+    shape = (1, 1, 2048, 256)
+    mc = ttnn.create_sharded_memory_config(shape, core_grid=grid, strategy=hs)
+    torch.manual_seed(zlib.crc32(f"l1fill{op}".encode()) % 100000)
+    ta = ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16) * 2 - 1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                         device=device, memory_config=mc)
+    tb = None
+    if op == "logical_and":
+        tb = ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16) - 0.25, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                             device=device, memory_config=mc)
+        fn = lambda: ttnn.logical_and(ta, tb, memory_config=mc)
+    elif op == "rsub_s":
+        fn = lambda: ttnn.rsub(ta, 0.375, memory_config=mc)
+    else:
+        bshape = (1, 1, 2048, 32)
+        bmc = ttnn.create_sharded_memory_config(bshape, core_grid=grid, strategy=hs)
+        tb = ttnn.from_torch(torch.rand(bshape, dtype=torch.bfloat16) - 0.5, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                             device=device, memory_config=bmc)
+        fn = lambda: ttnn.add(ta, tb, input_tensor_a_activations=[U(ttnn.UnaryOpType.RELU)], memory_config=mc)
+    out = None
+    try:
+        for _ in range(3):
+            out = fn()
+        got = ttnn.to_torch(out)
+    finally:
+        for t in (ta, tb, out, filler):
+            if t is not None:
+                ttnn.deallocate(t)
+    assert got.shape[-1] == shape[-1]
