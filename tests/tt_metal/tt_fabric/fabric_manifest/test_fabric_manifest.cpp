@@ -977,8 +977,6 @@ void check_router_edges(const json& manifest, const std::vector<RouterEntry>& ro
                 if (edge.at("through_tensix_mux").get<bool>()) {
                     EXPECT_EQ(vc_key, "vc0");
                     EXPECT_EQ(channel.at("status"), lower_enum_name(manifest::ChannelStatus::MUX)) << target;
-                } else {
-                    EXPECT_EQ(channel.at("producer"), entry.path) << target;
                 }
 
                 expect_fields(edge.at("fields"), manifest::k_downstream_edge_fields, manifest.at("vocabulary"), is_2d);
@@ -997,6 +995,10 @@ void check_router_fields(const json& manifest, const std::vector<RouterEntry>& r
         const auto num_active_eriscs = router.at("shape").at("num_active_eriscs").get<uint32_t>();
 
         expect_fields(router.at("fields"), manifest::k_router_fields, vocabulary, is_2d);
+        // The kernel's direction is the builder's; the key's is ControlPlane's.
+        EXPECT_EQ(
+            router.at("fields").at("my_direction").at("value").get<uint32_t>(),
+            static_cast<uint32_t>(control_plane().get_eth_chan_direction(entry.node, entry.eth_chan)));
         std::set<std::string> expected_eriscs;
         for (uint32_t risc_id = 0; risc_id < num_active_eriscs; ++risc_id) {
             expected_eriscs.insert(fmt::format("erisc{}", risc_id));

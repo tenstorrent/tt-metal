@@ -190,6 +190,14 @@ inline constexpr auto k_router_fields = [] {
         // Kernel parameters. Under DEBUG_PRINT_ENABLED the kernel ignores the context switch interval and the
         // handshake context switch timeout, and uses its own.
         RouterField{
+            .key = "my_direction",
+            .source = "MY_DIRECTION",
+            .category = KERNEL_PARAMS,
+            .kind = enum_kind<eth_chan_directions>(),
+            .description = "The direction the router faces, which the kernel picks its downstream channels and "
+                           "free-slot registers by. The router's key uses ControlPlane's direction.",
+        },
+        RouterField{
             .key = "wait_for_host_signal",
             .source = "WAIT_FOR_HOST_SIGNAL",
             .category = KERNEL_PARAMS,
@@ -329,6 +337,9 @@ inline constexpr auto k_erisc_fields = [] {
     };
 }();
 
+// The chip pass reads this sender field to find the channels a sibling must have an edge into.
+inline constexpr std::string_view k_static_connection_key = "static_connection";
+
 inline constexpr auto k_sender_channel_fields = [] {
     using enum FieldCategory;
     return std::array{
@@ -387,6 +398,14 @@ inline constexpr auto k_sender_channel_fields = [] {
             .kind = l1_value<SenderChannelProducerCursor>(),
             .description = "Where the producer keeps its write cursor across connections. In the producer's runtime "
                            "args, from the channel's connection spec.",
+        },
+        RouterField{
+            .key = k_static_connection_key,
+            .source = NamedArg{"SENDER_CH_{}_WAIT_STATIC_CONNECTION", ArgIndex::COMPACT},
+            .category = CONTROL_INFO,
+            .kind = kind::Flag{},
+            .description = "Whether a sibling router connects to the channel once, at startup: before its main loop, "
+                           "the router waits for that connection.",
         },
     };
 }();
