@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import subprocess
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -105,8 +106,8 @@ def _add_audio_stream(container, audio: Audio | None):
     return audio_stream
 
 
-def _mux_audio(container, audio_stream, audio: Audio) -> None:
-    """Encode + mux the decoded waveform into ``audio_stream`` (created by ``_add_audio_stream``)."""
+def _encode_audio(audio_stream, audio: Audio) -> list:
+    """Encode the decoded waveform into ``audio_stream``'s AAC packets without muxing them."""
     import av
 
     samples = audio.waveform
@@ -135,11 +136,32 @@ def _mux_audio(container, audio_stream, audio: Audio) -> None:
         layout=cc.layout or "stereo",
         rate=cc.sample_rate or audio.sampling_rate,
     )
+    packets = []
     for resampled in resampler.resample(frame_in):
-        for packet in audio_stream.encode(resampled):
+        packets.extend(audio_stream.encode(resampled))
+    packets.extend(audio_stream.encode())
+    return packets
+
+
+_audio_pool: ThreadPoolExecutor | None = None
+
+
+def _encode_audio_async(container, audio_stream, audio: Audio | None) -> Future | None:
+    """Start the AAC encode beside the video encode. Every stream is opened and the header written here, so only
+    the audio codec context is touched off-thread; all muxing stays on the caller's thread."""
+    global _audio_pool
+    if audio is None or audio_stream is None:
+        return None
+    container.start_encoding()
+    if _audio_pool is None:
+        _audio_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mp4-audio")
+    return _audio_pool.submit(_encode_audio, audio_stream, audio)
+
+
+def _mux_packets(container, packets: Future | None) -> None:
+    if packets is not None:
+        for packet in packets.result():
             container.mux(packet)
-    for packet in audio_stream.encode():
-        container.mux(packet)
 
 
 def export_video_audio_yuv(yuv_planar, output_path: str, fps: int = 24, audio: Audio | None = None) -> None:
@@ -171,6 +193,7 @@ def export_video_audio_yuv(yuv_planar, output_path: str, fps: int = 24, audio: A
     stream.thread_type = "AUTO"
 
     audio_stream = _add_audio_stream(container, audio)
+    audio_packets = _encode_audio_async(container, audio_stream, audio)
 
     for frame_array in yuv_planar:
         frame = av.VideoFrame.from_ndarray(frame_array, format="yuv420p")
@@ -179,8 +202,7 @@ def export_video_audio_yuv(yuv_planar, output_path: str, fps: int = 24, audio: A
     for packet in stream.encode():
         container.mux(packet)
 
-    if audio is not None and audio_stream is not None:
-        _mux_audio(container, audio_stream, audio)
+    _mux_packets(container, audio_packets)
 
     container.close()
     logger.info(f"Saved: {output_path} ({t}f @ {fps}fps, yuv420p fast path)")
@@ -226,6 +248,7 @@ def export_video_audio(video_pixels: torch.Tensor, output_path: str, fps: int = 
 
     # Prepare audio stream if provided (must be added before any packet is muxed)
     audio_stream = _add_audio_stream(container, audio)
+    audio_packets = _encode_audio_async(container, audio_stream, audio)
 
     # Write video frames
     for frame_array in frames:
@@ -237,9 +260,7 @@ def export_video_audio(video_pixels: torch.Tensor, output_path: str, fps: int = 
     for packet in stream.encode():
         container.mux(packet)
 
-    # Write audio if provided
-    if audio is not None and audio_stream is not None:
-        _mux_audio(container, audio_stream, audio)
+    _mux_packets(container, audio_packets)
 
     container.close()
     logger.info(f"Saved: {output_path} ({frames.shape[0]}f @ {fps}fps)")
