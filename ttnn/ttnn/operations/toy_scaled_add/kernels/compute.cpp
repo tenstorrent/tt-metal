@@ -26,7 +26,7 @@ namespace ckl = compute_kernel_lib;
 using namespace toy_scaled_add;
 
 void kernel_main() {
-    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+    constexpr uint32_t Wt = get_compile_time_arg_val(ct_arg::WIDTH_TILES);
     const uint32_t num_rows = get_arg_val<uint32_t>(core_arg::NUM_ROWS);
     const uint32_t alpha_bits = get_common_arg_val<uint32_t>(compute_arg::ALPHA_BITS);
 

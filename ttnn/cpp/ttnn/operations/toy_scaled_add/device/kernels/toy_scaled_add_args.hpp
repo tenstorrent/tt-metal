@@ -5,9 +5,8 @@
 
 #include <cstdint>
 
-// Circular buffers and runtime-argument slots of the toy_scaled_add kernels. The kernels and the
-// host that launches them index every slot through these names, so the two sides agree by
-// construction.
+// Circular buffers and argument slots of the toy_scaled_add kernels. The kernels and the host that
+// launches them index every slot through these names, so the two sides agree by construction.
 //
 // The arguments are split by how often they change:
 //   * common runtime args carry what changes from call to call (buffer addresses, alpha). A kernel
@@ -15,10 +14,6 @@
 //     whole grid;
 //   * per-core runtime args carry the work split, which the tensor shapes fix.
 //
-// Compile-time args: the named arg "Wt" (tiles per row) on every kernel; on the readers, the tensor
-// accessor args of a, b and gamma in that order (the sharded reader: gamma only). gamma's accessor args
-// are always present, a placeholder when there is no gamma, so the offsets of everything after them
-// never depend on whether gamma was given.
 namespace toy_scaled_add {
 
 // Dense from 0: every launch sends one circular-buffer config slot per index up to the highest one
@@ -30,6 +25,15 @@ constexpr uint32_t B = 1;
 constexpr uint32_t OUT = 2;
 constexpr uint32_t GAMMA = 3;
 }  // namespace cb
+
+// Compile-time args, the same leading slots on every kernel: the tiles per row. The readers and the
+// interleaved writer continue from COUNT with tensor accessor args: a, b and gamma in that order on the
+// interleaved reader, gamma alone on the sharded reader, out on the interleaved writer. gamma's accessor
+// args are always present, a placeholder when there is no gamma, so the offsets of everything after
+// them never depend on whether gamma was given.
+namespace ct_arg {
+enum : uint32_t { WIDTH_TILES, COUNT };
+}  // namespace ct_arg
 
 // Per-core runtime args, the same layout on every kernel: the block of tile-rows this core owns.
 namespace core_arg {
