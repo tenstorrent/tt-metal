@@ -12,8 +12,6 @@
 // Compile-time args: 0 Wt, 1 blk, 2 inv_w (float bits)
 // Runtime args: 0 num_rows
 
-#define ELTWISE_BINARY_PER_TILE_HANDOFF true
-#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
@@ -164,33 +162,6 @@ FORCE_INLINE void rstd() {
 // DST[idst] <- DST[idst] op row-broadcast(cb[itile]): the stock mul/add_tiles_bcast_rows
 // with the DST tile as SrcA instead of a packed and unpacked fp32 tile. Mirrors
 // binary_reuse_dest_init/tiles (eltwise_binary.h) with BroadcastType::ROW.
-#if defined(ARCH_BLACKHOLE)
-// On Blackhole, the hand-off of the eltwise binary compute API's dest-reuse forms.
-template <EltwiseBinaryType op>
-FORCE_INLINE void row_bcast_reuse_init(uint32_t cb) {
-    constexpr auto src_dvalid = ckernel::detail::binary_src_dvalid<EltwiseBinaryReuseDestType::DEST_TO_SRCA>;
-    UNPACK((llk_unpack_A_init<BroadcastType::ROW, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA, false, src_dvalid>(
-        false, false, cb)));
-    MATH((llk_math_eltwise_binary_init<
-          op,
-          BroadcastType::ROW,
-          MATH_FIDELITY,
-          EltwiseBinaryReuseDestType::DEST_TO_SRCA,
-          src_dvalid>(cb, cb, false)));
-}
-
-template <EltwiseBinaryType op>
-FORCE_INLINE void row_bcast_reuse_tile(uint32_t cb, uint32_t itile, uint32_t idst) {
-    UNPACK((llk_unpack_A<BroadcastType::ROW, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb, itile)));
-    MATH((llk_math_eltwise_binary<
-          op,
-          BroadcastType::ROW,
-          DST_ACCUM_MODE,
-          MATH_FIDELITY,
-          EltwiseBinaryReuseDestType::DEST_TO_SRCA,
-          ckernel::detail::binary_src_dvalid<EltwiseBinaryReuseDestType::DEST_TO_SRCA>>(cb, cb, idst, true)));
-}
-#else
 template <EltwiseBinaryType op>
 FORCE_INLINE void row_bcast_reuse_init(uint32_t cb) {
     UNPACK((llk_unpack_A_init<BroadcastType::ROW, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(false, false, cb)));
@@ -208,7 +179,6 @@ FORCE_INLINE void row_bcast_reuse_tile(uint32_t cb, uint32_t itile, uint32_t ids
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb, cb, idst, true)));
 }
-#endif
 
 // CB_OUT <- CB_XMM * rstd * gamma + beta for Wt tiles, one pack per tile.
 // Pops CB_XMM and CB_EX2PE.

@@ -2,10 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Blackhole: the per-tile hand-off, except with the fused residual add, which read slower with it
-#ifndef FUSE_PRE_ADD
-#define ELTWISE_BINARY_PER_TILE_HANDOFF true
-#endif
 #include <cstdint>
 
 #include "api/compute/sfpu_binary_bcast.h"
