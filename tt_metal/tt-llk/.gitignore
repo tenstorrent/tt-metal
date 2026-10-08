@@ -30,8 +30,9 @@ compile_flags.txt
 !.claude
 
 # Artifacts of the SFPU accuracy sweep: the per-comparison measurements
-# --ulp-measure records, and the report llk-sfpu-accuracy folds them into. Both are
-# uploaded from CI and neither belongs in the tree — the budget table is the only
-# checked-in record of a measurement.
+# --ulp-measure records, its JUnit report, and the headroom report the PR Gate sweep folds them into.
+# Neither belongs in the tree — the budget table is the only checked-in record of a
+# measurement.
 ulp_measurements.jsonl
 ulp_headroom_report.md
+ulp_sweep_junit.xml

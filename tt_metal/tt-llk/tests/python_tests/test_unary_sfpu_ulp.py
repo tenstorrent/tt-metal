@@ -12,13 +12,14 @@ One device run per variant covers the whole format: 65,279 finite bfloat16 value
 63,487 float16 ones, in 64 tiles. ``Bfp8_b`` is swept in bfloat16 and packed on the way
 in; a ``Float32`` input has 2**32 values, so it is walked with a stride instead.
 Marked ``accuracy``, which llk-e2e and the other marker-selected LLK workflows deselect;
-llk-sfpu-accuracy.yaml runs it by path. Run it as a gate::
+PR Gate runs it by path when an SFPU kernel changes (llk-sfpu-accuracy.yaml). Run it as
+a gate::
 
     pytest test_unary_sfpu_ulp.py
 
 which fails a gated cell over its budget and skips a tolerance cell with its measured
 maximum in the reason. To hold the tolerance cells to the figures their rows record, as
-the nightly does, measure and compare::
+PR Gate does, measure and compare::
 
     pytest test_unary_sfpu_ulp.py --ulp-measure=ulp.jsonl
     python3 helpers/ulp_budget_diff.py headroom \\
@@ -85,8 +86,7 @@ from helpers.ulp_sweep import (
 from helpers.utils import _record_ulp_measurement, passed_test
 
 #: `accuracy` is the marker llk-e2e and the other marker-selected LLK workflows deselect;
-#: `nightly` would not do, since llk-e2e runs it. llk-sfpu-accuracy.yaml runs this file
-#: by path.
+#: `nightly` would not do, since llk-e2e runs it. PR Gate runs this file by path.
 pytestmark = [
     pytest.mark.accuracy,
     # Every unkeyed budget is a Wormhole measurement and binds nowhere else
@@ -235,7 +235,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         arch=get_chip_architecture(),
     )
     # A tolerance cell has no budget to gate, but is measured anyway: its row records the
-    # last sweep's worst lane, and the nightly's headroom report fails a run that exceeds
+    # last sweep's worst lane, and PR Gate's headroom report fails a run that exceeds
     # it. Skipping it made a demoted cell's regressions and recoveries invisible.
     gated = contract.metric == Metric.ULP
 

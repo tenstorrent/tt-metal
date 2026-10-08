@@ -67,9 +67,9 @@ env:
   #                                  workflow, which supplies TTNOP setup and recovery.
   #   llk_perf_merge_gate_tests.yaml runs only through llk-perf-impl, which runs cmd
   #                                  from tt_metal/tt-llk in the LLK CI image.
-  #   llk_sfpu_accuracy_tests.yaml   runs only through llk-sfpu-accuracy-impl.yaml, which
-  #                                  supplies the LLK CI image, SFPI, the tt-llk working
-  #                                  directory and ULP_MEASURE_PATH.
+  #   llk_sfpu_accuracy_tests.yaml   runs only through llk-sfpu-accuracy.yaml (check:
+  #                                  sweep), which supplies the LLK CI image, SFPI and the
+  #                                  tt-llk working directory its cmd is relative to.
   #
   # This is not an exemption: the legs still block the PR until an owner approves.
   UNSUPPORTED_YAMLS: >-

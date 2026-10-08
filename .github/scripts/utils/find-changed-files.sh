@@ -32,6 +32,7 @@ LLK_TESTS_CHANGED=false
 LLK_UNIT_TESTS_CHANGED=false
 LLK_PERF_CHANGED=false
 LLK_CI_CHANGED=false
+LLK_SFPU_KERNELS_CHANGED=false
 TTSIM_CI_CHANGED=false
 WORKFLOWS_CHANGED=false
 
@@ -192,6 +193,26 @@ while IFS= read -r FILE; do
             ;;
     esac
 done <<< "$CHANGED_FILES"
+
+# --- llk-sfpu-kernels-changed: its own scan --------------------------------
+# The Wormhole SFPU kernels and the compiler that builds them, for the exhaustive ULP
+# sweep in PR Gate (llk-sfpu-accuracy.yaml). A pass of its own because the case above
+# stops at the first match, and every one of these also matches a broader LLK pattern.
+# Test and harness changes are deliberately absent: the sweep re-measures kernels.
+while IFS= read -r FILE; do
+    case "$FILE" in
+        tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/sfpu/*|\
+        tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/ckernel_sfpu*.h|\
+        tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu*.h|\
+        tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_sfpu_common.h|\
+        tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/*|\
+        tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu_types.h|\
+        tt_metal/sfpi-version|tt_metal/sfpi-info.sh)
+            LLK_SFPU_KERNELS_CHANGED=true
+            ;;
+    esac
+done <<< "$CHANGED_FILES"
+# ----------------------------------------------------------------------------
 
 # --- run-clang-tidy inputs: raw snapshot + dedicated re-scans ---------------
 # Snapshot the language-agnostic per-file flags NOW, before the blanket
@@ -354,6 +375,7 @@ declare -A changes=(
     [llk-unit-tests-changed]=$LLK_UNIT_TESTS_CHANGED
     [llk-perf-changed]=$LLK_PERF_CHANGED
     [llk-ci-changed]=$LLK_CI_CHANGED
+    [llk-sfpu-kernels-changed]=$LLK_SFPU_KERNELS_CHANGED
     [ttsim-ci-changed]=$TTSIM_CI_CHANGED
 )
 
