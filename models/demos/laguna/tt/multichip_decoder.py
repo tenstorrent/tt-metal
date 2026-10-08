@@ -847,6 +847,8 @@ class MultichipDecoder(OptimizedDecoder):
         )
         global_expert_idx = ttnn.squeeze(ttnn.squeeze(global_expert_idx, 0), 0)
 
+        # dispatch/combine "links" = sender cores (max 4); local-only dispatch sends nothing over fabric
+        dc_links = int(os.environ.get("TT_LAGUNA_DISPATCH_LINKS", "3"))
         bucket_modules = {}
         for seq_len in sorted(TOKEN_DISPATCH_BUCKETS):
             # Worst case: every one of T*K routes is local, plus at most 31
@@ -864,7 +866,7 @@ class MultichipDecoder(OptimizedDecoder):
                     seq_len_per_chip=seq_len,
                     emb_dim=self.cfg.hidden,
                     cluster_axis=0,
-                    num_links=1,
+                    num_links=dc_links,
                     topology=ttnn.Topology.Linear,
                 ),
                 "combine": TtCombineModule(
@@ -875,7 +877,7 @@ class MultichipDecoder(OptimizedDecoder):
                     num_experts_per_tok=self.cfg.top_k,
                     seq_len_per_chip=seq_len,
                     cluster_axis=0,
-                    num_links=1,
+                    num_links=dc_links,
                     topology=ttnn.Topology.Linear,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     init_zeros=True,

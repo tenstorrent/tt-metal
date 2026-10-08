@@ -849,6 +849,23 @@ class OptimizedDecoder(LightweightModule):
     def _apply_rope(self, x, cos, sin):
         rd = self.cfg.rotary_dim
         hd = self.cfg.head_dim
+        if (
+            os.environ.get("TT_LAGUNA_FUSED_ROPE_PREFILL", "1") == "1"
+            and len(x.shape) == 4
+            and x.shape[0] == 1
+            and x.shape[-2] == cos.shape[-2]
+            and x.shape[-2] > 1
+            and x.dtype == cos.dtype
+        ):
+            # prefill [1, heads, seq, hd] with cos/sin [1, 1, seq, rd]: one fused HF rotate_half op instead of
+            # slice, slice, neg, concat, mul, mul, add (~240 us for 18 heads x 2048 tokens)
+            if rd == hd:
+                return ttnn.experimental.rotary_embedding_hf(x, cos, sin, is_decode_mode=False)
+            x_rot = ttnn.slice(x, [0, 0, 0, 0], [1, x.shape[1], x.shape[2], rd])
+            x_pass = ttnn.slice(x, [0, 0, 0, rd], list(x.shape))
+            return ttnn.concat(
+                [ttnn.experimental.rotary_embedding_hf(x_rot, cos, sin, is_decode_mode=False), x_pass], dim=-1
+            )
         if rd == hd:
             x_rot, x_pass = x, None
         else:
