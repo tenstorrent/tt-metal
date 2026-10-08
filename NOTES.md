@@ -28,3 +28,22 @@
    head_dim_tiles = num_tile_cols -> row-major packed; needs C++ rebuild in an own build dir under /var/tmp/fasth3),
    est. -140 ms; (a) K+V one halo CCL, uncertain; (b) SwiGLU hidden in L1, est. ~4 ms/block, marginal.
    Even all together the estimate is ~-0.2 s, below -0.4 s: do not land unless the measured gain clears the bar.
+
+## Result (blx01 job 947, 2026-10-08 05:05-05:10 UTC, -t 330, rc 0, no drops)
+- Warm decode, 2 seeds, one arm per process: def 3.374 s, fold (DIFFVAE_S5_FOLD_ADDS=1) 3.374 s. No gain.
+- Profiled stage 5: 2398.7 -> 2387.7 ms (-11 ms, ~1.4 ms/block). Residual crop+add (2.7 ms) is gone but the
+  out-proj with the folded epilogue grew 2.7 -> 4.7 ms; context-inject 4.8 -> 4.6 ms.
+- Quality vs #214 refs: def PCC 0.99995/0.99995, PSNR 55.04/54.59 dB; fold PCC 0.99995/0.99995,
+  PSNR 54.97/54.51 dB (-0.08 dB). fold vs def 55.7/55.3 dB. md5 differ (valid A/B).
+- Stage-5 non-NA per block (def): qkv-proj 5.6, qkv-lanes 27.8, halo+brick 42.4 (k/v halo 10.4 each,
+  rebrick 3.1+3.0, untilize 1.8+1.8, unattributed 11.8), out-proj 2.7, context 4.8, norm+mod 3.3+2.6,
+  residual 2.7, mlp 25.6.
+- Evidence: tt-project/t262/out_AB/ (stage trees, cmp json, driver.log).
+
+## Decision
+- DIFFVAE_S5_FOLD_ADDS rejected: stays opt-in, default off, not landed on t48 (code commit e0c550083cd on this
+  branch only).
+- R3 stopped. The remaining levers ((c) packed norm output, est. -140 ms; (a) one K+V halo CCL, uncertain;
+  (b) SwiGLU hidden in L1, ~-30 ms) add up to ~-0.2 s even if all estimates hold, below the -0.4 s bar and
+  each below the 5% single-lever cut (#257). The biggest single item is the K/V halo+brick (42 ms/block,
+  ~0.34 s over 8 blocks), which belongs with R1 (NA K/V L1 ring) rather than here.
