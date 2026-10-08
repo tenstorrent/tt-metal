@@ -4,6 +4,7 @@
 
 #include "moreh_clip_grad_norm_step3_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/core/caller_owned_topology.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -44,14 +45,22 @@ MorehClipGradNormStep3Operation::tensor_return_value_t MorehClipGradNormStep3Ope
 
 std::vector<tt::tt_metal::TensorTopology> MorehClipGradNormStep3Operation::compute_output_topologies(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
-    // The inputs are scaled in place and returned as the outputs. Without this hook the framework relabels every
-    // one of them with the union of all inputs' placements, so a single sharded gradient in the list would turn
-    // each replicated gradient's label into Shard, and anything that gathers by label (checkpointing) would then
-    // concatenate identical replicas. Each gradient's distribution is untouched by the scaling, so it keeps its own.
+    // The inputs are scaled in place by clip_coef_clamped and returned as the outputs. Each keeps its own label
+    // while the coefficient's label is compatible with it (core::caller_owned_output_topology). A coefficient
+    // computed per device (any gradient sharded across the mesh makes step1/step2's norm per-device) leaves a
+    // replicated gradient different on every device, and that gradient takes the union of every tensor here.
+    if (tensor_args.inputs.empty()) {
+        return {};
+    }
+    std::vector<std::reference_wrapper<const Tensor>> all_tensors(tensor_args.inputs.begin(), tensor_args.inputs.end());
+    all_tensors.emplace_back(tensor_args.clip_coef_clamped);
+    const auto union_topology = union_output_topology(all_tensors, tensor_args.inputs.front());
     std::vector<tt::tt_metal::TensorTopology> topologies;
     topologies.reserve(tensor_args.inputs.size());
     for (const auto& input : tensor_args.inputs) {
-        topologies.push_back(input.tensor_topology());
+        topologies.push_back(ttnn::operations::core::caller_owned_output_topology(
+                                 input, {&tensor_args.clip_coef_clamped}, "ttnn::moreh_clip_grad_norm (step 3)")
+                                 .value_or(union_topology));
     }
     return topologies;
 }

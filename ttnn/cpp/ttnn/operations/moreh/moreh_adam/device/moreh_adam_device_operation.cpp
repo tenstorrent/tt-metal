@@ -104,11 +104,8 @@ MorehAdamOperation::tensor_return_value_t MorehAdamOperation::create_output_tens
 
 std::vector<tt::tt_metal::TensorTopology> MorehAdamOperation::compute_output_topologies(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    std::vector<std::reference_wrapper<const Tensor>> inputs = {
-        tensor_args.param_in, tensor_args.grad, tensor_args.exp_avg_in, tensor_args.exp_avg_sq_in};
-    if (tensor_args.max_exp_avg_sq_in.has_value()) {
-        inputs.emplace_back(*tensor_args.max_exp_avg_sq_in);
-    }
+    const Tensor* max_exp_avg_sq_in =
+        tensor_args.max_exp_avg_sq_in.has_value() ? &*tensor_args.max_exp_avg_sq_in : nullptr;
     // output_tensors holds the caller's slot for every entry of compute_output_specs, in the same order.
     std::vector<std::reference_wrapper<const std::optional<Tensor>>> preallocated_outputs;
     preallocated_outputs.reserve(tensor_args.output_tensors.size());
@@ -116,10 +113,15 @@ std::vector<tt::tt_metal::TensorTopology> MorehAdamOperation::compute_output_top
         preallocated_outputs.emplace_back(output_tensor);
     }
     return preallocated_or_union_output_topologies(
-        std::move(inputs),
+        {&tensor_args.param_in,
+         &tensor_args.grad,
+         &tensor_args.exp_avg_in,
+         &tensor_args.exp_avg_sq_in,
+         max_exp_avg_sq_in},
         tensor_args.param_in,
         compute_output_specs(operation_attributes, tensor_args),
-        preallocated_outputs);
+        preallocated_outputs,
+        "ttnn::moreh_adam");
 }
 
 auto MorehAdamOperation::compute_program_hash(
