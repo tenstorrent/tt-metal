@@ -79,9 +79,9 @@ def inputs_for(device, variant, q, k, v):
     return tq, tk, tv
 
 
-def program_config(device, q_chunk, k_chunk):
+def program_config(device, q_chunk, k_chunk, grid=None):
     return ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=grid or device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk,
         k_chunk_size=k_chunk,
     )
@@ -300,7 +300,7 @@ CAUSAL_SHAPES = {
 }
 
 
-def check_key_range(device, variant, shape, *, causal, window=None):
+def check_key_range(device, variant, shape, *, causal, window=None, grid=None):
     """Dense causal and/or sliding-window SDPA (scaled_dot_product_attention with is_causal / sliding_window_size)."""
     b, nh, nkv, s, d, q_chunk, k_chunk = shape
     q, k, v = randn(b, nh, s, d, seed=33), randn(b, nkv, s, d, seed=34), randn(b, nkv, s, d, seed=35)
@@ -308,14 +308,16 @@ def check_key_range(device, variant, shape, *, causal, window=None):
         *inputs_for(device, variant, q, k, v),
         is_causal=causal,
         sliding_window_size=window,
-        program_config=program_config(device, q_chunk, k_chunk),
+        program_config=program_config(device, q_chunk, k_chunk, grid),
         precision=VARIANTS[variant][0],
     )
     expected = reference(q, k, v, key_mask(s, s, causal=causal, window=window))
     assert l2_pct(ttnn.to_torch(out), expected) < L2_PCT_BOUND[variant]
 
 
-def check_windowed(device, variant, cu, *, causal, q_rows=None, q_offset=0, offset_as_tensor=False, chunks=(128, 256)):
+def check_windowed(
+    device, variant, cu, *, causal, q_rows=None, q_offset=0, offset_as_tensor=False, chunks=(128, 256), grid=None
+):
     """Windowed (block-diagonal) SDPA from cu_window_seqlens, optionally on a Q slice at q_offset."""
     s, d = cu[-1], 128
     q, k, v = randn(1, 4, s, d, seed=36), randn(1, 2, s, d, seed=37), randn(1, 2, s, d, seed=38)
@@ -329,7 +331,7 @@ def check_windowed(device, variant, cu, *, causal, q_rows=None, q_offset=0, offs
     out = ttnn.transformer.scaled_dot_product_attention(
         *inputs_for(device, variant, q, k, v),
         is_causal=causal,
-        program_config=program_config(device, *chunks),
+        program_config=program_config(device, *chunks, grid),
         precision=VARIANTS[variant][0],
         **kwargs,
     )
@@ -403,8 +405,8 @@ class ChunkedCase:
         self.page_table = int_tensor(device, table)
         self.sink = randn(1, nh, 1, 1, seed=seed + 3) * 4 if sink else None
 
-    def run(self, start, q_chunk, k_chunk, *, window=None, start_tensor=None):
-        config = program_config(self.device, q_chunk, k_chunk)
+    def run(self, start, q_chunk, k_chunk, *, window=None, start_tensor=None, grid=None):
+        config = program_config(self.device, q_chunk, k_chunk, grid)
         precision = VARIANTS[self.variant][0]
         if self.head_dim_v:
             return ttnn.transformer.chunked_flash_mla_prefill(
@@ -447,10 +449,11 @@ class ChunkedCase:
         assert l2_pct(ttnn.to_torch(out), self.expected(start, window)) < L2_PCT_BOUND[self.variant]
 
 
-def check_chunked(device, variant, start, *, q_chunk=128, k_chunk=256, window=None, as_tensor=False, **case):
+def check_chunked(device, variant, start, *, q_chunk=128, k_chunk=256, window=None, as_tensor=False, grid=None, **case):
     chunked = ChunkedCase(device, variant, **case)
     start_tensor = int_tensor(device, [start]) if as_tensor else None
-    chunked.check(chunked.run(start, q_chunk, k_chunk, window=window, start_tensor=start_tensor), start, window)
+    out = chunked.run(start, q_chunk, k_chunk, window=window, start_tensor=start_tensor, grid=grid)
+    chunked.check(out, start, window)
 
 
 # MLA prefill (flash_mla_prefill): b, nh, s_q, s_k, QK head dim, V head dim, q_chunk, k_chunk.

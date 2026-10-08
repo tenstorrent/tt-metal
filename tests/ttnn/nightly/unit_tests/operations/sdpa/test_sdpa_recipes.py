@@ -280,6 +280,40 @@ def test_windowed_sdpa_recipe(device, variant, case, causal):
     check_windowed(device, variant, causal=causal, **case)
 
 
+# Key ranges on small grids: many snake rounds (alternating deal direction, a partial last round) with K/V passed
+# between the cores of one head (causal, sliding window, chunked prefill, windowed), and more heads than cores (no
+# sharing).
+KEY_RANGE_GRID_CASES = {
+    "causal_5_cores_7_rounds": lambda d, v: check_key_range(
+        d, v, (1, 2, 2, 1024, 64, 64, 128), causal=True, grid=ttnn.CoreCoord(5, 1)
+    ),
+    "causal_gqa_batch2_9_cores": lambda d, v: check_key_range(
+        d, v, (2, 4, 2, 768, 128, 128, 256), causal=True, grid=ttnn.CoreCoord(3, 3)
+    ),
+    "causal_heads_over_cores": lambda d, v: check_key_range(
+        d, v, (1, 4, 4, 512, 64, 128, 128), causal=True, grid=ttnn.CoreCoord(2, 1)
+    ),
+    "window300_8_cores": lambda d, v: check_key_range(
+        d, v, (1, 3, 3, 1000, 128, 128, 256), causal=True, window=300, grid=ttnn.CoreCoord(4, 2)
+    ),
+    "centred_window300_7_cores": lambda d, v: check_key_range(
+        d, v, (1, 2, 2, 1000, 64, 64, 128), causal=False, window=300, grid=ttnn.CoreCoord(7, 1)
+    ),
+    "chunked_start700_6_cores": lambda d, v: check_chunked(
+        d, v, 700, sq=1024, block=2048, nh=2, nkv=1, grid=ttnn.CoreCoord(3, 2)
+    ),
+    "windowed_5_cores": lambda d, v: check_windowed(
+        d, v, [0, 100, 356, 357, 800, 1024], causal=True, chunks=(64, 128), grid=ttnn.CoreCoord(5, 1)
+    ),
+}
+
+
+@pytest.mark.parametrize("case", KEY_RANGE_GRID_CASES.keys())
+@pytest.mark.parametrize("variant", ["standard", "accurate", "fast_bfp8"])
+def test_sdpa_recipe_key_range_small_grid(device, variant, case):
+    KEY_RANGE_GRID_CASES[case](device, variant)
+
+
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_chunked_flash_mla_prefill_recipe(device, variant):
     """chunked_flash_mla_prefill: paged K [blocks, 1, block, 192] shared by four heads, V its first 128 columns."""
