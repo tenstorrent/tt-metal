@@ -1,6 +1,7 @@
 ## Setup 'chippy'
 
 `git clone git@yyz-gitlab.local.tenstorrent.com:syseng-platform/chippy.git`
+`git checkout kstevens/metal_bringup`
 
 Log into one of the soc machines (e.g. `soc-l-#`) or another machine with GGC 13 available.
 
@@ -22,6 +23,10 @@ cmake --build $CHIPPY_DIR/../chippy-build --target grendel
 
 ## Build tt-metal
 
+Use branches:
+- `kstevens/enable_mimir` for tt-metal
+- `kstevens/grendel-emu-additions` for tt-umd (`tt_metal/third_party/umd`)
+
 Need to add additional defines to build. After building the first time, can just run usual `./build_metal.sh` commands unless the CMAKE files are removed (e.g. with a `--clean` or `git clean`).
 
 ```
@@ -35,7 +40,7 @@ cmake -DTT_UMD_BUILD_GRENDEL_JTAG=ON \
 cmake --build build --target install
 ```
 
-*NOTE:* Probably don't need this, but keeping it here in case I'm wrong.
+**_NOTE:_** Probably don't need this, but keeping it here in case I'm wrong.
 `  -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/12 \`
 
 
@@ -55,11 +60,11 @@ source bin/setup_env.sh
 emu run -t 3600 -- -sv tests/test_sival_server.py --disable-dpi
 ```
 
-**NOTE:** Sometimes just re-launching the server doesn't work properly (it exits immediately thinking there is no design) and the setup commands must be re-run before re-launching the server.
+**_NOTE:_** Sometimes just re-launching the server doesn't work properly (it exits immediately thinking there is no design) and the setup commands must be re-run before re-launching the server.
 
-**NOTE:** If you are switching between emulation models, sometimes the previous setup leaves behind paths that cause failures. To be safe, start from a fresh terminal whenever you switch emulation models.
+**_NOTE:_** If you are switching between emulation models, sometimes the previous setup leaves behind paths that cause failures. To be safe, start from a fresh terminal whenever you switch emulation models.
 
-**NOTE:** Both chippy & tt-metal will need to know the server host & port to connect to the emulation server. You will see host listed several times in the output. The default port is `8080` for emulation (and is explicit in the last example below). Note the host & port for future steps.
+**_NOTE:_** Both chippy & tt-metal will need to know the server host & port to connect to the emulation server. You will see host listed several times in the output. The default port is `8080` for emulation (and is explicit in the last example below). Note the host & port for future steps.
 `Running on host soc-zebu-01`
 `Running on emulation host: soc-zebu-01`
 `INFO     server._start_server        SiVal server bound to soc-zebu-01:8080`

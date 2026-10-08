@@ -15,11 +15,14 @@ void kernel_main() {
     constexpr uint32_t num_slots = get_compile_time_arg_val(5);
     constexpr uint32_t slot_stride = get_compile_time_arg_val(6);
     constexpr uint32_t slot_base = get_compile_time_arg_val(7);
+    constexpr uint32_t local_mimir = get_compile_time_arg_val(8);
     constexpr uint32_t staging_uncached_address = staging_l1_address + MEM_L1_UNCACHED_BASE;
 
     for (uint32_t slot = 0; slot < num_slots; slot++) {
         const uint64_t offset = static_cast<uint64_t>(slot_base + slot) * slot_stride;
-        experimental::cce_gddr_read(mimir_index, src_buffer_address + offset, staging_uncached_address, num_words);
-        experimental::cce_gddr_write(mimir_index, dst_buffer_address + offset, staging_uncached_address, num_words);
+        experimental::cce_gddr_read(
+            local_mimir, mimir_index, src_buffer_address + offset, staging_uncached_address, num_words);
+        experimental::cce_gddr_write(
+            local_mimir, mimir_index, dst_buffer_address + offset, staging_uncached_address, num_words);
     }
 }
