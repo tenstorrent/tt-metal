@@ -176,6 +176,37 @@ jobs:
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
       ops-test-categories: ${{ inputs.ops-test-categories || needs.release-precheck.outputs.default-ops-test-categories }}
 
+  # Harbor pull-through cache for the profiler build's base images. The release
+  # build gets this via release-build-test-publish.yaml's own check-harbor; the
+  # profiler build sits outside that workflow, so it needs its own.
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  # ===========================================================================
+  # Profiler (tracy) build -- additive, for new buckets that need it.
+  # ===========================================================================
+  #
+  build-artifact-profiler:
+    # create-tag already depends on release-precheck, so that edge is transitive.
+    needs: [create-tag, check-harbor]
+    if: ${{ !cancelled() && needs.create-tag.result == 'success' }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      platform: "Ubuntu 22.04"
+      tracy: true
+      build-wheel: true
+      fetch-depth: 0
+      skip-tt-train: false
+      enable-lto: false
+      # Mirror the release build so the profiler artifacts differ ONLY in tracy.
+      wheel-ref: ${{ inputs.dry-run && github.sha || format('refs/tags/{0}', needs.create-tag.outputs.version) }}
+      use-system-sfpi: false
+
   publish-to-pypi:
     needs: [build-test-publish, create-tag]
     runs-on: ubuntu-latest
@@ -205,6 +236,32 @@ jobs:
           find artifacts -type f -name '*.whl' -exec cp {} dist/ \;
           find artifacts -type f -name '*.tar.gz' -exec cp {} dist/ \;
           ls -l dist
+
+      - name: Verify no profiler wheel is about to be published
+        run: |
+          set -euo pipefail
+
+          # Matches the wheel-side suffix produced by wheels.yaml / build-artifact.yaml
+          # ("-profiler-"), and stays loose enough to catch a bare "profiler" appearing
+          # anywhere in a filename.
+          OFFENDERS=$(find dist -type f \( -name '*.whl' -o -name '*.tar.gz' \) \
+                        -name '*profiler*' -printf '%f\n' || true)
+          if [ -n "$OFFENDERS" ]; then
+            echo "::error::Refusing to publish: a profiler build reached dist/. PyPI must only ever receive the non-profiler wheel."
+            echo "Offending files:"
+            echo "$OFFENDERS"
+            exit 1
+          fi
+
+          # An empty dist/ would let pypa/gh-action-pypi-publish no-op silently, which
+          # looks identical to a successful release. Catch it here instead.
+          COUNT=$(find dist -type f \( -name '*.whl' -o -name '*.tar.gz' \) | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::dist/ contains no wheel or sdist to publish."
+            exit 1
+          fi
+
+          echo "dist/ verified clean: ${COUNT} non-profiler artifact(s) to publish."
 
       - name: Publish to PyPI (Trusted Publishing)
         if: ${{ !inputs.dry-run }}

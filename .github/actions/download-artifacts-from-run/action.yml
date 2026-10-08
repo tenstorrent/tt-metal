@@ -106,8 +106,23 @@ runs:
           BUILD_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "TTMetal_build_any" | grep -v "_profiler_" | head -1 || true)
         fi
 
-        # Find wheel artifact
-        WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "^ttnn-dist" | head -1 || true)
+        # Find wheel artifact. Must discriminate on tracy exactly like the tarball
+        # above: a release run publishes BOTH a non-profiler wheel (the one shipped to
+        # PyPI) and a profiler wheel, and both match "^ttnn-dist". A bare `head -1`
+        # would hand back whichever the API happened to list first, so a consumer
+        # asking for tracy=false could get the profiler wheel paired with the correct
+        # non-profiler tarball -- a mismatch that only shows up as confusing runtime
+        # behaviour, never as a download error.
+        #
+        # The wheel suffix is "-profiler-" (hyphens), unlike the tarball's "_profiler_"
+        # (underscores); see wheels.yaml and build-artifact.yaml where the names are
+        # built. Matching with the surrounding hyphens keeps this from firing on a ref
+        # that merely contains the word "profiler".
+        if [ "$TRACY_ENABLED" = "true" ]; then
+          WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "^ttnn-dist" | grep -E -- "-profiler-" | head -1 || true)
+        else
+          WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "^ttnn-dist" | grep -v -- "-profiler-" | head -1 || true)
+        fi
 
         # Find packages artifact (optional)
         PACKAGES_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "packages-" | head -1 || true)
