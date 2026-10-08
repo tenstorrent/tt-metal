@@ -41,61 +41,6 @@
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
-// Eager-path reader: reads the previous ring iteration's normalized output and LSE from DRAM.
-// Used by the non-streaming (old sdpa_ring) path for sigmoid-based inter-iteration merging.
-// Pushes output tiles into cb_prev_out and LSE tiles into cb_lse_in.
-//
-// @param cat_out_generator   Address generator for the output DRAM tensor (local or joint)
-// @param stats_writer        TensorAccessor for the stats DRAM tensor
-// @param stats_tile_logical  Tile shape of the stats tensor (for address computation)
-// @param nb                  Batch index
-// @param nq                  Head index
-// @param Sq_chunk_t          Q chunk size in tiles
-// @param out_slice           Row/col tile range in the output tensor for this Q chunk
-// @param end_seq_tile        Last valid sequence tile (for padding-aware reads)
-// @param stats_seq_start_tile  First tile row in the stats tensor for this Q chunk
-// @param stats_seq_end_tile    One-past-last tile row (clamped to avoid reading past padding)
-// @param cb_prev_out         CB to push previous output tiles into (read by compute)
-// @param cb_lse_in           CB to push previous LSE tiles into (read by compute)
-// @param tile_bytes          Output tile size in bytes
-// @param stats_tile_bytes    Stats tile size in bytes
-template <typename CatAddrGeneratorType, typename TensorAccessorType, typename StatsShapeType>
-void read_prev_output_and_lse(
-    Noc noc,
-    const CatAddrGeneratorType& cat_out_generator,
-    const TensorAccessorType& stats_writer,
-    const StatsShapeType& stats_tile_logical,
-    const uint32_t nb,
-    const uint32_t nq,
-    const uint32_t Sq_chunk_t,
-    const Slice& out_slice,
-    const uint32_t end_seq_tile,
-    const uint32_t stats_seq_start_tile,
-    const uint32_t stats_seq_end_tile,
-    const uint32_t cb_prev_out,
-    const uint32_t cb_lse_in,
-    const uint32_t tile_bytes,
-    const uint32_t stats_tile_bytes) {
-    // Read previous output for this Q chunk
-    read_block(cat_out_generator, out_slice, end_seq_tile, cb_prev_out, tile_bytes, false);
-
-    // Read previous LSE for this Q chunk
-    CircularBuffer cb_lse(cb_lse_in);
-    cb_lse.reserve_back(Sq_chunk_t);
-    uint32_t lse_addr = cb_lse.get_write_ptr();
-    for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc.async_read(
-            stats_writer,
-            CoreLocalMem<uint32_t>(lse_addr),
-            stats_tile_bytes,
-            {.page_id = stats_tile_logical.id_of(nb, nq, i, 0)},
-            {});
-        lse_addr += stats_tile_bytes;
-    }
-    noc.async_read_barrier();
-    cb_lse.push_back(Sq_chunk_t);
-}
-
 template <typename TensorAccessorType, typename StatsShapeType>
 static __attribute__((noinline, noclone)) void issue_stats_column_reads(
     Noc noc,
@@ -311,59 +256,6 @@ void save_accumulators_with_trid(
     // cb_out was already popped per-group inside write_block_row_grouped_trid.
     cb_max.pop_front(Sq_chunk_t);
     cb_sum.pop_front(Sq_chunk_t);
-}
-
-// Eager-path writer: writes normalized output and LSE to DRAM every ring iteration.
-// Used by the non-streaming (old sdpa_ring) path.
-// Reads from: cb_out and cb_lse_out.
-//
-// @param cat_out_generator   Address generator for the output DRAM tensor (local or joint)
-// @param stats_writer        TensorAccessor for the stats DRAM tensor
-// @param stats_tile_logical  Tile shape of the stats tensor
-// @param nb                  Batch index
-// @param nq                  Head index
-// @param Sq_chunk_t          Q chunk size in tiles
-// @param out_slice           Row/col tile range in the output tensor for this Q chunk
-// @param end_seq_tile        Last valid sequence tile
-// @param stats_seq_start_tile  First tile row in stats tensor for this Q chunk's LSE
-// @param stats_seq_end_tile    One-past-last tile row (clamped to sequence bounds)
-// @param cb_out              CB to drain output tiles from
-// @param cb_lse_out          CB to drain LSE tiles from
-// @param tile_bytes          Output tile size in bytes
-// @param stats_tile_bytes    Stats tile size in bytes
-template <typename CatAddrGeneratorType, typename TensorAccessorType, typename StatsShapeType>
-void write_output_and_lse(
-    Noc noc,
-    const CatAddrGeneratorType& cat_out_generator,
-    const TensorAccessorType& stats_writer,
-    const StatsShapeType& stats_tile_logical,
-    const uint32_t nb,
-    const uint32_t nq,
-    const uint32_t Sq_chunk_t,
-    const Slice& out_slice,
-    const uint32_t end_seq_tile,
-    const uint32_t stats_seq_start_tile,
-    const uint32_t stats_seq_end_tile,
-    const uint32_t cb_out,
-    const uint32_t cb_lse_out,
-    const uint32_t tile_bytes,
-    const uint32_t stats_tile_bytes) {
-    write_block(noc, cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
-
-    CircularBuffer cb_lse(cb_lse_out);
-    cb_lse.wait_front(Sq_chunk_t);
-    uint32_t lse_addr = cb_lse.get_read_ptr();
-    for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc.async_write(
-            CoreLocalMem<uint32_t>(lse_addr),
-            stats_writer,
-            stats_tile_bytes,
-            {},
-            {.page_id = stats_tile_logical.id_of(nb, nq, i, 0)});
-        lse_addr += stats_tile_bytes;
-    }
-    noc.async_writes_flushed();
-    cb_lse.pop_front(Sq_chunk_t);
 }
 
 // One completion bit per receiving ACTIVE ordinal. A receiver has at most one donor
@@ -590,7 +482,7 @@ void kernel_main() {
     constexpr uint32_t ring_size = get_compile_time_arg_val(18);
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(19);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(20);
-    constexpr bool use_streaming_compute = get_compile_time_arg_val(21) == 1;
+    static_assert(get_compile_time_arg_val(21) == 1, "ring joint SDPA has only its streaming compute path");
     constexpr uint32_t is_causal = get_compile_time_arg_val(22) == 1;
     constexpr uint32_t is_balanced = get_compile_time_arg_val(23) == 1;
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(24) == 1;
@@ -692,7 +584,7 @@ void kernel_main() {
     // the physical (x, y) of its reducer (a sender) or of its senders in band order (the reducer).
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool ksplit_enabled = ksplit_count > 1;
-    static_assert(!ksplit_enabled || (!rotated_q_split_enabled && !has_sliding_window && use_streaming_compute));
+    static_assert(!ksplit_enabled || (!rotated_q_split_enabled && !has_sliding_window));
     static_assert(ksplit_count <= ring_joint::kKSplitMaxCount);
     const bool ksplit_active = ksplit_enabled && global_q_end - global_q_start == 1;
     // Segmented accumulation (see the compute kernel): the output is normalized after the ring loop.
@@ -1007,7 +899,7 @@ void kernel_main() {
                     noc, gen, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);
             }
             noc.async_write_barrier();
-        } else if constexpr (use_streaming_compute) {
+        } else {
             // Deferred norm: accumulates across ring iterations with exponential rescaling.
             // Single Q-chunk: accumulators persist in L1, write final output on last ring_iter.
             // Multi Q-chunk: raw accumulators round-trip through DRAM between ring iterations.
@@ -1340,70 +1232,6 @@ void kernel_main() {
             if (is_last_ring_iter) {
                 noc.async_write_barrier();
             }
-        } else {
-            for (uint32_t q_iter = 0; q_iter + global_q_start < global_q_end; ++q_iter) {
-                const auto decoded_q =
-                    decompose_global_q_index(global_q_start + q_iter, num_q_chunks, NH, use_zigzag_balancing);
-                const uint32_t nb = decoded_q.nb;
-                const uint32_t nq = decoded_q.nq;
-                const uint32_t q_chunk = decoded_q.q_chunk;
-
-                const auto qi = get_q_chunk_info<has_joint_q>(
-                    q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
-                const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_id, Lt, q_local_padded_Nt);
-
-                if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
-                    continue;
-                }
-
-                const auto& gen = [&]() -> const auto& {
-                    if constexpr (has_joint_q) {
-                        if (qi.is_joint_q) {
-                            return joint_out_generator;
-                        }
-                    }
-                    return out_generator;
-                }();
-
-                // If not on the first iteration, read LSE and previous output chunk.
-                // No race condition because writer kernel writes previous output before reading it again
-                if (ring_iter > 0) {
-                    read_prev_output_and_lse(
-                        noc,
-                        gen,
-                        stats_writer,
-                        stats_tile_logical,
-                        nb,
-                        nq,
-                        Sq_chunk_t,
-                        qi.out_slice,
-                        end_seq_tile,
-                        qi.stats_seq_start_tile,
-                        qi.stats_seq_end_tile,
-                        cb_prev_out,
-                        cb_lse_in,
-                        tile_bytes,
-                        stats_tile_bytes);
-                }
-
-                write_output_and_lse(
-                    noc,
-                    gen,
-                    stats_writer,
-                    stats_tile_logical,
-                    nb,
-                    nq,
-                    Sq_chunk_t,
-                    qi.out_slice,
-                    end_seq_tile,
-                    qi.stats_seq_start_tile,
-                    qi.stats_seq_end_tile,
-                    cb_out,
-                    cb_lse_out,
-                    tile_bytes,
-                    stats_tile_bytes);
-            }
-            noc.async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
         }
     }
     // K-split reducers and segmented cores normalize after the ring loop and write their one Q chunk here.

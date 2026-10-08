@@ -767,10 +767,9 @@ void bind_sdpa(nb::module_& mod) {
             kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
                 value must be less than kv_cache_num_layers.
             precision (ttnn.SDPAPrecision, optional): Named numerical recipe (see
-                tech_reports/FlashAttention/SDPAPrecisionRecipes.md). Noncausal only, without cache, window or
-                sink features; logical_n/logical_l may be scalars or device tensors. When omitted, BF16 DEST runs
-                the streaming kernel; FP32 DEST runs ACCURATE on Blackhole when the call has none of the features
-                above (or MLA / chunked prefill), else the legacy kernel.
+                tech_reports/FlashAttention/SDPAPrecisionRecipes.md). Without KV-pad rotation, circular caches,
+                sinks or sliding windows; logical_n/logical_l may be scalars or device tensors. When omitted, BF16
+                DEST runs the streaming kernel and FP32 DEST runs ACCURATE (an error with those features).
                 compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq

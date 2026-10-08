@@ -101,10 +101,10 @@ void drop_unsupported_routed_chunks(
     }
 }
 
-// Why ring_joint_scaled_dot_product_attention cannot run the ring recipe (nullopt: it can). Every feature left here is
-// one the legacy FP32-dest loop rejects too (attention sinks, sliding windows, KV-pad rotation: kv_actual_isl or the
-// metadata tensors on chunked prefill, circular caches), or a V wider than Q, which no caller passes; a routed call
-// with one of them keeps today's behaviour.
+// Why ring_joint_scaled_dot_product_attention with FP32 DEST cannot run the ring recipe (nullopt: it can). The
+// streaming kernel (BF16 DEST) serves these features; with FP32 DEST they are an error, as they were on the deleted
+// legacy FP32 loop (attention sinks, sliding windows, KV-pad rotation: kv_actual_isl or the metadata tensors on chunked
+// prefill, circular caches), except a V wider than Q, which no caller passes.
 std::optional<std::string_view> ring_recipe_gap(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
@@ -713,27 +713,27 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     if (!precision) {
         operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
     }
-    // Only FP32 DEST reaches the legacy loop (sdpa_ring); routed when the ring recipe has the call's features.
-    bool routed = false;
-    if (!precision && routes_fp32_dest(input_tensor_q, compute_kernel_config)) {
-        if (const auto gap = ring_recipe_gap(
-                input_tensor_q,
-                input_tensor_k,
-                input_tensor_v,
-                is_cross,
-                attention_sink,
-                sliding_window_size,
-                circular_kv_cache,
-                kv_actual_isl,
-                slot_id,
-                kv_actual_isl_tensor)) {
-            log_debug(
-                tt::LogOp, "ring_joint SDPA with FP32 dest keeps the legacy loop: the ring recipe lacks {}", *gap);
-        } else {
-            routed = true;
-            precision = SDPAPrecision::ACCURATE;
-            program_config.sub_core_grids = std::nullopt;
-        }
+    // Only FP32 DEST leaves the streaming kernel; it runs the ACCURATE ring recipe.
+    const bool routed = !precision && routes_fp32_dest(input_tensor_q, compute_kernel_config);
+    if (routed) {
+        const auto gap = ring_recipe_gap(
+            input_tensor_q,
+            input_tensor_k,
+            input_tensor_v,
+            is_cross,
+            attention_sink,
+            sliding_window_size,
+            circular_kv_cache,
+            kv_actual_isl,
+            slot_id,
+            kv_actual_isl_tensor);
+        TT_FATAL(
+            !gap,
+            "Ring joint SDPA with fp32_dest_acc_en=True runs the ACCURATE ring recipe, which does not support {}; use "
+            "fp32_dest_acc_en=False",
+            gap.value_or(""));
+        precision = SDPAPrecision::ACCURATE;
+        program_config.sub_core_grids = std::nullopt;
     }
     ttnn::Tensor query = input_tensor_q;
     std::optional<ttnn::Tensor> joint_query = joint_tensor_q;
