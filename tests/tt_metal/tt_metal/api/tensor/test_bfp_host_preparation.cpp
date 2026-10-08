@@ -90,6 +90,7 @@ TEST_P(BfpHostPreparation, PreservePerCoreAllocation) {
 
 TEST_P(BfpHostPreparation, ConcurrentCalls) {
     std::vector<std::future<void>> pending;
+    pending.reserve(4);
     for (size_t i = 0; i < 4; ++i) {
         pending.emplace_back(std::async(std::launch::async, [dtype = GetParam()] {
             CMAKE_UNIQUE_NAMESPACE::check_factory<float>(Shape{1024, 512}, dtype);

@@ -6,6 +6,7 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include "../data_format/bfp_simd.hpp"
+#include "../data_format/bfp_tasks.hpp"
 #include "common/executor.hpp"
 
 #include <algorithm>
@@ -70,16 +71,11 @@ std::optional<HostTensor> try_encode_bfp_matrix(
                 process(0, tile_count);
             } else {
                 const size_t chunks = std::max<size_t>(1, std::min(GetExecutor().num_workers(), tile_count / 128));
-                std::vector<std::shared_future<void>> pending;
-                pending.reserve(chunks);
-                for (size_t chunk = 0; chunk < chunks; ++chunk) {
+                run_bfp_tasks(chunks, [&](size_t chunk) {
                     const size_t begin = tile_count * chunk / chunks;
                     const size_t end = tile_count * (chunk + 1) / chunks;
-                    pending.emplace_back(async([&, begin, end] { process(begin, end); }));
-                }
-                for (auto& future : pending) {
-                    future.get();
-                }
+                    return async([&, begin, end] { process(begin, end); });
+                });
             }
             return HostTensor::from_buffer(HostBuffer(std::move(packed)), spec);
         };
