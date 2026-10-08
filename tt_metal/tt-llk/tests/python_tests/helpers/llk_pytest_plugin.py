@@ -79,8 +79,8 @@ _exalens_server: Optional[ExalensServer] = None
 
 
 # This is a workaround for this issue: https://github.com/tenstorrent/tt-exalens/issues/958
-# In a nutshell, everything except Tensix GPRs is accessible over NoC, thus ignoring that allows us to dump
-# most of the Tensix state, without causing any runtime issues.
+# In a nutshell, everything except Tensix GPRs is accessible over NoC, and ttexalens reads GPRs by halting
+# BRISC. TensixState.fetch reads them from an L1 copy made by the BRISC firmware instead.
 # Quasar is a no-op: ttexalens has no Tensix register description yet
 # (hardware/quasar/device.py raises NotImplementedError).
 def override_gprs_used_by_tensix_dump():

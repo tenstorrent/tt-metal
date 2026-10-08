@@ -8,6 +8,11 @@ from helpers.llk_params import (
     DestAccumulation,
 )
 from helpers.param_config import parametrize
+from helpers.reconfig_formats import (
+    configured_key,
+    kernel_visible_key,
+    kernel_visible_variants,
+)
 from helpers.tensix import TensixState
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import CONFIGURE_TEST_RUN_IDX
@@ -42,8 +47,8 @@ def get_valid_dest_acc(
     )
 
 
-@parametrize(
-    formats=generate_valid_formats(
+_VARIANTS = kernel_visible_variants(
+    generate_valid_formats(
         [
             DataFormat.Float16,
             DataFormat.Float16_b,
@@ -58,7 +63,13 @@ def get_valid_dest_acc(
             DataFormat.UInt8,
         ]
     ),
-    dest_acc=lambda formats: get_valid_dest_acc(formats),
+    get_valid_dest_acc,
+)
+
+
+@parametrize(
+    formats=list(_VARIANTS),
+    dest_acc=lambda formats: _VARIANTS[formats],
 )
 def test_math_reconfig(
     formats,
@@ -79,6 +90,7 @@ def test_math_reconfig(
         ],
         dest_acc=dest_acc,
     )
+    assert configured_key(configuration) == kernel_visible_key(formats, dest_acc)
 
     configuration.run()
     expected = TensixState.fetch(TestConfig.TENSIX_LOCATION)

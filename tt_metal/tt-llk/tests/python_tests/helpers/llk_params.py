@@ -690,6 +690,7 @@ class BriscCmd(Enum):
     START_TRISCS = 1
     RESET_TRISCS = 2
     UPDATE_START_ADDR_CACHE_AND_START = 3
+    DUMP_GPRS = 4
 
 
 format_tile_sizes = {

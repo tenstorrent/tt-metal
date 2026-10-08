@@ -8,6 +8,11 @@ from helpers.llk_params import (
     DestAccumulation,
 )
 from helpers.param_config import parametrize
+from helpers.reconfig_formats import (
+    configured_key,
+    kernel_visible_key,
+    kernel_visible_variants,
+)
 from helpers.tensix import TensixState
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import CONFIGURE_TEST_RUN_IDX
@@ -27,6 +32,9 @@ _INT8_FORMATS = {DataFormat.Int8, DataFormat.UInt8}
 
 # These may vary run to run. Excluded so that tests don't fail spuriously.
 _IGNORED_GROUPS = ("address_counters", "register_window_counters")
+
+# NEXT_SIZE in pack_reconfig_test.cpp; configure_pack stores it in the pack thread's TILE_HEADER GPR.
+_NEXT_TILE_SIZE = 16 * 16 * 4
 
 
 def _exp_section_size_required(dst: DataFormat) -> bool:
@@ -68,8 +76,8 @@ def get_valid_dest_acc(
     )
 
 
-@parametrize(
-    formats=generate_valid_formats(
+_VARIANTS = kernel_visible_variants(
+    generate_valid_formats(
         [
             DataFormat.Float16,
             DataFormat.Float16_b,
@@ -84,7 +92,13 @@ def get_valid_dest_acc(
             DataFormat.UInt8,
         ]
     ),
-    dest_acc=lambda formats: get_valid_dest_acc(formats),
+    get_valid_dest_acc,
+)
+
+
+@parametrize(
+    formats=list(_VARIANTS),
+    dest_acc=lambda formats: _VARIANTS[formats],
 )
 def test_pack_reconfig(
     formats,
@@ -102,9 +116,11 @@ def test_pack_reconfig(
         ],
         dest_acc=dest_acc,
     )
+    assert configured_key(configuration) == kernel_visible_key(formats, dest_acc)
 
     configuration.run()
     expected = TensixState.fetch(TestConfig.TENSIX_LOCATION)
+    assert expected["gpr"][2]["tile_header"] == _NEXT_TILE_SIZE
 
     # Only the runtime parameter changes between runs.
     configuration.runtimes = [CONFIGURE_TEST_RUN_IDX(1)]
