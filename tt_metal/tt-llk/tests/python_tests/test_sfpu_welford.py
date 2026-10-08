@@ -3,7 +3,7 @@
 
 """Functional coverage for the Welford SFPU kernel: the mean and the population variance of T tiles
 against a float64 reference, with and without a reciprocal table, and the no-table reciprocal against
-the host's fp32 division, bit for bit, for every count from 1 to 65536, around 2^20 and below 2^24.
+the host's fp32 division, bit for bit, for every count from 1 to 65536 and in windows up to the top of uint32.
 """
 
 import numpy as np
@@ -112,9 +112,16 @@ _SLAB_COLUMN_START = (0, 1, 16, 17)
 
 
 @parametrize(
-    # 1..65536 exhaustively, then windows across 2^20, 2^24 and 2^31 and the top of the uint32 range.
+    # 1..65536 exhaustively, then windows across 2^20, 2^22 (where Blackhole's two SFPU forms meet), 2^24
+    # and 2^31 and the top of the uint32 range.
     base=list(range(0, 2**16, _RECIP_PER_RUN))
-    + [2**20 - 2048, 2**24 - 2048, 2**31 - 2048, 2**32 - 1 - _RECIP_PER_RUN],
+    + [
+        2**20 - 2048,
+        2**22 - 2048,
+        2**24 - 2048,
+        2**31 - 2048,
+        2**32 - 1 - _RECIP_PER_RUN,
+    ],
 )
 def test_sfpu_welford_reciprocal(base):
     if isinstance(base, tuple):

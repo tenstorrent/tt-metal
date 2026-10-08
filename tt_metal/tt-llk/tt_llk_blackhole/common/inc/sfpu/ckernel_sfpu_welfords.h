@@ -13,9 +13,9 @@
 // The scoreboard spaces the row's three dependent multiply-adds, so the four-instruction row costs no NOP.
 #define WELFORD_SFPU_IN_PLACE_MEAN_ROW
 #define WELFORD_SFPU_INSTR_PER_ROW 4
-#define WELFORD_INTEGER_RECIP
+#define WELFORD_SFPU_EXACT_RECIP
 #include "ckernel_sfpu_welfords_common.h"
-#undef WELFORD_INTEGER_RECIP
+#undef WELFORD_SFPU_EXACT_RECIP
 #undef WELFORD_SFPU_INSTR_PER_ROW
 #undef WELFORD_SFPU_IN_PLACE_MEAN_ROW
 #undef WELFORD_SFPU_ONLINE_HAZARD_NOP
