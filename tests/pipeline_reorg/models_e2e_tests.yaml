@@ -1105,7 +1105,7 @@
     unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
@@ -1685,7 +1685,7 @@
   cmd: |
     unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
     export NO_PROMPT=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/weka/model-cache/scratch/vbench TORCH_HOME=/mnt/weka/model-cache/scratch/vbench/torch_hub
     export TT_MESH_ID=0
@@ -1713,7 +1713,7 @@
   cmd: |
     unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
     export NO_PROMPT=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/weka/model-cache/scratch/vbench TORCH_HOME=/mnt/weka/model-cache/scratch/vbench/torch_hub
     export TT_MESH_ID=0
@@ -1746,7 +1746,7 @@
   cmd: |
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-cache/scratch/vbench TORCH_HOME=/mnt/weka/model-cache/scratch/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
@@ -1769,7 +1769,7 @@
   cmd: |
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-cache/scratch/vbench TORCH_HOME=/mnt/weka/model-cache/scratch/vbench/torch_hub
     # Keep five seeds and every frame. Appearance metrics use the original clips;
     # temporal metrics use lossless 960x544 copies, scored concurrently after pytest.
@@ -1804,7 +1804,7 @@
   cmd: |
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-cache/scratch/vbench TORCH_HOME=/mnt/weka/model-cache/scratch/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
@@ -1828,7 +1828,7 @@
   cmd: |
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-cache/scratch/vbench TORCH_HOME=/mnt/weka/model-cache/scratch/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
@@ -1929,7 +1929,7 @@
         --weights real \
         --cache-path /mnt/weka/model-cache/scratch/deepseek-ai/cache-2026-03-22 \
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
-        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
+        --model-path /mnt/weka/model-weights/llm/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
       > "${PIPELINE_DIR}/launch.log" 2>&1
   model: deepseek-v3-b1
   model_family: DeepSeek
@@ -1966,7 +1966,7 @@
 #         --weights real \
 #         --cache-path /mnt/weka/model-cache/scratch/deepseek-ai/cache-2026-03-22 \
 #         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
-#         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
+#         --model-path /mnt/weka/model-weights/llm/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
 #       > "${PIPELINE_DIR}/launch.log" 2>&1
 #   model: deepseek-v3-b1
 #   model_family: DeepSeek
@@ -1998,7 +1998,7 @@
 #       python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
 #         --weights real \
 #         --cache-path /mnt/weka/model-cache/scratch/deepseek-ai/cache-2026-03-22 \
-#         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
+#         --model-path /mnt/weka/model-weights/llm/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
 #         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
 #         --reference-file /mnt/models/ref_data/output1_reference.txt \
 #         --output-file "${PIPELINE_DIR}/teacher_forcing_output.json" \
@@ -2109,7 +2109,7 @@
 
 - name: Galaxy TinyLlama 1.1B DDP=32 train e2e tests
   cmd: |
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
     SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
     rc=0
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
@@ -2133,7 +2133,7 @@
 # Hanging on bh_sc1, disable until issue is resolved. Maybe related to: https://github.com/tenstorrent/tt-metal/issues/49557
 # - name: Galaxy Llama 8B TP=8 DDP=4 train e2e tests
 #   cmd: |
-#     export HF_HOME=/mnt/models/huggingface
+#     export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
 #     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc '
 #       ./tt-train/scripts/setup_pth.sh
 #       python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp8_ddp4_shakespeare"
@@ -2149,7 +2149,7 @@
 
 - name: Galaxy Qwen 3 1.7B DDP=32 train e2e tests
   cmd: |
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
     SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
     rc=0
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
@@ -2196,7 +2196,7 @@
 # - name: Galaxy Llama 70B TP=8 FSDP=4 train e2e tests
 #   cmd: |
 #     export HF_HUB_OFFLINE=1
-#     export HF_HOME=/mnt/models/huggingface
+#     export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
 #     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc '
 #       ./tt-train/scripts/setup_pth.sh
 #       python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_70b_tp8_fsdp4_shakespeare"
@@ -2213,7 +2213,7 @@
 # Hanging on g13blx01, disable until issue is resolved: https://github.com/tenstorrent/tt-metal/issues/49557
 # - name: Galaxy Llama 8B TP=4 DDP=8 train e2e tests
 #   cmd: |
-#     export HF_HOME=/mnt/models/huggingface
+#     export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
 #     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc '
 #       ./tt-train/scripts/setup_pth.sh
 #       python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp4_ddp8_shakespeare"
