@@ -22,7 +22,7 @@ namespace sfpu {
  * Any rounding is the output operand's store policy. Advances explicit indices only; the caller
  * owns setup and synchronization. Each input range must coincide with the output or be disjoint.
  */
-template <int ITERATIONS, class Input0, class Input1, class Output>
+template <int ITERATIONS, typename Input0, typename Input1, typename Output>
 sfpi_inline void calculate_add_operands(const Input0& input0, const Input1& input1, const Output& output) {
     static_assert(ITERATIONS > 0, "ADD requires at least one SFPI access");
     static_assert(

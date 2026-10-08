@@ -21,7 +21,7 @@ namespace sfpu {
  * Advances explicit indices only; the caller owns setup and synchronization. Input/output
  * ranges must coincide or be disjoint.
  */
-template <int ITERATIONS, class Input, class Output>
+template <int ITERATIONS, typename Input, typename Output>
 sfpi_inline void calculate_square_operands(const Input& input, const Output& output) {
     static_assert(ITERATIONS > 0, "Square requires at least one SFPI access");
     static_assert(

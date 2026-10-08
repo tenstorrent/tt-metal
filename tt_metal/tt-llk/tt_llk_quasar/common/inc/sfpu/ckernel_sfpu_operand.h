@@ -70,15 +70,13 @@ struct SfpiFormat
  * cursor (unless FORMAT's store mode does) and never completes SrcS slices; the caller owns
  * traversal and synchronization.
  */
-template <SfpuReg REG, class FORMAT>
+template <SfpuReg REG, typename FORMAT>
 class SfpuOperand
 {
     static_assert(REG == SfpuReg::Dest || REG == SfpuReg::SrcS, "Unsupported SFPU register space");
 
 public:
-    using format_type            = FORMAT;
-    using value_type             = typename FORMAT::value_type;
-    static constexpr SfpuReg reg = REG;
+    using value_type = typename FORMAT::value_type;
 
     sfpi_inline constexpr explicit SfpuOperand(int base_offset = 0) : base_offset_(base_offset)
     {

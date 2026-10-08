@@ -42,7 +42,7 @@ struct SrcsLayout {
  * Pass the register format (unpack_S_dst / pack_S_src), not the L1 format; MX inputs use their
  * unpacked register format.
  */
-template <class Op>
+template <typename Op>
 sfpi_inline void dispatch_sfpu_srcs_format(const DataFormat format, Op&& op) {
     switch (format) {
         case DataFormat::Float32: op(SrcsLayout<sfpi::DataLayout::F32>{}); break;

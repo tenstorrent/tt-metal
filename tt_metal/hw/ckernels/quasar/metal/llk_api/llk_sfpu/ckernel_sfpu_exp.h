@@ -306,7 +306,7 @@ using ExpAlgo = std::conditional_t<(!FP32_RESULT || APPROXIMATION_MODE), ExpHwLu
  *
  * @tparam Algo: @ref ExpHwLut or @ref ExpFp32Accurate (see @ref ExpAlgo).
  */
-template <class Algo, int ITERATIONS, class Input, class Output>
+template <typename Algo, int ITERATIONS, typename Input, typename Output>
 sfpi_inline void calculate_exponential_operands(const Input& input, const Output& output) {
     static_assert(ITERATIONS > 0, "EXP requires at least one SFPI access");
     static_assert(

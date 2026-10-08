@@ -132,6 +132,8 @@ class MathOperation(Enum):
     Cosh = OpSpec("cosh", MathOpType.SFPU_UNARY)
     # round-half-to-even to integer (decimals = 0).
     Round = OpSpec("round", MathOpType.SFPU_UNARY)
+    # Uniform [from, from + scale] generator from the per-lane PRNG; ignores its input.
+    Rand = OpSpec("rand", MathOpType.SFPU_UNARY)
     # Comparison-to-zero unary SFPU ops. cpp_enum_value must exactly match the
     # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
     EqualZero = OpSpec("equal_zero", MathOpType.SFPU_UNARY)
