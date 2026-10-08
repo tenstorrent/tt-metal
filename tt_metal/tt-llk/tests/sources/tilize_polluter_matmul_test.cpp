@@ -218,6 +218,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     run                                   = 1;
     constexpr std::uint32_t mm_num_faces  = 4;
     const std::uint32_t mm_pack_tile_size = FACE_R_DIM * TILE_C_DIM * mm_num_faces;
+    // hw_configure writes the packer config by MMIO, which does not wait for the run-0 pack still in
+    // flight. Changing the packer input width under it (32-bit DEST with mixed 16/32-bit formats) hangs.
+    tensix_sync();
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
         formats_array[run].pack_src, formats_array[run].pack_dst, mm_pack_tile_size, FACE_R_DIM, TILE_C_DIM, mm_num_faces);
     _llk_pack_init_wrapper_<ckernel::PackMode::Default, false /* zero_output */>(formats_array[run].pack_dst, FACE_R_DIM, TILE_C_DIM, mm_num_faces);
