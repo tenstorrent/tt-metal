@@ -73,7 +73,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     // Sliding window over absolute positions (the kernels offset the window by chunk_start_idx)
     // and a per-head learned attention sink, both as in scaled_dot_product_attention.
     std::optional<uint32_t> sliding_window_size = std::nullopt,
-    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt);
+    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
+    // Named numerical recipe (as scaled_dot_product_attention); omit for the legacy kernel.
+    std::optional<SDPAPrecision> precision = std::nullopt);
 
 /// Flexible: chunk start index in device tensor [1] (int32). Read at runtime; use for trace.
 ttnn::Tensor chunked_scaled_dot_product_attention(
@@ -88,7 +90,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     std::optional<operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
     std::optional<uint32_t> sliding_window_size = std::nullopt,
-    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt);
+    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
+    std::optional<SDPAPrecision> precision = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
