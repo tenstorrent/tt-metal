@@ -56,3 +56,16 @@ reads arm: skipped on blx01 (2 drops); follow-up on another box.
 ## 2026-10-08 11:19 UTC: job B submitted
 blx01 broker job 020 (math + bf8), -t 540, log /var/log/tt-device-broker/2026-10-08_111857_020.log.
 On wake: `ssh g15blx01 tt-device-mcp status -j 020`; then score bf8 per 'Next step (exact)' and compare.
+
+## 2026-10-08 result: job 020 (math + bf8) completed, exit 0, 292 s
+- math ablation (DIFFVAE_NA_ABLATE=math, reader only, compute drained): stage-5 NA 103.0 ms/block vs 120.8 default.
+  Decode 2.959 s (output garbage by design). So reads are ~85% of NA time; compute adds only ~18 ms/block.
+- bf8 (DIFFVAE_NA_BF8=1 on the ring default): NA 120.8 ms/block (= default), decode 3.166 s vs 3.113-3.115 default.
+  md5 08fecde9a85471ad78fbd1d671be0629 (differs from def 13802b01..., A/B valid).
+  Quality BROKEN on the ring path: PCC 0.253 / 0.271, PSNR 12.3 / 11.5 dB (seeds 0,1, cmp_bf8.json). Host noise 12.5/11.5 s.
+- Conclusion: halving K/V bytes gives zero NA gain, so the reader is not DRAM-bandwidth-bound but bound by per-tile
+  NOC issue / index math / latency. Ring widening, K-only ring and BF8 cannot reach the <=60 ms target. BF8 rejected
+  (no gain, and broken with the ring: likely a ring-size/tile-size mismatch; not debugged, no point without gain).
+- reads ablation (compute floor) never ran: config A dropped twice on blx01 (949, 003).
+- Next lever: reader issue cost (one NOC read per ring entry/brick instead of per tile, cheaper index math,
+  more outstanding reads). Nothing landed on t48.
