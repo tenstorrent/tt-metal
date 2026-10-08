@@ -135,13 +135,29 @@ inline void calculate_sfpu_binary(
         } else if constexpr (BINOP == BinaryOp::POW) {
             result = calculate_sfpu_binary_power(in0, in1);
         } else if constexpr (BINOP == BinaryOp::XLOGY) {
-            v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
-            v_else {
-                sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in1;
-                _calculate_log_body_(log_c, log_d, dst_index_out);
-                result = sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * in0;
+            if constexpr (is_fp32_dest_acc_en) {
+                v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
+                v_else {
+                    sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in1;
+                    _calculate_log_body_(log_c, log_d, dst_index_out);
+                    result = sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * in0;
+                }
+                v_endif;
+            } else {
+                // A 16-bit Dest truncates every SFPSTORE, so the in-place log body above would
+                // narrow ln(in1) toward zero before the multiply and the 16-bit store would
+                // narrow the product again. Keep the log in an LREG and round the product
+                // to nearest even once, as MUL and DIV do. Flat predication: the zero and NaN
+                // fixups are separate v_ifs rather than nested in a v_else.
+                sfpi::vFloat log_in1 = _calculate_log_series_(in1, log_c, log_d);
+                // Same bitwise ln(0) = -inf test as _calculate_log_body_.
+                v_if(in1 == 0.0f) { log_in1 = -std::numeric_limits<float>::infinity(); }
+                v_endif;
+                result = log_in1 * in0;
+                v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
+                v_endif;
+                result = float32_to_bf16_rne(result);
             }
-            v_endif;
         } else if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
             // Step in0 one representable value toward in1. Consecutive floats of one sign are
             // consecutive integers when the bit pattern is read as an integer, so the step is taken
