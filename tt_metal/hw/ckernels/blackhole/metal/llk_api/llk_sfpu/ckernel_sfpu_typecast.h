@@ -953,12 +953,13 @@ inline void calculate_typecast_fp32_to_uint8() {
             0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_SET_CC_SGN_EXP | sfpi::SFPEXEXP_MOD1_SET_CC_COMP_EXP);
         // exponent -= 31; LaneEnabled &= exponent < 31. SFPSHFT shifts by (amount & 31), so an
         // unbounded exponent - 23 wraps for exponents 55..62, 87..94 and 119..126 and leaves
-        // mantissa bits in the low byte. Every |in| >= 2^31 (inf/NaN too) is a multiple of 256,
-        // so those lanes keep the result of 0.
+        // mantissa bits in the low byte. Every finite |in| >= 2^31 is a multiple of 256, so its
+        // uint8 wrap is 0; inf/NaN (exponent 128) are masked off the same way and also give 0.
+        // Masked lanes keep the result of 0.
         TTI_SFPIADD(-31 & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
         // mantissa = exman(in, sfpi::MantissaMode::ImplicitOne)
         TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        // shift_amount = exponent - 23
+        // exponent += 8 (shift_amount = original exponent - 23)
         TTI_SFPIADD(8, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
         // result = floor(|in|)
         TTI_SFPSHFT(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);

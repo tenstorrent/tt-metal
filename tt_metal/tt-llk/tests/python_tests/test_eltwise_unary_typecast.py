@@ -13,8 +13,8 @@ and the ``int32<->uint32`` pair (not a kernel pair) are excluded.
 import math
 import struct
 
-import pytest
 import torch
+from conftest import blackhole_only
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
@@ -231,6 +231,20 @@ def test_eltwise_unary_typecast_uint32_to_fp32_rounding(
     )
 
 
+_FP32_EXP_BIAS = 127
+_FP32_MANTISSA_BITS = 23
+_FP32_SIGN_BIT = 1 << 31
+
+
+def _fp32_bits(unbiased_exp: int, mantissa: int) -> int:
+    """Positive fp32 bit pattern for 1.mantissa * 2^unbiased_exp."""
+    return ((unbiased_exp + _FP32_EXP_BIAS) << _FP32_MANTISSA_BITS) | mantissa
+
+
+def _fp32_unbiased_exp(bits: int) -> int:
+    return ((bits >> _FP32_MANTISSA_BITS) & 0xFF) - _FP32_EXP_BIAS
+
+
 def _fp32_to_uint8_wrap(bits: int) -> int:
     """Exact uint8 wrap of an fp32 bit pattern: trunc toward zero, low byte.
 
@@ -246,44 +260,35 @@ def _fp32_to_uint8_wrap(bits: int) -> int:
 def _fp32_to_uint8_wide_exponent_bits() -> list[int]:
     """fp32 bit patterns covering every binade at or above 2^24 with nonzero low
     mantissa bits, both signs, plus the issue's two named inputs and small values."""
-    named = [
-        0x5B000001,  # 2^55 + 2^32 (shift amount 32 wraps to 0 -> low byte 1)
-        0x5D800001,  # 2^60 + 2^37
+    patterns = [
+        _fp32_bits(
+            55, 0x000001
+        ),  # 2^55 + 2^32 (shift amount 32 wraps to 0 -> low byte 1)
+        _fp32_bits(60, 0x000001),  # 2^60 + 2^37
     ]
     mantissas = (0x000001, 0x0000FF, 0x00007F, 0x123457, 0x5A5A5B, 0x7FFFFF)
-    patterns = list(named)
     for unbiased_exp in range(24, 128):
         for mantissa in mantissas:
-            patterns.append(((unbiased_exp + 127) << 23) | mantissa)
+            patterns.append(_fp32_bits(unbiased_exp, mantissa))
     patterns += [0x7F800000, 0x7FC00000]  # +inf, NaN
     # Small whole and fractional values keep the in-range path pinned too.
     for unbiased_exp in range(-2, 24):
         for mantissa in (0x000000, 0x400001, 0x7FFFFF):
-            patterns.append(((unbiased_exp + 127) << 23) | mantissa)
-    patterns += [p | 0x80000000 for p in patterns]
+            patterns.append(_fp32_bits(unbiased_exp, mantissa))
+    patterns += [p | _FP32_SIGN_BIT for p in patterns]
     return patterns
 
 
-@pytest.mark.skipif(
-    get_chip_architecture() != ChipArchitecture.BLACKHOLE,
-    reason="Wormhole calculate_typecast_fp32_to_uint8 still shifts by (exp - 23) & 31 "
-    "(tenstorrent/tt-llk#1701 item 15); only the Blackhole kernel is fixed",
-)
-@parametrize(
-    formats=[InputOutputFormat(DataFormat.Float32, DataFormat.UInt8)],
-    dest_acc=[DestAccumulation.Yes],
-    approx_mode=[ApproximationMode.No],
-    input_dimensions=[[32, 64]],
-)
-def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent(
-    formats: InputOutputFormat,
-    dest_acc: DestAccumulation,
-    approx_mode: ApproximationMode,
-    input_dimensions: list[int],
-):
+# Blackhole only: the Wormhole calculate_typecast_fp32_to_uint8 still shifts by
+# (exp - 23) & 31 (https://github.com/tenstorrent/tt-llk/issues/1701 item 15).
+@blackhole_only
+def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
     # SFPSHFT uses (amount & 31); without a bound on the large side, exponents
     # 55..62, 87..94 and 119..126 shift the mantissa back into the low byte.
-    # Every |x| >= 2^31 is a multiple of 256, so the wrapped result must be 0.
+    # Every finite |x| >= 2^31 is a multiple of 256, so the wrapped result must be 0.
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.UInt8)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 64]
     patterns = _fp32_to_uint8_wide_exponent_bits()
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -306,80 +311,40 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent(
     ]
     golden = [_fp32_to_uint8_wrap(b) for b in src_bits]
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+    configuration = _build_typecast_config(
+        formats,
         dest_acc,
-        formats,
+        ApproximationMode.No,
         input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-    configuration = TestConfig(
-        "sources/eltwise_unary_typecast_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(approx_mode),
-            MATH_OP(mathop=MathOperation.Typecast),
-            TYPECAST_FORMATS(formats.input_format, formats.output_format),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=True,
+        src_A,
+        tile_cnt_A,
+        src_B,
+        tile_cnt_B,
     )
     result = [int(v) & 0xFF for v in configuration.run().result]
-    assert len(result) == len(golden)
+    assert len(result) == len(
+        golden
+    ), f"expected {len(golden)} result elements, got {len(result)}"
 
-    mismatches = [(hex(b), g, r) for b, g, r in zip(src_bits, golden, result) if g != r]
-    failing_exponents = sorted(
-        {((int(b, 16) >> 23) & 0xFF) - 127 for b, _, _ in mismatches}
-    )
+    mismatches = [(b, g, r) for b, g, r in zip(src_bits, golden, result) if g != r]
+    failing_exponents = sorted({_fp32_unbiased_exp(b) for b, _, _ in mismatches})
     assert not mismatches, (
         f"{len(mismatches)} fp32->uint8 mismatches at unbiased exponents "
-        f"{failing_exponents}; first (input bits, expected, got): {mismatches[:16]}"
+        f"{failing_exponents}; first (input bits, expected, got): "
+        f"{[(hex(b), g, r) for b, g, r in mismatches[:16]]}"
     )
 
 
-def _run_typecast(
+def _build_typecast_config(
     formats: InputOutputFormat,
     dest_acc: DestAccumulation,
     approx_mode: ApproximationMode,
     input_dimensions: list[int],
-    spec_A: StimuliSpec,
-    *,
-    max_ulp: int | None = None,
-):
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        spec_A=spec_A,
-        spec_B=spec_A,
-    )
-
-    generate_golden = get_golden_generator(TypecastGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        formats.input_format,
-        formats.output_format,
-        input_dimensions,
-    )
-
+    src_A: torch.Tensor,
+    tile_cnt_A: int,
+    src_B: torch.Tensor,
+    tile_cnt_B: int,
+) -> TestConfig:
     # Unpack straight into Dest when either:
     #  * the input is 32-bit -- the unpacker has no SrcA/SrcB path for
     #    Int32/UInt32/Float32, so is_unpacker_format_conversion_supported_dest
@@ -453,6 +418,46 @@ def _run_typecast(
         )
         for fmt_config in configuration.formats_config:
             fmt_config.pack_src = pack_src
+
+    return configuration
+
+
+def _run_typecast(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    approx_mode: ApproximationMode,
+    input_dimensions: list[int],
+    spec_A: StimuliSpec,
+    *,
+    max_ulp: int | None = None,
+):
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=spec_A,
+        spec_B=spec_A,
+    )
+
+    generate_golden = get_golden_generator(TypecastGolden)
+    golden_tensor = generate_golden(
+        src_A,
+        formats.input_format,
+        formats.output_format,
+        input_dimensions,
+    )
+
+    configuration = _build_typecast_config(
+        formats,
+        dest_acc,
+        approx_mode,
+        input_dimensions,
+        src_A,
+        tile_cnt_A,
+        src_B,
+        tile_cnt_B,
+    )
 
     res_from_L1 = configuration.run().result
 
