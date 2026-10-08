@@ -316,12 +316,17 @@ def create_program_descriptor(x_in, output, *, variant, chunk_rows):
         )
 
     # mcast: injector = cores[0] = (0,0), a corner of the 2xC rect; the mcast_pipe SenderPipe broadcasts
-    # to the rect and self-excludes (fan-out = the other 21). ttnn.Mcast2D emits the semaphores + the
-    # McastArgs wire (compile-time block + per-core runtime args) the kernels decode.
+    # to the rect and self-excludes (fan-out = the other 21). ttnn.Mcast (one group = the whole rect)
+    # emits the semaphores + the McastArgs wire (compile-time block + per-core runtime args) the kernels
+    # decode.
     injector = cores[0]
     receivers = cores[1:]
-    mc = ttnn.Mcast2D(
-        device, all_crs, ttnn.Mcast2DFixedSenderConfig(ttnn.CoreCoord(*injector)), ttnn.McastConfig(handshake=True)
+    mc = ttnn.Mcast(
+        device,
+        ttnn.McastConfig(handshake=True),
+        all_crs,
+        all_crs.num_cores(),
+        ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(*injector)]),
     )
 
     sender_ct = [CB_IN, chunk_tiles, tile_bytes, num_chunks, *x_ct]
@@ -349,7 +354,7 @@ def create_program_descriptor(x_in, output, *, variant, chunk_rows):
         config=ttnn.ReaderConfigDescriptor(),
     )
     descriptor = ttnn.ProgramDescriptor(cbs=[cb_in, cb_zero, cb_out])
-    mc.attach(descriptor, "mcast", [sender_kernel, receiver_kernel])
+    mc.attach(descriptor, "mcast", [sender_kernel, receiver_kernel], 0)
     descriptor.kernels = [sender_kernel, receiver_kernel, compute_kernel, writer_kernel]
     return descriptor
 
