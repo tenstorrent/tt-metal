@@ -6,45 +6,37 @@
 #include <array>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     Noc noc;
 
     // WRITER RUNTIME ARGS
-    uint32_t q_tensor_addr = get_arg_val<uint32_t>(0);
-    uint32_t k_tensor_addr = get_arg_val<uint32_t>(1);
-    uint32_t v_tensor_addr = get_arg_val<uint32_t>(2);
-    uint32_t out_tensor_tile_id = get_arg_val<uint32_t>(3);
-    uint32_t out_tensor_tile_id_with_transpose = get_arg_val<uint32_t>(4);
+    uint32_t out_tensor_tile_id = get_arg(args::out_tensor_tile_id);
+    uint32_t out_tensor_tile_id_with_transpose = get_arg(args::out_tensor_tile_id_with_transpose);
 
     // COMPILE TIME ARGS
     // WRITER COMPILE TIME ARGS
-    constexpr bool block_size_is_one = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t block_size = get_compile_time_arg_val(1);
-    constexpr uint32_t out_num_blocks_per_tensor = get_compile_time_arg_val(2);
-    constexpr uint32_t out_num_c_per_block = get_compile_time_arg_val(3);
-    constexpr uint32_t out_w_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t out_h_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t out_HtWt = get_compile_time_arg_val(6);
-    constexpr auto q_args = TensorAccessorArgs<7>();
-    constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
-    constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    constexpr bool block_size_is_one = get_arg(args::block_size_is_one) == 1;
+    constexpr uint32_t block_size = get_arg(args::block_size);
+    constexpr uint32_t out_num_blocks_per_tensor = get_arg(args::out_num_blocks_per_tensor);
+    constexpr uint32_t out_num_c_per_block = get_arg(args::out_num_c_per_block);
+    constexpr uint32_t out_w_tiles = get_arg(args::out_w_tiles);
+    constexpr uint32_t out_h_tiles = get_arg(args::out_h_tiles);
+    constexpr uint32_t out_HtWt = get_arg(args::out_HtWt);
 
-    constexpr uint32_t cb_id_out0 = 16;
-    constexpr uint32_t cb_id_out1 = 1;  // same as cb_id_in1
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
-    const auto sq = TensorAccessor(q_args, q_tensor_addr);
-    const auto sk = TensorAccessor(k_args, k_tensor_addr);
-    const auto sv = TensorAccessor(v_args, v_tensor_addr);
+    DataflowBuffer dfb_out0(dfb::k);   // K heads, after the compute transpose
+    DataflowBuffer dfb_out1(dfb::qv);  // same buffer the reader fills with Q and V heads
+    const uint32_t single_tile_size_bytes = dfb_out0.get_tile_size();
+    const auto sq = TensorAccessor(tensor::q);
+    const auto sk = TensorAccessor(tensor::k);
+    const auto sv = TensorAccessor(tensor::v);
 
-    CircularBuffer cb_out0(cb_id_out0);
-    CircularBuffer cb_out1(cb_id_out1);
-
-    uint32_t l1_read_addr_out0 = cb_out0.get_read_ptr();
-    uint32_t l1_read_addr_out1 = cb_out1.get_read_ptr();
+    uint32_t l1_read_addr_out0 = dfb_out0.get_read_ptr();
+    uint32_t l1_read_addr_out1 = dfb_out1.get_read_ptr();
     uint32_t out_num_tiles_read_out0 = block_size;
     uint32_t out_num_tiles_read_out1 = block_size;
     uint32_t out_tensor_current_tile_id_along_c;
@@ -54,7 +46,7 @@ void kernel_main() {
     out_tensor_current_tile_id_along_c = out_tensor_tile_id;
     for (uint32_t block_idx = 0; block_idx < out_num_blocks_per_tensor; block_idx++) {
         if constexpr (!block_size_is_one) {
-            cb_out1.wait_front(out_num_tiles_read_out1);
+            dfb_out1.wait_front(out_num_tiles_read_out1);
             out_num_tiles_read_out1 += block_size;
         }
 
@@ -62,7 +54,7 @@ void kernel_main() {
             out_tensor_current_tile_id = out_tensor_current_tile_id_along_c;
             for (uint32_t w_dim = 0; w_dim < out_w_tiles; w_dim++) {
                 if constexpr (block_size_is_one) {
-                    cb_out1.wait_front(out_num_tiles_read_out1);
+                    dfb_out1.wait_front(out_num_tiles_read_out1);
                     out_num_tiles_read_out1++;
                 }
 
@@ -83,14 +75,14 @@ void kernel_main() {
     out_tensor_current_tile_id = out_tensor_tile_id_with_transpose;
     for (uint32_t block_idx = 0; block_idx < out_num_blocks_per_tensor; block_idx++) {
         if constexpr (!block_size_is_one) {
-            cb_out0.wait_front(out_num_tiles_read_out0);
+            dfb_out0.wait_front(out_num_tiles_read_out0);
             out_num_tiles_read_out0 += block_size;
         }
 
         for (uint32_t c_dim_idx = 0; c_dim_idx < out_num_c_per_block; c_dim_idx++) {
             for (uint32_t w_dim = 0; w_dim < out_w_tiles; w_dim++) {
                 if constexpr (block_size_is_one) {
-                    cb_out0.wait_front(out_num_tiles_read_out0);
+                    dfb_out0.wait_front(out_num_tiles_read_out0);
                     out_num_tiles_read_out0++;
                 }
 
@@ -110,7 +102,7 @@ void kernel_main() {
     out_tensor_current_tile_id_along_c = out_tensor_tile_id;
     for (uint32_t block_idx = 0; block_idx < out_num_blocks_per_tensor; block_idx++) {
         if constexpr (!block_size_is_one) {
-            cb_out1.wait_front(out_num_tiles_read_out1);
+            dfb_out1.wait_front(out_num_tiles_read_out1);
             out_num_tiles_read_out1 += block_size;
         }
 
@@ -118,7 +110,7 @@ void kernel_main() {
             out_tensor_current_tile_id = out_tensor_current_tile_id_along_c;
             for (uint32_t w_dim = 0; w_dim < out_w_tiles; w_dim++) {
                 if constexpr (block_size_is_one) {
-                    cb_out1.wait_front(out_num_tiles_read_out1);
+                    dfb_out1.wait_front(out_num_tiles_read_out1);
                     out_num_tiles_read_out1++;
                 }
 
@@ -136,6 +128,6 @@ void kernel_main() {
     }
 
     noc.async_write_barrier();
-    cb_out0.pop_front(out_num_tiles_read_out0);
-    cb_out1.pop_front(out_num_tiles_read_out1);
+    dfb_out0.pop_front(out_num_tiles_read_out0);
+    dfb_out1.pop_front(out_num_tiles_read_out1);
 }
