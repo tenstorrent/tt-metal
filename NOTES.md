@@ -13,3 +13,17 @@ Simpler than the full edge-slab design (NP volume unchanged); est. ~3.6 of 8.8 b
   Out /var/tmp/fasth3/t276/out_A (run.log, stage_tree_*.txt, dr/ref_dvx_seed*.yuv).
 - Score: F=/var/tmp/fasth3; $F/t48/python_env/bin/python $F/t276/drv/cmp241.py $F/diffvae/ref $F/t276/out_A/dr $F/t276/out_A/cmp_dr.json 0,1,2,3,4
 - Next: check md5 dr == def per seed, decode means, stage-5 halo+brick ms/block; if gain >= 5% of decode, flip default, land.
+
+## Job 044 result: INVALID A/B (dr path never ran)
+- def 2.311-2.317 s, dr 2.310-2.313 s, md5 identical per seed, stage-5 tree identical (k/v untilize +
+  key-phase rebrick present, no tiles-to-sticks scope). Halo+brick 42 ms/block in both.
+- Cause: stage 5 packs 4 heads per lane, channels=256 (16 KB stick, _halo_split=4); guard needed
+  channels==64 and parts==1.
+- Fix: code commit 2c8539570d7 (kernel takes CHANNELS and PARTS as compile args; mode 0 writes the
+  exchange's split shape directly; mode 1 page = s / (32/PARTS); layout guard per K/V tensor).
+
+## Job 045 (blx01, 2026-10-08 12:25 UTC, -t 340): rerun A/B with 2c8539570d7
+- Overlay $T/src now = git archive models/ @2c8539570d7 (REV file). Out /var/tmp/fasth3/t276/out_B.
+- Next: confirm dr tree has "tiles-to-sticks"; md5 dr == def per seed; decode means; ms/block;
+  score: $F/t48/python_env/bin/python $F/t276/drv/cmp241.py $F/diffvae/ref $F/t276/out_B/dr $F/t276/out_B/cmp_dr.json 0,1,2,3,4
+- Bar: gain >= 0.116 s (5% of 2.31 s) -> flip default + land on t48; else notes branch.
