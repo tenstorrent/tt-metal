@@ -113,7 +113,7 @@ void matmul_relu_pass(uint32_t head_in_group, uint32_t q_row, uint32_t k_col) {
     emit_qk_matmul_block<q_cb, k_cb>(head_in_group, q_row, k_col);
     qk.reserve_back(heads_per_dest_pass);
     tile_regs_wait();
-    pack_block(0, qk_cb, heads_per_dest_pass);
+    pack_block_mop(0, qk_cb, heads_per_dest_pass);
     tile_regs_release();
     qk.push_back(heads_per_dest_pass);
 }
@@ -290,9 +290,13 @@ inline void mul_phase(uint32_t r, uint32_t slot_base, uint32_t col_base, uint32_
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, cb_acc_strip, n_cols);
+#else
         for (uint32_t out_col = 0; out_col < n_cols; ++out_col) {
             pack_tile(out_col, cb_acc_strip, slot_base + col_base + sub_base + out_col);
         }
+#endif
         tile_regs_release();
     }
     qk.pop_front(batch_tiles);
@@ -410,9 +414,13 @@ inline void block_max_pool_batched(uint32_t unit_strip) {
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, out_cb, blocks_per_unit);
+#else
         for (uint32_t b = 0; b < blocks_per_unit; ++b) {
             pack_tile<true>(b, out_cb, b);  // DEST[b] (block b col-0 maxes) -> slot b
         }
+#endif
         tile_regs_release();
         out.push_back(blocks_per_unit);
     }

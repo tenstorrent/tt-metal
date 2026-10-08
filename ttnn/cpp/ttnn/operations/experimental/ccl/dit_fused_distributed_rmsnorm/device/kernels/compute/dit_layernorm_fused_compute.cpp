@@ -169,8 +169,12 @@ void kernel_main() {
         cb_welford_zero.reserve_back(2);
         tile_regs_wait();
         pack_reconfig_data_format(welford_zero_cb);
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(mean_dst, welford_zero_cb, 2);
+#else
         pack_tile(mean_dst, welford_zero_cb);
         pack_tile(var_dst, welford_zero_cb);
+#endif
         tile_regs_release();
         cb_welford_zero.push_back(2);
     }
@@ -247,8 +251,12 @@ void kernel_main() {
                 cb_stats_local.reserve_back(2);
                 tile_regs_wait();
                 pack_reconfig_data_format(stats_local_cb);
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(mean_dst, stats_local_cb, 2);
+#else
                 pack_tile(mean_dst, stats_local_cb);
                 pack_tile(var_dst, stats_local_cb);
+#endif
                 tile_regs_release();
                 cb_stats_local.push_back(2);
             }
@@ -347,8 +355,12 @@ void kernel_main() {
             tile_regs_commit();
             cb_combine.reserve_back(2);
             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+            pack_block_mop(DM, combine_cb, 2);
+#else
             pack_tile(DM, combine_cb);  // mean_g -> tile 0
             pack_tile(DV, combine_cb);  // 1/std  -> tile 1
+#endif
             tile_regs_release();
             cb_stats_gathered.pop_front(two_ring);
             cb_combine.push_back(2);
@@ -397,9 +409,13 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, xmm_cb, block_size);
+#else
                 for (uint32_t i = 0; i < block_size; i++) {
                     pack_tile(i, xmm_cb);
                 }
+#endif
                 tile_regs_release();
                 cb_xmm.push_back(block_size);
                 cb_input.pop_front(block_size);
@@ -417,9 +433,13 @@ void kernel_main() {
                 tile_regs_commit();
                 cb_xmm.pop_front(block_size);
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, norm_result_cb, block_size);
+#else
                 for (uint32_t i = 0; i < block_size; i++) {
                     pack_tile(i, norm_result_cb);
                 }
+#endif
                 tile_regs_release();
                 cb_norm_result.push_back(block_size);
 
@@ -446,9 +466,13 @@ void kernel_main() {
                     tile_regs_commit();
                     cb_norm_result.pop_front(block_size);
                     tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                    pack_block_mop(0, weight_result_cb, block_size);
+#else
                     for (uint32_t i = 0; i < block_size; i++) {
                         pack_tile(i, weight_result_cb);
                     }
+#endif
                     tile_regs_release();
                     cb_weight_result.push_back(block_size);
                 }
@@ -476,9 +500,13 @@ void kernel_main() {
                     tile_regs_commit();
                     cb_weight_result.pop_front(block_size);
                     tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                    pack_block_mop(0, output_cb, block_size);
+#else
                     for (uint32_t i = 0; i < block_size; i++) {
                         pack_tile(i, output_cb);
                     }
+#endif
                     tile_regs_release();
                     cb_output.push_back(block_size);
                 }
@@ -516,9 +544,13 @@ void kernel_main() {
                     }
                     tile_regs_commit();
                     tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                    pack_block_mop(0, xmm_cb, n);
+#else
                     for (uint32_t i = 0; i < n; i++) {
                         pack_tile(i, xmm_cb);
                     }
+#endif
                     tile_regs_release();
                     cb_xmm.push_back(block_size);
                 }
@@ -539,9 +571,13 @@ void kernel_main() {
                     }
                     tile_regs_commit();
                     tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                    pack_block_mop(0, norm_result_cb, n);
+#else
                     for (uint32_t i = 0; i < n; i++) {
                         pack_tile(i, norm_result_cb);
                     }
+#endif
                     tile_regs_release();
                     cb_norm_result.push_back(block_size);
                     cb_xmm.pop_front(block_size);
@@ -575,9 +611,13 @@ void kernel_main() {
                     cb_norm_result.pop_front(block_size);
                     cb_weight_result.reserve_back(block_size);
                     tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                    pack_block_mop(0, weight_result_cb, n);
+#else
                     for (uint32_t i = 0; i < n; i++) {
                         pack_tile(i, weight_result_cb);
                     }
+#endif
                     tile_regs_release();
                     cb_weight_result.push_back(block_size);
                 }
@@ -615,9 +655,13 @@ void kernel_main() {
                     cb_weight_result.pop_front(block_size);
                     cb_output.reserve_back(block_size);
                     tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                    pack_block_mop(0, output_cb, n);
+#else
                     for (uint32_t i = 0; i < n; i++) {
                         pack_tile(i, output_cb);
                     }
+#endif
                     tile_regs_release();
                     cb_output.push_back(block_size);
                 }

@@ -822,6 +822,26 @@ class UNPACK_AB_BLOCK(TemplateParameter):
 
 
 @dataclass
+class PACK_BLOCK(TemplateParameter):
+    """Pack every dest block with one _llk_pack_block_ run instead of one _llk_pack_ per tile (Blackhole)."""
+
+    pack_block: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool pack_block_en = {str(self.pack_block).lower()};"
+
+
+@dataclass
+class TINY_PACK_MODE(TemplateParameter):
+    """Pack of a block of tiny tiles (Blackhole): 0 one block-contiguous run, 1 one closed run per tile, 2 one _llk_pack_ per tile."""
+
+    tiny_pack_mode: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int tiny_pack_mode = {self.tiny_pack_mode};"
+
+
+@dataclass
 class IMPLIED_MATH_FORMAT(TemplateParameter):
     implied_math_format: ImpliedMathFormat = ImpliedMathFormat.No
 
