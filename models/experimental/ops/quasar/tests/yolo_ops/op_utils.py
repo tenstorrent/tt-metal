@@ -33,6 +33,8 @@ from __future__ import annotations
 import pytest  # noqa: F401  (re-exported convenience for op files)
 import torch
 
+import os
+
 import ttnn
 
 # Reuse the generic tensor/assert helpers from the llama op suite (arch-agnostic).
@@ -45,6 +47,33 @@ from models.experimental.llama32_1b_quasar.tests.ops.op_utils import (  # noqa: 
     torch_rand,
     with_default_mesh,
 )
+
+# =============================================================================
+# Quasar op routing
+# =============================================================================
+#
+# conv2d, the binary_ng elementwise ops (add / multiply / div / subtract) and max_pool2d are
+# legacy (ProgramDescriptor) on mainline and fail on Quasar with "DataMovementKernel is not
+# supported on Quasar"; their Metal 2.0 copies live under ``ttnn.experimental.quasar`` with the
+# same call signature. ``op(name)`` returns the fork on Quasar and the mainline op elsewhere.
+# ``TTNN_YOLO_OPS_QUASAR_FORKS=1|0`` forces either choice (the forks also run on WH/BH).
+_QUASAR_FORKED_OPS = ("conv2d", "max_pool2d", "add", "multiply", "div", "subtract")
+
+
+def quasar_forks_enabled() -> bool:
+    v = os.environ.get("TTNN_YOLO_OPS_QUASAR_FORKS", "auto").lower()
+    if v in ("1", "true", "yes"):
+        return True
+    if v in ("0", "false", "no"):
+        return False
+    return ttnn.get_arch_name() == "quasar"
+
+
+def op(name: str):
+    """``ttnn.<name>`` or its ``ttnn.experimental.quasar`` fork (see the note above)."""
+    assert name in _QUASAR_FORKED_OPS, name
+    return getattr(ttnn.experimental.quasar, name) if quasar_forks_enabled() else getattr(ttnn, name)
+
 
 # =============================================================================
 # YOLOv8 (640x640, batch 1) constants
