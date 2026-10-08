@@ -911,12 +911,14 @@ class TtQwenModelArgs(TtModelArgs):
                     )
                 else:  # For seq_len >= 16384, use the best config from sweep results
                     # This covers 16384, 32768, 65536, 131072
+                    # Wormhole: subblock 1x8 instead of 4x2 (same grid and blocks, bit-identical output);
+                    # isolated op at S=40960: 3.63 -> 3.01 ms. Blackhole keeps 4x2.
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
                         K_block_size=8,
                         N_block_size=8,
-                        subblock_h=4,
-                        subblock_w=2,
+                        subblock_h=4 if is_blackhole() else 1,
+                        subblock_w=2 if is_blackhole() else 8,
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
                     )
 
