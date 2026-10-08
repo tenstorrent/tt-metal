@@ -9,6 +9,7 @@ import gc
 import hashlib
 import os
 import pathlib
+import statistics
 import time
 from unittest import mock
 
@@ -153,7 +154,7 @@ def _hf_text_config(hf_model_id):
 # ── The prefill model under test ────────────────────────────────────────────
 
 
-def _build_prefill_model(mesh_config, hf_model_id, chunk_size, context_len=None):
+def _build_prefill_model(mesh_config, hf_model_id, chunk_size, context_len=None, max_batch_size=1):
     """Create a CP prefill model with ring caches for one or more chunks."""
     if mesh_config.cp_degree <= 1:
         raise ValueError("This demo requires context parallel prefill")
@@ -169,7 +170,7 @@ def _build_prefill_model(mesh_config, hf_model_id, chunk_size, context_len=None)
     t0 = time.time()
     model_args, model, kv_cache, _state_dict = create_tt_model(
         mesh_config=mesh_config,
-        max_batch_size=1,
+        max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
         dtype=MODEL_DTYPE,
         force_rebuild=_load_full_weights(),
@@ -441,21 +442,38 @@ def _perf_signposts(layer_type, chunk_idx):
 def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_size, context_len, reset_seeds, request):
     """Measure selected layer/chunk pairs with one trace per layer type.
 
-    Each layer is compiled and captured once, then each selected chunk is measured once.
+    Each layer is compiled and captured once. GEMMA4_LAYER_PERF_CHUNKS selects
+    request chunk indices; GEMMA4_LAYER_PERF_REPEATS defaults to one. The final
+    replay supplies the signposted operation table. GEMMA4_LAYER_BATCH_MODE=chunked4
+    measures four 1K requests with the sz4096 parameter (total useful tokens).
     Ring caches are initialized with random values before measurement.
     Inputs are token embeddings, so this is an isolated-layer benchmark.
     """
     from models.demos.gemma4_d_p.scripts.layer_perf_report import write_manifest
     from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
     from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache
+    from models.demos.gemma4_d_p.tt.chunked_batch import ChunkedAttentionLayout, ChunkedBatchPlan, ChunkedRequest
+    from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
 
     mesh_config = _mesh_config(mesh_device)
+    mode = os.environ.get("GEMMA4_LAYER_BATCH_MODE", "canonical")
+    if mode not in ("canonical", "chunked4"):
+        raise ValueError("GEMMA4_LAYER_BATCH_MODE must be canonical or chunked4")
+    batched = mode == "chunked4"
+    if batched and (chunk_size != 4096 or mesh_config.mesh_shape != (8, 4)):
+        pytest.skip("Fixed batching profiles require sz4096 (total useful tokens) on CP8/TP4")
+    plan = ChunkedBatchPlan() if batched else None
+    request_chunk_size = plan.chunk_size if batched else chunk_size
+    batch_size = plan.batch_size if batched else 1
+    repeats = int(os.environ.get("GEMMA4_LAYER_PERF_REPEATS", "1"))
+    if repeats < 1:
+        raise ValueError("GEMMA4_LAYER_PERF_REPEATS must be positive")
     cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
     if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len):
         pytest.skip(geometry_error)
-    n_chunks = context_len // chunk_size
+    n_chunks = context_len // request_chunk_size
     layer_types = ["global", "local"] if layer_type == "both" else [layer_type]
     if chunk_idx == "ci":
         cells_by_type = {lt: LAYER_PERF_CI_CELLS[lt] for lt in layer_types}
@@ -463,6 +481,8 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         cells_by_type = {lt: tuple(range(n_chunks)) for lt in layer_types}
     else:
         cells_by_type = {lt: (int(chunk_idx),) for lt in layer_types}
+    if selected := os.environ.get("GEMMA4_LAYER_PERF_CHUNKS"):
+        cells_by_type = {lt: tuple(int(i) for i in selected.split(",")) for lt in layer_types}
     if outside := sorted({i for idxs in cells_by_type.values() for i in idxs if not 0 <= i < n_chunks}):
         pytest.skip(f"chunks {outside} are outside the {n_chunks} chunks of {chunk_size} in {context_len} tokens")
 
@@ -475,10 +495,17 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     model_args, model, _ = _build_prefill_model(
         mesh_config=mesh_config,
         hf_model_id=hf_model_id,
-        chunk_size=chunk_size,
+        chunk_size=request_chunk_size,
         context_len=context_len,
+        max_batch_size=batch_size,
     )
     tokens_all = _get_prefill_tokens(hf_model_id, context_len, model_args.vocab_size)
+    batch_layout = (
+        ChunkedAttentionLayout(plan, [PrefillMetadata(mesh_config, clamp_valid=True) for _ in range(batch_size)])
+        if batched
+        else None
+    )
+    prompts = [torch.roll(tokens_all[0], shifts=lane * 701).tolist() for lane in range(batch_size)] if batched else []
 
     layer_idxs = {lt: find_layer_idx(text_config, model_layer_types[lt]) for lt in layer_types}
     type_desc = ", ".join(f"{lt}=layer{layer_idxs[lt]}" for lt in layer_types)
@@ -511,18 +538,40 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
 
     def _stage(idx):
         """Refresh tokens, ring metadata, semaphores, and RoPE positions before replay."""
-        chunk_start = idx * chunk_size
+        chunk_start = idx * request_chunk_size
+        requests = (
+            tuple(
+                ChunkedRequest(lane, lane, chunk_start, tuple(prompt[chunk_start : chunk_start + request_chunk_size]))
+                for lane, prompt in enumerate(prompts)
+            )
+            if batched
+            else ()
+        )
+        token_rows = (
+            torch.tensor(plan.pack(requests), dtype=torch.int32).unsqueeze(0)
+            if batched
+            else tokens_all[:, chunk_start : chunk_start + chunk_size].contiguous()
+        )
         staged = ttnn.from_torch(
-            tokens_all[:, chunk_start : chunk_start + chunk_size].contiguous(),
+            token_rows,
             device=None,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         )
         ttnn.copy_host_to_device_tensor(staged, device_input_tokens)
-        model.prefill_metadata.update(slot_idx=0, kv_actual_global=chunk_start)
+        if batched:
+            for metadata, req in zip(batch_layout.metadata, requests):
+                metadata.update(slot_idx=req.slot_id, kv_actual_global=chunk_start, valid_global=req.actual_end)
+        else:
+            model.prefill_metadata.update(slot_idx=0, kv_actual_global=chunk_start)
+        position_rows = (
+            torch.tensor(plan.pack(requests, positions=True), dtype=torch.int32).unsqueeze(0)
+            if batched
+            else torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).unsqueeze(0)
+        )
         pos_host = ttnn.from_torch(
-            torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).unsqueeze(0),
+            position_rows,
             device=None,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -564,6 +613,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
                 chunk_start_idx=chunk_start,
                 packed_global_rope=packed_rope if lt == "global" else None,
                 packed_sliding_rope=packed_rope if lt == "local" else None,
+                chunked_batch=batch_layout,
             )
 
         return prepare, forward
@@ -624,12 +674,18 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
             chunk_start = _stage(idx)
             ttnn.execute_trace(mesh_device, prep_traces[lt], cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
-            signpost(sp_start)
-            t_i = time.time()
-            ttnn.execute_trace(mesh_device, traces[lt], cq_id=0, blocking=False)
-            ttnn.synchronize_device(mesh_device)
-            measured_s = time.time() - t_i
-            signpost(sp_stop)
+            samples_ms = []
+            for replay in range(repeats):
+                # The final warmed replay supplies one unambiguous operation table.
+                if replay == repeats - 1:
+                    signpost(sp_start)
+                t_i = time.perf_counter()
+                ttnn.execute_trace(mesh_device, traces[lt], cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+                samples_ms.append((time.perf_counter() - t_i) * 1000)
+                if replay == repeats - 1:
+                    signpost(sp_stop)
+            measured_s = statistics.median(samples_ms) / 1000
 
             results.append(
                 {
@@ -637,7 +693,9 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
                     "layer_type": lt,
                     "layer_idx": layer_idxs[lt],
                     "chunk_start": chunk_start,
+                    "request_end": chunk_start + request_chunk_size,
                     "measured_ms": measured_s * 1000,
+                    "samples_ms": samples_ms,
                     "start_signpost": sp_start,
                     "stop_signpost": sp_stop,
                 }
@@ -652,14 +710,21 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     finally:
         for tid in (*traces.values(), *prep_traces.values()):
             ttnn.release_trace(mesh_device, tid)
+        if batch_layout is not None:
+            for metadata in batch_layout.metadata:
+                metadata.deallocate()
 
     assert torch.isfinite(hidden).all(), f"{layer_types[-1]} layer produced non-finite output"
     assert float(hidden.std()) > 0.001, f"{layer_types[-1]} layer output is degenerate"
     write_manifest(
-        request.node.callspec.id,
+        request.node.callspec.id + ("-chunked4" if batched else ""),
         results,
         context_len=context_len,
         chunk_size=chunk_size,
+        request_chunk_size=request_chunk_size,
+        batch_size=batch_size,
+        mode=mode,
+        cache_initialization="random values; isolated layer fed token embeddings",
         mesh_shape=tuple(mesh_device.shape),
     )
 

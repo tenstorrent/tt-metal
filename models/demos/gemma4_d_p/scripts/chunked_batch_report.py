@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--validation", type=Path)
     parser.add_argument("--official-log", type=Path)
     parser.add_argument("--source-commit", default="unspecified")
+    parser.add_argument("--layers", type=Path, help="Layer measurements from chunked_batch_layer_report.py")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     runs = {mode: json.loads((args.input / f"{mode}.json").read_text()) for mode in ("canonical", "chunked4")}
@@ -80,6 +81,7 @@ def main():
         assert len(official) == 64
         write_csv(args.output / "official_canonical.csv", official)
     validation = json.loads(args.validation.read_text()) if args.validation else {}
+    layer_data = json.loads(args.layers.read_text()) if args.layers else None
     method = (
         "Gemma-4-31B-it, 60 layers, Blackhole CP8/TP4, original reduce-scatter, default activation placement. "
         "Each call processes 4,096 useful tokens: one 4K request in canonical, or four 1K requests in the fixed batch. "
@@ -97,6 +99,8 @@ def main():
                 memory_note="Eight 256K slots plus weights failed DRAM allocation. Four slots halve KV storage; the measured fixed batch uses four 256K slots.",
                 kv_storage_bytes_per_device={"four_slots": 15151923200, "eight_slots": 30303846400},
                 official_canonical=official,
+                layer_profile_method=layer_data["method"] if layer_data else None,
+                tt_perf_report_commit=layer_data["tt_perf_report_commit"] if layer_data else None,
             ),
             indent=2,
         )
@@ -111,7 +115,7 @@ def main():
         fig.savefig(path)
         svg = "\n".join(line.rstrip() for line in path.read_text().splitlines()) + "\n"
         path.write_text(svg)
-        pages.append(svg[svg.index("<svg") :])
+        pages.append(f'<section><img src="{name}.svg" alt="{name.replace("_", " ")}" loading="lazy"></section>')
         pdf.savefig(fig)
         plt.close(fig)
 
@@ -194,8 +198,12 @@ def main():
             fig.text(0.06, y, wrapped, va="top", fontsize=10, linespacing=1.3)
             y -= 0.023 * (wrapped.count("\n") + 1) + 0.014
         finish(fig, "padding", pdf)
+        if layer_data:
+            from models.demos.gemma4_d_p.scripts.chunked_batch_layer_plots import append_layer_pages
+
+            append_layer_pages(pdf, finish, layer_data, args.layers.parent)
     body = f"""<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Gemma4 fixed 4×1K batching</title><style>body{{font:16px/1.5 system-ui;max-width:1200px;margin:30px auto;color:#223147}}svg{{width:100%;height:auto}}</style>
+<title>Gemma4 fixed 4×1K batching</title><style>body{{font:16px/1.5 system-ui;max-width:1200px;margin:30px auto;color:#223147}}img{{width:100%;height:auto}}</style>
 <h1>Fixed 4×1K batching versus canonical 4K</h1>
 <p><a href="comparison.pdf">PDF</a> · <a href="comparison.csv">Comparison CSV</a> · <a href="study.json">Method and validation</a> · <a href="reproduce.sh">Reproduction commands</a></p>
 {''.join(pages)}<p>{html.escape(method)}</p>

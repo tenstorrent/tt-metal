@@ -31,7 +31,7 @@ pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_per
 pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunkall-local-sz8192-ctx_256k-8x4] -sv
 ```
 
-Both tests support chunk sizes 4096, 8192, 16384, and 32768. A CP-local chunk must cover the 1024-token sliding window, so 4096 skips on 8×4. Layer tests compile and capture once per layer type, initialize the ring caches with random values, and measure each selected chunk once.
+The tests parameterize chunk sizes 2048, 4096, 8192, 16384, and 32768. Chunks must divide the context capacity and contain whole CP-local tiles. Layer tests compile and capture once per layer type, initialize the ring caches with random values, and measure each selected chunk once by default.
 
 ### Layer perf in CI
 
@@ -132,6 +132,24 @@ retain the existing math settings.
 
 Measured results and reproduction commands: [4×1K vs canonical 4K report](docs/perf/chunked_batch_4x1k_vs_4k_2026_10_08/report.html)
 and [PDF](docs/perf/chunked_batch_4x1k_vs_4k_2026_10_08/comparison.pdf).
+
+The same PDF includes first/final global and sliding-layer operation comparisons
+and detailed per-call tables generated with `tt-perf-report` 1.4.1 (main commit
+`cb9407747a28`). The isolated-layer test accepts:
+
+- `GEMMA4_LAYER_BATCH_MODE=canonical|chunked4` (default `canonical`).
+- `GEMMA4_LAYER_PERF_CHUNKS=0,63` for canonical 4K; `0,252,255` for 4×1K.
+- `GEMMA4_LAYER_PERF_REPEATS=5` to warm four replays before the signposted replay.
+
+Use `test_prefill_layer_perf_chunk_n[blackhole-chunkall-both-sz4096-ctx_256k-8x4]`
+for both modes: `sz4096` is the total useful token count. A batch request advances
+by 1K. The final canonical chunk is `[252K,256K)`; final batch requests are each
+`[255K,256K)`. Batch chunk 252 supplies a matching-prefix control. Embedding and
+RoPE preparation are excluded from layer timing. These isolated tests use random
+KV histories; the full-model performance runs populate actual model histories.
+See the report's [reproduction script](docs/perf/chunked_batch_4x1k_vs_4k_2026_10_08/reproduce.sh)
+for Tracy capture and report generation commands.
+
 
 ## Host verification
 
