@@ -970,8 +970,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel,
     std::optional<SDPAPrecision> precision) {
-    // The legacy exp ring kernel builds only its streaming path; any other blocking (and FP32 DEST) fails to
-    // compile there, so those calls run a recipe (STANDARD, or ACCURATE with FP32 DEST).
+    // The legacy exp ring kernel has only its streaming path; its factory rejects any other blocking (and FP32
+    // DEST), so those calls run a recipe (STANDARD, or ACCURATE with FP32 DEST).
     if (!precision) {
         operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
     }
