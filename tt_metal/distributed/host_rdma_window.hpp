@@ -43,6 +43,11 @@ public:
     std::string flush(uint32_t peer_rank);
     std::string barrier();
 
+    // For a TARGET polling its own window with plain loads: sync makes the public copy visible,
+    // poke_progress applies the PEER's puts (flush completes only ours).
+    std::string sync();
+    std::string poke_progress();
+
     std::string describe() const;
 
     // True only when every rank passed. Collective, so a rank that already failed locally must

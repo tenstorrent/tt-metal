@@ -179,4 +179,34 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
 )
 
+ 
+# OpenMPI::MPI is what tt_metal/distributed/CMakeLists.txt exposes in both MPI branches, and it
+# does not exist at all when ENABLE_DISTRIBUTED is OFF -- so this target appears only when MPI does.
+if(TARGET OpenMPI::MPI)
+    # erisc H2H: two ranks, MPI one-sided, NO device. Carries its own main(), so no benchmark_main.
+    add_executable(erisc_h2h_benchmark)
+    target_sources(erisc_h2h_benchmark PRIVATE benchmark_erisc_h2h_socket.cpp)
+    target_link_libraries(
+        erisc_h2h_benchmark
+        PRIVATE
+            tt_metal
+            test_common_libs
+            benchmark::benchmark
+            OpenMPI::MPI
+    )
+    target_include_directories(
+        erisc_h2h_benchmark
+        PRIVATE
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+            ${PROJECT_SOURCE_DIR}/tests
+            ${PROJECT_SOURCE_DIR}
+    )
+    set_target_properties(
+        erisc_h2h_benchmark
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+    )
+endif()
+
 add_subdirectory(multiprocess)
