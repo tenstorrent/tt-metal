@@ -659,8 +659,8 @@ class LinearPixelShuffleUpsample(Module):
 
 
 def det_a2a_enabled() -> bool:
-    """Whether stages 2-4 split the band's tokens over the head axis: on with DIFFVAE_DET_A2A=1."""
-    return os.environ.get("DIFFVAE_DET_A2A", "0") not in ("0", "false", "False", "")
+    """Whether stages 2-4 split the band's tokens over the head axis: on unless DIFFVAE_DET_A2A=0."""
+    return os.environ.get("DIFFVAE_DET_A2A", "1") not in ("0", "false", "False", "")
 
 
 def token_split_rows(tokens: int, parts: int) -> int:
