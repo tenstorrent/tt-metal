@@ -67,19 +67,35 @@ def load_top_level(keys):
     return out
 
 
-def build_sequence(tokenizer, gen_len, source_reference):
+def shorten_prompt(tokenizer, prompt_text, prompt_len):
+    """Cut the question so the chat-templated prompt is exactly ``prompt_len`` tokens (template kept intact)."""
+    question = tokenizer.encode(prompt_text, add_special_tokens=False)
+    for keep in range(len(question), 0, -1):
+        text = tokenizer.decode(question[:keep])
+        ids = chat_template_tokens(tokenizer, text)
+        if len(ids) == prompt_len:
+            return text, ids
+        if len(ids) < prompt_len:
+            break
+    raise ValueError(f"no cut of the question gives a {prompt_len}-token chat prompt")
+
+
+def build_sequence(tokenizer, gen_len, source_reference, prompt_len=None):
     """Return (prompt_text, prompt_ids, continuation_ids)."""
     from transformers import AutoTokenizer
 
     ref = load_reference(source_reference)
     entry = ref.entries[0]
-    prompt_ids = chat_template_tokens(tokenizer, entry.prompt_text)
+    prompt_text = entry.prompt_text
+    prompt_ids = chat_template_tokens(tokenizer, prompt_text)
+    if prompt_len is not None:
+        prompt_text, prompt_ids = shorten_prompt(tokenizer, prompt_text, prompt_len)
     source_tokenizer = AutoTokenizer.from_pretrained(ref.hf_model_id, trust_remote_code=True)
     continuation_text = source_tokenizer.decode(entry.generated_tokens[0].tolist(), skip_special_tokens=False)
     continuation_ids = tokenizer.encode(continuation_text, add_special_tokens=False)[:gen_len]
     if len(continuation_ids) < gen_len:
         raise ValueError(f"continuation has only {len(continuation_ids)} tokens; requested {gen_len}")
-    return entry.prompt_text, prompt_ids, continuation_ids
+    return prompt_text, prompt_ids, continuation_ids
 
 
 def rms_norm(x, weight, eps):
@@ -98,6 +114,7 @@ def main():
     ap.add_argument("--router-dump", type=Path, default=None, help="directory for per-MoE-layer router inputs")
     ap.add_argument("--threads", type=int, default=0, help="torch CPU threads (0 = torch default)")
     ap.add_argument("--save-logits", type=Path, default=None, help="also save the [G, vocab] fp32 logits (accuracy gates)")
+    ap.add_argument("--prompt-len", type=int, default=None, help="shorten the question to an exactly N-token chat prompt")
     args = ap.parse_args()
     if args.threads:
         torch.set_num_threads(args.threads)
@@ -107,7 +124,7 @@ def main():
 
     config = R.build_config()
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
-    prompt_text, prompt_ids, cont_ids = build_sequence(tokenizer, args.gen_len, args.source_reference)
+    prompt_text, prompt_ids, cont_ids = build_sequence(tokenizer, args.gen_len, args.source_reference, args.prompt_len)
     seq_ids = prompt_ids + cont_ids
     P, G = len(prompt_ids), len(cont_ids)
     print(f"{MODEL_ID}: prompt {P} tokens + continuation {G} tokens, dtype {args.dtype}", flush=True)
