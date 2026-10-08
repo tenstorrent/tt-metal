@@ -33,10 +33,16 @@ and positions. Prefill can use its static L1 circular buffers between decodes
 without overwriting the persistent state.
 
 Warmup and capture run the same boundary copies into explicit output buffers.
-The GCB reservation is established during preparation and suspended/resumed
-using the lifecycle from #57906. The GCB address checks and trace-specific
-restoration acknowledgements remain necessary. Model capture has no broad
-allocation-tracker exemption; unexpected surviving allocations are errors.
+The first decode preparation establishes the GCB data and configuration
+addresses. The model releases both allocations before it loads the prefill
+sub-device manager. After it loads the decode manager, it recreates both
+allocations at the saved addresses before any other decode allocation.
+If either range is occupied, reconstruction fails before configuration writes
+or trace replay. Other allocations can use the released ranges during prefill;
+they must release those ranges before the next decode switch.
+The model acknowledges only the two GCB allocations as corruptible and reuses
+the captured traces. Model capture has no broad allocation-tracker exemption;
+unexpected surviving allocations are errors.
 
 Device tensors returned by traced forward calls are **borrowed**. Consume them
 before the next call that writes their shared group. Keeping a Python reference

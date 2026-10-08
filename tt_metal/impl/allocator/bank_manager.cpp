@@ -447,7 +447,8 @@ uint64_t BankManager::allocate_buffer(
     std::optional<uint32_t> num_shards,
     BankManager::AllocatorDependencies::AllocatorID allocator_id,
     const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges,
-    const std::optional<std::unordered_set<uint32_t>>& scoped_dependent_allocators) {
+    const std::optional<std::unordered_set<uint32_t>>& scoped_dependent_allocators,
+    std::optional<DeviceAddr> requested_address) {
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
 
@@ -477,7 +478,7 @@ uint64_t BankManager::allocate_buffer(
     // If using single allocator strategy, Algorithm::allocate handles address limit, which means it can only be used
     // with top-down allocation. Otherwise, address limit is used to clamp the available ranges regardless of bottom_up
     // vs. top-down allocation
-    if (dependent_allocators.empty()) {
+    if (dependent_allocators.empty() && !requested_address.has_value()) {
         auto address = alloc->allocate(size_per_bank, bottom_up, address_limit);
         if (!address.has_value()) {
             auto mem_stats = alloc->get_statistics();
@@ -517,7 +518,26 @@ uint64_t BankManager::allocate_buffer(
     // Choose an address from the allowed ranges respecting alignment and direction
     // Addresses should already be aligned to alignment_bytes_
     std::optional<DeviceAddr> chosen;
-    if (bottom_up) {
+    if (requested_address.has_value()) {
+        TT_FATAL(
+            requested_address.value() % alignment_bytes_ == 0,
+            "Requested buffer address {} is not aligned to {} B",
+            requested_address.value(),
+            alignment_bytes_);
+        for (const auto& [start, end] : available_ranges) {
+            // Subtract only after checking the bounds, to avoid unsigned overflow.
+            if (requested_address.value() >= start && requested_address.value() <= end &&
+                size_per_bank <= end - requested_address.value()) {
+                chosen = requested_address;
+                break;
+            }
+        }
+        TT_FATAL(
+            chosen.has_value(),
+            "Requested buffer address {} ({} B per bank) is unavailable",
+            requested_address.value(),
+            size_per_bank);
+    } else if (bottom_up) {
         for (const auto& r : available_ranges) {
             DeviceAddr s = r.first;
             if (s + size_per_bank <= r.second) {
@@ -661,21 +681,6 @@ std::optional<DeviceAddr> BankManager::lowest_occupied_address(
     }
     DeviceAddr adjusted_abs_addr = lowest_address.value() + this->bank_offset(bank_id);
     return adjusted_abs_addr;
-}
-
-std::optional<DeviceAddr> BankManager::lowest_occupied_address_excluding(
-    uint32_t bank_id, const std::unordered_set<DeviceAddr>& ignored_addresses) const {
-    const auto* allocator = get_allocator_from_id(AllocatorDependencies::AllocatorID{0});
-    if (allocator == nullptr) {
-        return std::nullopt;
-    }
-    std::optional<DeviceAddr> lowest;
-    for (const auto& [begin, end] : allocator->allocated_addresses()) {
-        if (!ignored_addresses.contains(begin) && (!lowest || begin < *lowest)) {
-            lowest = begin;
-        }
-    }
-    return lowest ? std::make_optional(*lowest + bank_offset(bank_id)) : std::nullopt;
 }
 
 Statistics BankManager::get_statistics(BankManager::AllocatorDependencies::AllocatorID allocator_id) const {

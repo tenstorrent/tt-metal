@@ -18,7 +18,9 @@ GlobalCircularBuffer create_global_circular_buffer(
     MeshDevice* mesh_device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type = BufferType::L1);
+    BufferType buffer_type = BufferType::L1,
+    std::optional<tt::tt_metal::DeviceAddr> buffer_address = std::nullopt,
+    std::optional<tt::tt_metal::DeviceAddr> config_address = std::nullopt);
 
 // DRAM-sender variant: senders are programmable DRAM cores identified by DRAM bank id.
 // The returned GlobalCircularBuffer is the same type as the worker variant; the sender

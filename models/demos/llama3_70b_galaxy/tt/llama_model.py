@@ -14,7 +14,6 @@ from models.demos.llama3_70b_galaxy.tt.lm_head import LMHead
 from models.demos.llama3_70b_galaxy.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
-from models.demos.llama3_70b_galaxy.tt.global_cb_trace import GlobalCBTraceState
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.common.sampling.generator import SamplingGenerator
@@ -78,7 +77,7 @@ class TtTransformer(LightweightModule):
         self.is_prefill_setup = False
         self.is_decode_setup = False
         self.prefetcher_setup = None
-        self.global_cb_trace_state = GlobalCBTraceState()
+        self._global_cb_addresses = None
         # Device-side prefill inputs, reused across requests. Keyed by the host inputs' shape /
         # dtype / layout signature. Callers must keep page-table widths fixed at the
         # configured block-pool size as well as padding prompts to prefill buckets.
@@ -209,8 +208,8 @@ class TtTransformer(LightweightModule):
         return self.tt_rot_mats_prefill
 
     def setup_prefill(self, mesh_sub_device_manager_id_prefill=None):
-        if self.global_cb_trace_state.global_cb is not None:
-            self.global_cb_trace_state.global_cb.suspend()
+        if self.prefetcher_setup is not None:
+            self._global_cb_addresses = self.prefetcher_setup.release_global_cb()
         # BH unfused-CCL path: prefill uses the fused all_gather_minimal_matmul + interleaved weights, never
         # the ring matmuls or the prefetcher global CB (those are decode-only). Run prefill exactly like the
         # no-prefetcher path (default sub-device, no custom manager). Loading the prefetcher's prefill
@@ -305,9 +304,9 @@ class TtTransformer(LightweightModule):
             n_tensors=5,
             n_layers=self.n_layers,
             mesh_sub_device_manager_id_decode=mesh_sub_device_manager_id_decode,
-            global_cb_trace_state=self.global_cb_trace_state,
             save_tensor_addresses=True,
             is_qwen=self.args.is_qwen,
+            global_cb_addresses=self._global_cb_addresses,
         )
         self.mesh_sub_device_manager_id_decode = self.prefetcher_setup.mesh_sub_device_manager_id_decode
         self.mesh_device.set_sub_device_stall_group(
@@ -965,8 +964,6 @@ class TtTransformer(LightweightModule):
                 self.lm_head.tt_ccl = self.tt_ccl
                 if self.use_prefetcher:
                     self.tt_tensors = self.prefetcher_setup.get_input_tensors()
-                    # Resume the reserved GCB after prefill has borrowed its contents.
-                    # Both decode variants and sampling keep their captured addresses.
                     self.prefetcher_setup.create_global_cb()
                 else:
                     # No-prefetcher path reuses the cached decode CCL; clear its semaphore drift.
@@ -991,19 +988,6 @@ class TtTransformer(LightweightModule):
                 if not self.use_prefetcher:
                     # No-prefetcher path reuses the cached prefill CCL; clear its semaphore drift.
                     self.tt_ccl.reset_global_semaphores()
-
-    def prepare_decode_global_cb(self):
-        if self.use_prefetcher:
-            self.global_cb_trace_state.prepare(self.prefetcher_setup.global_circular_buffer)
-
-    def validate_decode_global_cb(self):
-        if self.use_prefetcher:
-            global_cb = getattr(self.prefetcher_setup, "global_circular_buffer", None)
-            self.global_cb_trace_state.validate(global_cb)
-
-    def record_global_cb_traces(self, group, trace_ids):
-        if self.use_prefetcher:
-            self.global_cb_trace_state.record_traces(group, trace_ids, self.prefetcher_setup.global_circular_buffer)
 
     def forward(
         self,

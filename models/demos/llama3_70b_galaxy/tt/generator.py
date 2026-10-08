@@ -1639,7 +1639,6 @@ class Generator(WarmupForwardMixin):
                         is_page_table_sharded=is_page_table_sharded,
                         on_device_logits=mode,
                     )
-        self.model.prepare_decode_global_cb()
         self.model.switch_mode("prefill")
 
     def _prepare_trace_decode(
@@ -1731,11 +1730,9 @@ class Generator(WarmupForwardMixin):
             self.model.switch_mode("decode")
         prepared = self._prepared_decode_traces.pop(key)
         self._prepared_trace_io.freeze()
-        self.model.validate_decode_global_cb()
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         self._decode_trace_forward(prepared)
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-        self.model.record_global_cb_traces(("decode", key), (trace_id,))
         logger.info("Done Capturing Decode Trace")
         return trace_id, prepared["output"], *prepared["device_inputs"]
 
@@ -1751,7 +1748,6 @@ class Generator(WarmupForwardMixin):
         """
         Executes the trace for the decode_forward method but does not read back outputs.
         """
-        self.model.validate_decode_global_cb()
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
         return tt_out_trace
@@ -1898,7 +1894,6 @@ class Generator(WarmupForwardMixin):
         # Advance seeds after parameter copies so seeded sampling observes
         # one ordered params/seed state for this token.
         seed_manager.get_new_values(active_seed_slots)
-        self.model.validate_decode_global_cb()
         result = self.model.sampling.sample(
             logits=tt_logits,
             tt_out_tok=tt_out_tok,
@@ -1907,8 +1902,6 @@ class Generator(WarmupForwardMixin):
             # Leaving it inline here would allocate behind the live decode trace (#52176).
             skip_precompile=True,
         )
-        if enable_trace:
-            self.model.record_global_cb_traces("sampling", sampling_module.trace_ids)
         return result
 
     def read_decode_output(self, tt_out, async_read=True):
