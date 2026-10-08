@@ -21,7 +21,8 @@ CB_OUTPUT = 16
 
 SEM_PROGRESS = 0
 SEM_MCAST_READY = 1
-SEM_MCAST_CONSUMED = 2
+# Multicast attachment allocates its data-ready and consumer-ready semaphores from this id (1 and 2).
+SEM_MCAST_BASE = SEM_MCAST_READY
 SEM_STAGE2 = 3
 # Shares id 3 with SEM_STAGE2: the tree reducer and the push reduce-scatter are
 # different programs and neither declares the other's semaphore.
@@ -996,17 +997,31 @@ def _virtual_coords(device, cores):
     return result
 
 
-def _mcast_family(device, layout, *, rotating, sem_ids, first_root=False):
-    family = ttnn.McastFamily(device, ttnn.McastConfig(sem_ids=list(sem_ids)))
+def _mcast_dataflow_kernels(
+    descriptor, device, layout, source, compile_time_args, runtime_by_core, *, rotating, first_root=False
+):
+    """One dataflow kernel and one multicast channel per group rectangle, attached as `mcast`.
+
+    Mcast partitions its receivers into consecutive row-major runs, which match the group
+    rectangles only when they are stacked vertically, so each group gets its own channel. The
+    groups are disjoint, so every channel reuses the same semaphore ids.
+    """
+    kernels = []
     for group in layout.groups:
-        senders = (
-            [ttnn.CoreCoord(*core) for core in group.cores]
-            if rotating
-            else [ttnn.CoreCoord(*group.cores[0]) if first_root else group.root]
+        runtime_args = ttnn.RuntimeArgs()
+        for x, y in group.cores:
+            runtime_args[x][y] = runtime_by_core[(x, y)]
+        kernel = _inline_kernel(
+            source, group.core_range_set, compile_time_args, runtime_args, ttnn.ReaderConfigDescriptor()
         )
-        family.add_group(group.core_range_set, senders)
-    family.prepare_arguments()
-    return family
+        if rotating:
+            sender_config = ttnn.McastRotatingSenderConfig()
+        else:
+            sender_config = ttnn.McastFixedSenderConfig(sender_index=0 if first_root else layout.group_size - 1)
+        mcast = ttnn.Mcast(device, ttnn.McastConfig(), group.core_range_set, layout.group_size, sender_config)
+        mcast.attach(descriptor, "mcast", [kernel], SEM_MCAST_BASE)
+        kernels.append(kernel)
+    return kernels
 
 
 def _compute_kernel(core_ranges, runtime_by_core, output_cb=CB_OUTPUT):
@@ -1097,52 +1112,42 @@ def _create_unicast_all_gather_descriptor(input_tensor, output_tensor, layout, n
 
 def _create_mcast_all_gather_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
     group_size = layout.group_size
-    family = _mcast_family(input_tensor.device(), layout, rotating=True, sem_ids=(SEM_PROGRESS, SEM_MCAST_READY))
-    dataflow_rt = ttnn.RuntimeArgs()
+    dataflow_rt = {}
     compute_rt = {}
     for group in layout.groups:
         for index, (x, y) in enumerate(group.cores):
-            dataflow_rt[x][y] = [input_tensor.buffer_address(), index]
+            dataflow_rt[(x, y)] = [input_tensor.buffer_address(), index]
             compute_rt[(x, y)] = [group_size, num_tiles, kernel_iters]
 
     cbs = [
         _normal_cb(CB_GATHER, layout.core_ranges, group_size * num_tiles, page_bytes, input_tensor.dtype),
         ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output_tensor),
     ]
-    semaphores = [
-        ttnn.SemaphoreDescriptor(id=SEM_PROGRESS, core_ranges=layout.core_ranges, initial_value=0),
-        ttnn.SemaphoreDescriptor(id=SEM_MCAST_READY, core_ranges=layout.core_ranges, initial_value=0),
-    ]
-    dataflow = _inline_kernel(
+    compute = _compute_kernel(layout.core_ranges, compute_rt)
+    descriptor = ttnn.ProgramDescriptor(cbs=cbs)
+    dataflow = _mcast_dataflow_kernels(
+        descriptor,
+        input_tensor.device(),
+        layout,
         _MCAST_ALL_GATHER_KERNEL,
-        layout.core_ranges,
         [CB_GATHER, CB_OUTPUT] + [num_tiles, page_bytes, group_size, kernel_iters],
         dataflow_rt,
-        ttnn.ReaderConfigDescriptor(),
+        rotating=True,
     )
-    compute = _compute_kernel(layout.core_ranges, compute_rt)
-    descriptor = ttnn.ProgramDescriptor(semaphores=semaphores, cbs=cbs)
-    family.attach(descriptor, "mcast", [dataflow])
-    descriptor.kernels = [dataflow, compute]
+    descriptor.kernels = [*dataflow, compute]
     return descriptor
 
 
 def _create_reduce_root_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
     group_size = layout.group_size
-    family = _mcast_family(
-        input_tensor.device(),
-        layout,
-        rotating=False,
-        sem_ids=(SEM_MCAST_READY, SEM_MCAST_CONSUMED),
-    )
-    dataflow_rt = ttnn.RuntimeArgs()
+    dataflow_rt = {}
     compute_rt = {}
     roots = []
     for group in layout.groups:
         root_virtual = input_tensor.device().worker_core_from_logical_core(group.root)
         roots.append((group.root.x, group.root.y))
         for index, (x, y) in enumerate(group.cores):
-            dataflow_rt[x][y] = [
+            dataflow_rt[(x, y)] = [
                 input_tensor.buffer_address(),
                 output_tensor.buffer_address(),
                 index,
@@ -1156,22 +1161,19 @@ def _create_reduce_root_descriptor(input_tensor, output_tensor, layout, num_tile
         _normal_cb(CB_GATHER, layout.core_ranges, group_size * num_tiles, page_bytes, input_tensor.dtype),
         ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output_tensor),
     ]
-    semaphores = [
-        ttnn.SemaphoreDescriptor(id=SEM_PROGRESS, core_ranges=layout.core_ranges, initial_value=0),
-        ttnn.SemaphoreDescriptor(id=SEM_MCAST_READY, core_ranges=layout.core_ranges, initial_value=0),
-        ttnn.SemaphoreDescriptor(id=SEM_MCAST_CONSUMED, core_ranges=layout.core_ranges, initial_value=0),
-    ]
-    dataflow = _inline_kernel(
-        _REDUCE_ROOT_KERNEL,
-        layout.core_ranges,
-        [CB_GATHER, CB_OUTPUT] + [num_tiles, page_bytes, group_size, kernel_iters, SEM_PROGRESS],
-        dataflow_rt,
-        ttnn.ReaderConfigDescriptor(),
-    )
+    semaphores = [ttnn.SemaphoreDescriptor(id=SEM_PROGRESS, core_ranges=layout.core_ranges, initial_value=0)]
     compute = _compute_kernel(root_ranges, compute_rt)
     descriptor = ttnn.ProgramDescriptor(semaphores=semaphores, cbs=cbs)
-    family.attach(descriptor, "mcast", [dataflow])
-    descriptor.kernels = [dataflow, compute]
+    dataflow = _mcast_dataflow_kernels(
+        descriptor,
+        input_tensor.device(),
+        layout,
+        _REDUCE_ROOT_KERNEL,
+        [CB_GATHER, CB_OUTPUT] + [num_tiles, page_bytes, group_size, kernel_iters, SEM_PROGRESS],
+        dataflow_rt,
+        rotating=False,
+    )
+    descriptor.kernels = [*dataflow, compute]
     return descriptor
 
 
@@ -1183,20 +1185,14 @@ def _create_reduce_scatter_descriptor(input_tensor, output_tensor, layout, num_t
     # idle through the whole gather/reduce phase.
     num_workers = min(num_tiles, group_size)
     max_assigned = (num_tiles + num_workers - 1) // num_workers
-    family = _mcast_family(
-        input_tensor.device(),
-        layout,
-        rotating=False,
-        sem_ids=(SEM_MCAST_READY, SEM_MCAST_CONSUMED),
-    )
-    dataflow_rt = ttnn.RuntimeArgs()
+    dataflow_rt = {}
     compute_rt = {}
     worker_cores = []
     for group in layout.groups:
         virtual = _virtual_coords(input_tensor.device(), group.cores)
         root_virtual = input_tensor.device().worker_core_from_logical_core(group.root)
         for index, (x, y) in enumerate(group.cores):
-            dataflow_rt[x][y] = [
+            dataflow_rt[(x, y)] = [
                 input_tensor.buffer_address(),
                 output_tensor.buffer_address(),
                 index,
@@ -1217,22 +1213,19 @@ def _create_reduce_scatter_descriptor(input_tensor, output_tensor, layout, num_t
         _normal_cb(CB_GATHER, worker_ranges, group_size * max_assigned, page_bytes, input_tensor.dtype),
         _normal_cb(CB_PARTIAL, worker_ranges, max_assigned, page_bytes, output_tensor.dtype),
     ]
-    semaphores = [
-        ttnn.SemaphoreDescriptor(id=SEM_PROGRESS, core_ranges=layout.core_ranges, initial_value=0),
-        ttnn.SemaphoreDescriptor(id=SEM_MCAST_READY, core_ranges=layout.core_ranges, initial_value=0),
-        ttnn.SemaphoreDescriptor(id=SEM_MCAST_CONSUMED, core_ranges=layout.core_ranges, initial_value=0),
-    ]
-    dataflow = _inline_kernel(
-        _REDUCE_SCATTER_KERNEL,
-        layout.core_ranges,
-        [CB_GATHER, CB_PARTIAL] + [num_tiles, page_bytes, group_size, num_workers, kernel_iters, SEM_PROGRESS],
-        dataflow_rt,
-        ttnn.ReaderConfigDescriptor(),
-    )
+    semaphores = [ttnn.SemaphoreDescriptor(id=SEM_PROGRESS, core_ranges=layout.core_ranges, initial_value=0)]
     compute = _compute_kernel(worker_ranges, compute_rt, output_cb=CB_PARTIAL)
     descriptor = ttnn.ProgramDescriptor(semaphores=semaphores, cbs=cbs)
-    family.attach(descriptor, "mcast", [dataflow])
-    descriptor.kernels = [dataflow, compute]
+    dataflow = _mcast_dataflow_kernels(
+        descriptor,
+        input_tensor.device(),
+        layout,
+        _REDUCE_SCATTER_KERNEL,
+        [CB_GATHER, CB_PARTIAL] + [num_tiles, page_bytes, group_size, num_workers, kernel_iters, SEM_PROGRESS],
+        dataflow_rt,
+        rotating=False,
+    )
+    descriptor.kernels = [*dataflow, compute]
     return descriptor
 
 
@@ -1240,20 +1233,14 @@ def _create_reduce_scatter_push_descriptor(input_tensor, output_tensor, layout, 
     group_size = layout.group_size
     num_workers = min(num_tiles, group_size)
     max_assigned = (num_tiles + num_workers - 1) // num_workers
-    family = _mcast_family(
-        input_tensor.device(),
-        layout,
-        rotating=False,
-        sem_ids=(SEM_MCAST_READY, SEM_MCAST_CONSUMED),
-    )
-    dataflow_rt = ttnn.RuntimeArgs()
+    dataflow_rt = {}
     compute_rt = {}
     worker_cores = []
     for group in layout.groups:
         virtual = _virtual_coords(input_tensor.device(), group.cores)
         root_virtual = input_tensor.device().worker_core_from_logical_core(group.root)
         for index, (x, y) in enumerate(group.cores):
-            dataflow_rt[x][y] = [
+            dataflow_rt[(x, y)] = [
                 input_tensor.buffer_address(),
                 output_tensor.buffer_address(),
                 index,
@@ -1276,21 +1263,20 @@ def _create_reduce_scatter_push_descriptor(input_tensor, output_tensor, layout, 
     semaphores = [
         ttnn.SemaphoreDescriptor(id=SEM_PROGRESS, core_ranges=layout.core_ranges, initial_value=0),
         ttnn.SemaphoreDescriptor(id=SEM_GATHER, core_ranges=layout.core_ranges, initial_value=0),
-        ttnn.SemaphoreDescriptor(id=SEM_MCAST_READY, core_ranges=layout.core_ranges, initial_value=0),
-        ttnn.SemaphoreDescriptor(id=SEM_MCAST_CONSUMED, core_ranges=layout.core_ranges, initial_value=0),
     ]
-    dataflow = _inline_kernel(
+    compute = _compute_kernel(worker_ranges, compute_rt, output_cb=CB_PARTIAL)
+    descriptor = ttnn.ProgramDescriptor(semaphores=semaphores, cbs=cbs)
+    dataflow = _mcast_dataflow_kernels(
+        descriptor,
+        input_tensor.device(),
+        layout,
         _REDUCE_SCATTER_PUSH_KERNEL,
-        layout.core_ranges,
         [CB_GATHER, CB_PARTIAL]
         + [num_tiles, page_bytes, group_size, num_workers, kernel_iters, SEM_PROGRESS, SEM_GATHER],
         dataflow_rt,
-        ttnn.ReaderConfigDescriptor(),
+        rotating=False,
     )
-    compute = _compute_kernel(worker_ranges, compute_rt, output_cb=CB_PARTIAL)
-    descriptor = ttnn.ProgramDescriptor(semaphores=semaphores, cbs=cbs)
-    family.attach(descriptor, "mcast", [dataflow])
-    descriptor.kernels = [dataflow, compute]
+    descriptor.kernels = [*dataflow, compute]
     return descriptor
 
 
@@ -1302,11 +1288,7 @@ def _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tile
         return _create_reduce_root_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters)
 
     device = input_tensor.device()
-    family = _mcast_family(
-        device, layout, rotating=False, sem_ids=(SEM_MCAST_READY, SEM_MCAST_CONSUMED), first_root=True
-    )
-
-    dataflow_rt = ttnn.RuntimeArgs()
+    dataflow_rt = {}
     compute_rt = ttnn.RuntimeArgs()
     leader_cores = []
     for group in layout.groups:
@@ -1319,7 +1301,7 @@ def _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tile
             my_row = index // cols
             my_col = index % cols
             leader_x, leader_y = leader_virtual[my_row]
-            dataflow_rt[x][y] = [
+            dataflow_rt[(x, y)] = [
                 input_tensor.buffer_address(),
                 output_tensor.buffer_address(),
                 my_col,
@@ -1343,17 +1325,7 @@ def _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tile
     semaphores = [
         ttnn.SemaphoreDescriptor(id=SEM_PROGRESS, core_ranges=layout.core_ranges, initial_value=0),
         ttnn.SemaphoreDescriptor(id=SEM_STAGE2, core_ranges=layout.core_ranges, initial_value=0),
-        ttnn.SemaphoreDescriptor(id=SEM_MCAST_READY, core_ranges=layout.core_ranges, initial_value=0),
-        ttnn.SemaphoreDescriptor(id=SEM_MCAST_CONSUMED, core_ranges=layout.core_ranges, initial_value=0),
     ]
-    dataflow = _inline_kernel(
-        _TREE_REDUCE_KERNEL,
-        layout.core_ranges,
-        [CB_GATHER, CB_PARTIAL, CB_STAGE2, CB_OUTPUT]
-        + [num_tiles, page_bytes, rows, cols, kernel_iters, SEM_PROGRESS, SEM_STAGE2],
-        dataflow_rt,
-        ttnn.ReaderConfigDescriptor(),
-    )
     compute = _inline_kernel(
         _GRID_REDUCE_COMPUTE_KERNEL,
         leader_ranges,
@@ -1362,8 +1334,18 @@ def _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tile
         ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=True),
     )
     descriptor = ttnn.ProgramDescriptor(semaphores=semaphores, cbs=cbs)
-    family.attach(descriptor, "mcast", [dataflow])
-    descriptor.kernels = [dataflow, compute]
+    dataflow = _mcast_dataflow_kernels(
+        descriptor,
+        device,
+        layout,
+        _TREE_REDUCE_KERNEL,
+        [CB_GATHER, CB_PARTIAL, CB_STAGE2, CB_OUTPUT]
+        + [num_tiles, page_bytes, rows, cols, kernel_iters, SEM_PROGRESS, SEM_STAGE2],
+        dataflow_rt,
+        rotating=False,
+        first_root=True,
+    )
+    descriptor.kernels = [*dataflow, compute]
     return descriptor
 
 

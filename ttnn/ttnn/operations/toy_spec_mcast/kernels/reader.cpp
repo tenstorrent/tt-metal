@@ -14,7 +14,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_spec.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_metal2.hpp"
 
 void kernel_main() {
     const uint32_t row_page = get_arg(args::row_page);
@@ -35,13 +35,14 @@ void kernel_main() {
         noc.async_read(acc_in, dfb_tile, tile_bytes, {.page_id = row_page}, {.offset_bytes = 0});
         noc.async_read_barrier();
 
-        auto pipe = mc.sender(noc);
-        if constexpr (mc.active) {
-            pipe.send(entry, entry, tile_bytes);
+        // A sender with no receivers (one-column row, single-core rectangle) still sends: that is
+        // the degenerate local copy, which is a no-op here because src == dst.
+        if (auto pipe = mc.optional_sender(noc)) {
+            pipe->send(entry, entry, tile_bytes);
         }
-    } else {
-        auto pipe = mc.receiver(noc);
-        pipe.receive();
+    } else if (auto pipe = mc.optional_receiver(noc)) {
+        // The optional faces compile on every placement, including those with no receiver at all.
+        pipe->receive();
     }
 
     dfb_tile.push_back(1);
