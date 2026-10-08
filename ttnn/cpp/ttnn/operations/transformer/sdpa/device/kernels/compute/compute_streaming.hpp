@@ -246,7 +246,7 @@ constexpr uint32_t INVALID_CB = 32;
 // BH benefits from blocked pack from width 3; WH keeps the threshold at 8 because
 // width-4 blocked-pack reconfiguration costs more than it saves there.
 #ifdef ARCH_BLACKHOLE
-constexpr uint32_t MIN_BLOCKED_PACK_TILES = 3;
+constexpr uint32_t MIN_BLOCKED_PACK_TILES = 4;
 #else
 constexpr uint32_t MIN_BLOCKED_PACK_TILES = 8;
 #endif
