@@ -38,6 +38,14 @@ def _fill(dev, memory_config, bytes_per_core_or_total):
     return out
 
 
+def _paged_fill(dev):
+    """Prefill KV write into a scratch paged cache (not the model's): 8 blocks x 8 kv heads x 32 x 128."""
+    cache = _up(dev, 8, 8, 32, 128)
+    page_table = ttnn.from_torch(torch.arange(8, dtype=torch.int32).reshape(1, 8), dtype=ttnn.int32, device=dev)
+    ttnn.experimental.paged_fill_cache(cache, _up(dev, 1, 8, 128, 128), page_table, batch_idx=0)
+    return [cache, page_table]
+
+
 def _sdpa_prog(dev):
     g = dev.compute_with_storage_grid_size()
     return ttnn.SDPAProgramConfig(
@@ -79,6 +87,25 @@ PROBES = {
         is_decode_mode=False,
     ),
     "add_bcast": lambda dev: ttnn.experimental.quasar.add(_up(dev, 1, 1, 256, 3072), _up(dev, 1, 3072)),
+    # Prefill ops not covered above, any of which could leave a tile counter undrained (#59180).
+    "concat119": lambda dev: ttnn.concat(
+        [_up(dev, 1, 1, 32, 1280) for _ in range(119)], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    ),
+    "untilize_wide": lambda dev: ttnn.untilize(
+        _up(dev, 1, 1, 32, 151936), use_multicore=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    ),
+    "create_heads_prefill": lambda dev: ttnn.experimental.nlp_create_qkv_heads(
+        _up(dev, 1, 1, 128, 6144),
+        num_heads=32,
+        num_kv_heads=8,
+        transpose_k_heads=False,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    ),
+    "concat_heads_prefill": lambda dev: ttnn.experimental.nlp_concat_heads(
+        _up(dev, 1, 32, 128, 128), memory_config=ttnn.DRAM_MEMORY_CONFIG
+    ),
+    "typecast": lambda dev: ttnn.typecast(_up(dev, 1, 8, 128, 128), dtype=ttnn.bfloat16),
+    "paged_fill_cache": lambda dev: _paged_fill(dev),
     # Fill free memory with random data (allocated, then freed by run()), so reads of never-written memory see garbage.
     "dirty_l1": lambda dev: _fill(dev, ttnn.L1_MEMORY_CONFIG, 3 * 1024 * 1024),
     "dirty_dram": lambda dev: _fill(dev, ttnn.DRAM_MEMORY_CONFIG, 256 * 1024 * 1024),
