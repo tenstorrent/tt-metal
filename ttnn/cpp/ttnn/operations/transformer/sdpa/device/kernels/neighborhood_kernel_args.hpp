@@ -175,6 +175,12 @@ enum : uint32_t {
     kv_ring_mode,
     kv_ring_columns,
 
+    // Work order (DIFFVAE_NA_EDGE_ORDER): how many chunks at each end of the H and W axes visit in
+    // their own group (chunk_layout::EdgeGroupedOrder). 0 and 0 keep index order. The writer
+    // receives the same two values and must walk the same order.
+    edge_order_height,
+    edge_order_width,
+
     COUNT
 };
 }  // namespace reader_arg
@@ -225,6 +231,10 @@ enum : uint32_t {
     volume_bricks_time,
     volume_bricks_height,
     volume_bricks_width,
+
+    // Same values as reader_arg::edge_order_height / edge_order_width.
+    edge_order_height,
+    edge_order_width,
     COUNT
 };
 }  // namespace writer_arg

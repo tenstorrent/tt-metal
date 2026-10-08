@@ -43,6 +43,11 @@ struct NeighborhoodSDPAOperation {
     // DIFFVAE_NA_KV_RING=0 turns it off). Read from the environment on every call, so it is part
     // of the program hash.
     static bool kv_ring_requested();
+
+    // Visit each core's edge chunks grouped by edge position so the persistent mask block is
+    // rewritten about once per group (DIFFVAE_NA_EDGE_ORDER=1, off by default). Part of the
+    // program hash.
+    static bool edge_order_requested();
 };
 
 Tensor neighborhood_sdpa(
