@@ -37,3 +37,18 @@ On marker: read driver.log `summ` lines (neighborhood-sdpa ms per arm).
   bf16 mask pages with the Q/K/V tile size, wrong for bf8 operands: fixed in 51ecd3ac3e2 (kernel only).
 - Tree runs @51ecd3ac3e2 (python/kernel-only on top of the 6a23f8dfe10 C++ build).
 - Jobs submitted by hand from the run (no driver): A = def + reads, B = math + bf8 (bf8 scored, HOST_SEEDS=0,1).
+- Built OK (build2.rc=0), t263/b checked out @51ecd3ac3e2.
+- Job A resubmitted as broker job 003 (10:55 UTC, queued behind t261 job 002).
+- DROP 2: job 003 (ours, t263 A) killed by device recovery at 2026-10-08 10:59:30 UTC, g15blx01, chips 16-23
+  (tray 3), 66 s in, during JIT warm-up (no NA had run). Bridge resets 005/006 failed, health-gate 007 failed.
+  Config A (def+reads) has now dropped twice in a row on blx01 (949, 003): skipped there per the rules,
+  though both drops look box-wide (t272 job 984 and t261 job 931 dropped the same way today).
+
+## Next step (exact)
+When t263-drv/probe.sh exits 0 (blx01 healthy, last incident >= 15 min old, no smarton job):
+ssh g15blx01: check `git -C /var/tmp/fasth3/t263/b rev-parse --short=11 HEAD` = 51ecd3ac3e2 (box rebooted? dir is
+on /var/tmp, survives), then from /var/tmp/fasth3/t263:
+  tt-device-mcp run-bg "bash $T/drv/run263.sh 'math:DIFFVAE_NA_ABLATE=math bf8:DIFFVAE_NA_BF8=1' $T/out_B 'math bf8' 'bf8'" -w $T -e $T/drv/env.yaml -t 540
+Then score: $F/t48/python_env/bin/python $F/t260/drv/cmp241.py $F/diffvae/ref $T/out_B/bf8 $T/out_B/cmp_bf8.json 0,1
+Compare bf8 md5 vs def 13802b012e19cf652be8d9c88cdd9316 (must differ), decode vs def 3.113-3.115 s (946/949).
+reads arm: skipped on blx01 (2 drops); follow-up on another box.
