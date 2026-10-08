@@ -468,6 +468,7 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
  * @param ct_dim: Number of column tiles in the block, used to size the column stride.
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
  * @param unpB_face_r_dim: Rows per face for operand B.
+ * @param narrow_tile: Whether operand A's tile is narrow (single column of faces).
  * @note Call @ref _llk_unpack_tilizeA_B_uninit_ to revert the config it writes, including the SrcA Y stride.
  * @ref _llk_unpack_tilizeA_B_ is the matching execute call.
  */
@@ -477,11 +478,12 @@ inline void _llk_unpack_tilizeA_B_init_(
     const std::uint32_t unpack_dst_format,
     const std::uint32_t ct_dim,
     const std::uint32_t num_faces       = 4,
-    const std::uint32_t unpB_face_r_dim = FACE_R_DIM)
+    const std::uint32_t unpB_face_r_dim = FACE_R_DIM,
+    const bool narrow_tile              = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // Sets the block_c_dim for unpack to use to increment the L1 address
-    const std::uint32_t c_dim_size = SCALE_DATUM_SIZE(unpack_src_format, ct_dim * ((num_faces == 1) ? FACE_C_DIM : TILE_C_DIM)) >> 4;
+    const std::uint32_t c_dim_size = SCALE_DATUM_SIZE(unpack_src_format, ct_dim * ((narrow_tile || (num_faces == 1)) ? FACE_C_DIM : TILE_C_DIM)) >> 4;
 
     // This sets the scratch register that CFGSHIFTMASK instruction uses to increment the L1 address
     TT_SETDMAREG(0, LOWER_HALFWORD(c_dim_size), 0, LO_16(p_gpr_unpack::TMP0));
@@ -520,6 +522,7 @@ inline void _llk_unpack_tilizeA_B_init_(
  * @param tile_index_a: Column tile index into operand A.
  * @param block_ct_dim: Number of column tiles in the block, used to compute face strides.
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
+ * @param narrow_tile: Whether operand A's tile is narrow (single column of faces).
  * @note Call @ref _llk_unpack_tilizeA_B_init_ with matching template args before this function, and
  *       @ref _llk_unpack_tilizeA_B_uninit_ after it to restore modified state.
  */
@@ -531,13 +534,15 @@ inline void _llk_unpack_tilizeA_B_(
     std::uint32_t address_b,
     std::uint32_t tile_index_a,
     std::uint32_t block_ct_dim,
-    std::uint32_t num_faces = 4)
+    std::uint32_t num_faces = 4,
+    const bool narrow_tile  = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    const std::uint32_t offset_address_a = SCALE_DATUM_SIZE(unpA_src_format, tile_index_a) << 1;
+    // Offset in 16B words: tile_index_a * tile width (TILE_C_DIM, or FACE_C_DIM for a narrow tile) / 16
+    const std::uint32_t offset_address_a = SCALE_DATUM_SIZE(unpA_src_format, tile_index_a) << (narrow_tile ? 0 : 1);
     const std::uint32_t address_a        = base_address_a + offset_address_a;
 
-    const std::uint32_t block_c_dim = block_ct_dim * ((num_faces == 1) ? FACE_C_DIM : TILE_C_DIM) * face_r_dim;
+    const std::uint32_t block_c_dim = block_ct_dim * ((narrow_tile || (num_faces == 1)) ? FACE_C_DIM : TILE_C_DIM) * face_r_dim;
     const bool run_r_dim_loop       = (face_r_dim > 1);
 
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
@@ -552,9 +557,13 @@ inline void _llk_unpack_tilizeA_B_(
         Face 1: address = base_address + 1x16 row of datums
         Face 2: address = base_address + block_ct_dim * TILE_C_DIM * face_r_dim (address for the bottom 2 faces of tiles)
         Face 3: address = base_address + block_ct_dim * TILE_C_DIM * face_r_dim + 1x16 row of datums
+        A narrow tile is one face wide, so its face 1 sits below face 0:
+        Face 1: address = base_address + block_ct_dim * FACE_C_DIM * face_r_dim
         */
-        std::uint32_t address_face_a = (n % 2 == 0) ? address_a : (address_a + (SCALE_DATUM_SIZE(unpA_src_format, FACE_C_DIM) >> 4));
-        address_face_a += (n >= 2) ? ((SCALE_DATUM_SIZE(unpA_src_format, block_c_dim)) >> 4) : 0;
+        const bool right_face        = !narrow_tile && (n % 2 == 1);
+        const bool bottom_face       = narrow_tile ? (n == 1) : (n >= 2);
+        std::uint32_t address_face_a = right_face ? (address_a + (SCALE_DATUM_SIZE(unpA_src_format, FACE_C_DIM) >> 4)) : address_a;
+        address_face_a += bottom_face ? ((SCALE_DATUM_SIZE(unpA_src_format, block_c_dim)) >> 4) : 0;
 
         // Wait for free context
         wait_for_next_context(2);

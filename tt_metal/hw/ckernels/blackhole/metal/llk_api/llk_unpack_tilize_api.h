@@ -202,8 +202,8 @@ inline void llk_unpack_tilizeA_B_init(
         unpack_dst_format[operandA_id],
         ct_dim,
         num_faces,
-        unpB_face_r_dim
-    );
+        unpB_face_r_dim,
+        get_operand_narrow_tile(operandA_id));
 }
 
 /**
@@ -263,8 +263,8 @@ inline void llk_unpack_tilizeA_B(
         address_b,
         tile_index_a,
         block_ct_dim,
-        num_faces
-    );
+        num_faces,
+        get_operand_narrow_tile(operandA_id));
 
     WAYPOINT("UPTD");
 }
