@@ -1,7 +1,8 @@
 #!/bin/bash
 # t301: the repo's standard LTX e2e test, unmodified, 8+3 (each tree's default), one arm per broker job.
 #   main: origin/main 80b1cd689d0, t293's lean build.   pr: ttp/ltx23-main-pr df9e5ecaac6, own lean build.
-# Both: LTX-2.3 22B distilled 1.1, bf16 default, 1088x1920, 145 frames, seed 10, 4x8 bh_4x8sp1tp0_ring,
+# Both: LTX-2.3 22B distilled 1.1, bf16 default, 1088x1920, 145 frames, seed 10, 4x8 ring nl2 fsdp0
+#   (main id 4x8sp1tp0nl2_ring_is_fsdp0 = ltx-rt id bh_4x8sp1tp0_ring),
 # TT_DIT_CACHE_DIR unset (loads from the local checkpoint, writes no DiT cache), RUN_VBENCH=0 RUN_CLIP=0.
 # Warm table = gen #2 (pure replay). Usage (broker -t 600): run301.sh main|pr
 set -o pipefail
@@ -30,8 +31,13 @@ for f in $W/ttnn/ttnn/_ttnn.so $LTX_CHECKPOINT $GEMMA_PATH $T; do
   [ -r $f ] || { echo "missing $f" | tee -a run.log; exit 3; }
 done
 T0=$(date +%s)
-python -u -m pytest -c $W/pytest.ini --rootdir=$W -sv -p no:cacheprovider --timeout=570 "$T::test_pipeline_distilled" -k bh_4x8sp1tp0_ring 2>&1 | tee -a run.log
-rc=${PIPESTATUS[0]}
+# pytest runs in its own process group; any exit or broker kill takes the whole group (no orphan holds the device).
+export T W
+setsid bash -c 'python -u -m pytest -c $W/pytest.ini --rootdir=$W -sv -p no:cacheprovider --timeout=570 "$T::test_pipeline_distilled" -k 4x8sp1tp0nl2_ring_is_fsdp0 2>&1 | tee -a run.log; exit ${PIPESTATUS[0]}' &
+PG=$!
+trap 'kill -TERM -- -$PG 2>/dev/null; sleep 5; kill -KILL -- -$PG 2>/dev/null' EXIT
+trap 'exit 143' TERM INT
+wait $PG; rc=$?
 echo "[t301] process wall $(( $(date +%s) - T0 )) s" | tee -a run.log
 md5sum ltx_av_fast_*.mp4 2>/dev/null | tee -a run.log
 echo "T301_EXIT=$rc" | tee -a run.log

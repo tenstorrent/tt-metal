@@ -14,7 +14,7 @@ submit() {
     out=$(tt-device-mcp status 2>&1)
     run=$(echo "$out" | sed -n '/^RUNNING/,/^QUEUED/p'); q=$(echo "$out" | sed -n '/^QUEUED/,/^RECENT/p')
     if echo "$out" | grep -qi upgrade || echo "$run$q" | grep -qiE 'hold|health|reset|fabric-check|smarton'; then sleep 30; continue; fi
-    sub=$(tt-device-mcp run-bg "bash $D/run301.sh $1" -w $D -t 600 2>&1)
+    sub=$(tt-device-mcp run-bg "bash $D/run301.sh $1" -w $D -e $D/env.yaml -t 600 2>&1)
     echo "$sub" >> $L; echo "$sub" | grep -oE 'Job [0-9]+' | head -1 | grep -oE '[0-9]+'; return
   done
 }
@@ -29,6 +29,7 @@ for A in main pr; do
     log "arm=$A attempt=$att job=$J submitted"
     s=$(waitjob $J); log "arm=$A attempt=$att job=$J status=$s"
     cp $D/out_$A/run.log $D/run_${A}_job$J.log 2>/dev/null
+    sleep 10; log "arm=$A job=$J leftover: $(ps -u $(id -u) -o pid=,pgid=,args= | grep -E 'pytest|run301' | grep -v grep | tr '\n' ';')"
     RES[$A]="job=$J status=$s"
     [ "$s" = completed ] && break
     if [ "$s" = failed ] && grep -q '^T301_EXIT=' $D/out_$A/run.log 2>/dev/null; then break; fi
@@ -38,7 +39,6 @@ for A in main pr; do
 done
 P=$F/t48/python_env/bin/python
 for g in 0 1 2; do f=ltx_av_fast_1920x1088_$g.mp4
-  [ -e $D/out_main/$f ] && [ -e $D/out_pr/$f ] && $P $D/cmp301.py $D/out_main/$f $D/out_pr/$f $D gen$g >> $D/cmp.txt 2>&1
+  if [ -e $D/out_main/$f ] && [ -e $D/out_pr/$f ]; then $P $D/cmp301.py $D/out_main/$f $D/out_pr/$f $D gen$g >> $D/cmp.txt 2>&1; log "cmp gen$g rc=$?"; fi
 done
-log "cmp rc=$?"
 echo "DONE main:${RES[main]} pr:${RES[pr]}" > $M

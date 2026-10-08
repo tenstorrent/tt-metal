@@ -13,6 +13,16 @@ Box: blx01 (blx03 unreachable at 19:33 UTC: "No route to host"). Everything unde
   (no DiT cache written), JIT cache t301/jit-<arm>. Warm table = gen #2 (pure replay) in out_<arm>/run.log.
 - Marker: /var/tmp/fasth3/t301/drv301.done; per-step log drv301.done.log (job ids, statuses).
 
+## Attempt 2 (2026-10-08 ~19:55 UTC, blx03 still "No route to host")
+- First driver run: both broker submits refused ('Python env not found at .../t301/tt-metal/python_env'). Fix: env.yaml
+  (PYTHON_ENV_DIR=t48 python_env, HOME/TMPDIR under /var/tmp/fasth3) passed with -e.
+- Job 122 (main): 7 deselected, exit 5. main's test ids differ from ltx-rt: ltx-rt 'bh_4x8sp1tp0_ring' ((4,8) sp1 tp0
+  nl2 ring fsdp0, ring_trace_params) = main/PR '4x8sp1tp0nl2_ring_is_fsdp0'. Test file identical in both arms. Own queued
+  PR job 125 cancelled. Old outputs in t301/prev1.
+- run301.sh now runs pytest under setsid with an EXIT/TERM trap that kills the whole group; the driver logs any
+  leftover pytest/run301 process after each job.
+- Driver restarted 19:58:40 UTC; main arm = job 126 (queued behind ltx-host 124).
+
 Next: when the marker exists, read it. DONE -> quote both gen #2 timing tables from out_main/run.log and out_pr/run.log
 verbatim, per-row deltas, check ~-0.4 s across Stage1+Stage2+Audio decode (VAE decode unchanged), cmp.txt, md5 lines.
 mp4 md5 always differs between arms (PR export is x264 ultrafast crf 20); PCC/PSNR on decoded frames is the check.
