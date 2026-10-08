@@ -36,8 +36,6 @@ except ModuleNotFoundError:
 MODEL_DTYPE = ttnn.bfloat16
 PREFILL_CHUNK_SIZES = (2048, 4096, 8192, 16384, 32768)
 LAYER_PERF_CONTEXT_LENGTHS = (262144,)
-# Chunk indices measured per layer type by chunk_idx="ci".
-LAYER_PERF_CI_CELLS = {"global": (0, 1, 15, 31), "local": (0, 1)}
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
 
 
@@ -421,9 +419,18 @@ def test_prefill_chunk_sweep_traced(mesh_device, context_len, token_source, rese
 # ── Per-layer prefill timing ────────────────────────────────────────────────
 
 
-def _perf_signposts(layer_type, chunk_idx):
+def layer_perf_ci_cells(n_chunks):
+    """Chunk indices measured by chunk_idx="ci": first, second, middle and last global chunk; first two sliding."""
+    in_range = set(range(n_chunks))
+    return {
+        "global": tuple(sorted({0, 1, n_chunks // 2 - 1, n_chunks - 1} & in_range)),
+        "local": tuple(sorted({0, 1} & in_range)),
+    }
+
+
+def _perf_signposts(layer_type, chunk_size, chunk_idx):
     """Return profiler signposts for one layer and chunk."""
-    base = f"gemma4-layer-{layer_type}-chunk{chunk_idx}"
+    base = f"gemma4-layer-{layer_type}-sz{chunk_size}-chunk{chunk_idx}"
     return f"{base}-start", f"{base}-stop"
 
 
@@ -458,7 +465,8 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     n_chunks = context_len // chunk_size
     layer_types = ["global", "local"] if layer_type == "both" else [layer_type]
     if chunk_idx == "ci":
-        cells_by_type = {lt: LAYER_PERF_CI_CELLS[lt] for lt in layer_types}
+        ci_cells = layer_perf_ci_cells(n_chunks)
+        cells_by_type = {lt: ci_cells[lt] for lt in layer_types}
     elif chunk_idx == "all":
         cells_by_type = {lt: tuple(range(n_chunks)) for lt in layer_types}
     else:
@@ -619,7 +627,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     results = []
     try:
         for lt, idx in cells:
-            sp_start, sp_stop = _perf_signposts(lt, idx)
+            sp_start, sp_stop = _perf_signposts(lt, chunk_size, idx)
 
             chunk_start = _stage(idx)
             ttnn.execute_trace(mesh_device, prep_traces[lt], cq_id=0, blocking=False)
