@@ -7,8 +7,8 @@ power, its energy contribution to one block pass, and its energy per FLOP.
 parses its stdout, so `ttnn_ops_workload.py` is just a workload that happens to print the
 summary rows `parser.py` expects. `preview_op_breakdown.py` only reads tt-ember's output.
 
-Results already collected on Blackhole **p100a** are in `results/p100a/`. This document is
-written so the same measurement can be reproduced on Wormhole **n150** and the two compared.
+The paper's Blackhole **p100a** results are not committed here. This document is written so the
+same measurement can be reproduced, on p100a or on Wormhole **n150**, and the two compared.
 
 ---
 
@@ -24,7 +24,9 @@ the earlier Wormhole runs and cost real time to reconstruct.
 |---|---|
 | **tt-metal** | `e0c2360bb6ce706f801cd728b46e20b28f5b42d8` (upstream `main`, 2026-09-02) |
 | **tt-umd** (submodule of the above) | `169f35494e4d7e7aabefb0da0da3c44500dddeb0` (2026-08-27) |
-| tt-ember | this branch, off `ncvetkovic/fix-telemetry-tdp-regex` |
+
+That tt-metal commit predates `tools/tt-ember/`, so build it as below but run the scripts from a
+checkout that has this directory.
 
 `tt-umd` is pinned by tt-metal's `.gitmodules`, so `git submodule update --init --recursive` on
 the tt-metal commit above lands on it automatically. Verify with:
@@ -73,33 +75,21 @@ That venv also carries numpy/matplotlib, so it can serve as tt-ember's `--tt-ven
 too. **Activate it before invoking `auto.py`**, because the workload script is launched by
 `auto.py` with an inherited environment and resolves `python3` from `PATH`.
 
-### tt-ember
-
-Use this branch. It contains one fix beyond `main` that is **mandatory** against any current
-tt-metal:
-
-> Current `tt-umd` prints TDP as a value/limit pair, `TDP 16/150 W`. `parser.py` on `main`
-> requires a bare value, so the TDP match fails; `parse_line()` needs all three of TDP/TDC/
-> VCORE, so **every telemetry sample is discarded** and the run aborts with
-> `No telemetry lines matched. Check log format.`
-
-If you see that error, you are on a tt-ember without the fix.
-
 ---
 
 ## 2. Run it
 
 ```bash
-cd /path/to/tt-ember
 export TT_METAL_HOME=/path/to/tt-metal
+cd /path/to/tt-metal-with-tt-ember/tools/tt-ember
 source /path/to/ttnn_venv/bin/activate
 
 tt-smi -r && sleep 15          # clean thermal/electrical baseline
 
 python3 auto.py \
   --telemetry-exe "$TT_METAL_HOME"/build_Release/tools/umd/telemetry \
-  --telemetry-freq 100 \
-  --app-exe /path/to/tt-metal/tools/tt-ember/op_power_breakdown/ttnn_ops_workload.py \
+  --telemetry-freq 10000 \
+  --app-exe ./op_power_breakdown/ttnn_ops_workload.py \
   --parser-script ./parser.py \
   --tt-venv-activate /path/to/ttnn_venv/bin/activate \
   --tt-metal-root "$TT_METAL_HOME" \
@@ -113,21 +103,27 @@ python3 auto.py \
 `--app-args` **must be last** — `auto.py` uses `argparse.REMAINDER` and will otherwise swallow
 every following argument.
 
+`--telemetry-freq 10000` asks for a 100 us polling period. That is what the p100a capture used:
+before `auto.py` converted Hz to the period telemetry's `-f` expects, it was run as
+`--telemetry-freq 100`, which telemetry read as 100 us. At a lower rate the short calls below are
+not resolved (see the accuracy notes).
+
 Runtime is roughly 3 minutes: 12 ops x (4 s window + 5 s idle gap) plus device init and kernel
 JIT on the first run.
 
 Then render the breakdown:
 
 ```bash
-python3 /path/to/tt-metal/tools/tt-ember/op_power_breakdown/preview_op_breakdown.py ./out_ops/block_n150
+python3 ./op_power_breakdown/preview_op_breakdown.py ./out_ops/block_n150 --board "Wormhole n150"
 ```
 
-That prints the table and writes two figures into `out_ops/block_n150/Figures/`:
+That prints the table and writes three figures into `out_ops/block_n150/Figures/`:
 
 | file | what it shows |
 |---|---|
 | `op_energy_breakdown.png` | energy per op for one block pass, split into dynamic and idle-floor share |
 | `op_power_breakdown.png` | three panels over one op axis: pJ/FLOP (log scale), mJ/pass, dynamic W |
+| `op_energy_normalised.png` | two panels: energy per FLOP and energy per byte touched (log scale), with each op's arithmetic intensity |
 
 tt-ember's own 15 figures are written alongside. Most of them plot against *core count*, which
 this workload repurposes as an op index, so only `telemetry_overview.png` is meaningful from
@@ -187,8 +183,8 @@ Three things worth checking on n150:
 
 Read these before treating any number as precise.
 
-**Telemetry time resolution is ~103 us**, regardless of `--telemetry-freq` — the tool caps
-around 9.7 kHz, so requesting 50 us gains nothing. An op call shorter than that is never
+**Telemetry time resolution is ~103 us** at best — the tool tops out around 9.7 kHz, so asking
+for more than `--telemetry-freq 10000` gains nothing. An op call shorter than that is never
 resolved, and its measured power is diluted by whatever host dispatch gap follows it. Measured
 on p100a: a 41 us call reads about 24% low, and the effect vanishes once a call spans roughly
 ten samples. This is exactly why the script batches each op to ~1.5 ms per call. **Check the
@@ -200,9 +196,9 @@ slightly understated; they are under 1% of block energy, so it does not matter t
 per interval the standard error is about 0.002 A. Quantisation is not what limits accuracy.
 
 **Baseline drift is what limits accuracy.** The idle floor climbs as the board warms — about
-9 A across a p100a run. `parser.py` estimates it from the pauses either side of each interval,
-which gives roughly 1 A of uncertainty per interval: under 1% on a 130 A matmul, but 5-8% on a
-15 A elementwise op.
+9 A across a p100a run. `parser.py` takes one fixed baseline per run, from the pause after the
+first op, so any drift after that is counted as dynamic current for the later ops. That barely
+moves a 130 A matmul, but it is a large share of a 15 A elementwise op.
 
 **FLOP counts are exact only for matmuls** (`2*M*N*K`). Elementwise and normalisation ops use
 per-element conventions declared in `FLOPS_PER_ELEM` at the top of `ttnn_ops_workload.py`
@@ -233,5 +229,5 @@ fields:
 `program_intervals.csv` on the index. That is the whole mechanism — no tt-ember change.
 
 Each op is run repeatedly for ~4 s so the interval is long enough to measure, and separated by
-a 5 s idle gap because `parser.py` derives the baseline from the pauses between intervals. Both
-are configurable via `--target-seconds` and `--pause-seconds`.
+a 5 s idle gap so `parser.py` has an idle stretch to measure the baseline in. Both are
+configurable via `--target-seconds` and `--pause-seconds`.
