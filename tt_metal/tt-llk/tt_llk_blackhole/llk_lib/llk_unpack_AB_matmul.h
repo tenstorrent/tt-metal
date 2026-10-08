@@ -21,6 +21,33 @@ using namespace ckernel::unpacker;
 // Reuse direction (ct_dim >= rt_dim) the unpack MOP was programmed for; written and read only under LLK asserts.
 inline bool unpack_matmul_init_reuse_a = true;
 
+// Set by the first ttsync matmul unpack init of a kernel; _llk_unpack_AB_matmul_ttsync_restore_ clears it at kernel end.
+inline std::uint32_t unpack_matmul_ttsync_on = 0;
+
+// A kernel that runs the ttsync form defines MATMUL_UNPACK_TTSYNC before its includes, so that its TRISC wrapper calls
+// _llk_unpack_AB_matmul_ttsync_restore_ after the kernel.
+#if defined(MATMUL_UNPACK_TTSYNC)
+inline constexpr bool unpack_matmul_ttsync_restored = true;
+#else
+inline constexpr bool unpack_matmul_ttsync_restored = false;
+#endif
+
+/**
+ * @brief Turn Auto TTSync off and restore the MOP and REPLAY resource declarations, if a ttsync matmul init changed
+ * them. Called by the TRISC kernel wrapper after a kernel that defines MATMUL_UNPACK_TTSYNC.
+ */
+inline void _llk_unpack_AB_matmul_ttsync_restore_()
+{
+    if (unpack_matmul_ttsync_on)
+    {
+        TTI_RESOURCEDECL(2, 0x1FF, 13);
+        TTI_RESOURCEDECL(2, 0x1FF, 14);
+        set_ttsync_enables<0>();
+        tensix_sync();
+        unpack_matmul_ttsync_on = 0;
+    }
+}
+
 /**
  * @brief Set the SrcA address step used to stream matmul in1 columns.
  *
@@ -235,6 +262,10 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  *
  * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
+ * @tparam ttsync: Program each row's base addresses through two GPRs and WRCFG under Auto TTSync instead of the context
+ *                 poll and the memory-mapped writes; faster for streams of one or two tiles. The first such init of a
+ *                 kernel turns Auto TTSync on; the kernel must define MATMUL_UNPACK_TTSYNC (see
+ *                 @ref _llk_unpack_AB_matmul_ttsync_restore_), and @ref _llk_unpack_AB_matmul_ takes the same value.
  * @param transpose: Nonzero to enable within-face (16x16) transpose for SrcA.
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
@@ -252,7 +283,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  * @ref _llk_unpack_AB_matmul_ is the matching execute call.
  * @ref _llk_math_matmul_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */
-template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
+template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, bool ttsync = false>
 __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     const std::uint32_t transpose       = 0,
     const std::uint32_t ct_dim          = 1,
@@ -308,6 +339,20 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
 
     _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face, stream_narrow);
+
+    if constexpr (ttsync)
+    {
+        static_assert(unpack_matmul_ttsync_restored, "a kernel that runs the ttsync matmul unpack must define MATMUL_UNPACK_TTSYNC");
+        if (!unpack_matmul_ttsync_on)
+        {
+            // the unpack MOP and replay never touch the address GPRs, so the RISC's stores need not wait for them
+            TTI_RESOURCEDECL(2, 0x19F, 13);
+            TTI_RESOURCEDECL(2, 0x19F, 14);
+            set_ttsync_enables<TRACK_GPR | TRACK_TENSIX_INSTRUCTIONS>();
+            tensix_sync();
+            unpack_matmul_ttsync_on = 1;
+        }
+    }
 }
 
 /**
@@ -342,11 +387,12 @@ inline void _llk_unpack_AB_matmul_uninit_()
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
  * @param kt_dim: Number of tiles along the contraction (K) dimension.
+ * @tparam ttsync: The value @ref _llk_unpack_AB_matmul_init_ was called with.
  * @note Call @ref _llk_unpack_AB_matmul_init_ with matching template args before this function, and
  *       @ref _llk_unpack_AB_matmul_uninit_ after it to restore modified state.
  * @ref _llk_math_matmul_ on the math thread consumes the SrcA/SrcB tiles unpacked here.
  */
-template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
+template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, bool ttsync = false>
 inline void _llk_unpack_AB_matmul_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -390,16 +436,40 @@ inline void _llk_unpack_AB_matmul_(
         std::uint32_t address_a = base_address_a + offset_address_a;
         std::uint32_t address_b = base_address_b + offset_address_b;
 
-        // Wait for free context
-        wait_for_next_context(2);
+        if constexpr (ttsync)
+        {
+            LLK_ASSERT(is_valid_L1_address(address_a), "L1 address_a must be in valid L1 memory region");
+            LLK_ASSERT(is_valid_L1_address(address_b), "L1 address_b must be in valid L1 memory region");
+            // still counted for the context poll of the kernel's other unpack calls; the SEMGET below releases it
+            semaphore_post(semaphore::UNPACK_SYNC);
+            // Auto TTSync holds these stores until the previous row's WRCFGs have read the GPRs
+            regfile[p_gpr_unpack::MATMUL_ROW_ADDR_B] = address_b;
+            regfile[p_gpr_unpack::MATMUL_ROW_ADDR_A] = address_a;
+            if (unp_cfg_context == 0)
+            {
+                TTI_WRCFG(p_gpr_unpack::MATMUL_ROW_ADDR_B, p_cfg::WRCFG_32b, THCON_SEC0_REG3_Base_address_ADDR32);
+                TTI_WRCFG(p_gpr_unpack::MATMUL_ROW_ADDR_A, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_address_ADDR32);
+            }
+            else
+            {
+                TTI_WRCFG(p_gpr_unpack::MATMUL_ROW_ADDR_B, p_cfg::WRCFG_32b, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+                TTI_WRCFG(p_gpr_unpack::MATMUL_ROW_ADDR_A, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
+            }
+            TTI_NOP; // the instruction after a WRCFG must not read the config it writes
+        }
+        else
+        {
+            // Wait for free context
+            wait_for_next_context(2);
 
-        // Validate and configure addresses (note: address_b goes to SEC0, address_a to SEC1 for matmul)
-        _llk_unpack_configure_addresses_(address_b, address_a, cfg);
+            // Validate and configure addresses (note: address_b goes to SEC0, address_a to SEC1 for matmul)
+            _llk_unpack_configure_addresses_(address_b, address_a, cfg);
 
-        semaphore_post(semaphore::UNPACK_SYNC); // Trisc::SEMPOST for context acquire
+            semaphore_post(semaphore::UNPACK_SYNC); // Trisc::SEMPOST for context acquire
 
-        // Stall unpacker until pending CFG writes from Trisc have completed
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+            // Stall unpacker until pending CFG writes from Trisc have completed
+            TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        }
 
         if (reuse_a)
         {
