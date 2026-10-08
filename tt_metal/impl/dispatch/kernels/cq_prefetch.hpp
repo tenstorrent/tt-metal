@@ -13,8 +13,8 @@ namespace tt::tt_metal {
 
 struct PrefetchConstants {
     static constexpr uint32_t PREFETCH_MAX_OUTSTANDING_PCIE_READS = 4U;
-    // With snooped fetch queue entries, the host flips this bit each lap around the ring so the prefetcher
-    // can tell a new entry from the previous lap's without clearing consumed slots.
+    // With a cached fetch queue, the host flips this bit each lap around the ring so the prefetcher can tell a
+    // new entry from the previous lap's without clearing consumed slots.
     static constexpr uint32_t PREFETCH_Q_PHASE_BIT = 30U;
 };
 static_assert(

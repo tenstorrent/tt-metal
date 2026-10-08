@@ -47,14 +47,13 @@ public:
 
     uint32_t prefetch_q_entry_size_bytes() const;
 
-    // True on Quasar when the host writes fetch queue entries with the NOC snoop bit set, which lets the
-    // prefetcher poll them through its cache. Entries then carry a per-lap phase bit and are never cleared,
-    // and the host writes them a whole 16B beat at a time. Only the RTL simulator's UMD window can carry the
-    // snoop bit today, so ttsim and silicon poll uncached.
-    bool prefetch_q_snoop() const;
+    // True on Quasar when the prefetcher polls fetch queue entries through its cache. Entries then carry a per-lap
+    // phase bit and are never cleared, and the prefetcher invalidates queue lines itself to see new host writes.
+    // Only enabled on the RTL simulator so far, so ttsim and silicon poll uncached.
+    bool prefetch_q_cached() const;
 
-    // Size of each snooped fetch queue write. A snooped write must cover a whole aligned 16B beat (QUAS-4226).
-    static constexpr uint32_t PREFETCH_Q_SNOOP_BEAT_BYTES = 16;
+    // DM core cache line size. The cached fetch queue must cover whole lines.
+    static constexpr uint32_t PREFETCH_Q_CACHE_LINE_BYTES = 64;
 
     uint32_t prefetch_q_size() const;
 
@@ -128,7 +127,7 @@ private:
 
     DispatchSettings settings;
 
-    bool prefetch_q_snoop_ = false;
+    bool prefetch_q_cached_ = false;
 
     uint32_t num_cqs_per_core_ = 0;
     uint32_t cq_zone_stride_ = 0;
