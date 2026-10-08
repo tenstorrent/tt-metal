@@ -653,8 +653,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 tensor_args.input_v->logical_shape()[3] == q_shape[3],
             "Named ring recipes require matching Q/K/V head dims");
         TT_FATAL(
-            !args.is_causal && !args.is_balanced && !args.has_sliding_window() && !has_indexed_kv_cache &&
-                !kv_pad_rotation_active(args, tensor_args) && !tensor_args.attention_sink,
+            !args.has_sliding_window(),
+            "Named ring recipes do not support sliding_window_size yet; omit precision for the legacy kernel");
+        TT_FATAL(
+            !has_indexed_kv_cache && !kv_pad_rotation_active(args, tensor_args) && !tensor_args.attention_sink,
             "Unsupported feature for named ring recipes");
     } else if ((!args.is_causal && !is_chunked) || args.is_cross) {
         for (const auto& tensor : sdpa_input_tensors) {
@@ -1641,7 +1643,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         joint_strategy,
         scale,
         is_causal,
-        is_balanced,
+        // Zigzag balancing orders causal work only: a non-causal call runs unbalanced (is_cross keeps the flag,
+        // which validation rejects).
+        is_balanced && (is_causal || is_cross),
         is_cross,
         logical_n,
         logical_l,
