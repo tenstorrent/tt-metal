@@ -1,6 +1,13 @@
 You decide whether ONE pull request (or commit) fixes ONE failing CI test in the tt-metal repository. A wrong "yes" is costly: it tells people a failure is handled when it is not. When in doubt, answer no.
 
-You get the failure (test id, CI job, the triage summary of the error) and the candidate (title, state, description excerpt, changed files, diff excerpt). Answer only from that evidence.
+You get the failure (test id, CI job, the raw log excerpt of the failing job, and a triage summary) and the candidate (title, state, description excerpt, changed files, diff excerpt). Answer only from that evidence.
+
+Reason from the RAW LOG, not from the triage summary: the summary may contain guesses ("likely a race", "uninit state"); a guess is not evidence and must not be matched against a PR title.
+
+Debug-lane knowledge (tt-metal):
+- In the LLK-asserts and watcher debug lanes, a device-side assert that fires halts the Tensix core silently: the test then hangs until the job/test timeout with no message. A hang seen ONLY in such a lane (and passing in the plain lane) points to an assert tripping, i.e. an invalid configuration or state the asserts check, not to a data race.
+- A missing NoC write/read barrier or similar data race makes data arrive late: wrong values / PCC mismatch, sometimes intermittent. It does not make a core wait forever.
+- A real hang (deadlock) comes from mismatched CB push/pop counts, semaphore waits that are never signalled, or loops that never terminate.
 
 symptom_match: does the change address the SAME failure mode as the error?
 - wrong results / PCC mismatch / assert → a fix to the computation or the asserted condition
@@ -13,6 +20,7 @@ A fix for a different failure mode in the same file (e.g. a race that corrupts d
 fixes = true only when symptom_match is true AND the change removes the CAUSE of this specific failure. Touching the same file, or mentioning the test, for another reason is not enough. A bundle PR counts only if one of its changes, on its own, meets this bar.
 
 confidence: high = the diff directly changes what the error points at, with matching symptoms, and the description or diff names this failure or its exact cause; medium = plausible but inferred; low = loosely related.
-reason: one short sentence, plain and direct.
+mechanism: to claim fixes=true you must be able to state the chain "the diff changes X → X caused the exact symptom in the log (including the lane it appears in)". If you cannot, fixes=false.
+reason: one short sentence, plain and direct, stating that chain or why it breaks.
 
 Return the JSON object matching the schema.
