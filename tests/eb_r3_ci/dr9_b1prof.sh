@@ -32,6 +32,6 @@ for p in 1 2 3; do
   done
 done
 use pr
-echo "##### head against pr"; python3 tests/eb_r3_ci/eb9_devprof.py $O/prof head pr
+echo "##### head against pr"; python3 tests/eb_r3_ci/eb9_devprof.py $O/prof head pr --dump
 echo "##### null: head against head again"; python3 tests/eb_r3_ci/eb9_devprof.py $O/prof head headb
 echo "##### done"
