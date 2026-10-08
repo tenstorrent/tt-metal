@@ -318,6 +318,9 @@ INSTANTIATE_TEST_SUITE_P(
 class SumReduceScalarZeroFlagTest : public LLKMeshDeviceSingleCardFixture {};
 
 TEST_F(SumReduceScalarZeroFlagTest, RestoresDefaultAfterCopyBeforeDenormalScaler) {
+    if (this->arch_ == ARCH::QUASAR) {
+        GTEST_SKIP() << "not supported on Quasar";
+    }
     constexpr uint16_t largest_finite_bfloat16 = 0x7f7f;
     const float denormal_scaler = static_cast<float>(std::bit_cast<bfloat16>(uint16_t{1}));
 

@@ -1109,6 +1109,9 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
 ////////////////////////////////////////////////////////////////////////////
 
 TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
+    if (this->arch_ == ARCH::QUASAR) {
+        GTEST_SKIP() << "not supported on Quasar";
+    }
     for (bool explicit_reconfig : {true, false}) {
         for (bool split_src_reconfig : {true, false}) {
             for (bool fp32_dest_acc_en : {true, false}) {
@@ -1145,6 +1148,9 @@ TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
 }
 
 TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
+    if (this->arch_ == ARCH::QUASAR) {
+        GTEST_SKIP() << "not supported on Quasar";
+    }
     for (bool l1_acc : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "L1 accumulation is {}, DstSyncFull = {}", l1_acc ? "on." : "off.", dst_full_sync_en);

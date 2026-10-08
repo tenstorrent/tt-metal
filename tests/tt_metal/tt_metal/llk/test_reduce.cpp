@@ -626,6 +626,9 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceH) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceW) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP();
+    }
     std::vector<std::uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);

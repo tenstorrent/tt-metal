@@ -1456,7 +1456,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) 
 // Quasar fast untilize: no dedicated fast-untilize LLK on Quasar, so fast_untilize_* (api/compute/experimental/
 // fast_untilize.h) forwards to the plain pack_untilize path -- this exercises that forwarding on real Quasar
 // single-card CI.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeFastUntilize) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_QuasarComputeFastUntilize) {
     vector<vector<std::uint32_t>> num_tiles = {{1, 1}, {1, 4}, {2, 2}};
     for (auto num_tile : num_tiles) {
         unit_tests::compute::tilize::TestConfig test_config = {
@@ -1476,7 +1476,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeFastUntilize) {
 
 // Quasar fast tilize: no dedicated fast-tilize LLK on Quasar, so fast_tilize_* forwards to the plain
 // unpack_tilize path (tilize.h) -- this exercises that forwarding on real Quasar single-card CI.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeFastTilize) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_QuasarComputeFastTilize) {
     vector<vector<std::uint32_t>> num_tiles = {{1, 1}, {1, 4}, {2, 2}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {false}) {

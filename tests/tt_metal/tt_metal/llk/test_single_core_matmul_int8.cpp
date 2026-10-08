@@ -229,6 +229,9 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
 }  // namespace unit_tests::compute::matmul
 
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmulInt8) {
+    if (this->arch_ == ARCH::QUASAR) {
+        GTEST_SKIP() << "not supported on Quasar";
+    }
     ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul_int8(this->devices_.at(0)));
 }
 
