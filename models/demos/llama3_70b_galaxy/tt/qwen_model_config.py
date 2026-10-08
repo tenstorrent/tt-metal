@@ -98,6 +98,21 @@ def ring_sdpa_balanced_q_chunk(seq_len, n_local_heads, num_cores, ring_size=4, d
     return default_q_chunk
 
 
+# Prefill ring reduce-scatter (TT_CCL.ring_reduce_scatter -> reduce_scatter_minimal_async, 4 links) settings
+# for the untraced long prefills (> 4096 tokens, batch 1) on Wormhole, per buffer_key. Measured at 40960 tokens
+# (Qwen3-32B shapes, B=1): FF1/FF3 [S,3200] bf8, 4 workers/link + default sync/buffers 2.82 ms -> 6 workers/link,
+# 64 chunks per sync, 4 buffers per channel 2.45 ms; output bit-identical. Other buffer keys keep the defaults.
+QWEN_PREFILL_RING_RS_TUNED_KEYS = ("FF1", "FF3")
+QWEN_PREFILL_RING_RS_MIN_SEQ_LEN = 4096
+
+
+def qwen_prefill_ring_rs_params(seq_len, buffer_key):
+    """reduce_scatter_minimal_async overrides for one Qwen prefill ring RS, or None to keep the defaults."""
+    if seq_len <= QWEN_PREFILL_RING_RS_MIN_SEQ_LEN or buffer_key not in QWEN_PREFILL_RING_RS_TUNED_KEYS:
+        return None
+    return dict(num_workers_per_link=6, chunks_per_sync=64, num_buffers_per_channel=4)
+
+
 def qwen_ring_sdpa_program_config(base_program_config, seq_len, n_local_heads, exp_approx_mode):
     """Ring SDPA program config: base_program_config (SDPA_PROGCFG for this seq_len) with q_chunk_size
     replaced by ring_sdpa_balanced_q_chunk and exp_approx_mode set by the caller. Grid and k_chunk come from
@@ -593,6 +608,11 @@ class TtQwenModelArgs(TtModelArgs):
                 )
 
             self.model_config["SDPA_RING_PROGCFG"] = _sdpa_ring_progcfg
+
+            # Ring reduce-scatter overrides for long prefill (llama_ccl.TT_CCL.ring_reduce_scatter). Wormhole only
+            # (measured there); Blackhole keeps the defaults. Llama's model_config has no such key.
+            if not self.is_blackhole:
+                self.model_config["QWEN_PREFILL_RING_RS_PARAMS"] = qwen_prefill_ring_rs_params
 
             # For flexible chunked SDPA (prefix caching with chunk_start_idx_tensor): chunk sizes must
             # match KV cache block_size so one trace works for any block-aligned chunk at replay.
