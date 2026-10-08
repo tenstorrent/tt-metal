@@ -672,6 +672,25 @@
   team: models
   budget_type: vllm
 
+- name: "Qwen2.5-VL-7B-Instruct"
+  model: Qwen/Qwen2.5-VL-7B-Instruct
+  server-timeout: 10
+  benchmark-timeout: 10
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-llama-text-ver: tt_transformers
+  tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 60000000, "sample_on_device_mode": "decode_only"}'
+  structured-output: true
+  multimodal: true
+  additional-server-args: "--max_model_len 2048 --async-scheduling"
+  skus:
+    wh_llmbox:
+      timeout: 40
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  budget_type: vllm
+
 - name: "Qwen3-VL-32B-Instruct"
   model: Qwen/Qwen3-VL-32B-Instruct
   coherence-test: false
