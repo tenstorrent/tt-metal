@@ -1390,26 +1390,19 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
     compute_kernel_defines["SCALAR_IS_LHS"] = operation_attributes.scalar_is_lhs ? "1" : "0";
 
-    // Blackhole, sharded FPU ops: a DEST section is unpacked with one call (BINARY_NG_BLOCK) and packed with one
-    // (BINARY_NG_BLOCK_PACK) into bf16 from 16 tiles per core, into fp32 (4-tile sections) from 32. Without the block pack,
-    // the unpack call alone is faster only for add and sub with equal input formats into bf16 or a block-float format.
+    // Blackhole, sharded bf16 FPU ops without activations or broadcast: a DEST section is unpacked with one call
+    // (BINARY_NG_BLOCK) and, from 16 tiles per core, packed with one (BINARY_NG_BLOCK_PACK); below that only add and sub
+    // take the unpack call alone.
     const uint32_t c_tiles_per_core = c_num_tiles_per_shard.value_or(0);
     const auto fpu_binary_op =
         bh_fpu_op ? std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) : OpConfig::FpuBinaryOp::MUL;
-    const bool add_or_sub =
-        fpu_binary_op == OpConfig::FpuBinaryOp::ADD || fpu_binary_op == OpConfig::FpuBinaryOp::SUB;
-    const bool unpack_alone_formats =
-        add_or_sub && a_data_format == b_data_format &&
-        (c_data_format == tt::DataFormat::Float16_b || c_data_format == tt::DataFormat::Bfp8_b ||
-         c_data_format == tt::DataFormat::Bfp4_b);
-    const bool block_kernel = bh_fpu_op && !has_operand_activations && num_tiles_per_cycle > 1 &&
-                              (compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast ||
-                               compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar);
-    const bool block_pack = block_kernel && ((c_data_format == tt::DataFormat::Float16_b && c_tiles_per_core >= 16) ||
-                                             (c_data_format == tt::DataFormat::Float32 && c_tiles_per_core >= 32));
-    const bool block_unpack_alone = block_kernel &&
-                                    compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
-                                    !has_post_activations && unpack_alone_formats;
+    const bool block_kernel = bh_fpu_op && !has_operand_activations && !has_post_activations &&
+                              num_tiles_per_cycle > 1 && compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
+                              a_data_format == tt::DataFormat::Float16_b && b_data_format == tt::DataFormat::Float16_b &&
+                              c_data_format == tt::DataFormat::Float16_b;
+    const bool block_pack = block_kernel && c_tiles_per_core >= 16;
+    const bool block_unpack_alone =
+        block_kernel && (fpu_binary_op == OpConfig::FpuBinaryOp::ADD || fpu_binary_op == OpConfig::FpuBinaryOp::SUB);
     if (block_pack || block_unpack_alone) {
         compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
     }
