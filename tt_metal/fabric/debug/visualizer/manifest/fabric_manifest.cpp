@@ -6,7 +6,6 @@
 
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -19,6 +18,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_chip_pass.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
@@ -30,8 +30,6 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
-#include <map>
-#include <numeric>
 #include <optional>
 #include <string>
 #include <system_error>
@@ -46,7 +44,6 @@ namespace {
 using json = nlohmann::ordered_json;
 
 using manifest::chip_key;
-using manifest::direction_letter;
 using manifest::kind_name;
 using manifest::lower_enum_name;
 using manifest::mesh_key;
@@ -138,86 +135,39 @@ json l1_region_json(const manifest::L1Region& region) {
 // ============ Paths ============
 
 // One part of the manifest refers to a router elsewhere by its path, e.g. "M0/C7/E0".
-std::string router_path(FabricNodeId node, const std::string& key) {
-    return fmt::format("{}/{}/{}", mesh_key(node.mesh_id), chip_key(node.chip_id), key);
+std::string router_path(FabricNodeId node, eth_chan_directions direction, routing_plane_id_t routing_plane) {
+    return fmt::format(
+        "{}/{}/{}", mesh_key(node.mesh_id), chip_key(node.chip_id), router_key(direction, routing_plane));
 }
 
-// ============ Link facts ============
-
-// The path of the router on `peer_chan`, or nullopt when ControlPlane has no active router there (the
-// channel was trimmed from the peer's routing planes).
-std::optional<std::string> peer_router_path(
-    const ControlPlane& control_plane, FabricNodeId peer_node, chan_id_t peer_chan) {
-    for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(peer_node)) {
-        if (chan == peer_chan) {
-            return router_path(peer_node, router_key(direction, control_plane.get_routing_plane_id(peer_node, chan)));
-        }
-    }
-    return std::nullopt;
-}
-
-// Fails unless the physical system descriptor has a cable from `chan` on `node` to `peer_chan` on `peer_node`.
-void check_link_is_cabled(
-    const ControlPlane& control_plane, FabricNodeId node, chan_id_t chan, FabricNodeId peer_node, chan_id_t peer_chan) {
-    const auto connections = control_plane.get_physical_system_descriptor().get_eth_connections(
-        control_plane.get_asic_id_from_fabric_node_id(node), control_plane.get_asic_id_from_fabric_node_id(peer_node));
-    const bool cabled = std::ranges::any_of(connections, [&](const auto& connection) {
-        return connection.src_chan == chan && connection.dst_chan == peer_chan;
-    });
-    TT_FATAL(
-        cabled,
-        "Fabric manifest: ControlPlane pairs {} channel {} with {} channel {}, but no cable connects them",
-        node,
-        chan,
-        peer_node,
-        peer_chan);
-}
-
-// Wrap edges are resolved here rather than inferred by the viewer: a link wraps when its axis genuinely
-// closes and its coordinate delta spans the mesh.
-bool is_wrap_link(
-    FabricType fabric_type,
-    const MeshGraph& mesh_graph,
-    FabricNodeId node,
-    eth_chan_directions direction,
-    const std::optional<std::pair<FabricNodeId, chan_id_t>>& peer) {
-    const MeshShape mesh_shape = mesh_graph.get_mesh_shape(node.mesh_id);
-    const bool is_east_west = direction == eth_chan_directions::EAST || direction == eth_chan_directions::WEST;
-    const bool is_north_south = direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
-
-    // Wrap links require a 2D mesh, a peer in the same mesh, and an east-west or north-south direction
-    if (mesh_shape.dims() != 2 || !peer.has_value() || peer->first.mesh_id != node.mesh_id ||
-        !(is_east_west || is_north_south)) {
-        return false;
-    }
-    const uint32_t axis = is_east_west ? 1 : 0;
-    if (!has_genuine_torus_axis(fabric_type, mesh_shape, axis)) {
-        return false;
-    }
-    const uint32_t here = mesh_graph.chip_to_coordinate(node.mesh_id, node.chip_id)[axis];
-    const uint32_t there = mesh_graph.chip_to_coordinate(node.mesh_id, peer->first.chip_id)[axis];
-    const uint32_t delta = here > there ? here - there : there - here;
-    return delta == mesh_shape[axis] - 1;
+// A sibling is on the same chip and routing plane as the router that refers to it.
+std::string sibling_router_path(
+    FabricNodeId node, const manifest::RouterIdentity& identity, const manifest::SiblingRouterRef& sibling) {
+    return router_path(node, sibling.direction, identity.routing_plane);
 }
 
 // ============ Router ============
 
-// The router's mesh and chip are its path, so they are not repeated here.
-json router_identity_json(const manifest::RouterIdentity& identity, json logical_core, json virtual_core) {
+json core_json(const tt::tt_metal::CoreCoord& core) { return json::array({core.x, core.y}); }
+
+// The router's mesh and chip are its path, and its direction and routing plane its key, so they are not repeated
+// here.
+json router_identity_json(const manifest::RouterIdentity& identity) {
     json out;
     out["eth_chan"] = identity.eth_chan;
-    out["logical_core"] = std::move(logical_core);
-    out["virtual_core"] = std::move(virtual_core);
+    out["logical_core"] = core_json(identity.logical_core);
+    out["virtual_core"] = core_json(identity.virtual_core);
     return out;
 }
 
-// Direction and routing plane are the router's key, so they are not repeated here.
-json eth_link_json(const manifest::EthLink& link, const std::optional<std::string>& peer, bool cross_host, bool wrap) {
+json eth_link_json(const manifest::EthLink& link) {
     json out;
     out["edge_capability"] = lower_enum_name(link.edge_capability);
-    out["peer"] = peer.has_value() ? json(*peer) : json(nullptr);
-    out["cross_host"] = cross_host;
-    out["wrap"] = wrap;
+    out["peer"] = link.peer.has_value()
+                      ? json(router_path(link.peer->node, link.peer->direction, link.peer->routing_plane))
+                      : json(nullptr);
+    out["cross_host"] = link.cross_host;
+    out["wrap"] = link.wrap;
     out["dispatch_link"] = link.is_dispatch_link;
     return out;
 }
@@ -319,43 +269,11 @@ json serviced_by_json(const std::vector<uint32_t>& risc_ids) {
     return out;
 }
 
-// The channel of the router facing `direction` on the same chip and routing plane as the router on `chan`.
-chan_id_t sibling_chan(
-    const ControlPlane& control_plane, FabricNodeId node, chan_id_t chan, eth_chan_directions direction) {
-    const auto plane = control_plane.get_routing_plane_id(node, chan);
-    for (const auto& [sibling, sibling_direction] : control_plane.get_active_fabric_eth_channels(node)) {
-        if (sibling_direction == direction && control_plane.get_routing_plane_id(node, sibling) == plane) {
-            return sibling;
-        }
-    }
-    TT_THROW(
-        "Fabric manifest: {} channel {} has a sibling facing {} on routing plane {}, but no router is there",
-        node,
-        chan,
-        direction_letter(direction),
-        plane);
-}
-
-// The path of the router facing `direction` on the same chip and routing plane as the router on `chan`.
-std::string sibling_router_path(
-    const ControlPlane& control_plane, FabricNodeId node, chan_id_t chan, eth_chan_directions direction) {
-    const auto sibling = sibling_chan(control_plane, node, chan, direction);
-    return router_path(node, router_key(direction, control_plane.get_routing_plane_id(node, sibling)));
-}
-
-tt::tt_metal::CoreCoord router_virtual_core(const tt::Cluster& cluster, ChipId physical_chip_id, chan_id_t chan) {
-    const auto logical_core =
-        cluster.get_soc_desc(physical_chip_id).get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
-    return cluster.get_virtual_coordinate_from_logical_coordinates(
-        physical_chip_id, tt::tt_metal::CoreCoord(logical_core.x, logical_core.y), CoreType::ETH);
-}
-
 // A worker producer is "worker", the tensix mux is "tensix_mux", and a sibling router producer is that router's path.
 json sender_producer_json(
     const std::optional<manifest::SenderChannelProducer>& producer,
-    const ControlPlane& control_plane,
     FabricNodeId node,
-    chan_id_t chan) {
+    const manifest::RouterIdentity& identity) {
     if (!producer.has_value()) {
         return nullptr;
     }
@@ -365,11 +283,11 @@ json sender_producer_json(
     if (std::holds_alternative<manifest::LocalTensixMux>(*producer)) {
         return "tensix_mux";
     }
-    return sibling_router_path(control_plane, node, chan, std::get<manifest::SiblingRouterRef>(*producer).direction);
+    return sibling_router_path(node, identity, std::get<manifest::SiblingRouterRef>(*producer));
 }
 
 json sender_channel_json(
-    const manifest::SenderChannel& sender, const ControlPlane& control_plane, FabricNodeId node, chan_id_t chan) {
+    const manifest::SenderChannel& sender, FabricNodeId node, const manifest::RouterIdentity& identity) {
     json credits;
     if (sender.credits.acked.has_value()) {
         credits["acked"] = credit_ref_json(*sender.credits.acked);
@@ -379,7 +297,7 @@ json sender_channel_json(
     json out;
     out["status"] = lower_enum_name(sender.status);
     out["serviced_by"] = serviced_by_json(sender.serviced_by);
-    out["producer"] = sender_producer_json(sender.producer, control_plane, node, chan);
+    out["producer"] = sender_producer_json(sender.producer, node, identity);
     out["ring_buffer"] = l1_region_json(sender.ring_buffer);
     out["credits"] = std::move(credits);
     out["fields"] = fields_json(sender.fields);
@@ -416,15 +334,8 @@ json channels_by_vc_json(const std::vector<std::vector<Channel>>& channels_by_vc
 }
 
 // Keyed vc<N> then edge<N>, the kernel's EDGE_<N>. VCs without edges are left out. An edge names the sender channel
-// it lands on. It goes through the tensix mux when it writes to a core other than the sibling's ERISC: in mux mode,
-// the mux stands in for the sibling's VC0 channels other than the worker channel.
-json downstream_edges_json(
-    const manifest::Router& router,
-    const ControlPlane& control_plane,
-    const tt::Cluster& cluster,
-    FabricNodeId node,
-    ChipId physical_chip_id) {
-    const chan_id_t chan = router.identity.eth_chan;
+// it lands on. In mux mode, the mux stands in for the sibling's VC0 channels other than the worker channel.
+json downstream_edges_json(const manifest::Router& router, FabricNodeId node) {
     json out = json::object();
     for (size_t vc = 0; vc < router.intra_chip_downstream_edges.size(); ++vc) {
         const auto& edges = router.intra_chip_downstream_edges[vc];
@@ -433,14 +344,13 @@ json downstream_edges_json(
         }
         json vc_json;
         for (const auto& edge : edges) {
-            const auto target = sibling_chan(control_plane, node, chan, edge.target.direction);
             json entry;
             entry["downstream_channel"] = fmt::format(
                 "{}/channels/senders/vc{}/ch{}",
-                sibling_router_path(control_plane, node, chan, edge.target.direction),
+                sibling_router_path(node, router.identity, edge.target),
                 vc,
                 edge.landing_channel);
-            entry["through_tensix_mux"] = edge.core != router_virtual_core(cluster, physical_chip_id, target);
+            entry["through_tensix_mux"] = edge.through_tensix_mux;
             entry["fields"] = fields_json(edge.fields);
             vc_json[fmt::format("edge{}", edge.edge)] = std::move(entry);
         }
@@ -484,42 +394,17 @@ json make_vocabulary_json() {
     return out;
 }
 
-// A collected router with what ControlPlane and the cluster know about it: peer, cross-host, wrap and cores.
-json make_router_json(
-    const manifest::Router& router,
-    const ControlPlane& control_plane,
-    const tt::Cluster& cluster,
-    FabricType fabric_type,
-    FabricNodeId node,
-    ChipId physical_chip_id) {
-    const chan_id_t chan = router.identity.eth_chan;
-
-    const auto peer = control_plane.try_get_connected_mesh_chip_chan_ids(node, chan);
-    std::optional<std::string> peer_path;
-    if (peer.has_value()) {
-        check_link_is_cabled(control_plane, node, chan, peer->first, peer->second);
-        peer_path = peer_router_path(control_plane, peer->first, peer->second);
-    }
-
-    const auto logical_core =
-        cluster.get_soc_desc(physical_chip_id).get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
-    const auto virtual_core = router_virtual_core(cluster, physical_chip_id, chan);
-
+json make_router_json(const manifest::Router& router, FabricNodeId node) {
     json out;
-    out["identity"] = router_identity_json(
-        router.identity, json::array({logical_core.x, logical_core.y}), json::array({virtual_core.x, virtual_core.y}));
-    out["link"] = eth_link_json(
-        router.link,
-        peer_path,
-        control_plane.is_cross_host_eth_link(physical_chip_id, chan),
-        is_wrap_link(fabric_type, control_plane.get_mesh_graph(), node, router.link.direction, peer));
+    out["identity"] = router_identity_json(router.identity);
+    out["link"] = eth_link_json(router.link);
     out["shape"] = router_shape_json(router.shape);
     out["credit_counters"] = credit_counters_json(router.credit_counters);
     out["channels"]["senders"] = channels_by_vc_json(
         router.channels.senders,
-        [&](const manifest::SenderChannel& sender) { return sender_channel_json(sender, control_plane, node, chan); });
+        [&](const manifest::SenderChannel& sender) { return sender_channel_json(sender, node, router.identity); });
     out["channels"]["receivers"] = channels_by_vc_json(router.channels.receivers, receiver_channel_json);
-    out["intra_chip_downstream_edges"] = downstream_edges_json(router, control_plane, cluster, node, physical_chip_id);
+    out["intra_chip_downstream_edges"] = downstream_edges_json(router, node);
     out["fields"] = fields_json(router.fields);
     out["eriscs"] = eriscs_json(router.eriscs);
     return out;
@@ -535,162 +420,12 @@ json local_sync_json(const manifest::LocalSync& local_sync) {
     return out;
 }
 
-// Each edge lands on a sender channel its sibling has, at the compact index the builder recorded for it.
-void check_edge_landings(const manifest::Chip& chip, const ControlPlane& control_plane, FabricNodeId node) {
-    std::map<chan_id_t, const manifest::Router*> by_chan;
-    for (const auto& router : chip.routers) {
-        by_chan.emplace(router.identity.eth_chan, &router);
-    }
-    for (const auto& router : chip.routers) {
-        const chan_id_t chan = router.identity.eth_chan;
-        for (uint32_t vc = 0; vc < router.intra_chip_downstream_edges.size(); ++vc) {
-            for (const auto& edge : router.intra_chip_downstream_edges[vc]) {
-                const auto target = sibling_chan(control_plane, node, chan, edge.target.direction);
-                const auto it = by_chan.find(target);
-                TT_FATAL(
-                    it != by_chan.end(),
-                    "Fabric manifest: {} channel {} has an edge to channel {}, which was not collected",
-                    node,
-                    chan,
-                    target);
-                const auto& counts = it->second->shape.senders_per_vc;
-                TT_FATAL(
-                    edge.landing_channel < counts.at(vc),
-                    "Fabric manifest: {} channel {}'s VC{} edge {} lands on channel {}, but channel {} has {}",
-                    node,
-                    chan,
-                    vc,
-                    edge.edge,
-                    edge.landing_channel,
-                    target,
-                    counts.at(vc));
-                if (edge.landing_compact.has_value()) {
-                    const uint32_t compact =
-                        std::accumulate(counts.begin(), counts.begin() + vc, 0u) + edge.landing_channel;
-                    TT_FATAL(
-                        compact == *edge.landing_compact,
-                        "Fabric manifest: {} channel {}'s VC{} edge {} lands on compact channel {}, but the builder "
-                        "connected it to {}",
-                        node,
-                        chan,
-                        vc,
-                        edge.edge,
-                        compact,
-                        *edge.landing_compact);
-                }
-            }
-        }
-    }
-}
-
-// Every sender channel a sibling feeds has exactly one edge into it, from that sibling, and every edge lands on a
-// channel its router feeds. An edge through the tensix mux lands on a channel the mux carries.
-void check_edges_match_producers(const json& routers, FabricNodeId node) {
-    std::map<std::string, std::string> fed_by;
-    std::map<std::string, std::string> edges_into;
-    for (const auto& [key, router] : routers.items()) {
-        const auto path = router_path(node, key);
-        for (const auto& [vc_key, vc_channels] : router.at("channels").at("senders").items()) {
-            for (const auto& [ch_key, sender] : vc_channels.items()) {
-                const auto& producer = sender.at("producer");
-                if (producer.is_string() && producer != "worker" && producer != "tensix_mux") {
-                    fed_by[fmt::format("{}/channels/senders/{}/{}", path, vc_key, ch_key)] =
-                        producer.get<std::string>();
-                }
-            }
-        }
-    }
-    for (const auto& [key, router] : routers.items()) {
-        const auto path = router_path(node, key);
-        for (const auto& [vc_key, vc_edges] : router.at("intra_chip_downstream_edges").items()) {
-            for (const auto& [edge_key, edge] : vc_edges.items()) {
-                const auto target = edge.at("downstream_channel").get<std::string>();
-                const auto [it, inserted] = edges_into.emplace(target, path);
-                TT_FATAL(
-                    inserted,
-                    "Fabric manifest: {} and {} both have a downstream edge into {}",
-                    it->second,
-                    path,
-                    target);
-                if (edge.at("through_tensix_mux").get<bool>()) {
-                    // The target's path within this chip's routers: it drops the mesh and chip keys.
-                    const json::json_pointer status(
-                        "/" + target.substr(target.find('/', target.find('/') + 1) + 1) + "/status");
-                    TT_FATAL(
-                        routers.contains(status) && routers.at(status) == lower_enum_name(manifest::ChannelStatus::MUX),
-                        "Fabric manifest: {}'s {} {} goes through the tensix mux, but {} is not carried by a mux",
-                        path,
-                        vc_key,
-                        edge_key,
-                        target);
-                    continue;
-                }
-                const auto fed = fed_by.find(target);
-                TT_FATAL(
-                    fed != fed_by.end() && fed->second == path,
-                    "Fabric manifest: {} has a downstream edge into {}, but that channel's producer is {}",
-                    path,
-                    target,
-                    fed != fed_by.end() ? fed->second : "not a sibling router");
-            }
-        }
-    }
-    for (const auto& [channel, producer] : fed_by) {
-        TT_FATAL(
-            edges_into.contains(channel),
-            "Fabric manifest: {} is fed by {}, but no downstream edge of that router lands on it",
-            channel,
-            producer);
-    }
-}
-
-// The chip's routers keyed <direction><routing_plane>. ControlPlane's active channels and the collected routers
-// must correspond one to one, and agree on each router's direction.
-json make_chip_routers_json(
-    const manifest::Chip& chip,
-    const ControlPlane& control_plane,
-    const tt::Cluster& cluster,
-    FabricType fabric_type,
-    FabricNodeId node,
-    ChipId physical_chip_id) {
-    std::map<chan_id_t, const manifest::Router*> collected;
-    for (const auto& router : chip.routers) {
-        TT_FATAL(
-            collected.emplace(router.identity.eth_chan, &router).second,
-            "Fabric manifest: {} has two collected routers on channel {}",
-            node,
-            router.identity.eth_chan);
-    }
-
+// The chip's routers keyed <direction><routing_plane>.
+json make_chip_routers_json(const manifest::Chip& chip, FabricNodeId node) {
     json routers = json::object();
-    for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(node)) {
-        const auto it = collected.find(chan);
-        TT_FATAL(
-            it != collected.end(),
-            "Fabric manifest: {} channel {} is an active fabric router, but no router was collected for it",
-            node,
-            chan);
-        const manifest::Router& router = *it->second;
-        collected.erase(it);
-        TT_FATAL(
-            router.link.direction == direction,
-            "Fabric manifest: {} channel {} was built facing {}, but ControlPlane has it facing {}",
-            node,
-            chan,
-            direction_letter(router.link.direction),
-            direction_letter(direction));
-
-        const auto key = router_key(direction, control_plane.get_routing_plane_id(node, chan));
-        TT_FATAL(!routers.contains(key), "Fabric manifest: {} has two routers keyed {}", node, key);
-        routers[key] = make_router_json(router, control_plane, cluster, fabric_type, node, physical_chip_id);
+    for (const auto& router : chip.routers) {
+        routers[router_key(router.identity.direction, router.identity.routing_plane)] = make_router_json(router, node);
     }
-    TT_FATAL(
-        collected.empty(),
-        "Fabric manifest: {} has {} collected routers on channels that are not active fabric routers",
-        node,
-        collected.size());
-    check_edge_landings(chip, control_plane, node);
-    check_edges_match_producers(routers, node);
     return routers;
 }
 
@@ -732,7 +467,8 @@ json make_chip_json(
     chip["is_local"] = true;
     chip["z_port_role"] = lower_enum_name(collected.z_port_role);
     chip["local_sync"] = collected.local_sync ? local_sync_json(*collected.local_sync) : json(nullptr);
-    chip["routers"] = make_chip_routers_json(collected, control_plane, cluster, fabric_type, node, *physical_chip_id);
+    chip["routers"] = make_chip_routers_json(
+        join_chip(collected, control_plane, cluster, fabric_type, node, *physical_chip_id), node);
     return chip;
 }
 
