@@ -161,8 +161,10 @@ void kernel_main() {
 #else
                     const uintptr_t pad_align_src = static_cast<uintptr_t>(pad_align.get_base_address());
 #endif
+                    // Cast through uintptr_t: Quasar's DM cores are rv64, and a bare 32-bit int -> pointer
+                    // cast is -Werror=int-to-pointer-cast there (no-op on the 32-bit WH/BH RISCs).
                     memmove(
-                        (void*)(l1_write_addr + stick_size_padded_front),
+                        (void*)(uintptr_t)(l1_write_addr + stick_size_padded_front),
                         (void*)(pad_align_src),
                         (size_t)(stick_size_bytes));
                 } else if constexpr (unaligned) {
