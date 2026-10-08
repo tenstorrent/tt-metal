@@ -942,15 +942,18 @@ ttnn::Tensor launch_indexer_score(
     const auto tile_bytes = [](const ttnn::Tensor& t) {
         return t.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.dtype()));
     };
-    const auto resolved_program_config =
-        program_config.value_or(ttnn::operations::experimental::indexer_score::program::default_program_config(
-            q.logical_shape()[1],
-            k.logical_shape()[2] / tt::constants::TILE_WIDTH,
-            q.logical_shape()[3] / tt::constants::TILE_WIDTH,
-            tile_bytes(q),
-            tile_bytes(k),
-            ttnn::operations::experimental::indexer_score::program::cb_l1_budget(q),
-            key_compression_ratio));
+    // An L1 q also puts the output in L1, allocated after this choice, so it keeps the small default.
+    const auto resolved_program_config = program_config.value_or(
+        q.memory_config().buffer_type() == BufferType::L1
+            ? ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig{}
+            : ttnn::operations::experimental::indexer_score::program::default_program_config(
+                  q.logical_shape()[1],
+                  k.logical_shape()[2] / tt::constants::TILE_WIDTH,
+                  q.logical_shape()[3] / tt::constants::TILE_WIDTH,
+                  tile_bytes(q),
+                  tile_bytes(k),
+                  ttnn::operations::experimental::indexer_score::program::cb_l1_budget(q),
+                  key_compression_ratio));
 
     // Block-cyclic (per-SP-shard) K layout -- interface matches ttnn.transformer.sparse_sdpa: the caller
     // names the MESH AXIS the cache was striped over (block_cyclic_sp_axis) and passes the per-shard chunk
