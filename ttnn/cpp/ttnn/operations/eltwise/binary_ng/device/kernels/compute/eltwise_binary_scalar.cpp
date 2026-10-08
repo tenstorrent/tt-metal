@@ -4,6 +4,9 @@
 
 #include <cstdint>
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#ifdef EB_R3_PER_TILE  // CI only
+#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL)
+#endif
 #include "api/compute/eltwise_binary.h"
 
 #include "eltwise_utils_common.hpp"
