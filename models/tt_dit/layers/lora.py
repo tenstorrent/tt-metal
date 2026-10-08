@@ -81,6 +81,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -359,6 +360,13 @@ class LoRAMixin:
         re-merge skips the host upload; the same cached ``+scale`` delta serves
         both bind and unbind, making the pair an exact negation. The full-size
         delta itself is never cached (that would cost a whole weight per adapter)."""
+        if self.weight.data.dtype != ttnn.bfloat16:
+            # A rank-r delta is far below a block-float weight's quantization step, so the in-place add below
+            # would round it away; the adapter has to be bound before the weight is quantized.
+            logger.warning(
+                f"LoRA delta applied to a {self.weight.data.dtype} weight; the merge is lossy or a no-op "
+                "(bind adapters before quantizing the weights)"
+            )
         A_dev, B_dev, owned = self._acquire_delta_ab(idx, float(scale))
         delta = ttnn.matmul(A_dev, B_dev, compute_kernel_config=self.compute_config)
         if owned:

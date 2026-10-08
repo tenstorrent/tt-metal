@@ -74,6 +74,11 @@ from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_mini
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
+from ...models.transformers.minimax_h3.quant_config import (
+    MiniMaxH3QuantConfig,
+    apply_quant_config,
+    quant_config_from_env,
+)
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
@@ -504,9 +509,12 @@ class MiniMaxH3Pipeline:
         vae_output_type: str = "yuv420",
         adaln_slot_roles: tuple[str, ...] | None = None,
         warmup: bool = True,
+        quant_config: MiniMaxH3QuantConfig | None = None,
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
+        # Opt-in 8-bit block matmuls (FAST_H3_FP8); applied to the weights after every transformer load.
+        self.quant_config = quant_config_from_env() if quant_config is None else quant_config
         self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)
         self.audio_shift = AUDIO_SHIFT if audio_shift is None else float(audio_shift)
         supplied = (tp_axis, sp_axis, num_links, topology)
@@ -750,6 +758,7 @@ class MiniMaxH3Pipeline:
         adaln_slot_roles: tuple[str, ...] | None = None,
         warmup: bool = True,
         coresident: bool | None = None,
+        quant_config: MiniMaxH3QuantConfig | None = None,
         **subclass_kwargs,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
@@ -791,6 +800,7 @@ class MiniMaxH3Pipeline:
             adaln_slot_roles=adaln_slot_roles,
             warmup=warmup,
             coresident=coresident,
+            quant_config=quant_config,
             **subclass_kwargs,
         )
 
@@ -1366,7 +1376,8 @@ class MiniMaxH3Pipeline:
             kv_gather_capacity=self.bucket_ladder[-1] if self.bucket_denoise else None,
         )
 
-    def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
+    def _load_transformer(self) -> MiniMaxH3Transformer3DModel:
+        """The cached base weights onto the device; a no-op while they are resident."""
         cache.load_model(
             self._transformer,
             model_name=MODEL_NAME,
@@ -1377,6 +1388,16 @@ class MiniMaxH3Pipeline:
             get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
         )
         return self._transformer
+
+    def _quantize_transformer(self, transformer: MiniMaxH3Transformer3DModel) -> None:
+        """Apply the 8-bit config to the loaded (and adapter-fused) weights. Idempotent, so it runs after every load."""
+        if self.quant_config.active:
+            apply_quant_config(transformer, self.quant_config)
+
+    def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
+        transformer = self._load_transformer()
+        self._quantize_transformer(transformer)
+        return transformer
 
     @property
     def patch_size(self) -> tuple[int, int, int]:

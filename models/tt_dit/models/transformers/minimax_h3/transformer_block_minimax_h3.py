@@ -145,6 +145,8 @@ class MiniMaxH3TransformerBlock(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # The feed-forward's own config, set by quant_config; adaln_proj keeps the one above.
+        self.ff_compute_kernel_config = self.mm_compute_kernel_config
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
@@ -317,7 +319,7 @@ class MiniMaxH3TransformerBlock(Module):
                 normed,
                 residual,
                 modulation(_GATE_MLP),
-                compute_kernel_config=self.mm_compute_kernel_config,
+                compute_kernel_config=self.ff_compute_kernel_config,
                 parallel_config=self.parallel_config if self.use_fused_agmm else None,
                 default_block_size=ff1_block_size,
                 force_transpose=False,
@@ -325,7 +327,7 @@ class MiniMaxH3TransformerBlock(Module):
             )
         ff_out = self.ff(
             normed,
-            compute_kernel_config=self.mm_compute_kernel_config,
+            compute_kernel_config=self.ff_compute_kernel_config,
             parallel_config=self.parallel_config if self.use_fused_agmm else None,
             default_block_size=ff1_block_size,
             force_transpose=False,

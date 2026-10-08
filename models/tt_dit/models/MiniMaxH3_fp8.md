@@ -125,8 +125,9 @@ block-INT8, which the MX paper finds lossless for direct-cast inference where MX
 What everyone agrees on:
 
 - **Always kept high precision:** time embedders and `time_proj`; patch / `x_embedder` / `proj_in`; the context /
-  caption embedder; the output head(s) and `norm_out`; every norm and bias. H3 keeps `proj_in`, `audio_proj_in`,
-  the time embedder, `proj_out` and `audio_proj_out` in float32 in its own checkpoint.
+  caption embedder; the output head(s) and `norm_out`; every norm and bias. The H3 checkpoint declares `proj_in`,
+  `audio_proj_in`, the time embedder, `proj_out` and `audio_proj_out` float32; this port runs the time embedder in
+  float32 and the others in bf16, all outside the 8-bit mode.
 - **Usually kept:** adaLN / modulation projections (ModelOpt FLUX / LTX / Qwen filters, Kijai Wan and Hunyuan-fast,
   Nunchaku's 16-bit modulation activations, every H3 community card). musubi-tuner saw rendered text and digits break
   when modulation was per-channel e4m3; OrbitQuant and SemanticDialect call the modulation linear the most sensitive
@@ -166,7 +167,9 @@ What everyone agrees on:
   lever without quantizing activations), `w8a8_lofi` (the Wan / LTX tier). `1` means `w8a8` until the measurements
   below pick the shipped default. Knobs refine a preset: `FAST_H3_FP8_LINEARS` (subset of roles),
   `FAST_H3_FP8_ACTIVATIONS`, `FAST_H3_FP8_FIDELITY`, `FAST_H3_FP8_FP32_ACC`, `FAST_H3_FP8_SDPA` (cast Q/K/V),
-  `FAST_H3_FP8_OUT_WEIGHT` (un-fuse `to_out`'s epilogue and quantize its weight).
+  `FAST_H3_FP8_OUT_WEIGHT` (un-fuse `to_out`'s epilogue and quantize its weight), `FAST_H3_FP8_FF2_CAST` (typecast
+  `ff1`'s bf16 output for `ff2` instead of writing `bfloat8_b` directly: the matmul packs a block-float output
+  without the precise rounding path that `ttnn.typecast` uses, so both are measured).
 - **Mechanics:** `MiniMaxH3QuantConfig` / `apply_quant_config` in
   `models/tt_dit/models/transformers/minimax_h3/quant_config.py`; the pipeline reads the environment (or a
   `quant_config=` argument) at construction and applies it after every transformer load, and the Turbo pipeline after

@@ -11,7 +11,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ....layers.linear import ColParallelLinear
+from ....layers.linear import ColParallelLinear, maybe_cast_activation
 from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
@@ -219,6 +219,12 @@ class MiniMaxH3Attention(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # Per-linear precision, set by quant_config: compute configs for the two projections, an optional
+        # bfloat8_b cast of the ring SDPA's inputs, and whether to_out keeps its fused addcmul epilogue.
+        self.qkv_compute_kernel_config = self.mm_compute_kernel_config
+        self.out_compute_kernel_config = self.mm_compute_kernel_config
+        self.sdpa_input_dtype: ttnn.DataType | None = None
+        self.fuse_out_addcmul = True
 
     # ------------------------------------------------------------------ weights
 
@@ -508,7 +514,7 @@ class MiniMaxH3Attention(Module):
 
         q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
             spatial_1BND,
-            compute_kernel_config=self.mm_compute_kernel_config,
+            compute_kernel_config=self.qkv_compute_kernel_config,
             parallel_config=matmul_parallel_config,
             default_block_size=agmm_block_size(
                 self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2]
@@ -542,14 +548,22 @@ class MiniMaxH3Attention(Module):
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
         exp_program_config = self._exp_sdpa_program_config(q_BHNE.shape[2])
+        # The ring SDPA wants one dtype across Q, K, V and the joint dummies, so the opt-in cast (after the
+        # norm and RoPE, which keep full precision) covers all of them; K/V are the SP ring's payload.
+        dummy_joint = self.dummy_joint_input
+        if self.sdpa_input_dtype is not None and self.use_ring:
+            q_BHNE = maybe_cast_activation(q_BHNE, self.sdpa_input_dtype)
+            k_BHNE = maybe_cast_activation(k_BHNE, self.sdpa_input_dtype)
+            v_BHNE = maybe_cast_activation(v_BHNE, self.sdpa_input_dtype)
+            dummy_joint = maybe_cast_activation(dummy_joint, self.sdpa_input_dtype)
         if exp_program_config is not None:
             spatial_BHNE, _prompt, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                 q_BHNE,
                 k_BHNE,
                 v_BHNE,
-                self.dummy_joint_input,
-                self.dummy_joint_input,
-                self.dummy_joint_input,
+                dummy_joint,
+                dummy_joint,
+                dummy_joint,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
                     k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
                 ),
@@ -575,9 +589,9 @@ class MiniMaxH3Attention(Module):
                 q_BHNE,
                 k_BHNE,
                 v_BHNE,
-                self.dummy_joint_input,
-                self.dummy_joint_input,
-                self.dummy_joint_input,
+                dummy_joint,
+                dummy_joint,
+                dummy_joint,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
                     k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
                 ),
@@ -623,10 +637,10 @@ class MiniMaxH3Attention(Module):
 
         # The gated residual rides along in the matmul epilogue on the fused path; on the unfused
         # path the op has no addcmul, so apply it afterwards.
-        fuse_gate = addcmul_residual is not None and self.use_fused_agmm
+        fuse_gate = addcmul_residual is not None and self.use_fused_agmm and self.fuse_out_addcmul
         out = self.to_out(
             spatial_1BND,
-            compute_kernel_config=self.mm_compute_kernel_config,
+            compute_kernel_config=self.out_compute_kernel_config,
             parallel_config=matmul_parallel_config,
             default_block_size=agmm_block_size(
                 self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2]
