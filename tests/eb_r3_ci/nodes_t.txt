@@ -1,0 +1,13 @@
+tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py::test_sdpa_tt[b=1-nh=8-nkv=1-s=2048-d=128-k256-q256-dram_interleaved-bf16]
+tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py::test_sdpa_tt[b=1-nh=71-nkv=1-s=2048-d=64-k128-q128-dram_interleaved-bfp8]
+tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py::test_sdpa_tt[b=1-nh=8-nkv=1-s=8192-d=128-k256-q256-dram_interleaved-bf16]
+tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py::test_sdpa_noncausal[b=1-nh=8-nkv=1-s=2048-d=128-k128-q128-bf16]
+tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py::test_joint_sdpa[d128-seq_len=2048-joint_seq_len=256-nh3-b1-k512-q128-bf16]
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py::test_sparse_sdpa_runs
+tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_prod_shape_sampled_accuracy
+tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py::test_sdpa_decode[b=8-nh=8-nkv=1-s=32768-d=128-grid_size=(8, 6)-single_iter=True-cur_pos_tensor=False-kv_bfp8]
+tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py::test_sdpa_decode[b=4-nh=32-nkv=8-s=8192-d=128-grid_size=(8, 8)-single_iter=True-cur_pos_tensor=True-kv_bfp8]
+tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py::test_sdpa_decode_paged_attention[paged_64-llama3.1-a-kv_bfp8_q_bf16]
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gated_delta_rule.py::test_compute_kernel_config_contract[mono]
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gated_delta_rule.py::test_chunk_vs_recurrent_reference[s0=rand-T256-single_dev]
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_prims.py::test_prep_outputs_vs_torch[bh=16-nc=8]

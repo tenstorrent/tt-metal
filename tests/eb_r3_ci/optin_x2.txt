@@ -1,0 +1,3 @@
+ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/attn_res_weighted_reduce_nc/device/kernels/weighted_reduce_nc.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/device/kernels/deepseek_moe_fast_reduce_nc_fused_compute.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+models/demos/deepseek_v3_b1/fused_ops/gated_local_reduce/kernels/gated_local_reduce_kernel.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
