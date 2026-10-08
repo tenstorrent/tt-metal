@@ -228,6 +228,8 @@ def test_mp5_dump(device, op, shape_id, d):
 # cores at 32 tiles per core (256x2048, one b value per call).
 NAT6D = [("col_ws2_bfp8", op) for op in ("add", "sub", "mul")] + [("col_bs32_relu", op) for op in ("add", "sub")]
 NAT6D += [("scalar_ws16_gelu", op) for op in ("add", "sub")]
+NAT6D += [("col_ws8_bfp8_r16", op) for op in ("add", "mul")] + [("col_ws8_bfp4_r8", op) for op in ("add", "mul")]
+NAT6D += [("scalar_ws8_relu_t64", op) for op in ("add", "sub")]
 
 
 @pytest.mark.parametrize("geo, op", NAT6D, ids=["-".join(c) for c in NAT6D])
@@ -236,20 +238,24 @@ def test_nat6_dump(device, geo, op):
         _dump_bcast(device, f"nat6_{geo}_{op}", op, "col", "width", 1, 2, 2048, 4, b16_set(), "bfp8", "bfp8", "bfp8")
     elif geo == "col_bs32_relu":
         _dump_bcast(device, f"nat6_{geo}_{op}", op, "col", "block", 4, 8, 2048, 64, b16_set(), "bf16", "bf16", None, "relu")
+    elif geo == "col_ws8_bfp8_r16":
+        _dump_bcast(device, f"nat6_{geo}_{op}", op, "col", "width", 1, 8, 2048, 16, b16_set(), "bfp8", "bfp8", "bfp8")
+    elif geo == "col_ws8_bfp4_r8":
+        _dump_bcast(device, f"nat6_{geo}_{op}", op, "col", "width", 1, 8, 2048, 8, b16_set(), "bfp4", "bfp4", "bfp4")
     else:
         t0 = time.time()
         B = b16_small(64)
         tag = f"nat6_{geo}_{op}"
         diffs = make_diffs(tag, None)
-        shape = (1, 1, 256, 2048)
-        mc = _mc(shape, 2, 8, "width")
+        shape, grid, post = ((1, 1, 512, 1024), (1, 8), "relu") if geo == "scalar_ws8_relu_t64" else ((1, 1, 256, 2048), (2, 8), "gelu")
+        mc = _mc(shape, grid[0], grid[1], "width")
         done = 0
         try:
             for c in range(B.size):
-                a = PATS[(np.arange(256 * 2048) + c * 4099) % 65536]
+                a = PATS[(np.arange(shape[2] * shape[3]) + c * 4099) % 65536]
                 ta = ttnn.from_torch(bf16_from_bits(a).reshape(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
                 tb = ttnn.from_torch(bf16_from_bits(B[c:c + 1]).reshape(1, 1, 1, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                run_chunk(device, diffs, lambda: out_bits(_call(op, ta, tb, None, mc, "gelu")), tensor_vals(ta), np.repeat(tensor_vals(tb), a.size))
+                run_chunk(device, diffs, lambda: out_bits(_call(op, ta, tb, None, mc, post)), tensor_vals(ta), np.repeat(tensor_vals(tb), a.size))
                 ttnn.deallocate(ta)
                 ttnn.deallocate(tb)
                 done += 1

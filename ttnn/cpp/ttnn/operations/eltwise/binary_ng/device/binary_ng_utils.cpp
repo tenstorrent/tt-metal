@@ -859,9 +859,10 @@ NativeBlockBroadcast native_block_broadcast(
             scalar = cores >= 2 && tiles <= 64 * cores;
         }
         // Column b only with the LLK broadcast (one format); without it the reader also fills b's tile on every row.
-        const bool column = one_format && ((a_dt == DataType::BFLOAT16 && rows <= 2 * cores) ||
-                                           (a_dt == DataType::BFLOAT8_B && (rows <= cores || (width && rows <= 4))) ||
-                                           (a_dt == DataType::BFLOAT4_B && 2 * rows <= cores));
+        const bool column =
+            one_format && ((a_dt == DataType::BFLOAT16 && rows <= 2 * cores) ||
+                           (a_dt == DataType::BFLOAT8_B && (rows <= cores || (width && (rows <= 4 || cores >= 8)))) ||
+                           (a_dt == DataType::BFLOAT4_B && (2 * rows <= cores || (width && cores >= 8 && rows <= 8))));
         return {.column = column, .scalar = scalar};
     }
 
@@ -885,7 +886,7 @@ NativeBlockBroadcast native_block_broadcast(
     } else if (small && silu) {
         out.column = out.scalar = width && cores >= 32;
     } else if (plain_op && lhs.empty() && act == UnaryOpType::RELU) {
-        out.scalar = cores >= (width ? 16u : 32u);
+        out.scalar = cores >= (width ? 16u : 32u) || (width && add_or_sub && cores >= 8 && tiles >= 64);
         out.column = !width && cores >= (add_or_sub ? 32u : 64u);
     } else if (plain_op && lhs.empty() && act == UnaryOpType::GELU) {
         out.scalar = cores >= 32 || (width && add_or_sub && cores >= 16);

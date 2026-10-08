@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "binary_ng_utils.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -1154,23 +1155,20 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                 (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
                                  operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B);
     const uint32_t bcast_section_tiles = fp32_dest_acc_en ? 4 : 8;
-    // Blackhole: with an operand activation the operand pass runs over up to four DEST sections before one binary init; one
-    // section takes it in the no-broadcast kernel when partial or with both operands activated.
+    // Blackhole: the operand pass covers up to 4 DEST sections (8 with two operand passes or a Python scalar), then one
+    // init; a single section in the no-broadcast kernel if partial or both operands are activated.
     const uint32_t c_shard_tiles = c_num_tiles_per_shard.value_or(0);
     const uint32_t shard_sections = tt::div_up(c_shard_tiles, num_tiles_per_cycle);
     const bool one_section_pass =
-        (b.has_value() && (c_shard_tiles < num_tiles_per_cycle || both_operand_activations)) ||
-        (!b.has_value() && eb_r3_env("EB_R3_PRE_ONE_SCALAR"));
-    const uint32_t eb_pre_max = std::getenv("EB_R3_PRE_MAX") ? static_cast<uint32_t>(std::atoi(std::getenv("EB_R3_PRE_MAX"))) : 4u;
-    const uint32_t pre_sections_rule = bh_fpu_op && has_operand_activations && num_tiles_per_cycle > 1 && c_shard_tiles > 0 &&
-                                          (shard_sections > 1 || one_section_pass)
-                                      ? std::min(shard_sections, eb_pre_max)
-                                      : 0;
-    // CI only: EB_R3_NO_PRE_SECTIONS main's pass per section; EB_R3_PRE_K2 the fourth pass's two sections from two
-    const uint32_t pre_sections =
-        eb_r3_env("EB_R3_NO_PRE_SECTIONS") ? 0
-        : eb_r3_env("EB_R3_PRE_K2") ? (bh_fpu_op && has_operand_activations && num_tiles_per_cycle > 1 && shard_sections > 1 ? 2 : 0)
-                                    : pre_sections_rule;
+        b.has_value() && (c_shard_tiles < num_tiles_per_cycle || both_operand_activations);
+    const uint32_t max_pre_sections =
+        std::getenv("EB_R3_PRE_MAX") ? static_cast<uint32_t>(std::atoi(std::getenv("EB_R3_PRE_MAX")))
+                                     : ((both_operand_activations || !b.has_value()) ? 8u : 4u);
+    // CI only: EB_R3_NO_PRE_SECTIONS main's pass per section
+    uint32_t pre_sections = !eb_r3_env("EB_R3_NO_PRE_SECTIONS") && bh_fpu_op && has_operand_activations &&
+                                    num_tiles_per_cycle > 1 && c_shard_tiles > 0 && (shard_sections > 1 || one_section_pass)
+                                ? std::min(shard_sections, max_pre_sections)
+                                : 0;
     const uint32_t a_intermediate_tiles =
         (bcast_sections ? std::max(num_tiles_per_cycle, bcast_section_tiles) : num_tiles_per_cycle) *
         std::max(pre_sections, 1u);
@@ -1283,6 +1281,45 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             }}},
             .buffer = c_sharded ? c_buffer : nullptr,
         });
+    }
+
+    // Blackhole: fewer sections per operand pass where the intermediate CBs would not fit below the lowest L1 buffer;
+    // below two, main's pass per section and its one-section CBs.
+    if (pre_sections > 1) {
+        const auto is_intermediate = [](const CBDescriptor& cb) {
+            const auto index = cb.format_descriptors[0].buffer_index;
+            return index == static_cast<uint8_t>(tt::CBIndex::c_3) || index == static_cast<uint8_t>(tt::CBIndex::c_4);
+        };
+        uint64_t fixed_bytes = 0;
+        uint64_t section_bytes = 0;
+        for (const auto& cb : desc.cbs) {
+            if (cb.buffer != nullptr || cb.tensor != nullptr || cb.global_circular_buffer != nullptr) {
+                continue;
+            }
+            if (is_intermediate(cb)) {
+                section_bytes += cb.total_size / pre_sections;
+            } else {
+                fixed_bytes += cb.total_size;
+            }
+        }
+        const uint64_t free_l1 = ttnn::operations::core::usable_program_l1_capacity(a.device());
+        uint32_t fitting = pre_sections;
+        while (fitting > 1 && fixed_bytes + section_bytes * fitting > free_l1) {
+            --fitting;
+        }
+        if (std::getenv("EB_R3_LOG_RULE")) {
+            std::fprintf(stderr, "EB_R3_RULE l1 free=%llu fixed=%llu section=%llu planned=%u fitting=%u\n",
+                static_cast<unsigned long long>(free_l1), static_cast<unsigned long long>(fixed_bytes),
+                static_cast<unsigned long long>(section_bytes), pre_sections, fitting);
+        }
+        if (fitting < pre_sections) {
+            for (auto& cb : desc.cbs) {
+                if (cb.buffer == nullptr && is_intermediate(cb)) {
+                    cb.total_size = cb.total_size / pre_sections * fitting;
+                }
+            }
+            pre_sections = fitting > 1 ? fitting : 0;
+        }
     }
 
     const bool outputs_row_major = inputs_row_major && operation_attributes.output_layout == Layout::ROW_MAJOR;
@@ -1509,8 +1546,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
-    // Blackhole: a multiply with operand and post activations (logical_and), its init per tile, keeps the per-face
-    // program on block grids of 4 rows by 2 or 4 columns, where the per-tile one measured slower.
+    // Blackhole: logical_and (operand and post activations, its init per tile) keeps the per-face multiply on block
+    // grids of 4 rows by 2 or 4 columns, where per tile measured slower (a scalar b from 128 tiles a core).
     const auto& a_shard_spec = a.memory_config().shard_spec();
     if (bh_fpu_op && fpu_binary_op == OpConfig::FpuBinaryOp::MUL && has_operand_activations && has_post_activations &&
         !bcast_sections && num_tiles_per_cycle == 1 &&
@@ -1519,7 +1556,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         const auto grid_box = a_shard_spec->grid.bounding_box();
         const uint32_t grid_rows = grid_box.end_coord.y - grid_box.start_coord.y + 1;
         const uint32_t grid_cols = grid_box.end_coord.x - grid_box.start_coord.x + 1;
-        if (grid_rows == 4 && (grid_cols == 2 || grid_cols == 4)) {
+        const uint32_t shard_tiles = (a_shard_spec->shape[0] / a.tensor_spec().tile().get_height()) *
+                                     (a_shard_spec->shape[1] / a.tensor_spec().tile().get_width());
+        const bool small_scalar =
+            operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B && shard_tiles < 128;
+        if (grid_rows == 4 && (grid_cols == 2 || grid_cols == 4) && !small_scalar) {
             compute_kernel_defines["BINARY_NG_MUL_PER_FACE"] = "1";
         }
     }
