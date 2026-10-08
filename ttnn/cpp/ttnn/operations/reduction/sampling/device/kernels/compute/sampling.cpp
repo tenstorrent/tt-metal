@@ -468,8 +468,9 @@ void top_k_fused_32b_dest() {
                 _llk_math_eltwise_unary_sfpu_params_(topk_fused_raw16::flush_key_denormals, 0, VectorMode::RC_custom)));
             ckernel::topk_local_sort</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
                 0, /*idir=*/0, logk - 1, /*i_start_phase=*/1);
+            // A NaN leaves as the infinity of its sign, as main's pack of the local sort out of a 16-bit DEST makes it.
             MATH((_llk_math_eltwise_unary_sfpu_params_(
-                topk_fused_raw16::defuse_raw16<largest, false>, 0, VectorMode::RC_custom, 2)));
+                topk_fused_raw16::defuse_raw16<largest, true>, 0, VectorMode::RC_custom, 2)));
             tile_regs_commit<true>();
 
             input_dfb.pop_front(2);
