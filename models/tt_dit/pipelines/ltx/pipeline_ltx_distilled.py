@@ -381,6 +381,20 @@ class LTXDistilledPipeline(LTXPipeline):
                 device=self.mesh_device,
             )
 
+    def _stage_prompts(self, v_embeds, a_embeds, traced: bool, reuse_prompt: bool):
+        if reuse_prompt:
+            assert traced and self._prompt_v.value is not None and self._prompt_a.value is not None
+            return self._prompt_v.value, self._prompt_a.value
+        prompt_v = self._prepare_prompt(v_embeds)
+        prompt_a = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
+        # Traced persists the shared prompt (baked address); untraced keeps locals to avoid
+        # fragmenting DRAM for the downstream VAE decode.
+        if traced:
+            self._prompt_v.update(prompt_v, traced)
+            self._prompt_a.update(prompt_a, traced)
+            return self._prompt_v.value, self._prompt_a.value
+        return prompt_v, prompt_a
+
     def _denoise_no_guidance(
         self,
         v_embeds: torch.Tensor,
@@ -397,6 +411,9 @@ class LTXDistilledPipeline(LTXPipeline):
         image_cond_strength: float = 1.0,
         traced: bool = False,
         trace_key: str | None = None,
+        # The persistent prompt buffers already hold v_embeds/a_embeds (a traced stage of the same
+        # generate() wrote them); skip the re-upload.
+        reuse_prompt: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = 1
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
@@ -432,14 +449,7 @@ class LTXDistilledPipeline(LTXPipeline):
             sp_axis=sp_axis,
         )
 
-        prompt_v = self._prepare_prompt(v_embeds)
-        prompt_a = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
-        # Traced persists the shared prompt (baked address); untraced keeps locals to avoid
-        # fragmenting DRAM for the downstream VAE decode.
-        if traced:
-            self._prompt_v.update(prompt_v, traced)
-            self._prompt_a.update(prompt_a, traced)
-            prompt_v, prompt_a = self._prompt_v.value, self._prompt_a.value
+        prompt_v, prompt_a = self._stage_prompts(v_embeds, a_embeds, traced, reuse_prompt)
 
         sigmas = torch.tensor(sigma_values, dtype=torch.float32)
 
@@ -811,6 +821,8 @@ class LTXDistilledPipeline(LTXPipeline):
             image_cond_strength=cond_strength,
             traced=self._traced,
             trace_key="s2",
+            # Stage 1 (traced) left this gen's prompt in the shared buffers.
+            reuse_prompt=self._traced and os.environ.get("LTX_S2_PROMPT_REUSE", "1") == "1",
         )
         t_stage2 = time.time() - t0
         timings.append(("Stage 2 denoise", t_stage2))
