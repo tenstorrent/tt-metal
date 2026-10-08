@@ -974,9 +974,9 @@ def run_topk_large_k_routed_test(N, C, H, W, k, device):
     ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True)
 
     # Index dtype contract must match the stock device op: UINT16 iff the
-    # tile-padded width fits 16 bits, else UINT32.
+    # tile-padded width fits 16 bits (up to 65536, #59448), else UINT32.
     padded_w = 32 * ((W + 31) // 32)
-    uint16_expected = padded_w <= UINT16_MAX
+    uint16_expected = padded_w <= UINT16_MAX + 1
     assert ttnn_indices.dtype == (ttnn.uint16 if uint16_expected else ttnn.uint32)
 
     desired_shape = [N, C, H, k]
