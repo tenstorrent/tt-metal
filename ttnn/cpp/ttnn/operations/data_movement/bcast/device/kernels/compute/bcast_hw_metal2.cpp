@@ -6,7 +6,6 @@
 // this file; the original serves the consumers still on the legacy API. Until the last of them migrates
 // and the original is retired, changes here likely belong there too.
 
-#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 
 #include "api/compute/bcast.h"
