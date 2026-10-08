@@ -220,11 +220,12 @@ chunk in L1 across all ring steps. They mask key tails (shard padding, `logical_
 normalize once, on the last active step. Exp ring rows with several head segments (up to three passes) run
 pass-outer and ring-inner.
 
-- Noncausal only; cache, window and sink features are rejected. Q must be BF16; K/V may be BF16, BFP8 or BFP4
-  under every recipe. `scale`, `compute_kernel_config` and `exp_approx_mode` follow
-  [Legacy arguments](#legacy-arguments-with-a-recipe).
-- `ring_distributed_scaled_dot_product_attention` has no recipe path yet: it is always causal (two Q slabs per
-  device); the dense K-range model above covers its masking, its two-slab Q scheduling is still to do.
+- Ring: noncausal, `is_causal` and `is_balanced` (see [Causal rings](#causal-rings)); exp ring: noncausal.
+  Cache, window and sink features are rejected (`sliding_window_size` with an explicit error: the legacy FP32 ring
+  kernel ignores it). Q must be BF16; K/V may be BF16, BFP8 or BFP4 under every recipe. `scale`,
+  `compute_kernel_config` and `exp_approx_mode` follow [Legacy arguments](#legacy-arguments-with-a-recipe).
+- `ring_distributed_scaled_dot_product_attention` takes `precision` too (see
+  [Ring-distributed attention](#ring-distributed-attention)).
 - `logical_n` (and ring's `logical_l`) may be a host scalar or a single-value device tensor, so a captured
   trace can replay with new lengths.
 - For FAST, prepare K/V before they are communicated.
@@ -234,6 +235,64 @@ pass-outer and ring-inner.
   K chunk hands finished O row groups to the writer, a restore acks maxima and sums first and then each O row as
   it lands, and compute waits only for the rows it is about to accumulate onto. On a BH Galaxy this takes
   FAST BFP8 Wan 2.2 720p attention from 19.32 to 18.80 ms (480p 5.87 to 5.74 ms), bit-identical.
+
+### Causal rings
+
+A causal ring (`is_causal`) holds the sequence's chunk d on device d; balanced (`is_balanced`) holds chunks d and
+2R − 1 − d, so devices do equal work. The ring reader and writer schedule both as for the legacy kernels; the recipe
+compute (`SDPA_RECIPE_RING_CAUSAL`) follows them:
+
+- On the device's own K shard, query q sees key k ≤ q in the shard's frame (a balanced shard's two chunks keep
+  their order). QK tiles past a Q tile row are set to −∞ in the pack thread, the diagonal tiles above their
+  diagonal, as the key-tail mask does; K chunks starting past a Q chunk's last row are popped unread. Every row
+  sees key 0 in its first chunk, so its running max is always finite.
+- Unbalanced: earlier devices' K is fully visible, later devices' steps are inactive.
+- Balanced, K from an earlier device: only that shard's early chunk precedes this device's rows; the reader sends
+  the K chunks up to the one straddling it, and compute masks the straddle as a key tail. K from a later device:
+  the early chunk's Q chunks see none of it and are skipped (the reader sends them nothing), so they normalize on
+  the last step that reaches them; compute and writer find that step by walking the ring order once.
+
+Causal builds compile at −O2 (BALANCED/ACCURATE unpack and pack otherwise build at −O3), which keeps every tested
+variant inside the kernel config buffer at no measurable cost. On a 1x2 P150b ring, 8 heads, D128, 16384 rows per
+device:
+
+| Recipe vs legacy (each at its best chunks) | Causal | Balanced |
+|---|---|---|
+| STANDARD Q256/K512 vs legacy BF16 dest | 12.47 vs 13.04 ms | 8.71 vs 8.89 ms |
+| ACCURATE Q256/K512 vs legacy FP32 dest Q128/K256 | 32.58 vs 23.37 ms | 21.43 vs 17.35 ms |
+
+The legacy FP32-dest kernel does not fit Q256/K512 at this shape; at Q128/K256 ACCURATE takes 35.64 ms (causal)
+and 26.03 ms (balanced). The causal/noncausal time ratio of each recipe matches the legacy kernels'.
+
+## Ring-distributed attention
+
+`ring_distributed_scaled_dot_product_attention` gives each device of a ring of size R the causal attention of two
+slabs of the whole sequence, chunks `ring_id` and 2R − 1 − `ring_id` of 2R, so every device does the same work. It
+needs no communication: Q, K and V hold the whole sequence on every device. With `precision` it runs on the dense
+recipe kernels and the [K-range model](#causal-sliding-window-chunked-and-windowed-attention): a head's Q chunks are
+the two slabs' chunks, read from Q at their sequence rows (`SDPA_RECIPE_Q_SLAB_JOBS`; the reader and writer map a job
+to its chunk of the sequence), and the causal key range of each follows from its global position. The zigzag order
+pairs the early slab's chunks with the late slab's, so pairs cost the same. Without an explicit `ring_id`, each
+device takes its index along the mesh axis of length R, and the op runs one program per device that differs only
+in the slabs' rows (runtime arguments, folded into the program hash).
+
+- The legacy op's rules: R even, the sequence a multiple of 64R (tile-aligned slabs), Sq == Sk without prefix
+  caching; Q chunks must divide the slab (the op-chosen blocking picks one that does). Q and K/V types follow the
+  recipe (BFP8 Q is widened and the output narrowed back, as for dense SDPA).
+- Prefix caching (`page_table` with `chunk_start_idx`): Q holds the rows after the cached prefix, K/V the paged
+  cache, read through the chunked-prefill key range (the slabs' global positions start at `chunk_start_idx`).
+
+Throughput on one P150b, Galaxy Llama 70B shape per device (8 Q heads, 1 K/V head, D128, BFP8 Q/K/V, R = 4,
+grid 7x10, Q256/K512, mean of ring positions 0 and 3):
+
+| Sequence | Legacy BF16 dest | STANDARD | Legacy FP32 dest | ACCURATE |
+|---|---|---|---|---|
+| 8192 | 1.82 ms | 0.66 ms | 2.75 ms | 1.34 ms |
+| 32768 | 6.79 ms | 4.73 ms | 10.43 ms | 11.66 ms |
+
+The legacy op walks both slabs on the same cores (two phases); the recipe spreads both slabs' chunks over the grid,
+which wins at short sequences. Without a K/V chain each core reads its own K/V; with GQA (8 Q heads per K/V head)
+BF16 K/V then becomes read-bound at 32k (STANDARD 6.66 ms), BFP8 K/V halves the traffic.
 
 ## FAST inputs
 
@@ -273,9 +332,11 @@ Compile-time defines set by the host:
 | `SDPA_RECIPE_FUSED` | STANDARD, FAST with QK width ≥ 2 | fused K chunks (inactive with an attn_mask) |
 | `SDPA_RECIPE_MASK` | an attn_mask or a key range | additive mask on the reduce path |
 | `SDPA_RECIPE_KRANGE` | causal, sliding window, chunked, windowed | K range per Q chunk; mask on edge chunks only |
+| `SDPA_RECIPE_Q_SLAB_JOBS` (reader, writer) | ring-distributed | a head's Q chunks are two slabs of the sequence |
 | `SDPA_RECIPE_QK_W`, `SDPA_RECIPE_PV_W` | all | matmul subblock widths |
 | `SDPA_RECIPE_RING` (in the ring kernels) | ring, exp ring | key-tail masking, resident state |
 | `SDPA_RING_STREAM_STATE` | ring STANDARD and FAST with fused chunks | streamed multi-Q checkpoints |
+| `SDPA_RECIPE_RING_CAUSAL` | causal (and balanced) ring | diagonal mask, skipped K and Q chunks |
 
 **Code size.** Each program must fit the 70656 B kernel config buffer, and the ring and exp ring FAST
 kernels sit within a few hundred bytes of it. The reduce path (`SDPA_RECIPE_COLD`), normalization and the ring
