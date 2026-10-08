@@ -131,8 +131,8 @@ json l1_json(const manifest::content::L1& l1) {
     return out;
 }
 
-json ring_buffer_json(const std::optional<manifest::content::L1>& ring) {
-    return ring.has_value() ? l1_json(*ring) : json(nullptr);
+json optional_l1_json(const std::optional<manifest::content::L1>& l1) {
+    return l1.has_value() ? l1_json(*l1) : json(nullptr);
 }
 
 json stream_json(const manifest::content::Stream& stream) {
@@ -225,13 +225,18 @@ json credit_ref_json(const manifest::CreditRef& credit) {
     return out;
 }
 
-// Keyed by field. Each carries its category and kind, then its memory, its stream register or its value.
 json fields_json(const std::vector<manifest::Field>& fields) {
     json out = json::object();
     for (const auto& field : fields) {
+        const std::string key(field.key);
+        TT_FATAL(!out.contains(key), "Fabric manifest: two fields are keyed {}", key);
+        if (!field.content.has_value()) {
+            out[key] = nullptr;
+            continue;
+        }
         json entry;
         entry["category"] = lower_enum_name(field.category);
-        entry["kind"] = kind_name(field.content);
+        entry["kind"] = kind_name(*field.content);
         std::visit(
             ttsl::overloaded{
                 [&](const manifest::content::L1& l1) { entry.update(l1_json(l1)); },
@@ -243,9 +248,7 @@ json fields_json(const std::vector<manifest::Field>& fields) {
                     entry["schema"] = manifest::schema_name(enumerator.type);
                 },
             },
-            field.content);
-        const std::string key(field.key);
-        TT_FATAL(!out.contains(key), "Fabric manifest: two fields are keyed {}", key);
+            *field.content);
         out[key] = std::move(entry);
     }
     return out;
@@ -288,7 +291,7 @@ json sender_channel_json(
     out["status"] = lower_enum_name(sender.status);
     out["serviced_by"] = serviced_by_json(sender.serviced_by);
     out["producer"] = sender_producer_json(sender.producer, node, identity);
-    out["ring_buffer"] = ring_buffer_json(sender.ring_buffer);
+    out["ring_buffer"] = optional_l1_json(sender.ring_buffer);
     out["credits"] = std::move(credits);
     out["fields"] = fields_json(sender.fields);
     return out;
@@ -300,7 +303,7 @@ json receiver_channel_json(const manifest::ReceiverChannel& receiver) {
     out["serviced_by"] = serviced_by_json(receiver.serviced_by);
     out["forwards_on"] =
         receiver.forwards_on.has_value() ? json(fmt::format("vc{}", *receiver.forwards_on)) : json(nullptr);
-    out["ring_buffer"] = ring_buffer_json(receiver.ring_buffer);
+    out["ring_buffer"] = optional_l1_json(receiver.ring_buffer);
     out["fields"] = fields_json(receiver.fields);
     return out;
 }
@@ -397,6 +400,7 @@ json make_router_json(const manifest::Router& router, FabricNodeId node) {
     out["intra_chip_downstream_edges"] = downstream_edges_json(router, node);
     out["fields"] = fields_json(router.fields);
     out["eriscs"] = eriscs_json(router.eriscs);
+    out["leftover_l1"] = optional_l1_json(router.leftover_l1);
     return out;
 }
 
