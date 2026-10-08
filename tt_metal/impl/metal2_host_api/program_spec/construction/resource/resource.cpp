@@ -40,7 +40,8 @@ KernelResourceBindings ResolveKernelResourceBindings(
             resources.dfbs.slot,
             resources.dfbs.is_relay,
             resources.dfbs.relay_pipe_id,
-            collected.dfb_by_name),
+            collected.dfb_by_name,
+            resources.dfbs.id),
         .semaphores = MakeSemaphoreBindingHandles(
             kernel_spec, collected.semaphore_binders, resources.semaphores.id, resources.semaphores.scope),
         .prefetcher_pipes = {}};

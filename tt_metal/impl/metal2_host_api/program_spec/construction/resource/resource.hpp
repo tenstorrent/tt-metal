@@ -121,7 +121,8 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const DFBNameToSlotMap& dfb_name_to_slot,
     const std::unordered_map<DFBSpecName, bool>& dfb_name_to_is_relay,
     const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id,
-    const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name);
+    const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name,
+    const DFBNameToIdMap& dfb_name_to_id);
 
 // ----------------------------------------------------------------------------
 // PrefetcherPipes (prefetcher_pipe.cpp)
