@@ -476,7 +476,16 @@ class DSV41PrefillLayer:
         ):  # unified MoE: all own rows hh [1,1,N,D] in one count-driven pipeline -> own rows [1,1,N,D]
             from models.demos.blackhole.deepseek_v41_flash.tt.prefill_unified_moe import moe_cols
 
-            ms = [moe_cols(self.umoe, L.moe.gate, hh, mc, cc)]
+            ov, box, overlap = None, [], None
+            if (
+                moe_overlap.enabled()
+                and hasattr(L.shared, "w01")
+                and (moe_overlap.explicit() or hasattr(L.shared, "wg"))
+                and hh.shape[2] <= moe_overlap.MAX_M
+            ):  # shared expert on a sub-device concurrently with the dispatch (tt/moe_overlap.py), as in _moe_unified
+                ov = moe_overlap.SDOverlap.get(L.mesh_device)
+                overlap = (ov, lambda: box.append(ov.shared(L.shared, hh)))
+            ms = [moe_cols(self.umoe, L.moe.gate, hh, mc, cc, overlap=overlap)]
             _mark("moe+allgather")
         else:
             route_own = os.environ.get("DSV41_PF_ROUTE_OWN", "1") == "1"
@@ -510,8 +519,13 @@ class DSV41PrefillLayer:
                 ttnn.deallocate(sc_all)
                 ttnn.deallocate(ix_all)
             _mark("moe+allgather")
-        sh_all = shared_big(L.shared, hh)
-        ttnn.deallocate(hh)
+        if (
+            self.umoe is not None and overlap is not None
+        ):  # shared output computed during the dispatch; hh is read by those async kernels until the expand
+            sh_all = box[0]
+        else:
+            sh_all = shared_big(L.shared, hh)
+            ttnn.deallocate(hh)
         _mark("shared")
         m_all = f32(ttnn.concat(ms, dim=2) if len(ms) > 1 else ms[0])
         for t in ms:
@@ -519,6 +533,8 @@ class DSV41PrefillLayer:
         x3 = pkf.expand(m_all, x2, post_f, comb_f, sh_all)
         for t in (m_all, sh_all, x2, post_f, comb_f):
             ttnn.deallocate(t)
+        if self.umoe is not None and overlap is not None:
+            ttnn.deallocate(hh)
         if converted:  # the caller owns (and frees) the chunk lists it passed in, we own the packed copies we made
             ttnn.deallocate(x)
             ttnn.deallocate(pre_in)
