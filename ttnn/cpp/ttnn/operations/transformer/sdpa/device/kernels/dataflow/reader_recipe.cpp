@@ -13,8 +13,8 @@
 // For singleton chains, rank=0, length=1, downstream_Q_jobs=0; coordinates unused.
 // Key ranges (SDPA_RECIPE_KRANGE: causal, sliding window, chunked, windowed; recipe_key_range.hpp): singleton
 // chains; args 3/4 are a range of positions in the heads' zigzag orders; 12 scalar Q offset, 13-15 the Q offset,
-// cu_window_seqlens and page table addresses (0 when absent). Each Q chunk reads only its K range; the writer
-// generates the edge chunks' masks.
+// cu_window_seqlens and page table addresses (0 when absent); with Q slabs (ring-distributed SDPA) 16-17 the slabs'
+// first Q chunks. Each Q chunk reads only its K range; the writer generates the edge chunks' masks.
 // Attention sink (SDPA_RECIPE_SINK_CB): runtime arg SDPA_RECIPE_SINK_ARG is the sink tensor's address; each Q chunk
 // gets a page holding its head's sink logit.
 //
@@ -327,6 +327,9 @@ void kernel_main() {
     uint32_t page_table_batch = UINT32_MAX;
     const auto* blocks = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + SDPA_RECIPE_PAGE_TABLE_OFFSET);
 #endif
+#ifdef SDPA_RECIPE_Q_SLAB_JOBS
+    const RecipeQSlabs slabs{{get_arg_val<uint32_t>(16), get_arg_val<uint32_t>(17)}};
+#endif
 #endif
     for (uint32_t qi = 0; qi < jobs; ++qi) {
 #ifdef SDPA_RECIPE_KRANGE
@@ -364,7 +367,13 @@ void kernel_main() {
         auto v_row = [&](uint32_t t) { return kv_row(t) * SDPA_RECIPE_V_SRC_DHT; };
 #endif
         const uint32_t kvbase = kv_head * k_chunks * kv_tiles;
+#ifdef SDPA_RECIPE_Q_SLAB_JOBS
+        // The job's chunk of the whole sequence Q holds (q_primary_rows rows per head).
+        const uint32_t q_chunk = slabs.chunk(job % queries_per_head);
+        const uint32_t qbase = (job_head * (q_primary_rows / (q_tiles * 32)) + q_chunk) * q_tiles * SDPA_RECIPE_DHT;
+#else
         const uint32_t qbase = job * q_tiles * SDPA_RECIPE_DHT;
+#endif
         // Paired recipes pad an odd chunk with SDPA_RECIPE_Q_PAD_TILES zero rows (host: recipe_compute_q_tiles).
         constexpr uint32_t q_push_tiles = (q_tiles + SDPA_RECIPE_Q_PAD_TILES) * SDPA_RECIPE_DHT;
         qcb.reserve_back(q_push_tiles);
@@ -407,7 +416,11 @@ void kernel_main() {
 #ifdef SDPA_RECIPE_KRANGE
         // K chunks of this Q chunk (recipe_key_range.hpp; the writer sends compute the range and the edge masks).
         // The chain is off: every core reads its own K/V.
+#ifdef SDPA_RECIPE_Q_SLAB_JOBS
+        const uint32_t q_row0 = q_chunk * q_tiles * 32;
+#else
         const uint32_t q_row0 = (job % queries_per_head) * q_tiles * 32;
+#endif
         const uint32_t q_row_end = q_row0 + q_tiles * 32 < q_primary_rows ? q_row0 + q_tiles * 32 : q_primary_rows;
         const RecipeChunkRange range = keys.chunks(q_row0, q_row_end, SDPA_K_CHUNK_TILES * 32, k_chunks);
         for (uint32_t ki = range.first; ki < range.end; ++ki) {

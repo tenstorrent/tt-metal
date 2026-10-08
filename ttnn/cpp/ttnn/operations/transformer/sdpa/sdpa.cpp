@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
 #include <cmath>
 #include <string_view>
 #include <utility>
@@ -270,6 +271,74 @@ ttnn::Tensor chunked_recipe(
         key_range,
         {.head_dim_v = head_dim_v, .attention_sink = attention_sink},
         routed);
+}
+
+// Ring-distributed SDPA on a named recipe: each device computes the causal attention of two slabs of the whole Q,
+// sequence chunks ring_id and 2 * ring_size - 1 - ring_id (RecipeKeyRange::q_slab_rows), with the legacy op's argument
+// rules. ring_id, when not given, is the device's index along the mesh axis of length ring_size.
+ttnn::Tensor ring_distributed_recipe(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& v,
+    uint32_t ring_size,
+    std::optional<uint32_t> ring_id,
+    std::optional<float> scale,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& page_table,
+    std::optional<int64_t> chunk_start_idx,
+    SDPAPrecision precision,
+    bool routed = false) {
+    namespace numeric = operations::transformer::sdpa::detail;
+    TT_FATAL(q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
+    // The legacy op's ring and shape rules; Q and K/V types follow the recipe (FAST takes prepared inputs).
+    const uint32_t sq = q.logical_shape()[2];
+    TT_FATAL(ring_size > 0 && ring_size % 2 == 0, "ring_size must be positive and even, got {}", ring_size);
+    TT_FATAL(!ring_id || *ring_id < ring_size, "ring_id must be less than ring_size, got {}", ring_id.value_or(0));
+    TT_FATAL(
+        sq % (64 * ring_size) == 0,
+        "Ring-distributed SDPA splits the sequence into 2 * ring_size tile-aligned slabs; got sequence length {} for "
+        "ring size {}",
+        sq,
+        ring_size);
+    TT_FATAL(
+        chunk_start_idx.has_value() == page_table.has_value(),
+        "Ring-distributed SDPA takes chunk_start_idx and page_table together (prefix caching)");
+    TT_FATAL(
+        page_table || k.logical_shape()[2] == sq,
+        "Ring-distributed SDPA is causal and requires Q and K to have the same sequence length when not using prefix "
+        "caching. Got Q: {}, K: {}",
+        sq,
+        k.logical_shape()[2]);
+    const uint32_t slab_rows = q.logical_shape()[2] / (2 * ring_size);
+    const auto slabs = [&](uint32_t id) {
+        return std::array<uint32_t, 2>{id * slab_rows, (2 * ring_size - 1 - id) * slab_rows};
+    };
+    auto* mesh_device = q.device();
+    numeric::RecipeKeyRange key_range{
+        .causal = true,
+        .q_offset = static_cast<uint32_t>(chunk_start_idx.value_or(0)),
+        .page_table = page_table,
+        .q_slab_rows = slab_rows};
+    const ttnn::MeshCoordinateRange all_devices(mesh_device->shape());
+    if (ring_id) {
+        key_range.q_slab_starts.emplace_back(all_devices, slabs(*ring_id));
+    } else {
+        const auto& shape = mesh_device->get_view().shape();
+        const bool rows = shape[0] == ring_size;
+        TT_FATAL(
+            rows || (shape.dims() > 1 && shape[1] == ring_size),
+            "Ring size {} doesn't match mesh dimensions {}",
+            ring_size,
+            shape);
+        for (const auto& coordinate : all_devices) {
+            key_range.q_slab_starts.emplace_back(
+                ttnn::MeshCoordinateRange(coordinate), slabs(coordinate[rows ? 0 : 1]));
+        }
+    }
+    return dense_recipe(
+        q, k, v, std::nullopt, scale, memory_config, program_config, compute_kernel_config, precision, key_range, {}, routed);
 }
 }  // namespace
 
@@ -1144,10 +1213,30 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& page_table,
-    std::optional<int64_t> chunk_start_idx) {
-    // TODO(ring_distributed recipe): this op always runs the legacy sdpa_standard loop (two causal Q slabs per
-    // device). Route it like the other entry points once its recipe path lands: STANDARD, or ACCURATE with FP32
-    // DEST (routed_precision), on Blackhole (routes_to_recipes). Not routed yet.
+    std::optional<int64_t> chunk_start_idx,
+    std::optional<SDPAPrecision> precision) {
+    // Without precision, Blackhole runs STANDARD, or ACCURATE with FP32 DEST (this op always left the streaming
+    // kernels for the legacy loop).
+    const bool routed = !precision && routes_to_recipes(input_tensor_q);
+    if (routed) {
+        precision = routed_precision(input_tensor_q, compute_kernel_config);
+    }
+    if (precision) {
+        return ring_distributed_recipe(
+            input_tensor_q,
+            input_tensor_k,
+            input_tensor_v,
+            ring_size,
+            ring_id,
+            scale,
+            memory_config,
+            routed ? routed_program_config(program_config) : program_config,
+            compute_kernel_config,
+            page_table,
+            chunk_start_idx,
+            *precision,
+            routed);
+    }
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
