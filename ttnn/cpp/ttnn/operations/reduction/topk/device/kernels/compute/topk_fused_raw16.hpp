@@ -17,13 +17,13 @@ namespace topk_fused_raw16 {
 using namespace ckernel;
 using namespace ckernel::sfpu;
 
-// What the fuse does to a value first: nothing; -0 to +0; or every zero and denormal to +0.
-enum class Zeros { Keep, FoldNegative, ToPositive };
+// What the fuse does to a value first: nothing, or every zero and denormal to +0.
+enum class Zeros { Keep, ToPositive };
 
 // _topk_fuse_tile_ for value tiles moved in as raw u16 words: DEST 0,1 hold [garbage | bf16 bits].
 template <bool largest, Zeros zeros>
 inline void fuse_raw16_slab() {
-    constexpr int body = zeros == Zeros::Keep ? 10 : (zeros == Zeros::FoldNegative ? 15 : 14);
+    constexpr int body = zeros == Zeros::Keep ? 10 : 14;
     TOPK_SFPENCC_ALL_LANES_ON();
     sfpi::vConstIntPrgm0 = TOPK_LO16_MASK;
     set_dst_write_addr(0);
@@ -32,13 +32,7 @@ inline void fuse_raw16_slab() {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 128);
         TTI_SFPSHFT(16, 0, p_sfpu::LREG0, 1);
-        if constexpr (zeros == Zeros::FoldNegative) {
-            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
-            TTI_SFPSHFT(1, 0, p_sfpu::LREG2, 1);
-            TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-            TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-            TOPK_SFPENCC_ALL_LANES_ON();
-        } else if constexpr (zeros == Zeros::ToPositive) {
+        if constexpr (zeros == Zeros::ToPositive) {
             TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_NODEBIAS);
             TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
             TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
@@ -58,27 +52,6 @@ inline void fuse_raw16_slab() {
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     topk_replay_init = 0;
-}
-
-// Flushes the denormal values of the keys in DEST 0,1 to signed zero, index kept, as a BF16 store does. No replay: a
-// local sort's later phases replay the loads and stores its phase 0 recorded.
-inline void flush_key_denormals() {
-    TOPK_SFPENCC_ALL_LANES_ON();
-    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, 0x8000);
-    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, 0xFFFF);
-    set_dst_write_addr(0);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    for (int i = 0; i < 64; i++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_NODEBIAS);
-        TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-        TTI_SFPAND(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);
-        TOPK_SFPENCC_ALL_LANES_ON();
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        TTI_INCRWC(0, 2, 0, 0);
-    }
-    set_dst_write_addr(0);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
 // Makes a NaN value of the keys in DEST 0,1 the infinity of its sign, index kept, as a pack out of a 16-bit DEST does.

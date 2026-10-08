@@ -461,13 +461,11 @@ void top_k_fused_32b_dest() {
             transpose_tile<true>(index_dfb_index, 0, 2);
             transpose_tile<true>(index_dfb_index, 1, 3);
             MATH((_llk_math_eltwise_unary_sfpu_params_(
-                topk_fused_raw16::fuse_raw16_slab<largest, topk_fused_raw16::Zeros::Keep>, 0, VectorMode::RC_custom)));
+                topk_fused_raw16::fuse_raw16_slab<largest, topk_fused_raw16::Zeros::ToPositive>,
+                0,
+                VectorMode::RC_custom)));
             ckernel::topk_local_sort</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
-                0, /*idir=*/0, /*i_end_phase=*/0);
-            MATH((
-                _llk_math_eltwise_unary_sfpu_params_(topk_fused_raw16::flush_key_denormals, 0, VectorMode::RC_custom)));
-            ckernel::topk_local_sort</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
-                0, /*idir=*/0, logk - 1, /*i_start_phase=*/1);
+                0, /*idir=*/0, logk - 1);
             // A NaN leaves as the infinity of its sign, as main's pack of the local sort out of a 16-bit DEST makes it.
             MATH((_llk_math_eltwise_unary_sfpu_params_(
                 topk_fused_raw16::defuse_raw16<largest, true>, 0, VectorMode::RC_custom, 2)));
@@ -501,7 +499,7 @@ void top_k_fused_32b_dest() {
                 copy_tile<true>(index_transposed_dfb_index, left_ind, 2);
                 copy_tile<true>(index_transposed_dfb_index, right_ind, 3);
                 MATH((_llk_math_eltwise_unary_sfpu_params_(
-                    topk_fused_raw16::fuse_raw16_slab<largest, topk_fused_raw16::Zeros::FoldNegative>,
+                    topk_fused_raw16::fuse_raw16_slab<largest, topk_fused_raw16::Zeros::Keep>,
                     0,
                     VectorMode::RC_custom)));
                 ckernel::topk_merge</*idir=*/false, /*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
