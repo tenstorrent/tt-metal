@@ -975,6 +975,7 @@ def test_attn_matmul_with_program_cache_exhaustive(
 
 # Runtime args were enumerated over the device core count but mapped with the op grid's y, so a grid
 # shorter than the device sent args to off-grid coordinates and left real cores without any.
+@pytest.mark.use_module_device
 def test_attn_matmul_compute_grid_shorter_than_device(device):
     grid = device.compute_with_storage_grid_size()
     if grid.y < 2:
