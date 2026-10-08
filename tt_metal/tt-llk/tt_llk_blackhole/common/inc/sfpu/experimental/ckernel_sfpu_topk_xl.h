@@ -2716,13 +2716,12 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
 }
 
 /**
- * @brief Sorts each 64 row column of a K=1024 tile in place. Every column must be bitonic, as a merge of two
- *        oppositely sorted columns leaves it.
- * @tparam K Sequence length; only 1024.
- * @param dst_index Dest tile index of the tile.
- * @param ascending Sort direction of every column.
- * @note Call _topk_xl_init_<1024, true> first (ADDR_MOD_1/5/6/7). Overwrites replay slots [0, 16) and issues no
- *       CLR_AB, so do not pair it with the SrcB dummy valid that _topk_xl_rebuild_ uses.
+ * @brief Sort each 64 row column of a K=1024 tile in place; every column must be bitonic.
+ * @tparam K: Sequence length, values = <1024>
+ * @param dst_index: Dest tile index.
+ * @param ascending: Sort direction of every column.
+ * @note Call _topk_xl_init_<1024, true> first. Overwrites replay slots [0, 16) and issues no CLR_AB, so do not
+ *       pair it with the SrcB dummy valid of _topk_xl_rebuild_.
  */
 template <std::uint32_t K>
 inline void _topk_xl_rebuild_columns_(const std::uint32_t dst_index, const bool ascending)

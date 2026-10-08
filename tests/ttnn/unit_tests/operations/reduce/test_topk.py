@@ -913,7 +913,7 @@ def _tree_merge_sub_core_grid(device, local_x, local_y):
 @pytest.mark.parametrize("largest", (True, False))
 @pytest.mark.parametrize("stable", (False, True))
 def test_topk_multicore_tree_merge(local_x, local_y, k, largest, stable, device):
-    """Pairwise tree merge over n local cores (#56797); H=64 runs the per-row handshake across two tile rows."""
+    """Pairwise tree merge over n local cores; H=64 runs the per-row handshake across two tile rows."""
     torch.manual_seed(2007)
     W = 16384
     sub_core_grids = _tree_merge_sub_core_grid(device, local_x, local_y)
@@ -974,7 +974,7 @@ def run_topk_large_k_routed_test(N, C, H, W, k, device):
     ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True)
 
     # Index dtype contract must match the stock device op: UINT16 iff the
-    # tile-padded width fits 16 bits (up to 65536, #59448), else UINT32.
+    # tile-padded width fits 16 bits (up to 65536), else UINT32.
     padded_w = 32 * ((W + 31) // 32)
     uint16_expected = padded_w <= UINT16_MAX + 1
     assert ttnn_indices.dtype == (ttnn.uint16 if uint16_expected else ttnn.uint32)

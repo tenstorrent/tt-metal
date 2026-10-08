@@ -77,7 +77,7 @@ inline void _bcast_cols_op_()
 }
 
 /**
- * @brief One bcast-col FPU op per fidelity phase: ADDR_MOD_4 steps the phase, the last op advances and clears it.
+ * @brief Emit the bcast-col FPU op once per fidelity phase; ADDR_MOD_4 steps the phase, the last op advances and clears it.
  */
 template <EltwiseBinaryType eltwise_binary_type, std::uint8_t addr_mod, std::uint32_t fidelity_phases>
 inline void _bcast_cols_op_phased_()

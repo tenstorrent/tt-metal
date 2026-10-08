@@ -100,8 +100,7 @@ inline void llk_math_eltwise_binary_mul_bcast_cols_init_custom(
  * Column j MACs onto dest[dst_index + j], so calling once per head into the same dst_index reduces
  * heads in place (see @ref _llk_math_bcast_cols_reuse_custom_).
  *
- * @tparam math_fidelity values = <LoFi/HiFi2/HiFi3/HiFi4>. Each MUL repeats once per fidelity phase and the
- *         phases MAC into dest.
+ * @tparam math_fidelity: values = <LoFi/HiFi2/HiFi3/HiFi4>; one MUL per fidelity phase, each MACing into dest.
  * @param dst_index: First destination tile index.
  * @param ct_dim: Number of column tiles written, into dest range [dst_index, dst_index + ct_dim).
  * @note Run @ref llk_math_eltwise_binary_mul_bcast_cols_init_custom first.
