@@ -8,6 +8,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Literal
 
+from loguru import logger
+
 import ttnn
 
 KDA_CHUNK_SIZE = ttnn.TILE_SIZE
@@ -22,16 +24,30 @@ KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
 # core; the rest of L1 holds the summary, prefix and scan buffers that run while the chunk terms are alive.
 # Single-device and longer-sequence geometries exceed the budget and would clash with those buffers.
 KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
+# The normalized heads and the TP partial sums each stay in L1 for their consumer under this budget: K3 on Galaxy
+# SP8xTP4 needs 32 and 77 KiB per core on its 12x10 grid. The scan output stays in DRAM: in L1 it slows the scan
+# by about as much as it speeds up the norm that reads it.
+KDA_INTERMEDIATE_L1_BYTES_PER_CORE = 128 * 1024
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
 
-def l1_when_it_fits(device, nbytes: int, bytes_per_core: int) -> ttnn.MemoryConfig:
-    """Interleaved L1 when ``nbytes`` spread over the worker grid fits ``bytes_per_core`` per core, else DRAM."""
+def l1_when_it_fits(device, nbytes: int, bytes_per_core: int, *, what: str) -> ttnn.MemoryConfig:
+    """Interleaved L1 when ``nbytes`` spread over the worker grid fits ``bytes_per_core`` per core, else DRAM.
+
+    Falling back to DRAM is logged, since the consumers of ``what`` then run slower.
+    """
     grid = device.compute_with_storage_grid_size()
-    return ttnn.L1_MEMORY_CONFIG if nbytes <= bytes_per_core * grid.x * grid.y else ttnn.DRAM_MEMORY_CONFIG
+    cores = grid.x * grid.y
+    if nbytes <= bytes_per_core * cores:
+        return ttnn.L1_MEMORY_CONFIG
+    logger.warning(
+        f"KDA {what} need {nbytes // cores // 1024} KiB per core, over the {bytes_per_core // 1024} KiB L1 budget; "
+        "keeping them in DRAM, so their producer and consumers run slower."
+    )
+    return ttnn.DRAM_MEMORY_CONFIG
 
 
 def preparation_bytes(batch_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> int:

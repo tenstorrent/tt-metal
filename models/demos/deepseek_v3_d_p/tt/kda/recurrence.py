@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from loguru import logger
-
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
@@ -531,14 +529,12 @@ class KDARecurrence:
         # Both scans read the chunk terms chunk by chunk; keeping them in L1 when they fit spares those DRAM reads
         # and chunk preparation's DRAM writes.
         preparation_size = preparation_bytes(batch * heads, local_rows // KDA_CHUNK_SIZE, key_dim, value_dim)
-        self._preparation_memory = l1_when_it_fits(device, preparation_size, KDA_PREPARATION_L1_BYTES_PER_CORE)
-        if self._preparation_memory.buffer_type != ttnn.BufferType.L1:
-            grid = device.compute_with_storage_grid_size()
-            logger.warning(
-                f"KDA chunk terms need {preparation_size // (grid.x * grid.y) // 1024} KiB per core, over the "
-                f"{KDA_PREPARATION_L1_BYTES_PER_CORE // 1024} KiB L1 budget; keeping them in DRAM, so chunk "
-                f"preparation and the scan run slower ({heads} heads, {local_rows} rows per device)."
-            )
+        self._preparation_memory = l1_when_it_fits(
+            device,
+            preparation_size,
+            KDA_PREPARATION_L1_BYTES_PER_CORE,
+            what=f"chunk terms ({heads} heads, {local_rows} rows per device)",
+        )
         self._sequence_parallel_axis = sequence_parallel_axis
         self._sequence_parallel = (
             isinstance(device, ttnn.MeshDevice) and tuple(device.shape)[sequence_parallel_axis] > 1
