@@ -903,10 +903,18 @@ def test_dsv41_demo_session(mesh_device, device_params):
                 uni_policy.set_in_use(
                     umoes[si % len(umoes)] == "1" and any(p_.umoe is not None for _, p_ in pm_.layers)
                 )
-        if mode:
+        if mode and os.environ.get(
+            "DSV41_MODE_" + mode.upper()
+        ):  # generic A/B mode: DSV41_MODE_A="K=V,K=V" env assignments (MoE overlap A/B)
+            for kv in os.environ["DSV41_MODE_" + mode.upper()].split(","):
+                if "=" in kv:
+                    k_, _, v_ = kv.partition("=")
+                    os.environ[k_] = v_
+        elif mode:
             os.environ["DSV41_PF_MHC"] = "packed" if set(mode) & set("PREQ") else "0"
             os.environ["DSV41_PF_ROUTE_OWN"] = "1" if set(mode) & set("RE") else "0"
             os.environ["DSV41_PF_ENGRAM_OWN"] = "1" if set(mode) & set("EQ") else "0"
+        if mode:
             for _, (_, m_, _) in cache.items():  # force a new prefill trace capture in the new mode
                 pm_ = getattr(m_, "prefill_model", None)
                 if pm_ is not None and getattr(pm_, "dyn", None) is not None:
@@ -916,7 +924,7 @@ def test_dsv41_demo_session(mesh_device, device_params):
         logger.info(
             f"=== session scenario {s.id} (DSV41_PF_ASYNC={os.environ.get('DSV41_PF_ASYNC')}, ROW_TOKENS={os.environ.get('DSV41_PREFILL_ROW_TOKENS')}"
             + (
-                f" MODE {mode}: PF_MHC={os.environ['DSV41_PF_MHC']} ROUTE_OWN={os.environ['DSV41_PF_ROUTE_OWN']} ENGRAM_OWN={os.environ['DSV41_PF_ENGRAM_OWN']}"
+                f" MODE {mode}: PF_MHC={os.environ.get('DSV41_PF_MHC')} ROUTE_OWN={os.environ.get('DSV41_PF_ROUTE_OWN')} ENGRAM_OWN={os.environ.get('DSV41_PF_ENGRAM_OWN')} MO_OVERLAP={os.environ.get('DSV41_MO_OVERLAP')} UNI_ROUTER={os.environ.get('DSV41_UNI_ROUTER')} UNI_TOPO={os.environ.get('DSV41_UNI_TOPO')}"
                 if mode
                 else ""
             )

@@ -88,3 +88,42 @@ The op (`ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_e
 4. Private variant for development (does not touch the main build): `tools/oc_build.sh` builds from a worktree into pf_onecopy_build/lib; run with `LD_LIBRARY_PATH=/mnt/tt-data/ssinghal/wt/pf_onecopy_build/lib`.
 5. Verify with the one-layer test from the tree only: `DSV41_UM_RING=2 DSV41_UM_REAL=1 DSV41_UM_N=512 pytest models/demos/blackhole/deepseek_v41_flash/tests/test_unified_moe.py` (ring vs copy PCC 0.9998+).
 Done for the main build on 2026-10-06 (old library kept as build_Release/lib/_ttnncpp.so.pre_ring1); verified on host .34 with only the main build (PCC ring vs copy 0.99985-0.99994, 3.72 ms/layer at N=512).
+## MoE collectives: fused / overlapped alternatives (pf_moeoverlap; flags default OFF)
+Survey result (BH, this build): fused AG+matmul (`all_gather_minimal_matmul_async`, `strided_all_gather_minimal_matmul_async`) only run on the 1D fabric (they hard-code
+`LowLatencyPacketHeader`; llama_mlp.py comment still true), `matmul_reduce_scatter_async` is tested on a 1x4 box only, `minimal_matmul_strided_reduce_scatter_async` races on BH
+(gpt_oss_d_p gates it off), `deepseek_moe_reduce_scatter` / `moe_gpt` / `selective_reduce_combine` are decode-shaped (TG tests skipped on BH), `post_combine_reduce` fuses only the
+top-k weighted sum (DSV3 `TtReduceModule` = pcr + a separate hidden-dim `reduce_scatter`, i.e. exactly our path), fp8 dispatch/combine exist (BH only) but `post_combine_reduce`
+requires a bf16 combine output. DSV3 hides the shared expert behind dispatch on a one-row sub-device (`overlap_shared_expert_with_dispatch`, `SubDeviceTraceController`).
+Standalone single layer (layer 3, ring weights, links=2), ms:
+| stage | N=4096 random | N=4096 real FFN input (layer 3, one 4096-token user, rolled per row) | N=512 |
+| all_gather hidden / to RM | 0.48 / 0.22 | same | 0.08 / 0.03 |
+| router (16 slices) + packed routing AG | 0.85 | 0.85 | 0.18 |
+| bincount+cumsum / dispatch / experts / combine / pcr | 0.13 / 1.51 / 2.79 / 1.04 / 0.85 | 0.13 / 3.93 / 6.06 / 3.14 / 0.85 | 0.12 / 0.27 / 2.44 / 0.33 / 0.18 |
+| reduce_scatter(hidden) + all_to_all | 0.48 + 0.17 | same | 0.09 + 0.03 |
+Real tokens double the dispatch / experts / combine times (hot experts: in the layer-3 dump one expert receives 63x the mean token count; chip load max/mean ~5, a greedy re-mapping of
+experts to chips only gets it to ~4.7): the "collectives 4-5x above floor" are mostly hot-expert skew (ingress of the hot chip), not fabric inefficiency.
+Not working on this build / no gain: one `all_to_all(in_dim=tokens, out_dim=hidden)` + local sum instead of reduce_scatter + all_to_all gives WRONG data (PCC 0.001) and is 8x slower
+(1.39 ms); untilize before the all-gather (all-gather of row-major pages) 1.32 ms vs 0.71 ms; `num_workers_per_sender` 1-4: no change; dispatch/combine `Topology.Ring` over the 4 rows:
+output identical, 6.21 vs 6.32 ms (DSV41_UNI_TOPO=ring, -0.11 ms, not enabled in the A/B).
+Implemented:
+* `DSV41_UNI_ROUTER=batched`: one router for all own rows (`router_select` extended to any T % 32 == 0: rows strided over the cores, JIT kernel only): bit-identical expert ids
+  and weights, router + packed AG 0.85 -> 0.31 ms per layer at N=4096 (0.18 -> 0.17 at N=512).
+* `DSV41_MO_OVERLAP=1` (`DSV41_MO_OVERLAP=prep` builds the split weights only; tt/moe_overlap.py): shared expert on a Tensix sub-device (rows 1..9) concurrent with `dispatch` on
+  sub-device 0 (row 0), DSV3 style. Needs separate gate / up bf8 weights (+24 MB per chip per layer, split from w01 at build), explicit 2D matmul configs on the 12x9 sub-device grid,
+  `sub_core_grids` for the GLU multiply, and a SEGMENTED chunk trace (a sub-device manager cannot be loaded / cleared inside a capture): `SegTrace` captures the chunk forward as
+  81 traces split at the load / clear points. Single layer: output bit-identical (MoE partial `torch.equal`), shared-expert PCC 1.0000; section 7.74 -> 6.39 ms (N=4096 random),
+  15.51 -> 14.16 (real tokens), 5.01 -> 4.34 (N=2048), 3.54 -> 3.38 (N=512).
+In-process A/B session modes: `DSV41_SESSION=id@a,id@b,id@c,id@a` with `DSV41_MODE_A/B/C="K=V,K=V"` (tools/mo_run40.sh).
+Real-token N=4096 (hot experts): dispatch/combine `Topology.Ring` over the 4 rows (DSV41_UNI_TOPO=ring, identical output): MoE section 14.10 -> 12.14 ms; with shared||dispatch 12.19 ms
+(vs 15.51 sequential), plus the batched router -0.54 ms.
+40 layers, prefill only, in-process A/B (a = unflagged, b = batched router, c = b + shared||dispatch, d = c + ring), replay device time per call / TTFT, first tokens identical in all modes:
+| scenario | a | b | c | d |
+| isl4k_b16 (3720) | 9.61 s / 10.70 s | 9.53 / 10.53 | 9.31 / 10.37 | 9.20 / 10.29 (second session: a 9.61-9.50 / 10.64) |
+| isl8k_b4 (7443) | 4.75 s / 6.18 s | 4.71 / 6.70* | 4.60 / 6.02 | not run |
+(* host-side noise; replay time is the comparable number.) 6-layer traced chunk logits: bit-identical to the unflagged run for c and d.
+
+### MoE overlap re-measured on main df4ffc9f838 (ported as 62a893e7838 / 6fca7020e68 / 01c49e743da / 5c09e3dbab2 on ssinghal/dsv4p1-pf-overlap2; flags default OFF)
+Grid env (no MEMLOG, SPEC=0, 40 layers), in-process A/B via tools/mo_grid.sh, modes a=base, b=batched router, c=b+shared||dispatch, d=c+ring topology, e=ring topology only. TTFT ms, 4k (3720 tokens):
+* B=16 .43 (logs/mogrid_b16_h43.log): a 8755 / 8753 (first a 10626 = cold), b 8715, c 8604, d 8501 / 8474, e 8634  -> d -3.0%, c -1.7%, e -1.4%, b -0.4%. Outputs identical in all modes (16 users).
+* B=32 .44 (logs/mogrid_b32_h44.log): a 17495 / 16940, c 16589, d 16361 -> c -3.6%, d -4.9% vs mean(a). BUT in c and d the 32 identical prompts no longer give identical outputs (row groups of 8 users diverge at the 2nd generated token; a: all 32 equal): not bit-identical at U=8 per row. Cause not investigated.
+Long ISL not run (scope: 4k only until a confirmed gain).
