@@ -98,9 +98,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         });
     };
     // Per-core K/V block cache: the reader fills a slot on a miss and compute reads it in place, replacing the
-    // streamed K/V block buffers. The plan is hashed, so this layout is fixed for the program's lifetime.
-    const KvCachePlan& kv = attrs.kv_cache_plan;
-    const uint32_t kv_cache_slots = kv.slots;
+    // streamed K/V block buffers. The count is hashed, so this layout is fixed for the program's lifetime.
+    const uint32_t kv_cache_slots = attrs.kv_cache_slots;
     for (const CbSpec& s : base_cbs(g, attrs.causal_enabled(), /*block_cache_serves_kv=*/kv_cache_slots > 0)) {
         cb(s.id, s.page_size, s.num_pages, s.df);
     }
