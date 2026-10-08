@@ -9,12 +9,16 @@
 //    names one expert at several k gives one entry per k, as moe_compute lists them) and sends its local entries
 //    (slot, token, score, k) to the root core (core 0). The root counting-sorts them by slot in core order (= token
 //    order) into the routing table: per slot the routed rows in token order, at most `row_cap` (the slot's e_t page and
-//    double-buffer half; later entries are dropped), and jobs of at most JR rows of one slot. Every other core reads
-//    the table back.
+//    double-buffer half; later entries are dropped), and jobs of at most JR rows of one slot, dealt to the expert
+//    groups: with one row tile per job every job has the same predicted time and job j of the slot order runs on group
+//    j % G (the table stays in slot order); with several each job goes to the group with the earliest predicted finish
+//    and the jobs are listed group by group. Every other core reads the table back.
 //    The root also writes the table block to DRAM for the metadata program.
 // 2. Streams this core's share of each job's expert weights in compute order P1(0), P1(1), P2(0), P1(2), P2(1), ...:
-//    P1 = this core's W0/W1 column groups, P2 = its W2 output groups, both in moe_compute's prepared layout (one run
-//    per group, the K padding rows at each group's end are not read).
+//    P1 = this core's W0/W1 column groups, P2 = its W2 output groups, both in moe_compute's prepared layout (the K
+//    padding rows at each group's end are not read). A unit is what the compute holds at once: one group's run for a
+//    job of one row tile; for a job of several (M > 1) one chunk of one group, P1 chunk-major (chunk 0 of every column
+//    group, then chunk 1, ...), P2 group-major, each unit padded to the same number of CB blocks.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
@@ -70,6 +74,22 @@ void kernel_main() {
     constexpr uint32_t P2_RUN = get_named_compile_time_arg_val("w2_run_tiles");
     constexpr uint32_t P2_STRIDE = get_named_compile_time_arg_val("w2_group_tiles");
     constexpr uint32_t P2_GROUPS = get_named_compile_time_arg_val("w2_groups_per_core");
+    constexpr uint32_t M = get_named_compile_time_arg_val("row_tiles");
+    constexpr uint32_t KC = get_named_compile_time_arg_val("chunk_tiles");
+    constexpr uint32_t SB = get_named_compile_time_arg_val("chunk_blocks");
+    constexpr uint32_t KC2 = get_named_compile_time_arg_val("w2_chunk_rows");
+    constexpr uint32_t KT = get_named_compile_time_arg_val("hidden_tiles");
+    constexpr uint32_t NT = get_named_compile_time_arg_val("intermediate_tiles");
+    constexpr uint32_t BIAS = get_named_compile_time_arg_val("has_bias");
+    constexpr uint32_t CTL_WORDS = get_named_compile_time_arg_val("ctl_words");
+    // M > 1: the planner's predicted time of a job (host-scaled cycles): its weight stream while the G groups share
+    // DRAM, the busiest core's matmuls and partial reloads per row tile of a held job, and those of a one-row-tile job
+    constexpr uint32_t DEAL_STREAM = get_named_compile_time_arg_val("deal_stream");
+    constexpr uint32_t DEAL_ROW_TILE = get_named_compile_time_arg_val("deal_row_tile");
+    constexpr uint32_t DEAL_SINGLE = get_named_compile_time_arg_val("deal_single");
+    constexpr bool HELD = M > 1;  // jobs of several row tiles: held units, padded passes, per-job row tiles
+    // cb_rt ctl block: job count, touched slots, rows, then (M > 1) the first job of each group and the job count
+    constexpr uint32_t CTL_BYTES = HELD ? (16 + 2 * (G + 1) + 15) & ~15u : 16;
 
     constexpr auto idx_args = TensorAccessorArgs<0>();
     constexpr auto sc_args = TensorAccessorArgs<idx_args.next_compile_time_args_offset()>();
@@ -181,6 +201,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rt + CTO);
     tt_l1_ptr uint16_t* rows = reinterpret_cast<tt_l1_ptr uint16_t*>(rt + RWO);
     tt_l1_ptr uint16_t* jobs = reinterpret_cast<tt_l1_ptr uint16_t*>(rt + JBO);
+    tt_l1_ptr uint16_t* gs = reinterpret_cast<tt_l1_ptr uint16_t*>(rt + CTO + 16);
     uint32_t nj = 0;
     if (root) {
         volatile tt_l1_ptr uint32_t* sa = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_A));
@@ -240,13 +261,90 @@ void kernel_main() {
                 ++q;
             }
         }
-        for (uint32_t i = 0; i < d; ++i) {
-            const uint32_t l = list[i];
-            for (uint32_t r0 = 0; r0 < cnt[l]; r0 += JR) {
-                jobs[3 * nj] = l;
-                jobs[3 * nj + 1] = ofs[l] + r0;
-                jobs[3 * nj + 2] = cnt[l] - r0 < JR ? cnt[l] - r0 : JR;
-                ++nj;
+        if constexpr (HELD) {
+            // Deal: jobs of more row tiles first (every slot's full jobs of M row tiles as the slots are walked, then
+            // the slots' last partial jobs by row tiles, from bucket lists), each to the group with the earliest
+            // predicted finish, on a tie the one with the least matmul work (stream-bound jobs tie), then the lower
+            // group; at most CTL_WORDS - 1 per group (cb_ctl's list; G (CTL_WORDS - 1) is at least the most jobs of a
+            // call). Each group then runs its jobs in slot order, so that jobs of many and of few row tiles run at
+            // the same time on different groups. The deal is recorded per job (slot order) in the entry areas (read
+            // by now), then the jobs are written group by group (group k's from gs[k]).
+            static_assert(G <= 32, "expert groups");
+            constexpr uint32_t END = 0xFFFF;
+            // until the jobs are written: bucket lists of the slots with a partial job, that job's index
+            tt_l1_ptr uint16_t* next = jobs;
+            tt_l1_ptr uint16_t* part = jobs + d;
+            tt_l1_ptr uint32_t* dealt = reinterpret_cast<tt_l1_ptr uint32_t*>(rt + ENO);  // first | slot, rows | group
+            uint32_t head[M + 1];
+            for (uint32_t t = 0; t <= M; ++t) {
+                head[t] = END;
+            }
+            uint32_t load[G], work[G], fill[G];
+#pragma GCC unroll 32
+            for (uint32_t k = 0; k < G; ++k) {
+                load[k] = 0;
+                work[k] = 0;
+                fill[k] = 0;
+            }
+            auto deal = [&](uint32_t id, uint32_t l, uint32_t first, uint32_t n) {
+                const uint32_t m = (n + 31) / 32;
+                const uint32_t w = m > 1 ? m * DEAL_ROW_TILE : DEAL_SINGLE;
+                uint32_t to = G, best_load = 0xFFFFFFFF, best_work = 0xFFFFFFFF;
+#pragma GCC unroll 32
+                for (uint32_t k = 0; k < G; ++k) {
+                    const uint32_t lk = load[k], wk = work[k];
+                    if (fill[k] + 1 < CTL_WORDS && (lk < best_load || (lk == best_load && wk < best_work))) {
+                        to = k;
+                        best_load = lk;
+                        best_work = wk;
+                    }
+                }
+                load[to] += w > DEAL_STREAM ? w : DEAL_STREAM;
+                work[to] += w;
+                ++fill[to];
+                dealt[2 * id] = first | (l << 16);
+                dealt[2 * id + 1] = n | (to << 16);
+            };
+            for (uint32_t i = 0; i < d; ++i) {
+                const uint32_t l = list[i], c = cnt[l], o = ofs[l];
+                const uint32_t full = c / JR, r = c - full * JR;
+                for (uint32_t f = 0; f < full; ++f) {
+                    deal(nj++, l, o + f * JR, JR);
+                }
+                if (r) {
+                    const uint32_t t = (r + 31) / 32;
+                    next[i] = head[t];
+                    head[t] = i;
+                    part[i] = nj++;
+                }
+            }
+            for (uint32_t t = M; t >= 1; --t) {
+                for (uint32_t i = head[t]; i != END; i = next[i]) {
+                    const uint32_t l = list[i], c = cnt[l], r = c % JR;
+                    deal(part[i], l, ofs[l] + c - r, r);
+                }
+            }
+            gs[0] = 0;
+            for (uint32_t k = 0; k < G; ++k) {
+                gs[k + 1] = gs[k] + fill[k];
+                fill[k] = gs[k];  // write cursor
+            }
+            for (uint32_t q = 0; q < nj; ++q) {
+                const uint32_t lo = dealt[2 * q], hi = dealt[2 * q + 1];
+                const uint32_t p = fill[hi >> 16]++;
+                jobs[3 * p] = lo >> 16;
+                jobs[3 * p + 1] = lo & 0xFFFF;
+                jobs[3 * p + 2] = hi & 0xFFFF;
+            }
+        } else {
+            for (uint32_t i = 0; i < d; ++i) {
+                const uint32_t l = list[i];
+                for (uint32_t r0 = 0; r0 < cnt[l]; r0 += JR) {
+                    jobs[3 * nj] = l;
+                    jobs[3 * nj + 1] = ofs[l] + r0;
+                    jobs[3 * nj + 2] = cnt[l] - r0 < JR ? cnt[l] - r0 : JR;
+                    ++nj;
+                }
             }
         }
         ctl[0] = nj;
@@ -284,7 +382,7 @@ void kernel_main() {
         while (*sb < 1) {
             invalidate_l1_cache();
         }
-        noc_async_read(get_noc_addr(rx, ry, rt + CTO), rt + CTO, 16);
+        noc_async_read(get_noc_addr(rx, ry, rt + CTO), rt + CTO, CTL_BYTES);
         noc_async_read_barrier();
         nj = ctl[0];
         const uint32_t nrow = ctl[2];
@@ -298,15 +396,23 @@ void kernel_main() {
     cb_push_back(cb_rt, 1);
     cb_reserve_back(cb_ctl, 1);
     volatile tt_l1_ptr uint32_t* cc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_ctl));
-    const uint32_t D = nj > g ? (nj - g + G - 1) / G : 0;  // this group's jobs: g, g + G, ...
+    // this group's jobs (local index e): g, g + G, ... with one row tile per job, else as dealt above
+    const uint32_t D = HELD ? gs[g + 1] - gs[g] : (nj > g ? (nj - g + G - 1) / G : 0);
+    auto job_at = [&](uint32_t e) -> uint32_t { return HELD ? gs[g] + e : g + G * e; };
     cc[0] = D;
+    if constexpr (HELD) {
+        // row tiles of each of this group's jobs
+        for (uint32_t e = 0; e < D && e + 1 < CTL_WORDS; ++e) {
+            cc[1 + e] = (jobs[3 * job_at(e) + 2] + 31) / 32;
+        }
+    }
     cb_push_back(cb_ctl, 1);
     if (D == 0) {
         noc_async_write_barrier();  // the root's table block
         return;
     }
 
-    // ---- weight stream: passes P1(0), P1(1), P2(0), P1(2), P2(1), ..., P2(D - 1); one run per group ----
+    // ---- weight stream: passes P1(0), P1(1), P2(0), P1(2), P2(1), ..., P2(D - 1) ----
     const uint32_t npass = 2 * D;
     auto pass_of = [&](uint32_t s, uint32_t& e, uint32_t& ph) {
         if (s == 0) {
@@ -326,36 +432,82 @@ void kernel_main() {
             }
         }
     };
+    // A pass streams one job's P1 or P2 share. Jobs of several row tiles hold each unit for all their row tiles: x
+    // chunk c of column group u (chunk-major), W2 chunk p of output group q, every unit padded to SB blocks. A job of
+    // one row tile streams whole W2 runs and x chunks as large as an x slot of M row tiles holds (all of x when
+    // M = 1); when held units exist (M > 1) its pass is padded to whole units so that the next held unit starts at a
+    // unit boundary of the CB.
+    constexpr uint32_t KC1 = KC * M < KT ? KC * M : KT;  // x chunk of a one-row-tile job
+    constexpr uint32_t C1 = (KT + KC - 1) / KC;
+    constexpr uint32_t C1S = (KT + KC1 - 1) / KC1;
+    constexpr uint32_t C2 = (NT + KC2 - 1) / KC2;
+    constexpr uint32_t UNIT_BLOCKS = HELD ? SB : 1;
+    auto pad_to_unit = [](uint32_t b) { return (UNIT_BLOCKS - b % UNIT_BLOCKS) % UNIT_BLOCKS; };
+    auto p1_tiles = [&](uint32_t c, uint32_t kc, uint32_t chunks) {
+        return 4 * ((c + 1 < chunks ? kc : KT - c * kc) + (c + 1 == chunks ? BIAS : 0));
+    };
+    // blocks of a one-row-tile pass before its padding
+    auto stream_blocks = [&](uint32_t ph) {
+        if (ph == 1) {
+            return nq * ((P2_RUN + BT - 1) / BT);
+        }
+        uint32_t b = 0;
+        for (uint32_t c = 0; c < C1S; ++c) {
+            b += (p1_tiles(c, KC1, C1S) + BT - 1) / BT;
+        }
+        return ng * b;
+    };
+    // unit i of a pass: DRAM address, real tiles, CB blocks; unit `units` of a padded pass carries no data
+    auto unit_of =
+        [&](uint32_t ph, bool held, uint32_t slot, uint32_t i, uint32_t& addr, uint32_t& tiles, uint32_t& blocks) {
+            if (ph == 0) {
+                const uint32_t kc = held ? KC : KC1, chunks = held ? C1 : C1S;
+                const uint32_t u = i % ng, c = i / ng;
+                addr = w01_addr + ((slot * P1_GROUPS + g0 + u) * P1_STRIDE + 4 * c * kc) * TB;
+                tiles = p1_tiles(c, kc, chunks);
+            } else if (held) {
+                const uint32_t q = i / C2, p = i % C2;
+                addr = w2_addr + ((slot * P2_GROUPS + q0 + q) * P2_STRIDE + 4 * p * KC2) * TB;
+                tiles = 4 * ((p + 1 < C2 ? KC2 : NT - p * KC2) + (p + 1 == C2 ? BIAS : 0));
+            } else {
+                addr = w2_addr + ((slot * P2_GROUPS + q0 + i) * P2_STRIDE) * TB;
+                tiles = P2_RUN;
+            }
+            blocks = held ? SB : (tiles + BT - 1) / BT;
+        };
     const uint64_t bank_noc = get_noc_addr_from_bank_id<true>(bank_id, 0);
     const uint32_t bank_lo = (uint32_t)bank_noc;
     const uint32_t slots = get_write_ptr(cb_w);
     noc_async_read_one_packet_set_state<true>(bank_noc, PT * TB, 0);
-    // cursor over (pass, run, block)
-    uint32_t pass = 0, run = 0, runs = 0, run_base = 0, run_stride = 0, run_addr = 0, run_left = 0, run_tiles = 0;
-    auto open_pass = [&]() {
-        uint32_t e, ph;
-        pass_of(pass, e, ph);
-        const uint32_t slot = jobs[3 * (g + G * e)];
-        if (ph == 0) {
-            runs = ng;
-            run_tiles = P1_RUN;
-            run_stride = P1_STRIDE * TB;
-            run_base = w01_addr + ((slot * P1_GROUPS) + g0) * P1_STRIDE * TB;
+    // cursor over (pass, unit, block)
+    uint32_t pass = 0, ph = 0, slot = 0, unit = 0, units = 0, addr = 0, left = 0, block = 0, blocks = 0;
+    bool held = false;
+    auto open_unit = [&]() {
+        uint32_t tiles = 0;
+        if (unit < units) {
+            unit_of(ph, held, slot, unit, addr, tiles, blocks);
         } else {
-            runs = nq;
-            run_tiles = P2_RUN;
-            run_stride = P2_STRIDE * TB;
-            run_base = w2_addr + ((slot * P2_GROUPS) + q0) * P2_STRIDE * TB;
+            blocks = pad_to_unit(stream_blocks(ph));
         }
-        run = 0;
-        run_addr = run_base;
-        run_left = runs ? run_tiles : 0;
+        left = tiles;
+        block = 0;
     };
+    auto open_pass = [&]() {
+        uint32_t e;
+        pass_of(pass, e, ph);
+        const uint32_t j = job_at(e);
+        slot = jobs[3 * j];
+        held = HELD && jobs[3 * j + 2] > 32;
+        units = ph == 0 ? ng * (held ? C1 : C1S) : (held ? nq * C2 : nq);
+        unit = 0;
+        open_unit();
+    };
+    // units of the open pass, plus the padding unit of a one-row-tile pass when M > 1
+    auto last_unit = [&]() { return units + (HELD && !held ? 1 : 0); };
     auto advance = [&]() {
-        while (run_left == 0) {
-            if (++run < runs) {
-                run_addr = run_base + run * run_stride;
-                run_left = run_tiles;
+        while (block == blocks) {
+            if (++unit < last_unit()) {
+                open_unit();
             } else if (++pass < npass) {
                 open_pass();
             } else {
@@ -367,33 +519,45 @@ void kernel_main() {
     advance();
     uint32_t total = 0;
     for (uint32_t s = 0; s < npass; ++s) {
-        uint32_t e, ph;
-        pass_of(s, e, ph);
-        total += ph == 0 ? ng * ((P1_RUN + BT - 1) / BT) : nq * ((P2_RUN + BT - 1) / BT);
+        uint32_t e, p;
+        pass_of(s, e, p);
+        if (HELD && jobs[3 * job_at(e) + 2] > 32) {
+            total += (p == 0 ? ng * C1 : nq * C2) * SB;
+        } else {
+            const uint32_t b = stream_blocks(p);
+            total += b + (HELD ? pad_to_unit(b) : 0);
+        }
     }
+    // one transaction id per block in flight (ids 1..NOC_MAX_TRANSACTION_ID; IF blocks are in flight at most)
+    constexpr uint32_t TRIDS = RS < NOC_MAX_TRANSACTION_ID ? RS : NOC_MAX_TRANSACTION_ID;
+    static_assert(IF < TRIDS, "transaction ids");
     uint32_t issued = 0, pushed = 0;
     while (pushed < total) {
         if (issued < total && issued - pushed < IF && cb_pages_reservable_at_back(cb_w, BT * (issued - pushed + 1))) {
-            const uint32_t slot = issued % RS;
-            const uint32_t nt = run_left < BT ? run_left : BT;
-            noc_async_read_set_trid(slot + 1);
-            for (uint32_t done = 0; done < nt; done += PT) {  // the block's packets share its transaction id
-                const uint32_t pt = nt - done < PT ? nt - done : PT;
-                if (pt != PT) {
-                    noc_async_read_one_packet_set_state<true>(bank_noc, pt * TB, 0);
-                }
-                noc_async_read_one_packet_with_state_with_trid(
-                    bank_lo, run_addr + done * TB, slots + slot * BB + done * TB, slot + 1);
-                if (pt != PT) {
-                    noc_async_read_one_packet_set_state<true>(bank_noc, PT * TB, 0);
+            const uint32_t bslot = issued % RS;
+            const uint32_t trid = issued % TRIDS + 1;
+            const uint32_t nt = left < BT ? left : BT;
+            if (nt) {  // a unit's padding blocks carry no data
+                noc_async_read_set_trid(trid);
+                for (uint32_t done = 0; done < nt; done += PT) {  // the block's packets share its transaction id
+                    const uint32_t pt = nt - done < PT ? nt - done : PT;
+                    if (pt != PT) {
+                        noc_async_read_one_packet_set_state<true>(bank_noc, pt * TB, 0);
+                    }
+                    noc_async_read_one_packet_with_state_with_trid(
+                        bank_lo, addr + done * TB, slots + bslot * BB + done * TB, trid);
+                    if (pt != PT) {
+                        noc_async_read_one_packet_set_state<true>(bank_noc, PT * TB, 0);
+                    }
                 }
             }
             ++issued;
-            run_addr += nt * TB;
-            run_left -= nt;
+            addr += nt * TB;
+            left -= nt;
+            ++block;
             advance();
         }
-        if (pushed < issued && ncrisc_noc_read_with_transaction_id_flushed(noc_index, pushed % RS + 1)) {
+        if (pushed < issued && ncrisc_noc_read_with_transaction_id_flushed(noc_index, pushed % TRIDS + 1)) {
             cb_push_back(cb_w, BT);
             ++pushed;
         }
