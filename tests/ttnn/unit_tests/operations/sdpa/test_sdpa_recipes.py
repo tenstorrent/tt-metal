@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """SDPA precision recipes (ttnn.SDPAPrecision): the fast subset that runs in the ttnn sanity sdpa group.
 
-Every recipe once, plus masks, joint attention, op-selected blocking, program cache and trace, rejected arguments
-and prepare_sdpa_input. The sweeps (all shapes, long K, rising maxima, every recipe for masks / joint / blocking)
+Every recipe once, plus masks, causal / sliding-window / chunked / windowed key ranges, joint attention, op-selected
+blocking, program cache and trace, rejected arguments and prepare_sdpa_input. The sweeps (all shapes, long K, rising maxima, every recipe for masks / joint / blocking)
 are in tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_recipes.py.
 """
 
@@ -12,15 +12,19 @@ import torch
 import ttnn
 
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
+    CAUSAL_SHAPES,
     OP_SELECTED_SHAPES,
     SHAPES,
     VARIANTS,
     blackhole_only,
     check_accuracy,
     check_attn_mask,
-    check_legacy_arguments,
+    check_chunked_trace,
     check_joint,
+    check_key_range,
+    check_legacy_arguments,
     check_op_selected_blocking,
+    check_windowed,
     inputs_for,
     l2_pct,
     program_config,
@@ -39,6 +43,27 @@ def test_sdpa_recipe_accuracy(device, variant):
 @pytest.mark.parametrize("variant, mask_kind", [("standard", "key_padding"), ("fast_bfp8", "random")])
 def test_sdpa_recipe_attn_mask(device, variant, mask_kind):
     check_attn_mask(device, variant, mask_kind)
+
+
+# Key ranges, one case per recipe family: the reference-max recipes' fused chunks between masked edge chunks, and the
+# FP32-state recipes. Sliding windows leave rows with no visible key in a Q chunk's first K chunk.
+@pytest.mark.parametrize("variant", ["standard", "accurate"])
+def test_sdpa_recipe_causal(device, variant):
+    check_key_range(device, variant, CAUSAL_SHAPES["subtile_tails"], causal=True)
+
+
+@pytest.mark.parametrize("variant, causal", [("fast_bfp8", True), ("balanced", False)], ids=["causal", "centred"])
+def test_sdpa_recipe_sliding_window(device, variant, causal):
+    check_key_range(device, variant, CAUSAL_SHAPES["q256_k512"], causal=causal, window=300)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 4194304}], indirect=True)
+def test_chunked_sdpa_recipe_trace(device):
+    check_chunked_trace(device, "standard", [512, 96])
+
+
+def test_windowed_sdpa_recipe(device):
+    check_windowed(device, "accurate", [0, 100, 356, 357, 800, 1024], causal=True, q_rows=512, q_offset=256)
 
 
 def test_joint_sdpa_recipe(device):
@@ -100,8 +125,8 @@ def test_sdpa_recipe_legacy_arguments(device, variant):
 @pytest.mark.parametrize(
     "invalid",
     [
-        "causal",
-        "sliding_window",
+        "causal_sq_ne_sk",
+        "causal_with_attn_mask",
         "attention_sink",
         "sub_core_grids",
         "zero_scale",
@@ -118,10 +143,12 @@ def test_sdpa_recipe_rejects_unsupported(expect_error, device, invalid):
     tensors = [to_device(device, x) for x in (q, k, v)]
     kwargs = dict(is_causal=False, precision=ttnn.SDPAPrecision.ACCURATE)
     cfg = dict(compute_with_storage_grid_size=(1, 1), q_chunk_size=256, k_chunk_size=512)
-    if invalid == "causal":
+    if invalid == "causal_sq_ne_sk":
         kwargs["is_causal"] = True
-    elif invalid == "sliding_window":
-        kwargs["sliding_window_size"] = 256
+    elif invalid == "causal_with_attn_mask":
+        kwargs["is_causal"] = True
+        tensors[1], tensors[2] = tensors[0], tensors[0]
+        kwargs["attn_mask"] = to_device(device, torch.zeros(1, 1, 256, 256))
     elif invalid == "attention_sink":
         kwargs["attention_sink"] = tensors[0]
     elif invalid == "sub_core_grids":
