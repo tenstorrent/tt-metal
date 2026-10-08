@@ -170,21 +170,16 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
     }
 }
 void RunSetUnicastRouteTest(
-    BaseFabricFixture* fixture,
-    bool is_multi_mesh = false,
-    HalProgrammableCoreType core_type = HalProgrammableCoreType::TENSIX) {
+    BaseFabricFixture* fixture, HalProgrammableCoreType core_type = HalProgrammableCoreType::TENSIX) {
     const auto& devices = fixture->get_devices();
     const size_t NUM_DEVICES = devices.size();
-    bool invalid_test_scenario = !is_multi_mesh && NUM_DEVICES < 2;
-    if (invalid_test_scenario) {
+    if (NUM_DEVICES < 2) {
         GTEST_SKIP() << "Test requires at least 2 devices, found " << NUM_DEVICES;
     }
 
-    // Select appropriate logical core based on core type - this will be device-specific
     std::vector<tt::tt_metal::CoreCoord> logical_cores(NUM_DEVICES);
     for (size_t dev_idx = 0; dev_idx < NUM_DEVICES; dev_idx++) {
         if (core_type == HalProgrammableCoreType::IDLE_ETH) {
-            // Use first available IDLE_ETH core for each device
             auto idle_eth_cores = devices[dev_idx]->get_devices()[0]->get_inactive_ethernet_cores();
             if (idle_eth_cores.empty()) {
                 GTEST_SKIP() << "No IDLE_ETH cores available on device " << dev_idx;
@@ -199,21 +194,18 @@ void RunSetUnicastRouteTest(
     }
 
     std::vector<tt::tt_metal::Program> programs(NUM_DEVICES);
-    std::vector<uint32_t> result_addrs(NUM_DEVICES);  // Store fixed addresses for each device
+    std::vector<uint32_t> result_addrs(NUM_DEVICES);
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    // Get mesh shape to determine if it's 2D fabric
-    auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(devices[0]->get_device_ids()[0]);
-    auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
     const auto& fabric_context = control_plane.get_fabric_context();
-    const auto topology = fabric_context.get_fabric_topology();
-    bool is_2d_fabric = topology == Topology::Mesh;
-    uint32_t ew_dim = is_2d_fabric ? mesh_shape[1] : 0;
+    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
-    // Query actual route buffer size from fabric context (topology-aware)
-    uint32_t MAX_ROUTE_BUFFER_SIZE =
+    const uint32_t route_buffer_size =
         is_2d_fabric ? fabric_context.get_2d_pkt_hdr_route_buffer_size() : SINGLE_ROUTE_SIZE_1D;
-    uint32_t RESULT_SIZE_PER_DEVICE = (MAX_ROUTE_BUFFER_SIZE * 2);  // 2 route buffers
+    constexpr uint32_t NUM_2D_METADATA_WORDS = 4;
+    const uint32_t result_words_per_destination =
+        is_2d_fabric ? route_buffer_size + NUM_2D_METADATA_WORDS : route_buffer_size * 2;
+    const uint32_t result_size = NUM_DEVICES * result_words_per_destination * sizeof(uint32_t);
+
     // 0x100000 (1MB) is safe on Tensix L1
     uint32_t FABRIC_TEST_BUFFER_BASE_ADDR = 0x100000;
     if (core_type == HalProgrammableCoreType::IDLE_ETH) {
@@ -227,12 +219,10 @@ void RunSetUnicastRouteTest(
             control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_device_ids()[0]);
         uint32_t src_fabric_chip_id = src_fabric_node_id.chip_id;
 
-        uint32_t result_size = NUM_DEVICES * RESULT_SIZE_PER_DEVICE * sizeof(uint32_t);
-        uint32_t result_addr = FABRIC_TEST_BUFFER_BASE_ADDR + (src_idx * result_size);
-        result_addrs[src_idx] = result_addr;  // Store for later use
+        // Every source runs on a different chip, so their L1 address spaces do not overlap.
+        uint32_t result_addr = FABRIC_TEST_BUFFER_BASE_ADDR;
+        result_addrs[src_idx] = result_addr;
 
-        // Skip MeshBuffer creation - directly use fixed address for experimental measurement
-        // This bypasses host-side device memory management for raw address access
         programs[src_idx] = tt::tt_metal::CreateProgram();
 
         std::vector<uint32_t> runtime_args = {
@@ -240,10 +230,8 @@ void RunSetUnicastRouteTest(
             src_fabric_chip_id,                  // src_chip_id
             result_addr,                         // result_addr
             static_cast<uint32_t>(NUM_DEVICES),  // num_devices
-            ew_dim,                              // ew_dim
         };
 
-        // Add mesh_id and chip_id pairs for all destinations
         for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
             auto dst_fabric_node_id =
                 control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_device_ids()[0]);
@@ -251,9 +239,11 @@ void RunSetUnicastRouteTest(
             runtime_args.push_back(dst_fabric_node_id.chip_id);   // dst_chip_id
         }
 
-        std::map<std::string, std::string> defines = {};
+        // Header sizing, routing mode, and maximum local express capacity are configuration-wide.
+        // Exact 2D mesh shape is read from this device's routing L1 metadata.
+        auto defines = fabric_context.get_fabric_kernel_defines(control_plane);
         if (is_2d_fabric) {
-            defines["FABRIC_2D"] = "";
+            defines["FABRIC_2D"] = "1";
         }
 
         KernelHandle kernel;
@@ -290,7 +280,6 @@ void RunSetUnicastRouteTest(
         auto src_fabric_node_id =
             control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_device_ids()[0]);
 
-        uint32_t result_size = NUM_DEVICES * RESULT_SIZE_PER_DEVICE * sizeof(uint32_t);
         std::vector<uint32_t> result_data;
 
         CoreType read_core_type = (core_type == HalProgrammableCoreType::IDLE_ETH) ? CoreType::ETH : CoreType::WORKER;
@@ -300,28 +289,98 @@ void RunSetUnicastRouteTest(
         for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
             auto dst_fabric_node_id =
                 control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_device_ids()[0]);
-            if (!is_2d_fabric && std::abs(
-                                     static_cast<long>(src_fabric_node_id.chip_id) -
-                                     static_cast<long>(dst_fabric_node_id.chip_id)) >= MAX_CHIPS_LOWLAT_1D) {
-                // Skip 1D route buffer comparison if src and dst are more than 16 chips apart
+
+            // Intermesh unicast needs an exit-node oracle in addition to the destination-map oracle
+            // below and is outside this single-mesh test.
+            if (src_fabric_node_id.mesh_id != dst_fabric_node_id.mesh_id) {
                 continue;
             }
 
-            uint32_t result_offset = dst_idx * RESULT_SIZE_PER_DEVICE;
-            // Compare route buffers
-            bool route_buffers_match = true;
-            for (uint32_t i = 0; i < MAX_ROUTE_BUFFER_SIZE; i++) {
-                uint32_t actual_byte = result_data[result_offset + i];
-                uint32_t expected_byte = result_data[result_offset + MAX_ROUTE_BUFFER_SIZE + i];
-                if (actual_byte != expected_byte) {
-                    route_buffers_match = false;
-                    break;
+            const uint32_t result_offset = dst_idx * result_words_per_destination;
+            if (!is_2d_fabric) {
+                const uint32_t distance = src_fabric_node_id.chip_id > dst_fabric_node_id.chip_id
+                                              ? src_fabric_node_id.chip_id - dst_fabric_node_id.chip_id
+                                              : dst_fabric_node_id.chip_id - src_fabric_node_id.chip_id;
+                if (distance >= MAX_CHIPS_LOWLAT_1D) {
+                    continue;
+                }
+                for (uint32_t i = 0; i < route_buffer_size; i++) {
+                    EXPECT_EQ(result_data[result_offset + i], result_data[result_offset + route_buffer_size + i])
+                        << "1D route byte " << i << " mismatch for " << src_fabric_node_id << " -> "
+                        << dst_fabric_node_id;
+                }
+                continue;
+            }
+
+            // Independent host oracle for the destination-major action map. It queries ControlPlane
+            // directly rather than sharing the L1 pack/widen implementation exercised by the kernel.
+            const auto mesh_shape =
+                control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id, MeshScope::GLOBAL);
+            const uint32_t y_size = mesh_shape[0];
+            const uint32_t x_size = mesh_shape[1];
+            const uint32_t active_map_bytes = y_size + x_size;
+            ASSERT_LE(active_map_bytes, route_buffer_size);
+            ASSERT_LT(dst_fabric_node_id.chip_id, y_size * x_size);
+
+            const uint32_t dst_y = dst_fabric_node_id.chip_id / x_size;
+            const uint32_t dst_x = dst_fabric_node_id.chip_id % x_size;
+            std::vector<uint8_t> expected_map(active_map_bytes, 0);
+
+            auto expected_action = [&](uint32_t current_chip, uint32_t destination_chip, bool y_axis) {
+                const FabricNodeId current(src_fabric_node_id.mesh_id, current_chip);
+                const FabricNodeId destination(src_fabric_node_id.mesh_id, destination_chip);
+                const auto direction = control_plane.get_forwarding_direction(current, destination);
+                EXPECT_TRUE(direction.has_value() && direction.value() != RoutingDirection::NONE)
+                    << "Missing route for action-map entry " << current << " -> " << destination;
+                if (!direction.has_value() || direction.value() == RoutingDirection::NONE) {
+                    return uint8_t{0};
+                }
+
+                const auto eth_direction = control_plane.routing_direction_to_eth_direction(direction.value());
+                const bool direction_is_on_axis =
+                    y_axis ? (eth_direction == eth_chan_directions::NORTH ||
+                              eth_direction == eth_chan_directions::SOUTH || eth_direction == eth_chan_directions::Z)
+                           : (eth_direction == eth_chan_directions::EAST || eth_direction == eth_chan_directions::WEST);
+                EXPECT_TRUE(direction_is_on_axis) << "Off-axis direction " << static_cast<uint32_t>(eth_direction)
+                                                  << " for " << current << " -> " << destination;
+                return direction_is_on_axis ? Routing2DCodec::action_bit(eth_direction) : uint8_t{0};
+            };
+
+            // Y vectors are generated on representative column 0.
+            for (uint32_t current_y = 0; current_y < y_size; current_y++) {
+                if (current_y != dst_y) {
+                    expected_map[current_y] = expected_action(current_y * x_size, dst_y * x_size, /*y_axis=*/true);
                 }
             }
 
-            EXPECT_TRUE(route_buffers_match)
-                << "Route buffer mismatch for [" << *src_fabric_node_id.mesh_id << "/" << src_fabric_node_id.chip_id
-                << "] -> [" << *dst_fabric_node_id.mesh_id << "/" << dst_fabric_node_id.chip_id << "]";
+            // X vectors are generated on representative row 0. The destination column delivers
+            // locally; its STOP code widens to no eth output.
+            for (uint32_t current_x = 0; current_x < x_size; current_x++) {
+                expected_map[y_size + current_x] = current_x == dst_x
+                                                       ? Routing2DCodec::ACTION_LOCAL_DELIVER
+                                                       : expected_action(current_x, dst_x, /*y_axis=*/false);
+            }
+
+            for (uint32_t i = 0; i < active_map_bytes; i++) {
+                EXPECT_EQ(result_data[result_offset + i], expected_map[i])
+                    << "2D action-map byte " << i << " mismatch for " << src_fabric_node_id << " -> "
+                    << dst_fabric_node_id;
+            }
+
+            // The encoder owns only Y+X bytes and must not overwrite the unused capacity of the
+            // selected packet-header tier.
+            constexpr uint32_t UNTOUCHED = 0xA5;
+            for (uint32_t i = active_map_bytes; i < route_buffer_size; i++) {
+                EXPECT_EQ(result_data[result_offset + i], UNTOUCHED)
+                    << "2D encoder overwrote inactive route-buffer byte " << i << " for " << src_fabric_node_id
+                    << " -> " << dst_fabric_node_id;
+            }
+
+            const uint32_t expected_destination = (*dst_fabric_node_id.mesh_id << 16) | dst_fabric_node_id.chip_id;
+            EXPECT_EQ(result_data[result_offset + route_buffer_size], expected_destination);
+            EXPECT_EQ(result_data[result_offset + route_buffer_size + 1], 0u);
+            EXPECT_EQ(result_data[result_offset + route_buffer_size + 2], 0u);
+            EXPECT_EQ(result_data[result_offset + route_buffer_size + 3], 0u);
         }
     }
 }
@@ -1933,25 +1992,21 @@ TEST_F(Fabric1DFixture, TestSetUnicastRoute) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
         GTEST_SKIP() << "Test applicable only on T3K";
     }
-    RunSetUnicastRouteTest(this, false);
+    RunSetUnicastRouteTest(this);
 }
 
 TEST_F(Fabric1DFixture, TestSetUnicastRouteIdleEth) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
         GTEST_SKIP() << "Test applicable only on T3K";
     }
-    RunSetUnicastRouteTest(this, false, HalProgrammableCoreType::IDLE_ETH);
+    RunSetUnicastRouteTest(this, HalProgrammableCoreType::IDLE_ETH);
 }
 
-// 1 mesh all-to-all
-TEST_F(Fabric2DFixture, TestSetUnicastRoute) { RunSetUnicastRouteTest(this, false); }
+// 1 mesh all-to-all. The device's action-map encoder is checked against an independent host
+// ControlPlane oracle in RunSetUnicastRouteTest().
+TEST_F(Fabric2DFixture, TestSetUnicastRoute) { RunSetUnicastRouteTest(this); }
 
-TEST_F(Fabric2DFixture, TestSetUnicastRouteIdleEth) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
-        GTEST_SKIP() << "Test applicable only on T3K";
-    }
-    RunSetUnicastRouteTest(this, false, HalProgrammableCoreType::IDLE_ETH);
-}
+TEST_F(Fabric2DFixture, TestSetUnicastRouteIdleEth) { RunSetUnicastRouteTest(this, HalProgrammableCoreType::IDLE_ETH); }
 
 // Test for std::atomic_exchange on kernels using BRISC and NCRISC
 }  // namespace tt::tt_fabric::fabric_router_tests

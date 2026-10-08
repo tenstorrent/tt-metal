@@ -1291,6 +1291,30 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        if (
+            "gpt-oss-120b" in model_name.lower()
+            and num_devices == 32
+            and tt_data_parallel == 4
+            and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
+        ):
+            # Allow two long contexts in each BH Galaxy lane. The plugin
+            # adds its per-user block padding to this per-lane token budget.
+            return 262_144
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
+
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
         # While hybrid KV cache groups are disabled (one full-attention group
         # for every layer), the per-layer page-table routing inside this

@@ -34,22 +34,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t INPUT_NUM_BLOCKS         = params.INPUT_NUM_BLOCKS;
+    const std::uint32_t INPUT_NUM_TILES_IN_BLOCK = params.INPUT_NUM_TILES_IN_BLOCK;
+    const Operand& buffer_A                      = params.buffer_A;
+    const Operand& buffer_B                      = params.buffer_B;
+#endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    const auto tensor_shape = tensor_shape_from_params(params);
+    const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
-    const auto bfd_a =
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
-    const auto bfd_b =
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
+    const auto bfd_a = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+    const auto bfd_b = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
 
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
         static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
 
     _llk_unpack_AB_sub_bcast_col_init_custom_(tensor_shape);
 
-    const std::uint32_t ct_dim     = params.INPUT_NUM_TILES_IN_BLOCK;
-    const std::uint32_t num_blocks = static_cast<std::uint32_t>(params.INPUT_NUM_BLOCKS);
+    const std::uint32_t ct_dim     = INPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t num_blocks = static_cast<std::uint32_t>(INPUT_NUM_BLOCKS);
 
     for (std::uint32_t block = 0; block < num_blocks; block++)
     {
@@ -73,21 +77,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t OUTPUT_NUM_BLOCKS         = params.OUTPUT_NUM_BLOCKS;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+#endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     const DataFormat math_format = static_cast<DataFormat>(formats.math);
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
 
-    const auto tensor_shape = tensor_shape_from_params(params);
+    const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
     // The addr-mods are identical for every block, so init once outside the loop.
     _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE>(tensor_shape);
 
-    const std::uint32_t num_blocks = static_cast<std::uint32_t>(params.OUTPUT_NUM_BLOCKS);
+    const std::uint32_t num_blocks = static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS);
 
     for (std::uint32_t block = 0; block < num_blocks; block++)
     {
-        _llk_math_sub_bcast_cols_reuse_custom_(params.OUTPUT_NUM_TILES_IN_BLOCK, tensor_shape, 0 /*dst_index*/);
+        _llk_math_sub_bcast_cols_reuse_custom_(OUTPUT_NUM_TILES_IN_BLOCK, tensor_shape, 0 /*dst_index*/);
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }
 }
@@ -106,17 +114,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t OUTPUT_NUM_BLOCKS         = params.OUTPUT_NUM_BLOCKS;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const Operand& buffer_Res                     = params.buffer_Res;
+#endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    const auto tensor_shape = tensor_shape_from_params(params);
+    const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
-    const auto bfd_pack =
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
+    const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_init_(bfd_pack, tensor_shape, 1 /*num_tiles_per_pack*/);
 
-    const std::uint32_t ct_dim     = params.OUTPUT_NUM_TILES_IN_BLOCK;
-    const std::uint32_t num_blocks = static_cast<std::uint32_t>(params.OUTPUT_NUM_BLOCKS);
+    const std::uint32_t ct_dim     = OUTPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t num_blocks = static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS);
 
     for (std::uint32_t block = 0; block < num_blocks; block++)
     {

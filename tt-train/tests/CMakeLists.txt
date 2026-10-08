@@ -3,7 +3,7 @@ enable_testing()
 
 set(SOURCES
     core/tensor_utils_test.cpp
-    core/n300_utils_test.cpp
+    core/mesh_1x2_utils_test.cpp
     core/scoped_test.cpp
     core/clip_grad_norm_test.cpp
     core/random_tests.cpp
