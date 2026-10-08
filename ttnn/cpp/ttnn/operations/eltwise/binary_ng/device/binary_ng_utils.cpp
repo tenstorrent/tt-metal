@@ -814,18 +814,82 @@ NativeBlockBroadcast native_block_broadcast(
     std::optional<tt::tt_metal::DataType> b,
     tt::tt_metal::DataType c) {
     using tt::tt_metal::DataType;
-    const auto op = attributes.binary_op_type;
+    using unary::UnaryOpType;
     const auto& shard_spec = a.memory_config().shard_spec();
     if (std::getenv("EB_R3_NATIVE_ALL") != nullptr) {
         return {.column = true, .scalar = true};  // CI only: native for every format and activation
     }
-    const bool take = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && std::getenv("EB_R3_NO_NATIVE") == nullptr &&
-                      (op == BinaryOpType::ADD || op == BinaryOpType::SUB || op == BinaryOpType::MUL) &&
-                      attributes.lhs_activations.empty() && attributes.rhs_activations.empty() &&
-                      attributes.post_activations.empty() && a.data_type() == DataType::BFLOAT16 &&
-                      b == DataType::BFLOAT16 && c == DataType::BFLOAT16 && shard_spec.has_value() &&
-                      shard_spec->grid.num_cores() >= 4;
-    return {.column = take, .scalar = take};
+    if (std::getenv("EB_R3_NATIVE_OLD") != nullptr) {  // CI only: the fourth pass's rule
+        const auto op4 = attributes.binary_op_type;
+        const bool take = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE &&
+                          (op4 == BinaryOpType::ADD || op4 == BinaryOpType::SUB || op4 == BinaryOpType::MUL) &&
+                          attributes.lhs_activations.empty() && attributes.rhs_activations.empty() &&
+                          attributes.post_activations.empty() && a.data_type() == DataType::BFLOAT16 &&
+                          b == DataType::BFLOAT16 && c == DataType::BFLOAT16 && shard_spec.has_value() &&
+                          shard_spec->grid.num_cores() >= 4;
+        return {.column = take, .scalar = take};
+    }
+    if (tt::tt_metal::hal::get_arch() != tt::ARCH::BLACKHOLE || !shard_spec.has_value() || !b.has_value() ||
+        std::getenv("EB_R3_NO_NATIVE") != nullptr) {
+        return {};
+    }
+    const auto op = attributes.binary_op_type;
+    const auto& lhs = attributes.lhs_activations;
+    const auto& post = attributes.post_activations;
+    const DataType a_dt = a.data_type();
+    const uint32_t cores = shard_spec->grid.num_cores();
+    const uint32_t rows = shard_spec->shape[0] / a.tile().get_height();
+    const uint32_t tiles = rows * (shard_spec->shape[1] / a.tile().get_width());
+    const bool width = a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    const bool plain_op = op == BinaryOpType::ADD || op == BinaryOpType::SUB || op == BinaryOpType::MUL;
+
+    if (plain_op && lhs.empty() && attributes.rhs_activations.empty() && post.empty()) {
+        // The native op reads b once (scalar) or once per tile row (column) on each core of the shard grid; the op spread
+        // over the device takes longer with the tensor's bytes, so native pays up to a per-core count scaled by tile size.
+        const bool one_format = *b == a_dt && c == a_dt;
+        bool scalar = false;
+        if (a_dt == DataType::BFLOAT16 && *b == DataType::BFLOAT16 && (c == DataType::BFLOAT16 || c == DataType::FLOAT32)) {
+            scalar = tiles <= 128 * cores;
+        } else if (one_format && a_dt == DataType::BFLOAT8_B) {
+            scalar = tiles <= 64 * cores;
+        } else if (one_format && a_dt == DataType::BFLOAT4_B) {
+            scalar = cores >= 2 && tiles <= 32 * cores;
+        } else if (a_dt == DataType::BFLOAT16 && *b == DataType::BFLOAT8_B && c == DataType::BFLOAT16) {
+            scalar = cores >= 2 && tiles <= 64 * cores;
+        }
+        // Column b only with the LLK broadcast (one format); without it the reader also fills b's tile on every row.
+        const bool column = one_format && ((a_dt == DataType::BFLOAT16 && rows <= 2 * cores) ||
+                                           (a_dt == DataType::BFLOAT8_B && rows <= cores) ||
+                                           (a_dt == DataType::BFLOAT4_B && 2 * rows <= cores));
+        return {.column = column, .scalar = scalar};
+    }
+
+    // bf16 with one activation after the op or on a (or rsub's and logical_and's own), where it measured faster
+    if (a_dt != DataType::BFLOAT16 || *b != DataType::BFLOAT16 || c != DataType::BFLOAT16 ||
+        !attributes.rhs_activations.empty() || lhs.size() + post.size() > 1) {
+        return {};
+    }
+    const bool none = lhs.empty() && post.empty();
+    const auto act = !lhs.empty() ? lhs[0].type() : !post.empty() ? post[0].type() : UnaryOpType::IDENTITY;
+    const bool cheap = (plain_op && (act == UnaryOpType::RELU || (act == UnaryOpType::GELU && lhs.empty()))) ||
+                       (op == BinaryOpType::RSUB && none);
+    const bool silu = plain_op && act == UnaryOpType::SILU;
+    const bool small = rows == 1 && tiles <= 4;
+    NativeBlockBroadcast out;
+    if (small && cheap) {
+        out.column = out.scalar = cores >= (width ? 8u : 16u);
+    } else if (small && op == BinaryOpType::LOGICAL_AND && none) {
+        out.scalar = cores >= 16;
+        out.column = width && cores >= 16;
+    } else if (small && silu) {
+        out.column = out.scalar = width && cores >= 32;
+    } else if (plain_op && lhs.empty() && act == UnaryOpType::RELU) {
+        out.scalar = cores >= (width ? 16u : 32u);
+        out.column = !width && cores >= 64;
+    } else if (plain_op && lhs.empty() && act == UnaryOpType::GELU) {
+        out.scalar = cores >= 32;
+    }
+    return out;
 }
 
 // the check is based on user facing information, input tensors and output memory config

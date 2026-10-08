@@ -152,8 +152,8 @@ const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal:
 
 bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
-// Blackhole: whether a block or width sharded a with a column or scalar b may take the native sharded path, which computes on
-// the shard grid only: the plain FPU add, subtract and multiply of bf16 tensors, without activations, on 4 or more cores.
+// Blackhole: whether a block or width sharded a with a column or scalar b takes the native sharded path, which computes on the
+// shard grid only: by formats, cores, tile rows or tiles per core, and activation, where that measured faster.
 NativeBlockBroadcast native_block_broadcast(
     const BinaryNgDeviceOperation::operation_attributes_t& attributes,
     const tt::tt_metal::TensorSpec& a,

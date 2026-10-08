@@ -167,3 +167,32 @@ def test_nat7(device, act, mem, kind):
     shape, mc = _mc(mem)
     op, post, lact = ACT7[act]
     _run(device, op, shape, mc, "bf16", "bf16", "bf16", kind, act=post, lact=lact)
+
+
+# sixth pass (#58725): one-section and multi-section ops with block-float and bf16 operands, bfp4 included, no accuracy check
+ONE4_MEMS = {"hs8_t8": ((1, 1, 512, 128), 2, 4, ttnn.ShardStrategy.HEIGHT), "ws32_t4": ((1, 1, 32, 4096), 4, 8, ttnn.ShardStrategy.WIDTH),
+             "hs8_t24": ((1, 1, 768, 256), 2, 4, ttnn.ShardStrategy.HEIGHT), "hs8_t32": ((1, 1, 1024, 256), 2, 4, ttnn.ShardStrategy.HEIGHT)}
+ONE4 = [(op, mm, d) for op in ("rsub", "add_arelu", "logical_and", "ldexp", "div", "rsub_s") for mm in ONE4_MEMS for d in ("bf16", "bfp8", "bfp4")]
+
+
+@pytest.mark.parametrize("op, mem, d", ONE4, ids=["-".join(c) for c in ONE4])
+def test_one4(device, op, mem, d):
+    shape, gy, gx, st = ONE4_MEMS[mem]
+    mc = ttnn.create_sharded_memory_config(shape, core_grid=ttnn.CoreGrid(y=gy, x=gx), strategy=st)
+    torch.manual_seed(zlib.crc32(f"one4{op}{mem}{d}".encode()) % 100000)
+    a = torch.rand(shape, dtype=torch.bfloat16) * 2 - 1
+    ta = ttnn.from_torch(a, dtype=DT[d], layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+    tb = None
+    if not op.endswith("_s"):
+        b = torch.randint(-4, 5, shape).bfloat16() if op == "ldexp" else torch.rand(shape, dtype=torch.bfloat16) + 0.5
+        tb = ttnn.from_torch(b, dtype=DT[d], layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+    fn = {"rsub": lambda: ttnn.rsub(ta, tb, memory_config=mc), "add_arelu": lambda: ttnn.add(ta, tb, input_tensor_a_activations=[U(ttnn.UnaryOpType.RELU)], memory_config=mc),
+          "logical_and": lambda: ttnn.logical_and(ta, tb, memory_config=mc), "ldexp": lambda: ttnn.ldexp(ta, tb, memory_config=mc),
+          "div": lambda: ttnn.divide(ta, tb, memory_config=mc), "rsub_s": lambda: ttnn.rsub(ta, 0.375, memory_config=mc)}[op]
+    for _ in range(3):
+        out = fn()
+    got = ttnn.to_torch(out)
+    for t in (ta, tb, out):
+        if t is not None:
+            ttnn.deallocate(t)
+    assert got.shape[-1] == shape[-1]
