@@ -352,14 +352,13 @@ uint32_t calculate_max_tensors_per_concat(
         }
 
         // Other sharded layouts (height/width) go to ConcatS2SMultiProgramFactory:
-        //   Compile-time: cb_dst_id, page_size, output_stride, num_input_tensors, num_blocks,
-        //                 output_block_stride                                         = 6
+        //   Compile-time: cb_dst_id, page_size, output_stride, num_input_tensors,
+        //                 output_block_stride, block_start, block_count                = 7
         //   Runtime per input, per RISC: pages_per_stick, num_sticks, write_offset,
-        //                 read_offset, block_stride                                   = 5N
-        // Total 6 + 5N against the 256 the concat kernels are built with. num_blocks and
-        // block_stride are the two the height-concat interleaving fix added (#55342).
+        //                 read_offset, block_stride                                    = 5N
+        // Total 7 + 5N against the 256 the concat kernels are built with.
         constexpr uint32_t effective_args_limit = 256;
-        constexpr uint32_t base_args = 6;
+        constexpr uint32_t base_args = 7;
         constexpr uint32_t args_per_tensor = 5;
 
         uint32_t theoretical_max = (effective_args_limit - base_args) / args_per_tensor;
