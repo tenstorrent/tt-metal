@@ -1,7 +1,7 @@
 # SDPA Precision Recipes
 
-`ttnn.transformer.scaled_dot_product_attention` and `joint_scaled_dot_product_attention` take an optional
-`precision=ttnn.SDPAPrecision.<RECIPE>`. A recipe fixes every numerical choice in the attention kernel, so
+`ttnn.transformer.scaled_dot_product_attention`, `chunked_scaled_dot_product_attention` and
+`joint_scaled_dot_product_attention` take an optional `precision=ttnn.SDPAPrecision.<RECIPE>`. A recipe fixes every numerical choice in the attention kernel, so
 callers pick an accuracy/throughput point instead of tuning compute-kernel fields. Omitting `precision`
 keeps the legacy kernel and its `compute_kernel_config` / `exp_approx_mode` controls; with a recipe both are
 accepted and ignored (see [Legacy arguments](#legacy-arguments-with-a-recipe)).
@@ -108,6 +108,11 @@ compute level; they cut K/V bandwidth and L1 to about a half or a quarter.
 
 - Blackhole. Noncausal attention with an optional additive `attn_mask` of shape [1|B, 1|H, Sq, Sk] (BF16, BFP8,
   BFP4, or FP32 for BALANCED/ACCURATE). Joint attention supports the `"rear"` strategy without a mask.
+- `is_causal`, `sliding_window_size` (causal or centred), windowed attention (`cu_window_seqlens` with
+  `windowed_q_token_offset` or its tensor form) and chunked prefill (`chunk_start_idx` or `chunk_start_idx_tensor`)
+  through the [K-range model](#causal-sliding-window-chunked-and-windowed-attention). Causal and sliding windows
+  need Sq == Sk, as in the legacy kernel. Chunked prefill takes one cache block per sequence (page table [B, 1]);
+  multi-block page tables, `paged_cache_geometry` and attention sinks are not supported yet.
 - Batch and GQA are supported, with any number of batch/heads (more than the grid's cores is fine). Q/K lengths
   need not be tile or chunk multiples. Head dim and chunk sizes must be tile multiples, and the chunks must fit in
   L1.
@@ -147,6 +152,32 @@ removing them. The rule is: **the recipe owns the numerics.**
   With more batch/heads than cores, all Q chunks of all heads split evenly over the grid without chains, and
   each core's reader follows the head of every chunk it reads.
 
+## Causal, sliding-window, chunked and windowed attention
+
+These run on the same compute loop as unmasked attention (`dataflow/recipe_key_range.hpp`). Query row q at global
+position p = offset + q (the chunk start, or the windowed Q offset) sees one key interval [lo(p), hi(p)): causal
+k ≤ p, a causal window p − w < k ≤ p, a centred window |k − p| ≤ w/2, a window of `cu_window_seqlens` the keys of
+p's window. Neither end moves left as p grows, so for a Q chunk each K chunk is
+
+1. outside every row's interval: skipped (no reads, no compute);
+2. inside every row's interval: the recipe's unmasked chunk, fused for STANDARD and FAST;
+3. otherwise an edge: the attn_mask path, with {0, −2^100} BFP4 mask tiles the writer generates (mixed tiles are
+   cached by their diagonal offset, so a causal call writes one).
+
+Compute reads each Q chunk's K range and its unmasked sub-range from a control page the writer sends. Masked keys
+add −2^100 instead of −∞, so a row with no visible key in its Q chunk's first K chunk keeps a finite running max,
+and the next chunk's real keys replace it with a zero rescale (STANDARD and FAST: θ is exceeded, the fused chunk's
+saturation check redoes the group). Q chunks of a head run in zigzag order (0, J−1, 1, J−2, ...) split over its
+cores, which balances causal work by pairs; there is no K/V chain, and each core bounds its in-flight K/V reads
+like the legacy kernel. A paired recipe pads an odd Q chunk to even (the single-row group mishandles a row whose
+keys are all masked in its first K chunk). The chunk start (scalar) is part of the program hash, as in the legacy
+op; `chunk_start_idx_tensor` and `windowed_q_token_offset_tensor` are read on device, so one trace serves every
+offset.
+
+Throughput on one P150b (8192² × 10 heads, D128, Q256/K512, full grid): causal STANDARD 2.21 ms, FAST BFP8 1.55 ms,
+ACCURATE 3.22 ms, against 1.96 ms for the legacy BF16-dest kernel (noncausal STANDARD 1.78 ms, which keeps the K/V
+chain). Edge chunks run the unfused path, so causal STANDARD per core is about 1.15x the legacy kernel.
+
 ## Blocking
 
 With a recipe, the op chooses Q and K chunk sizes when the caller leaves them unset: no `program_config`,
@@ -169,7 +200,7 @@ pass-outer and ring-inner.
   under every recipe. `scale`, `compute_kernel_config` and `exp_approx_mode` follow
   [Legacy arguments](#legacy-arguments-with-a-recipe).
 - `ring_distributed_scaled_dot_product_attention` has no recipe path yet: it is always causal (two Q slabs per
-  device) and needs the recipes' causal K-range model first.
+  device); the dense K-range model above covers its masking, its two-slab Q scheduling is still to do.
 - `logical_n` (and ring's `logical_l`) may be a host scalar or a single-value device tensor, so a captured
   trace can replay with new lengths.
 - For FAST, prepare K/V before they are communicated.
@@ -203,6 +234,7 @@ rounding differs from the round-to-nearest-even with saturation in `prepare_bfp4
 | `streaming/recipe_streaming.hpp` | Shared K-chunk step: reduce path (first chunk, redo), FP32 / reference-max state, normalization |
 | `streaming/recipe_fused_chunk.hpp` | Fused K chunk (above) |
 | `streaming/recipe_sfpu.hpp`, `recipe_tail.hpp` | Exp variants, key-tail masking |
+| `dataflow/recipe_key_range.hpp` | K-range model: per-row key intervals, chunk classes, edge mask tiles, zigzag Q order |
 | `streaming/recipe_checkpoint.hpp`, `dataflow/recipe_state_transfer.hpp` | Ring multi-Q state checkpoints (compute side, writer side) |
 | `dataflow/reader_recipe.cpp`, `ring_joint_*_impl.hpp`, `exp_ring_joint_*_impl.hpp` | Readers / writers; the ring and exp ring bodies are shared with the legacy kernels through a `Policy` struct (the legacy kernels compile unchanged) |
 | `sdpa_recipe.cpp`, `sdpa_recipe_blocking.cpp` | Host: recipe → CB layout and defines; chunk chooser |
@@ -214,8 +246,9 @@ Compile-time defines set by the host:
 | `SDPA_RECIPE_FP32` | BALANCED, ACCURATE | FP32 scores and state (DEST in FP32) |
 | `SDPA_RECIPE_ACCURATE` | ACCURATE | HiFi4 PV and the tighter exp fit |
 | `SDPA_RECIPE_LOFI` | FAST | LoFi matmuls (prepared inputs) |
-| `SDPA_RECIPE_FUSED` | STANDARD, FAST with QK width ≥ 2 | fused K chunks (inactive with `SDPA_RECIPE_MASK`) |
-| `SDPA_RECIPE_MASK` | an attn_mask | additive mask on the reduce path |
+| `SDPA_RECIPE_FUSED` | STANDARD, FAST with QK width ≥ 2 | fused K chunks (inactive with an attn_mask) |
+| `SDPA_RECIPE_MASK` | an attn_mask or a key range | additive mask on the reduce path |
+| `SDPA_RECIPE_KRANGE` | causal, sliding window, chunked, windowed | K range per Q chunk; mask on edge chunks only |
 | `SDPA_RECIPE_QK_W`, `SDPA_RECIPE_PV_W` | all | matmul subblock widths |
 | `SDPA_RECIPE_RING` (in the ring kernels) | ring, exp ring | key-tail masking, resident state |
 | `SDPA_RING_STREAM_STATE` | ring STANDARD and FAST with fused chunks | streamed multi-Q checkpoints |
