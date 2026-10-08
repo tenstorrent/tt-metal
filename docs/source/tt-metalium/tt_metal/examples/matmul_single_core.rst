@@ -169,7 +169,7 @@ The matrix multiplication is performed by a pipeline of three specialized kernel
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_args});
 
     // Compute kernel - performs matrix multiplication using the matrix engine
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     std::vector<uint32_t> compute_compile_time_args = {Mt, Kt, Nt};
     auto matmul_single_core_kernel_id = tt_metal::CreateKernel(
         program,

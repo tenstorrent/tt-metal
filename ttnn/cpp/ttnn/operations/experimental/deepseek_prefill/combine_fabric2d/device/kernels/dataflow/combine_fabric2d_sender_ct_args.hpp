@@ -29,6 +29,7 @@ struct SenderCtArgs {
     uint32_t fwd_sem_noc_x;
     uint32_t fwd_sem_noc_y;
     uint32_t fwd_sem_addr;
+    uint32_t final_sem_addr;
 
 #ifndef KERNEL_BUILD
     // `downstream` is the worker serving this stream on the next chip: the sender bumps its
@@ -54,7 +55,8 @@ struct SenderCtArgs {
         freed_addr(plan.ring_freed_addr),
         fwd_sem_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
         fwd_sem_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
-        fwd_sem_addr(plan.fwd_arrived_addr) {}
+        fwd_sem_addr(plan.fwd_arrived_addr),
+        final_sem_addr(plan.final_arrived_addr) {}
 
     std::vector<uint32_t> to_ct_word_arr() const {
         return {
@@ -72,7 +74,8 @@ struct SenderCtArgs {
             freed_addr,
             fwd_sem_noc_x,
             fwd_sem_noc_y,
-            fwd_sem_addr};
+            fwd_sem_addr,
+            final_sem_addr};
     }
 #else
     constexpr SenderCtArgs() :
@@ -90,7 +93,8 @@ struct SenderCtArgs {
         freed_addr(get_compile_time_arg_val(11)),
         fwd_sem_noc_x(get_compile_time_arg_val(12)),
         fwd_sem_noc_y(get_compile_time_arg_val(13)),
-        fwd_sem_addr(get_compile_time_arg_val(14)) {}
+        fwd_sem_addr(get_compile_time_arg_val(14)),
+        final_sem_addr(get_compile_time_arg_val(15)) {}
 #endif
 
     constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }

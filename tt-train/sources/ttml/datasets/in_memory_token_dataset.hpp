@@ -27,6 +27,8 @@ public:
     InMemoryTokenDataset& operator=(InMemoryTokenDataset&&) = default;
     ~InMemoryTokenDataset() = default;
 
+    [[nodiscard]] size_t get_num_tokens() const;
+
 private:
     [[nodiscard]] size_t get_size_impl() const;
 
