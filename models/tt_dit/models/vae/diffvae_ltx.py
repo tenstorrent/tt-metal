@@ -603,6 +603,11 @@ class LinearPixelShuffleUpsample(Module):
         return joined, (out_t_total, h * p2, w * p3)
 
 
+def stage1_split_enabled() -> bool:
+    """Whether stage 1 runs split over the whole mesh: off unless DIFFVAE_DET_S1_SPLIT=1."""
+    return os.environ.get("DIFFVAE_DET_S1_SPLIT", "0") not in ("0", "false", "False", "")
+
+
 class DeterministicStages(Module):
     """Stages 1-4: NA blocks and upsamples that turn the latent into the stage-5 context.
 
@@ -650,10 +655,14 @@ class DeterministicStages(Module):
         self.sp = mesh_axis_size(mesh_device, sp_axis) if self._w_sharded else 1
         if self._w_sharded:
             assert sp_axis is not None and ccl_manager is not None, f"{self.na3d_backend} needs sp_axis + ccl_manager"
+        # Stage 1's W does not divide sp, but it divides the TP axis. Swapping the two axes puts
+        # W on the TP axis and the heads on the SP axis, so stage 1 runs on every chip instead
+        # of replicated, and gathers back before its upsample.
+        self.stage1_split = stage1_split_enabled() and self._w_sharded and tp_axis is not None
         self.conv_in = Linear(in_channels, stage_channels[0], bias=True, mesh_device=mesh_device)
 
         def block_backend(stage: int) -> NAKernel:
-            if self._w_sharded and stage == 0:
+            if self.stage_axes(stage) is None:
                 return resolve_na_kernel("linear_order")
             return self.kernel
 
@@ -669,9 +678,9 @@ class DeterministicStages(Module):
                             head_dim=head_dim,
                             mesh_device=mesh_device,
                             na3d_backend=block_backend(stage),
-                            ccl_manager=ccl_manager if self._w_sharded and stage > 0 else None,
-                            sp_axis=sp_axis if self._w_sharded and stage > 0 else None,
-                            tp_axis=tp_axis if self._w_sharded and stage > 0 else None,
+                            ccl_manager=ccl_manager if self.stage_axes(stage) else None,
+                            sp_axis=self.stage_axes(stage)[0] if self.stage_axes(stage) else None,
+                            tp_axis=self.stage_axes(stage)[1] if self.stage_axes(stage) else None,
                             options=block_options,
                         )
                         for _ in range(stage_depths[stage])
@@ -690,6 +699,16 @@ class DeterministicStages(Module):
         )
         self._plan_cache: dict[tuple, NA3DDevicePlan] = {}
         self._rope_cache: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+
+    def stage_axes(self, stage: int) -> tuple[int, int | None] | None:
+        """``(W axis, head axis)`` of a W-sharded stage, or None for a replicated one."""
+        if not self._w_sharded:
+            return None
+        if stage > 0:
+            return self.sp_axis, self.tp_axis
+        if self.stage1_split:
+            return self.tp_axis, self.sp_axis
+        return None
 
     def _plan(self, dims: tuple[int, int, int], kernel: tuple[int, int, int]) -> NA3DDevicePlan:
         key = (dims, kernel)
@@ -734,19 +753,19 @@ class DeterministicStages(Module):
         self.load_state_dict(self.state_from_checkpoint(path, statistics=statistics))
 
     @timing_tree.span("mesh_device", "reshard: replicated -> W-sharded", category=timing_tree.RESHAPE)
-    def _wshard(self, x: ttnn.Tensor, dims: tuple[int, int, int]) -> ttnn.Tensor:
-        """Reshard a replicated ``(T*H*W, ch)`` volume into this chip's W-band ``(T*H*(W/sp), ch)``.
-        **Consumes** ``x``."""
-        return wshard(x, dims, sp_axis=self.sp_axis)
+    def _wshard(self, x: ttnn.Tensor, dims: tuple[int, int, int], axis: int) -> ttnn.Tensor:
+        """Reshard a replicated ``(T*H*W, ch)`` volume into this chip's W-band ``(T*H*(W/sp), ch)``
+        over mesh ``axis``. **Consumes** ``x``."""
+        return wshard(x, dims, sp_axis=axis)
 
     @timing_tree.span("mesh_device", "det -> replicated context gather", category=timing_tree.ALLGATHER)
-    def _wgather(self, x: ttnn.Tensor, dims: tuple[int, int, int]) -> ttnn.Tensor:
-        """Gather a W-sharded ``(T*H*(W/sp), ch)`` band back to the replicated ``(T*H*W, ch)`` volume.
+    def _wgather(self, x: ttnn.Tensor, dims: tuple[int, int, int], axis: int) -> ttnn.Tensor:
+        """Gather a band W-sharded over mesh ``axis`` back to the replicated ``(T*H*W, ch)`` volume.
         **Consumes** ``x``."""
         t, h, w = dims
         ch = int(x.shape[-1])
-        vol = consume(x, to_row_major, (t, h, w // self.sp, ch))
-        full = self.ccl_manager.all_gather(vol, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
+        vol = consume(x, to_row_major, (t, h, w // mesh_axis_size(self.mesh_device, axis), ch))
+        full = self.ccl_manager.all_gather(vol, dim=2, mesh_axis=axis, use_hyperparams=False)
         return retile(full, (t * h * w, ch))
 
     def forward(
@@ -765,11 +784,11 @@ class DeterministicStages(Module):
         """
         x = self._conv_in(x)
         count = len(self.upsamples) if stages is None else stages
-        sharded = False
+        sharded = None
         for stage in range(count):
             x, dims, sharded = self._run_stage(x, stage, dims, sharded=sharded, drop_leading_frame=drop_leading_frame)
-        if sharded and gather_output:
-            x = self._wgather(x, dims)
+        if sharded is not None and gather_output:
+            x = self._wgather(x, dims, sharded)
             log_dram(self.mesh_device, f"det gathered to replicated {dims}")
         return x, dims
 
@@ -781,23 +800,33 @@ class DeterministicStages(Module):
         "mesh_device", lambda self, x, stage, dims, **k: f"det stage {stage} (in {dims[0]},{dims[1]},{dims[2]})"
     )
     def _run_stage(
-        self, x: ttnn.Tensor, stage: int, dims: tuple[int, int, int], *, sharded: bool, drop_leading_frame: bool
-    ) -> tuple[ttnn.Tensor, tuple[int, int, int], bool]:
-        """One deterministic stage. Returns the activation, its FULL out-dims, and whether it is W-sharded."""
+        self, x: ttnn.Tensor, stage: int, dims: tuple[int, int, int], *, sharded: int | None, drop_leading_frame: bool
+    ) -> tuple[ttnn.Tensor, tuple[int, int, int], int | None]:
+        """One deterministic stage. Returns the activation, its FULL out-dims, and the mesh axis
+        its W is sharded over (None when replicated)."""
         t, h, w = dims
-        stage_sharded = self._w_sharded and stage > 0
+        axes = self.stage_axes(stage)
+        stage_sharded = axes is not None
+        w_axis = axes[0] if stage_sharded else None
+        sp = mesh_axis_size(self.mesh_device, w_axis) if stage_sharded else 1
+        if sharded is not None and sharded != w_axis:
+            x = self._wgather(x, dims, sharded)
+            sharded = None
         if stage_sharded:
-            assert w % self.sp == 0, f"stage {stage} W={w} not divisible by sp={self.sp}"
-            if not sharded:
-                x = self._wshard(x, dims)
-                sharded = True
-        local_dims = (t, h, w // self.sp) if stage_sharded else dims
-        cos, sin, plan = self._stage_setup(stage, dims, stage_sharded)
+            assert w % sp == 0, f"stage {stage} W={w} not divisible by sp={sp}"
+            if sharded is None:
+                x = self._wshard(x, dims, w_axis)
+                sharded = w_axis
+        local_dims = (t, h, w // sp)
+        cos, sin, plan = self._stage_setup(stage, dims, w_axis)
         x = self._run_blocks(x, stage, local_dims, cos, sin, plan, stage_sharded)
+        if stage == 0 and stage_sharded:
+            # Upsampled, stage 1's output is 4x the tokens; gather the smaller pre-upsample band.
+            x = self._wgather(x, dims, w_axis)
+            sharded, sp, local_dims = None, 1, dims
         x, out_dims = self._upsample(x, stage, local_dims, drop_leading_frame)
-        if stage_sharded:
-            out_dims = (out_dims[0], out_dims[1], out_dims[2] * self.sp)
-        log_dram(self.mesh_device, f"det stage {stage} upsampled to {out_dims} sharded={stage_sharded}")
+        out_dims = (out_dims[0], out_dims[1], out_dims[2] * sp)
+        log_dram(self.mesh_device, f"det stage {stage} upsampled to {out_dims} sharded={sharded}")
         return x, out_dims, sharded
 
     @timing_tree.span(
@@ -805,12 +834,12 @@ class DeterministicStages(Module):
         lambda self, stage, *a: f"stage {stage + 1} setup: rope tables + plan",
         category=timing_tree.SETUP,
     )
-    def _stage_setup(self, stage: int, dims: tuple[int, int, int], stage_sharded: bool):
+    def _stage_setup(self, stage: int, dims: tuple[int, int, int], w_axis: int | None):
         cos, sin = self._rope(dims)
-        if stage_sharded:
-            cos = ttnn.mesh_partition(cos, dim=3, cluster_axis=self.sp_axis)
-            sin = ttnn.mesh_partition(sin, dim=3, cluster_axis=self.sp_axis)
-        plan = None if stage_sharded else self._plan(dims, self.stage_kernels[stage])
+        if w_axis is not None:
+            cos = ttnn.mesh_partition(cos, dim=3, cluster_axis=w_axis)
+            sin = ttnn.mesh_partition(sin, dim=3, cluster_axis=w_axis)
+        plan = None if w_axis is not None else self._plan(dims, self.stage_kernels[stage])
         return cos, sin, plan
 
     @timing_tree.span(
@@ -944,6 +973,9 @@ class DiffVAEDecoder(Module):
                 yield from parameters(child, f"{prefix}{name}.")
 
         det = "-".join(stage_token(self.stages.det_stages[i]) for i in range(len(self.stages.det_stages)))
+        if self.stages.stage1_split:
+            # Stage 1's qkv is then column-sharded in device-major head order: other bytes, same shapes.
+            det = f"s1x-{det}"
         block = self.stage5.diff_blocks[0]
         stage5 = f"q{1 if block.attn.fused_qkv else 3}m{1 if block.mlp.fused else 2}"
         digest = hashlib.sha1("\n".join(sorted(parameters(self))).encode()).hexdigest()[:8]
