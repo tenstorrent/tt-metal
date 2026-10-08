@@ -300,7 +300,12 @@ void validate_ring_recipe_inputs(
     const auto kv_dtype = k.dtype();
     resolve_precision_policy(select_recipe(precision, kv_dtype));
     require_recipe_sfploadmacro();
-    TT_FATAL(q.device()->arch() == tt::ARCH::BLACKHOLE, "Named {} recipes require Blackhole", name);
+    // Ring recipes run on Blackhole and Wormhole B0; exp ring (fabric MUX) on Blackhole.
+    TT_FATAL(
+        q.device()->arch() == tt::ARCH::BLACKHOLE || (op == RecipeOp::Ring && q.device()->arch() == tt::ARCH::WORMHOLE_B0),
+        "Named {} recipes require {}",
+        name,
+        op == RecipeOp::Ring ? "Blackhole or Wormhole B0" : "Blackhole");
     TT_FATAL(q.dtype() == DataType::BFLOAT16, "Named {} recipes require BF16 Q, got {}", name, q.dtype());
     TT_FATAL(
         kv_dtype == DataType::BFLOAT16 || kv_dtype == DataType::BFLOAT8_B || kv_dtype == DataType::BFLOAT4_B,

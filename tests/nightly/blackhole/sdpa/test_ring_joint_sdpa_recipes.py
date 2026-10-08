@@ -17,18 +17,18 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     LOGIT_SCALES,
     VARIANTS,
     aligned_inputs,
-    blackhole_only,
     fp32_dest_config,
     key_mask,
     l2_pct,
     randn,
+    recipe_hardware,
     reference,
     stored,
 )
 
 RING = 2
 
-pytestmark = blackhole_only
+pytestmark = recipe_hardware
 
 
 def precision_inputs(mesh, variant, values, mapper):
@@ -92,7 +92,7 @@ def check_device_length_trace(mesh, call, lengths):
 
 def open_ring_mesh(fabric, ring=RING, **mesh_options):
     if ttnn.GetNumAvailableDevices() < ring:
-        pytest.skip(f"Requires {ring} connected Blackholes")
+        pytest.skip(f"Requires {ring} connected devices")
     ttnn.set_fabric_config(*fabric)
     mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, ring), trace_region_size=16777216, **mesh_options)
     mesh.enable_program_cache()
@@ -150,6 +150,14 @@ RING_CASES = {
     "multi_q_checkpoint": (1, 4, 4, 1024, 1024, 128, 256, 512, None, None, (2, 2)),
     "multi_q_checkpoint_wide": (1, 10, 10, 2368, 2368, 128, 288, 384, None, None, (8, 4)),
 }
+
+if ttnn.get_arch_name() == "wormhole_b0":
+    # Wormhole: an 8-column worker grid whose last column runs the CCL, and 1464 KiB of L1 (no Q288 chunk). Q160
+    # keeps the odd-chunk coverage.
+    RING_CASES = {
+        name: c[:6] + (160 if c[6] == 288 else c[6],) + c[7:10] + ((min(c[10][0], 7), c[10][1]),)
+        for name, c in RING_CASES.items()
+    }
 
 
 def run_ring(
@@ -426,6 +434,8 @@ CAUSAL_CASES = {
     # Several Q chunks per core: checkpointed state, and the balanced early half finishing before the last step.
     "multi_q_checkpoint": (1, 4, 4, 1024, 128, 128, 256, (2, 2)),
 }
+if ttnn.get_arch_name() == "wormhole_b0":
+    CAUSAL_CASES = {name: c[:7] + ((min(c[7][0], 7), c[7][1]),) for name, c in CAUSAL_CASES.items()}
 
 
 def causal_layout(x, balanced):

@@ -16,7 +16,7 @@ import ttnn
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     L2_PCT_BOUND,
     VARIANTS,
-    blackhole_only,
+    recipe_hardware,
     inputs_for,
     key_mask,
     l2_pct,
@@ -26,7 +26,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     to_device,
 )
 
-pytestmark = blackhole_only
+pytestmark = recipe_hardware
 
 
 def slabs(ring_size, ring_id, s):
