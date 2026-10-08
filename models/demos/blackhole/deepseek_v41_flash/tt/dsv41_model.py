@@ -1315,13 +1315,14 @@ class Model:
         self.timing["decode_device_read"] = t3 - t2
         return out
 
-    def _capture_decode(self, tokens, current_pos):
-        """Compile pass (restores the step-carried compressor state) + trace capture of one device-loop step."""
+    def _capture_decode(self, tokens, current_pos, compile_pass=True):
+        """Compile pass (restores the step-carried compressor state) + trace capture of one device-loop step. ``compile_pass=False``: everything was compiled before (warm_serving)."""
         snaps = self.dec.snapshot_states()
-        self.dec.forward()
-        ttnn.synchronize_device(self.md)
-        self.dec.restore_states(snaps)
-        self._set_loop_state(tokens, current_pos)
+        if compile_pass:
+            self.dec.forward()
+            ttnn.synchronize_device(self.md)
+            self.dec.restore_states(snaps)
+            self._set_loop_state(tokens, current_pos)
         self.trace_id = ttnn.begin_trace_capture(self.md, cq_id=0)
         self.last_logits = self.dec.forward()
         ttnn.end_trace_capture(self.md, self.trace_id, cq_id=0)
@@ -1337,6 +1338,83 @@ class Model:
         if self.trace_id is not None:
             ttnn.release_trace(self.md, self.trace_id)
             self.trace_id = None
+        for b in getattr(self, "buckets", {}).values():
+            b.release_trace()
+
+    # ---- serving warm-up and decode buckets (tt/decode_buckets.py, VLLM_BUCKETS_NOTES.md) -----------------------------------------------------
+    def decode_filler(self):
+        """Deterministic diverse token ids [B] fed to the users that hold no request in a decode step (a constant token routes every filler row to the same experts)."""
+        f = self.__dict__.get("_dfill")
+        if f is None:
+            g = torch.Generator().manual_seed(20260508)
+            f = self._dfill = torch.randint(1000, int(self.args.vocab_size), (self.B,), generator=g)
+        return f
+
+    def warm_serving(self, chunk, s_pad, bucket_users=()):
+        """Everything a server needs before its first request, in the order that keeps device allocation out of any captured trace: (1) allocate every persistent buffer (prefill
+        per-chunk buffers, the full decode loop buffers, every decode bucket), (2) compile every program (prefill chunk, full decode step, every bucket step), (3) capture the traces
+        (prefill chunk, full decode, every bucket). A request afterwards only replays traces and copies into persistent tensors. ``bucket_users``: users per mesh row of the
+        decode buckets below U. Returns the seconds each phase took."""
+        t0 = time.perf_counter()
+        B, rows, Up, U, pm = self.B, self.rows, self.Up, self.U, self.prefill_model
+        general = Up != U
+        zeros = torch.zeros(B, dtype=torch.long)
+        filler = self.decode_filler()
+        self._admit_idle()
+        self.sink.set_lengths(zeros)
+        self.sink.set_map([None] * (rows * Up) if general else None)
+        self.sink.bind(chunk)
+        self.prepare_for_traces(zeros)  # decode loop buffers of the full model + its compile pass
+        if getattr(self, "_hooks_set", None) is not pm:
+            pm.pre_replay_hooks.append(lambda s0, C_: self.sink.update(s0, C_))
+            pm.post_replay_hooks.append(self._post_chunk)
+            self._hooks_set = pm
+        pm.timing = {}
+        compiled = pm.compile_dyn(chunk, s_pad)
+        t1 = time.perf_counter()
+        from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import DecodeBucket
+
+        self.buckets = {}
+        feeds = {}
+        for Ub in sorted(set(int(u) for u in bucket_users if 0 < int(u) < U)):
+            b = DecodeBucket(self, Ub, self.log)
+            phys = torch.tensor([(i // Ub) * U + i % Ub for i in range(rows * Ub)], dtype=torch.long)
+            tok, pos = filler[phys].clone(), torch.zeros(rows * Ub, dtype=torch.long)
+            b.prepare(tok, pos, phys)
+            b.compile(tok, pos, phys)
+            self.buckets[Ub] = b
+            feeds[Ub] = (tok, pos)
+            self.log_dram(f"decode bucket U'={Ub} compiled")
+        ttnn.synchronize_device(self.md)
+        gc.collect()
+        t2 = time.perf_counter()
+        if compiled:  # (a (re)capture of the prefill trace: the carried prefill state of every user is gone)
+            pm.capture_dyn_trace(chunk)
+            self.__dict__.setdefault("pf_resume", {}).clear()
+            self.__dict__.pop("pf_slot_of", None)
+            self.__dict__.pop("pf_slot_owner", None)
+        self.release_trace()
+        for Ub, b in self.buckets.items():
+            b.capture(*feeds[Ub])
+        if self.trace_id is None:
+            self._capture_decode(filler, zeros, compile_pass=False)
+        self.log_dram("serving warm-up done (all traces captured)")
+        t3 = time.perf_counter()
+        self.timing["warm_serving"] = {"alloc_compile": t2 - t0, "prefill_compile": t1 - t0, "capture": t3 - t2}
+        self.log(
+            f"warm_serving: prefill chunk {chunk} / S_pad {s_pad}, decode buckets U' {sorted(self.buckets)} + {U}: compile {t2 - t0:.1f} s, capture {t3 - t2:.1f} s"
+        )
+        return self.timing["warm_serving"]
+
+    def decode_forward_bucket(self, Ub, tokens, current_pos, phys, enable_trace=True):
+        """One decode step at ``Ub`` users per mesh row (``Ub`` = U: the full model). tokens / current_pos [4 Ub] in bucket row order, ``phys`` [4 Ub] the model user of every row
+        (``r * U + u``, u < Ub). -> next greedy tokens [4 Ub]."""
+        if Ub == self.U:
+            return self.decode_forward(tokens, current_pos, enable_trace=enable_trace, reload_inputs=True)
+        return self.buckets[Ub].step(tokens, current_pos, phys, enable_trace=enable_trace)
+
+    def read_logits_bucket(self, Ub):
+        return self.read_logits() if Ub == self.U else self.buckets[Ub].read_logits()
 
     # ---- one model build, many batch sizes / context lengths ---------------------------------------------------------------------------
     def _l1_alloc(self):
@@ -1401,6 +1479,7 @@ class Model:
             "host_rows",
             "hasher",
             "rows_cat",
+            "buckets",
             "last_logits",
             "uni_layers",
             "_hooks_set",

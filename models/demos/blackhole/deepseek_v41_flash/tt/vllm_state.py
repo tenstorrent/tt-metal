@@ -17,6 +17,42 @@ import torch
 MESH_ROWS = 4
 MAX_USERS_PER_ROW = 32  # mHC kernels: at most 32 users per mesh row
 PAGE_TOKENS = 128
+SUPPORTED_BATCHES = (
+    4,
+    8,
+    16,
+    32,
+    64,
+    128,
+)  # decode / prefill batch sizes: 4 mesh rows x U users per row, U = 1, 2, 4, 8, 16, 32
+
+
+def decode_buckets(users_per_row: int, min_batch: int = 16, spec=None):
+    """Users-per-row sizes U' (ascending) a decode step may run at: the supported batch sizes B' = 4 U' >= ``min_batch`` (plain decode is flat below 16: 43-44 ms at B = 4 / 8 / 16)
+    that are <= the build's U, plus the build's own U. ``spec`` (env DSV41_VLLM_BUCKETS, e.g. "4,8,16,32" = batch sizes) overrides the list. -> [U', ...] (contains ``users_per_row``).
+    """
+    if spec:
+        bs = sorted({int(x) for x in str(spec).split(",") if x.strip()})
+    else:
+        bs = [b for b in SUPPORTED_BATCHES if b >= min_batch]
+    out = sorted(
+        {b // MESH_ROWS for b in bs if b % MESH_ROWS == 0 and b // MESH_ROWS < users_per_row} | {users_per_row}
+    )
+    return out
+
+
+def pick_bucket(users_needed: int, buckets) -> int:
+    """smallest bucket (users per row) >= ``users_needed``."""
+    for u in buckets:
+        if u >= users_needed:
+            return u
+    return buckets[-1]
+
+
+def filler_tokens(n: int, vocab: int = 129280, seed: int = 20260508):
+    """Deterministic diverse token ids for the rows of a decode step that hold no request (a constant token routes every filler row to the same experts)."""
+    g = torch.Generator().manual_seed(seed)
+    return torch.randint(1000, vocab, (n,), generator=g)
 
 
 def padded_batch(max_num_seqs: int, rows: int = MESH_ROWS) -> int:
@@ -103,6 +139,40 @@ class SlotTable:
         self.live.add(p)
         load[p // users_per_row] = load.get(p // users_per_row, 0) + 1
         return p
+
+    def claim_packed(self, logical: int, load: dict, users_per_row: int) -> int:
+        """Prefill of a NEW request with decode buckets: like ``claim_balanced`` (concurrent prompts spread over the mesh rows: ``load`` {mesh row: users in prefill}) but among the rows
+        of equal prefill load the free model user with the LOWEST in-row index u is taken (then the row with the fewest live users), so that the live set stays inside the smallest
+        decode bucket (a step runs the users u < U' of every row). Free logical slots hold no state: the swap is invisible to the plugin.
+        """
+        if not 0 <= logical < self.n_logical:
+            raise ValueError(f"empty slot {logical} outside 0..{self.n_logical - 1}")
+        U = users_per_row
+        live_row = {}
+        for q in self.live:
+            live_row[q // U] = live_row.get(q // U, 0) + 1
+        free = [j for j in range(self.n_logical) if j == logical or self.phys[j] not in self.live]
+        best = min(
+            free,
+            key=lambda j: (
+                load.get(self.phys[j] // U, 0),
+                self.phys[j] % U,
+                live_row.get(self.phys[j] // U, 0),
+                j != logical,
+                self.phys[j],
+            ),
+        )
+        if best != logical:
+            self.phys[logical], self.phys[best] = self.phys[best], self.phys[logical]
+        p = self.phys[logical]
+        self.live.add(p)
+        load[p // U] = load.get(p // U, 0) + 1
+        return p
+
+    def users_needed(self, users_per_row: int, extra=()) -> int:
+        """1 + the highest in-row index of the live users (and ``extra`` physical users, e.g. parked ones): the decode bucket must cover them. 1 when nothing is live."""
+        U = users_per_row
+        return 1 + max([p % U for p in set(self.live) | set(extra)], default=0)
 
     def release(self, logical: int) -> int | None:
         """The request in logical slot ``logical`` finished / was preempted: free its physical slot. Returns it (None when the slot held no request)."""
@@ -232,6 +302,40 @@ def build_decode_inputs(B, slots: SlotTable, tokens, start_pos, parked=None):
         if p not in taken:
             pos_b[p] = int(pp)
     return tok_b, pos_b, rows
+
+
+def build_decode_inputs_bucket(U, Ub, slots: SlotTable, tokens, start_pos, parked=None, filler=None, rows_n=MESH_ROWS):
+    """Decode inputs of a step at ``Ub`` users per mesh row (batch ``rows_n * Ub``) out of a model built for ``U``: bucket row i = r * Ub + u is model user r * U + u.
+    -> (tok [rows_n * Ub], pos [rows_n * Ub], rows [(logical row, bucket row, position)], phys [rows_n * Ub] model user of every bucket row).
+    Every live user must satisfy u < Ub (the adapter picks the bucket with ``SlotTable.users_needed``). Rows without a request feed a deterministic diverse token (``filler``,
+    indexed by model user) at position 0; parked users (prefill in progress) feed token 0 at their parked position."""
+    tok = tokens.reshape(-1).long()
+    pos = start_pos.reshape(-1).long()
+    if tok.numel() != pos.numel():
+        raise ValueError(f"{tok.numel()} tokens vs {pos.numel()} positions")
+    if tok.numel() > slots.n_logical:
+        raise ValueError(f"decode batch of {tok.numel()} rows exceeds the {slots.n_logical} plugin slots")
+    n = rows_n * Ub
+    phys = torch.tensor([(i // Ub) * U + i % Ub for i in range(n)], dtype=torch.long)
+    row_of = {int(p): i for i, p in enumerate(phys.tolist())}
+    tok_b = torch.zeros(n, dtype=torch.long) if filler is None else filler[phys].clone().long()
+    pos_b = torch.zeros(n, dtype=torch.long)
+    rows = []
+    for i in range(tok.numel()):
+        if int(pos[i]) < 0:
+            continue
+        p = slots.physical(i)
+        if p not in row_of:
+            raise ValueError(f"user {p} (in-row index {p % U}) is outside the decode bucket of {Ub} users per row")
+        r = row_of[p]
+        tok_b[r], pos_b[r] = tok[i], pos[i]
+        rows.append((i, r, int(pos[i])))
+    taken = {r for _, r, _ in rows}
+    for p, pp in (parked or {}).items():
+        r = row_of.get(int(p))
+        if r is not None and r not in taken:
+            tok_b[r], pos_b[r] = 0, int(pp)
+    return tok_b, pos_b, rows, phys
 
 
 def scatter_rows(values, rows, width, fill=0):

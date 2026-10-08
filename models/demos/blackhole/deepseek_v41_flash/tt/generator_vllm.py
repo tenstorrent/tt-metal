@@ -177,7 +177,27 @@ class DeepseekV41ForCausalLM:
             # BEFORE any prefill / decode trace exists: persistent tensors allocated after a captured trace can sit on its scratch memory (demo DSV41_SPEC_EARLY)
             generator.enable_spec(spec_k)
             logger.info(f"DSV4.1 vLLM: speculative decoding ON, {generator.spec_choice.describe()}")
-        return cls(generator, max_batch_size, max_seq_len)
+        self = cls(generator, max_batch_size, max_seq_len)
+        if self.bucketing and os.environ.get("DSV41_VLLM_WARM", "1") == "1":
+            self.warm_serving()
+        return self
+
+    def warm_serving(self):
+        """Allocate / compile / capture everything before the first request (``Model.warm_serving``): the prefill chunk trace at a FIXED S_pad (``DSV41_VLLM_S_PAD`` tokens, default the model
+        context) and the decode traces of every bucket, so that serving only replays traces (no device allocation while a trace is captured).
+        """
+        chunk = self._interleave_chunk()
+        fixed = os.environ.get("DSV41_VLLM_S_PAD", "")
+        s_pad = int(fixed) if fixed.isdigit() else int(self.m.max_ctx)
+        s_pad = -(-s_pad // chunk) * chunk
+        s_pad = min(s_pad, int(self.m.max_ctx) + 128)
+        self.s_pad_policy = str(s_pad)
+        self.s_pad_cur = s_pad
+        logger.info(f"DSV4.1 vLLM: warm-up (chunk {chunk}, S_pad {s_pad}, decode buckets U' {self.bucket_users})")
+        t0 = time.perf_counter()
+        self.m.warm_serving(chunk, s_pad, [u for u in self.bucket_users if u < self.U])
+        self._warm = True
+        logger.info(f"DSV4.1 vLLM: warm-up done in {time.perf_counter() - t0:.1f} s")
 
     # ---- speculative decoding: configuration ----------------------------------------------------------------------------------------------
     @staticmethod
@@ -284,6 +304,18 @@ class DeepseekV41ForCausalLM:
         self.timing = {}
         self._warm = False
         self._calls = {"prefill": 0, "decode": 0}
+        # decode buckets (VLLM_BUCKETS_NOTES.md): a step runs at the smallest supported batch 4 x U' (users u < U' of every mesh row) that covers the live requests
+        self.U = int(getattr(self.m, "U", self.B // VS.MESH_ROWS))
+        self.bucketing = (
+            os.environ.get("DSV41_VLLM_BUCKETING", "1") == "1"
+            and self.interleave
+            and self.spec is None
+            and hasattr(self.m, "warm_serving")
+        )
+        self.bucket_users = (
+            VS.decode_buckets(self.U, spec=os.environ.get("DSV41_VLLM_BUCKETS")) if self.bucketing else [self.U]
+        )
+        self.bucket_calls = {}
 
     # vLLM inspects this protocol (``is_text_generation_model``: __init__(vllm_config), embed_input_ids, forward(input_ids, positions), compute_logits) to resolve
     # ``--runner generate`` while building the ModelConfig, BEFORE the TT plugin loads the model; the architecture is the TT-only ``TTDeepseekV41ForCausalLM`` (no upstream
@@ -477,7 +509,12 @@ class DeepseekV41ForCausalLM:
                     )
                     st = 0
             if p is None:
-                p = self.slots.claim_balanced(slot, load, U) if balanced else self.slots.claim([slot])[0]
+                if self.bucketing and U:
+                    p = self.slots.claim_packed(
+                        slot, load, U
+                    )  # lowest in-row index: the live set stays inside the smallest decode bucket
+                else:
+                    p = self.slots.claim_balanced(slot, load, U) if balanced else self.slots.claim([slot])[0]
             items.append((p, toks[i], st, e))
             phys.append(p)
         if len(set(phys)) != N:
@@ -531,10 +568,20 @@ class DeepseekV41ForCausalLM:
         if slot_remap is not None:
             self.slots.apply_remap(slot_remap)
         W = int(tokens.shape[0])
-        tok_B, pos_B, rows = VS.build_decode_inputs(
-            self.B, self.slots, tokens, start_pos, parked=self.inprog.parked() if self.interleave else None
-        )
-        for _, p, _ in rows:
+        parked = self.inprog.parked() if self.interleave else None
+        Ub, phys = self.U, None
+        if self.bucketing:
+            # every LIVE user (decoding, or prefilled and parked) must be inside the bucket: a step also rewrites the padding rows of the compressor state tile
+            Ub = VS.pick_bucket(self.slots.users_needed(self.U, extra=(parked or {}).keys()), self.bucket_users)
+        if Ub < self.U:
+            tok_B, pos_B, rows, phys = VS.build_decode_inputs_bucket(
+                self.U, Ub, self.slots, tokens, start_pos, parked=parked, filler=self.m.decode_filler()
+            )
+            rows_p = [(i, int(phys[r]), pos) for i, r, pos in rows]  # (logical row, model user, position)
+        else:
+            tok_B, pos_B, rows = VS.build_decode_inputs(self.B, self.slots, tokens, start_pos, parked=parked)
+            rows_p = rows
+        for _, p, _ in rows_p:
             self.inprog.drop(p)  # decoding now
         if device_sampling:
             if VS.wants_logprobs(sampling_params, [i for i, _, _ in rows]):
@@ -549,7 +596,7 @@ class DeepseekV41ForCausalLM:
             return (
                 torch.zeros(W, 1, dtype=torch.int32) if device_sampling else torch.zeros(W, 1, self.m.args.vocab_size)
             )
-        for i, p, pos in rows:
+        for i, p, pos in rows_p:
             if pos >= self.m.max_ctx:
                 raise ValueError(f"position {pos} reaches the model context {self.m.max_ctx}")
             if (
@@ -559,9 +606,15 @@ class DeepseekV41ForCausalLM:
         t0 = time.perf_counter()
         self.m.admit_idle_users()  # idle / released users own no pages: pool.ensure would fail (KeyError) stepping all B users
         t_in = time.perf_counter()
-        out = self.m.decode_forward(tok_B, pos_B, enable_trace=bool(enable_trace), reload_inputs=True)
-        for i, p, pos in rows:
-            self.book.note_fed(p, pos, int(tok_B[p]))
+        if phys is None:
+            out = self.m.decode_forward(tok_B, pos_B, enable_trace=bool(enable_trace), reload_inputs=True)
+            for i, p, pos in rows_p:
+                self.book.note_fed(p, pos, int(tok_B[p]))
+        else:
+            out = self.m.decode_forward_bucket(Ub, tok_B, pos_B, phys, enable_trace=bool(enable_trace))
+            for (i, r, pos), (_, p, _) in zip(rows, rows_p):
+                self.book.note_fed(p, pos, int(tok_B[r]))
+        self.bucket_calls[Ub] = self.bucket_calls.get(Ub, 0) + 1
         self.timing["decode"] = time.perf_counter() - t0
         self._calls["decode"] += 1
         t_out = time.perf_counter()
@@ -572,13 +625,15 @@ class DeepseekV41ForCausalLM:
                 f"DSV4.1 first decode after prefill: {t_out - t_in:.2f} s (trace re-capture included; model: { {k: round(v * 1e3, 1) for k, v in self.m.timing.items() if k.startswith('decode')} } ms)"
             )
         else:
-            self._decode_stats(t_in, t_out)
+            self._decode_stats(t_in, t_out, Ub)
         if device_sampling:
             return VS.scatter_rows(out.reshape(-1, 1).to(torch.int32), rows, W)
-        logits = self.m.read_logits().float()  # [B, vocab] host
-        return VS.scatter_rows(logits.reshape(self.B, 1, -1), rows, W)
+        logits = (
+            self.m.read_logits_bucket(Ub).float() if self.bucketing else self.m.read_logits().float()
+        )  # [B', vocab] host
+        return VS.scatter_rows(logits.reshape(logits.shape[0], 1, -1), rows, W)
 
-    def _decode_stats(self, t_in, t_out):
+    def _decode_stats(self, t_in, t_out, bucket=None):
         """Every DSV41_VLLM_STATS_EVERY (default 256) decode calls log the mean adapter time per call (host prep + device step + read, ``model:`` breakdown) next to the mean wall time
         BETWEEN calls (plugin scheduling / sampling / output processing), to separate device time from serving overhead.
         """
@@ -593,7 +648,7 @@ class DeepseekV41ForCausalLM:
         if every > 0 and st["n"] % every == 0:
             n, gn = st["n"], max(st["gn"], 1)
             logger.info(
-                f"DSV4.1 decode stats over {n} calls: in-adapter {1e3 * st['in'] / n:.1f} ms/call, between-calls (plugin/scheduler/sampling) {1e3 * st['gap'] / gn:.1f} ms/call, "
+                f"DSV4.1 decode stats over {n} calls (bucket B'={4 * (bucket or self.U)}, calls per bucket {dict(self.bucket_calls)}): in-adapter {1e3 * st['in'] / n:.1f} ms/call, between-calls (plugin/scheduler/sampling) {1e3 * st['gap'] / gn:.1f} ms/call, "
                 f"last model timing { {k: round(v * 1e3, 1) for k, v in self.m.timing.items() if k.startswith('decode')} }"
             )
             st.update(n=0, **{"in": 0.0, "gap": 0.0, "gn": 0})

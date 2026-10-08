@@ -648,6 +648,15 @@ class DSV41PrefillModel:
         """Compile + capture the chunk trace for (C, S_pad) on DUMMY inputs with every user masked (no real state is written), so that real windows are only ever
         replayed (``replay_window``). Returns True when a (re)capture happened (the caller must drop everything that depends on the carried state).
         """
+        if not self.compile_dyn(C, S_pad):
+            return False
+        self.capture_dyn_trace(C)
+        return True
+
+    def compile_dyn(self, C, S_pad):
+        """First half of ``capture_dyn``: allocate every per-chunk persistent buffer and run the eager compile pass (no trace is captured). Split from the capture so that a server can
+        compile EVERY program (prefill chunk, all decode buckets) before capturing ANY trace. -> False when the (C, S_pad) trace is already captured.
+        """
         assert C % 128 == 0
         if self.dyn is not None and self.dyn.C == C and self.dyn.S_pad == S_pad and self.dyn_trace is not None:
             return False
@@ -669,12 +678,19 @@ class DSV41PrefillModel:
         for _, pl in self.layers:
             pl.pa.reset_dyn()  # before any capture only
         ttnn.synchronize_device(self.md)
+        self._dyn_compiled = (C, bufs, t0)
+        return True
+
+    def capture_dyn_trace(self, C):
+        """Second half of ``capture_dyn``: capture the chunk trace (everything is compiled and allocated)."""
+        C_, bufs, t0 = self._dyn_compiled
+        assert C_ == C
         self.dyn_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
         self.forward_device(bufs, C, 0, C, dyn=True)
         ttnn.end_trace_capture(self.md, self.dyn_trace, cq_id=0)
         ttnn.synchronize_device(self.md)
+        self._dyn_compiled = None
         self.timing["compile_and_capture"] = time.perf_counter() - t0
-        return True
 
     def replay_window(self, tokens, hashes, s0, C, active):
         """One replay of the captured chunk trace for the window of positions [s0, s0 + C): tokens [B, C] (fillers 0), hashes of the active users only,

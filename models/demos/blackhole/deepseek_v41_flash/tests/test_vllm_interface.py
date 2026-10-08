@@ -776,3 +776,139 @@ def test_configured_spec_k_from_the_server_command_line(monkeypatch):
     assert f() == 3
     monkeypatch.setattr("sys.argv", ["run", "--speculative-config", '{"method":"ngram","num_speculative_tokens":3}'])
     assert f() == 0
+
+
+# ---- decode buckets (VLLM_BUCKETS_NOTES.md) ---------------------------------------------------------------------------------------------------
+def test_decode_buckets_and_pick():
+    assert VS.decode_buckets(32) == [4, 8, 16, 32] and VS.decode_buckets(8) == [4, 8] and VS.decode_buckets(4) == [4]
+    assert VS.decode_buckets(32, spec="4,8,16,32,64") == [1, 2, 4, 8, 16, 32]  # batch sizes -> users per row
+    assert VS.decode_buckets(2) == [2]
+    assert [VS.pick_bucket(n, [4, 8, 16, 32]) for n in (1, 4, 5, 8, 9, 17, 32)] == [4, 4, 8, 8, 16, 32, 32]
+
+
+def test_claim_packed_takes_the_lowest_in_row_index_and_balances_prefill_rows():
+    st = VS.SlotTable(32, 32)  # U = 8
+    load = {}
+    first = st.claim_packed(5, load, 8)
+    assert first % 8 == 0  # lowest in-row index
+    assert load == {first // 8: 1}
+    second = st.claim_packed(6, load, 8)
+    assert second % 8 == 0 and second // 8 != first // 8  # another mesh row (its prefill load is 0)
+    for s in (7, 8):
+        st.claim_packed(s, load, 8)
+    assert {p // 8 for p in st.live} == {0, 1, 2, 3} and all(p % 8 == 0 for p in st.live)
+    assert st.users_needed(8) == 1
+    fifth = st.claim_packed(
+        9, {}, 8
+    )  # all rows hold one live user, no prefill load: next u = 1 in the row with the fewest live users
+    assert fifth % 8 == 1 and st.users_needed(8) == 2
+    assert st.users_needed(8, extra=[7]) == 8  # a parked user at in-row index 7 pins the big bucket
+
+
+def test_decode_inputs_bucket_maps_rows_and_fills_with_diverse_tokens(expect_error):
+    st = VS.SlotTable(32, 32)
+    load = {}
+    ps = [st.claim_packed(i, load, 8) for i in range(6)]
+    tokens = torch.arange(100, 100 + 32).reshape(32, 1)
+    pos = torch.tensor([10 + i if i < 6 else -1 for i in range(32)])
+    filler = VS.filler_tokens(32)
+    tok, p, rows, phys = VS.build_decode_inputs_bucket(8, 4, st, tokens, pos, parked={ps[0]: 1}, filler=filler)
+    assert tok.shape == (16,) and phys.tolist() == [(i // 4) * 8 + i % 4 for i in range(16)]
+    assert [r for _, r, _ in rows] == [int(torch.nonzero(phys == q)) for q in ps]
+    for i, r, ps_ in rows:
+        assert int(tok[r]) == 100 + i and int(p[r]) == 10 + i
+    idle = [r for r in range(16) if r not in {r for _, r, _ in rows}]
+    assert (
+        all(int(tok[r]) == int(filler[phys[r]]) and int(p[r]) == 0 for r in idle) and len(set(tok[idle].tolist())) > 4
+    )
+    st2 = VS.SlotTable(32, 32)
+    st2.phys[0] = 5  # in-row index 5 is outside a 4-users bucket
+    st2.live.add(5)
+    with expect_error(ValueError, "outside the decode bucket"):
+        VS.build_decode_inputs_bucket(8, 4, st2, tokens, torch.tensor([3] + [-1] * 31), filler=filler)
+
+
+class FakeBucketModel(FakeInterleaveModel):
+    def __init__(self, B, **kw):
+        super().__init__(B, **kw)
+        self.U = B // 4
+        self.bucket_log = []
+        self.warm_args = None
+        self._f = VS.filler_tokens(B)
+
+    def warm_serving(self, chunk, s_pad, bucket_users=()):
+        self.warm_args = (chunk, s_pad, tuple(bucket_users))
+
+    def decode_filler(self):
+        return self._f
+
+    def decode_forward_bucket(self, Ub, tokens, current_pos, phys, enable_trace=True):
+        self.bucket_log.append((Ub, tokens.clone(), current_pos.clone(), phys.clone()))
+        out = (tokens + 1) % 7
+        self.last = torch.zeros(len(tokens), VOCAB)
+        self.last[torch.arange(len(tokens)), out] = 1.0
+        return out
+
+    def read_logits_bucket(self, Ub):
+        return self.last
+
+
+@pytest.fixture
+def bucket_gen(monkeypatch):
+    monkeypatch.setenv("DSV41_VLLM_INTERLEAVE", "1")
+    monkeypatch.setenv("DSV41_VLLM_CHUNK", "512")
+    B = VS.padded_batch(32)
+    m = FakeBucketModel(B)
+    gen = SimpleNamespace(m=m, prefill_chunk=None, auto_chunk=lambda max_len: 256)
+    return DeepseekV41ForCausalLM(gen, 32, 4096), m
+
+
+def test_a_lone_request_decodes_in_the_smallest_bucket(bucket_gen):
+    gen, m = bucket_gen
+    assert gen.bucketing and gen.bucket_users == [4, 8]
+    first = gen.prefill_forward(
+        torch.tensor([[1, 2, 3]], dtype=torch.int32), prompt_lens=[3], empty_slots=[5], sampling_params=GREEDY
+    )
+    W = 32
+    tok = torch.zeros(W, 1, dtype=torch.int32)
+    pos = torch.full((W,), -1)
+    tok[5, 0], pos[5] = int(first[0]), 3
+    out = gen.decode_forward(tok, pos, sampling_params=GREEDY)
+    Ub, t, p, phys = m.bucket_log[-1]
+    assert Ub == 4 and t.shape == (16,) and int(p.max()) == 3 and int((p > 0).sum()) == 1
+    assert out.shape == (W, 1) and int(out[5, 0]) == (int(first[0]) + 1) % 7 and int(out.abs().sum()) == int(out[5, 0])
+    assert gen.book.n[int(gen.slots.physical(5))] == 4  # note_fed went to the model user, not the bucket row
+
+
+def test_bucket_grows_with_the_live_set_and_a_pinned_high_user(bucket_gen):
+    gen, m = bucket_gen
+    W = 32
+    firsts = {}
+    for s in range(17):  # 17 requests: 16 fit the 4-per-row bucket, the 17th needs in-row index 4
+        firsts[s] = int(
+            gen.prefill_forward(
+                torch.tensor([[s + 1, 2]], dtype=torch.int32), prompt_lens=[2], empty_slots=[s], sampling_params=GREEDY
+            )[0]
+        )
+        gen.inprog.users.clear()  # (decoding already)
+    tok = torch.zeros(W, 1, dtype=torch.int32)
+    pos = torch.full((W,), -1)
+    for s in range(17):
+        tok[s, 0], pos[s] = firsts[s], 2
+    out = gen.decode_forward(tok, pos, sampling_params=GREEDY)
+    assert not m.bucket_log and m.log[-1][0] == "decode"  # needs in-row index 4: bucket 8 = the full model (U = 8)
+    assert all(int(out[s, 0]) == (firsts[s] + 1) % 7 for s in range(17))
+    for s in range(1, 17):
+        gen.release_request(s)
+    pos2 = torch.full((W,), -1)
+    pos2[0] = 3
+    gen.decode_forward(tok, pos2, sampling_params=GREEDY)
+    assert m.bucket_log[-1][0] == 4  # the live set shrank back
+
+
+def test_bucketing_off_when_disabled_or_spec(monkeypatch, bucket_gen):
+    monkeypatch.setenv("DSV41_VLLM_BUCKETING", "0")
+    gen, m = bucket_gen
+    B = VS.padded_batch(32)
+    g2 = DeepseekV41ForCausalLM(SimpleNamespace(m=FakeBucketModel(B), prefill_chunk=None, auto_chunk=None), 32, 4096)
+    assert not g2.bucketing and g2.bucket_users == [8]

@@ -111,6 +111,32 @@ class DSV41MoEBlock:
         adds it separately in higher precision, see shared_expert.py. ``expert_state``: the already uploaded routed-expert weights of this layer
         (``_TTMoEDecodeExpertState`` of an earlier block, batch independent): they are reused instead of read from the cache again (Model.reconfigure).
         """
+        self._topology, self._shared_in_moe = topology, shared_in_moe
+        decode_cfg, gate_cfg = self._configs(mesh_device, batch_per_device, topology, shared_in_moe)
+
+        self.mesh_device = mesh_device
+        self.decode_config = decode_cfg
+        # bf16-exact selection bias + fp32 residual folded into the score (see router.py)
+        self.gate = DSV41Gate(
+            mesh_device,
+            gate_cfg,
+            torch_gate_weight=weights["gate_weight"],
+            torch_gate_bias=weights["gate_bias"],
+            bias_shift=gate_bias_shift,
+        )
+        if expert_state is not None:
+            self.decode = self._weightless_decode(mesh_device, decode_cfg, buffers, expert_state=expert_state)
+        elif __import__("os").environ.get("DSV41_UNI_NODECODE") == "1":
+            # PREFILL-ONLY measurement mode (DSV41_PREFILL_MOE=unified): no moe_compute expert weights on the device (DRAM would not fit them next to the
+            # unified-layout copy); decode through this block is not possible. Scratch buffers / config as TTMoEDecode.__init__ builds them.
+            self.decode = self._weightless_decode(mesh_device, decode_cfg, buffers)
+        else:
+            self._build_decode(mesh_device, decode_cfg, weights, shared_in_moe, buffers)
+        self.decode._mesh = mesh_device
+
+    @staticmethod
+    def _configs(mesh_device, batch_per_device, topology, shared_in_moe):
+        """(decode config, gate config) for ``batch_per_device`` tokens per device."""
         text = CONFIG_PATH.read_text()
         # the derived memory configs (dispatch input shards, ...) are computed from batch_per_device when the config is parsed,
         # so the batch size has to be in the YAML text itself (updating the field afterwards leaves them sized for 4 users)
@@ -134,26 +160,22 @@ class DSV41MoEBlock:
                 }
             )
         gate_cfg = TTMoEGateConfig.from_yaml(text).model_copy(update={"batch_per_device": batch_per_device})
+        return decode_cfg, gate_cfg
 
-        self.mesh_device = mesh_device
-        self.decode_config = decode_cfg
-        # bf16-exact selection bias + fp32 residual folded into the score (see router.py)
-        self.gate = DSV41Gate(
-            mesh_device,
-            gate_cfg,
-            torch_gate_weight=weights["gate_weight"],
-            torch_gate_bias=weights["gate_bias"],
-            bias_shift=gate_bias_shift,
+    def for_batch(self, batch_per_device, buffers=None):
+        """A block for ANOTHER number of tokens per device (a decode bucket, tt/decode_buckets.py) that shares everything batch independent with this one (routed-expert weights, the
+        router: its exact path reads the token count from its input) and owns the decode scratch buffers / config of the new size (``buffers``: those of an earlier block of the
+        same bucket). The expert-weight state of this block is reused."""
+        import copy
+
+        nb = copy.copy(self)
+        decode_cfg, _ = self._configs(self.mesh_device, batch_per_device, self._topology, self._shared_in_moe)
+        nb.decode_config = decode_cfg
+        nb.decode = self._weightless_decode(
+            self.mesh_device, decode_cfg, buffers, expert_state=self.decode.expert_state
         )
-        if expert_state is not None:
-            self.decode = self._weightless_decode(mesh_device, decode_cfg, buffers, expert_state=expert_state)
-        elif __import__("os").environ.get("DSV41_UNI_NODECODE") == "1":
-            # PREFILL-ONLY measurement mode (DSV41_PREFILL_MOE=unified): no moe_compute expert weights on the device (DRAM would not fit them next to the
-            # unified-layout copy); decode through this block is not possible. Scratch buffers / config as TTMoEDecode.__init__ builds them.
-            self.decode = self._weightless_decode(mesh_device, decode_cfg, buffers)
-        else:
-            self._build_decode(mesh_device, decode_cfg, weights, shared_in_moe, buffers)
-        self.decode._mesh = mesh_device
+        nb.decode._mesh = self.mesh_device
+        return nb
 
     @staticmethod
     def _weightless_decode(mesh_device, cfg, buffers, expert_state=None):
