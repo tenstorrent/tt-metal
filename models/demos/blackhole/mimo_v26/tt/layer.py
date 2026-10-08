@@ -158,6 +158,24 @@ class MiMoDecoderLayer:
             # hilo/plain kernel paths read them, the exact path (fp32 matmul + topk) does not.
             for n in ("tt_bias", "tt_input_indices", "tt_output", "tt_output_indices"):
                 ttnn.deallocate(getattr(self.gate, n))
+        from models.demos.blackhole.mimo_v26.tt.moe_prefill import uni_ring_active
+
+        if uni_ring_active(mesh, self.expert_op):
+            # ONE weight copy: the decode ring-layout bfp8 weights (NFS cache MIMO_WCACHE/ring_L<L>) are built here, at load time, and read in place by the unified
+            # prefill op AND by the ring decode MoE (tt/moe_ring.py); no per-expert layout is built (MIMO_UNI_RING=0 restores the two-copy layout)
+            if wc.build_only:
+                return None
+            from models.demos.blackhole.mimo_v26.tt.moe_ring import RingExpertWeights
+
+            self.ring_ex = RingExpertWeights(mesh, L)
+            return MiMoPrefillMoE(
+                mesh,
+                None,
+                ckc=make_ckc("hifi2", fp32acc=True, packer_l1_acc=True),
+                expert_op=self.expert_op,
+                cf=cf,
+                ring=(self.ring_ex.state.tt_w0_w1, self.ring_ex.state.tt_w2),
+            )
         experts = {}
 
         def host(l, i):
@@ -320,8 +338,12 @@ class MiMoDecoderLayer:
             if (
                 getattr(self, "moe_dec", None) is None
                 and os.environ.get("MIMO_MOE_DECODE", "ring") == "ring"
-                and __import__("models.demos.blackhole.mimo_v26.tt.moe_ring", fromlist=["ring_enabled"]).ring_enabled(
-                    self.mesh
+                and (
+                    getattr(self, "ring_ex", None)
+                    is not None  # one copy: the ring weights are already resident, no headroom needed
+                    or __import__(
+                        "models.demos.blackhole.mimo_v26.tt.moe_ring", fromlist=["ring_enabled"]
+                    ).ring_enabled(self.mesh)
                 )
             ):
                 # RING decode MoE, the default (MIMO_MOE_DECODE=unified is the documented fallback; ring_enabled() also falls back to unified when DRAM headroom < 1 GiB per chip; needs the integ_e4ff6c137d3 library): second, ring-layout bfp8 weight copy of this layer (NFS cache MIMO_WCACHE; build it once with tests/build_ring_cache.py)
@@ -330,7 +352,7 @@ class MiMoDecoderLayer:
                 self.moe_dec = MiMoRingMoEDecode(
                     self.mesh,
                     self.gate,
-                    RingExpertWeights(self.mesh, self.L),
+                    getattr(self, "ring_ex", None) or RingExpertWeights(self.mesh, self.L),
                     router=os.environ.get("MIMO_ROUTER", "fast"),
                 )
             if getattr(self, "moe_dec", None) is None:

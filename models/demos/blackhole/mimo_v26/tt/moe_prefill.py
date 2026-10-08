@@ -119,12 +119,81 @@ def build_expert_weights(md, w_of_expert, nd_sharded=True, dtype=None):
     return outs["gate"], outs["up"], outs["down"]
 
 
-class MiMoPrefillMoE:
-    """Routed experts of one layer. ``forward(x_rm, scores, indices)`` -> per-column PARTIAL weighted sums [1,1,N,D] (tile, DRAM)."""
+# ----------------------------------------------------------------------------- one-copy ring weights (policy)
+_RING_MARK = b"ring weights mode needs 8 live DRAM banks"
+_ring_lib = {}
 
-    def __init__(self, md, weights, ckc=None, expert_op="unified", cf=4):
+
+def ring_supported():
+    """Does the _ttnncpp library MAPPED in this process contain the RING_WEIGHTS mode of the unified op? (scans the mapped read-only segments, so a library replaced on
+    disk after the process started is judged by what is loaded)"""
+    if "v" not in _ring_lib:
+        import ctypes
+
+        ok = False
+        try:
+            with open("/proc/self/maps") as f:
+                for line in f:
+                    if "_ttnncpp.so" in line and line.split()[1].startswith("r"):
+                        a, b = (int(x, 16) for x in line.split()[0].split("-"))
+                        if _RING_MARK in ctypes.string_at(a, b - a):
+                            ok = True
+                            break
+        except Exception:
+            ok = False
+        _ring_lib["v"] = ok
+    return _ring_lib["v"]
+
+
+def banks_ok(md):
+    """The ring weights have one shard per ring core = one per live DRAM bank: the op needs 8 (chips with 7 banks fall back to the per-expert copy)."""
+    try:
+        from ttnn.experimental.moe_compute_utils import effective_matmul_ring_size
+
+        return int(effective_matmul_ring_size(md)) == 8
+    except Exception:
+        return False
+
+
+_UNI_RING = {}
+
+
+def uni_ring_active(md, expert_op="unified", log=print):
+    """ONE weight copy: should the prefill routed-expert op read the decode (moe_compute ring layout) weights in place? MIMO_UNI_RING=1 (default) when the expert op is
+    `unified`, the loaded library has the RING_WEIGHTS mode and the chip has 8 live DRAM banks; MIMO_UNI_RING=0 restores the per-expert copy. One log line on a fallback.
+    """
+    if os.environ.get("MIMO_UNI_RING", "1") != "1" or expert_op != "unified":
+        return False
+    key = id(md)
+    if key not in _UNI_RING:
+        why = None
+        if not ring_supported():
+            why = "the loaded ttnn library has no ring-weights mode for unified_routed_expert_moe"
+        elif not banks_ok(md):
+            why = "the chip does not have 8 live DRAM banks (ring size != 8)"
+        if why:
+            log(f"[moe_prefill] one-copy ring weights OFF, using the per-expert copy: {why}")
+        else:
+            log(
+                "[moe_prefill] one-copy ring weights ON: the unified prefill op reads the decode ring-layout bfp8 weights in place (no per-expert copy)"
+            )
+        _UNI_RING[key] = why is None
+    return _UNI_RING[key]
+
+
+class MiMoPrefillMoE:
+    """Routed experts of one layer. ``forward(x_rm, scores, indices)`` -> per-column PARTIAL weighted sums [1,1,N,D] (tile, DRAM).
+    ring=(w0_w1, w2): the moe_compute decode weight tensors of the layer, read in place by the unified op (RING_WEIGHTS mode, no per-expert copy): the same tensor is passed
+    EPC times in the gate/up/down lists (gate and up both = w0_w1)."""
+
+    def __init__(self, md, weights=None, ckc=None, expert_op="unified", cf=4, ring=None):
         self.md = md
-        self.gate_projs, self.up_projs, self.down_projs = weights
+        self.ring = ring
+        if ring is not None:
+            assert expert_op == "unified", "ring weights are read in place by the unified op only"
+            self.gate_projs, self.up_projs, self.down_projs = [ring[0]] * EPC, [ring[0]] * EPC, [ring[1]] * EPC
+        else:
+            self.gate_projs, self.up_projs, self.down_projs = weights
         self.ckc = ckc or make_ckc()
         if expert_op == "mm":
             # MiMo scale-bias study: HiFi2/LoFi truncate mantissa products (~1-2% systematic expert shrink, invisible to PCC). The mm path needs HiFi4 with fp32

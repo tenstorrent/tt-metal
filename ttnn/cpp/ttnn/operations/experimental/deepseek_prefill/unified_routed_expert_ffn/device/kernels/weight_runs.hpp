@@ -72,4 +72,74 @@ struct WeightRuns {
     }
 };
 
+// ---------------------------------------------------------------------------------------------
+// RING_WEIGHTS: the weights are the moe_compute decode (ring) tensors, read in place (one copy for decode and prefill).
+// NC = 8 ring cores (= DRAM banks); the op's N columns are NOT tied to them: a column owns the global tile range [col0,
+// col_end) and every tile is addressed individually, so any grid width works (the same 11 x 8 grid as the per-expert
+// copy).
+//   w0_w1 (gate+up): tile page ((((c * E + e) * G + g) * R + k) * 4 + t): c = ring core owning N tiles [TNC c, TNC (c +
+//   1)), g = group of 2 of its N tiles, k = K tile row
+//     (R = K padded to a multiple of 7), t = [gate n0, up n0, gate n1, up n1].
+//   w2 (down): page ((((c * E + e) * GD + g) * RD + r) * 4 + t): c = ring core owning hidden tiles [4 GD c, 4 GD (c +
+//   1)), g = group of 4 hidden tiles, r = stored K row (RD = N padded to
+//     a multiple of 7), t = the 4 hidden tiles. K rows are stored per CH-row chunk, rotated per core
+//     (moe_compute_utils.py prepare_w2_tensor_for_moe_compute): logical chunk ch of core c sits at stored chunk q = (c
+//     - ch) mod NC.
+// The accessor is the decode tensor's own (HEIGHT_SHARDED over the DRAM banks, tile pages), so a page id is all that is
+// needed.
+template <uint32_t E, uint32_t G, uint32_t R, uint32_t GD, uint32_t RD, uint32_t NC, uint32_t TNC, uint32_t CH>
+struct RingWeights {
+    // gate (is_up = 0) or up (is_up = 1) tiles of K row `row`, global N tiles [col0, col0 + ncols), into l1_base + nl *
+    // page_bytes
+    template <class Acc>
+    static FORCE_INLINE void read_gu(
+        const Noc& noc,
+        const Acc& acc,
+        uint32_t is_up,
+        uint32_t e,
+        uint32_t col0,
+        uint32_t row,
+        uint32_t ncols,
+        uint32_t l1_base,
+        uint32_t page_bytes) {
+        for (uint32_t nl = 0; nl < ncols; ++nl) {
+            const uint32_t n = col0 + nl;
+            const uint32_t c = n / TNC;
+            const uint32_t loc = n - c * TNC;
+            const uint32_t g = loc >> 1;
+            const uint32_t page = ((((c * E + e) * G + g) * R + row) * 4) + is_up + 2 * (loc & 1);
+            noc.async_read(acc, CoreLocalMem<uint32_t>(l1_base + nl * page_bytes), page_bytes, {.page_id = page}, {});
+        }
+    }
+
+    // down tiles of logical K row `row`, global hidden tiles [col0, col_end) (col0 and col_end - col0 multiples of 4),
+    // into l1_base + (h - col0) * page_bytes; one 4-tile read per group
+    template <class Acc>
+    static FORCE_INLINE void read_d(
+        const Noc& noc,
+        const Acc& acc,
+        uint32_t e,
+        uint32_t col0,
+        uint32_t col_end,
+        uint32_t row,
+        uint32_t l1_base,
+        uint32_t page_bytes) {
+        const uint32_t ch = row / CH;
+        const uint32_t j = row - ch * CH;
+        for (uint32_t h = col0; h < col_end; h += 4) {
+            const uint32_t hg = h >> 2;
+            const uint32_t c = hg / GD;
+            const uint32_t g = hg - c * GD;
+            const uint32_t q = (c + NC - ch) % NC;
+            const uint32_t r = q * CH + j;
+            noc.async_read(
+                acc,
+                CoreLocalMem<uint32_t>(l1_base + (h - col0) * page_bytes),
+                4 * page_bytes,
+                {.page_id = ((((c * E + e) * GD + g) * RD + r) * 4)},
+                {});
+        }
+    }
+};
+
 }  // namespace unified_routed_expert_ffn

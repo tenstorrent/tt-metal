@@ -148,6 +148,13 @@ void patch_common_buffer_addresses(tt::tt_metal::RuntimeArgsData& args, const Vi
     });
     TT_FATAL(slot == args.size(), "patched {} common runtime args, cached program has {}", slot, args.size());
 }
+
+// RING_WEIGHTS mode (see weight_runs.hpp / device operation): the decode moe_compute ring tensors are read in place.
+bool is_ring_weights_f(const ttnn::Tensor& w) {
+    const auto& mem = w.memory_config();
+    return w.logical_shape().rank() == 6 && mem.buffer_type() == tt::tt_metal::BufferType::DRAM &&
+           mem.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED;
+}
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_descriptor(
@@ -165,10 +172,31 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // This expert's M (not x's allocated M): x may be a shared buffer wider
     // than one expert's region. K still comes from x's last dim (emb).
     const uint32_t M_tiles_full = op.m_tiles;
-    const uint32_t K_gate_tiles = x_shape[-1] / TILE;          // = N_gate K = emb / TILE
-    const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE;  // = hidden / TILE
-    const uint32_t K_down_tiles = down_shape[-2] / TILE;       // = hidden / TILE
-    const uint32_t N_down_tiles_full = down_shape[-1] / TILE;  // = emb / TILE
+    const bool ring_weights = is_ring_weights_f(t.gate_projs[0]);
+    const uint32_t K_gate_tiles = x_shape[-1] / TILE;  // = N_gate K = emb / TILE
+    // Ring weights: 8 ring cores (= the op's 8 N columns); N is the multiple of 8 whose 7-padded size is the stored w2
+    // K-row count and whose per-core group count (2 N tiles per group) is the stored w0_w1 group count.
+    uint32_t ring_n_tiles = 0;
+    if (ring_weights) {
+        const uint32_t rd = down_shape[-2] / TILE, groups = gate_shape[-3];
+        for (uint32_t n = 8; n <= 8 * rd; n += 8) {
+            if (((n + 6) / 7) * 7 == rd && (n / 8 + 1) / 2 == groups) {
+                ring_n_tiles = n;
+            }
+        }
+        TT_FATAL(
+            ring_n_tiles != 0,
+            "ring weights: cannot infer the intermediate size from w0_w1 {} / w2 {}",
+            gate_shape,
+            down_shape);
+        TT_FATAL(
+            down_shape[-3] * 4 * 8 == K_gate_tiles && ((K_gate_tiles + 6) / 7) * 7 == gate_shape[-2] / TILE,
+            "ring weights: w2 hidden groups / w0_w1 K rows do not match x ({} tiles)",
+            K_gate_tiles);
+    }
+    const uint32_t N_gate_tiles_full = ring_weights ? ring_n_tiles : gate_shape[-1] / TILE;  // = hidden / TILE
+    const uint32_t K_down_tiles = ring_weights ? ring_n_tiles : down_shape[-2] / TILE;       // = hidden / TILE
+    const uint32_t N_down_tiles_full = ring_weights ? K_gate_tiles : down_shape[-1] / TILE;  // = emb / TILE
 
     // Blackhole compute grid is 13x10 worker cores; we use the bottom-left
     // 11x8 = 88 to leave headroom for dispatch and to give per_core_M /
@@ -266,6 +294,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
 
     const uint32_t per_core_N_gu = (N_gate_tiles_full + GRID_X - 1) / GRID_X;
     const uint32_t per_core_N_d = (N_down_tiles_full + GRID_X - 1) / GRID_X;
+    // Ring weights: the down weights are read as 4-tile groups (the ring's w2 group width), so a core's hidden slice
+    // must be a whole number of groups.
+    TT_FATAL(
+        !ring_weights || (per_core_N_d % 4 == 0 && N_down_tiles_full % 4 == 0),
+        "ring weights: per-core down N ({} tiles on {} columns, N {}) must be a multiple of the 4-tile ring group",
+        per_core_N_d,
+        GRID_X,
+        N_down_tiles_full);
     const uint32_t N_gate_tiles_padded = per_core_N_gu * GRID_X;
     const uint32_t K_down_tiles_padded = N_gate_tiles_padded;  // down K = gate N
 
@@ -978,6 +1014,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         tt::tt_metal::TensorAccessorArgs(t.down_biases[0].buffer()).append_to(reader_ct_args);
         reader_defines.emplace_back("FUSE_BIAS", "1");
     }
+    if (ring_weights) {
+        reader_defines.emplace_back("RING_WEIGHTS", "1");
+    }
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
@@ -1059,6 +1098,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = core_range_set;
     writer_kernel_desc.compile_time_args = std::move(writer_ct_args);
+    if (ring_weights) {
+        writer_kernel_desc.defines.emplace_back("RING_WEIGHTS", "1");
+    }
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
     // Compute kernel compile-time args: positional + named CB ids.

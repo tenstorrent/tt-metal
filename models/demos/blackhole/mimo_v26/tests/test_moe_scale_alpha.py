@@ -118,13 +118,20 @@ def test_moe_scale_alpha(mesh_device):
     w_bf = w_d.bfloat16().float()[:, :NT]
     for opname in OPS:
         # op names: unified | mm | mm_f32int (fp32 gate/up/activated) | mm_bf16w (bf16 weights instead of bfp8) | mm_hifi4 | mm_bf16w_f32int
-        op = "mm" if opname.startswith("mm") else opname
+        ring = opname == "unified_ring"  # ONE copy: unified op reading the decode ring-layout weights in place
+        op = "mm" if opname.startswith("mm") else ("unified" if ring else opname)
         wdt = ttnn.bfloat16 if "bf16w" in opname else None
-        wts = build_expert_weights(md, lambda e: W[e], nd_sharded=(op not in ("mm", "loop")), dtype=wdt)
+        if ring:
+            from models.demos.blackhole.mimo_v26.tt.moe_ring import RingExpertWeights
+
+            rex = RingExpertWeights(md, LAYER, w_of_expert=lambda e: W[e])
+            wts = [[], [], []]
+        else:
+            wts = build_expert_weights(md, lambda e: W[e], nd_sharded=(op not in ("mm", "loop")), dtype=wdt)
         print(f"RESULT variant {opname}", flush=True)
         # (d) device-read weights vs dequantised bf16: slot 0 gate on a few devices
         ratios = []
-        for r, c in ((0, 0), (1, 3), (3, 7)):
+        for r, c in () if ring else ((0, 0), (1, 3), (3, 7)):
             e = global_expert(r, c, 0)
             dev = ttnn.to_torch(ttnn.get_device_tensors(wts[0][0])[r * COLS + c]).float().reshape(-1)
             ref = W[e][0].float().reshape(-1)
@@ -135,10 +142,11 @@ def test_moe_scale_alpha(mesh_device):
         print(f"RESULT op={opname} (d) device weights vs dequantised bf16 (gate, slot 0): {ratios}", flush=True)
         um = MiMoPrefillMoE(
             md,
-            wts,
+            None if ring else wts,
             ckc=make_ckc("hifi4" if "hifi4" in opname else "hifi2", fp32acc=True, packer_l1_acc=(op != "fused")),
             expert_op=op,
             cf=4,
+            ring=(rex.state.tt_w0_w1, rex.state.tt_w2) if ring else None,
         )
         if "f32int" in opname:
             um.mm_interm = ttnn.float32
