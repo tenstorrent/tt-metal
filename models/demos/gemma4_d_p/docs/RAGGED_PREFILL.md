@@ -139,6 +139,27 @@ There is no automatic retile or cache reinterpretation fallback.
 
 ## Validation and measurements
 
+For an editable perf-only workload, with the model/cache environment from
+`PREFILL_SERVICE.md`:
+
+```bash
+OMP_NUM_THREADS=16 pytest models/demos/gemma4_d_p/tests/test_ragged_prefill_perf.py -sv --timeout=3600
+```
+
+This uses all 60 layers by default; set `GEMMA4_RAGGED_TEST_LAYERS=6` for a shorter
+run. Edit the consecutive `run_batch(lengths, starts=[...])` calls in the test.
+Each list index selects its KV slot, and the printed token range is
+`[start, start + length)`. Start zero replaces a slot's request; a nonzero start
+continues its preceding full 8192-token chunk. The examples include unequal
+lengths, three/four-request batches, full chunks and populated-prefix continuations.
+
+Each call invokes `prefill_batch` once. Output shows useful tokens/s for the batch
+and completion latency for each request. All requests share the batch's completion
+time. New shapes are labeled `capture+replay` (including warmup/capture); matching
+consecutive shapes are labeled `replay`. Timings include packing, staging, device
+execution and synchronization, excluding model loading, random token generation,
+output downloads and external KV transfer.
+
 Run host checks:
 
 ```bash
@@ -186,8 +207,9 @@ The host suite passed 150 tests (two hardware-only transform cases excluded).
 
 Validated shapes use C=8192, one or two active requests, four allocated slots,
 32K cache capacity, starts of 0 and 8192, and valid lengths 31, 32, 33, 1023,
-1024, 1025, 1055 and 8192. Larger packs and other chunk sizes have not been
-hardware-validated; the existing `GEMMA4_ACTIVATIONS_DRAM_ONLY=1` option is
+1024, 1025, 1055 and 8192. Numerical comparisons have not covered larger packs
+or other chunk sizes; the perf-only test also exercises three/four-request packs
+without output comparisons. The existing `GEMMA4_ACTIVATIONS_DRAM_ONLY=1` option is
 available when activation storage exceeds L1 capacity.
 
 Medians of three steady-state replays, with both requests starting at zero.
