@@ -234,7 +234,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
     if (rtoptions.get_enable_fabric_bw_telemetry() || this->arch == tt::ARCH::BLACKHOLE) {
         // Avoid a bug on BH, always allocate the space for the telemetry buffer
         this->perf_telemetry_buffer_address = next_l1_addr;
-        next_l1_addr += 32;
+        next_l1_addr += perf_telemetry_buffer_size;
     }
 
     // Allocate code profiling buffer (conditionally enabled)
@@ -251,10 +251,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
     // Allocate channel trimming capture buffer (conditionally enabled)
     if (rtoptions.get_enable_channel_trimming_capture()) {
         this->datapath_usage_l1_address = next_l1_addr;
-        this->datapath_usage_buffer_size = sizeof(tt::tt_fabric::FabricDatapathUsageL1Results<
-                                                  true,
-                                                  builder_config::MAX_NUM_VCS,
-                                                  builder_config::num_max_sender_channels>);
+        this->datapath_usage_buffer_size = sizeof(ChannelTrimmingOverrides);
         next_l1_addr += this->datapath_usage_buffer_size;
         next_l1_addr = tt::align(next_l1_addr, eth_word_l1_alignment);
     } else {
@@ -1430,9 +1427,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
 FabricRouterDiagnosticBufferMap FabricEriscDatamoverConfig::get_telemetry_and_metadata_buffer_map() const {
     FabricRouterDiagnosticBufferMap map;
 
-    // Perf telemetry: fixed 32-byte buffer
     if (perf_telemetry_buffer_address != 0) {
-        map.perf_telemetry = {perf_telemetry_buffer_address, 32};
+        map.perf_telemetry = {perf_telemetry_buffer_address, perf_telemetry_buffer_size};
     }
 
     // Code profiling: size from timer type count

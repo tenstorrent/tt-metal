@@ -33,6 +33,8 @@
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
@@ -44,6 +46,8 @@ namespace {
 using json = nlohmann::json;
 
 const ControlPlane& control_plane() { return tt::tt_metal::MetalContext::instance().get_control_plane(); }
+
+const FabricBuilderContext& builder_context() { return control_plane().get_fabric_context().get_builder_context(); }
 
 // ============ Helpers ============
 
@@ -330,7 +334,8 @@ void check_router_blocks(const std::vector<RouterEntry>& routers) {
                 "channels",
                 "intra_chip_downstream_edges",
                 "fields",
-                "eriscs"}));
+                "eriscs",
+                "leftover_l1"}));
         EXPECT_EQ(keys_of(entry.router->at("channels")), (std::set<std::string>{"senders", "receivers"}));
     }
 }
@@ -707,7 +712,12 @@ void expect_ring_buffer(const json& ring, uint32_t channel_buffer_size, bool act
 }
 
 // A field is written as its table entry says: its category and kind, then a region, a stream register or a value.
+// Only an L1 field can be null, as a buffer the builder did not allocate.
 void expect_field(const json& entry, const manifest::RouterField& field) {
+    if (entry.is_null()) {
+        EXPECT_TRUE(std::holds_alternative<manifest::content::L1>(field.content.value));
+        return;
+    }
     EXPECT_EQ(entry.at("category"), lower_enum_name(field.category.value));
     EXPECT_EQ(entry.at("kind"), kind_name(field.content.value));
     std::set<std::string> keys = {"category", "kind"};
@@ -746,10 +756,20 @@ void expect_field(const json& entry, const manifest::RouterField& field) {
     EXPECT_EQ(keys_of(entry), keys);
 }
 
-// Whether `field`'s argument is emitted on this fabric: a 2D-only argument is not emitted in 1D.
+// Whether `field`'s argument is emitted on this fabric: a 2D-only argument is not emitted in 1D, and a capture-only
+// argument only when the builder allocated the channel trimming capture.
 bool is_emitted(const manifest::RouterField& field, bool is_2d) {
     const auto* arg = std::get_if<manifest::NamedArg>(&field.source);
-    return is_2d || arg == nullptr || arg->emitted != manifest::Emitted::FABRIC_2D;
+    if (arg == nullptr) {
+        return true;
+    }
+    switch (arg->emitted) {
+        case manifest::Emitted::ALWAYS: return true;
+        case manifest::Emitted::FABRIC_2D: return is_2d;
+        case manifest::Emitted::CHANNEL_TRIMMING_CAPTURE:
+            return builder_context().get_telemetry_and_metadata_buffer_map().channel_trimming_capture.is_enabled();
+    }
+    return false;
 }
 
 // `fields` holds exactly `table`'s fields emitted on this fabric, each written as its entry says, with a category and
@@ -769,8 +789,10 @@ void expect_fields(
         if (fields.contains(key)) {
             SCOPED_TRACE(key);
             expect_field(fields.at(key), field);
-            EXPECT_TRUE(listed("categories", fields.at(key).at("category")));
-            EXPECT_TRUE(listed("kinds", fields.at(key).at("kind")));
+            if (!fields.at(key).is_null()) {
+                EXPECT_TRUE(listed("categories", fields.at(key).at("category")));
+                EXPECT_TRUE(listed("kinds", fields.at(key).at("kind")));
+            }
         }
     }
     EXPECT_EQ(keys_of(fields), expected_keys);
@@ -1068,6 +1090,105 @@ void check_local_sync(const json& manifest) {
     }
 }
 
+// A diagnostic buffer is where the builder's buffer map puts it, or null when the builder did not allocate it.
+void expect_diagnostic_buffer(const json& field, const FabricRouterDiagnosticBufferMap::BufferRegion& region) {
+    if (!region.is_enabled()) {
+        EXPECT_TRUE(field.is_null()) << field;
+        return;
+    }
+    ASSERT_FALSE(field.is_null());
+    EXPECT_EQ(field.at("address").get<size_t>(), region.l1_address);
+    EXPECT_EQ(field.at("size").get<size_t>(), region.size_bytes);
+}
+
+// The diagnostic buffers are where the builder's buffer map puts them, and the router records a channel trimming
+// capture exactly when the builder allocated one. notify_worker_src is where the builder's config puts it.
+void check_router_diagnostics(const std::vector<RouterEntry>& routers) {
+    const auto& context = builder_context();
+    const auto buffers = context.get_telemetry_and_metadata_buffer_map();
+    const auto notify_address = context.get_fabric_router_config().notify_worker_of_read_counter_update_src_address;
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        const auto& fields = entry.router->at("fields");
+        expect_diagnostic_buffer(fields.at("perf_telemetry"), buffers.perf_telemetry);
+        expect_diagnostic_buffer(fields.at("code_profiling"), buffers.code_profiling);
+        const bool capture = buffers.channel_trimming_capture.is_enabled();
+        EXPECT_EQ(fields.at("channel_trimming_capture_enabled").at("value").get<bool>(), capture);
+        if (capture) {
+            expect_diagnostic_buffer(fields.at("channel_trimming_capture"), buffers.channel_trimming_capture);
+        }
+        const auto& notify = fields.at("notify_worker_src");
+        if (notify_address == 0) {
+            EXPECT_TRUE(notify.is_null()) << notify;
+        } else {
+            ASSERT_FALSE(notify.is_null());
+            EXPECT_EQ(notify.at("address").get<size_t>(), notify_address);
+        }
+    }
+}
+
+// The addresses of every region under `node` that the manifest marks cleared_by_host.
+void collect_cleared_addresses(const json& node, std::set<size_t>& addresses) {
+    if (!node.is_object()) {
+        return;
+    }
+    if (node.contains("cleared_by_host")) {
+        if (node.at("cleared_by_host").get<bool>()) {
+            addresses.insert(node.at("address").get<size_t>());
+        }
+        return;
+    }
+    for (const auto& [key, child] : node.items()) {
+        collect_cleared_addresses(child, addresses);
+    }
+}
+
+// Every address the host zeroes before launch starts a region the manifest describes as cleared_by_host, and no other
+// region is.
+void check_router_host_cleared(const std::vector<RouterEntry>& routers) {
+    const auto to_clear = builder_context().get_fabric_router_addresses_to_clear();
+    const std::set<size_t> expected(to_clear.begin(), to_clear.end());
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        std::set<size_t> cleared;
+        collect_cleared_addresses(*entry.router, cleared);
+        EXPECT_EQ(cleared, expected);
+    }
+}
+
+// The L1 past the channel buffers runs from the end of the last ring buffer to the end of the ERISC's unreserved L1,
+// which the HAL gives. It is null only when the ring buffers reach that end.
+void check_router_leftover_l1(const std::vector<RouterEntry>& routers) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto core = tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+    const uint64_t l1_end = hal.get_dev_addr(core, tt::tt_metal::HalL1MemAddrType::UNRESERVED) +
+                            hal.get_dev_size(core, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        uint64_t buffers_end = 0;
+        for (const auto& [side, vcs] : entry.router->at("channels").items()) {
+            for (const auto& [vc_key, channels] : vcs.items()) {
+                for (const auto& [ch_key, channel] : channels.items()) {
+                    const auto& ring = channel.at("ring_buffer");
+                    if (!ring.is_null()) {
+                        buffers_end =
+                            std::max(buffers_end, ring.at("address").get<uint64_t>() + ring.at("size").get<uint64_t>());
+                    }
+                }
+            }
+        }
+        const auto& leftover = entry.router->at("leftover_l1");
+        if (leftover.is_null()) {
+            EXPECT_EQ(buffers_end, l1_end);
+            continue;
+        }
+        EXPECT_EQ(keys_of(leftover), k_region_keys);
+        EXPECT_EQ(leftover.at("schema"), "bytes");
+        EXPECT_EQ(leftover.at("address").get<uint64_t>(), buffers_end);
+        EXPECT_EQ(leftover.at("address").get<uint64_t>() + leftover.at("size").get<uint64_t>(), l1_end);
+    }
+}
+
 }  // namespace
 
 // ============ Tests ============
@@ -1127,6 +1248,7 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(lower_enum_name(manifest::FieldCategory::KERNEL_PARAMS), "kernel_params");
     EXPECT_EQ(lower_enum_name(manifest::FieldCategory::FLOW_CONTROL), "flow_control");
     EXPECT_EQ(lower_enum_name(manifest::FieldCategory::CONTROL_INFO), "control_info");
+    EXPECT_EQ(lower_enum_name(manifest::FieldCategory::DIAGNOSTICS), "diagnostics");
 
     EXPECT_EQ(kind_name<manifest::content::L1>(), "l1");
     EXPECT_EQ(kind_name<manifest::content::Stream>(), "stream");
@@ -1198,5 +1320,14 @@ TEST_F(Fabric2DManifestFixture, LocalSync) { check_local_sync(manifest_); }
 
 TEST_F(Fabric1DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(routers_); }
+
+TEST_F(Fabric1DManifestFixture, RouterDiagnostics) { check_router_diagnostics(routers_); }
+TEST_F(Fabric2DManifestFixture, RouterDiagnostics) { check_router_diagnostics(routers_); }
+
+TEST_F(Fabric1DManifestFixture, RouterHostCleared) { check_router_host_cleared(routers_); }
+TEST_F(Fabric2DManifestFixture, RouterHostCleared) { check_router_host_cleared(routers_); }
+
+TEST_F(Fabric1DManifestFixture, RouterLeftoverL1) { check_router_leftover_l1(routers_); }
+TEST_F(Fabric2DManifestFixture, RouterLeftoverL1) { check_router_leftover_l1(routers_); }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
