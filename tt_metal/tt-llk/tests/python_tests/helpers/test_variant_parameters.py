@@ -396,6 +396,22 @@ class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
 
 
 @dataclass
+class SFPU_RELU_MAX_INT_THRESHOLD(TemplateParameter):
+    """Integer threshold for relu_max's vInt branch, as a two's-complement uint32.
+
+    Same ``#ifdef`` arrangement as :class:`SFPU_RELU_MIN_INT_THRESHOLD`; sfpu_operations.h
+    compiles the vInt relu_max branch only when this is set. Takes a *signed* Python int and
+    emits its raw two's-complement bits, the encoding ``_relu_min_`` takes for its vInt
+    branch. The field name is unique for the perf-CSV header gate.
+    """
+
+    relu_max_int_threshold: int = 5
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SFPU_RELU_MAX_INT_THRESHOLD {self.relu_max_int_threshold & 0xFFFFFFFF}u"
+
+
+@dataclass
 class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 
