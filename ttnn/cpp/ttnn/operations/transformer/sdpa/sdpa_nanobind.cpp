@@ -344,7 +344,7 @@ void bind_sdpa(nb::module_& mod) {
         dtype BFLOAT4_B, rounded onto each 16-value group's BFP4 grid with saturation so the
         BFP4 pack is exact.
 
-        Requires Blackhole and tiled, interleaved DRAM, rank-four inputs with minimal tile padding.
+        Requires Blackhole or Wormhole B0 and tiled, interleaved DRAM, rank-four inputs with minimal tile padding.
         Values must be finite (normal or zero); for BFP4 each nonzero group's maximum exponent must
         lie in [-124, 106].
         )doc",
@@ -387,7 +387,7 @@ void bind_sdpa(nb::module_& mod) {
             output_concat_heads (bool): Defaults to `False`. Write the heads side by side as [b x 1 x s x nqh*dh] (what `nlp_concat_heads` produces from the default layout) without that op. Plain SDPA only.
 
 
-        Precision recipes run on Blackhole with an optional additive attn_mask ([1|b, 1|nqh, s, s_kv],
+        Precision recipes run on Blackhole and Wormhole B0 with an optional additive attn_mask ([1|b, 1|nqh, s, s_kv],
         BF16/BFP8/BFP4, or FP32 for BALANCED/ACCURATE) or a causal / sliding-window / windowed key
         range, and take attention_sink and output_concat_heads. Batch and GQA are supported; Q/K/V
         lengths and chunk sizes need not divide each other. Head dim and chunk sizes must be tile
