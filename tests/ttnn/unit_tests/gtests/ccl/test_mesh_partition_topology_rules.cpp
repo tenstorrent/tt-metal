@@ -116,17 +116,17 @@ TEST(MeshPartitionTopologyRules, SameDimOnAnInnerAxisOrAnotherShardOnThePartitio
     const auto inner =
         compute_mesh_partition_topology(nd_label(mesh, {Replicate{}, Shard{kDim}}), mesh, kDim, 0, kRank);
     EXPECT_FALSE(inner.topology.has_value());
-    EXPECT_NE(inner.fallback_reason, nullptr);
+    EXPECT_FALSE(inner.fallback_reason.empty());
     // The outer axis shards dim but the partitioned axis held a different Shard.
     const auto other = compute_mesh_partition_topology(nd_label(mesh, {Shard{kDim}, Shard{2}}), mesh, kDim, 1, kRank);
     EXPECT_FALSE(other.topology.has_value());
-    EXPECT_NE(other.fallback_reason, nullptr);
+    EXPECT_FALSE(other.fallback_reason.empty());
     // A third non-trivial axis would make the collapsed label over-claim N distinct slices.
     const MeshShape mesh3(2, 2, 2);
     const auto third = compute_mesh_partition_topology(
         nd_label(mesh3, {Shard{kDim}, Replicate{}, Replicate{}}), mesh3, kDim, 1, kRank);
     EXPECT_FALSE(third.topology.has_value());
-    EXPECT_NE(third.fallback_reason, nullptr);
+    EXPECT_FALSE(third.fallback_reason.empty());
 }
 
 // Rule 2: a whole-mesh partition of a replicated input is {N},[Shard{dim}] in row-major device order, whether the
@@ -160,7 +160,7 @@ TEST(MeshPartitionTopologyRules, WholeMeshOverwritesShardDimButNotAnotherDim) {
     const auto other_dim =
         compute_mesh_partition_topology(nd_label(mesh, {Shard{2}, Replicate{}}), mesh, kDim, kWholeMesh, kRank);
     EXPECT_FALSE(other_dim.topology.has_value());
-    EXPECT_NE(other_dim.fallback_reason, nullptr);
+    EXPECT_FALSE(other_dim.fallback_reason.empty());
 
     const MeshShape line(1, 8);
     const auto trivial =
@@ -205,7 +205,7 @@ TEST(MeshPartitionTopologyRules, CollapsedShardOnAMultiAxisMeshFallsBack) {
     for (uint32_t axis : {0U, 1U}) {
         const auto result = compute_mesh_partition_topology(collapsed_label(mesh, Shard{2}), mesh, kDim, axis, kRank);
         EXPECT_FALSE(result.topology.has_value()) << "axis " << axis;
-        EXPECT_NE(result.fallback_reason, nullptr) << "axis " << axis;
+        EXPECT_FALSE(result.fallback_reason.empty()) << "axis " << axis;
     }
 }
 
@@ -221,7 +221,7 @@ TEST(MeshPartitionTopologyRules, CollapsedLabelOverFewerDevicesThanTheMeshFallsB
         const auto result = compute_mesh_partition_topology(fewer_shards, mesh, kDim, axis, kRank);
         EXPECT_FALSE(result.topology.has_value())
             << "cluster_axis " << (axis.has_value() ? static_cast<int>(*axis) : -1);
-        EXPECT_NE(result.fallback_reason, nullptr);
+        EXPECT_FALSE(result.fallback_reason.empty());
     }
 }
 
@@ -242,11 +242,11 @@ TEST(MeshPartitionTopologyRules, SubMeshLabelIsPartitionedWithinItsBlockOnlyAlon
 
     const auto across_rows = compute_mesh_partition_topology(row_block, mesh, kDim, 0, kRank);  // 1 < 2
     EXPECT_FALSE(across_rows.topology.has_value());
-    EXPECT_NE(across_rows.fallback_reason, nullptr);
+    EXPECT_FALSE(across_rows.fallback_reason.empty());
 
     const auto whole = compute_mesh_partition_topology(row_block, mesh, kDim, kWholeMesh, kRank);
     EXPECT_FALSE(whole.topology.has_value());
-    EXPECT_NE(whole.fallback_reason, nullptr);
+    EXPECT_FALSE(whole.fallback_reason.empty());
 
     // A {2,2} block at an offset (mesh_offset_override): axis 0 spans the mesh, axis 1 does not.
     const std::vector<MeshCoordinate> block{
@@ -273,12 +273,12 @@ TEST(MeshPartitionTopologyRules, RowMajorReshapeOfTheMeshPartitionsAsAWholeOnly)
     for (uint32_t axis : {0U, 1U}) {
         const auto result = compute_mesh_partition_topology(reshaped, mesh, kDim, axis, kRank);
         EXPECT_FALSE(result.topology.has_value()) << "axis " << axis;
-        EXPECT_NE(result.fallback_reason, nullptr) << "axis " << axis;
+        EXPECT_FALSE(result.fallback_reason.empty()) << "axis " << axis;
     }
     const auto transposed = compute_mesh_partition_topology(
         TensorTopology(MeshShape(4, 2), {Replicate{}, Replicate{}}, row_major_coords(mesh)), mesh, kDim, 1, kRank);
     EXPECT_FALSE(transposed.topology.has_value());
-    EXPECT_NE(transposed.fallback_reason, nullptr);
+    EXPECT_FALSE(transposed.fallback_reason.empty());
 }
 
 // Every emitted label depends on the coordinates agreeing with the partition: the factory picks chunks from the
@@ -295,7 +295,7 @@ TEST(MeshPartitionTopologyRules, LabelWhoseCoordinatesDisagreeWithThePartitionFa
     const auto block_shape_over_row = compute_mesh_partition_topology(
         TensorTopology(MeshShape(2, 2), {Replicate{}, Replicate{}}, row), mesh, kDim, 0, kRank);
     EXPECT_FALSE(block_shape_over_row.topology.has_value());
-    EXPECT_NE(block_shape_over_row.fallback_reason, nullptr);
+    EXPECT_FALSE(block_shape_over_row.fallback_reason.empty());
 
     // A full-mesh N-D label with two coordinates swapped across rows: rule 0 does not look at it (the shape is the
     // mesh's) and rule 1 would carry the coordinates through. Both swapped devices keep column 1, so partitions
@@ -305,10 +305,10 @@ TEST(MeshPartitionTopologyRules, LabelWhoseCoordinatesDisagreeWithThePartitionFa
     const TensorTopology permuted_nd(mesh, {Replicate{}, Replicate{}}, swapped);
     const auto nd_rows = compute_mesh_partition_topology(permuted_nd, mesh, kDim, 0, kRank);
     EXPECT_FALSE(nd_rows.topology.has_value());
-    EXPECT_NE(nd_rows.fallback_reason, nullptr);
+    EXPECT_FALSE(nd_rows.fallback_reason.empty());
     const auto nd_whole = compute_mesh_partition_topology(permuted_nd, mesh, kDim, kWholeMesh, kRank);
     EXPECT_FALSE(nd_whole.topology.has_value());
-    EXPECT_NE(nd_whole.fallback_reason, nullptr);
+    EXPECT_FALSE(nd_whole.fallback_reason.empty());
     EXPECT_TRUE(compute_mesh_partition_topology(permuted_nd, mesh, kDim, 1, kRank).topology.has_value());
 
     // Collapsed labels: rule 3 on a line with reversed coordinates, rule 4 on the 2x4 with the swap above.
@@ -318,11 +318,11 @@ TEST(MeshPartitionTopologyRules, LabelWhoseCoordinatesDisagreeWithThePartitionFa
     const auto rule3 =
         compute_mesh_partition_topology(TensorTopology(MeshShape(8), {Replicate{}}, reversed), line, kDim, 1, kRank);
     EXPECT_FALSE(rule3.topology.has_value());
-    EXPECT_NE(rule3.fallback_reason, nullptr);
+    EXPECT_FALSE(rule3.fallback_reason.empty());
     const TensorTopology permuted_collapsed(MeshShape(8), {Replicate{}}, swapped);
     const auto rule4 = compute_mesh_partition_topology(permuted_collapsed, mesh, kDim, 0, kRank);
     EXPECT_FALSE(rule4.topology.has_value());
-    EXPECT_NE(rule4.fallback_reason, nullptr);
+    EXPECT_FALSE(rule4.fallback_reason.empty());
     EXPECT_TRUE(compute_mesh_partition_topology(permuted_collapsed, mesh, kDim, 1, kRank).topology.has_value());
 }
 
@@ -333,10 +333,10 @@ TEST(MeshPartitionTopologyRules, OutOfRangeClusterAxisOrEmptyLabelLeavesTheUnion
     const auto bad_axis =
         compute_mesh_partition_topology(nd_label(mesh, {Replicate{}, Replicate{}}), mesh, kDim, 2, kRank);
     EXPECT_FALSE(bad_axis.topology.has_value());
-    EXPECT_EQ(bad_axis.fallback_reason, nullptr);
+    EXPECT_TRUE(bad_axis.fallback_reason.empty());
 
     const TensorTopology no_placements(mesh, {}, row_major_coords(mesh));
     const auto empty = compute_mesh_partition_topology(no_placements, mesh, kDim, 1, kRank);
     EXPECT_FALSE(empty.topology.has_value());
-    EXPECT_EQ(empty.fallback_reason, nullptr);
+    EXPECT_TRUE(empty.fallback_reason.empty());
 }

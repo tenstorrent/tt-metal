@@ -6,6 +6,7 @@
 
 #include <variant>
 #include <optional>
+#include <string_view>
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -89,7 +90,7 @@ uint32_t get_cluster_axis_size(const ttnn::Tensor& input_tensor, const std::opti
 // in tests/ttnn/unit_tests/gtests/ccl/test_mesh_partition_topology_rules.cpp). `topology` is nullopt when no
 // TensorTopology can describe the partitioned result; the op then returns {} and launch() keeps the input's label
 // (the framework's union default). `fallback_reason` is set for every fallback, so the op can warn (once per
-// distinct case), and null only for inputs validation rejects right after the hook or that carry no placements.
+// distinct case), and empty only for inputs validation rejects right after the hook or that carry no placements.
 //
 // `dim` is normalised to [0, rank). Shard dims inside the label may be negative or out of range (left behind by
 // rank-changing ops, #52331) and are compared normalised; an out-of-range one counts as not sharding `dim`.
@@ -141,7 +142,7 @@ uint32_t get_cluster_axis_size(const ttnn::Tensor& input_tensor, const std::opti
 // stating chunks the devices do not hold.
 struct MeshPartitionTopology {
     std::optional<tt::tt_metal::TensorTopology> topology;
-    const char* fallback_reason = nullptr;
+    std::string_view fallback_reason;  // always a string literal
 };
 MeshPartitionTopology compute_mesh_partition_topology(
     const tt::tt_metal::TensorTopology& input_topology,

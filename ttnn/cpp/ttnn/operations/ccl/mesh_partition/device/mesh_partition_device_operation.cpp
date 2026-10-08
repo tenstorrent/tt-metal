@@ -6,6 +6,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -115,12 +116,12 @@ using Placement = tt::tt_metal::distributed::MeshMapperConfig::Placement;
 using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
 using Replicate = tt::tt_metal::distributed::MeshMapperConfig::Replicate;
 
-constexpr const char* kCoordsOffAxis =
+constexpr std::string_view kCoordsOffAxis =
     "the label's coordinates do not follow the cluster axis the op partitions by (not a mapper's block)";
 
-MeshPartitionTopology fallback(const char* reason) { return MeshPartitionTopology{std::nullopt, reason}; }
+MeshPartitionTopology fallback(std::string_view reason) { return MeshPartitionTopology{std::nullopt, reason}; }
 
-MeshPartitionTopology label(TensorTopology topology) { return MeshPartitionTopology{std::move(topology), nullptr}; }
+MeshPartitionTopology label(TensorTopology topology) { return MeshPartitionTopology{std::move(topology), {}}; }
 
 // Whether `placement` shards tensor dim `dim`; negative shard dims are normalised by `rank`, out-of-range ones never
 // match.
@@ -142,12 +143,19 @@ uint32_t axis_size(const MeshShape& distribution_shape, size_t axis) {
 // `grid_axis`. The program factory picks each device's chunk from the device's own mesh coordinate, never from the
 // label, so an emitted label is honest only if its coordinates agree (mapper-built labels always do).
 bool coords_follow_axis(
-    const std::vector<MeshCoordinate>& coords, const MeshShape& grid, size_t grid_axis, size_t mesh_axis) {
+    const std::vector<MeshCoordinate>& coords,  // the label's device coordinate per grid point, row-major
+    const MeshShape& grid,                      // the shape `coords` is laid out over
+    size_t grid_axis,                           // the grid axis whose index each device must match
+    size_t mesh_axis) {                         // the physical mesh axis the device coordinate is read on
+    // The grid axis must exist, with exactly one device coordinate per grid point.
     if (grid_axis >= grid.dims() || coords.size() != grid.mesh_size()) {
         return false;
     }
+    // Walk the grid points in row-major order.
     for (size_t flat = 0; flat < coords.size(); ++flat) {
+        // This grid point's index along `grid_axis`: the chunk the label claims it holds.
         const auto grid_index = (flat / grid.get_stride(grid_axis)) % grid[static_cast<int>(grid_axis)];
+        // The device's coordinate on `mesh_axis` is the chunk the program factory gave it; it must match.
         if (coords[flat].dims() <= mesh_axis || coords[flat][static_cast<int32_t>(mesh_axis)] != grid_index) {
             return false;
         }
@@ -187,8 +195,8 @@ bool is_sub_block(const MeshShape& distribution_shape, const MeshShape& mesh_sha
     return true;
 }
 
-// Rule 0: why the label does not describe the devices the partition acts on, or nullptr when it does.
-const char* coverage_violation(
+// Rule 0: why the label does not describe the devices the partition acts on, or empty when it does.
+std::string_view coverage_violation(
     size_t num_placements,
     const MeshShape& distribution_shape,
     const MeshShape& mesh_shape,
@@ -196,18 +204,18 @@ const char* coverage_violation(
     if (num_placements == 1) {
         // Collapsed label: no axes to reason with, so it must cover the whole mesh.
         return distribution_shape.mesh_size() == mesh_shape.mesh_size()
-                   ? nullptr
+                   ? std::string_view{}
                    : "the label covers fewer devices than the mesh the op partitions across";
     }
     if (distribution_shape == mesh_shape) {
-        return nullptr;
+        return {};
     }
     const bool sub_block = is_sub_block(distribution_shape, mesh_shape);
     if (!cluster_axis.has_value()) {
         // Only a row-major reshape of the whole mesh (e.g. {1,8} over 2x4) passes: rule 2 is exact over its coords.
         return (sub_block || distribution_shape.mesh_size() != mesh_shape.mesh_size())
                    ? "a whole-mesh partition reaches devices outside the label"
-                   : nullptr;
+                   : std::string_view{};
     }
     if (!sub_block) {
         return "the label's axes are a reshape of the mesh, not the axes the op partitions along";
@@ -216,7 +224,7 @@ const char* coverage_violation(
         distribution_shape[static_cast<int>(*cluster_axis)] != mesh_shape[static_cast<int>(*cluster_axis)]) {
         return "the partition groups along the cluster axis reach devices outside the label";
     }
-    return nullptr;  // sub-mesh block spanning complete partition groups: rule 1 applies within it
+    return {};  // sub-mesh block spanning complete partition groups: rule 1 applies within it
 }
 
 // Whether a non-trivial axis of the label shards a tensor dim other than `dim` (rule 2's restriction).
@@ -265,8 +273,8 @@ std::optional<size_t> other_nontrivial_axis_sharding_dim(
 bool same_dim_shards_collapse_row_major(
     const ttsl::SmallVector<Placement>& placements,
     const MeshShape& distribution_shape,
-    size_t same_dim_axis,
-    size_t partitioned_axis,
+    size_t same_dim_axis,     // a different axis that already splits the same tensor dimension dim before the op runs
+    size_t partitioned_axis,  // the cluster axis, the axis the op splits along now
     uint32_t dim,
     uint32_t rank) {
     const Placement& partitioned_placement = placements[partitioned_axis];
@@ -278,7 +286,7 @@ bool same_dim_shards_collapse_row_major(
             other_axes_trivial = false;
         }
     }
-    return same_dim_axis < partitioned_axis && partitioned_axis_composes && other_axes_trivial;
+    return (same_dim_axis < partitioned_axis) && partitioned_axis_composes && other_axes_trivial;
 }
 
 // Rule 1 (N-D label, cluster axis a): Shard{dim} on a, and 1(i)-(iii) for another axis that also shards dim.
@@ -287,7 +295,7 @@ MeshPartitionTopology partition_nd_label(
     const auto& placements = input_topology.placements();
     const auto& distribution_shape = input_topology.distribution_shape();
     if (partitioned_axis >= placements.size()) {
-        return fallback(nullptr);  // validation rejects this cluster_axis right after the hook
+        return fallback({});  // validation rejects this cluster_axis right after the hook
     }
     if (!coords_follow_axis(input_topology.mesh_coords(), distribution_shape, partitioned_axis, partitioned_axis)) {
         return fallback(kCoordsOffAxis);
@@ -342,10 +350,11 @@ MeshPartitionTopology compute_mesh_partition_topology(
     const auto& placements = input_topology.placements();
     const auto& distribution_shape = input_topology.distribution_shape();
     if (placements.empty()) {
-        return fallback(nullptr);
+        return fallback({});
     }
     // Rule 0: the label must describe the devices the partition acts on.
-    if (const char* reason = coverage_violation(placements.size(), distribution_shape, mesh_shape, cluster_axis)) {
+    if (const auto reason = coverage_violation(placements.size(), distribution_shape, mesh_shape, cluster_axis);
+        !reason.empty()) {
         return fallback(reason);
     }
     // Rule 2: whole-mesh partition.
@@ -387,7 +396,7 @@ std::vector<tt::tt_metal::TensorTopology> MeshPartitionDeviceOperation::compute_
     if (result.topology.has_value()) {
         return {*result.topology};
     }
-    if (result.fallback_reason != nullptr) {
+    if (!result.fallback_reason.empty()) {
         // Once per distinct (dim, cluster_axis, distribution shape, reason): the hook runs on every launch, program
         // cache hits included, and the framework silenced its own union-rule warnings for that spam (#25340).
         static std::mutex warned_mutex;
