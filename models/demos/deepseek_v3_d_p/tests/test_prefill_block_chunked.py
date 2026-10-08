@@ -34,7 +34,8 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
@@ -139,9 +140,16 @@ def _load_trace_tensor(trace_dir: Path, layout: str, subdir: str, layer: int, ke
         return f.get_tensor(key)[:total_len].to(torch.float32)
 
 
+def _single_file_has_key(trace_dir: Path, subdir: str, layer: int, key: str) -> bool:
+    with safe_open(trace_dir / subdir / f"layer_{layer}.safetensors", framework="pt") as f:
+        return key in f.keys()
+
+
 def _load_optional(trace_dir: Path, layout: str, subdir: str, layer: int, key: str, total_len: int):
-    """None if a chunked_group_a_v1 capture never recorded this MLA intermediate; single_file always loads."""
-    if layout == "chunked_group_a_v1" and not _chunked_has_key(trace_dir, subdir, layer, key):
+    """None if the capture never recorded this MLA intermediate (e.g. the Mistral single_file golden
+    stores only decoder_output and kv_post_transform)."""
+    has_key = _chunked_has_key if layout == "chunked_group_a_v1" else _single_file_has_key
+    if not has_key(trace_dir, subdir, layer, key):
         logger.warning(f"golden lacks {key} -- skipping its comparison(s)")
         return None
     return _load_trace_tensor(trace_dir, layout, subdir, layer, key, total_len)
@@ -1127,6 +1135,60 @@ def test_kimi_prefill_block_chunked_padded(
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_block_padded(
         variant, config_only, mesh_device, weight_cache_path, splits, layer_idx, gate_fallback_mode, num_links, topology
+    )
+
+
+# ---------------------------------------------------------------------------
+# Mistral Small 4 chunked block test
+# ---------------------------------------------------------------------------
+# All 36 layers are MoE (first_k_dense_replace = 0), so there is no dense row.
+# GPT_DEVICE rather than DEVICE_FP32: moe_grouped_topk.cpp accepts only sigmoid and
+# sqrtsoftplus; Mistral's softmax -> top-4 -> renormalize router cannot be expressed by
+# sigmoid affinity, and DEVICE_FP32 would silently apply the wrong routing weights.
+@pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
+@pytest.mark.parametrize(
+    "layer_idx, gate_fallback_mode",
+    [(1, GateComputeMode.GPT_DEVICE)],
+    ids=["moe-gate_gpt"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            fabric2d_device_params(fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 targets the Blackhole galaxy")
+@pytest.mark.timeout(1800)
+def test_mistral4_prefill_block_chunked(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    weight_cache_path,
+    n_chunks,
+    layer_idx,
+    gate_fallback_mode,
+    num_links,
+):
+    topology = per_axis_topology(device_params["fabric_config"])
+    run_chunked_block(
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        n_chunks,
+        layer_idx,
+        gate_fallback_mode,
+        num_links,
+        topology,
     )
 
 

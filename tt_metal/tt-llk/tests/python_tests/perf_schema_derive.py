@@ -314,11 +314,34 @@ def _perf_test_sources(quasar: bool):
     """Yield (catalog_key, source_path) for each perf test.
 
     WH/BH: perf_*.py at the python_tests root, derived from itself unless the
-    sibling test_*.py holds create_test_or_perf_config and the wrapper does not.
+    sibling test_*.py or a runner imported by that sibling holds
+    create_test_or_perf_config and the wrapper does not.
     Quasar: quasar/perf_*_quasar.py wrappers, derived from the sibling
     test_*_quasar.py (perf_ -> test_) that actually calls PerfConfig and holds the
     templates/runtimes lists. Keyed by the wrapper name a developer runs.
     """
+
+    def imported_runner_source(tree):
+        if tree is None:
+            return None
+        for node in tree.body:
+            if not isinstance(node, ast.ImportFrom) or not node.module:
+                continue
+            if not any(
+                alias.name.startswith(("run_", "_run_")) for alias in node.names
+            ):
+                continue
+            candidate = ROOT.joinpath(*node.module.split(".")).with_suffix(".py")
+            if not candidate.exists():
+                continue
+            try:
+                candidate_tree = ast.parse(candidate.read_text())
+            except SyntaxError:
+                continue
+            if _has_perfconfig(candidate_tree):
+                return candidate
+        return None
+
     if quasar:
         for wrapper in sorted(ROOT.glob(f"{QUASAR_DIR}/perf_*_quasar.py")):
             sibling = wrapper.parent / wrapper.name.replace("perf_", "test_", 1)
@@ -343,6 +366,12 @@ def _perf_test_sources(quasar: bool):
                     and (not perf_tree or not _has_perfconfig(perf_tree))
                 ):
                     source = sibling
+                elif not perf_tree or not _has_perfconfig(perf_tree):
+                    source = (
+                        imported_runner_source(sibling_tree)
+                        or imported_runner_source(perf_tree)
+                        or source
+                    )
             yield path.stem, source
 
 

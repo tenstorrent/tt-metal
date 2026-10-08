@@ -600,6 +600,7 @@ from ttnn.operations.transformer import (
     ChunkGdnMonoProgramConfig,
     ChunkGdnPhasedProgramConfig,
     ChunkGdnFusedProgramConfig,
+    ChunkGdnWyInverse,
 )
 
 transformer.SparseKVFormat = SparseKVFormat

@@ -630,8 +630,8 @@ void RunFullBarrierWritesSingleCore(
     fixture->RunProgram(mesh_device, workload);
     ReadMeshDeviceProfilerResults(*mesh_device);
 
-    for (IDevice* device : mesh_device->get_devices()) {
-        EXPECT_FALSE(fixture->has_unflushed_write_issue(device->id(), writer_virtual, 0))
+    for (auto device_id : mesh_device->get_device_ids()) {
+        EXPECT_FALSE(fixture->has_unflushed_write_issue(device_id, writer_virtual, 0))
             << "A full barrier must flush pending writes by kernel end; the FULL_BARRIER host mapping was not "
                "applied so the writes were falsely reported as unflushed.";
     }
@@ -686,8 +686,8 @@ void RunAtomicBarrierWritesSingleCore(
     fixture->RunProgram(mesh_device, workload);
     ReadMeshDeviceProfilerResults(*mesh_device);
 
-    for (IDevice* device : mesh_device->get_devices()) {
-        EXPECT_TRUE(fixture->has_unflushed_write_issue(device->id(), writer_virtual, 0))
+    for (auto device_id : mesh_device->get_device_ids()) {
+        EXPECT_TRUE(fixture->has_unflushed_write_issue(device_id, writer_virtual, 0))
             << "An atomic barrier must not flush pending writes (writes use a NIU counter separate from atomics); "
                "the writes should still be reported as unflushed at kernel end.";
     }

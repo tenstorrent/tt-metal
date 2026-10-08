@@ -20,12 +20,26 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/dfb_binding_token.h"
 #include "experimental/kernel_args.h"
+#include "swiglu_sfpu.hpp"
+
+// Quasar: the packer's destination buffer descriptor (BFD) is baked in by the last PACK init;
+// pack_reconfig_data_format only reprograms the format gasket, and none of the inits this kernel
+// uses (matmul_block_init, copy_init, add_bcast_rows_init, mul_*_init, add_init) carries a PACK step
+// on Quasar. So every switch of the pack destination (intermediate <-> out) must be followed by an
+// explicit pack_init, or the tiles land in the previous destination's ring. WH/BH: their inits /
+// pack_reconfig_data_format retarget the packer themselves, so this is a no-op there.
+inline void retarget_packer([[maybe_unused]] uint32_t ocb) {
+#ifdef ARCH_QUASAR
+    pack_init(ocb);
+#endif
+}
 
 void copy_and_pack_block(
     DFBBindingToken in_dfb, DFBBindingToken out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     DataflowBuffer dfb_out(out_dfb);
     reconfig_data_format_srca(in_dfb);
     pack_reconfig_data_format(out_dfb);
+    retarget_packer(out_dfb);
     copy_init(in_dfb);
     uint32_t fused_act_dst_id = 0;
 
@@ -74,6 +88,7 @@ void swiglu_block(
     reconfig_data_format_srca(in_dfb);
 #endif
     pack_reconfig_data_format(out_dfb);
+    retarget_packer(out_dfb);
 
     constexpr uint32_t GATE_DST = 0;
     constexpr uint32_t UP_DST = 1;
@@ -112,6 +127,13 @@ void swiglu_block(
 }
 #endif  // FUSE_SWIGLU
 
+#ifdef FUSE_BIAS
+// Only compiled when bound: it is a plain (non-template) function, so without this guard its
+// add_tiles_bcast<ROW> is instantiated even on the bias-less path. On Quasar that instantiation fails
+// to build -- bcast.h::any_tiles_bcast forwards the kernel's MATH_FIDELITY (HiFi2 here) into an
+// ELWADD, and the Quasar LLK static_asserts "Math fidelity must be LoFi for non-ELWMUL ops"
+// (llk_math_binary_api.h). The guard is codegen-neutral on WH/BH (the function was unused there).
+// NOTE: a Quasar FUSE_BIAS build still hits that assert -- compute-API (bcast.h) item, see the report.
 // For caller: if FUSE_TERNARY defined then out_dfb == intermediate_dfb
 /**
  * Add bias to input block
@@ -130,6 +152,7 @@ void add_bias_block(
     DataflowBuffer dfb_out(out_dfb);
     reconfig_data_format(in_dfb, bias_dfb);
     pack_reconfig_data_format(out_dfb);
+    retarget_packer(out_dfb);
     add_bcast_rows_init(in_dfb, bias_dfb);
     uint32_t fused_act_dst_id = 0;
 
@@ -150,6 +173,7 @@ void add_bias_block(
         dfb_out.push_back(N_block_tiles);
     }
 }
+#endif  // FUSE_BIAS
 
 void add_bias_and_addcmul_block(
     DFBBindingToken intermediate_dfb,
@@ -185,6 +209,7 @@ void add_bias_and_addcmul_block(
 
     reconfig_data_format(intermediate_dfb, bias_dfb);
     pack_reconfig_data_format(intermediate_dfb);
+    retarget_packer(intermediate_dfb);
     add_bcast_rows_init(intermediate_dfb, bias_dfb);
 
     // Wait for ALL input data ONCE at the beginning
@@ -214,6 +239,9 @@ void add_bias_and_addcmul_block(
 
     // Restore intermediate_dfb to ready (+ sync packer/unpacker)
     dfb_intermediate.reserve_back(out_block_num_tiles);
+    // TEN-4746: Quasar orders a PUSH after its WAIT_FREE only across a real packer op; dummy_pack is
+    // the no-write PACR provided for exactly this reserve->push idiom (no-op on WH/BH).
+    dummy_pack(intermediate_dfb);
     dfb_intermediate.push_back(out_block_num_tiles);
 #endif  // FUSE_BIAS
 
@@ -233,15 +261,12 @@ void add_bias_and_addcmul_block(
 
         reconfig_data_format(intermediate_dfb, ternary_b_dfb);
         pack_reconfig_data_format(intermediate_dfb);
+        retarget_packer(intermediate_dfb);
 #ifndef TERNARY_B_IS_FLOAT32
         mul_bcast_rows_init(intermediate_dfb, ternary_b_dfb);
 #else
-        // Full re-arm (hw_configure + pack_dest/math_pack_sync), matching the pre-cleanup
-        // 2-arg unary_bcast_init(ternary_b_dfb, intermediate_dfb); this runs after matmul_blocks
-        // regardless of FUSE_BIAS, so a plain reconfig would drop the MATH<->PACK DST re-arm.
-        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
-        // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-        compute_kernel_hw_startup(ternary_b_dfb, intermediate_dfb);
+        // ternary_b_dfb is bound UnpackToSrc, so unary_bcast reads it through SrcB, which the
+        // reconfig above sets.
         unary_bcast_init<BroadcastType::ROW>(ternary_b_dfb);
 #endif  // TERNARY_B_IS_FLOAT32
 
@@ -256,9 +281,7 @@ void add_bias_and_addcmul_block(
                 mul_tiles_bcast<BroadcastType::ROW>(intermediate_dfb, ternary_b_dfb, tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
-                // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
-                // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-                compute_kernel_hw_startup(ternary_b_dfb, intermediate_dfb);
+                // copy_init below retargets the unpacker, so re-init per tile.
                 unary_bcast_init<BroadcastType::ROW>(ternary_b_dfb);
                 unary_bcast<BroadcastType::ROW>(ternary_b_dfb, n, TERNARY_B_DST_ID);
 
@@ -285,6 +308,7 @@ void add_bias_and_addcmul_block(
         // === NO BROADCAST: row-by-row, wait/pop per M row ===
         reconfig_data_format(intermediate_dfb, ternary_b_dfb);
         pack_reconfig_data_format(intermediate_dfb);
+        retarget_packer(intermediate_dfb);
 #ifndef TERNARY_B_IS_FLOAT32
         mul_init(intermediate_dfb, ternary_b_dfb);
 #endif
@@ -328,12 +352,14 @@ void add_bias_and_addcmul_block(
 
     // 'refill' intermediate_dfb (also synchronize packer/unpacker)
     dfb_intermediate.reserve_back(out_block_num_tiles);
+    dummy_pack(intermediate_dfb);  // TEN-4746, see above
     dfb_intermediate.push_back(out_block_num_tiles);
 
     dfb_intermediate.wait_front(out_block_num_tiles);
 
     reconfig_data_format(intermediate_dfb, ternary_a_dfb);
     pack_reconfig_data_format(out_dfb);
+    retarget_packer(out_dfb);
     add_init(intermediate_dfb, ternary_a_dfb);
 
     tile_id = 0;
@@ -418,6 +444,94 @@ void matmul_blocks(
     }
 }
 
+// The last K block of a fused-SwiGLU output block. Each subblock accumulates the last K block from zero in DST, then
+// adds its partial sums over K blocks 0..K-2 (packer-L1-accumulated in the intermediate) with one dest-reuse add, the
+// same rounding order as the packer's L1 accumulation. The PACK thread then applies silu(gate) * up to every gate/up
+// pair in its DST half and packs the results straight into out: the SFPU work overlaps the math thread's next
+// subblock, and no epilogue pass re-reads the intermediate (which cost ~2100 cycles per output tile on the math
+// thread). The out tiles land row-major in a half-width block, as swiglu_block writes them. block_float_output selects
+// the cheaper sigmoid (swiglu_sfpu.hpp).
+template <bool block_float_output>
+void matmul_blocks_swiglu(
+    const DFBBindingToken in0_dfb,
+    const DFBBindingToken in1_dfb,
+    const DFBBindingToken interm_dfb,
+    const DFBBindingToken out_dfb,
+    const uint32_t M_block_tiles,
+    const uint32_t N_block_tiles,
+    const uint32_t full_N_block_tiles,
+    const uint32_t K_block_tiles,
+    const uint32_t subblock_h,
+    const uint32_t subblock_w,
+    const bool add_partials) {
+    const uint32_t out_full_N_block_tiles = full_N_block_tiles >> 1;
+    uint32_t in0_index_offset = 0;
+    for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
+        uint32_t in1_index_offset = 0;
+        for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
+            tile_regs_acquire();
+            uint32_t in0_index = in0_index_offset;
+            uint32_t in1_index = in1_index_offset;
+            for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
+                matmul_block(
+                    in0_dfb,
+                    in1_dfb,
+                    in0_index,
+                    in1_index,
+                    0,
+                    false /*transpose*/,
+                    subblock_w,
+                    subblock_h,
+                    K_block_tiles);
+                in0_index++;
+                in1_index += full_N_block_tiles;
+            }
+            if (add_partials) {
+                // DST -> SrcB, partial-sum tile -> SrcA
+                reconfig_data_format_srca(in1_dfb, interm_dfb);
+                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(interm_dfb);
+                uint32_t dst = 0;
+                for (uint32_t h = 0; h < subblock_h; h++) {
+                    for (uint32_t w = 0; w < subblock_w; w++) {
+                        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                            interm_dfb, (M_start + h) * full_N_block_tiles + N_start + w, dst++);
+                    }
+                }
+                reconfig_data_format_srca(interm_dfb, in1_dfb);
+                matmul_block_init(in0_dfb, in1_dfb, false /*transpose*/, subblock_w, subblock_h, K_block_tiles);
+            }
+            tile_regs_commit();
+
+            // SFPU on the pack thread, as moe_compute's compute kernel runs its SwiGLU
+            // (ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute.cpp):
+            // tile_regs_wait() that also stalls CFG, so the SETC16 below waits for the math thread's commit
+            PACK(TTI_SEMWAIT(
+                p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                semaphore::t6_sem(semaphore::MATH_PACK),
+                p_stall::STALL_ON_ZERO));
+            // point the SFPU at the packer's half of DST
+            PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+            for (uint32_t h = 0; h < subblock_h; h++) {
+                for (uint32_t w = 0; w < subblock_w; w += 2) {
+                    const uint32_t gate = h * subblock_w + w;
+                    PACK((minimal_matmul_swiglu_tile<block_float_output>(gate, gate + 1, gate)));
+                }
+            }
+            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+            for (uint32_t h = 0; h < subblock_h; h++) {
+                for (uint32_t w = 0; w < subblock_w; w += 2) {
+                    pack_tile<true>(
+                        h * subblock_w + w, out_dfb, (M_start + h) * out_full_N_block_tiles + ((N_start + w) >> 1));
+                }
+            }
+            tile_regs_release();
+
+            in1_index_offset += subblock_w;
+        }
+        in0_index_offset += subblock_h * K_block_tiles;
+    }
+}
+
 void kernel_main() {
     constexpr auto K_num_blocks = get_arg(args::K_num_blocks);
     constexpr auto M_block_tiles = get_arg(args::M_block_tiles);
@@ -427,6 +541,9 @@ void kernel_main() {
     constexpr auto N_blocks_per_core = get_arg(args::N_blocks_per_core);
     constexpr auto subblock_h = get_arg(args::subblock_h);
     constexpr auto subblock_w = get_arg(args::subblock_w);
+    // SwiGLU without a bias, applied on the pack thread in each output block's last K block
+    constexpr bool swiglu_in_k_loop = get_arg(args::swiglu_in_k_loop) == 1;
+    constexpr bool swiglu_block_float_output = get_arg(args::swiglu_block_float_output) == 1;
 
     const auto M_start_tile = get_arg(args::M_start_tile);
     const auto M_end_tile = get_arg(args::M_end_tile);
@@ -460,6 +577,9 @@ void kernel_main() {
 #endif
 
     matmul_init(dfb::in0, dfb::in1);
+    if constexpr (swiglu_in_k_loop) {
+        PACK((minimal_matmul_swiglu_tile_init()));  // once: nothing else on the pack thread reprograms the SFPU
+    }
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -491,6 +611,7 @@ void kernel_main() {
             // configured for the previous output stage's operands (see #55052).
             reconfig_data_format(dfb::in1, dfb::in0);
             pack_reconfig_data_format(dfb::intermediate);
+            retarget_packer(dfb::intermediate);
             matmul_block_init(
                 dfb::in0,
                 dfb::in1,
@@ -504,16 +625,43 @@ void kernel_main() {
                 dfb_in0.wait_front(in0_block_num_tiles);
                 dfb_in1.wait_front(in1_block_num_tiles);
 
-                matmul_blocks(
-                    dfb::in0,
-                    dfb::in1,
-                    dfb::intermediate,
-                    current_M_block_tiles,
-                    current_N_block_tiles,
-                    N_block_tiles,
-                    K_block_tiles,
-                    current_subblock_h,
-                    current_subblock_w);
+                if (swiglu_in_k_loop && k_block == K_num_blocks - 1) {
+                    if (K_num_blocks > 1) {  // publish the partial sums of K blocks 0..K-2 for the add
+                        dfb_intermediate.push_back(out_block_num_tiles);
+                        dfb_intermediate.wait_front(out_block_num_tiles);
+                    }
+                    pack_reconfig_l1_acc(0);
+                    pack_reconfig_data_format(dfb::out);
+                    // SwiGLU collapses the interleaved gate/up block to half its N width.
+                    dfb_out.reserve_back(out_block_num_tiles >> 1);
+                    matmul_blocks_swiglu<swiglu_block_float_output>(
+                        dfb::in0,
+                        dfb::in1,
+                        dfb::intermediate,
+                        dfb::out,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w,
+                        K_num_blocks > 1);
+                    dfb_out.push_back(out_block_num_tiles >> 1);
+                    if (K_num_blocks > 1) {
+                        dfb_intermediate.pop_front(out_block_num_tiles);
+                    }
+                } else {
+                    matmul_blocks(
+                        dfb::in0,
+                        dfb::in1,
+                        dfb::intermediate,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w);
+                }
 
                 if (k_block == K_num_blocks - 1) {
                     /**
@@ -535,13 +683,18 @@ void kernel_main() {
                 }
             }
 
-            dfb_intermediate.push_back(out_block_num_tiles);
+            if constexpr (!swiglu_in_k_loop) {
+                dfb_intermediate.push_back(out_block_num_tiles);
+            }
             pack_reconfig_l1_acc(0);
 
-#ifdef FUSE_SWIGLU
-            // SwiGLU collapses the interleaved gate/up block to half its N width.
-            dfb_out.reserve_back(out_block_num_tiles >> 1);
-            dfb_intermediate.wait_front(out_block_num_tiles);
+            if constexpr (swiglu_in_k_loop) {
+                // SwiGLU was applied in the last K block (matmul_blocks_swiglu).
+            } else {
+#if defined(FUSE_SWIGLU)
+                // With a bias: SwiGLU collapses the interleaved gate/up block to half its N width.
+                dfb_out.reserve_back(out_block_num_tiles >> 1);
+                dfb_intermediate.wait_front(out_block_num_tiles);
 #ifdef FUSE_BIAS
             dfb_in2.wait_front(N_block_tiles);
 #endif
@@ -585,6 +738,7 @@ void kernel_main() {
                 N_block_tiles,
                 broadcast_ternary_b);
 #endif  // FUSE_TERNARY
+            }
         }
     }
 }

@@ -78,7 +78,7 @@ ttnn::Tensor sparse_sdpa(
     auto kernel_config = init_device_compute_kernel_config(
         tt::tt_metal::hal::get_arch(),
         compute_kernel_config,
-        /*default_fidelity=*/MathFidelity::HiFi2,
+        /*default_fidelity=*/tt::tt_metal::MathFidelity::HiFi2,
         /*default_approx_mode=*/true,
         /*default_fp32_acc=*/any_fp8,
         /*default_l1_acc=*/false);

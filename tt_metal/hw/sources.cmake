@@ -7,6 +7,7 @@ set(HW_JIT_API_HEADERS
     inc/api/remote_circular_buffer.h
     inc/api/semaphore.h
     inc/api/socket_api.h
+    inc/api/tt_uva.h
     inc/api/dataflow/dataflow_api.h
     inc/api/debug/assert.h
     inc/api/debug/checkpoint.h
@@ -206,6 +207,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/tilize.h
     inc/api/compute/topk.h
     inc/api/compute/transpose.h
+    inc/api/compute/triangle_solve.h
     inc/api/compute/transpose_dest.h
     inc/api/compute/transpose_wh.h
     inc/api/compute/transpose_wh_dest.h
