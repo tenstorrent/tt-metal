@@ -64,14 +64,13 @@ void kernel_main() {
     constexpr uint32_t cb_v_cache = get_compile_time_arg_val(ct::CB_V_CACHE);
     constexpr uint32_t cb_slot = get_compile_time_arg_val(ct::CB_SLOT);
     // cb_slot depth = blocks the reader may run ahead of compute, so a miss's DRAM read overlaps the previous
-    // block's math.
+    // block's math. At depth 2 compute may still be reading the previous block's slot once reserve_back(cb_slot)
+    // returns, so that one slot is never the victim; at depth 1 there is no such slot and the check is compiled out.
     constexpr uint32_t KV_CACHE_SLOT_DEPTH = get_compile_time_arg_val(ct::KV_CACHE_SLOT_DEPTH);
-    // Slots compute may still be reading once reserve_back(cb_slot) returns; the busy scan is compiled out at depth 1.
-    constexpr uint32_t KV_CACHE_INFLIGHT = KV_CACHE_SLOT_DEPTH > 1 ? KV_CACHE_SLOT_DEPTH - 1 : 1;
-    // The victim search skips the in-flight slots, so it terminates only if some slot is never in flight.
+    static_assert(KV_CACHE_SLOT_DEPTH <= 2, "a deeper cb_slot queue would need more than one protected slot");
     static_assert(
-        KV_CACHE_SLOTS == 0 || KV_CACHE_SLOT_DEPTH == 1 || KV_CACHE_INFLIGHT < KV_CACHE_SLOTS,
-        "cb_slot depth must leave at least one slot outside the in-flight set");
+        KV_CACHE_SLOTS == 0 || KV_CACHE_SLOT_DEPTH == 1 || KV_CACHE_SLOTS >= 2,
+        "depth 2 needs a second slot to evict into");
 
     // K/V use RuntimeTensorShape so T can vary without recompilation.
     constexpr auto q_args = TensorAccessorArgs<ct::COUNT, 0>();
@@ -123,19 +122,15 @@ void kernel_main() {
     // Block-cache residency: slot s holds logical block kv_cache_bid[s] (sentinel = empty); misses fill the
     // slots round-robin. The cache CBs are reserved whole and never pushed, so slot addresses stay fixed. Any
     // slot assignment is correct -- the cache only changes where the bytes come from -- so the policy is free.
-    // Sizes of 1 are placeholders (no zero-length arrays) for builds that never touch them.
+    // A size of 1 is a placeholder (no zero-length arrays) for builds that never touch it.
     [[maybe_unused]] uint32_t kv_cache_bid[KV_CACHE_SLOTS > 0 ? KV_CACHE_SLOTS : 1];
-    [[maybe_unused]] uint32_t kv_rr_next = 0;                  // round-robin cursor: the next victim candidate
-    [[maybe_unused]] uint32_t kv_inflight[KV_CACHE_INFLIGHT];  // slots handed to compute in the last depth-1 blocks
-    [[maybe_unused]] uint32_t kv_inflight_pos = 0;
+    [[maybe_unused]] uint32_t kv_rr_next = 0;                 // round-robin cursor: the next victim candidate
+    [[maybe_unused]] uint32_t kv_prev_slot = KV_CACHE_SLOTS;  // slot handed over on the previous block; none yet
     if constexpr (KV_CACHE_SLOTS > 0) {
         k_cache_cb.reserve_back(KV_CACHE_SLOTS * k_tiles_per_block);
         v_cache_cb.reserve_back(KV_CACHE_SLOTS * v_tiles_per_block);
         for (uint32_t s = 0; s < KV_CACHE_SLOTS; ++s) {
             kv_cache_bid[s] = sentinel;
-        }
-        for (uint32_t i = 0; i < KV_CACHE_INFLIGHT; ++i) {
-            kv_inflight[i] = sentinel;
         }
     }
 
@@ -283,24 +278,22 @@ void kernel_main() {
                         break;
                     }
                 }
-                // Reserve before choosing a victim: once this returns compute holds at most depth-1 slot records,
-                // so kv_inflight is exactly the set of slots it may still be reading.
+                // Reserve before choosing a victim: once this returns compute holds at most one older slot record,
+                // the previous block's, so that is the only slot it may still be reading.
                 slot_cb.reserve_back(1);
                 const bool miss = slot == KV_CACHE_SLOTS;
                 if (miss) {
-                    // Round-robin victim that skips the in-flight slots (terminates: INFLIGHT < SLOTS).
-                    for (;;) {
+                    // Round-robin victim; at depth 2 the previous block's slot is skipped and the next one is free
+                    // (SLOTS >= 2).
+                    const auto next_victim = [&]() {
                         const uint32_t cand = kv_rr_next;
                         kv_rr_next = (kv_rr_next + 1 == KV_CACHE_SLOTS) ? 0 : kv_rr_next + 1;
-                        bool busy = false;
-                        if constexpr (KV_CACHE_SLOT_DEPTH > 1) {
-                            for (uint32_t i = 0; i < KV_CACHE_INFLIGHT; ++i) {
-                                busy |= (kv_inflight[i] == cand);
-                            }
-                        }
-                        if (!busy) {
-                            slot = cand;
-                            break;
+                        return cand;
+                    };
+                    slot = next_victim();
+                    if constexpr (KV_CACHE_SLOT_DEPTH > 1) {
+                        if (slot == kv_prev_slot) {
+                            slot = next_victim();
                         }
                     }
                 }
@@ -322,8 +315,7 @@ void kernel_main() {
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_cb.get_write_ptr()) = slot;
                 slot_cb.push_back(1);
                 if constexpr (KV_CACHE_SLOT_DEPTH > 1) {
-                    kv_inflight[kv_inflight_pos] = slot;
-                    kv_inflight_pos = (kv_inflight_pos + 1 == KV_CACHE_INFLIGHT) ? 0 : kv_inflight_pos + 1;
+                    kv_prev_slot = slot;
                 }
             } else {
                 // Streamed path: the reader reserves the whole block, the writer fills the lower half and the

@@ -109,7 +109,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         cb(cb_k_cache, k_tile_bytes, kv_cache_slots * k_tiles_per_block, g.k_df);
         cb(cb_v_cache, v_tile_bytes, kv_cache_slots * v_tiles_per_block, g.v_df);
         // Depth = blocks the reader may run ahead of compute (a miss's DRAM read overlaps the previous block's
-        // math); the reader keeps the last depth-1 handed-over slots off the victim list.
+        // math); at depth 2 the reader keeps the previous block's slot off the victim list.
         cb(cb_slot, message_page_bytes(1), kv_cache_slot_depth, bf);
     }
 
