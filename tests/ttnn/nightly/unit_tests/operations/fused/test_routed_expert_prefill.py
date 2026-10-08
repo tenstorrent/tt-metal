@@ -8,7 +8,7 @@ These tests are intentionally non-gating: they log correctness and latency for
 agents/engineers optimizing the op, but they do not assert thresholds.
 
 Each case is the per-chip call one prefill MoE layer makes for a production
-model, run on a (1, 4) mesh: the routed-expert op owns no CCL, so every chip
+model, run on a single chip: the routed-expert op owns no CCL, so one chip
 sees exactly the production local shapes once the mesh-level constants
 (experts_per_chip, dispatch buffer rows, max tokens per expert) are derived the
 way compute_constants does for the production mesh.
@@ -269,15 +269,15 @@ def _run_once(x, offsets, counts, idx_table, weights, biases, case: RoutedExpert
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("case", _CASES)
 @pytest.mark.parametrize("seed", [0], ids=["seed0"])
 def test_routed_expert_prefill(mesh_device, case: RoutedExpertCase, seed):
-    """Run correctness + perf logging for production routed-expert calls on a (1, 4) mesh.
+    """Run correctness + perf logging for one chip's routed-expert call in a production prefill MoE layer.
 
-    The op has no CCL, so each chip runs an independent production-shaped call: its own local experts,
-    routing counts and dispatch buffer, with device-local shapes identical to one chip of the production
-    mesh in ``case``. The dispatch buffer is ROW_MAJOR bf16 (the dispatch output), weights are bf4 DRAM
+    The op has no CCL, so a single chip runs the production-shaped call: its local experts, routing
+    counts and dispatch buffer match one chip of the production mesh in ``case``. A larger mesh_device
+    also works: each chip then gets its own experts, counts and buffer. The dispatch buffer is ROW_MAJOR bf16 (the dispatch output), weights are bf4 DRAM
     ND-sharded (the Blackhole default) and the compute config is the routed-expert LoFi default, so the
     op takes the same fused tilize path it takes in production. Token counts come from uniform top-k
     routing of the dispatch group's chunk; every expert runs on unified_routed_expert_moe (no hybrid split).
