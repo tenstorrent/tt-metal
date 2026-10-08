@@ -34,12 +34,11 @@
 #include "../adaptive_chunk.hpp"
 #include "../weight_runs.hpp"
 
-// Stage zones for bottleneck runs, off by default so ordinary profiler sweeps do not pay for the
-// extra records. Set UNIFIED_FFN_STAGE_PROFILE=1 before process start; the program factory turns
-// it into this define for all three kernels. Budget: at most 4 records per gate/up K-block and 4 per
-// down K-block on any RISC (plus one per output subblock on the writer) against a 125-per-RISC
-// cap, so one chunk of up to 14 gate/up K-blocks resolves fully; multi-chunk runs overflow.
-#ifdef UNIFIED_FFN_STAGE_PROFILE
+// Stage zones for bottleneck runs, compiled in only under the device profiler
+// (TT_METAL_DEVICE_PROFILER=1 makes the JIT define PROFILE_KERNEL) for all three kernels. Budget: at most 4 records per
+// gate/up K-block and 4 per down K-block on any RISC (plus one per output subblock on the writer) against a
+// 125-per-RISC cap, so one chunk of up to 14 gate/up K-blocks resolves fully; multi-chunk runs overflow.
+#ifdef PROFILE_KERNEL
 #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
 #else
 #define MaybeDeviceZoneScope(name)

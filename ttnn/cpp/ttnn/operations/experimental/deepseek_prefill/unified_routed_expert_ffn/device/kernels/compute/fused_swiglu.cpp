@@ -106,9 +106,8 @@
 #include "api/compute/clamped_silu_glu.h"
 #endif
 
-// Stage zones, off by default; see the reader for how UNIFIED_FFN_STAGE_PROFILE is set and the
-// record budget.
-#ifdef UNIFIED_FFN_STAGE_PROFILE
+// Stage zones, device profiler only; see the reader for the record budget.
+#ifdef PROFILE_KERNEL
 #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
 #else
 #define MaybeDeviceZoneScope(name)
@@ -503,7 +502,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
             //  restore it to the gate/up weight format before resuming the matmul
             //  (SrcB still holds x_cb_id — the BH tilize path never touches it);
             //  then restore the partials packer + L1_ACC state for this block.
-#ifdef UNIFIED_FFN_STAGE_PROFILE
+#ifdef PROFILE_KERNEL
             {
                 // Profile-only: split the reader's x arrival out of the tilize zone below.
                 MaybeDeviceZoneScope("cmp_x_wait");

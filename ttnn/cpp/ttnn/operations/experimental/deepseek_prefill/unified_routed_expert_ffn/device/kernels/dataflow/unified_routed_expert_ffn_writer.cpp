@@ -45,9 +45,8 @@
 
 constexpr uint32_t TILE_HEIGHT = 32;
 
-// Stage zones, off by default; see the reader for how UNIFIED_FFN_STAGE_PROFILE is set and the
-// record budget.
-#ifdef UNIFIED_FFN_STAGE_PROFILE
+// Stage zones, device profiler only; see the reader for the record budget.
+#ifdef PROFILE_KERNEL
 #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
 #else
 #define MaybeDeviceZoneScope(name)
