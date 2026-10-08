@@ -77,6 +77,8 @@ class TtnnConv2D:
         self.kernel_size = conv.kernel_size
         self.padding = conv.padding
         self.stride = conv.stride
+        # conv2d gets no dilation, nor does the slice count below account for one.
+        assert tuple(conv.dilation) == (1, 1), f"TtnnConv2D supports dilation (1, 1) only, got {conv.dilation}"
         self.groups = conv.groups
         math_fidelity = ttnn.MathFidelity.HiFi2 if ttnn.get_arch_name() == "blackhole" else ttnn.MathFidelity.LoFi
         self.compute_config = ttnn.init_device_compute_kernel_config(
