@@ -214,124 +214,130 @@ class DropInVisionTransformer(torch.nn.Module):
 
         Returns:
             torch.Tensor: Output tensor matching the reference model's output shape [total_seq_len, out_hidden_size].
-        """
-        # process pixel_values for each image/video separately
-        all_pixel_values = pixel_values
-        all_grid_thw = grid_thw
-        final_outputs = []
-        # todo)) refactor this code to leverage tt-mesh's ttnn.ShardTensorToMesh(mesh_device, dim=batch_size_dim) for data parallelism
-        for grid_thw in all_grid_thw:
-            # --- pick out the pixel_values for this users' images (grid_thw.prod() pixels) ---
-            pixel_values = all_pixel_values[: grid_thw.prod(), :]
-            all_pixel_values = all_pixel_values[grid_thw.prod() :, :]
-            # --- Preprocessing ---
-            # 1. Calculate total unpadded sequence length
-            grid_thw = grid_thw.unsqueeze(0)
-            unpadded_seq_len = (grid_thw[:, 1] * grid_thw[:, 2]).sum().item()
-            # Calculate padded sequence length (divisible by 2048) required by models/tt_transformers/tt/attention.py::forward_prefill
-            seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
 
-            # 2. Use preprocessing function from reference/functional to get indices and embeddings
+        The vision weights are replicated on every chip of the mesh, so the images are run data-parallel:
+        each pass takes one image per chip (inputs, RoPE tables and window boundaries sharded on dim 0),
+        padded to the longest image of the group. A group with fewer images than chips repeats its last
+        image on the idle chips.
+        """
+        mesh = self.model_args.mesh_device
+        # On a 32-chip Galaxy mesh the vision tower is tensor-parallel over the mesh columns (VisionModelArgs
+        # splits the weights), so images go through one at a time with the hidden dim column-sharded; on
+        # every other mesh the weights are replicated and the chips take one image each.
+        image_parallel = not self.model_args.is_galaxy
+        num_devices = mesh.get_num_devices() if image_parallel else 1
+        # --- per-image host preprocessing ---
+        images = []
+        offset = 0
+        for g in grid_thw:
+            n_pix = int(g.prod())
+            pv = pixel_values[offset : offset + n_pix]
+            offset += n_pix
+            g = g.unsqueeze(0)
+            unpadded_seq_len = int((g[:, 1] * g[:, 2]).sum())
+            # padded sequence length (multiple of 2048) required by models/tt_transformers/tt/attention.py::forward_prefill
+            seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
             cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
                 seq_len=unpadded_seq_len,
-                grid_thw=grid_thw,
+                grid_thw=g,
                 head_dim=self.model_args.vision_head_dim,
                 spatial_merge_size=self.model_args.hf_config.vision_config.spatial_merge_size,
                 window_size=self.model_args.hf_config.vision_config.window_size,
                 patch_size=self.model_args.hf_config.vision_config.patch_size,
             )
-
-            # 3. Use reference model's patch embedding
-            patch_input = self.reference_model.patch_embed(pixel_values)
-
-            # 4. Prepare rotational embeddings (cos, sin) -> pad -> convert to TT tensors
-            cos_orig, sin_orig = position_embeddings
-            cos_orig, sin_orig = convert_rope_style_hf_to_meta(cos_orig, sin_orig)
-            # pad sequence length with cos = 1, sin = 0 (identity rotation)
-            cos_padded = (
-                torch.nn.functional.pad(cos_orig, (0, 0, 0, seq_len - unpadded_seq_len), value=1)
-                .unsqueeze(0)
-                .unsqueeze(0)
+            patch_input = self.reference_model.patch_embed(pv)
+            cos, sin = convert_rope_style_hf_to_meta(*position_embeddings)
+            # window-ordered patches, as the TT model consumes them
+            spatial_merge_unit = self.model_args.hf_config.vision_config.spatial_merge_size**2
+            x = patch_input.reshape(unpadded_seq_len // spatial_merge_unit, spatial_merge_unit, -1)[
+                window_index
+            ].reshape(unpadded_seq_len, -1)
+            images.append(
+                dict(
+                    x=x,
+                    cos=cos,
+                    sin=sin,
+                    cu_seqlens=cu_seqlens,
+                    cu_window_seqlens=cu_window_seqlens,
+                    window_index=window_index,
+                    unpadded=unpadded_seq_len,
+                    padded=seq_len,
+                )
             )
-            sin_padded = (
-                torch.nn.functional.pad(sin_orig, (0, 0, 0, seq_len - unpadded_seq_len), value=0)
-                .unsqueeze(0)
-                .unsqueeze(0)
-            )
-            # Convert to TT tensors on the mesh device
-            cos = ttnn.from_torch(
-                cos_padded,
-                dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
-                layout=ttnn.TILE_LAYOUT,
-                device=self.model_args.mesh_device,
-                # mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
-                # todo)) refactor this code to make the intent clear, which is data parallelism
-                mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
-            )
-            sin = ttnn.from_torch(
-                sin_padded,
-                dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
-                layout=ttnn.TILE_LAYOUT,
-                device=self.model_args.mesh_device,
-                # mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
-                # todo)) refactor this code to make the intent clear, which is data parallelism
-                mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
-            )
-            rot_mats = [cos, sin]
 
-            # 5. Prepare input tensor for the TT model using window_index
-            tt_input = self.tt_model.prepare_input(patch_input, window_index, seq_len)
+        out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
+        # Group images of similar length together so a pass is padded to the longest image of its group only
+        order = sorted(range(len(images)), key=lambda i: images[i]["padded"])
+        final_outputs = [None] * len(images)
+        for group_start in range(0, len(images), num_devices):
+            group_ids = order[group_start : group_start + num_devices]
+            group = [images[i] for i in group_ids]
+            n_real = len(group)
+            group = group + [group[-1]] * (num_devices - n_real)  # idle chips repeat the last image
+            S = max(im["padded"] for im in group)
+            max_unpadded = max(im["unpadded"] for im in group)
+            L = max(im["cu_seqlens"].numel() for im in group)
+            Lw = max(im["cu_window_seqlens"].numel() for im in group)
 
-            # --- TT Model Execution ---
+            def _pad_rows(t, value=0.0):
+                return torch.nn.functional.pad(t, (0, 0, 0, S - t.shape[-2]), value=value)
+
+            def _pad_bounds(b, n):  # repeated trailing boundaries are empty windows (no-ops for the kernel)
+                return torch.cat([b, b[-1:].expand(n - b.numel())]).to(torch.int32)
+
+            x = torch.stack([_pad_rows(im["x"]) for im in group]).unsqueeze(1)  # [N, 1, S, H]
+            cos = torch.stack([_pad_rows(im["cos"], 1.0) for im in group]).unsqueeze(1)  # [N, 1, S, D]
+            sin = torch.stack([_pad_rows(im["sin"], 0.0) for im in group]).unsqueeze(1)
+            cu = torch.stack([_pad_bounds(im["cu_seqlens"], L) for im in group])  # [N, L]
+            cuw = torch.stack([_pad_bounds(im["cu_window_seqlens"], Lw) for im in group])  # [N, Lw]
+            if image_parallel:
+                shard0 = ttnn.ShardTensorToMesh(mesh, dim=0)
+                x_mapper = rope_mapper = bounds_mapper = shard0
+            else:
+                x_mapper = ttnn.ShardTensor2dMesh(mesh, dims=(None, -1), mesh_shape=self.model_args.cluster_shape)
+                rope_mapper = bounds_mapper = ttnn.ReplicateTensorToMesh(mesh)
+            common = dict(device=mesh, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            tt_input = ttnn.from_torch(x, dtype=ttnn.bfloat16, mesh_mapper=x_mapper, **common)
+            rot_mats = [
+                ttnn.from_torch(cos, dtype=ttnn.bfloat16, mesh_mapper=rope_mapper, **common),
+                ttnn.from_torch(sin, dtype=ttnn.bfloat16, mesh_mapper=rope_mapper, **common),
+            ]
+
+            def _bounds_tensor(b):  # per-device 1-D uint32 row, as the windowed SDPA expects
+                t = ttnn.from_torch(
+                    b, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=bounds_mapper
+                )
+                return ttnn.reshape(t, (b.shape[-1],))
+
             tt_out = self.tt_model(
                 tt_input,
-                unpadded_seq_len=unpadded_seq_len,
-                rot_mats=rot_mats,  # Use rot_mats generated in this forward pass
-                cu_seqlens=ttnn.from_torch(
-                    cu_seqlens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.model_args.mesh_device
-                ),
-                cu_window_seqlens=ttnn.from_torch(
-                    cu_window_seqlens,
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=self.model_args.mesh_device,
-                ),
+                unpadded_seq_len=max_unpadded,
+                rot_mats=rot_mats,
+                cu_seqlens=_bounds_tensor(cu),
+                cu_window_seqlens=_bounds_tensor(cuw),
             )
-
-            # deallocate device tensors that are not needed by decode
             ttnn.deallocate(tt_input)
-            ttnn.deallocate(cos)
-            ttnn.deallocate(sin)
             ttnn.deallocate(rot_mats[0])
             ttnn.deallocate(rot_mats[1])
 
-            # --- Postprocessing ---
-            # 1. Convert TT output back to torch tensor
-            tt_output_torch = ttnn.to_torch(
-                tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1)
-            )
-
-            # deallocate TT output
+            # [N, 1, max_unpadded // merge, H_out_padded]
+            if image_parallel:
+                out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+            else:
+                out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=1))[:, 0:1]
             ttnn.deallocate(tt_out)
+            for i, im in enumerate(group[:n_real]):
+                merged_len = im["unpadded"] // spatial_merge_unit
+                o = out[i, 0, :merged_len, :out_hidden_size]
+                final_outputs[group_ids[i]] = o[torch.argsort(im["window_index"]), :]
 
-            # 2. Extract the relevant output part and adjust shape (matching test logic)
-            out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
-            # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims
-            tt_output_torch = tt_output_torch[:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0)
+        if self.debug:
+            logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
+            reference_output = self.reference_model.forward(pixel_values, grid_thw)
+            reference_output = getattr(reference_output, "pooler_output", reference_output)
+            _, pcc = comp_pcc(reference_output, torch.cat(final_outputs, dim=0))
+            logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
 
-            # 3. Apply reverse window indexing to match reference model output order
-            reverse_indices = torch.argsort(window_index)
-            final_output = tt_output_torch[reverse_indices, :]
-
-            if self.debug:
-                logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
-                reference_output = self.reference_model.forward(pixel_values, grid_thw)
-                _, pcc = comp_pcc(reference_output, final_output)
-                logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
-
-            final_outputs.append(final_output)
-
-        # concatenate all the outputs
         return torch.cat(final_outputs, dim=0)
 
 
