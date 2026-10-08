@@ -1,6 +1,6 @@
 # Program Construction folder
 
-There's 3 stages to transfrorm a `ProgramSpec` to a `Program`.
+There are 3 stages to transform a `ProgramSpec` to a `Program`.
 
 1. Structural lookup table build-up.
 2. Validation of `ProgramSpec`
@@ -8,7 +8,7 @@ There's 3 stages to transfrorm a `ProgramSpec` to a `Program`.
 
 ## Program construction overview
 
-Program construction have 3 big steps.
+Program construction has 3 big steps.
 
 1. Processor assignment
 2. Register resource with the `Program`.
@@ -16,11 +16,11 @@ Program construction have 3 big steps.
 
 ## Folder structure
 
-This folder tries to echo the 3 bigs steps of program construction.
+This folder tries to echo the 3 big steps of program construction.
 
 | Directory / file | What it does |
-|---|---|---|
+|---|---|
 | `construct_program.cpp` | Driver function |
 | `processor_assignment/` | Performs RISC-V core allocation (step 1) |
-| `resource/` | Resource orienated organization, echoing `../validation/resource`. Incl. step 2 and 3 |
+| `resource/` | Resource oriented organization, echoing `../validation/resource`. Incl. step 2 and 3 |
 | `kernel_lowering.cpp` | Lowers `KernelSpec` into a `Kernel`, handles CTA/CRTA, collects bindings. Step 3 |

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "impl/context/metal_context.hpp"
