@@ -58,7 +58,7 @@ void kernel_main() {
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     constexpr uint32_t exp_sbw = (Skt <= dst_size) ? Skt : 1;
     constexpr uint32_t hdr_words = 2 + G;
-    constexpr uint32_t kDiagShift = 8;
+    constexpr uint32_t kDiagShift = 16;
 
     CircularBuffer q_in_cb(cb_q_in), k_in_cb(cb_k_in), v_in_cb(cb_v_in), qk_cb(cb_qk_im), scale_cb(cb_scale),
         ctrl_cb(cb_ctrl), corr_cb(cb_corr), vmask_cb(cb_vmask);

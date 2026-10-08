@@ -78,7 +78,7 @@ tt::tt_metal::ProgramDescriptor create_packed_descriptor(
     const uint32_t v_half = v_tiles_per_block >> 1;
     const uint32_t scale_packed = std::bit_cast<uint32_t>(attrs.scale);
     TT_FATAL(H_logical == 16, "packed sparse_sdpa_msa needs 16 query heads per KV group");
-    TT_FATAL(G >= 2 && G <= 8 && G % 2 == 0, "packed group size must be 2, 4, 6 or 8 (got {})", G);
+    TT_FATAL(G >= 2 && G <= 12 && G % 2 == 0, "packed group size must be even and in [2, 12] (got {})", G);
     TT_FATAL(Skt <= 15, "packed sparse_sdpa_msa: block_size {} exceeds the mask-stamp encoding", block_size);
 
     const uint32_t q_elem_bytes = t.q.element_size();
@@ -114,16 +114,17 @@ tt::tt_metal::ProgramDescriptor create_packed_descriptor(
         });
     };
     const auto round_up = [](uint32_t x, uint32_t a) { return ((x + a - 1) / a) * a; };
-    cb(q_row_bytes, H_logical * G, q_rm_df);          // cb_q_rm
-    cb(q_in_tile_bytes, Sqt * DHt, q_in_df);          // cb_q_in
-    cb(k_tile_bytes, 2 * k_tiles_per_block, k_df);    // cb_k_in (2 slots)
-    cb(v_tile_bytes, 2 * v_tiles_per_block, v_df);    // cb_v_in (2 slots)
-    cb(tile_bytes, 1, bf);                            // cb_scale
-    cb(tile_bytes, Skt, bf);                          // cb_qk_im (exactly one row: the hold-wr-ptr wrap)
-    cb(tile_bytes, 1, bf);                            // cb_corr
-    cb(tile_bytes, Sqt * vDHt, bf);                   // cb_out_im
-    cb(out_tile_bytes, Sqt * vDHt, out_df);           // cb_out_rm
-    cb(round_up(3 * G * topk * 4, 32), 1, bf);        // cb_idx
+    cb(q_row_bytes, H_logical * G, q_rm_df);        // cb_q_rm
+    cb(q_in_tile_bytes, Sqt * DHt, q_in_df);        // cb_q_in
+    cb(k_tile_bytes, 2 * k_tiles_per_block, k_df);  // cb_k_in (2 slots)
+    cb(v_tile_bytes, 2 * v_tiles_per_block, v_df);  // cb_v_in (2 slots)
+    cb(tile_bytes, 1, bf);                          // cb_scale
+    cb(tile_bytes, Skt, bf);                        // cb_qk_im (exactly one row: the hold-wr-ptr wrap)
+    cb(tile_bytes, 1, bf);                          // cb_corr
+    cb(tile_bytes, Sqt * vDHt, bf);                 // cb_out_im
+    cb(out_tile_bytes, Sqt * vDHt, out_df);         // cb_out_rm
+    // cb_idx: G block-id rows + union ids + masks (u32), union hash heads/tails (256 u16 each), chain links (u16)
+    cb(round_up(3 * G * topk * 4 + 2 * 256 * 2 + G * topk * 2, 32), 1, bf);
     cb(round_up(4 * (2 + G + G * topk), 32), 2, bf);  // cb_ctrl
     cb(tile_bytes, 1, bf);                            // cb_col_identity
     cb(tile_bytes, 1, bf);                            // cb_recip_scratch

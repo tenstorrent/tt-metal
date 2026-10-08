@@ -44,7 +44,9 @@ def _natural_to_block_cyclic(t, sp, n_chunks, chunk_local):
 @pytest.mark.parametrize("n_chunks", [8])
 @pytest.mark.parametrize("causal", [False, True])  # True: diagonal-block mask must stay on the logical id
 @pytest.mark.parametrize("H", [32, 16], ids=["h32", "h16_packed"])  # 16 heads/KV group -> packed token groups
-def test_msa_native_block_cyclic_sp_gt1_matches_plain(mesh_device, n_chunks, causal, H):
+def test_msa_native_block_cyclic_sp_gt1_matches_plain(mesh_device, n_chunks, causal, H, monkeypatch):
+    if H == 16:
+        monkeypatch.setenv("TT_MSA_PACKED_GROUP", "8")  # packed kernels are opt-in
     rows, cols = tuple(mesh_device.shape)
     sp_axis, sp = 1, cols
     if sp < 2:
@@ -149,7 +151,9 @@ def _diag_plus_past_indices(positions, n_kv, topk, n_past, gen):
     ids=["slab_aligned", "mid_block_straddle", "block_aligned_straddle", "rotated", "rotated_straddle"],
 )
 @pytest.mark.parametrize("H", [32, 16], ids=["h32", "h16_packed"])  # 16 heads/KV group -> packed token groups
-def test_msa_block_cyclic_mid_slab_causal(mesh_device, start_offset, H):
+def test_msa_block_cyclic_mid_slab_causal(mesh_device, start_offset, H, monkeypatch):
+    if H == 16:
+        monkeypatch.setenv("TT_MSA_PACKED_GROUP", "8")  # packed kernels are opt-in
     """Causal sparse_sdpa_msa over a block-cyclic cache when the chunk starts mid-slab (a multi-turn resume at
     a 32-token boundary). Each SP rank's query rows sit at the KV writer's rotated positions, not the linear
     chunk_start + rank*S; the op must derive them (compute_causal_geometry) so the diagonal-block mask lands on
@@ -232,7 +236,9 @@ def test_msa_block_cyclic_mid_slab_causal(mesh_device, start_offset, H):
 @pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4)], indirect=True)  # SP along cols, TP sub-shard along rows
 @pytest.mark.parametrize("start_offset", [0, 32, 288], ids=["slab_aligned", "mid_block_straddle", "rotated_straddle"])
 @pytest.mark.parametrize("H", [32, 16], ids=["h32", "h16_packed"])  # 16 heads/KV group -> packed token groups
-def test_msa_block_cyclic_mid_slab_causal_tp_subshard(mesh_device, start_offset, H):
+def test_msa_block_cyclic_mid_slab_causal_tp_subshard(mesh_device, start_offset, H, monkeypatch):
+    if H == 16:
+        monkeypatch.setenv("TT_MSA_PACKED_GROUP", "8")  # packed kernels are opt-in
     """Causal sparse_sdpa_msa with q seq-sharded over BOTH mesh axes (block_cyclic_chunk_local == tp*S): device
     (tp r, sp c) holds rows [r*S, (r+1)*S) of SP rank c's chunk_local rotated rows. The mask must use that
     [SP, TP] position (as indexer_score does with seq_shard_axes=[SP, TP]), not chunk_start + sp_rank*S."""

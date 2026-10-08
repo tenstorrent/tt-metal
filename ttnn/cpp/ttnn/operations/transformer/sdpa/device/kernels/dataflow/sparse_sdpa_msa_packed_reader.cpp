@@ -25,8 +25,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
-#include "sparse_sdpa_msa_gather.hpp"  // per-NoC trid-ring (K_TRID_RING knob)
-#include "block_cyclic_remap.hpp"      // tt::block_cyclic::logical_to_physical_page (block-cyclic cache remap)
+#include "sparse_sdpa_msa_gather.hpp"        // per-NoC trid-ring (K_TRID_RING knob)
+#include "block_cyclic_remap.hpp"            // tt::block_cyclic::logical_to_physical_page (block-cyclic cache remap)
+#include "sparse_sdpa_msa_packed_union.hpp"  // group formation: hashed union + lead block
 
 constexpr uint32_t sentinel = 0xFFFFFFFFu;
 
@@ -35,7 +36,7 @@ constexpr uint32_t sentinel = 0xFFFFFFFFu;
 //   [2 + s]       slot s's diagonal-block geometry: boundary key-tile | boundary column << 8 (key-tiles past the
 //                 boundary are fully masked; the boundary key-tile gets a partial-column mask when column > 0,
 //                 else it is fully masked too; boundary key-tile == Skt -> nothing masked)
-//   [2 + G + u]   union block u: bits [0,G) = slots that selected it, bits [8,8+G) = slots for which it is
+//   [2 + G + u]   union block u: bits [0,G) = slots that selected it, bits [16,16+G) = slots for which it is
 //                 the (first entry of their) diagonal block.
 
 // Half-tile partial-column mask: rows of `half` (0: rows 0-15 = faces 0,1; 1: rows 16-31 = faces 2,3) get -inf
@@ -90,7 +91,7 @@ void kernel_main() {
     constexpr uint32_t v_tile_bytes = get_compile_time_arg_val(19);
     constexpr bool CAUSAL_MASK_ENABLED = get_compile_time_arg_val(20) != 0;
     constexpr uint32_t block_size = get_compile_time_arg_val(21);
-    constexpr uint32_t G = get_compile_time_arg_val(22);  // max tokens per group (even, <= 8)
+    constexpr uint32_t G = get_compile_time_arg_val(22);  // max tokens per group (even, <= 12)
     constexpr bool block_cyclic = get_compile_time_arg_val(23) != 0;
     constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(24);
     constexpr uint32_t bc_sp = get_compile_time_arg_val(25);
@@ -103,7 +104,7 @@ void kernel_main() {
         TensorAccessorArgs<k_args.next_compile_time_args_offset(), k_args.next_common_runtime_args_offset()>();
     constexpr auto idx_args =
         TensorAccessorArgs<v_args.next_compile_time_args_offset(), v_args.next_common_runtime_args_offset()>();
-    static_assert(G >= 2 && G <= 8 && (G % 2) == 0, "packed group size must be 2, 4, 6 or 8");
+    static_assert(G >= 2 && G <= 12 && (G % 2) == 0, "packed group size must be even and in [2, 12]");
     static_assert(H_logical == 16, "packed groups put two 16-head tokens in one 32-row tile row");
     constexpr uint32_t rows_per_group = H_logical * G;
     constexpr uint32_t keys_per_tile = 32;  // tile width
@@ -137,12 +138,19 @@ void kernel_main() {
     const auto v = TensorAccessor(v_args, v_addr);
     const auto idx = TensorAccessor(idx_args, idx_addr);
 
-    // Reader-internal scratch (reserved once, reused): G block-id rows, then the union's block ids and masks.
+    // Reader-internal scratch (reserved once, reused): G block-id rows, then the union (ids, masks, hash chains).
     idx_cb.reserve_back(1);
     const uint32_t idx_l1 = idx_cb.get_write_ptr();
     volatile tt_l1_ptr uint32_t* rows = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
-    volatile tt_l1_ptr uint32_t* uni_id = rows + G * topk;
-    volatile tt_l1_ptr uint32_t* uni_mask = uni_id + G * topk;
+    uint32_t* uni_id = reinterpret_cast<uint32_t*>(idx_l1) + G * topk;
+    uint32_t* uni_mask = uni_id + G * topk;
+    uint16_t* hash_head = reinterpret_cast<uint16_t*>(uni_mask + G * topk);
+    sparse_sdpa_msa_union::Union<uint32_t*, uint16_t*> uni{
+        uni_id,
+        uni_mask,
+        hash_head,
+        hash_head + sparse_sdpa_msa_union::kBuckets,
+        hash_head + 2 * sparse_sdpa_msa_union::kBuckets};
 
     uint32_t tok = work_start;
     uint32_t kv_group = 0;
@@ -180,63 +188,8 @@ void kernel_main() {
         }
 
         // ---- union of the tokens' selections, keeping a block every token selected (the lead) ----
-        // Token 0's ids enter verbatim (in its top-k order); a later token's occurrence of a block takes the
-        // first entry of that block it does not own yet, else appends a new entry.
-        uint32_t n_union = nv[0];
-        for (uint32_t c = 0; c < n_union; ++c) {
-            uni_id[c] = rows[c];
-            uni_mask[c] = 1u;
-        }
-        uint32_t g = 1;
-        for (uint32_t j = 1; j < g_max; ++j) {
-            const uint32_t bit = 1u << j;
-            const uint32_t n_before = n_union;
-            volatile tt_l1_ptr uint32_t* r = rows + j * topk;
-            for (uint32_t c = 0; c < nv[j]; ++c) {
-                const uint32_t b = r[c];
-                uint32_t e = 0;
-                while (e < n_union && !(uni_id[e] == b && (uni_mask[e] & bit) == 0)) {
-                    ++e;
-                }
-                if (e == n_union) {
-                    uni_id[n_union] = b;
-                    uni_mask[n_union] = 0;
-                    ++n_union;
-                }
-                uni_mask[e] |= bit;
-            }
-            const uint32_t all = (bit << 1) - 1;
-            bool has_lead = false;
-            for (uint32_t e = 0; e < n_before && !has_lead; ++e) {
-                has_lead = (uni_mask[e] & all) == all;
-            }
-            if (!has_lead) {
-                // Roll token j back; it starts the next group.
-                n_union = n_before;
-                for (uint32_t e = 0; e < n_union; ++e) {
-                    uni_mask[e] &= ~bit;
-                }
-                break;
-            }
-            g = j + 1;
-        }
-        // Move the first common entry to the front (identity when token 0 lists it first, the common case).
-        {
-            const uint32_t all = (1u << g) - 1;
-            uint32_t lead = 0;
-            while ((uni_mask[lead] & all) != all) {
-                ++lead;
-            }
-            if (lead != 0) {
-                const uint32_t lid = uni_id[lead], lmask = uni_mask[lead];
-                for (uint32_t e = lead; e > 0; --e) {
-                    uni_id[e] = uni_id[e - 1];
-                    uni_mask[e] = uni_mask[e - 1];
-                }
-                uni_id[0] = lid;
-                uni_mask[0] = lmask;
-            }
-        }
+        const uint32_t g = sparse_sdpa_msa_union::build_group(uni, rows, nv, g_max, topk);
+        const uint32_t n_union = uni.n;
 
         // ---- per-slot causal geometry; flag each token's first diagonal entry ----
         uint32_t bt[G], bcol[G];
@@ -258,11 +211,9 @@ void kernel_main() {
                 bcol[s] = first_masked % keys_per_tile;
                 // The legacy kernel masks the first occurrence in the token's own order. Token 0's entries are in
                 // its order; a later token's occurrences map to that block's entries in increasing index.
-                for (uint32_t e = 0; e < n_union; ++e) {
-                    if (uni_id[e] == diag_block && (uni_mask[e] & (1u << s))) {
-                        diag_bits[s] = e;
-                        break;
-                    }
+                const uint32_t e = uni.find_owned(diag_block, 1u << s);
+                if (e < n_union) {
+                    diag_bits[s] = e;
                 }
             }
         }
@@ -318,7 +269,7 @@ void kernel_main() {
                         dmask |= 1u << s;
                     }
                 }
-                cp[hdr_words + e] = uni_mask[e] | (dmask << 8);
+                cp[hdr_words + e] = uni_mask[e] | (dmask << 16);
             }
         }
         ctrl_cb.push_back(1);

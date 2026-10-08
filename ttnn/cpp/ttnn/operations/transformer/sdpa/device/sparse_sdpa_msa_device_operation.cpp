@@ -21,15 +21,16 @@ namespace ttnn::prim {
 // Packed token groups (sparse_sdpa_msa_packed_*): with 16 query heads per KV group the legacy kernels run one
 // token per 32-row Q tile (half of it zero padding) and gather that token's selected K/V blocks for it alone.
 // The packed kernels put two tokens in each tile row and up to G consecutive tokens in one group whose union
-// of selected blocks is gathered once. Returns G (2..8, even), or 0 for the legacy kernels. Other head counts
-// always use the legacy kernels. TT_MSA_PACKED_GROUP overrides the default (0 = legacy; for A/B and sweeps).
+// of selected blocks is gathered once. Returns G (2..12, even), or 0 for the legacy kernels. Other head counts
+// always use the legacy kernels. Opt-in: TT_MSA_PACKED_GROUP=<G> enables it (unset or 0 = legacy kernels), so
+// the default build stays bit-exact with the legacy op until the model-level accuracy gate signs it off.
 uint32_t sparse_sdpa_msa_packed_group(const SparseSDPAMsaParams& /*attrs*/, const SparseSDPAMsaInputs& t) {
     const uint32_t H_total = t.q.logical_shape()[1];
     const uint32_t n_kv = t.k.logical_shape()[1];
     if (n_kv == 0 || H_total % n_kv != 0 || H_total / n_kv != 16) {
         return 0;
     }
-    constexpr uint32_t kDefaultGroup = 8;
+    constexpr uint32_t kDefaultGroup = 0;  // legacy kernels unless TT_MSA_PACKED_GROUP is set
     uint32_t g = kDefaultGroup;
     if (const char* env = std::getenv("TT_MSA_PACKED_GROUP"); env != nullptr && *env != '\0') {
         g = static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
@@ -37,7 +38,7 @@ uint32_t sparse_sdpa_msa_packed_group(const SparseSDPAMsaParams& /*attrs*/, cons
     if (g == 0) {
         return 0;
     }
-    g = std::min<uint32_t>(8, g + (g & 1u));  // even, <= 8
+    g = std::min<uint32_t>(12, g + (g & 1u));  // even, <= 12 (6 tile rows of per-row state CBs)
     return g;
 }
 
