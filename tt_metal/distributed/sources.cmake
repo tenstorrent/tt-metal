@@ -47,4 +47,5 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/erisc_bridge_reg_access.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/erisc_bridge_region.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/erisc_e2h_leg.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/erisc_h2e_leg.cpp
 )

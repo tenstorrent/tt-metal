@@ -112,6 +112,7 @@ uint32_t E2HLeg::poll(const Sink& sink) {
             t.origin = c.arena_idx;
             t.elapsed = d->elapsed;
             t.release_cyc = d->release_cyc;
+            t.far_slot = d->slot_idx;  // the router's far-ring write cursor, for H2E to check
             if (!sink(t)) {
                 break;
             }
