@@ -4,6 +4,8 @@
 
 import hashlib
 import json
+import math
+import statistics
 from pathlib import Path
 
 COMPUTE = Path("ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp")
@@ -14,6 +16,18 @@ PINNED = {
 }
 VARIANTS = ("native", "accurate_partial")
 CONTEXTS = (1024, 32768, 131072, 262016)
+HARDWARE_CASES = (
+    (32768, 8),
+    (32768, 16),
+    (32768, 32),
+    (16384, 8),
+    (16384, 16),
+    (16384, 32),
+    (131072, 8),
+    (131072, 16),
+    (262016, 4),
+    (262016, 8),
+)
 
 
 def sha(path):
@@ -168,4 +182,79 @@ def compare_simulator(reports):
         hardware_qualified=False,
         promoted_to_model=False,
         scope="One virtual-chip synthetic numerical screen; no hardware timing or model-eval qualification",
+    )
+
+
+def compare_hardware(cases):
+    """Bracket each partial query with unchanged full-query kernel controls."""
+    if len(cases) != 3:
+        raise ValueError("Need full/partial/full hardware controls")
+    before, partial, after = cases
+    if [c["device_query_heads"] for c in cases] != [32, 6, 32]:
+        raise ValueError("Wrong hardware query-head comparison")
+    for key in (
+        "input_tokens",
+        "batch",
+        "positions",
+        "seed",
+        "aligned_capacity",
+        "native_chunk",
+        "page_table_sha256",
+        "query_bf16_sha256",
+        "reference_fp32_sha256",
+        "worker_grid",
+    ):
+        if before[key] != partial[key] or before[key] != after[key]:
+            raise ValueError("Mismatched hardware geometry or operands")
+    if any(len(c["candidates"]) != 1 for c in cases):
+        raise ValueError("Need one fixed chunk per hardware case")
+    rows = [c["candidates"][0] for c in cases]
+    if any(
+        len(c["candidates"][0]["traced_call_us"]) != 5
+        or len(c["baseline_repeat_us"]) != 5
+        or len(c["candidates"][0]["output_fp32_sha256_per_rank"]) != 4
+        or len(c["baseline_repeat_output_fp32_sha256_per_rank"]) != 4
+        for c in cases
+    ):
+        raise ValueError("Incomplete hardware samples or ranks")
+    for index in (0, 2):
+        if not cases[index]["passed"] or not rows[index]["accuracy_passed"]:
+            raise ValueError("Full-query hardware control failed")
+    if rows[0]["output_fp32_sha256_per_rank"] != rows[2]["output_fp32_sha256_per_rank"]:
+        raise ValueError("Full-query control output changed")
+    deterministic = all(
+        c["candidates"][0]["output_fp32_sha256_per_rank"] == c["baseline_repeat_output_fp32_sha256_per_rank"]
+        for c in cases
+    )
+    baseline_samples = [
+        v for c in (before, after) for v in (*c["candidates"][0]["traced_call_us"], *c["baseline_repeat_us"])
+    ]
+    candidate_samples = [*rows[1]["traced_call_us"], *partial["baseline_repeat_us"]]
+    if any(v <= 0 or not math.isfinite(v) for v in (*baseline_samples, *candidate_samples)):
+        raise ValueError("Invalid hardware timing")
+    baseline_us, candidate_us = statistics.median(baseline_samples), statistics.median(candidate_samples)
+    # Compare the four full-query medians; include the within-case bracket.
+    control_medians = [
+        statistics.median(v)
+        for c in (before, after)
+        for v in (c["candidates"][0]["traced_call_us"], c["baseline_repeat_us"])
+    ]
+    drift = max(control_medians) / min(control_medians) - 1
+    candidate_drift = abs(statistics.median(partial["baseline_repeat_us"]) / rows[1]["median_traced_call_us"] - 1)
+    passed = partial["passed"] and rows[1]["accuracy_passed"]
+    qualified = passed and deterministic and max(drift, candidate_drift) <= 0.03
+    return dict(
+        input_tokens=before["input_tokens"],
+        batch=before["batch"],
+        full_query_us=baseline_us,
+        partial_query_us=candidate_us,
+        candidate_accuracy_passed=passed,
+        deterministic_replay=deterministic,
+        full_query_drift_fraction=drift,
+        partial_query_drift_fraction=candidate_drift,
+        timing_comparison_qualified=qualified,
+        qualified_speedup=baseline_us / candidate_us if qualified else None,
+        output_bit_identical=rows[0]["output_fp32_sha256_per_rank"] == rows[1]["output_fp32_sha256_per_rank"],
+        promoted_to_model=False,
+        scope="Synthetic TP4 kernel comparison; full-query controls use unchanged arithmetic in the candidate overlay",
     )

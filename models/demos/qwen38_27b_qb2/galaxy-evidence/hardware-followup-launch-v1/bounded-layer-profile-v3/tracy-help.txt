@@ -1,0 +1,73 @@
+Usage: python3 -m tracy [-m module | scriptfile] [arg] ...
+
+Options:
+  -h, --help            show this help message and exit
+  -m                    Profile a library module.
+  -p                    Only profile enabled zones
+  -l                    Profile every line of python code
+  -r                    Generate ops report
+  -v                    More info is printed to stdout
+  --no-device           Do not include device data
+  -o OUTPUT_FOLDER, --output-folder=OUTPUT_FOLDER
+                        Profiler artifacts folder
+  -n NAME_APPEND, --name-append=NAME_APPEND
+                        Custom name to be added to report name
+  -t PORT, --port=PORT  Internal port used by the script
+  --web-app-port=WEB_APP_PORT
+                        HTTP port for the Tracy WASM web UI after capture
+                        (default: 8080, or TRACY_WASM_HTTP_PORT if set).
+                        WebSocket uses this port + 1.
+  --no-web-server       Do not start the Tracy WASM web UI after capture. The
+                        server is a daemon and outlives the run that started
+                        it, so headless CI and measurement loops that only
+                        want the numbers should turn it off. Same effect as
+                        setting TRACY_NO_WEB_SERVER=1.
+  --no-op-info-cache    Show full op info for cached ops as well
+  --op-support-count=OP_SUPPORT_COUNT
+                        Maximum number of ops that can be supported by the
+                        profiler
+  --child-functions=CHILD_FUNCTIONS
+                        Comma separated list of child function to have their
+                        duration included for parent OPs
+  --process-logs-only   Only process the logs available in the default logs
+                        folder
+  --profile-dispatch-cores
+                        Collect dispatch cores profiling data
+  --enable-sum-profiling
+                        Enable sum profiling
+  --enable-accumulate-profiling
+                        Accumulate multiple kernel invocations in the L1
+                        profiler buffer and only push to DRAM when full
+                        (worker cores only)
+  --no-runtime-analysis
+                        Disable C++ post-processing of profiling data (enabled
+                        by default)
+  --sync-host-device    Sync host with all devices
+  --device-trace-profiler
+                        Profile device side trace durations
+  --device-memory-profiler
+                        Profile allocated device L1 and DRAM memory buffers
+  --dump-device-data-mid-run
+                        Dump collected device data to files and push to Tracy
+                        GUI mid-run
+  --disable-device-data-dump-to-files
+                        Disable dumping collected device data to files
+  --disable-device-data-push-to-tracy
+                        Disable pushing collected device data to Tracy GUI
+  --collect-noc-traces  Collect noc event traces when profiling
+  --check-exit-code     Exit the run and do not attempt post processing if the
+                        test command fails
+  -a DEVICE_ANALYSIS_TYPES, --device-analysis-types=DEVICE_ANALYSIS_TYPES
+                        List of device analysis types
+  --tracy-tools-folder=BINARY_FOLDER
+                        Tracy tools folder
+  --profiler-capture-perf-counters=PERF_COUNTER_GROUPS
+                        Comma-separated list of performance counter groups to
+                        capture: fpu, pack, unpack, l1_0..l1_5, instrn, all
+  --perf-counter-multipass
+                        When the requested counter groups don't fit one pass
+                        (>1 L1 bank, or too many groups for BRISC firmware),
+                        replay the workload once per scheduled pass and merge
+                        results. Without this, such a request errors with the
+                        required pass plan.
+  --no-capture-tool     Do not run Tracy capture tool

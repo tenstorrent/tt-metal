@@ -317,6 +317,39 @@ tool, not a replacement for hardware, long-horizon state checks, or model evals.
   78 terminal placement cases, 16 simulator candidates and eight partial/full
   output hash matches. See [follow-up evidence](../galaxy-evidence/optimization-followup-v1).
 
+## Hardware queue and profiling wrapper correction, Oct 8 UTC
+
+- **06:30:43:** native 32K/B32 full model completed, three repeats and clean
+  close: 250.13 output tok/s per TP4, 7.817 tok/s/user, 127.93-ms TPOT.
+  Prefill is 5184.79 input tok/s, TTFT p50 202.50 seconds. The single-step
+  pair is still running; do not claim its uplift before the paired receipt.
+- **06:30:46:** the first v2 profile failed before device work. The controller
+  selected the Blaze safe-test wrapper, which lacks `--profile-ops`; pytest
+  rejected the argument. This was a harness failure, not a hardware stall.
+- Fixed selection to a profiling-capable Metal wrapper frozen with the source
+  and covered by source hashes. Added shell-syntax and Tracy-help preflight
+  before waiting for the device. Preserved the original failed log/receipt.
+- **06:35:55:** launched v3 profile, same 12 captures and resource/export caps,
+  after 276 CPU tests plus 40 subtests passed. Preflight succeeded and the job
+  was verified waiting on the shared lock. No profiling timing claim yet.
+- **06:40:24:** launched persistent physical partial-query diagnostic after
+  295 CPU tests plus 40 subtests passed. It rechecks completed simulator
+  evidence, matches the candidate header hash and uses production instructions
+  without the simulator fallback. Ten geometries give 30 full/partial/full
+  component cases, prioritizing 32K then 16K, retaining 128K/256K tuning.
+  Original numerical gates, replay determinism, four ranks, input hashes and
+  <=3% timing drift are required for a speedup. Model defaults remain unchanged.
+- **06:43:27:** authoritative systemd and loginctl collection confirmed all
+  three controllers live and `Linger=yes`. The hardware diagnostic/profile
+  wait behind the healthy full-model run. Three full-model variants remained
+  at the count check, roughly 1.5-2 hours of model work plus diagnostic
+  contention. Total 2-4 hours is provisional until a bounded profile succeeds;
+  the 14/12/5-hour service deadlines are safety caps, not ETAs.
+- Published source and all prior results at `fba818e6acc`; verified the remote
+  branch. New launch/source/CPU evidence, retained profile failure and the
+  completed native 32K/B32 receipt are in
+  [hardware-followup-launch-v1](../galaxy-evidence/hardware-followup-launch-v1).
+
 ## Remaining gates and next experiments
 
 1. Finish the fresh-process capacity pairs; keep OOM, accuracy, and timing outcomes

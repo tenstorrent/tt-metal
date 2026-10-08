@@ -1,16 +1,16 @@
 {
-  "generated_at": "2026-10-08T06:26:39.364627+00:00",
+  "generated_at": "2026-10-08T06:46:35.234844+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 32394,
-      "sha256": "f517279972c1f39c9fb7e5dacbf375353386b58d73c931d61bcc594e939136fa"
+      "bytes": 34706,
+      "sha256": "c72bdbcc769a62a59066d4687a9c21ce6575d5f18671d8cc48a5a9d4310aaba8"
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 12471,
-      "sha256": "bba7a3de0da45e32657774cf469522ba32429b82df057bf176a116aaa65dfc68"
+      "bytes": 13111,
+      "sha256": "e7125322e1872d7bd6de8e8c6d767c41318d7698acb84108bec4537c16e1505c"
     },
     {
       "path": "experiments/TT-LAB-REVIEW.md",
@@ -1730,6 +1730,137 @@
       "bytes": 1352,
       "sha256": "f559420a7c432d7ca68e2763f9313de49f4bac3fde9c20b75a9de23c4bc62831",
       "scope": "198/198 Diamond questions; 32768-token output budget"
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/README.md",
+      "bytes": 4600,
+      "sha256": "d3165eb4754885eef0065243652d5f2b9d6095d4e07b22efe9f64993d4ed7889"
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/attention-half-tile-hardware-launch-v1.json",
+      "bytes": 3081,
+      "sha256": "856a9610bf0f26a98ba684330f8be5c7dae8c87db347c3b02fa8434ab8904f9a",
+      "scope": "Production-instruction TP4 kernel screen; no full-model qualification or performance claim while queued",
+      "created_at": "2026-10-08T06:40:24.396678+00:00"
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/attention-half-tile-hardware-source-v1/scripts/run_safe_pytest.sh.gz",
+      "bytes": 5168,
+      "sha256": "97e49724e1d5c17f69e08432c97a534ce0f946247dbc676813ebb46c9745886c"
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/attention-half-tile-hardware-unit-v1.xml.gz",
+      "bytes": 5867,
+      "sha256": "159ffd27d367e6e178cbd4d9862d729f971738a943a93a88d0d84b54cb81cbe9",
+      "junit": {
+        "tests": 335,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/attention-half-tile-hardware-v1/overlay/manifest.json",
+      "bytes": 1460,
+      "sha256": "562125f6b967f9471f6456d7d9a9b7af23e04c61880cb7890c849f0e8bb289ae"
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/attention-half-tile-hardware-v1/queue.json",
+      "bytes": 30227,
+      "sha256": "2c5184f6c77831b4b8f59b0c273413acffee602984cc0583158fbf2cfe4de0da",
+      "state": "hardware_diagnostic_or_waiting_for_lock",
+      "updated_at": "2026-10-08T06:40:31Z"
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/attention-half-tile-hardware-v1/unit.xml.gz",
+      "bytes": 5877,
+      "sha256": "5dc9d6aa011279047f9111b474fb50bc8f4d5f8e5fc0eb5f6888741a8d1ded8f",
+      "junit": {
+        "tests": 335,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/bounded-layer-profile-launch-v3.json",
+      "bytes": 3321,
+      "sha256": "36d8254c903b8687cb5ed481a2905b9892d9d90d960e348a07f3551a75581d34",
+      "scope": "Real two-layer weights; synthetic caches; warm eager attribution, not model qualification",
+      "created_at": "2026-10-08T06:35:55.555172+00:00"
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/bounded-layer-profile-source-v3/scripts/run_safe_pytest.sh.gz",
+      "bytes": 5168,
+      "sha256": "97e49724e1d5c17f69e08432c97a534ce0f946247dbc676813ebb46c9745886c"
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/bounded-layer-profile-unit-v3.xml.gz",
+      "bytes": 5575,
+      "sha256": "264233c67af2c900259c7f2aae7a08093e8facffc36d71ede210a69d44b5171b",
+      "junit": {
+        "tests": 316,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/bounded-layer-profile-v2.log.gz",
+      "bytes": 14531,
+      "sha256": "7f7a96077cf5fa1c4ddcbe85792e6dc29d45c627a61acc6890f5086ed3d8a50f"
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/bounded-layer-profile-v2/queue.json",
+      "bytes": 16385,
+      "sha256": "712d8c8148a60b5238db5500fb6ee589d2932c613e799322f1487c92ef393967",
+      "state": "failed",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T06:30:47Z",
+      "error_type": "CalledProcessError"
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/bounded-layer-profile-v3/queue.json",
+      "bytes": 15735,
+      "sha256": "a9d286c86467a68b23d714e34c63af33355dbe6b5d094b0845fcba69a34f4015",
+      "state": "bounded_profile",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T06:36:04Z"
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/bounded-layer-profile-v3/tracy-help.txt",
+      "bytes": 3940,
+      "sha256": "ee957b490f9e30b0f40a25e321c259ec0258bc9e8ed5256737697865b09f4eec"
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/capacity-pairs-v1/s32768-b32/native/attempt-01/command.json",
+      "bytes": 646,
+      "sha256": "71e0013516a3e6c243c1e0d3b56c79c6ce058c3a42782485b40a65b8fabeb1a8"
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/capacity-pairs-v1/s32768-b32/native/attempt-01/hardware.xml.gz",
+      "bytes": 300,
+      "sha256": "5adabe4d6cf3a6ed2fa5b817a633b10528a09928d293bb7446dfd2c7c863760d",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/capacity-pairs-v1/s32768-b32/native/sweep.json",
+      "bytes": 16233,
+      "sha256": "1855494b617e20e2ed981471329c79355e49e19dbe6aa3b569bc07a5e8d81db5",
+      "state": "completed",
+      "cleanup_completed": true,
+      "updated_at": "2026-10-08T06:30:43.724665+00:00",
+      "created_at": "2026-10-08T05:53:12.722259+00:00"
+    },
+    {
+      "path": "galaxy-evidence/hardware-followup-launch-v1/collection.json",
+      "bytes": 6471,
+      "sha256": "6b78eef295c691232effd7e9bea16a8e6bb30a581e4c586c4cf17fc9efd87edb"
     },
     {
       "path": "galaxy-evidence/kernel-diagnostics-v1/README.md",

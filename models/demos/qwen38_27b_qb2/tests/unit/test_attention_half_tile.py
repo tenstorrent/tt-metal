@@ -14,6 +14,7 @@ from models.demos.qwen38_27b_qb2.tests.attention_half_tile import (
     CONTEXTS,
     VARIANTS,
     build_overlay,
+    compare_hardware,
     compare_simulator,
     compilation_evidence,
     patch_common,
@@ -137,3 +138,74 @@ def test_partial_evidence_cannot_qualify_the_candidate(failure, expect_error):
         data[1]["cleanup_completed"] = False
     with expect_error(ValueError, "Incomplete|bit-identical|mismatched|cleanly"):
         compare_simulator(data)
+
+
+def hardware_cases():
+    cases = []
+    for heads, us in ((32, 100), (6, 80), (32, 100)):
+        cases.append(
+            dict(
+                device_query_heads=heads,
+                input_tokens=32768,
+                batch=16,
+                positions=list(range(16)),
+                seed=123,
+                aligned_capacity=33280,
+                native_chunk=256,
+                page_table_sha256="pages",
+                query_bf16_sha256="query",
+                reference_fp32_sha256="reference",
+                worker_grid=[12, 10],
+                passed=True,
+                candidates=[
+                    dict(
+                        traced_call_us=[us] * 5,
+                        median_traced_call_us=us,
+                        accuracy_passed=True,
+                        output_fp32_sha256_per_rank=["output"] * 4,
+                    )
+                ],
+                baseline_repeat_us=[us] * 5,
+                baseline_repeat_output_fp32_sha256_per_rank=["output"] * 4,
+            )
+        )
+    return cases
+
+
+def test_hardware_speedup_requires_same_operands_and_both_controls():
+    result = compare_hardware(hardware_cases())
+    assert result["timing_comparison_qualified"] and result["qualified_speedup"] == 1.25
+    assert not result["promoted_to_model"]
+
+
+@pytest.mark.parametrize("failure", ["operands", "control", "hash", "missing_repeat", "missing_rank", "nonfinite"])
+def test_invalid_hardware_comparison_is_rejected(failure, expect_error):
+    data = hardware_cases()
+    if failure == "operands":
+        data[1]["reference_fp32_sha256"] = "changed"
+    elif failure == "control":
+        data[2]["passed"] = False
+    elif failure == "hash":
+        data[2]["candidates"][0]["output_fp32_sha256_per_rank"][0] = "changed"
+    elif failure == "missing_repeat":
+        data[1]["baseline_repeat_us"].pop()
+    elif failure == "missing_rank":
+        data[1]["candidates"][0]["output_fp32_sha256_per_rank"].pop()
+    else:
+        data[1]["baseline_repeat_us"][0] = float("nan")
+    with expect_error(ValueError, "Mismatched|failed|changed|Incomplete|Invalid"):
+        compare_hardware(data)
+
+
+@pytest.mark.parametrize("failure", ["numerical", "drift", "nondeterministic"])
+def test_failing_or_unstable_partial_query_is_retained_without_speedup_claim(failure):
+    data = hardware_cases()
+    if failure == "numerical":
+        data[1]["passed"] = False
+        data[1]["candidates"][0]["accuracy_passed"] = False
+    elif failure == "drift":
+        data[2]["baseline_repeat_us"] = [104] * 5
+    else:
+        data[1]["baseline_repeat_output_fp32_sha256_per_rank"][0] = "changed"
+    result = compare_hardware(data)
+    assert not result["timing_comparison_qualified"] and result["qualified_speedup"] is None

@@ -1,0 +1,104 @@
+{
+  "collected_at": "2026-10-08T06:43:27.822211+00:00",
+  "root": "/home/ttuser/qwen38-artifacts-20261007",
+  "systemd": "RuntimeMaxUSec=14h\nMainPID=2502739\nExecMainStatus=0\nId=qwen38-capacity-pairs-v1-20261007.service\nActiveState=active\nSubState=running\n\nRuntimeMaxUSec=12h\nMainPID=2651226\nExecMainStatus=0\nId=qwen38-bounded-layer-profile-v3-20261008.service\nActiveState=active\nSubState=running\n\nRuntimeMaxUSec=5h\nMainPID=2656275\nExecMainStatus=0\nId=qwen38-attention-half-tile-hardware-v1-20261008.service\nActiveState=active\nSubState=running\n",
+  "loginctl": "State=active\nLinger=yes\n",
+  "files": [
+    {
+      "path": "bounded-layer-profile-v2.log.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-v2.log",
+      "sha256": "7f7a96077cf5fa1c4ddcbe85792e6dc29d45c627a61acc6890f5086ed3d8a50f",
+      "uncompressed_sha256": "c1e4e71247095661aa21b0fb5578267e98fbe1e384efcbc9a20b2e196d29ae9b"
+    },
+    {
+      "path": "bounded-layer-profile-v2/queue.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-v2/queue.json",
+      "sha256": "712d8c8148a60b5238db5500fb6ee589d2932c613e799322f1487c92ef393967",
+      "uncompressed_sha256": "712d8c8148a60b5238db5500fb6ee589d2932c613e799322f1487c92ef393967"
+    },
+    {
+      "path": "bounded-layer-profile-launch-v3.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-launch-v3.json",
+      "sha256": "36d8254c903b8687cb5ed481a2905b9892d9d90d960e348a07f3551a75581d34",
+      "uncompressed_sha256": "36d8254c903b8687cb5ed481a2905b9892d9d90d960e348a07f3551a75581d34"
+    },
+    {
+      "path": "bounded-layer-profile-unit-v3.xml.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-unit-v3.xml",
+      "sha256": "264233c67af2c900259c7f2aae7a08093e8facffc36d71ede210a69d44b5171b",
+      "uncompressed_sha256": "38f3ae6c84f189d0acd7e58f418c65fd14d0879f14056409a79055303e6bb6ee"
+    },
+    {
+      "path": "bounded-layer-profile-v3/queue.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-v3/queue.json",
+      "sha256": "a9d286c86467a68b23d714e34c63af33355dbe6b5d094b0845fcba69a34f4015",
+      "uncompressed_sha256": "a9d286c86467a68b23d714e34c63af33355dbe6b5d094b0845fcba69a34f4015"
+    },
+    {
+      "path": "bounded-layer-profile-v3/tracy-help.txt",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-v3/tracy-help.txt",
+      "sha256": "ee957b490f9e30b0f40a25e321c259ec0258bc9e8ed5256737697865b09f4eec",
+      "uncompressed_sha256": "ee957b490f9e30b0f40a25e321c259ec0258bc9e8ed5256737697865b09f4eec"
+    },
+    {
+      "path": "attention-half-tile-hardware-launch-v1.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-hardware-launch-v1.json",
+      "sha256": "856a9610bf0f26a98ba684330f8be5c7dae8c87db347c3b02fa8434ab8904f9a",
+      "uncompressed_sha256": "856a9610bf0f26a98ba684330f8be5c7dae8c87db347c3b02fa8434ab8904f9a"
+    },
+    {
+      "path": "attention-half-tile-hardware-unit-v1.xml.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-hardware-unit-v1.xml",
+      "sha256": "159ffd27d367e6e178cbd4d9862d729f971738a943a93a88d0d84b54cb81cbe9",
+      "uncompressed_sha256": "b72be23149793ff33ce252ffeaeeca04bcad853a9b31d98198e7bf431070ad36"
+    },
+    {
+      "path": "attention-half-tile-hardware-v1/queue.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-hardware-v1/queue.json",
+      "sha256": "2c5184f6c77831b4b8f59b0c273413acffee602984cc0583158fbf2cfe4de0da",
+      "uncompressed_sha256": "2c5184f6c77831b4b8f59b0c273413acffee602984cc0583158fbf2cfe4de0da"
+    },
+    {
+      "path": "attention-half-tile-hardware-v1/unit.xml.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-hardware-v1/unit.xml",
+      "sha256": "5dc9d6aa011279047f9111b474fb50bc8f4d5f8e5fc0eb5f6888741a8d1ded8f",
+      "uncompressed_sha256": "9cba8c96fb7bbb49768b7377fc09c89c7e44060e2db804ed27a971c89015185d"
+    },
+    {
+      "path": "attention-half-tile-hardware-v1/overlay/manifest.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-hardware-v1/overlay/manifest.json",
+      "sha256": "562125f6b967f9471f6456d7d9a9b7af23e04c61880cb7890c849f0e8bb289ae",
+      "uncompressed_sha256": "562125f6b967f9471f6456d7d9a9b7af23e04c61880cb7890c849f0e8bb289ae"
+    },
+    {
+      "path": "capacity-pairs-v1/s32768-b32/native/sweep.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s32768-b32/native/sweep.json",
+      "sha256": "1855494b617e20e2ed981471329c79355e49e19dbe6aa3b569bc07a5e8d81db5",
+      "uncompressed_sha256": "1855494b617e20e2ed981471329c79355e49e19dbe6aa3b569bc07a5e8d81db5"
+    },
+    {
+      "path": "capacity-pairs-v1/s32768-b32/native/attempt-01/command.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s32768-b32/native/attempt-01/command.json",
+      "sha256": "71e0013516a3e6c243c1e0d3b56c79c6ce058c3a42782485b40a65b8fabeb1a8",
+      "uncompressed_sha256": "71e0013516a3e6c243c1e0d3b56c79c6ce058c3a42782485b40a65b8fabeb1a8"
+    },
+    {
+      "path": "capacity-pairs-v1/s32768-b32/native/attempt-01/hardware.xml.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s32768-b32/native/attempt-01/hardware.xml",
+      "sha256": "5adabe4d6cf3a6ed2fa5b817a633b10528a09928d293bb7446dfd2c7c863760d",
+      "uncompressed_sha256": "3ea8c6eb3e59d7c30f272b672f1887b8f6406af6120662fa2f479a4fef2e3fb1"
+    },
+    {
+      "path": "bounded-layer-profile-source-v3/scripts/run_safe_pytest.sh.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-source-v3/scripts/run_safe_pytest.sh",
+      "sha256": "97e49724e1d5c17f69e08432c97a534ce0f946247dbc676813ebb46c9745886c",
+      "uncompressed_sha256": "0a8f51458da93464af7b542dd5b7a3068b6f1405704d7c5df5f8c42110e65d27"
+    },
+    {
+      "path": "attention-half-tile-hardware-source-v1/scripts/run_safe_pytest.sh.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-hardware-source-v1/scripts/run_safe_pytest.sh",
+      "sha256": "97e49724e1d5c17f69e08432c97a534ce0f946247dbc676813ebb46c9745886c",
+      "uncompressed_sha256": "0a8f51458da93464af7b542dd5b7a3068b6f1405704d7c5df5f8c42110e65d27"
+    }
+  ]
+}

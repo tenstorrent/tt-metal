@@ -114,11 +114,20 @@ active secondary tuning targets. Hardware runs retain BFP8 KV/FP32 state.
   timing, production-instruction parity and model evaluation remain untested.
   The retained first attempt failed a generated-file evidence lookup, fixed in
   v2 without relaxing numerical or source-verification checks.
-- **Bounded profile requeued at 06:16:39 UTC:** prioritize 32K/B16/B32, then
-  16K/B16/B32, then 128K/B16 and 256K/B8. The prior still-waiting controller was
-  stopped before a device worker started; the active 32K model sweep continues.
-  CPU validation passed 276 tests plus 40 subtests. Both controllers are systemd
-  user services; `Linger=yes` was verified. No profiling result is claimed yet.
+- **Bounded profile v3 queued at 06:35:55 UTC:** prioritize 32K/B16/B32, then
+  16K/B16/B32, then 128K/B16 and 256K/B8. The v2 attempt rejected a profiling
+  flag before opening devices because it used the wrong safe-test wrapper.
+  V3 freezes the Metal wrapper and validates shell syntax/Tracy first. CPU
+  validation passed 276 tests plus 40 subtests. No profile measurement yet.
+- **Physical partial-query sweep queued at 06:40:24 UTC:** 10 geometries,
+  30 full/partial/full cases, production instructions and unchanged BFP8 KV.
+  CPU validation passed 295 tests plus 40 subtests; completed simulator
+  receipts and the exact candidate header are rechecked before hardware.
+- Native **32K/B32 full-model** completed at 250.13 output tok/s per TP4,
+  5184.79 prefill input tok/s. Its single-step comparison is in progress.
+  All three controllers are persistent systemd user jobs; `Linger=yes` was
+  verified. Current source/launch/failure evidence is in
+  [hardware-followup-launch-v1](../galaxy-evidence/hardware-followup-launch-v1).
 - KV is still interleaved. A source audit of Blaze's 92% bandwidth reference
   identifies bank-local streaming and transaction-ID buffering as useful next
   experiments. The cited rate is recorded expert-matmul streaming bandwidth,

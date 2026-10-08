@@ -42,7 +42,12 @@ def run(args):
     args.results.mkdir()
     status_path = args.results / "queue.json"
     model = args.source / "models/demos/qwen38_27b_qb2"
-    files = [args.source / name for name in ("conftest.py", "pytest.ini")]
+    # The Blaze wrapper under task/source does not support --profile-ops.
+    # Freeze the profiling-capable Metal wrapper beside this source snapshot.
+    runner = args.source / "scripts/run_safe_pytest.sh"
+    if "--profile-ops)" not in runner.read_text():
+        raise ValueError("Frozen test runner lacks the --profile-ops option")
+    files = [args.source / name for name in ("conftest.py", "pytest.ini", "scripts/run_safe_pytest.sh")]
     files.extend(p for p in model.rglob("*") if p.suffix in (".py", ".cpp", ".h", ".hpp", ".json"))
     hashes = {str(p.relative_to(args.source)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
     status = dict(
@@ -60,6 +65,17 @@ def run(args):
         env = environment(args.task, args.source, args.weights)
         for key in ("TT_METAL_SIMULATOR", "TT_METAL_KERNEL_PATH", "TT_METAL_DISABLE_SFPLOADMACRO"):
             env.pop(key, None)
+        subprocess.run(["/bin/bash", "-n", str(runner)], check=True, timeout=30)
+        help_result = subprocess.run(
+            [str(args.task / "python_env/bin/python"), "-m", "tracy", "--help"],
+            cwd=args.source,
+            env=env,
+            check=True,
+            timeout=60,
+            capture_output=True,
+            text=True,
+        )
+        (args.results / "tracy-help.txt").write_text(help_result.stdout + help_result.stderr)
         subprocess.run(
             [
                 str(args.task / "python_env/bin/python"),
@@ -104,7 +120,7 @@ def run(args):
                     "--kill-after=180",
                     "7200",
                     "/bin/bash",
-                    str(args.task / "source/scripts/run_safe_pytest.sh"),
+                    str(runner),
                     "--profile-ops",
                     str(model / "tests/test_bounded_layer_profile.py"),
                     f"--rootdir={args.source}",
