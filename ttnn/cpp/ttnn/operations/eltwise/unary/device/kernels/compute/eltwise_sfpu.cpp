@@ -69,6 +69,50 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_input, cb_output);
     copy_init(cb_input);
+#if defined(ARCH_BLACKHOLE) && defined(SFPU_OP_CHAIN_0_BLOCK)
+    // Op-major blocks: every op runs over the block's tiles before the next op, so an init or re-program the chain
+    // repeats is paid once per block; each tile is copied just before the first op runs on it.
+#define SFPU_OP_CHAIN_FIRST_TILE_ONLY(init) \
+    if (i == 0) {                           \
+        init                                \
+    }
+#define SFPU_OP_CHAIN_FIRST_OR_LATER_TILE(first, later) \
+    if (i == 0) {                                       \
+        first                                           \
+    } else {                                            \
+        later                                           \
+    }
+#define SFPU_OP_CHAIN_FOR_EACH_TILE(func) \
+    for (uint32_t t = 0; t < n; ++t) {    \
+        if (!copied) {                    \
+            dfb_in.wait_front(t + 1);     \
+            copy_tile(cb_input, t, t);    \
+        }                                 \
+        func                              \
+    }                                     \
+    copied = true;
+    for (uint32_t i = 0; i < num_tiles; i += SFPU_OP_CHAIN_0_BLOCK) {
+        const uint32_t n = num_tiles - i < SFPU_OP_CHAIN_0_BLOCK ? num_tiles - i : SFPU_OP_CHAIN_0_BLOCK;
+        tile_regs_acquire();
+
+        dfb_out.reserve_back(n);
+
+        bool copied = false;
+        SFPU_OP_CHAIN_0_BLOCK_OPS
+
+        tile_regs_commit();
+        tile_regs_wait();
+
+        for (uint32_t t = 0; t < n; ++t) {
+            pack_tile(t, cb_output);
+        }
+
+        dfb_in.pop_front(n);
+        dfb_out.push_back(n);
+
+        tile_regs_release();
+    }
+#else
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
 
@@ -112,4 +156,5 @@ void kernel_main() {
 
         tile_regs_release();
     }
+#endif
 }
