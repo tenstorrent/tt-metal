@@ -43,6 +43,22 @@
   on the 1-D path too). Fix 6b75bdfde1a: the assert applies only with an H axis.
 - Resubmitted 2026-10-08 10:54:58 UTC as blx01 broker job 002, src 6b75bdfde1a, -t 480, env drv/env.yaml.
 
+## Job 002 result (blx01, 10:54-10:58 UTC, build t238/b 34a571c5f47 = pre-K/V-ring C++)
+- def 3.372 s, s1x 2.971 s (-0.40 s, -12%). Deep tree: det 1476 -> 1028 ms, stage 1 613 -> 178 ms.
+- vs host-noise refs: def PCC 0.99995/0.99995 PSNR 55.04/54.59; s1x PCC 0.99995/0.99995 PSNR 54.71/54.28
+  (-0.33/-0.31 dB, within 0.5 dB). s1x vs def PSNR 55.1/54.7. md5s differ between arms (valid A/B).
+- Spec's -0.7 s / det <= 600 ms not reached; stages 2-4 S5_2D split is infeasible (see Findings).
+  Judgment: land the stage-1 split as default anyway (12% gain, quality neutral).
+- Default flip 3bcd80dc1b0. Landing branch <this>-land = origin/t48 b1ca9870f09 + d16bfe2f1f5,
+  9d65f8ea669, 5833f56096f (cherry-picks of 3c4521837d5, 6b75bdfde1a, 3bcd80dc1b0).
+- t48 now has the K/V ring C++ default (#260), untested with the stage-1 split. Validation job: arms
+  off (DIFFVAE_DET_S1_SPLIT=0) vs def on build t272/b cae4b52657d (t48 C++ + hash-only fix), src
+  5833f56096f, runner drv/run261r.sh, out /var/tmp/fasth3/t261/out_R.
+
+## Drops
+- 2026-10-08 ~10:59 UTC blx01 chips 16-23 (tray), broker post-job gate right after our job 002 (smarton t261),
+  which had completed exit 0; bridge-reset jobs 005/006 failed, broker recovering.
+
 ## Next
 On wake: read driver.log and run.log. Check DECODE_MEAN_S per arm, the PCC/PSNR lines (cmp vs
 refs) and stage 1 in stage_tree_s1x.txt.
