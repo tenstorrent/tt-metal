@@ -42,7 +42,7 @@ _OPT = {
     "DSV41_PFA_FP4": "fused",
     "DSV41_PFA_ENGRAM_BATCH": "1",  # one T=256 Engram forward per 8-chunk group (bit-identical)
     "DSV41_PF_MHC": "packed",  # packed mHC carrier + own-chunk routing (tt/mhc_packed.py; DSV41_PF_ROUTE_OWN defaults to 1 with it)
-    "DSV41_PF_MHC_UMOE": "1",  # packed mHC carrier also with the unified MoE (moe_cols on the packed hh); =0 restores the 32-token chunk-loop mHC
+    "DSV41_PF_MHC_UMOE": "0",  # packed mHC carrier also with the unified MoE (moe_cols on the packed hh); =0 restores the 32-token chunk-loop mHC
 }
 
 
