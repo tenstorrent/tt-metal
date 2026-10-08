@@ -100,9 +100,15 @@ def ring_sdpa_balanced_q_chunk(seq_len, n_local_heads, num_cores, ring_size=4, d
 # Prefill ring reduce-scatter (TT_CCL.ring_reduce_scatter -> reduce_scatter_minimal_async, 4 links) settings
 # for the untraced long prefills (> 4096 tokens, batch 1) on Wormhole, per buffer_key. Measured at 40960 tokens
 # (Qwen3-32B shapes, B=1): FF1/FF3 [S,3200] bf8, 4 workers/link + default sync/buffers 2.82 ms -> 6 workers/link,
-# 64 chunks per sync, 4 buffers per channel 2.45 ms; output bit-identical. Other buffer keys keep the defaults.
-QWEN_PREFILL_RING_RS_TUNED_KEYS = ("FF1", "FF3")
+# 64 chunks per sync, 4 buffers per channel 2.45 ms; the all-reduce RS halves gain 9-10% with the same setting
+# (QKV [S,1280] bf8 axis 1 1.27 -> 1.15 ms, WO [S,1280] bf8 axis 0 1.30 -> 1.19, FF2 [S,1280] bf16 axis 0
+# 2.16 -> 2.04); outputs bit-identical. Other buffer keys keep the defaults.
+QWEN_PREFILL_RING_RS_TUNED_KEYS = ("FF1", "FF3", "QKV", "WO", "FF2")
 QWEN_PREFILL_RING_RS_MIN_SEQ_LEN = 4096
+# Ring all-gather (TT_CCL.ring_all_gather -> all_gather_async, 4 links) for the all-reduce AG halves, same
+# lengths: 6 workers/link, QKV [S,320] bf8 axis 1 0.96 -> 0.91 ms, FF2 [S,160] bf16 axis 0 1.77 -> 1.69 ms;
+# bit-identical. WO and the SDPA gathers gained < 3% and keep the defaults.
+QWEN_PREFILL_RING_AG_TUNED_KEYS = ("QKV", "FF2")
 
 
 def qwen_prefill_ring_rs_params(seq_len, buffer_key):
@@ -110,6 +116,13 @@ def qwen_prefill_ring_rs_params(seq_len, buffer_key):
     if seq_len <= QWEN_PREFILL_RING_RS_MIN_SEQ_LEN or buffer_key not in QWEN_PREFILL_RING_RS_TUNED_KEYS:
         return None
     return dict(num_workers_per_link=6, chunks_per_sync=64, num_buffers_per_channel=4)
+
+
+def qwen_prefill_ring_ag_params(seq_len, buffer_key):
+    """all_gather_async overrides for one Qwen prefill ring AG, or None to keep the defaults."""
+    if seq_len <= QWEN_PREFILL_RING_RS_MIN_SEQ_LEN or buffer_key not in QWEN_PREFILL_RING_AG_TUNED_KEYS:
+        return None
+    return dict(num_workers_per_link=6)
 
 
 def qwen_ring_sdpa_program_config(base_program_config, seq_len, n_local_heads, exp_approx_mode):
@@ -617,10 +630,12 @@ class TtQwenModelArgs(TtModelArgs):
 
             self.model_config["SDPA_RING_PROGCFG"] = _sdpa_ring_progcfg
 
-            # Ring reduce-scatter overrides for long prefill (llama_ccl.TT_CCL.ring_reduce_scatter). Wormhole only
+            # Ring reduce-scatter / all-gather overrides for long prefill (llama_ccl.TT_CCL.ring_reduce_scatter,
+            # ring_all_gather). Wormhole only
             # (measured there); Blackhole keeps the defaults. Llama's model_config has no such key.
             if not self.is_blackhole:
                 self.model_config["QWEN_PREFILL_RING_RS_PARAMS"] = qwen_prefill_ring_rs_params
+                self.model_config["QWEN_PREFILL_RING_AG_PARAMS"] = qwen_prefill_ring_ag_params
 
             # For flexible chunked SDPA (prefix caching with chunk_start_idx_tensor): chunk sizes must
             # match KV cache block_size so one trace works for any block-aligned chunk at replay.

@@ -1586,6 +1586,11 @@ class TT_CCL:
         num_links = (
             4 if (self.use_prefetcher and not self.is_blackhole) else min(4, self.model_config["GALAXY_NUM_LINKS"])
         )
+        # Qwen long prefill: per-buffer worker overrides from qwen_model_config (qwen_prefill_ring_ag_params).
+        # Llama never takes this branch (is_qwen False, no config key); the reversed gather keeps its defaults.
+        ag_overrides = {}
+        if self.is_qwen and not reverse_order and "QWEN_PREFILL_RING_AG_PARAMS" in self.model_config:
+            ag_overrides = self.model_config["QWEN_PREFILL_RING_AG_PARAMS"](seqlen, buffer_key) or {}
         if reverse_order:
             all_gather_function = ttnn.experimental.all_gather_async_reversed
         else:
@@ -1601,6 +1606,7 @@ class TT_CCL:
             topology=ttnn.Topology.Ring,
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
+            **ag_overrides,
         )
 
         if self.mode == "prefill" and buffer_key is not None and dim != 2:
