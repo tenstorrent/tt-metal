@@ -80,6 +80,83 @@ ttnn::Shape compute_sparse_matmul_compact_output_shape(
 
 namespace ttnn::prim {
 
+namespace {
+
+// in1 over the Tensor prefetcher's PrefetcherPipes (mask mode). The pipes deliver, per worker, one
+// K-block stream per expert the sparsity mask selects, in ascending expert order -- exactly what the
+// in1 reader consumes when it skips the experts the mask zeroes. Everything the dense matmul over pipes
+// checks applies, plus what keeps the prefetcher's and the matmul's views of the mask the same.
+void validate_sparse_matmul_prefetcher_pipes(
+    const SparseMatmulParams& attributes, const SparseMatmulInputs& tensor_args, uint32_t batch_length_A) {
+    using namespace operations::matmul::utilities;
+    const auto& input_tensor_a = tensor_args.input_tensors.at(0);
+    const auto& input_tensor_b = tensor_args.input_tensors.at(1);
+    TT_FATAL(
+        !attributes.global_cb.has_value(),
+        "sparse_matmul: global_cb and prefetcher_pipes are alternative in1 transports; supply at most one");
+    TT_FATAL(
+        !attributes.use_indices && !attributes.use_bias,
+        "sparse_matmul over prefetcher_pipes supports the sparsity mask mode only: indices and bias read in1 from "
+        "DRAM by expert id, which the pipes cannot deliver");
+    TT_FATAL(
+        attributes.is_input_b_sparse,
+        "sparse_matmul over prefetcher_pipes needs is_input_b_sparse=true: the pipes stream the experts of input B");
+    const auto& b_padded = input_tensor_b.padded_shape();
+    TT_FATAL(
+        b_padded.rank() >= 3 && b_padded.volume() / (b_padded[-1] * b_padded[-2]) == b_padded[-3],
+        "sparse_matmul over prefetcher_pipes needs input B's expert axis to be its only batch dim, got shape {}",
+        b_padded);
+    // Validation of the shapes above leaves the mask holding batch_length_A pages of experts; the
+    // prefetcher reads exactly one.
+    const uint32_t outer_batch = attributes.is_input_a_sparse ? 1u : batch_length_A;
+    TT_FATAL(
+        outer_batch == 1,
+        "sparse_matmul over prefetcher_pipes reads one sparsity page, so input A's batch dims must not add an outer "
+        "batch: got {} outer batches (input A shape {})",
+        outer_batch,
+        input_tensor_a.padded_shape());
+    TT_FATAL(
+        !input_tensor_a.is_sharded(),
+        "sparse_matmul over prefetcher_pipes needs an interleaved input A, got {}",
+        input_tensor_a.memory_config());
+    TT_FATAL(
+        !attributes.output_mem_config.is_sharded(),
+        "sparse_matmul over prefetcher_pipes writes an interleaved output, got {}",
+        attributes.output_mem_config);
+    const bool output_given =
+        !tensor_args.optional_output_tensors.empty() && tensor_args.optional_output_tensors.at(0).has_value();
+    if (output_given) {
+        TT_FATAL(
+            !tensor_args.optional_output_tensors.at(0)->is_sharded(),
+            "sparse_matmul over prefetcher_pipes writes an interleaved output, but the optional output tensor is {}",
+            tensor_args.optional_output_tensors.at(0)->memory_config());
+    }
+
+    TT_FATAL(
+        attributes.program_config.has_value(),
+        "sparse_matmul over prefetcher_pipes needs a MatmulMultiCoreReuseMultiCast1DProgramConfig");
+    const auto* program_config = std::get_if<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+        &attributes.program_config.value());
+    TT_FATAL(
+        program_config != nullptr && program_config->mcast_in0 && !program_config->gather_in0,
+        "sparse_matmul over prefetcher_pipes needs a MatmulMultiCoreReuseMultiCast1DProgramConfig with mcast_in0=True");
+    validate_prefetcher_pipes_mcast_in0_geometry(
+        attributes.prefetcher_pipes,
+        input_tensor_b,
+        get_matmul_tile(input_tensor_b, /*transpose=*/false),
+        *program_config);
+}
+
+}  // namespace
+
+SparseMatmulDeviceOperation::program_factory_t SparseMatmulDeviceOperation::select_program_factory(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    if (!operation_attributes.prefetcher_pipes.empty()) {
+        return SparseMatmulMultiCoreReuseMcast1DSpecFactory{};
+    }
+    return SparseMatmulMultiCoreReuseMcast1DProgramFactory{};
+}
+
 void SparseMatmulDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(operation_attributes, tensor_args);
@@ -432,6 +509,11 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
                 pc->out_block_w);
         }
     }
+
+    // After the divisor checks above: the pipe checks divide by program-config fields too.
+    if (!operation_attributes.prefetcher_pipes.empty()) {
+        validate_sparse_matmul_prefetcher_pipes(operation_attributes, tensor_args, batch_length_A);
+    }
 }
 
 SparseMatmulDeviceOperation::spec_return_value_t SparseMatmulDeviceOperation::compute_output_specs(
@@ -561,7 +643,8 @@ std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<Tensor>& indices,
-    const std::optional<Tensor>& bias) {
+    const std::optional<Tensor>& bias,
+    const ttnn::PrefetcherPipeList& prefetcher_pipes) {
     auto sparse_matmul_attributes = SparseMatmulParams{
         nnz,
         is_input_a_sparse,
@@ -575,7 +658,8 @@ std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation
         user_core_coord,
         output_tile,
         global_cb,
-        sub_device_id};
+        sub_device_id,
+        prefetcher_pipes};
 
     auto parameters = create_sparse_matmul_attributes(
         input_tensor_a, input_tensor_b, sparsity, sparse_matmul_attributes, {optional_output_tensor});
@@ -615,7 +699,8 @@ SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<Tensor>& indices,
-    const std::optional<Tensor>& bias) {
+    const std::optional<Tensor>& bias,
+    const ttnn::PrefetcherPipeList& prefetcher_pipes) {
     auto [params, inputs] = sparse_matmul_build_operation_args(
         input_tensor_a,
         input_tensor_b,
@@ -633,7 +718,8 @@ SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
         global_cb,
         sub_device_id,
         indices,
-        bias);
+        bias,
+        prefetcher_pipes);
     return ttnn::device_operation::launch<SparseMatmulDeviceOperation>(params, inputs);
 }
 
@@ -678,6 +764,9 @@ SparseMatmulParams create_sparse_matmul_attributes(
         matmul_struct.user_core_coord,
         matmul_struct.output_tile,
         matmul_struct.global_cb,
-        matmul_struct.sub_device_id};
+        matmul_struct.sub_device_id,
+        // Not routed through MatmulParams above: create_matmul_attributes would validate the pipes
+        // against the dense matmul's program config rules, and the sparse op validates its own.
+        parameters.prefetcher_pipes};
 }
 }  // namespace ttnn::prim

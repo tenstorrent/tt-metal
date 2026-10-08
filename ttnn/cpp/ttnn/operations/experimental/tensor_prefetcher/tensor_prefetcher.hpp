@@ -24,14 +24,17 @@ class MeshDevice;
 
 namespace ttnn::operations::experimental {
 
-// One tensor to prefetch: either (tensor, block_count) or (tensor, block_count, rotation).
-// block_count is the number of K-blocks to divide the tensor's K dimension into. rotation
-// (receiver-contiguous layout only; omitted/empty == batched) is the per-receiver streaming
-// ring-rotation table, indexed by global ring position: it delivers that tensor's K-blocks in
-// host-specified ring-rotated FIFO order for a matching stream_in1 matmul. See
-// TensorPrefetcherInput for the rotation contract.
-using TensorPrefetcherQueueTensor =
-    std::variant<std::pair<ttnn::Tensor, uint32_t>, std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>>;
+// One tensor to prefetch: (tensor, block_count), (tensor, block_count, rotation) or
+// (tensor, block_count, rotation, selector). block_count is the number of K-blocks to divide the
+// tensor's K dimension into. rotation (receiver-contiguous layout only; empty == batched) is the
+// per-receiver streaming ring-rotation table, indexed by global ring position: it delivers that
+// tensor's K-blocks in host-specified ring-rotated FIFO order for a matching stream_in1 matmul. See
+// TensorPrefetcherInput for the rotation contract. selector is the mask of a grouped weight's
+// TensorPrefetcherGroupSelector: only the groups whose mask entry is non-zero are streamed.
+using TensorPrefetcherQueueTensor = std::variant<
+    std::pair<ttnn::Tensor, uint32_t>,
+    std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>,
+    std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>, ttnn::Tensor>>;
 
 // Thin ttnn-side wrappers around the queueable
 // tt::tt_metal::experimental::Start/Queue/Stop TensorPrefetcher API.

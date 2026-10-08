@@ -138,6 +138,46 @@ def recv_contig_weight_memory_config(
     return ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard)
 
 
+def recv_contig_grouped_weight_memory_config(
+    num_groups,
+    K,
+    N,
+    num_dram_banks: int,
+    ring_size: int,
+    distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+):
+    """The memory config of a grouped receiver-contiguous weight ((1, G, K, N), e.g. a fused MoE
+    expert stack): shard ``(G, K, N // ring_size)``, so every receiver's slab stacks all G groups and
+    the Tensor prefetcher can stream any subset of them to it."""
+    assert N % ring_size == 0, f"N={N} must be divisible by ring_size={ring_size}"
+    dram_core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
+    )
+    nd_shard = ttnn.NdShardSpec(
+        ttnn.Shape([num_groups, K, N // ring_size]),
+        dram_core_range_set,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        distribution_strategy,
+    )
+    return ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard)
+
+
+def make_recv_contig_grouped_weight(
+    device,
+    pt_weight,
+    num_dram_banks: int,
+    ring_size: int,
+    dtype,
+    distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+):
+    """Allocate ``pt_weight`` ((1, G, K, N)) as a grouped receiver-contiguous weight (see
+    ``recv_contig_grouped_weight_memory_config``)."""
+    mem_config = recv_contig_grouped_weight_memory_config(
+        pt_weight.shape[-3], pt_weight.shape[-2], pt_weight.shape[-1], num_dram_banks, ring_size, distribution_strategy
+    )
+    return ttnn.as_tensor(pt_weight, device=device, dtype=dtype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
+
+
 def make_krow_major_weight(device, pt_weight, num_dram_banks: int, dtype):
     """Allocate ``pt_weight`` ((1, 1, K, N)) in the legacy K-row-major layout: one
     WIDTH_SHARDED ``(K, N // num_dram_banks)`` shard per DRAM bank, K-row-major

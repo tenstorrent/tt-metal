@@ -61,6 +61,7 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     bank_receivers_strided as _bank_receivers_strided,
     bank_receivers_contiguous as _bank_receivers_contiguous,
     make_recv_contig_weight as _make_recv_contig_weight,
+    make_recv_contig_grouped_weight as _make_recv_contig_grouped_weight,
     recv_contig_weight_memory_config as _recv_contig_weight_memory_config,
     make_krow_major_weight as _make_krow_major_weight,
     tensor_prefetcher_session,
@@ -2229,3 +2230,304 @@ def test_tensor_prefetcher_gather_and_mcast_in0_share_pipes(device, gather_strea
     assert (
         device.num_program_cache_entries() == cache_entries_after_first
     ), "second pass over the two consumers did not hit the program cache"
+
+
+# ---------------------------------------------------------------------------
+# Sparse matmul over PrefetcherPipes (device-selected experts)
+# ---------------------------------------------------------------------------
+_SPARSE_NUM_EXPERTS = 8
+
+
+def _sparse_pipe_setup(device, weight_layout, per_core_N=1, dtype=ttnn.bfloat16, is_input_a_sparse=False):
+    """A fused [1, E, K, N] expert weight sharded [E, K, N / ring] over the mcast-in0 worker ring, its
+    activation, and the program config the sparse matmul over pipes runs with.
+
+    The ring and K match ``_mcast_in0_pipe_setup``: two receivers per bank, K = 2 * ring tiles, one
+    output block of ``per_core_N`` tiles per worker.
+    """
+    num_dram_banks = device.dram_grid_size().x
+    recv_per_bank = 2
+    receiver_count = num_dram_banks * recv_per_bank
+    ring_cols = num_dram_banks
+    ring_rows = recv_per_bank
+    E = _SPARSE_NUM_EXPERTS
+    M = ttnn.TILE_SIZE
+    k_tiles = 2 * receiver_count
+    K = k_tiles * ttnn.TILE_SIZE
+    N = receiver_count * per_core_N * ttnn.TILE_SIZE
+
+    torch.manual_seed(zlib.crc32(f"sparse_pipes_{weight_layout}_{per_core_N}_{dtype}_{is_input_a_sparse}".encode()))
+    pt_weight = torch.randn(1, E, K, N)
+    distribution_strategy = _MCAST_IN0_PIPE_LAYOUTS[weight_layout]
+    tt_weight = _make_recv_contig_grouped_weight(
+        device,
+        pt_weight,
+        num_dram_banks=num_dram_banks,
+        ring_size=receiver_count,
+        dtype=dtype,
+        distribution_strategy=distribution_strategy,
+    )
+    bank_to_receivers = _bank_to_receivers(
+        distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D, num_dram_banks, recv_per_bank, ring_cols
+    )
+    pt_act = torch.randn(1, E if is_input_a_sparse else 1, M, K)
+    tt_act = ttnn.from_torch(
+        pt_act, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(ring_cols, ring_rows),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=per_core_N,
+        out_block_h=1,
+        out_block_w=per_core_N,
+        per_core_M=1,
+        per_core_N=per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+        gather_in0=False,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=ring_rows,
+        untilize_out=False,
+        stream_in1=False,
+    )
+    return {
+        "E": E,
+        "M": M,
+        "N": N,
+        "pt_act": pt_act,
+        "pt_weight": pt_weight,
+        "tt_act": tt_act,
+        "tt_weight": tt_weight,
+        "bank_to_receivers": bank_to_receivers,
+        "program_config": program_config,
+        "entry_size": per_core_N * _bytes_per_tile(dtype),
+        "is_input_a_sparse": is_input_a_sparse,
+        "dtype": dtype,
+    }
+
+
+def _sparse_mask(E, active):
+    """A [1, 1, 1, E] mask with ones at the ``active`` experts."""
+    mask = torch.zeros(1, 1, 1, E)
+    mask[..., list(active)] = 1.0
+    return mask
+
+
+def _to_device_mask(device, mask):
+    return ttnn.from_torch(
+        mask, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+
+def _sparse_expected(setup, active):
+    """Per-expert expected outputs [E, M, N]: A @ W[e] for active e, zeros elsewhere."""
+    a = setup["pt_act"].float()
+    w = setup["pt_weight"].float()
+    out = torch.zeros(setup["E"], setup["M"], setup["N"])
+    for e in active:
+        out[e] = (a[0, e] if setup["is_input_a_sparse"] else a[0, 0]) @ w[0, e]
+    return out
+
+
+def _check_sparse_output(setup, tt_out, active, label, compact=False):
+    """PCC per active expert, exact zeros for the masked-out ones (unless ``compact``, whose output
+    holds only the active experts, packed in expert order)."""
+    got = ttnn.to_torch(tt_out).float().reshape(-1, setup["M"], setup["N"])
+    expected = _sparse_expected(setup, active)
+    pcc_threshold = 0.999 if setup["dtype"] == ttnn.bfloat16 else 0.99
+    for slot, e in enumerate(sorted(active)):
+        passing, output_str = comp_pcc(expected[e], got[slot if compact else e], pcc_threshold)
+        logger.info(f"[{label}] expert {e}: {output_str}")
+        assert passing, f"{label} expert {e} PCC failed: {output_str}"
+    if not compact:
+        for e in sorted(set(range(setup["E"])) - set(active)):
+            assert torch.count_nonzero(got[e]) == 0, f"{label}: masked-out expert {e} produced non-zero output"
+
+
+def _prefetch_and_sparse_matmul(setup, pipes, sparsity, **kwargs):
+    return ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_sparse_matmul(
+        setup["tt_act"],
+        setup["tt_weight"],
+        sparsity,
+        prefetcher_pipes=pipes,
+        program_config=setup["program_config"],
+        is_input_a_sparse=setup["is_input_a_sparse"],
+        compute_kernel_config=_hifi4_compute_kernel_config(setup["tt_act"].device()),
+        dtype=ttnn.bfloat16,
+        **kwargs,
+    )
+
+
+@pytest.mark.parametrize("weight_layout", list(_MCAST_IN0_PIPE_LAYOUTS), ids=list(_MCAST_IN0_PIPE_LAYOUTS))
+@pytest.mark.parametrize("per_core_N", [1, 2], ids=["1tile", "2tile"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bfp8"])
+@pytest.mark.parametrize("nnz_given", [True, False], ids=["nnz_given", "nnz_none"])
+def test_tensor_prefetcher_sparse_matmul_pipes(device, weight_layout, per_core_N, dtype, nnz_given):
+    """Sparse matmul whose experts arrive over PrefetcherPipes: the prefetcher reads the mask on device
+    and streams only the selected experts' slabs, in the order the matmul skips the others. The second
+    run selects a different set of experts (same count, so nnz holds) from a different mask buffer and
+    must reuse the cached program."""
+    setup = _sparse_pipe_setup(device, weight_layout, per_core_N=per_core_N, dtype=dtype)
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 4 * setup["entry_size"])
+
+    selections = [(0, 2, 3, 6), (1, 4, 5, 7)]
+    cache_entries_after_first = None
+    with tensor_prefetcher_session(device):
+        for run, active in enumerate(selections):
+            sparsity = _to_device_mask(device, _sparse_mask(setup["E"], active))
+            tt_out = _prefetch_and_sparse_matmul(setup, pipes, sparsity, nnz=len(active) if nnz_given else None)
+            _check_sparse_output(setup, tt_out, active, f"sparse_pipes {weight_layout} run={run}")
+            if run == 0:
+                cache_entries_after_first = device.num_program_cache_entries()
+
+    assert (
+        device.num_program_cache_entries() == cache_entries_after_first
+    ), "second sparse matmul over pipes did not hit the program cache"
+
+
+@pytest.mark.parametrize("weight_layout", list(_MCAST_IN0_PIPE_LAYOUTS), ids=list(_MCAST_IN0_PIPE_LAYOUTS))
+def test_tensor_prefetcher_sparse_matmul_pipes_input_a_sparse(device, weight_layout):
+    """The down projection: A holds one [M, K] slice per expert ([1, E, M, K]), and in0 skips the
+    masked-out experts' slices in step with the pipes skipping their weights."""
+    setup = _sparse_pipe_setup(device, weight_layout, is_input_a_sparse=True)
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 4 * setup["entry_size"])
+    active = (1, 2, 5)
+    with tensor_prefetcher_session(device):
+        sparsity = _to_device_mask(device, _sparse_mask(setup["E"], active))
+        tt_out = _prefetch_and_sparse_matmul(setup, pipes, sparsity)
+        _check_sparse_output(setup, tt_out, active, f"sparse_pipes_a_sparse {weight_layout}")
+
+
+def test_tensor_prefetcher_sparse_matmul_pipes_compact_output(device):
+    """With nnz and a [1, nnz, M, N] output, the active experts' results are packed in expert order."""
+    setup = _sparse_pipe_setup(device, "recv_contig_strided")
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 4 * setup["entry_size"])
+    active = (0, 3, 4, 7)
+    with tensor_prefetcher_session(device):
+        sparsity = _to_device_mask(device, _sparse_mask(setup["E"], active))
+        compact_out = ttnn.from_torch(
+            torch.zeros(1, len(active), setup["M"], setup["N"]),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_out = _prefetch_and_sparse_matmul(
+            setup, pipes, sparsity, nnz=len(active), optional_output_tensor=compact_out
+        )
+        _check_sparse_output(setup, tt_out, active, "sparse_pipes_compact", compact=True)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872}], indirect=True)
+def test_tensor_prefetcher_sparse_matmul_pipes_trace(device):
+    """Captured once, replayed after the mask is rewritten in place: the replayed request reads the
+    new mask on device, so the replay streams and computes the newly selected experts."""
+    setup = _sparse_pipe_setup(device, "recv_contig_contiguous")
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 4 * setup["entry_size"])
+    first, second = (0, 1, 6), (2, 3, 4, 7)
+    with tensor_prefetcher_session(device):
+        sparsity = _to_device_mask(device, _sparse_mask(setup["E"], first))
+        # Warmup compiles and caches the program trace capture needs.
+        tt_out = _prefetch_and_sparse_matmul(setup, pipes, sparsity)
+        _check_sparse_output(setup, tt_out, first, "sparse_pipes_trace warmup")
+
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        tt_out = _prefetch_and_sparse_matmul(setup, pipes, sparsity)
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+        for label, active in (("replay first", first), ("replay rewritten", second)):
+            host_mask = ttnn.from_torch(_sparse_mask(setup["E"], active), dtype=ttnn.bfloat16)
+            ttnn.copy_host_to_device_tensor(host_mask, sparsity)
+            # The prefetcher reads the mask off the command queue; fence it behind the write.
+            ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device)
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            _check_sparse_output(setup, tt_out, active, f"sparse_pipes_trace {label}")
+
+        ttnn.release_trace(device, trace_id)
+
+
+def test_tensor_prefetcher_sparse_matmul_pipes_rejects_ungrouped_selector(device, expect_error):
+    """A selector picks groups of a grouped weight; a rank-2 shard has none."""
+    setup = _mcast_in0_pipe_setup(device, "recv_contig_strided")
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 2 * setup["entry_size"])
+    sparsity = _to_device_mask(device, _sparse_mask(_SPARSE_NUM_EXPERTS, (0,)))
+    with tensor_prefetcher_session(device):
+        with expect_error(RuntimeError, "is not a grouped weight"):
+            ttnn.experimental.queue_tensor_prefetcher_request(
+                device, [(setup["tt_weight"], setup["block_count"], [], sparsity)], prefetcher_pipes=pipes
+            )
+
+
+def test_tensor_prefetcher_sparse_matmul_pipes_rejects_mask_of_wrong_length(device, expect_error):
+    """The mask needs one entry per expert."""
+    setup = _sparse_pipe_setup(device, "recv_contig_strided")
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 4 * setup["entry_size"])
+    short_mask = _to_device_mask(device, _sparse_mask(setup["E"] - 1, (0,)))
+    block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(
+        setup["program_config"], setup["tt_weight"], prefetcher_pipes=pipes
+    )
+    with tensor_prefetcher_session(device):
+        with expect_error(RuntimeError, "single row of one entry per group"):
+            ttnn.experimental.queue_tensor_prefetcher_request(
+                device, [(setup["tt_weight"], block_count, [], short_mask)], prefetcher_pipes=pipes
+            )
+
+
+def test_tensor_prefetcher_sparse_matmul_pipes_rejects_outer_batch(device, expect_error):
+    """Two outer batches need two mask pages; the prefetcher reads one."""
+    setup = _sparse_pipe_setup(device, "recv_contig_strided")
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 4 * setup["entry_size"])
+    act = ttnn.from_torch(
+        torch.randn(1, 2, setup["M"], setup["pt_act"].shape[-1]),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    sparsity = _to_device_mask(device, torch.ones(1, 2, 1, setup["E"]))
+    with expect_error(RuntimeError, "reads one sparsity page"):
+        ttnn.sparse_matmul(
+            act,
+            setup["tt_weight"],
+            sparsity=sparsity,
+            program_config=setup["program_config"],
+            prefetcher_pipes=pipes,
+        )
+
+
+def test_tensor_prefetcher_sparse_matmul_pipes_rejects_indices(device, expect_error):
+    """Indexed mode reads in1 by expert id, which the pipes cannot deliver."""
+    setup = _sparse_pipe_setup(device, "recv_contig_strided")
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 4 * setup["entry_size"])
+    sparsity = _to_device_mask(device, _sparse_mask(setup["E"], (0, 1)))
+    indices = ttnn.from_torch(
+        torch.tensor([[[[0, 1]]]], dtype=torch.int32),
+        device=device,
+        dtype=ttnn.uint16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    with expect_error(RuntimeError, "mask mode only"):
+        ttnn.sparse_matmul(
+            setup["tt_act"],
+            setup["tt_weight"],
+            sparsity=sparsity,
+            program_config=setup["program_config"],
+            indices=indices,
+            prefetcher_pipes=pipes,
+        )
+
+
+def test_tensor_prefetcher_sparse_matmul_pipes_rejects_ring_without_lookahead(device, expect_error):
+    """The in1 reader keeps one K-block of lookahead, so a one-block ring would deadlock."""
+    setup = _sparse_pipe_setup(device, "recv_contig_strided")
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], setup["entry_size"])
+    sparsity = _to_device_mask(device, _sparse_mask(setup["E"], (0,)))
+    with expect_error(RuntimeError, "at least 2 in1 K-blocks"):
+        ttnn.sparse_matmul(
+            setup["tt_act"],
+            setup["tt_weight"],
+            sparsity=sparsity,
+            program_config=setup["program_config"],
+            prefetcher_pipes=pipes,
+        )

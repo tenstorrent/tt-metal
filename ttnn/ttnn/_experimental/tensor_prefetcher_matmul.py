@@ -124,3 +124,73 @@ def prefetch_and_linear(
         **target_kwargs,
         **linear_kwargs,
     )
+
+
+def prefetch_and_sparse_matmul(
+    input_tensor_a,
+    weight,
+    sparsity,
+    *,
+    prefetcher_pipes,
+    program_config,
+    **sparse_matmul_kwargs,
+):
+    """Queue a DRAM-core prefetch of the experts ``sparsity`` selects from ``weight`` into
+    ``prefetcher_pipes``, then run the ``ttnn.sparse_matmul`` that consumes them.
+
+    The prefetcher reads ``sparsity`` on device when it reaches the request and streams, in ascending
+    expert order, only the experts whose entry is non-zero -- the order ``ttnn.sparse_matmul`` scans
+    the same mask in. Because the selection happens on device, a trace captured around this call
+    replays correctly when the mask changes between replays.
+
+    Args:
+        input_tensor_a: Activation (in0), interleaved: ``[1, 1, M, K]`` to broadcast over the
+            experts, or ``[1, E, M, K]`` with ``is_input_a_sparse=True``.
+        weight: The fused ``[1, E, K, N]`` expert weight, receiver-contiguous with an NdShardSpec
+            shard of ``[E, K, N / ring_size]`` so every receiver slab holds all E experts.
+        sparsity: ``[1, 1, 1, E]`` ROW_MAJOR mask, one page. It must be written before this call
+            (fence the writing queue with ``ttnn.experimental.wait_for_cq_on_tensor_prefetcher``)
+            and must not change until the matmul has run, or the pipes deadlock. That fence cannot
+            be captured into a trace, so when this call is traced, a mask written by an op inside
+            the same trace is not fenced on replay: write and fence the mask before
+            ``execute_trace``.
+        prefetcher_pipes: Every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call,
+            whose receivers are the matmul's workers.
+        program_config: ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True``
+            and one output block per worker.
+        **sparse_matmul_kwargs: Forwarded to ``ttnn.sparse_matmul`` (e.g. ``nnz``,
+            ``is_input_a_sparse``, ``memory_config``, ``compute_kernel_config``, ``dtype``). Prefer
+            leaving ``nnz`` unset: an ``nnz`` that differs from ``count_nonzero(sparsity)`` stalls the
+            prefetcher as well as the matmul. ``queue_id``/``cq_id`` steer both halves, as in
+            ``prefetch_and_linear``.
+
+    Returns:
+        The ``ttnn.sparse_matmul`` output tensor.
+    """
+    device = input_tensor_a.device()
+    block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(
+        program_config, weight, prefetcher_pipes=prefetcher_pipes
+    )
+    # Resolved as prefetch_and_linear resolves it, so the request is captured on the queue the
+    # matmul dispatches on.
+    cq_id = None
+    if "queue_id" in sparse_matmul_kwargs:
+        cq_id = sparse_matmul_kwargs["queue_id"]
+    elif "cq_id" in sparse_matmul_kwargs:
+        cq_id = sparse_matmul_kwargs["cq_id"]
+    ttnn.experimental.queue_tensor_prefetcher_request(
+        device,
+        # Rotation-free: mcast_in0 consumes each expert's K-blocks in natural FIFO order.
+        [(weight, block_count, [], sparsity)],
+        prefetcher_pipes=prefetcher_pipes,
+        capture_into_trace=True,
+        cq_id=cq_id,
+    )
+    return ttnn.sparse_matmul(
+        input_tensor_a,
+        weight,
+        sparsity=sparsity,
+        program_config=program_config,
+        prefetcher_pipes=prefetcher_pipes,
+        **sparse_matmul_kwargs,
+    )

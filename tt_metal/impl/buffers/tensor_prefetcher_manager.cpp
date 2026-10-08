@@ -6,6 +6,7 @@
 
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_command_queue_base.hpp"
+#include "impl/allocator/allocator.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/global_circular_buffer_dram_sender_internal.hpp"
 #include "impl/buffers/global_circular_buffer_impl.hpp"
@@ -19,6 +20,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <optional>
@@ -371,13 +373,28 @@ TensorPrefetcherTensorLayout compute_tensor_layout_recv_contig(
         nd_opt.has_value(),
         "Receiver-contiguous Tensor prefetcher tensor must be allocated with an "
         "NdShardSpec (e.g. ttnn.MemoryConfig(BufferType.DRAM, NdShardSpec(...))).");
+    // A rank-3 shard (G, K_elems, n_per_recv_elems) is a grouped weight -- an expert stack -- whose
+    // every receiver slab holds all G groups. Within a shard pages run (group, k, n) row-major, so each
+    // group's (K, n_per_recv) block is contiguous and the slab is G of them back to back.
     const auto& shard_shape = nd_opt->shard_shape;
     TT_FATAL(
-        shard_shape.rank() == 2,
-        "Receiver-contiguous NdShardSpec shard shape must be 2D (K_elems, n_per_recv_elems); got rank {}",
-        shard_shape.rank());
-    const uint32_t k_elems = shard_shape[0];
-    const uint32_t n_per_recv_elems = shard_shape[1];
+        shard_shape.rank() == 2 || shard_shape.rank() == 3,
+        "Receiver-contiguous NdShardSpec shard shape must be (K_elems, n_per_recv_elems) or, for a grouped "
+        "weight, (num_groups, K_elems, n_per_recv_elems); got {}",
+        shard_shape);
+    const bool grouped = shard_shape.rank() == 3;
+    const uint32_t num_groups = grouped ? shard_shape[0] : 1;
+    if (grouped) {
+        const auto& logical_shape = t.logical_shape();
+        TT_FATAL(
+            logical_shape.rank() >= 3 && logical_shape[-3] == num_groups,
+            "Grouped receiver-contiguous weight: the shard must hold the whole group axis, so its leading dim ({}) "
+            "must equal the tensor's dim -3, but the tensor shape is {}",
+            num_groups,
+            logical_shape);
+    }
+    const uint32_t k_elems = shard_shape[-2];
+    const uint32_t n_per_recv_elems = shard_shape[-1];
     TT_FATAL(
         k_elems % tt::constants::TILE_HEIGHT == 0 && n_per_recv_elems % tt::constants::TILE_WIDTH == 0,
         "Receiver-contiguous shard shape ({}, {}) must be tile-aligned (TILE={}, {})",
@@ -419,7 +436,8 @@ TensorPrefetcherTensorLayout compute_tensor_layout_recv_contig(
         noc_max_burst);
 
     const uint32_t bytes_per_recv_per_block = k_block_w_tiles * n_per_recv * tile_bytes;
-    const uint32_t recv_stride_bytes = k_tiles_raw * n_per_recv * tile_bytes;
+    const uint32_t group_bytes = k_tiles_raw * n_per_recv * tile_bytes;
+    const uint32_t recv_stride_bytes = num_groups * group_bytes;
 
     // Fit ladder. Rung 1: full block fits in one stage-third (the kernel uses
     // 3 rotating slots, not 2 halves, so the constraint is tighter than the
@@ -484,6 +502,7 @@ TensorPrefetcherTensorLayout compute_tensor_layout_recv_contig(
     g.target_per_visit_pages = target_per_visit_pages;
     g.recv_stride_bytes = recv_stride_bytes;
     g.block_count = block_count;
+    g.group_stride_bytes = grouped ? group_bytes : 0;
     return g;
 }
 
@@ -533,6 +552,98 @@ void validate_prefetcher_pipe_delivery(const TensorPrefetcherTensorLayout& layou
         "Tensor prefetcher: PrefetcherPipe delivery supports receiver-contiguous tensors only, but input tensor {} "
         "resolved to the K-row-major layout. Shard it so each receiver owns a disjoint contiguous shard.",
         tensor_idx);
+}
+
+// Where the DRISC kernel reads a group selector's mask page: a NoC endpoint as virtual coordinates
+// (x in the low 16 bits, y in the high 16, the TensorPrefetcherEntry::selector_noc_xy encoding) and
+// the page's address there.
+struct SelectorLocation {
+    uint32_t noc_xy = 0;
+    uint32_t addr = 0;
+};
+
+// The kernel reads the mask on NOC 0 with virtual coordinates, the convention of the pipes' receiver
+// table, so a DRAM page names its bank's NOC 0 endpoint -- the one that forwards DRAM reads (see
+// drisc_mode.h). The address is mesh-uniform; the endpoint is resolved per device because DRAM
+// harvesting may move it, and one page serves every device, so the devices must agree.
+SelectorLocation resolve_group_selector(
+    const MeshDevice& mesh_device,
+    const std::vector<IDevice*>& devices,
+    const MeshTensor& mask,
+    uint32_t num_groups,
+    uint32_t tensor_idx) {
+    TT_FATAL(
+        num_groups <= kTensorPrefetcherSelectorMaxEntries,
+        "Tensor prefetcher input {}: a group selector reads one mask word per group into a {}-entry scratch, but the "
+        "weight has {} groups",
+        tensor_idx,
+        kTensorPrefetcherSelectorMaxEntries,
+        num_groups);
+    TT_FATAL(
+        &mask.device() == &mesh_device,
+        "Tensor prefetcher input {}: the group selector mask must live on the prefetcher's mesh device",
+        tensor_idx);
+    TT_FATAL(
+        mask.layout() == Layout::ROW_MAJOR,
+        "Tensor prefetcher input {}: the group selector mask must be ROW_MAJOR, got {}",
+        tensor_idx,
+        mask.layout());
+    TT_FATAL(
+        mask.dtype() == DataType::BFLOAT16 || mask.dtype() == DataType::UINT16,
+        "Tensor prefetcher input {}: the group selector mask holds one 16-bit word per group, so it must be BFLOAT16 "
+        "or UINT16, got {}",
+        tensor_idx,
+        mask.dtype());
+    const auto& mask_shape = mask.logical_shape();
+    TT_FATAL(
+        mask.logical_volume() == mask_shape[-1] && mask_shape[-1] == num_groups,
+        "Tensor prefetcher input {}: the group selector mask must be a single row of one entry per group ({}), got "
+        "shape {}",
+        tensor_idx,
+        num_groups,
+        mask_shape);
+
+    const ContextId context_id = mesh_device.impl().get_context_id();
+    const MemoryConfig& memory_config = mask.memory_config();
+    std::optional<SelectorLocation> location;
+    for (IDevice* device : devices) {
+        SelectorLocation here;
+        if (memory_config.buffer_type() == BufferType::DRAM && !memory_config.is_sharded()) {
+            // Page 0 of an interleaved buffer sits in bank 0.
+            const auto channel = mesh_device.allocator()->impl().get_dram_channel_from_bank_id(0);
+            const CoreCoord xy = MetalContext::instance(context_id)
+                                     .get_cluster()
+                                     .get_soc_desc(device->id())
+                                     .get_preferred_worker_core_for_dram_view(static_cast<int>(channel), /*noc=*/0);
+            here.noc_xy = static_cast<uint32_t>(xy.x) | (static_cast<uint32_t>(xy.y) << 16);
+            here.addr = static_cast<uint32_t>(mask.mesh_buffer().get_reference_buffer()->page_address(0, 0));
+        } else {
+            TT_FATAL(
+                memory_config.buffer_type() == BufferType::L1 && mask.shard_spec().has_value() &&
+                    mask.shard_spec()->grid.num_cores() == 1,
+                "Tensor prefetcher input {}: the group selector mask must be DRAM interleaved or sharded onto a single "
+                "L1 core, got {}",
+                tensor_idx,
+                memory_config);
+            const CoreCoord xy =
+                device->worker_core_from_logical_core(mask.shard_spec()->grid.ranges().front().start_coord);
+            here.noc_xy = static_cast<uint32_t>(xy.x) | (static_cast<uint32_t>(xy.y) << 16);
+            here.addr = static_cast<uint32_t>(mask.address());
+        }
+        if (location.has_value()) {
+            TT_FATAL(
+                location->noc_xy == here.noc_xy,
+                "Tensor prefetcher input {}: the group selector mask page resolves to NoC xy {:#x} on device {} but "
+                "{:#x} on the first device; one request page serves every device, so they must agree",
+                tensor_idx,
+                here.noc_xy,
+                device->id(),
+                location->noc_xy);
+        } else {
+            location = here;
+        }
+    }
+    return location.value_or(SelectorLocation{});
 }
 
 }  // namespace
@@ -811,6 +922,7 @@ void TensorPrefetcherManager::build_and_launch_programs(
                 ordinary_mpfe_weight,
                 static_cast<uint32_t>(dynamic_mpfe_weighting),
                 static_cast<uint32_t>(mpfe_policy.has_value()),
+                selector_scratch_l1_addr_,
             };
 
             // WATCHER_NOINLINE only takes effect in watcher builds: it lets the compiler outline the
@@ -916,7 +1028,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
         "DRISC L1 kernel region ({} B) too small for the prefetcher ping-pong stage",
         kernel_region_size);
     // Carve the per-core DRISC L1 kernel working region into:
-    //   [socket_config | socket_data FIFO | stage ring].
+    //   [cq signal slots | socket_config | socket_data FIFO | selector scratch | stage ring].
     // Each DRAM core hosts exactly one H2DSocket recv (for its own sender), so
     // the layout is uniform across all DRAM cores. The MeshBuffer L1 allocator
     // can't reach DRAM-core L1, so we hand the addresses to the H2DSocket
@@ -937,7 +1049,11 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
     cq_signal_l1_addr_ = align_up(kernel_region_base, l1_alignment);
     socket_config_l1_addr_ = align_up(cq_signal_l1_addr_ + cq_signal_bytes, pcie_alignment_for_layout);
     socket_data_l1_addr_ = align_up(socket_config_l1_addr_ + socket_config_bytes, pcie_alignment_for_layout);
-    stage_ring_base_ = align_up(socket_data_l1_addr_ + socket_data_bytes, l1_alignment);
+    // The selector scratch takes a NoC read from DRAM, which lands at the same offset within a
+    // DRAM-alignment word as its source, and selector pages start DRAM-aligned.
+    const uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
+    selector_scratch_l1_addr_ = align_up(socket_data_l1_addr_ + socket_data_bytes, dram_alignment);
+    stage_ring_base_ = align_up(selector_scratch_l1_addr_ + kTensorPrefetcherSelectorScratchBytes, l1_alignment);
     const uint32_t kernel_region_end = kernel_region_base + kernel_region_size;
     TT_FATAL(
         stage_ring_base_ < kernel_region_end,
@@ -1038,12 +1154,6 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     for (const auto& [_sender, receivers] : mapping) {
         max_receivers = std::max(max_receivers, receivers.num_cores());
     }
-    const uint32_t layout_stride = kLayoutBytes + max_receivers * static_cast<uint32_t>(sizeof(uint32_t));
-    // Byte offset of layout slot i: the slots grow backward from the end of the payload, so slot 0
-    // is flush against it. Both the entry that names a slot and the write that fills it go through
-    // here, so the two cannot drift apart.
-    const auto slot_offset = [layout_stride](uint32_t i) { return kRequestPageBytes - (i + 1) * layout_stride; };
-
     // A streaming tensor needs each receiver's bank-local slab index, which is that sender's
     // recv_index_base plus its position within the sender. The topology guard below is what makes
     // that index usable as a global receiver position, so it runs only when some tensor streams.
@@ -1054,6 +1164,15 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
             break;
         }
     }
+    // Only a streaming tensor's slot carries a rotation table (the kernel reads it only when the
+    // layout says streaming), so a request with none packs bare geometry and is not bounded by the
+    // receivers per sender.
+    const uint32_t layout_stride =
+        kLayoutBytes + (any_streaming ? max_receivers * static_cast<uint32_t>(sizeof(uint32_t)) : 0u);
+    // Byte offset of layout slot i: the slots grow backward from the end of the payload, so slot 0
+    // is flush against it. Both the entry that names a slot and the write that fills it go through
+    // here, so the two cannot drift apart.
+    const auto slot_offset = [layout_stride](uint32_t i) { return kRequestPageBytes - (i + 1) * layout_stride; };
     if (any_streaming) {
         // Both the strided and contiguous (bank, slab index) -> global position formulas are
         // bijections onto [0, total_receivers) only when the DRAM banks are dense 0..num_banks-1 and
@@ -1104,6 +1223,9 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     struct PlanEntry {
         uint32_t bank_local_base = 0;
         uint32_t layout_index = 0;
+        uint16_t num_groups = 1;
+        TensorPrefetcherSelectorMode selector_mode = TENSOR_PREFETCHER_SELECTOR_NONE;
+        SelectorLocation selector;
     };
     struct PagePlan {
         std::vector<PlanEntry> entries;
@@ -1217,8 +1339,30 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
             slot_idx = static_cast<int32_t>(plan->slots.size());
             plan->slots.push_back(std::move(slot));
         }
-        const uint32_t bank_local_base = static_cast<uint32_t>(input.tensor.get().mesh_buffer().address());
-        plan->entries.push_back(PlanEntry{bank_local_base, static_cast<uint32_t>(slot_idx)});
+        PlanEntry entry{
+            .bank_local_base = static_cast<uint32_t>(input.tensor.get().mesh_buffer().address()),
+            .layout_index = static_cast<uint32_t>(slot_idx)};
+        if (layout.group_stride_bytes != 0) {
+            const uint32_t num_groups = layout.recv_stride_bytes / layout.group_stride_bytes;
+            TT_FATAL(
+                num_groups <= std::numeric_limits<uint16_t>::max(),
+                "Tensor prefetcher input {} stacks {} groups per receiver slab; at most {} are supported",
+                tensor_idx,
+                num_groups,
+                std::numeric_limits<uint16_t>::max());
+            entry.num_groups = static_cast<uint16_t>(num_groups);
+        }
+        if (input.group_selector.has_value()) {
+            TT_FATAL(
+                layout.group_stride_bytes != 0,
+                "Tensor prefetcher input {} has a group selector but is not a grouped weight: give it a "
+                "receiver-contiguous NdShardSpec shard of (num_groups, K, N / ring_size)",
+                tensor_idx);
+            entry.selector_mode = TENSOR_PREFETCHER_SELECTOR_NONZERO_MASK;
+            entry.selector = resolve_group_selector(
+                *mesh_device_, devices_, input.group_selector->mask.get(), entry.num_groups, tensor_idx);
+        }
+        plan->entries.push_back(entry);
     }
 
     // ---- Materialize each logical page into one byte buffer per sender ----
@@ -1248,6 +1392,10 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
             TensorPrefetcherEntry entry;
             entry.bank_local_base = plan.entries[k].bank_local_base;
             entry.layout_offset = slot_offset(plan.entries[k].layout_index);
+            entry.selector_noc_xy = plan.entries[k].selector.noc_xy;
+            entry.selector_addr = plan.entries[k].selector.addr;
+            entry.num_groups = plan.entries[k].num_groups;
+            entry.selector_mode = plan.entries[k].selector_mode;
             std::memcpy(templ.data() + (kHeaderBytes + k * kEntryBytes), &entry, kEntryBytes);
         }
         for (uint32_t i = 0; i < plan.slots.size(); ++i) {

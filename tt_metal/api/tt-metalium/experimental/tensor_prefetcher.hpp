@@ -76,6 +76,25 @@ struct TensorPrefetcherConfig {
 // use this to skip rather than fail.
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
 
+// Picks which groups of a grouped weight a request streams. A grouped weight is a receiver-
+// contiguous weight whose NdShardSpec shard is (G, K, N / ring_size) with G the tensor's dim -3, so
+// every receiver slab stacks all G groups (e.g. MoE experts). With a selector the prefetcher reads
+// `mask` on device when it reaches the request and streams, in ascending group order, only the groups
+// whose mask entry is non-zero -- the order a sparse matmul scans the same mask in. Reading it on
+// device is what lets a traced request follow a mask the device rewrites between replays.
+//
+// `mask` must be a ROW_MAJOR, BFLOAT16 or UINT16 tensor of exactly G elements in one page (every dim
+// but the last is 1), G <= 256, on the same mesh as the weight, in DRAM (interleaved) or in L1 on a
+// single core. It must be written before the request is queued (fence the writing queue with
+// WaitForCqOnTensorPrefetcher) and must not change until the consumer that reads it has run;
+// otherwise the prefetcher and the consumer disagree on which groups arrive and the delivery
+// target deadlocks. That fence cannot be captured into a trace while the request can, so a mask
+// written by an op inside the same trace is not fenced on replay: today the mask must be written,
+// and fenced, before execute_trace.
+struct TensorPrefetcherGroupSelector {
+    std::reference_wrapper<const MeshTensor> mask;
+};
+
 // One prefetch work item: a weight tensor plus the number of K-blocks to split
 // its K dimension into. `block_count` is used in place of the GCB ring size when
 // dividing K (k_block_w_tiles = ceil(K_tiles / block_count)), so different
@@ -113,6 +132,8 @@ struct TensorPrefetcherInput {
     // built to consume in the matching order, else it deadlocks. The host is responsible for
     // supplying a rotation consistent with the consumer's ring topology.
     std::vector<uint32_t> rotation;
+    // Grouped weights only. Unset streams every group in ascending order.
+    std::optional<TensorPrefetcherGroupSelector> group_selector = std::nullopt;
 };
 
 // Build per-device Programs (two DRISC kernels per DRAM bank), allocate

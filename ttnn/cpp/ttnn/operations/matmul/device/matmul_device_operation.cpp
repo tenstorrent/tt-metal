@@ -1248,8 +1248,11 @@ void validate_prefetcher_pipes_in1_delivery(
         in1_block_size_bytes);
 }
 
+}  // namespace
+
 // mcast_in0 over PrefetcherPipes. A worker-sender pipe's producer delivers receiver i the K-blocks of
-// output column block i, in K order.
+// output column block i, in K order. Declared in the header: the sparse matmul over pipes runs the same
+// body and checks it the same way.
 void validate_prefetcher_pipes_mcast_in0_geometry(
     const ttnn::PrefetcherPipeList& prefetcher_pipes,
     const Tensor& input_tensor_b,
@@ -1263,6 +1266,8 @@ void validate_prefetcher_pipes_mcast_in0_geometry(
         in1_k_block_size_bytes(input_tensor_b, in1_tile, program_config.in0_block_w, program_config),
         "mcast_in0");
 }
+
+namespace {
 
 // gather_in0 over PrefetcherPipes: each worker's in1 K-blocks arrive one per ring position, and compute
 // takes them in ring order, the worker's own first, as the in0 shards come round. With stream_in1 they
