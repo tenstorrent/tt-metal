@@ -2,11 +2,17 @@
 """Readiness generator with persistent model and common-sampler split traces."""
 
 import math
+import os
 import time
 from collections import Counter
 from dataclasses import dataclass
 
 import torch
+
+# Experiment (tt-agentic-bringup-qb2#75): vLLM hands over one page table per layer, but layers of
+# the same KV-cache group carry identical tables. Upload each distinct table once per refresh and
+# fill the other layers' device tables with device-to-device copies instead of host uploads.
+PAGE_TABLE_DEDUPE = os.environ.get("KOLIBRI_PAGE_TABLE_DEDUPE", "0") == "1"
 
 try:
     from readiness_check.contract import Generator
@@ -331,20 +337,27 @@ class KolibriGenerator(Generator):
     def refresh_page_tables(self, page_table):
         if isinstance(page_table, torch.Tensor):
             page_table = {"full": page_table, "sliding": self.state.host_page_tables["sliding"]}
+        uploaded = []  # (host pages, device table) already uploaded in this refresh
         for key, pages in page_table.items():
             if pages.shape != self.state.host_page_tables[key].shape:
                 raise ValueError("Page table must retain the configured physical shape")
-            pool_pages = getattr(self, "page_table_pool_pages", {})
             physical_pages = (
                 self.state.layers[key][0].shape[0]
                 if isinstance(key, int)
-                else pool_pages.get(key)
-                or self.batch_size * (min(self.capacity, 8704) if key == "sliding" else self.capacity) // 32
+                else self.batch_size * (min(self.capacity, 8704) if key == "sliding" else self.capacity) // 32
             )
             if pages.dtype != torch.int32 or (pages < 0).any() or (pages >= physical_pages).any():
                 raise ValueError("Invalid physical page mapping")
             if not torch.equal(pages, self.copied_pages[key]):
-                self.copy(pages, self.state.page_tables[key], "page_table_refreshes")
+                source = None
+                if PAGE_TABLE_DEDUPE:
+                    source = next((device for host, device in uploaded if torch.equal(host, pages)), None)
+                if source is None:
+                    self.copy(pages, self.state.page_tables[key], "page_table_refreshes")
+                    uploaded.append((pages, self.state.page_tables[key]))
+                else:
+                    ttnn.copy(source, self.state.page_tables[key])
+                    self.counters["page_table_d2d_copies"] += 1
                 self.state.host_page_tables[key] = pages.clone()
                 self.copied_pages[key] = pages.clone()
 
