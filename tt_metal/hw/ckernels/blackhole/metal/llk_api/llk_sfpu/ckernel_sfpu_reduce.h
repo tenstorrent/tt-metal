@@ -853,13 +853,9 @@ inline void set_manual_col_swap_direction() {
 // 0x06 / 0x07: template 2 / 3). Written per row call, so the init the column calls share does not hold them.
 inline void init_row_max_min_load_macros() {
     TTI_SFPSWAP(0, p_sfpu::LREG0, 0xE /* instruction template 2 */, 1);
-    TTI_SFPLOADI(0, 0xA, 0x0286);
-    TTI_SFPLOADI(0, 0x8, 0x0000);
-    TTI_SFPCONFIG(0, 6, 0);
+    TTI_SFPCONFIG(0x0286, 6, 1);
     TTI_SFPSWAP(0, p_sfpu::LREG1, 0xF /* instruction template 3 */, 1);
-    TTI_SFPLOADI(0, 0xA, 0x0287);
-    TTI_SFPLOADI(0, 0x8, 0x0000);
-    TTI_SFPCONFIG(0, 7, 0);
+    TTI_SFPCONFIG(0x0287, 7, 1);
 }
 
 /**
@@ -1264,17 +1260,11 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     // is safe under one shared init because the row paths use the same convention and write no replay slot.
     set_sfpswap_direction<pool_type == PoolType::MIN>();
 
-    // Setup LOADMACRO sequence 0
+    // LOADMACRO sequences 0 and 1 (SFPCONFIG writes a sequence that fits 16 bits as its immediate)
     TTI_SFPSWAP(0, p_sfpu::LREG4, (0xC | p_sfpu::LREG0), 1);
-    TTI_SFPLOADI(0, 0xA, 0x0084);
-    TTI_SFPLOADI(0, 0x8, 0x0000);
-    TTI_SFPCONFIG(0, 4, 0);
-
-    // Setup LOADMACRO sequence 1
+    TTI_SFPCONFIG(0x0084, 4, 1);
     TTI_SFPSWAP(0, p_sfpu::LREG5, (0xD | p_sfpu::LREG4), 1);
-    TTI_SFPLOADI(0, 0xA, 0x0085);
-    TTI_SFPLOADI(0, 0x8, 0x0000);
-    TTI_SFPCONFIG(0, 5, 0);
+    TTI_SFPCONFIG(0x0085, 5, 1);
 
     configure_addrmod_max_min(num_cols);
 
