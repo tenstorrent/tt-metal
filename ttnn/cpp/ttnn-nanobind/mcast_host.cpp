@@ -6,6 +6,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
@@ -17,12 +18,17 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+
+#include "ttnn-nanobind/metal2_casters.hpp"
 
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 
 namespace ttnn::mcast_host {
 
 namespace kh = ttnn::kernel_lib::host;
+namespace m2 = tt::tt_metal::experimental;
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::NOC;
@@ -70,6 +76,17 @@ void py_module(nb::module_& mod) {
             nb::arg("prefix"),
             nb::arg("kernels"),
             nb::arg("first_semaphore_id"))
+        .def(
+            "attach",
+            [](const kh::Mcast& mcast,
+               m2::ProgramSpec& spec,
+               m2::ProgramRunArgs& run_args,
+               const std::string& prefix,
+               const std::vector<m2::KernelSpecName>& kernels) { mcast.attach(spec, run_args, prefix, kernels); },
+            nb::arg("spec"),
+            nb::arg("run_args"),
+            nb::arg("prefix"),
+            nb::arg("kernels"))
         .def("next_semaphore_id", &kh::Mcast::next_semaphore_id);
 
     mod.def(
@@ -79,6 +96,14 @@ void py_module(nb::module_& mod) {
         },
         nb::arg("kernel"),
         nb::arg("prefix"));
+    mod.def(
+        "attach_absent_mcast",
+        [](m2::ProgramSpec& spec, const std::string& prefix, const std::vector<m2::KernelSpecName>& kernels) {
+            kh::attach_absent_mcast(spec, prefix, kernels);
+        },
+        nb::arg("spec"),
+        nb::arg("prefix"),
+        nb::arg("kernels"));
 
     static_cast<nb::class_<kh::McastConfig>>(mod.attr("McastConfig"))
         .def(

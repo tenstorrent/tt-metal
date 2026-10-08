@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Broadcast via a Metal 2.0 ProgramSpec + a kernel_lib mcast family, in both mcast topologies.
+"""Broadcast via a Metal 2.0 ProgramSpec + a kernel_lib Mcast channel, in both mcast topologies.
 
 `toy_spec_mcast` (1D): `in` holds one tile per grid row. The sender core of each row reads its tile
 and multicasts it across the row; every core writes what it received to its own output tile. So the
@@ -11,7 +11,7 @@ output is `in` replicated across the grid width, which a broken mcast cannot fak
 whole receiver rectangle in one shot; every participating core writes its copy to its own output
 tile. The sender may sit inside the rectangle or outside it.
 
-The point of the op is the mcast plumbing: one McastFamily.attach() call writes the semaphores,
+The point of the op is the mcast plumbing: one Mcast.attach() call writes the semaphores,
 bindings, named CT args and per-core varargs into the spec, and the kernel reads them back with
 MCAST_ARGS(row). Neither side spells a CT or RT offset -- and the SAME reader kernel serves both
 topologies using the metadata and per-core roles emitted by native attachment.
@@ -62,12 +62,14 @@ def create_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int):
     tile_bytes = inp.buffer_page_size()
     cores = [ttnn.CoreCoord(x, y) for y in range(rows) for x in range(cols)]
 
-    mcast = ttnn.Mcast1D(
+    # One receiver group per grid row (row-major order, `cols` cores each); the first core of each
+    # row is its sender.
+    mcast = ttnn.Mcast(
         device,
+        ttnn.McastConfig(noc=ttnn.NOC.NOC_0),
         grid,
-        ttnn.Mcast1DShape.PerRow,
-        ttnn.Mcast1DFixedSenderConfig(starting_sender_index=0),
-        config=ttnn.McastConfig(noc=ttnn.NOC.NOC_0),
+        cols,
+        ttnn.McastFixedSenderConfig(sender_index=0),
     )
 
     spec = ttnn.ProgramSpec(
@@ -126,7 +128,7 @@ def create_2d_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int, sender=N
 
     `inp` is (1, 1, 32, 32). `sender` is the one broadcasting core, inside the rectangle or outside
     it; it defaults to the rectangle's origin. Returns (1, 1, 32, 32 * n) holding one copy of the
-    tile per participating core, in the enumeration order of `McastFamily.participating_cores()` -- a flat mapping
+    tile per participating core, in the enumeration order of `Mcast.participating_cores()` -- a flat mapping
     rather than a grid-shaped one so that a sender outside the rectangle needs no special case.
     """
     if inp.layout != ttnn.TILE_LAYOUT or inp.dtype != ttnn.bfloat16:
@@ -141,11 +143,15 @@ def create_2d_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int, sender=N
     if sender.x >= grid_size.x or sender.y >= grid_size.y:
         raise NotImplementedError(f"sender ({sender.x},{sender.y}) is outside device grid {grid_size.x}x{grid_size.y}")
 
-    # The kernel spells MCAST_ARGS(row), so the prefix stays "row" for the 2D family too: the macro
-    # names a family, not a topology.
-    mcast = ttnn.McastFamily(device, ttnn.McastConfig(noc=ttnn.NOC.NOC_0))
-    mcast.add_group(rect, [sender])
-    mcast.prepare_arguments()
+    # The kernel spells MCAST_ARGS(row), so the prefix stays "row" for the 2D channel too: the macro
+    # names a channel, not a topology.
+    mcast = ttnn.Mcast(
+        device,
+        ttnn.McastConfig(noc=ttnn.NOC.NOC_0),
+        rect,
+        rect.num_cores(),
+        ttnn.McastExplicitFixedSenderConfig([sender]),
+    )
     # nodes is the rectangle plus the sender when the sender sits outside it; every one of those
     # cores runs the program, so it is both the work unit and the output page map.
     cores = list(ttnn.corerange_to_cores(mcast.participating_cores(), None, True))
@@ -217,8 +223,8 @@ def create_2d_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int, sender=N
 # ---------------------------------------------------------------------------------------
 # Both factories above return FOUR values, not the usual three. The output tensor's shape is
 # derived from the mcast topology -- for the 2D program it is one tile per participating core,
-# which is only known once McastFamily has resolved its node set -- so the factory allocates it
-# rather than making the entry point rebuild the family just to learn the shape. Everything else
+# which is only known once Mcast has resolved its node set -- so the factory allocates it
+# rather than making the entry point rebuild the channel just to learn the shape. Everything else
 # follows the template: the factory owns every name it declares and hands back the tensor
 # bindings, so nothing below names a TensorParameter.
 
