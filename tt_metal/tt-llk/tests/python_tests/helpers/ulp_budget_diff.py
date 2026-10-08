@@ -719,6 +719,21 @@ def junit_failures(text: str) -> List[Failure]:
     return failures
 
 
+def junit_completed(text: str) -> List[Tuple[str, str, str, str, str]]:
+    """The cell of every sweep test case in a JUnit report that neither failed nor
+    errored. Each wrote a measurement -- a gated cell from ``passed_test``, a tolerance
+    cell before its skip -- so one with none means the recorder lost it, and nothing
+    judged that cell."""
+    cells = []
+    for case in ElementTree.fromstring(text).iter("testcase"):
+        if case.find("failure") is not None or case.find("error") is not None:
+            continue
+        found = _SWEEP_ID.search(case.get("name", ""))
+        if found:
+            cells.append(found.groups())
+    return cells
+
+
 def _same_cell(cell: Cell) -> Tuple[str, ...]:
     """A measured cell as a failure's ``(op, in, out, approx, dest)``."""
     key = dict(cell[1])
@@ -730,6 +745,7 @@ def render_headroom(
     measured: Dict[Cell, int],
     nonfinite: Optional[Dict[Cell, int]] = None,
     failures: Iterable[Failure] = (),
+    completed: Iterable[Tuple[str, str, str, str, str]] = (),
 ) -> Tuple[str, int]:
     """The report, and the regression count the workflow fails on.
 
@@ -743,6 +759,12 @@ def render_headroom(
     *failures* are the sweep's failed tests (:func:`junit_failures`). One whose cell is
     already listed as over budget or regressed is not repeated; the rest -- failures no
     measurement describes -- get a section of their own and count as regressions.
+
+    *completed* are the sweep's tests that did not fail (:func:`junit_completed`). Each
+    should have written a measurement; one that did not was judged by nothing, since
+    the recorder swallows a failed write, so it is listed and counts as a regression.
+    An empty comparison -- nothing measured, nothing failed -- fails too: it is a sweep
+    that did not run, not one that passed.
     """
     over: List[str] = []
     regressed: List[str] = []
@@ -785,9 +807,18 @@ def render_headroom(
         if f.cell is None or f.cell not in listed
     ]
 
+    recorded = {_same_cell(cell) for cell in measured}
+    recorded |= {_same_cell(cell) for cell in (nonfinite or {})}
+    unrecorded = sorted(set(completed) - recorded)
+
     out = ["### SFPU ULP sweep vs the declared budgets", ""]
-    if not measured and not failed:
-        return "\n".join(out + ["No measurements recorded.", ""]), 0
+    if not measured and not failed and not unrecorded:
+        out += [
+            "No measurements recorded and no test failed: nothing was compared, so "
+            "this is not a pass.",
+            "",
+        ]
+        return "\n".join(out), 1
     out += [f"{len(measured)} cell(s) measured.", ""]
     if unjudged:
         # Not a failure, but not a pass either: without a recorded figure there is
@@ -832,13 +863,25 @@ def render_headroom(
             *_md_table(("test (op, in, out, approx, dest_acc)", "failure"), failed),
             "",
         ]
-    if not (over or regressed or tight or slack or failed):
+    if unrecorded:
+        lines = [f"| `{', '.join(cell)}` |" for cell in unrecorded]
+        out += [
+            f"**Ran without a measurement — {len(unrecorded)}**",
+            "",
+            "These tests finished without failing but wrote no measurement, so nothing "
+            "judged them (an unwritable or full disk loses rows without failing a "
+            "test).",
+            "",
+            *_md_table(("cell (op, in, out, approx, dest_acc)",), lines),
+            "",
+        ]
+    if not (over or regressed or tight or slack or failed or unrecorded):
         out += [
             "Every gated cell is inside its budget with headroom to spare, and no "
             "judged tolerance cell is past its recorded measurement.",
             "",
         ]
-    return "\n".join(out), len(over) + len(regressed) + len(failed)
+    return "\n".join(out), len(over) + len(regressed) + len(failed) + len(unrecorded)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -864,13 +907,21 @@ def _headroom(args) -> Tuple[str, int]:
     # measured nothing, and the JUnit failures say why.
     text = args.measured.read_text(encoding="utf-8") if args.measured.exists() else ""
     rows = [json.loads(line) for line in text.splitlines() if line.strip()]
-    failures = (
-        junit_failures(args.junit.read_text(encoding="utf-8"))
-        if args.junit is not None and args.junit.exists()
-        else []
-    )
+    failures, completed = [], []
+    if args.junit is not None:
+        # Named but absent is a sweep that never finished writing it: without it there
+        # is no telling which cells ran, so nothing below could be called a pass.
+        if not args.junit.exists():
+            return (
+                "### SFPU ULP sweep vs the declared budgets\n\n"
+                f"No JUnit report at `{args.junit}`: the sweep did not finish, so "
+                "which cells it judged is unknown.\n",
+                1,
+            )
+        junit = args.junit.read_text(encoding="utf-8")
+        failures, completed = junit_failures(junit), junit_completed(junit)
     report, regressions = render_headroom(
-        table, _measured_cells(rows), _nonfinite_cells(rows), failures
+        table, _measured_cells(rows), _nonfinite_cells(rows), failures, completed
     )
     return report, 1 if regressions else 0
 
@@ -898,8 +949,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     h.add_argument(
         "--junit",
         type=Path,
-        help="the sweep's JUnit report; its failed tests no measurement describes are "
-        "listed and fail the comparison (a missing file is no failures)",
+        help="the sweep's JUnit report; its failed tests no measurement describes, and "
+        "its passed or skipped tests that wrote no measurement, are listed and fail the "
+        "comparison (a named file that is missing fails it too)",
     )
     h.add_argument("--out", type=Path)
 

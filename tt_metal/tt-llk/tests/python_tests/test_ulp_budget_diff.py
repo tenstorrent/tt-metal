@@ -21,6 +21,7 @@ from helpers.ulp_budget_diff import (
     _nonfinite_cells,
     _resolve,
     compare,
+    junit_completed,
     junit_failures,
     main,
     parse_table,
@@ -834,7 +835,7 @@ def test_the_headroom_report_fails_an_overflow_the_row_does_not_account_for():
 
     at_row = ("Float32", "Bfp8_b", "Yes")
     plain = ("Float16", "Float16", "No")
-    assert judged() == 0
+    assert judged() == 1  # nothing measured is a sweep that did not run, not a pass
     assert judged({at_row: 2}) == 0  # what the row accounts for
     assert judged({at_row: 3}) == 1  # one more lane than it names
     assert judged({plain: 1}) == 1  # any on a row that names none
@@ -984,3 +985,97 @@ def test_headroom_reads_the_junit_report_and_survives_no_measurements(tmp_path):
     ]
     assert main(argv) == 1
     assert "Raw maximum 9 ULP" in (tmp_path / "r.md").read_text(encoding="utf-8")
+
+
+# ── Fail closed: a cell that ran must be on the record ────────────────────────
+
+
+def _row(op, in_fmt, out_fmt, approx, dest, worst):
+    return {
+        "op": op,
+        "in": in_fmt,
+        "out": out_fmt,
+        "approx": approx,
+        "dest": dest,
+        "arch": "WORMHOLE",
+        "max": worst,
+    }
+
+
+def test_a_sweep_test_that_finished_without_a_measurement_fails_the_comparison():
+    """The recorder swallows a failed write, so a full disk leaves the JSONL short while
+    pytest stays green. Every test that did not fail wrote a row; a missing one is a
+    cell nothing judged, and the comparison has to say so and fail."""
+    table = parse_table(
+        "Abs:\n  - {in: Float16_b, out: Float16_b, max_ulp: 1}  # max 1 ULP\n"
+        "Neg:\n  - {in: Float16_b, out: Float16_b, max_ulp: 0}  # max 0 ULP\n"
+    )
+    assert junit_completed(_JUNIT) == [("Neg", "Float16_b", "Float16_b", "No", "No")]
+    abs_only = [_row("Abs", "Float16_b", "Float16_b", "No", "Yes", 1)]
+    report, regressions = render_headroom(
+        table, _measured_cells(abs_only), completed=junit_completed(_JUNIT)
+    )
+    assert "Ran without a measurement — 1" in report
+    assert "`Neg, Float16_b, Float16_b, No, No`" in report
+    assert regressions == 1
+
+    both = abs_only + [_row("Neg", "Float16_b", "Float16_b", "No", "No", 0)]
+    report, regressions = render_headroom(
+        table, _measured_cells(both), completed=junit_completed(_JUNIT)
+    )
+    assert "without a measurement" not in report
+    assert regressions == 0
+
+
+def test_a_skipped_tolerance_cell_counts_as_measured_through_its_overflow_row():
+    """A tolerance cell nothing can measure records only its non-finite lane count; that
+    row is the cell's measurement, so the cell is not reported as unrecorded."""
+    table = parse_table(
+        "Neg:\n  - {in: Float16_b, out: Float16_b, metric: tolerance}"
+        "  # not measurable: 3 lane(s) non-finite\n"
+    )
+    row = dict(_row("Neg", "Float16_b", "Float16_b", "No", "No", 0), nonfinite=3)
+    report, regressions = render_headroom(
+        table,
+        _measured_cells([row]),
+        _nonfinite_cells([row]),
+        completed=[("Neg", "Float16_b", "Float16_b", "No", "No")],
+    )
+    assert "without a measurement" not in report
+    assert regressions == 0
+
+
+def test_an_empty_comparison_is_not_a_pass(tmp_path):
+    """Nothing measured and nothing failed is a sweep that did not run."""
+    argv = [
+        "headroom",
+        "--table",
+        _write(tmp_path, "t.yaml", _BASE),
+        "--measured",
+        _write(tmp_path, "m.jsonl", ""),
+    ]
+    assert main(argv) == 1
+
+
+def test_a_named_junit_report_that_is_missing_fails_the_comparison(tmp_path, capsys):
+    """The cmd always names the report; its absence means pytest never finished, so
+    which cells ran is unknown and the measurements alone cannot pass the run."""
+    import json
+
+    measured = _write(
+        tmp_path,
+        "m.jsonl",
+        json.dumps({"op": "Abs", "in": "Float16_b", "out": "Float16_b", "max": 1})
+        + "\n",
+    )
+    argv = [
+        "headroom",
+        "--table",
+        _write(tmp_path, "t.yaml", _BASE),
+        "--measured",
+        measured,
+        "--junit",
+        str(tmp_path / "never_written.xml"),
+    ]
+    assert main(argv) == 1
+    assert "No JUnit report" in capsys.readouterr().out
