@@ -9,3 +9,4 @@ ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_
 ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp
 ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp
 ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/joint_sdpa.cpp
+tt_metal/hw/firmware/src/tt-1xx/trisck.cc
