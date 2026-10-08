@@ -17,12 +17,20 @@ inline void calculate_softsign() {
         sfpi::vFloat v = sfpi::dst_reg[0];
         // Clamp |v| at 2**26 (vConstFloatPrgm1): from there on v / (1 + |v|) rounds to +-1.0f in float32, and the clamp
         // keeps 1 / (1 + |v|) far from the smallest normal, below which it flushes to zero. poison = v - v is NaN for
-        // +-inf and NaN inputs and 0 otherwise, so those inputs still produce NaN; the sign goes on before the
-        // multiply, so the result is never re-signed and a NaN keeps the sign the hardware gives it.
+        // +-inf and NaN inputs and +0 otherwise, so those inputs still produce NaN. It is subtracted rather than added:
+        // -0 - (+0) stays -0, while -0 + (+0) rounds to +0. The sign goes on before the multiply, so the result is
+        // never re-signed and a NaN keeps the sign the hardware gives it.
         sfpi::vFloat va = sfpi::min(sfpi::setsgn(v, 0), sfpi::vFloat(sfpi::vConstFloatPrgm1));
         sfpi::vFloat denom = va + 1.0f;
         sfpi::vFloat poison = v - v;
-        sfpi::dst_reg[0].mode(ADDR_MOD_6) = sfpi::copysgn(va, v) * sfpu_reciprocal<APPROXIMATION_MODE>(denom) + poison;
+        // With APPROXIMATION_MODE the compiler folds the subtraction into poison (computing v + (-v), +0 again) at the
+        // cost of an instruction, so that mode keeps the add.
+        sfpi::vFloat y = sfpi::copysgn(va, v) * sfpu_reciprocal<APPROXIMATION_MODE>(denom);
+        if constexpr (APPROXIMATION_MODE) {
+            sfpi::dst_reg[0].mode(ADDR_MOD_6) = y + poison;
+        } else {
+            sfpi::dst_reg[0].mode(ADDR_MOD_6) = y - poison;
+        }
     }
 }
 

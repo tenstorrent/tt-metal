@@ -23,8 +23,9 @@ inline void calculate_softsign() {
         sfpi::vFloat denom = va + 1.0f;
         sfpi::vFloat poison = v - v;
         sfpi::vFloat tmp = va * sfpu_reciprocal<APPROXIMATION_MODE>(denom) + poison;
-        // Re-signing after the multiply keeps the NaN sign Wormhole gave before this change (it follows the input).
-        // Blackhole signs the clamped value before the multiply instead, so its NaNs stay canonical.
+        // tmp is computed from |v|; re-signing it after the multiply gives the result the input's sign, so a zero
+        // result keeps it and a NaN result follows the input. Blackhole signs the clamped value before the multiply
+        // instead, so its NaNs stay canonical.
         // ADDR_MOD_2 here is ADDR_MOD_6 once the SFPU address-mode base is applied.
         sfpi::dst_reg[0].mode(ADDR_MOD_2) = sfpi::copysgn(tmp, v);
     }
