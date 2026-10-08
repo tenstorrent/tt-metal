@@ -35,16 +35,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t TILE_CNT    = params.TILE_CNT;
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const Operand& buffer_A         = params.buffer_A;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_A             = params.buffer_A;
 #endif
     LLK_ASSERT(TILE_CNT == 3, "Where stages three Dest tiles (cond, true, false)");
 
     {
         ZONE_SCOPED("INIT")
         const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
@@ -249,15 +251,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t DST_INDEX   = params.DST_INDEX;
-    const Operand& buffer_Res       = params.buffer_Res;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t DST_INDEX       = params.DST_INDEX;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_Res           = params.buffer_Res;
 #endif
 
     {
         ZONE_SCOPED("INIT")
         const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*only the SFPU result tile*/);
