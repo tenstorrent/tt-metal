@@ -27,6 +27,16 @@ void kernel_main() {
     // Interleaved: write each finished tile over the NoC to its place in the output tensor.
     Noc noc;
     const auto out = TensorAccessor(tensor::out);
+
+#ifdef ARCH_QUASAR
+    // Implicit sync: each write waits for its tile itself and frees the slot once the write has left.
+    for (uint32_t tile = start_tile_id; tile < start_tile_id + num_tiles; ++tile) {
+        noc.async_write<NocOptions::TXN_ID>(dfb_out, out, {}, {.page_id = tile});
+    }
+    // finish(): every tile handed off and its slot freed. write_barrier(): every write acknowledged.
+    dfb_out.finish();
+    dfb_out.write_barrier(noc);
+#else
     const uint32_t out_tile_bytes = dfb_out.get_entry_size();
 
     for (uint32_t tile = start_tile_id; tile < start_tile_id + num_tiles; ++tile) {
@@ -35,5 +45,6 @@ void kernel_main() {
         noc.async_write_barrier();
         dfb_out.pop_front(1);
     }
+#endif
 #endif
 }

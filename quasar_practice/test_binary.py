@@ -25,6 +25,7 @@ GOLDEN = {
         (32, 32 * 40),  # 40 tiles: more tiles than nodes, uneven split
         (30, 50),  # not a multiple of 32: padded to 32x64
     ],
+    ids=["1tile", "8tiles", "40tiles", "padded"],
 )
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
 def test_binary(device, op, shape, memory_config):

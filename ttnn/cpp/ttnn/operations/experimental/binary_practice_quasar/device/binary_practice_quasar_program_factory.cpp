@@ -63,7 +63,7 @@ ttnn::device_operation::ProgramArtifacts BinaryPracticeQuasarProgramFactory::cre
     // Names that tie the pieces together: kernels see them as tensor::a, dfb::a, args::num_tiles, ...
     const m2::TensorParamName T_A{"a"}, T_B{"b"}, T_OUT{"out"};
     const m2::DFBSpecName DFB_A{"a"}, DFB_B{"b"}, DFB_OUT{"out"};
-    const m2::KernelSpecName READER{"reader"}, COMPUTE{"compute"}, WRITER{"writer"};
+    const m2::KernelSpecName READER{"reader"}, READER_B{"reader_b"}, COMPUTE{"compute"}, WRITER{"writer"};
 
     // Validation guarantees all or nothing: a sharded means b and the output are sharded the same way.
     const bool sharded = a.is_sharded();
@@ -113,9 +113,10 @@ ttnn::device_operation::ProgramArtifacts BinaryPracticeQuasarProgramFactory::cre
     m2::KernelSpec reader{
         .unique_id = READER,
         .source = std::string(kKernelDir) + "reader.cpp",
-        .dfb_bindings = {m2::ProducerOf(DFB_A, "a"), m2::ProducerOf(DFB_B, "b")},
+        .dfb_bindings = {m2::ProducerOf(DFB_A, "a")},
         .runtime_arg_schema = {.runtime_arg_names = {"start_tile_id", "num_tiles"}},
-        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
+        // Interleaved reads use Quasar implicit sync; the sharded branch publishes with reserve_back/push_back.
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/sharded),
     };
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
@@ -130,19 +131,29 @@ ttnn::device_operation::ProgramArtifacts BinaryPracticeQuasarProgramFactory::cre
         .source = std::string(kKernelDir) + "writer.cpp",
         .dfb_bindings = {m2::ConsumerOf(DFB_OUT, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"start_tile_id", "num_tiles"}},
-        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
+        // Same split as the reader: implicit sync for interleaved, wait_front/pop_front for sharded.
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/sharded),
     };
     if (sharded) {
         reader.compiler_options.defines = {{"SHARDED", "1"}};
         writer.compiler_options.defines = {{"SHARDED", "1"}};
     } else {
-        reader.tensor_bindings = {m2::TensorBinding{T_A, "a"}, m2::TensorBinding{T_B, "b"}};
+        reader.tensor_bindings = {m2::TensorBinding{T_A, "a"}};
         writer.tensor_bindings = {m2::TensorBinding{T_OUT, "out"}};
+    }
+
+    // One DFB per DM core: a second reader instance on its own DM core feeds DFB b. The kernel calls its DFB and
+    // tensor "a", so b is bound under that name.
+    m2::KernelSpec reader_b = reader;
+    reader_b.unique_id = READER_B;
+    reader_b.dfb_bindings = {m2::ProducerOf(DFB_B, "a")};
+    if (!sharded) {
+        reader_b.tensor_bindings = {m2::TensorBinding{T_B, "a"}};
     }
 
     m2::ProgramSpec spec{
         .name = "binary_practice_quasar",
-        .kernels = {reader, writer, compute},
+        .kernels = {reader, reader_b, writer, compute},
         .dataflow_buffers = {make_dfb(DFB_A, a, T_A), make_dfb(DFB_B, b, T_B), make_dfb(DFB_OUT, output, T_OUT)},
         .tensor_parameters =
             {{.unique_id = T_A, .spec = a.tensor_spec()},
@@ -150,13 +161,14 @@ ttnn::device_operation::ProgramArtifacts BinaryPracticeQuasarProgramFactory::cre
              {.unique_id = T_OUT, .spec = output.tensor_spec()}},
         .work_units = {m2::WorkUnitSpec{
             .name = "binary_practice_quasar",
-            .kernels = {READER, WRITER, COMPUTE},
+            .kernels = {READER, READER_B, WRITER, COMPUTE},
             .target_nodes = m2::NodeRangeSet(target_ranges)}},
     };
 
     m2::ProgramRunArgs run_params;
     run_params.kernel_run_args = {
-        m2::ProgramRunArgs::KernelRunArgs{.kernel = READER, .runtime_arg_values = std::move(reader_args)},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = READER, .runtime_arg_values = reader_args},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = READER_B, .runtime_arg_values = std::move(reader_args)},
         m2::ProgramRunArgs::KernelRunArgs{.kernel = WRITER, .runtime_arg_values = std::move(writer_args)},
         m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE, .runtime_arg_values = std::move(compute_args)},
     };

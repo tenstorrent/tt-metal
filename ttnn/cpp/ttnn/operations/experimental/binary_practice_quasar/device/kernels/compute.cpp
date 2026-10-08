@@ -44,4 +44,9 @@ void kernel_main() {
         dfb_a.pop_front(1);
         dfb_b.pop_front(1);
     }
+
+    // Wait until every DFB this kernel touches is drained (no-op on WH/BH).
+    dfb_a.finish();
+    dfb_b.finish();
+    dfb_out.finish();
 }
