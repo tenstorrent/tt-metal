@@ -66,7 +66,7 @@ inline __attribute__((always_inline)) std::uint32_t read_thread_word_mmio()
     static_assert(creg_addr <= 0x7ffu, "thread CFG address exceeds the RISC CREG selector");
 
     reg_write(RISCV_DEBUG_REG_TENSIX_CREG_READ, creg_addr);
-    wait(1);
+    wait(1 /*cycles*/);
     return reg_read(RISCV_DEBUG_REG_TENSIX_CREG_RDDATA);
 }
 
