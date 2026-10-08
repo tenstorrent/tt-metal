@@ -840,6 +840,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             {"sfpu_two_pass_reciprocal", std::bit_cast<uint32_t>(1.0f / static_cast<float>(local_count))});
     }
 
+    if (!use_welford && subblock_wt > 2) {
+        eltwise_binary_defines["CKL_ELTWISE_CHAIN_PACK_BLOCK"] = "1";
+    }
+
     KernelDescriptor compute_sender_desc;
     compute_sender_desc.kernel_source =
         (use_welford
