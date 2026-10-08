@@ -948,7 +948,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["ISCLOSE_ATOL_RT_ARG_IDX"] = "4";
     }
 
-    // FPU op's activations, for the Blackhole block sections and operand pass
+    // FPU op's activations, for the Blackhole block sections
     bool has_operand_activations = false;
     bool has_post_activations = false;
     bool post_zero_point = false;
@@ -1093,12 +1093,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
-    // Blackhole FPU op, for the block sections and the operand pass (below)
+    // Blackhole FPU op, for the block sections (below)
     const bool bh_fpu_op = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
                            std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) && !post_zero_point;
-    // Blackhole: the operand pass covers these DEST sections, then one init (operand_pass_sections, at invoke).
-    const uint32_t pre_sections = operation_attributes.operand_pass_sections;
-    TT_ASSERT(pre_sections == 0 || (bh_fpu_op && has_operand_activations && num_tiles_per_cycle > 1));
     bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
     const bool inputs_row_major =
@@ -1125,7 +1122,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                                   : a_data_format;
         uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
-            .total_size = a_intermediate_single_tile_size * num_tiles_per_cycle * std::max(pre_sections, 1u),
+            .total_size = a_intermediate_single_tile_size * num_tiles_per_cycle,
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
@@ -1156,7 +1153,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                                   : b_data_format;
         uint32_t b_intermediate_single_tile_size = tt::tile_size(b_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
-            .total_size = b_intermediate_single_tile_size * num_tiles_per_cycle * std::max(pre_sections, 1u),
+            .total_size = b_intermediate_single_tile_size * num_tiles_per_cycle,
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
@@ -1418,10 +1415,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
     if (block_pack) {
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
-    }
-
-    if (pre_sections > 0) {
-        compute_kernel_defines["BINARY_NG_PRE_SECTIONS"] = std::to_string(pre_sections);
     }
 
     // Blackhole: a multiply with operand and post activations (logical_and), whose init runs per tile, keeps the

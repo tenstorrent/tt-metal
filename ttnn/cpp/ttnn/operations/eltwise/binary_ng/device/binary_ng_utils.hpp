@@ -146,16 +146,6 @@ const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal:
 
 bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
-// Blackhole: the DEST sections binary_ng's operand pass covers, up to 4 (8 with two operand passes or a Python scalar),
-// fewer where its CBs would not fit below the lowest L1 buffer once c is allocated; 0 for a pass per section.
-struct OperandSections {
-    uint32_t pass = 0;
-};
-OperandSections operand_sections(
-    const BinaryNgDeviceOperation::operation_attributes_t& attributes,
-    const BinaryNgDeviceOperation::tensor_args_t& tensor_args,
-    const tt::tt_metal::TensorSpec& c);
-
 bool is_native_L1_sharding(
     const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c);
 
