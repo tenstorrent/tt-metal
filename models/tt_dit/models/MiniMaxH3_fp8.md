@@ -203,4 +203,134 @@ All on the 4x8 Galaxy at the HyperFlow working point (1344x768, 5 s, 8 forwards,
 
 ## 8. Results
 
-Filled in by the runs recorded in the PR that added the knob.
+All runs on a 4x8 Blackhole Galaxy at a 190 W per-chip TDP limit, HyperFlow 8-forward adapter, 1344x768, 5 s t2va
+(124 frames, packed sequence 37 749 rows bucketed to 38 912 = 4 864 rows per device), seed 0, one prompt (a second
+prompt was run for the side-by-side clips only). "default" is the unmodified branch. The 8-bit configs run in the
+same process after the default (the weights are typecast once; the activation casts and compute configs switch per
+config, and every config gets a quiet compile pass before its timed generation).
+
+### 8.1 Noise floor and the measurement itself
+
+Two default generations in separate processes are bit-identical (video and audio PSNR infinite, every forward's
+predicted velocity identical), so every difference below is the 8-bit change.
+
+### 8.2 Denoise time (the lever this work was after)
+
+| config | denoise 8 forwards | steady ms/forward | total clip | vs default |
+|---|---|---|---|---|
+| default (bf16, HiFi2) | 7.60 s | 933 | 8.72 s | – |
+| `w8` (bfloat8_b weights, HiFi2) | 7.57 s | 928 | 8.67 s | −0.4 % |
+| `w8a8` (+ bfloat8_b activations) | 7.61 s | 924 | 8.75 s | +0.1 % |
+| `w8a8` + Q/K/V cast before SDPA (`FAST_H3_FP8_SDPA=1`) | 7.57 s | 930 | 8.68 s | −0.3 % |
+| `w8a8` + `to_out` weight quantized, epilogue un-fused (`FAST_H3_FP8_OUT_WEIGHT=1`) | 7.40 s | 907 | 8.50 s | −2.6 % |
+| `w8_lofi`, `w8a8_lofi`, `w8a8_lofi` without fp32 accumulation | see 8.6 | | | |
+
+The VAE decode (0.76 s) and audio decode (0.06 s) are untouched. The bytes lever is worth almost nothing here: halving
+the weight reads (`w8`) and the all-gather payloads (`w8a8`) moves the step by under half a percent, and the extra
+typecast passes of `w8a8` eat what the smaller gathers save.
+
+### 8.3 Where the time goes, per matmul (why the bytes lever is flat)
+
+Teacher-forced timing of each block linear in isolation on captured real inputs (min of 3 synchronized calls, mean
+over blocks 0, 12, 25, 37, 49 at forwards 0 and 4):
+
+| config | `to_qkv` | `to_out` | `ff1` | `ff2` | whole block |
+|---|---|---|---|---|---|
+| bf16 | 1.67 ms | 1.58 ms | 2.44 ms | 2.55 ms | 18.5 ms |
+| `w8` | 1.68 (1.01x) | 1.63 (1.03x) | 2.42 (0.99x) | 2.91 (1.14x) | 18.3 (0.99x) |
+| `w8a8` | 1.71 (1.02x) | 1.54 (0.97x) | 2.45 (1.00x) | 2.81 (1.11x) | 18.2 (0.99x) |
+| `w8_lofi` | 1.59 (0.95x) | 1.62 (1.02x) | 2.25 (0.92x) | 2.80 (1.10x) | 18.0 (0.98x) |
+| `w8a8_lofi`, fused `to_out` | 1.37 (0.82x) | 1.54 (0.98x) | 2.10 (0.86x) | 2.60 (1.02x) | 17.4 (0.94x) |
+| `w8a8_lofi`, no fp32 accumulation | 1.37 (0.82x) | 1.52 (0.96x) | 2.09 (0.86x) | 2.72 (1.07x) | 17.4 (0.94x) |
+| `w8a8`, un-fused `to_out` (weight quantized) | 1.72 (1.03x) | 1.29 (0.82x) | 2.44 (1.00x) | 2.82 (1.11x) | 18.0 (0.97x) |
+| `w8a8_lofi`, un-fused `to_out` | 1.38 (0.83x) | 1.28 (0.81x) | 2.11 (0.86x) | 2.64 (1.04x) | 17.2 (0.93x) |
+
+(Program cache cleared before each config, so every config runs its own programs; the earlier same-process numbers,
+where the all-gather matmul reused the HiFi2 programs, are superseded.)
+
+- The four linears take 8.2 ms of a block's 18.5 ms (44 %); 50 blocks make the 925 ms of a forward, so the rest of
+  the block (ring attention, norms, modulation gathers, residual ops) is the other 56 %.
+- Bytes buy nothing: `w8` and `w8a8` leave every matmul within a few percent of bf16, so at 4 864 rows per device
+  the all-gather matmuls are bound neither by weight bytes nor by the gathered activation bytes. `ff2`'s reduce-scatter
+  matmul is slightly *slower* with block-float operands (1.02–1.14x) and is unmoved by LoFi: it is bound by the
+  reduce-scatter, not the FPU.
+- LoFi is the lever, and it needs block-float activations: `to_qkv` 1.67 → 1.37 ms and `ff1` 2.44 → 2.10 ms
+  (0.82–0.86x) with `w8a8_lofi`, only 0.92–0.95x with bf16 activations (`w8_lofi`). The block drops 6–7 %.
+- `to_out` without its fused `residual + gate·out` epilogue is faster at any fidelity (1.58 → 1.28 ms): the fused
+  epilogue's swept blocking at this M puts one M tile per core. At HiFi2 that is a bf16-applicable follow-up worth
+  about 2 % of the step; at LoFi the un-fused form is also the accurate one (8.5), so the LoFi presets use it.
+
+### 8.4 Weight rounding alone (host side, adapter-fused weights of blocks 0, 12, 25, 37, 49)
+
+| rounding | relative L2 error of the weight | note |
+|---|---|---|
+| bfloat8_b (exact at HiFi2) | 0.75–0.82 % (≈ 42 dB) for every role and block | block crest factor median 2.1, max 4: no weight outliers |
+| LoFi's 5-bit weight operand | 1.35 % | |
+| bfloat8_b then LoFi | 1.60 % | |
+| bfloat4_b | 11–12 % | for scale |
+
+The adaLN projection rounds the same as the block linears (0.68–0.75 %); it is excluded for its position in the model
+(every block reads it), not because it would round worse.
+
+### 8.5 Per-matmul error on real activations (teacher-forced, versus the bf16 result on the same input)
+
+Mean over the ten captures [worst] in relative L2 %; SQNR in dB after the slash:
+
+| config | `to_qkv` | `to_out` | `ff1` | `ff2` | whole block |
+|---|---|---|---|---|---|
+| `w8` | 0.59 [0.68] / 44.6 | 0 (weight stays bf16) | 0.99 [1.16] / 40.1 | 0.35 [0.66] / 49.1 | 1.24 [2.57] / 38.1 |
+| `w8a8` | 1.14 [1.28] / 38.9 | 0.40 [0.70] / 47.9 | 2.46 [2.71] / 32.2 | 0.60 [1.24] / 44.5 | 1.53 [3.04] / 36.3 |
+| `w8a8`, un-fused `to_out` (weight quantized) | 1.14 | 0.70 [1.37] / 43.0 | 2.46 | 0.60 | 1.64 [3.15] / 35.7 |
+| `w8_lofi`, fused `to_out` | 1.45 [1.61] / 36.7 | 1.93 [3.94] / 34.3 | 2.64 [3.07] / 31.6 | 0.71 [1.48] / 43.0 | 3.00 [5.99] / 30.5 |
+| `w8a8_lofi`, fused `to_out` | 1.24 [1.51] / 38.1 | 1.74 [3.49] / 35.2 | 2.31 [2.91] / 32.7 | 0.66 [1.29] / 43.6 | 2.80 [6.09] / 31.0 |
+| `w8a8_lofi`, no fp32 accumulation | 1.35 [1.64] / 37.4 | 1.48 [2.85] / 36.6 | 2.51 [3.11] / 32.0 | 0.70 [1.35] / 43.1 | 2.50 [4.50] / 32.0 |
+| `w8a8_lofi`, un-fused `to_out` (the preset) | 1.24 [1.51] / 38.1 | 0.60 [1.30] / 44.4 | 2.31 [2.91] / 32.7 | 0.66 [1.29] / 43.6 | 1.66 [3.53] / 35.6 |
+
+- Weights cost 0.4–1 % per matmul at HiFi2; the activation cast costs more than the weight cast, and most of all on
+  `ff1`, whose input (the second norm's output) carries channel outliers: casting it to 16-value blocks produces
+  single errors up to 18 standard deviations of the output at block 0 while the mean error stays at 2.5 %.
+- LoFi adds 0.1–0.3 % on `to_qkv`, `ff1` and `ff2` (the 5-bit weight operand), as the host rounding analysis
+  predicts. The outlier is `to_out` with its *fused* epilogue: at LoFi the kernel also multiplies `gate · out` and
+  adds the residual at LoFi, so `to_out`'s error triples (0.4 → 1.7–1.9 %) and the block's doubles (1.5 → 2.8–3.0 %,
+  5–6 % at block 0). Un-fusing the epilogue at LoFi brings `to_out` to 0.60 % and the block to 1.66 %, essentially
+  the HiFi2 figure, which is why the LoFi presets un-fuse it by default.
+- Depth matters more than role: the whole-block error is 0.2 % at block 12, 0.5–1 % at block 25, 1.2–1.6 % at
+  block 0 and 2–3.5 % at blocks 37 and 49, for every config.
+- Through 50 blocks these compound to a 4.3 % (27 dB) error of the predicted velocity at the first forward for `w8`
+  and `w8a8` alike, and 5.2 % (25.7 dB) for `w8a8_lofi`: the per-forward error of the whole model is set mostly by
+  the weight rounding, and the activation cast and LoFi add little on top at the model output.
+
+### 8.6 Clip-level: per-forward drift and final PSNR against the default
+
+| config | forward 0 velocity rel-L2 / SQNR | forward 7 | video PSNR (124 frames) | audio PSNR |
+|---|---|---|---|---|
+| `w8` | 4.27 % / 27.4 dB | 17.9 % | 28.5 dB | 29.5 dB |
+| `w8a8` | 4.25 % / 27.4 dB | 30.8 % | 26.6 dB | 25.6 dB |
+| `w8a8` + Q/K/V cast | 4.23 % / 27.5 dB | 23.2 % | 27.0 dB | 27.0 dB |
+| `w8a8` + `to_out` weight | 5.23 % / 25.6 dB | 27.7 % | 26.3 dB | 23.3 dB |
+
+The first forward sees identical inputs, so its error is the model's; later forwards accumulate the trajectory's
+divergence (the sampler's steps are large with 8 forwards). The 24–28.5 dB clip PSNRs are in the range the GPU FP8
+H3 checkpoints report against bf16 (24.8 dB at 10 steps), and the clips are visually the same scene and motion with
+small texture differences (see the side-by-side clips attached to the PR).
+
+A second prompt (a saxophonist on a rain-soaked night street under neon, same seed) diverges more, as a busier scene
+does: `w8` 22.2 dB video / 18.6 dB audio, `w8a8_lofi` 19.8 dB / 18.5 dB against the default, from first-forward
+errors of 3.5 % and 5.2 %. Frame by frame the three clips are the same shot, composition and quality; the neon
+lettering, the passing cars and the musician's expression differ, nothing is blurred or broken. So the PSNR against
+the bf16 run measures how far the sample moved, not whether it got worse; whether a different-but-equivalent sample
+is acceptable for a given use is a product call, and the per-forward error (3–5 %, 26–29 dB) is the number to budget.
+
+LoFi configurations: the first sweep measured them in the same process as the default and found them identical to
+their HiFi2 counterparts on `to_qkv`, `to_out` and `ff1`. That was the all-gather matmul's program cache: its key did
+not include the compute config, so the cached HiFi2 programs served the LoFi requests (fixed in this PR,
+`all_gather_minimal_matmul_async_device_operation_types.hpp`). The second-prompt run happened to compile its
+block-float-input programs under `w8a8_lofi` first, so LoFi really ran there: 7.14 s denoise, 873 ms per forward,
+**−7.0 %** against that process's default (7.67 s, 938 ms). The LoFi presets are re-measured in fresh processes
+after the fix; their rows follow.
+
+### 8.7 Conclusion for the shipped default
+
+`FAST_H3_FP8=1` stays opt-in and off. At the 5 s HyperFlow working point on a 4x8 the block matmuls are not bound by
+operand bytes, so 8-bit storage and transport buy under 1 % while costing a 27 dB per-forward error; the compute
+lever (LoFi) is the only one that can move the step, and its measurement follows the cache-key fix.

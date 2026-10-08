@@ -85,7 +85,7 @@ class MiniMaxH3QuantConfig:
         fidelity: ttnn.MathFidelity | None = None,
         fp32_dest_acc: bool | None = None,
         sdpa: bool = False,
-        out_weight: bool = False,
+        out_weight: bool | None = None,
     ) -> MiniMaxH3QuantConfig:
         """One of `PRESETS`, narrowed to `linears` and with any explicit overrides applied.
 
@@ -98,6 +98,10 @@ class MiniMaxH3QuantConfig:
         w8_lofi: bfloat8_b weights, bf16 activations, LoFi (the compute lever without quantizing activations).
         w8a8_lofi: bfloat8_b weights and activations, LoFi (the Wan / LTX bf8 tier).
         fp32 destination accumulation stays on in every preset; `fp32_dest_acc=False` is a separate, measured knob.
+
+        `out_weight` defaults to True at LoFi: the fused addcmul epilogue multiplies the gated residual at the
+        matmul's fidelity, which triples to_out's error at LoFi, while the un-fused matmul with a block-float weight
+        is both more accurate and faster at the measured shape. At HiFi2 the fused epilogue is exact and kept.
         """
         if name not in PRESETS:
             raise ValueError(f"unknown preset {name!r}, expected one of {PRESETS}")
@@ -108,6 +112,7 @@ class MiniMaxH3QuantConfig:
         lofi = name.endswith("_lofi")
         fid = fidelity if fidelity is not None else (ttnn.MathFidelity.LoFi if lofi else ttnn.MathFidelity.HiFi2)
         acc = True if fp32_dest_acc is None else fp32_dest_acc
+        out_weight = lofi if out_weight is None else out_weight
         quant = LinearQuant(
             weight_dtype=ttnn.bfloat8_b,
             activation_dtype=ttnn.bfloat8_b if act else None,
@@ -163,13 +168,13 @@ def math_fidelity_from_env(var: str) -> ttnn.MathFidelity | None:
 
 
 def quant_config_from_env() -> MiniMaxH3QuantConfig:
-    """`FAST_H3_FP8` = 0 (default, off) | 1 (the `w8a8` preset) | a preset name, refined by the optional
+    """`FAST_H3_FP8` = 0 (default, off) | 1 (the `w8a8_lofi` preset) | a preset name, refined by the optional
     FAST_H3_FP8_LINEARS (subset of qkv,out,ff1,ff2), FAST_H3_FP8_ACTIVATIONS, FAST_H3_FP8_FIDELITY,
     FAST_H3_FP8_FP32_ACC, FAST_H3_FP8_SDPA and FAST_H3_FP8_OUT_WEIGHT."""
     raw = os.environ.get(ENV_FLAG, "0").strip()
     if raw.lower() in _FALSE:
         return MiniMaxH3QuantConfig.default()
-    name = "w8a8" if raw.lower() in _TRUE else raw
+    name = "w8a8_lofi" if raw.lower() in _TRUE else raw
     if name not in PRESETS:
         raise ValueError(f"{ENV_FLAG}={raw!r}: expected 0, 1 or one of {PRESETS}")
     linears = tuple(n for n in os.environ.get("FAST_H3_FP8_LINEARS", ",".join(LINEARS)).split(",") if n)
@@ -180,7 +185,7 @@ def quant_config_from_env() -> MiniMaxH3QuantConfig:
         fidelity=math_fidelity_from_env("FAST_H3_FP8_FIDELITY"),
         fp32_dest_acc=_flag("FAST_H3_FP8_FP32_ACC"),
         sdpa=_flag("FAST_H3_FP8_SDPA", False),
-        out_weight=_flag("FAST_H3_FP8_OUT_WEIGHT", False),
+        out_weight=_flag("FAST_H3_FP8_OUT_WEIGHT"),
     )
 
 

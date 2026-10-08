@@ -44,21 +44,36 @@ def test_false_values_are_off(clean_env, value):
     assert not qc.quant_config_from_env().active
 
 
-def test_one_means_w8a8(clean_env):
+def test_one_means_w8a8_lofi_with_an_unfused_out(clean_env):
     clean_env.setenv(qc.ENV_FLAG, "1")
     config = qc.quant_config_from_env()
-    assert config == qc.MiniMaxH3QuantConfig.preset("w8a8")
+    assert config == qc.MiniMaxH3QuantConfig.preset("w8a8_lofi")
+    for name in qc.LINEARS:
+        quant = config.linear(name)
+        assert quant.weight_dtype == ttnn.bfloat8_b
+        assert quant.activation_dtype == ttnn.bfloat8_b
+        assert quant.math_fidelity == ttnn.MathFidelity.LoFi
+        assert quant.fp32_dest_acc
+    # At LoFi to_out's epilogue is un-fused (it would multiply the residual at LoFi), so its weight is quantized too.
+    assert config.out_weight
+    assert config.sdpa_input_dtype is None
+
+
+def test_w8a8_keeps_the_fused_out_epilogue(clean_env):
+    clean_env.setenv(qc.ENV_FLAG, "w8a8")
+    config = qc.quant_config_from_env()
     for name in ("qkv", "ff1", "ff2"):
         quant = config.linear(name)
         assert quant.weight_dtype == ttnn.bfloat8_b
         assert quant.activation_dtype == ttnn.bfloat8_b
         assert quant.math_fidelity == ttnn.MathFidelity.HiFi2
-        assert quant.fp32_dest_acc
     # to_out feeds the fused addcmul epilogue, whose weight tile format must match the bf16 residual.
     assert config.out.weight_dtype is None
     assert config.out.activation_dtype == ttnn.bfloat8_b
-    assert config.sdpa_input_dtype is None
     assert not config.out_weight
+    clean_env.setenv("FAST_H3_FP8_OUT_WEIGHT", "0")
+    clean_env.setenv(qc.ENV_FLAG, "w8a8_lofi")
+    assert not qc.quant_config_from_env().out_weight  # an explicit 0 keeps the epilogue fused at LoFi too
 
 
 def test_w8_is_weights_only(clean_env):
@@ -80,7 +95,7 @@ def test_lofi_presets_keep_fp32_accumulation(clean_env):
     config = qc.quant_config_from_env()
     assert config.qkv.math_fidelity == ttnn.MathFidelity.LoFi
     assert config.qkv.weight_dtype == ttnn.bfloat8_b and config.qkv.activation_dtype is None
-    assert config.describe() == "qkv:w8a16/LoFi ff1:w8a16/LoFi ff2:w8a16/LoFi"
+    assert config.describe() == "qkv:w8a16/LoFi out:w8a16/LoFi ff1:w8a16/LoFi ff2:w8a16/LoFi"
 
 
 def test_overrides(clean_env):
@@ -95,6 +110,7 @@ def test_overrides(clean_env):
     assert config.qkv.math_fidelity == ttnn.MathFidelity.LoFi and not config.qkv.fp32_dest_acc
     assert config.sdpa_input_dtype == ttnn.bfloat8_b
     assert config.describe() == "qkv:w8a8/LoFi/no-fp32-acc ff1:w8a8/LoFi/no-fp32-acc sdpa:in8"
+    assert not config.out_weight  # "out" is not in the restricted linears
 
 
 def test_out_weight_requires_the_unfused_epilogue(clean_env):
@@ -146,9 +162,10 @@ def test_apply_sets_the_block_attributes(monkeypatch):
     monkeypatch.setattr(qc.ttnn, "typecast", lambda data, dtype: casts.append(dtype) or SimpleNamespace(dtype=dtype))
     block = _fake_block()
     qc.apply_quant_config(block, qc.MiniMaxH3QuantConfig.preset("w8a8_lofi", sdpa=True))
-    # Weights: qkv, ff1, ff2 cast; to_out carved out.
-    assert casts == [ttnn.bfloat8_b] * 3
-    assert block.attn.to_out.weight._data.dtype == ttnn.bfloat16
+    # Weights: all four cast; at LoFi to_out's epilogue is un-fused so its weight is quantized too.
+    assert casts == [ttnn.bfloat8_b] * 4
+    assert block.attn.to_out.weight._data.dtype == ttnn.bfloat8_b
+    assert not block.attn.fuse_out_addcmul
     # Inputs: the three ColParallel linears cast before their gather; ff2 takes ff1's bfloat8_b output instead.
     for linear in (block.attn.to_qkv, block.attn.to_out, block.ff.ff1):
         assert linear.activation_dtype == ttnn.bfloat8_b
@@ -160,10 +177,13 @@ def test_apply_sets_the_block_attributes(monkeypatch):
     assert block.attn.qkv_compute_kernel_config.math_fidelity == ttnn.MathFidelity.LoFi
     assert block.ff_compute_kernel_config.math_fidelity == ttnn.MathFidelity.LoFi
     assert block.attn.sdpa_input_dtype == ttnn.bfloat8_b
-    assert block.attn.fuse_out_addcmul
     # Re-applying is a no-op on already-cast weights.
     qc.apply_quant_config(block, qc.MiniMaxH3QuantConfig.preset("w8a8_lofi", sdpa=True))
-    assert casts == [ttnn.bfloat8_b] * 3
+    assert casts == [ttnn.bfloat8_b] * 4
+    # At HiFi2 the fused epilogue stays and to_out's weight is carved out.
+    hifi = _fake_block()
+    qc.apply_quant_config(hifi, qc.MiniMaxH3QuantConfig.preset("w8a8"))
+    assert hifi.attn.fuse_out_addcmul and hifi.attn.to_out.weight._data.dtype == ttnn.bfloat16
 
 
 def test_apply_out_weight_unfuses_the_epilogue(monkeypatch):

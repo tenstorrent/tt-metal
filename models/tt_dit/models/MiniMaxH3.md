@@ -462,13 +462,13 @@ matmul throughput) rounds the weight to 5 significant bits while the activation 
 
 | knob | values | meaning |
 |---|---|---|
-| `FAST_H3_FP8` | `0` (default), `1` = `w8a8`, `w8`, `w8a8`, `w8_lofi`, `w8a8_lofi` | preset: `w8` = bfloat8_b weights only (HiFi2); `w8a8` = weights and activations (HiFi2); `w8_lofi` / `w8a8_lofi` = the same at LoFi |
+| `FAST_H3_FP8` | `0` (default), `1` = `w8a8_lofi`, `w8`, `w8a8`, `w8_lofi`, `w8a8_lofi` | preset: `w8` = bfloat8_b weights only (HiFi2); `w8a8` = weights and activations (HiFi2); `w8_lofi` / `w8a8_lofi` = the same at LoFi, with `to_out`'s epilogue un-fused and its weight quantized (see below) |
 | `FAST_H3_FP8_LINEARS` | subset of `qkv,out,ff1,ff2` | restrict the preset to these linears (the others stay bf16) |
 | `FAST_H3_FP8_ACTIVATIONS` | `0` / `1` | override the preset's activation cast |
 | `FAST_H3_FP8_FIDELITY` | `LoFi`, `HiFi2`, `HiFi3`, `HiFi4` | override the preset's math fidelity |
 | `FAST_H3_FP8_FP32_ACC` | `0` / `1` | fp32 destination accumulation (on in every preset) |
 | `FAST_H3_FP8_SDPA` | `0` / `1` | also typecast Q, K and V to `bfloat8_b` before the ring SDPA (one dtype is required across its inputs; the SP ring then gathers half the bytes) |
-| `FAST_H3_FP8_OUT_WEIGHT` | `0` / `1` | quantize `to_out`'s weight by un-fusing its addcmul epilogue |
+| `FAST_H3_FP8_OUT_WEIGHT` | `0` / `1` | quantize `to_out`'s weight by un-fusing its addcmul epilogue; defaults to `1` at LoFi (the fused epilogue would multiply the gated residual at LoFi, tripling `to_out`'s error, and the un-fused matmul is faster at the measured shape) and `0` at HiFi2 |
 
 The knobs are named `FAST_H3_*` rather than `MINIMAX_H3_*` to keep the opt-in speed tier apart from the model's
 configuration knobs.
