@@ -226,6 +226,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // ---- Run 1: pack the tiny matmul result to the output buffer (verbatim) ----
     run = 1;
+    // hw_configure writes the packer config by MMIO, which does not wait for the run-0 pack still in
+    // flight. Changing the packer input width under it (32-bit DEST with mixed 16/32-bit formats) hangs.
+    tensix_sync();
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats_array[run].pack_src,
         formats_array[run].pack_dst,
