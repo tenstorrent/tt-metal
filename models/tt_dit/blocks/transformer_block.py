@@ -44,6 +44,8 @@ class TransformerBlock(Module):
         attention_q_chunk_size: int = 128,
         is_fsdp: bool = False,
         attention_exp_approx_mode: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -120,6 +122,8 @@ class TransformerBlock(Module):
             q_chunk_size=attention_q_chunk_size,
             is_fsdp=is_fsdp,
             exp_approx_mode=attention_exp_approx_mode,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
         self.norm2 = DistributedLayerNorm(
