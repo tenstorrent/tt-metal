@@ -63,18 +63,14 @@ void kernel_main() {
 
     const Noc noc;
 
-    {
-        constexpr std::uint32_t dfb_max_scaler = dfb::max_scaler;
-        constexpr std::uint32_t dfb_sum_scaler = dfb::sum_scaler;
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb_max_scaler,
-            ckernel::PoolType::MAX,
-            ckernel::ReduceDim::REDUCE_ROW>();
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb_sum_scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW>();
-    }
+    // Prepare scalers in parallel with the writer's padding mask, which compute waits on first.
+    using MaxAuxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::max_scaler>;
+    using SumAuxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<
+        ttnn::kernel_lib::ReduceAuxiliaryArgs<MaxAuxiliary::next_compile_time_args_offset()>,
+        dfb::sum_scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<MaxAuxiliary>();
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<SumAuxiliary>();
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     const std::uint32_t i_tile = 0;

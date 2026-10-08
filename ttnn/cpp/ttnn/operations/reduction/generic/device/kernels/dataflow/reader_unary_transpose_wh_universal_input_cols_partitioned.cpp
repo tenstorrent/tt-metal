@@ -9,7 +9,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 void kernel_main() {
@@ -22,9 +22,8 @@ void kernel_main() {
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto HtWt = get_arg(args::HtWt);
 
-    const auto scaler_bits = get_arg(args::scaler_bits);
-    constexpr bool use_welford = get_arg(args::use_welford) != 0;
-    constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+    // The host fixes the stream order to match the planned compute call.
+    constexpr uint32_t row_chunk = get_arg(args::reduce_output_tiles);
     constexpr uint32_t tiles_per_batch = get_arg(args::tiles_per_batch);
     // H-axis split geometry: the reduction axis is cut into `num_h_slices` slices of `slice_Ht` tiles
     // each, and the work units become (nc, slice, wt) triples over a (N, C, num_h_slices, W) result.
@@ -32,32 +31,15 @@ void kernel_main() {
     constexpr auto num_h_slices = get_arg(args::num_h_slices);
     constexpr auto slice_Ht = get_arg(args::slice_Ht);
 
-    // Welford must process one column at a time because the SFPU can only maintain
-    // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
-    // per chunk, which would feed the Welford kernel tiles from the wrong columns.
-    // Int32 SFPU max keeps one acc DST per column plus one shared work DST (DEST_AUTO_LIMIT - 1).
-    //
-    // The data format has to be a constant expression here (it is a template argument below), so it
-    // is read with the free function rather than off a DataflowBuffer object: DataflowBuffer's
-    // constructor is not constexpr, so no such object is usable in a constant expression.
-    constexpr DataFormat reduce_format = get_dataformat(dfb::in0);
-    constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format, fp32_mode>();
-    constexpr uint32_t dest_row_chunk =
-        use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1) : compute_kernel_lib::DEST_AUTO_LIMIT;
-    constexpr uint32_t row_chunk = use_welford ? 1 : dest_row_chunk;
-
     constexpr uint32_t onetile = 1;
 
-    // Batch only when row_chunk matches the host's tiles_per_batch; SFPU shortens the chunk.
+    // Batch only when the planned column group matches the host's reader batch.
     constexpr bool batch_reads = (row_chunk == tiles_per_batch);
 
     const Noc noc;
     // dfb::in0 is the reduce input pipe: this kernel fills it, the compute kernel drains it.
     DataflowBuffer dfb_in0(dfb::in0);
     const uint32_t tile_bytes = dfb_in0.get_tile_size();
-
-    const float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
     auto tensor_accessor = TensorAccessor(tensor::src);
 

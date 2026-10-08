@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fused_rmsnorm_pre_all_gather_device_operation.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -108,6 +109,14 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
         dst_reg_count,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+    // Only the final, single-tile reduction needs a scaler. Cross-tile
+    // accumulation is fused into packing the squared input tiles.
+    ttnn::kernel_lib::host::ReduceAuxiliaryArgs(
+        {reduce_scalar_cb_id,
+         {{.value = 1.0F,
+           .type = ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRow,
+           .num_valid_elements = TILE_WIDTH}}})
+        .append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_id, output_tiles_per_row};
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);

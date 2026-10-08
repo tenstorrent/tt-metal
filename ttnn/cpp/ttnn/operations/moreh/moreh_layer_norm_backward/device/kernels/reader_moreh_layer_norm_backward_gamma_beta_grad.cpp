@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -119,14 +120,6 @@ void kernel_main() {
 
     uint32_t offs = 0;
     constexpr uint32_t onetile = 1;
-
-    union {
-        float f;
-        uint32_t u;
-    } scaler;
-    scaler.f = 1.0f;
-    DataflowBuffer dfb_scaler(dfb::scaler);
-    fill_cb_with_value(dfb_scaler, scaler.u);
 
 #ifdef DO_MASK_H
     DataflowBuffer dfb_mask_h(dfb::mask_h);

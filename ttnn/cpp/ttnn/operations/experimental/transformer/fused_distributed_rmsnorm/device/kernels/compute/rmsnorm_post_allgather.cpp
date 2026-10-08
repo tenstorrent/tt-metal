@@ -21,6 +21,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
@@ -91,8 +92,8 @@ void kernel_main() {
          * stats_cb = [sum(x0**2), sum(x1**2), ...]
          * Uses auto-batched STREAMING mode - library handles CB lifecycle
          */
-        ckl::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, stats_cb, reduce_scalar_cb, reduce_result_cb>(
-            ckl::ReduceInputBlockShape::row(stats_tiles_cols));
+        using ReduceCall = ttnn::kernel_lib::ReduceCallArgs<18>;
+        ckl::reduce<ReduceCall>();
 
         // 1/sqrt(mean_squared + eps)
         ckl::eltwise_chain(

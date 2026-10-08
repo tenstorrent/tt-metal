@@ -42,6 +42,9 @@ void kernel_main() {
         reconfig_data_format(input_cb, input_cb);
         pack_reconfig_data_format(intermediate_cb);
 
+        // Keep cross-tile accumulation fused into packing: the full reduce-helper flow
+        // adds a separate read/add pass and partial-sum reloads, regressing performance.
+        // Use the helper only for the final single-tile reduction below.
         // Disable L1 accumulation when starting a new row
         PACK((llk_pack_reconfig_l1_acc(0)));
 

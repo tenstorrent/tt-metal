@@ -32,7 +32,9 @@ file(
     moreh_group_norm_backward/device/gamma_beta_grad/kernels/*.cpp
     moreh_group_norm_backward/device/input_grad/kernels/*.cpp
     moreh_layer_norm/device/kernels/*.cpp
+    moreh_layer_norm/device/kernels/*.hpp
     moreh_layer_norm_backward/device/kernels/*.cpp
+    moreh_layer_norm_backward/device/kernels/*.hpp
     moreh_linear_backward/device/kernels/*.cpp
     moreh_matmul/device/kernels/*.cpp
     moreh_mean/device/kernels/*.cpp
@@ -41,9 +43,7 @@ file(
     moreh_nll_loss/moreh_nll_loss_step2/device/kernels/*.cpp
     moreh_nll_loss_backward/device/kernels/*.cpp
     moreh_nll_loss_unreduced_backward/device/kernels/*.cpp
-    moreh_norm/device/moreh_norm_h/kernels/*.cpp
     moreh_norm/device/moreh_norm_other/kernels/*.cpp
-    moreh_norm/device/moreh_norm_w/kernels/*.cpp
     moreh_norm/device/ord_other/moreh_norm_h/kernels/*.cpp
     moreh_norm/device/ord_other/moreh_norm_nc/kernels/*.cpp
     moreh_norm/device/ord_other/moreh_norm_w/kernels/*.cpp

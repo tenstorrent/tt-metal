@@ -31,7 +31,6 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "layernorm_dataflow_utils.h"
@@ -100,23 +99,6 @@ void kernel_main() {
 #endif
 
     // Generate constant tiles (scaler and epsilon) — shared between TILE and RM paths.
-    {
-        constexpr uint32_t partial_last_tile_cols = W_logical % tt::constants::TILE_WIDTH;
-
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb::scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW,
-            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
-
-        if constexpr (partial_last_tile_cols > 0) {
-            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                dfb::scaler,
-                ckernel::PoolType::SUM,
-                ckernel::ReduceDim::REDUCE_ROW,
-                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(partial_last_tile_cols);
-        }
-    }
     const uint32_t eps = get_arg(args::eps);
     DataflowBuffer dfb_eps(dfb::eps);
     generate_bcast_col_scalar(dfb_eps, eps);

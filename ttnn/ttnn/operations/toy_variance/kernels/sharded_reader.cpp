@@ -31,12 +31,10 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_spec.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     constexpr uint32_t Ht = get_arg(args::Ht);
     constexpr uint32_t shard_tiles = get_arg(args::shard_tiles);
-    constexpr uint32_t scaler_bits = get_arg(args::scaler_bits);
     const uint32_t is_root = get_arg(args::is_root);
 
     Noc noc;
@@ -44,10 +42,6 @@ void kernel_main() {
     DataflowBuffer dfb_mean_src(dfb::mean_src);
     DataflowBuffer dfb_mean(dfb::mean);
     constexpr auto mc = MCAST_ARGS(mean_bcast);
-
-    const float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-        scaler_f);
 
     // Credit the resident shard. No write -- the bytes are already there.
     dfb_in.reserve_back(shard_tiles);

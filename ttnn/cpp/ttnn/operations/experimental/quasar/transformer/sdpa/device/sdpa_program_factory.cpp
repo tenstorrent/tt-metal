@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
 #include "ttnn/operations/experimental/quasar/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
@@ -1585,6 +1586,9 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         writer_defines.insert({"FLEXIBLE_CHUNKED", "1"});
     }
 
+    const auto reduction_auxiliary = ttnn::kernel_lib::host::ReduceAuxiliaryArgs(
+                                         {0, {{1.0F, ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRow, 32}}})
+                                         .get_compile_time_args();
     KernelSpec writer{
         .unique_id = WRITER,
         .source =
@@ -1596,6 +1600,7 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         .compile_time_args = writer_cta,
         .runtime_arg_schema = {.runtime_arg_names = writer_rta_names},
         .hw_config = ttnn::create_writer_datamovement_config(),
+        .advanced_options = {.compile_time_varargs = reduction_auxiliary},
     };
 
     KernelSpec::CompileTimeArgs compute_cta = {

@@ -10,113 +10,99 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"  // Exp, Log, Recip
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"  // Mask, Negative
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-namespace ckl = compute_kernel_lib;
+constexpr uint32_t sum_count_offset = ttnn::kernel_lib::reduce_plan_args::call_compile_time_arg_count();
+constexpr uint32_t sum_call_count = get_compile_time_arg_val(sum_count_offset);
+using MaxCall =
+    ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, dfb::in0, dfb::max_scaler, dfb::max>;
+template <uint32_t I>
+using SumCall = ttnn::kernel_lib::BoundReduceCallArgs<
+    ttnn::kernel_lib::ReduceCallAtT<sum_count_offset + 1, I>,
+    dfb::exps,
+    dfb::sum_scaler,
+    dfb::recip_sum_exps,
+    dfb::add>;
 
 void kernel_main() {
-    DataflowBuffer dfb_recipsumexps_obj(dfb::recip_sum_exps);
-    DataflowBuffer dfb_max_obj(dfb::max);
+    constexpr auto dfb_in0 = dfb::in0;
+    constexpr auto dfb_max_scaler = dfb::max_scaler;
+    constexpr auto dfb_sum_scaler = dfb::sum_scaler;
+    constexpr auto dfb_out0 = dfb::out0;
+    constexpr auto dfb_exps = dfb::exps;
+    DataflowBuffer dfb_exps_obj(dfb_exps);
+    constexpr auto dfb_recipsumexps = dfb::recip_sum_exps;
+    DataflowBuffer dfb_recipsumexps_obj(dfb_recipsumexps);
+    constexpr auto dfb_add = dfb::add;
+    constexpr auto dfb_max = dfb::max;
+    DataflowBuffer dfb_max_obj(dfb_max);
+    constexpr auto dfb_tmp = dfb::tmp;
+    DataflowBuffer dfb_tmp_obj(dfb_tmp);
 
-    compute_kernel_hw_startup(dfb::in0, dfb::max_scaler, dfb::out0);
+    compute_kernel_hw_startup(dfb_in0, dfb_max_scaler, dfb_out0);
 
     constexpr std::uint32_t onetile = 1;
 
     // Plain uint32_t (not constexpr) to match legacy get_compile_time_arg_val typing.
-    uint32_t N = get_arg(args::N);
-    uint32_t Wt = get_arg(args::Wt);
+    std::uint32_t N = get_arg(args::N);
+    std::uint32_t Wt = get_arg(args::Wt);
+
+    constexpr uint32_t block_tiles = get_arg(args::reduce_block_tiles);
+    constexpr uint32_t buffer_tiles = get_arg(args::reduce_buffer_tiles);
+    const uint32_t num_blocks = Wt < block_tiles ? 1 : Wt / block_tiles;
+    const auto post_reduce = [](uint32_t dst_idx) {
+#ifdef LOG
+        log_tile_init();
+        log_tile(dst_idx);
+#else
+        recip_tile_init();
+        recip_tile(dst_idx);
+#endif
+    };
 
     for (std::uint32_t n = 0; n < N; ++n) {
-        // find max
-        if (Wt == 1) {
-            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(0, 0, /*pop0=*/1, /*popm=*/0);
+        compute_kernel_lib::reduce<MaxCall>();
 
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::tmp, dfb::max_scaler, dfb::max>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
-        } else {
-            // Phase 1: reduce Wt-1 full tiles into dfb::max (no accumulation, first call).
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::in0, dfb::max_scaler, dfb::max>(
-                compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
-
-            // Phase 2: mask the last tile and continue reducing into dfb::max via Accumulate.
-            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(0, 0, /*pop0=*/1, /*popm=*/0);
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::tmp, dfb::max_scaler, dfb::max>(
-                compute_kernel_lib::ReduceInputBlockShape::row(1),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(dfb::max, /*iter=*/1));
-        }
-
-        for (uint32_t w = 0; w < Wt; ++w) {
-            // compute exp(x - max(x))
-            sub_tiles_bcast_cols_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
-            if (w == Wt - 1) {
-#ifdef SOFTMAX
-                exp_tile_and_mask_tile_to_dfb<dfb::tmp, dfb::mask, dfb::exps>(
-                    /*itile=*/0,
-                    /*mtile=*/0,
-                    /*pop=*/1,
-                    /*popm=*/0);
-#else
-                rexp_tile_and_mask_tile_to_dfb<dfb::tmp, dfb::mask, dfb::exps>(
-                    /*itile=*/0,
-                    /*mtile=*/0,
-                    /*pop=*/1,
-                    /*popm=*/0);
+        // Produce bounded resident blocks; the plan masks the last logical
+        // tile and performs the tile accumulation plus the within-tile fold.
+        for (uint32_t block = 0; block < num_blocks; ++block) {
+            const uint32_t current_tiles = block + 1 == num_blocks ? Wt - block * block_tiles : block_tiles;
+            dfb_exps_obj.reserve_back(buffer_tiles);
+            for (uint32_t tile = 0; tile < current_tiles; ++tile) {
+                sub_tiles_bcast_cols_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
+                dfb_tmp_obj.wait_front(1);
+                tile_regs_acquire();
+                copy_tile_init_with_dt(dfb_tmp_obj);
+                copy_tile(dfb_tmp, 0, 0);
+#ifndef SOFTMAX
+                negative_tile_init();
+                negative_tile(0);
 #endif
-            } else {
-#ifdef SOFTMAX
-                exp_tile_to_dfb<dfb::tmp, dfb::exps>();
-#else
-                rexp_tile_to_dfb<dfb::tmp, dfb::exps>();
-#endif
+                exp_tile_init();
+                exp_tile(0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(dfb_exps);
+                pack_tile<true>(0, dfb_exps, tile);
+                tile_regs_release();
+                dfb_tmp_obj.pop_front(1);
             }
-
-            if (w == 0) {
-                copy_tile_to_dfb<dfb::exps, dfb::add>();
-            } else {
-                add_tiles_to_dfb<dfb::add, dfb::exps, dfb::add>();
+            // Consume the full allocation to keep indexed reads aligned.
+            dfb_exps_obj.push_back(buffer_tiles);
+            if (block == 0) {
+                compute_kernel_lib::reduce<SumCall<0>>(post_reduce);
+            } else if constexpr (sum_call_count > 1) {
+                if (block + 1 == num_blocks) {
+                    compute_kernel_lib::reduce<SumCall<sum_call_count - 1>>(post_reduce);
+                } else {
+                    compute_kernel_lib::reduce<SumCall<1>>(post_reduce);
+                }
             }
+            dfb_exps_obj.pop_front(buffer_tiles);
         }
-
-#ifdef LOG
-        // compute log(sum) - pop tile after reduce
-        ckl::reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            dfb::add,
-            dfb::sum_scaler,
-            dfb::recip_sum_exps,
-            ckl::ReduceInputPolicy::BulkWaitBulkPop>(
-            ckl::ReduceInputBlockShape::single(),
-            ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::NoAccumulation{},
-            [](uint32_t dst_idx) {
-                log_tile_init();
-                log_tile(dst_idx);
-            });
-#else
-        // compute 1/sum(exp(x)) - pop tile after reduce
-        ckl::reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            dfb::add,
-            dfb::sum_scaler,
-            dfb::recip_sum_exps,
-            ckl::ReduceInputPolicy::BulkWaitBulkPop>(
-            ckl::ReduceInputBlockShape::single(),
-            ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::NoAccumulation{},
-            [](uint32_t dst_idx) {
-                recip_tile_init();
-                recip_tile(dst_idx);
-            });
-#endif
 
         // step 3, compute final result
         for (std::uint32_t w = 0; w < Wt; w += onetile) {
@@ -127,6 +113,7 @@ void kernel_main() {
 
             sub_tiles_bcast_cols_to_dfb<dfb::tmp, dfb::recip_sum_exps, dfb::out0>(0, 0, /*pop0=*/1, /*pop1=*/0);
 #else
+            // -x + max - log(sum)
             // logsoftmin not implemented
 #endif
 #else
@@ -134,16 +121,16 @@ void kernel_main() {
             // exp(x - max) / sum
             sub_tiles_bcast_cols_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
 
-            exp_tile_to_dfb<dfb::tmp, dfb::exps>();
+            exp_tile_to_dfb<dfb::tmp, dfb::add>();
 
-            mul_tiles_bcast_cols_to_dfb<dfb::exps, dfb::recip_sum_exps, dfb::out0>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            mul_tiles_bcast_cols_to_dfb<dfb::add, dfb::recip_sum_exps, dfb::out0>(0, 0, /*pop0=*/1, /*pop1=*/0);
 #else
             // rexp(x - max) / sum
             sub_tiles_bcast_cols_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
 
-            rexp_tile_to_dfb<dfb::tmp, dfb::exps>();
+            rexp_tile_to_dfb<dfb::tmp, dfb::add>();
 
-            mul_tiles_bcast_cols_to_dfb<dfb::exps, dfb::recip_sum_exps, dfb::out0>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            mul_tiles_bcast_cols_to_dfb<dfb::add, dfb::recip_sum_exps, dfb::out0>(0, 0, /*pop0=*/1, /*pop1=*/0);
 #endif
 #endif
         }
@@ -151,4 +138,6 @@ void kernel_main() {
         dfb_recipsumexps_obj.pop_front(onetile);
         dfb_max_obj.pop_front(onetile);
     }
+    DataflowBuffer(dfb_max_scaler).pop_front(MaxCall::auxiliary_tile_count);
+    DataflowBuffer(dfb_sum_scaler).pop_front(get_arg(args::sum_auxiliary_tiles));
 }

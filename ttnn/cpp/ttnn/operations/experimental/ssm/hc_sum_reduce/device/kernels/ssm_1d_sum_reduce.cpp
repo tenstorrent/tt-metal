@@ -8,6 +8,7 @@
 #include "api/compute/transpose.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 constexpr uint32_t ONE_TILE = 1;
 
@@ -42,6 +43,7 @@ void kernel_main() {
     constexpr uint32_t intermed_cb_id1 = get_compile_time_arg_val(3);
     constexpr uint32_t intermed_cb_id2 = get_compile_time_arg_val(4);
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(5);
+    using ReduceCall = ttnn::kernel_lib::ReduceCallArgs<6>;
 
     CircularBuffer cb_scalar(scalar_cb_id);
 
@@ -56,15 +58,7 @@ void kernel_main() {
                 pack_reconfig_data_format(output_cb_id, intermed_cb_id0);
                 transpose(input_cb_id, intermed_cb_id0);  // 32 x B
                 reconfig_data_format_srca(input_cb_id, intermed_cb_id0);
-                compute_kernel_lib::reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_COL,
-                    intermed_cb_id0,
-                    scalar_cb_id,
-                    intermed_cb_id1,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::single());  // 1 x B
+                compute_kernel_lib::reduce<ReduceCall>();  // 1 x B
             }
             // Get full tile back from writer and transpose it
             pack_reconfig_data_format(intermed_cb_id0, output_cb_id);

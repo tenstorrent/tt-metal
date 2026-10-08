@@ -13,23 +13,8 @@ void kernel_main() {
     const auto num_rows_per_core = get_arg(args::num_rows_per_core);
     const auto Wt = get_arg(args::Wt);
     const auto tile_offset = get_arg(args::tile_offset);
-    const auto origin_w = get_arg(args::origin_w);
 
     const auto s = TensorAccessor(tensor::input);
-
-    Scalar one;
-    one.f = 1.0f;
-    DataflowBuffer dfb_one(dfb::one);
-    fill_cb_with_value(dfb_one, one.u);
-
-    constexpr uint32_t TILE_W = 32;
-    const bool do_mask_w = (origin_w % TILE_W) != 0;
-    const auto mask_w = do_mask_w ? (origin_w % TILE_W) : TILE_W;
-
-    if (do_mask_w) {
-        DataflowBuffer dfb_mask_w(dfb::mask_w);
-        generate_mask_w(dfb_mask_w, mask_w);
-    }
 
     const auto start_tile_idx = tile_offset;
 

@@ -8,6 +8,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 void kernel_main() {
     constexpr auto Ht = get_arg(args::Ht);
@@ -17,9 +18,8 @@ void kernel_main() {
     // can amortize the noc reads by doing them side by side for the two tensors
     constexpr uint32_t onetile = 1;
 
-    // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb::scale, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scale>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     const auto interleaved_accessor0 = TensorAccessor(tensor::output);
 

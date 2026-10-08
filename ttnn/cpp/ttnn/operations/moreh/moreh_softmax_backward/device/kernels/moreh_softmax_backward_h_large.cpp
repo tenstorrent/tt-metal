@@ -5,19 +5,28 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"  // Exp
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"  // Mask, Negative
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-namespace ckl = compute_kernel_lib;
+#ifdef LOG
+constexpr auto reduce_input = dfb::dy;
+#else
+constexpr auto reduce_input = dfb::ydy;
+#endif
+constexpr uint32_t reduce_call_count = get_compile_time_arg_val(0);
+template <uint32_t I>
+using ReduceCall = ttnn::kernel_lib::
+    BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallAtT<1, I>, reduce_input, dfb::scaler, dfb::sum, dfb::add>;
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
 
+    DataflowBuffer dfb_y_obj(dfb::y);
+    DataflowBuffer dfb_dy_obj(dfb::dy);
+
+    DataflowBuffer dfb_ydy_obj(dfb::ydy);  // y * dy
     DataflowBuffer dfb_sum_obj(dfb::sum);
 
     compute_kernel_hw_startup(dfb::y, dfb::scaler, dfb::dx);
@@ -27,35 +36,13 @@ void kernel_main() {
 
     for (uint32_t n = 0; n < N; ++n) {
 #ifdef LOG
-        // sum(dy)
-        for (uint32_t h = 0; h < Ht; ++h) {
-            if (h == Ht - 1) {
-                if (h == 0) {
-                    mask_tile_to_dfb<dfb::dy, dfb::mask, dfb::add>(
-                        /*itile=*/0, /*mtile=*/0, /*pop=*/1, /*popm=*/0);
-                } else {
-                    // The y*dy buffer under a second name; one FIFO, not an extra buffer.
-                    constexpr auto dfb_inter0_id = dfb::ydy;
-                    mask_tile_to_dfb<dfb::dy, dfb::mask, dfb_inter0_id>(
-                        /*itile=*/0, /*mtile=*/0, /*pop=*/1, /*popm=*/0);
-
-                    add_tiles_to_dfb<dfb::add, dfb_inter0_id, dfb::add>();
-                }
-            } else {
-                if (h == 0) {
-                    copy_tile_to_dfb<dfb::dy, dfb::add>();
-                } else {
-                    add_tiles_to_dfb<dfb::add, dfb::dy, dfb::add>();
-                }
-            }
-        }
-
-        ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_COL, dfb::add, dfb::scaler, dfb::sum>(
-            ckl::ReduceInputBlockShape::single());
+        // The streaming plan reduces dy directly, including its partial tail.
+        compute_kernel_lib::reduce<ReduceCall<0>>();
 
         for (uint32_t h = 0; h < Ht; ++h) {
+            // exp(y)
             constexpr auto dfb_exp_id = dfb::ydy;  // the y * dy buffer, reused to hold exp(y)
-            exp_tile_to_dfb<dfb::y, dfb_exp_id>();
+            exp_tile_to_dfb<dfb::y, dfb_exp_id>(0);
 
             // sum * exp(y)
             mul_tiles_bcast_rows_to_dfb<dfb_exp_id, dfb::sum, dfb::dy_m_sum>(0, 0, /*pop0=*/1, /*pop1=*/0);
@@ -67,25 +54,38 @@ void kernel_main() {
         dfb_sum_obj.pop_front(onetile);
 #else
 
-        // step 1, compute y * dy
-        for (uint32_t h = 0; h < Ht; ++h) {
-            if (h == Ht - 1) {
-                mul_tiles_and_mask_tile_to_dfb<dfb::y, dfb::dy, dfb::mask, dfb::ydy>(
-                    0, 0, 0, /*pop0=*/1, /*pop1=*/1, /*popm=*/0);
-            } else {
-                mul_tiles_to_dfb<dfb::y, dfb::dy, dfb::ydy>();
+        constexpr uint32_t block_tiles = get_arg(args::reduce_block_tiles);
+        constexpr uint32_t buffer_tiles = get_arg(args::reduce_buffer_tiles);
+        const uint32_t num_blocks = Ht < block_tiles ? 1 : Ht / block_tiles;
+        for (uint32_t block = 0; block < num_blocks; ++block) {
+            const uint32_t current_tiles = block + 1 == num_blocks ? Ht - block * block_tiles : block_tiles;
+            dfb_ydy_obj.reserve_back(buffer_tiles);
+            for (uint32_t tile = 0; tile < current_tiles; ++tile) {
+                dfb_y_obj.wait_front(1);
+                dfb_dy_obj.wait_front(1);
+                tile_regs_acquire();
+                mul_tiles_init_with_dt(dfb_y_obj, dfb_dy_obj);
+                mul_tiles(dfb::y, dfb::dy, 0, 0, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(dfb::ydy);
+                pack_tile<true>(0, dfb::ydy, tile);
+                tile_regs_release();
+                dfb_y_obj.pop_front(1);
+                dfb_dy_obj.pop_front(1);
             }
-
-            if (h == 0) {
-                copy_tile_to_dfb<dfb::ydy, dfb::add>();
-            } else {
-                add_tiles_to_dfb<dfb::add, dfb::ydy, dfb::add>();
+            dfb_ydy_obj.push_back(buffer_tiles);
+            if (block == 0) {
+                compute_kernel_lib::reduce<ReduceCall<0>>();
+            } else if constexpr (reduce_call_count > 1) {
+                if (block + 1 == num_blocks) {
+                    compute_kernel_lib::reduce<ReduceCall<reduce_call_count - 1>>();
+                } else {
+                    compute_kernel_lib::reduce<ReduceCall<1>>();
+                }
             }
+            dfb_ydy_obj.pop_front(buffer_tiles);
         }
-
-        // step 2, compute sum(y * dy)
-        ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_COL, dfb::add, dfb::scaler, dfb::sum>(
-            ckl::ReduceInputBlockShape::single());
 
         // step 3, compute final result
         for (uint32_t h = 0; h < Ht; ++h) {
@@ -104,4 +104,5 @@ void kernel_main() {
         dfb_sum_obj.pop_front(onetile);
 #endif
     }
+    DataflowBuffer(dfb::scaler).pop_front(get_arg(args::reduce_auxiliary_tiles));
 }

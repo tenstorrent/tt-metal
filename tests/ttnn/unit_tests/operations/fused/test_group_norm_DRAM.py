@@ -15,7 +15,6 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole, skip_for_blackhole
 
-
 DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
 # atol for the non-tile-aligned regressions, matching the tile-aligned specify_grid cases.
 NON_TILE_ALIGNED_ATOL = 0.08
@@ -1007,7 +1006,9 @@ GN_INTERLEAVED_SHAPES = [
     (2, 768, 1, 512, 32, 2, 8, 8),  # batch 2 (still multicast), num_out_blocks 2
     (1, 2560, 1, 512, 32, 2, 8, 8),  # mcast num_out_blocks 2
     (1, 128, 1, 512, 32, 2, 4, 4),  # all groups on core fit in less than one tile
+    (1, 768, 1, 1280, 32, 3, 4, 8),  # multicast, full blocks plus a shorter final block
     (8, 768, 1, 512, 32, 3, 8, 8),  # batch 8 (no multicast), uneven num_out_blocks divisor
+    (9, 768, 1, 512, 32, 3, 8, 8),  # two core groups, each with full and tail blocks
 ]
 
 

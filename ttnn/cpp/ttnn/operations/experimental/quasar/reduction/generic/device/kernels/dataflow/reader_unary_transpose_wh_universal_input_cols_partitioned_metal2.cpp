@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Metal 2.0 fork of reader_unary_transpose_wh_universal_input_cols_partitioned.cpp (interleaved H/W
-// reduce reader). Identical dataflow: fill the reduce-scaler DFB once, then stream input tiles into
+// reduce reader). Stream input tiles into
 // the input DFB in the chunked N/W_skip/H/W_chunk order. CB indices → dfb:: bindings, source
 // TensorAccessor → tensor:: binding (src_addr runtime arg gone), CTAs/RTAs named. Legacy retained for
 // not-yet-ported reduce paths.
@@ -15,7 +15,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "experimental/kernel_args.h"
 
@@ -26,19 +26,10 @@ void kernel_main() {
 
     constexpr uint32_t Ht = get_arg(args::Ht);
     constexpr uint32_t Wt = get_arg(args::Wt);
-    constexpr uint32_t scaler_bits = get_arg(args::scaler_bits);
-    constexpr bool use_welford = get_arg(args::use_welford) != 0;
-
-    constexpr DataFormat reduce_format = get_dataformat(dfb::in);
-    constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format>();
-    constexpr uint32_t row_chunk = use_welford ? 1
-                                               : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1)
-                                                                       : compute_kernel_lib::DEST_AUTO_LIMIT);
+    // Match the independent column accumulators described by the host plan.
+    constexpr uint32_t row_chunk = get_arg(args::reduce_output_tiles);
 
     constexpr uint32_t onetile = 1;
-
-    float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
     const auto tensor_accessor = TensorAccessor(tensor::input);
 

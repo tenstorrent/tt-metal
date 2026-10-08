@@ -14,23 +14,8 @@ void kernel_main() {
     const auto tile_offset = get_arg(args::tile_offset);
     const auto Ht = get_arg(args::Ht);
     const auto Wt = get_arg(args::Wt);
-    const auto origin_h = get_arg(args::origin_h);
 
     const auto s = TensorAccessor(tensor::input);
-
-    Scalar one;
-    one.f = 1.0f;
-    DataflowBuffer dfb_one(dfb::one);
-    fill_cb_with_value(dfb_one, one.u);
-
-    constexpr uint32_t TILE_H = 32;
-    const bool do_mask_h = (origin_h % TILE_H) != 0;
-    const auto mask_h = do_mask_h ? (origin_h % TILE_H) : TILE_H;
-
-    if (do_mask_h) {
-        DataflowBuffer dfb_mask_h(dfb::mask_h);
-        generate_mask_h(dfb_mask_h, mask_h);
-    }
 
     Noc noc;
     DataflowBuffer dfb_input(dfb::input);

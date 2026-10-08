@@ -7,14 +7,18 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 void kernel_main() {
+    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<0>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
     int i{0};
     const auto output_addr = get_arg_val<uint32_t>(i++);
     const auto tile_offset = get_arg_val<uint32_t>(i++);
 
     constexpr uint32_t cb_id_output = 16;
 
-    constexpr auto output_args = TensorAccessorArgs<0>();
+    constexpr auto output_args = TensorAccessorArgs<Auxiliary::next_compile_time_args_offset()>();
     const auto s = TensorAccessor(output_args, output_addr);
 
     constexpr uint32_t onetile = 1;

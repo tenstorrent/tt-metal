@@ -14,7 +14,6 @@ void kernel_main() {
     const auto gamma_addr = get_arg_val<uint32_t>(i++);
     const auto beta_addr = get_arg_val<uint32_t>(i++);
 
-    const auto scaler = get_arg_val<uint32_t>(i++);
     const auto eps = get_arg_val<uint32_t>(i++);
 
     const auto tile_offset = get_arg_val<uint32_t>(i++);
@@ -53,9 +52,7 @@ void kernel_main() {
     const auto cb_id_mask_h = cb_id++;
     const auto cb_id_mask_w = cb_id++;
 
-    DataflowBuffer dfb_scaler(cb_id_scaler);
     DataflowBuffer dfb_eps(cb_id_eps);
-    fill_cb_with_value(dfb_scaler, scaler);
     fill_cb_with_value(dfb_eps, eps);
 
     const bool do_mask_h = (origin_h % TILE_H) != 0;

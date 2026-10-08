@@ -93,7 +93,11 @@ void write_mean_rstd(
     dfb.pop_front(onetile);
 }
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 void kernel_main() {
+    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<3>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
     using namespace tt::constants;
     const auto output_addr = get_arg_val<uint32_t>(0);
     const auto mean_addr = get_arg_val<uint32_t>(1);
@@ -108,7 +112,7 @@ void kernel_main() {
     constexpr bool mean_has_value = get_compile_time_arg_val(0) == 1;
     constexpr bool rstd_has_value = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t block_size = get_compile_time_arg_val(2);
-    constexpr auto output_args = TensorAccessorArgs<3>();
+    constexpr auto output_args = TensorAccessorArgs<Auxiliary::next_compile_time_args_offset()>();
     constexpr auto mean_args = TensorAccessorArgs<decltype(output_args)::next_compile_time_args_offset()>();
     constexpr auto rstd_args = TensorAccessorArgs<decltype(mean_args)::next_compile_time_args_offset()>();
 

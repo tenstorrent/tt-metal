@@ -8,7 +8,6 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     Noc noc;
@@ -18,10 +17,6 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
     uint32_t input_num_blocks_h = get_arg_val<uint32_t>(3);
     uint32_t input_total_blocks_w = get_arg_val<uint32_t>(4);
-
-    constexpr uint32_t cb_id_in2 = 2;
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_id_in2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
 
     constexpr uint32_t cb_id_in0 = 0;
     CircularBuffer cb_in0(cb_id_in0);

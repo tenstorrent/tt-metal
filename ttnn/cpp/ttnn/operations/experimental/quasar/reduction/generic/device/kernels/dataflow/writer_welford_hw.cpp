@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 // Welford HW-reduction writer kernel.
 //
 // Phase 1 (per output): Reads Wt partial (mean, var) tile pairs from
@@ -52,6 +54,8 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_16;
 
     constexpr auto dst_args = TensorAccessorArgs<7>();
+    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<dst_args.next_compile_time_args_offset()>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     // welford_finalize_to_row stores 32 per-column values in tile row 0.
     // In tile format, row 0 spans Face 0 (columns 0-15) and Face 1 (columns 16-31).

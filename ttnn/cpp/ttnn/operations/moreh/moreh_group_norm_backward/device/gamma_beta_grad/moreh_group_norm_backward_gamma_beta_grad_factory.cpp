@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/moreh/moreh_reduce.hpp"
+
 #include "moreh_group_norm_backward_gamma_beta_grad_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -127,7 +129,6 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     const uint32_t in1_t = 1;                  // input(==x)
     const uint32_t in2_t = 1;                  // mean
     const uint32_t in3_t = 1;                  // rstd
-    const uint32_t in4_t = 1;                  // one
     const uint32_t in5_t = do_mask_h ? 1 : 0;  // mask_h
     const uint32_t in6_t = do_mask_w ? 1 : 0;  // mask_w
 
@@ -135,14 +136,22 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     const uint32_t out1_t = beta_grad_has_value ? 1 : 0;   // beta_grad(==dbeta)
 
     const uint32_t im0_t = 1;  // output(==y)
-    const uint32_t im1_t = 1;  // y * dy
     const uint32_t im2_t = 1;  // Add[dy]
     const uint32_t im3_t = 1;  // Add[y * dy]
     const uint32_t im4_t = 1;  // x - mean
-    const uint32_t im5_t = 1;  // dycopy
 
     const auto data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     const auto single_tile_size = tt::tile_size(data_format);
+    const bool reduce_grad_tiles = true;
+    auto reduction = make_moreh_reduce_blocks(
+        reduce_grad_tiles ? num_inner_tiles : 1U,
+        ReduceOpDim::HW,
+        DataType::FLOAT32,
+        output_grad.dtype(),
+        {device->arch(), true, false});
+    const auto& auxiliary =
+        *reduction.sequence.calls.front().plan.find_cb(ttnn::kernel_lib::host::ReduceCbRole::Auxiliary);
+    const uint32_t in4_t = reduction.sequence.auxiliary.tiles.size();
 
     Group<DataflowBufferSpec> dfbs;
 
@@ -158,21 +167,33 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
         });
     };
 
-    add_dfb(DY, in0_t);       // output_grad(==dy)
-    add_dfb(X, in1_t);        // input(==x)
-    add_dfb(MEAN, in2_t);     // mean
-    add_dfb(RSTD, in3_t);     // rstd
-    add_dfb(SCALER, in4_t);   // one
+    add_dfb(DY, in0_t);    // output_grad(==dy)
+    add_dfb(X, in1_t);     // input(==x)
+    add_dfb(MEAN, in2_t);  // mean
+    add_dfb(RSTD, in3_t);  // rstd
+    dfbs.push_back(DataflowBufferSpec{
+        .unique_id = SCALER,
+        .entry_size = auxiliary.page_size,
+        .num_entries = in4_t,
+        .data_format_metadata = auxiliary.data_format});
     add_dfb(MASK_H, in5_t);   // mask_h
     add_dfb(MASK_W, in6_t);   // mask_w
     add_dfb(DGAMMA, out0_t);  // gamma_grad(==dgamma)
     add_dfb(DBETA, out1_t);   // beta_grad(==dbeta)
     add_dfb(Y, im0_t);        // output(==y)
-    add_dfb(YDY, im1_t);      // y * dy
+    add_dfb(YDY, gamma_grad_has_value ? reduction.buffer_tiles : 1);  // y * dy
     add_dfb(DYADD, im2_t);    // Add[dy]
     add_dfb(YDYADD, im3_t);   // Add[y * dy]
     add_dfb(XMM, im4_t);      // x - mean
-    add_dfb(DYCOPY, im5_t);   // dycopy
+    add_dfb(DYCOPY, beta_grad_has_value ? reduction.buffer_tiles : 1);
+    // dycopy retains the input dtype: copying and masking dy needs no extra precision.
+    // Pack gamma products directly into the FP32 reduction input; keep FP32 running accumulators.
+    for (auto& buffer : dfbs) {
+        if (buffer.unique_id == YDY || buffer.unique_id == DYADD || buffer.unique_id == YDYADD) {
+            buffer.entry_size = tt::tile_size(tt::DataFormat::Float32);
+            buffer.data_format_metadata = tt::DataFormat::Float32;
+        }
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -190,10 +211,10 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     // discarded branch. The borrowed compute kernel needs the same flags as the reader and writer.
     KernelSpec::CompilerOptions::Defines reader_defines{};
     KernelSpec::CompilerOptions::Defines writer_defines{};
-    KernelSpec::CompilerOptions::Defines compute_defines{
-        {"REDUCE_OP", "PoolType::SUM"},
-        {"REDUCE_DIM", "ReduceDim::REDUCE_SCALAR"},
-    };
+    KernelSpec::CompilerOptions::Defines compute_defines{{"FP32_DEST_ACC_EN", "1"}};
+    if (reduce_grad_tiles) {
+        compute_defines["REDUCE_GRAD_TILES"] = "1";
+    }
     if (gamma_grad_has_value) {
         reader_defines["GAMMA_GRAD_HAS_VALUE"] = "1";
         writer_defines["GAMMA_GRAD_HAS_VALUE"] = "1";
@@ -217,7 +238,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
         DFBBinding{.dfb_spec_name = X, .accessor_name = "input", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{.dfb_spec_name = MEAN, .accessor_name = "mean", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{.dfb_spec_name = RSTD, .accessor_name = "rstd", .endpoint_type = DFBEndpointType::PRODUCER},
-        DFBBinding{.dfb_spec_name = SCALER, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER},
+
     };
     if (do_mask_h) {
         reader_dfb_bindings.push_back(
@@ -254,7 +275,9 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    Group<DFBBinding> writer_dfb_bindings{};
+    Group<DFBBinding> writer_dfb_bindings{
+        DFBBinding{.dfb_spec_name = SCALER, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::PRODUCER},
+    };
     Group<TensorBinding> writer_tensor_bindings{};
     if (gamma_grad_has_value) {
         writer_dfb_bindings.push_back(DFBBinding{
@@ -280,6 +303,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
                 .runtime_arg_names = {"tile_offset", "num_channels_per_core", "num_inner_tiles", "batch"},
             },
         .hw_config = ttnn::create_writer_datamovement_config(),
+        .advanced_options = {.compile_time_varargs = reduction.sequence.get_auxiliary_compile_time_args()},
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -326,12 +350,12 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
             DFBBinding{.dfb_spec_name = DBETA, .accessor_name = "dbeta", .endpoint_type = DFBEndpointType::PRODUCER});
     }
 
-    // The descriptor factory set an all-default ComputeConfigDescriptor{}, so the hardware config is
-    // built directly and left at its own defaults. Routing this through the TTNN ComputeKernelConfig helper
-    // would silently flip every field, because that helper's defaults favor performance while the
-    // Metal struct's favor precision. With enable_32_bit_dest at its default false, the Float32
-    // unpack_modes requirement does not apply, so the table stays empty.
-    const ComputeHardwareConfig compute_hw = ComputeHardwareConfig{};
+    ComputeHardwareConfig compute_hw{.enable_32_bit_dest = true};
+    for (const auto& buffer : dfbs) {
+        if (buffer.data_format_metadata == tt::DataFormat::Float32) {
+            compute_hw.unpack_modes.emplace(buffer.unique_id, UnpackMode::UnpackToSrc);
+        }
+    }
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_channels_per_core) {
         return KernelSpec{
@@ -344,6 +368,9 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
             .compile_time_args =
                 {
                     {"num_cols_per_core", num_channels_per_core},
+                    {"reduce_block_tiles", MorehReduceBlocks::tiles_per_block},
+                    {"reduce_buffer_tiles", reduction.buffer_tiles},
+                    {"reduce_aux_tiles", in4_t},
                     {"origin_H", origin_h},
                     {"origin_W", origin_w},
                     {"NCHt", num_inner_tiles},
@@ -352,6 +379,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
                     {"is_groupnorm", static_cast<uint32_t>(is_groupnorm)},
                 },
             .hw_config = compute_hw,
+            .advanced_options = {.compile_time_varargs = reduction.sequence.get_compile_time_args()},
         };
     };
 

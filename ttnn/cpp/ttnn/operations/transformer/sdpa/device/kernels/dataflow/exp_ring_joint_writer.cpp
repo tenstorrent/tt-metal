@@ -99,8 +99,10 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<logical_n_args.next_compile_time_args_offset()>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
+    using ReduceAuxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<joint_out_args.next_compile_time_args_offset()>;
+
 #ifdef USE_MUX
-    constexpr uint32_t mux_ct_base = joint_out_args.next_compile_time_args_offset();
+    constexpr uint32_t mux_ct_base = ReduceAuxiliary::next_compile_time_args_offset();
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(mux_ct_base + 0);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(mux_ct_base + 1);
     constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(mux_ct_base + 2);
@@ -288,11 +290,7 @@ void kernel_main() {
 
     generate_bcast_unary_scalar(CircularBuffer(cb_scale_in), scale_val);
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_identity_scale_in,
-        ckernel::PoolType::MAX,
-        ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<ReduceAuxiliary>();
 
     // Read the live length ONCE, before the ring loop. This kernel is a protocol participant, not just a
     // mask producer: the MUX forwarding loop below skips chunks on the same predicate as the reader and

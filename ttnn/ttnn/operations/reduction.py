@@ -206,3 +206,4 @@ ttnn.attach_golden_function(ttnn.manual_seed, golden_function=None)
 __all__ = []
 
 ReduceType = ttnn._ttnn.operations.reduction.ReduceType
+reduce_planner = ttnn._ttnn.operations.reduction.planner

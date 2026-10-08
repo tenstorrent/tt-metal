@@ -102,4 +102,40 @@ constexpr std::uint32_t DEST_NUM_TILES_FP16      = (DEST_REGISTER_FULL_SIZE * DE
 constexpr std::uint32_t DEST_NUM_TILES_FP16_HALF = DEST_NUM_TILES_FP16 / 2;
 static_assert((DEST_NUM_TILES_FP16 & (DEST_NUM_TILES_FP16 - 1)) == 0);
 
+constexpr static bool IS_MX_FORMAT(std::uint32_t format)
+{
+    switch (static_cast<DataFormat>(format))
+    {
+        case DataFormat::MxFp8R:
+        case DataFormat::MxFp8P:
+        case DataFormat::MxFp6R:
+        case DataFormat::MxFp6P:
+        case DataFormat::MxFp4:
+        case DataFormat::MxInt8:
+        case DataFormat::MxInt4:
+        case DataFormat::MxInt2:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// True for integer data formats, whose packer negative-infinity fill is an all-ones bit pattern.
+constexpr static bool IS_INTEGER_FORMAT(std::uint32_t format)
+{
+    switch (static_cast<DataFormat>(format))
+    {
+        case DataFormat::Int8:
+        case DataFormat::UInt8:
+        case DataFormat::Int16:
+        case DataFormat::UInt16:
+        case DataFormat::Int32:
+        case DataFormat::Int4:
+        case DataFormat::UInt4:
+            return true;
+        default:
+            return false;
+    }
+}
+
 } // namespace ckernel

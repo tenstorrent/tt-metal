@@ -78,7 +78,12 @@ FORCE_INLINE void gather_to_root(
 
 }  // namespace
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 void kernel_main() {
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+
     constexpr uint32_t Ht = get_arg(args::Ht);
     constexpr uint32_t num_cores = get_arg(args::num_cores);
     constexpr uint32_t root_x = get_arg(args::root_x);
