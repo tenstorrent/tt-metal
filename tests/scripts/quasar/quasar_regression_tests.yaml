@@ -312,6 +312,12 @@ unit_tests_debug_tools:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
+  - filter: "DevicePrintOutputFixture.PrintConcurrentRocketRiscsWithL1Reads"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
 # Dispatch Engine tests
   - filter: "*WatcherAssertTests*/DispatchDM2"
     config: 2x3_DISPATCH

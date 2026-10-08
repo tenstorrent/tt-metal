@@ -1776,7 +1776,7 @@ class TestConfig:
                 if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
                     risc_id, _ = TestConfig.RISC_INFO[name]
                     # Quasar: kernel addresses the buffer through the uncached alias
-                    # (see device_print.h:get_lock_atomic).
+                    # (see device_print.h:get_lock).
                     kernel_buffer_base = TestConfig.DEVICE_PRINT_BUFFER_BASE + (
                         0x400000 if TestConfig.ARCH == ChipArchitecture.QUASAR else 0
                     )

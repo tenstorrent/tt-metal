@@ -1444,23 +1444,21 @@ namespace locking {
 uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintBufferType* device_print_buffer, uint32_t message_size);
 void release_lock();
 
-#if !defined(ARCH_WORMHOLE)
-volatile tt_l1_ptr std::atomic<uint32_t>& get_lock_atomic() {
+volatile tt_l1_ptr DevicePrintLockType& get_lock() {
 #if !defined(ARCH_QUASAR) || defined(ENV_LLK_INFRA)
-    return get_device_print_buffer()->aux.lock;
+    return get_device_print_buffer()->aux.lock.get();
 #else
     // Atomics require the cached L1 alias.
-    return GET_MAILBOX_ADDRESS_DEV_CACHED(dprint_buf.buffer)->aux.lock;
+    return GET_MAILBOX_ADDRESS_DEV_CACHED(dprint_buf.buffer)->aux.lock.get();
 #endif
 }
-#endif
 
 // Takes lock unconditionally. Prints kernel id message if needed.
 void acquire_lock() {
     // We need to acquire lock only if we have more than 1 processor, otherwise there is no contention.
     if constexpr (DevicePrintBufferType::processor_count > 1) {
 #if defined(ARCH_WORMHOLE)
-        volatile uint32_t* lock_ptr = &(get_device_print_buffer()->aux.lock);
+        volatile uint32_t* lock_ptr = &get_lock();
 
         while (true) {
         again:
@@ -1490,7 +1488,7 @@ void acquire_lock() {
             }
         }
 #else
-        auto& lock_atomic = get_lock_atomic();
+        auto& lock_atomic = get_lock();
 
         while (lock_atomic.exchange(1) != 0) {
             // Failed to acquire lock, wait and try again
@@ -1557,25 +1555,25 @@ void update_kernel_finished() {
 
 void release_lock() {
 #if defined(ARCH_WORMHOLE)
-    volatile uint32_t* lock_ptr = &(get_device_print_buffer()->aux.lock);
+    volatile uint32_t* lock_ptr = &get_lock();
 
     asm volatile("" ::: "memory");
     *lock_ptr = 0;  // Release lock by setting to 0
     asm volatile("" ::: "memory");
 #else
-    auto& lock_atomic = get_lock_atomic();
+    auto& lock_atomic = get_lock();
     lock_atomic = 0;
 #endif
 }
 
 void initialize_lock() {
 #if defined(ARCH_WORMHOLE)
-    volatile uint32_t* lock_ptr = &(get_device_print_buffer()->aux.lock);
+    volatile uint32_t* lock_ptr = &get_lock();
     asm volatile("" ::: "memory");
     *lock_ptr = 0;  // Ensure lock starts in free state
     asm volatile("" ::: "memory");
 #else
-    auto& lock_atomic = get_lock_atomic();
+    auto& lock_atomic = get_lock();
     lock_atomic = 0;
 #endif
 }

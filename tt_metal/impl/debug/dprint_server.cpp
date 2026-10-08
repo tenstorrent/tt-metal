@@ -207,11 +207,15 @@ public:
         // uint32_t wpos;
         // uint32_t rpos;
         // uint8_t risc_state[processor_count]; // Rounded up to nearest word
-        // uint32_t lock;
+        // uint32_t lock, or two cache lines for a lock that needs a line of its own (lock_line_bytes != 0);
         // byte print_buffer[remaining buffer];
-        auto make_buffer = [](uint64_t address, uint16_t size, uint16_t processor_count, uint16_t processor_offset) {
-            const uint16_t risc_state_bytes = ((processor_count + 3) / 4) * 4;
-            const uint16_t buffer_offset = 8u + risc_state_bytes + sizeof(uint32_t);
+        auto make_buffer = [](uint64_t address,
+                              uint16_t size,
+                              uint16_t processor_count,
+                              uint16_t processor_offset,
+                              uint32_t lock_line_bytes = 0) {
+            const uint16_t buffer_offset =
+                static_cast<uint16_t>(device_print_buffer_data_offset(processor_count, lock_line_bytes));
             const uint16_t buffer_size = size - buffer_offset;
             return DPrintBufferInfo{address, size, 0, buffer_offset, buffer_size, processor_count, processor_offset};
         };
@@ -232,18 +236,24 @@ public:
                 kQuasarDprintDmSubbufferSize,
                 structure_size);
             return {
-                make_buffer(
-                    structure_address, kQuasarDprintComputeSubbufferSize, compute_count, dm_count),
+                make_buffer(structure_address, kQuasarDprintComputeSubbufferSize, compute_count, dm_count),
                 make_buffer(
                     structure_address + kQuasarDprintComputeSubbufferSize,
                     kQuasarDprintDmSubbufferSize,
                     dm_count,
-                    0),
+                    0,
+                    DEVICE_PRINT_QUASAR_L2_CACHE_LINE_SIZE),
             };
         }
 
+        // Quasar dispatch engines are DM-only, so their buffer has the DM lock layout.
+        const uint32_t lock_line_bytes =
+            (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type == HalProgrammableCoreType::DISPATCH)
+                ? DEVICE_PRINT_QUASAR_L2_CACHE_LINE_SIZE
+                : 0;
         const uint16_t num_processors = static_cast<uint16_t>(hal.get_num_risc_processors(programmable_core_type));
-        return {make_buffer(structure_address, static_cast<uint16_t>(structure_size), num_processors, 0)};
+        return {
+            make_buffer(structure_address, static_cast<uint16_t>(structure_size), num_processors, 0, lock_line_bytes)};
     }
 
 private:
