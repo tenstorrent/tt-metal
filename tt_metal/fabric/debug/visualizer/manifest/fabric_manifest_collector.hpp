@@ -15,7 +15,6 @@
 
 namespace tt::tt_fabric {
 
-class ControlPlane;
 class FabricEriscDatamoverBuilder;
 struct ChipRoutingFacts;
 struct RouterLocation;
@@ -36,7 +35,6 @@ struct ManifestRouterInputs {
     const RouterVcShape& vc_shape;
     const RouterLocation& location;
     const ChipRoutingFacts& chip_facts;
-    const ControlPlane& control_plane;
     // get_fabric_router_addresses_to_clear()
     const std::vector<size_t>& addresses_to_clear;
     const RouterKernelInputs& kernel;
