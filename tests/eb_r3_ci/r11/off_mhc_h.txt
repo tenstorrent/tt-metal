@@ -1,0 +1,1 @@
+ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/mhc_split_sinkhorn/device/kernels/compute/mhc_split_sinkhorn_compute.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
