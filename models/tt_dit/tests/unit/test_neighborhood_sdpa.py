@@ -385,7 +385,8 @@ def test_shards_match_the_whole_volume(mesh_device):
             tiles_per_kv_chunk=min(plan["gather_brick_count"], 8),
         )
 
-        bricked_out = ttnn.to_torch(actual_device).float().reshape(1, -1, head_count, head_dim)
+        bricked_out = ttnn.to_torch(ttnn.get_device_tensors(actual_device)[0]).float()
+        bricked_out = bricked_out.reshape(1, -1, head_count, head_dim)
         present = table >= 0
         resident_out = torch.zeros(1, resident[0] * resident[1] * resident[2], head_count, head_dim)
         resident_out[:, table[present]] = bricked_out[:, present]
@@ -512,7 +513,8 @@ def test_symmetric_halo_shards_match_the_whole_volume(mesh_device, volume, conte
         )
 
         # The output is the owned band, bricked over the query region.
-        bricked_out = ttnn.to_torch(actual_device).float().reshape(1, -1, head_count, head_dim)
+        bricked_out = ttnn.to_torch(ttnn.get_device_tensors(actual_device)[0]).float()
+        bricked_out = bricked_out.reshape(1, -1, head_count, head_dim)
         present = query_table >= 0
         actual_owned = torch.zeros(1, query_extent[0] * query_extent[1] * query_extent[2], head_count, head_dim)
         actual_owned[:, query_table[present]] = bricked_out[:, present]
@@ -600,20 +602,36 @@ def test_kv_ring_is_bit_identical(mesh_device, owned_width, monkeypatch):
         assert torch.equal(left, right), f"shard {shard_index}: ring output differs"
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=["mesh_device"])
 @pytest.mark.parametrize("owned_width", [None, 12], ids=["unsharded", "w_sharded_negative_origin"])
 def test_edge_order_is_bit_identical(mesh_device, owned_width, monkeypatch):
     """DIFFVAE_NA_EDGE_ORDER only changes the order a core visits its work items in; every item
-    still sees the same tiles in the same order, so its output must equal index order bit for bit."""
+    still sees the same tiles in the same order, so its output must equal index order bit for bit.
+
+    The flag is part of the program hash, so the cache shows which program an unset flag gets: the
+    default must compile apart from =0 and share its programs with =1, i.e. edge order is on."""
+    device = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
     monkeypatch.setenv("DIFFVAE_NA_CHUNK_BRICKS", "2,1,1")
-    monkeypatch.setenv("DIFFVAE_NA_EDGE_ORDER", "0")
-    index_order = []
-    _run_interior_table_case(mesh_device, owned_width, None, (24, 24, 24), outputs=index_order)
-    monkeypatch.delenv("DIFFVAE_NA_EDGE_ORDER")
-    edge_order = []
-    _run_interior_table_case(mesh_device, owned_width, None, (24, 24, 24), outputs=edge_order)
-    assert len(index_order) == len(edge_order)
-    for shard_index, (left, right) in enumerate(zip(index_order, edge_order)):
+
+    def run(flag):
+        if flag is None:
+            monkeypatch.delenv("DIFFVAE_NA_EDGE_ORDER", raising=False)
+        else:
+            monkeypatch.setenv("DIFFVAE_NA_EDGE_ORDER", flag)
+        outputs = []
+        entries = device.num_program_cache_entries()
+        _run_interior_table_case(device, owned_width, None, (24, 24, 24), outputs=outputs)
+        return outputs, device.num_program_cache_entries() - entries
+
+    default_order, default_programs = run(None)
+    index_order, index_programs = run("0")
+    _, edge_programs = run("1")
+    assert (
+        default_programs > 0 and index_programs == default_programs
+    ), f"unset flag compiled {default_programs} programs, =0 added {index_programs}: =0 must not reuse them"
+    assert edge_programs == 0, f"=1 compiled {edge_programs} new programs: the unset default is not edge order"
+    assert len(index_order) == len(default_order)
+    for shard_index, (left, right) in enumerate(zip(index_order, default_order)):
         assert torch.equal(left, right), f"shard {shard_index}: edge-grouped output differs"
 
 
@@ -719,7 +737,8 @@ def _run_interior_table_case(mesh_device, owned_width, brick, volume, outputs=No
 
         # The output covers the query region: the whole resident tensor unsharded, the owned band
         # sharded (so no halo columns to slice off).
-        bricked_out = ttnn.to_torch(actual_device).float().reshape(1, -1, head_count, head_dim)
+        bricked_out = ttnn.to_torch(ttnn.get_device_tensors(actual_device)[0]).float()
+        bricked_out = bricked_out.reshape(1, -1, head_count, head_dim)
         if outputs is not None:
             outputs.append(bricked_out)
         present = output_table >= 0
