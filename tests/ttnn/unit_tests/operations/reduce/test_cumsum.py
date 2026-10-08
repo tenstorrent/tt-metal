@@ -418,3 +418,53 @@ def test_cumsum_bf16_accuracy(size, dim, sequence_type, reverse_order, device):
 
     assert output.dtype == torch.bfloat16
     assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("scan_len", [4, 8, 33])
+@pytest.mark.parametrize("dim", [0, -2])
+@pytest.mark.parametrize("special_type", ["pos_inf", "neg_inf", "overflow", "nan"])
+@pytest.mark.parametrize("disable_compensated_sum", [False, True])
+def test_cumsum_fp32_special_values_regression(scan_len, dim, special_type, disable_compensated_sum, device):
+    """Regression test for #58986: FP32 ttnn.cumsum returns NaN after infinity or overflow."""
+    shape = [32, 32]
+    shape[dim] = scan_len
+
+    torch_input = torch.ones(shape, dtype=torch.float32)
+    mid_idx = 1
+
+    if special_type == "pos_inf":
+        idx = [slice(None)] * len(shape)
+        idx[dim] = mid_idx
+        torch_input[tuple(idx)] = float("inf")
+    elif special_type == "neg_inf":
+        idx = [slice(None)] * len(shape)
+        idx[dim] = mid_idx
+        torch_input[tuple(idx)] = float("-inf")
+    elif special_type == "overflow":
+        idx = [slice(None)] * len(shape)
+        idx[dim] = 0
+        torch_input[tuple(idx)] = 2e38
+        idx[dim] = 1
+        torch_input[tuple(idx)] = 2e38
+    elif special_type == "nan":
+        idx = [slice(None)] * len(shape)
+        idx[dim] = mid_idx
+        torch_input[tuple(idx)] = float("nan")
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
+    output = ttnn.cumsum(input_tensor, dim=dim, disable_compensated_sum=disable_compensated_sum)
+    torch_output = ttnn.to_torch(output)
+    torch_expected = torch.cumsum(torch_input, dim=dim)
+
+    # Check match with PyTorch
+    is_nan_expected = torch.isnan(torch_expected)
+    is_nan_actual = torch.isnan(torch_output)
+    assert torch.equal(is_nan_expected, is_nan_actual), f"NaN mask mismatch for {special_type}"
+
+    non_nan_mask = ~is_nan_expected
+    if non_nan_mask.any():
+        assert torch.allclose(torch_expected[non_nan_mask], torch_output[non_nan_mask], rtol=1e-3, atol=1e-3), (
+            f"Value mismatch for {special_type} with disable_compensated_sum={disable_compensated_sum}"
+        )

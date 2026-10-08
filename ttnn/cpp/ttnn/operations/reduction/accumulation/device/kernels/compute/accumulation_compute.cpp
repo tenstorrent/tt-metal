@@ -18,6 +18,39 @@
 #include "experimental/kernel_args.h"
 #include "../accumulation_common.hpp"
 
+#ifdef COMPENSATED_SUM
+#ifdef TRISC_MATH
+namespace ckernel::sfpu {
+
+template <int ITERATIONS = 8>
+inline void calculate_kahan_compensation_guard() {
+    for (int d = 0; d < ITERATIONS; ++d) {
+        sfpi::vFloat c = sfpi::dst_reg[0];
+        // Guard: if running total is infinite/overflowed or c is non-finite,
+        // clear c to 0.0f so it does not poison subsequent scan elements into NaN (#58986).
+        v_if (!sfpi::is_finite(c)) {
+            c = 0.0f;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = c;
+        sfpi::dst_reg++;
+    }
+}
+
+}  // namespace ckernel::sfpu
+
+inline void kahan_compensation_guard_tile(uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        ckernel::sfpu::calculate_kahan_compensation_guard,
+        (8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC));
+}
+#endif
+#endif
+
 void kernel_main() {
     constexpr auto default_acc_value = get_arg(args::default_acc_value);
 
@@ -130,6 +163,9 @@ void kernel_main() {
             add_binary_tile(DST_ACC, DST_IN, DST_T);      // t = acc + y
             sub_binary_tile(DST_T, DST_ACC, DST_COMP);    // (t - acc)
             sub_binary_tile(DST_COMP, DST_IN, DST_COMP);  // c = (t - acc) - y
+#ifdef TRISC_MATH
+            kahan_compensation_guard_tile(DST_COMP);
+#endif
             constexpr uint32_t DST_RESULT = DST_T;
             dfb_comp_obj.pop_front(ONE_TILE);
 #else
