@@ -19,6 +19,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     blackhole_only,
     check_accuracy,
     check_attn_mask,
+    check_cache_hit_rebinds,
     check_chunked,
     check_chunked_trace,
     check_concat_heads,
@@ -388,3 +389,9 @@ def test_sdpa_recipe_odd_q_masked_first_chunk(device, variant, q_chunk, k_chunk)
     mask = mask.bfloat16()
     actual = ttnn.to_torch(sdpa(device, variant, q, k, v, q_chunk, k_chunk, mask))
     assert l2_pct(actual, reference(q, k, v, mask)) < L2_PCT_BOUND[variant]
+
+
+# Program-cache hits on new inputs (check_cache_hit_rebinds), the layouts the unit file does not cover.
+@pytest.mark.parametrize("case", ["joint", "windowed_offset_tensor"])
+def test_sdpa_recipe_cache_hit_rebinds(device, case):
+    check_cache_hit_rebinds(device, case)
