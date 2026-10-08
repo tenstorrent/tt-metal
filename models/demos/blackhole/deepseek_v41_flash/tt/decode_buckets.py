@@ -126,6 +126,7 @@ class DecodeBucket:
         self.dev_engram = keep["dev_engram"]
         self.dec = DSV41Decoder(md, built_b, self.embedding, m.head, self.dev_engram, step_states=self.step_groups)
         self.dec.mesh_config, self.dec.ccl = m.mc, m.ccl
+        self.dec.cand_k = getattr(m, "cand_k", 0)
         self.engram_ids = m.engram_ids
         self.engram_kin = m.engram_kin
         log(f"decode bucket U'={self.U} (batch {self.B}) objects built in {time.time() - t0:.1f} s")

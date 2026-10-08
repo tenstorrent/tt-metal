@@ -369,3 +369,43 @@ def sampling_wants_greedy(sampling_params, rows=None) -> bool:
 def wants_logprobs(sampling_params, rows=None) -> bool:
     e = _col(getattr(sampling_params, "enable_log_probs", None), rows)
     return bool(e) and any(bool(x) for x in e)
+
+
+# ---- temperature / top-k / top-p sampling over candidates (the device returns the per-column top-k, see DSV41DeviceHead.topk_candidates) ------------------------------------------------
+def row_sampling(sampling_params, n):
+    """Per plugin row (temperature, top_k, top_p, seed) of the device-sampling params; a missing field = greedy / no truncation."""
+    t = _col(getattr(sampling_params, "temperature", None), None) or [0.0] * n
+    k = _col(getattr(sampling_params, "top_k", None), None) or [-1] * n
+    p = _col(getattr(sampling_params, "top_p", None), None) or [1.0] * n
+    sd = _col(getattr(sampling_params, "seed", None), None) or [None] * n
+    pad = lambda x, v: (list(x) + [v] * n)[:n]
+    return pad(t, 0.0), pad(k, -1), pad(p, 1.0), pad(sd, None)
+
+
+def row_is_greedy(temperature, top_k) -> bool:
+    return float(temperature) == 0.0 or int(top_k) == 1
+
+
+def sample_from_candidates(vals, ids, temperature, top_k=-1, top_p=1.0, gen=None):
+    """One token from candidate logits ``vals`` [C] (token ids ``ids`` [C], any order): temperature, top-k (> 0), top-p (< 1; the smallest prefix of the sorted candidates whose mass reaches
+    top_p, at least one token), renormalise, multinomial draw. The candidates are a superset of the global top-C of the vocabulary: the dropped tail is the approximation.
+    """
+    order = torch.argsort(vals.float(), descending=True)
+    v, i = vals.float()[order], ids[order]
+    if top_k is not None and int(top_k) > 0:
+        v, i = v[: int(top_k)], i[: int(top_k)]
+    pr = torch.softmax(v / float(temperature), dim=0)
+    if top_p is not None and float(top_p) < 1.0:
+        keep = (pr.cumsum(0) - pr) < float(
+            top_p
+        )  # a token stays while the mass BEFORE it is below top_p: the token that crosses top_p stays
+        pr = pr * keep
+        pr = pr / pr.sum()
+    j = int(torch.multinomial(pr, 1, generator=gen))
+    return int(i[j])
+
+
+def sample_from_logits(logits, temperature, top_k=-1, top_p=1.0, gen=None):
+    """Same over the FULL vocabulary row (the prefill's first token, reference of the candidate path)."""
+    ids = torch.arange(logits.numel())
+    return sample_from_candidates(logits.reshape(-1), ids, temperature, top_k, top_p, gen)

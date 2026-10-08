@@ -236,6 +236,10 @@ class DSV41Decoder:
             if diag:
                 self._l1(f"after layer {lid}")
         logits = self.head.forward(x, pre)
+        if getattr(
+            self, "cand_k", 0
+        ):  # temperature / top-p sampling candidates (adapter): read by the host only on steps that have a sampled row
+            self.cand = self.head.topk_candidates(logits, self.mesh_config, self.ccl, self.cand_k)
         if self.device_loop:
             nxt = self.head.sample_global(logits, self.mesh_config, self.ccl)
             ttnn.copy(nxt, self.tok_dev)  # feed the sampled token to the next replay ...
