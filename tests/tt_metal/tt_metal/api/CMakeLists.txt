@@ -85,6 +85,7 @@ add_executable(
     allocator/test_per_core_allocation.cpp
     allocator/test_range_lockstep_allocation.cpp
     allocator/test_range_lockstep_allocation_host.cpp
+    allocator/test_uniform_per_core_allocation.cpp
 )
 target_include_directories(
     unit_tests_hybrid_allocator

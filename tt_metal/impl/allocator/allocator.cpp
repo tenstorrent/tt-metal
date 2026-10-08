@@ -170,19 +170,57 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         DeviceAddr alloc_size = buffer->aligned_size_per_bank();
 
         std::unordered_map<CoreCoord, DeviceAddr> addrs;
-        for (const auto& core : cores) {
-            auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
-            // PrefetcherPipe / persistent L1 sit outside BankManager. Per-core placement
-            // must skip this core's persistent occupancy; lockstep uses the flattened
-            // all-cores list below because it picks one address for every bank.
-            addrs[core] = l1_manager_->allocate_buffer(
-                alloc_size,
-                page_size,
-                bottom_up,
-                config_->compute_grid,
-                /*num_shards=*/1,
-                AllocatorID{bank_id + 1},
-                persistent_l1_.occupied_ranges(core));
+        if (buffer->impl().uniform_per_core_address_) {
+            // One address on every core, reserved only in each core's own per-core allocator, so
+            // cores outside the grid keep it. On a mesh, MeshBuffer::create supplies the other
+            // devices' ranges for the first device and the resulting address for the rest.
+            DeviceAddr uniform_address = 0;
+            if (buffer->impl().required_per_core_address_.has_value()) {
+                uniform_address = *buffer->impl().required_per_core_address_;
+            } else {
+                auto found = this->find_uniform_per_core_address_unlocked(
+                    cores, alloc_size, page_size, bottom_up, buffer->impl().uniform_additional_occupied_ranges_);
+                TT_FATAL(
+                    found.has_value(),
+                    "Out of Memory: no address is free for {} B on all {} cores of a uniform per-core buffer",
+                    alloc_size,
+                    cores.size());
+                uniform_address = *found;
+            }
+            for (const auto& core : cores) {
+                auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
+                try {
+                    l1_manager_->allocate_at(
+                        uniform_address,
+                        alloc_size,
+                        page_size,
+                        AllocatorID{bank_id + 1},
+                        persistent_l1_.occupied_ranges(core));
+                } catch (...) {
+                    // Leave no core holding the address when another cannot take it.
+                    for (const auto& [placed_core, placed_address] : addrs) {
+                        auto placed_bank = logical_core_to_bank_ids_.at(BufferType::L1).at(placed_core).at(0);
+                        l1_manager_->deallocate_buffer(placed_address, AllocatorID{placed_bank + 1});
+                    }
+                    throw;
+                }
+                addrs[core] = uniform_address;
+            }
+        } else {
+            for (const auto& core : cores) {
+                auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
+                // PrefetcherPipe / persistent L1 sit outside BankManager. Per-core placement
+                // must skip this core's persistent occupancy; lockstep uses the flattened
+                // all-cores list below because it picks one address for every bank.
+                addrs[core] = l1_manager_->allocate_buffer(
+                    alloc_size,
+                    page_size,
+                    bottom_up,
+                    config_->compute_grid,
+                    /*num_shards=*/1,
+                    AllocatorID{bank_id + 1},
+                    persistent_l1_.occupied_ranges(core));
+            }
         }
         buffer->impl().set_per_core_addresses(std::move(addrs));
         allocated_buffers_.insert(buffer);
@@ -402,6 +440,43 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_l1_allocated_r
     std::lock_guard<std::mutex> lock(mutex_);
     auto state = l1_manager_->extract_state(allocator_id);
     return state.allocated_regions;
+}
+
+std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::uniform_per_core_occupied_ranges_unlocked(
+    const std::vector<CoreCoord>& cores) const {
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    // Every per-core allocator depends on the lockstep one, so a single device's placement
+    // subtracts it anyway; it is listed for the devices whose ranges a mesh merges in.
+    auto ranges = l1_manager_->extract_state(AllocatorID{0}).allocated_regions;
+    for (const auto& core : cores) {
+        auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
+        const auto per_core = l1_manager_->extract_state(AllocatorID{bank_id + 1}).allocated_regions;
+        ranges.insert(ranges.end(), per_core.begin(), per_core.end());
+        const auto persistent = persistent_l1_.occupied_ranges(core);
+        ranges.insert(ranges.end(), persistent.begin(), persistent.end());
+    }
+    return ranges;
+}
+
+std::optional<DeviceAddr> AllocatorImpl::find_uniform_per_core_address_unlocked(
+    const std::vector<CoreCoord>& cores,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    bool bottom_up,
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges) {
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    TT_FATAL(!cores.empty(), "Uniform per-core placement needs at least one core");
+    auto occupied = this->uniform_per_core_occupied_ranges_unlocked(cores);
+    occupied.insert(occupied.end(), additional_occupied_ranges.begin(), additional_occupied_ranges.end());
+    // The first core's allocator stands in for all of them: `occupied` already holds the others.
+    auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(cores.front()).at(0);
+    return l1_manager_->find_address(size, page_size, bottom_up, AllocatorID{bank_id + 1}, occupied);
+}
+
+std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_uniform_per_core_occupied_ranges(
+    const std::vector<CoreCoord>& cores) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return this->uniform_per_core_occupied_ranges_unlocked(cores);
 }
 
 void AllocatorImpl::mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size) {

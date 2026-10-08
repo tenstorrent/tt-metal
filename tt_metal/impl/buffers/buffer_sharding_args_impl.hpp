@@ -30,6 +30,9 @@ public:
     TensorMemoryLayout buffer_layout_ = TensorMemoryLayout::INTERLEAVED;
     bool per_core_allocation_ = false;
     bool range_lockstep_allocation_ = false;
+    // Per-core allocation that places every core at the same address; see
+    // experimental/per_core_allocation/buffer.hpp.
+    bool uniform_per_core_address_ = false;
 };
 
 }  // namespace tt::tt_metal

@@ -19,6 +19,15 @@ namespace distributed {
 class MeshDevice;
 }  // namespace distributed
 
+// Where a global semaphore's address is reserved.
+enum class GlobalSemaphorePlacement : uint8_t {
+    // Lockstep: one address, kept clear on every core of the device.
+    ALL_CORES,
+    // Uniform per-core: one address, reserved only on the semaphore's own cores (HYBRID
+    // allocator only; otherwise ALL_CORES). See per_core_allocation::set_uniform_address.
+    OWN_CORES,
+};
+
 // GlobalSemaphoreImpl is implemented as a wrapper around a sharded buffer
 // This can be updated in the future to be its own container with optimized dispatch functions
 class GlobalSemaphoreImpl {
@@ -27,7 +36,8 @@ public:
         distributed::MeshDevice& device,
         CoreRangeSet cores,
         std::optional<uint32_t> initial_value,
-        BufferType buffer_type);
+        BufferType buffer_type,
+        GlobalSemaphorePlacement placement = GlobalSemaphorePlacement::ALL_CORES);
 
     // Dedicated constructor for creating a global semaphore **without allocation**.
     // The instantiation of GlobalSemphore will be emplaced onto the address specified.
@@ -56,7 +66,10 @@ public:
 
 private:
     void setup_buffer(
-        std::optional<uint32_t> initial_value, BufferType buffer_type, std::optional<uint64_t> address);
+        std::optional<uint32_t> initial_value,
+        BufferType buffer_type,
+        std::optional<uint64_t> address,
+        GlobalSemaphorePlacement placement);
 
     std::shared_ptr<distributed::MeshBuffer> buffer_;
     distributed::MeshDevice* device_;

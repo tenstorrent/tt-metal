@@ -501,8 +501,12 @@ BufferImpl::BufferImpl(
     shard_spec_(sharding_args.shard_spec()),
     buffer_distribution_spec_(sharding_args.buffer_distribution_spec()),
     per_core_allocation_(experimental::per_core_allocation::is_per_core_allocation(sharding_args)),
+    uniform_per_core_address_(experimental::per_core_allocation::is_uniform_address(sharding_args)),
     range_lockstep_allocation_(experimental::range_lockstep_allocation::is_range_lockstep_allocation(sharding_args)) {
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
+    TT_FATAL(
+        !this->uniform_per_core_address_ || this->per_core_allocation_,
+        "uniform per-core address requires per_core_allocation");
     // BufferShardingArgs does not know the buffer type; this is the first point where both are visible.
     TT_FATAL(
         !this->range_lockstep_allocation_ || buffer_type == BufferType::L1,
@@ -621,6 +625,30 @@ std::shared_ptr<Buffer> BufferImpl::create(
         bottom_up,
         sub_device_id);
 
+    return buffer;
+}
+
+std::shared_ptr<Buffer> BufferImpl::create_uniform_per_core(
+    IDevice* device,
+    std::optional<DeviceAddr> required_address,
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_occupied_ranges,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const BufferShardingArgs& sharding_args,
+    const std::optional<bool> bottom_up,
+    const std::optional<SubDeviceId> sub_device_id) {
+    TT_FATAL(
+        experimental::per_core_allocation::is_uniform_address(sharding_args),
+        "create_uniform_per_core requires a uniform per-core sharding spec");
+    auto buffer = std::make_shared<Buffer>(BufferImpl(
+        device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, true /* owns data */));
+    TT_FATAL(buffer->impl().size_ != 0, "create_uniform_per_core requires a non-empty buffer");
+    buffer->impl().required_per_core_address_ = required_address;
+    buffer->impl().uniform_additional_occupied_ranges_ = std::move(additional_occupied_ranges);
+    buffer->impl().allocate_impl(*buffer);
+    buffer->impl().required_per_core_address_.reset();
+    buffer->impl().uniform_additional_occupied_ranges_.clear();
     return buffer;
 }
 

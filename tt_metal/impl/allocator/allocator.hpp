@@ -146,6 +146,14 @@ public:
     std::vector<std::pair<DeviceAddr, DeviceAddr>> get_l1_allocated_ranges(
         BankManager::AllocatorDependencies::AllocatorID allocator_id) const;
 
+    // Uniform per-core placement (experimental/per_core_allocation/buffer.hpp, set_uniform_address).
+    //
+    // The ranges a uniform per-core allocation over `cores` must avoid on this device: each core's
+    // per-core allocations and persistent L1, and this device's lockstep allocations. A mesh
+    // gathers them from every device so that one address suits them all.
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> get_uniform_per_core_occupied_ranges(
+        const std::vector<CoreCoord>& cores) const;
+
     // Mirror a lockstep allocation (from the mesh-level allocator) into this allocator's lockstep sub-allocator.
     // This marks the region as occupied so per-bank allocators avoid it.
     void mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size);
@@ -178,6 +186,16 @@ private:
         SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id);
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
     void verify_safe_allocation() const;
+    // Uniform per-core placement helpers; callers hold mutex_. The second returns an address free
+    // on every core of `cores` and outside `additional_occupied_ranges`, or empty when none fits.
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> uniform_per_core_occupied_ranges_unlocked(
+        const std::vector<CoreCoord>& cores) const;
+    std::optional<DeviceAddr> find_uniform_per_core_address_unlocked(
+        const std::vector<CoreCoord>& cores,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        bool bottom_up,
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges);
     void record_allocation_if_unsafe(Buffer* buffer);
     void record_deallocation(size_t buffer_unique_id);
     void record_all_deallocations();

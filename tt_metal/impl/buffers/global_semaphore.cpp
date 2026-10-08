@@ -10,6 +10,8 @@
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/global_semaphore.hpp>
 #include <tt_metal.hpp>
 #include <cstdint>
 #include <memory>
@@ -31,9 +33,10 @@ GlobalSemaphoreImpl::GlobalSemaphoreImpl(
     distributed::MeshDevice& device,
     CoreRangeSet cores,
     std::optional<uint32_t> initial_value,
-    BufferType buffer_type) :
+    BufferType buffer_type,
+    GlobalSemaphorePlacement placement) :
     device_{&device}, cores_{std::move(cores)} {
-    this->setup_buffer(initial_value, buffer_type, std::nullopt);
+    this->setup_buffer(initial_value, buffer_type, std::nullopt, placement);
 }
 
 GlobalSemaphoreImpl::GlobalSemaphoreImpl(
@@ -43,7 +46,7 @@ GlobalSemaphoreImpl::GlobalSemaphoreImpl(
     BufferType buffer_type,
     uint64_t address) :
     device_{&device}, cores_{std::move(cores)} {
-    this->setup_buffer(initial_value, buffer_type, address);
+    this->setup_buffer(initial_value, buffer_type, address, GlobalSemaphorePlacement::ALL_CORES);
 }
 
 distributed::MeshDevice& GlobalSemaphoreImpl::device() const { return *device_; }
@@ -78,19 +81,33 @@ void GlobalSemaphoreImpl::reset_semaphore_value(uint32_t reset_value) const {
 }
 
 void GlobalSemaphoreImpl::setup_buffer(
-    std::optional<uint32_t> initial_value, BufferType buffer_type, std::optional<uint64_t> address) {
+    std::optional<uint32_t> initial_value,
+    BufferType buffer_type,
+    std::optional<uint64_t> address,
+    GlobalSemaphorePlacement placement) {
     TT_FATAL(
         buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL,
         "Global semaphore can only be created for L1 buffer types");
     TT_FATAL(cores_.num_cores() > 0, "CoreRangeSet must have at least one core");
     uint32_t num_cores = cores_.num_cores();
     auto shard_parameters = ShardSpecBuffer(cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+    auto sharding_args = BufferShardingArgs(std::move(shard_parameters), TensorMemoryLayout::HEIGHT_SHARDED);
+    // Reserve the address only on cores_, which the shard spec already names. Per-core allocators
+    // exist only in HYBRID mode; without them every core is lockstep anyway, so ALL_CORES is the
+    // same reservation.
+    if (placement == GlobalSemaphorePlacement::OWN_CORES && !address.has_value() &&
+        MetalContext::instance(extract_context_id(device_)).rtoptions().get_allocator_mode_hybrid()) {
+        TT_FATAL(
+            buffer_type == BufferType::L1, "A global semaphore reserved on its own cores must be in L1, not L1_SMALL");
+        experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
+        experimental::per_core_allocation::set_uniform_address(sharding_args, true);
+    }
     buffer_ = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = num_cores * sizeof(uint32_t)},
         distributed::DeviceLocalBufferConfig{
             .page_size = sizeof(uint32_t),
             .buffer_type = buffer_type,
-            .sharding_args = BufferShardingArgs(std::move(shard_parameters), TensorMemoryLayout::HEIGHT_SHARDED),
+            .sharding_args = std::move(sharding_args),
         },
         device_,
         address);
@@ -112,6 +129,14 @@ GlobalSemaphore CreateGlobalSemaphore(
     return GlobalSemaphore{GlobalSemaphoreImpl{device, cores, initial_value, buffer_type, address}};
 }
 }  // namespace experimental
+
+namespace experimental::per_core_allocation {
+GlobalSemaphore create_global_semaphore(
+    distributed::MeshDevice& device, const CoreRangeSet& cores, uint32_t initial_value) {
+    return GlobalSemaphore{
+        GlobalSemaphoreImpl{device, cores, initial_value, BufferType::L1, GlobalSemaphorePlacement::OWN_CORES}};
+}
+}  // namespace experimental::per_core_allocation
 
 // GlobalSemaphore implementation
 

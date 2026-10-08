@@ -50,9 +50,27 @@ BufferShardingArgs& set_per_core_allocation(BufferShardingArgs& args, bool enabl
             "independent address on each core or one address across them");
     }
     args.impl().per_core_allocation_ = enable;
+    if (!enable) {
+        // A uniform address only means something on a per-core allocation.
+        args.impl().uniform_per_core_address_ = false;
+    }
     return args;
 }
 
 bool is_per_core_allocation(const BufferShardingArgs& args) { return args.impl().per_core_allocation_; }
+
+BufferShardingArgs& set_uniform_address(BufferShardingArgs& args, bool enable) {
+    if (enable) {
+        TT_FATAL(
+            args.impl().per_core_allocation_,
+            "set_uniform_address requires per_core_allocation: call set_per_core_allocation(args, true) first");
+    }
+    args.impl().uniform_per_core_address_ = enable;
+    return args;
+}
+
+bool is_uniform_address(const BufferShardingArgs& args) { return args.impl().uniform_per_core_address_; }
+
+bool is_uniform_address(const Buffer& buffer) { return buffer.impl().uniform_per_core_address_; }
 
 }  // namespace tt::tt_metal::experimental::per_core_allocation
