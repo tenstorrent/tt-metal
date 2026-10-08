@@ -4,8 +4,12 @@
 
 #include <cstdint>
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-// Blackhole: ELWMUL, which binary_ng runs at HiFi4, takes the per-tile hand-off; add and sub keep the per-face one.
-#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL)
+// Blackhole: ELWMUL, which binary_ng runs at HiFi4, takes the per-tile hand-off unless BINARY_NG_MUL_PER_FACE; add and
+// sub keep the per-face one.
+#ifndef BINARY_NG_MUL_PER_FACE
+#define BINARY_NG_MUL_PER_FACE 0
+#endif
+#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL && !BINARY_NG_MUL_PER_FACE)
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/trigonometry.h"
 

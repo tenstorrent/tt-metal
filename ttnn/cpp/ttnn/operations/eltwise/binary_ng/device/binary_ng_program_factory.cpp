@@ -1494,6 +1494,20 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
+    // Blackhole: a multiply with operand and post activations (logical_and), its init per tile, keeps the per-face
+    // program on block grids of 4 rows by 2 or 4 columns, where the per-tile one measured slower.
+    const auto& a_shard_spec = a.memory_config().shard_spec();
+    if (bh_fpu_op && fpu_binary_op == OpConfig::FpuBinaryOp::MUL && has_operand_activations && has_post_activations &&
+        !bcast_sections && num_tiles_per_cycle == 1 &&
+        a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED && a_shard_spec.has_value()) {
+        const auto grid_box = a_shard_spec->grid.bounding_box();
+        const uint32_t grid_rows = grid_box.end_coord.y - grid_box.start_coord.y + 1;
+        const uint32_t grid_cols = grid_box.end_coord.x - grid_box.start_coord.x + 1;
+        if (grid_rows == 4 && (grid_cols == 2 || grid_cols == 4)) {
+            compute_kernel_defines["BINARY_NG_MUL_PER_FACE"] = "1";
+        }
+    }
+
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
