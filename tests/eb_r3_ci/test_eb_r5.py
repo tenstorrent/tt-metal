@@ -37,6 +37,19 @@ SH = {
     "ws32_t4": ((1, 1, 32, 4096), 4, 8, ttnn.ShardStrategy.WIDTH),
     "bs4_t256": ((1, 1, 1024, 1024), 2, 2, ttnn.ShardStrategy.BLOCK),
     "bs8_t128": ((1, 1, 1024, 1024), 2, 4, ttnn.ShardStrategy.BLOCK),
+    "bs1_t128": ((1, 1, 256, 512), 1, 1, ttnn.ShardStrategy.BLOCK),
+    "bs2_t128": ((1, 1, 512, 512), 1, 2, ttnn.ShardStrategy.BLOCK),
+    "bs4_t128": ((1, 1, 512, 1024), 2, 2, ttnn.ShardStrategy.BLOCK),
+    "ws2_t128": ((1, 1, 128, 2048), 1, 2, ttnn.ShardStrategy.WIDTH),
+    "bs4_t64": ((1, 1, 512, 512), 2, 2, ttnn.ShardStrategy.BLOCK),
+    "bs16_r32": ((1, 1, 4096, 1024), 4, 4, ttnn.ShardStrategy.BLOCK),
+    "bs32_t128": ((1, 1, 2048, 2048), 4, 8, ttnn.ShardStrategy.BLOCK),
+    "ws8_t4": ((1, 1, 32, 1024), 1, 8, ttnn.ShardStrategy.WIDTH),
+    "ws16_t4": ((1, 1, 32, 2048), 2, 8, ttnn.ShardStrategy.WIDTH),
+    "bs16_t4": ((1, 1, 128, 512), 4, 4, ttnn.ShardStrategy.BLOCK),
+    "ws16_t64": ((1, 1, 512, 2048), 2, 8, ttnn.ShardStrategy.WIDTH),
+    "ws8_t32": ((1, 1, 256, 1024), 1, 8, ttnn.ShardStrategy.WIDTH),
+    "ws32_t32": ((1, 1, 256, 4096), 4, 8, ttnn.ShardStrategy.WIDTH),
 }
 
 
@@ -60,7 +73,7 @@ def _run(device, op, shape, mc, da, db, do, kind, act=None, lact=None):
     if act:
         kw["activations"] = [U({"relu": ttnn.UnaryOpType.RELU, "gelu": ttnn.UnaryOpType.GELU, "silu": ttnn.UnaryOpType.SILU}[act])]
     if lact:
-        kw["input_tensor_a_activations"] = [U(ttnn.UnaryOpType.RELU)]
+        kw["input_tensor_a_activations"] = [U({"relu": ttnn.UnaryOpType.RELU, "silu": ttnn.UnaryOpType.SILU}[lact])]
     fn = {"add": lambda: ttnn.add(ta, tb, **kw), "sub": lambda: ttnn.subtract(ta, tb, **kw),
           "mul": lambda: ttnn.multiply(ta, tb, fast_and_approximate_mode=True, **kw),
           "logical_and": lambda: ttnn.logical_and(ta, tb, **kw), "logical_or": lambda: ttnn.logical_or(ta, tb, **kw),
@@ -118,3 +131,39 @@ ONE = [(op, mm, d) for op in ("div", "rsub", "ldexp", "logical_and", "add_arelu"
 @pytest.mark.parametrize("op, mem, d", ONE, ids=["-".join(c) for c in ONE])
 def test_one(device, op, mem, d):
     m.test_mp(device, op, mem, d)
+
+
+# fifth pass, second native run (#58726): the class boundaries. Scalar b on 1 to 4 cores at 128 tiles per core; column b on 4
+# cores, at 32 tile rows on 16 cores and 16 rows on 32; activations at 4 tiles per core on 8 and 16 cores; scalar relu and
+# gelu on width 8, 16 and 32 and block 32 at more tiles per core.
+NAT6 = [("add", mm, "scalar", d) for mm in ("bs1_t128", "bs2_t128", "bs4_t128", "ws2_t128") for d in ("bf16-bf16-bf16", "bfp8-bfp8-bfp8", "bfp4-bfp4-bfp4", "bf16-bfp8-bf16", "bf16-bf16-fp32")]
+NAT6 += [("mul", mm, "scalar", d) for mm in ("bs1_t128", "bs2_t128", "bs4_t128", "ws2_t128") for d in ("bf16-bf16-bf16", "bfp8-bfp8-bfp8")]
+NAT6 += [(op, "bs1_t64", "scalar", d) for op in ("add", "mul") for d in ("bfp4-bfp4-bfp4", "bf16-bfp8-bf16")]
+NAT6 += [(op, "bs4_t64", "col", "bf16-bf16-bf16") for op in ("add", "mul")]
+NAT6 += [("add", "bs4_t128", "col", d) for d in ("bf16-bf16-bf16", "bfp8-bfp8-bfp8")] + [("mul", "bs4_t128", "col", "bf16-bf16-bf16")]
+NAT6 += [("add", "ws2_t128", "col", d) for d in ("bf16-bf16-bf16", "bfp8-bfp8-bfp8", "bfp4-bfp4-bfp4")]
+NAT6 += [(op, "ws2_t64", "col", "bfp4-bfp4-bfp4") for op in ("add", "mul")]
+NAT6 += [(op, "bs16_r32", "col", d) for op in ("add", "mul") for d in ("bfp8-bfp8-bfp8", "bfp4-bfp4-bfp4")]
+NAT6 += [("add", "bs32_t128", "col", d) for d in ("bf16-bf16-bf16", "bfp8-bfp8-bfp8", "bfp4-bfp4-bfp4")] + [("mul", "bs32_t128", "col", "bf16-bf16-bf16")]
+
+
+@pytest.mark.parametrize("op, mem, kind, dts", NAT6, ids=["-".join(c) for c in NAT6])
+def test_nat6(device, op, mem, kind, dts):
+    shape, mc = _mc(mem)
+    da, db, do = dts.split("-")
+    _run(device, op, shape, mc, da, db, do, kind)
+
+
+ACT7 = {"add_relu": ("add", "relu", None), "add_gelu": ("add", "gelu", None), "add_silu": ("add", "silu", None),
+        "rsub": ("rsub", None, None), "logical_and": ("logical_and", None, None), "add_arelu": ("add", None, "relu"),
+        "mul_asilu": ("mul", None, "silu"), "mul_relu": ("mul", "relu", None), "mul_gelu": ("mul", "gelu", None)}
+NAT7 = [(a, mm, k) for mm in ("ws8_t4", "ws16_t4", "bs16_t4") for k in ("col", "scalar") for a in ("add_relu", "add_gelu", "add_silu", "rsub", "logical_and", "add_arelu", "mul_asilu")]
+NAT7 += [(a, mm, "scalar") for mm in ("ws16_t64", "ws8_t32", "ws32_t32", "bs32_t128") for a in ("add_relu", "add_gelu", "mul_relu", "mul_gelu")]
+NAT7 += [(a, mm, "col") for mm in ("ws32_t32", "bs32_t128") for a in ("add_relu", "mul_relu")]
+
+
+@pytest.mark.parametrize("act, mem, kind", NAT7, ids=["-".join(c) for c in NAT7])
+def test_nat7(device, act, mem, kind):
+    shape, mc = _mc(mem)
+    op, post, lact = ACT7[act]
+    _run(device, op, shape, mc, "bf16", "bf16", "bf16", kind, act=post, lact=lact)
