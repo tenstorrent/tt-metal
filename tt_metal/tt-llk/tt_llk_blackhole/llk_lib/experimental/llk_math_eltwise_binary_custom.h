@@ -104,6 +104,8 @@ inline void _bcast_cols_op_()
  *                   callers (e.g. the fuser LoopBlockRow driver) advance this per block-row so each row
  *                   lands on its own dest slots; single-tile-row callers leave it at 0.
  * @note Canonical description of the shared blocked bcast-col mechanism; other files reference this one.
+ * @note Call @ref _llk_math_eltwise_binary_init_custom_ first; re-run it after any op that leaves the Src zero flag
+ *       at keep.
  */
 template <EltwiseBinaryType eltwise_binary_type>
 inline void _llk_math_bcast_cols_reuse_custom_(

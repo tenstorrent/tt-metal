@@ -277,8 +277,8 @@ def test_eltwise_bcast_col_custom(
 # Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
 BF16_DENORMAL_MIN = 2.0**-133
 BF16_DENORMAL_MANTISSAS = 1 << 7
-# SrcA value on the denormal rows. MUL: large, so a kept denormal gives a visibly nonzero product. SUB: the
-# smallest normal exponent range, so subtracting a kept denormal visibly changes it.
+# SrcA value on the denormal rows. MUL: large, so a kept denormal gives a visibly nonzero product. SUB: a small
+# normal value, so subtracting a kept denormal changes the result for most mantissas.
 DENORMAL_ROW_SRCA = {MathOperation.Elwmul: 2.0**100, MathOperation.Elwsub: 2.0**-120}
 
 
@@ -297,6 +297,9 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag(mathop):
         pytest.skip("MUL bcast-col reuse scaffold is Blackhole-only")
 
     formats = input_output_formats([DataFormat.Float16_b])[0]
+    math_fidelity = MathFidelity.LoFi
+    dest_acc = DestAccumulation.No
+    rt_dim = 1
     tile_rows, ct_dim = DEFAULT_TILE_R_DIM, 2
     tile_dims = [tile_rows, DEFAULT_TILE_C_DIM]
     input_dimensions_A = [tile_rows, ct_dim * DEFAULT_TILE_C_DIM]
@@ -324,7 +327,7 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag(mathop):
             src_A.flatten(),
             src_B.repeat(1, ct_dim).flatten(),
             formats.output_format,
-            MathFidelity.LoFi,
+            math_fidelity,
         )
         .reshape(input_dimensions_A)
         .clone()
@@ -350,7 +353,7 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag(mathop):
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        DestAccumulation.No,
+        dest_acc,
         formats,
         input_dimensions_A,
         tile_dimensions=tile_dims,
@@ -359,12 +362,12 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag(mathop):
         "sources/multiple_tiles_eltwise_custom_test.cpp",
         formats,
         templates=[
-            MATH_FIDELITY(MathFidelity.LoFi),
+            MATH_FIDELITY(math_fidelity),
             INPUT_DIMENSIONS(
-                full_rt_dim=1,
+                full_rt_dim=rt_dim,
                 full_ct_dim=ct_dim,
                 block_ct_dim=ct_dim,
-                block_rt_dim=1,
+                block_rt_dim=rt_dim,
             ),
             MATH_OP(mathop=mathop),
             BROADCAST_TYPE(BroadcastType.Column),
@@ -392,7 +395,7 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag(mathop):
             tile_dimensions=tile_dims,
             use_dense_tile_dimensions=True,
         ),
-        dest_acc=DestAccumulation.No,
+        dest_acc=dest_acc,
     )
     res = untilize_block(
         configuration.run().result,
