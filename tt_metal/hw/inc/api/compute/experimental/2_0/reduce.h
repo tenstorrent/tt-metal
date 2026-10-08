@@ -56,7 +56,7 @@ ALWI void reduce_init(LLKOperand<DF, DS> /*data*/, LLKOperand<OF, OS> /*out*/) {
     UNPACK((llk_unpack_AB_reduce_init_impl<reduce_type, reduce_dim>(DS)));
     MATH((llk_math_reduce_init_impl<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(DS)));
     PACK((llk_pack_reduce_mask_config_impl<reduce_type, reduce_dim, PackMode::Default>(
-        OS.face_r_dim, get_tile_geometry(OS.num_faces_r_dim, OS.num_faces_c_dim))));
+        static_cast<std::uint32_t>(OF), OS)));
 }
 
 // clang-format off

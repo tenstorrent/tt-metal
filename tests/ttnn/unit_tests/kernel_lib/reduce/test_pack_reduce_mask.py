@@ -12,6 +12,12 @@ KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/pack_reduce_mask.cpp"
 REPEATS = 5
 OUTPUTS_PER_SECTION = 4 + 3 * REPEATS
 TILE_SHAPES = [(32, 32), (32, 16), (16, 32), (16, 16), (8, 32), (4, 16), (2, 32), (1, 32), (1, 16)]
+BFP8_TILE_SHAPES = [(32, 32), (32, 16), (8, 32), (4, 16), (2, 32), (1, 32), (1, 16)]
+CASES = [
+    (tile_shape, dtype, fp32_dest)
+    for tile_shape in TILE_SHAPES
+    for dtype, fp32_dest in [(ttnn.float32, True), (ttnn.bfloat16, False), (ttnn.bfloat16, True)]
+] + [(tile_shape, ttnn.bfloat8_b, False) for tile_shape in BFP8_TILE_SHAPES]
 
 
 def _single_core():
@@ -29,10 +35,10 @@ def _sharded(shape):
     )
 
 
-@pytest.mark.parametrize("tile_shape", TILE_SHAPES)
-@pytest.mark.parametrize("dtype,fp32_dest", [(ttnn.float32, True), (ttnn.bfloat16, False), (ttnn.bfloat16, True)])
+@pytest.mark.parametrize("tile_shape,dtype,fp32_dest", CASES)
 @pytest.mark.parametrize("full_sync", [False, True])
-def test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, runtime_output=False):
+@pytest.mark.parametrize("pool", ["SUM", "MAX"])
+def test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, pool, runtime_output=False):
     if device.arch() not in (ttnn.device.Arch.BLACKHOLE, ttnn.device.Arch.WORMHOLE_B0):
         pytest.skip("Blackhole/Wormhole reduction-mask regression")
     height, width = tile_shape
@@ -41,6 +47,9 @@ def test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, runti
     source = (torch.arange(height * 2 * width, dtype=torch.float32) + 1).reshape(1, 1, height, 2 * width)
     if dtype == ttnn.bfloat16:
         source = source.bfloat16().float()
+    elif dtype == ttnn.bfloat8_b:
+        # Every value shares the [64, 128) exponent, so the 7-bit BFP mantissa holds it exactly.
+        source = 64 + source % 64
     inp = ttnn.from_torch(
         source,
         dtype=dtype,
@@ -68,7 +77,7 @@ def test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, runti
                 kernel_source=KERNEL,
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                 core_ranges=_single_core(),
-                compile_time_args=[0, 16, REPEATS, int(runtime_output)],
+                compile_time_args=[0, 16, REPEATS, int(runtime_output), int(pool == "MAX")],
                 runtime_args=[(ttnn.CoreCoord(0, 0), [17])],
                 config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest, dst_full_sync_en=full_sync),
             )
@@ -78,11 +87,13 @@ def test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, runti
     )
     actual = ttnn.to_torch(ttnn.generic_op([inp, out], program))[0, 0].float()
     inputs = [source[0, 0, :, i * width : (i + 1) * width] for i in range(2)]
+    # MAX pads with negative infinity, except BFP outputs, whose shared exponent keeps zero fill.
+    fill = float("-inf") if pool == "MAX" and dtype != ttnn.bfloat8_b else 0.0
     expected_section = inputs.copy()
     for dim in ("row", "col", "scalar"):
         for i in range(REPEATS):
             original = inputs[i % 2]
-            masked = torch.zeros_like(original)
+            masked = torch.full_like(original, fill)
             if dim == "row":
                 masked[:, 0] = original[:, 0]
             elif dim == "col":
@@ -95,8 +106,8 @@ def test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, runti
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("tile_shape", TILE_SHAPES)
-@pytest.mark.parametrize("dtype,fp32_dest", [(ttnn.float32, True), (ttnn.bfloat16, False), (ttnn.bfloat16, True)])
+@pytest.mark.parametrize("tile_shape,dtype,fp32_dest", CASES)
 @pytest.mark.parametrize("full_sync", [False, True])
-def test_pack_reduce_mask_runtime_output(device, tile_shape, dtype, fp32_dest, full_sync):
-    test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, runtime_output=True)
+@pytest.mark.parametrize("pool", ["SUM", "MAX"])
+def test_pack_reduce_mask_runtime_output(device, tile_shape, dtype, fp32_dest, full_sync, pool):
+    test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, pool, runtime_output=True)
