@@ -146,10 +146,35 @@ class Linear(Module):
                 bias = prepare_for_fused_swiglu(bias, ndev=1)
             state["bias"] = bias
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None, default_block_size=None) -> ttnn.Tensor:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        compute_kernel_config=None,
+        dtype=None,
+        default_block_size=None,
+        addcmul_a: ttnn.Tensor | None = None,
+        addcmul_b: ttnn.Tensor | None = None,
+        addcmul_scalar: float = 1.0,
+    ) -> ttnn.Tensor:
+        """With ``addcmul_a``/``addcmul_b`` returns ``a + scalar * linear(x) * b`` from one matmul."""
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
         core_grid = get_matmul_core_grid(self.mesh_device)
         matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+        if addcmul_a is not None:
+            if self.fused_activation_fn is not None or self.fuse_swiglu or self.activation_fn is not None:
+                msg = "fused addcmul is not supported alongside an activation"
+                raise ValueError(msg)
+            return ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                x,
+                self.weight.data,
+                addcmul_scalar,
+                addcmul_a,
+                addcmul_b,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                dtype=dtype,
+            )
         output = ttnn.experimental.minimal_matmul(
             input_tensor=x,
             weight_tensor=self.weight.data,

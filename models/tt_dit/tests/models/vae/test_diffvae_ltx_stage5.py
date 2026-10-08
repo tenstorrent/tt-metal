@@ -605,8 +605,9 @@ def test_stage5_gna_parity_w_sharded(*, mesh_device, device_params, sp_axis, gri
 @pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=["mesh_device"])
 @pytest.mark.parametrize("sp_axis", [1], ids=["sp_cols"])
 @pytest.mark.parametrize("pcc", [0.999], ids=["pcc999"])
+@pytest.mark.parametrize("fold_adds", [False, True], ids=["adds", "fold_adds"])
 @pytest.mark.diffvae_gate
-def test_stage5_parity_w_sharded_bricked(*, mesh_device, device_params, sp_axis, pcc):
+def test_stage5_parity_w_sharded_bricked(*, mesh_device, device_params, sp_axis, pcc, fold_adds, monkeypatch):
     """Stage 5 on the BRICKED W-sharded backend against the ltx_core reference.
 
     Until this existed, no committed gate covered ``bricked_sp_w_sharded`` at all: every gate here
@@ -629,6 +630,7 @@ def test_stage5_parity_w_sharded_bricked(*, mesh_device, device_params, sp_axis,
     # ratio of 0.19 against production's 0.10. W=64 (local width 8, i.e. 4 brick-columns against 3)
     # clears the brick chooser's halo check but wedges the halo exchange; see
     # tests/unit/test_halo_exchange_geometry.py, which bounds that limit directly.
+    monkeypatch.setenv("DIFFVAE_S5_FOLD_ADDS", "1" if fold_adds else "0")
     grid = Grid(batch=1, t=12, h=32, w=256)
     sp = int(list(mesh_device.shape)[sp_axis])
     assert grid.w % sp == 0, f"W={grid.w} not divisible by sp={sp}"

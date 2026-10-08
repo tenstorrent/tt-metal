@@ -113,6 +113,14 @@ def packed_lanes_enabled() -> bool:
     return os.environ.get("DIFFVAE_S5_PACKED_LANES") != "0"
 
 
+def fold_adds_enabled() -> bool:
+    """Whether stage 5 folds its residual and context adds into the epilogue of the matmul that
+    feeds each (context projection, attention out-projection, MLP down-projection), so none of
+    those outputs is written and read back just to be added. Off by default, on with
+    ``DIFFVAE_S5_FOLD_ADDS=1``."""
+    return os.environ.get("DIFFVAE_S5_FOLD_ADDS") == "1"
+
+
 @dataclass(frozen=True)
 class DiffVAEStage5Config:
     """Shipped LTX-2.5 DiffVAE stage-5 geometry."""
@@ -650,9 +658,22 @@ class _NeighborhoodAttention3D(Module):
         return out if scale is None else consume(out, ttnn.multiply, scale)
 
     def forward(
-        self, y: ttnn.Tensor, grid: Grid, tables: _RopeTables, brick: tuple[int, int, int] | None = None
+        self,
+        y: ttnn.Tensor,
+        grid: Grid,
+        tables: _RopeTables,
+        brick: tuple[int, int, int] | None = None,
+        *,
+        crop: tuple[int, int] | None = None,
+        residual: ttnn.Tensor | None = None,
+        ones: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """``y``: ``(1, batch, sites, dim)``. Returns the same shape.
+
+        ``crop`` keeps only site rows ``[lo, hi)`` of the output; the projection is per row, so
+        cropping before it is exact and skips the rows thrown away. ``residual`` (those rows,
+        **consumed**) is added in the projection's epilogue, with ``ones`` its ``[1, dim]``
+        broadcast multiplier.
 
         ``grid`` is always the FULL ``(T, H, W)``. Under a W-sharded kernel ``y`` is this chip's
         W-shard, so the local W extent is ``W/sp`` while the attention is told the full W.
@@ -775,7 +796,13 @@ class _NeighborhoodAttention3D(Module):
 
         with timing_tree.span(self.mesh_device, "out-proj", category=timing_tree.PROJ, deep=True):
             flat = consume(out, retile, (1, grid.batch, sites_local, cfg.dim))
-            projected = self.proj(flat)
+            if crop is not None:
+                flat = consume(flat, slice_rows, *crop)
+            if residual is not None:
+                projected = self.proj(flat, addcmul_a=residual, addcmul_b=ones)
+                ttnn.deallocate(residual)
+            else:
+                projected = self.proj(flat)
             ttnn.deallocate(flat)
         return projected
 
@@ -833,6 +860,19 @@ class DiffusionNABlock(Module):
         self.norm2 = RMSNorm(config.dim, **norm)
         # One fused [up | gate] GEMM whose epilogue emits silu(gate) * up; replicated (TP is over heads).
         self.mlp = SwiGLU(config.dim, config.mlp_hidden, mesh_device=mesh_device, dtype=dtype, fused=True)
+        self._ones: ttnn.Tensor | None = None
+
+    def _ones_row(self) -> ttnn.Tensor:
+        """``[1, dim]`` of ones: the broadcast multiplier that turns the fused addcmul into an add."""
+        if self._ones is None:
+            self._ones = ttnn.from_torch(
+                torch.ones(1, self.config.dim),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self._ones
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "scale_shift_table" in state:
@@ -874,6 +914,7 @@ class DiffusionNABlock(Module):
         else:
             rows = sites_per_t_brick((grid.t, grid.h, grid.w), brick) if brick is not None else grid.h * grid.w
         frame_step = brick[0] if brick is not None else 1
+        fold = fold_adds_enabled()
         # A local view of the volume; entries become None as this loop releases them.
         live: list[ttnn.Tensor | None] = list(x)
         out: list[ttnn.Tensor] = []
@@ -887,20 +928,25 @@ class DiffusionNABlock(Module):
                 (band.layout_hi - band.pad_lo) // frame_step * rows,
             )
 
-            xs = self._inject_context(padded, context, band, rows, frame_step, owned=padded is live[index])
+            xs = self._inject_context(padded, context, band, rows, frame_step, owned=padded is live[index], fold=fold)
             band_grid = Grid(grid.batch, min(band.pad_hi, grid.t) - band.pad_lo, grid.h, grid.w)
-            attended = self._attend(
-                self._modulated("pre-attn", self.norm1, xs, scale_msa, shift_msa), band_grid, tables[index], brick
-            )
+            modulated = self._modulated("pre-attn", self.norm1, xs, scale_msa, shift_msa)
+            if fold:
+                with timing_tree.span(
+                    self.mesh_device, "residual crop (attn)", category=timing_tree.RESHAPE, deep=True
+                ):
+                    residual = consume(xs, slice_rows, *interior)
+                y = self._attend(modulated, band_grid, tables[index], brick, crop=interior, residual=residual)
+            else:
+                attended = self._attend(modulated, band_grid, tables[index], brick)
+                with timing_tree.span(
+                    self.mesh_device, "residual crop+add (attn)", category=timing_tree.RESHAPE, deep=True
+                ):
+                    residual = consume(xs, slice_rows, *interior)
+                    cropped = consume(attended, slice_rows, *interior)
+                    y = consume_all(ttnn.add, residual, cropped)
 
-            with timing_tree.span(
-                self.mesh_device, "residual crop+add (attn)", category=timing_tree.RESHAPE, deep=True
-            ):
-                residual = consume(xs, slice_rows, *interior)
-                cropped = consume(attended, slice_rows, *interior)
-                y = consume_all(ttnn.add, residual, cropped)
-
-            out.append(self._mlp(self._modulated("pre-mlp", self.norm2, y, scale_mlp, shift_mlp), y))
+            out.append(self._mlp(self._modulated("pre-mlp", self.norm2, y, scale_mlp, shift_mlp), y, fold=fold))
 
             # A band's input rows are read as halo by its neighbours; release them once no band
             # still to come reaches back that far.
@@ -913,16 +959,27 @@ class DiffusionNABlock(Module):
 
     @timing_tree.span("mesh_device", "context-inject", category=timing_tree.CONTEXT_INJECT)
     def _inject_context(
-        self, padded: ttnn.Tensor, context: ttnn.Tensor, band: _Band, rows: int, frame_step: int, *, owned: bool
+        self,
+        padded: ttnn.Tensor,
+        context: ttnn.Tensor,
+        band: _Band,
+        rows: int,
+        frame_step: int,
+        *,
+        owned: bool,
+        fold: bool = False,
     ) -> ttnn.Tensor:
         """``padded`` plus the projected context rows of its frames. **Consumes** ``padded`` unless it is
         a band's own tensor (``owned``), which the caller's bookkeeping still has to read."""
         context_rows = slice_rows(context, band.pad_lo // frame_step * rows, band.pad_hi // frame_step * rows)
-        injected = self.context_proj(context_rows)
+        if fold:
+            xs = self.context_proj(context_rows, addcmul_a=padded, addcmul_b=self._ones_row())
+        else:
+            injected = self.context_proj(context_rows)
+            xs = ttnn.add(padded, injected)
+            ttnn.deallocate(injected)
         if context_rows is not context:
             ttnn.deallocate(context_rows)
-        xs = ttnn.add(padded, injected)
-        ttnn.deallocate(injected)
         if not owned:
             ttnn.deallocate(padded)
         return xs
@@ -942,15 +999,28 @@ class DiffusionNABlock(Module):
         return consume(scaled, ttnn.add, shift)
 
     @timing_tree.span("mesh_device", "attention", category=timing_tree.ATTENTION)
-    def _attend(self, modulated: ttnn.Tensor, band_grid: Grid, tables: _RopeTables, brick) -> ttnn.Tensor:
-        """Attention over one padded band. **Consumes** ``modulated``."""
-        attended = self.attn(modulated, band_grid, tables, brick=brick)
+    def _attend(
+        self,
+        modulated: ttnn.Tensor,
+        band_grid: Grid,
+        tables: _RopeTables,
+        brick,
+        *,
+        crop: tuple[int, int] | None = None,
+        residual: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        """Attention over one padded band, optionally cropped and added to ``residual`` (see
+        :meth:`_NeighborhoodAttention3D.forward`). **Consumes** ``modulated`` and ``residual``."""
+        ones = self._ones_row() if residual is not None else None
+        attended = self.attn(modulated, band_grid, tables, brick=brick, crop=crop, residual=residual, ones=ones)
         ttnn.deallocate(modulated)
         return attended
 
     @timing_tree.span("mesh_device", "mlp", category=timing_tree.MLP)
-    def _mlp(self, modulated: ttnn.Tensor, y: ttnn.Tensor) -> ttnn.Tensor:
+    def _mlp(self, modulated: ttnn.Tensor, y: ttnn.Tensor, *, fold: bool = False) -> ttnn.Tensor:
         """SwiGLU plus the residual add. **Consumes** ``modulated`` and ``y``."""
+        if fold:
+            return self.mlp(modulated, residual=y, ones=self._ones_row())
         return consume_all(ttnn.add, y, self.mlp(modulated))
 
     def _padded_rows(

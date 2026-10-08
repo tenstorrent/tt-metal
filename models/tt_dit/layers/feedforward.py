@@ -274,10 +274,30 @@ class SwiGLU(Module):
         if gate is not None and up is not None:
             state["gate_up.weight"] = torch.cat([up, gate], dim=0)
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """**Consumes** ``x``. Row-chunked: the hidden intermediates are 4x the activation."""
+    def forward(
+        self, x: ttnn.Tensor, *, residual: ttnn.Tensor | None = None, ones: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
+        """**Consumes** ``x``. Row-chunked: the hidden intermediates are 4x the activation.
+
+        With ``residual`` returns ``residual + swiglu(x)`` and consumes ``residual`` too. When the
+        rows fit one chunk the add runs in ``w_down``'s epilogue (``ones``: a ``[1, dim]`` row of
+        ones, the op's broadcast multiplier), so the output is not written and re-read for it.
+        """
         width = self.hidden_dim // self.mlp_shards
-        return pointwise_in_chunks(x, self._project, width=width)
+        if residual is not None and self.fused and not self.tp_mlp and _chunk_rows(width) >= x.shape[-2]:
+            hidden = self.gate_up(x)
+            ttnn.deallocate(x)
+            out = self.w_down(hidden, addcmul_a=residual, addcmul_b=ones)
+            ttnn.deallocate(hidden)
+            ttnn.deallocate(residual)
+            return out
+        out = pointwise_in_chunks(x, self._project, width=width)
+        if residual is None:
+            return out
+        summed = ttnn.add(residual, out)
+        ttnn.deallocate(residual)
+        ttnn.deallocate(out)
+        return summed
 
     @property
     def mlp_shards(self) -> int:
