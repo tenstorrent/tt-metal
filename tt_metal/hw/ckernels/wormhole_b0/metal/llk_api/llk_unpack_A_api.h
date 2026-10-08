@@ -33,7 +33,11 @@ inline void llk_unpack_A_init(
 
     LLK_ASSERT_BLOCK((is_unpacker_A_configured_correctly<
                       UnpackerProgramType::ProgramByTile,
-                      (!_llk_unpack_A_address_on_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>())>(
+                      _llk_unpack_A_asserts_check_unpacker_B_<
+                          BType,
+                          acc_to_dest,
+                          binary_reuse_dest,
+                          unpack_to_dest>() /*check_unpacker_b*/>(
         operand_unpack_src_format,
         operand_unpack_dst_format,
         tensor_shape.face_r_dim,
@@ -74,7 +78,11 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
 
     LLK_ASSERT_BLOCK((is_unpacker_A_configured_correctly<
                       UnpackerProgramType::ProgramByTile,
-                      (!_llk_unpack_A_address_on_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>())>(
+                      _llk_unpack_A_asserts_check_unpacker_B_<
+                          BType,
+                          acc_to_dest,
+                          binary_reuse_dest,
+                          unpack_to_dest>() /*check_unpacker_b*/>(
         unpack_src_format[operand_id],
         unpack_dst_format[operand_id],
         get_operand_face_r_dim(operand_id),
