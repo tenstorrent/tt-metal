@@ -341,8 +341,11 @@ void blocked_matmul_and_pack(
     tile_regs_wait();
 #if defined(SDPA_RECIPE_K_PRIMARY_ROWS) || defined(SDPA_RECIPE_RING)
     if constexpr (transpose) {
+#ifdef SDPA_RECIPE_RING_CAUSAL
+        recipe_causal_row0 = row_subblock_idx * subblock_h;
+#endif
 #ifdef SDPA_RECIPE_RING
-        if (recipe_k_valid_rows < recipe_k_chunk_rows)
+        if (recipe_ring_chunk_masked())
 #endif
             mask_recipe_tail(out_col_offset, subblock_w, subblock_h);
     }

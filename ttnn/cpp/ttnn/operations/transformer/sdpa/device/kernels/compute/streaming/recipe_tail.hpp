@@ -17,6 +17,43 @@ inline void mask_recipe_columns(uint32_t valid_columns) {
         sfpi::dst_reg++;
     }
 }
+
+#ifdef SDPA_RECIPE_RING_CAUSAL
+// A QK tile on the causal diagonal (query row r sees key column c <= r): -inf above the diagonal. Face 1 (rows
+// 0-15, columns 16-31) is masked whole, face 2 not at all; faces 0 and 3 hold the diagonal. A vector holds four
+// rows (lane row (id >> 4) & 3) and the even or odd columns (id & 0xe, + 1) of one face; per 4-row group the
+// threshold on column - row moves by 4.
+inline void mask_recipe_diagonal() {
+    const sfpi::vInt id = sfpi::vConstTileId;
+    const sfpi::vInt column_minus_row = (id & sfpi::vInt(0xe)) - ((id >> 4) & sfpi::vInt(3));
+    const sfpi::vFloat negative_infinity = Converter::as_float(0xff800000);
+#pragma GCC unroll 1
+    for (uint32_t face = 0; face < 4; face += 3) {
+        sfpi::vInt v = column_minus_row;
+#pragma GCC unroll 1
+        for (uint32_t group = 0; group < 4; ++group) {
+            // Even columns: masked where v > 0; odd columns (one further right): where v >= 0.
+            v_if(v > 0) { sfpi::dst_reg[0] = negative_infinity; }
+            v_endif;
+            sfpi::dst_reg++;
+            v_if(v >= 0) { sfpi::dst_reg[0] = negative_infinity; }
+            v_endif;
+            sfpi::dst_reg++;
+            v -= 4;
+        }
+        if (face == 0) {
+            // Face 1 masked whole, face 2 untouched.
+#pragma GCC unroll 1
+            for (uint32_t i = 0; i < 16; ++i) {
+                if (i < 8) {
+                    sfpi::dst_reg[0] = negative_infinity;
+                }
+                sfpi::dst_reg++;
+            }
+        }
+    }
+}
+#endif
 }  // namespace ckernel::sfpu
 #endif
 
@@ -25,6 +62,15 @@ static uint32_t recipe_k_tile_offset;
 static uint32_t recipe_k_valid_rows;
 // Rows in one full K chunk; the ring hook masks only chunks with fewer valid rows.
 static uint32_t recipe_k_chunk_rows = 512;
+#endif
+#ifdef SDPA_RECIPE_RING_CAUSAL
+// Ring causal step on the local shard (streaming/recipe_ring.hpp): whether this K chunk crosses the Q chunk's
+// diagonal, its first K tile minus the Q chunk's first tile row (both in the shard's frame), and the first Q tile
+// row of the subblock being packed (set by the QK pack sites). QK tile (r, c) is masked whole when its K tile
+// lies past its Q tile, and above the diagonal when they are equal.
+static bool recipe_causal_edge;
+static int32_t recipe_causal_tile_delta;
+static uint32_t recipe_causal_row0;
 #endif
 
 ALWI uint32_t recipe_valid_k_columns(uint32_t tile) {
@@ -41,6 +87,17 @@ ALWI uint32_t recipe_valid_k_columns(uint32_t tile) {
     return remaining < 32 ? remaining : 32;
 }
 
+#ifdef SDPA_RECIPE_RING
+// Whether this K chunk's QK tiles need the pack-thread mask: a key tail or (ring causal) the diagonal.
+ALWI bool recipe_ring_chunk_masked() {
+#ifdef SDPA_RECIPE_RING_CAUSAL
+    return recipe_k_valid_rows < recipe_k_chunk_rows || recipe_causal_edge;
+#else
+    return recipe_k_valid_rows < recipe_k_chunk_rows;
+#endif
+}
+#endif
+
 // Stamp chunk padding before packing QK, so neither maxima nor the denominator
 // see dummy keys. PACK owns SFPU while MATH overlaps the next matmul; using a
 // math-thread fill here would race the pack-thread exponential. No math-counter
@@ -55,7 +112,21 @@ void mask_recipe_tail(uint32_t col_offset, uint32_t width, uint32_t height) {
     bool masked = false;
     for (uint32_t row = 0; row < height; ++row) {
         for (uint32_t col = 0; col < width; ++col) {
-            const uint32_t valid = recipe_valid_k_columns(recipe_k_tile_offset + col_offset + col);
+            uint32_t valid = recipe_valid_k_columns(recipe_k_tile_offset + col_offset + col);
+#ifdef SDPA_RECIPE_RING_CAUSAL
+            const int32_t delta = recipe_causal_edge ? recipe_causal_tile_delta + static_cast<int32_t>(col_offset + col) -
+                                                           static_cast<int32_t>(recipe_causal_row0 + row)
+                                                     : -1;
+            valid = delta > 0 ? 0 : valid;
+            if (delta == 0) {
+                if (!masked) {
+                    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+                    masked = true;
+                }
+                SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+                    DST_SYNC_MODE, DST_ACCUM_MODE, mask_recipe_diagonal, row * width + col, VectorMode::None);
+            }
+#endif
             if (valid < 32) {
                 if (!masked) {
                     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);

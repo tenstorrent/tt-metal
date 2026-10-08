@@ -60,6 +60,7 @@ public:
             Sk_chunk_t,
             DHt);
         desc.cbs = program_.cbs;
+        causal_ = args.is_causal;
         grid_ = grid;
         Sq_chunk_t_ = Sq_chunk_t;
         Sk_chunk_t_ = Sk_chunk_t;
@@ -176,6 +177,10 @@ public:
         if (has("SDPA_RECIPE_FUSED") && !has("SDPA_RECIPE_FP32")) {
             defines.emplace_back("SDPA_RING_STREAM_STATE", "1");
         }
+        // Causal (and balanced) rings: diagonal masking, skipped K chunks and Q chunks (streaming/recipe_ring.hpp).
+        if (causal_) {
+            defines.emplace_back("SDPA_RECIPE_RING_CAUSAL", "1");
+        }
     }
 
     std::optional<tt::tt_metal::KernelDescriptor::ConfigDescriptor> compute_config() const override {
@@ -185,6 +190,7 @@ public:
 private:
     mutable tt::tt_metal::ProgramDescriptor program_;  // finalize_cbs may drop the fused chunks
     tt::tt_metal::CoreRangeSet grid_;
+    bool causal_ = false;
     uint32_t Sq_chunk_t_ = 0;
     uint32_t Sk_chunk_t_ = 0;
 };

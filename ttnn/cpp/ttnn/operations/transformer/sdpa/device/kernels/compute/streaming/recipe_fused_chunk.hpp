@@ -270,8 +270,11 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         tile_regs_commit();
         tile_regs_wait();
 #if defined(SDPA_RECIPE_K_PRIMARY_ROWS) || defined(SDPA_RECIPE_RING)
+#ifdef SDPA_RECIPE_RING_CAUSAL
+        recipe_causal_row0 = row0;
+#endif
 #ifdef SDPA_RECIPE_RING
-        if (recipe_k_valid_rows < recipe_k_chunk_rows)
+        if (recipe_ring_chunk_masked())
 #endif
         {
             mask_recipe_tail(col0, sbw, h);

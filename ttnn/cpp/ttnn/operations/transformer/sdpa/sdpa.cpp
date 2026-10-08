@@ -751,9 +751,13 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
                 input_tensor_q.logical_shape()[3]);
         }
         TT_FATAL(
-            !is_causal && !is_balanced && !attention_sink && !sliding_window_size && !circular_kv_cache &&
-                !kv_cache_batch_idx && !kv_actual_isl && !slot_id && !kv_actual_isl_tensor,
-            "Named ring recipes currently require noncausal attention without indexed/cache/window/sink features");
+            !sliding_window_size,
+            "Named ring recipes do not support sliding_window_size yet; omit precision for the legacy kernel");
+        TT_FATAL(
+            !attention_sink && !circular_kv_cache && !kv_cache_batch_idx && !kv_actual_isl && !slot_id &&
+                !kv_actual_isl_tensor,
+            "Named ring recipes do not support indexed/cache or sink features");
+        const bool auto_q_chunk = program_config.q_chunk_size == 0;
         program_config = operations::transformer::sdpa::detail::resolve_ring_recipe_blocking(
             policy,
             input_tensor_q,
@@ -767,6 +771,15 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
             input_tensor_k.logical_shape()[3] == input_tensor_q.logical_shape()[3] &&
                 input_tensor_v.logical_shape()[3] == input_tensor_q.logical_shape()[3],
             "Named ring recipes require matching Q/K/V head dims");
+        if (is_balanced && auto_q_chunk) {
+            // A balanced ring's Q chunks must not straddle the two halves of a device's sequence.
+            const uint32_t half_tiles = input_tensor_q.padded_shape()[2] / 64;
+            uint32_t q_tiles = program_config.q_chunk_size / 32;
+            while (q_tiles > 1 && half_tiles % q_tiles != 0) {
+                --q_tiles;
+            }
+            program_config.q_chunk_size = q_tiles * 32;
+        }
         // Unfused STANDARD processes Q tile rows in pairs: an odd Q chunk rounds up to the next even one, so that
         // kernel never builds the single-row group (outputs are per row, so the chunking does not change them
         // beyond accumulation order).
