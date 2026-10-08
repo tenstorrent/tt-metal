@@ -191,6 +191,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     const uint32_t N_chunks = static_cast<uint32_t>(operation_attributes.chunks);
 
     auto* device = input_tensor.device();
+    // Quasar (Gen2) uplift: every Gen2-specific choice below is keyed on this one flag so WH/BH keep
+    // the original path byte-for-byte.
+    const bool is_quasar = device->arch() == tt::ARCH::QUASAR;
 
     // Fused concat (concat-free): in0's K is sourced from input_tensor (prefix K-tiles) then
     // optional_input_tensor (suffix), via the in0 second-source (in3) read path, instead of a
@@ -379,12 +382,26 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     auto core_0_endy = CoreCoord{0, grid_size.y - 1};
     auto core_endx_endy = CoreCoord{grid_size.x - 1, grid_size.y - 1};
 
+    // Which of the four kernel flavours exist on this grid. A receiver kernel only exists when its
+    // parallel axis spans more than one core (in0 receivers sit at in1_idx > 0, in1 receivers at
+    // in0_idx > 0). On WH/BH the grid is always >= 2x2 (validate_on_program_cache_miss), so all four
+    // exist and the spec is unchanged; on a 1-wide / 1-tall grid (single-core Quasar emulator) the
+    // absent receiver kernels and their empty work-unit regions must not be declared -- the spec
+    // validator rejects a kernel that no WorkUnitSpec references, and CoreRange rejects start > end.
+    const bool has_in0_receivers = in1_parallel_axis_cores > 1;
+    const bool has_in1_receivers = in0_parallel_axis_cores > 1;
+
     ProgramSpec spec;
     spec.name = "minimal_matmul";
 
     /**
      * Semaphores. Names replace the sequential ids the legacy factory handed out; the kernels bind
      * them by name. The non-zero initial values are carried over from the legacy factory.
+     *
+     * Quasar: the Gen2 runtime only supports zero-initialized semaphores (ValidateProgramSpec rejects
+     * any other initial_value). The `*_valid` semaphores do not depend on their initial value: both DM
+     * kernels execute `in*_valid_semaphore.set(VALID)` before the first relay_unicast that reads it, so
+     * a zero initial value is behaviorally identical. WH/BH keep the legacy VALID init untouched.
      */
     const SemaphoreSpecName SEM_IN0_SENDER{"in0_sender"};
     const SemaphoreSpecName SEM_IN0_RECEIVER{"in0_receiver"};
@@ -405,7 +422,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
             .unique_id = name,
             .target_nodes = CoreRangeSet(core_grid),
         };
-        sem.advanced_options.initial_value = initial_value;
+        sem.advanced_options.initial_value = is_quasar ? 0u : initial_value;
         spec.semaphores.push_back(std::move(sem));
     }
 
@@ -690,22 +707,24 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         SEM_IN0_SENDER,
         SEM_IN0_RECEIVER,
         SEM_IN0_VALID));
-    spec.kernels.push_back(make_dm_kernel(
-        K_IN0_RECEIVER,
-        kIn0Source,
-        in0_tile_size,
-        /*is_injector_core=*/false,
-        in0_is_output_writer,
-        DFB_IN0,
-        TP_IN0,
-        /*bind_in3=*/false,
-        "in0",
-        defines,
-        in0_risc,
-        in0_noc,
-        SEM_IN0_SENDER,
-        SEM_IN0_RECEIVER,
-        SEM_IN0_VALID));
+    if (has_in0_receivers) {
+        spec.kernels.push_back(make_dm_kernel(
+            K_IN0_RECEIVER,
+            kIn0Source,
+            in0_tile_size,
+            /*is_injector_core=*/false,
+            in0_is_output_writer,
+            DFB_IN0,
+            TP_IN0,
+            /*bind_in3=*/false,
+            "in0",
+            defines,
+            in0_risc,
+            in0_noc,
+            SEM_IN0_SENDER,
+            SEM_IN0_RECEIVER,
+            SEM_IN0_VALID));
+    }
     spec.kernels.push_back(make_dm_kernel(
         K_IN1_SENDER,
         kIn1Source,
@@ -722,22 +741,24 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         SEM_IN1_SENDER,
         SEM_IN1_RECEIVER,
         SEM_IN1_VALID));
-    spec.kernels.push_back(make_dm_kernel(
-        K_IN1_RECEIVER,
-        kIn1Source,
-        in1_tile_size,
-        /*is_injector_core=*/false,
-        in1_is_output_writer,
-        DFB_IN1,
-        TP_IN1,
-        /*bind_in3=*/false,
-        "in1",
-        defines,
-        in1_risc,
-        in1_noc,
-        SEM_IN1_SENDER,
-        SEM_IN1_RECEIVER,
-        SEM_IN1_VALID));
+    if (has_in1_receivers) {
+        spec.kernels.push_back(make_dm_kernel(
+            K_IN1_RECEIVER,
+            kIn1Source,
+            in1_tile_size,
+            /*is_injector_core=*/false,
+            in1_is_output_writer,
+            DFB_IN1,
+            TP_IN1,
+            /*bind_in3=*/false,
+            "in1",
+            defines,
+            in1_risc,
+            in1_noc,
+            SEM_IN1_SENDER,
+            SEM_IN1_RECEIVER,
+            SEM_IN1_VALID));
+    }
 
     /**
      * Compute kernel.
@@ -848,14 +869,20 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
             transpose_core_grid ? static_cast<uint32_t>(c.x) : static_cast<uint32_t>(c.y),
             transpose_core_grid ? static_cast<uint32_t>(c.y) : static_cast<uint32_t>(c.x)};
     };
-    for (const auto& [name, nodes] : std::initializer_list<std::pair<const char*, CoreRange>>{
-             {"corner", CoreRange(core_0_0, core_0_0)},
-             {"top_row", CoreRange(core_1_0, core_endx_0)},
-             {"left_col", CoreRange(core_0_1, core_0_endy)},
-             {"interior", CoreRange(CoreCoord{1, 1}, core_endx_endy)},
-         }) {
+    auto add_region = [&](const char* name, const CoreRange& nodes) {
         auto [in0_idx, in1_idx] = idx_for(nodes.start_coord);
         add_work_unit(name, nodes, in0_idx, in1_idx);
+    };
+    // Only the regions that exist on this grid (all four on WH/BH, see has_in*_receivers above).
+    add_region("corner", CoreRange(core_0_0, core_0_0));
+    if (grid_size.x > 1) {
+        add_region("top_row", CoreRange(core_1_0, core_endx_0));
+    }
+    if (grid_size.y > 1) {
+        add_region("left_col", CoreRange(core_0_1, core_0_endy));
+    }
+    if (grid_size.x > 1 && grid_size.y > 1) {
+        add_region("interior", CoreRange(CoreCoord{1, 1}, core_endx_endy));
     }
 
     /**
@@ -1001,9 +1028,13 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     }
 
     run_args.kernel_run_args.push_back(std::move(in0_sender_args));
-    run_args.kernel_run_args.push_back(std::move(in0_receiver_args));
+    if (has_in0_receivers) {
+        run_args.kernel_run_args.push_back(std::move(in0_receiver_args));
+    }
     run_args.kernel_run_args.push_back(std::move(in1_sender_args));
-    run_args.kernel_run_args.push_back(std::move(in1_receiver_args));
+    if (has_in1_receivers) {
+        run_args.kernel_run_args.push_back(std::move(in1_receiver_args));
+    }
     run_args.kernel_run_args.push_back(std::move(compute_args));
 
     // Tensor arguments. The framework re-applies these on every program-cache hit, which is what
