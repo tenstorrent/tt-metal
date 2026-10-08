@@ -236,11 +236,19 @@ class DSV41DecodeIndexer:
             self._fp4_blocks(ttnn.reshape(ttnn.typecast(k, ttnn.float32), (1, 1, T * 4, 32))), ttnn.bfloat16
         )
         k = ttnn.reshape(k, (1, 1, T, DIM))
+        ent = st["ent"]
+        Us = getattr(self, "U_slab", None)
+        if Us is not None and Us != T:
+            # decode bucket (tt/decode_buckets.py): the key slab keeps its [U,..] shape and the op takes one row per slab user: the users outside the bucket get a zero key at entry 0
+            # (they hold no live state; their slab rows are rewritten by the prefill hand-off)
+            k = ttnn.pad(k, [(0, 0), (0, 0), (0, Us - T), (0, 0)], 0.0)
+            ent = ttnn.concat([ent, self._pad_idx], dim=0)
+            T = Us
         k = ttnn.to_layout(
             ttnn.reshape(ttnn.to_layout(k, ttnn.ROW_MAJOR_LAYOUT), (1, T, 1, DIM)), ttnn.TILE_LAYOUT
         )  # one tile per user, key in row 0
         k = ttnn.to_memory_config(k, self._kcfg)
-        ttnn.experimental.paged_update_cache(self.k_cache, k, update_idxs_tensor=st["ent"], page_table=None)
+        ttnn.experimental.paged_update_cache(self.k_cache, k, update_idxs_tensor=ent, page_table=None)
         ttnn.deallocate(k)
 
     def project(self, x, qr, st):
@@ -289,9 +297,11 @@ class DSV41DecodeIndexer:
                     )
                 )
             return out
-        s = ttnn.matmul(
-            q, self.k_cache, transpose_b=True, activation="relu", compute_kernel_config=self.ckc
-        )  # [U,1,32,T]
+        kc = self.k_cache
+        Us = getattr(self, "U_slab", None)
+        if Us is not None and Us != self.T:  # decode bucket: the users u < T of the shared slab
+            kc = ttnn.slice(kc, [0, 0, 0, 0], [self.T, 1, kc.shape[2], kc.shape[3]])
+        s = ttnn.matmul(q, kc, transpose_b=True, activation="relu", compute_kernel_config=self.ckc)  # [U,1,32,T]
         s = ttnn.matmul(w, s, compute_kernel_config=self.ckc)  # [U,1,1(32),T]
         return ttnn.to_layout(ttnn.slice(s, [0, 0, 0, 0], [self.T, 1, 1, self.n_alloc]), ttnn.ROW_MAJOR_LAYOUT)
 
