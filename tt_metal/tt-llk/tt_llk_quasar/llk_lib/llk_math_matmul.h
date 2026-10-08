@@ -506,7 +506,7 @@ inline void _llk_math_matmul_load_replay_(const bool use_half_face_replay = fals
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
 inline void _llk_math_matmul_mop_config_(const std::uint8_t ct_dim, const std::uint8_t rt_dim, const _llk_math_matmul_execution_geometry_t& geometry)
 {
-    constexpr std::uint32_t FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
+    constexpr std::uint32_t FIDELITY_PHASES = math_fidelity_phases<MATH_FIDELITY_TYPE>();
 
     const bool reuse_a = ct_dim >= rt_dim;
 
@@ -557,7 +557,7 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
     // if TRANSPOSE_EN = true, unpacker loads f0/f2/f1/f3
     // else, unpacker loads f0/f1/f2/f3
     // Math LLKs do not need any transpose handling for Quasar
-    constexpr std::uint32_t FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
+    constexpr std::uint32_t FIDELITY_PHASES = math_fidelity_phases<MATH_FIDELITY_TYPE>();
     const bool reuse_a                      = ct_dim >= rt_dim;
 
     constexpr std::uint32_t FACE_PAIRS     = ENABLE_2X_FORMAT ? 4 : 8;
@@ -630,6 +630,8 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam ENABLE_DIRECT_INDEXING: Enable direct indexing matrix multiplication
  * @tparam ENABLE_2X_FORMAT: Enable matrix multiplication with MXFP_2X mode (double the performance)
+ * @param src_a_format: Effective SrcA register format (input 1).
+ * @param src_b_format: Effective SrcB register format (input 0).
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  * @param src_b_shape: Input 0/SrcB tile shape.
@@ -640,11 +642,14 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
 
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_DIRECT_INDEXING = false, bool ENABLE_2X_FORMAT = false>
 inline void _llk_math_matmul_init_(
+    const DataFormat src_a_format,
+    const DataFormat src_b_format,
     const std::uint8_t ct_dim,
     const std::uint8_t rt_dim,
     const TensorShape src_b_shape = DEFAULT_TENSOR_SHAPE,
     const TensorShape src_a_shape = DEFAULT_TENSOR_SHAPE)
 {
+    validate_math_fidelity<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
     if constexpr (ENABLE_DIRECT_INDEXING || ENABLE_2X_FORMAT)
     {
         LLK_ASSERT(

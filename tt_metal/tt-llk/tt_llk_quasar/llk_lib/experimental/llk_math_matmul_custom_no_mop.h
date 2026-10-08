@@ -39,7 +39,7 @@ using namespace ckernel::math;
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
 inline void _llk_math_matmul_run_no_mop_(const bool reuse_a)
 {
-    constexpr std::uint32_t FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
+    constexpr std::uint32_t FIDELITY_PHASES = math_fidelity_phases<MATH_FIDELITY_TYPE>();
     constexpr std::uint32_t replay_buf_len  = _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
 
     constexpr std::uint8_t fidelity_phase_completion_addr_mod = ADDR_MOD_4;
@@ -77,18 +77,21 @@ inline void _llk_math_matmul_run_no_mop_(const bool reuse_a)
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam ENABLE_2X_FORMAT: Enable matrix multiplication with MXFP_2X mode (double the performance)
+ * @param src_a_format: Effective SrcA register format (input 1).
+ * @param src_b_format: Effective SrcB register format (input 0).
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  * @note On the unpack thread, pair with @ref _llk_unpack_matmul_init_ (T0); on the pack thread, with @ref _llk_pack_init_ (T2).
- * @note @ref _llk_math_matmul_block_no_mop_ runs the configured matmul with matching template args.
+ * @note @ref _llk_math_matmul_block_no_mop_ runs the configured matmul with matching template args and source formats.
  * @note Reload before every matmul that is interleaved with another replay-using op: every Quasar LLK
  *       records its replay buffer at slot 0, so an intervening op overwrites this one's image. Unlike the
  *       MOP path there is no MOP config holding the length, so a stale image would silently replay the
  *       wrong instructions.
  */
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
-inline void _llk_math_matmul_init_no_mop_(std::uint8_t ct_dim, std::uint8_t rt_dim)
+inline void _llk_math_matmul_init_no_mop_(const DataFormat src_a_format, const DataFormat src_b_format, std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
+    validate_math_fidelity<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
     _llk_math_matmul_addrmod_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
     _llk_math_matmul_load_replay_<ENABLE_2X_FORMAT>();
 
@@ -111,13 +114,16 @@ inline void _llk_math_matmul_init_no_mop_(std::uint8_t ct_dim, std::uint8_t rt_d
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam ENABLE_2X_FORMAT: Enable matrix multiplication with MXFP_2X mode (double the performance)
+ * @param src_a_format: Effective SrcA register format (input 1), matching init.
+ * @param src_b_format: Effective SrcB register format (input 0), matching init.
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
- * @note Call @ref _llk_math_matmul_init_no_mop_ with matching template args before this function.
+ * @note Call @ref _llk_math_matmul_init_no_mop_ with matching template args and source formats before this function.
  */
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
-inline void _llk_math_matmul_block_no_mop_(std::uint8_t ct_dim, std::uint8_t rt_dim)
+inline void _llk_math_matmul_block_no_mop_(const DataFormat src_a_format, const DataFormat src_b_format, std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
+    validate_math_fidelity<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
     // Matmul Block, reset the dest addr to 0 for fused kernels
     _set_dst_write_addr_<DstTileShape::Tile32x32>(0);
 

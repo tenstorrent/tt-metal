@@ -96,11 +96,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // ENABLE_2X_FORMAT enables the 2x-packed FP4 matmul path (8 MVMULs per tile vs 16, K-dim halved per
     // MVMUL via the SrcA 2x sub-datum expansion). Set when SrcA/SrcB are configured as MxFp4_2x_A/B.
-    _llk_math_matmul_init_no_mop_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
+    const DataFormat src_a_format = IMPLIED_MATH_FORMAT ? static_cast<DataFormat>(formats.unpack_B_dst) : math_format;
+    const DataFormat src_b_format = IMPLIED_MATH_FORMAT ? static_cast<DataFormat>(formats.unpack_A_dst) : math_format;
+    _llk_math_matmul_init_no_mop_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_2X_FORMAT>(src_a_format, src_b_format, CT_DIM, RT_DIM);
 
     for (std::uint32_t i = 0; i < KT_DIM; i++)
     {
-        _llk_math_matmul_block_no_mop_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
+        _llk_math_matmul_block_no_mop_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_2X_FORMAT>(src_a_format, src_b_format, CT_DIM, RT_DIM);
     }
     _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 }

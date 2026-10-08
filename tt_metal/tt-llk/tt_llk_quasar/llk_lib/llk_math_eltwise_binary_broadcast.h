@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// TODO: Plumb MATH_FIDELITY
 #pragma once
 
 #include <cstdint>
@@ -50,7 +49,7 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& te
     const std::uint32_t eltwise_binary_op_clr_srcAB_valid =
         eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCAB_VLD, SRCB_BROADCAST_TYPE, ADDR_MOD_1>(advancing_acc);
 
-    constexpr std::uint32_t replay_buf_len = high_fidelity ? to_underlying(MATH_FIDELITY_TYPE) - 1 : 0;
+    constexpr std::uint32_t replay_buf_len = math_fidelity_phases<MATH_FIDELITY_TYPE>() - 1;
 
     if constexpr (high_fidelity)
     {
@@ -168,7 +167,9 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam BROADCAST_TYPE: Sets the broadcast type (must not be NONE for this op), values = <COL/ROW/SCALAR>
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
- *values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @param src_a_format: Effective SrcA register format.
+ * @param src_b_format: Effective SrcB register format.
  * @param tensor_shape: Face grid and face row/column dimensions for the operand tile
  * @param acc_to_dest: When true, accumulate into dest even at LoFi. HiFi partial products still accumulate; without this flag the first phase overwrites.
  * @note On the unpack thread, pair with @ref _llk_unpack_binary_broadcast_operands_init_ (T0) with matching BROADCAST_TYPE; on the pack thread, pair with
@@ -176,12 +177,17 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
  * @note @ref _llk_math_eltwise_binary_broadcast_ runs the configured op with matching template args.
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
-inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_shape, bool acc_to_dest = false)
+inline void _llk_math_eltwise_binary_broadcast_init_(
+    const DataFormat src_a_format, const DataFormat src_b_format, const TensorShape& tensor_shape, bool acc_to_dest = false)
 {
     LLK_ASSERT(
         tensor_shape.total_num_faces() != NUM_FACES || tensor_shape.face_r_dim == MAX_FACE_R_DIM,
         "Eltwise binary broadcast four-face tiles require 16-row faces");
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_binary_broadcast_init_", tensor_shape);
+    if constexpr (ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWMUL)
+    {
+        validate_math_fidelity<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
+    }
     _llk_math_eltwise_binary_broadcast_addrmod_<BROADCAST_TYPE, MATH_FIDELITY_TYPE>();
     _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE, MATH_FIDELITY_TYPE>(tensor_shape, acc_to_dest);
 
