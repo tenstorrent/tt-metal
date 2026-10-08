@@ -57,11 +57,13 @@ ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_prog
     const bool is_quasar = tensor_args.input_a.device()->arch() == tt::ARCH::QUASAR;
     const uint32_t compute_threads = is_quasar ? kQuasarComputeThreads : 1u;
     const uint32_t reader_threads = is_quasar ? kQuasarReaderThreads : 1u;
-    const uint32_t writer_threads = is_quasar ? kQuasarWriterThreads : 1u;
 
     const DataFormat data_format = datatype_to_dataformat_converter(a.dtype());
     const uint32_t tile_bytes = tile_size(data_format);
     const uint32_t num_tiles = a.physical_volume() / a.tensor_spec().tile().get_tile_hw();
+    // Every writer thread must write at least one tile: with implicit sync, finish() skips the end-of-kernel credit
+    // flush on a thread with no transactions while its siblings wait for it there. So no more writers than tiles.
+    const uint32_t writer_threads = is_quasar ? std::min(kQuasarWriterThreads, num_tiles) : 1u;
 
     // A STRIDED DFB is split into max(producers, consumers) tile counters of kEntriesPerThread slots each, so
     // num_entries is kEntriesPerThread * max(producers, consumers): in0/in1 are reader_threads -> compute_threads,
@@ -77,7 +79,16 @@ ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_prog
         };
     };
 
-    // The kernels use explicit reserve_back/push_back sync, so DFB implicit sync is off (Quasar only).
+    // DFB implicit sync (Quasar only): the reader and writer issue transaction-id tagged NoC reads/writes and the
+    // DM0 ISR posts/acks the tile-counter credits. On the craq-sim Quasar simulator a partial transaction-id batch
+    // on the reader side, whose credits finish() posts by hand, makes a later Tensix push_back on out go missing
+    // and hangs the writer. So the readers process num_input_tiles = num_tiles rounded up to a multiple of
+    // reader_threads, which keeps every reader batch full (the in0/in1 batch is reader_threads reads here): the
+    // extra tiles carry filler data, compute pops them without producing output, and the writers still see exactly
+    // num_tiles tiles.
+    const bool implicit_sync = is_quasar;
+    const uint32_t num_input_tiles =
+        implicit_sync ? (num_tiles + reader_threads - 1) / reader_threads * reader_threads : num_tiles;
     m2::KernelSpec reader{
         .unique_id = READER,
         .source = std::filesystem::path{std::string(kKernelDir) + "dataflow/reader_simple_add.cpp"},
@@ -86,8 +97,9 @@ ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_prog
         .tensor_bindings =
             {m2::TensorBinding{.tensor_parameter_name = A, .accessor_name = "a"},
              m2::TensorBinding{.tensor_parameter_name = B, .accessor_name = "b"}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
+        .compile_time_args = {{"implicit_sync", implicit_sync ? 1u : 0u}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "num_input_tiles"}},
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/!implicit_sync),
     };
 
     m2::KernelSpec writer{
@@ -96,8 +108,9 @@ ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_prog
         .num_threads = writer_threads,
         .dfb_bindings = {m2::ConsumerOf(OUT_DFB, "out")},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = C, .accessor_name = "c"}},
+        .compile_time_args = {{"implicit_sync", implicit_sync ? 1u : 0u}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/!implicit_sync),
     };
 
     m2::KernelSpec compute{
@@ -106,7 +119,7 @@ ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_prog
         .num_threads = compute_threads,
         .dfb_bindings =
             {m2::ConsumerOf(IN0_DFB, "in0"), m2::ConsumerOf(IN1_DFB, "in1"), m2::ProducerOf(OUT_DFB, "out")},
-        .compile_time_args = {{"num_tiles", num_tiles}},
+        .compile_time_args = {{"num_tiles", num_tiles}, {"num_input_tiles", num_input_tiles}},
         .hw_config = m2::ComputeHardwareConfig{},
     };
 
@@ -125,7 +138,9 @@ ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_prog
     m2::ProgramRunArgs run_args;
     run_args.kernel_run_args = {
         m2::KernelRunArgs{
-            .kernel = READER, .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tiles}})},
+            .kernel = READER,
+            .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(
+                node, {{"num_tiles", num_tiles}, {"num_input_tiles", num_input_tiles}})},
         m2::KernelRunArgs{
             .kernel = WRITER, .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tiles}})},
         m2::KernelRunArgs{.kernel = COMPUTE},

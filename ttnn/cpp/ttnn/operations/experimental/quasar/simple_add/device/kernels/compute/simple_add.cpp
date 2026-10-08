@@ -17,10 +17,13 @@
 
 void kernel_main() {
     constexpr uint32_t num_tiles = get_arg(args::num_tiles);
-    // This thread's share of the strided sub-stream {t, t+N, ...}: floor(num_tiles/N), plus one for the
-    // first num_tiles % N threads. Dropping the remainder would leave the writer waiting forever.
+    constexpr uint32_t num_input_tiles = get_arg(args::num_input_tiles);
+    // This thread's share of the strided input sub-stream {t, t+N, ...}: floor(num_input_tiles/N), plus one for
+    // the first num_input_tiles % N threads. Every input must be popped or the reader never drains. Inputs past
+    // num_tiles are filler and produce no output tile.
     const uint32_t num_threads = get_num_threads();
-    const uint32_t my_tiles = num_tiles / num_threads + (get_my_thread_id() < num_tiles % num_threads ? 1u : 0u);
+    const uint32_t thread_id = get_my_thread_id();
+    const uint32_t my_inputs = num_input_tiles / num_threads + (thread_id < num_input_tiles % num_threads ? 1u : 0u);
     constexpr uint32_t dst_reg = 0;
 
     compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
@@ -30,9 +33,14 @@ void kernel_main() {
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);
 
-    for (uint32_t i = 0; i < my_tiles; ++i) {
+    for (uint32_t i = 0; i < my_inputs; ++i) {
         dfb_in0.wait_front(1);
         dfb_in1.wait_front(1);
+        if (thread_id + i * num_threads >= num_tiles) {
+            dfb_in0.pop_front(1);
+            dfb_in1.pop_front(1);
+            continue;
+        }
 
         tile_regs_acquire();
         add_tiles(dfb::in0, dfb::in1, 0, 0, dst_reg);
