@@ -139,6 +139,9 @@ class VisionModelArgs(ModelArgs):
         # fused path only affects decode (not prefill), and M-RoPE differences are
         # handled in the prefill code path which uses pre-computed rotation matrices.
         self.use_qk_fused = True
+        # Qwen2.5-VL's K-projection biases (|b_k| up to ~170) make raw QK^T too large for the bf16 score
+        # intermediates of the decode SDPA kernel; subtract them from the post-RoPE keys (softmax-invariant).
+        self.subtract_k_bias_post_rope = True
 
         # Minimal matmul configs for text decoder MLP on N300 (experimental, gated behind env var)
         self.use_minimal_matmul = os.getenv("TT_MINIMAL_MATMUL") == "1" and not self.is_galaxy
