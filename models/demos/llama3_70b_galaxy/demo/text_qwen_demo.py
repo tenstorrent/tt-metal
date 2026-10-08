@@ -455,6 +455,66 @@ def create_tt_qwen_model(
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
         ),
+        (  # prefill-perf-40k-b1 - 1 user, 40928-token local prompt, 3 warmed prefills (one per repeat batch)
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_prefill_40k_local.json",  # input_prompts
+            True,  # instruct mode
+            3,  # repeat_batches (do not use 2: the repeat2 output check would compare against another prompt)
+            40960,  # max_seq_len (Qwen3-32B native max; 128k makes the prefill warmup sweep OOM at 131072)
+            1,  # batch_size
+            2,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # token_accuracy
+            False,  # prefill-only profile
+            64,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
+        ),
+        (  # prefill-perf-4k-b1 - 1 user, 4064-token local prompt, 3 warmed prefills (one per repeat batch)
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_prefill_4k_local.json",  # input_prompts
+            True,  # instruct mode
+            3,  # repeat_batches (do not use 2: the repeat2 output check would compare against another prompt)
+            40960,  # max_seq_len (same config as the 40k case; only the prompt differs)
+            1,  # batch_size
+            2,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # token_accuracy
+            False,  # prefill-only profile
+            64,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
+        ),
+        (  # profile-1L-prefill-40k-b1 - 1 layer, 1 user, 40928-token local prompt, signposts around the timed prefill
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_prefill_40k_local.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            40960,  # max_seq_len (same config as prefill-perf-40k-b1)
+            1,  # batch_size
+            1,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # token_accuracy
+            True,  # prefill-only profile
+            64,  # num layers (prefill-only profile overrides to 1)
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
+        ),
     ],
     ids=[
         "batch-32",  # throughput
@@ -470,6 +530,9 @@ def create_tt_qwen_model(
         "apc-test",  # apc check for 64L + teacher forced for prefill + pcc check on prefill and 1st decode token
         "pcc-64L",  # pcc check for 64L + teacher forced
         "ci-token-matching",  # CI performs token accuracy matching with precomputed reference tokens
+        "prefill-perf-40k-b1",  # warmed 64L prefill TTFT at 40k (local prompt, no download)
+        "prefill-perf-4k-b1",  # warmed 64L prefill TTFT at 4k (local prompt, no download)
+        "profile-1L-prefill-40k-b1",  # 1L prefill-only tracy profile at 40k (id avoids the "prefill-profile" -k substring)
     ],
 )
 @pytest.mark.parametrize(
