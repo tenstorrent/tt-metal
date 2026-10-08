@@ -53,7 +53,7 @@ _PERF_REFERENCE_MS = {
     "SP2xTP4": 8.758,
     "SP4xTP2": 9.066,
 }
-_GALAXY_PERF_REFERENCE_MS = 2.749
+_GALAXY_PERF_REFERENCE_MS = 2.459
 # Like the model's prefill tests, give CCL semaphores their own L1_SMALL region: allocated in L1 on the first call,
 # they would land between the chunk terms and fragment L1, so the traced call would plan ops on less free L1 than
 # the warm-up compiled for.
