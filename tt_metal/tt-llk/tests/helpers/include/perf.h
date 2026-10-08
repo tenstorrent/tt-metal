@@ -48,12 +48,25 @@ enum class PerfRunType
 
 // With the barrier, INIT and the code after the measured loop run out of line at the end of the kernel code (sections.ld)
 // on 512 B, so changes to them cannot move the loop; by value, so nothing the loop uses escapes, and noipa keeps them out.
-#if defined(LLK_DBG_BARRIER)
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_OOL) // the other threads keep INIT inline: their loop code is the one without the barrier
 #define LLK_INIT_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"), aligned(512)))
 #define LLK_INIT_END   ()
 #else
 #define LLK_INIT_BEGIN
 #define LLK_INIT_END
+#endif
+
+// Wormhole perf builds, for a kernel whose INIT stays inline but whose loop must not depend on INIT's code: the code after
+// the loop out of line (so a change to it cannot move the loop), and a value both use read through an opaque copy in INIT
+// (so the compiler does not share it, and INIT's code cannot change the loop's registers).
+#if defined(LLK_DBG_BARRIER)
+#define LLK_POST_LOOP_BEGIN [=]() __attribute__((noipa, section(".llk_init_text"), aligned(512)))
+#define LLK_POST_LOOP_END   ()
+#define LLK_PERF_OPAQUE(v)  asm volatile("" : "+r"(v))
+#else
+#define LLK_POST_LOOP_BEGIN
+#define LLK_POST_LOOP_END
+#define LLK_PERF_OPAQUE(v)
 #endif
 
 inline void _perf_unpack_set_valid(std::uint32_t source)

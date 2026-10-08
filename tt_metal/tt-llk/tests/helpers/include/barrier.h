@@ -121,15 +121,19 @@ __attribute__((always_inline)) inline void flip(std::uint8_t sem)
 }
 } // namespace detail
 
+// Park kinds (Wormhole perf builds): 1 KiB in run_kernel, aligned TILE_LOOP restart, unfilled in main.
+constexpr int PARK_SIZED = 0;
+constexpr int PARK_LOOP  = 1;
+constexpr int PARK_PLAIN = 2;
+
 #if defined(LLK_DBG_BARRIER) // Wormhole perf builds: BRISC restarts every thread from a flushed pipeline
 namespace detail
 {
-// Park at the BRISC barrier server (brisc.cpp dbg_barrier): the resume PC goes into this thread's reset PC, the arrive
-// read blocks until BRISC has every thread, and the ebreak halts the core. BRISC flushes the pipeline (registers and
-// branch predictor stay) and restarts it at 1f, where the hold read waits for the common release.
-// The TILE_LOOP park restarts after llk_loop_pad bytes of never executed NOPs, an assembler symbol perf/layout.py
-// sets per kernel when it links: they move the measured loop without recompiling it.
-template <bool LOOP_PAD = false>
+#if defined(LLK_PERF_OOL)
+// LLK_PERF_OOL threads (math, see test_config.py) keep INIT out of line (perf.h) and the park of the pushed harness, so
+// their loop code cannot depend on INIT. Every such park restarts 512 B aligned, the TILE_LOOP one after llk_loop_pad
+// bytes (perf/layout.py).
+template <int MODE = PARK_SIZED>
 __attribute__((always_inline)) inline void park()
 {
     volatile std::uint32_t* reset_pc = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE) + TRISC_RESET_PC_SEC0_PC_ADDR32 + THREAD_ID;
@@ -156,20 +160,101 @@ __attribute__((always_inline)) inline void park()
         "lw    %[s], 0(%[pcb])\n\t"
         "andi  %[s], %[s], 0\n\t"
         : [s] "=&r"(scratch)
-        : [rpc] "r"(reset_pc), [pcb] "r"(ckernel::pc_buf_base), [on] "i"(LOOP_PAD ? 1 : 0)
+        : [rpc] "r"(reset_pc), [pcb] "r"(ckernel::pc_buf_base), [on] "i"(MODE == PARK_LOOP ? 1 : 0)
         : "memory");
 }
+#else
+// The park body is an assembler macro, so the compiler sees a one line asm: its size estimate for the branches around
+// the park stays as without the barrier (it decides short or long branches from those estimates).
+asm(R"ASM(
+.macro llk_park mode, pcb, rpc, size
+.option push
+.option norelax
+2:
+    addi  sp, sp, -16
+    sw    t0, 0(sp)
+    sw    t1, 4(sp)
+    li    t1, \pcb
+    sw    zero, 4(t1)
+    lw    t0, 4(t1)
+    andi  t0, t0, 0
+    li    t1, \rpc
+    la    t0, 1f
+    sw    t0, 0(t1)
+    lw    t0, 0(t1)
+    andi  t0, t0, 0
+    li    t1, \pcb
+    lw    t0, 0(t1)
+    andi  t0, t0, 0
+    .word 0x00100073
+    .rept 16
+    .word 0x00000013
+    .endr
+.if \mode == 1
+.option pop
+    .balign 1024
+    .ifndef llk_loop_pad
+    .set llk_loop_pad, 0
+    .endif
+    .rept llk_loop_pad / 4
+    nop
+    .endr
+1:
+    lw    t0, 0(t1)
+    andi  t0, t0, 0
+    lw    t0, 0(sp)
+    lw    t1, 4(sp)
+    addi  sp, sp, 16
+.else
+.if \mode == 0
+    .rept (\size - 20 - (. - 2b)) / 4
+    nop
+    .endr
+.endif
+1:
+    lw    t0, 0(t1)
+    andi  t0, t0, 0
+    lw    t0, 0(sp)
+    lw    t1, 4(sp)
+    addi  sp, sp, 16
+.option pop
+.endif
+.endm
+)ASM");
+
+// Park at the BRISC barrier server (brisc.cpp dbg_barrier): wait for this thread's Tensix work (store to PC buffer
+// word 1), put the resume PC in this thread's reset PC, then the arrive read blocks until BRISC has every thread and
+// the ebreak halts the core. BRISC flushes the pipeline (registers stay) and restarts it at 1f, where the hold read
+// waits for the common release. The macro saves the two registers it uses on the stack and takes no register operands,
+// so to the compiler the park is a plain memory barrier: the kernel around it compiles to the same code as without it.
+// TILE_LOOP park: the code after 1f keeps its address mod 1 KiB (branch predictor hash, icache sets) as code before it
+// moves, plus llk_loop_pad bytes of never executed NOPs, an assembler symbol perf/layout.py sets per kernel when it
+// links. Code before it that grows past the alignment moves the code after it, and the callees (kernel_placement.h),
+// by a whole 1 KiB, which neither the predictor nor the instruction cache can tell apart. Every other park in run_kernel is exactly 1 KiB (512 B on math), so the code after it keeps the address bits
+// (branch predictor hash, icache sets) it has without the barrier. The parks in main (PARK_PLAIN) take no fill.
+template <int MODE = PARK_SIZED>
+__attribute__((always_inline)) inline void park()
+{
+    asm volatile("llk_park %[mode], %[pcb], %[rpc], %[size]"
+                 :
+                 : [mode] "i"(MODE),
+                   [size] "i"(THREAD_ID == 1 ? 512 : 1024), // math: BP hash and its 256 B icache repeat every 512 B
+                   [pcb] "i"(PC_BUF_BASE),
+                   [rpc] "i"(TENSIX_CFG_BASE + 4 * (TRISC_RESET_PC_SEC0_PC_ADDR32 + THREAD_ID))
+                 : "memory");
+}
+#endif
 } // namespace detail
 #endif
 
 // The release is a level, sampled by each peer before it arrives and flipped once every peer has; a token on a
 // shared count could be consumed twice and release a peer early. Waiters poll the PC buffer, not the measured L1.
-template <bool LOOP_PAD = false, typename Action>
+template <int LOOP_PAD = PARK_SIZED, typename Action>
 __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Action action)
 {
     ckernel::fence_compiler();
 
-#if defined(LLK_DBG_BARRIER)
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_OOL)
     ckernel::tensix_sync();
     if (is_action_thread)
     {
@@ -181,6 +266,7 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
             ckernel::semaphore_get(ARRIVE_SEM);
         }
         action();
+        detail::flip(RELEASE_SEM); // peers on the inline-INIT path wait for the release level
         ckernel::tensix_sync();
     }
     else
@@ -189,6 +275,7 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
     }
     detail::park<LOOP_PAD>();
 #else
+
     if (is_action_thread)
     {
         while (ckernel::semaphore_read(ARRIVE_SEM) < NUM_THREADS - 1)
@@ -218,6 +305,9 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
         {
         }
     }
+#if defined(LLK_DBG_BARRIER)
+    detail::park<LOOP_PAD>();
+#endif
 #endif
 
     ckernel::fence_compiler();

@@ -790,8 +790,10 @@ class PERF_RUN_TYPE(TemplateParameter):
     perf_run_type: PerfRunType
 
     def convert_to_cpp(self) -> str:
+        # The macro lets trisc.cpp, compiled after build.h, keep run type specific code out of the other builds.
         return (
             f"\nconstexpr auto PERF_RUN_TYPE = PerfRunType::{self.perf_run_type.name};"
+            f"\n#define LLK_PERF_RUN_TYPE_{self.perf_run_type.name} 1"
         )
 
 

@@ -3,36 +3,74 @@
 # SPDX-License-Identifier: Apache-2.0
 """Code layout pads for the measured loop of Wormhole perf kernels (LLK_DBG_BARRIER builds, see barrier.h).
 
-A TRISC loop's speed depends on its address: the branch predictor (16 untagged entries, indexed by a hash of PC bits
-2..8) and the 2-way instruction cache (16 sets of 16 B on the math thread, 64 on the others) both see the code
-address. The TILE_LOOP restart point (pad P) and the code after the TILE_LOOP zone end (pad Z) can take NOPs that
-never run in the measured window. This module traces the measured window of one kernel thread for one runtime
-configuration with a small RV32IM interpreter, models both structures for every (P, Z) and returns the pads with the
-fewest modelled mispredicts and misses. The choice depends only on the code in the window and the runtime arguments.
+A TRISC loop's speed depends on its address: the branch predictor (16 entries indexed by a hash of PC bits 2..8, each
+holding the last next PC of a control instruction) and the 2-way instruction cache (16 sets of 16 B on the math thread,
+64 on the others) both see the code address. Two assembler symbols move the measured code without recompiling it:
+llk_loop_pad P (NOPs at the TILE_LOOP restart point, barrier.h) and llk_loop_end_pad Z (NOPs after the TILE_LOOP zone
+end on the out of line INIT threads, before the callees of run_kernel on the others; profiler.h, kernel_placement.h).
+
+For one kernel thread and runtime configuration this module
+1. maps every code address of the unpadded ELF to its address under any (P, Z). The kept assembly is linked at a few
+   probe pads and the instruction streams are paired one to one (the pads only insert NOPs). Each place where the
+   shift changes between two neighbouring instructions is fitted as an insertion of P or Z and/or an alignment; the
+   fit is checked on the real link of the pads it chooses;
+2. traces the measured window with an RV32IM interpreter: Tensix instructions do nothing, memory mapped registers read
+   0, and a short backward branch revisited with the same registers and no RAM store in between is a spin wait and
+   falls through. The trace runs until no new instruction has been seen for a while (the loop's steady state), so a
+   long SFPU window is covered past its first tile;
+3. models the window's front end for every candidate (RTL semantics, see deep/frontend): the predictor stores the next
+   PC of each control instruction, the first execution of a control instruction is not predicted, an update is seen 3
+   instructions later; 2-way first in first out instruction cache, cold at the restart; the false register hazard
+   after branches and stores. Cost = 2 * mispredicts + 7 * misses + hazards per window instruction;
+4. groups the candidates by the shifts they give the segments the window runs in (modulo the predictor and cache
+   periods), evaluates every group, or for very large windows searches P, then Z from the best few P, then P from the
+   best few Z, and keeps the cheapest pads (ties: the smaller pads), checked on their real link.
+The choice depends only on the window's instructions and their addresses modulo the predictor and cache periods, not on
+code outside the window (INIT, other zones). Candidates that overflow the code region or push a branch out of range
+(the assembler would then change the code) are left out.
 """
+import fcntl
 import functools
 import hashlib
 import json
 import os
 import struct
+import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
 
 PAD_STEP = 4
-PADS = np.arange(0, 512, PAD_STEP)
-WINDOW = 4000  # instructions of the measured window that are modelled
-BP_LAG = 8  # instructions between a branch and its predictor update
-MISPREDICT_COST, MISS_COST = 3.0, 5.0
-CODE_HEADROOM = 2048  # parks and 512 B aligned sections after the pads can each grow the code by up to 511 B
+# P covers the restart's address modulo the predictor and cache periods: 512 B on math (its restart is 1 KiB aligned
+# inline, 512 B out of line, barrier.h), 1 KiB on the others (1 KiB aligned restart, 64 cache sets of 16 B)
+P_SPAN = {"math": 512}
+P_SPAN_DEFAULT = 1024
+Z_SPAN = {"math": 512}  # callees vs the loop modulo the instruction cache period: 256 B on math, 1 KiB on the others
+Z_SPAN_DEFAULT = 1024
+MIN_WINDOW = 4000  # instructions modelled at least (or the whole window)
+MAX_WINDOW = 60000  # and at most
+TRACE_BUDGET = 4_000_000  # interpreted instructions before a kernel is given up on
+MIS_COST, MISS_COST, HAZ_COST = 2.0, 7.0, 1.0
+EXHAUSTIVE = 16384 * 6000  # every candidate class is evaluated when classes x window instructions is at most this
+STARTS = 8  # P (then Z) values the coordinate search restarts from
+EVAL_CHUNK = 1024  # candidates costed at once
+BOUND_STEP = 16  # resolution of the largest pads that keep the code
+MAX_VERIFY = 8  # chosen pads checked on their real link before the search gives up
+MIN_WINDOW_INSTR = 200  # shorter windows are not padded: their time is mostly the start after the restart
+K_PRED = 3  # a predictor update is seen by the predictions this many instructions later
+SPIN_SPAN = 32  # only short backward branches can be spin waits
 CLOCK_LO = 0xFFB121F0
 EBREAK = 0x00100073
-NOP = 0x00000013
+FILL = (0x00000013, 0x00000000)  # NOPs and the linker's zero fill
+PARK_FIXED = 64  # NOP words between a park's ebreak and its alignment (barrier.h)
 ZONE_RESERVE = "_ZN12llk_profiler12zone_reserveEv"
 ZONE_RECORD = "_ZN12llk_profiler11zone_recordEtyy"
 RUN_KERNEL = "_Z10run_kernelRK13RuntimeParams"
 PARAMS, STACK, RETURN = 0x70000000, 0x7FFF0000, 0x7EEE0000
 M32 = 0xFFFFFFFF
+MAP_VERSION = 12
+ALIGNS = (8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096)
 
 
 def _sext(x, bits):
@@ -45,7 +83,7 @@ def _s32(x):
 
 
 class Elf:
-    """Loaded sections, symbols and the end of the code region of a little endian ELF32."""
+    """Loaded sections, code words and symbols of a little endian ELF32."""
 
     def __init__(self, path):
         data = Path(path).read_bytes()
@@ -58,20 +96,20 @@ class Elf:
         name = lambda off, tab: data[
             tab[4] + off : data.index(b"\0", tab[4] + off)
         ].decode()
-        self.sections, self.symbols, self.region_end = {}, {}, None
+        self.sections, self.symbols, self.region_end, self.code = {}, {}, None, []
         for h in heads:
             n = name(h[0], heads[shstrndx])
             if n == ".loader_init":  # placed right after the TRISC code region
                 self.region_end = h[3]
             if h[2] & 2 and h[1] != 8:  # SHF_ALLOC, not SHT_NOBITS
                 self.sections[n] = (h[3], data[h[4] : h[4] + h[5]])
+                if h[2] & 4 and h[5] >= 4:  # SHF_EXECINSTR
+                    self.code.append((h[3], data[h[4] : h[4] + h[5]]))
             if h[1] == 2:  # SHT_SYMTAB
                 for off in range(h[4], h[4] + h[5], 16):
                     st_name, st_value, st_size = struct.unpack_from("<III", data, off)
                     self.symbols[name(st_name, heads[h[6]])] = (st_value, st_size)
-        self.text_end = max(
-            a + len(d) for n, (a, d) in self.sections.items() if n.startswith(".text")
-        )
+        self.text_end = max(a + len(d) for a, d in self.code)
 
     def word(self, addr):
         for a, d in self.sections.values():
@@ -79,64 +117,238 @@ class Elf:
                 return struct.unpack_from("<I", d, addr - a)[0]
         return None
 
+    def instructions(self):
+        """(addresses, words) of every code word that is not fill, in address order"""
+        addrs, words = [], []
+        for a, d in sorted(self.code):
+            w = np.frombuffer(d[: len(d) & ~3], dtype="<u4").astype(np.int64)
+            keep = (w != FILL[0]) & (w != FILL[1])
+            addrs.append(a + 4 * np.flatnonzero(keep))
+            words.append(w[keep])
+        return np.concatenate(addrs).astype(np.int64), np.concatenate(words)
 
-class Kernel:
-    """One thread's ELF: run_kernel, the measured zone's clock read sites and the parks it re-aligns at."""
 
-    def __init__(self, path):
-        self.elf = Elf(path)
-        self.rk0, size = self.elf.symbols[RUN_KERNEL]
-        self.rk1 = self.rk0 + size
-        self.words = {a: self.elf.word(a) for a in range(self.rk0, self.rk1, 4)}
-        self.sites = self._sites()
-        self.parks = [a for a, w in sorted(self.words.items()) if w == EBREAK]
+def _norm(words):
+    """instruction words without their immediates, which change when code moves (branches, jal, auipc, lui, la)"""
+    op = words & 0x7F
+    return np.where(
+        np.isin(op, (0x63, 0x23)),
+        words & 0x01FFF07F,
+        np.where(
+            np.isin(op, (0x6F, 0x17, 0x37)),
+            words & 0xFFF,
+            np.where(np.isin(op, (0x13, 0x03, 0x67)), words & 0xFFFFF, words),
+        ),
+    )
 
-    def _sites(self):
-        """(start, end): the clock read after zone_reserve and the one before zone_record, or None"""
-        reserve = self.elf.symbols.get(ZONE_RESERVE, (None,))[0]
-        record = self.elf.symbols.get(ZONE_RECORD, (None,))[0]
 
-        def calls(a, offsets, target):
-            for k in offsets:
-                w = self.words.get(a + 4 * k)
-                if (
-                    w is not None
-                    and w & 0x7F == 0x6F
-                    and (a + 4 * k + _jal_offset(w)) & M32 == target
-                ):
-                    return True
-            return False
+def _apply(model, s_in, P, Z):
+    """shift after a gap, from the shift before it, for candidate pads (P, Z)"""
+    cp, cz, A, f, mode = model
+    ins = cp * P + cz * Z
+    if not A:
+        return s_in + ins
+    if mode == 2:  # a fill that keeps its section's size modulo A: it absorbs the inserted pad bytes
+        return s_in + np.mod(f - ins, A) - f
+    x = s_in + ins if mode else s_in
+    return x + np.mod(f - x, A) - f + (0 if mode else ins)
 
-        reads = []
-        for a, w in self.words.items():
-            nxt = self.words.get(a + 4)
-            if (
-                w is None
-                or nxt is None
-                or w & 0x707F != 0x2003
-                or nxt & 0x707F != 0x2003
-            ):
+
+class AddressMap:
+    """Where each code address of the unpadded ELF lands under pads (P, Z).
+
+    Between two neighbouring non-fill instructions the shift changes only where a pad or an alignment sits. Such a gap
+    is fitted as shift_out = shift_in + [((f - shift_in) mod A) - f] + cP * P + cZ * Z: an alignment to A that has f
+    fill bytes in the unpadded ELF, and an insertion of the pads before or after it (cP, cZ = -1: the linker keeps a
+    relaxed section's size, so its trailing fill shrinks by the pad bytes inserted in it). Every probe link must agree.
+
+    A link whose code differs only before the TILE_LOOP restart still counts: a branch there that the pads push past the
+    assembler's range is relaxed into two instructions, which the park's 512 B alignment absorbs, so the code from the
+    restart on and its addresses do not change (code before the restart never moves with the pads).
+    """
+
+    def __init__(self, base, period=None):
+        self.period = period  # of the cost: a gap no exact model fits may be fitted modulo it
+        self.mod_gaps = set()
+        self.addr, words = base.instructions()
+        self.norm = _norm(words)
+        self.words = words
+        self.obs = {}
+        self.gaps = []  # [(instruction index, [models])]
+        self.rk = base.symbols.get(RUN_KERNEL)
+        self.parks = _park_restarts(self.addr, words, self.rk)
+        self.loop_park = None  # ordinal of the TILE_LOOP park among self.parks, once found
+        self.restart = None  # index of its restart (the first instruction that moves with P)
+
+    def find_loop_park(self, probes):
+        """the TILE_LOOP park from probe links {(P, Z): Elf}: the park whose restart is 512 B aligned without pads and
+        moves by exactly P in every probe with P > 0; None when no single park does (then only identical links count)"""
+        cands = [k for k, i in enumerate(self.parks) if self.addr[i] % 512 == 0]
+        for pz, elf in probes.items():
+            if elf is None or not pz[0]:
                 continue
-            if (
-                _sext(w >> 20, 12) == 496
-                and _sext(nxt >> 20, 12) == 504
-                and (w >> 15) & 31 == (nxt >> 15) & 31
-            ):
-                reads.append(a)
-        start = [a for a in reads if calls(a, range(-4, 0), reserve)]
-        end = [a for a in reads if calls(a, range(1, 14), record)]
-        return (start[0], end[0]) if len(start) == 1 and len(end) == 1 else None
+            a, w = elf.instructions()
+            parks = _park_restarts(a, w, elf.symbols.get(RUN_KERNEL))
+            if len(parks) != len(self.parks):
+                return None
+            cands = [k for k in cands if _whole_moves(a[parks[k]] - self.addr[self.parks[k]] - pz[0]) is not None]
+        if cands:  # the parks after the TILE_LOOP one move with it: the first is the TILE_LOOP park
+            self.loop_park = cands[0]
+            self.restart = self.parks[cands[0]]
+        return self.loop_park
 
-    def events(self):
-        """[boundary, kind, fill start, takes P]: kind 1 = park restart point (512 B aligned), 2 = zone end pad"""
-        ev = [
-            [(a + 68 + 511) & ~511, 1, a + 68, 0] for a in self.parks
-        ]  # ebreak, 16 words, then .balign 512
-        before = [e for e in ev if e[0] <= self.sites[0]]
-        if before:
-            max(before, key=lambda e: e[0])[3] = 1
-        ev.append([self.sites[1] + 8, 2, 0, 0])
-        return sorted(ev)
+    def pair(self, pz, elf):
+        """(shift of every instruction, whole) in a link with pads pz, or None when its code differs from the restart
+        on. whole > 0: code before the park grew past the restart's alignment (a relaxed branch), so the code from the
+        restart on moved by whole periods more (and the callees by whole periods too, or not, as the linker keeps
+        run_kernel's size modulo its alignment): the same layout modulo the predictor and cache periods"""
+        a, w = elf.instructions()
+        nw = _norm(w)
+        if len(a) == len(self.addr) and np.array_equal(nw, self.norm):
+            return a - self.addr, 0
+        if self.restart is None:
+            return None
+        parks = _park_restarts(a, w, elf.symbols.get(RUN_KERNEL))
+        if len(parks) != len(self.parks):
+            return None
+        rb, rp = self.restart, parks[self.loop_park]
+        if len(a) - rp != len(self.addr) - rb or not np.array_equal(nw[rp:], self.norm[rb:]):
+            return None
+        whole = _whole_moves(a[rp] - self.addr[rb] - pz[0])
+        if whole is None:
+            return None
+        shift = np.zeros(len(self.addr), np.int64)
+        shift[rb:] = a[rp:] - self.addr[rb:]
+        return shift, whole
+
+    def add(self, pz, elf):
+        """record a probe link; False when its instructions differ from the restart on (a branch the pads push out of
+        range is relaxed). A link whose restart moved by whole periods more keeps the code but is not used for the fit
+        (its addresses are those of the fitted layout modulo the periods only)"""
+        got = self.pair(pz, elf)
+        if got is None:
+            return False
+        if not got[1]:
+            self.obs[tuple(int(v) for v in pz)] = got[0]
+        return True
+
+    def fit(self):
+        keys = sorted(self.obs)
+        shifts = np.array([self.obs[k] for k in keys])
+        pz = np.array(keys, np.int64).reshape(-1, 2)
+        if (shifts[:, 0] != 0).any():
+            raise ValueError("the first instruction moves")
+        moved = np.flatnonzero((np.diff(shifts, axis=1) != 0).any(axis=0)) + 1
+        self.gaps = []
+        self.mod_gaps = set()
+        for i in moved:
+            s_in, s_out = shifts[:, i - 1], shifts[:, i]
+            g0 = int(self.addr[i] - self.addr[i - 1] - 4)
+            after_park = int(self.words[i - 1]) == EBREAK
+            models = []
+            # exact models; failing those, models right modulo the cost's period: the linker places run_kernel's
+            # callees by its size before relaxation (a 1 KiB restart alignment reserves 1020 B), which can move them
+            # by a whole period against every simple model, and the cost cannot tell such layouts apart
+            for modulo in (None, self.period):
+                same = (lambda p, o: (p == o).all(axis=0)) if modulo is None else (lambda p, o: ((p - o) % modulo == 0).all(axis=0))
+                for cp in (0, 1, -1):
+                    for cz in (0, 1, -1):
+                        ins = cp * pz[:, 0] + cz * pz[:, 1]
+                        if same((s_in + ins)[:, None], s_out[:, None])[0]:
+                            models.append((cp, cz, 0, 0, 0))
+                        for A in ALIGNS:
+                            f = np.arange(0, min(g0, A - 4) + 1, 4)
+                            for mode in (0, 1, 2):  # insertion after the alignment, absorbed by it, or a size keeping fill
+                                if mode == 2:
+                                    pred = s_in[:, None] + np.mod(f[None, :] - ins[:, None], A) - f[None, :]
+                                else:
+                                    x = s_in[:, None] + (ins[:, None] if mode else 0)
+                                    pred = x + np.mod(f[None, :] - x, A) - f[None, :] + (0 if mode else ins[:, None])
+                                for ff in f[same(pred, s_out[:, None])]:
+                                    models.append((cp, cz, A, int(ff), mode))
+                if models or not modulo and not self.period:
+                    break
+                if modulo is None:
+                    continue
+            if models and modulo:
+                self.mod_gaps.add(int(i))
+            if not models:
+                raise ValueError(f"no model for the shift change at {self.addr[i]:#x}")
+            # simplest first: plain insertions, then alignments whose fill is the harness's own (a park aligns after
+            # PARK_FIXED NOPs, a section alignment fills the whole gap), then the rest; models[0] is the one used
+            structural = lambda m: m[3] == (g0 - PARK_FIXED if after_park else g0)
+            models.sort(key=lambda m: (m[2] != 0, m[0] < 0 or m[1] < 0, m[4] == 2, not structural(m), m[2], m[4]))
+            self.gaps.append((int(i), models))
+
+    def bounds(self):
+        return np.array([self.addr[i] for i, _ in self.gaps], np.int64)
+
+    def segment_shifts(self, P, Z):
+        """[segments x candidates]: the shift of every segment between moving gaps"""
+        s = np.zeros_like(P)
+        out = [s]
+        for _, models in self.gaps:
+            s = _apply(models[0], s, P, Z)
+            out.append(s)
+        return np.array(out)
+
+    def disagreement(self, P, Z):
+        """a candidate (P, Z) on which the fitted models of a gap disagree, or None: the one that splits the models of
+        the first such gap most evenly, so each link halves them"""
+        s = np.zeros_like(P)
+        for i, models in self.gaps:
+            preds = np.array([_apply(m, s, P, Z) for m in models])
+            if i in self.mod_gaps:  # models that agree modulo the period give the same cost
+                preds = preds % self.period
+            if len(models) > 1:
+                same = (preds == preds[0]).mean(axis=0)
+                split = np.flatnonzero(same < 1)
+                if len(split):
+                    k = split[np.argmin(np.abs(same[split] - 0.5))]
+                    return int(P[k]), int(Z[k])
+            s = _apply(models[0], s, P, Z)
+        return None
+
+    def in_range(self, P, Z):
+        """candidates whose layout keeps every conditional branch in range: one pushed past +-4 KiB is relaxed by the
+        assembler into two instructions, which changes the code"""
+        seg = np.searchsorted(self.bounds(), self.addr, side="right")
+        br = np.flatnonzero((self.words & 0x7F) == 0x63)
+        if self.restart is not None:  # a branch before the restart may be relaxed: its park absorbs the change
+            br = br[br >= self.restart]
+        off = np.array([_br_offset(int(w)) for w in self.words[br]], np.int64)
+        ti = np.minimum(np.searchsorted(self.addr, self.addr[br] + off), len(self.addr) - 1)
+        sb, st = seg[br], seg[ti]
+        cross = sb != st
+        ok = np.ones(len(P), bool)
+        if cross.any():
+            segs = self.segment_shifts(P, Z)
+            for b, t, o in set(zip(sb[cross].tolist(), st[cross].tolist(), off[cross].tolist())):
+                new = o + segs[t] - segs[b]
+                ok &= (new >= -4096) & (new <= 4094)
+        return ok
+
+    def to_json(self):
+        return [[i, [list(m) for m in models]] for i, models in self.gaps]
+
+    def from_json(self, gaps, loop_park=None, mod_gaps=()):
+        self.gaps = [(int(i), [tuple(m) for m in models]) for i, models in gaps]
+        self.mod_gaps = {int(i) for i in mod_gaps}
+        if loop_park is not None and loop_park < len(self.parks):
+            self.loop_park, self.restart = loop_park, self.parks[loop_park]
+
+
+def _whole_moves(d):
+    """d when it is a move by whole 512 B periods (0 included), else None"""
+    return int(d) if d >= 0 and d % 512 == 0 else None
+
+
+def _park_restarts(addr, words, rk):
+    """indices of the first instruction after each park (its ebreak, barrier.h) in run_kernel, in address order"""
+    if rk is None:
+        return []
+    e = np.flatnonzero((words == EBREAK) & (addr >= rk[0]) & (addr < rk[0] + rk[1]))
+    return [int(i) + 1 for i in e if i + 1 < len(addr)]
 
 
 def _jal_offset(w):
@@ -149,45 +361,102 @@ def _jal_offset(w):
     )
 
 
-def trace(kernel, runtime_bytes, window=WINDOW):
-    """Branch records (pc, taken, target, instruction index) of the first `window` instructions of the measured zone.
+def _br_offset(w):
+    return _sext(
+        ((w >> 31) & 1) << 12
+        | ((w >> 7) & 1) << 11
+        | ((w >> 25) & 0x3F) << 5
+        | ((w >> 8) & 0xF) << 1,
+        13,
+    )
 
-    Tensix and SFPU instructions do nothing, memory mapped registers read 0, and a backward branch taken again with
-    an unchanged register file (a spin wait) falls through, as when the waited-for unit is ready.
+
+class Kernel:
+    """One thread's unpadded ELF: run_kernel and the zone clock read sites."""
+
+    def __init__(self, path):
+        self.elf = Elf(path)
+        self.rk0, size = self.elf.symbols[RUN_KERNEL]
+        self.rk1 = self.rk0 + size
+        self.words = {a: self.elf.word(a) for a in range(self.rk0, self.rk1, 4)}
+        self.starts, self.ends = self._sites()
+
+    def _sites(self):
+        """clock reads after a zone_reserve call (zone starts) and before a zone_record call (zone ends)"""
+        reserve = self.elf.symbols.get(ZONE_RESERVE, (None,))[0]
+        record = self.elf.symbols.get(ZONE_RECORD, (None,))[0]
+
+        def calls(a, offsets, target):
+            for k in offsets:
+                w = self.words.get(a + 4 * k)
+                if w is not None and w & 0x7F == 0x6F and (a + 4 * k + _jal_offset(w)) & M32 == target:
+                    return True
+            return False
+
+        reads = []
+        for a, w in self.words.items():
+            nxt = self.words.get(a + 4)
+            if w is None or nxt is None or w & 0x707F != 0x2003 or nxt & 0x707F != 0x2003:
+                continue
+            if _sext(w >> 20, 12) == 496 and _sext(nxt >> 20, 12) == 504 and (w >> 15) & 31 == (nxt >> 15) & 31:
+                reads.append(a)
+        return (
+            {a for a in reads if calls(a, range(-4, 0), reserve)},
+            {a for a in reads if calls(a, range(1, 14), record)},
+        )
+
+
+def trace(kernel, runtime_bytes, restarts, min_window=MIN_WINDOW, max_window=MAX_WINDOW):
+    """The measured window from the TILE_LOOP restart (restarts: its possible addresses).
+
+    Returns (records, restart pc, restart index, lo, hi, complete) or None: records = control instructions (pc, taken,
+    target, instruction index) from the restart on; the window starts at the first zone start clock read after the
+    restart (index lo) and is modelled up to index hi: to its zone end read (complete), or until no new instruction has
+    been seen for max(min_window, half the window so far), or for max_window instructions.
     """
     elf = kernel.elf
-    mem = {}
+    l1 = bytearray(0x200000)
+    ldm = bytearray(0x10000)
+    other = {}
     for a, d in elf.sections.values():
-        for i, b in enumerate(d):
-            mem[a + i] = b
+        if a < 0x200000:
+            l1[a : a + len(d)] = d
+        elif 0xFFB00000 <= a < 0xFFB10000:
+            ldm[a - 0xFFB00000 : a - 0xFFB00000 + len(d)] = d
     for i, b in enumerate(runtime_bytes):
-        mem[PARAMS + i] = b
+        other[PARAMS + i] = b
+
+    def ld(a, n):
+        if a < 0x200000:
+            return int.from_bytes(l1[a : a + n], "little")
+        if 0xFFB00000 <= a < 0xFFB10000:
+            o = a - 0xFFB00000
+            return int.from_bytes(ldm[o : o + n], "little")
+        if 0x70000000 <= a < 0x80000000:
+            return sum(other.get(a + i, 0) << (8 * i) for i in range(n))
+        return 0  # memory mapped register
+
+    stores = 0
     x = [0] * 32
-    x[2], x[3], x[10], x[1] = (
-        STACK,
-        elf.symbols.get("__global_pointer$", (0, 0))[0],
-        PARAMS,
-        RETURN,
-    )
-    ld = lambda a, n: sum(mem.get((a + i) & M32, 0) << (8 * i) for i in range(n))
-
-    def st(a, v, n):
-        if a < 0x200000 or 0xFFB00000 <= a < 0xFFB10000 or 0x70000000 <= a < 0x80000000:
-            for i in range(n):
-                mem[(a + i) & M32] = (v >> (8 * i)) & 0xFF
-
-    pc, icount, start, end, rec, seen, words = (
-        kernel.rk0,
-        0,
-        None,
-        None,
-        [],
-        set(),
-        dict(kernel.words),
-    )
-    for _ in range(1_000_000):
-        if pc == RETURN or (start is not None and icount >= start + window):
+    x[2], x[3], x[10], x[1] = STACK, elf.symbols.get("__global_pointer$", (0, 0))[0], PARAMS, RETURN
+    words = dict(kernel.words)
+    rec, seen = [], {}
+    pc, icount = kernel.rk0, 0
+    warm = lo = start = None
+    pcs_seen, last_new = set(), 0
+    complete = False
+    for _ in range(TRACE_BUDGET):
+        if pc == RETURN:
             break
+        if warm is None and pc in restarts:
+            warm, start = icount, pc
+        if lo is not None:
+            if pc not in pcs_seen:
+                pcs_seen.add(pc)
+                last_new = icount
+            n = icount - lo
+            if n >= max_window or (n >= min_window and icount - last_new >= max(min_window, n // 2)):
+                break
         w = words.get(pc)
         if w is None:
             w = words[pc] = elf.word(pc)
@@ -205,290 +474,586 @@ def trace(kernel, runtime_bytes, window=WINDOW):
             val = pc + (w & 0xFFFFF000)
         elif op == 0x6F:
             val, nxt = pc + 4, (pc + _jal_offset(w)) & M32
-            rec.append((pc, 1, nxt, icount))
+            if warm is not None:
+                rec.append((pc, 1, nxt, icount))
         elif op == 0x67:
             val, nxt = pc + 4, (a + _sext(w >> 20, 12)) & ~1 & M32
-            rec.append((pc, 1, nxt, icount))
+            if warm is not None:
+                rec.append((pc, 1, nxt, icount))
         elif op == 0x63:
-            t = (
-                pc
-                + _sext(
-                    ((w >> 31) & 1) << 12
-                    | ((w >> 7) & 1) << 11
-                    | ((w >> 25) & 0x3F) << 5
-                    | ((w >> 8) & 0xF) << 1,
-                    13,
-                )
-            ) & M32
-            c = {
-                0: a == b,
-                1: a != b,
-                4: _s32(a) < _s32(b),
-                5: _s32(a) >= _s32(b),
-                6: a < b,
-                7: a >= b,
-            }.get(f3, False)
-            if c and t <= pc:
+            t = (pc + _br_offset(w)) & M32
+            if f3 == 0:
+                c = a == b
+            elif f3 == 1:
+                c = a != b
+            elif f3 == 4:
+                c = _s32(a) < _s32(b)
+            elif f3 == 5:
+                c = _s32(a) >= _s32(b)
+            elif f3 == 6:
+                c = a < b
+            elif f3 == 7:
+                c = a >= b
+            else:
+                c = False
+            if c and t <= pc and pc - t <= SPIN_SPAN:  # a spin wait: same registers and no RAM store since the last visit
                 key = (pc, tuple(x))
-                c = key not in seen
-                seen.add(key)
-            rec.append((pc, int(c), t, icount))
+                c = seen.get(key) != stores
+                seen[key] = stores
+            if warm is not None:
+                rec.append((pc, int(c), t, icount))
             nxt = t if c else pc + 4
         elif op == 0x03:
             ea = (a + _sext(w >> 20, 12)) & M32
-            if ea == CLOCK_LO and pc == kernel.sites[0] and start is None:
-                start = icount
-            elif ea == CLOCK_LO and pc == kernel.sites[1] and start is not None:
-                end = icount
-                break
-            n = {0: 1, 1: 2, 2: 4, 4: 1, 5: 2}.get(f3, 4)
-            mmio = not (
-                ea < 0x200000
-                or 0xFFB00000 <= ea < 0xFFB10000
-                or 0x70000000 <= ea < 0x80000000
-            )
-            v = 0 if mmio else ld(ea, n)
+            if ea == CLOCK_LO and warm is not None:
+                if lo is None and (pc in kernel.starts or not kernel.starts):
+                    lo = icount
+                elif lo is not None and (pc in kernel.ends or not kernel.ends):
+                    complete = True
+                    break
+            n = (1, 2, 4, 4, 1, 2, 4, 4)[f3]
+            v = ld(ea, n)
             val = _sext(v, 8 * n) & M32 if f3 in (0, 1) else v
         elif op == 0x23:
-            st(
-                (a + _sext(((w >> 25) << 5) | ((w >> 7) & 31), 12)) & M32,
-                b,
-                {0: 1, 1: 2, 2: 4}.get(f3, 4),
-            )
+            ea = (a + _sext(((w >> 25) << 5) | ((w >> 7) & 31), 12)) & M32
+            n = (1, 2, 4, 4, 4, 4, 4, 4)[f3]
+            if ea < 0x200000:
+                l1[ea : ea + n] = (b & ((1 << (8 * n)) - 1)).to_bytes(n, "little")
+                stores += 1
+            elif 0xFFB00000 <= ea < 0xFFB10000:
+                o = ea - 0xFFB00000
+                ldm[o : o + n] = (b & ((1 << (8 * n)) - 1)).to_bytes(n, "little")
+                stores += 1
+            elif 0x70000000 <= ea < 0x80000000:
+                for i in range(n):
+                    other[ea + i] = (b >> (8 * i)) & 0xFF
+                stores += 1
         elif op == 0x13:
             i = _sext(w >> 20, 12)
-            sh = (w >> 20) & 31
-            val = {
-                0: a + i,
-                2: int(_s32(a) < i),
-                3: int(a < (i & M32)),
-                4: a ^ (i & M32),
-                6: a | (i & M32),
-                7: a & (i & M32),
-                1: a << sh,
-                5: (_s32(a) >> sh) if (w >> 30) & 1 else (a >> sh),
-            }[f3]
+            if f3 == 0:
+                val = a + i
+            elif f3 == 1:
+                val = a << ((w >> 20) & 31)
+            elif f3 == 2:
+                val = int(_s32(a) < i)
+            elif f3 == 3:
+                val = int(a < (i & M32))
+            elif f3 == 4:
+                val = a ^ (i & M32)
+            elif f3 == 5:
+                sh = (w >> 20) & 31
+                val = (_s32(a) >> sh) if (w >> 30) & 1 else (a >> sh)
+            elif f3 == 6:
+                val = a | (i & M32)
+            else:
+                val = a & (i & M32)
         elif op == 0x33:
             f7 = w >> 25
             if f7 == 1:
                 sa, sb = _s32(a), _s32(b)
                 val = {
-                    0: a * b,
-                    1: (sa * sb) >> 32,
-                    2: (sa * b) >> 32,
-                    3: (a * b) >> 32,
-                    4: (int(sa / sb) if sb else -1),
-                    5: (a // b if b else M32),
-                    6: ((abs(sa) % abs(sb)) * (1 if sa >= 0 else -1) if sb else sa),
-                    7: (a % b if b else a),
-                }[f3]
+                    0: lambda: a * b,
+                    1: lambda: (sa * sb) >> 32,
+                    2: lambda: (sa * b) >> 32,
+                    3: lambda: (a * b) >> 32,
+                    4: lambda: (int(sa / sb) if sb else -1),
+                    5: lambda: (a // b if b else M32),
+                    6: lambda: ((abs(sa) % abs(sb)) * (1 if sa >= 0 else -1) if sb else sa),
+                    7: lambda: (a % b if b else a),
+                }[f3]()
             else:
                 val = {
-                    0: (a - b) if f7 == 0x20 else (a + b),
-                    1: a << (b & 31),
-                    2: int(_s32(a) < _s32(b)),
-                    3: int(a < b),
-                    4: a ^ b,
-                    5: (_s32(a) >> (b & 31)) if f7 == 0x20 else (a >> (b & 31)),
-                    6: a | b,
-                    7: a & b,
-                }[f3]
+                    0: lambda: (a - b) if f7 == 0x20 else (a + b),
+                    1: lambda: a << (b & 31),
+                    2: lambda: int(_s32(a) < _s32(b)),
+                    3: lambda: int(a < b),
+                    4: lambda: a ^ b,
+                    5: lambda: (_s32(a) >> (b & 31)) if f7 == 0x20 else (a >> (b & 31)),
+                    6: lambda: a | b,
+                    7: lambda: a & b,
+                }[f3]()
         elif op == 0x73 and f3:
             val = 0  # CSR reads
         if val is not None and rd:
             x[rd] = val & M32
         pc = nxt
         icount += 1
-    if start is None:
+    if lo is None:
         return None
-    return (
-        [r for r in rec if r[3] >= start],
-        start,
-        end if end is not None else min(icount, start + window),
-    )
-
-
-def _offsets(events, p, z):
-    """the address shift after each event, per candidate pad pair"""
-    off = np.zeros((len(p), len(events) + 1), np.int64)
-    for e, (bound, kind, fill, takes_p) in enumerate(events):
-        if kind == 1:
-            off[:, e + 1] = (
-                ((fill + off[:, e] + 511) // 512) * 512 + (p if takes_p else 0) - bound
-            )
-        else:
-            off[:, e + 1] = off[:, e] + z
-    return off
+    return rec, start, warm, lo, icount, complete
 
 
 def _bp_index(a):
     b = lambda i: (a >> i) & 1
-    return (
-        ((1 - (b(8) ^ b(6))) << 3)
-        | ((b(7) ^ b(5)) << 2)
-        | ((1 - (b(4) ^ b(3))) << 1)
-        | b(2)
-    )
+    return ((1 - (b(8) ^ b(6))) << 3) | ((b(7) ^ b(5)) << 2) | ((1 - (b(4) ^ b(3))) << 1) | b(2)
 
 
-def cost(kernel, records, lo, hi, nsets, p, z):
-    """Modelled mispredicts * MISPREDICT_COST + misses * MISS_COST per instruction, per candidate pad pair (p[i], z[i])"""
-    ev = kernel.events()
-    bounds = np.array([e[0] for e in ev], np.int64)
-    off = _offsets(ev, np.asarray(p, np.int64), np.asarray(z, np.int64))
-    n = off.shape[0]
-    rows = np.arange(n)
+def _regs_read(w):
+    if w is None or w & 3 != 3:
+        return ()
+    op = w & 0x7F
+    rs1, rs2 = (w >> 15) & 31, (w >> 20) & 31
+    if op in (0x33, 0x23, 0x63):
+        return (rs1, rs2)
+    if op in (0x13, 0x03, 0x67, 0x73):
+        return (rs1,)
+    return ()
 
-    def shifted(a):
-        seg = (
-            len(ev)
-            if a >= kernel.rk1
-            else 0 if a < kernel.rk0 else int(np.searchsorted(bounds, a, side="right"))
-        )
-        return a + off[:, seg]
 
-    # instruction cache: 2 ways, first in first out, cold at the window start. A straight run of instructions within
-    # one shift segment reads consecutive lines, so it is walked a line at a time for every candidate together.
-    ways = np.full((n, nsets, 2), -1, np.int64)
-    fill = np.zeros((n, nsets), np.int64)
-    last = np.full(n, -1, np.int64)
-    misses = np.zeros(n, np.int64)
-    edges = sorted({e[0] for e in ev} | {kernel.rk0, kernel.rk1})
+class Window:
+    """The modelled window of one kernel thread and runtime configuration, to be costed for any pads."""
 
-    def access(ln, active):
-        new = active & (ln != last)
-        if not new.any():
-            return
-        last[new] = ln[new]
-        r, l = rows[new], ln[new]
-        st = l % nsets
-        hit = (ways[r, st, 0] == l) | (ways[r, st, 1] == l)
-        r, l, st = r[~hit], l[~hit], st[~hit]
-        f = fill[r, st]
-        ways[r, st, f & 1] = l
-        fill[r, st] = f + 1
-        misses[r] += 1
+    def __init__(self, kernel, amap, records, start, warm, lo):
+        self.amap, self.records = amap, records
+        pcs, ctl, cur = [], [], start
+        for pc, taken, target, _ in records:
+            pcs.extend(range(cur, pc + 4, 4) if pc >= cur else [pc])
+            ctl.append(len(pcs) - 1)
+            cur = target if taken else pc + 4
+        self.pcs = np.array(pcs, np.int64)
+        self.ctl = ctl
+        self.counted = np.arange(len(self.pcs)) + warm >= lo
+        self.n = max(int(self.counted.sum()), 1)
+        self.bounds = amap.bounds()
+        idx = np.searchsorted(amap.addr, self.pcs, side="right") - 1
+        self.idx = np.maximum(idx, 0)  # the non-fill instruction each executed one moves with
+        self.seg = np.searchsorted(self.bounds, amap.addr[self.idx], side="right")
+        self.seg[idx < 0] = 0
+        word = kernel.elf.word
+        self.words = {int(a): word(int(a)) for a in np.unique(self.pcs)}
+        # false hazard sites: (stream index, constant hazard or None, branch target segment, branch target, regs read)
+        self.haz = []
+        for i in np.flatnonzero(self.counted[:-2]):
+            w = self.words.get(int(self.pcs[i]))
+            if w is None or w & 3 != 3 or (w & 0x7F) not in (0x63, 0x23):
+                continue
+            reads = _regs_read(self.words.get(int(self.pcs[i + 2])))
+            if not reads:
+                continue
+            if (w & 0x7F) == 0x23:
+                f = (w >> 7) & 31
+                if f != 0 and f in reads:
+                    self.haz.append((int(i), True, None, None, reads))
+            else:
+                t = (int(self.pcs[i]) + _br_offset(w)) & M32
+                ti = max(int(np.searchsorted(amap.addr, t, side="right")) - 1, 0)
+                tseg = int(np.searchsorted(self.bounds, amap.addr[ti], side="right"))
+                if tseg == self.seg[i]:
+                    offs = t - int(self.pcs[i])
+                    f = ((offs >> 1) & 0xF) << 1 | ((offs >> 11) & 1)
+                    if f != 0 and f in reads:
+                        self.haz.append((int(i), True, None, None, reads))
+                else:
+                    self.haz.append((int(i), None, (tseg, ti), t, reads))
 
-    cur = kernel.sites[0]
-    for pc, taken, target, _ in records:
-        a = cur
-        while a <= pc:
-            b = min(
-                [e - 4 for e in edges if e > a] + [pc]
-            )  # last instruction before the next shift change
-            b = min(b, pc)
-            first, end = shifted(a) >> 4, shifted(b) >> 4
-            for k in range(int((end - first).max()) + 1):
-                access(first + k, first + k <= end)
-            a = b + 4
-        cur = target if taken else pc + 4
-
-    # branch predictor: 2-bit counter and target per entry, updated BP_LAG instructions after the branch; the shift is
-    # one to one, so targets compare by their unshifted addresses and only the entry index depends on the candidate
-    cnt = np.zeros((n, 16), np.int64)
-    tgt = np.full((n, 16), -1, np.int64)
-    mispred = np.zeros(n, np.int64)
-    pending, index = [], {}
-    for pc, taken, target, ic in records:
-        while pending and pending[0][0] <= ic:
-            _, idx, c, t = pending.pop(0)
-            cnt[rows, idx], tgt[rows, idx] = c, t
-        idx = index.get(pc)
-        if idx is None:
-            idx = index[pc] = _bp_index(shifted(pc))
-        c, e = cnt[rows, idx], tgt[rows, idx]
-        pred = ((c & 2) == 0) & (e != pc)
-        ok = (pred == bool(taken)) & ((not taken) | (e == target))
-        mispred += ~ok
-        right = e == target
-        if taken:
-            nc = np.where(~right, 1, np.where(c == 1, c, (c + 1) & 3))
+    def cost(self, P, Z, nsets, actual=None):
+        """(cost per window instruction, mispredicts, misses, hazards) per candidate (P[i], Z[i]); with actual (the
+        shift of every non-fill instruction in a real link) for that one layout"""
+        P = np.asarray(P, np.int64)
+        Z = np.asarray(Z, np.int64)
+        n = len(P)
+        rows = np.arange(n)
+        if actual is None:
+            segs = self.amap.segment_shifts(P, Z).astype(np.int32)  # [segments x candidates]
+            shift = segs[self.seg]
+            target_shift = lambda tseg, ti: segs[tseg].astype(np.int64)
         else:
-            nc = np.where(~right, 2, np.where(c == 2, c, (c - 1) & 3))
-        pending.append((ic + BP_LAG, idx, nc, target))
-    return (
-        (MISPREDICT_COST * mispred + MISS_COST * misses) / max(hi - lo, 1),
-        mispred,
-        misses,
-    )
+            actual = np.asarray(actual, np.int64)
+            shift = actual[self.idx][:, None].astype(np.int32)
+            target_shift = lambda tseg, ti: np.full(n, int(actual[ti]), np.int64)
+        counted = self.counted
+        lines = (self.pcs[:, None].astype(np.int32) + shift) >> 4
+
+        # instruction cache: 2 ways, first in first out, cold at the restart (BRISC invalidates it)
+        change = np.ones(len(self.pcs), bool)
+        change[1:] = (lines[1:] != lines[:-1]).any(axis=1)
+        ways = np.full((n, nsets, 2), -1, np.int32)
+        fill = np.zeros((n, nsets), np.int64)
+        last = np.full(n, -1, np.int32)
+        misses = np.zeros(n, np.int64)
+        for k in np.flatnonzero(change):
+            ln = lines[k]
+            new = ln != last
+            if not new.all():
+                if not new.any():
+                    continue
+                r, l = rows[new], ln[new]
+            else:
+                r, l = rows, ln
+            last[r] = l
+            st = l % nsets
+            hit = (ways[r, st, 0] == l) | (ways[r, st, 1] == l)
+            miss = ~hit
+            if not miss.any():
+                continue
+            r, l, st = r[miss], l[miss], st[miss]
+            f = fill[r, st]
+            ways[r, st, f & 1] = l
+            fill[r, st] = f + 1
+            if counted[k]:
+                misses[r] += 1
+
+        # branch predictor: next PC entries; the first execution of a control instruction is not predicted
+        cnt = np.zeros((n, 16), np.int64)
+        tgt = np.zeros((n, 16), np.int64)
+        known = set()
+        mis = np.zeros(n, np.int64)
+        pend = []
+        mis_at = {}
+        idx_cache = {}
+        for r_i, k in enumerate(self.ctl):
+            pc, taken, target, _ = self.records[r_i]
+            nxt = target if taken else pc + 4
+            while pend and pend[0][0] <= k:
+                _, idx, c, t = pend.pop(0)
+                cnt[rows, idx], tgt[rows, idx] = c, t
+            idx = idx_cache.get(pc)
+            if idx is None:
+                idx = idx_cache[pc] = _bp_index(pc + shift[k].astype(np.int64))
+            c, e = cnt[rows, idx], tgt[rows, idx]
+            if pc in known:
+                m = (e != nxt) | (((c >= 0) & (e != pc)) != bool(taken))
+            else:
+                m = np.full(n, bool(taken))
+                known.add(pc)
+            if counted[k]:
+                mis += m
+            mis_at[k] = m
+            right = e == nxt
+            if taken:
+                nc = np.where(~right, 1, np.minimum(c + 1, 1))
+            else:
+                nc = np.where(~right, -2, np.maximum(c - 1, -2))
+            pend.append((k + K_PRED, idx, nc, nxt))
+
+        # false hazard: instruction i+2 reads x[instr_i[11:7]] after a branch or store, unless a mispredict intervened
+        haz = np.zeros(n, np.int64)
+        for i, const, tseg, t, reads in self.haz:
+            if const:
+                h = np.ones(n, bool)
+            else:
+                offs = (t + target_shift(*tseg)) - (int(self.pcs[i]) + shift[i].astype(np.int64))
+                f = ((offs >> 1) & 0xF) << 1 | ((offs >> 11) & 1)
+                h = (f != 0) & np.isin(f, reads)
+            if i in mis_at:
+                h = h & ~mis_at[i]
+            if i + 1 in mis_at:
+                h = h & ~mis_at[i + 1]
+            haz += h
+        total = MIS_COST * mis + MISS_COST * misses + HAZ_COST * haz
+        return total / self.n, mis, misses, haz
 
 
 def flow_key(records, lo):
     """Identifies the modelled control flow, so runtime configurations that take the same path share a choice"""
-    return hashlib.sha1(
-        repr([(pc, t, tg, ic - lo) for pc, t, tg, ic in records]).encode()
-    ).hexdigest()[:16]
+    return hashlib.sha1(repr([(pc, t, tg, ic - lo) for pc, t, tg, ic in records]).encode()).hexdigest()[:16]
 
 
-def choose(elf_path, thread, runtime_bytes, cache_dir=None):
+@functools.lru_cache(maxsize=16)
+def _kernel(elf_path):
+    return Kernel(elf_path)
+
+
+class _Lock:
+    def __init__(self, path):
+        self.path = Path(path).with_suffix(".lock")
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.f = open(self.path, "w")
+        fcntl.flock(self.f, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.f, fcntl.LOCK_UN)
+        self.f.close()
+
+
+class Maps:
+    """The address map of one thread ELF, fitted once per variant and kept as json in the cache dir."""
+
+    def __init__(self, base_elf, thread, relink, cache_dir):
+        self.base_elf, self.thread, self.relink = str(base_elf), thread, relink
+        self.file = Path(cache_dir) / f"map-{thread}.json"
+        self.zspan = Z_SPAN.get(thread, Z_SPAN_DEFAULT)
+        self.period = 512 if thread == "math" else 1024  # of the cost (predictor hash, instruction cache sets)
+        self.P = np.arange(0, P_SPAN.get(thread, P_SPAN_DEFAULT), PAD_STEP)
+        self.Z = np.arange(0, self.zspan, PAD_STEP)
+        pmax, zmax = int(self.P[-1]), int(self.Z[-1])
+        self.probes = [(PAD_STEP, 0), (0, PAD_STEP), (pmax, 0), (0, zmax), (pmax, zmax)]
+        self.state = None
+        self.amap = None
+        self.links = 0
+        self._grid = None
+
+    def _link(self, pz, d):
+        out = Path(d) / f"{pz[0]}_{pz[1]}"
+        out.mkdir(parents=True, exist_ok=True)
+        self.links += 1
+        try:
+            self.relink(int(pz[0]), int(pz[1]), out)
+            return Elf(out / f"{self.thread}.elf")
+        except Exception:
+            return None
+
+    def _read(self):
+        try:
+            s = json.loads(self.file.read_text())
+            return s if s.get("version") == MAP_VERSION else None
+        except (OSError, ValueError):
+            return None
+
+    def get(self):
+        """the fitted map (probe links once per variant thread, then from the json)"""
+        if self.amap is not None:
+            return self.amap
+        base = Elf(self.base_elf)
+        amap = AddressMap(base, self.period)
+        s = self._read()
+        if s is None:
+            with _Lock(self.file):
+                s = self._read()
+                if s is None:
+                    s = self._fit(base, amap)
+                    write_json(self.file, s)
+        self.state = s
+        amap.from_json(s["gaps"], s.get("loop_park"), s.get("mod_gaps", ()))
+        self.amap = amap
+        return amap
+
+    def _fit(self, base, amap):
+        state = {"version": MAP_VERSION, "limit": None, "bounds": None, "verified": {}}
+        with tempfile.TemporaryDirectory(prefix="llk_layout_") as d:
+            linked = {}
+
+            def probe(pz):
+                e = self._link(pz, d)
+                linked[pz] = e is not None
+                return e is not None and amap.add(pz, e)
+
+            first = {pz: self._link(pz, d) for pz in self.probes}
+            amap.find_loop_park(first)
+            for pz, e in first.items():
+                linked[pz] = e is not None
+            ok = {pz: e is not None and amap.add(pz, e) for pz, e in first.items()}
+            if not linked[self.probes[-1]]:  # the largest pads overflow the code region: keep to what fits
+                state["limit"] = max((base.region_end or base.text_end) - base.text_end - 2048, 0)
+            pmax, zmax = int(self.P[-1]), int(self.Z[-1])
+            if not all(ok.values()):
+                # pads that push a branch past +-4 KiB at assembly time (before the linker shrinks the code, so the
+                # final ELF cannot tell) change the code: keep below the first that does, found to BOUND_STEP bytes
+                def largest(point, hi):
+                    lo = 0
+                    while hi - lo > BOUND_STEP:
+                        mid = (lo + hi) // 2 // PAD_STEP * PAD_STEP
+                        if probe(point(mid)):
+                            lo = mid
+                        else:
+                            hi = mid
+                    return lo
+
+                plim = pmax if ok[(pmax, 0)] else largest(lambda v: (v, 0), pmax)
+                zlim = zmax if ok[(0, zmax)] else largest(lambda v: (0, v), zmax)
+                slim = plim + zlim
+                if (plim, zlim) != (pmax, zmax) or not ok[(pmax, zmax)]:
+                    if not probe((plim, zlim)):
+                        slim = largest(lambda v: (min(v, plim), v - min(v, plim)), plim + zlim)
+                state["bounds"] = [plim, zlim, slim]
+            amap.fit()
+            self.state, self._grid = state, None
+            tried = set()
+            for _ in range(16):  # links that decide between the models a gap still has
+                PP, ZZ = self.grid(amap)
+                pz = amap.disagreement(PP, ZZ)
+                if pz is None or pz in tried or not probe(pz):
+                    break
+                tried.add(pz)
+                amap.fit()
+                self._grid = None
+        state["gaps"] = amap.to_json()
+        state["loop_park"] = amap.loop_park
+        state["mod_gaps"] = sorted(amap.mod_gaps)
+        state["probes"] = [list(k) for k in sorted(amap.obs)]
+        state["links"] = self.links
+        return state
+
+    def grid(self, amap=None):
+        """the candidate pads: on the PAD_STEP grid, within the code region, no branch pushed out of range"""
+        if getattr(self, "_grid", None) is None:
+            amap = amap or self.get()
+            PP, ZZ = np.meshgrid(self.P, self.Z, indexing="ij")
+            PP, ZZ = PP.ravel(), ZZ.ravel()
+            ok = amap.in_range(PP, ZZ)
+            if self.state and self.state.get("limit") is not None:
+                ok &= PP + ZZ <= self.state["limit"]
+            if self.state and self.state.get("bounds") is not None:
+                plim, zlim, slim = self.state["bounds"]
+                ok &= (PP <= plim) & (ZZ <= zlim) & (PP + ZZ <= slim)
+            self._grid = (PP[ok], ZZ[ok])
+        return self._grid
+
+    def verify(self, pz):
+        """link the pads and compare every instruction's address with the map: (True, None) when it holds, else
+        (False, the real shift of every non-fill instruction, or None when the link fails or changes instructions);
+        the outcome is kept in the json"""
+        key = f"{pz[0]},{pz[1]}"
+        s = self._read() or self.state
+        got = s.get("verified", {}).get(key)
+        if got is True:
+            return True, None
+        amap = self.get()
+        if got is not None and got is not False:
+            return False, _expand(got, len(amap.addr))
+        ok, actual = False, None
+        with tempfile.TemporaryDirectory(prefix="llk_layout_") as d:
+            e = self._link(pz, d)
+            if e is not None:
+                got = amap.pair(pz, e)
+                if got is not None:
+                    actual = got[0]
+                    segs = amap.segment_shifts(np.array([pz[0]]), np.array([pz[1]]))[:, 0]
+                    seg = np.searchsorted(amap.bounds(), amap.addr, side="right")
+                    # equal modulo the period the cost sees (exactly, unless the restart moved by whole periods more or
+                    # a gap was fitted modulo the period)
+                    ok = bool(((actual - segs[seg]) % self.period == 0).all())
+        with _Lock(self.file):
+            s = self._read() or self.state
+            s.setdefault("verified", {})[key] = True if ok else (_runs(actual) if actual is not None else False)
+            write_json(self.file, s)
+        return ok, (None if ok else actual)
+
+
+def _runs(shift):
+    """[[first index, shift], ...] of a per instruction shift array"""
+    starts = np.flatnonzero(np.diff(shift, prepend=shift[0] - 1))
+    return [[int(i), int(shift[i])] for i in starts]
+
+
+def _expand(runs, n):
+    out = np.zeros(n, np.int64)
+    for k, (i, v) in enumerate(runs):
+        out[i : runs[k + 1][0] if k + 1 < len(runs) else n] = v
+    return out
+
+
+def code_key(assembly):
+    """Identifies a thread's code: the hash of its assembly without the debug sections (they name the variant's build
+    directory), so variants that compile to the same code share their layout work (choose's shared cache)"""
+    end = assembly.find("\t.section\t.debug_info")
+    return hashlib.sha256(assembly[: end if end >= 0 else len(assembly)].encode()).hexdigest()[:24]
+
+
+def choose(elf_path, thread, runtime_bytes, cache_dir, relink, log=None, shared=None):
     """(P, Z) in bytes for one kernel thread and runtime configuration, (0, 0) when it has no measured loop.
 
-    On the math thread the search runs over pads below 256 B (its 16 set cache repeats every 256 B) and then picks the
-    256 B multiples for the predictor; the other threads search P and Z in turn.
-    Runtime configurations with the same modelled control flow share a choice, cached as json in cache_dir.
+    elf_path: the unpadded ELF (pads (0, 0)); relink(P, Z, out_dir) links this thread with pads (P, Z) into
+    out_dir/<thread>.elf. Runtime configurations with the same modelled control flow share a choice (cache_dir).
+    shared: (directory, code_key of the thread's assembly): the map and the flow choices are kept there instead, so
+    variants with the same code fit the map and cost each flow once. Both are functions of the code alone, so sharing
+    them changes no pads.
     """
+    if shared:
+        cache_dir = Path(shared[0]) / f"{thread}-{shared[1]}"
+    return tuple(_choose(elf_path, thread, runtime_bytes, cache_dir, relink, log))
+
+
+def _choose(elf_path, thread, runtime_bytes, cache_dir, relink, log):
+    t_start = time.perf_counter()
     kernel = _kernel(str(elf_path))
-    if not kernel.parks or kernel.sites is None:
+    if not kernel.starts:
         return 0, 0
-    tr = trace(kernel, runtime_bytes)
-    if tr is None or tr[2] - tr[1] < 200 or not tr[0]:
+    maps = Maps(elf_path, thread, relink, cache_dir)
+    amap = maps.get()
+    restarts = {int(amap.addr[i]) for i, models in amap.gaps if models[0][:2] == (1, 0) and models[0][4] != 2}
+    if not restarts:
         return 0, 0
-    records, lo, hi = tr
-    cached = (
-        Path(cache_dir) / f"{thread}-{flow_key(records, lo)}.json"
-        if cache_dir
-        else None
-    )
-    if cached:
+    t_trace = time.perf_counter()
+    tr = trace(kernel, runtime_bytes, restarts)
+    t_trace = time.perf_counter() - t_trace
+    if tr is None:
+        return 0, 0
+    records, start, warm, lo, hi, complete = tr
+    if hi - lo < MIN_WINDOW_INSTR or not records:
+        return 0, 0
+    cached = Path(cache_dir) / f"{thread}-{flow_key(records, lo)}.json"
+    try:
+        return tuple(json.loads(cached.read_text())["pads"])
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    win = Window(kernel, amap, records, start, warm, lo)
+    nsets = 16 if thread == "math" else 64
+    PP, ZZ = maps.grid()
+    # the cost depends on the pads only through the shifts of the segments the window runs in, modulo the predictor
+    # and cache periods: candidates with the same shifts are evaluated once
+    period = 512 if thread == "math" else 1024
+    touched = np.unique(win.seg)
+    shifts = amap.segment_shifts(PP, ZZ)[touched] % period
+    _, cls = np.unique(shifts, axis=1, return_inverse=True)
+    cls = cls.ravel()
+    index = {(int(p), int(z)): i for i, (p, z) in enumerate(zip(PP, ZZ))}
+    by_cls = {}
+    for i in np.lexsort((PP, ZZ)):  # the smallest pads of each class (Z first) stand for it
+        by_cls.setdefault(int(cls[i]), int(i))
+    costs = np.full(int(cls.max()) + 1, np.nan)
+
+    def evaluate(cands):
+        ids = sorted({int(cls[index[c]]) for c in cands if c in index} - set(np.flatnonzero(~np.isnan(costs)).tolist()))
+        for k in range(0, len(ids), EVAL_CHUNK):
+            part = ids[k : k + EVAL_CHUNK]
+            rep = [by_cls[c] for c in part]
+            costs[part] = win.cost(PP[rep], ZZ[rep], nsets)[0]
+
+    def ranked():
+        """the evaluated classes' smallest pads, by cost, ties by the smaller pads (Z first)"""
+        reps = [by_cls[c] for c in np.flatnonzero(~np.isnan(costs))]
+        reps.sort(key=lambda i: (costs[cls[i]], ZZ[i], PP[i]))
+        return [(int(PP[i]), int(ZZ[i])) for i in reps]
+
+    if costs.size * win.n <= EXHAUSTIVE:
+        evaluate(list(index))
+    else:  # P, then Z from the best few P, then P from the best few Z, then Z again
+        evaluate([(p, 0) for p in maps.P.tolist()] + [(0, 0)])
+        tops = list(dict.fromkeys(p for p, _ in ranked()))[:STARTS]
+        evaluate([(p, z) for p in tops for z in maps.Z.tolist()])
+        topz = list(dict.fromkeys(z for _, z in ranked()))[:STARTS]
+        evaluate([(p, z) for z in topz for p in maps.P.tolist()])
+        p1, _ = ranked()[0]
+        evaluate([(p1, z) for z in maps.Z.tolist()])
+    # the chosen pads are checked on their real link; where the fitted map is wrong, their cost is taken from the real
+    # addresses and the search goes on down the ranking
+    exact = {(0, 0): float(costs[cls[index[(0, 0)]]])} if (0, 0) in index else {}
+    pads = None
+    for cand in ranked()[:MAX_VERIFY]:
+        if cand in exact:
+            pads = cand
+            break
+        ok, actual = maps.verify(cand)
+        if ok:
+            exact[cand] = float(costs[cls[index[cand]]])
+            pads = cand
+            break
+        if actual is not None:
+            exact[cand] = float(win.cost([cand[0]], [cand[1]], nsets, actual=actual)[0][0])
+    if pads is None or (exact and exact.get(pads, np.inf) > min(exact.values())):
+        pads = min(exact, key=lambda c: (exact[c], c[1], c[0])) if exact else (0, 0)
+    cost_of = lambda pz: exact.get(pz, float(costs[cls[index[pz]]]) if pz in index else None)
+    result = {"pads": list(pads), "cost": cost_of(pads), "cost0": cost_of((0, 0)), "window": [lo, hi, int(complete)],
+              "classes": int(costs.size), "evaluated": int((~np.isnan(costs)).sum())}
+    timing = {"t": round(time.perf_counter() - t_start, 4), "t_trace": round(t_trace, 4)}
+    write_json(cached, result)
+    if log:
         try:
-            return tuple(json.loads(cached.read_text()))
-        except (
-            OSError,
-            ValueError,
-        ):  # not chosen yet, or being written by another worker
+            with open(log, "a") as f:
+                f.write(json.dumps({"elf": str(elf_path), "thread": thread, "bytes": bytes(runtime_bytes).hex(), **result, **timing}) + "\n")
+        except OSError:
             pass
-    free = max(
-        (kernel.elf.region_end or kernel.elf.text_end)
-        - kernel.elf.text_end
-        - CODE_HEADROOM,
-        0,
-    )
-
-    def best(p, z, nsets):
-        c = cost(kernel, records, lo, hi, nsets, p, z)[0]
-        c = np.where(p + z <= free, c, np.inf)
-        if not np.isfinite(c.min()):
-            return 0, 0
-        i = min(
-            np.flatnonzero(c <= c.min() * (1 + 1e-9)).tolist(),
-            key=lambda k: (z[k], p[k]),
-        )
-        return int(p[i]), int(z[i])
-
-    if thread != "math":
-        # 64 set cache: P alone, then Z, then P again (as good as the full search on the matmul unpack loops)
-        p, _ = best(PADS, np.zeros_like(PADS), 64)
-        _, z = best(np.full_like(PADS, p), PADS, 64)
-        pads = best(PADS, np.full_like(PADS, z), 64)
-    else:
-        low = PADS[PADS < 256]
-        p, z = best(np.repeat(low, len(low)), np.tile(low, len(low)), 16)
-        pads = best(
-            np.array([p, p + 256, p, p + 256]), np.array([z, z, z + 256, z + 256]), 16
-        )
-    if cached:
-        write_json(cached, pads)
-    return pads
+    return tuple(pads)
 
 
 def write_json(path, value):
     """Atomically, as several pytest workers can choose for the same variant at once."""
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(value))
     os.replace(tmp, path)
-
-
-@functools.lru_cache(maxsize=64)
-def _kernel(elf_path):
-    return Kernel(elf_path)

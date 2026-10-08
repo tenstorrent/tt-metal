@@ -99,7 +99,7 @@ extern std::uint32_t reserved_words_count;
 
 __attribute__((always_inline)) inline void sync_threads()
 {
-    llk_barrier::rendezvous(llk_barrier::is_action_thread());
+    llk_barrier::rendezvous<llk_barrier::PARK_PLAIN>(llk_barrier::is_action_thread(), [] {});
 }
 
 // The barrier words are unused since the semaphore rendezvous, but BARRIER_END anchors BUFFERS_START; keep them.
@@ -164,7 +164,30 @@ __attribute__((noipa, section(".text.llk_zone.record"))) inline void zone_record
     write_entry_at(EntryType::ZONE_END, id16, end_timestamp);
 }
 
-template <std::uint16_t id16, bool LOOP_PAD = false>
+#if defined(LLK_DBG_BARRIER)
+// Quiet peers (Wormhole perf builds). In PACK_ISOLATE the unpack and math threads are done with their TILE_LOOP at
+// once, and their epilogue (zone record, uninit, return, park: icache refills and L1 stores on L1 ports 2 and 3, the
+// ports packers 2 and 3 write through) lands in the first tiles of the measured pack loop. That shifts the dest read
+// phase of packers 2 and 3, and the four packers can lock into their slow pattern for the rest of the loop. So these
+// peers hold at the end of their TILE_LOOP zone until the pack thread is back from run_kernel and flips the release
+// level once more (trisc.cpp, PACK_ISOLATE builds only); they sample the level right after the TILE_LOOP release, so
+// it does not matter whether the rendezvous itself flips it. The sample sits in its own section after every other
+// variable (sections.ld), so nothing else moves.
+__attribute__((section(".llk_quiet_data"))) inline std::uint32_t quiet_seen = 0;
+
+__attribute__((noipa, section(".llk_quiet_text"))) inline void quiet_wait()
+{
+    while (llk_barrier::detail::settled(ckernel::semaphore_read(llk_barrier::RELEASE_SEM)) == quiet_seen)
+    {
+        for (std::uint32_t i = 0; i < 32; ++i)
+        {
+            asm volatile("nop");
+        }
+    }
+}
+#endif
+
+template <std::uint16_t id16, bool LOOP_PAD = false, bool QUIET_WAIT = false>
 class zone_scoped
 {
 private:
@@ -192,10 +215,16 @@ public:
     ~zone_scoped()
     {
         ckernel::fence_compiler();
+#if defined(LLK_DBG_BARRIER)
+        if constexpr (QUIET_WAIT)
+        {
+            quiet_wait();
+        }
+#endif
         if (is_opened)
         {
             const std::uint64_t end_timestamp = ckernel::read_wall_clock();
-#if defined(LLK_DBG_BARRIER) // the id hashes the source line: a fixed lui + addi keeps its size from moving the code after it
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PERF_OOL) // the id hashes the source line: a fixed lui + addi keeps its size from moving the code after it
             // llk_loop_end_pad bytes of NOPs after the TILE_LOOP end read move the code after it against the loop (perf/layout.py)
             asm volatile(".ifndef llk_loop_end_pad\n\t.set llk_loop_end_pad, 0\n.endif\n.rept (llk_loop_end_pad / 4) * %[on]\n\tnop\n\t.endr"
                          :
@@ -233,6 +262,11 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, s
 #define ZONE_SCOPED(marker)            \
     PROFILER_META(MARKER_FULL(marker)) \
     const auto _zone_scoped_ = llk_profiler::zone_scoped<MARKER_ID(marker), hashString16(marker) == hashString16("TILE_LOOP")>();
+
+// A peer's TILE_LOOP zone in PACK_ISOLATE: it holds its epilogue until the pack thread is done (quiet_wait).
+#define ZONE_SCOPED_Q(marker, quiet_wait) \
+    PROFILER_META(MARKER_FULL(marker))    \
+    const auto _zone_scoped_ = llk_profiler::zone_scoped<MARKER_ID(marker), hashString16(marker) == hashString16("TILE_LOOP"), quiet_wait>();
 
 #define TIMESTAMP(marker)              \
     PROFILER_META(MARKER_FULL(marker)) \

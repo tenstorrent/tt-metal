@@ -343,6 +343,9 @@ inline void _llk_pack_hw_configure_(
     const bool narrow_tile          = false,
     const std::uint32_t relu_config = 0)
 {
+#if defined(LLK_EXP_NOP_PACK)
+    asm volatile("nop"); // experiment: INIT NOP
+#endif
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
@@ -386,6 +389,20 @@ inline void _llk_pack_init_(
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0 pack init supports only PackMode::Default and PackMode::Untilize");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+#if defined(LLK_EXP_NOP_PACK_INIT) // experiment: N NOPs at the top of _llk_pack_init_ (the CI placement test's position)
+#if LLK_EXP_NOP_PACK_INIT >= 1
+    asm volatile("nop");
+#endif
+#if LLK_EXP_NOP_PACK_INIT >= 2
+    asm volatile("nop");
+#endif
+#if LLK_EXP_NOP_PACK_INIT >= 3
+    asm volatile("nop");
+#endif
+#if LLK_EXP_NOP_PACK_INIT >= 4
+    asm volatile("nop");
+#endif
+#endif
     if constexpr (!skip_addrmod_config)
     {
         _llk_pack_configure_addrmod_<pack_mode>();
