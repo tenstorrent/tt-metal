@@ -18,8 +18,8 @@
 using namespace toy_scaled_add;
 
 void kernel_main() {
-    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
-    constexpr auto a_args = TensorAccessorArgs<0>();
+    constexpr uint32_t Wt = get_compile_time_arg_val(ct_arg::WIDTH_TILES);
+    constexpr auto a_args = TensorAccessorArgs<ct_arg::COUNT>();
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
 

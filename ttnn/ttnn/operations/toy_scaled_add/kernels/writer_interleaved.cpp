@@ -17,8 +17,8 @@
 using namespace toy_scaled_add;
 
 void kernel_main() {
-    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
-    constexpr auto out_args = TensorAccessorArgs<0>();
+    constexpr uint32_t Wt = get_compile_time_arg_val(ct_arg::WIDTH_TILES);
+    constexpr auto out_args = TensorAccessorArgs<ct_arg::COUNT>();
 
     const uint32_t row_start = get_arg_val<uint32_t>(core_arg::ROW_START);
     const uint32_t num_rows = get_arg_val<uint32_t>(core_arg::NUM_ROWS);
