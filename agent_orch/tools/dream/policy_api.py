@@ -51,6 +51,7 @@ class RoundView:
     branches: dict[int, list[NodeObs]]  # branch -> attempts in order (revealed prefix only)
     closed: dict[int, str]  # branch -> reason
     steps_done: int
+    root_score: float = 1.0  # score of the round root (1.0 = campaign baseline)
 
     # ---- derived helpers -------------------------------------------------
     @property
@@ -71,7 +72,7 @@ class RoundView:
 
     def best(self) -> float:
         vals = [n.score for n in self.nodes if n.ok]
-        return max(vals) if vals else 1.0
+        return max(vals + [self.root_score])
 
     def within_noise(self, delta: float | None, ref: float = 1.0) -> bool:
         return delta is not None and abs(delta) <= ref * self.noise_pct / 100.0

@@ -53,7 +53,7 @@ def policy_default_beta(path: Path, fallback: float) -> float:
 def simulate(policy_path, beta, rr: RecordedRound, history, defaults, noise_pct, cost, bonus, max_steps):
     pol = load_policy(policy_path, {"beta": beta, "defaults": defaults})
     plan = pol.plan(PlanContext(rr.round, defaults, history))
-    view = RoundView(rr.round, plan.W, plan.R, noise_pct, {}, {}, 0)
+    view = RoundView(rr.round, plan.W, plan.R, noise_pct, {}, {}, 0, rr.root_score)
     unopened = sorted(rr.branches)
     total = len(rr.nodes)
     trace = {"round": rr.round, "beta": beta, "plan": {"W": plan.W, "R": plan.R, "reason": plan.reason}, "steps": []}
@@ -81,6 +81,11 @@ def simulate(policy_path, beta, rr: RecordedRound, history, defaults, noise_pct,
                 if k < len(rr.branches[b]):
                     view.branches[b].append(rr.branches[b][k])
                     revealed.append(rr.branches[b][k])
+        if not revealed:  # every selected start point is beyond the recording ("out of support")
+            trace["steps"].append(
+                {"step": view.steps_done + 1, "out_of_support": True, "batch": [i.parent for i in batch.items]}
+            )
+            break
         view.steps_done += 1
         trace["steps"].append(
             {

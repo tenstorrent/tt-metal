@@ -16,6 +16,7 @@ class RecordedRound:
     branches: dict[int, list[NodeObs]]
     manifest: dict = field(default_factory=dict)
     decisions: list[dict] = field(default_factory=list)
+    root_score: float = 1.0
 
     @property
     def nodes(self) -> list[NodeObs]:
@@ -35,9 +36,9 @@ class RecordedRound:
         return sum(1 for d in self.decisions if d.get("type") == "lost")
 
 
-def _with_deltas(branches: dict[int, list[NodeObs]]) -> dict[int, list[NodeObs]]:
+def _with_deltas(branches: dict[int, list[NodeObs]], root_score: float = 1.0) -> dict[int, list[NodeObs]]:
     for nodes in branches.values():
-        prev_score = 1.0  # root
+        prev_score = root_score
         prev_ok = True
         for n in nodes:
             n.delta_vs_parent = (n.score - prev_score) if (n.ok and prev_ok) else None
@@ -99,7 +100,12 @@ def load_round(c: Campaign, rnd: int) -> RecordedRound:
         branches.setdefault(n.branch, []).append(n)
     for b in branches:
         branches[b].sort(key=lambda n: n.attempt)
-    return RecordedRound(rnd, _with_deltas(branches), manifest, decisions)
+    root_score = 1.0
+    rr_ref = manifest.get("round_root", "")
+    if rr_ref.startswith(f"dream/{c.name}/n/"):
+        s = json.loads(read_node_file(c, rr_ref.rsplit("/", 1)[1], "eval/score.json") or "{}")
+        root_score = float(s.get("score", 1.0)) if s.get("valid") else 1.0
+    return RecordedRound(rnd, _with_deltas(branches, root_score), manifest, decisions, root_score)
 
 
 def recorded_rounds(c: Campaign) -> list[int]:
@@ -149,7 +155,8 @@ def round_summary(rr: RecordedRound) -> dict:
         "R": rr.manifest.get("R"),
         "attempts": len(rr.nodes),
         "steps": rr.steps_done(),
-        "best": max(ok) if ok else 1.0,
+        "best": max(ok + [rr.root_score]),
+        "root_score": rr.root_score,
         "branches": {
             b: [{"attempt": n.attempt, "score": n.score, "fail_class": n.fail_class, "tags": n.tags} for n in nodes]
             for b, nodes in rr.branches.items()
@@ -166,4 +173,5 @@ def online_view(rr: RecordedRound, W: int, R: int, noise_pct: float) -> RoundVie
         branches={b: list(v) for b, v in rr.branches.items()},
         closed=rr.closed(),
         steps_done=rr.steps_done(),
+        root_score=rr.root_score,
     )
