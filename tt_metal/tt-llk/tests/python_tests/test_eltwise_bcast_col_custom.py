@@ -277,20 +277,24 @@ def test_eltwise_bcast_col_custom(
 # Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
 BF16_DENORMAL_MIN = 2.0**-133
 BF16_DENORMAL_MANTISSAS = 1 << 7
-# SrcA value on the denormal rows: large enough that a kept denormal gives a visibly nonzero product.
-DENORMAL_ROW_SCALE = 2.0**100
+# SrcA value on the denormal rows. MUL: large, so a kept denormal gives a visibly nonzero product. SUB: the
+# smallest normal exponent range, so subtracting a kept denormal visibly changes it.
+DENORMAL_ROW_SRCA = {MathOperation.Elwmul: 2.0**100, MathOperation.Elwsub: 2.0**-120}
 
 
-def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag():
+@pytest.mark.parametrize("mathop", [MathOperation.Elwmul, MathOperation.Elwsub])
+def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag(mathop):
     """The init must restore the Src zero flag a preceding datacopy left at keep.
 
-    Even rows broadcast a bf16 denormal from SrcB, which a bf16 FPU op flushes to zero. Against srcA rows of
-    2^100 a kept denormal gives a nonzero product, so those rows must come out exactly 0. Odd rows are normal
-    and check the rest of the op. MUL only: a denormal is lost in a SUB result either way.
+    Even rows broadcast a bf16 denormal from SrcB, which a bf16 FPU op flushes to zero, so those rows must
+    come out exactly as for a zero SrcB: 0 for MUL against 2^100, SrcA itself for SUB from 2^-120. Odd rows
+    are normal and check the rest of the op.
     """
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+    if (
+        mathop == MathOperation.Elwmul
+        and get_chip_architecture() != ChipArchitecture.BLACKHOLE
+    ):
         pytest.skip("MUL bcast-col reuse scaffold is Blackhole-only")
-    mathop = MathOperation.Elwmul
 
     formats = input_output_formats([DataFormat.Float16_b])[0]
     tile_rows, ct_dim = DEFAULT_TILE_R_DIM, 2
@@ -303,7 +307,7 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag():
 
     torch.manual_seed(0)
     src_A = torch.randn(input_dimensions_A)
-    src_A[denormal_rows] = DENORMAL_ROW_SCALE
+    src_A[denormal_rows] = DENORMAL_ROW_SRCA[mathop]
     # One value per row, so the column broadcast reads it whichever column it takes.
     row_values = torch.randn(tile_rows)
     row_values[denormal_rows] = (
@@ -313,7 +317,7 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag():
     src_B = row_values[:, None].expand(input_dimensions_B).clone()
     src_A = src_A.to(torch.bfloat16)
     src_B = src_B.to(torch.bfloat16)
-    # LoFi golden on the bf16 operands; the denormal rows are flushed, so their result is exactly 0.
+    # LoFi golden on the bf16 operands; on the denormal rows SrcB is flushed to zero.
     golden = (
         get_golden_generator(EltwiseBinaryGolden)(
             mathop,
@@ -325,7 +329,12 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag():
         .reshape(input_dimensions_A)
         .clone()
     )
-    golden[denormal_rows] = 0
+    flushed = (
+        torch.zeros_like(src_A[denormal_rows])
+        if mathop == MathOperation.Elwmul
+        else src_A[denormal_rows]
+    )
+    golden[denormal_rows] = flushed.to(golden.dtype)
     src_A = src_A.flatten()
     src_B = src_B.flatten()
 
@@ -395,10 +404,10 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag():
     ).flatten()
     res = torch.tensor(res, dtype=torch.bfloat16).reshape(input_dimensions_A)
 
-    kept = res[denormal_rows].float()
+    diff = (res[denormal_rows].float() - flushed.float()).abs()
     assert (
-        torch.count_nonzero(kept) == 0
-    ), f"denormal SrcB rows were not flushed: max |value| {kept.abs().max().item():.3e}"
+        torch.count_nonzero(diff) == 0
+    ), f"denormal SrcB rows were not flushed: max |difference| {diff.max().item():.3e}"
     assert passed_test(
         golden.flatten(), res.flatten(), formats.output_format
     ), "Assert against golden failed"

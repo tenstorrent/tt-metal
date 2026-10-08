@@ -50,6 +50,8 @@ inline void eltwise_binary_configure_addrmod_custom()
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param num_faces: Number of faces to process (1, 2, or 4)
+ * @note Establishes the operand-driven default Src zero-substitution state, which the bcast-col compute asserts
+ *       under LLK asserts; an op that leaves it at keep must be followed by this init again.
  */
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type>
 inline void _llk_math_eltwise_binary_init_custom_(const std::uint32_t num_faces)
