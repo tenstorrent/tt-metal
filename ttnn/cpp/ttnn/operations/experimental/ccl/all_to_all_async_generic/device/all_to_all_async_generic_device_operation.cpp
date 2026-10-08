@@ -33,16 +33,15 @@ DrainCoreMapping gather_drain_virtual_cores(
     const size_t candidates_per_node = logical_core_candidates.size();
 
     std::vector<DrainCoreRecord> local_records(mesh_shape.mesh_size() * candidates_per_node);
-    auto maybe_device_it = mesh_device->get_view().begin();
     for (const auto& coord : ttnn::MeshCoordinateRange(mesh_shape)) {
-        const auto& maybe_coordinate_device = *maybe_device_it++;
-        if (maybe_coordinate_device.is_remote()) {
+        if (!mesh_device->is_local(coord)) {
             continue;
         }
+        auto* coordinate_device = mesh_device->get_device(coord);
         const size_t node_index = coord.to_linear_index(mesh_shape);
         for (size_t candidate = 0; candidate < candidates_per_node; ++candidate) {
             const auto drain_virtual_core =
-                maybe_coordinate_device.value()->worker_core_from_logical_core(logical_core_candidates[candidate]);
+                coordinate_device->worker_core_from_logical_core(logical_core_candidates[candidate]);
             local_records[node_index * candidates_per_node + candidate] = {
                 .valid = 1,
                 .x = static_cast<uint32_t>(drain_virtual_core.x),

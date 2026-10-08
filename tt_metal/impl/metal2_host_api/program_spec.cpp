@@ -34,6 +34,7 @@
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/metal2_host_api/semaphore_scope.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "hostdev/remote_dfb_config_layout.h"  // PREFETCHER_PIPE_MAX_CREDIT_LANES
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
@@ -914,7 +915,11 @@ bool DmKernelDisablesImplicitSync(const DataMovementHardwareConfig& dm_config, c
 //     and, when P > 1, divide the ring's entry count.
 // Rules per relay DFB:
 //  5. Not also borrowed_from. Every relayed pipe shares ring_size / entry_size; the DFB's
-//     entry_size equals it and entry_size * num_entries == ring_size (the DFB is exactly the ring).
+//     entry_size divides that entry_size (the relay may page one pipe entry as several pages, e.g.
+//     a K-block as tiles, or one entry per consumer; only with a single-threaded producer) and
+//     entry_size * num_entries is the pipe's
+//     whole entries: ring_size rounded down to a multiple of the pipe's entry_size (the DFB is
+//     exactly the ring the pipe uses; the pipe skips any trailing gap at the wrap).
 //  6. The relayed pipes' receiver sets are pairwise disjoint and their union equals the DFB's
 //     node set; every PRODUCER kernel binds exactly the relayed pipe set under one accessor (so
 //     it is those pipes' receiver kernel and can drive the protocol the relay depends on).
@@ -1136,22 +1141,42 @@ void ValidatePrefetcherPipeSpec(const ProgramSpec& spec, const CollectedSpecData
         }
 
         TT_FATAL(
-            dfb.entry_size == first->entry_size,
-            "DFB '{}' entry_size {} differs from relayed PrefetcherPipeParameter '{}' entry_size {}",
+            dfb.entry_size != 0 && first->entry_size % dfb.entry_size == 0,
+            "DFB '{}' entry_size {} must divide relayed PrefetcherPipeParameter '{}' entry_size {}: a relay DFB "
+            "pages each pipe entry as a whole number of its own entries",
             dfb.unique_id,
             dfb.entry_size,
             first->unique_id,
             first->entry_size);
+        if (dfb.entry_size != first->entry_size) {
+            // Credit lanes stripe whole pipe entries over the relay's producer threads; a relay paged
+            // finer than the pipe is only implemented for one producer thread.
+            for (const auto& rec : collected.dfb_endpoints.at(dfb.unique_id).producers) {
+                TT_FATAL(
+                    rec.kernel->num_threads == 1,
+                    "DFB '{}' pages relayed PrefetcherPipeParameter '{}' entry_size {} as entries of {} bytes, which "
+                    "needs a single-threaded relay producer, but kernel '{}' has {} threads",
+                    dfb.unique_id,
+                    first->unique_id,
+                    first->entry_size,
+                    dfb.entry_size,
+                    rec.kernel->unique_id,
+                    rec.kernel->num_threads);
+            }
+        }
+        const uint32_t usable_ring_size = first->ring_size - first->ring_size % first->entry_size;
         TT_FATAL(
-            static_cast<uint64_t>(dfb.entry_size) * dfb.num_entries == first->ring_size,
-            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) must exactly cover relayed "
-            "PrefetcherPipeParameter '{}' ring_size {}",
+            static_cast<uint64_t>(dfb.entry_size) * dfb.num_entries == usable_ring_size,
+            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) must exactly cover the {} bytes of whole entries in "
+            "relayed PrefetcherPipeParameter '{}' (ring_size {}, entry_size {})",
             dfb.unique_id,
             dfb.entry_size,
             dfb.num_entries,
             static_cast<uint64_t>(dfb.entry_size) * dfb.num_entries,
+            usable_ring_size,
             first->unique_id,
-            first->ring_size);
+            first->ring_size,
+            first->entry_size);
 
         const NodeRangeSet& dfb_nodes = collected.dfb_node_set.at(dfb.unique_id);
         TT_FATAL(
@@ -3118,7 +3143,8 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const DFBNameToSlotMap& dfb_name_to_slot,
     const std::unordered_map<DFBSpecName, bool>& dfb_name_to_is_relay,
     const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id,
-    const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name) {
+    const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name,
+    const DFBNameToIdMap& dfb_name_to_id) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
@@ -3136,7 +3162,20 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
         if (!handle.is_relay) {
             handle.llk_metadata = LLKMetadataFromDfb(*dfb_by_name.at(dfb_binding.dfb_spec_name));
         }
-        out.emplace(dfb_binding.accessor_name, handle);
+        // Borrowed-memory DFB: remember the tensor it is and this kernel's side, for op-to-op R/W inference.
+        if (const auto& borrowed_from = dfb_by_name.at(dfb_binding.dfb_spec_name)->borrowed_from) {
+            handle.borrowed_dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
+            handle.borrowed_tensor_parameter_name = borrowed_from->get();
+            handle.produces = dfb_binding.endpoint_type == DFBEndpointType::PRODUCER;
+            handle.consumes = !handle.produces;
+        }
+        // A self-loop pair may bind one DFB as PRODUCER and as CONSUMER under the same accessor name; that is one
+        // handle, on both sides.
+        auto [it, inserted] = out.try_emplace(dfb_binding.accessor_name, handle);
+        if (!inserted) {
+            it->second.produces |= handle.produces;
+            it->second.consumes |= handle.consumes;
+        }
     }
     return out;
 }
@@ -3629,8 +3668,9 @@ PrefetcherPipeHandlesByKernel ReservePrefetcherPipeSlots(
 
 Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.name);
-    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&mesh_device));
-    const Hal& hal = metal_ctx.hal();
+    MetalContext& metal_ctx = mesh_device.impl().metal_context();
+    MetalEnvImpl& metal_env = mesh_device.impl().metal_env();
+    const Hal& hal = metal_env.get_hal();
 
     // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
     CollectedSpecData collected = CollectSpecData(spec);
@@ -3827,10 +3867,11 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         semaphore_name_to_id[semaphore_name] = sem_id;
     }
 
-    // Pick each semaphore's access mechanism. Resolve against this program's context Hal (the mesh
-    // device's), not the default context, so a non-default-context device resolves its own arch.
+    // Pick each semaphore's access mechanism. Resolve against this program's env (the mesh
+    // device's), not the default context, so a non-default-context device resolves its own arch
+    // and target device.
     const sem_solver::SemaphoreNameToScopeMap semaphore_name_to_scope =
-        sem_solver::ResolveSemaphoreScopes(spec, semaphore_binders, hal);
+        sem_solver::ResolveSemaphoreScopes(spec, semaphore_binders, metal_env);
 
     // Create Kernels (arch-specific)
     for (const KernelSpec& kernel_spec : spec.kernels) {
@@ -3839,7 +3880,12 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
         // Make the local accessor name -> DFB device slot map for this kernel
         const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles = MakeDataflowBufferBindingHandles(
-            kernel_spec, dfb_name_to_slot, dfb_name_to_is_relay, dfb_name_to_prefetcher_pipe_id, collected.dfb_by_name);
+            kernel_spec,
+            dfb_name_to_slot,
+            dfb_name_to_is_relay,
+            dfb_name_to_prefetcher_pipe_id,
+            collected.dfb_by_name,
+            dfb_name_to_id);
         const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
             MakeSemaphoreBindingHandles(kernel_spec, semaphore_binders, semaphore_name_to_id, semaphore_name_to_scope);
 

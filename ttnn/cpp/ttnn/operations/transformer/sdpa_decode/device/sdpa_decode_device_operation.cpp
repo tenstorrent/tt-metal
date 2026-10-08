@@ -183,7 +183,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
 
     if (!operation_attributes.is_causal) {
         if (tensor_args.attn_mask.has_value()) {
-            // Causal attention verification
+            // Non-causal: an explicit mask is permitted, so validate its shape and dtype
             const auto& mask_tensor = tensor_args.attn_mask.value();
             const auto mask_shape = mask_tensor.padded_shape();
             const auto mask_shape_unpadded = mask_tensor.logical_shape();
@@ -220,8 +220,10 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
                 mask_tensor.dtype());
         }
     } else {
-        // Uncausal attention verification
-        TT_FATAL(not tensor_args.attn_mask.has_value(), "Must not have attn_mask tensor for non-causal attention");
+        // Causal: causality is applied from cur_pos on device, so an explicit mask is rejected
+        TT_FATAL(
+            not tensor_args.attn_mask.has_value(),
+            "attn_mask must not be provided when is_causal=True. Pass is_causal=False to use an explicit mask.");
     }
 
     const auto& paged_geo = operation_attributes.paged_cache_geometry;
@@ -259,6 +261,18 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
                 modulo,
                 operation_attributes.sliding_window_size.value());
         }
+    }
+
+    if (operation_attributes.is_causal && tensor_args.cur_pos_tensor.has_value() &&
+        !tensor_args.cur_pos_tensor->is_sharded()) {
+        // The reader fetches only page 0 of an interleaved cur_pos tensor and indexes it by batch,
+        // so every position must sit in that one row. A [B, 1] tensor has B one-entry pages: batch
+        // b > 0 would read page padding as its position and scan far past the KV cache (hang).
+        const auto& cur_pos_shape = tensor_args.cur_pos_tensor->padded_shape();
+        TT_FATAL(
+            cur_pos_shape.volume() == cur_pos_shape[-1],
+            "cur_pos tensor must hold all positions in its last dim (e.g. [B] or [1, B]), got shape {}",
+            cur_pos_shape);
     }
 
     if (operation_attributes.paged_attention) {
@@ -507,6 +521,14 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
                 "V tensor hidden dimension ({}) must equal Q tensor hidden dimension ({})",
                 v_shape[-1],
                 D);
+        }
+        if (operation_attributes.is_causal && tensor_args.cur_pos_tensor.has_value() &&
+            !tensor_args.cur_pos_tensor->is_sharded()) {
+            TT_FATAL(
+                tensor_args.cur_pos_tensor->padded_shape()[-1] >= B,
+                "cur_pos tensor must have at least one position per batch ({}), got shape {}",
+                B,
+                tensor_args.cur_pos_tensor->padded_shape());
         }
         // Check valid seqlen
         for (unsigned int cur_pos_val : operation_attributes.cur_pos) {

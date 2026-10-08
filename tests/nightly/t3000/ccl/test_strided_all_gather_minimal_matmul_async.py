@@ -65,6 +65,8 @@ def run_strided_all_gather_minimal_matmul_impl(
     read_local_slice_from_input=False,
     mm_signal_aggregator_mode=ttnn.MMSignalAggregatorMode.Auto,
     fuse_swiglu=False,
+    residual_memory_config=None,
+    gate_memory_config=None,
 ):
     torch.manual_seed(0)
 
@@ -207,7 +209,7 @@ def run_strided_all_gather_minimal_matmul_impl(
                 device=mesh_device,
                 layout=layout,
                 dtype=ag_input_dtype,
-                memory_config=mem_config_input,
+                memory_config=residual_memory_config if residual_memory_config is not None else mem_config_input,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     mesh_device, dims=[other_dim, dim if shard_weights else None], mesh_shape=tuple(mesh_device.shape)
                 ),
@@ -217,7 +219,7 @@ def run_strided_all_gather_minimal_matmul_impl(
                 device=mesh_device,
                 layout=layout,
                 dtype=ag_input_dtype,
-                memory_config=mem_config_input,
+                memory_config=gate_memory_config if gate_memory_config is not None else mem_config_input,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     mesh_device, dims=[None, dim if shard_weights else None], mesh_shape=tuple(mesh_device.shape)
                 ),
