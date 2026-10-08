@@ -30,7 +30,8 @@ MODULES = {
 SOURCES = {
     "unary": "eltwise_unary_sfpu_perf.cpp",
     "typecast": "eltwise_unary_typecast_perf.cpp",
-    "binary": "eltwise_binary_sfpu_perf.cpp",
+    # Shared with the functional tests; only the perf module is compiled here.
+    "binary": "sfpu_binary_test.cpp",
 }
 
 _BINARY_OP = re.compile(r"SFPU_BINARY_OPERATION\s*=\s*ckernel::BinaryOp::(\w+)")

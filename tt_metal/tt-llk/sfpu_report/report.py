@@ -692,7 +692,8 @@ def footer(summaries):
         ]
         per_op = {}
         for f in findings([x]):
-            fmts = per_op.setdefault(f["op"], [])
+            # A broadcast row's label ("SfpuElwadd (bcast Row)") is not an --ops name.
+            fmts = per_op.setdefault(f["op"].split(" (", 1)[0], [])
             fmts += [m for m in f["fmt"].split(",") if m not in fmts]
         if per_op:
             lines.append(f"# only what regressed, {_ARCH[x['arch']]}")
