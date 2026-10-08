@@ -13,6 +13,7 @@
 #include <cstdint>
 #include "api/compile_time_args.h"
 
+#include "overlay/fds_signalling.hpp"
 #include "quasar_fds_common.h"
 
 using fds_filter::kPayloadGo;
@@ -29,7 +30,7 @@ constexpr uint32_t kTimeoutFloorCapture = 0x5A5A0032;
 
 void kernel_main() {
     constexpr uint32_t l1_address = get_named_compile_time_arg_val("l1_address");
-    constexpr uint32_t dispatch_mask = get_named_compile_time_arg_val("dispatch_mask");
+    constexpr uint32_t dispatch_mask = overlay::fds_signalling::dispatch_lane_mask;
     constexpr uint32_t long_filter = get_named_compile_time_arg_val("long_filter");
     constexpr uint32_t floor_filter = get_named_compile_time_arg_val("floor_filter");
     constexpr uint32_t silence_iterations = get_named_compile_time_arg_val("silence_iterations");

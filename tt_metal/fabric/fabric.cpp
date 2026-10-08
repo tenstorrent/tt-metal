@@ -37,25 +37,6 @@ class Program;
 
 namespace {
 
-// checks if the connection b/w src and dst is a connection b/w TG gateway and a remote chip
-bool is_TG_gateway_connection(
-    const tt::tt_fabric::FabricNodeId& src_fabric_node_id, const tt::tt_fabric::FabricNodeId& dst_fabric_node_id) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::TG) {
-        return false;
-    }
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    tt::ChipId src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-    tt::ChipId dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
-    const auto mmio_chip_id1 =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(src_chip_id);
-    const auto mmio_chip_id2 =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dst_chip_id);
-
-    // both of the chips should have the same associated mmio device and
-    // one of the chips should be the mmio device itself
-    return mmio_chip_id1 == mmio_chip_id2 && (mmio_chip_id1 == src_chip_id || mmio_chip_id2 == dst_chip_id);
-}
-
 bool is_neighbor_in_direction(
     const tt::tt_fabric::ControlPlane& control_plane,
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
@@ -141,9 +122,7 @@ void append_fabric_connection_rt_args(
     const auto& fabric_context = control_plane.get_fabric_context();
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
-    // Make an exception for TG gateway connections. TG gateways are on a different mesh compared to remote chips
-    // but the routing is simple and doesn't need any special inter-mesh handling
-    if (!is_2d_fabric && !is_TG_gateway_connection(src_fabric_node_id, dst_fabric_node_id)) {
+    if (!is_2d_fabric) {
         TT_FATAL(
             src_fabric_node_id.mesh_id == dst_fabric_node_id.mesh_id,
             "Currently only the chips on the same mesh are supported for 1D fabric. Src: {}, Dst: {}",
@@ -487,8 +466,6 @@ void append_routing_plane_connection_manager_rt_args_impl(
 
     // 2) Append additional info for 2D Mesh
     if (fabric_context.is_2D_routing_enabled()) {
-        auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-        worker_args.push_back(mesh_shape[1]);                     // ew_dim
         worker_args.push_back(src_fabric_node_id.chip_id);        // my_chip_id
         worker_args.push_back(src_fabric_node_id.mesh_id.get());  // my_mesh_id
 
@@ -748,6 +725,10 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
         default: TT_FATAL(false, "Unsupported FabricApiType: {}", static_cast<int>(api_type));
     }
     if (fabric_context.is_2D_routing_enabled()) {
+        // `api_type` selects the API *surface* -- Linear (1D) versus Mesh (2D). It is not an ABI
+        // choice: there is one 2D codec, so express is a flavour of mesh routing rather than a third
+        // api_type. Exact mesh shape is read from routing_l1_info_t by route-producing workers, while
+        // configuration-wide header sizing and express capacity are injected by CreateKernel.
         defines.push_back({"FABRIC_2D", "1"});
     }
     return defines;
@@ -781,7 +762,7 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
     const auto& fabric_context = control_plane.get_fabric_context();
 
     std::vector<uint32_t> worker_args;
-    worker_args.reserve(dst_nodes.size() * 4 + (fabric_context.is_2D_routing_enabled() ? 3 + dst_nodes.size() * 2 : 0));
+    worker_args.reserve(dst_nodes.size() * 4 + (fabric_context.is_2D_routing_enabled() ? 2 + dst_nodes.size() * 2 : 0));
 
     for (size_t i = 0; i < dst_nodes.size(); i++) {
         const auto& dst_node = dst_nodes[i];
@@ -819,8 +800,6 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
 
     // 2D metadata
     if (fabric_context.is_2D_routing_enabled()) {
-        auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-        worker_args.push_back(mesh_shape[1]);                     // ew_dim
         worker_args.push_back(src_fabric_node_id.chip_id);        // my_chip_id
         worker_args.push_back(src_fabric_node_id.mesh_id.get());  // my_mesh_id
 

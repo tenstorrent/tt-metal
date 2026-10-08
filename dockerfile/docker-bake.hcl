@@ -67,7 +67,7 @@ variable "TT_SMI_VERSION" {
   # Bake always passes this to the main targets, so it takes precedence over the
   # ARG TT_SMI_VERSION default in dockerfile/Dockerfile (used only for standalone
   # `docker build` without Bake). Keep the two in sync.
-  default = "5.2.0"
+  default = "6.7.0"
 }
 
 variable "UV_IMAGE" {

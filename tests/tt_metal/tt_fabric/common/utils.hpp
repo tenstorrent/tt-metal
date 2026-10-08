@@ -93,4 +93,7 @@ void expect_mesh_graph_host_topology_matches_runtime(const ControlPlane& control
 // these structural checks). Returns FABRIC_2D when no custom MGD path is set.
 tt::tt_fabric::FabricConfig fabric_config_for_active_mgd();
 
+// Writes an inline descriptor to a PID-qualified temporary file and returns its path.
+std::string write_temp_descriptor(const std::string& name, const std::string& text_proto);
+
 }  // namespace tt::tt_fabric::fabric_router_tests
