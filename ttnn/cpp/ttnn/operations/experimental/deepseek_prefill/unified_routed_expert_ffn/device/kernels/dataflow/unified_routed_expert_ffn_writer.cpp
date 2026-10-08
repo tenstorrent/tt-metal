@@ -39,10 +39,19 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include "../adaptive_chunk.hpp"
 #include "../weight_runs.hpp"
 
 constexpr uint32_t TILE_HEIGHT = 32;
+
+// Stage zones, off by default; see the reader for how UNIFIED_FFN_STAGE_PROFILE is set and the
+// record budget.
+#ifdef UNIFIED_FFN_STAGE_PROFILE
+#define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+#else
+#define MaybeDeviceZoneScope(name)
+#endif
 
 void kernel_main() {
     Noc noc;
@@ -281,7 +290,11 @@ void kernel_main() {
                     const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
                     for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
                         ++up_seq;
-                        up_go_sem.wait_min(up_seq);
+                        {
+                            MaybeDeviceZoneScope("wr_wu_go_wait");
+                            up_go_sem.wait_min(up_seq);
+                        }
+                        MaybeDeviceZoneScope("wr_wu_send");
                         const uint32_t l1_w_up_block_start = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
                         uint32_t l1_w_up = l1_w_up_block_start;
                         // N-OOB hidden padding columns left UNWRITTEN: their up output lands on
@@ -309,9 +322,13 @@ void kernel_main() {
                         // mcast_done until it needs the slot again, so its next block's DRAM
                         // read overlaps this multicast -- which is the whole point.
                         if constexpr (writer_mcasts_in1) {
+                            MaybeDeviceZoneScope("wr_wgu_mcast");
                             ++mc_seq;
-                            mcast_go_sem.wait_min(mc_seq);
-                            in1_ready_sem.wait(in1_num_receivers);
+                            {
+                                MaybeDeviceZoneScope("wr_wgu_ready_wait");
+                                mcast_go_sem.wait_min(mc_seq);
+                                in1_ready_sem.wait(in1_num_receivers);
+                            }
                             in1_ready_sem.set(0);
                             CircularBuffer cb_in1_gate_buf(cb_in1_gate);
                             const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
@@ -385,7 +402,11 @@ void kernel_main() {
                     const uint32_t down_slot_bytes = d_in1_block_num_tiles * down_tile_bytes;
                     for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
                         ++down_seq;
-                        down_go_sem.wait_min(down_seq);
+                        {
+                            MaybeDeviceZoneScope("wr_wd_go_wait");
+                            down_go_sem.wait_min(down_seq);
+                        }
+                        MaybeDeviceZoneScope("wr_wd_read");
                         uint32_t l1_w = down_cb_base + (down_blk % kDownNumSlots) * down_slot_bytes +
                                         down_split_k * per_core_N_d * down_tile_bytes;
                         ++down_blk;
@@ -426,12 +447,16 @@ void kernel_main() {
             // (runtime) rows; the rest are MAC-skipped zeros that map onto other
             // cores' rows and must not be emitted (the local_row < per_core_M guard below).
             const uint32_t sb_m_bound = d_in1_num_subblocks_M;
+            MaybeDeviceZoneScope("wr_out");
             for (uint32_t sb_m = 0; sb_m < sb_m_bound; ++sb_m) {
                 for (uint32_t sb_n = 0; sb_n < d_in1_num_subblocks_N; ++sb_n) {
                     const uint32_t this_w =
                         (sb_n + 1 == d_in1_num_subblocks_N) ? d_out_subblock_w_tail : d_out_subblock_w;
                     const uint32_t this_tiles = this_w * d_out_subblock_h;
-                    cb_out_buf.wait_front(this_tiles);
+                    {
+                        MaybeDeviceZoneScope("wr_out_wait");
+                        cb_out_buf.wait_front(this_tiles);
+                    }
                     uint32_t subblock_tile_offset = 0;
                     for (uint32_t i = 0; i < d_out_subblock_h; ++i) {
                         for (uint32_t j = 0; j < this_w; ++j) {
@@ -496,6 +521,7 @@ void kernel_main() {
     }  // end per-local-expert loop
     // Ensure all outstanding writes complete at the destination before the
     // kernel returns (the next dispatched op may read this output).
+    MaybeDeviceZoneScope("wr_out_barrier");
     noc.async_write_barrier();
     // UP_SPLIT issues only per-K-block-barriered NoC-1 `up` reads (no NoC-1
     // worker multicast and no NoC-1 atomics), so no extra NoC-1 drain is needed

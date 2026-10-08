@@ -592,6 +592,7 @@ void kernel_main() {
     }
 
     if (out_pending) {
+        MaybeDeviceZoneScope("writer_out_final_drain");
         noc.async_write_barrier();
         out_buf.pop_front(out_pending);
     }

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <initializer_list>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -83,6 +84,17 @@ uint32_t nd_shard_n_tiles(const ttnn::Tensor& w) {
         return 0;
     }
     return static_cast<uint32_t>(spec->shard_shape[-1]) / TILE;
+}
+
+// UNIFIED_FFN_STAGE_PROFILE=1 (set before process start) compiles the kernels' stage zones in for
+// device-profiler bottleneck runs. Off by default so ordinary profiler sweeps see the plain kernels.
+bool stage_profile_enabled() {
+    const char* value = std::getenv("UNIFIED_FFN_STAGE_PROFILE");
+    if (value == nullptr) {
+        return false;
+    }
+    const std::string_view setting(value);
+    return setting != "0" && setting != "false" && setting != "False" && setting != "off";
 }
 
 // create_descriptor pushes kernels in this order. override_runtime_arguments indexes them.
@@ -956,6 +968,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         tt::tt_metal::TensorAccessorArgs(t.down_biases[0].buffer()).append_to(reader_ct_args);
         reader_defines.emplace_back("FUSE_BIAS", "1");
     }
+    const bool stage_profile = stage_profile_enabled();
+    if (stage_profile) {
+        reader_defines.emplace_back("UNIFIED_FFN_STAGE_PROFILE", "1");
+    }
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
@@ -1037,6 +1053,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = core_range_set;
     writer_kernel_desc.compile_time_args = std::move(writer_ct_args);
+    if (stage_profile) {
+        writer_kernel_desc.defines.emplace_back("UNIFIED_FFN_STAGE_PROFILE", "1");
+    }
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
     // Compute kernel compile-time args: positional + named CB ids.
@@ -1146,6 +1165,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // activation and down bias after the down matmul. Validation restricts this to
         // the activations that have that branch.
         compute_defines.emplace_back("FUSE_BIAS", "1");
+    }
+    if (stage_profile) {
+        compute_defines.emplace_back("UNIFIED_FFN_STAGE_PROFILE", "1");
     }
 
     tt::tt_metal::KernelDescriptor compute_kernel_desc;

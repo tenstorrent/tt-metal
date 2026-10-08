@@ -106,6 +106,14 @@
 #include "api/compute/clamped_silu_glu.h"
 #endif
 
+// Stage zones, off by default; see the reader for how UNIFIED_FFN_STAGE_PROFILE is set and the
+// record budget.
+#ifdef UNIFIED_FFN_STAGE_PROFILE
+#define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+#else
+#define MaybeDeviceZoneScope(name)
+#endif
+
 namespace {
 
 // Packer-completion barrier for the K-block boundary of a PACKER_L1_ACC phase.
@@ -214,8 +222,12 @@ FORCE_INLINE void matmul_phase(
     for (uint32_t block = 0; block < num_blocks; ++block) {
         // The reader pushes the FULL compile-time-max activated block (filling only
         // its first per_core_M tile-rows), so this wait/pop stays compile-time sized.
-        in0_cb.wait_front(in0_block_num_tiles);
-        in1_cb.wait_front(in1_block_num_tiles);
+        {
+            MaybeDeviceZoneScope("cmp_d_wait");
+            in0_cb.wait_front(in0_block_num_tiles);
+            in1_cb.wait_front(in1_block_num_tiles);
+        }
+        MaybeDeviceZoneScope("cmp_d_mm");
 
         // Reduce only the REAL K-tiles this block covers. Neither operand is
         // zero-filled past real_k_tiles — the down weights hold stale L1 and the
@@ -295,6 +307,7 @@ FORCE_INLINE void matmul_phase(
     }
     // Make the accumulated partials visible to the second-pass copy below.
     partials_cb.push_back(out_block_num_tiles);
+    MaybeDeviceZoneScope("cmp_d_out");
 
     // After the K-loop: partials_cb_id has EFF_OUT tiles holding the final
     // accumulated sum. Move them through dst into final_cb_id, applying silu on
@@ -490,6 +503,14 @@ FORCE_INLINE void matmul_phase_fused_gu(
             //  restore it to the gate/up weight format before resuming the matmul
             //  (SrcB still holds x_cb_id — the BH tilize path never touches it);
             //  then restore the partials packer + L1_ACC state for this block.
+#ifdef UNIFIED_FFN_STAGE_PROFILE
+            {
+                // Profile-only: split the reader's x arrival out of the tilize zone below.
+                MaybeDeviceZoneScope("cmp_x_wait");
+                CircularBuffer(x_rm_cb_id).wait_front(X_BLOCK_TILES_MAX);
+            }
+#endif
+            MaybeDeviceZoneScope("cmp_tilize");
 #ifdef PACKER_L1_ACC
             PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
@@ -522,9 +543,13 @@ FORCE_INLINE void matmul_phase_fused_gu(
             PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
 #endif
         }
-        x_cb.wait_front(X_BLOCK_TILES_MAX);
-        gate_cb.wait_front(in1_block_num_tiles);
-        up_cb.wait_front(in1_block_num_tiles);
+        {
+            MaybeDeviceZoneScope("cmp_gu_wait");
+            x_cb.wait_front(X_BLOCK_TILES_MAX);
+            gate_cb.wait_front(in1_block_num_tiles);
+            up_cb.wait_front(in1_block_num_tiles);
+        }
+        MaybeDeviceZoneScope("cmp_gu_mm");
 
         int in0_index_subblock_offset = 0;
         uint32_t partials_slot_idx = 0;
@@ -616,6 +641,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
     // Make the accumulated partials visible to the second-pass copy loops.
     partials_gu_cb.push_back(EFF_OUT_MAX);
     partials_up_cb.push_back(EFF_OUT_MAX);
+    MaybeDeviceZoneScope("cmp_silu");
 
     // After K-loop: partials_gu holds gate-matmul accumulator,
     // partials_up holds up-matmul accumulator. Copy each to its intermed
@@ -725,6 +751,7 @@ FORCE_INLINE void binary_activation_phase(
     uint32_t eff_out_tiles,
     uint32_t gate_bias_cb_id = 0,
     uint32_t up_bias_cb_id = 0) {
+    MaybeDeviceZoneScope("cmp_act");
     // Adaptive per_core_M: this core produces eff_out_tiles = per_core_M * pcN
     // activated tiles this chunk (0 if it owns no row -> nothing to do).
     const uint32_t EFF_OUT = eff_out_tiles;
@@ -827,6 +854,7 @@ FORCE_INLINE void binary_activation_phase(
 template <uint32_t out_block_num_tiles, uint32_t out_subblock_num_tiles>
 FORCE_INLINE void multiply_phase(
     uint32_t gate_cb_id, uint32_t up_cb_id, uint32_t activated_cb_id, uint32_t eff_out_tiles) {
+    MaybeDeviceZoneScope("cmp_mul");
     CircularBuffer gate_cb(gate_cb_id);
     CircularBuffer up_cb(up_cb_id);
     CircularBuffer activated_cb(activated_cb_id);

@@ -1267,6 +1267,7 @@ void kernel_main() {
                 }
             }
             if (prefetch_next_x) {
+                MaybeDeviceZoneScope("reader_nextx_wait");
                 noc_async_read_set_trid(0);
                 noc_async_read_barrier_with_trid(NEXT_X_TRID);
                 if constexpr (INPUT_FORMAT == 0) {

@@ -30,8 +30,20 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include "../adaptive_chunk.hpp"
 #include "../weight_runs.hpp"
+
+// Stage zones for bottleneck runs, off by default so ordinary profiler sweeps do not pay for the
+// extra records. Set UNIFIED_FFN_STAGE_PROFILE=1 before process start; the program factory turns
+// it into this define for all three kernels. Budget: at most 4 records per gate/up K-block and 4 per
+// down K-block on any RISC (plus one per output subblock on the writer) against a 125-per-RISC
+// cap, so one chunk of up to 14 gate/up K-blocks resolves fully; multi-chunk runs overflow.
+#ifdef UNIFIED_FFN_STAGE_PROFILE
+#define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+#else
+#define MaybeDeviceZoneScope(name)
+#endif
 
 void kernel_main() {
     // -------------------------- runtime args ------------------------------
@@ -298,6 +310,7 @@ void kernel_main() {
     const uint32_t counts_page_size = counts_acc.get_aligned_page_size();
     const uint32_t idx_page_size = idx_acc.get_aligned_page_size();
     {
+        MaybeDeviceZoneScope("rd_counts");
         // COUNTS_BCAST: one core reads the two pages and multicasts them to the grid.
         // Every core needs counts/idx to derive its chunking, but all of them hitting the
         // same two DRAM pages at once serialises on a single bank. One read plus one L1
@@ -571,7 +584,11 @@ void kernel_main() {
             // work begins immediately. For core (0,0) (both senders), in0
             // runs first then in1, ~60µs sequentially — same as before.
             if (is_in0_sender) {
-                in0_ready_sem.wait(in0_num_receivers);
+                MaybeDeviceZoneScope("rd_x_send");
+                {
+                    MaybeDeviceZoneScope("rd_x_ready_wait");
+                    in0_ready_sem.wait(in0_num_receivers);
+                }
                 in0_ready_sem.set(0);
 
                 uint32_t l1_x = x_stage_obj.get_write_ptr();
@@ -645,7 +662,10 @@ void kernel_main() {
                         }
                     }
                 }
-                noc_read.async_read_barrier();
+                {
+                    MaybeDeviceZoneScope("rd_x_read_wait");
+                    noc_read.async_read_barrier();
+                }
 
                 // Multicast only the real rows of the block. Valid tile-rows form a
                 // contiguous prefix from block_start; padding rows past the token
@@ -706,6 +726,7 @@ void kernel_main() {
             }
 
             if (is_in1_sender) {
+                MaybeDeviceZoneScope("rd_wg_send");
                 if constexpr (writer_mcasts_in1) {
                     // The writer multicasts, so it owns the receivers' ready handshake. This
                     // RISC only needs its own slot back: cb_in1_* is double-buffered, so the
@@ -715,6 +736,7 @@ void kernel_main() {
                     // block, which is the whole point.
                     ++mc_seq;
                     if (mc_seq >= 3) {
+                        MaybeDeviceZoneScope("rd_wg_slot_wait");
                         mcast_done_sem.wait_min(mc_seq - 2);
                     }
                 } else {
@@ -779,6 +801,7 @@ void kernel_main() {
 
                 // UP_SPLIT: wait for the writer's NoC-1 `up` read before mcast.
                 if constexpr (up_split) {
+                    MaybeDeviceZoneScope("rd_wu_done_wait");
                     up_done_sem.wait_min(up_seq);
                 }
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; the
@@ -847,10 +870,12 @@ void kernel_main() {
 
             // Step 3: receivers wait for both valid semaphores and push.
             if (!is_in0_sender) {
+                MaybeDeviceZoneScope("rd_x_valid_wait");
                 in0_valid_sem.wait(IN0_VALID);
                 x_stage_obj.push_back(g_in0_block_tiles_max);
             }
             if (!is_in1_sender) {
+                MaybeDeviceZoneScope("rd_wgu_valid_wait");
                 in1_valid_sem.wait(IN1_VALID);
                 cb_in1_gate_obj.push_back(g_in1_block_num_tiles);
                 if constexpr (reader_mcasts_up) {
@@ -867,6 +892,7 @@ void kernel_main() {
         // phase-4 mcast waits forever for acks that were eaten.
         if constexpr (writer_mcasts_in1) {
             if (is_in1_sender) {
+                MaybeDeviceZoneScope("rd_wg_drain_wait");
                 mcast_done_sem.wait_min(mc_seq);
             }
         }
@@ -884,6 +910,7 @@ void kernel_main() {
         // Sender NoC addr for the per-K-block ready-sem inc is looked up by
         // index kb from the same table.
         // GRID_X_NOC comes from compile-time arg now (= GRID_X in program factory).
+        MaybeDeviceZoneScope("rd_down");
         const uint32_t mrow_first_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 0);
         const uint32_t mrow_first_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 1);
         const uint32_t mrow_last_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * (GRID_X_NOC - 1) + 0);
@@ -927,6 +954,7 @@ void kernel_main() {
             // below on NoC 1.
             uint32_t in1_block_start = 0;
             if (is_in1_sender) {
+                MaybeDeviceZoneScope("rd_wd_issue");
                 in1_ready_sem.wait(in1_num_receivers);
                 in1_ready_sem.set(0);
                 uint32_t l1_w = cb_in1_down_obj.get_write_ptr();
@@ -961,10 +989,12 @@ void kernel_main() {
             // that is BOTH senders (gy==0 && gx==kb) the DRAM-read barrier is no
             // longer hidden under the activated wait — measure before keeping.
             if (is_in1_sender) {
+                MaybeDeviceZoneScope("rd_wd_send");
                 noc_read.async_read_barrier();
                 // DOWN_SPLIT: the writer's block must have landed before it is multicast
                 // (or consumed locally at GRID_Y == 1).
                 if constexpr (split_down) {
+                    MaybeDeviceZoneScope("rd_wd_done_wait");
                     down_done_sem.wait_min(down_seq);
                 }
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
@@ -1010,7 +1040,11 @@ void kernel_main() {
                 // cb_in0_down_full is pushed FULL below, and the down matmul
                 // MAC-skips the rows past per_core_M.
                 const uint32_t re_act_tiles = per_core_M * in0_block_w_d;
-                cb_activated_obj.wait_front(act_tiles_max);
+                {
+                    MaybeDeviceZoneScope("rd_act_wait");
+                    cb_activated_obj.wait_front(act_tiles_max);
+                }
+                MaybeDeviceZoneScope("rd_act_send");
                 act_ready_sem.wait(GRID_X_NOC - 1);
                 act_ready_sem.set(0);
 
@@ -1056,6 +1090,7 @@ void kernel_main() {
 
             // Step 5: receivers wait for both valid sems and push.
             if (!is_act_sender) {
+                MaybeDeviceZoneScope("rd_act_valid_wait");
                 act_valid_sem.wait(ACT_VALID);
             } else {
                 // The sender's own copy arrives via the INCL_SRC loopback, so it needs a wait
@@ -1070,6 +1105,7 @@ void kernel_main() {
             cb_in0_down_full_obj.push_back(d_in0_block_num_tiles);
 
             if (!is_in1_sender) {
+                MaybeDeviceZoneScope("rd_wd_valid_wait");
                 in1_valid_sem.wait(IN1_VALID);
             }
             cb_in1_down_obj.push_back(d_in1_block_num_tiles);
