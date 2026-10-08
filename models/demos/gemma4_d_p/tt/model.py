@@ -290,6 +290,7 @@ class Gemma4Model:
         on_layer_complete=None,
         d2h_service=None,
         metadata_msg=None,
+        chunked_batch=None,
     ):
         """Prefill one user's chunk and return its final decoder hidden states.
 
@@ -301,6 +302,14 @@ class Gemma4Model:
         seq_len = hidden_states.shape[2] * tp
         if hidden_states.shape[0] != 1 or hidden_states.shape[1] != 1:
             raise ValueError("Ring prefill processes one user per call")
+        if chunked_batch is not None:
+            plan = chunked_batch.plan
+            if self.prefill_chunk_size != plan.chunk_size or seq_len != plan.packed_size // plan.cp:
+                raise ValueError("Fixed batching requires 1K cache geometry and 8K packed tokenwise inputs")
+            if self._rope_prefill_positions is None or not self._prefill_metadata_external:
+                raise ValueError("Fixed batching requires staged per-request positions and metadata")
+            if d2h_service is not None or on_layer_complete is not None:
+                raise ValueError("Fixed-batch acknowledgements are emitted by its runtime after replay")
         if d2h_service is not None and metadata_msg is None:
             raise ValueError("metadata_msg is required for D2H layer acknowledgements")
         if not self._prefill_metadata_external:
@@ -336,6 +345,7 @@ class Gemma4Model:
                 chunk_start_idx=chunk_start_idx,
                 packed_global_rope=packed_rope if layer_type == "full_attention" else None,
                 packed_sliding_rope=packed_rope if layer_type == "sliding_attention" else None,
+                chunked_batch=chunked_batch,
             )
             if d2h_service is not None:
                 ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)

@@ -99,6 +99,7 @@ class Gemma4DecoderLayer:
         chunk_start_idx=0,
         packed_global_rope=None,
         packed_sliding_rope=None,
+        chunked_batch=None,
     ):
         """Prefill one CP-sharded chunk."""
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
@@ -114,6 +115,7 @@ class Gemma4DecoderLayer:
             chunk_start_idx=chunk_start_idx,
             packed_global_rope=packed_global_rope,
             packed_sliding_rope=packed_sliding_rope,
+            chunked_batch=chunked_batch,
         )
 
         act_mc = prefill_short_lived_memcfg()

@@ -151,6 +151,7 @@ def write_chunk_to_global_ring_cache(
             layer_idx=layer_idx,
             num_layers=num_layers,
             kv_actual_global=kv_actual_global_t,
+            valid_global=getattr(prefill_metadata, "valid_global", None),
             cluster_axis=mesh_config.cp_axis,
         )
     else:
@@ -330,6 +331,7 @@ def write_chunk_to_sliding_ring_cache(
                 layer_idx=layer_idx,
                 num_layers=num_layers,
                 kv_actual_global=kv_actual_global_t,
+                valid_global=getattr(prefill_metadata, "valid_global", None),
                 cluster_axis=mesh_config.cp_axis,
             )
         else:

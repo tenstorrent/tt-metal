@@ -219,11 +219,12 @@ def read_slot_kv_and_check_pcc(table, device_map, slot_id, real_len, trace_dir):
     return compare_slot_cache(read_heads, slot_id, real_len, trace_dir)
 
 
-def read_cache_tensor(tensor, slot_id, real_len):
+def read_cache_tensor(tensor, slot_id, real_len, *, chunk_size=None):
     """Gather one slot's populated prefix and restore chunk-major CP order."""
     cp, tp = Gemma4ServiceConfig.MESH_SHAPE
-    local_chunk = Gemma4ServiceConfig.CHUNK_SIZE // cp
-    if real_len % Gemma4ServiceConfig.CHUNK_SIZE:
+    chunk_size = chunk_size or Gemma4ServiceConfig.CHUNK_SIZE
+    local_chunk = chunk_size // cp
+    if real_len % chunk_size:
         raise ValueError("Command-queue validation requires complete prefill chunks")
     selected = ttnn.slice(
         tensor,
@@ -241,7 +242,7 @@ def read_cache_tensor(tensor, slot_id, real_len):
         ttnn.deallocate(row_major)
     shards = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(host)]
     local_heads, width = shards[0].shape[1], shards[0].shape[3]
-    chunks = real_len // Gemma4ServiceConfig.CHUNK_SIZE
+    chunks = real_len // chunk_size
     gathered = torch.empty((local_heads * tp, chunks, cp, local_chunk, width), dtype=shards[0].dtype)
     for row in range(cp):
         for column in range(tp):
@@ -250,11 +251,11 @@ def read_cache_tensor(tensor, slot_id, real_len):
     return gathered.reshape(local_heads * tp, real_len, width)
 
 
-def check_table_samples(table, device_map, layer, slot_id, config_id, actual):
+def check_table_samples(table, device_map, layer, slot_id, config_id, actual, *, chunk_size=None):
     """Check each CP rank's first and last populated block against the table."""
     from models.demos.common.prefill.runners.prefill_producer import _decode_bfp8_chunk, _resolve_unique_id
 
-    chunk_size = Gemma4ServiceConfig.CHUNK_SIZE
+    chunk_size = chunk_size or Gemma4ServiceConfig.CHUNK_SIZE
     local_chunk = chunk_size // Gemma4ServiceConfig.MESH_SHAPE[0]
     last_chunk = actual.shape[0] - chunk_size
     for row in range(Gemma4ServiceConfig.MESH_SHAPE[0]):
