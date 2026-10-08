@@ -15,8 +15,8 @@
 
 namespace ttnn::operations::transformer::sdpa::ring_joint {
 
-// Bounds the reducer's serial merge, one pass per sender.
-constexpr uint32_t kKSplitMaxCount = 4;
+// Bounds the reducer's serial merge, one pass per sender. The writer's ready semaphore holds one bit per sender.
+constexpr uint32_t kKSplitMaxCount = 8;
 
 struct KSplitRange {
     uint32_t begin;
@@ -69,6 +69,24 @@ inline KSplitRange sliding_ksplit_range(uint32_t num_items, uint32_t split_idx, 
         return split_idx + 1 == split_count ? KSplitRange{0, num_items} : KSplitRange{0, 0};
     }
     return ksplit_range(num_items, split_idx, split_count);
+}
+
+// Bit s set when sender s (every split but the last) owns K chunks. Dense slices are not monotone in num_valid, so
+// the reducer ORs this over ring iterations.
+inline uint32_t ksplit_senders(uint32_t num_valid, uint32_t split_count) {
+    uint32_t mask = 0;
+    for (uint32_t s = 0; s + 1 < split_count; ++s) {
+        mask |= ksplit_range(num_valid, s, split_count).empty() ? 0u : 1u << s;
+    }
+    return mask;
+}
+
+inline uint32_t sliding_ksplit_senders(uint32_t num_items, uint32_t split_count) {
+    uint32_t mask = 0;
+    for (uint32_t s = 0; s + 1 < split_count; ++s) {
+        mask |= sliding_ksplit_range(num_items, s, split_count).empty() ? 0u : 1u << s;
+    }
+    return mask;
 }
 
 }  // namespace ttnn::operations::transformer::sdpa::ring_joint
