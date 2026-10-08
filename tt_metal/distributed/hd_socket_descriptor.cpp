@@ -28,7 +28,8 @@ void HDSocketDescriptor::populate_from_owner(
     uint32_t fifo_size_arg,
     uint32_t config_buffer_address_arg,
     MeshDevice* mesh_device,
-    const MeshCoreCoord& core) {
+    const MeshCoreCoord& core,
+    bool core_is_tensix) {
     socket_type = type;
     shm_name = shm.name();
     shm_size = shm.size();
@@ -52,9 +53,16 @@ void HDSocketDescriptor::populate_from_owner(
     core_x = core.core_coord.x;
     core_y = core.core_coord.y;
     mesh_coord.assign(core.device_coord.coords().begin(), core.device_coord.coords().end());
-    auto vc = mesh_device->worker_core_from_logical_core(core.core_coord);
-    virtual_core_x = vc.x;
-    virtual_core_y = vc.y;
+    // Translated only for a Tensix socket: the worker grid cannot translate an ETH core -- it
+    // throws for some and returns a wrong core for the rest.
+    if (core_is_tensix) {
+        auto vc = mesh_device->worker_core_from_logical_core(core.core_coord);
+        virtual_core_x = vc.x;
+        virtual_core_y = vc.y;
+    } else {
+        virtual_core_x = core.core_coord.x;
+        virtual_core_y = core.core_coord.y;
+    }
     pcie_alignment = mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST);
 }
 

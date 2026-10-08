@@ -1169,6 +1169,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["ENABLE_DEADLOCK_AVOIDANCE"] = final_enable_deadlock_avoidance ? 1 : 0;
     named_args["ENABLE_SPEEDY_VC0"] = enable_speedy_vc0 ? 1 : 0;
     named_args["IS_INTERMESH_ROUTER"] = this->is_inter_mesh;
+    // E2H host bridge off by default; ct_args.hpp reads these in every kernel that includes it.
+    named_args["ENABLE_E2H_BRIDGE"] = 0;
+    named_args["E2H_BRIDGE_BLOCK_ADDR"] = 0;
+    named_args["E2H_BRIDGE_CAPACITY"] = static_cast<uint32_t>(this->channel_buffer_size);
     named_args["IS_HANDSHAKE_SENDER"] = is_handshake_master;
     named_args["HANDSHAKE_ADDR"] = static_cast<uint32_t>(this->handshake_address);
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
