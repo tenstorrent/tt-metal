@@ -80,10 +80,10 @@ Buffer* gamma_buffer(const ToyScaledAddInputs& t) { return t.gamma.has_value() ?
 // Every CB id this op uses must exist on the device it runs on.
 void check_cb_ids() {
     TT_FATAL(
-        cb::GAMMA < hal::get_arch_num_circular_buffers(),
+        cb::GAMMA < hal::get_num_dataflow_buffers(),
         "toy_scaled_add: circular-buffer id {} exceeds the {} circular buffers of this architecture",
         cb::GAMMA,
-        hal::get_arch_num_circular_buffers());
+        hal::get_num_dataflow_buffers());
 }
 
 KernelDescriptor compute_kernel(
