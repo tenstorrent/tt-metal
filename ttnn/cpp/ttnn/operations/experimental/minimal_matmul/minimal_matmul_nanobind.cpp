@@ -77,6 +77,11 @@ void bind_minimal_matmul(nb::module_& mod) {
             The bias (if provided) must use the same column layout. N must be divisible by 2*32 (two
             tile-aligned halves). Mutually exclusive with fused_activation.
 
+        in0_column_offset : int, optional, default: None
+            Read in0 as the K-wide column window of ``input_tensor`` starting at this tile-aligned column, where K is
+            the weight's K. Lets the matmul read its operand in place from a wider tensor. Cannot be combined with a
+            fused-concat second input.
+
         config : Optional[MinimalMatmulConfig], default: None
             Execution configuration in tile units. If omitted, reasonable defaults are selected based on tensor
             sizes and kernel flags.
@@ -159,7 +164,8 @@ void bind_minimal_matmul(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("fuse_swiglu") = false);
+        nb::arg("fuse_swiglu") = false,
+        nb::arg("in0_column_offset") = nb::none());
 
     auto py_minimal_matmul_config = nb::class_<MinimalMatmulConfig>(
                                         mod,

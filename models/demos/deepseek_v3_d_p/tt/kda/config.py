@@ -13,7 +13,6 @@ import ttnn
 KDA_CHUNK_SIZE = ttnn.TILE_SIZE
 KDA_QKV_DTYPE = ttnn.bfloat16
 KDA_GATE_DTYPE = ttnn.bfloat16
-KDA_BETA_DTYPE = ttnn.float32
 KDA_RECURRENT_STATE_DTYPE = ttnn.float32
 KDA_AFFINE_SUMMARY_DTYPE = ttnn.bfloat16
 KDA_SCAN_OUTPUT_DTYPE = ttnn.bfloat16
@@ -132,35 +131,16 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
     )
 
 
-def decay_projection_program_config(
-    grid: ttnn.CoreCoord, rows: int, decay_rank: int, output_n: int, fused_activation: ttnn.UnaryWithParam | None
-) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None:
-    """Return a 2D multicast schedule for the low-rank decay projection that applies ``fused_activation``.
-
-    ttnn.linear's ``activation`` argument runs as a separate eltwise op under the auto-selected
-    config; an explicit schedule fuses it into the matmul's pack. Returns None when the projection
-    does not tile the grid, keeping the auto-selected config.
-    """
-    row_tiles = rows // ttnn.TILE_SIZE
-    k_tiles = decay_rank // ttnn.TILE_SIZE
-    n_tiles = output_n // ttnn.TILE_SIZE
-    if row_tiles % grid.y or n_tiles % grid.x:
+def decay_projection_config(grid: ttnn.CoreCoord, rows: int) -> ttnn.MinimalMatmulConfig | None:
+    """Return the decay projection's minimal_matmul schedule, tuned at _TUNED_PROJECTION_ROWS; None elsewhere keeps
+    the op's default blocking."""
+    if rows != _TUNED_PROJECTION_ROWS:
         return None
-    per_core_m = row_tiles // grid.y
-    per_core_n = n_tiles // grid.x
-    # FP32 destination accumulation holds four tiles.
-    subblock_h = 2 if per_core_m % 2 == 0 and per_core_n % 2 == 0 else 1
-    subblock_w = next(width for width in (4 // subblock_h, 2, 1) if per_core_n % width == 0)
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=2,
+        K_block_size=4,
+        N_block_size=8,
+        subblock_h=1,
+        subblock_w=4,
         compute_with_storage_grid_size=grid,
-        in0_block_w=k_tiles,
-        out_subblock_h=subblock_h,
-        out_subblock_w=subblock_w,
-        out_block_h=per_core_m,
-        out_block_w=per_core_n,
-        per_core_M=per_core_m,
-        per_core_N=per_core_n,
-        transpose_mcast=False,
-        fused_activation=fused_activation,
-        fuse_batch=True,
     )

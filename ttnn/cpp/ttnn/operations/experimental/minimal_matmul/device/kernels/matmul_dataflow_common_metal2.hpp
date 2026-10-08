@@ -102,7 +102,12 @@ void read_in0_block_sync(
                 }
 #else
                 {
+#ifdef IN0_COLUMN_WINDOW
+                    // A K-wide column window of a wider activation.
+                    uint32_t tile_id = i * IN0_ROW_TILES + IN0_COLUMN_OFFSET_TILES + j;
+#else
                     uint32_t tile_id = i * shape.logical_d1 + j;
+#endif
                     noc.async_read(
                         tensor_accessor, CoreLocalMem<uint32_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
                 }

@@ -39,5 +39,6 @@ ttnn::Tensor minimal_matmul(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<const DataType> dtype = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    bool fuse_swiglu = false);
+    bool fuse_swiglu = false,
+    std::optional<uint32_t> in0_column_offset = std::nullopt);
 }

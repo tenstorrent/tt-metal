@@ -45,7 +45,11 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     check_interleaved(in.g, operation_name, "g");
     check_allocated_device_tensor(in.beta, operation_name, "beta");
     check_layout(in.beta, Layout::TILE, operation_name, "beta");
-    check_dtype(in.beta, DataType::FLOAT32, operation_name, "beta");
+    check_dtype(
+        in.beta,
+        attrs.beta_logits_column_offset.has_value() ? DataType::BFLOAT16 : DataType::FLOAT32,
+        operation_name,
+        "beta");
     check_interleaved(in.beta, operation_name, "beta");
     check_same_device(in.q, in.k, operation_name, "k");
     check_same_device(in.q, in.v, operation_name, "v");
@@ -87,10 +91,19 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     const bool beta_by_chunk = beta_shape.rank() == 4 && beta_shape[0] == attrs.num_heads &&
                                beta_shape[1] == attrs.num_chunks && beta_shape[2] == tt::constants::TILE_HEIGHT &&
                                beta_shape[3] == 1;
-    // Token-major beta keeps one column per head: [1, num_chunks * 32, num_heads].
+    // Token-major beta keeps one column per head: [1, num_chunks * 32, num_heads]. Beta logits sit at a tile-aligned
+    // column offset of a wider token-major tensor.
+    const uint32_t beta_columns = attrs.beta_logits_column_offset.value_or(0) + attrs.num_heads;
     const bool beta_token_major = beta_shape.rank() == 3 && beta_shape[0] == 1 &&
                                   beta_shape[1] == attrs.num_chunks * tt::constants::TILE_HEIGHT &&
-                                  beta_shape[2] == attrs.num_heads;
+                                  (attrs.beta_logits_column_offset.has_value() ? beta_shape[2] >= beta_columns
+                                                                               : beta_shape[2] == attrs.num_heads);
+    if (attrs.beta_logits_column_offset.has_value()) {
+        TT_FATAL(
+            beta_token_major && *attrs.beta_logits_column_offset % tt::constants::TILE_WIDTH == 0,
+            "prepare_chunk_recurrence: beta logits must be token-major [1, num_chunks * 32, columns] with a "
+            "tile-aligned column offset and num_heads columns after it");
+    }
     TT_FATAL(
         beta_by_chunk || beta_token_major,
         "prepare_chunk_recurrence: beta shape must be [num_heads, num_chunks, 32, 1] or [1, num_chunks * 32, "
@@ -165,7 +178,8 @@ std::vector<Tensor> prepare_chunk_recurrence(
     const std::optional<Tensor>& actual_start,
     const std::optional<Tensor>& actual_end,
     uint32_t sequence_parallel_axis,
-    float gate_scale) {
+    float gate_scale,
+    const std::optional<uint32_t>& beta_logits_column_offset) {
     TT_FATAL(std::isfinite(gate_scale), "prepare_chunk_recurrence: gate_scale must be finite");
     TT_FATAL(!actual_end || actual_start, "prepare_chunk_recurrence: actual_end requires actual_start");
     if (actual_start) {
@@ -198,6 +212,7 @@ std::vector<Tensor> prepare_chunk_recurrence(
             .value_dim = value_dim,
             .output_bf16_mask = output_bf16_mask,
             .gate_scale = gate_scale,
+            .beta_logits_column_offset = beta_logits_column_offset,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         PrepareChunkRecurrenceInputs{

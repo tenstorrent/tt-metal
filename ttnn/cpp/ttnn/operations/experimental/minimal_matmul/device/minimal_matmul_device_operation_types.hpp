@@ -38,6 +38,10 @@ struct MinimalMatmulParams {
     // Fused SwiGLU: the weight is a tile-pair-interleaved [gate|up] matrix of width 2N.
     // The op emits silu(gate) * up of width N (half the weight width) in a single matmul.
     bool fuse_swiglu = false;
+
+    // When set, in0 is the K-wide column window of the activation starting at this tile-aligned column; the weight's
+    // K is the window width. Lets a matmul read its operand in place from a wider tensor.
+    std::optional<uint32_t> in0_column_offset;
 };
 
 struct MinimalMatmulInputs {
