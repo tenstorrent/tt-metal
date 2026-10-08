@@ -343,13 +343,9 @@ ALWI void fold_binary_act_blocked(uint32_t num_contributors, uint32_t n) {
         }
         tile_regs_commit();
         tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-        pack_block_mop(0, OUT, width);
-#else
         for (uint32_t i = 0; i < width; ++i) {
             pack_tile(i, OUT);
         }
-#endif
         tile_regs_release();
     }
     gate_in.pop_front(num_contributors * n);
