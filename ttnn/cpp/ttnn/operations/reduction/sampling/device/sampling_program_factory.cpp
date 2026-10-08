@@ -200,8 +200,9 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
 
     uint32_t num_out_tiles = Ht;
 
-    // random number
-    const uint32_t rand_tile_size = tile_size(tt::DataFormat::Float16_b);
+    // random number — Float32 so the stochastic threshold has full FP32 resolution
+    // (previously BF16 with ~8-bit mantissa and a 255/256 cap which biased the distribution).
+    const uint32_t rand_tile_size = tile_size(tt::DataFormat::Float32);
 
     // final indices
     uint32_t final_indices_rm_unit_size = input_indices_tensor.element_size();  // 4 for int32
@@ -237,7 +238,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         make_dfb(SAMPLING_OUTPUT_IND, index_tile_size, num_dfb_unit, index_dfb_data_format),
         make_dfb(SAMPLING_CUR_MAX, input_values_tile_size, num_out_tiles, input_values_dfb_data_format),
         make_dfb(SAMPLING_CUR_SUM, input_values_tile_size, num_out_tiles, input_values_dfb_data_format),
-        make_dfb(SAMPLING_RAND_TILE, rand_tile_size, 1, tt::DataFormat::Float16_b),
+        make_dfb(SAMPLING_RAND_TILE, rand_tile_size, 1, tt::DataFormat::Float32),
         make_dfb(
             SAMPLING_FINAL_INDICES_RM,
             aligned_final_indices_rm_unit_size,
