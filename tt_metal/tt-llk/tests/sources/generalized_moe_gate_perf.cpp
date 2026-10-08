@@ -85,8 +85,12 @@ using namespace ckernel;
 constexpr GeneralizedMoeGateEltwiseBinaryMode BINARY_MODE =
     GMG_RELOAD ? GeneralizedMoeGateEltwiseBinaryMode::RELOAD : GeneralizedMoeGateEltwiseBinaryMode::COPY;
 
+// The gate's own passes, issued as generalized_moe_gate.h issues them.
+#ifndef GMG_SFPU_UNARY_CALL
+#define GMG_SFPU_UNARY_CALL SFPU_UNARY_CALL
+#endif
 #define GMG_SFPU_CALL(FN, TEMPLATES, ...) \
-    SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, FN, TEMPLATES, 0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
+    GMG_SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, FN, TEMPLATES, 0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
 
 static inline void run_gate()
 {
