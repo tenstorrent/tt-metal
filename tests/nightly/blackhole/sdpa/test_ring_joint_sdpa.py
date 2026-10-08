@@ -2318,9 +2318,7 @@ def run_ring_joint_sdpa_chunked(
             reuse_seq = (
                 compact_sliding_seq
                 if compact_sliding_seq is not None
-                else reuse_kv_stable_seq
-                if reuse_kv_buffer
-                else total_seq
+                else reuse_kv_stable_seq if reuse_kv_buffer else total_seq
             )
             shared_persistent_buffers = (
                 create_ring_mla_kv_buffer(reuse_seq, b) if use_ring_mla else create_persistent_buffers(reuse_seq, b)
@@ -8121,16 +8119,24 @@ def test_ring_joint_attention_gemma4_global_ksplit_accuracy(tokens_per_device, q
 
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize(
-    "tokens_per_device,q_chunk_size,max_k_splits",
-    [(256, 64, 3), (1024, 96, 1)],
-    ids=["chunk2048-q64-ksplit3", "chunk8192-q96-unsplit"],
+    "tokens_per_device,q_chunk_size,max_k_splits,q_dtype",
+    [
+        (256, 64, 3, ttnn.bfloat16),
+        # Five bands go empty on some ring iterations and not on others.
+        (256, 128, 5, ttnn.bfloat8_b),
+        (256, 128, 5, ttnn.bfloat16),
+        (1024, 96, 1, ttnn.bfloat16),
+    ],
+    ids=["chunk2048-q64-ksplit3", "chunk2048-q128-ksplit5-bfp8q", "chunk2048-q128-ksplit5", "chunk8192-q96-unsplit"],
 )
-def test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy(tokens_per_device, q_chunk_size, max_k_splits):
+def test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy(
+    tokens_per_device, q_chunk_size, max_k_splits, q_dtype
+):
     """Gemma4's global attention with its matmuls at LoFi, on the packed K/V cache at the K-split and unsplit configs."""
     chunk_size = tokens_per_device * MESH_CONFIG.sp_size
     run_ring_joint_sdpa_chunked(
         MESH_CONFIG,
-        replace(GEMMA4_GLOBAL_CHUNKED_MODEL, d_k=640),
+        replace(GEMMA4_GLOBAL_CHUNKED_MODEL, d_k=640, q_dtype=q_dtype),
         chunk_size=chunk_size,
         total_seq=5 * chunk_size,
         qk_configs=[(q_chunk_size, 256)],
