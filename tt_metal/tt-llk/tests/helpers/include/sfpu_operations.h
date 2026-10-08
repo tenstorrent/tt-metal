@@ -1685,7 +1685,12 @@ void call_binary_sfpu_operation_init()
     }
     else if constexpr (BINOP == BinaryOp::POW)
     {
+#if defined(ARCH_BLACKHOLE)
+        // The init of calculate_sfpu_binary_pow, the body power_binary_tile runs.
+        SFPU_BINARY_INIT_FN(power, sfpu_binary_pow_init, (APPROXIMATION_MODE));
+#else
         SFPU_BINARY_INIT_FN(power, sfpu_binary_init, (APPROXIMATION_MODE, BINOP));
+#endif
     }
     else if constexpr (BINOP == BinaryOp::ADD_TOP_ROW)
     {
@@ -1890,7 +1895,26 @@ void call_binary_sfpu_operation(
     // matching how every production llk_math_eltwise_binary_sfpu_* wrapper
     // dispatches into _calculate_sfpu_binary_ / _calculate_*_shift_.
     static_assert(ITERATIONS == 8 || ITERATIONS == 32, "Binary SFPU tests support legacy 8/32 iteration values; execution uses 8 rows per face.");
+#if defined(ARCH_BLACKHOLE)
+    // The entry points the compute API issues as one 32-row call on Blackhole run that way here too.
+    constexpr bool is_int32 = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32);
+    constexpr bool one_call = BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::POW || BINOP == BinaryOp::XLOGY ||
+                              ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL) && !is_int32) || BINOP == BinaryOp::LT ||
+                              BINOP == BinaryOp::GT || BINOP == BinaryOp::LE || BINOP == BinaryOp::GE || BINOP == BinaryOp::EQ || BINOP == BinaryOp::NE ||
+                              BINOP == BinaryOp::MAX || BINOP == BinaryOp::MIN || BINOP == BinaryOp::FMOD || BINOP == BinaryOp::REMAINDER ||
+                              BINOP == BinaryOp::ATAN2 || BINOP == BinaryOp::ISCLOSE || BINOP == BinaryOp::LOGADDEXP || BINOP == BinaryOp::LOGADDEXP2 ||
+                              BINOP == BinaryOp::EQ_INT || BINOP == BinaryOp::NE_INT || BINOP == BinaryOp::MAX_INT32 || BINOP == BinaryOp::MIN_INT32 ||
+                              BINOP == BinaryOp::MAX_UINT32 || BINOP == BinaryOp::MIN_UINT32 || BINOP == BinaryOp::REMAINDER_INT32 ||
+                              BINOP == BinaryOp::REMAINDER_UINT32 || BINOP == BinaryOp::FMOD_INT32;
+    constexpr int PER_FACE_ITERATIONS = one_call ? 32 : 8;
+    if constexpr (one_call)
+    {
+        LLK_ASSERT(vector_mode == ckernel::VectorMode::RC, "one 32-row call covers a full tile only");
+        vector_mode = ckernel::VectorMode::None;
+    }
+#else
     constexpr int PER_FACE_ITERATIONS = 8;
+#endif
     if constexpr (BINOP == BinaryOp::DIV)
     {
         // Route DIV to the dedicated production kernel (calculate_sfpu_binary_div),
@@ -1940,17 +1964,38 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
+#if defined(ARCH_BLACKHOLE)
+    else if constexpr (BINOP == BinaryOp::POW)
+    {
+        // The body power_binary_tile runs; the generic loop's POW arm has no compute API caller.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_binary_pow,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+#endif
     else if constexpr (
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY ||
         BINOP == BinaryOp::POW)
     {
+#if defined(ARCH_BLACKHOLE)
+        // Two's complement in DEST, as add_int_tile and sub_int_tile pass.
+        constexpr bool int32_sign_magnitude = false;
+#else
+        constexpr bool int32_sign_magnitude = true;
+#endif
         if constexpr (BINOP == BinaryOp::ADD && MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
         {
             SFPU_BINARY_CALL(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 _add_int_,
-                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, true /* SIGN_MAGNITUDE_FORMAT */),
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, int32_sign_magnitude),
                 dst_index_in0,
                 dst_index_in1,
                 dst_index_out,
@@ -1965,7 +2010,7 @@ void call_binary_sfpu_operation(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 _sub_int_,
-                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, true /* SIGN_MAGNITUDE_FORMAT */),
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, int32_sign_magnitude),
                 dst_index_in0,
                 dst_index_in1,
                 dst_index_out,
@@ -2387,13 +2432,25 @@ void call_ternary_sfpu_operation(
     const std::uint32_t value         = 0x40000000u /* 2.0f */,
     ckernel::VectorMode vector_mode   = ckernel::VectorMode::RC)
 {
+#if defined(ARCH_BLACKHOLE)
+    // where, addcmul, addcdiv and lerp run as one 32-row call on Blackhole, as their compute API entry points do.
+    constexpr bool one_call = OPERATION == SfpuType::where || OPERATION == SfpuType::addcmul || OPERATION == SfpuType::addcdiv || OPERATION == SfpuType::lerp;
+    constexpr int ROWS      = one_call ? 32 : ITERATIONS;
+    if constexpr (one_call)
+    {
+        LLK_ASSERT(vector_mode == ckernel::VectorMode::RC, "one 32-row call covers a full tile only");
+        vector_mode = ckernel::VectorMode::None;
+    }
+#else
+    constexpr int ROWS = ITERATIONS;
+#endif
     if constexpr (OPERATION == SfpuType::where)
     {
         SFPU_TERNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _calculate_where_,
-            (APPROX_MODE, MATH_FORMAT, ITERATIONS),
+            (APPROX_MODE, MATH_FORMAT, ROWS),
             dst_index_in0,
             dst_index_in1,
             dst_index_in2,
@@ -2406,7 +2463,7 @@ void call_ternary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_addcmul,
-            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ITERATIONS),
+            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ROWS),
             dst_index_in0,
             dst_index_in1,
             dst_index_in2,
@@ -2420,7 +2477,7 @@ void call_ternary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_addcdiv,
-            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ITERATIONS),
+            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ROWS),
             dst_index_in0,
             dst_index_in1,
             dst_index_in2,
@@ -2434,7 +2491,7 @@ void call_ternary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_lerp,
-            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ITERATIONS),
+            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ROWS),
             dst_index_in0,
             dst_index_in1,
             dst_index_in2,

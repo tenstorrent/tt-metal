@@ -50,6 +50,17 @@ ALWI void nextafter_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         is_fp32_dest_acc_en,
         "nextafter_binary_tile steps one float32 ULP and requires a float32 DEST; use "
         "nextafter_bf16_binary_tile whenever the tile is bfloat16, regardless of DEST width");
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_sfpu_binary,
+        (APPROX, BinaryOp::NEXTAFTER, 32 /* ITERATIONS */, is_fp32_dest_acc_en),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::None)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -59,6 +70,7 @@ ALWI void nextafter_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst1,
         odst,
         VectorMode::RC)));
+#endif
 }
 
 /**
@@ -83,6 +95,17 @@ ALWI void nextafter_binary_tile_init() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void nextafter_bf16_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_sfpu_binary,
+        (APPROX, BinaryOp::NEXTAFTER_BF16, 32 /* ITERATIONS */, is_fp32_dest_acc_en),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::None)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -92,6 +115,7 @@ ALWI void nextafter_bf16_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t od
         idst1,
         odst,
         VectorMode::RC)));
+#endif
 }
 
 /**

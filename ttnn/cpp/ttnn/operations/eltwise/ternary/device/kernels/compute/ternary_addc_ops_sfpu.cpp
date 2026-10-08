@@ -13,6 +13,30 @@
 #include "api/compute/eltwise_unary/addcdiv.h"
 #include "api/dataflow/dataflow_buffer.h"
 
+#if defined(ARCH_BLACKHOLE)
+// The copy init of c_0 serves an operand that shares its formats and tile geometry.
+template <uint32_t cb>
+constexpr bool copy_init_shared_with_c0() {
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
+    constexpr uint32_t c0 = tt::CBIndex::c_0;
+    return unpack_src_format[cb] == unpack_src_format[c0] && unpack_dst_format[cb] == unpack_dst_format[c0] &&
+           unpack_tile_num_faces[cb] == unpack_tile_num_faces[c0] &&
+           unpack_tile_face_r_dim[cb] == unpack_tile_face_r_dim[c0] &&
+           unpack_partial_face[cb] == unpack_partial_face[c0] && unpack_narrow_tile[cb] == unpack_narrow_tile[c0] &&
+           unpack_tile_r_dim[cb] == unpack_tile_r_dim[c0] && unpack_tile_c_dim[cb] == unpack_tile_c_dim[c0];
+#else
+    return true;
+#endif
+}
+#endif
+
+#if defined(ARCH_BLACKHOLE)
+// With 32-bit operands the inits stay per tile: addcdiv on float32 measured slower without them.
+constexpr bool init_once = !DST_ACCUM_MODE;
+#else
+constexpr bool init_once = false;
+#endif
+
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t scalar_arg = get_arg_val<uint32_t>(3);
@@ -25,6 +49,15 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_in0.get_id(), dfb_out.get_id());
     copy_init(dfb_in0.get_id());
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (init_once) {
+        TERNARY_SFPU_OP_INIT();
+    }
+    constexpr bool shared_copy_init =
+        init_once && copy_init_shared_with_c0<tt::CBIndex::c_1>() && copy_init_shared_with_c0<tt::CBIndex::c_2>();
+#else
+    constexpr bool shared_copy_init = false;
+#endif
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         dfb_in0.wait_front(num_tiles_per_cycle);
@@ -35,16 +68,24 @@ void kernel_main() {
 
         tile_regs_acquire();
 
-        copy_init(dfb_in0.get_id());
+        if constexpr (!shared_copy_init) {
+            copy_init(dfb_in0.get_id());
+        }
         copy_tile(dfb_in0.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_init(dfb_in1.get_id());
+        if constexpr (!shared_copy_init) {
+            copy_init(dfb_in1.get_id());
+        }
         copy_tile(dfb_in1.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        copy_init(dfb_in2.get_id());
+        if constexpr (!shared_copy_init) {
+            copy_init(dfb_in2.get_id());
+        }
         copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
-        TERNARY_SFPU_OP_INIT();
+        if constexpr (!init_once) {
+            TERNARY_SFPU_OP_INIT();
+        }
         TERNARY_SFPU_OP_FUNC(0, 1, 2, 0, scalar_arg);
 
         tile_regs_commit();

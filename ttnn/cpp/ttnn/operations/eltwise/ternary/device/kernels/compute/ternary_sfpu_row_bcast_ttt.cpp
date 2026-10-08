@@ -56,6 +56,9 @@ void kernel_main() {
     // Initialize pack/format for SFPU-style ternary kernels (matches existing ternary SFPU kernels)
     compute_kernel_hw_startup(dfb_eff_a.get_id(), dfb_out.get_id());
     copy_init(dfb_eff_a.get_id());
+#if defined(ARCH_BLACKHOLE)
+    TERNARY_SFPU_OP_INIT();
+#endif
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
 #if BCAST_A
@@ -143,7 +146,9 @@ void kernel_main() {
         copy_tile(dfb_eff_c.get_id(), 0, 2);
 
         // Execute configured ternary SFPU op
+#if !defined(ARCH_BLACKHOLE)
         TERNARY_SFPU_OP_INIT();
+#endif
         TERNARY_SFPU_OP_FUNC(0, 1, 2, 0);
 
         tile_regs_commit();

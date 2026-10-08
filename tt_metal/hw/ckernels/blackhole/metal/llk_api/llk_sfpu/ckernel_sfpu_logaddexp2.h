@@ -53,7 +53,7 @@ inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_i
     // in logaddexp. Only the bfloat16 path uses them.
     [[maybe_unused]] const sfpi::vFloat exp_c0 = EXP_21F_BF16_C0;
     [[maybe_unused]] const sfpi::vFloat exp_c1 = EXP_21F_BF16_C1;
-    for (int d = 0; d < ITERATIONS; d++) {
+    auto row = [&]() __attribute__((always_inline)) {
         sfpi::vFloat a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
@@ -80,6 +80,16 @@ inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_i
         // ADDR_MOD_6 (set by logaddexp's init) advances the destination on the store,
         // in place of a separate dst_reg++.
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_6) = result;
+    };
+    if constexpr (is_fp32_dest_acc_en) {
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            row();
+        }
+    } else {
+        for (int d = 0; d < ITERATIONS; d++) {
+            row();
+        }
     }
 }
 

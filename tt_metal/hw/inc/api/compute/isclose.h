@@ -58,6 +58,19 @@ namespace ckernel {
 // clang-format on
 template <bool EQUAL_NAN = false>
 ALWI void isclose_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, uint32_t rtol_bits, uint32_t atol_bits) {
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_isclose,
+        (APPROX, 32 /* ITERATIONS */, EQUAL_NAN),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::None,
+        rtol_bits,
+        atol_bits)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -69,6 +82,7 @@ ALWI void isclose_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, uin
         VectorMode::RC,
         rtol_bits,
         atol_bits)));
+#endif
 }
 
 /**

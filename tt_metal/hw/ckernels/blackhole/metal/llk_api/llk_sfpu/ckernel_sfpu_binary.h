@@ -114,8 +114,8 @@ inline void calculate_sfpu_binary(
         log_c = LogPoly::C;
         log_d = LogPoly::D;
     }
-    // SFPU microcode
-    for (int d = 0; d < ITERATIONS; d++) {
+    // SFPU microcode, one row of a face
+    auto row = [&]() __attribute__((always_inline)) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
         constexpr std::uint32_t dst_tile_size_sfpi = 32;
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
@@ -173,10 +173,10 @@ inline void calculate_sfpu_binary(
             // the sign first is what brings -0.0 into the guard.
             sfpi::vFloat mag_a = sfpi::setsgn(in0, 0);
             sfpi::vFloat mag_b = sfpi::setsgn(in1, 0);
-            sfpi::vFloat tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt(kUlpStep));
-            v_if(mag_a == 0.0f && in1 > 0.0f) { result = tiny; }
+            // vConstFloatPrgm2 holds the bit pattern kUlpStep, programmed by sfpu_binary_init.
+            v_if(mag_a == 0.0f && in1 > 0.0f) { result = sfpi::vConstFloatPrgm2; }
             v_endif;
-            v_if(mag_a == 0.0f && in1 < 0.0f) { result = -tiny; }
+            v_if(mag_a == 0.0f && in1 < 0.0f) { result = -sfpi::vFloat(sfpi::vConstFloatPrgm2); }
             v_endif;
             // Equal operands return the target, so two zeros return in1's zero, which is not
             // always in0's: nextafter(+0, -0) is -0. This runs after the two guards above because
@@ -191,11 +191,10 @@ inline void calculate_sfpu_binary(
             // reason ckernel_sfpu_isclose.h reads bit patterns for its own Inf/NaN lanes. A
             // widened bfloat16 NaN has that exponent and a non-zero mantissa too, so this serves
             // both entry points unchanged. Last, so it wins over the direction and zero arms.
-            constexpr int32_t kInfBits = 0x7F800000;
-            constexpr int32_t kAbsMask = 0x7FFFFFFF;
-            v_if((bits & kAbsMask) > kInfBits) { result = nan; }
+            // vConstIntPrgm0 = 0x7FFFFFFF and vConstIntPrgm1 = 0x7F800000, programmed by sfpu_binary_init.
+            v_if((bits & sfpi::vConstIntPrgm0) > sfpi::vConstIntPrgm1) { result = nan; }
             v_endif;
-            v_if((sfpi::as<sfpi::vInt>(in1) & kAbsMask) > kInfBits) { result = nan; }
+            v_if((sfpi::as<sfpi::vInt>(in1) & sfpi::vConstIntPrgm0) > sfpi::vConstIntPrgm1) { result = nan; }
             v_endif;
         }
 
@@ -207,6 +206,18 @@ inline void calculate_sfpu_binary(
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
+    };
+
+    if constexpr (BINOP == BinaryOp::POW) {
+        // Not unrolled: the long pow body is slower unrolled.
+        for (int d = 0; d < ITERATIONS; d++) {
+            row();
+        }
+    } else {
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            row();
+        }
     }
 }
 
@@ -215,6 +226,7 @@ inline void calculate_sfpu_binary_mul(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
@@ -222,96 +234,154 @@ inline void calculate_sfpu_binary_mul(
         sfpi::vFloat result = in0 * in1;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // software RNE approach:
-            result = float32_to_bf16_rne(result);
-
-            // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
-            v_if(in0 == 0 || in1 == 0) { result = 0.0f; }
+            // Software RNE with 0 * x = 0 and x * 0 = 0, to match FPU behaviour for bfloat16 multiplication:
+            // where either input is zero the sum stays 0x7fff, which the mask turns into +0.
+            sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(result);
+            sfpi::vUInt rounded = 0x7fffU;
+            v_if(in0 != 0 && in1 != 0) { rounded += bits + ((bits >> 16) & 1); }
             v_endif;
+            result = sfpi::as<sfpi::vFloat>(rounded & 0xFFFF0000U);
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
+    }
+}
+
+// The 32-bit division row: the operations of #59381's sfpi form (normalized mantissas, one Newton step, the residual
+// step, the exponent restored in two factors, the exceptional-input fix-up), reordered so that no instruction reads a
+// multiply-add result on the next cycle, with the NaN test against Prgm1 = +inf and the fix-up's ENCC and the store
+// scheduled by load macro 0. Every lane's result is the sfpi form's.
+template <int ITERATIONS>
+inline void calculate_sfpu_binary_div_fp32_rows(
+    const std::uint32_t in0, const std::uint32_t in1, const std::uint32_t out) {
+    // Macro 0: the out row loaded into dead L4, template 0's ENCC on the next cycle, the store of L0 on the one after.
+    TTI_SFPENCC(3, 0, 12, 10);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, (0 << 3) | 4);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, (0x80 | (1 << 3) | 3) << 8);
+    TTI_SFPCONFIG(0, 4, 0);
+    TTI_SFPCONFIG(0x010, 8, 1);
+    load_replay_buf<Exec>(0, 32, [in0, in1] {
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in1);
+        TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in0);
+        TTI_SFPSETEXP(127, p_sfpu::LREG0, p_sfpu::LREG1, 1);                           // mb
+        TTI_SFPARECIP(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);                             // r
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG4, 1);    // t = 2 - mb * r
+        TTI_SFPSETEXP(127, p_sfpu::LREG2, p_sfpu::LREG5, 1);                           // ma
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG3, 2);  // r = r * t
+        TTI_SFPEXEXP(0, p_sfpu::LREG2, p_sfpu::LREG6, 1);                              // ea
+        TTI_SFPMUL(p_sfpu::LREG5, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);  // q = ma * r
+        TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG7, 0);                              // eb
+        TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG1, 1);     // residual = ma - q * mb
+        TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG5, 2);
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG3, 0);  // q = q + residual * r
+        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG5, 6);                            // ea - eb
+        TTI_SFPEXEXP(0, p_sfpu::LREG3, p_sfpu::LREG1, 1);
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG5, 4);      // exponent
+        TTI_SFPSHFT(0xFFF, p_sfpu::LREG5, p_sfpu::LREG1, 5);  // half
+        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG4, 2);
+        TTI_SFPSETEXP(0, p_sfpu::LREG3, p_sfpu::LREG4, 0);  // setexp(q, half)
+        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG1, 6);
+        TTI_SFPSETEXP(0, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);  // setexp(1.0f, exponent - half)
+        TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+        TTI_SFPSETSGN(0, p_sfpu::LREG0, p_sfpu::LREG5, 1);
+        TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);  // result
+        TTI_SFPSETMAN(0, p_sfpu::LREG3, p_sfpu::LREG3, 1);                             // scale
+        TTI_SFPGT(0, p_sfpu::LREG13, p_sfpu::LREG5, 8);                                // nan_divisor
+        TTI_SFPIADD(0xFFF, p_sfpu::LREG6, p_sfpu::LREG4, 9);
+        TTI_SFPIADD(0xF01, p_sfpu::LREG6, p_sfpu::LREG6, 1);
+        TTI_SFPIADD(0x07E, p_sfpu::LREG7, p_sfpu::LREG4, 9);
+        TTI_SFPIADD(0xF80, p_sfpu::LREG7, p_sfpu::LREG7, 1);
+        TTI_SFPCOMPC(0, 0, 0, 0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG5, p_sfpu::LREG0, 1);  // the exceptional lanes
+    });
+    TT_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG4 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, out | (p_sfpu::LREG4 >> 2));
+    TTI_INCRWC(0, 2, 0, 0);
+#pragma GCC unroll 8
+    for (int d = 1; d < ITERATIONS; d++) {
+        lltt::replay(0, 32);
+        TT_SFPLOADMACRO(
+            (0 << 2) | (p_sfpu::LREG4 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, out | (p_sfpu::LREG4 >> 2));
+        TTI_INCRWC(0, 2, 0, 0);
+    }
+}
+
+// The 16-bit division row of the sfpi form (reciprocal, two Newton steps, product, zero-divisor arm, nearest-even
+// rounding), ordered so that no instruction reads a multiply-add result on the next cycle (the second step's first
+// multiply-add runs on every lane into L5, which only the predicated second one reads). The rounding is #58207's
+// (ldjurovicTT) store form: bits + 0x7fff + lsb with the lsb from two shifts and no mask, since the store to a 16-bit
+// Float16_b DEST keeps only the high half. Load macro 0 issues the rounding's last add and the store.
+template <int ITERATIONS>
+inline void calculate_sfpu_binary_div_bf16_rows(
+    const std::uint32_t in0, const std::uint32_t in1, const std::uint32_t out) {
+    // Macro 0 loads the out row into dead L3, which the lsb's shifts then overwrite; three instructions later template
+    // 0 writes L3 + L0 (the lsb plus bits + 0x7fff) to L16, and a cycle after that L16 is stored.
+    constexpr std::uint32_t add_l3_l0 = TT_OP_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, 4);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, add_l3_l0 & 0xffff);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, add_l3_l0 >> 16);
+    TTI_SFPCONFIG(0, 0, 0);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x40 | (3 << 3) | 4);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, (0x40 | (4 << 3) | 3) << 8);
+    TTI_SFPCONFIG(0, 4, 0);
+    TTI_SFPCONFIG(0x110, 8, 1);
+    load_replay_buf<Exec>(0, 21, [in0, in1, out] {
+        TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in1);
+        TTI_SFPARECIP(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);                           // r
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG4, 2);  // t = in1 * r - 2
+        TTI_SFPLOADI(p_sfpu::LREG6, 2, 0x7fff);                                      // the rounding's addend
+        TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG3, 3);  // y1 = r * -t
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG5, 1);    // 2 - in1 * y1
+        TTI_SFPGT(0, p_sfpu::LREG4, p_sfpu::LCONST_0, 1);                              // lanes t < 0
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG0, 2);  // r = y1 * (2 - in1 * y1)
+        TTI_SFPENCC(3, 0, 0, 10);
+        TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);  // result = in0 * r
+        TTI_SFPSETCC(0, p_sfpu::LREG2, 0, 6);                                          // lanes in1 == 0
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, 2);                                          // and in0 != 0
+        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+        TTI_SFPSETSGN(0, p_sfpu::LREG13, p_sfpu::LREG0, 0);  // copysgn(Prgm1 = inf, in0)
+        TTI_SFPENCC(3, 0, 0, 10);
+        TT_SFPLOADMACRO(
+            (0 << 2) | (p_sfpu::LREG3 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, out | (p_sfpu::LREG3 >> 2));
+        TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG3, 5);
+        TTI_SFPSHFT(0xFE1, p_sfpu::LREG3, p_sfpu::LREG3, 5);  // lsb = (bits << 15) >> 31
+        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG0, 4);      // bits + 0x7fff; macro 0 adds the lsb
+        TTI_INCRWC(0, 2, 0, 0);
+    });
+#pragma GCC unroll 8
+    for (int d = 1; d < ITERATIONS; d++) {
+        lltt::replay(0, 21);
     }
 }
 
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_div(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr std::uint32_t dst_tile_size_sfpi = 32;
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-
-        sfpi::vFloat result;
-        if constexpr (is_fp32_dest_acc_en) {
-            // Refine signed mantissas with magnitudes in [1, 2), so neither the
-            // reciprocal nor the residual underflows, then restore the exponent.
-            sfpi::vFloat ma = sfpi::setexp(in0, 127);
-            sfpi::vFloat mb = sfpi::setexp(in1, 127);
-            // The hardware seed needs one Newton step before quotient refinement.
-            sfpi::vFloat r = sfpu_reciprocal_iter<1, true>(mb);
-            sfpi::vFloat q = ma * r;
-            sfpi::vFloat residual = ma - q * mb;
-            q = q + residual * r;
-
-            sfpi::vInt ea = sfpi::exexp(in0, sfpi::ExponentMode::Biased);
-            // eb is unbiased, which absorbs the bias in exponent below.
-            sfpi::vInt eb = sfpi::exexp(in1);
-            // Split exponent restoration between two factors. Their product
-            // supplies hardware overflow/underflow handling, while power-of-two
-            // scaling is exact for normal results.
-            sfpi::vInt exponent = ea - eb + sfpi::exexp(q, sfpi::ExponentMode::Biased);
-            sfpi::vInt half = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(exponent) >> 1);
-            result = sfpi::setexp(q, half) * sfpi::setexp(sfpi::vFloat(1.0f), exponent - half);
-
-            // For exceptional inputs only the reciprocal's sign and zero/Inf
-            // classification matter. Inverting its exponent gives Inf for zero,
-            // zero for Inf/NaN, and a finite nonzero scale for every normal divisor.
-            // Zero scales would hide NaN divisors, so add an all-ones NaN bit
-            // pattern where |in1| > +Inf in sign-magnitude order, and +0 elsewhere.
-            // Normal inputs have biased exponents in [1, 254], or unbiased exponents
-            // in [-126, 127]; zero/subnormal and Inf/NaN fall outside. Each bound is a
-            // sign test on SFPIADD, and the compares narrow lanes without SFPAND.
-            v_if(!(ea >= 1 && ea < 255 && eb >= -126 && eb < 128)) {
-                sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(~sfpi::as<sfpi::vInt>(in1)), 0);
-                sfpi::vFloat nan_divisor = sfpi::vFloat(__builtin_rvtt_sfpgt(
-                    sfpi::setsgn(in1, 0).get(), sfpi::vFloat(std::numeric_limits<float>::infinity()).get(), 8));
-                // Inverting in1 also inverts the scale's sign, so negate the product.
-                result = nan_divisor - in0 * scale;
-            }
-            v_endif;
-        } else {
-            result = in0 * sfpu_reciprocal_iter<2>(in1);
-            v_if(in1 == 0) {
-                v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
-                v_else {
-                    result = std::numeric_limits<float>::infinity();
-                    result = sfpi::copysgn(result, in0);
-                }
-                v_endif;
-            }
-            v_endif;
-        }
-
-        if constexpr (!is_fp32_dest_acc_en) {
-            // software RNE approach:
-            result = float32_to_bf16_rne(result);
-        }
-
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg++;
+    const std::uint32_t in0 = (dst_index_in0 * 64) & 0x3ff;
+    const std::uint32_t in1 = (dst_index_in1 * 64) & 0x3ff;
+    const std::uint32_t out = (dst_index_out * 64) & 0x3ff;
+    if constexpr (is_fp32_dest_acc_en) {
+        calculate_sfpu_binary_div_fp32_rows<ITERATIONS>(in0, in1, out);
+    } else {
+        calculate_sfpu_binary_div_bf16_rows<ITERATIONS>(in0, in1, out);
     }
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
 inline void sfpu_binary_init() {
-    if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW) {
-        // Initialisation for use of sfpu_reciprocal_iter<2> in DIV or POW.
+    if constexpr (BINOP == BinaryOp::DIV) {
+        // Initialisation for sfpu_reciprocal_iter<2> in DIV and the zero-divisor infinity of the div arm.
+        sfpu_reciprocal_init<false>();
+        sfpi::vConstFloatPrgm1 = std::numeric_limits<float>::infinity();
+    } else if constexpr (BINOP == BinaryOp::POW) {
+        // Initialisation for use of sfpu_reciprocal_iter<2> in POW.
         sfpu_reciprocal_init<false>();
     } else if constexpr (BINOP == BinaryOp::XLOGY) {
         _init_log_<APPROXIMATION_MODE>();
+    } else if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
+        sfpi::vConstIntPrgm0 = 0x7FFFFFFF;
+        sfpi::vConstIntPrgm1 = 0x7F800000;
+        sfpi::vConstIntPrgm2 = (BINOP == BinaryOp::NEXTAFTER_BF16) ? 0x10000 : 1;
     }
 }
 
