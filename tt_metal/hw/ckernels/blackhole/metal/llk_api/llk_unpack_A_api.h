@@ -32,7 +32,7 @@ inline void llk_unpack_A_init_impl(
     const std::uint32_t dst_format) {
     LLK_ASSERT_BLOCK((is_unpacker_A_configured_correctly<
                       UnpackerProgramType::ProgramByTile,
-                      (!_llk_unpack_A_reads_via_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>())>(
+                      (!_llk_unpack_A_address_on_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>())>(
         src_format, dst_format, tensor_shape.face_r_dim, tensor_shape.total_num_faces())));
 
     SAN_HOOK(init<OperationUnpackUnary>(
@@ -97,7 +97,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
 
     LLK_ASSERT_BLOCK((is_unpacker_A_configured_correctly<
                       UnpackerProgramType::ProgramByTile,
-                      (!_llk_unpack_A_reads_via_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>())>(
+                      (!_llk_unpack_A_address_on_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>())>(
         unpack_src_format[operand_id],
         unpack_dst_format[operand_id],
         get_operand_face_r_dim(operand_id),
