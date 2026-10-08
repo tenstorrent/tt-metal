@@ -10,7 +10,8 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/_common.sh"
 
 # 2x3 matches the emulator so craq-sim is a fast pre-flight for emulator runs; 8x4 is craq-sim's full grid.
 GRID=2x3
-TIMEOUT=3600
+# Prefill alone takes ~1 h on craq-sim at 2x1 (tiny, V=T=2); leave room for decode.
+TIMEOUT=10800
 # The watcher slows craq-sim ~150-300x per op (a 2.5 s add took 736 s); use --debug default only to localize hangs.
 DEBUG_PROFILE=fast
 parse_target_flag() {
