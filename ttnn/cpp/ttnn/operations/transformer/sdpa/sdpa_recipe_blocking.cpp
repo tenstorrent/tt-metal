@@ -653,6 +653,20 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
         }
         return apply_choice(config, choice, problem, "ring-distributed");
     }
+    // A routed call whose keys fit one K chunk (at most kRecipeSearchMaxKTiles tiles) runs them as one when it fits L1:
+    // no running rescale, and a Q chunk's K/V and mask stream in one piece. Measured 1.03-1.16x on S256-S512 encoder
+    // shapes (bge_m3 B8 S512 Q256/K256 0.479 -> 0.452 ms); key ranges keep their K chunks to skip masked keys.
+    if (chunks_are_hints && !joint_q && !(key_range && key_range->active()) && problem.fixed_q_tiles != 0 &&
+        problem.fixed_k_tiles != 0) {
+        const uint32_t whole_k_tiles = div_up(problem.k_rows, kTile);
+        if (problem.fixed_k_tiles < whole_k_tiles && whole_k_tiles <= kRecipeSearchMaxKTiles) {
+            auto one_chunk = problem;
+            one_chunk.fixed_k_tiles = whole_k_tiles;
+            if (const auto choice = choose_recipe_blocking(one_chunk)) {
+                return apply_choice(config, choice, one_chunk, "dense");
+            }
+        }
+    }
     auto choice = invalid_fixed(config) ? std::nullopt : choose_recipe_blocking(problem);
     if (!choice && chunks_are_hints && (problem.fixed_q_tiles != 0 || problem.fixed_k_tiles != 0)) {
         log_debug(

@@ -141,7 +141,8 @@ void reject_auto_blocking_without_recipe(const std::optional<SDPAProgramConfig>&
 // fall back to Q256/K512 so the op's own validation reports why. Dense: `reserved_l1_bytes` per core
 // are kept free for buffers allocated after the choice (an L1 output). `chunks_are_hints` (calls routed
 // to a recipe without `precision`, whose chunk sizes were chosen for the legacy kernels): explicit chunk
-// sizes are kept when the recipe supports them and they fit L1, else the op chooses both.
+// sizes are kept when the recipe supports them and they fit L1, else the op chooses both; a dense call without a key
+// range whose keys fit one K chunk (up to kRecipeSearchMaxKTiles tiles) runs them as one when that fits.
 std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     const PrecisionPolicy& policy,
     const Tensor& q,
