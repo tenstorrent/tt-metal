@@ -25,7 +25,7 @@ using ::sfpi::DataLayout;
 // rational template: squared_abs_denominator_rational. y = 1 / (1 + abs(x))^2.
 #define TT_TARGET_BH_BF16_SQUARED_ABS_DENOMINATOR_TTI_BODY_SLOTS 18u
 
-#include "sfpu/ckernel_sfpu_bf16_rational_squared_replay.inc"
+#include "sfpu/ckernel_sfpu_bf16_rational_squared_replay.h"
 static_assert(kSquaredAbsDenominatorTtiReplay);
 inline void tile() { squared_abs_denominator_tti_replay_tile(); }
 

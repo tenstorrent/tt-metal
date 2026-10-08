@@ -53,7 +53,7 @@ constexpr uint32_t clog2(uint32_t x) {
 
 // out[Mt,Nt] = A[Mt,Kt] @ (tr ? B[Nt,Kt]^T : B[Kt,Nt]). Inputs must be available.
 void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr) {
-    cb_reserve_back(o, Mt * Nt);
+    CircularBuffer(o).reserve_back(Mt * Nt);
     pack_reconfig_data_format(o);  // mixed bf16/fp32 CBs: set packer to this output's format
     // matmul_tiles(a,b): in0=a->srcB, in1=b->srcA. Reconfig unpack src formats to match (the op
     // init only asserts formats, it does not set them), else fp32/bf16 CBs are read at the wrong
@@ -73,12 +73,12 @@ void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t N
             tile_regs_release();
         }
     }
-    cb_push_back(o, Mt * Nt);
+    CircularBuffer(o).push_back(Mt * Nt);
 }
 
 // out = A (op) B elementwise, n tiles. op: 0 add, 1 sub, 2 mul.
 void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op) {
-    cb_reserve_back(o, n);
+    CircularBuffer(o).reserve_back(n);
     pack_reconfig_data_format(o);
     reconfig_data_format(a, b);  // binary(a,b): a->srcA, b->srcB
     if (op == 0) {
@@ -102,12 +102,12 @@ void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op) {
         pack_tile(0, o, i);
         tile_regs_release();
     }
-    cb_push_back(o, n);
+    CircularBuffer(o).push_back(n);
 }
 
 // out = copy(in), n tiles.
 void cpy(uint32_t in, uint32_t o, uint32_t n) {
-    cb_reserve_back(o, n);
+    CircularBuffer(o).reserve_back(n);
     pack_reconfig_data_format(o);
     reconfig_data_format_srca(in);  // unary: in->srcA
     copy_init(in);
@@ -119,11 +119,11 @@ void cpy(uint32_t in, uint32_t o, uint32_t n) {
         pack_tile(0, o, i);
         tile_regs_release();
     }
-    cb_push_back(o, n);
+    CircularBuffer(o).push_back(n);
 }
 
 void expc(uint32_t in, uint32_t o, uint32_t n) {
-    cb_reserve_back(o, n);
+    CircularBuffer(o).reserve_back(n);
     pack_reconfig_data_format(o);
     reconfig_data_format_srca(in);  // unary: in->srcA
     copy_init(in);
@@ -137,12 +137,12 @@ void expc(uint32_t in, uint32_t o, uint32_t n) {
         pack_tile(0, o, i);
         tile_regs_release();
     }
-    cb_push_back(o, n);
+    CircularBuffer(o).push_back(n);
 }
 
 // out[Mt,Nt] = A[Mt,Nt] * col[Mt,1]  (broadcast the single column of `col` across N)
 void bcast_cols_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, uint32_t Nt) {
-    cb_reserve_back(o, Mt * Nt);
+    CircularBuffer(o).reserve_back(Mt * Nt);
     pack_reconfig_data_format(o);
     reconfig_data_format(a, col);  // bcast(a,col): a->srcA, col->srcB
     mul_bcast_cols_init(a, col);
@@ -156,12 +156,12 @@ void bcast_cols_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, uint32_t 
             tile_regs_release();
         }
     }
-    cb_push_back(o, Mt * Nt);
+    CircularBuffer(o).push_back(Mt * Nt);
 }
 
 // out[Mt,Nt] = A[Mt,Nt] - row[1,Nt]  (broadcast the single row of `row` across M)
 void bcast_rows_sub(uint32_t a, uint32_t row, uint32_t o, uint32_t Mt, uint32_t Nt) {
-    cb_reserve_back(o, Mt * Nt);
+    CircularBuffer(o).reserve_back(Mt * Nt);
     pack_reconfig_data_format(o);
     reconfig_data_format(a, row);  // bcast(a,row): a->srcA, row->srcB
     sub_bcast_rows_init(a, row);
@@ -175,12 +175,12 @@ void bcast_rows_sub(uint32_t a, uint32_t row, uint32_t o, uint32_t Mt, uint32_t 
             tile_regs_release();
         }
     }
-    cb_push_back(o, Mt * Nt);
+    CircularBuffer(o).push_back(Mt * Nt);
 }
 
 // out = S * scalar[0,0], n tiles.
 void bcast_scalar_mul(uint32_t a, uint32_t scal, uint32_t o, uint32_t n) {
-    cb_reserve_back(o, n);
+    CircularBuffer(o).reserve_back(n);
     pack_reconfig_data_format(o);
     reconfig_data_format(a, scal);  // bcast(a,scal): a->srcA, scal->srcB
     mul_bcast_scalar_init(a, scal);
@@ -192,12 +192,12 @@ void bcast_scalar_mul(uint32_t a, uint32_t scal, uint32_t o, uint32_t n) {
         pack_tile(0, o, i);
         tile_regs_release();
     }
-    cb_push_back(o, n);
+    CircularBuffer(o).push_back(n);
 }
 
 // out[1,Ct] row-form = transpose of col[Ct,1]; produces Ct tiles (each row0 = a 32-chunk of col).
 void transpose_col(uint32_t in, uint32_t o, uint32_t Ct) {
-    cb_reserve_back(o, Ct);
+    CircularBuffer(o).reserve_back(Ct);
     pack_reconfig_data_format(o);
     reconfig_data_format_srca(in);  // unary: in->srcA
     transpose_init(in);
@@ -209,7 +209,7 @@ void transpose_col(uint32_t in, uint32_t o, uint32_t Ct) {
         pack_tile(0, o, i);
         tile_regs_release();
     }
-    cb_push_back(o, Ct);
+    CircularBuffer(o).push_back(Ct);
 }
 
 }  // namespace
@@ -359,7 +359,7 @@ void kernel_main() {
         POP(cb_k, ck);
         // decayfac kept alive: reused at the scan to recompute dl = exp(g_sum).
         // k_dec_t = transpose(k_dec) [K,C]: transpose each [Ct,Kt] tile block into [Kt,Ct].
-        cb_reserve_back(cb_kdec_t, Kt * Ct);
+        CircularBuffer(cb_kdec_t).reserve_back(Kt * Ct);
         pack_reconfig_data_format(cb_kdec_t);
         reconfig_data_format_srca(cb_scr1);  // unary: in->srcA
         transpose_init(cb_scr1);
@@ -373,7 +373,7 @@ void kernel_main() {
                 tile_regs_release();
             }
         }
-        cb_push_back(cb_kdec_t, Kt * Ct);
+        CircularBuffer(cb_kdec_t).push_back(Kt * Ct);
         WAIT(cb_kdec_t, Kt * Ct);
         POP(cb_scr1, ck);
 

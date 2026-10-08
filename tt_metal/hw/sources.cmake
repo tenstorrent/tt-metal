@@ -7,6 +7,7 @@ set(HW_JIT_API_HEADERS
     inc/api/remote_circular_buffer.h
     inc/api/semaphore.h
     inc/api/socket_api.h
+    inc/api/tt_uva.h
     inc/api/dataflow/dataflow_api.h
     inc/api/debug/assert.h
     inc/api/debug/checkpoint.h
@@ -407,6 +408,5 @@ set(HW_JIT_API_HEADERS
     toolchain/erisc-b0-kernel.ld
     ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_gradient_finalization_owner.inc
     ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_gradient_finalize.inc
-    ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_squared_replay.inc
     inc/api/compute/softsign_bw.h
 )
