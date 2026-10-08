@@ -47,6 +47,8 @@ def test_qwen3_vl_e2e(mesh_device, qwen_run_config, monkeypatch, request):
     if not progress.hooks_active():
         notes.append("progress.log unavailable: ttnn fast runtime mode is on (set TTNN_CONFIG_OVERRIDES).")
     recorder = StageRecorder(progress)
+    if request.config.getoption("--qwen-dump-decode-ops"):
+        progress.capture_prefix = "text.decode"
     session = OverrideSession(mesh_device, cfg.host_ops, cfg.disable_wa, cfg.allow_uncertified)
     session.install(monkeypatch)
     resume_from = request.config.getoption("--qwen-resume-prefill")
@@ -71,6 +73,8 @@ def test_qwen3_vl_e2e(mesh_device, qwen_run_config, monkeypatch, request):
             check_integrity=request.config.getoption("--qwen-check-tensor-integrity"),
         )
     host_ops, hits = session.host_ops_active, dict(session.hits)
+    if progress.captured:
+        torch.save(progress.captured, cfg.run_dir / "decode_ops.pt")
 
     if request.config.getoption("--qwen-dump-stages"):
         torch.save({"golden": goldens.tensors, "tt": recorder.tensors}, cfg.run_dir / "stages.pt")

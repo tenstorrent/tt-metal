@@ -31,6 +31,9 @@ class ProgressLog:
         self.stage = "-"
         self._open = []
         self._f = open(path, "a", buffering=1)
+        self.capture_prefix = None  # debug: keep top-level op outputs of stages starting with this
+        self.captured = []  # (index, op name, stage, host tensor)
+        self._capturing = False
 
     def _line(self, operation, args, kwargs):
         named = [f"{k}={_describe(v)}" for k, v in kwargs.items() if hasattr(v, "shape")]
@@ -45,6 +48,26 @@ class ProgressLog:
         if self._open:
             self._open.pop()
         self._f.write(f"{time.time():.3f} POST {self._line(operation, args, kwargs)}\n")
+        if (
+            self.capture_prefix
+            and not self._open
+            and not self._capturing
+            and self.stage.startswith(self.capture_prefix)
+        ):
+            self._capture(operation, output)
+
+    def _capture(self, operation, output):
+        import ttnn
+
+        from models.experimental.ops.quasar.qwen3_vl.tests.e2e.recorder import to_host
+
+        self._capturing = True  # reading back runs ttnn ops, whose hooks must not capture again
+        try:
+            for t in output if isinstance(output, (list, tuple)) else [output]:
+                if isinstance(t, ttnn.Tensor) and t.storage_type() == ttnn.StorageType.DEVICE and t.is_allocated():
+                    self.captured.append((len(self.captured), _name(operation), self.stage, to_host(t)))
+        finally:
+            self._capturing = False
 
     def last_unfinished(self):
         return self._open[-1] if self._open else None
