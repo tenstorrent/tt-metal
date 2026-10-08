@@ -13,9 +13,7 @@
 #include "api/compute/eltwise_unary/rdiv.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/dataflow/dataflow_buffer.h"
-#if WORK_QUEUE
-#include "unary_work_queue_tiles.hpp"
-#endif
+#include "dram_height_sharded.hpp"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -28,7 +26,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_input, cb_output);
     copy_init(cb_input);
-    auto process = [&](uint32_t count) {
+    dram_hs::for_each_chunk(num_tiles, [&](uint32_t count) {
         for (uint32_t i = 0; i < count; ++i) {
             tile_regs_acquire();
 
@@ -51,12 +49,5 @@ void kernel_main() {
 
             tile_regs_release();
         }
-    };
-#if WORK_QUEUE
-    for (uint32_t n = unary_wq::next_chunk_tiles(); n != 0; n = unary_wq::next_chunk_tiles()) {
-        process(n);
-    }
-#else
-    process(num_tiles);
-#endif
+    });
 }

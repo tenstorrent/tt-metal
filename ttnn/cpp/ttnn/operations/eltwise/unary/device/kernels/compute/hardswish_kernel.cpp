@@ -8,9 +8,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"  // Hardsigmoid
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // Optional
-#if WORK_QUEUE
-#include "unary_work_queue_tiles.hpp"
-#endif
+#include "dram_height_sharded.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -26,7 +24,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
 
-    auto process = [&](uint32_t count) {
+    dram_hs::for_each_chunk(num_tiles, [&](uint32_t count) {
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(count),
             ckl::CopyTile<
@@ -62,12 +60,5 @@ void kernel_main() {
                 ckl::ReservePolicy::PerTile,
                 ckl::PushPolicy::PerTile,
                 ckl::DataFormatReconfig::Disabled)>{});
-    };
-#if WORK_QUEUE
-    for (uint32_t n = unary_wq::next_chunk_tiles(); n != 0; n = unary_wq::next_chunk_tiles()) {
-        process(n);
-    }
-#else
-    process(num_tiles);
-#endif
+    });
 }
