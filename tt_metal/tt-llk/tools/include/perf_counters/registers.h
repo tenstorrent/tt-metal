@@ -63,12 +63,6 @@ inline constexpr std::uint32_t L1_MUX_SHIFT       = 4;
 inline constexpr std::uint32_t REF_PERIOD_MAX     = 0xFFFFFFFF;
 inline constexpr std::uint32_t DEFAULT_POLL_LIMIT = 1024;
 
-// PERF_CNT_ALL reaches only these two blocks (RTL confirmed); the others need their own control register.
-constexpr bool follows_all(Bank bank)
-{
-    return bank == Bank::INSTRN_THREAD || bank == Bank::FPU;
-}
-
 // Cross check every address against the arch tensix.h when it is visible.
 #ifdef RISCV_DEBUG_REG_PERF_CNT_FPU0
 static_assert(bank_regs(Bank::INSTRN_THREAD).ref_period == RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0);

@@ -31,8 +31,8 @@ PERF_COUNTER_GROUP_BITS = {
 }
 PERF_COUNTER_L1_GROUPS = {"l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"}
 PERF_COUNTER_BH_ONLY_GROUPS = {"l1_2", "l1_3", "l1_4", "l1_5"}
-# Every non L1 group plus one L1 bank fits the BRISC .text: measured 8684 of 8704 bytes on Blackhole and 7600 of
-# 7712 on Wormhole with the five group mask. The one L1 bank per pass rule below is what still forces passes.
+# Every non L1 group plus one L1 bank fits the BRISC .text: 8648 of 8704 bytes on Blackhole (8692 with a harvested
+# DRAM bank) and 7584 of 7712 on Wormhole with the five group mask. The one L1 bank per pass rule forces passes.
 PERF_COUNTER_MAX_GROUPS_PER_PASS = 5
 # PERF_COUNTER_PROFILER_ID in perf_counters.hpp: the timer_id the firmware tags counter rows with.
 PERF_COUNTER_MARKER_ID = "9090"

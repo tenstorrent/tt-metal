@@ -23,11 +23,6 @@ inline std::uint32_t read(std::uint32_t addr)
     return *reinterpret_cast<volatile std::uint32_t*>(addr);
 }
 
-inline void compiler_fence()
-{
-    asm volatile("" ::: "memory");
-}
-
 // Read-modify-write: the low bits of MUX_CTRL hold the INSTRN_THREAD debug-bus select.
 inline void set_l1_mux(std::uint8_t position)
 {
@@ -74,7 +69,7 @@ inline void stop_all()
 // Polls the mode register back so the next readout sees the new select. PollLimit 0 spins without a bound and
 // always returns true (the BRISC firmware is a few bytes from its size limit); otherwise false if no read matched.
 template <std::uint32_t PollLimit = DEFAULT_POLL_LIMIT>
-inline bool select(const BankRegs& regs, std::uint16_t sel)
+[[nodiscard]] inline bool select(const BankRegs& regs, std::uint16_t sel)
 {
     const std::uint32_t mode = (static_cast<std::uint32_t>(sel) << SELECT_SHIFT) | MODE_CONTINUOUS;
     write(regs.mode, mode);
@@ -108,13 +103,13 @@ inline std::uint32_t read_count(const BankRegs& regs)
     return read(regs.out_h);
 }
 
-// Calls emit(PerfCounterType, ref, count) once per table entry.
-template <std::uint32_t PollLimit = DEFAULT_POLL_LIMIT, class Emit>
+// Calls emit(PerfCounterType, ref, count) once per table entry. The poll is unbounded: emit has no way to flag a miss.
+template <class Emit>
 inline void read_table(const BankRegs& regs, Table table, Emit&& emit)
 {
     for (std::size_t i = 0; i < table.size; ++i)
     {
-        select<PollLimit>(regs, table.data[i].second);
+        (void)select<0>(regs, table.data[i].second);
         const std::uint32_t ref   = read_ref(regs);
         const std::uint32_t count = read_count(regs);
         emit(table.data[i].first, ref, count);

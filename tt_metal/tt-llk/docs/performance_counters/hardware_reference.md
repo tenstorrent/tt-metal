@@ -15,10 +15,10 @@ The counter inventory is defined once, in tt-llk, and metal consumes it too. The
 | Header | Holds |
 |---|---|
 | `types.h` | `PerfCounterType` (the counter names; the ordinal is the wire format the metal profiler tags records with, so append only), `Bank`, `Entry` |
-| `blackhole.h`, `wormhole.h` | Per-bank `{name, select}` tables (`instrn_counters`, `fpu_counters`, `unpack_counters`, `pack_counters`, `l1_<mux>_counters`), `NUM_*_COUNTERS`, `L1_MUX_MASK`, `L1_MUX_POSITIONS` |
+| `blackhole.h`, `wormhole.h` | Per-bank `{name, select}` tables (`instrn_counters`, `fpu_counters`, `unpack_counters`, `pack_counters`, `l1_<mux>_counters`), `L1_MUX_MASK`, `L1_MUX_POSITIONS` |
 | `inventory.h` | Picks the arch header from `ARCH_BLACKHOLE` / `ARCH_WORMHOLE` (`#error` on `ARCH_QUASAR`) and exposes `table_for(bank, l1_mux)` |
 | `registers.h` | `BankRegs` and `bank_regs(bank)` (the three control and two readout registers of each bank), `PERF_CNT_ALL`, `PERF_CNT_MUX_CTRL`, `DBG_FEATURE_DISABLE`, the `START` / `STOP` / `SELECT_SHIFT` / `L1_MUX_SHIFT` constants |
-| `hw.h` | Register primitives: `configure`, `start`, `stop`, `start_all`, `stop_all`, `select` (readback poll, bounded unless the caller asks for no limit), `read_ref`, `read_count`, `read_table`, `set_l1_mux`, `clear_debug_feature_disable` |
+| `hw.h` | Register primitives: `configure`, `start`, `stop`, `start_all`, `stop_all`, `select` (readback poll, bounded unless the caller asks for no limit), `read_ref`, `read_count`, `read_table` (unbounded poll), `set_l1_mux`, `clear_debug_feature_disable` |
 
 The host side is the stdlib-only package `tools/python/tt_llk_perf/`: `headers.py` parses `types.h` (`counter_type_names()`, ordinal to name) and the arch tables (`bank_tables(arch)`, bank to `[CounterEntry(name, select, l1_mux)]`); `metrics.py` is the derived-metric engine (`compute_metrics(view)`, `METRIC_LABELS`).
 
@@ -29,7 +29,7 @@ Consumers:
 
 Only **one** L1 mux group is emitted per build, chosen by `LLK_PERF_L1_MUX_GROUP` (default 0). There are only eight physical L1 counters and `PERF_CNT_MUX_CTRL` routes a group of eight client interfaces into them *while they count*, not when they are read, so a run observes exactly one group. The group is a compile-time constant baked into `brisc.elf`, so a sweep must recompile the producer. The readout checks the group decoded from L1 against the requested one and fails if they disagree.
 
-To add a counter: append the name to the end of `PerfCounterType` in `types.h`, add one `{PerfCounterType::NAME, select}` entry to the right bank table in the arch header and keep its `NUM_*_COUNTERS` in step. Nothing else changes: both device sides build their tables from the headers and both host sides parse them. To add a metric: one formula in `compute_metrics()` and one `METRIC_LABELS` entry in `metrics.py`, plus a row in the catalogue in `tech_reports/PerfCounters/perf-counters.md` (a unit test keeps the two in sync). The pieces the harness still mirrors by hand are its own L1 ABI: the config-word bit layout (`PERF_CFG_*`, parsed from `counters.h` by `counters.py`) and the bank-id to name mapping.
+To add a counter: append the name to the end of `PerfCounterType` in `types.h`, add one `{PerfCounterType::NAME, select}` entry to the right bank table in the arch header and bump the `std::array<Entry, N>` size (the Python parser checks it, and takes only integer literal selects). Nothing else changes: both device sides build their tables from the headers and both host sides parse them. To add a metric: one formula in `compute_metrics()` and one `METRIC_LABELS` entry in `metrics.py`, plus a row in the [derived metrics catalogue](#derived-metrics-reference) below (a unit test keeps the two in sync). The pieces the harness still mirrors by hand are its own L1 ABI: the config-word bit layout (`PERF_CFG_*`, parsed from `counters.h` by `counters.py`) and the bank-id to name mapping.
 
 ## Architecture Summary
 
@@ -160,7 +160,7 @@ their product:
 | Older label | Replacement | Identity |
 |---|---|---|
 | Unpacker0 Write Efficiency (%) | Unpacker-to-Math Data Flow (srcA) x SrcA Write Actual Efficiency | `SRCA_WRITE_NOT_BLOCKED_PORT / UNPACK0_BUSY_THREAD0` |
-| Unpacker1 Write Efficiency (%) | Unpacker-to-Math Data Flow (srcB) x (1 - SrcB Write Port Blocked Rate) | `SRCB_WRITE_NOT_BLOCKED_PORT / UNPACK1_BUSY_THREAD0` |
+| Unpacker1 Write Efficiency (%) | Unpacker-to-Math Data Flow (srcB) x SrcB Write Actual Efficiency | `SRCB_WRITE_NOT_BLOCKED_PORT / UNPACK1_BUSY_THREAD0` |
 | Unpacker Write Efficiency (%) | mean of the two rows above | mean of the two identities |
 
 The flow halves are ratios, not percentages: source writes per unpacker busy cycle passes 1.0 whenever an unpacker
@@ -193,9 +193,9 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 | Unpacker-to-Math Data Flow (srcA) (ratio) | `unpack_to_math_flow0_ratio` | `SRCA_WRITE_REQ / UNPACK0_BUSY_THREAD0` | UNBOUNDED ratio: srcA write requests per unpacker-0 busy cycle. THCON and other-thread writes also count, so it can exceed 1. |
 | Unpacker-to-Math Data Flow (srcB) (ratio) | `unpack_to_math_flow1_ratio` | `SRCB_WRITE_REQ / UNPACK1_BUSY_THREAD0` | UNBOUNDED ratio: srcB write requests per unpacker-1 busy cycle. |
 | SrcA Write Actual Efficiency (%) | `srca_write_eff_pct` | `SRCA_WRITE_NOT_BLOCKED_PORT / SRCA_WRITE_REQ` | srcA write requests that the write port accepted. |
-| SrcB Write Actual Efficiency (%) | `srcb_write_eff_pct` | `SRCB_WRITE_NOT_BLOCKED_OVR / SRCB_WRITE_REQ` | srcB write requests not blocked by overwrite protection. |
+| SrcB Write Actual Efficiency (%) | `srcb_write_eff_pct` | `SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_REQ` | srcB write requests that the write port accepted. |
 | SrcA Write Overwrite Blocked Rate (%) | `srca_write_ovr_blocked_pct` | `1 - SRCA_WRITE_NOT_BLOCKED_OVR / SRCA_WRITE_REQ` | srcA writes blocked by overwrite protection. |
-| SrcB Write Port Blocked Rate (%) | `srcb_write_port_blocked_pct` | `1 - SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_REQ` | srcB writes blocked on the write port. |
+| SrcB Write Overwrite Blocked Rate (%) | `srcb_write_ovr_blocked_pct` | `1 - SRCB_WRITE_NOT_BLOCKED_OVR / SRCB_WRITE_REQ` | srcB writes blocked by overwrite protection. |
 | Unpacker0 T1 Share (%) | `unpack0_thread1_share_pct` | `UNPACK0_BUSY_THREAD1 / (thread0 + thread1 busy)` | Unpacker-0 busy cycles driven by the math thread. |
 | Unpacker1 T1 Share (%) | `unpack1_thread1_share_pct` | `UNPACK1_BUSY_THREAD1 / (thread0 + thread1 busy)` | Unpacker-1 busy cycles driven by the math thread. |
 | SrcA Write Even-TID Share (%) | `srca_write_even_tid_share_pct` | `SRCA_WRITE_TID_EVEN / (even + odd writes)` | srcA writes from even thread ids (the counter tests thread-id bit 0, lane 0). |

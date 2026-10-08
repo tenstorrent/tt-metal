@@ -116,3 +116,39 @@ def test_synthetic_view_drives_the_engine():
     assert out["pack_utilization_pct"] == 80.0
     assert out["pack_dest_eff_pct"] == 25.0
     assert out["unpack_thread_stall_pct"] is None
+
+
+def test_table_parser_reads_hex_and_rejects_what_it_cannot_parse():
+    decl = "inline constexpr std::array<Entry, {n}> fpu_counters = {{{{{body}}}}};"
+    hex_body = "{PerfCounterType::FPU_COUNTER, 0x101}, {PerfCounterType::SFPU_COUNTER, 7}"
+    entries = headers.parse_tables(decl.format(n=2, body=hex_body))["FPU"]
+    assert [(e.name, e.select) for e in entries] == [
+        ("FPU_COUNTER", 257),
+        ("SFPU_COUNTER", 7),
+    ]
+    named = "{PerfCounterType::FPU_COUNTER, GRANT_BASE | 1}"
+    # allow-pytest.raises: same reason as test_arch_aliases_and_quasar.
+    with pytest.raises(ValueError, match="not an integer literal"):  # allow-pytest.raises
+        headers.parse_tables(decl.format(n=1, body=named))
+    with pytest.raises(ValueError, match="declares 3"):  # allow-pytest.raises
+        headers.parse_tables(decl.format(n=3, body=hex_body))
+
+
+def test_a_missed_select_reads_missing_not_zero():
+    assert metrics.bounded(float("nan")) is None
+    assert metrics.bounded(1.5) == 1.0
+    assert metrics.bounded(-0.5) == 0.0
+
+
+def test_srcb_write_metrics_mirror_srca():
+    out = metrics.compute_metrics(
+        _View(
+            {
+                "SRCB_WRITE_REQ": 100.0,
+                "SRCB_WRITE_NOT_BLOCKED_PORT": 80.0,
+                "SRCB_WRITE_NOT_BLOCKED_OVR": 40.0,
+            }
+        )
+    )
+    assert out["srcb_write_eff_pct"] == 80.0
+    assert out["srcb_write_ovr_blocked_pct"] == 60.0

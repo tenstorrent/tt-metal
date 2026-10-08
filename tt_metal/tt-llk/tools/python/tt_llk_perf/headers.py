@@ -133,25 +133,46 @@ def counter_type_names(include_dir=None) -> Dict[int, str]:
     return names
 
 
+_TABLE_DECL = re.compile(r"std::array<\s*Entry\s*,\s*(\d+)\s*>\s+(\w+_counters)\b[^=;]*=")
+_TABLE_ENTRY = re.compile(r"\{\s*PerfCounterType::(\w+)\s*,\s*([^{}]*?)\s*\}")
+_SELECT_LITERAL = re.compile(r"0[xX][0-9a-fA-F]+|0|[1-9]\d*")
+
+
+def _table_entries(name: str, size: int, chunk: str) -> List[tuple]:
+    """(name, select) pairs of one table; raises on a non-literal select or a count other than the array size."""
+    pairs = []
+    for counter, select in _TABLE_ENTRY.findall(chunk):
+        if _SELECT_LITERAL.fullmatch(select) is None:
+            raise ValueError(
+                f"{name}: select {select!r} of {counter} is not an integer literal"
+            )
+        pairs.append((counter, int(select, 0)))
+    if len(pairs) != size:
+        raise ValueError(
+            f"{name}: parsed {len(pairs)} entries but the array declares {size}"
+        )
+    return pairs
+
+
 def parse_tables(text: str) -> Dict[str, List[CounterEntry]]:
     """Bank -> entries for one <arch>.h; empty arrays (Wormhole L1 banks 2-5) are skipped."""
     banks: Dict[str, List[CounterEntry]] = {bank: [] for bank in BANK_KEYS}
     text = _strip_comments(text)
-    decls = list(re.finditer(r"\b(\w+_counters)\s*=", text))
+    decls = list(_TABLE_DECL.finditer(text))
     for i, decl in enumerate(decls):
-        name = decl.group(1)
+        size, name = int(decl.group(1)), decl.group(2)
         chunk = text[decl.end() : decls[i + 1].start() if i + 1 < len(decls) else None]
         chunk = chunk.split("};", 1)[0]
-        pairs = re.findall(r"PerfCounterType::(\w+)\s*,\s*(\d+)", chunk)
+        pairs = _table_entries(name, size, chunk)
         if not pairs:
             continue
         l1 = re.fullmatch(r"l1_(\d+)_counters", name)
         if l1 is not None:
             mux = int(l1.group(1))
-            banks["L1"].extend(CounterEntry(n, int(s), mux) for n, s in pairs)
+            banks["L1"].extend(CounterEntry(n, s, mux) for n, s in pairs)
         elif name in _ARRAY_TO_BANK:
             banks[_ARRAY_TO_BANK[name]].extend(
-                CounterEntry(n, int(s), None) for n, s in pairs
+                CounterEntry(n, s, None) for n, s in pairs
             )
     return banks
 

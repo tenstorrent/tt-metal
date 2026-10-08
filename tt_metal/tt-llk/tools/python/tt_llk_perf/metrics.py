@@ -39,10 +39,12 @@ def pct(value: "float | None") -> "float | None":
 
 
 def bounded(value: "float | None") -> "float | None":
-    """Clamp to [0, 1]. An L1 grant is the arbiter accept of a requesting client in the same cycle, so grants never
-    exceed requests; the clamp only guards ratios whose two counters were captured in different passes or groups.
+    """Clamp to [0, 1]; NaN (a missed select) stays missing. An L1 grant is the arbiter accept of a requesting client
+    in the same cycle, so grants never exceed requests; the clamp only guards ratios across passes or groups.
     """
-    return None if value is None else min(1.0, max(0.0, value))
+    if value is None or value != value:
+        return None
+    return min(1.0, max(0.0, value))
 
 
 def strict(v: "CounterView", *names) -> bool:
@@ -175,7 +177,7 @@ def compute_metrics(v: CounterView) -> dict:
     pack_sem_wait = _instrn_rate("WAITING_FOR_NONZERO_SEM_2")
 
     srca_write = v.count("TDMA_UNPACK", "SRCA_WRITE_NOT_BLOCKED_PORT")
-    srcb_write = v.count("TDMA_UNPACK", "SRCB_WRITE_NOT_BLOCKED_OVR")
+    srcb_write = v.count("TDMA_UNPACK", "SRCB_WRITE_NOT_BLOCKED_PORT")
     unpack0_busy = v.count("TDMA_UNPACK", "UNPACK0_BUSY_THREAD0")
     unpack1_busy = v.count("TDMA_UNPACK", "UNPACK1_BUSY_THREAD0")
 
@@ -272,7 +274,7 @@ def compute_metrics(v: CounterView) -> dict:
     )
     srcb_write_eff = (
         safe_div(srcb_write, srcb_avail)
-        if strict(v, "SRCB_WRITE_NOT_BLOCKED_OVR", "SRCB_WRITE_REQ")
+        if strict(v, "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_REQ")
         else None
     )
 
@@ -354,11 +356,11 @@ def compute_metrics(v: CounterView) -> dict:
         if strict(v, "SRCA_WRITE_NOT_BLOCKED_OVR", "SRCA_WRITE_REQ")
         else None
     )
-    srcb_write_port_blocked = (
+    srcb_write_ovr_blocked = (
         one_minus(
-            safe_div(v.count("TDMA_UNPACK", "SRCB_WRITE_NOT_BLOCKED_PORT"), srcb_avail)
+            safe_div(v.count("TDMA_UNPACK", "SRCB_WRITE_NOT_BLOCKED_OVR"), srcb_avail)
         )
-        if strict(v, "SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_REQ")
+        if strict(v, "SRCB_WRITE_NOT_BLOCKED_OVR", "SRCB_WRITE_REQ")
         else None
     )
 
@@ -627,7 +629,7 @@ def compute_metrics(v: CounterView) -> dict:
         "pack_instrn_avail_t2_pct": pct(pack_instrn_avail_t2),
         # Write-blocked rates (the other blocking mode of each source; the first is 1 - its efficiency)
         "srca_write_ovr_blocked_pct": pct(srca_write_ovr_blocked),
-        "srcb_write_port_blocked_pct": pct(srcb_write_port_blocked),
+        "srcb_write_ovr_blocked_pct": pct(srcb_write_ovr_blocked),
         "l1_port2_util_pct": pct(l1_port2_util),
         "l1_port1_util_pct": pct(l1_port1_util),
         "l1_packer_port8_util_pct": pct(l1_packer_port8_util),
@@ -714,7 +716,7 @@ METRIC_LABELS = {
     "srca_write_eff_pct": "SrcA Write Actual Efficiency",
     "srcb_write_eff_pct": "SrcB Write Actual Efficiency",
     "srca_write_ovr_blocked_pct": "SrcA Write Overwrite Blocked Rate",
-    "srcb_write_port_blocked_pct": "SrcB Write Port Blocked Rate",
+    "srcb_write_ovr_blocked_pct": "SrcB Write Overwrite Blocked Rate",
     "thread0_ipc_pct": "T0 Instrn Issue Rate",
     "thread1_ipc_pct": "T1 Instrn Issue Rate",
     "thread2_ipc_pct": "T2 Instrn Issue Rate",
