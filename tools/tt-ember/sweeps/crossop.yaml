@@ -1,9 +1,9 @@
-# Cross-op sweep (not in the paper): the POWER_CASE ablation repeated for every HIGH_POWER_OP,
+# Cross-op sweep (not in the paper): the POWER_CASE ablation repeated for every LONG_MATMUL_OP,
 # so the seven instructions can be compared at byte-identical data movement. K=4096 as in the
 # original cross-op runs, so absolute pJ/FLOP is not comparable with the K=2048 paper figures.
 # Set aiclk_mhz: 1000 for the iso-clock variant on Blackhole (needs tt_umd in the venv).
 name: crossop
-workload: high_power_matmul
+workload: long_matmul
 app_args: [1024, 2048, 4096, 160]
 telemetry_freq_hz: 50
 trim_ms: 1.0

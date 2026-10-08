@@ -15,7 +15,7 @@ Charge -> energy -> pJ/FLOP the same way as make_pj_per_flop.py:
     pJ/FLOP   = energy_J / (2 * M * N * K * iterations) * 1e12
 
 Caveat on the writer row: no POWER_CASE in this sweep genuinely idles the writer (that needs
-HIGH_POWER_DISABLE_WRITER=1, not captured here). `regular` (write amplification 0%) is used as
+LONG_MATMUL_DISABLE_WRITER=1, not captured here). `regular` (write amplification 0%) is used as
 the writer-idle stand-in, on the assumption that turning off write amplification is the closest
 available proxy for "writer not doing extra work". This isolates the cost of the write-amplified
 path specifically, not the writer engine's total contribution (the writer still performs its one

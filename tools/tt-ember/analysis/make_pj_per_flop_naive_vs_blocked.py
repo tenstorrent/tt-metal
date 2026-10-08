@@ -50,7 +50,7 @@ def pj_per_flop(path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("naive_csv", type=Path, help="program_intervals.csv of the naive POWER_CASE=0 run")
-    ap.add_argument("blocked_csv", type=Path, help="program_intervals.csv of the HIGH_POWER_BLOCK_M=2 N=4 run")
+    ap.add_argument("blocked_csv", type=Path, help="program_intervals.csv of the LONG_MATMUL_BLOCK_M=2 N=4 run")
     ap.add_argument("--out", type=Path, default=Path("pj_per_flop_blackhole_naive_vs_blocked.png"))
     args = ap.parse_args()
 

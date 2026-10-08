@@ -46,7 +46,7 @@ POWER_CASE_SPECS: Dict[int, Tuple[str, str]] = {
 # sides, so (case 1 - case X) isolates engine X's own contribution to dynamic power.
 DEFAULT_POWER_CASES: List[int] = [5, 1, 2, 4]
 
-# Which per-tile FPU instruction the compute kernel runs (HIGH_POWER_OP, see mm_power.cpp's
+# Which per-tile FPU instruction the compute kernel runs (LONG_MATMUL_OP, see compute.cpp's
 # USE_ADD / USE_SILU / USE_EXP / USE_SIGMOID / USE_GELU / USE_RECIP / MATMUL_FNN_DN). The full
 # POWER_CASE sweep runs once per entry here, into its own <output-root>/<op>/ subtree, so the
 # operations can be compared like-for-like. Each op/case directory is skipped individually if
