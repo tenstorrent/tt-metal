@@ -167,9 +167,10 @@ What everyone agrees on:
   lever without quantizing activations), `w8a8_lofi` (the Wan / LTX tier). `1` means `w8a8` until the measurements
   below pick the shipped default. Knobs refine a preset: `FAST_H3_FP8_LINEARS` (subset of roles),
   `FAST_H3_FP8_ACTIVATIONS`, `FAST_H3_FP8_FIDELITY`, `FAST_H3_FP8_FP32_ACC`, `FAST_H3_FP8_SDPA` (cast Q/K/V),
-  `FAST_H3_FP8_OUT_WEIGHT` (un-fuse `to_out`'s epilogue and quantize its weight), `FAST_H3_FP8_FF2_CAST` (typecast
-  `ff1`'s bf16 output for `ff2` instead of writing `bfloat8_b` directly: the matmul packs a block-float output
-  without the precise rounding path that `ttnn.typecast` uses, so both are measured).
+  `FAST_H3_FP8_OUT_WEIGHT` (un-fuse `to_out`'s epilogue and quantize its weight). A typecast of `ff1`'s bf16
+  output for `ff2` (instead of the matmul writing block float directly, which packs without the precise rounding
+  path `ttnn.typecast` uses) was tried and dropped: the fused SwiGLU returns non-finite values when a block-float
+  input is paired with a bf16 output override.
 - **Mechanics:** `MiniMaxH3QuantConfig` / `apply_quant_config` in
   `models/tt_dit/models/transformers/minimax_h3/quant_config.py`; the pipeline reads the environment (or a
   `quant_config=` argument) at construction and applies it after every transformer load, and the Turbo pipeline after

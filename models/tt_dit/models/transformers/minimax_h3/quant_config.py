@@ -64,9 +64,6 @@ class MiniMaxH3QuantConfig:
     sdpa_input_dtype: ttnn.DataType | None = None
     #: Quantize `to_out`'s weight as well, at the cost of un-fusing its addcmul epilogue.
     out_weight: bool = False
-    #: Feed ff2 a bf16 ff1 output typecast to bfloat8_b (the precise rounding path, one extra pass) instead of
-    #: ff1's matmul writing bfloat8_b directly.
-    ff2_cast: bool = False
 
     def linear(self, name: str) -> LinearQuant:
         return getattr(self, name)
@@ -89,7 +86,6 @@ class MiniMaxH3QuantConfig:
         fp32_dest_acc: bool | None = None,
         sdpa: bool = False,
         out_weight: bool = False,
-        ff2_cast: bool = False,
     ) -> MiniMaxH3QuantConfig:
         """One of `PRESETS`, narrowed to `linears` and with any explicit overrides applied.
 
@@ -125,7 +121,6 @@ class MiniMaxH3QuantConfig:
             **fields,
             sdpa_input_dtype=ttnn.bfloat8_b if sdpa else None,
             out_weight=out_weight and "out" in linears,
-            ff2_cast=ff2_cast and "ff2" in linears,
         )
 
     def describe(self) -> str:
@@ -140,8 +135,6 @@ class MiniMaxH3QuantConfig:
             parts.append(f"{n}:{w}{a}/{fid}{'' if q.fp32_dest_acc else '/no-fp32-acc'}")
         if self.sdpa_input_dtype is not None:
             parts.append("sdpa:in8")
-        if self.ff2_cast and self.ff2.activation_dtype is not None:
-            parts.append("ff2:cast")
         return " ".join(parts) if parts else "off"
 
 
@@ -172,7 +165,7 @@ def math_fidelity_from_env(var: str) -> ttnn.MathFidelity | None:
 def quant_config_from_env() -> MiniMaxH3QuantConfig:
     """`FAST_H3_FP8` = 0 (default, off) | 1 (the `w8a8` preset) | a preset name, refined by the optional
     FAST_H3_FP8_LINEARS (subset of qkv,out,ff1,ff2), FAST_H3_FP8_ACTIVATIONS, FAST_H3_FP8_FIDELITY,
-    FAST_H3_FP8_FP32_ACC, FAST_H3_FP8_SDPA, FAST_H3_FP8_OUT_WEIGHT and FAST_H3_FP8_FF2_CAST."""
+    FAST_H3_FP8_FP32_ACC, FAST_H3_FP8_SDPA and FAST_H3_FP8_OUT_WEIGHT."""
     raw = os.environ.get(ENV_FLAG, "0").strip()
     if raw.lower() in _FALSE:
         return MiniMaxH3QuantConfig.default()
@@ -188,7 +181,6 @@ def quant_config_from_env() -> MiniMaxH3QuantConfig:
         fp32_dest_acc=_flag("FAST_H3_FP8_FP32_ACC"),
         sdpa=_flag("FAST_H3_FP8_SDPA", False),
         out_weight=_flag("FAST_H3_FP8_OUT_WEIGHT", False),
-        ff2_cast=_flag("FAST_H3_FP8_FF2_CAST", False),
     )
 
 
@@ -231,12 +223,12 @@ def apply_quant_config(model, config: MiniMaxH3QuantConfig) -> None:
         attn, ff = block.attn, block.ff
         _apply_linear(attn.to_qkv, config.qkv, cast_input=True, pin_output=True)
         _apply_linear(attn.to_out, config.out, cast_input=True, pin_output=True)
-        # ff1 feeds ff2 directly in block float unless ff2_cast asks for a bf16 output typecast afterwards.
-        _apply_linear(ff.ff1, config.ff1, cast_input=True, pin_output=config.ff2_cast)
+        _apply_linear(ff.ff1, config.ff1, cast_input=True, pin_output=False)
         _apply_linear(ff.ff2, config.ff2, cast_input=False, pin_output=False)
-        # ff1's SwiGLU output is ff2's input: produce it in bfloat8_b directly, or (ff2_cast) typecast it.
-        ff.ff1_output_dtype = None if config.ff2_cast else config.ff2.activation_dtype
-        ff.ff2_input_cast = config.ff2.activation_dtype if config.ff2_cast else None
+        # ff1's SwiGLU output is ff2's input: the matmul writes it in bfloat8_b directly. (A bf16 output typecast
+        # afterwards was tried and dropped: the fused SwiGLU returns non-finite values when its block-float input
+        # is paired with a bf16 output override.)
+        ff.ff1_output_dtype = config.ff2.activation_dtype
         attn.qkv_compute_kernel_config = _compute_config(arch, config.qkv)
         attn.out_compute_kernel_config = _compute_config(arch, config.out)
         block.ff_compute_kernel_config = _compute_config(arch, config.ff1)

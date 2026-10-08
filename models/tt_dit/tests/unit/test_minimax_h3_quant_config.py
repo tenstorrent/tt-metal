@@ -21,7 +21,6 @@ KNOBS = (
     "FAST_H3_FP8_FP32_ACC",
     "FAST_H3_FP8_SDPA",
     "FAST_H3_FP8_OUT_WEIGHT",
-    "FAST_H3_FP8_FF2_CAST",
 )
 
 
@@ -138,7 +137,7 @@ class _Linear:
 
 def _fake_block():
     attn = SimpleNamespace(to_qkv=_Linear(), to_out=_Linear(), sdpa_input_dtype=None, fuse_out_addcmul=True)
-    ff = SimpleNamespace(ff1=_Linear(), ff2=_Linear(), ff1_output_dtype=None, ff2_input_cast=None)
+    ff = SimpleNamespace(ff1=_Linear(), ff2=_Linear(), ff1_output_dtype=None)
     return SimpleNamespace(attn=attn, ff=ff, mesh_device=SimpleNamespace(arch=lambda: ttnn.device.Arch.BLACKHOLE))
 
 
@@ -154,7 +153,7 @@ def test_apply_sets_the_block_attributes(monkeypatch):
     for linear in (block.attn.to_qkv, block.attn.to_out, block.ff.ff1):
         assert linear.activation_dtype == ttnn.bfloat8_b
     assert block.ff.ff2.activation_dtype is None
-    assert block.ff.ff1_output_dtype == ttnn.bfloat8_b and block.ff.ff2_input_cast is None
+    assert block.ff.ff1_output_dtype == ttnn.bfloat8_b
     # Outputs feeding a norm or the residual are pinned to bf16; ff1's is not.
     assert block.attn.to_qkv.pin_output_bf16 and block.attn.to_out.pin_output_bf16
     assert not block.ff.ff1.pin_output_bf16
@@ -165,18 +164,6 @@ def test_apply_sets_the_block_attributes(monkeypatch):
     # Re-applying is a no-op on already-cast weights.
     qc.apply_quant_config(block, qc.MiniMaxH3QuantConfig.preset("w8a8_lofi", sdpa=True))
     assert casts == [ttnn.bfloat8_b] * 3
-
-
-def test_ff2_cast_moves_the_rounding_to_a_typecast(monkeypatch, clean_env):
-    monkeypatch.setattr(qc.ttnn, "typecast", lambda data, dtype: SimpleNamespace(dtype=dtype))
-    clean_env.setenv(qc.ENV_FLAG, "w8a8")
-    clean_env.setenv("FAST_H3_FP8_FF2_CAST", "1")
-    config = qc.quant_config_from_env()
-    assert config.ff2_cast and config.describe().endswith("ff2:cast")
-    block = _fake_block()
-    qc.apply_quant_config(block, config)
-    assert block.ff.ff1_output_dtype is None and block.ff.ff2_input_cast == ttnn.bfloat8_b
-    assert block.ff.ff1.pin_output_bf16  # the bf16 output exists only if the matmul is told to write it
 
 
 def test_apply_out_weight_unfuses_the_epilogue(monkeypatch):
