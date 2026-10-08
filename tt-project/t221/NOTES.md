@@ -33,3 +33,27 @@ tables) and cmp.txt and report the table vs #251. If FILL_NOT_OK, read out_fill*
   chips 8-15 off the bus since 05:01 UTC), no t221 job there.
 - drv221b.sh copied to blx01 and started (pgid 85242). Timed job 948 (seeds 0-4, out_time2/) running from 05:18:17 UTC.
 - Marker /var/tmp/fasth3/t221/drv221b.done. Next: parse out_time2/run.log + cmp.txt, report vs #251.
+
+## Result (2026-10-08, standard wake): DONE
+Job 948 (blx01, 05:18:17-05:21:47 UTC, commit d791f4e9497) vs #251 job 909 (bf8, same tree). Stage times from
+log timestamps (parse221.py; s1 includes ~0.1 s denoise init, audio = mel-VAE + vocoder, export = mp4 mux).
+
+| run | gen/seed | wall | enc | S1 (6 st) | upsample | S2 (1 st) | VAE | audio | export |
+|---|---|---|---|---|---|---|---|---|---|
+| bf16 | 1/0 (first warm) | 7.348 | 1.731 | 1.786 | 0.144 | 0.965 | 0.698 | 1.217 | 0.798 |
+| bf16 | 2/1 | 5.624 | 0.189 | 1.766 | 0.148 | 0.970 | 0.699 | 1.194 | 0.649 |
+| bf16 | 3/2 | 5.721 | 0.181 | 1.780 | 0.148 | 0.972 | 0.699 | 1.189 | 0.744 |
+| bf16 | 4/3 | 5.744 | 0.180 | 1.764 | 0.145 | 0.973 | 0.694 | 1.240 | 0.737 |
+| bf16 | 5/4 | 5.600 | 0.184 | 1.775 | 0.139 | 0.965 | 0.696 | 1.182 | 0.647 |
+| bf16 mean 5 seeds | | 6.007 | 0.493 | 1.774 | 0.145 | 0.969 | 0.697 | 1.204 | 0.715 |
+| bf16 mean seeds 1-4 | | 5.672 | 0.184 | 1.771 | 0.145 | 0.970 | 0.697 | 1.201 | 0.694 |
+| bf8 mean 5 seeds (909) | | 5.756 | 0.554 | 1.599 | 0.152 | 0.877 | 0.693 | 1.211 | 0.661 |
+| bf8 mean seeds 1-4 (909) | | 5.451 | 0.257 | 1.597 | 0.151 | 0.877 | 0.691 | 1.202 | 0.665 |
+
+Step: bf16 S1 275 ms, S2 814 ms; bf8 S1 247 ms, S2 722 ms (+11-13%). Cold gen0: bf16 31.9 s, bf8 32.4 s.
+Quality: bf16 vs bf8 seed 0 PCC 0.425, PSNR 13.6 dB. Visual check of frame 72: both clean, same prompt content
+(singer, guitar, stool), different pose/framing. Divergent sampling from the weight precision change, not a
+broken bf16 output. Artifacts on g15blx02 tt-project/t221/: bf16_seed0.mp4, still_bf16_seed0_f72.png,
+still_bf8_vs_bf16_seed0_f72.png (untracked). blx01 originals: /var/tmp/fasth3/t221/out_time2/.
+Cleanup: removed the 37 GB bf16 DiT cache (t220/cache/.../ltx-2.3-22b-distilled-1.1/transformer, built by fill 913).
+Drops: 1 (2026-10-08 03:15:13 UTC, blx01, job 914, tray 4 chips 16-23, ours). Rerun 948 clean.
