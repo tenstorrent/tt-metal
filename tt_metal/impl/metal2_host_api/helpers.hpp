@@ -4,11 +4,15 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <string_view>
 #include <type_traits>
 #include <umd/device/types/arch.hpp>
 #include <unordered_set>
 #include <variant>
+#include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
@@ -19,7 +23,6 @@
 
 namespace tt::tt_metal::experimental {
 
-// TODO: Shouldn't be in helpers.
 // ============================================================================
 // Constants
 // ============================================================================
@@ -35,7 +38,8 @@ static constexpr uint32_t QUASAR_TENSIX_ENGINES_PER_NODE = 4;
 // Basic Utility Helpers
 // ============================================================================
 
-// TODO: This should be upstreamed.
+// This is needed because NodeRangeSet does not have a constructor that takes a NodeCoord.
+// Adding that constructor would break use sites :(
 inline NodeRangeSet to_node_range_set(const Nodes& nodes) {
     return std::visit(
         [](const auto& n) -> NodeRangeSet {
@@ -123,7 +127,9 @@ inline bool same_node_set(const NodeRangeSet& a, const NodeRangeSet& b) {
     return a.num_cores() == b.num_cores() && a.intersection(b).num_cores() == a.num_cores();
 }
 
-// TODO: Move this as prefetcher domain
+// ============================================================================
+// Prefetcher specific helpers
+// ============================================================================
 
 // Role of a kernel binding a PrefetcherPipe accessor group, from its nodes and the group's receiver
 // sets alone (the spec does not name senders; a pipe's sender is the pipe object's). The kernel is
@@ -144,6 +150,10 @@ inline bool is_prefetcher_pipe_sender_role(
 inline const std::vector<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) {
     return dfb.advanced_options.alias_with;
 }
+
+// ============================================================================
+// DFB helpers
+// ============================================================================
 
 // Whether a DM kernel opts out of implicit sync for a particular DFB.
 // Two routes lead to the same opt-out:

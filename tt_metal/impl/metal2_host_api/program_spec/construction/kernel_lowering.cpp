@@ -4,6 +4,7 @@
 
 #include "impl/metal2_host_api/program_spec/construction/kernel_lowering.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <map>
 #include <string>
