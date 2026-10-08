@@ -89,6 +89,10 @@ void kernel_main() {
     // posts to a dispatcher absent under SD and wedges the NOC.
 #if defined(WATCHER_KERNEL_SLOW_DISPATCH)
     go_message_in->signal = RUN_MSG_DONE;
+#elif defined(FDS_SIGNALLING)
+    // Quasar dispatch engines complete a launch on the FDS done wire and the go message carries no
+    // dispatcher coordinate to post to. No early notify here: the watcher error aborts the host's wait, and
+    // a done queued on the wire by this kernel would be left over for the next device open.
 #else
     uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
     notify_dispatch_core_done(dispatch_addr, noc_index);
