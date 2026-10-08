@@ -73,6 +73,20 @@ class MLP:
         from models.demos.minimax_m3.utils import expert_placement
 
         self.expert_perm = expert_placement.perm_for_layer(kagent_flags.EXPERT_PLACEMENT, layer_idx)
+        # How the router's expert ids become placement labels (M3_KA_EXPERT_RELABEL):
+        #   gather (default): the router is untouched (routing decisions bit-identical, incl. the gate's top-k
+        #     tie resolution) and one ttnn.gather maps id -> label after it (self.expert_relabel_table).
+        #   router: permute the router's columns at load (no extra op, but the gate's unstable top-k resolves
+        #     TF32-tied scores by column position, so ~4 % of routing decisions per layer change; rejected).
+        self.expert_relabel_table = None
+        router_perm = None
+        if self.expert_perm is not None:
+            if kagent_flags.EXPERT_RELABEL == "router":
+                router_perm = self.expert_perm
+            else:
+                from models.demos.minimax_m3.tt.moe.placed_routed_expert import build_relabel_table
+
+                self.expert_relabel_table = build_relabel_table(mesh_device, self.expert_perm, ep_seq_len_per_chip)
         self.mesh_config = mesh_config
         self.ccl = ccl_manager
         # Residual-stream layout (tt/residual.py). Sharded => this block CONSUMES full emb (the layer's
@@ -96,7 +110,7 @@ class MLP:
             # Tokens per device per forward — lets the router size the fused gate's wide bias at init.
             num_tokens=ep_seq_len_per_chip,
             mesh_config=mesh_config,
-            expert_perm=self.expert_perm,
+            expert_perm=router_perm,
         )
 
         # Cache-only loading: an empty state_dict means "load every tilized weight from the on-disk
@@ -248,6 +262,17 @@ class MLP:
         padding_config = self.router.build_padding_config(actual_isl, actual_start)
         with zone("router_topk"):
             idx, wts = self.router(hidden_states, padding_config=padding_config)  # per-row top-k
+        if self.expert_relabel_table is not None:
+            # M3_KA_EXPERT_PLACEMENT: expert id -> placement label (pad-row sentinel maps to itself); the top-k
+            # order and weights are untouched, so every downstream op sees the same routing under new labels.
+            table = self.expert_relabel_table
+            if len(table.shape) != len(idx.shape):  # the gate keeps the router logits' rank (2 today)
+                table = ttnn.reshape(table, [1] * (len(idx.shape) - len(table.shape)) + list(table.shape))
+                self.expert_relabel_table = table
+            with zone("expert_relabel", FINE):
+                labels = ttnn.gather(table, -1, idx, memory_config=idx.memory_config())
+            ttnn.deallocate(idx)
+            idx = labels
         x3d = ttnn.squeeze(hidden_states, dim=0)  # [1,1,S,H] -> [1,S,H] per device
         out = self.experts(
             x3d, topk_indices=idx, topk_weights=wts, padding_config=padding_config, skip_reduce_scatter=single_rs

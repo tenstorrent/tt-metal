@@ -9,18 +9,19 @@ default). The chip whose 8 experts drew the most (token, expert) rows sets the c
 experts -> combine -> TP reduce-scatter for the whole mesh.
 
 How (exact): a placement is a per-layer permutation ``perm`` of the 128 labels with ``perm[new_label] = expert``:
-the expert whose checkpoint id is ``perm[n]`` is served at the slot of label ``n``. It is applied at load time by
-permuting the router's output columns (gate weight columns and the e_score_correction_bias, bf16 bytes moved,
-never rounded) and the cached bf4 expert weight shards (bytes moved between devices / local slots). The router
-then emits new labels for the same expert choices (the logits of each expert are computed from the same weight
-column, the top-k is over the same values; only exact fp32 score ties could resolve differently, because the
-top-k tie order is by index), and everything downstream (masked_bincount, offset_cumsum, dispatch, the expert
-FFN, combine, post_combine_reduce) runs the default label -> chip mapping unchanged.
+the expert whose checkpoint id is ``perm[n]`` is served at the slot of label ``n``. It is applied at load time to the
+cached bf4 expert weight shards (bytes moved between devices / local slots), and at run time the router's top-k
+expert ids are mapped to labels by one ``ttnn.gather`` (tt/moe/placed_routed_expert.build_relabel_table). The
+router itself is untouched, so every routing decision and the top-k order are bit-identical to the default
+placement, and everything downstream (masked_bincount, offset_cumsum, dispatch, the expert FFN, combine,
+post_combine_reduce) runs the default label -> chip mapping unchanged. (Permuting the router's columns instead,
+M3_KA_EXPERT_RELABEL=router, saves the gather but changes ~4 % of routing decisions per layer: the gate's top-k is
+unstable on TF32 keys, so tied scores resolve by column position.)
 
 Exactness classes:
   * ``column`` placements keep every expert in its original column (``perm[n] // 32 == n // 32``). Each column then
     holds the same expert set, post_combine_reduce sums the same top-k slots in the same order, and the TP
-    reduce-scatter adds identical partials: KV and logits are expected bit-exact (class A; verify).
+    reduce-scatter adds identical partials: KV and logits are bit-exact (class A; verified on silicon, docs 32).
   * ``global`` placements may move an expert to another column; the per-column partial sums group differently
     before the bf16 reduce-scatter (class B, NLL gate).
 
