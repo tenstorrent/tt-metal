@@ -2661,7 +2661,7 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
         return;
     }
 
-    std::scoped_lock lock(ctx_.profiler_state_manager()->log_file_write_mutex);
+    std::scoped_lock lock(ProfilerRegistry::instance().log_file_write_mutex);
 
     const std::filesystem::path log_path = device_logs_output_dir / DEVICE_SIDE_LOG;
     dumpDeviceResultsToCSV(
