@@ -279,7 +279,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> sliding_window_size,
-    const std::optional<ttnn::Tensor>& attention_sink) {
+    const std::optional<ttnn::Tensor>& attention_sink,
+    std::optional<ttnn::transformer::SDPAPrecision> precision) {
     if (chunk_start_idx_tensor_opt.has_value()) {
         return ttnn::transformer::chunked_scaled_dot_product_attention(
             input_tensor_q,
@@ -293,7 +294,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
             compute_kernel_config,
             paged_cache_geometry,
             sliding_window_size,
-            attention_sink);
+            attention_sink,
+            precision);
     }
     if (!chunk_start_idx_arg.has_value()) {
         throw std::runtime_error(
@@ -312,7 +314,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
         compute_kernel_config,
         paged_cache_geometry,
         sliding_window_size,
-        attention_sink);
+        attention_sink,
+        precision);
 }
 
 }  // namespace
@@ -582,6 +585,10 @@ void bind_sdpa(nb::module_& mod) {
                 at absolute position p attends to keys in (p - window, p]. Defaults to `None`.
             attention_sink (ttnn.Tensor, optional): Per-head learned sink logit [1 x nqh x 1 x 1],
                 as for `scaled_dot_product_attention`. Defaults to `None`.
+            precision (ttnn.SDPAPrecision, optional): Named numerical recipe, as for
+                `scaled_dot_product_attention`. Recipes take one cache block per sequence (page table
+                [b x 1]), any chunk_start_idx, and no paged_cache_geometry or attention_sink yet.
+                Omit for the legacy kernel. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -605,7 +612,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
         nb::arg("paged_cache_geometry").noconvert() = nb::none(),
         nb::arg("sliding_window_size") = nb::none(),
-        nb::arg("attention_sink").noconvert() = nb::none());
+        nb::arg("attention_sink").noconvert() = nb::none(),
+        nb::arg("precision").noconvert() = nb::none());
 
     const auto* const joint_doc = R"doc(
         JointAttention operation that efficiently performs non-causal attention over two
