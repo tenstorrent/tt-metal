@@ -627,10 +627,10 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     const std::string_view compute_kernel = get_compute_kernel_path(ops_chain[0].type(), input.dtype());
     const std::string compute_path =
         fmt::format("ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}", compute_kernel);
-    // A chain's op-major block on a native L1 shard of 17 or more tiles, 16-bit DEST: the tiles half of DEST holds.
+    // A chain's op-major block on a native L1 shard of 12 or more tiles, 16-bit DEST: the tiles half of DEST holds.
     uint32_t chain_block = 1;
     if (compute_kernel == "eltwise_sfpu.cpp" && input.device()->arch() == tt::ARCH::BLACKHOLE) {
-        if (src_num_tiles_per_shard.value_or(0) >= 17 && dst_num_tiles_per_shard.value_or(0) >= 17 &&
+        if (src_num_tiles_per_shard.value_or(0) >= 12 && dst_num_tiles_per_shard.value_or(0) >= 12 &&
             !operation_attributes.fp32_dest_acc_en) {
             chain_block = 8;
         }
