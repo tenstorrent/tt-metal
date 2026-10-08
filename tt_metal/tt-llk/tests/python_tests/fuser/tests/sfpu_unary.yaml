@@ -25,7 +25,7 @@ operations:
         block_tiles: [1, 4]
         operation: "Exp"
         approximation_mode: false
-        iterations: 32
+        iterations: tile
     pack:
       - output: "datacopy_out"
         block_tiles: [1, 4]

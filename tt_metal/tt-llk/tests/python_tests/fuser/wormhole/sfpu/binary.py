@@ -85,12 +85,13 @@ class BinarySfpu(Sfpu):
         src2 = block.dest_src1
         dst = block.tile_id_dest
         format = self._format_arg(config)
+        vector_mode = self._vector_mode(operation)
 
         return (
             f"    test_utils::call_binary_sfpu_operation<"
             f"{dest_sync}, {dest_acc}, "
             f"{approx_mode}, {op}, {iterations}, {format}"
-            f">({src1} /* dst_index_in0 */, {src2} /* dst_index_in1 */, {dst} /* dst_index_out */);\n"
+            f">({src1} /* dst_index_in0 */, {src2} /* dst_index_in1 */, {dst} /* dst_index_out */, {vector_mode});\n"
         )
 
     def __str__(self) -> str:

@@ -82,11 +82,13 @@ class BinarySfpu(Sfpu):
         dst = block.tile_id_dest
         data_format = config.sentinel._sfpu_format.cpp_enum_value
         dst_rounding_mode = self.dst_rounding_mode.cpp_enum_value
+        tile_elements = operation.tile_shape.total_tile_size()
+        dst_tile_shape = f"ckernel::trisc::DstTileShape::Tile32x{tile_elements // 32}"
 
         return (
             f"test_utils::call_binary_sfpu_operation_quasar<"
             f"{op}, {dest_sync}, {en_32bit_dest}, {dst_rounding_mode}, "
-            f"{quasar_iterations}, false, {approx_mode}"
+            f"{quasar_iterations}, false, {approx_mode}, ckernel::BroadcastType::NONE, {dst_tile_shape}"
             f">({src1} /* src0_tile */, {src2} /* src1_tile */, {dst} /* dst_tile */, {data_format});\n"
         )
 

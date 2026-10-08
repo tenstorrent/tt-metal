@@ -410,7 +410,7 @@ class UnarySfpuMathSchema(BlockSchema):
     type: Literal["UnarySfpu"]
     operation: MathOperation
     approximation_mode: ApproximationMode = ApproximationMode.No
-    iterations: Literal[8, 32] = 8
+    iterations: Literal[8, 16, 32, "tile"] = 8
     fill_const_value: float = 1.0
     indexes: Optional[Union[str, IndexesSchema]] = None
 
@@ -839,6 +839,23 @@ class OperationSchemaBase(BaseModel):
 
         # Each node may use its own block_size; the shared dest bank spans the
         # per-axis max. Nodes address dest tiles through their index_spec arrays.
+        for schema in all_schemas:
+            if not isinstance(schema, UnarySfpuMathSchema):
+                continue
+            if (
+                schema.iterations == "tile"
+                and tile_shape.tile_dims not in SFPU_TILE_SIZES
+            ):
+                raise ValueError(
+                    f"iterations: tile requires an SFPU tile shape, got {tile_shape.tile_dims}"
+                )
+            if schema.iterations == "tile":
+                schema.iterations = tile_shape.total_tile_size() // 32
+            if schema.iterations * 32 > tile_shape.total_tile_size():
+                raise ValueError(
+                    f"UnarySfpu iterations={schema.iterations} exceeds tile shape "
+                    f"{tile_shape.tile_dims}; use iterations: tile to process one tile"
+                )
         node_dims = [node_block_dims(s) for s in all_schemas]
         bank_x = max(nx for nx, _ in node_dims)
         bank_y = max(ny for _, ny in node_dims)
