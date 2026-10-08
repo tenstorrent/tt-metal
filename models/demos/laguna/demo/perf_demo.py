@@ -11,15 +11,19 @@ results table. Run it with no server running:
     python models/demos/laguna/demo/perf_demo.py --input-lens 128,16384,131072   # other lengths, up to 1M
     python models/demos/laguna/demo/perf_demo.py --modes dflash --prompts 3   # DFlash averaged over 3 prompts
     python models/demos/laguna/demo/perf_demo.py --modes normal --input-lens 128,4096
+    python models/demos/laguna/demo/perf_demo.py --batch 32                 # 32 concurrent users (normal decode)
 
 Every request is greedy (temperature 0) and generates exactly ``--output-tokens`` tokens (EOS ignored). Each input
 length gets ``--prompts`` different random prompts (default 1, like tt-metal's simple_text_demo seqlen-sweep); with
 more than one the table reports the mean and the per-request range.
 
-    TTFT            time from sending the request to the first output token (prefill, plus queueing: none at batch 1)
+    TTFT            time from sending the request to the first output token (prefill, plus queueing: none at batch 1;
+                    with --batch N the N requests arrive together and are prefilled one after another, so the mean
+                    includes waiting for the others and the max is the last user's)
                     Each length is first sent once as a 16-token warm-up with the same prompt, so one-time program
                     builds (DFlash builds one per new prompt length) are not timed.
-    decode tok/s    1000 / time per output token after the first (per user; batch 1, so also the total)
+    decode tok/s    1000 / time per output token after the first, per user
+    total tok/s     all users' output tokens / benchmark wall time (with --batch N; includes the prefills)
 
 Speculative decoding speed depends on how predictable the generated text is, so DFlash varies from prompt to prompt
 much more than normal decode; pass ``--prompts 3`` or more for a steadier DFlash number. Results (table, JSON with every request) and the
@@ -64,8 +68,10 @@ def server_is_up() -> bool:
         return False
 
 
-def start_server(mode: str, model: str, log_dir: Path, timeout_s: int) -> None:
+def start_server(mode: str, model: str, log_dir: Path, timeout_s: int, batch: int = 1) -> None:
     env = dict(os.environ, HF_MODEL=model, LAGUNA_LOG_DIR=str(log_dir), **MODES[mode][1])
+    if batch > 1:
+        env["LAGUNA_MAX_NUM_SEQS"] = str(batch)
     print(f"[perf demo] starting the {MODES[mode][0]} server (logs: {log_dir}/latest.log) ...", flush=True)
     launch = subprocess.run([str(MODEL_DIR / "serve_vllm.sh")], env=env, cwd=MODEL_DIR, capture_output=True, text=True)
     if launch.returncode != 0:
@@ -87,8 +93,10 @@ def stop_server() -> None:
     subprocess.run([str(MODEL_DIR / "serve_vllm.sh"), "stop"], cwd=MODEL_DIR, capture_output=True, text=True)
 
 
-def bench(model: str, input_len: int, output_len: int, prompts: int, result_dir: Path, name: str) -> dict:
-    """One ``vllm bench serve`` run: ``prompts`` random-token prompts of ``input_len`` tokens, one at a time."""
+def bench(
+    model: str, input_len: int, output_len: int, prompts: int, result_dir: Path, name: str, concurrency: int = 1
+) -> dict:
+    """One ``vllm bench serve`` run: ``prompts`` random-token prompts of ``input_len`` tokens, ``concurrency`` at a time."""
     vllm = MODEL_DIR / ".venv" / "bin" / "vllm"
     if not vllm.exists():
         vllm = Path(shutil.which("vllm") or "vllm")
@@ -97,7 +105,7 @@ def bench(model: str, input_len: int, output_len: int, prompts: int, result_dir:
         "--backend", "openai-chat", "--endpoint", "/v1/chat/completions", "--base-url", SERVER_URL,
         "--model", model, "--trust-remote-code",
         "--dataset-name", "random", "--random-input-len", str(input_len), "--random-output-len", str(output_len),
-        "--num-prompts", str(prompts), "--max-concurrency", "1", "--request-rate", "inf",
+        "--num-prompts", str(prompts), "--max-concurrency", str(concurrency), "--request-rate", "inf",
         "--temperature", "0", "--ignore-eos", "--seed", "1234", "--num-warmups", "0",
         "--save-result", "--save-detailed", "--result-dir", str(result_dir), "--result-filename", f"{name}.json",
     ]  # fmt: skip
@@ -175,18 +183,21 @@ def summarize(result: dict) -> dict:
         "ttft_s_min": min(ttft_s),
         "ttft_s_max": max(ttft_s),
         "decode_tok_s_mean": 1000.0 / float(result["mean_tpot_ms"]),
+        "total_tok_s": float(result.get("output_throughput") or 0.0),
         "decode_tok_s_min": min(speed),
         "decode_tok_s_max": max(speed),
     }
 
 
-def table(rows: dict, modes: list[str], input_lens: list[int]) -> str:
+def table(rows: dict, modes: list[str], input_lens: list[int], batch: int = 1) -> str:
     def cell(mean, low, high, fmt):
         return fmt.format(mean) if abs(high - low) < 1e-9 else f"{fmt.format(mean)} ({fmt.format(low)}-{fmt.format(high)})"
 
     header = ["Input tokens (requested)", "Input tokens (actual)"]
     for mode in modes:
         header += [f"TTFT s, {mode}", f"decode tok/s, {mode}"]
+        if batch > 1:
+            header.append(f"total tok/s, {mode}")
     if "normal" in modes and "dflash" in modes:
         header.append("DFlash speedup")
     lines = ["| " + " | ".join(header) + " |", "|" + "---:|" * len(header)]
@@ -202,10 +213,12 @@ def table(rows: dict, modes: list[str], input_lens: list[int]) -> str:
         for mode in modes:
             s = rows.get(mode, {}).get(input_len)
             if s is None:
-                line += ["-", "-"]
+                line += ["-", "-"] + (["-"] if batch > 1 else [])
                 continue
             line.append(cell(s["ttft_s_mean"], s["ttft_s_min"], s["ttft_s_max"], "{:.2f}"))
             line.append(cell(s["decode_tok_s_mean"], s["decode_tok_s_min"], s["decode_tok_s_max"], "{:.1f}"))
+            if batch > 1:
+                line.append(f"{s['total_tok_s']:.1f}")
         if "normal" in modes and "dflash" in modes:
             n, d = rows.get("normal", {}).get(input_len), rows.get("dflash", {}).get(input_len)
             line.append(f"{d['decode_tok_s_mean'] / n['decode_tok_s_mean']:.2f}x" if n and d else "-")
@@ -219,6 +232,9 @@ def main() -> int:
     parser.add_argument("--input-lens", default=None, help="comma-separated input lengths (default: 128,1024,2048,4096,8192)")
     parser.add_argument("--prompts", type=int, default=None, help="random prompts per input length (default: 1)")
     parser.add_argument("--output-tokens", type=int, default=512, help="tokens generated per request (default: 512)")
+    parser.add_argument(
+        "--batch", type=int, default=1, help="concurrent users (server LAGUNA_MAX_NUM_SEQS, up to 32; normal decode only)"
+    )
     parser.add_argument("--model", default=os.environ.get("HF_MODEL", "poolside/Laguna-S-2.1"))
     parser.add_argument("--output-dir", default=None)
     parser.add_argument(
@@ -230,7 +246,13 @@ def main() -> int:
     parser.add_argument("--example-tokens", type=int, default=200, help="max tokens per example answer (0: no examples)")
     args = parser.parse_args()
 
+    if args.batch > 1 and args.modes == "normal,dflash":
+        args.modes = "normal"  # DFlash serves one request at a time
     modes = [mode.strip() for mode in args.modes.split(",") if mode.strip()]
+    if args.batch > 1 and "dflash" in modes:
+        parser.error("DFlash serves one request at a time; use --modes normal with --batch > 1")
+    if not 1 <= args.batch <= 32:
+        parser.error("--batch must be between 1 and 32")
     unknown = [mode for mode in modes if mode not in MODES]
     if unknown:
         parser.error(f"unknown mode(s) {unknown}; choose from {sorted(MODES)}")
@@ -254,7 +276,7 @@ def main() -> int:
 
     print(
         f"[perf demo] model {args.model} | modes {modes} | input lengths {input_lens} | {prompts} prompt(s) each | "
-        f"{args.output_tokens} output tokens | batch 1 | results in {out}",
+        f"{args.output_tokens} output tokens | batch {args.batch} | results in {out}",
         flush=True,
     )
     rows: dict = {}
@@ -265,7 +287,7 @@ def main() -> int:
         mode_dir.mkdir(exist_ok=True)
         try:
             if not args.use_running_server:
-                start_server(mode, args.model, mode_dir / "server", args.startup_timeout)
+                start_server(mode, args.model, mode_dir / "server", args.startup_timeout, args.batch)
             # One short request first so one-time setup (first-request program builds) is not in the 128 point.
             bench(args.model, 128, 16, 1, mode_dir, "warmup")
             if args.example_tokens > 0:
@@ -276,9 +298,11 @@ def main() -> int:
             for input_len in input_lens:
                 # Warm-up at this length first: the same seed gives the same random prompts, so programs that depend
                 # on the exact prompt length (DFlash compiles one per new length) are built before the measured run.
-                warm = bench(args.model, input_len, 16, prompts, mode_dir, f"warmup_isl_{input_len}")
-                result = bench(args.model, input_len, args.output_tokens, prompts, mode_dir, f"isl_{input_len}")
-                if (warm.get("input_lens") or []) != (result.get("input_lens") or []):
+                n = prompts * args.batch
+                # batch > 1 (normal decode only) needs no per-prompt program builds: one short request warms the length
+                warm = bench(args.model, input_len, 16, prompts if args.batch == 1 else 1, mode_dir, f"warmup_isl_{input_len}")
+                result = bench(args.model, input_len, args.output_tokens, n, mode_dir, f"isl_{input_len}", args.batch)
+                if args.batch == 1 and (warm.get("input_lens") or []) != (result.get("input_lens") or []):
                     print(f"[perf demo] warning: warm-up prompt lengths {warm.get('input_lens')} differ from the "
                           f"measured {result.get('input_lens')}", flush=True)  # fmt: skip
                 summary = summarize(result)
@@ -287,14 +311,15 @@ def main() -> int:
                     f"[perf demo] {mode:6s} input {input_len:>7,}: TTFT {summary['ttft_s_mean']:8.2f} s | "
                     f"decode {summary['decode_tok_s_mean']:6.1f} tok/s "
                     f"({summary['decode_tok_s_min']:.1f}-{summary['decode_tok_s_max']:.1f}) | "
-                    f"{summary['requests']} ok, {summary['failed']} failed",
+                    + (f"total {summary['total_tok_s']:.1f} tok/s | " if args.batch > 1 else "")
+                    + f"{summary['requests']} ok, {summary['failed']} failed",
                     flush=True,
                 )
         finally:
             if not args.use_running_server:
                 stop_server()
 
-    report = table(rows, modes, input_lens)
+    report = table(rows, modes, input_lens, args.batch)
     if "normal" in examples and "dflash" in examples:
         same = sum(a["answer"] == b["answer"] for a, b in zip(examples["normal"], examples["dflash"]))
         print(
@@ -303,14 +328,19 @@ def main() -> int:
             flush=True,
         )
     notes = (
-        f"Laguna serving performance: {args.model}, batch 1, {prompts} random-token prompt(s) per input length, "
+        f"Laguna serving performance: {args.model}, batch {args.batch}, {prompts * args.batch} random-token prompt(s) "
+        "per input length, "
         f"{args.output_tokens} output tokens, greedy. Values are means; ranges in parentheses are min-max over the "
         "requests. vLLM's random prompts are random token ids decoded to text and re-tokenized with the chat template, "
         "so the actual input length differs from the requested one (most at short lengths)."
     )
     (out / "results.md").write_text(notes + "\n\n" + report + "\n")
     (out / "results.json").write_text(
-        json.dumps({"model": args.model, "prompts": prompts, "output_tokens": args.output_tokens, "summary": rows}, indent=1)
+        json.dumps(
+            {"model": args.model, "batch": args.batch, "prompts": prompts * args.batch,
+             "output_tokens": args.output_tokens, "summary": rows},
+            indent=1,
+        )
     )
     print("\n" + notes + "\n\n" + report + f"\n\n[perf demo] saved {out / 'results.md'} and results.json", flush=True)
     return 0
