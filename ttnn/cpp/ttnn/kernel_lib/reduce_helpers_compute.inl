@@ -366,10 +366,10 @@ ALWI void reduce(
     const uint32_t num_batches = input_block_shape.batches;
 
     constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>();
-    // A post-reduce op that returns bool reports whether it ran SFPU work.
+    // A post-reduce op that returns bool reports whether it ran anything on the math thread.
     constexpr bool post_op_reports = std::is_same_v<std::invoke_result_t<PostReduceOp, uint32_t>, bool>;
 #ifdef ARCH_BLACKHOLE
-    // The SFPU reduce init holds across outputs while no fold init, accumulator reload or SFPU post-reduce op runs.
+    // The SFPU reduce init holds across outputs while no fold init, accumulator reload or post-reduce math runs.
     constexpr bool hoist_sfpu_init =
         is_sfpu && !enable_accumulation && (std::is_same_v<PostReduceOp, NoOp> || post_op_reports);
 #else

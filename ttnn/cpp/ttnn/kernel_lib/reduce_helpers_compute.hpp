@@ -290,6 +290,9 @@ struct NoOp {
  * - REDUCE_ROW: Called once per row with dst_idx=0 (single output in DST[0])
  * - REDUCE_COL: Called once per column in current chunk with dst_idx in [0, current_chunk)
  * - REDUCE_SCALAR: Called once per batch with dst_idx pointing at the single accumulated DST register
+ * - On Blackhole's SFPU path, a callback that returns bool reports whether it ran anything on the math thread
+ *   (SFPU or FPU work, or an init): false lets the next output reuse the SFPU reduce init, true re-runs it.
+ *   With any other callback but NoOp the init runs before every output.
  *
  * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - required explicit parameter
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter

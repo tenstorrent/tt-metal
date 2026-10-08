@@ -42,7 +42,7 @@ void kernel_main() {
         // scaler buffer entirely, so both paths apply the user scalar here per output tile.
         // reduce_post_mul_tile handles Int32 (typecast-bracketed) and float formats uniformly.
 #ifdef ARCH_BLACKHOLE
-        // Returns whether it ran SFPU work, so that with an identity scalar the helper keeps the SFPU reduce init.
+        // Returns whether it ran anything on the math thread; false (the identity scalar) keeps the SFPU reduce init.
         [](uint32_t dst_idx) -> bool {
             const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
             if (post_mul_scaler_bits == k_identity_scaler_bits) {
