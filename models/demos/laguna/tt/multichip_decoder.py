@@ -1425,7 +1425,7 @@ class MultichipDecoder(OptimizedDecoder):
                     user_pt,
                     **start_kw,
                     sliding_window_size=win,
-                    compute_kernel_config=self._sdpa_compute,
+                    compute_kernel_config=getattr(self, "_sdpa_compute_sliding", self._sdpa_compute),
                     **self._prefill_chunked_sdpa_kw(),
                 )
             attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)

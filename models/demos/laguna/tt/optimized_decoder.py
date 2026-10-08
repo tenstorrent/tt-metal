@@ -594,6 +594,21 @@ class OptimizedDecoder(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+        # Sliding-window PREFILL attention: TTNN skips K chunks outside the window only on its streaming-compute
+        # path, which requires fp32_dest_acc_en=False (sdpa_program_factory can_use_streaming_compute). With fp32
+        # accumulation every query attended over all earlier keys and masked them. A window sums <= 512 keys, so
+        # the long-context fp32 argument applies to full-attention layers only. TT_LAGUNA_SLIDING_SDPA_FP32=1 restores.
+        self._sdpa_compute_sliding = (
+            self._sdpa_compute
+            if os.environ.get("TT_LAGUNA_SLIDING_SDPA_FP32", "0") == "1"
+            else ttnn.init_device_compute_kernel_config(
+                arch,
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+        )
         # DEFAULT ON: apply a decode SDPA program config with the max_cores_per_head_batch=16 parallel
         # KV scan (the long-context speed: 128k 151.7→36.2 ms/tok, 4.2×). The NORMAL decode uses
         # self._sdpa_pc_decode (k_chunk=64); the spec-decode verify uses self._sdpa_pc (k_chunk=128).
@@ -1292,7 +1307,8 @@ class OptimizedDecoder(LightweightModule):
         chunk_start_idx_tensor=None,
     ):
         cfg = self.cfg
-        base = {"scale": cfg.scaling, "compute_kernel_config": self._sdpa_compute}
+        sdpa_ck = getattr(self, "_sdpa_compute_sliding", self._sdpa_compute) if cfg.is_sliding else self._sdpa_compute
+        base = {"scale": cfg.scaling, "compute_kernel_config": sdpa_ck}
         if seq <= self.PREFILL_SDPA_CHUNK:
             if start_pos == 0:
                 # From-scratch: the whole sequence is local, so a single
@@ -1311,7 +1327,7 @@ class OptimizedDecoder(LightweightModule):
             user_pt = ttnn.slice(page_table, [user_id, 0], [user_id + 1, page_table.shape[1]])
             kw = {
                 "program_config": self._sdpa_pc_chunked,
-                "compute_kernel_config": self._sdpa_compute,
+                "compute_kernel_config": sdpa_ck,
             }
             if chunk_start_idx_tensor is None:
                 kw["chunk_start_idx"] = start_pos
