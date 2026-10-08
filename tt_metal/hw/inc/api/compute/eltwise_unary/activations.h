@@ -50,6 +50,15 @@ ALWI void hardsigmoid_tile(uint32_t idst) {
 }
 
 ALWI void hardsigmoid_tile_pack(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_activation,
+        (APPROX, ckernel::ActivationType::Hardsigmoid, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None));
+#else
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -57,6 +66,7 @@ ALWI void hardsigmoid_tile_pack(uint32_t idst) {
         (APPROX, ckernel::ActivationType::Hardsigmoid, 8 /* ITERATIONS */),
         idst,
         VectorMode::RC));
+#endif
 }
 
 /**
