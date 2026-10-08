@@ -287,8 +287,8 @@ def test_sdpa_create_perf_table(request, b, nh, s, d):
     from tracy.process_model_log import run_device_profiler
 
     # A process that opened a device keeps the chip lock, so the profiler subprocesses below would wait forever.
-    if any(item.originalname != "test_sdpa_create_perf_table" for item in request.session.items):
-        pytest.skip("run test_sdpa_create_perf_table on its own: its profiler subprocesses need the chip")
+    if any(getattr(item, "originalname", None) != "test_sdpa_create_perf_table" for item in request.session.items):
+        pytest.skip("skipped next to other tests, the whole file included: select it alone with -k or its node id")
 
     # NOTE: Hardcoded for Blackhole (11x10 grid = 110 cores)
     # Cannot query device here as it causes TLB resource contention with subprocess tests
