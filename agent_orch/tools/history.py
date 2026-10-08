@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate $DREAM_HOME/<c>/history.md (read by workers) and tree.html (for humans) from git + the ledger.
 
-history.py --campaign rmsnorm-prefill [--out-dir DIR]
+history.py --campaign <campaign> [--out-dir DIR]
 """
 
 import argparse

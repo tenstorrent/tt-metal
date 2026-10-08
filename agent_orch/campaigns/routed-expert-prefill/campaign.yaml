@@ -1,0 +1,59 @@
+# Campaign: unified_routed_expert_moe prefill latency, one Blackhole chip per call (production per-chip shapes).
+name: routed-expert-prefill
+op: ttnn.experimental.deepseek_prefill.unified_routed_expert_moe
+op_code: UnifiedRoutedExpertFfnDeviceOperation   # "OP CODE" column in the ops perf CSV (one device op per call)
+
+machine: bh-qbge-12
+test: tests/ttnn/nightly/unit_tests/operations/fused/test_routed_expert_prefill.py
+devices: 1                 # 1x1 mesh; evals run one at a time
+calls_per_shape: {warmup: 3, measured: 10}
+log: {case_key: model}     # the test logs "model=<ConfigClass> ... max_abs=.. mean_abs=.. PCC: .."
+shapes:                    # id = pytest param id, case = model config class; listed in test order
+  - {id: deepseek-v3-h7168-i2048, case: DeepSeekV3Config}
+  - {id: kimi-k2-7-h7168-i2048, case: KimiK27Config}
+  - {id: kimi-k3-latent-h3584-i3072, case: KimiK3Config}
+  - {id: glm-5-3-h6144-i2048, case: GLM53Config}
+  - {id: mistral-small-4-h4096-i2048, case: MistralSmall4Config}
+  - {id: deepseek-v4-flash-h4096-i2048, case: DeepSeekV4FlashConfig}
+  - {id: deepseek-v4-pro-h7168-i3072, case: DeepSeekV4ProConfig}
+  - {id: minimax-m3-h6144-i3072, case: MiniMaxM3Config}
+  - {id: gpt-oss-120b-h2880-i2880, case: GptOss120BConfig}
+
+metric:
+  group_by: order          # profiler rows are assigned to shapes by call order (3 + 10 per shape)
+  per_shape: mean DEVICE KERNEL DURATION [ns] over the 10 measured calls (warmup dropped)
+  score: geomean over shapes of baseline_us / attempt_us   # root = 1.0, higher is better
+
+accuracy_gate:             # relative to the campaign baseline, per shape; failing it -> accuracy_fail, score 0
+  mode: relative
+  mean_abs_rel_tol: 0.01   # mean_abs may not grow by more than 1%
+  pcc_abs_tol: 0.0001      # PCC may not drop by more than 1e-4 (baseline ~0.980-0.984 with bf4 weights + LoFi)
+
+rules:                     # told to every worker; enforced by the accuracy gate and verify_node
+  - "Do not reduce numerical precision anywhere: keep the baseline's math fidelity, data formats for activations/intermediates/outputs, fp32 accumulation and approximation modes. The test's weight dtype (bf4) and compute config are inputs, not knobs."
+  - "Keep every code path of the op correct (TILE and ROW_MAJOR inputs, biases, every activation, any token count including 0, experts_per_chip > 1). The benchmark only exercises the ROW_MAJOR dispatch-buffer path; do not specialize in ways that break the others."
+  - "Do not edit the test or anything outside allowed_paths. To change shared helpers (e.g. moe_gpt swiglu_sfpu.h, matmul helpers), copy them into the op directory first."
+
+forbidden_patterns: []
+
+allowed_paths:             # fnmatch globs, relative to the repo root
+  - ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/*
+  - ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn/*
+
+eval:
+  timeout_s: 900           # whole profiled pytest run (~45 s at baseline)
+  baseline_runs: 3
+  min_noise_pct: 1.0
+
+policy_defaults:           # v0 plan; later plans come from policy.plan()
+  W: 4
+  R: 4
+  beta: 0.6
+  max_steps: 30
+
+dreaming:
+  revisions: 5
+  cost_per_attempt: 0.005
+  parallel_bonus: 0.01
+  beta_sweep: [0.2, 0.4, 0.6, 0.8, 1.0]
+  max_replay_steps: 100

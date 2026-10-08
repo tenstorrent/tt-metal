@@ -2,7 +2,7 @@
 # One-time campaign setup. Run from a checkout of the repo whose HEAD (or --base) contains
 # agent_orch/campaigns/<c>/campaign.yaml.
 #
-#   setup_campaign.sh --campaign rmsnorm-prefill [--base <ref>] [--no-build]
+#   setup_campaign.sh --campaign <campaign> [--base <ref>] [--no-build]
 #
 # Creates: tag dream/<c>/root, $DREAM_HOME/<c>/{wt,reports,logs}, the ledger branch + worktree
 # (with policies/v0 and ACTIVE=v0), and the eval checkout (built unless --no-build).

@@ -59,7 +59,7 @@ V = best valid score revealed
 
 `cost_per_attempt` and `parallel_bonus` are in `campaign.yaml: dreaming`.
 `cost_per_attempt` encodes what an attempt really costs us (a build plus a
-turn on the only 4-chip mesh). The policy's score is **V averaged over all
+turn on the device). The policy's score is **V averaged over all
 replayed rounds** at its default beta. The beta sweep is diagnostic: it shows
 whether beta actually trades attempts for quality.
 

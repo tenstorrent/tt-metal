@@ -12,11 +12,11 @@ round.
 
 | Variable | Example | Meaning |
 |---|---|---|
-| `CAMPAIGN` | `rmsnorm-prefill` | Campaign name `<c>` |
+| `CAMPAIGN` | `routed-expert-prefill` | Campaign name `<c>` |
 | `NODE_ID` | `r01-b03-a02` | Your node id. Never reuse one |
 | `PARENT` | `r01-b03-a01` or `root` | Node you start from (tag `dream/<c>/n/<PARENT>`, or `dream/<c>/root`) |
-| `WORKTREE` | `$DREAM_HOME/rmsnorm-prefill/wt/r01-b03` | Your git worktree, already checked out on `dream/<c>/b/r01-b03` at `PARENT`, with a skeleton `node.json` in `NODE_DIR` |
-| `HISTORY` | `$DREAM_HOME/rmsnorm-prefill/history.md` | Generated index of every node so far |
+| `WORKTREE` | `$DREAM_HOME/routed-expert-prefill/wt/r01-b03` | Your git worktree, already checked out on `dream/<c>/b/r01-b03` at `PARENT`, with a skeleton `node.json` in `NODE_DIR` |
+| `HISTORY` | `$DREAM_HOME/routed-expert-prefill/history.md` | Generated index of every node so far |
 
 Work only inside `WORKTREE`. Its `agent_orch/tools/` are the tools you use.
 
@@ -65,7 +65,7 @@ git log --oneline dream/$CAMPAIGN/root..dream/$CAMPAIGN/n/$N               # its
 ```json
 {
   "node_id": "r01-b03-a02",
-  "campaign": "rmsnorm-prefill",
+  "campaign": "routed-expert-prefill",
   "round": 1, "branch": 3, "attempt": 2,
   "parent": "r01-b03-a01",
   "parent_commit": "<sha>",
@@ -74,7 +74,7 @@ git log --oneline dream/$CAMPAIGN/root..dream/$CAMPAIGN/n/$N               # its
   "finished_at": "2026-10-07T15:40:00Z",
   "mechanism": "one line, same as the commit subject",
   "tags": ["compute", "cb-sizing"],
-  "files_changed": ["ttnn/cpp/.../dit_rmsnorm_fused_compute.cpp"],
+  "files_changed": ["ttnn/cpp/.../hybrid_compute.cpp"],
   "valid": true,
   "fail_class": "ok",
   "score": 1.043,
@@ -199,13 +199,13 @@ device resets.
   "score": 1.043,
   "score_def": "geomean over shapes of baseline_us / attempt_us, per-chip mean device kernel time, measured iters only",
   "shapes": {
-    "kimi-k3-latent-moe-h3584": {"us_chip_mean": 16.42, "us_chip_max": 17.80, "baseline_us": 17.13, "speedup": 1.043, "pcc": 0.9999985, "max_abs": 0.0213},
+    "deepseek-v3-h7168-i2048": {"us_chip_mean": 768.9, "baseline_us": 802.1, "speedup": 1.043, "pcc": 0.98031, "max_abs": 1.93, "mean_abs": 0.27303},
     "...": {}
   },
   "noise_pct": 1.5,
   "commit_under_test": "<sha of the evaluated snapshot>",
   "build_seconds": 0, "eval_seconds": 140,
-  "report_dir": "$DREAM_HOME/rmsnorm-prefill/reports/r01-b03-a02"
+  "report_dir": "$DREAM_HOME/routed-expert-prefill/reports/r01-b03-a02"
 }
 ```
 

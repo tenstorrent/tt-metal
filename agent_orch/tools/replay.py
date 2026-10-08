@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Replay exploration policies on recorded rounds ("dreaming").
 
-    replay.py --campaign rmsnorm-prefill --policy <dir>/policy.py [--policy ...]
+    replay.py --campaign <campaign> --policy <dir>/policy.py [--policy ...]
               [--rounds 1,2] [--beta-sweep 0.2,0.4,...] [--out replay.json] [--traces traces.jsonl]
     replay.py --fixture tests/fixture_example.fixture --policy ... --cost 0.005 --bonus 0.01
 

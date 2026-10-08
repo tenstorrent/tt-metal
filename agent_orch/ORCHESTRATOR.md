@@ -29,7 +29,7 @@ Run on the device machine (bh-qbge-12). Workers build and evaluate there.
 Round 1 at our defaults is 4 × 4 = 16 attempts. A step takes as long as its
 slowest worker (agent work + build + eval, roughly 30–45 min), so a round is
 about 2–3 hours. The paper's rounds were 110–640 attempts. Ours are small
-because every attempt costs a build and a turn on the only 4-chip mesh.
+because every attempt costs a build and a turn on the device.
 
 ## 2. Campaign setup (once)
 

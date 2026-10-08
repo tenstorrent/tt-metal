@@ -10,7 +10,11 @@ from pathlib import Path
 KERNEL = "DEVICE KERNEL DURATION [ns]"
 WIDTH = "INPUT_0_X_PAD[LOGICAL]"
 
-_CASE = re.compile(r"case=(\S+) .*?max_abs=([0-9.eE+-]+) .*?PCC: ([0-9.eE+-]+|nan)")
+
+def _case_re(key: str):
+    return re.compile(
+        rf"{re.escape(key)}=(\S+) .*?max_abs=([0-9.eE+-]+)(?: mean_abs=([0-9.eE+-]+))? .*?PCC: ([0-9.eE+-]+|nan)"
+    )
 
 
 def find_ops_csv(report_dir: Path) -> Path | None:
@@ -18,14 +22,16 @@ def find_ops_csv(report_dir: Path) -> Path | None:
     return Path(hits[-1]) if hits else None
 
 
-def parse_log(text: str, shapes: list[dict]) -> dict:
-    out = {s["id"]: {"pytest": "missing", "pcc": None, "max_abs": None} for s in shapes}
+def parse_log(text: str, shapes: list[dict], case_key: str = "case") -> dict:
+    """Per-shape pytest status and accuracy. The test logs one line per case with `<case_key>=<case>`."""
+    out = {s["id"]: {"pytest": "missing", "pcc": None, "max_abs": None, "mean_abs": None} for s in shapes}
     by_case = {s["case"]: s["id"] for s in shapes}
-    for m in _CASE.finditer(text):
+    for m in _case_re(case_key).finditer(text):
         sid = by_case.get(m.group(1))
         if sid:
             out[sid]["max_abs"] = float(m.group(2))
-            out[sid]["pcc"] = float(m.group(3))
+            out[sid]["mean_abs"] = float(m.group(3)) if m.group(3) else None
+            out[sid]["pcc"] = float(m.group(4))
     for line in text.splitlines():
         for status in ("PASSED", "FAILED", "ERROR"):
             if line.startswith(status + " "):
@@ -51,18 +57,38 @@ def error_excerpt(text: str, n: int = 60) -> str:
     return "\n".join(lines[-n:])
 
 
+def _assign_shapes(d, cfg: dict):
+    """Label each op row with its shape id and call index.
+
+    group_by "width": shapes differ in INPUT_0 width (local_width in the shape config).
+    group_by "order": shapes run in config order, each makes warmup + measured calls per device.
+    """
+    group_by = cfg.get("metric", {}).get("group_by", "width")
+    d = d.sort_values(["DEVICE ID", "GLOBAL CALL COUNT"]).copy()
+    if group_by == "width":
+        d["W"] = d[WIDTH].astype(str).str.split("[").str[0].astype(int)
+        by_width = {s["local_width"]: s["id"] for s in cfg["shapes"]}
+        d["shape"] = d["W"].map(by_width)
+        d["call"] = d.groupby(["W", "DEVICE ID"]).cumcount()
+        return d
+    per = int(cfg["calls_per_shape"]["warmup"]) + int(cfg["calls_per_shape"]["measured"])
+    idx = d.groupby("DEVICE ID").cumcount()
+    ids = [s["id"] for s in cfg["shapes"]]
+    d["shape"] = [ids[i // per] if i // per < len(ids) else None for i in idx]
+    d["call"] = idx % per
+    return d
+
+
 def parse_ops(csv_path: Path, cfg: dict) -> tuple[dict, "object"]:
     import pandas as pd
 
     df = pd.read_csv(csv_path)
-    d = df[df["OP CODE"] == cfg["op_code"]].copy()
-    d["W"] = d[WIDTH].astype(str).str.split("[").str[0].astype(int)
-    d = d.sort_values(["DEVICE ID", "GLOBAL CALL COUNT"])
-    d["call"] = d.groupby(["W", "DEVICE ID"]).cumcount()
+    codes = cfg["op_code"] if isinstance(cfg["op_code"], list) else [cfg["op_code"]]
+    d = _assign_shapes(df[df["OP CODE"].isin(codes)], cfg)
     warm = int(cfg["calls_per_shape"]["warmup"])
     out = {}
     for s in cfg["shapes"]:
-        g = d[(d["W"] == s["local_width"]) & (d["call"] >= warm)]
+        g = d[(d["shape"] == s["id"]) & (d["call"] >= warm)]
         if g.empty:
             out[s["id"]] = None
             continue
@@ -81,6 +107,8 @@ def parse_ops(csv_path: Path, cfg: dict) -> tuple[dict, "object"]:
         for c in [
             "GLOBAL CALL COUNT",
             "DEVICE ID",
+            "shape",
+            "call",
             "OP CODE",
             WIDTH,
             "CORE COUNT",
@@ -101,7 +129,7 @@ def parse_ops(csv_path: Path, cfg: dict) -> tuple[dict, "object"]:
 def measure(cfg: dict, log_path: Path, report_dir: Path, pytest_rc: int) -> dict:
     """Measurements + correctness for one run. fail_class here is only about the test run."""
     text = log_path.read_text(errors="replace") if log_path.exists() else ""
-    shapes = parse_log(text, cfg["shapes"])
+    shapes = parse_log(text, cfg["shapes"], cfg.get("log", {}).get("case_key", "case"))
     csv = find_ops_csv(report_dir)
     ops, rows = parse_ops(csv, cfg) if csv else ({}, None)
     expected = int(cfg["calls_per_shape"]["measured"]) * int(cfg.get("devices", 4))
@@ -112,12 +140,30 @@ def measure(cfg: dict, log_path: Path, report_dir: Path, pytest_rc: int) -> dict
     for sid, v in shapes.items():
         v.update(ops.get(sid) or {})
         if fail == "ok":
-            if v["pcc"] is None or v["pcc"] < gate["pcc_min"] or (v["max_abs"] or 0) > gate["max_abs_max"]:
+            absolute_bad = ("pcc_min" in gate and (v["pcc"] or 0) < gate["pcc_min"]) or (
+                "max_abs_max" in gate and (v["max_abs"] or 0) > gate["max_abs_max"]
+            )
+            if v["pcc"] is None or absolute_bad:
                 fail, error = "accuracy_fail", f"{sid}: pcc={v['pcc']} max_abs={v['max_abs']} gate={gate}"
             elif not ops.get(sid) or ops[sid]["n_rows"] != expected:
                 n = ops[sid]["n_rows"] if ops.get(sid) else 0
                 fail, error = "infra", f"{sid}: {n} measured profiler rows, expected {expected} (csv={csv})"
     return {"fail_class": fail, "error": error, "shapes": shapes, "ops_csv": str(csv) if csv else None, "rows": rows}
+
+
+def relative_accuracy_problems(shapes: dict, baseline: dict, gate: dict) -> list[str]:
+    """Accuracy must not get worse than the baseline: mean_abs within mean_abs_rel_tol, PCC within pcc_abs_tol."""
+    probs = []
+    for sid, v in shapes.items():
+        b = baseline["shapes"].get(sid, {})
+        if b.get("mean_abs") is not None and v.get("mean_abs") is not None:
+            lim = b["mean_abs"] * (1 + float(gate.get("mean_abs_rel_tol", 0.0)))
+            if v["mean_abs"] > lim:
+                probs.append(f"{sid}: mean_abs {v['mean_abs']:.6f} > baseline {b['mean_abs']:.6f} (+tol)")
+        if b.get("pcc") is not None and v.get("pcc") is not None:
+            if v["pcc"] < b["pcc"] - float(gate.get("pcc_abs_tol", 0.0)):
+                probs.append(f"{sid}: pcc {v['pcc']:.7f} < baseline {b['pcc']:.7f} (-tol)")
+    return probs
 
 
 def score_vs_baseline(shapes: dict, baseline: dict) -> float:
@@ -147,14 +193,17 @@ def make_baseline(runs: list[dict], min_noise_pct: float) -> dict:
             "spread_pct": round(spread, 2),
             "pcc": min(r["shapes"][sid]["pcc"] for r in runs),
             "max_abs": max(r["shapes"][sid]["max_abs"] for r in runs),
+            "mean_abs": max((r["shapes"][sid].get("mean_abs") or 0) for r in runs) or None,
         }
     return {"shapes": shapes, "noise_pct": round(noise, 2), "runs": len(runs)}
 
 
 def summary_md(node: str, res: dict) -> str:
     lines = [f"# {node}: {res['fail_class']}" + (f", score {res['score']:.4f}" if res.get("valid") else ""), ""]
-    lines.append("| shape | µs (chip mean) | µs (max over chips) | baseline µs | speedup | PCC | max_abs | pytest |")
-    lines.append("|---|---|---|---|---|---|---|---|")
+    lines.append(
+        "| shape | µs (chip mean) | µs (max over chips) | baseline µs | speedup | PCC | max_abs | mean_abs | pytest |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for sid, v in res["shapes"].items():
 
         def f(k, fmt="{:.3f}"):
@@ -162,7 +211,7 @@ def summary_md(node: str, res: dict) -> str:
 
         lines.append(
             f"| {sid} | {f('us_chip_mean')} | {f('us_chip_max')} | {f('baseline_us')} | {f('speedup', '{:.4f}')} "
-            f"| {f('pcc', '{:.7f}')} | {f('max_abs', '{:.4f}')} | {v.get('pytest', '-')} |"
+            f"| {f('pcc', '{:.7f}')} | {f('max_abs', '{:.4f}')} | {f('mean_abs', '{:.6f}')} | {v.get('pytest', '-')} |"
         )
     if res.get("noise_pct") is not None:
         lines += ["", f"Noise band: ±{res['noise_pct']}% (from baseline.json)."]

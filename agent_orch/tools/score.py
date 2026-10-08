@@ -20,6 +20,7 @@ from dream.campaign import load_campaign  # noqa: E402
 from dream.scoring import (  # noqa: E402
     make_baseline,
     measure,
+    relative_accuracy_problems,
     score_vs_baseline,
     summary_md,
 )
@@ -80,7 +81,15 @@ def main():
             if baseline is None:
                 res.update(fail_class="infra", error=f"no baseline at {base_path}; run eval_attempt.sh --baseline")
             else:
-                res.update(valid=True, score=score_vs_baseline(res["shapes"], baseline))
+                probs = (
+                    relative_accuracy_problems(res["shapes"], baseline, cfg["accuracy_gate"])
+                    if cfg["accuracy_gate"].get("mode") == "relative"
+                    else []
+                )
+                if probs:
+                    res.update(fail_class="accuracy_fail", error="; ".join(probs))
+                else:
+                    res.update(valid=True, score=score_vs_baseline(res["shapes"], baseline))
     elif args.status not in PRE_RUN:
         sys.exit(f"unknown status {args.status}")
     if args.error_file and args.error_file.exists():

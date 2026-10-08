@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Export a whole campaign (every attempt, the ledger, transcripts, a git bundle) into one folder.
 
-    export_campaign.py --campaign rmsnorm-prefill [--out agent_orch/campaigns/<c>/export]
+    export_campaign.py --campaign <campaign> [--out agent_orch/campaigns/<c>/export]
 
 Run on the machine that holds the dream/<c>/* refs and $DREAM_HOME/<c>. The folder is plain
 files (browsable, loadable with pandas); the bundle restores the exact git structure:
