@@ -9,10 +9,10 @@
 //   - the nD stride cascade is gone: page = start_tile_id + k.
 //   - the tile loop is per-thread. Thread t of N takes the STRIDED share {t, t+N, t+2N, ...}, which
 //     is the slot assignment the DFB gives producer thread t.
-//   - a borrowed shard is published once per tile counter, and its tiles past the borrowed rings are
-//     copied into the tail rings.
-// Both operands are interleaved and read over the NoC, or both are borrowed L1 shards (SRC_SHARDED):
-// the factory borrows all operands or none.
+//   - a borrowed shard or slice is published once per tile counter, and a shard's tiles past the borrowed
+//     rings are copied into the tail rings.
+// Both operands are read over the NoC, or both are borrowed from this core's L1 (SRC_SHARDED): its
+// shards, or its slices of L1-interleaved tensors. The factory borrows all operands or none.
 //
 // "no_bcast" means no SUBTILE broadcast. The cascade this replaces also carried OUTER-dim broadcast,
 // indexing each operand through strides the factory zeroes for unit input dims, so the linear form here
@@ -32,8 +32,8 @@
 
 void kernel_main() {
 #if SRC_SHARDED
-    // Borrowed operands: each borrowed DFB is the resident L1 shard, so this thread publishes its credits,
-    // once per tile counter. One reserve_back for the whole shard, as on WH and BH, cannot work here: the
+    // Borrowed operands: each borrowed DFB is the resident L1 shard or slice, so this thread publishes its
+    // credits, once per tile counter. One reserve_back for the whole shard, as on WH and BH, cannot work: the
     // active counter holds only its share, and push_back credits one counter and then rotates.
     static_assert(SRC_SHARDED_B, "the native factory borrows both operands or neither");
     const uint32_t dst_num_tiles = get_arg(args::dst_num_tiles);

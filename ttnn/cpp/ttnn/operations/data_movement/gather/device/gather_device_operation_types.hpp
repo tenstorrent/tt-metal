@@ -12,7 +12,7 @@ struct GatherParams {
     const int8_t dim;
     const bool sparse_grad;
     const tt::tt_metal::MemoryConfig output_mem_config;
-    const std::optional<CoreRangeSet> sub_core_grids;
+    const std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
 };
 
 struct GatherInputs {
