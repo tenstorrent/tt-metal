@@ -333,6 +333,30 @@ def test_gelu_golden_skips_only_device_specific_fast_variants(operation_kwargs, 
     assert (output is None) == should_skip
 
 
+_U = ttnn.UnaryOpType
+_W = ttnn.UnaryWithParam
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="the chain's reciprocal replay is recorded once on Blackhole only")
+@pytest.mark.parametrize(
+    "ops, golden",
+    [
+        ([_W(_U.SQUARE), _W(_U.ADD_UNARY_SFPU, 1.0), _W(_U.RECIP)], lambda x: 1.0 / (x * x + 1.0)),
+        ([_W(_U.ABS), _W(_U.ADD_UNARY_SFPU, 1.0), _W(_U.SQUARE), _W(_U.RECIP)], lambda x: 1.0 / (x.abs() + 1.0) ** 2),
+        ([_W(_U.SQUARE), _W(_U.RECIP)], lambda x: 1.0 / (x * x)),
+    ],
+    ids=["atan_bw", "softsign_bw", "hypot_bw"],
+)
+def test_unary_chain_fp32_reciprocal_several_tiles_per_core(device, ops, golden):
+    # 9 or 10 tiles per core: the later tiles replay what the 32-bit reciprocal recorded with the first
+    g = torch.Generator().manual_seed(7)
+    x = torch.empty(1, 1, 1024, 1024, dtype=torch.float32).uniform_(-10.0, 10.0, generator=g)
+    x = torch.where(x.abs() < 0.01, torch.full_like(x, 0.5), x)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.to_torch(ttnn.unary_chain(tt_x, ops))
+    assert_with_ulp(expected_result=golden(x.double()).float(), actual_result=out, ulp_threshold=8)
+
+
 def test_relu_reglu_uint32_edge_cases(device):
     values = [0, 1, 35, 41, 600, 2147483647, 2147483648, 4294967295]
     torch_input_tensor = torch.tensor([values], dtype=torch.int64).to(torch.uint32)
