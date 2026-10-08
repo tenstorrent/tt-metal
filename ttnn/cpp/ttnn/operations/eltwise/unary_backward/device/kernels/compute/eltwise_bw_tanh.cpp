@@ -10,19 +10,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"  // TanhDerivative
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "operand_reconfig.hpp"
 
 namespace ckl = compute_kernel_lib;
-
-// Switching the unpacker's format between the two operand buffers is only needed when the
-// operands carry different formats, which the program factory signals with
-// MIXED_OPERAND_DATA_FORMATS. For the same-dtype case -- every call in practice -- the single
-// configuration compute_kernel_hw_startup() installs already covers both buffers, and a
-// reconfiguration per tile transition is pure overhead, so stay disabled by default.
-#ifdef MIXED_OPERAND_DATA_FORMATS
-constexpr auto operand_reconfig = ckl::DataFormatReconfig::Enabled;
-#else
-constexpr auto operand_reconfig = ckl::DataFormatReconfig::Disabled;
-#endif
 
 void kernel_main() {
     uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
