@@ -180,7 +180,7 @@ inline void wait_start()
 {
     _llk_packer_wait_for_math_done_();
     _llk_packer_set_math_semaphore_<ckernel::p_stall::NONE>();
-    ckernel::sfpu::_topk_xl_split_sfpu_init_<K>();
+    ckernel::sfpu::_topk_xl_split_sfpu_init_<K, true>();
 }
 
 template <std::uint32_t K>
@@ -200,7 +200,7 @@ inline __attribute__((noinline)) void sfpu_stage(const std::uint32_t chunk, cons
             }
             else
             {
-                _topk_xl_split_sort_head_512_(tile_offset, ascending);
+                _topk_xl_split_sort_head_512_<true>(tile_offset, ascending);
             }
             break;
         case 1:
@@ -224,11 +224,11 @@ inline __attribute__((noinline)) void sfpu_stage(const std::uint32_t chunk, cons
             {
                 if (chunk & 1)
                 {
-                    _topk_xl_split_merge_<K, sequence_rows>(0);
+                    _topk_xl_split_merge_<K, sequence_rows, true>(0);
                 }
                 else
                 {
-                    _topk_xl_split_merge_<K, 2 * sequence_rows>(0);
+                    _topk_xl_split_merge_<K, 2 * sequence_rows, true>(0);
                 }
             }
             break;

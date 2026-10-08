@@ -196,7 +196,7 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
             if constexpr (K == 2048) {
                 _topk_xl_split_sort_head_2048_(tile_offset, ascending);
             } else {
-                _topk_xl_split_sort_head_512_(tile_offset, ascending);
+                _topk_xl_split_sort_head_512_<!classic>(tile_offset, ascending);
             }
             break;
         case 1: _topk_xl_split_stride2_<K, 4>(tile_offset, ascending); break;
@@ -217,9 +217,9 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
                 }
             } else if (chunk > 0) {
                 if (chunk & 1) {
-                    _topk_xl_split_merge_<K, chunk_rows>(0);
+                    _topk_xl_split_merge_<K, chunk_rows, true>(0);
                 } else {
-                    _topk_xl_split_merge_<K, 2 * chunk_rows>(0);
+                    _topk_xl_split_merge_<K, 2 * chunk_rows, true>(0);
                 }
             }
             break;
@@ -264,7 +264,7 @@ inline void pack_row(const std::uint32_t num_chunks, RowInit&& row_init, Epilogu
             }
             take_math_token();
             if (first) {
-                ckernel::sfpu::_topk_xl_split_sfpu_init_<K>();
+                ckernel::sfpu::_topk_xl_split_sfpu_init_<K, !classic>();
                 row_init();
                 TTI_STALLWAIT(ckernel::p_stall::STALL_SFPU, ckernel::p_stall::MATH);
                 first = false;

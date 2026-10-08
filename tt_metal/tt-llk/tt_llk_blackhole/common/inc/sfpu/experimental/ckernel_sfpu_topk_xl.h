@@ -3750,7 +3750,7 @@ inline void _topk_xl_separate_indices_()
 
 // PACK, once per row: ADDR_MOD_3 takes the stamp's +4 so ADDR_MOD_6 keeps the sort's +32; ADDR_MOD_4 is the K = 2048
 // stamp's face skip. K = 2048's segments share one fused macro configuration, programmed here; none reprograms it.
-template <std::uint32_t K>
+template <std::uint32_t K, bool macros = (K == 2048)>
 inline void _topk_xl_split_sfpu_init_()
 {
     static_assert(K == 512 || K == 2048, "K must be 512 or 2048");
@@ -3763,10 +3763,13 @@ inline void _topk_xl_split_sfpu_init_()
     if constexpr (K == 2048)
     {
         addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 16}}.set(ADDR_MOD_4);
-#if TOPK_XL_FUSED_MACRO
-        topk_xl_fused_macro::configure();
-#endif
     }
+#if TOPK_XL_FUSED_MACRO
+    if constexpr (macros)
+    {
+        topk_xl_fused_macro::configure();
+    }
+#endif
 }
 
 inline void _topk_xl_split_begin_(const std::uint32_t tile_offset)
@@ -3831,7 +3834,9 @@ inline void _topk_xl_split_stamp_(const std::uint32_t tile_offset, const std::ui
     }
 }
 
-// Local sort up to its first transpose: the per-column length-32 builds and the length-64 cross-column pass.
+// Local sort up to its first transpose: the per-column length-32 builds and the length-64 cross-column pass, its two
+// step groups on the load macros when `macros` (the fused rows, programmed once per row).
+template <bool macros = false>
 inline void _topk_xl_split_sort_head_512_(const std::uint32_t tile_offset, const bool ascending)
 {
     _topk_xl_split_begin_(tile_offset);
@@ -3860,12 +3865,22 @@ inline void _topk_xl_split_sort_head_512_(const std::uint32_t tile_offset, const
 
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
     TTI_SFPCONFIG(0x4444, 0xF, 8);
-    load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    bitonic_sort_len_k(dir);
-    load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
-    lltt::replay(0, 8);
-    bitonic_sort_len_k(dir);
-    lltt::replay(8, 8);
+#if TOPK_XL_FUSED_MACRO
+    if constexpr (macros)
+    {
+        topk_xl_fused_macro::record_step_group<2, 16>(dir);
+        lltt::replay(0, topk_xl_fused_macro::group_len);
+    }
+    else
+#endif
+    {
+        load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
+        bitonic_sort_len_k(dir);
+        load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
+        lltt::replay(0, 8);
+        bitonic_sort_len_k(dir);
+        lltt::replay(8, 8);
+    }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     for (int col = 0; col < 2; col++)
     {
@@ -4036,7 +4051,7 @@ inline void _topk_xl_split_columns_(const std::uint32_t tile_offset, const bool 
 }
 
 // _topk_xl_merge_<K, true> with the incoming run `distance` rows past the survivor at tile_offset.
-template <std::uint32_t K, int distance>
+template <std::uint32_t K, int distance, bool macros = (K == 2048)>
 inline void _topk_xl_split_merge_(const std::uint32_t tile_offset)
 {
     constexpr int tiles_per_sequence = K == 512 ? 1 : 2;
@@ -4045,7 +4060,7 @@ inline void _topk_xl_split_merge_(const std::uint32_t tile_offset)
     topk_mop_config<true>();
     _topk_xl_split_begin_(tile_offset);
 #if TOPK_XL_FUSED_MACRO
-    if constexpr (K == 2048)
+    if constexpr (macros)
     {
         load_replay_buf<Exec>(
             0,
