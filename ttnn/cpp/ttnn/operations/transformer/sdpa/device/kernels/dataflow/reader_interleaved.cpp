@@ -87,7 +87,7 @@ void kernel_main() {
     constexpr uint32_t mla_kv_overlap = get_compile_time_arg_val(24) == 1;
     constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(25);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(26);
-    constexpr bool use_streaming_compute = get_compile_time_arg_val(27) == 1;
+    static_assert(get_compile_time_arg_val(27) == 1, "SDPA has only its streaming compute path");
 
     // Semaphore IDs for KV chain forwarding (non-causal only, but always present in compile args)
     constexpr uint32_t sender_semaphore_id = get_compile_time_arg_val(28);
@@ -361,7 +361,7 @@ void kernel_main() {
                 prev_nq = decoded.nq;
             }
             if constexpr (use_attention_sink) {
-                constexpr uint32_t sink_tiles = use_streaming_compute ? 1 : Sq_chunk_t;
+                constexpr uint32_t sink_tiles = 1;  // the compute broadcasts the per-head sink scalar
                 cb_attn_sink.reserve_back(sink_tiles);
                 uint32_t attention_sink_write_ptr = cb_attn_sink.get_write_ptr();
                 const uint32_t sink_tile_id = attention_sink_tile_shape.id_of(0, decoded.nq, 0, 0);
@@ -372,10 +372,6 @@ void kernel_main() {
                     {.page_id = sink_tile_id},
                     {});
                 noc.async_read_barrier();
-                if constexpr (!use_streaming_compute) {
-                    fill_attention_sink_tiles<attention_sink_tile_bytes>(
-                        cb_attention_sink, sink_tiles, attention_sink_write_ptr);
-                }
                 cb_attn_sink.push_back(sink_tiles);
             }
 
@@ -441,7 +437,7 @@ void kernel_main() {
                 q_high_idx = Skt;
             }
             uint32_t k_loop_start = 0;
-            if constexpr (use_streaming_compute && sliding_window_size > 0) {
+            if constexpr (sliding_window_size > 0) {
                 // Must match the compute kernel's K-loop bounds (see sliding_window_geometry.hpp).
                 using window_geom =
                     SlidingWindowLoopGeometry<sliding_window_size, is_causal, tt::constants::TILE_HEIGHT>;

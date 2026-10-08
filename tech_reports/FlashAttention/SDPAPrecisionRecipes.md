@@ -159,8 +159,9 @@ removing them. The rule is: **the recipe owns the numerics.**
 
 ## Routing
 
-Without `precision`, a call that would reach one of the legacy loops (`sdpa_legacy_loops.hpp`) runs a recipe instead
-(Blackhole; `sdpa.cpp`, "Precision routing"). Everything else keeps the streaming kernels (`compute_streaming.hpp`).
+Without `precision`, a call that the BF16-DEST streaming kernels (`compute_streaming.hpp`) do not serve runs a recipe
+(`sdpa.cpp`, "Precision routing"). The legacy loops these calls used to reach (`sdpa_standard`, `sdpa_joint`) are
+deleted; only the ring joint FP32 gaps below still reach `sdpa_ring` (`sdpa_legacy_loops.hpp`).
 The DEST mode is read from `compute_kernel_config` as before (`fp32_dest_acc_en`, default off).
 
 | Entry point | BF16 DEST (default) | `fp32_dest_acc_en=True` |
@@ -169,7 +170,7 @@ The DEST mode is read from `compute_kernel_config` as before (`fp32_dest_acc_en`
 | `joint_scaled_dot_product_attention` | STANDARD | ACCURATE |
 | `ring_joint_scaled_dot_product_attention` | streaming kernel | ACCURATE; legacy loop only for combinations the legacy FP32 loop rejects too (sink, sliding window, KV-pad rotation, circular cache) or a V wider than Q |
 | `exp_ring_joint_scaled_dot_product_attention` | streaming kernel; STANDARD for a blocking the streaming kernel cannot build (QK subblock taller than two tiles, K chunk not a multiple of the subblock row, one Q subblock), which failed to compile before | ACCURATE (failed to compile before) |
-| `ring_distributed_scaled_dot_product_attention` | legacy loop (no recipe path yet) | legacy loop |
+| `ring_distributed_scaled_dot_product_attention` | STANDARD | ACCURATE |
 
 - A routed call is the named recipe, bit for bit, with the blocking below. `compute_kernel_config` and
   `exp_approx_mode` are ignored as for any recipe call. ACCURATE is the recipe that keeps FP32 scores and state, the
@@ -186,7 +187,6 @@ The DEST mode is read from `compute_kernel_config` as before (`fp32_dest_acc_en`
   `max_cores_per_head_batch` is kept; `sub_core_grids`, which prefill ignored, is dropped. Zero chunk sizes still
   need an explicit `precision`.
 - Routed ring calls return the recipe's scratch as the third output, not an LSE (no caller reads it).
-- Wormhole keeps the legacy loops until the recipes run there.
 
 Op time on a P150 (ms, median of five batches of five calls; the routed column is what the same call runs now, with
 the blocking above, the legacy column the same call before routing):

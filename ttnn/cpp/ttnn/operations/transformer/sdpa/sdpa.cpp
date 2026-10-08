@@ -17,10 +17,8 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
-#include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation.hpp"
-#include "ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
@@ -40,12 +38,12 @@ std::optional<ttnn::Tensor> drop_if_empty(const std::optional<ttnn::Tensor>& t) 
 }
 
 // Precision routing (tech_reports/FlashAttention/SDPAPrecisionRecipes.md, "Routing"). A call without `precision`
-// that would reach a legacy loop (sdpa_legacy_loops.hpp) runs a recipe instead: ACCURATE when its compute config asks
-// for FP32 DEST accumulation, STANDARD on the routes that have no streaming kernel (non-ring joint, exp ring
-// blockings its streaming kernel cannot build). BF16-dest dense, chunked and ring calls keep the streaming kernels
-// (compute_streaming.hpp). Routed dense, chunked and MLA calls choose their blocking (the program_config chunk sizes
-// were tuned for the legacy kernels; resolve_dense_recipe_blocking); joint, ring, exp ring and ring-distributed calls
-// keep them when the recipe supports them.
+// that the streaming kernels (compute_streaming.hpp, BF16 DEST only) do not serve runs a recipe instead: ACCURATE
+// when its compute config asks for FP32 DEST accumulation, STANDARD on the routes that have no streaming kernel
+// (non-ring joint, ring-distributed, exp ring blockings its streaming kernel cannot build). BF16-dest dense, chunked
+// and ring calls keep the streaming kernels. Routed dense, chunked and MLA calls choose their blocking (the
+// program_config chunk sizes were tuned for the legacy kernels; resolve_dense_recipe_blocking); joint, ring, exp ring
+// and ring-distributed calls keep them when the recipe supports them.
 // The recipes run on Blackhole and Wormhole; only device inputs are routed (host inputs fail the op's validation).
 bool routes_to_recipes(const ttnn::Tensor& q) { return q.storage_type() == StorageType::DEVICE; }
 
@@ -63,8 +61,7 @@ SDPAPrecision routed_precision(
                                                                                  : SDPAPrecision::STANDARD;
 }
 
-// Dense, chunked, MLA prefill and ring joint: only FP32 DEST reaches a legacy loop (the BF16 path streams), and
-// runs ACCURATE.
+// Dense, chunked, MLA prefill and ring joint: only FP32 DEST leaves the streaming kernels, and runs ACCURATE.
 bool routes_fp32_dest(const ttnn::Tensor& q, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return routes_to_recipes(q) && get_fp32_dest_acc_en(legacy_compute_config(q, compute_kernel_config));
 }
@@ -598,67 +595,42 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<SDPAPrecision> precision) {
-    // Non-ring joint has no streaming kernel: without `precision` it always reaches the legacy loop, so it is
-    // always routed (STANDARD, or ACCURATE with FP32 DEST).
-    if (!precision) {
-        operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
-    }
-    const bool routed = !precision && routes_to_recipes(input_tensor_q);
+    namespace numeric = operations::transformer::sdpa::detail;
+    // Non-ring joint always runs a recipe: without `precision`, STANDARD, or ACCURATE with FP32 DEST.
+    const bool routed = !precision;
     if (routed) {
+        numeric::reject_auto_blocking_without_recipe(program_config);
+        TT_FATAL(routes_to_recipes(input_tensor_q), "Joint SDPA requires device inputs");
         precision = routed_precision(input_tensor_q, compute_kernel_config);
     }
-    if (precision) {
-        namespace numeric = operations::transformer::sdpa::detail;
-        TT_FATAL(joint_strategy == "rear", "SDPA recipes require rear joint strategy");
-        const auto recipe_program_config =
-            routed ? routed_program_config(program_config) : std::optional(program_config);
-        const auto policy = numeric::resolve_recipe_policy(
-            input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, recipe_program_config);
-        // BF16 kernel I/O; BFP8/BFP4 Q round-trip as in the dense branch.
-        const auto query = numeric::recipe_bf16_query(input_tensor_q);
-        const auto joint_query = numeric::recipe_bf16_query(joint_tensor_q);
-        const auto blocking = numeric::resolve_dense_recipe_blocking(
-            policy,
-            query,
-            input_tensor_k,
-            &joint_query,
-            &joint_tensor_k,
-            recipe_program_config,
-            nullptr,
-            0,
-            nullptr,
-            nullptr,
-            routed);
-        auto [output, joint_output] = numeric::run_joint_recipe(
-            query,
-            input_tensor_k,
-            input_tensor_v,
-            joint_query,
-            joint_tensor_k,
-            joint_tensor_v,
-            policy,
-            blocking,
-            scale);
-        if (input_tensor_q.dtype() != DataType::BFLOAT16) {
-            output = ttnn::typecast(output, input_tensor_q.dtype());
-        }
-        if (joint_tensor_q.dtype() != DataType::BFLOAT16) {
-            joint_output = ttnn::typecast(joint_output, joint_tensor_q.dtype());
-        }
-        return {output, joint_output};
-    }
-    auto output_tensors = ttnn::prim::joint_scaled_dot_product_attention(
-        input_tensor_q,
+    TT_FATAL(joint_strategy == "rear", "Joint SDPA requires rear joint strategy");
+    const auto recipe_program_config = routed ? routed_program_config(program_config) : std::optional(program_config);
+    const auto policy = numeric::resolve_recipe_policy(
+        input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, recipe_program_config);
+    // BF16 kernel I/O; BFP8/BFP4 Q round-trip as in the dense branch.
+    const auto query = numeric::recipe_bf16_query(input_tensor_q);
+    const auto joint_query = numeric::recipe_bf16_query(joint_tensor_q);
+    const auto blocking = numeric::resolve_dense_recipe_blocking(
+        policy,
+        query,
         input_tensor_k,
-        input_tensor_v,
-        joint_tensor_q,
-        joint_tensor_k,
-        joint_tensor_v,
-        joint_strategy,
-        program_config,
-        scale,
-        compute_kernel_config);
-    return {output_tensors[prim::JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::JOINT_SDPA_JOINT_OUTPUT_IDX]};
+        &joint_query,
+        &joint_tensor_k,
+        recipe_program_config,
+        nullptr,
+        0,
+        nullptr,
+        nullptr,
+        routed);
+    auto [output, joint_output] = numeric::run_joint_recipe(
+        query, input_tensor_k, input_tensor_v, joint_query, joint_tensor_k, joint_tensor_v, policy, blocking, scale);
+    if (input_tensor_q.dtype() != DataType::BFLOAT16) {
+        output = ttnn::typecast(output, input_tensor_q.dtype());
+    }
+    if (joint_tensor_q.dtype() != DataType::BFLOAT16) {
+        joint_output = ttnn::typecast(joint_output, joint_tensor_q.dtype());
+    }
+    return {output, joint_output};
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_product_attention(
@@ -1214,43 +1186,26 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& page_table,
     std::optional<int64_t> chunk_start_idx,
     std::optional<SDPAPrecision> precision) {
-    // Without precision, the op runs STANDARD, or ACCURATE with FP32 DEST (this op always left the streaming
-    // kernels for the legacy loop).
-    const bool routed = !precision && routes_to_recipes(input_tensor_q);
+    // Always a recipe: without precision, STANDARD, or ACCURATE with FP32 DEST.
+    const bool routed = !precision;
     if (routed) {
+        TT_FATAL(routes_to_recipes(input_tensor_q), "Ring-distributed SDPA requires device inputs");
         precision = routed_precision(input_tensor_q, compute_kernel_config);
     }
-    if (precision) {
-        return ring_distributed_recipe(
-            input_tensor_q,
-            input_tensor_k,
-            input_tensor_v,
-            ring_size,
-            ring_id,
-            scale,
-            memory_config,
-            routed ? routed_program_config(program_config) : program_config,
-            compute_kernel_config,
-            page_table,
-            chunk_start_idx,
-            *precision,
-            routed);
-    }
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
-
-    return ttnn::prim::ring_distributed_sdpa(
+    return ring_distributed_recipe(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
         ring_size,
-        ring_id,  // Pass through the ring_id parameter (can be used or ignored)
+        ring_id,
         scale,
-        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-        program_config,
-        kernel_config_val,
+        memory_config,
+        routed ? routed_program_config(program_config) : program_config,
+        compute_kernel_config,
         page_table,
-        chunk_start_idx);
+        chunk_start_idx,
+        *precision,
+        routed);
 }
 
 }  // namespace ttnn::transformer

@@ -33,7 +33,7 @@ void kernel_main() {
     constexpr uint32_t is_chunked = get_compile_time_arg_val(14) == 1;
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(15);
     constexpr bool use_lightweight_mask = get_compile_time_arg_val(16) == 1;
-    constexpr bool use_streaming_compute = get_compile_time_arg_val(17) == 1;
+    static_assert(get_compile_time_arg_val(17) == 1, "SDPA has only its streaming compute path");
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(18);
     constexpr uint32_t k_partial_col = get_compile_time_arg_val(19);
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(20) == 1;
@@ -81,8 +81,6 @@ void kernel_main() {
         q_tok_offset = get_arg_val<uint32_t>(11);
         q_tok_offset_addr = get_arg_val<uint32_t>(12);
     }
-
-    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
 
     constexpr uint32_t cb_arg_offset = q_offset_args.next_compile_time_args_offset();
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 0);
@@ -237,35 +235,21 @@ void kernel_main() {
             } else {
                 out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
             }
-            if constexpr (use_streaming_compute) {
-                // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
-                // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
-                // are padding and get popped without being written.
-                write_block_row_grouped(
-                    noc,
-                    out_writer,
-                    cb_out,
-                    Sq_chunk_t,
-                    out_row_tile_count,
-                    vDHt,
-                    out_tile_id,
-                    tile_bytes,
-                    out_subblock_h,
-                    barrier_threshold,
-                    out_row_stride);
-            } else {
-                write_block(
-                    noc,
-                    out_writer,
-                    cb_out,
-                    out_chunk_tiles,
-                    out_row_tile_count,
-                    vDHt,
-                    out_tile_id,
-                    tile_bytes,
-                    barrier_threshold,
-                    out_row_stride);
-            }
+            // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
+            // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
+            // are padding and get popped without being written.
+            write_block_row_grouped(
+                noc,
+                out_writer,
+                cb_out,
+                Sq_chunk_t,
+                out_row_tile_count,
+                vDHt,
+                out_tile_id,
+                tile_bytes,
+                out_subblock_h,
+                barrier_threshold,
+                out_row_stride);
         }
     }  // close phase
 }
