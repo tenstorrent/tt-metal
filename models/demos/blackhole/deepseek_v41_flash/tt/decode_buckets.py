@@ -127,6 +127,8 @@ class DecodeBucket:
         self.dec = DSV41Decoder(md, built_b, self.embedding, m.head, self.dev_engram, step_states=self.step_groups)
         self.dec.mesh_config, self.dec.ccl = m.mc, m.ccl
         self.dec.cand_k = getattr(m, "cand_k", 0)
+        if self.dec.cand_k:
+            self.dec.alloc_invT(self.U)
         self.engram_ids = m.engram_ids
         self.engram_kin = m.engram_kin
         log(f"decode bucket U'={self.U} (batch {self.B}) objects built in {time.time() - t0:.1f} s")
@@ -285,7 +287,7 @@ class DecodeBucket:
             self.trace_id = None
 
     # ---- one step -----------------------------------------------------------------------------------------------------------------------
-    def step(self, tokens, pos, phys, reload_inputs=True, enable_trace=True):
+    def step(self, tokens, pos, phys, reload_inputs=True, enable_trace=True, invT=None):
         """One decode step of the bucket's users. tokens / pos [B'] in bucket row order, ``phys`` [B'] the model user of every row. -> next greedy tokens [B'] (long)."""
         m = self.m
         t0 = time.perf_counter()
@@ -305,6 +307,8 @@ class DecodeBucket:
             self.capture(tokens, pos)
             self.upload_rows(host_rows)
         t2 = time.perf_counter()
+        if invT is not None and self.dec.cand_k:
+            self.dec.set_invT(invT)
         if enable_trace:
             check_trace_allocations(m.md, self.trace_id, f"decode bucket B'={self.B}")
             ttnn.execute_trace(m.md, self.trace_id, cq_id=0, blocking=False)
