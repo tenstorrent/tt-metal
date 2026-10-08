@@ -121,6 +121,7 @@ block-INT8, which the MX paper finds lossless for direct-cast inference where MX
 | SVDQuant / Nunchaku | attention + MLP projections | modulation activations 16-bit | W4A4 + rank-32 branch | per-group | FLUX W8A8: PSNR 27 dB, LPIPS 0.09 | 3x vs NF4 |
 | SageAttention 2 / 2++ | QKᵀ INT8 (K mean-subtracted), PV FP8 | softmax, norms | attention only | per-block Q/K, per-channel V | HunyuanVideo VQA-t 75.9 -> 75.4 (8-bit); 4-bit QK 65.4 | 2.7-3.9x attention |
 | TT LTX / Wan `all_bf8_lofi` | qkv / ff1 / ff2 weights + activations, SDPA inputs | `to_out` weight (kernel rule), SDPA math HiFi2, norms | W+A | 16-element block | LTX VBench-gated | LoFi 2x HiFi2 |
+| NVlabs Sol-H3 `--compute-quant mxfp8` (MiniMax-H3 on 8x B300, FastH3 4-forward adapter) | attention and FFN linears of transformer blocks 2–46 (fused MXFP8 kernels) | blocks 0–1 and 47–49, everything outside the blocks; LoRA modes need bf16 | W+A (MXFP8: block-32 E4M3, E8M0 scale) | block 32 | 13.8 dB PSNR / 0.54 SSIM vs bf16 on one prompt and seed | 5 s T2V 1.655 → 1.472 s (−11 %); weights 32.3 → 16.7 GiB per rank; multi-GPU also uses INT8 QKV and FP8 output transport |
 
 What everyone agrees on:
 

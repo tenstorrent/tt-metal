@@ -469,6 +469,7 @@ matmul throughput) rounds the weight to 5 significant bits while the activation 
 | `FAST_H3_FP8_FP32_ACC` | `0` / `1` | fp32 destination accumulation (on in every preset) |
 | `FAST_H3_FP8_SDPA` | `0` / `1` | also typecast Q, K and V to `bfloat8_b` before the ring SDPA (one dtype is required across its inputs; the SP ring then gathers half the bytes) |
 | `FAST_H3_FP8_OUT_WEIGHT` | `0` / `1` | quantize `to_out`'s weight by un-fusing its addcmul epilogue; defaults to `1` at LoFi (the fused epilogue would multiply the gated residual at LoFi, tripling `to_out`'s error, and the un-fused matmul is faster at the measured shape) and `0` at HiFi2 |
+| `FAST_H3_FP8_BLOCKS` | `lo-hi` (inclusive block indices) | quantize only these transformer blocks and keep the others bf16, e.g. `2-46` keeps the first two and last three blocks at full precision |
 
 The knobs are named `FAST_H3_*` rather than `MINIMAX_H3_*` to keep the opt-in speed tier apart from the model's
 configuration knobs.

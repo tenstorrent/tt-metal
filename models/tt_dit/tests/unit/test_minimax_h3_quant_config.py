@@ -21,6 +21,7 @@ KNOBS = (
     "FAST_H3_FP8_FP32_ACC",
     "FAST_H3_FP8_SDPA",
     "FAST_H3_FP8_OUT_WEIGHT",
+    "FAST_H3_FP8_BLOCKS",
 )
 
 
@@ -121,10 +122,26 @@ def test_out_weight_requires_the_unfused_epilogue(clean_env):
     assert config.out_weight
 
 
+def test_block_range(clean_env, monkeypatch):
+    clean_env.setenv(qc.ENV_FLAG, "1")
+    clean_env.setenv("FAST_H3_FP8_BLOCKS", "2-46")
+    config = qc.quant_config_from_env()
+    assert config.blocks == (2, 46) and config.describe().endswith("blocks:2-46")
+    assert not config.covers(1) and config.covers(2) and config.covers(46) and not config.covers(47)
+    monkeypatch.setattr(qc.ttnn, "typecast", lambda data, dtype: SimpleNamespace(dtype=dtype))
+    model = SimpleNamespace(transformer_blocks=[_fake_block() for _ in range(4)])
+    qc.apply_quant_config(model, qc.MiniMaxH3QuantConfig.preset("w8a8", blocks=(1, 2)))
+    cast = [b.attn.to_qkv.weight._data.dtype == ttnn.bfloat8_b for b in model.transformer_blocks]
+    assert cast == [False, True, True, False]
+    assert model.transformer_blocks[0].attn.to_qkv.activation_dtype is None
+
+
 @pytest.mark.parametrize(
     ("var", "value"),
     [
         (qc.ENV_FLAG, "fp8"),
+        ("FAST_H3_FP8_BLOCKS", "46-2"),
+        ("FAST_H3_FP8_BLOCKS", "all"),
         ("FAST_H3_FP8_LINEARS", "qkv,adaln"),
         ("FAST_H3_FP8_FIDELITY", "VeryHiFi"),
         ("FAST_H3_FP8_SDPA", "maybe"),

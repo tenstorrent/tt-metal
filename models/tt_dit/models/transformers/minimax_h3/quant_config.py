@@ -64,6 +64,9 @@ class MiniMaxH3QuantConfig:
     sdpa_input_dtype: ttnn.DataType | None = None
     #: Quantize `to_out`'s weight as well, at the cost of un-fusing its addcmul epilogue.
     out_weight: bool = False
+    #: Inclusive range of transformer block indices to quantize; None means every block. The first and last
+    #: blocks carry the largest per-block error, and other 8-bit ports keep them at full precision.
+    blocks: tuple[int, int] | None = None
 
     def linear(self, name: str) -> LinearQuant:
         return getattr(self, name)
@@ -86,6 +89,7 @@ class MiniMaxH3QuantConfig:
         fp32_dest_acc: bool | None = None,
         sdpa: bool = False,
         out_weight: bool | None = None,
+        blocks: tuple[int, int] | None = None,
     ) -> MiniMaxH3QuantConfig:
         """One of `PRESETS`, narrowed to `linears` and with any explicit overrides applied.
 
@@ -126,6 +130,7 @@ class MiniMaxH3QuantConfig:
             **fields,
             sdpa_input_dtype=ttnn.bfloat8_b if sdpa else None,
             out_weight=out_weight and "out" in linears,
+            blocks=blocks,
         )
 
     def describe(self) -> str:
@@ -140,7 +145,12 @@ class MiniMaxH3QuantConfig:
             parts.append(f"{n}:{w}{a}/{fid}{'' if q.fp32_dest_acc else '/no-fp32-acc'}")
         if self.sdpa_input_dtype is not None:
             parts.append("sdpa:in8")
+        if self.blocks is not None:
+            parts.append(f"blocks:{self.blocks[0]}-{self.blocks[1]}")
         return " ".join(parts) if parts else "off"
+
+    def covers(self, block_index: int) -> bool:
+        return self.blocks is None or self.blocks[0] <= block_index <= self.blocks[1]
 
 
 # --------------------------------------------------------------------------------------------- environment
@@ -167,10 +177,21 @@ def math_fidelity_from_env(var: str) -> ttnn.MathFidelity | None:
     return ttnn.MathFidelity.__members__[name]
 
 
+def _block_range(var: str) -> tuple[int, int] | None:
+    value = os.environ.get(var)
+    if not value:
+        return None
+    lo, sep, hi = value.partition("-")
+    if not sep or not lo.strip().isdigit() or not hi.strip().isdigit() or int(lo) > int(hi):
+        raise ValueError(f"{var}={value!r}: expected an inclusive range like 2-46")
+    return int(lo), int(hi)
+
+
 def quant_config_from_env() -> MiniMaxH3QuantConfig:
     """`FAST_H3_FP8` = 0 (default, off) | 1 (the `w8a8_lofi` preset) | a preset name, refined by the optional
     FAST_H3_FP8_LINEARS (subset of qkv,out,ff1,ff2), FAST_H3_FP8_ACTIVATIONS, FAST_H3_FP8_FIDELITY,
-    FAST_H3_FP8_FP32_ACC, FAST_H3_FP8_SDPA and FAST_H3_FP8_OUT_WEIGHT."""
+    FAST_H3_FP8_FP32_ACC, FAST_H3_FP8_SDPA, FAST_H3_FP8_OUT_WEIGHT and FAST_H3_FP8_BLOCKS (an inclusive index range
+    such as 2-46; unset quantizes every block)."""
     raw = os.environ.get(ENV_FLAG, "0").strip()
     if raw.lower() in _FALSE:
         return MiniMaxH3QuantConfig.default()
@@ -186,6 +207,7 @@ def quant_config_from_env() -> MiniMaxH3QuantConfig:
         fp32_dest_acc=_flag("FAST_H3_FP8_FP32_ACC"),
         sdpa=_flag("FAST_H3_FP8_SDPA", False),
         out_weight=_flag("FAST_H3_FP8_OUT_WEIGHT"),
+        blocks=_block_range("FAST_H3_FP8_BLOCKS"),
     )
 
 
@@ -224,7 +246,11 @@ def apply_quant_config(model, config: MiniMaxH3QuantConfig) -> None:
     if not blocks:
         return
     arch = blocks[0].mesh_device.arch()
-    for block in blocks:
+    skipped = 0
+    for index, block in enumerate(blocks):
+        if not config.covers(index):
+            skipped += 1
+            continue
         attn, ff = block.attn, block.ff
         _apply_linear(attn.to_qkv, config.qkv, cast_input=True, pin_output=True)
         _apply_linear(attn.to_out, config.out, cast_input=True, pin_output=True)
@@ -240,7 +266,7 @@ def apply_quant_config(model, config: MiniMaxH3QuantConfig) -> None:
         attn.sdpa_input_dtype = config.sdpa_input_dtype
         attn.fuse_out_addcmul = not config.out_weight
     if config.active:
-        logger.info(f"minimax-h3 8-bit matmuls: {config.describe()} on {len(blocks)} block(s)")
+        logger.info(f"minimax-h3 8-bit matmuls: {config.describe()} on {len(blocks) - skipped} of {len(blocks)} block(s)")
 
 
 def apply_env_quant_config(model) -> MiniMaxH3QuantConfig:
