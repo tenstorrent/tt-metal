@@ -235,10 +235,13 @@ using namespace ckernel;
 #define DST_ACCUM_MODE is_fp32_dest_acc_en
 #if TOPK_IMPL == 1
 #include "topk_typed_multiresult.h"
-#elif TOPK_IMPL != 0
+#elif TOPK_IMPL != 0 && TOPK_IMPL != 2 && TOPK_IMPL != 3
 #error "Unknown TopK implementation selector"
 #endif
 #include "llk_sfpu/ckernel_sfpu_topk.h"
+#if TOPK_IMPL == 2 || TOPK_IMPL == 3
+#include "topk_threaded_merge.h"
+#endif
 #if TOPK_IMPL == 1
 // Limit the test-only interception to the TopK header.
 #undef TTI_SFPSWAP
@@ -379,7 +382,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 SFPU_UNARY_CALL(
                     dest_sync,
                     is_fp32_dest_acc_en,
+#if TOPK_IMPL == 2 || TOPK_IMPL == 3
+                    calculate_bitonic_topk_merge_threaded,
+#else
                     calculate_bitonic_topk_merge,
+#endif
                     (APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, TOPK_STABLE_SORT),
                     dst_index,
                     vector_mode,

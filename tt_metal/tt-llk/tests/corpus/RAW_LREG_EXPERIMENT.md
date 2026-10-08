@@ -12,6 +12,11 @@ zero unexpected failures, 384 cases. The broader and focused matrices below
 establish additional configuration coverage, not universal compiler correctness.
 No production wrapper rewrite or compiler-pass removal is justified yet.
 
+The production-linked TopK merge experiment below additionally passes exact
+value/index checks with the pass disabled. Its default-codegen performance
+regression is associated with an unroll-cost threshold, not extra vector moves.
+It remains test-only; neither global pass removal nor production adoption follows.
+
 ## Question and controlled intervention
 
 Do independent read/write identity pairs preserve a raw L0 value across a typed
@@ -94,11 +99,10 @@ can be carried in C++. This does not establish that independent macro wrappers
 can communicate that lifetime, nor that the effect pass can be removed globally.
 
 No production wrapper policy is changed on this evidence alone. Before choosing
-a general replacement, extend the partial-predicate tests below and validate
-multiple simultaneously live registers on hardware, pressure/spills, control
-flow, calls, and representative affected LLKs.
+a general replacement, extend beyond the partial-predicate and four-register
+TopK tests below to pressure/spills, calls, and other representative affected LLKs.
 Other chips, arbitrary raw opcodes, formal equivalence, exhaustive input coverage,
-and performance are not established here. The proposed unknown-value builtin
+and corpus-wide performance are not established here. The proposed unknown-value builtin
 remains a design alternative, not an experimentally evaluated implementation.
 
 ## Strengthened experiment
@@ -256,3 +260,88 @@ compiler pass. Explicit state can encode them at region boundaries instead.
 The tests support neither removing the pass globally nor claiming it is the
 only possible solution. No production policy changes or new compiler passes
 were made in this experiment.
+
+## Production-linked TopK merge experiment
+
+`sources/topk_threaded_merge.h` adapts only the production merge region:
+four raw loads, coupled value/index swap, four raw stores. It captures and
+threads L0/L1/L4/L5 through C++ values, recapturing all four after the swap.
+The outer loop, formats and address arithmetic follow the production header;
+local sort and rebuild are unchanged. Raw operations in the adapted region
+bypass effect wrappers. No public LLK header or compiler implementation changes.
+
+`TOPK_IMPL=2` is the measured adaptation. `TOPK_IMPL=3` additionally inserts a
+typed load/store roundtrip of the OTHER compare operand after capturing L0.
+This keeps the input unchanged while making accidental L0 reuse observable;
+it is correctness stress only, never a performance arm. An earlier version
+reloaded the same operand, which could hide corruption; the recorded final
+stress runs below use the distinct operand.
+
+Same Blackhole/runtime/compiler identities as above, live-in pass disabled:
+
+| Configuration | Exact correctness |
+|---|---:|
+| O2 default scheduling, hand + threaded | 24 PASS |
+| O3 explicit scheduling, hand + threaded | 24 PASS |
+| O3 explicit scheduling, hand + threaded + distinct-value stress | 36 PASS |
+| Same, diagnostic complete-unroll limit300 | 36 PASS |
+
+The 36-case matrix covers two directions, three orders (ascending, descending,
+seeded permutation), 32/64 rows, width128, K32, unique finite BF16 values,
+and non-stable sorting. Both value and index tiles must equal the independent
+golden tensor exactly. Each case executes at least twice with sentinel clearing.
+This does not cover ties, special values, other formats/chips, or all TopK phases
+rewritten using threaded state.
+
+Five-run TOPK_BODY profiling measures the whole 32x128 pipeline, not isolated
+merge latency. Same O3/scheduling/pass-disabled options for both arms:
+
+| Complete-unroll size limit | Hand cycles | Threaded cycles | Threaded vs hand |
+|---|---:|---:|---:|
+| Default (200) | 5038 | 5186 | +2.94% |
+| Diagnostic control (300) | 4941 | 4827 | -2.31% |
+
+The default threaded GIMPLE dump explicitly refuses full unroll: estimated
+size280 minus27 eliminated =253, above200. Its sixteen read/write annotations
+each cost one GIMPLE unit. The hand ELF has eight unrolled swap sites; the
+threaded ELF retains one swap plus scalar address calculations and a backedge.
+Neither default ELF contains SFPMOV. This establishes a code-generation
+difference, not attribution of every cycle to one loop.
+
+The 300 limit is a diagnostic compiler-option intervention, NOT a shipped
+default or a production win claim: it also changes other loops, and the hand
+timing changes too. Both arms must always receive the same setting. The
+control ELF confirms eight straight-line swaps, constant offsets, no merge
+backedge, and zero SFPMOV instructions. The existing
+full-stack launch-flatten implementation prices these markers at zero but
+requires positive-cost typed content, so it does not automatically cover this
+raw-delivery-plus-annotations case. It was not the compiler used for these runs.
+Any targeted cost-model/eligibility change requires its own compiler regression
+tests and runtime validation; no new pass is introduced here.
+
+### Reproduce TopK
+
+From `tt_metal/tt-llk/tests/python_tests`, with the matching backend and headers
+selected as in the earlier re-run section:
+
+```sh
+export CHIP_ARCH=blackhole
+# Prepend -B/path/to/backend/ -I/path/to/matching/sfpi/include if needed.
+export TT_LLK_EXTRA_COMPILER_OPTIONS='-O3 -fschedule-insns -fschedule-insns2 -fdisable-rtl-rvtt_lreg_livein'
+../.venv/bin/python -m pytest test_topk.py::test_topk_threaded_merge_exact -x -s -q
+../.venv/bin/python -m pytest test_topk.py::test_topk_device_profile \
+  -k 'handwritten or threaded_merge' -x -s -q
+
+# Diagnostic control: same source and compiler; apply to BOTH arms.
+export TT_LLK_EXTRA_COMPILER_OPTIONS="$TT_LLK_EXTRA_COMPILER_OPTIONS --param=max-completely-peeled-insns=300"
+../.venv/bin/python -m pytest test_topk.py::test_topk_threaded_merge_exact -x -s -q
+../.venv/bin/python -m pytest test_topk.py::test_topk_device_profile \
+  -k 'handwritten or threaded_merge' -x -s -q
+```
+
+Profiling checks valid counters, not correctness or a speedup threshold; run
+the exact gate first. Existing quietbox evidence under `/tmp/lreg-review.Y7HFRq`:
+`topk-exact`, `topk-scheduled`, `topk-profile`, `topk-unroll-control`,
+`topk-distinct-stress`, `topk-distinct-control` (logs/XML as applicable). Temporary evidence paths are
+not reproduction prerequisites. Add `-fdump-tree-cunroll-details` to inspect
+the unroll decision; use a separate RUNNER_TEMP per run to retain its ELFs.

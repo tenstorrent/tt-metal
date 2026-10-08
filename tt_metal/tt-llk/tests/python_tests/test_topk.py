@@ -136,7 +136,7 @@ def prepare_input_tensor_for_topk(src_A, formats, input_dimensions=[32, 128]):
     return src_A
 
 
-def make_unique_value_input(src_A, input_dimensions=[32, 128]):
+def make_unique_value_input(src_A, input_dimensions=[32, 128], order="ascending"):
     """Give each row unique, exactly representable values for an exact index gate."""
     src_A = src_A.clone()
     num_rows_tensor, num_cols_tensor = input_dimensions
@@ -144,7 +144,15 @@ def make_unique_value_input(src_A, input_dimensions=[32, 128]):
     unique_values = torch.arange(values_per_row, dtype=torch.float32).to(src_A.dtype)
     for row in range(num_rows_tensor):
         values_start_idx = row * num_cols_tensor
-        src_A[values_start_idx : values_start_idx + values_per_row] = unique_values
+        values = unique_values
+        if order == "descending":
+            values = values.flip(0)
+        elif order == "permuted":
+            generator = torch.Generator().manual_seed(42 + row)
+            values = (values - values_per_row // 2)[
+                torch.randperm(values_per_row, generator=generator)
+            ]
+        src_A[values_start_idx : values_start_idx + values_per_row] = values
     return src_A
 
 
@@ -308,6 +316,7 @@ def test_topk_sfpu(
     sort_direction: TopKSortDirection,
     stable_sort: bool,
     implementation: int,
+    exact_order=None,
 ):
 
     if input_dimensions == [32, 1024]:
@@ -330,8 +339,8 @@ def test_topk_sfpu(
         spec_B=sfpu_false_spec,
     )
 
-    if os.getenv("TOPK_EXACT_UNIQUE") == "1":
-        src_A = make_unique_value_input(src_A, input_dimensions)
+    if exact_order is not None or os.getenv("TOPK_EXACT_UNIQUE") == "1":
+        src_A = make_unique_value_input(src_A, input_dimensions, exact_order or "ascending")
 
     golden_generator = get_golden_generator(TopKGolden)
     golden_tensor = golden_generator(
@@ -386,6 +395,10 @@ def test_topk_sfpu(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
+    if exact_order is not None:
+        # Unique finite BF16 values make both values and indices unambiguous.
+        assert torch.equal(res_tensor, golden_tensor), "exact TopK value/index mismatch"
+
     # TODO: Fix issue #1344 on tt-llk.
     if input_dimensions[1] == 128 and not _RECORD_TEST_ORDER:
         assert validate_topk_indices(
@@ -403,7 +416,7 @@ def test_topk_sfpu(
 
 
 @pytest.mark.parametrize(
-    "implementation,label", [(0, "handwritten"), (1, "typed_multiresult")]
+    "implementation,label", [(0, "handwritten"), (1, "typed_multiresult"), (2, "threaded_merge")]
 )
 def test_topk_device_profile(perf_report, implementation: int, label: str):
     """Profile one 32x128 TopK SFPU body, excluding datacopy and handshakes."""
@@ -446,10 +459,34 @@ def test_topk_device_profile(perf_report, implementation: int, label: str):
         dest_acc=DestAccumulation.No,
         unpack_to_dest=False,
     )
-    configuration.run(perf_report, run_count=1)
+    configuration.run(perf_report, run_count=5)
     rows = perf_report.frame()
     rows = rows[rows["marker"] == "TOPK_BODY"]
     assert len(rows) >= 1, rows.to_string(index=False)
     cycles = float(rows.iloc[-1]["mean(MATH_ISOLATE)"])
     assert cycles > 0
     print(f"TOPK_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}")
+
+
+@pytest.mark.parametrize(
+    "implementation",
+    [0, 2, 3],
+    ids=["handwritten", "threaded_merge", "threaded_merge_stress"],
+)
+@pytest.mark.parametrize("rows", [32, 64])
+@pytest.mark.parametrize("order", ["ascending", "descending", "permuted"])
+@pytest.mark.parametrize(
+    "direction", [TopKSortDirection.Descending, TopKSortDirection.Ascending]
+)
+def test_topk_threaded_merge_exact(implementation, rows, order, direction, monkeypatch):
+    """Production TopK pipeline, replacing only the four-register merge region."""
+    monkeypatch.setattr(TestConfig, "BIT_EXACT_RUNS", max(2, TestConfig.BIT_EXACT_RUNS))
+    test_topk_sfpu(
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        [rows, 128],
+        32,
+        direction,
+        False,
+        implementation,
+        exact_order=order,
+    )
