@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// topk_xl_perf.cpp's fused K = 512 row with the chunk split across threads: the SFPU work on PACK, the copy and
+// topk_xl_perf.cpp's fused K = 512 and K = 2048 rows with the chunk split across threads: the SFPU work on PACK, the copy and
 // the face transposes on MATH, two chunks in flight (helpers/include/topk_xl_split.h). Same unpack stream, same
 // Dst result. L1_TO_L1 only, Blackhole-only.
 
@@ -20,10 +20,12 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 static_assert(PERF_RUN_TYPE == PerfRunType::L1_TO_L1, "topk_xl_split_perf runs L1_TO_L1 only");
-static_assert(TOPK_XL_K == 512 && TOPK_XL_FUSED_E2E, "the split pipeline covers the fused K = 512 chunk only");
+static_assert((TOPK_XL_K == 512 || TOPK_XL_K == 2048) && TOPK_XL_FUSED_E2E, "the split pipeline covers the fused K = 512 and 2048 chunks");
 static_assert(TOPK_XL_NUM_CHUNKS >= 2 && TOPK_XL_NUM_CHUNKS <= 32, "the perf rows merge 2 to 32 chunks");
 
 constexpr std::uint32_t ELEMENTS_PER_TILE = ckernel::TILE_R_DIM * ckernel::TILE_C_DIM;
+constexpr std::uint32_t TILES_PER_SEQ     = TOPK_XL_K / ELEMENTS_PER_TILE + (TOPK_XL_K < ELEMENTS_PER_TILE ? 1 : 0);
+constexpr std::uint32_t TILE_ELEMENTS     = TOPK_XL_K < ELEMENTS_PER_TILE ? TOPK_XL_K : ELEMENTS_PER_TILE;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -33,8 +35,11 @@ constexpr std::uint32_t ELEMENTS_PER_TILE = ckernel::TILE_R_DIM * ckernel::TILE_
 
 __attribute__((noinline)) void unpack_copy_tile(RUNTIME_PARAMETERS params, std::uint32_t c, std::uint32_t src_format, std::uint32_t dst_format)
 {
-    TT_SETADCXX(p_setadc::UNP_A, TOPK_XL_K - 1, 0x0);
-    ckernel::_llk_unpack_topk_xl_copy_(L1_ADDRESS(params.buffer_A[c]), src_format, dst_format, TOPK_XL_K);
+    for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
+    {
+        TT_SETADCXX(p_setadc::UNP_A, TILE_ELEMENTS - 1, 0x0);
+        ckernel::_llk_unpack_topk_xl_copy_(L1_ADDRESS(params.buffer_A[c * TILES_PER_SEQ + t]), src_format, dst_format, TILE_ELEMENTS);
+    }
     TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
 }
 
@@ -103,7 +108,10 @@ static __attribute__((noinline)) void scrub_dest()
 
 static __attribute__((noinline)) void copy_chunk(std::uint32_t tile, std::uint32_t dst_format)
 {
-    ckernel::_llk_math_topk_xl_copy_(tile, dst_format, TOPK_XL_K);
+    for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
+    {
+        ckernel::_llk_math_topk_xl_copy_(tile + t, dst_format, TILE_ELEMENTS);
+    }
 }
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -129,7 +137,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
             _llk_math_wait_for_dest_available_<dest_sync>();
-            topk_xl_split::math_row(TOPK_XL_NUM_CHUNKS, [math_format](std::uint32_t, std::uint32_t tile) { copy_chunk(tile, math_format); });
+            topk_xl_split::math_row<TOPK_XL_K>(TOPK_XL_NUM_CHUNKS, [math_format](std::uint32_t, std::uint32_t tile) { copy_chunk(tile, math_format); });
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
         PROFILER_SYNC();
@@ -159,17 +167,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
-    topk_xl_split::wait_start();
+    topk_xl_split::wait_start<TOPK_XL_K>();
     {
         START_PERF_MEASURE("TILE_LOOP")
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
-            topk_xl_split::pack_row(TOPK_XL_NUM_CHUNKS);
+            topk_xl_split::pack_row<TOPK_XL_K>(TOPK_XL_NUM_CHUNKS);
             topk_xl_split::split_indices<TOPK_XL_K>(0);
             _llk_packer_wait_for_math_done_();
             _llk_pack_mop_config_<PackMode::Default, false>(FACE_R_DIM, TILE_C_DIM, 4, 1);
-            // The value region of tile 0, then its index region in tile 1.
-            for (std::uint32_t t = 0; t < 2; t++)
+            // The value region of sequence 0, then its index region after it.
+            for (std::uint32_t t = 0; t < 2 * TILES_PER_SEQ; t++)
             {
                 _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(t, L1_ADDRESS(params.buffer_Res[t]));
             }

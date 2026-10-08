@@ -2,17 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Split topk_xl chunk pipeline, fused K = 512: every SFPU instruction of a chunk on PACK, the copy and the face
+// Split topk_xl chunk pipeline, fused K = 512 or 2048: every SFPU instruction of a chunk on PACK, the copy and the face
 // transposes on MATH, two chunks in flight. Chunk c runs its stage j at step 9c + 2j, so consecutive steps belong to
 // different chunks and MATH transposes one chunk while PACK sorts the other. Each stage is an FPU part (MATH) followed
 // by an SFPU part (PACK):
 //
-//   stage    MATH                          PACK
-//   0        copy into the chunk's tile    stamp, sort up to the first transpose
-//   1..6     transpose the chunk's tile    sort pass after that transpose (6: last pass, then merge into tile 0)
-//   7, 8     transpose tile 0              rebuild build pass, rebuild column pass
+//   stage    MATH                              PACK
+//   0        copy into the chunk's sequence    stamp, sort up to the first transpose
+//   1..6     transpose the chunk's sequence    sort pass after that transpose (6: last pass, then merge into sequence 0)
+//   7, 8     transpose sequence 0              rebuild build pass, rebuild column pass
 //
-// Chunk 0 is sorted in place in tile 0 and stops after stage 6; chunk c > 0 goes to tile 1 (odd c) or 2 (even c).
+// A sequence is one tile at K = 512 and two at K = 2048. Chunk 0 is sorted in place in sequence 0 and stops after
+// stage 6; chunk c > 0 goes to sequence 1 (odd c) or 2 (even c).
 // Tokens: MATH posts F2S after each stage's FPU part, PACK takes one before each SFPU part and posts S2F after it.
 // MATH starts a stage once every SFPU part at least two steps back is done, which covers the previous stage of the
 // same chunk, the survivor rebuild before a merge and the merge that frees a tile before its next copy.
@@ -51,9 +52,13 @@ inline bool decode_step(const std::uint32_t c1, const std::uint32_t r, const std
     return chunk < num_chunks && stage < (chunk == 0 ? STAGES_FIRST_CHUNK : STAGES_MERGING_CHUNK);
 }
 
+template <std::uint32_t K>
+constexpr std::uint32_t tiles_per_sequence = K == 2048 ? 2 : 1;
+
+template <std::uint32_t K>
 constexpr std::uint32_t chunk_tile(const std::uint32_t chunk)
 {
-    return chunk == 0 ? 0 : 2 - (chunk & 1);
+    return tiles_per_sequence<K> * (chunk == 0 ? 0 : 2 - (chunk & 1));
 }
 
 #ifdef LLK_TRISC_MATH
@@ -84,7 +89,7 @@ inline void release_src()
 // One Dst section. copy_chunk(chunk, tile) issues the chunk's copy. The SrcA/SrcB releases keep the single-thread
 // order (after the copy, halfway through the chunk, before the next copy), and every release and copy runs with the
 // transpose CFG block closed, as it does there.
-template <typename CopyChunk>
+template <std::uint32_t K, typename CopyChunk>
 inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk)
 {
     std::uint32_t posted = 0, taken = 0, half_release_step = 0;
@@ -120,7 +125,7 @@ inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk)
                     half_release_due  = true;
                     half_release_step = step + 5;
                 }
-                copy_chunk(chunk, chunk_tile(chunk));
+                copy_chunk(chunk, chunk_tile<K>(chunk));
             }
             else
             {
@@ -139,7 +144,7 @@ inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk)
                     ckernel::sfpu::enter_transpose_cfg_block();
                     cfg_open = true;
                 }
-                ckernel::sfpu::_topk_xl_split_transpose_512_(chunk_tile(stage >= STAGES_FIRST_CHUNK ? 0 : chunk) << 6);
+                ckernel::sfpu::_topk_xl_split_transpose_<K>(chunk_tile<K>(stage >= STAGES_FIRST_CHUNK ? 0 : chunk) << 6);
             }
 
             ckernel::t6_semaphore_post<ckernel::p_stall::MATH>(F2S);
@@ -170,63 +175,74 @@ inline void take_math_token()
 }
 
 // Waits for MATH's start signal, then owns the SFPU state: LaneConfig, LRegs, PACK's ADDR_MODs, replay and MOP.
+template <std::uint32_t K>
 inline void wait_start()
 {
     _llk_packer_wait_for_math_done_();
     _llk_packer_set_math_semaphore_<ckernel::p_stall::NONE>();
-    ckernel::sfpu::_topk_xl_split_sfpu_init_();
+    ckernel::sfpu::_topk_xl_split_sfpu_init_<K>();
 }
 
+template <std::uint32_t K>
 inline __attribute__((noinline)) void sfpu_stage(const std::uint32_t chunk, const std::uint32_t stage)
 {
     using namespace ckernel::sfpu;
-    const std::uint32_t tile_offset = chunk_tile(chunk) << 6;
+    constexpr int sequence_rows     = 64 * tiles_per_sequence<K>;
+    const std::uint32_t tile_offset = chunk_tile<K>(chunk) << 6;
     const bool ascending            = chunk > 0;
     switch (stage)
     {
         case 0:
-            _topk_xl_split_stamp_512_(tile_offset, chunk);
-            _topk_xl_split_sort_head_512_(tile_offset, ascending);
+            _topk_xl_split_stamp_<K>(tile_offset, chunk);
+            if constexpr (K == 2048)
+            {
+                _topk_xl_split_sort_head_2048_(tile_offset, ascending);
+            }
+            else
+            {
+                _topk_xl_split_sort_head_512_(tile_offset, ascending);
+            }
             break;
         case 1:
-            _topk_xl_split_stride2_512_<4>(tile_offset, ascending);
+            _topk_xl_split_stride2_<K, 4>(tile_offset, ascending);
             break;
         case 2:
-            _topk_xl_split_columns_512_<0x5050>(tile_offset, ascending);
+            _topk_xl_split_columns_<K, 0x5050>(tile_offset, ascending);
             break;
         case 3:
-            _topk_xl_split_stride2_512_<8>(tile_offset, ascending);
+            _topk_xl_split_stride2_<K, 8>(tile_offset, ascending);
             break;
         case 4:
-            _topk_xl_split_columns_512_<0x5500>(tile_offset, ascending);
+            _topk_xl_split_columns_<K, 0x5500>(tile_offset, ascending);
             break;
         case 5:
-            _topk_xl_split_stride2_512_<16>(tile_offset, ascending);
+            _topk_xl_split_stride2_<K, 16>(tile_offset, ascending);
             break;
         case 6:
-            _topk_xl_split_columns_512_<0>(tile_offset, ascending);
+            _topk_xl_split_columns_<K, 0>(tile_offset, ascending);
             if (chunk > 0)
             {
                 if (chunk & 1)
                 {
-                    _topk_xl_split_merge_512_<64>(0);
+                    _topk_xl_split_merge_<K, sequence_rows>(0);
                 }
                 else
                 {
-                    _topk_xl_split_merge_512_<128>(0);
+                    _topk_xl_split_merge_<K, 2 * sequence_rows>(0);
                 }
             }
             break;
         case 7:
-            _topk_xl_split_rebuild_build_512_(0, false);
+            _topk_xl_split_rebuild_build_<K>(0, false);
             break;
         default:
-            _topk_xl_split_columns_512_<0>(0, false);
+            _topk_xl_split_columns_<K, 0>(0, false);
             break;
     }
 }
 
-// Every SFPU part of one Dst section, survivor left fused in tile 0.
+// Every SFPU part of one Dst section, survivor left fused in sequence 0.
+template <std::uint32_t K>
 inline void pack_row(const std::uint32_t num_chunks)
 {
     TTI_STALLWAIT(ckernel::p_stall::STALL_SFPU, ckernel::p_stall::MATH);
@@ -240,13 +256,13 @@ inline void pack_row(const std::uint32_t num_chunks)
                 continue;
             }
             take_math_token();
-            sfpu_stage(chunk, stage);
+            sfpu_stage<K>(chunk, stage);
             ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
         }
     }
 }
 
-// The row-major global index split of tile 0 into tiles 0 (values) and 1 (indices), on PACK.
+// The row-major global index split of sequence 0 into values (sequence 0) and indices (the tiles after it), on PACK.
 template <std::uint32_t K>
 inline void split_indices(const std::uint32_t seg_base)
 {
