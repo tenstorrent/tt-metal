@@ -449,12 +449,12 @@ def main():
         # T3000 (T3K)
         "t3000-tests.yaml",
         "t3000-dispatch-tests.yaml",
-        "t3000-profiler-tests.yaml",
+        # Profiler (T3K, Galaxy and single-card)
+        "profiler-tests.yaml",
         # Galaxy
         "blaze-models-prefill-tests.yaml",
         "galaxy-tests.yaml",
         "galaxy-sanity.yaml",
-        "galaxy-profiler-tests.yaml",
         "galaxy-stress-tests.yaml",
         # Blackhole
         "blackhole-demo-tests.yaml",

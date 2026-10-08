@@ -12,6 +12,11 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      enabled-skus:
+        required: false
+        type: string
+        default: "wh_llmbox"
+        description: "Comma-separated SKUs (see .github/sku_config.yaml). Filtered against each test's own skus map."
       ref:
         required: false
         type: string
@@ -52,11 +57,12 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
         with:
           tests-yaml: ${{ env.TESTS_YAML_PATH }}
-          enabled-skus: "wh_llmbox"
+          enabled-skus: "${{ inputs.enabled-skus }}"
           sku-config: ./.github/sku_config.yaml
 
   t3000-profiler-tests:
     needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
       matrix:
