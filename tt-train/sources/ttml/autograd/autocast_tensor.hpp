@@ -62,10 +62,9 @@ class AutocastTensor {
 public:
     AutocastTensor();
     explicit AutocastTensor(const ttnn::Tensor &tensor);
+    // No move operations: a move copies, so the moved-from tensor keeps sharing the state and stays usable.
     AutocastTensor(const AutocastTensor &) = default;
-    AutocastTensor(AutocastTensor &&other) noexcept;
     AutocastTensor &operator=(const AutocastTensor &) = default;
-    AutocastTensor &operator=(AutocastTensor &&other) noexcept;
     ~AutocastTensor() = default;
 
     void set_tensor(const ttnn::Tensor &tensor);

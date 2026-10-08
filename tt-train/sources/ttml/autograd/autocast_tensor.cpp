@@ -67,14 +67,6 @@ AutocastTensor::AutocastTensor(const ttnn::Tensor &tensor) :
     m_state(std::make_shared<detail::AutocastState>(make_state(tensor))) {
 }
 
-AutocastTensor::AutocastTensor(AutocastTensor &&other) noexcept : m_state(other.m_state) {
-}
-
-AutocastTensor &AutocastTensor::operator=(AutocastTensor &&other) noexcept {
-    m_state = other.m_state;
-    return *this;
-}
-
 void AutocastTensor::set_tensor(const ttnn::Tensor &tensor) {
     TT_FATAL(!m_state->write_in_progress, "set_tensor called while the tensor is being written in place");
     // Built before the current state changes: tensor may be a reference into it, e.g. set_tensor(get_tensor(FULL)).
