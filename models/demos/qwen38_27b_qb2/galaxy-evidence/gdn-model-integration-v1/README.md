@@ -262,3 +262,62 @@ for persistence. Inspect `queue.json` for waiting/running state and
 `capacity/attempt-*/sweep.json` for live per-cell progress. To cancel only this
 experiment, stop `qwen38-long-context-capacity-v1-20261007.service` with
 `systemctl --user stop`; this does not remove the runtime or weights.
+
+## Attention placement diagnostic
+
+Branch: `anatarajan/qwen38-long-context-throughput-20261007`.
+The persistent `qwen38-attention-placement-v1-20261007.service` is queued
+after the capacity experiment. At 2026-10-08 00:40 UTC both controllers were
+waiting on their live dependencies; the GDN full-model sweep was running.
+There are no placement hardware results or model promotion yet. CPU validation
+passed 236 tests plus 40 subtests, and the opt-in hardware test collects.
+The launch manifest and compressed validation receipt are in
+[`../attention-placement-v1/`](../attention-placement-v1/).
+
+On one TP4 replica the diagnostic measures these six context/batch pairs:
+32,768/B16, 131,072/B8, 262,016/B4, 32,768/B32, 131,072/B16 and 262,016/B8.
+Each runs the native layout, row-major 64 cores, 64 cores at DeepSeek FlashMLA's
+bank-proximity locations, row-major 80 cores, 80 cores in the outer columns,
+then the native layout again to detect drift. The two equal-core-count pairs
+isolate placement from available core count. Active cores per user are recorded
+explicitly because the native split does not always use all 110 cores.
+
+KV remains interleaved across DRAM banks. The 64-core candidate borrows
+FlashMLA's physical distribution, not its bank ownership or KV representation.
+Native SDPA requires sharded input or output for an explicit core subgrid;
+these candidates use height-sharded output followed by conversion to the same
+DRAM output layout as the native path. That conversion is included in timing.
+The comparison against native therefore includes this layout cost; the matched
+64/80-core pairs share it. No native library, precision or checkpoint changes.
+
+All cases use 256-token KV chunks, BF16 Q, BFP8 KV, HiFi4 with FP32 accumulation
+and accurate exponential. Inputs, page tables and numerical tolerances are held
+fixed. Five samples of 100 trace replays exclude allocation and host readback.
+Numerically failing candidates remain visible and are excluded from selection;
+baseline drift above 3% disqualifies the cross-layout timing comparison. Useful
+KV bytes divided by time is reported as effective bandwidth, not as a hardware
+DRAM-counter measurement. A completed diagnostic does not establish a full-model
+speedup or an evaluation pass.
+
+The isolated `attention-placement-source-v1` snapshot and pinned native runtime
+are reused. The controller verifies its source hashes after waiting for the
+capacity service and its clean terminal receipt. It then repeats CPU validation
+and runs hardware through the shared device lock with a 90-minute timeout;
+the outer service has a 14-hour bound. Inspect `queue.json` for controller state
+and `placement.json` for individual cases and paired comparisons.
+
+```sh
+python -m models.demos.qwen38_27b_qb2.demo.run_attention_placement \
+  --task /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006 \
+  --source /home/ttuser/qwen38-artifacts-20261007/attention-placement-source-v1 \
+  --weights /home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2 \
+  --results /home/ttuser/qwen38-artifacts-20261007/attention-placement-NEW \
+  --after-unit qwen38-long-context-capacity-v1-20261007.service \
+  --after-results /home/ttuser/qwen38-artifacts-20261007/long-context-capacity-v1
+```
+
+Use a new results directory and the saved systemd launch command for persistence.
+To cancel this diagnostic alone, stop its named user service; leave the running
+GDN and capacity services intact. Bank-local KV ownership, read-buffer depth,
+transaction-specific barriers and NoC channel scheduling remain follow-up kernel
+experiments, rather than knobs implemented by this placement diagnostic.

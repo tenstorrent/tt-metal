@@ -82,6 +82,7 @@ def run_case(
     precision="native",
     require_native_accuracy=True,
     max_cores_per_head_batch=16,
+    core_placement=None,
 ):
     if precision not in (
         "native",
@@ -94,6 +95,8 @@ def run_case(
         raise ValueError(f"Unsupported precision diagnostic {precision}")
     if max_cores_per_head_batch not in (16, 32):
         raise ValueError("Diagnostic core budget must be 16 or 32")
+    if core_placement is not None and precision != "hifi4_fp32_full_tile_accurate_exp":
+        raise ValueError("Placement experiments require unchanged full-tile accurate attention precision")
     batch, capacity = case["batch"], case["aligned_capacity"]
     case["seed"] = 20261006 + case["input_tokens"] + batch
     rng = torch.Generator().manual_seed(case["seed"])
@@ -144,6 +147,33 @@ def run_case(
     expected = reference(query, key_quantized, value_quantized, table, case["positions"])
     del key_quantized, value_quantized
     grid = mesh.compute_with_storage_grid_size()
+    placement_options = {}
+    output_memory = None
+    if core_placement is not None:
+        from models.demos.qwen38_27b_qb2.tests.attention_placement import placement
+
+        if (grid.x, grid.y) != (11, 10):
+            raise ValueError("Placement candidates require the validated 11x10 Blackhole worker grid")
+        selected = placement(core_placement, batch)
+        case["placement"] = selected
+        grid = ttnn.CoreCoord(*selected["grid"])
+        max_cores_per_head_batch = selected["max_cores_per_head_batch"]
+        if selected["explicit_subgrid"]:
+
+            def core_set(points):
+                return ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in points]
+                )
+
+            points = selected["logical_cores"]
+            placement_options["sub_core_grids"] = core_set(points)
+            # The native factory requires sharded Q or output on explicit grids.
+            # Keep Q identical and give each reducer its own 32x256 output shard.
+            output_memory = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(core_set(points[:batch]), [32, 256], ttnn.ShardOrientation.ROW_MAJOR),
+            )
     case.update(state="measuring", grid=[grid.x, grid.y])
     save(path, report)
 
@@ -169,7 +199,7 @@ def run_case(
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
-        return ttnn.transformer.paged_scaled_dot_product_attention_decode(
+        result = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
             key,
             value,
@@ -182,9 +212,14 @@ def run_case(
                 k_chunk_size=chunk,
                 exp_approx_mode=not precision.endswith("accurate_exp"),
                 max_cores_per_head_batch=max_cores_per_head_batch,
+                **placement_options,
             ),
+            **({"memory_config": output_memory} if output_memory is not None else {}),
             **config,
         )
+        # Include output conversion in every candidate's timed call, preserving
+        # the current decoder's DRAM output boundary rather than hiding its cost.
+        return ttnn.to_memory_config(result, ttnn.DRAM_MEMORY_CONFIG) if output_memory is not None else result
 
     # Measure the native-selected chunk first, then revisit it to expose drift.
     case["precision_mode"] = precision

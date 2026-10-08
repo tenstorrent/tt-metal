@@ -10,7 +10,7 @@ CASES = ((8192, 1), (8192, 16), (55000, 1), (131072, 1), (131072, 8), (262016, 1
 
 
 def geometry(length, batch):
-    if batch not in (1, 4, 8, 16) or not 1 <= length <= 262016:
+    if batch not in (1, 4, 8, 16, 32) or not 1 <= length <= 262016:
         raise ValueError("Unsupported attention sweep geometry")
     native_capacity = (length + 127 + 31) // 32 * 32
     aligned_capacity = (length + 127 + 511) // 512 * 512

@@ -49,3 +49,14 @@ def test_failed_process_does_not_start_hardware_even_with_clean_receipts(tmp_pat
     with patch(MODULE + ".subprocess.run", return_value=failed):
         with expect_error(RuntimeError, "did not exit successfully"):
             wait_for_sweep("example.service", tmp_path, {}, tmp_path / "queue.json")
+
+
+def test_capacity_dependency_requires_its_own_terminal_receipt(tmp_path):
+    directory = tmp_path / "capacity"
+    directory.mkdir()
+    (directory / "sweep.json").write_text(json.dumps(dict(state="completed_with_oom", cleanup_completed=True)))
+    finished = SimpleNamespace(
+        stdout="LoadState=loaded\nActiveState=inactive\nSubState=dead\nMainPID=0\nResult=success\n"
+    )
+    with patch(MODULE + ".subprocess.run", return_value=finished):
+        wait_for_sweep("capacity.service", tmp_path, {}, tmp_path / "queue.json", variants=("capacity",))
