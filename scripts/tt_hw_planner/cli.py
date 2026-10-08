@@ -11718,6 +11718,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="skip the post-publish on-device benchmark (real-hardware sweep into the card)",
     )
     pph.add_argument(
+        "--no-verify-publish",
+        dest="no_verify_publish",
+        action="store_true",
+        help="skip the post-publish check that pulls the published package back and runs its quickstart",
+    )
+    pph.add_argument(
         "--bench-batches", dest="bench_batches", help="users grid for the on-device sweep (default 1,8,32)"
     )
     pph.add_argument("--bench-isl", dest="bench_isl", help="input-length grid for the sweep (default 128,1024)")

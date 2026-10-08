@@ -1360,7 +1360,120 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
     if not getattr(args, "no_bench", False):
         cfg = state.get("config") or {}
         _enrich_card_with_benchmarks(args, slug, checkout, demo_dir, cfg.get("perf_test"), cfg.get("pcc_test"))
+    _verify_published_package(args, slug, servable)
     return 0
+
+
+_VERIFY_TITLE = "Published-package verification"
+
+
+def _verify_published_package(args, slug: str, servable: bool) -> None:
+    """Pull THE JUST-PUBLISHED package back and run its own quickstart, so the page is proven, not
+    asserted. `tt model pull` must succeed; `tt serve` must then reach either `Application startup
+    complete` (a servable package) or the documented scaffold stop (`initialize_vllm_model` missing)
+    for a not-yet-servable one. The VERIFIED outcome is written into the card and printed; a result
+    that CONTRADICTS the card's serve claim is flagged loudly. Best-effort: skips (the publish
+    stands) when the `tt` CLI or docker is absent, and never raises."""
+    import datetime as _dt
+    import shutil
+    import subprocess
+    import time
+
+    if getattr(args, "no_verify_publish", False):
+        return
+    tt = shutil.which("tt") or shutil.which("tt-model")
+    docker = shutil.which("docker")
+    if not tt or not docker:
+        print("  [publish-hf] verify: tt CLI / docker not on this host; skipped (publish stands).")
+        return
+    repo = args.repo
+    sub_model = "model" if os.path.basename(tt) == "tt" else None  # `tt model pull` vs `tt-model pull`
+
+    def _tt(*a, timeout=3600):
+        cmd = [tt] + ([sub_model] if sub_model else []) + list(a)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+    print(f"  [publish-hf] verify: pulling the PUBLISHED package back ({repo}) …")
+    try:
+        pull = _tt("pull", repo, timeout=5400)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [publish-hf] verify: pull errored ({e}); skipped (publish stands).")
+        return
+    pull_ok = pull.returncode == 0
+    if not pull_ok:
+        print("  [publish-hf] verify: tt model pull FAILED for the just-published package.")
+
+    outcome, detail, cname = "unknown", "", None
+    if pull_ok:
+        print(f"  [publish-hf] verify: starting `tt serve {repo}` (first start compiles kernels) …")
+        try:
+            _tt("serve", repo, timeout=300)  # launches the container and returns
+        except Exception:  # noqa: BLE001
+            pass
+        key = slug.split("/")[-1].replace("-", "_")[:12]
+        deadline = time.time() + 1200
+        beat = 0
+        while time.time() < deadline:
+            ps = subprocess.run([docker, "ps", "-a", "--format", "{{.Names}}"], capture_output=True, text=True)
+            cands = [n for n in ps.stdout.split() if key in n.replace("-", "_")]
+            cname = cands[0] if cands else cname
+            if cname:
+                r = subprocess.run([docker, "logs", cname], capture_output=True, text=True)
+                low = ((r.stdout or "") + (r.stderr or "")).lower()
+                if "application startup complete" in low:
+                    outcome, detail = "ready", "Application startup complete"
+                    break
+                if (
+                    "initialize_vllm_model" in low
+                    or "engine core initialization failed" in low
+                    or "has no attribute" in low
+                ):
+                    outcome, detail = "scaffold_stop", "vLLM adapter not implemented (initialize_vllm_model)"
+                    break
+                st = subprocess.run(
+                    [docker, "inspect", "-f", "{{.State.Status}} {{.State.ExitCode}}", cname],
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                if st.startswith("exited") and not st.endswith(" 0"):
+                    outcome, detail = "error", f"container exited: {st}"
+                    break
+            if beat % 6 == 0:
+                print(f"  [publish-hf] verify: … waiting for the served container ({int(deadline - time.time())}s left)")
+            beat += 1
+            time.sleep(10)
+        if cname:
+            subprocess.run([docker, "rm", "-f", cname], capture_output=True, text=True)
+
+    if not pull_ok:
+        verdict = "FAIL (the published package did not pull)"
+    elif servable and outcome == "ready":
+        verdict = "PASS (pulled + served: Application startup complete)"
+    elif (not servable) and outcome == "scaffold_stop":
+        verdict = "PASS as documented (pulled; serve stops at the pending vLLM adapter)"
+    elif servable and outcome != "ready":
+        verdict = f"MISMATCH (card claims servable, but serve did not start: {outcome} {detail})"
+    elif (not servable) and outcome == "ready":
+        verdict = "NOTE (card says not-yet-servable, but the package actually served)"
+    else:
+        verdict = f"INCONCLUSIVE (pull ok; serve outcome {outcome} {detail})"
+    loud = verdict.startswith(("FAIL", "MISMATCH"))
+    print(f"  [publish-hf] verify: {'FAIL -> ' if loud else 'OK -> '}{verdict}")
+
+    ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    section = (
+        "Automated post-publish check of THIS uploaded package on real hardware "
+        "(`tt model pull` + `tt serve`), so the page is proven rather than asserted. "
+        f"_Verified {ts}._\n\n"
+        "| step | result |\n| --- | --- |\n"
+        f"| `tt model pull` | {'pass' if pull_ok else 'FAIL'} |\n"
+        f"| `tt serve` | {verdict} |\n"
+    )
+    try:
+        _upload_card_section(args, _VERIFY_TITLE, section)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [publish-hf] verify: card section not written ({e}).")
+
 
 
 def cmd_publish_hf(args) -> int:
