@@ -98,10 +98,11 @@ inline void sdpa_custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim
  *
  * @tparam transpose: Transpose in1 faces during the multiply.
  * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}; currently unused (the
- *        address mods are fixed), kept for symmetry with the unpack init.
+ *        address mods are fixed), kept for symmetry with @ref _llk_unpack_AB_custom_mm_init_.
  * @param ct_dim: Number of output column tiles.
  * @note Establishes the operand-driven default Src zero-substitution state, which @ref _llk_math_sdpa_custom_mm_
  *       asserts under LLK asserts. Re-run this init after any math op that leaves the flag at keep (a copy init does).
+ * @note On the unpack thread, pair with @ref _llk_unpack_AB_custom_mm_init_.
  */
 template <bool transpose = false>
 inline void _llk_math_sdpa_custom_mm_init_(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim = 1)

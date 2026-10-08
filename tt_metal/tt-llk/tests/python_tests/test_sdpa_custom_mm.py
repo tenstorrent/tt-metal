@@ -198,16 +198,6 @@ def _pack_in1(torch_b, kt, ct, read_transposed=False):
     return out
 
 
-@dataclass
-class SDPA_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
-    """Math sets the Src zero flag to keep before the sdpa_custom_mm init, as a preceding copy_tile_init does."""
-
-    preserve: bool = False
-
-    def convert_to_cpp(self) -> str:
-        return f"#define SDPA_PRESERVE_SRC_ZERO_FLAG {int(self.preserve)}"
-
-
 def _run(
     M,
     K,
@@ -264,8 +254,8 @@ def _run(
                 signal_granularity=signal_granularity,
                 read_transposed=read_transposed,
                 mm_transpose=mm_transpose,
+                preserve_src_zero_flag=preserve_zero_flag,
             ),
-            SDPA_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
         ],
         runtimes=[
             # in1 (SrcA) = [32,32] -> 4 faces of 16 rows; in0 (SrcB) = [M,32] -> 2 faces of M
