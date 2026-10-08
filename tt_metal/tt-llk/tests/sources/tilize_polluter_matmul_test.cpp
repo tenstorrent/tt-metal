@@ -21,8 +21,9 @@
 // `tilize(MatmulGolden(A, B))`.
 //
 // NOTE: run-0 tilize reads `buffer_A[0]` (which holds the tilized matmul operand)
-// as raw row-major input; its packed output goes to a scratch buffer and is
-// discarded. Only the run-1 matmul result is validated.
+// as raw row-major input; the 4-face polluter (two tiles wide) also reads on into
+// `buffer_B[0]`. Its packed output goes to a scratch buffer and is discarded. Only
+// the run-1 matmul result is validated.
 
 #include <algorithm>
 #include <cstdint>
@@ -61,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // ---- Run 0: tilize "polluter" (output discarded) ----
     // Two tiles wide so the leaked tilize row pitch differs from one tile's row. On Blackhole a one-tile-wide
     // tilize leaves a pitch equal to the tile row, which reads a tilized tile unchanged, so the leak would not show.
-    // The wider pitch makes the polluter read past buffer_A[0]; only reads, and its output is discarded.
+    // With 4 faces (face_r_dim 16) the wider pitch reads past buffer_A[0]; only reads, and its output is discarded.
     constexpr std::uint32_t pol_ct_dim   = 2;
     int run                              = 0;
     const std::uint32_t pol_block_ct_dim = _llk_unpack_tilize_block_ct_dim_wrapper_(pol_ct_dim);

@@ -22,13 +22,14 @@ leaks its strides into the matmul, corrupting the result.
 
 The `do_restore` toggle makes this a controlled experiment:
     do_restore=True  -> transition restores the baseline; matmul must match golden.
-    do_restore=False -> no restore; on a correct (PR) build this always exposes the leak
-                        and corrupts the matmul, for every polluter geometry including the
-                        regular G0 (face_r_dim=16). Even when the regular polluter's
-                        Y-stride already matches, `unpack_tilize` leaves `tilize_mode` set
-                        and `Tile_x_dim` covering the whole tile row, which
-                        `_llk_unpack_AB_matmul_init_` does not reset — so divergence is
-                        guaranteed and (16, False) is a valid negative-control point.
+    do_restore=False -> no restore; the leaked tilize state corrupts the matmul, for every
+                        polluter geometry including the regular G0 (face_r_dim=16).
+                        On Wormhole the leaked `tilize_mode` and `Tile_x_dim` alone change
+                        the matmul read. On Blackhole they do not: a one-tile-wide polluter
+                        leaks all of that and the matmul still matches golden, because its
+                        row pitch equals one tile row. The polluter is two tiles wide so the
+                        leaked row pitch differs from a tile row, and that pitch is what makes
+                        the Blackhole control diverge.
 """
 
 from dataclasses import dataclass
@@ -213,9 +214,10 @@ def test_tilize_polluter_matmul(
     else:
         # Negative control: run-1 performs NO hw_configure and relies entirely on the
         # restore that we skipped here, so the polluter tilize state (tilize_mode, mutated
-        # Tile_x_dim / Y-stride, and — for tiny polluters — a <4-face descriptor) leaks into
-        # the regular matmul and MUST corrupt the result. This proves the restore is
-        # load-bearing (and that _llk_unpack_AB_matmul_init_ does not reset that state).
+        # Tile_x_dim / Y-stride, and for tiny polluters a <4-face descriptor) leaks into the
+        # regular matmul. The divergence shows that _llk_unpack_AB_matmul_init_ does not
+        # reset the leaked state the matmul read depends on: on Wormhole that includes
+        # Tile_x_dim; on Blackhole only the two-tile polluter's row pitch makes it diverge.
         assert (
             not result_matches
         ), "expected a state leak without restore, but the matmul matched golden"
