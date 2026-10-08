@@ -1343,7 +1343,8 @@
       export PREFILL_TP=8
       export PREFILL_NUM_LAYERS=36
       export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
-      export PREFILL_HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
+      # The mounted path is the tilized-cache root and its config.json is not an HF AutoConfig.
+      export PREFILL_HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b
       export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
       export PREFILL_TTNN_CACHE=/mnt/models/blaze/openai/gpt-oss-120b
       export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
