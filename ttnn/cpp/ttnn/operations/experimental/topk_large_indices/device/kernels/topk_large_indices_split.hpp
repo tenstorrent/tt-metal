@@ -57,6 +57,9 @@ template <std::uint32_t K, bool classic>
 constexpr std::uint32_t chunk_tiles = classic ? 2 : (K == 2048 ? 2 : 1);
 
 template <std::uint32_t K, bool classic>
+constexpr bool supported_split = (K == 512 || (K == 2048 && !classic));
+
+template <std::uint32_t K, bool classic>
 constexpr std::uint32_t chunk_tile(const std::uint32_t chunk) {
     return chunk_tiles<K, classic> * (chunk == 0 ? 0 : 2 - (chunk & 1));
 }
@@ -83,6 +86,7 @@ inline void release_src() { TTI_SETRWC(ckernel::p_setrwc::CLR_AB, 0, 0, 0, 0, ck
 // closed, as it does there.
 template <std::uint32_t K, bool classic, typename CopyChunk>
 inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk) {
+    static_assert(supported_split<K, classic>, "the split takes fused K = 512 and 2048 rows and Classic K = 512 rows");
     std::uint32_t posted = 0, taken = 0, half_release_step = 0;
     bool prev_step_busy = false, cfg_open = false, half_release_due = false;
 
@@ -123,11 +127,15 @@ inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk) {
                     ckernel::sfpu::enter_transpose_cfg_block();
                     cfg_open = true;
                 }
-                if (classic && stage >= STAGES_FIRST_CHUNK) {
-                    ckernel::sfpu::_topk_xl_split_transpose_unfused_512_(0);
+                const std::uint32_t tile = chunk_tile<K, classic>(stage >= STAGES_FIRST_CHUNK ? 0 : chunk);
+                if constexpr (classic) {
+                    if (stage >= STAGES_FIRST_CHUNK) {
+                        ckernel::sfpu::_topk_xl_split_transpose_unfused_512_(0);
+                    } else {
+                        ckernel::sfpu::_topk_xl_split_transpose_<K>(tile << 6);
+                    }
                 } else {
-                    ckernel::sfpu::_topk_xl_split_transpose_<K>(
-                        chunk_tile<K, classic>(stage >= STAGES_FIRST_CHUNK ? 0 : chunk) << 6);
+                    ckernel::sfpu::_topk_xl_split_transpose_<K>(tile << 6);
                 }
             }
 
@@ -165,6 +173,7 @@ inline void wait_start() {
 
 template <std::uint32_t K, bool classic>
 inline __attribute__((noinline)) void sfpu_stage(const std::uint32_t chunk, const std::uint32_t stage) {
+    static_assert(supported_split<K, classic>, "the split takes fused K = 512 and 2048 rows and Classic K = 512 rows");
     using namespace ckernel::sfpu;
     constexpr int chunk_rows = 64 * chunk_tiles<K, classic>;
     const std::uint32_t tile_offset = chunk_tile<K, classic>(chunk) << 6;
