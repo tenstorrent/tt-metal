@@ -290,13 +290,18 @@ def test_ab_prompt_enhancer(mesh_device, device_params, sp_axis, tp_axis, num_li
         last = probes["after_arm_B"]
         parity["device_greedy"], parity["device_greedy_stats"] = last["text"], last["stats"]
 
-        host = HostPromptEnhancer(default_ltx_enhancer(), max_new_tokens=enhancer.max_new_tokens)
-        logger.info("=== parity: greedy rewrite on host ===")
-        parity["host_greedy"], parity["host_greedy_stats"] = _greedy_rewrite(host, raw_prompt)
-        logger.info(f"host greedy: {parity['host_greedy']!r}")
-        parity["greedy_divergence"] = {
-            stage: _first_divergence(host._tokenizer, parity["host_greedy"], p["text"]) for stage, p in probes.items()
-        }
+        # AB_HOST_PARITY=0 skips the CPU reference rewrite: on a slow or contended
+        # host it can take most of an hour and the device probes already cover
+        # stage-to-stage coherence.
+        if os.environ.get("AB_HOST_PARITY", "1") == "1":
+            host = HostPromptEnhancer(default_ltx_enhancer(), max_new_tokens=enhancer.max_new_tokens)
+            logger.info("=== parity: greedy rewrite on host ===")
+            parity["host_greedy"], parity["host_greedy_stats"] = _greedy_rewrite(host, raw_prompt)
+            logger.info(f"host greedy: {parity['host_greedy']!r}")
+            parity["greedy_divergence"] = {
+                stage: _first_divergence(host._tokenizer, parity["host_greedy"], p["text"])
+                for stage, p in probes.items()
+            }
 
         parity["device_sampled"] = results[f"B_{backend}_enhanced_prompt"]["prompt_encoded"]
         if os.environ.get("AB_HOST_SAMPLED", "0") == "1":

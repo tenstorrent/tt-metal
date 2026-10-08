@@ -830,7 +830,11 @@ def build_prompt_enhancer(
     if key == "host":
         return HostPromptEnhancer(model_path)
     if key == "device":
-        return DevicePromptEnhancer(model_path, mesh_device=mesh_device)
+        # LTX_ENHANCER_TRACE=1 captures gemma4's decode trace on the warmup rewrite
+        # (hand-off open item 2: plumbed, never exercised). Default off: the capture
+        # ordering with the encoder/DiT traces is still being validated.
+        traced = os.environ.get("LTX_ENHANCER_TRACE", "0").lower() in ("1", "true", "yes")
+        return DevicePromptEnhancer(model_path, mesh_device=mesh_device, enable_trace=traced)
     raise ValueError(f"LTX_PROMPT_ENHANCER={backend!r}: expected 'host', 'device', or unset")
 
 
