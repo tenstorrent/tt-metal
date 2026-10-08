@@ -13,10 +13,19 @@ from pathlib import Path
 from models.demos.qwen38_27b_qb2.tests.sweep_recovery import normalized_configuration, resume_measurements
 
 
-def compare(native_path, candidate_path):
+def compare(
+    native_path,
+    candidate_path,
+    *,
+    variants=("native", "single-step"),
+    recurrence_policies=("native", "single_step"),
+    require_same_output=False,
+):
+    if len(variants) != 2 or len(recurrence_policies) != 2:
+        raise ValueError("Comparison requires two variants and policies")
     paths = [native_path, candidate_path]
     reports = [json.loads(path.read_text()) for path in paths]
-    for report, path, variant in zip(reports, paths, ("native", "single-step")):
+    for report, path, variant in zip(reports, paths, variants):
         if (
             report.get("state") not in ("completed", "completed_with_oom")
             or report.get("cleanup_completed") is not True
@@ -50,7 +59,7 @@ def compare(native_path, candidate_path):
     ]
     if policies[0] != policies[1]:
         raise ValueError("Precision differs beyond recurrence selection")
-    if [r["precision"]["decode_recurrence"] for r in reports] != ["native", "single_step"]:
+    if tuple(r["precision"]["decode_recurrence"] for r in reports) != tuple(recurrence_policies):
         raise ValueError("Wrong recurrence policies")
     if normalized_configuration(native["configuration"]) != normalized_configuration(candidate["configuration"]):
         raise ValueError("Unmatched runtime settings")
@@ -71,6 +80,8 @@ def compare(native_path, candidate_path):
             input_tokens=length, batch_per_replica=batch, native_status=a["status"], candidate_status=b["status"]
         )
         for label, cell in (("native", a), ("candidate", b)):
+            if require_same_output and cell["status"] != "completed":
+                raise ValueError("Output equivalence requires completed cells")
             if cell["status"] == "completed":
                 for key in (
                     "aggregate_decode_tokens_per_second",
@@ -89,6 +100,8 @@ def compare(native_path, candidate_path):
             row["same_output_hash_as_native"] = (
                 a["warmup"]["output_sha256_per_replica"] == b["warmup"]["output_sha256_per_replica"]
             )
+            if require_same_output and not row["same_output_hash_as_native"]:
+                raise ValueError("Full-model output differs between recurrence variants")
         rows.append(row)
     return dict(
         state="completed",
@@ -96,6 +109,8 @@ def compare(native_path, candidate_path):
         replicas=1,
         precision_change=False,
         promoted_to_serving=False,
+        variant_labels=list(variants),
+        output_equivalence_required=require_same_output,
         source_receipts=[dict(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest()) for path in paths],
         methodology=native["methodology"],
         cells=rows,
@@ -120,7 +135,8 @@ def render(report, output):
         "candidate_aggregate_decode_tokens_per_second",
         "decode_uplift_percent",
     ]
-    titles = ["Native GDN · output tok/s", "Single-step GDN · output tok/s", "Candidate change vs native · %"]
+    labels = report.get("variant_labels", ["native", "single-step"])
+    titles = [f"{labels[0]} · output tok/s", f"{labels[1]} · output tok/s", "Candidate change vs control · %"]
     measured = sum("decode_uplift_percent" in row for row in rows)
     maximum = max(r.get(key, 0) for r in rows for key in metrics[:2])
     with plt.rc_context({"font.size": 10, "axes.spines.top": False, "axes.spines.right": False}):
@@ -186,7 +202,7 @@ def render(report, output):
         f"""<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Qwen matched GDN sweep</title>
 <style>body{{font:16px system-ui;max-width:1600px;margin:32px auto;padding:0 24px;background:#f7f9fc;color:#172033}}p{{line-height:1.6}}svg{{width:100%;height:auto;background:white}}a{{margin-right:18px}}</style>
-<h1>Qwen3.8-27B · native vs single-step GDN</h1>
+<h1>Qwen3.8-27B · {html.escape(labels[0])} vs {html.escape(labels[1])} GDN</h1>
 <p>{html.escape(report['scope'])}. Model sources and all precision settings match except recurrence selection.</p>
 {svg}<p><a href="comparison.png">PNG</a><a href="comparison.svg">SVG</a><a href="comparison.pdf">PDF</a><a href="comparison.csv">CSV</a><a href="comparison.json">JSON</a></p>
 <p>{html.escape(report['methodology'])}</p>

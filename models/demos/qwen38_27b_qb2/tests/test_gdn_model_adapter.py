@@ -19,7 +19,11 @@ from models.demos.qwen38_27b_qb2.tt.gdn_step.model_adapter import step_from_flat
 from models.demos.qwen38_27b_qb2.tt.generator import configure_fabric
 
 
-def run_case(mesh, batch):
+def tensor_digest(value):
+    return hashlib.sha256(value.contiguous().view(torch.uint8).numpy().tobytes()).hexdigest()
+
+
+def run_case(mesh, batch, *, shared_qk=False):
     rng = torch.Generator().manual_seed(902100 + batch)
     host = [torch.randn(batch, 32, width, generator=rng).bfloat16() for width in (512, 512, 1536)]
     decay = torch.zeros(batch, 32, 12)
@@ -43,6 +47,16 @@ def run_case(mesh, batch):
     state = upload(initial, ttnn.float32)
     reset = upload(initial, ttnn.float32)
     output = upload(torch.full((batch * 12, 128), float("nan")), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT)
+    scratch = (
+        tuple(upload(torch.full((batch * 4, 128), float("nan")), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT) for _ in range(2))
+        if shared_qk
+        else None
+    )
+    scratch_addresses = [tensor.buffer_address() for tensor in scratch] if scratch else []
+
+    def invoke():
+        return step_from_flat(*inputs, state, output, shared_qk_outputs=scratch)
+
     normalized = []
     for value, scale in ((host[0], 128**-0.5), (host[1], 1.0)):
         value = value[:, 0].float().reshape(batch, 4, 128)
@@ -70,12 +84,12 @@ def run_case(mesh, batch):
         return dict(passed=passed, state=state_checks, output=output_checks)
 
     for _ in range(2):
-        actual_output = step_from_flat(*inputs, state, output)
+        actual_output = invoke()
         expected, expected_output = reference(expected, *normalized, values, gates)
         checks.append(verify(actual_output, expected, expected_output))
     trace = ttnn.begin_trace_capture(mesh, cq_id=0)
     try:
-        traced_output = step_from_flat(*inputs, state, output)
+        traced_output = invoke()
     except BaseException:
         ttnn.end_trace_capture(mesh, trace, cq_id=0)
         ttnn.release_trace(mesh, trace)
@@ -88,6 +102,8 @@ def run_case(mesh, batch):
             ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
             expected, expected_output = reference(expected, *normalized, values, gates)
         checks.append(verify(traced_output, expected, expected_output))
+        state_hashes = [tensor_digest(ttnn.to_torch(rank)) for rank in ttnn.get_device_tensors(state)]
+        output_hashes = [tensor_digest(ttnn.to_torch(rank)[:, 0]) for rank in ttnn.get_device_tensors(traced_output)]
         samples = []
         for _ in range(5):
             ttnn.synchronize_device(mesh)
@@ -100,8 +116,13 @@ def run_case(mesh, batch):
         ttnn.release_trace(mesh, trace)
     for tensor, original in zip(inputs, host):
         assert all(torch.equal(ttnn.to_torch(rank), original) for rank in ttnn.get_device_tensors(tensor))
+    assert scratch_addresses == ([tensor.buffer_address() for tensor in scratch] if scratch else [])
     result = dict(
         batch=batch,
+        shared_qk=shared_qk,
+        input_sha256=[tensor_digest(value) for value in (*host, initial)],
+        state_sha256_per_rank=state_hashes,
+        output_sha256_per_rank=output_hashes,
         passed=True,
         checks=checks,
         traced_call_us=samples,
@@ -201,6 +222,7 @@ def test_gdn_model_adapter():
                 Path(__file__),
                 *Path(step_from_flat.__code__.co_filename).parent.glob("*.py"),
                 *Path(step_from_flat.__code__.co_filename).parent.glob("*.cpp"),
+                *Path(step_from_flat.__code__.co_filename).parent.glob("*.hpp"),
             ]
         },
         cases=[],

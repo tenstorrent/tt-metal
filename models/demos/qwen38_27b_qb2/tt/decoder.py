@@ -262,7 +262,8 @@ class Qwen38Decoder(LightweightModule):
             )
         c = self.config
         width = 2 * c.linear_num_key_heads * c.linear_key_head_dim + c.linear_num_value_heads * c.linear_value_head_dim
-        if self.policy.get("decode_recurrence", "native") == "single_step":
+        recurrence = self.policy.get("decode_recurrence", "native")
+        if recurrence in ("single_step", "single_step_shared_qk"):
             if (c.linear_num_key_heads, c.linear_num_value_heads, c.linear_key_head_dim, c.linear_value_head_dim) != (
                 4,
                 12,
@@ -271,7 +272,11 @@ class Qwen38Decoder(LightweightModule):
             ):
                 raise ValueError("Single-step GDN model integration currently requires TP4 Qwen head geometry")
             if not hasattr(self, "gdn_decode_workspace"):
-                self.gdn_decode_workspace = DecodeWorkspace(self.device, c.linear_num_value_heads)
+                self.gdn_decode_workspace = DecodeWorkspace(
+                    self.device,
+                    c.linear_num_value_heads,
+                    shared_qk_heads=c.linear_num_key_heads if recurrence == "single_step_shared_qk" else None,
+                )
             self.gdn_decode_workspace.prepare(batch_size)
         return DecoderState(
             recurrent=zeros(
@@ -858,10 +863,16 @@ class Qwen38Decoder(LightweightModule):
 
     def _delta_recurrence(self, q, k, v, g, beta, state, *, decode=False):
         b, hv = q.shape[0], self.config.linear_num_value_heads
-        if decode and self.policy.get("decode_recurrence", "native") == "single_step":
+        recurrence = self.policy.get("decode_recurrence", "native")
+        if decode and recurrence in ("single_step", "single_step_shared_qk"):
             if not hasattr(self, "gdn_decode_workspace"):
                 raise RuntimeError("Allocate the layer's GDN state before decode/trace capture")
-            return step_from_flat(q, k, v, g, beta, state.recurrent, self.gdn_decode_workspace.output(b))
+            options = (
+                {"shared_qk_outputs": self.gdn_decode_workspace.shared_qk(b)}
+                if recurrence == "single_step_shared_qk"
+                else {}
+            )
+            return step_from_flat(q, k, v, g, beta, state.recurrent, self.gdn_decode_workspace.output(b), **options)
         # Native chunked scan remains the prefill path, including one-token
         # prefill continuations. Its independent batch axis is split to fit one
         # value head per core; caller-owned constants make it traceable.

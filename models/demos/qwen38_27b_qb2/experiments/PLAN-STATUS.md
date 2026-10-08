@@ -50,14 +50,14 @@ single cause that accounts for the whole difference:
   output tok/s/Galaxy under this model. The separate 2,680 target needs less
   KV traffic per accepted output token, not just reaching the assumed 85%.
 
-The next attribution step is a bounded per-stage profile that separates state
-reads/writes, FP32 math, synchronization, layout/epilogue work and collectives.
-The incomplete P0 capture cannot justify a precise percentage decomposition.
+All 12 bounded native/single-step profiles have now completed. They isolate
+major operation and stage intervals; full-model critical-path reconciliation,
+compute/bandwidth calibration and separation of active work from waits remain open.
 
 | Phase / requirement | Current evidence | Remaining gate |
 |---|---|---|
 | G0: eight TP4 replicas | Historical physical eight-replica short-context baseline passed output agreement and <3% TPOT degradation; aggregate 288.16 tok/s at B1. | Repeat qualification for the new attention/GDN policy and long-context operating points. An 8x TP4 projection is not this test. |
-| P0: stage attribution | Earlier export failed after a 67.5-GB CSV. A new bounded native 32K/B16 two-layer capture is now recovered with all four ranks and complete applicable RISC intervals. | Complete the single-step and other-geometry captures, reconcile against traced full-model TPOT, and calibrate compute/bandwidth/collective costs. |
+| P0: stage attribution | All 12 bounded native/single-step two-layer profiles completed with four ranks and applicable RISC intervals; raw CSV reanalysis matches. Raw bank-local read probe reaches 499-508 GB/s/chip. | Reconcile against traced full-model TPOT; calibrate compute/collectives and transfer reader bandwidth into attention with redistribution included. |
 | P1: one-token recurrence | Opt-in custom Metal recurrence is integrated into decode, updates FP32 state in place, eliminates the candidate path's out-of-place state copy, and fuses FP32 Q/K normalization. 4,096 changing-input steps and rebinding checks pass. | Gated RMSNorm and SiLU(z) epilogue are still separate; the public/native op and complete fusion boundary are not finished. Every measured standalone latency misses the bandwidth-plus-10-us gate. |
 | P2: graph cleanup | Compact decode paths, batched RoPE, packed projections and packed convolution for multiples of eight exist. Full-model B32 fixed-shape traces are measured. | No proof of <=15 programs/layer or L1 retention across the full graph. Small/irregular batches retain a per-user convolution path. Gating/layout conversions remain. |
 | P2: B32/B64 serving buckets | Fixed-shape B32 benchmark works. Resident serving bucket selection still uses 1/8/16. | Extend and qualify B32/B64 resident buckets. Full-model B64 is blocked by the DRAM-sharded projection M==1 limit and remains unmeasured. Component B64 recurrence is not full-model support. |
@@ -153,7 +153,7 @@ The existing baseline G0 and failed P0 recovery receipts are respectively
 
 ## Long-context throughput projection and traffic limits
 
-Completed operating points (256K matched pair still running):
+Completed operating points (256K matched pair is effectively flat at -0.169%):
 
 | Context | Batch per TP4 | Measured output tok/s per TP4 | 8x projection, output tok/s/Galaxy | Ideal traffic-model ceiling at that batch |
 |---|---:|---:|---:|---:|
@@ -180,8 +180,8 @@ earlier native point is 49.3%. These ratios are not DRAM-counter utilization.
 
 Compare boundaries carefully: native two-layer profile kernels are eager with
 real weights and synthetic activations/cache; attention and single-step GDN
-microbenchmarks are separate traced calls. No complete optimized stage profile
-or compute/communication roofline is available yet.
+microbenchmarks are separate traced calls. Optimized two-layer profiles are now complete; a calibrated full-model
+compute/communication roofline remains open.
 
 | Stage and geometry | Measured time | Optimistic memory time | Interpretation / next lever |
 |---|---:|---:|---|
@@ -217,3 +217,23 @@ user's 2,680 target at this length requires reducing KV traffic per accepted
 output token, not solely improving placement. BFP8 bandwidth work still has
 considerable headroom versus the current projection; the separate BFP4 KV
 experiment does not yet qualify a lower-traffic policy.
+
+## Latest evidence: Oct 8, 09:15 UTC
+
+[Shared-Q/K and bandwidth report](../galaxy-evidence/shared-qk-and-bandwidth-v1/README.md)
+contains complete physical and raw-profile evidence. Shared normalization passes
+4,096 bit-identical updates and improves the real GDN block by 12.2% at B32 and
+9.5% at B16. Its full-model opt-in policy is running a persistent matched sweep;
+no new model-level uplift or eval pass is claimed. B1 retains the faster fused
+normalization path.
+
+Bank-adjacent bulk reads with four independent slots reach 499-508 GB/s/chip,
+while row placement reaches 340-343 GB/s and tile-at-a-time bank readers about
+190 GB/s. This raw diagnostic excludes compute-worker redistribution and
+attention math. The next bandwidth gate includes those costs; do not compare
+its simple interleaved control directly to the production attention reader.
+
+The 256K capacity pair and all 12 profile captures are complete. Earlier
+"running/queued" statements above are historical snapshots. Updated near256K/B8
+single-step output is 89.831 tok/s/TP4 versus native 89.983, effectively flat.
+Reference-eval qualification and physical eight-replica scaling remain open.

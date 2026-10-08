@@ -482,3 +482,44 @@ failure/recovery, next action and publication revision. Store raw receipts under
 a new directory, update the evidence index, and push working progress. Record
 running jobs with their service name and observed PID; update with terminal
 evidence later. Never infer success from queue order or a missing log line.
+
+## Oct 8, 08:30-09:15 UTC: shared Q/K, physical bandwidth and full-model follow-up
+
+Latest priority remains 32K ISL first, 16K second; 128K/256K remain active
+secondary targets. No speculative default if aggregate committed throughput
+regresses at matched offered concurrency.
+
+- **08:30:22:** capacity pairs completed. Near256K/B8 native 89.983 versus
+  single-step 89.831 output tok/s/TP4 (-0.169%); all repeats clean.
+- **08:32:07:** shared-Q/K adapter passed all batches and 4,096 changing-input
+  steps with bit-identical state/output. Adapter gains B32/B16 30.7%/26.2%;
+  B1 regressed 2.8%, so retain the existing B1 path.
+- **08:33:44:** real-weight GDN block passed. B32 1092.41 -> 973.30 us
+  (1.122x); B16 730.64 -> 667.13 us (1.095x), projected output bit-identical.
+- **08:42:50:** all 12 bounded profiles completed, including optimized paths.
+  Recomputed every derived table from compressed raw CSVs locally. P0 full-model
+  critical-path/roofline calibration still open.
+- **08:44:36-08:45:34:** frozen bandwidth v2 launched and completed. CPU suite
+  341 tests +40 subtests; hardware 42.57 s. Eleven variants and 36 timed cases,
+  with full-byte tail/rebinding checks. Bank-adjacent bulk reads reached
+  499.5-508.2 GB/s/chip; row bulk 340-343, tile-at-a-time about 190. This is raw
+  read calibration, not an attention/model improvement. Four tags/eight-page
+  packets nearly match the maximum; more buffering is not warranted yet.
+- **Failed preflight:** v1 had ten fixture-call failures (missing expected error
+  regex); device work never launched. Corrected tests and preserved failure
+  receipt. Verified the user's interrupted staging attempt had not launched
+  anything before retrying. Corrected an initial nonexistent copy-source path.
+- **09:09:38:** shared-Q/K full-model comparison launched persistently after
+  350 CPU tests +40 subtests. New policy preallocates scratch before traces,
+  preserves fused B1/B2/B4, and leaves defaults unchanged. Control/candidate
+  at 32K/B32, 16K/B32, 128K/B16, 262016/B8; 3 measured full-prefill repeats.
+  Require identical output tokens, model sources, precision and concurrency.
+  Unit `qwen38-gdn-shared-qk-model-v1-20261008.service`, PID 2860184 observed
+  active after launch; 20-hour bound/128-GiB cap, host-local only, global lock.
+- **Next:** measure bulk reader plus compute-worker delivery/backpressure;
+  quantify its benefit against actual attention, whose bandwidth already exceeds
+  the probe's simple interleaved control. Await shared-Q/K model results, then
+  requalify useful policies through evals and physical Galaxy scaling.
+
+Raw receipts, pins, failed preflight, compressed per-op profiles and reproduction
+notes: [shared-qk-and-bandwidth-v1](../galaxy-evidence/shared-qk-and-bandwidth-v1/README.md).

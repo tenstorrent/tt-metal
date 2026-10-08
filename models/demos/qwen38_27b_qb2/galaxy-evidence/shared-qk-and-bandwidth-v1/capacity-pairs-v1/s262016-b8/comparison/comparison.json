@@ -1,0 +1,36 @@
+{
+  "state": "completed",
+  "scope": "One TP4 replica, 64 layers; measured decode output throughput, not full-Galaxy or online-eval qualification",
+  "replicas": 1,
+  "precision_change": false,
+  "promoted_to_serving": false,
+  "source_receipts": [
+    {
+      "path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s262016-b8/native/sweep.json",
+      "sha256": "eccf886a0b9aff2498a4a7cda959bd76cef97c45a0f58b55cf1cf2b9cf4e1e07"
+    },
+    {
+      "path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s262016-b8/single-step/sweep.json",
+      "sha256": "411bec6296b79e08edcd2cda374209e93f1b58fdb7cb952bc728a22660a59385"
+    }
+  ],
+  "methodology": "Full 64-layer native generator; fresh full prefills, no prefix reuse; fixed 128-token output including tokens beyond EOS. Warm measurements exclude weight loading and first-use compilation. TTFT includes request-state reset, prefill and first token readback. Decode uses device sampling and deferred history readback; HTTP and router overhead are not included. Input throughput times prefill_forward through device synchronization, excluding reset, sampling and readback. This native harness submits replica prefills sequentially; its aggregate input rate reflects that schedule, not ideal parallel prefill capacity. Whole-Galaxy throughput is measured only when replicas=8, never multiplied from TP4 results.",
+  "cells": [
+    {
+      "input_tokens": 262016,
+      "batch_per_replica": 8,
+      "native_status": "completed",
+      "candidate_status": "completed",
+      "native_aggregate_decode_tokens_per_second": 89.98320461160156,
+      "native_tokens_per_second_per_user": 11.247900576450196,
+      "native_aggregate_input_tokens_per_second": 3687.088541142177,
+      "native_ttft_p50_s": 568.5930366357788,
+      "candidate_aggregate_decode_tokens_per_second": 89.83101672534204,
+      "candidate_tokens_per_second_per_user": 11.228877090667755,
+      "candidate_aggregate_input_tokens_per_second": 3687.055201666222,
+      "candidate_ttft_p50_s": 568.6005864776671,
+      "decode_uplift_percent": -0.16912921351981414,
+      "same_output_hash_as_native": false
+    }
+  ]
+}

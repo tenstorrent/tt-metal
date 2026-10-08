@@ -14,6 +14,17 @@ from pathlib import Path
 HERE = Path(__file__).parent
 
 
+def kernel_source(filename):
+    # Inline shared math so generic_op's source hash covers its exact contents.
+    return (HERE / filename).read_text().replace('#include "compute_math.hpp"', (HERE / "compute_math.hpp").read_text())
+
+
+def shared_head_count(value_heads, qk_head_repeat):
+    if type(qk_head_repeat) is not int or qk_head_repeat < 1 or value_heads % qk_head_repeat:
+        raise ValueError("Q/K head repetition must divide the value-head count")
+    return value_heads // qk_head_repeat
+
+
 def work_items(heads, grid_x, grid_y, value_splits=1):
     """Disjoint (head, value-column partition) assignments, including waves."""
     if min(heads, grid_x, grid_y) <= 0:
@@ -42,7 +53,7 @@ def circular_buffer_pages(value_splits, input_buffer_items, *, normalize_qk=Fals
     )
 
 
-def step(q, k, v, gates, state, output, *, value_splits=1, input_buffer_items=1, normalize_qk=False):
+def step(q, k, v, gates, state, output, *, value_splits=1, input_buffer_items=1, normalize_qk=False, qk_head_repeat=1):
     """Mutate state[heads,128,128]; write output[heads,128], all FP32 DRAM.
 
     The caller preallocates output and retains all tensors through trace
@@ -56,7 +67,8 @@ def step(q, k, v, gates, state, output, *, value_splits=1, input_buffer_items=1,
 
     mesh = state.device()
     heads = state.shape[0]
-    shapes = [(heads, 128)] * 3 + [(heads, 8), (heads, 128, 128), (heads, 128)]
+    qk_heads = shared_head_count(heads, qk_head_repeat)
+    shapes = [(qk_heads, 128)] * 2 + [(heads, 128), (heads, 8), (heads, 128, 128), (heads, 128)]
     tensors = [q, k, v, gates, state, output]
     for index, (tensor, shape) in enumerate(zip(tensors, shapes)):
         expected_layout = ttnn.TILE_LAYOUT if index == 4 else ttnn.ROW_MAJOR_LAYOUT
@@ -95,7 +107,12 @@ def step(q, k, v, gates, state, output, *, value_splits=1, input_buffer_items=1,
     config.unpack_to_dest_mode = modes
     kernels = []
     for filename, args, ctargs, cfg in [
-        ("reader.cpp", read_args, [value_columns, *accessors(tensors[:5])], ttnn.ReaderConfigDescriptor()),
+        (
+            "reader.cpp",
+            read_args,
+            [value_columns, qk_head_repeat, *accessors(tensors[:5])],
+            ttnn.ReaderConfigDescriptor(),
+        ),
         ("writer.cpp", write_args, [value_columns, *accessors([state, output])], ttnn.WriterConfigDescriptor()),
         ("compute.cpp", compute_args, [value_columns, int(normalize_qk)], config),
     ]:
@@ -103,7 +120,7 @@ def step(q, k, v, gates, state, output, *, value_splits=1, input_buffer_items=1,
             ttnn.KernelDescriptor(
                 # Source text enters generic_op's cache hash, so editing a kernel
                 # cannot silently reuse its previous descriptor in one process.
-                kernel_source=(HERE / filename).read_text(),
+                kernel_source=kernel_source(filename),
                 source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
                 core_ranges=cores,
                 compile_time_args=ctargs,

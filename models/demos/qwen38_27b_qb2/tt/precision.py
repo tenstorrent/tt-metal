@@ -58,7 +58,7 @@ def load_precision(value=None):
         raise ValueError("Precision policy must contain exactly the supported fields")
     if policy["decode_attention"] not in ("native", "accurate_full_tile"):
         raise ValueError("Unsupported decode attention policy")
-    if policy["decode_recurrence"] not in ("native", "single_step"):
+    if policy["decode_recurrence"] not in ("native", "single_step", "single_step_shared_qk"):
         raise ValueError("Unsupported decode recurrence policy")
     # These are explicit runtime contracts of the native norm/GDN/sampler and
     # replicated residual path. Reject unsupported requests instead of ignoring them.

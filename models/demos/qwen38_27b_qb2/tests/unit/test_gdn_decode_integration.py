@@ -46,6 +46,33 @@ def test_workspace_rejects_unqualified_batches(batch, expect_error):
         DecodeWorkspace(object(), 12).prepare(batch)
 
 
+def test_shared_workspace_is_persistent_disjoint_and_skips_small_batches(monkeypatch, expect_error):
+    allocations = []
+
+    def allocate(shape, *args):
+        result = SimpleNamespace(shape=tuple(shape), serial=len(allocations))
+        allocations.append(result)
+        return result
+
+    monkeypatch.setattr(ttnn, "allocate_tensor_on_device", allocate)
+    workspace = DecodeWorkspace(object(), 12, shared_qk_heads=4)
+    workspace.prepare(16)
+    original = dict(workspace.shared_outputs)
+    assert set(original) == {8, 16}
+    assert len(allocations) == 7
+    assert all(tensor.shape == (batch * 4, 128) for batch, pair in original.items() for tensor in pair)
+    assert all(workspace.shared_qk(batch) is None for batch in (1, 2, 4))
+    with expect_error(RuntimeError, "cache allocation"):
+        workspace.shared_qk(32)
+    assert len(allocations) == 7
+    workspace.prepare(32)
+    workspace.prepare(16)
+    assert len(allocations) == 10
+    assert len({id(tensor) for tensor in allocations}) == 10
+    assert all(workspace.shared_qk(batch) is pair for batch, pair in original.items())
+    assert DecodeWorkspace(object(), 12).shared_qk(16) is None
+
+
 def test_single_token_prefill_keeps_chunked_scan_and_decode_uses_in_place_step(monkeypatch):
     calls = []
     scratch = object()
@@ -95,5 +122,33 @@ def test_recurrence_policy_is_explicit_and_backward_compatible(expect_error):
     assert load_precision(policy)["decode_recurrence"] == "native"
     candidate = load_precision(dict(policy, decode_recurrence="single_step"))
     assert decoder_policy(candidate, 0)["decode_recurrence"] == "single_step"
+    shared = load_precision(dict(policy, decode_recurrence="single_step_shared_qk"))
+    assert decoder_policy(shared, 0)["decode_recurrence"] == "single_step_shared_qk"
     with expect_error(ValueError, "Unsupported decode recurrence"):
         load_precision(dict(policy, decode_recurrence="unknown"))
+
+
+@pytest.mark.parametrize("batch", [1, 16, 32])
+def test_shared_policy_passes_only_preallocated_scratch_to_decode(monkeypatch, batch):
+    output, pair = object(), (object(), object())
+    calls = []
+
+    def single_step(*args, shared_qk_outputs):
+        assert args[-1] is output
+        assert shared_qk_outputs is (None if batch == 1 else pair)
+        calls.append(batch)
+        return output
+
+    monkeypatch.setattr(decoder, "step_from_flat", single_step)
+    layer = SimpleNamespace(
+        config=SimpleNamespace(linear_num_value_heads=12),
+        policy={"decode_recurrence": "single_step_shared_qk"},
+        gdn_decode_workspace=SimpleNamespace(
+            output=lambda b: output,
+            shared_qk=lambda b: None if b == 1 else pair,
+        ),
+    )
+    inputs = [torch.zeros(batch, 32, width) for width in (512, 512, 1536, 12, 12)]
+    state = SimpleNamespace(recurrent=object())
+    assert decoder.Qwen38Decoder._delta_recurrence(layer, *inputs, state, decode=True) is output
+    assert calls == [batch]

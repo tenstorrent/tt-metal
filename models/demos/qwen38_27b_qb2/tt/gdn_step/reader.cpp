@@ -9,9 +9,11 @@
 // uses tiled DRAM storage. The reader constructs the broadcast views in L1.
 void kernel_main() {
     constexpr uint32_t value_columns = get_compile_time_arg_val(0);
+    constexpr uint32_t qk_head_repeat = get_compile_time_arg_val(1);
     static_assert(value_columns == 1 || value_columns == 2 || value_columns == 4);
+    static_assert(qk_head_repeat > 0);
     constexpr uint32_t splits = 4 / value_columns;
-    constexpr auto qa = TensorAccessorArgs<1>();
+    constexpr auto qa = TensorAccessorArgs<2>();
     constexpr auto ka = TensorAccessorArgs<qa.next_compile_time_args_offset()>();
     constexpr auto va = TensorAccessorArgs<ka.next_compile_time_args_offset()>();
     constexpr auto ga = TensorAccessorArgs<va.next_compile_time_args_offset()>();
@@ -36,8 +38,8 @@ void kernel_main() {
         cb_reserve_back(3, 1);
         cb_reserve_back(4, 1);
         cb_reserve_back(5, 4 * value_columns);
-        noc_async_read_page(head, q, scratch);
-        noc_async_read_page(head, k, scratch + 512);
+        noc_async_read_page(head / qk_head_repeat, q, scratch);
+        noc_async_read_page(head / qk_head_repeat, k, scratch + 512);
         noc_async_read_page(head, v, scratch + 1024);
         noc_async_read_page(head, gates, scratch + 1536);
         const uint32_t state_l1 = get_write_ptr(5);

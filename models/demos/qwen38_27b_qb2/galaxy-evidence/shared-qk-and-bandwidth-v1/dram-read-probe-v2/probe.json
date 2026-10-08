@@ -1,0 +1,1361 @@
+{
+  "state": "completed",
+  "passed": true,
+  "cleanup_completed": true,
+  "promoted_to_model": false,
+  "scope": "Raw UINT32 1088-byte page read calibration; not BFP8 attention or counter bandwidth",
+  "full_byte_validation_scope": "2056 pages, two inputs/all four ranks, every variant",
+  "timed_integrity_scope": "first/last word of every packet plus ordered aggregate markers on all ranks",
+  "source_sha256": {
+    "test_dram_read_probe.py": "7c9fba61eeb227cad0ab4059a6b6c111b12d1707ff786399a687e42464ae2a2d",
+    "dram_read_probe.py": "0d8e03cbe18b1f70d3de023622263313474e891acf88a01904dfa29b722df645",
+    "dram_read_probe_reader.cpp": "ddd7913289d724a4c45f07980f299a4f403729a1142c4c1acf8258a2595843ab",
+    "dram_read_probe_writer.cpp": "0df5575b2530009e16ae66bb65bffe8e287f0f94d38c9443e11f5903e379edaf"
+  },
+  "validation": [
+    {
+      "variant": {
+        "mode": "interleaved_grid",
+        "placement": "grid",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "full_payload_pages": 2056,
+      "independent_allocations": 2,
+      "full_bytes_equal_all_four_ranks": true,
+      "input_sha256": [
+        "593228e1543e5170c2957f3e9ed1f7fa8da8706f1d09b6e23b8315020f5c5383",
+        "22632a5d096f7edad9b67b934d1e378828829e9da41c0ec8970ce098968be118"
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_tiles",
+        "placement": "row",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "full_payload_pages": 2056,
+      "independent_allocations": 2,
+      "full_bytes_equal_all_four_ranks": true,
+      "input_sha256": [
+        "593228e1543e5170c2957f3e9ed1f7fa8da8706f1d09b6e23b8315020f5c5383",
+        "22632a5d096f7edad9b67b934d1e378828829e9da41c0ec8970ce098968be118"
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_tiles",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "full_payload_pages": 2056,
+      "independent_allocations": 2,
+      "full_bytes_equal_all_four_ranks": true,
+      "input_sha256": [
+        "593228e1543e5170c2957f3e9ed1f7fa8da8706f1d09b6e23b8315020f5c5383",
+        "22632a5d096f7edad9b67b934d1e378828829e9da41c0ec8970ce098968be118"
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "row",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "full_payload_pages": 2056,
+      "independent_allocations": 2,
+      "full_bytes_equal_all_four_ranks": true,
+      "input_sha256": [
+        "593228e1543e5170c2957f3e9ed1f7fa8da8706f1d09b6e23b8315020f5c5383",
+        "22632a5d096f7edad9b67b934d1e378828829e9da41c0ec8970ce098968be118"
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 1
+      },
+      "full_payload_pages": 2056,
+      "independent_allocations": 2,
+      "full_bytes_equal_all_four_ranks": true,
+      "input_sha256": [
+        "593228e1543e5170c2957f3e9ed1f7fa8da8706f1d09b6e23b8315020f5c5383",
+        "22632a5d096f7edad9b67b934d1e378828829e9da41c0ec8970ce098968be118"
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 2
+      },
+      "full_payload_pages": 2056,
+      "independent_allocations": 2,
+      "full_bytes_equal_all_four_ranks": true,
+      "input_sha256": [
+        "593228e1543e5170c2957f3e9ed1f7fa8da8706f1d09b6e23b8315020f5c5383",
+        "22632a5d096f7edad9b67b934d1e378828829e9da41c0ec8970ce098968be118"
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "full_payload_pages": 2056,
+      "independent_allocations": 2,
+      "full_bytes_equal_all_four_ranks": true,
+      "input_sha256": [
+        "593228e1543e5170c2957f3e9ed1f7fa8da8706f1d09b6e23b8315020f5c5383",
+        "22632a5d096f7edad9b67b934d1e378828829e9da41c0ec8970ce098968be118"
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 8
+      },
+      "full_payload_pages": 2056,
+      "independent_allocations": 2,
+      "full_bytes_equal_all_four_ranks": true,
+      "input_sha256": [
+        "593228e1543e5170c2957f3e9ed1f7fa8da8706f1d09b6e23b8315020f5c5383",
+        "22632a5d096f7edad9b67b934d1e378828829e9da41c0ec8970ce098968be118"
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 1,
+        "depth": 4
+      },
+      "full_payload_pages": 2056,
+      "independent_allocations": 2,
+      "full_bytes_equal_all_four_ranks": true,
+      "input_sha256": [
+        "593228e1543e5170c2957f3e9ed1f7fa8da8706f1d09b6e23b8315020f5c5383",
+        "22632a5d096f7edad9b67b934d1e378828829e9da41c0ec8970ce098968be118"
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 4,
+        "depth": 4
+      },
+      "full_payload_pages": 2056,
+      "independent_allocations": 2,
+      "full_bytes_equal_all_four_ranks": true,
+      "input_sha256": [
+        "593228e1543e5170c2957f3e9ed1f7fa8da8706f1d09b6e23b8315020f5c5383",
+        "22632a5d096f7edad9b67b934d1e378828829e9da41c0ec8970ce098968be118"
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4
+      },
+      "full_payload_pages": 2056,
+      "independent_allocations": 2,
+      "full_bytes_equal_all_four_ranks": true,
+      "input_sha256": [
+        "593228e1543e5170c2957f3e9ed1f7fa8da8706f1d09b6e23b8315020f5c5383",
+        "22632a5d096f7edad9b67b934d1e378828829e9da41c0ec8970ce098968be118"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "variant": {
+        "mode": "interleaved_grid",
+        "placement": "grid",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 262144,
+      "unique_read_bytes_per_chip": 285212672,
+      "traced_call_us": [
+        1773.6735055223107,
+        1758.3898967131972,
+        1748.7843986600637,
+        1741.47286452353,
+        1749.8725559562445
+      ],
+      "median_traced_call_us": 1749.8725559562445,
+      "useful_read_gb_s_per_chip": 162.99053952768645,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "de368f1da468d14a445a0738e9663bac5e37678f59100708977e7cf5f1be8152",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          16
+        ],
+        [
+          16384,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_tiles",
+        "placement": "row",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 262144,
+      "unique_read_bytes_per_chip": 285212672,
+      "traced_call_us": [
+        1495.2851459383965,
+        1496.1179113015532,
+        1496.2255954742432,
+        1497.0247400924563,
+        1494.1233908757567
+      ],
+      "median_traced_call_us": 1496.1179113015532,
+      "useful_read_gb_s_per_chip": 190.6351563907675,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "71ccb1c526d533ef76d38ee4fb32609055432e2e210a2ef4c92dc055c129ee88",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          16
+        ],
+        [
+          16384,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_tiles",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 262144,
+      "unique_read_bytes_per_chip": 285212672,
+      "traced_call_us": [
+        1500.3533102571964,
+        1501.5471493825316,
+        1501.7864992842078,
+        1501.3097319751978,
+        1501.4424687251449
+      ],
+      "median_traced_call_us": 1501.4424687251449,
+      "useful_read_gb_s_per_chip": 189.95910795181538,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "71ccb1c526d533ef76d38ee4fb32609055432e2e210a2ef4c92dc055c129ee88",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          16
+        ],
+        [
+          16384,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "row",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 262144,
+      "unique_read_bytes_per_chip": 285212672,
+      "traced_call_us": [
+        838.2411673665047,
+        837.9056118428707,
+        838.4244050830603,
+        837.897602468729,
+        837.9992563277483
+      ],
+      "median_traced_call_us": 837.9992563277483,
+      "useful_read_gb_s_per_chip": 340.34955263546317,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "71ccb1c526d533ef76d38ee4fb32609055432e2e210a2ef4c92dc055c129ee88",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          16
+        ],
+        [
+          16384,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 1
+      },
+      "pages": 262144,
+      "unique_read_bytes_per_chip": 285212672,
+      "traced_call_us": [
+        1307.920808903873,
+        1310.0109063088894,
+        1310.9948951750994,
+        1310.0434560328722,
+        1310.360454954207
+      ],
+      "median_traced_call_us": 1310.0434560328722,
+      "useful_read_gb_s_per_chip": 217.71237487319146,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "71ccb1c526d533ef76d38ee4fb32609055432e2e210a2ef4c92dc055c129ee88",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          16
+        ],
+        [
+          16384,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 2
+      },
+      "pages": 262144,
+      "unique_read_bytes_per_chip": 285212672,
+      "traced_call_us": [
+        640.428951010108,
+        640.5391031876206,
+        640.3939099982381,
+        640.2967497706413,
+        640.2922095730901
+      ],
+      "median_traced_call_us": 640.3939099982381,
+      "useful_read_gb_s_per_chip": 445.3706813057993,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "71ccb1c526d533ef76d38ee4fb32609055432e2e210a2ef4c92dc055c129ee88",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          16
+        ],
+        [
+          16384,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 262144,
+      "unique_read_bytes_per_chip": 285212672,
+      "traced_call_us": [
+        570.8263488486409,
+        571.0161523893476,
+        571.2149664759636,
+        571.231497451663,
+        571.179878897965
+      ],
+      "median_traced_call_us": 571.179878897965,
+      "useful_read_gb_s_per_chip": 499.3394945044101,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "71ccb1c526d533ef76d38ee4fb32609055432e2e210a2ef4c92dc055c129ee88",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          16
+        ],
+        [
+          16384,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 8
+      },
+      "pages": 262144,
+      "unique_read_bytes_per_chip": 285212672,
+      "traced_call_us": [
+        570.8203418180346,
+        571.4081926271319,
+        571.098760701716,
+        570.9811113774776,
+        570.9935910999775
+      ],
+      "median_traced_call_us": 570.9935910999775,
+      "useful_read_gb_s_per_chip": 499.50240501046363,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "71ccb1c526d533ef76d38ee4fb32609055432e2e210a2ef4c92dc055c129ee88",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          16
+        ],
+        [
+          16384,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 1,
+        "depth": 4
+      },
+      "pages": 262144,
+      "unique_read_bytes_per_chip": 285212672,
+      "traced_call_us": [
+        3026.191610842943,
+        3026.754385791719,
+        3027.038904838264,
+        3026.721393689513,
+        3026.749938726425
+      ],
+      "median_traced_call_us": 3026.749938726425,
+      "useful_read_gb_s_per_chip": 94.23066912491946,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "bab7ff4b59f017f2f3752da42c2e6d5b180884ad4f8f654fc7040af0e245082a",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          16
+        ],
+        [
+          16384,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 4,
+        "depth": 4
+      },
+      "pages": 262144,
+      "unique_read_bytes_per_chip": 285212672,
+      "traced_call_us": [
+        842.0268539339304,
+        842.1640377491713,
+        842.4053899943829,
+        842.1410573646426,
+        842.0658996328712
+      ],
+      "median_traced_call_us": 842.1410573646426,
+      "useful_read_gb_s_per_chip": 338.67565238124286,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "65e87f95aee4d61ff9c59830846ed9ba50c778e8787215a1f4046e73ea61de73",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          16
+        ],
+        [
+          16384,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4
+      },
+      "pages": 262144,
+      "unique_read_bytes_per_chip": 285212672,
+      "traced_call_us": [
+        571.3331513106823,
+        571.6104991734028,
+        571.430753916502,
+        571.5599982067943,
+        572.8880176320672
+      ],
+      "median_traced_call_us": 571.5599982067943,
+      "useful_read_gb_s_per_chip": 499.0074058625918,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "44bfcd782669f420bc8dcc578f8ddded4e6c6696bc7e76b93e34437f69808608",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          16
+        ],
+        [
+          16384,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "interleaved_grid",
+        "placement": "grid",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 262144,
+      "unique_read_bytes_per_chip": 285212672,
+      "traced_call_us": [
+        1744.5479985326529,
+        1739.4908471032977,
+        1748.6501950770617,
+        1771.9438532367349,
+        1751.0993871837854
+      ],
+      "median_traced_call_us": 1748.6501950770617,
+      "useful_read_gb_s_per_chip": 163.10447498473582,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "de368f1da468d14a445a0738e9663bac5e37678f59100708977e7cf5f1be8152",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          16
+        ],
+        [
+          16384,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "interleaved_grid",
+        "placement": "grid",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 524288,
+      "unique_read_bytes_per_chip": 570425344,
+      "traced_call_us": [
+        3386.2026408314705,
+        3360.0957598537207,
+        3389.398497529328,
+        3397.7625891566277,
+        3380.2817575633526
+      ],
+      "median_traced_call_us": 3386.2026408314705,
+      "useful_read_gb_s_per_chip": 168.4557613657563,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "67a3f6625d0a641b8390a9e46fa2b647f1d7309f79761a28d588c4195d35c979",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_tiles",
+        "placement": "row",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 524288,
+      "unique_read_bytes_per_chip": 570425344,
+      "traced_call_us": [
+        2997.021609917283,
+        2998.02809022367,
+        2997.6530000567436,
+        2998.1848085299134,
+        2998.272469267249
+      ],
+      "median_traced_call_us": 2998.02809022367,
+      "useful_read_gb_s_per_chip": 190.26684435016185,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "026a9a9c8c98cb64e4ecd65eed1f6fd08aa0231009142ef9d42589bb77e205bf",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_tiles",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 524288,
+      "unique_read_bytes_per_chip": 570425344,
+      "traced_call_us": [
+        3001.5142867341638,
+        3003.650577738881,
+        3002.753690816462,
+        3002.0877486094832,
+        3001.740202307701
+      ],
+      "median_traced_call_us": 3002.0877486094832,
+      "useful_read_gb_s_per_chip": 190.00955060830967,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "026a9a9c8c98cb64e4ecd65eed1f6fd08aa0231009142ef9d42589bb77e205bf",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "row",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 524288,
+      "unique_read_bytes_per_chip": 570425344,
+      "traced_call_us": [
+        1667.5687627866864,
+        1667.3845006152987,
+        1667.6023602485657,
+        1667.7801497280598,
+        1667.5231978297234
+      ],
+      "median_traced_call_us": 1667.5687627866864,
+      "useful_read_gb_s_per_chip": 342.07005835654894,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "026a9a9c8c98cb64e4ecd65eed1f6fd08aa0231009142ef9d42589bb77e205bf",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 1
+      },
+      "pages": 524288,
+      "unique_read_bytes_per_chip": 570425344,
+      "traced_call_us": [
+        2605.2575558423996,
+        2603.9215503260493,
+        2605.4002344608307,
+        2607.3998073115945,
+        2606.0592848807573
+      ],
+      "median_traced_call_us": 2605.4002344608307,
+      "useful_read_gb_s_per_chip": 218.93962257896453,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "026a9a9c8c98cb64e4ecd65eed1f6fd08aa0231009142ef9d42589bb77e205bf",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 2
+      },
+      "pages": 524288,
+      "unique_read_bytes_per_chip": 570425344,
+      "traced_call_us": [
+        1266.743615269661,
+        1267.0145137235522,
+        1266.8717885389924,
+        1267.0450611039996,
+        1266.9103452935815
+      ],
+      "median_traced_call_us": 1266.9103452935815,
+      "useful_read_gb_s_per_chip": 450.24917991952714,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "026a9a9c8c98cb64e4ecd65eed1f6fd08aa0231009142ef9d42589bb77e205bf",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 524288,
+      "unique_read_bytes_per_chip": 570425344,
+      "traced_call_us": [
+        1128.269056789577,
+        1128.74626647681,
+        1128.5379528999329,
+        1128.9240093901753,
+        1128.4823529422283
+      ],
+      "median_traced_call_us": 1128.5379528999329,
+      "useful_read_gb_s_per_chip": 505.4551710327632,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "026a9a9c8c98cb64e4ecd65eed1f6fd08aa0231009142ef9d42589bb77e205bf",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 8
+      },
+      "pages": 524288,
+      "unique_read_bytes_per_chip": 570425344,
+      "traced_call_us": [
+        1128.4242616966367,
+        1128.6385357379913,
+        1128.480350598693,
+        1129.8028519377112,
+        1129.5849923044443
+      ],
+      "median_traced_call_us": 1128.6385357379913,
+      "useful_read_gb_s_per_chip": 505.41012550755386,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "026a9a9c8c98cb64e4ecd65eed1f6fd08aa0231009142ef9d42589bb77e205bf",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 1,
+        "depth": 4
+      },
+      "pages": 524288,
+      "unique_read_bytes_per_chip": 570425344,
+      "traced_call_us": [
+        6037.810700945556,
+        6038.269400596619,
+        6038.0300506949425,
+        6037.945416755974,
+        6038.382602855563
+      ],
+      "median_traced_call_us": 6038.0300506949425,
+      "useful_read_gb_s_per_chip": 94.47209424443777,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "e7720543dafd3cdf5d3e1410851cc7b9dee1e674fc343572cc34ab1e5c3c88ab",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 4,
+        "depth": 4
+      },
+      "pages": 524288,
+      "unique_read_bytes_per_chip": 570425344,
+      "traced_call_us": [
+        1672.0300540328026,
+        1672.4056098610163,
+        1672.0831161364913,
+        1672.4877525120974,
+        1672.3690554499626
+      ],
+      "median_traced_call_us": 1672.3690554499626,
+      "useful_read_gb_s_per_chip": 341.088195898556,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "90466a4a29b02bde1b1bbadccb76ed8f37bb959042d1ea62a059d2e1bc4f5a5b",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4
+      },
+      "pages": 524288,
+      "unique_read_bytes_per_chip": 570425344,
+      "traced_call_us": [
+        1129.4037336483598,
+        1129.7016637399793,
+        1129.3567018583417,
+        1129.4117663055658,
+        1130.9175519272685
+      ],
+      "median_traced_call_us": 1129.4117663055658,
+      "useful_read_gb_s_per_chip": 505.0641059513007,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "62546d1379dac23c0dd3a607c7c635b446be0f1a381bf598f5c6f3eeaa81d668",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "interleaved_grid",
+        "placement": "grid",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 524288,
+      "unique_read_bytes_per_chip": 570425344,
+      "traced_call_us": [
+        3388.28784879297,
+        3419.647691771388,
+        3379.8055490478873,
+        3380.625741556287,
+        3369.445400312543
+      ],
+      "median_traced_call_us": 3380.625741556287,
+      "useful_read_gb_s_per_chip": 168.73365690500898,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "67a3f6625d0a641b8390a9e46fa2b647f1d7309f79761a28d588c4195d35c979",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          32768,
+          32
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "interleaved_grid",
+        "placement": "grid",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 1048576,
+      "unique_read_bytes_per_chip": 1140850688,
+      "traced_call_us": [
+        6647.666054777801,
+        6714.122416451573,
+        6671.310751698911,
+        6680.242717266083,
+        6640.908843837678
+      ],
+      "median_traced_call_us": 6671.310751698911,
+      "useful_read_gb_s_per_chip": 171.00847651407508,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "3c0fb487b4b5a395bbec16897cbe7256219d967de644fbf0609f67f60daf7387",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          131072,
+          16
+        ],
+        [
+          262144,
+          8
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_tiles",
+        "placement": "row",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 1048576,
+      "unique_read_bytes_per_chip": 1140850688,
+      "traced_call_us": [
+        5983.908916823566,
+        5986.027093604207,
+        5984.356044791639,
+        5984.23583433032,
+        5984.863801859319
+      ],
+      "median_traced_call_us": 5984.356044791639,
+      "useful_read_gb_s_per_chip": 190.63883890947898,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "a693272677d60fb3ce3081cbcc4496439d13df3f32ede4db58e6d1e527d06fbd",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          131072,
+          16
+        ],
+        [
+          262144,
+          8
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_tiles",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 1048576,
+      "unique_read_bytes_per_chip": 1140850688,
+      "traced_call_us": [
+        5988.119752146304,
+        5988.543829880655,
+        5988.438683561981,
+        5988.47430665046,
+        5990.82934204489
+      ],
+      "median_traced_call_us": 5988.47430665046,
+      "useful_read_gb_s_per_chip": 190.507736959485,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "a693272677d60fb3ce3081cbcc4496439d13df3f32ede4db58e6d1e527d06fbd",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          131072,
+          16
+        ],
+        [
+          262144,
+          8
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "row",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 1048576,
+      "unique_read_bytes_per_chip": 1140850688,
+      "traced_call_us": [
+        3325.728396885097,
+        3325.4474401474,
+        3326.0779455304146,
+        3325.6217604503036,
+        3325.940202921629
+      ],
+      "median_traced_call_us": 3325.728396885097,
+      "useful_read_gb_s_per_chip": 343.037840693344,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "a693272677d60fb3ce3081cbcc4496439d13df3f32ede4db58e6d1e527d06fbd",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          131072,
+          16
+        ],
+        [
+          262144,
+          8
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 1
+      },
+      "pages": 1048576,
+      "unique_read_bytes_per_chip": 1140850688,
+      "traced_call_us": [
+        5195.900634862483,
+        5195.517488755286,
+        5195.890599861741,
+        5196.520546451211,
+        5197.250656783581
+      ],
+      "median_traced_call_us": 5195.900634862483,
+      "useful_read_gb_s_per_chip": 219.5674567649222,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "a693272677d60fb3ce3081cbcc4496439d13df3f32ede4db58e6d1e527d06fbd",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          131072,
+          16
+        ],
+        [
+          262144,
+          8
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 2
+      },
+      "pages": 1048576,
+      "unique_read_bytes_per_chip": 1140850688,
+      "traced_call_us": [
+        2521.975850686431,
+        2522.2417432814837,
+        2522.3834672942758,
+        2522.1535935997963,
+        2522.265282459557
+      ],
+      "median_traced_call_us": 2522.2417432814837,
+      "useful_read_gb_s_per_chip": 452.31615527690536,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "a693272677d60fb3ce3081cbcc4496439d13df3f32ede4db58e6d1e527d06fbd",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          131072,
+          16
+        ],
+        [
+          262144,
+          8
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 1048576,
+      "unique_read_bytes_per_chip": 1140850688,
+      "traced_call_us": [
+        2244.6015616878867,
+        2244.9615877121687,
+        2244.7317373007536,
+        2244.817349128425,
+        2245.0212156400084
+      ],
+      "median_traced_call_us": 2244.817349128425,
+      "useful_read_gb_s_per_chip": 508.2153737108936,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "a693272677d60fb3ce3081cbcc4496439d13df3f32ede4db58e6d1e527d06fbd",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          131072,
+          16
+        ],
+        [
+          262144,
+          8
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 8
+      },
+      "pages": 1048576,
+      "unique_read_bytes_per_chip": 1140850688,
+      "traced_call_us": [
+        2244.734764099121,
+        2245.310111902654,
+        2244.86596416682,
+        2245.0482472777367,
+        2245.0132062658668
+      ],
+      "median_traced_call_us": 2245.0132062658668,
+      "useful_read_gb_s_per_chip": 508.1710365069871,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "a693272677d60fb3ce3081cbcc4496439d13df3f32ede4db58e6d1e527d06fbd",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          131072,
+          16
+        ],
+        [
+          262144,
+          8
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 1,
+        "depth": 4
+      },
+      "pages": 1048576,
+      "unique_read_bytes_per_chip": 1140850688,
+      "traced_call_us": [
+        12059.851759113371,
+        12060.214299708605,
+        12059.748591855168,
+        12059.457157738507,
+        12060.41865516454
+      ],
+      "median_traced_call_us": 12059.851759113371,
+      "useful_read_gb_s_per_chip": 94.59906396758846,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "6c4e561c3e4a5baf3adea5043a3b3fe8370bc31d3b75e610c7122a9fbb569818",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          131072,
+          16
+        ],
+        [
+          262144,
+          8
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 4,
+        "depth": 4
+      },
+      "pages": 1048576,
+      "unique_read_bytes_per_chip": 1140850688,
+      "traced_call_us": [
+        3329.542698338628,
+        3329.867636784911,
+        3330.227197147906,
+        3330.484591424465,
+        3330.769040621817
+      ],
+      "median_traced_call_us": 3330.227197147906,
+      "useful_read_gb_s_per_chip": 342.57443125113343,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "ae135f45003c3df4bd07db096e34f48c89b5e22d4aa35692e68d08b0e0194c89",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          131072,
+          16
+        ],
+        [
+          262144,
+          8
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4
+      },
+      "pages": 1048576,
+      "unique_read_bytes_per_chip": 1140850688,
+      "traced_call_us": [
+        2246.3952424004674,
+        2246.472891420126,
+        2246.6596914455295,
+        2246.3596891611814,
+        2245.37521135062
+      ],
+      "median_traced_call_us": 2246.3952424004674,
+      "useful_read_gb_s_per_chip": 507.85839751908594,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "867112593f48c74442512332cb3b99c0817452ebf835380f936e2c97de548996",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          131072,
+          16
+        ],
+        [
+          262144,
+          8
+        ]
+      ]
+    },
+    {
+      "variant": {
+        "mode": "interleaved_grid",
+        "placement": "grid",
+        "packet_pages": 15,
+        "depth": 4
+      },
+      "pages": 1048576,
+      "unique_read_bytes_per_chip": 1140850688,
+      "traced_call_us": [
+        6722.797080874443,
+        6706.9826647639275,
+        6692.740158177912,
+        6665.508099831641,
+        6658.771401271224
+      ],
+      "median_traced_call_us": 6692.740158177912,
+      "useful_read_gb_s_per_chip": 170.4609264720946,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "3c0fb487b4b5a395bbec16897cbe7256219d967de644fbf0609f67f60daf7387",
+      "includes_trace_dispatch_and_consumer_marker_work": true,
+      "model_speedup_claim": false,
+      "equivalent_kv_geometries_isl_batch": [
+        [
+          131072,
+          16
+        ],
+        [
+          262144,
+          8
+        ]
+      ]
+    }
+  ],
+  "comparisons": [
+    {
+      "pages": 262144,
+      "control_drift": 0.0006985428024584017,
+      "timing_comparison_qualified": true,
+      "best_raw_read_gb_s": 499.50240501046363,
+      "model_promotion": false
+    },
+    {
+      "pages": 524288,
+      "control_drift": 0.0016469478843162966,
+      "timing_comparison_qualified": true,
+      "best_raw_read_gb_s": 505.4551710327632,
+      "model_promotion": false
+    },
+    {
+      "pages": 1048576,
+      "control_drift": 0.0032121733309371514,
+      "timing_comparison_qualified": true,
+      "best_raw_read_gb_s": 508.2153737108936,
+      "model_promotion": false
+    }
+  ],
+  "updated_at": "2026-10-08T08:45:29Z",
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ],
+  "active_variant": {
+    "mode": "interleaved_grid",
+    "placement": "grid",
+    "packet_pages": 15,
+    "depth": 4
+  },
+  "active_pages": 1048576
+}

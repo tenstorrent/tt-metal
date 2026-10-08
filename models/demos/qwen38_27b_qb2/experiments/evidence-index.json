@@ -1,21 +1,32 @@
 {
-  "generated_at": "2026-10-08T07:32:57.763570+00:00",
+  "generated_at": "2026-10-08T09:16:16.454279+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 37251,
-      "sha256": "82acd93f0d7c85983ece1f5b570d6ae1659234c5d74e05b0d99469cba2e6097e"
+      "bytes": 44660,
+      "sha256": "104f0934458926aa47deb052c2faa2ff8fd6773ce2a1c0b7749fd021e6ee78ab"
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 16575,
-      "sha256": "4addfd0f3aafc2e0b3814db86992a16439846681ea4f9ab94c76d9b9a960d8f1"
+      "bytes": 17813,
+      "sha256": "b10a37f82f72882aca234ecad81cb947faafdbecf981aa9e63816d8b805f6ebb"
+    },
+    {
+      "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
+      "bytes": 11574,
+      "sha256": "6642a7ae769d648c310b8727033c7ee52fc97203d8288cc4d80357c94644d4a8"
     },
     {
       "path": "experiments/TT-LAB-REVIEW.md",
       "bytes": 5227,
       "sha256": "f77a67b7c25da23daef2937914e90057930c3f46a1a7c1e5a18ea99306ddc9d5"
+    },
+    {
+      "path": "experiments/speculative-decode-scope-v1.json",
+      "bytes": 9472,
+      "sha256": "17901d6126c2288063a803a5b33b6d5fe6336319d3fbe5380dd405a24898c28e",
+      "scope": "Read-only speculative-decoding scoping, no device run or runtime promotion"
     },
     {
       "path": "galaxy-evidence/attention-gdn-integration-v1/README.md",
@@ -29,7 +40,8 @@
       "state": "completed",
       "passed": true,
       "scope": "Synthetic attention chunk/core allocation; no full-model qualification",
-      "updated_at": "2026-10-07T15:24:33Z"
+      "updated_at": "2026-10-07T15:24:33Z",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/attention-gdn-integration-v1/attention-accurate-chunks-v1/hardware.xml.gz",
@@ -50,6 +62,7 @@
       "passed": false,
       "scope": "Synthetic attention chunk/core allocation; no full-model qualification",
       "updated_at": "2026-10-07T15:10:39Z",
+      "promoted_to_model": false,
       "error_type": "AssertionError"
     },
     {
@@ -82,6 +95,7 @@
       "passed": false,
       "scope": "Synthetic attention math diagnosis; no model accuracy or deployment qualification",
       "updated_at": "2026-10-07T15:18:47Z",
+      "promoted_to_model": false,
       "error_type": "AssertionError"
     },
     {
@@ -91,7 +105,8 @@
       "state": "completed",
       "passed": true,
       "scope": "Model-layout preparation plus single-step GDN; convolution, output gating and projection excluded",
-      "updated_at": "2026-10-07T15:25:10Z"
+      "updated_at": "2026-10-07T15:25:10Z",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/attention-gdn-integration-v1/gdn-model-adapter-v1/hardware.xml.gz",
@@ -111,7 +126,8 @@
       "state": "completed",
       "passed": true,
       "scope": "Model-layout preparation plus single-step GDN; convolution, output gating and projection excluded",
-      "updated_at": "2026-10-07T15:47:53Z"
+      "updated_at": "2026-10-07T15:47:53Z",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/attention-gdn-integration-v1/gdn-native-control-v2/hardware.xml.gz",
@@ -214,9 +230,10 @@
       "sha256": "874dfeee5066d7481f2217d9390826d8f305010c7354c55353357f2b2b17dbab",
       "state": "failed",
       "passed": false,
-      "cleanup_completed": true,
       "scope": "Synthetic TP4 attention placement and common-output-layout timing; no full-model throughput or eval claim",
       "updated_at": "2026-10-08T02:16:10Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false,
       "error_type": "ValueError"
     },
     {
@@ -272,24 +289,26 @@
       "sha256": "bfeb3199f3af3f15adbe730e544b6652e1a4f04651a3d1918275e95be7c01249",
       "state": "completed",
       "passed": true,
-      "cleanup_completed": true,
       "scope": "Synthetic TP4 attention placement and common-output-layout timing; no full-model throughput or eval claim",
-      "updated_at": "2026-10-08T04:11:50Z"
+      "updated_at": "2026-10-08T04:11:50Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/attention-placement-v2/queue.json",
       "bytes": 13602,
       "sha256": "e409897a3d458e12b2ec6845d0d610002fbf0caefecb4ddec4e78745822b9dce",
       "state": "completed",
-      "updated_at": "2026-10-08T04:11:54Z"
+      "updated_at": "2026-10-08T04:11:54Z",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/attention-placement-v2/receipt.json",
       "bytes": 393,
       "sha256": "6ebe2ebe6b2c8af28c3b53fff8a2771f3c1498553f46f13b9c2901ecdeb95e2c",
       "state": "completed",
-      "cleanup_completed": true,
-      "scope": "Completed experiment; eight alternative-layout cases fail numerical gates, no model promotion"
+      "scope": "Completed experiment; eight alternative-layout cases fail numerical gates, no model promotion",
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/attention-placement-v2/summary.csv",
@@ -326,6 +345,7 @@
       "passed": false,
       "scope": "Synthetic attention math diagnosis; no model accuracy or deployment qualification",
       "updated_at": "2026-10-07T14:45:49Z",
+      "promoted_to_model": false,
       "error_type": "AttributeError"
     },
     {
@@ -352,6 +372,7 @@
       "passed": false,
       "scope": "Synthetic attention math diagnosis; no model accuracy or deployment qualification",
       "updated_at": "2026-10-07T14:55:42Z",
+      "promoted_to_model": false,
       "error_type": "AssertionError"
     },
     {
@@ -393,9 +414,10 @@
       "sha256": "13641ccb32fdbee1c2c5e25b97b5c6bd3a5bf997e66f391c5d7e063fb6c6969e",
       "state": "completed",
       "passed": true,
-      "cleanup_completed": true,
       "scope": "Real paged-SDPA op on synthetic inputs; no full-model speedup or reference-eval claim",
-      "updated_at": "2026-10-08T04:14:02Z"
+      "updated_at": "2026-10-08T04:14:02Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/attention-reader-v2/1-kv4/hardware.xml.gz",
@@ -414,9 +436,10 @@
       "sha256": "75fc1f8ddb0eb25b776bfc644e9857ad38f119269af571f71194b4176300d810",
       "state": "completed",
       "passed": true,
-      "cleanup_completed": true,
       "scope": "Real paged-SDPA op on synthetic inputs; no full-model speedup or reference-eval claim",
-      "updated_at": "2026-10-08T04:15:50Z"
+      "updated_at": "2026-10-08T04:15:50Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/attention-reader-v2/2-kv8/hardware.xml.gz",
@@ -435,9 +458,10 @@
       "sha256": "90c41ac8ee6d0957633e9657f915ee209ad86df0d8f8d722244cd8f3d041432e",
       "state": "completed",
       "passed": true,
-      "cleanup_completed": true,
       "scope": "Real paged-SDPA op on synthetic inputs; no full-model speedup or reference-eval claim",
-      "updated_at": "2026-10-08T04:17:38Z"
+      "updated_at": "2026-10-08T04:17:38Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/attention-reader-v2/3-kv16/hardware.xml.gz",
@@ -456,9 +480,10 @@
       "sha256": "d4c6a99bec8695106be0496ee4ad4462fe77845fe87bfea9101035bfdc6b4c00",
       "state": "completed",
       "passed": true,
-      "cleanup_completed": true,
       "scope": "Real paged-SDPA op on synthetic inputs; no full-model speedup or reference-eval claim",
-      "updated_at": "2026-10-08T04:19:27Z"
+      "updated_at": "2026-10-08T04:19:27Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/attention-reader-v2/4-native/hardware.xml.gz",
@@ -477,16 +502,18 @@
       "sha256": "e7d6dac01f383aca29e666eec67337c865c69c665c1608eaa0f1f861b401d0ea",
       "state": "completed",
       "passed": true,
-      "cleanup_completed": true,
       "scope": "Real paged-SDPA op on synthetic inputs; no full-model speedup or reference-eval claim",
-      "updated_at": "2026-10-08T04:21:14Z"
+      "updated_at": "2026-10-08T04:21:14Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/attention-reader-v2/queue.json",
       "bytes": 26382,
       "sha256": "8b39b3ee314ceb3750b0d70fa0874cb4580c8583f1fa8bbc30d839a38bf29512",
       "state": "completed",
-      "updated_at": "2026-10-08T04:21:18Z"
+      "updated_at": "2026-10-08T04:21:18Z",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/attention-reader-v2/unit.xml.gz",
@@ -518,6 +545,7 @@
       "passed": false,
       "scope": "Synthetic TP4 attention kernel experiment, not full-model performance or quality",
       "updated_at": "2026-10-07T08:04:44Z",
+      "promoted_to_model": false,
       "error_type": "AssertionError"
     },
     {
@@ -601,10 +629,10 @@
       "bytes": 4287,
       "sha256": "eb7ea6dca63a9836a4560aa84ba93985300dd557eff804ec7a032d154e545bf5",
       "state": "executing",
-      "cleanup_completed": false,
       "scope": "Synthetic BF16 Q/K/V; CPU ttsim eager execution on one virtual Blackhole; no silicon timing claim",
       "updated_at": "2026-10-08T05:19:29Z",
-      "model_accuracy_qualified": false
+      "cleanup_completed": false,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/long-v1.log.gz",
@@ -616,10 +644,10 @@
       "bytes": 340794,
       "sha256": "d3f7241be9fce36e46bbc2f87a6ad72455a299094d3d3d7dd37ea225dcce2a8d",
       "state": "completed",
-      "cleanup_completed": true,
       "scope": "Synthetic BF16 Q/K/V; CPU ttsim eager execution on one virtual Blackhole; no silicon timing claim",
       "updated_at": "2026-10-08T05:28:55Z",
-      "model_accuracy_qualified": false
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/long-v2.log.gz",
@@ -677,10 +705,10 @@
       "bytes": 87101,
       "sha256": "ad37b978962dbf25824a4432612d5baa7a3e5a317640e02fa14e7b4557baa025",
       "state": "completed",
-      "cleanup_completed": true,
       "scope": "Synthetic BF16 Q/K/V; CPU ttsim eager execution on one virtual Blackhole; no silicon timing claim",
       "updated_at": "2026-10-08T05:18:16Z",
-      "model_accuracy_qualified": false
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/smoke-v1.log.gz",
@@ -692,8 +720,7 @@
       "bytes": 89121,
       "sha256": "415970c6f0753d5d32d74638768e74d81f858caa32c7e80c0b07bf9f848c495d",
       "state": "completed",
-      "cleanup_completed": true,
-      "model_accuracy_qualified": false
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/bfp4-kv-simulator-v1/summarize.py",
@@ -752,10 +779,9 @@
       "bytes": 86516,
       "sha256": "013aee584250747a65426ad39538e8df3b660dfe1df7e917eec0c1a95e9545b3",
       "state": "completed",
-      "cleanup_completed": true,
       "scope": "Single virtual Blackhole; real weight submatrices with synthetic BF16 inputs; no full-model accuracy or timing claim",
       "updated_at": "2026-10-08T04:55:23Z",
-      "model_accuracy_qualified": false
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/bfp4-simulator-v1/real-weights-v1.log.gz",
@@ -817,7 +843,8 @@
       "sha256": "b9ffaef7b257a3c1fb4fb907be5544a0b6003f9b782dc2b558fe2147bc936f67",
       "state": "waiting_for_sweep",
       "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
-      "updated_at": "2026-10-08T05:44:28Z"
+      "updated_at": "2026-10-08T05:44:28Z",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/bounded-profile-launch-v1/bounded-layer-profile-v1/unit.xml.gz",
@@ -862,18 +889,18 @@
       "bytes": 12757,
       "sha256": "2e630a9959a6d827654e393267acee27931592b58473d68aa63d7b77233da59d",
       "state": "completed_with_oom",
-      "cleanup_completed": true,
+      "created_at": "2026-10-07T22:54:28.786362+00:00",
       "updated_at": "2026-10-07T23:18:07.332893+00:00",
-      "created_at": "2026-10-07T22:54:28.786362+00:00"
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/capacity-pairs-validation-v1/single-step.json",
       "bytes": 12536,
       "sha256": "b4b7eed3a7a90331647d4eeea3955354dbacb40c5138d17416b42e812bfd194f",
       "state": "completed_with_oom",
-      "cleanup_completed": true,
+      "created_at": "2026-10-07T22:54:30.094016+00:00",
       "updated_at": "2026-10-08T00:59:30.747265+00:00",
-      "created_at": "2026-10-07T22:54:30.094016+00:00"
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/capacity-pairs-validation-v1/unit.xml.gz",
@@ -1014,8 +1041,8 @@
       "bytes": 58525,
       "sha256": "d74a950576b0fb9149aaec58c23ce585f8be5e9c56e76f813e1d9d9380819a42",
       "state": "failed",
-      "updated_at": "2026-10-07T09:23:50.030921+00:00",
-      "created_at": "2026-10-07T09:15:21.352350+00:00"
+      "created_at": "2026-10-07T09:15:21.352350+00:00",
+      "updated_at": "2026-10-07T09:23:50.030921+00:00"
     },
     {
       "path": "galaxy-evidence/galaxy-serving-v9/http-sweep/sweep.pdf",
@@ -1075,9 +1102,9 @@
       "bytes": 115160,
       "sha256": "8e365c6372b5d07e117c2d97e59e2b238ccfaa4cc31cbeab2fe83c4eb9f2e27e",
       "state": "allocation_failed",
-      "cleanup_completed": true,
-      "updated_at": "2026-10-08T00:43:34.418841+00:00",
       "created_at": "2026-10-07T22:54:30.094016+00:00",
+      "updated_at": "2026-10-08T00:43:34.418841+00:00",
+      "cleanup_completed": true,
       "error_type": "RuntimeError"
     },
     {
@@ -1101,9 +1128,9 @@
       "bytes": 171966,
       "sha256": "a02f85d2397624b067fb1cc5f3fe4eeea3d6e8ecbda5bc0c740873ea5d72f16f",
       "state": "completed_with_oom",
-      "cleanup_completed": true,
+      "created_at": "2026-10-07T22:54:30.094016+00:00",
       "updated_at": "2026-10-08T00:59:25.836507+00:00",
-      "created_at": "2026-10-07T22:54:30.094016+00:00"
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/gdn-candidate-sweep-v4/index.html",
@@ -1120,9 +1147,9 @@
       "bytes": 172097,
       "sha256": "e0f97aebf9c34b9fca1f5aa3696b2af3177ca4bbbd10f67a84c5698ab72c7c9e",
       "state": "completed_with_oom",
-      "cleanup_completed": true,
+      "created_at": "2026-10-07T22:54:30.094016+00:00",
       "updated_at": "2026-10-08T00:59:30.747265+00:00",
-      "created_at": "2026-10-07T22:54:30.094016+00:00"
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/gdn-candidate-sweep-v4/sweep.pdf",
@@ -1154,7 +1181,8 @@
       "bytes": 21136,
       "sha256": "72fa632a69998990206f67368683e0f0dbbf2d8434d226519b24a81c7c97ef10",
       "state": "completed",
-      "scope": "One TP4 replica, 64 layers; measured decode output throughput, not full-Galaxy or online-eval qualification"
+      "scope": "One TP4 replica, 64 layers; measured decode output throughput, not full-Galaxy or online-eval qualification",
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/gdn-matched-comparison-v4/comparison.pdf",
@@ -1211,7 +1239,8 @@
       "state": "completed",
       "passed": true,
       "scope": "Standalone TP4 recurrence candidate; optional fused Q/K normalization; no convolution/output gating/model eval",
-      "updated_at": "2026-10-07T17:40:40Z"
+      "updated_at": "2026-10-07T17:40:40Z",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/gdn-model-integration-v1/gdn-kernel-validation-v1/long-horizon/hardware.xml.gz",
@@ -1350,9 +1379,9 @@
       "bytes": 118394,
       "sha256": "06dd9355167eb5cd30806d3927873676decdf7842b939f2620afa750b9fe8693",
       "state": "allocation_failed",
-      "cleanup_completed": true,
-      "updated_at": "2026-10-07T23:00:31.968085+00:00",
       "created_at": "2026-10-07T22:54:28.786362+00:00",
+      "updated_at": "2026-10-07T23:00:31.968085+00:00",
+      "cleanup_completed": true,
       "error_type": "RuntimeError"
     },
     {
@@ -1376,9 +1405,9 @@
       "bytes": 172298,
       "sha256": "b5ff4157964f290f5f2a841a0eacb56b9317f900e5c6d9bfdcfa02759da34dd3",
       "state": "completed_with_oom",
-      "cleanup_completed": true,
+      "created_at": "2026-10-07T22:54:28.786362+00:00",
       "updated_at": "2026-10-07T23:18:02.509163+00:00",
-      "created_at": "2026-10-07T22:54:28.786362+00:00"
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/gdn-native-sweep-v4/index.html",
@@ -1395,9 +1424,9 @@
       "bytes": 172424,
       "sha256": "28bca2bcb7a2cfc4b63c2724610ca393b7bdddd3a1f1bfcf9112b6e2d26a1fd0",
       "state": "completed_with_oom",
-      "cleanup_completed": true,
+      "created_at": "2026-10-07T22:54:28.786362+00:00",
       "updated_at": "2026-10-07T23:18:07.332893+00:00",
-      "created_at": "2026-10-07T22:54:28.786362+00:00"
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/gdn-native-sweep-v4/sweep.pdf",
@@ -1432,7 +1461,8 @@
       "state": "completed",
       "passed": true,
       "scope": "Standalone TP4 recurrence candidate; no convolution/normalization/output gating or model eval",
-      "updated_at": "2026-10-07T14:47:22Z"
+      "updated_at": "2026-10-07T14:47:22Z",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/gdn-step-buffering-v1/hardware.xml",
@@ -1460,7 +1490,8 @@
       "state": "completed",
       "passed": true,
       "scope": "Standalone TP4 recurrence candidate; no convolution/normalization/output gating or model eval",
-      "updated_at": "2026-10-07T06:41:37Z"
+      "updated_at": "2026-10-07T06:41:37Z",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/gdn-step-candidate-v1/hardware.xml",
@@ -1485,7 +1516,8 @@
       "state": "completed",
       "passed": true,
       "scope": "Standalone TP4 recurrence candidate; no convolution/normalization/output gating or model eval",
-      "updated_at": "2026-10-07T08:05:41Z"
+      "updated_at": "2026-10-07T08:05:41Z",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/gdn-step-candidate-v3/hardware.xml",
@@ -1529,8 +1561,8 @@
       "bytes": 73523,
       "sha256": "d5c41ae873c63069754d8bd196c9111e32070ac008574736b5168171293af257",
       "state": "failed",
-      "updated_at": "2026-10-07T22:38:54.172987+00:00",
       "created_at": "2026-10-07T17:54:27.014209+00:00",
+      "updated_at": "2026-10-07T22:38:54.172987+00:00",
       "error_type": "RuntimeError"
     },
     {
@@ -1553,8 +1585,8 @@
       "bytes": 73413,
       "sha256": "5ef7be4a63bc7886e92ee6b1d5956ce255c66df587ae0b91f5aee3c964533f33",
       "state": "failed",
-      "updated_at": "2026-10-07T19:21:34.945397+00:00",
       "created_at": "2026-10-07T17:54:27.014209+00:00",
+      "updated_at": "2026-10-07T19:21:34.945397+00:00",
       "error_type": "RuntimeError"
     },
     {
@@ -1595,8 +1627,8 @@
       "bytes": 7487,
       "sha256": "59c1a756452c3f18609ba31a3776a00a9f6f244377a731f34f928582008a0f7e",
       "state": "failed",
-      "updated_at": "2026-10-07T21:56:58.832482+00:00",
       "created_at": "2026-10-07T21:50:59.207910+00:00",
+      "updated_at": "2026-10-07T21:56:58.832482+00:00",
       "error_type": "RuntimeError"
     },
     {
@@ -1762,14 +1794,16 @@
     {
       "path": "galaxy-evidence/hardware-followup-launch-v1/attention-half-tile-hardware-v1/overlay/manifest.json",
       "bytes": 1460,
-      "sha256": "562125f6b967f9471f6456d7d9a9b7af23e04c61880cb7890c849f0e8bb289ae"
+      "sha256": "562125f6b967f9471f6456d7d9a9b7af23e04c61880cb7890c849f0e8bb289ae",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/hardware-followup-launch-v1/attention-half-tile-hardware-v1/queue.json",
       "bytes": 30227,
       "sha256": "2c5184f6c77831b4b8f59b0c273413acffee602984cc0583158fbf2cfe4de0da",
       "state": "hardware_diagnostic_or_waiting_for_lock",
-      "updated_at": "2026-10-08T06:40:31Z"
+      "updated_at": "2026-10-08T06:40:31Z",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/hardware-followup-launch-v1/attention-half-tile-hardware-v1/unit.xml.gz",
@@ -1817,6 +1851,7 @@
       "state": "failed",
       "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
       "updated_at": "2026-10-08T06:30:47Z",
+      "promoted_to_model": false,
       "error_type": "CalledProcessError"
     },
     {
@@ -1825,7 +1860,8 @@
       "sha256": "a9d286c86467a68b23d714e34c63af33355dbe6b5d094b0845fcba69a34f4015",
       "state": "bounded_profile",
       "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
-      "updated_at": "2026-10-08T06:36:04Z"
+      "updated_at": "2026-10-08T06:36:04Z",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/hardware-followup-launch-v1/bounded-layer-profile-v3/tracy-help.txt",
@@ -1853,9 +1889,9 @@
       "bytes": 16233,
       "sha256": "1855494b617e20e2ed981471329c79355e49e19dbe6aa3b569bc07a5e8d81db5",
       "state": "completed",
-      "cleanup_completed": true,
+      "created_at": "2026-10-08T05:53:12.722259+00:00",
       "updated_at": "2026-10-08T06:30:43.724665+00:00",
-      "created_at": "2026-10-08T05:53:12.722259+00:00"
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/hardware-followup-launch-v1/collection.json",
@@ -1953,9 +1989,9 @@
       "bytes": 68683,
       "sha256": "af92caa3cea0c66889964458bc7b2e9ceefa58d1f5bc78d18cd476bbab44ab80",
       "state": "allocation_failed",
-      "cleanup_completed": true,
-      "updated_at": "2026-10-08T01:29:49.403195+00:00",
       "created_at": "2026-10-08T00:59:48.396482+00:00",
+      "updated_at": "2026-10-08T01:29:49.403195+00:00",
+      "cleanup_completed": true,
       "error_type": "RuntimeError"
     },
     {
@@ -2004,9 +2040,9 @@
       "bytes": 62423,
       "sha256": "befb0a8611e86f1d4558c3debfd341104ab2aa37768c9678d66b74d15b75f33b",
       "state": "completed_with_oom",
-      "cleanup_completed": true,
+      "created_at": "2026-10-08T00:59:48.396482+00:00",
       "updated_at": "2026-10-08T02:15:34.922119+00:00",
-      "created_at": "2026-10-08T00:59:48.396482+00:00"
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-02/sweep.pdf",
@@ -2038,9 +2074,9 @@
       "bytes": 62557,
       "sha256": "63fe670672e1c4102ca9d568d23666ecf5e5c74af2d2a93653a22613bdabb8ee",
       "state": "completed_with_oom",
-      "cleanup_completed": true,
+      "created_at": "2026-10-08T00:59:48.396482+00:00",
       "updated_at": "2026-10-08T02:15:39.557700+00:00",
-      "created_at": "2026-10-08T00:59:48.396482+00:00"
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/sweep.pdf",
@@ -2062,8 +2098,8 @@
       "bytes": 12340,
       "sha256": "fb315794c0e812773d391ef5932e0d0dc150047600e57203054007353e7e8d03",
       "state": "completed",
-      "cleanup_completed": true,
-      "updated_at": "2026-10-08T02:15:40Z"
+      "updated_at": "2026-10-08T02:15:40Z",
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/long-context-capacity-v1/results/unit.xml.gz",
@@ -2135,7 +2171,8 @@
     {
       "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v1/native/overlay/manifest.json",
       "bytes": 1456,
-      "sha256": "d6b5b51fda14416c0c17f9d83e3eb726d40aa0f700af9901db42aba1276184f3"
+      "sha256": "d6b5b51fda14416c0c17f9d83e3eb726d40aa0f700af9901db42aba1276184f3",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v1/native/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp.gz",
@@ -2152,10 +2189,10 @@
       "bytes": 3277,
       "sha256": "6f73eaa7495b2fd60c02135ed7a837e46743dcd567ea3553a8d8dda391ac2726",
       "state": "failed",
-      "cleanup_completed": true,
       "scope": "BFP8 KV, BF16 Q/output, HiFi4 FP32 accumulation, accurate exp; synthetic CPU simulator",
       "updated_at": "2026-10-08T06:02:31Z",
-      "model_accuracy_qualified": false,
+      "cleanup_completed": true,
+      "promoted_to_model": false,
       "error_type": "ValueError"
     },
     {
@@ -2164,6 +2201,7 @@
       "sha256": "b19706c59b7935a3f8e38595c616a20aa747221139aecc1578a1abc760cef0d1",
       "state": "failed",
       "updated_at": "2026-10-08T06:02:32Z",
+      "promoted_to_model": false,
       "error_type": "CalledProcessError"
     },
     {
@@ -2230,7 +2268,8 @@
     {
       "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/accurate_partial/overlay/manifest.json",
       "bytes": 1496,
-      "sha256": "3d614cd942e4b9bb82fbfd9c24df910ed60c9930fba4e4c75e219d675a8065cc"
+      "sha256": "3d614cd942e4b9bb82fbfd9c24df910ed60c9930fba4e4c75e219d675a8065cc",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/accurate_partial/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp.gz",
@@ -2247,16 +2286,17 @@
       "bytes": 27467,
       "sha256": "94b042a20cd25b307f9243ac8c5ce70d5b0604af59480c206bc94f7681cf7ccf",
       "state": "completed",
-      "cleanup_completed": true,
       "scope": "BFP8 KV, BF16 Q/output, HiFi4 FP32 accumulation, accurate exp; synthetic CPU simulator",
       "updated_at": "2026-10-08T06:15:35Z",
-      "model_accuracy_qualified": false
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/comparison.json",
       "bytes": 11814,
       "sha256": "9d2dddf81541074947945c529f3853ded8371f518a67406b5a4d011e635ec38d",
-      "scope": "One virtual-chip synthetic numerical screen; no hardware timing or model-eval qualification"
+      "scope": "One virtual-chip synthetic numerical screen; no hardware timing or model-eval qualification",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/11404448665778722456/chlkc_math.cpp.gz",
@@ -2306,7 +2346,8 @@
     {
       "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/native/overlay/manifest.json",
       "bytes": 1456,
-      "sha256": "399dcb58f46826a8042e099808347cd13dfdf46e1311565466ed35febffec8a9"
+      "sha256": "399dcb58f46826a8042e099808347cd13dfdf46e1311565466ed35febffec8a9",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/native/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp.gz",
@@ -2323,18 +2364,19 @@
       "bytes": 27082,
       "sha256": "64d577485f9fbee311354ac19d1dbedd29079d691c6f401244aed3954ce610d0",
       "state": "completed",
-      "cleanup_completed": true,
       "scope": "BFP8 KV, BF16 Q/output, HiFi4 FP32 accumulation, accurate exp; synthetic CPU simulator",
       "updated_at": "2026-10-08T06:12:02Z",
-      "model_accuracy_qualified": false
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/queue.json",
       "bytes": 18844,
       "sha256": "89d41040feda88c86fe28547deff7d027aaa764c40d3d5c074e39a23bd67c317",
       "state": "completed",
+      "updated_at": "2026-10-08T06:15:35Z",
       "cleanup_completed": true,
-      "updated_at": "2026-10-08T06:15:35Z"
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/unit.xml.gz",
@@ -2426,17 +2468,19 @@
       "sha256": "d84cba1a21d50df70665cb5767577721ec36a6b458222bd6fe346f7e80dd16aa",
       "state": "completed",
       "passed": true,
-      "cleanup_completed": true,
       "scope": "Synthetic TP4 placement/chunk diagnostic; no full-model or reference-eval qualification",
-      "updated_at": "2026-10-08T06:09:53Z"
+      "updated_at": "2026-10-08T06:09:53Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/optimization-followup-v1/attention-placement-long-v1/queue.json",
       "bytes": 14487,
       "sha256": "5e702010122e2218319df1437f7d5d05b3d9d5d37059be992b5430e64d7d8caa",
       "state": "completed",
+      "updated_at": "2026-10-08T06:09:57Z",
       "cleanup_completed": true,
-      "updated_at": "2026-10-08T06:09:57Z"
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/optimization-followup-v1/bounded-layer-profile-launch-v2.json",
@@ -2467,7 +2511,8 @@
       "sha256": "bb48de8829167267c410de821cee734b182e8cd4b2e0b0f0716fe5d1e2412e6c",
       "state": "bounded_profile",
       "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
-      "updated_at": "2026-10-08T06:16:46Z"
+      "updated_at": "2026-10-08T06:16:46Z",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/queue.json",
@@ -2486,7 +2531,8 @@
       "bytes": 2158,
       "sha256": "0f3f17a153fb05735f6c8fb6116fe20ead97cdd19f5a8b74a0b29af784c8e74c",
       "state": "completed",
-      "scope": "One TP4 replica, 64 layers; measured decode output throughput, not full-Galaxy or online-eval qualification"
+      "scope": "One TP4 replica, 64 layers; measured decode output throughput, not full-Galaxy or online-eval qualification",
+      "promoted_to_serving": false
     },
     {
       "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/s131072-b16/comparison/comparison.pdf",
@@ -2534,9 +2580,9 @@
       "bytes": 14198,
       "sha256": "5bd8e483e4fd49a9f3adf3cb97f40538102cd7ffa0fc794f7e5f1aa6a48768d3",
       "state": "completed",
-      "cleanup_completed": true,
+      "created_at": "2026-10-08T04:28:08.891092+00:00",
       "updated_at": "2026-10-08T05:10:46.938726+00:00",
-      "created_at": "2026-10-08T04:28:08.891092+00:00"
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/s131072-b16/single-step/attempt-01/command.json",
@@ -2564,9 +2610,9 @@
       "bytes": 14235,
       "sha256": "8467ae9e06d1c69d38c9e90c1a581272514ba19436ed01dc696f47f20bedcb2e",
       "state": "completed",
-      "cleanup_completed": true,
+      "created_at": "2026-10-08T05:10:48.419983+00:00",
       "updated_at": "2026-10-08T05:53:10.293802+00:00",
-      "created_at": "2026-10-08T05:10:48.419983+00:00"
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/optimization-followup-v1/collection.json",
@@ -2599,8 +2645,8 @@
       "bytes": 123417,
       "sha256": "d81d65cdaadadaf23e9b2f538e2ebb348f756c486f282c4e6f1c4c373bcb39e9",
       "state": "completed",
-      "updated_at": "2026-10-07T05:39:30.365653+00:00",
-      "created_at": "2026-10-07T03:08:38.326156+00:00"
+      "created_at": "2026-10-07T03:08:38.326156+00:00",
+      "updated_at": "2026-10-07T05:39:30.365653+00:00"
     },
     {
       "path": "galaxy-evidence/perf-sweep-tp4-v1/sweep.pdf",
@@ -2629,7 +2675,8 @@
       "bytes": 14375,
       "sha256": "049565fdc2eb8211aa573d06cda41ad854fba0deff1ced5bd51fa91f96afdd26",
       "state": "waiting_for_device_lock_or_running",
-      "updated_at": "2026-10-08T05:16:20Z"
+      "updated_at": "2026-10-08T05:16:20Z",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/placement-long-launch-v1/attention-placement-long-v1/unit.xml.gz",
@@ -2658,9 +2705,9 @@
       "bytes": 14198,
       "sha256": "5bd8e483e4fd49a9f3adf3cb97f40538102cd7ffa0fc794f7e5f1aa6a48768d3",
       "state": "completed",
-      "cleanup_completed": true,
+      "created_at": "2026-10-08T04:28:08.891092+00:00",
       "updated_at": "2026-10-08T05:10:46.938726+00:00",
-      "created_at": "2026-10-08T04:28:08.891092+00:00"
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/placement-long-launch-v1/collection.json",
@@ -2702,32 +2749,58 @@
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/attention-half-tile-hardware-v1/hardware.json.gz",
       "bytes": 17480,
-      "sha256": "58eafe87eabc3b1044d78a29902fd2b030d3e51ffdb8ce79f2e715c8af34b36c"
+      "sha256": "58eafe87eabc3b1044d78a29902fd2b030d3e51ffdb8ce79f2e715c8af34b36c",
+      "state": "completed",
+      "passed": true,
+      "scope": "Synthetic TP4 attention kernel; excludes model query padding/slicing and full-model/eval qualification",
+      "updated_at": "2026-10-08T06:58:07Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/attention-half-tile-hardware-v1/hardware.xml.gz",
       "bytes": 308,
-      "sha256": "0c8d8313f519fdfc406b9cf189189df3fa8978ae60e5e6d4a7c66578d2ec4aef"
+      "sha256": "0c8d8313f519fdfc406b9cf189189df3fa8978ae60e5e6d4a7c66578d2ec4aef",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
     },
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/attention-half-tile-hardware-v1/queue.json",
       "bytes": 30262,
-      "sha256": "7c3bde594513d7bf3d42dd22b8f9ffb1674a82a6bb31ee33f7ee421606633a8f"
+      "sha256": "7c3bde594513d7bf3d42dd22b8f9ffb1674a82a6bb31ee33f7ee421606633a8f",
+      "state": "completed",
+      "updated_at": "2026-10-08T06:58:11Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-launch-v4.json",
       "bytes": 3338,
-      "sha256": "840fdacf0cae81147ac52f447fc729486360dc02c7c645d390cd19916fd4d19f"
+      "sha256": "840fdacf0cae81147ac52f447fc729486360dc02c7c645d390cd19916fd4d19f",
+      "scope": "Real two-layer weights; synthetic caches; warm eager attribution, not model qualification",
+      "created_at": "2026-10-08T07:25:25.632750+00:00"
     },
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-unit-v4.xml.gz",
       "bytes": 5779,
-      "sha256": "e28efbeb944e7d488d64da135356b805d527f58228ff2619bd3ac35c4dd32807"
+      "sha256": "e28efbeb944e7d488d64da135356b805d527f58228ff2619bd3ac35c4dd32807",
+      "junit": {
+        "tests": 332,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
     },
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-v3-recovery-v1/analysis/profile-summary.json",
       "bytes": 177125,
-      "sha256": "c4282e9bd411e54e0fa2f50c5493afe2bfa031e3e6164c10d4d20cf7e6ed354e"
+      "sha256": "c4282e9bd411e54e0fa2f50c5493afe2bfa031e3e6164c10d4d20cf7e6ed354e",
+      "state": "completed",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass"
     },
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-v3-recovery-v1/analysis/report.md.gz",
@@ -2742,17 +2815,33 @@
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-v3/queue.json",
       "bytes": 15827,
-      "sha256": "c5f837fcd5acaaac8bd670dbfb764818c1a2e7fbdae1f9f015d8540d2e7b11c7"
+      "sha256": "c5f837fcd5acaaac8bd670dbfb764818c1a2e7fbdae1f9f015d8540d2e7b11c7",
+      "state": "failed",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T06:53:03Z",
+      "promoted_to_model": false,
+      "error_type": "ValueError"
     },
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-v3/s32768-b16-native/hardware.xml.gz",
       "bytes": 300,
-      "sha256": "0a06568b4aeb909219ca437180399484874711a5125dfa6fe5d2104d7aca7fbc"
+      "sha256": "0a06568b4aeb909219ca437180399484874711a5125dfa6fe5d2104d7aca7fbc",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
     },
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-v3/s32768-b16-native/profile.json",
       "bytes": 12875,
-      "sha256": "f0f0dde8dfb6853b70ae0f942d93882062dcdbd7a9735068a5aa211cbf30fe46"
+      "sha256": "f0f0dde8dfb6853b70ae0f942d93882062dcdbd7a9735068a5aa211cbf30fe46",
+      "state": "completed",
+      "passed": true,
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T06:52:51Z",
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-v3/s32768-b16-native/tracy/.logs/cpp_device_perf_report.csv.gz",
@@ -2767,7 +2856,11 @@
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-v4/queue.json",
       "bytes": 15735,
-      "sha256": "b7ba825188c6b5af90017f7a0a1d4ae192603c4a435a04124ea1e099bbbb2a01"
+      "sha256": "b7ba825188c6b5af90017f7a0a1d4ae192603c4a435a04124ea1e099bbbb2a01",
+      "state": "bounded_profile",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T07:25:34Z",
+      "promoted_to_model": false
     },
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/capacity-pairs-v1/s32768-b32/native/attempt-01/command.json",
@@ -2777,12 +2870,22 @@
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/capacity-pairs-v1/s32768-b32/native/attempt-01/hardware.xml.gz",
       "bytes": 300,
-      "sha256": "5adabe4d6cf3a6ed2fa5b817a633b10528a09928d293bb7446dfd2c7c863760d"
+      "sha256": "5adabe4d6cf3a6ed2fa5b817a633b10528a09928d293bb7446dfd2c7c863760d",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
     },
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/capacity-pairs-v1/s32768-b32/native/sweep.json",
       "bytes": 16233,
-      "sha256": "1855494b617e20e2ed981471329c79355e49e19dbe6aa3b569bc07a5e8d81db5"
+      "sha256": "1855494b617e20e2ed981471329c79355e49e19dbe6aa3b569bc07a5e8d81db5",
+      "state": "completed",
+      "created_at": "2026-10-08T05:53:12.722259+00:00",
+      "updated_at": "2026-10-08T06:30:43.724665+00:00",
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/capacity-pairs-v1/s32768-b32/single-step/attempt-01/command.json",
@@ -2792,12 +2895,22 @@
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/capacity-pairs-v1/s32768-b32/single-step/attempt-01/hardware.xml.gz",
       "bytes": 304,
-      "sha256": "faca713c4a0ea8ee0eacc16ec6061e510017a4a3e43e0d65c81144ecc793a489"
+      "sha256": "faca713c4a0ea8ee0eacc16ec6061e510017a4a3e43e0d65c81144ecc793a489",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
     },
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/capacity-pairs-v1/s32768-b32/single-step/sweep.json",
       "bytes": 16300,
-      "sha256": "950c75f8426ca1d2a18f6f6c12ed924eb833fe63e0de49cae6e81df61615a692"
+      "sha256": "950c75f8426ca1d2a18f6f6c12ed924eb833fe63e0de49cae6e81df61615a692",
+      "state": "completed",
+      "created_at": "2026-10-08T06:30:45.245646+00:00",
+      "updated_at": "2026-10-08T06:51:12.166035+00:00",
+      "cleanup_completed": true
     },
     {
       "path": "galaxy-evidence/profile-recovery-and-throughput-v1/collection.json",
@@ -2854,6 +2967,632 @@
       "sha256": "9a36d327b117da76cb0a4b7b67eb963dee8e847b6af69db5396d1032b59fb81e",
       "junit": {
         "tests": 41,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/README.md",
+      "bytes": 7730,
+      "sha256": "61918d550cf607474997f76eab2b09102ef04c14691370c9e904969d5b90717d"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/queue.json",
+      "bytes": 27626,
+      "sha256": "338932d859ac6cb0807caa84b5f727d08fcdbba60f917ab1f919398980bcc5d4",
+      "state": "completed",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T08:42:50Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s131072-b16-native/analysis/profile-summary.json",
+      "bytes": 178243,
+      "sha256": "40b12f1b56ee6c2c5677d8e29605776af272c6955e3e757aa7211eac428f8bab",
+      "state": "completed",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s131072-b16-native/hardware.xml.gz",
+      "bytes": 302,
+      "sha256": "a2ce975a48b59e346a66d534c974a25ef7c1a5fba22fbce7f0dfb7b016941176",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s131072-b16-native/profile.json",
+      "bytes": 12876,
+      "sha256": "faecf323924efaaa710de3e32385f4b94b579022e5e6a0913a0dc349dce4442b",
+      "state": "completed",
+      "passed": true,
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T08:39:18Z",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s131072-b16-native/tracy/reports/2026_10_08_08_39_27/ops_perf_results_2026_10_08_08_39_27.csv.gz",
+      "bytes": 252946,
+      "sha256": "f68758627be5950de0db723fdabcbeadcfd0b5e4ce6adc10f7468bf6079bc48f"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s131072-b16-single_step/analysis/profile-summary.json",
+      "bytes": 182474,
+      "sha256": "fa50fb7ae2f7d8760143caef2185982f7645ffe12a3ebad4cc42c222f14238a2",
+      "state": "completed",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s131072-b16-single_step/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "38560da164a6336f28ad514abed7d597906a8f1dbabd231299b19fd750e742c8",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s131072-b16-single_step/profile.json",
+      "bytes": 12902,
+      "sha256": "85aa07632f69d1aa2e82e43c4837e3896578d25b49da658b92e270dee4451b31",
+      "state": "completed",
+      "passed": true,
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T08:40:24Z",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s131072-b16-single_step/tracy/reports/2026_10_08_08_40_32/ops_perf_results_2026_10_08_08_40_32.csv.gz",
+      "bytes": 255111,
+      "sha256": "c467c9b4299f30ddd2395a431b53104831e1e390d67a89a259d82478d847c425"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s16384-b16-native/analysis/profile-summary.json",
+      "bytes": 177098,
+      "sha256": "a87a02aefcf47667930481493dead69142499dafedff12c5cf0088251f5b00c6",
+      "state": "completed",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s16384-b16-native/hardware.xml.gz",
+      "bytes": 299,
+      "sha256": "d949de213a5960f1f91172df41c570c61a9123da754b781ffc7185ed97908b7d",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s16384-b16-native/profile.json",
+      "bytes": 12874,
+      "sha256": "de3eb12229772dfd68a790c776c423da21ba805016025d1e9fd78e1e7ababff8",
+      "state": "completed",
+      "passed": true,
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T08:35:25Z",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s16384-b16-native/tracy/reports/2026_10_08_08_35_34/ops_perf_results_2026_10_08_08_35_34.csv.gz",
+      "bytes": 251737,
+      "sha256": "c5febce9a85938cb471bed8e62426182187759b887439fbb8c459362af61570e"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s16384-b16-single_step/analysis/profile-summary.json",
+      "bytes": 181287,
+      "sha256": "040babdc3344a03d86b2419530b3268a7234d874fb6253fc25f9a4fa8fd5f67f",
+      "state": "completed",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s16384-b16-single_step/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "d9c2435c78de0181de720b7f62d3955bc891e6a0b19bc9a4cc71f0b343f265c5",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s16384-b16-single_step/profile.json",
+      "bytes": 12901,
+      "sha256": "4d0e22ffaba4c9981f29070388bf85811c5bfbeb0cbc9ef4e943973a6dda84d7",
+      "state": "completed",
+      "passed": true,
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T08:36:17Z",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s16384-b16-single_step/tracy/reports/2026_10_08_08_36_25/ops_perf_results_2026_10_08_08_36_25.csv.gz",
+      "bytes": 255213,
+      "sha256": "fb6dc128ad0514e97f7be2ae650a2321f7a9acb115f1dd0118d05df8e211a6ac"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s16384-b32-native/analysis/profile-summary.json",
+      "bytes": 174643,
+      "sha256": "b0cbc75677bfe5e4c358fb616584cdc671ccbb1036bf8abf91d4241c9fcba085",
+      "state": "completed",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s16384-b32-native/hardware.xml.gz",
+      "bytes": 302,
+      "sha256": "c7b8a011269812fc8444d6752e2ed6f127f8f84d820d88f59b893472189b1716",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s16384-b32-native/profile.json",
+      "bytes": 12874,
+      "sha256": "bddd97f12ec5275c13d9aeb87aeb3f25f145e4832473d4a6e23fbdfbb0e42a88",
+      "state": "completed",
+      "passed": true,
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T08:37:12Z",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s16384-b32-native/tracy/reports/2026_10_08_08_37_24/ops_perf_results_2026_10_08_08_37_24.csv.gz",
+      "bytes": 285404,
+      "sha256": "dc36e5fd8987684d689bda52faadd810657b97c8efe4a8566ad6434f064c2eb0"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s16384-b32-single_step/analysis/profile-summary.json",
+      "bytes": 178744,
+      "sha256": "bcd94c59cf12f54717541d66a2e82268fff1563a1a6112934d94af9f3b57f323",
+      "state": "completed",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s16384-b32-single_step/hardware.xml.gz",
+      "bytes": 302,
+      "sha256": "f3ae0351633af8c885fea74be5f0de30dab2a054e435f57062da28b61ccd466d",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s16384-b32-single_step/profile.json",
+      "bytes": 12901,
+      "sha256": "1df4ac9e27f048edc48b970af26ff7aab378d3b6274a403eafdd7a4f823ccc48",
+      "state": "completed",
+      "passed": true,
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T08:38:10Z",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s16384-b32-single_step/tracy/reports/2026_10_08_08_38_19/ops_perf_results_2026_10_08_08_38_19.csv.gz",
+      "bytes": 252686,
+      "sha256": "e5db44f5ce89958de0a8adcaff395920fced714b8f50d8a4ab9d93bbcc6741a1"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s262016-b8-native/analysis/profile-summary.json",
+      "bytes": 174195,
+      "sha256": "9c7749ada12d5633db3b32095fd8cedb7917d243bdf75936a889fa378fa6bd16",
+      "state": "completed",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s262016-b8-native/hardware.xml.gz",
+      "bytes": 302,
+      "sha256": "d699e547ba553531ae0f17e523c7a378842ed8259d8e799b9d6bbd4b3f8e6b71",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s262016-b8-native/profile.json",
+      "bytes": 12875,
+      "sha256": "721f04cab0e7e5679b17b774d94420bfc18a6d88a6534d6515b3ca6c90a558aa",
+      "state": "completed",
+      "passed": true,
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T08:41:34Z",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s262016-b8-native/tracy/reports/2026_10_08_08_41_42/ops_perf_results_2026_10_08_08_41_42.csv.gz",
+      "bytes": 225041,
+      "sha256": "9de5507fc8848378b0cf46497ac77bb83ac6aa666a1c8c9fd793670da8efb9ee"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s262016-b8-single_step/analysis/profile-summary.json",
+      "bytes": 181324,
+      "sha256": "7dde383d87b1958fd3868d271b12c40be9672c104d27de8846fbf9b9ec5bf04c",
+      "state": "completed",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s262016-b8-single_step/hardware.xml.gz",
+      "bytes": 303,
+      "sha256": "31a14e00778d48325ff06421fa2532db8be0d2ffb87c66a25328e13e6f3b22d8",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s262016-b8-single_step/profile.json",
+      "bytes": 12901,
+      "sha256": "57e630a6a41a4aaf56f92342d2b87b52d7375a0de986c466fac45b10120d8db0",
+      "state": "completed",
+      "passed": true,
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T08:42:39Z",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s262016-b8-single_step/tracy/reports/2026_10_08_08_42_47/ops_perf_results_2026_10_08_08_42_47.csv.gz",
+      "bytes": 254418,
+      "sha256": "f072fa192aee0545615fbd15fda3bc07117b1b5b8fc91ee3090c8d805d9e2fb3"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s32768-b16-native/analysis/profile-summary.json",
+      "bytes": 177121,
+      "sha256": "60f837f80f5b9db91015dd9308107d54b5c9287d7712a7219fce813ecec689da",
+      "state": "completed",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s32768-b16-native/hardware.xml.gz",
+      "bytes": 302,
+      "sha256": "f34e733ca8dc7c8aefb19e49a52128eed410d34857afe045d855eb0fb832b8d7",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s32768-b16-native/profile.json",
+      "bytes": 12875,
+      "sha256": "add9ce0761deb9fb1340b004a8dda55d7c22dd722aba0805ab6aed4a0dceddb5",
+      "state": "completed",
+      "passed": true,
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T07:44:34Z",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s32768-b16-native/tracy/reports/2026_10_08_07_44_43/ops_perf_results_2026_10_08_07_44_43.csv.gz",
+      "bytes": 252435,
+      "sha256": "e6a372aa7f82f80eec44f565b96bbe8c895c36a20c7e774986b26065c87200d6"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s32768-b16-single_step/analysis/profile-summary.json",
+      "bytes": 181332,
+      "sha256": "aed19791a87b32b10fcb506fa6885cfcb568304faef2fc555d412d1923bdadce",
+      "state": "completed",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s32768-b16-single_step/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "2c5570f6d2872f6c91269f03f9eb69e439bb82f7b266e62850c70d3f5fdebb41",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s32768-b16-single_step/profile.json",
+      "bytes": 12901,
+      "sha256": "dcf5a64cb536d632fb6db6f963ebf98eeb5b58fbb68cf971e0af902e04b09188",
+      "state": "completed",
+      "passed": true,
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T08:31:08Z",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s32768-b16-single_step/tracy/reports/2026_10_08_08_31_16/ops_perf_results_2026_10_08_08_31_16.csv.gz",
+      "bytes": 253515,
+      "sha256": "fa85a95913a94cd9d05473c644f63919655d184bfb6affbe94c37ae0b775d45a"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s32768-b32-native/analysis/profile-summary.json",
+      "bytes": 174750,
+      "sha256": "eb3004c3a3ff8401b59ba6eb3cfeac116d75f8fc931134ff62373376792c20f5",
+      "state": "completed",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s32768-b32-native/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "d086e942a57d6fbc5059e3e20ccff00a9941fedd40cd5b8f249ec70eb0701ded",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s32768-b32-native/profile.json",
+      "bytes": 12875,
+      "sha256": "d2fe62b9a11bd6c4d10e0512df40005a93445841b865a3ec2b21c4407fe4cd55",
+      "state": "completed",
+      "passed": true,
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T08:33:01Z",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s32768-b32-native/tracy/reports/2026_10_08_08_33_12/ops_perf_results_2026_10_08_08_33_12.csv.gz",
+      "bytes": 283851,
+      "sha256": "03e7d20770433887dd44c43ca733faa15a758b0dbe6abe972f1cadf5e8e88b66"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s32768-b32-single_step/analysis/profile-summary.json",
+      "bytes": 178862,
+      "sha256": "3d76ae99952d5b453a2aed5bab716611c936ba07b8b24acda4f32b6495679549",
+      "state": "completed",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s32768-b32-single_step/hardware.xml.gz",
+      "bytes": 302,
+      "sha256": "8609dc02eeb32fe2da91d070a984f63ba6aae7e1deaa9bdd9e0cde7fc6433c54",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s32768-b32-single_step/profile.json",
+      "bytes": 12901,
+      "sha256": "410c6f50a5974ed38fbad30e8c1638d2d80820c8e6dfab1ff720a8b2608dcfb2",
+      "state": "completed",
+      "passed": true,
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T08:34:32Z",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/bounded-layer-profile-v4/s32768-b32-single_step/tracy/reports/2026_10_08_08_34_40/ops_perf_results_2026_10_08_08_34_40.csv.gz",
+      "bytes": 251466,
+      "sha256": "b9e697c6c370dc72e65178723da992c45a0519231db0bcc4051f7f10ac13e3a7"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/capacity-pairs-v1/s262016-b8/comparison/comparison.json",
+      "bytes": 2155,
+      "sha256": "445ac42958910ddb64e09e539a4cfd23665865359624747b065be1d362978d41",
+      "state": "completed",
+      "scope": "One TP4 replica, 64 layers; measured decode output throughput, not full-Galaxy or online-eval qualification",
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/capacity-pairs-v1/s262016-b8/native/sweep.json",
+      "bytes": 13210,
+      "sha256": "eccf886a0b9aff2498a4a7cda959bd76cef97c45a0f58b55cf1cf2b9cf4e1e07",
+      "state": "completed",
+      "created_at": "2026-10-08T06:51:14.567475+00:00",
+      "updated_at": "2026-10-08T07:43:51.609123+00:00",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/capacity-pairs-v1/s262016-b8/single-step/sweep.json",
+      "bytes": 13246,
+      "sha256": "411bec6296b79e08edcd2cda374209e93f1b58fdb7cb952bc728a22660a59385",
+      "state": "completed",
+      "created_at": "2026-10-08T07:43:53.118608+00:00",
+      "updated_at": "2026-10-08T08:30:19.675574+00:00",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/dram-read-probe-launch-v2.json",
+      "bytes": 2820,
+      "sha256": "467de936ff71ed95450f7f3e73a6f4f6c7ce24332ffc1660f2185a41cf8a95bb",
+      "scope": "Raw 1088-byte page read calibration; full-byte copy checks at 2056 pages and packet markers during large timing; not model throughput",
+      "created_at": "2026-10-08T08:44:36.807898+00:00",
+      "promoted_to_model": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/dram-read-probe-unit-v1.xml.gz",
+      "bytes": 7400,
+      "sha256": "c7353488e4abd64d079cbbc9ffe7c225f76979d481f88b0af9236d8e52d71102",
+      "junit": {
+        "tests": 381,
+        "failures": 10,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/dram-read-probe-v2/hardware.xml.gz",
+      "bytes": 297,
+      "sha256": "0b7ebecb452f36144e942c5a01774a0fed307deb9a4f653a36cdcf3d67e9078d",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/dram-read-probe-v2/probe.json",
+      "bytes": 38192,
+      "sha256": "da9dbe3988b77e692630b5be3b6e322e43d7998d151d9fcc3f61f61ea6fe47b6",
+      "state": "completed",
+      "passed": true,
+      "scope": "Raw UINT32 1088-byte page read calibration; not BFP8 attention or counter bandwidth",
+      "updated_at": "2026-10-08T08:45:29Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/dram-read-probe-v2/queue.json",
+      "bytes": 17906,
+      "sha256": "4699e88fc1b44b54096f93010e7b92175d76fdc68a8960c1f416e56ba8f334b4",
+      "state": "completed",
+      "scope": "raw BFP8-sized page read calibration; no attention or precision change",
+      "updated_at": "2026-10-08T08:45:34Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/dram-read-probe-v2/unit.xml.gz",
+      "bytes": 6446,
+      "sha256": "c559665cc32c535315951f02a4a93f16f6356fb7fed7909f248472729483e91f",
+      "junit": {
+        "tests": 381,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/gdn-shared-qk-launch-v1.json",
+      "bytes": 4098,
+      "sha256": "ad1887777cc7c4f32a3d2be6c6fc18544c75065ceee9b632baf6e19f5c848750",
+      "scope": "Synthetic TP4 adapter comparison and FP32 recurrence; real-weight integration and full-model eval remain pending",
+      "created_at": "2026-10-08T07:45:40.054819+00:00",
+      "promoted_to_model": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/gdn-shared-qk-layer-launch-v1.json",
+      "bytes": 2667,
+      "sha256": "7c245e4492daf49a903481840e358e06d4827e517342db8b239fbb17c67c8bc4",
+      "scope": "Real layer-0 GDN block, 64 FP32 reference updates and projected output comparison; full-model performance/eval remain pending",
+      "created_at": "2026-10-08T07:53:04.295639+00:00",
+      "promoted_to_model": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/gdn-shared-qk-layer-v1/hardware.xml.gz",
+      "bytes": 299,
+      "sha256": "4434281a098013867d9126accf088fe97e0474bc86e57451503046e0a9e77a96",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/gdn-shared-qk-layer-v1/layer.json",
+      "bytes": 72227,
+      "sha256": "d9b5cef4b704086e349ed73bf68f661fe79ad119206dcc43aeee92792c9df3fd",
+      "state": "completed",
+      "passed": true,
+      "scope": "Layer 0 GDN projection, convolution, gates, shared normalization, recurrence, output norm and projection; MLP excluded",
+      "updated_at": "2026-10-08T08:33:40Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/gdn-shared-qk-layer-v1/queue.json",
+      "bytes": 20149,
+      "sha256": "44d79fc64476849b5da0683db51dae77627fb569d70b47fe8c09b68a08750727",
+      "state": "completed",
+      "updated_at": "2026-10-08T08:33:44Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/gdn-shared-qk-layer-v1/unit.xml.gz",
+      "bytes": 6024,
+      "sha256": "706cf6b793e0214435c6f5d71b0adef3dcffcdd16b84d8b8514bd0700c8c610e",
+      "junit": {
+        "tests": 354,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/gdn-shared-qk-model-launch-v1.json",
+      "bytes": 3428,
+      "sha256": "8008034b0c5905fb7fbe796a3710caa74a6a9410856b93dc9ea5d368003e6c35",
+      "scope": "Fresh-process full-model control and shared Q/K; fixed concurrency, identical output tokens required; 1 warmup and 3 fresh-prefill measured repeats per arm",
+      "created_at": "2026-10-08T09:09:38.943201+00:00",
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/gdn-shared-qk-model-unit-v1.xml.gz",
+      "bytes": 6621,
+      "sha256": "6b1f58aaae6ce02b6ed918bf211e27fd2b602baa7299446e6328a5b2ae9fb82b",
+      "junit": {
+        "tests": 390,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/gdn-shared-qk-model-v1/queue.json",
+      "bytes": 17948,
+      "sha256": "92ceaf8829a01d12427b2f51786491d230eabb7453c86f25c1d5c1cf323e9f75",
+      "state": "hardware_sweep_or_waiting_for_lock",
+      "updated_at": "2026-10-08T09:09:47Z",
+      "promoted_to_serving": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/gdn-shared-qk-v1/hardware.xml.gz",
+      "bytes": 297,
+      "sha256": "2eefa7e24ae050f4af5651e8c7450489a14cf3cc146c8287e860fb96a20aa188",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/gdn-shared-qk-v1/queue.json",
+      "bytes": 18658,
+      "sha256": "f1922ff714d7f9f8eb625d7181a550b28e6f212d2d8f6f721bb72ee4ba80c3da",
+      "state": "completed",
+      "updated_at": "2026-10-08T08:32:07Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/gdn-shared-qk-v1/shared.json",
+      "bytes": 152098,
+      "sha256": "0f22926a885fe76e23768f0f12569d06565c4b1ca8eea2f7f61d6ad743ff32cc",
+      "state": "completed",
+      "passed": true,
+      "scope": "Synthetic TP4 adapter timing and changing-input recurrence qualification; no model-eval claim",
+      "updated_at": "2026-10-08T08:32:02Z",
+      "cleanup_completed": true,
+      "promoted_to_model": false
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-and-bandwidth-v1/gdn-shared-qk-v1/unit.xml.gz",
+      "bytes": 6023,
+      "sha256": "23734db7ad08ff0f2d442c12c4070b4962f3cae32fbb7dc4fc0eee58c36fcc49",
+      "junit": {
+        "tests": 354,
         "failures": 0,
         "errors": 0,
         "skipped": 0

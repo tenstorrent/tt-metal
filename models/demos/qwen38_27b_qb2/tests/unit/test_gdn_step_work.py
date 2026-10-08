@@ -4,7 +4,7 @@
 
 import pytest
 
-from models.demos.qwen38_27b_qb2.tt.gdn_step.op import circular_buffer_pages, work_items
+from models.demos.qwen38_27b_qb2.tt.gdn_step.op import circular_buffer_pages, shared_head_count, work_items
 
 
 @pytest.mark.parametrize("heads", [1, 12, 96, 120, 121, 192, 768])
@@ -79,3 +79,23 @@ def test_fused_normalization_keeps_private_scratch_within_l1(splits):
     assert fused[: len(original)] == original
     assert fused[len(original) :] == [4, 4, 1]
     assert sum(fused) * 4096 < 512 * 1024
+
+
+@pytest.mark.parametrize("batch", [1, 8, 16, 32, 64])
+def test_shared_head_mapping_does_not_cross_user_boundaries(batch):
+    assert shared_head_count(batch * 12, 3) == batch * 4
+    counts = [0] * (batch * 4)
+    for user in range(batch):
+        for value_head in range(12):
+            work_head = user * 12 + value_head
+            shared_head = work_head // 3
+            assert shared_head // 4 == user
+            assert shared_head % 4 == value_head // 3
+            counts[shared_head] += 4  # Four independent value-column partitions.
+    assert set(counts) == {12}
+
+
+@pytest.mark.parametrize("repeat", [0, -1, 5, 3.0, True])
+def test_shared_head_rejects_invalid_repetition(repeat, expect_error):
+    with expect_error(ValueError, "head repetition"):
+        shared_head_count(12, repeat)

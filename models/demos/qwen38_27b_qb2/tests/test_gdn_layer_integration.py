@@ -14,6 +14,7 @@ from transformers import AutoConfig
 
 import ttnn
 from models.demos.qwen38_27b_qb2.demo.galaxy_serving import model_source_hashes
+from models.demos.qwen38_27b_qb2.tests.test_gdn_model_adapter import tensor_digest
 from models.demos.qwen38_27b_qb2.tests.test_gdn_step_candidate import accuracy, reference
 from models.demos.qwen38_27b_qb2.tests.test_long_context_attention import save
 from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder
@@ -86,15 +87,17 @@ def run_case(layer, mesh, batch):
     raw_inputs = []
     kernel_inputs = []
     kernel_normalizes = False
+    kernel_qk_repeat = 1
 
     def observe(q, k, v, g, beta, current, *, decode=False):
         raw_inputs[:] = [q, k, v, g, beta]
         return original(q, k, v, g, beta, current, decode=decode)
 
     def observe_step(q, k, v, gates, current, output, **kwargs):
-        nonlocal kernel_normalizes
+        nonlocal kernel_normalizes, kernel_qk_repeat
         kernel_inputs[:] = [q, k, v, gates]
         kernel_normalizes = kwargs.get("normalize_qk", False)
+        kernel_qk_repeat = kwargs.get("qk_head_repeat", 1)
         return original_step(q, k, v, gates, current, output, **kwargs)
 
     layer._delta_recurrence = observe
@@ -105,7 +108,13 @@ def run_case(layer, mesh, batch):
         for _ in range(5):
             layer._delta(x, state, decode=True)
         prepared = prepare_reference(raw_inputs, batch)
+        input_hashes = [tensor_digest(value) for tensor in raw_inputs for value in host_ranks(tensor)]
         device_prepared = list(zip(*(host_ranks(tensor) for tensor in kernel_inputs)))
+        if kernel_qk_repeat != 1:
+            device_prepared = [
+                (q.repeat_interleave(kernel_qk_repeat, dim=0), k.repeat_interleave(kernel_qk_repeat, dim=0), v, gates)
+                for q, k, v, gates in device_prepared
+            ]
         if kernel_normalizes:
             device_prepared = [
                 (
@@ -145,6 +154,10 @@ def run_case(layer, mesh, batch):
         kernel_checks = []
         actual_states = host_ranks(state.recurrent)
         actual_outputs = host_ranks(layer.gdn_decode_workspace.output(batch))
+        projected_outputs = host_ranks(output)
+        state_hashes = [tensor_digest(value) for value in actual_states]
+        output_hashes = [tensor_digest(value) for value in actual_outputs]
+        projected_hashes = [tensor_digest(value) for value in projected_outputs]
         for actual_state, actual_output, gold_state, gold_output in zip(
             actual_states,
             actual_outputs,
@@ -192,7 +205,7 @@ def run_case(layer, mesh, batch):
                     )
                 )
             torch.save(failures, Path(os.environ["QWEN_GDN_LAYER_RECEIPT"]).with_name(f"batch-{batch}-worst-heads.pt"))
-        assert all(torch.isfinite(value).all() for value in host_ranks(output)), "Nonfinite projected layer output"
+        assert all(torch.isfinite(value).all() for value in projected_outputs), "Nonfinite projected layer output"
         assert state.recurrent.buffer_address() == state_address
         assert layer.gdn_decode_workspace.output(batch).buffer_address() == scratch_address
         candidate = timing(mesh, trace)
@@ -215,6 +228,10 @@ def run_case(layer, mesh, batch):
     return dict(
         batch=batch,
         passed=passed,
+        input_sha256=input_hashes,
+        state_sha256_per_rank=state_hashes,
+        output_sha256_per_rank=output_hashes,
+        projected_output_sha256_per_rank=projected_hashes,
         checks=checks,
         preparation_checks=preparation_checks,
         recurrence_only_checks=kernel_checks,

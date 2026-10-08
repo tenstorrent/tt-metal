@@ -273,7 +273,7 @@ def test_gdn_step_candidate():
         source_sha256={
             p.name: hashlib.sha256(p.read_bytes()).hexdigest()
             for p in sorted(op.HERE.glob("*"))
-            if p.suffix in {".cpp", ".py"}
+            if p.suffix in {".cpp", ".py", ".hpp", ".h"}
         },
         cases=[],
         long_horizon=[],

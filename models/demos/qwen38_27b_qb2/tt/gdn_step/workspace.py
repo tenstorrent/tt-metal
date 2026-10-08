@@ -4,10 +4,12 @@
 
 
 class DecodeWorkspace:
-    def __init__(self, mesh, value_heads):
+    def __init__(self, mesh, value_heads, *, shared_qk_heads=None):
         self.mesh = mesh
         self.value_heads = value_heads
         self.outputs = {}
+        self.shared_qk_heads = shared_qk_heads
+        self.shared_outputs = {}
 
     def prepare(self, batch):
         """Setup boundary only; never replace buffers referenced by existing traces."""
@@ -26,6 +28,30 @@ class DecodeWorkspace:
                     self.mesh,
                     ttnn.DRAM_MEMORY_CONFIG,
                 )
+            # These batches passed the adapter's physical comparison. B1 was
+            # slower; B2/B4 have not been qualified and retain fused Q/K prep.
+            if self.shared_qk_heads is not None and size in (8, 16, 32, 64) and size not in self.shared_outputs:
+                self.shared_outputs[size] = tuple(
+                    ttnn.allocate_tensor_on_device(
+                        ttnn.Shape([size * self.shared_qk_heads, 128]),
+                        ttnn.float32,
+                        ttnn.ROW_MAJOR_LAYOUT,
+                        self.mesh,
+                        ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    for _ in range(2)
+                )
+
+    def shared_qk(self, batch):
+        """Lookup only; trace replay must keep the same two scratch addresses."""
+        if self.shared_qk_heads is None or batch not in (8, 16, 32, 64):
+            return None
+        try:
+            return self.shared_outputs[batch]
+        except KeyError:
+            raise RuntimeError(
+                "Prepare shared Q/K scratch during cache allocation before decode/trace capture"
+            ) from None
 
     def output(self, batch):
         try:
