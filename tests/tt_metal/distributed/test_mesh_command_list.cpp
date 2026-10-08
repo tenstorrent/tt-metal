@@ -1150,6 +1150,81 @@ TEST_F(CommandListTest, RejectsUnresolvableParametersWithoutChangingTheRecording
                    {.program = std::cref(program), .param_name = m2::TensorParamName{"missing"}}}}}},
         "TensorParameter 'missing' is not declared");
 
+    // A TensorParameter that backs a borrowed-memory DFB cannot be patched.
+    const auto dram_spec = TensorSpec(
+        Shape{2, 512},
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+    const uint32_t num_l1_banks = mesh_device_->allocator()->get_num_banks(BufferType::L1);
+    const auto scratch_spec = TensorSpec(
+        Shape{2 * num_l1_banks, 512},
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));
+    MeshTensor input = MeshTensor::allocate_on_device(*mesh_device_, dram_spec);
+    MeshTensor output = MeshTensor::allocate_on_device(*mesh_device_, dram_spec);
+    MeshTensor scratch = MeshTensor::allocate_on_device(*mesh_device_, scratch_spec);
+
+    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    producer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_producer.cpp";
+    producer.advanced_options.num_runtime_varargs = 1;
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_consumer.cpp";
+    consumer.advanced_options.num_runtime_varargs = 1;
+    auto dfb = MakeMinimalDFB("input_dfb", /*entry_size=*/1024, /*num_entries=*/2);
+    dfb.data_format_metadata = DataFormat::Float16_b;
+    dfb.borrowed_from = m2::TensorParamName{"scratch_tensor"};
+    producer.dfb_bindings.push_back(m2::ProducerOf(m2::DFBSpecName{"input_dfb"}, "input_dfb"));
+    consumer.dfb_bindings.push_back(m2::ConsumerOf(m2::DFBSpecName{"input_dfb"}, "input_dfb"));
+    BindTensorParameterToKernel(producer, "input_tensor", "input_tensor");
+    BindTensorParameterToKernel(consumer, "output_tensor", "output_tensor");
+    auto borrowed_workload = m2::MakeMeshWorkloadFromSpec(
+        *mesh_device_,
+        m2::ProgramSpec{
+            .name = "borrowed_dfb",
+            .kernels = {producer, consumer},
+            .dataflow_buffers = {dfb},
+            .tensor_parameters =
+                {
+                    m2::TensorParameter{.unique_id = m2::TensorParamName{"input_tensor"}, .spec = dram_spec},
+                    m2::TensorParameter{.unique_id = m2::TensorParamName{"output_tensor"}, .spec = dram_spec},
+                    m2::TensorParameter{.unique_id = m2::TensorParamName{"scratch_tensor"}, .spec = scratch_spec},
+                },
+            .work_units = {MakeMinimalWorkUnit("main", kNode, {"producer", "consumer"})},
+        });
+    auto& borrowed_program = borrowed_workload.get_programs().begin()->second;
+    m2::ProgramRunArgs borrowed_args;
+    borrowed_args.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = m2::KernelSpecName{"producer"},
+            .advanced_options = m2::AdvancedKernelRunArgs{.runtime_varargs = {{kNode, {2}}}},
+        },
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = m2::KernelSpecName{"consumer"},
+            .advanced_options = m2::AdvancedKernelRunArgs{.runtime_varargs = {{kNode, {2}}}},
+        },
+    };
+    borrowed_args.tensor_args = {
+        {m2::TensorParamName{"input_tensor"}, m2::ProgramRunArgs::TensorArgument{input}},
+        {m2::TensorParamName{"output_tensor"}, m2::ProgramRunArgs::TensorArgument{output}},
+        {m2::TensorParamName{"scratch_tensor"}, m2::ProgramRunArgs::TensorArgument{scratch}},
+    };
+    m2::SetProgramRunArgs(borrowed_program, borrowed_args);
+    EXPECT_THAT(
+        [&] {
+            builder.add(
+                borrowed_workload,
+                {.tensor_parameters = {
+                     {CmdListTensorArgName{"scratch"},
+                      std::vector<CmdListTensorArgInfo>{
+                          {.program = std::cref(borrowed_program),
+                           .param_name = m2::TensorParamName{"scratch_tensor"}}}}}});
+        },
+        ThrowsMessage<std::runtime_error>(HasSubstr("backs borrowed-memory DFB")));
+
     // None of the failed calls staged the workload.
     EXPECT_THAT(
         [&] { (void)builder.build(cq); },
