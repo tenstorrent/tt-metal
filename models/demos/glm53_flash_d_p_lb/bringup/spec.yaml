@@ -241,3 +241,6 @@ dashboard:
   - teletext
 device:
   experts_dtype: bfloat4_b         # owner (LoudBox): bfp4 routed experts so all 45 layers fit
+  experts_fidelity: LoFi           # owner: bfp4 weights need no more; 56k prefill -10%, and more accurate than HiFi4
+  attn_fidelity: HiFi2             # owner: MLA / SDPA / indexer / q_a / KDA; -2% time, more accurate than HiFi4 at 56k
+  moe_links: 2                     # LoudBox has 2 links per axis (was 1, a default from the MiMo 2x2 port); -12%

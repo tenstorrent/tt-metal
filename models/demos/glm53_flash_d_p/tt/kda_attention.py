@@ -40,6 +40,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.glm53_flash_d_p.tt.common import attn_fidelity
 
 SP_AXIS, TP_AXIS = 0, 1
 PRECISE_DECAY = os.environ.get("GLM_KDA_DECAY", "precise") == "precise"  # "kernel": prepare's own k_dec_t
@@ -155,6 +156,15 @@ class _GlmKDA(ttKDA):
     def __init__(self, *args, decay_scale32, decay_bias32, program_config, **kwargs):
         super().__init__(*args, program_config=program_config, **kwargs)
         self.decay_scale32, self.decay_bias32 = decay_scale32, decay_bias32
+        fid = attn_fidelity()
+        if fid != ttnn.MathFidelity.HiFi4:  # ttKDA hard-codes HiFi4 for its projections and KDA ops
+            arch = self.device.arch()
+            self.compute_config = ttnn.init_device_compute_kernel_config(
+                arch, math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=True
+            )
+            self.kda_compute_config = ttnn.init_device_compute_kernel_config(
+                arch, math_fidelity=fid, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+            )
         if PRECISE_DECAY:
             self.recurrence = _PreciseDecayRecurrence(
                 self.device,
@@ -271,12 +281,12 @@ class TtKdaAttention(LightweightModule):
             recurrence=KDARecurrenceProgramConfig(
                 local_scan_strategy="grouped",
                 summary_group_chunks=chunks // groups,
-                affine_prefix_math_fidelity=ttnn.MathFidelity.HiFi4,
-                scan_math_fidelity=ttnn.MathFidelity.HiFi4,
+                affine_prefix_math_fidelity=attn_fidelity(),
+                scan_math_fidelity=attn_fidelity(),
             ),
             tp_ccl_topology=ttnn.Topology.Linear,
             gated_rms_output_dtype=ttnn.float32,
-            output_projection_math_fidelity=ttnn.MathFidelity.HiFi4,
+            output_projection_math_fidelity=attn_fidelity(),
         )
 
     def _kda(self, s: int) -> ttKDA:
