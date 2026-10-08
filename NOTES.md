@@ -24,3 +24,10 @@ Read driver.log + cmp_def/cmp_traced/cmp_traced_vs_def.json. Expect traced host-
 If faster and identical/neutral: flip DIFFVAE_TRACED default to 1 (keep the eager first call), land code commits
 on ttp/t48-ltx25-integrated via a -land branch (`ttp push --detach`), notes via `ttp push --own --detach`.
 If capture fails (trace region too small / OOM), read the traceback in out/run.log.
+
+## Result job 884 (2026-10-08 01:05 UTC, blx01, no drops)
+Eager (default): 3.776/3.772, repeat 3.774/3.773 s -> mean 3.774 s.
+Traced (DIFFVAE_TRACED=1): first 4.414 (capture) / 3.793, repeat 3.790/3.800 s -> warm ~3.795 s, +20 ms slower.
+Quality: traced output md5-identical to eager (device noise and host noise). Host-noise vs #214 refs: PCC 0.999956/0.999957, PSNR 55.56/55.12 dB.
+Decision: tracing gives no gain (dispatch is not the bottleneck; device-bound). Stays opt-in, default off, not landed on t48.
+Next lever: fused stage-5 blocks / 2-D stage-5 split default (DIFFVAE_S5_2D) per PLAN.md; device-side kernel time is what remains.
