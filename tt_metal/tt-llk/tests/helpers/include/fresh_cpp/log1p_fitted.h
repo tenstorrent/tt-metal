@@ -79,6 +79,21 @@ __attribute__((noinline)) void calculate_log1p_fitted_cpp()
         e_float              = sfpi::copysgn(e_float, sfpi::as<sfpi::vFloat>(e));
         result               = e_float * LN2_EXPBIT + result;
 
+        // The encoding arithmetic above is valid only for 0 <= u < +inf. Below the domain (x < -1) the sign
+        // bit of u enters e and the body returns a finite value (176.75 at x = -1.5), and at u = +inf e reads
+        // k = 128, giving log1p(+inf) = 88.72. As in the production body: NaN below the domain, and +inf/NaN
+        // pass through. u = 0 (x = -1) is left to the arithmetic, which already yields -inf.
+        const sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
+        v_if (u < 0.0f)
+        {
+            result = std::numeric_limits<float>::quiet_NaN();
+        }
+        v_elseif (sfpi::as<sfpi::vInt>(u) >= sfpi::as<sfpi::vInt>(infinity))
+        {
+            result = u;
+        }
+        v_endif;
+
         sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         sfpi::dst_reg++;
     }
