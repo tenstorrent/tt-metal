@@ -18,7 +18,7 @@ from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, eff
 import ttnn
 from models.common.modules.moe.tt_moe_decode import TTMoEDecode, _TTMoEDecodeBuffers
 from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
-from models.demos.blackhole.deepseek_v41_flash.tt import pf_tune
+from models.demos.blackhole.deepseek_v41_flash.tt import moe_overlap, pf_tune
 
 _PROF_EVERY = int(
     os.environ.get("DSV41_PROF_EVERY", "0")
@@ -349,10 +349,30 @@ class DSV41PrefillLayer:
 
         L, T = self.L, self.T
         hh_own = ttnn.concat([e[4] for e in st], dim=2) if n8 > 1 else st[0][4]
-        own = moe_cols(self.umoe, L.moe.gate, hh_own, L.mesh_config, L.ccl)  # [1,1,n8*32,D]
-        if n8 > 1:
+        ov = None
+        self._sh_pre = None
+        if (
+            moe_overlap.enabled()
+            and hasattr(L.shared, "w01")
+            and (moe_overlap.explicit() or hasattr(L.shared, "wg"))
+            and hh_own.shape[2] <= moe_overlap.MAX_M
+        ):  # shared expert on a sub-device concurrently with the dispatch (tt/moe_overlap.py)
+            ov = moe_overlap.SDOverlap.get(L.mesh_device)
+            box = []
+            overlap = (ov, lambda: box.append(ov.shared(L.shared, hh_own)))
+        else:
+            overlap = None
+        own = moe_cols(self.umoe, L.moe.gate, hh_own, L.mesh_config, L.ccl, overlap=overlap)  # [1,1,n8*32,D]
+        if overlap is not None:
+            self._sh_pre = (
+                box[0],
+                hh_own if n8 > 1 else None,
+            )  # hh_own is read by async shared-expert kernels: freed with the shared output
+        elif n8 > 1:
             ttnn.deallocate(hh_own)
-        if n8 == 1:  # U=2 x C=128: a full-extent slice aliases ``own`` (freeing it would free the result: "Tensor is not allocated")
+        if (
+            n8 == 1
+        ):  # U=2 x C=128: a full-extent slice aliases ``own`` (freeing it would free the result: "Tensor is not allocated")
             return [own]
         D = own.shape[3]
         outs = [ttnn.slice(own, [0, 0, g * T, 0], [1, 1, (g + 1) * T, D]) for g in range(n8)]
@@ -557,8 +577,14 @@ class DSV41PrefillLayer:
             ttnn.deallocate(mg)
             ms.append(m_own)
         _mark("moe+allgather")
-        hh_all = ttnn.concat([e[4] for e in st], dim=2) if n8 > 1 else st[0][4]
-        sh_all = shared_big(L.shared, hh_all)
+        if getattr(self, "_sh_pre", None) is not None:  # computed on the shared-expert sub-device during the dispatch
+            sh_all, hh_all = self._sh_pre[0], self._sh_pre[1]
+            self._sh_pre = None
+            if hh_all is None:
+                hh_all = st[0][4]
+        else:
+            hh_all = ttnn.concat([e[4] for e in st], dim=2) if n8 > 1 else st[0][4]
+            sh_all = shared_big(L.shared, hh_all)
         _mark("shared")
         outs, pres_out = [], []
         for g in range(n8):

@@ -94,10 +94,14 @@ class UnifiedMoEShared:
             os.environ.get("DSV41_UNI_LINKS", "2")
         )  # fabric links of dispatch / combine / offset_cumsum (2 available per row hop)
         self.workers = int(os.environ.get("DSV41_UNI_WORKERS", "2"))  # worker cores per sender of the dispatch op
-        self.topology = ttnn.Topology.Linear
         self.l1_small = (
             os.environ.get("DSV41_UNI_L1SMALL", "1") == "1"
         )  # global semaphores of the CCL ops in L1_SMALL (device opened with l1_small_size > 0)
+
+
+def row_topology():
+    """dispatch / combine topology over the 4 rows (DSV41_UNI_TOPO=ring: use the column's wrap link; read per call so A/B modes can switch it)"""
+    return ttnn.Topology.Ring if os.environ.get("DSV41_UNI_TOPO", "ring") == "ring" else ttnn.Topology.Linear
 
 
 def get_shared(md, n_tokens):
@@ -210,7 +214,7 @@ class DSV41UnifiedMoE:
                 weights if weights is not None else build_expert_weights(md, layer_id, log=log)
             )
 
-    def forward(self, x_rm, scores, indices, upto=99):
+    def forward(self, x_rm, scores, indices, upto=99, overlap=None):
         """x_rm [1,N,D] bf16 ROW_MAJOR; scores [N,1,1,k] bf16 RM; indices [N,1,1,k] uint16 RM (the router outputs, N = tokens of this row)."""
         md = self.md
         N = x_rm.shape[1]
@@ -250,6 +254,12 @@ class DSV41UnifiedMoE:
         if upto == 1:
             return offsets, counts, region_offsets
         idx3 = ttnn.reshape(indices, [1, N, TOPK])
+        ov = None
+        if (
+            overlap is not None
+        ):  # (SDOverlap, hook): the hook (shared expert) runs on sub-device 1 while dispatch runs on sub-device 0
+            ov = overlap[0]
+            ov.load()
         disp, meta = ttnn.experimental.deepseek_prefill.dispatch(
             input_tensor=x_rm,
             indices_tensor=idx3,
@@ -266,12 +276,15 @@ class DSV41UnifiedMoE:
             max_dispatch_buffer_token_size=sh.max_buf,
             cluster_axis=0,
             num_links=sh.num_links,
-            topology=sh.topology,
+            topology=row_topology(),
             fp8_output=False,
-            subdevice_id=None,
+            subdevice_id=ov.d_id if ov is not None else None,
             num_workers_per_sender=sh.workers,
             use_l1_small_for_semaphores=sh.l1_small,
         )
+        if ov is not None:
+            overlap[1]()
+            ov.clear()
         ttnn.deallocate(offsets)
         if upto == 2:
             return disp, meta, counts, region_offsets
@@ -330,7 +343,7 @@ class DSV41UnifiedMoE:
             seq_len_per_chip=N,
             cluster_axis=0,
             num_links=sh.num_links,
-            topology=sh.topology,
+            topology=row_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             init_zeros=False,
             use_fp8_combine=False,
@@ -351,13 +364,14 @@ class DSV41UnifiedMoE:
         return summed
 
 
-def reduce_scatter_tokens(part, cc, piece=None):
+def reduce_scatter_tokens(part, cc, piece=None, mode=None, free=True):
     """[1,1,N,D] per-column partial sums, rows ordered [column c][own chunk g][32] -> [1,1,N/8,D] = this column's own rows summed over the 8 columns
     (reduce-scatter over the token dim; ``piece`` > 0 splits it into reduce-scatters of 8 x piece/8 rows taken from every column block: larger
     reduce-scatters corrupted a tile-row block on this build in the attention all-reduce, see DSV41PrefillAttention._allreduce).
     """
     R = part.shape[2]
-    if os.environ.get("DSV41_UNI_RS", "hidden") == "hidden":
+    mode = os.environ.get("DSV41_UNI_RS", "hidden") if mode is None else mode
+    if mode == "hidden":
         # reduce-scatter over the HIDDEN dim (the generic ttnn.reduce_scatter the deepseek_prefill reduce module uses) + all_to_all to own tokens
         r_ = ttnn.reduce_scatter(
             part,
@@ -367,7 +381,8 @@ def reduce_scatter_tokens(part, cc, piece=None):
             topology=cc.topology,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn.deallocate(part)
+        if free:
+            ttnn.deallocate(part)
         out = ttnn.experimental.all_to_all_async_generic(
             r_, in_dim=3, out_dim=2, num_links=cc.num_links, topology=ttnn.Topology.Ring, cluster_axis=1
         )
@@ -428,9 +443,14 @@ def route_cols(gate, hh_own, h, mc, cc, mode=None, dbg=None):
             ttnn.deallocate(p_[0])
             ttnn.deallocate(p_[1])
         return sc_all, ix_all, ()
-    parts = [gate.forward(ttnn.slice(hh_own, [0, 0, 32 * i, 0], [1, 1, 32 * (i + 1), D])) for i in range(n // 32)]
-    sc = ttnn.concat([p_[0] for p_ in parts], dim=0) if len(parts) > 1 else parts[0][0]
-    ix = ttnn.concat([p_[1] for p_ in parts], dim=0) if len(parts) > 1 else parts[0][1]
+    if os.environ.get("DSV41_UNI_ROUTER", "batched") == "batched":
+        # ONE router for all own rows (matmul / activations on n rows, router_select over n rows: bit-identical to the 32-row slices)
+        sc, ix = gate._forward_fused(hh_own, grid=(min(4, max(1, n // 128)), 8))
+        parts = []
+    else:
+        parts = [gate.forward(ttnn.slice(hh_own, [0, 0, 32 * i, 0], [1, 1, 32 * (i + 1), D])) for i in range(n // 32)]
+        sc = ttnn.concat([p_[0] for p_ in parts], dim=0) if len(parts) > 1 else parts[0][0]
+        ix = ttnn.concat([p_[1] for p_ in parts], dim=0) if len(parts) > 1 else parts[0][1]
     f32 = lambda a: ttnn.typecast(ttnn.to_layout(ttnn.reshape(a, [1, 1, n, TOPK]), ttnn.TILE_LAYOUT), ttnn.float32)
     ixf, scf = f32(ix), f32(sc)
     pk_t = ttnn.concat([ixf, scf], dim=3)  # fp32 tile [1,1,n,12]: expert ids (exact in fp32) | weights (bf16 values)
@@ -452,7 +472,7 @@ def route_cols(gate, hh_own, h, mc, cc, mode=None, dbg=None):
     return sc_all, ix_all, (sc, ix, ixf, scf)
 
 
-def moe_cols(um, gate, hh_own, mc, cc):
+def moe_cols(um, gate, hh_own, mc, cc, overlap=None):
     """Column-split MoE of a whole chunk. hh_own [1,1,n,D] tile bf16: the (n = N/8) normed hidden rows THIS column owns (own 32-token chunks in order).
     Routes the own rows (router per 32 rows), all-gathers hidden + routing over the 8 columns (row order [column][own chunk][32]: dispatch does not
     care about the token order), runs the pipeline and reduce-scatters the column partial sums back -> [1,1,n,D] (own rows, same order).
@@ -462,7 +482,7 @@ def moe_cols(um, gate, hh_own, mc, cc):
     sc_all, ix_all, junk = route_cols(gate, hh_own, h, mc, cc)
     x_rm = ttnn.reshape(ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT), [1, h.shape[2], D])
     ttnn.deallocate(h)
-    part = um.forward(x_rm, sc_all, ix_all)
+    part = um.forward(x_rm, sc_all, ix_all, overlap=overlap)
     for t_ in (x_rm, sc_all, ix_all) + tuple(junk):
         ttnn.deallocate(t_)
     return reduce_scatter_tokens(part, cc)
