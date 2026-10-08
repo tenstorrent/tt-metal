@@ -16,6 +16,7 @@ directory.
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 import warnings
 from dataclasses import dataclass
@@ -78,11 +79,18 @@ def _stub_runtime(patch):
     )
     patch.setitem(sys.modules, "ttnn", runtime)
     lower_modules = {
-        "models.demos.gemma4.tt.common": {"create_tt_model": _unused},
+        "models.demos.gemma4.tt.common": {
+            "GEMMA4_CP_PREFILL_CHUNK": 24576,
+            "create_tt_model": _unused,
+            "gemma4_cp_prefill_engaged": lambda mesh_device: False,
+            "gemma4_env_flag": lambda name, default="0": os.environ.get(name, default).lower() in ("1", "true", "yes"),
+        },
         "models.demos.gemma4.tt.generator": {
             "SDPA_CHUNK_ALIGN": 128,
             "ChunkedPrefillPageTableGuardMixin": type("ChunkedPrefillPageTableGuardMixin", (), {}),
             "align_num_cached_tokens_to_sdpa": _align_down,
+            # Pass-through: the stubbed prefill carries no stale page-table columns.
+            "mask_page_table_columns_past_allocation": lambda tables, prompt_lens, block_sizes: (tables, 0),
             "max_batched_prefill_users": _unused,
             "resolve_batched_prefill_chunk_users": _unused,
         },
@@ -109,6 +117,7 @@ def _stub_runtime(patch):
                 {"release_persistent_capture": lambda self: self.__dict__.setdefault("base_releases", []).append(1)},
             ),
             "allocate_vllm_kv_cache": _unused,
+            "allocate_vllm_kv_cache_per_layer": _unused,
         },
         "models.demos.gemma4.tt.attention": {
             "_RING_HEADROOM_BLOCK": 64,

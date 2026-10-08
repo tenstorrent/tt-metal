@@ -155,6 +155,12 @@ struct TopologyMappingConfig {
     // has exactly one rank binding (all ASICs on the same host map to fabric nodes with the same rank).
     // Used even when some ASICs have UNSET rank. Default empty.
     std::map<std::string, std::set<tt::tt_metal::AsicID>> hostname_to_asics;
+
+    // Optional: when non-empty, every mesh may only be seated on these ASICs. A restriction, not a
+    // footprint: a mesh smaller than the set still fits. TopologyMapper sets it in local mode (one mesh,
+    // one host rank, rank bindings disabled) when the PSD spans several hosts, so the mesh lands on the
+    // calling host's chips instead of an arbitrary host. Default empty (no restriction).
+    std::set<tt::tt_metal::AsicID> placement_asic_allowlist;
 };
 
 /**

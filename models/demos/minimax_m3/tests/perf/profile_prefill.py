@@ -93,6 +93,7 @@ from loguru import logger  # noqa: E402
 
 import ttnn  # noqa: E402
 from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE  # noqa: E402
+from models.demos.minimax_m3.tt.moe import shared_overlap  # noqa: E402
 from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env  # noqa: E402
 
 
@@ -412,6 +413,7 @@ def main():
     finally:
         # Sub-mesh first: closing the parent runs a final profiler read on the parent's command queue,
         # and MeshDevice::close then refuses to close a mesh whose child still holds an in-use queue.
+        shared_overlap.release_all()
         for sub in galaxy.get_submeshes():
             ttnn.close_mesh_device(sub)
         ttnn.close_mesh_device(galaxy)

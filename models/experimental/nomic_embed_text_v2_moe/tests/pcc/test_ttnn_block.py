@@ -73,7 +73,7 @@ def routing_agreement(config, reference, tt_block, x, x_tt, moe, rot_mats, attn_
         return torch.ones(batch, seqlen, dtype=torch.bool)
 
     tt_attn = tt_block.attn(x_tt, rot_mats, attn_mask)
-    tt_hidden = tt_block._norm(tt_attn, x_tt, tt_block.norm1_weight, tt_block.norm1_bias)
+    tt_hidden = tt_block._norm(tt_attn, x_tt, tt_block.norm1)
     _, _, indices = tt_block.mlp.router.select(flatten_tokens(tt_hidden))
     selected = ttnn.to_torch(indices).long().reshape(batch * seqlen, config.moe_top_k)
 
@@ -119,7 +119,7 @@ def test_block_with_ragged_padding(device, config, tt_config, state_dict, layer,
     x_tt = to_device(to_block_layout(x), device)
 
     rot_mats = rotary_tables(device, config, seqlen)
-    attn_mask = additive_attention_mask(mask, device)
+    attn_mask = additive_attention_mask(mask, device, mask_dtype=tt_config.attention_mask_dtype)
     ref_mask = build_extended_attention_mask(mask, torch.float32)
 
     out = tt_block(x_tt, rot_mats, attn_mask)
@@ -179,10 +179,12 @@ def test_dropping_a_residual_is_decorrelated(device, config, tt_config, state_di
     correct = from_block_layout(tt_block(x_tt, rot_mats))
 
     attn_out = tt_block.attn(x_tt, rot_mats)
+    norm1_weight, norm1_bias = tt_block.norm1.for_input(attn_out)
+    norm2_weight, norm2_bias = tt_block.norm2.for_input(attn_out)
     without_residual = ttnn.layer_norm(
         attn_out,
-        weight=tt_block.norm1_weight,
-        bias=tt_block.norm1_bias,
+        weight=norm1_weight,
+        bias=norm1_bias,
         epsilon=config.layer_norm_epsilon,
         compute_kernel_config=tt_config.compute_kernel_config(OpGroup.NORM),
     )
@@ -190,8 +192,8 @@ def test_dropping_a_residual_is_decorrelated(device, config, tt_config, state_di
         ttnn.layer_norm(
             tt_block.mlp(without_residual),
             residual_input_tensor=without_residual,
-            weight=tt_block.norm2_weight,
-            bias=tt_block.norm2_bias,
+            weight=norm2_weight,
+            bias=norm2_bias,
             epsilon=config.layer_norm_epsilon,
             compute_kernel_config=tt_config.compute_kernel_config(OpGroup.NORM),
         )

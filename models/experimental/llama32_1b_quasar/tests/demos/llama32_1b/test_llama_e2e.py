@@ -295,20 +295,18 @@ def _install_quasar_interleaved_matmul(monkeypatch, mesh_device):
             logger.warning(f"[llama-e2e][quasar] matmul de-shard failed ({e}); passing tensor through")
             return t
 
-    # CAP the matmul grid to a small 2D shape (2x2, clamped to the device). CRITICAL and non-obvious:
-    #  - It must be a 2D grid (both dims > 1), NOT a single row: a 1-row grid makes the picker choose 1D mcast
-    #    for the large-M prefill, whose per-core output = full M -> L1 OOM. A 2D grid lets the picker choose 2D
-    #    mcast for prefill/lm_head, which streams out_block and fits L1.
-    #  - It must be SMALL: 1D mcast FAILS at large grids on Quasar -- the device's full 8x4 tripped
-    #    llk_io_unpack.h:45 on the DECODE matmul (test_quasar_qkv_matmul_dfb[8x4] fails the same way; 8x4 was
-    #    never validated even with alias=0). The validated regime is <= ~3x2; 2x2 is validated for BOTH 1D
-    #    (test_quasar_qkv_matmul_dfb) and 2D (test_quasar_matmul_2d_mcast). Do NOT rely on
-    #    TT_METAL_CORE_GRID_OVERRIDE to keep the grid small -- pin it here so a run without the override
-    #    (device = full 8x4) doesn't fall back to the failing large grid.
-    # Cap the matmul grid to a small 2D shape (2x2, clamped to device). Must be 2D (a 1-row grid makes the
-    # picker pick 1D for prefill -> full-M-per-core L1 OOM) and SMALL (1D fails at 8x4 -- llk_io_unpack.h:45).
+    # Matmul grid for the 2-node emulator.
+    #  - gx capped to 2: 1D mcast FAILS at large grids on Quasar -- the full 8x4 tripped llk_io_unpack.h:45 on
+    #    the decode matmul; <= ~3x2 is the validated regime (test_quasar_qkv_matmul_dfb / _matmul_2d_mcast).
+    #  - gy PINNED to 1: the 2-node emulator is a SINGLE ROW (2x1). compute_with_storage_grid_size can report
+    #    y>1, but those rows are NOT usable in slow dispatch -- a 2-row config addresses row 1 and throws
+    #    "No core at (0,1)". A 1-row grid is fine because we build an EXPLICIT 2D config (not the picker): with
+    #    gy=1 the 2D path sets per_core_M = full M on the one row and out_block_h STREAMS it to L1, so it still
+    #    fits (no full-M-per-core OOM), and N splits across gx. The mainline 2D factory's single-row mcast
+    #    clamp lets grid.y==1 run (matmul_multicore_reuse_mcast_2d_program_factory.cpp; guard test
+    #    debug_ops/test_quasar_matmul_2d_single_row.py).
     dev = mesh_device.compute_with_storage_grid_size()
-    gx, gy = min(int(dev.x), 2), min(int(dev.y), 2)
+    gx, gy = min(int(dev.x), 2), 1
     mm_core_grid = ttnn.CoreGrid(y=gy, x=gx)
 
     def _blk(v, sub, cap):
@@ -1394,10 +1392,13 @@ def test_llama_e2e(mesh_device, optimizations, monkeypatch):  # noqa: F811 — m
         # Route weight-upload tilize through the Gen2-native quasar op (the mainline one hangs on the sim).
         # Must be installed before create_model, which materializes the weights via ttnn.from_torch.
         _install_quasar_tilize_from_torch(monkeypatch)
-        # Route interleaved_to_sharded through the Gen2-native quasar op (the mainline one faults on the
-        # sim -- RoPE cos/sin decode sharding, UNALIGNED_LOAD / neighbour-core corruption). See the
-        # dedicated repro test_llama_e2e_with_i2s_failure.py.
-        _install_quasar_i2s(monkeypatch)
+        # i2s reroute REVERTED: mainline ttnn.interleaved_to_sharded is now fixed in-branch -- it passes
+        # tile_bytes as a compile-time arg instead of the stale get_tile_size() descriptor read (885d5069683,
+        # #58195/#58133), and the idle-neighbour UNALIGNED_LOAD root (stale launch-msg DFB fields on cores left
+        # idle by a subset-grid program) is fixed by the dm.cc enables-gate. So the Gen2-native quasar i2s
+        # reroute is no longer needed. Confirm on the sim with test_quasar_i2s_rope_fault.py::test_i2s_mainline
+        # (incl. the addr-shift/churn variants); re-install _install_quasar_i2s(monkeypatch) here if it faults.
+        # _install_quasar_i2s(monkeypatch)
         # Force fp32_dest_acc_en=False everywhere: the Quasar sim can't do the bf16->Tf32 unpack that
         # fp32 accumulation needs (qsr_unpack_src_value in_format=5 out_format=4). Must precede create_model
         # (compute configs are built during model construction).
@@ -1425,12 +1426,14 @@ def test_llama_e2e(mesh_device, optimizations, monkeypatch):  # noqa: F811 — m
             _install_quasar_host_matmul(monkeypatch)
             _install_quasar_host_create_qkv_heads(monkeypatch)
 
-        # RoPE on HOST by default (both modes). The device rotary_embedding_llama_sharded compute kernel is only
-        # PARTIALLY Quasar-ported: it pack_init's for the matmul-rotate output (dfb::rotated_interm) but NOT for
-        # the eltwise-chain PackTile targets (sin_interm / cos_interm / out), so pack_tile trips the pack re-init
-        # guard (llk_pack_tile_api.h:94, recipe section 7). host RoPE is exact + validated. Flip to device with
-        # LLAMA_QSR_DEVICE_ROPE=1 once the kernel port (pack_init on each pack-output switch) lands.
-        device_rope = device_attn and os.environ.get("LLAMA_QSR_DEVICE_ROPE", "0") == "1"
+        # RoPE ON DEVICE by default (LLAMA_QSR_DEVICE_ROPE=1 default; set =0 to fall back to host). The model is
+        # use_qk_fused=False (model.py:838), so decode uses the NON-fused ttnn.experimental.rotary_embedding_llama
+        # (separate Q/K), whose sharded compute kernel is Quasar-ported by #58196 (9d3abcb5c85: dummy_pack for
+        # resident pushes + pack_init on each pack-output switch) and binds 8 DFBs (fits the HW remapper's
+        # 8-intra-tensix-DFB limit). The fused_qk op is NOT used here and does NOT fit on Quasar (10 DFBs).
+        # Verified by tests/debug_ops/test_quasar_rope_device.py (non-fused sharded decode, PCC vs torch).
+        # host RoPE (LLAMA_QSR_DEVICE_ROPE=0) remains exact + validated as a fallback.
+        device_rope = device_attn and os.environ.get("LLAMA_QSR_DEVICE_ROPE", "1") == "1"
         if not device_rope:
             _install_quasar_host_rope(monkeypatch)
 

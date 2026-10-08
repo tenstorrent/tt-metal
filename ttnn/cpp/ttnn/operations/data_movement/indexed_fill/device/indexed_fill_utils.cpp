@@ -229,7 +229,7 @@ bool is_shard_local_indexed_fill(
     return true;
 }
 
-CoreRangeSet get_indexed_fill_worker_grid(
+tt::tt_metal::CoreRangeSet get_indexed_fill_worker_grid(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& batch_id,

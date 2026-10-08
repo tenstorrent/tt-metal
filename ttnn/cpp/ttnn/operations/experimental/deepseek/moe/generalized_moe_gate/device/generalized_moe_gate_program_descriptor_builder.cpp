@@ -147,7 +147,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     };
 
     tt::tt_metal::ComputeConfigDescriptor compute_config{};
-    compute_config.math_fidelity = MathFidelity::HiFi4;
+    compute_config.math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     // Full DEST sync (single 16-tile bank; no double-buffer bank alternation across tile_regs_acquire).
     // The multi-block combine parks block0's run in DEST and reads it back in block1's SEPARATE acquire;
     // that only survives if acquire does not swap banks.

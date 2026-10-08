@@ -53,7 +53,7 @@ void kernel_main() {
         .size = num_banks,
         .skip = 1,
         .base = first_bank,
-        .offset = 0,
+        .current = 0,
         .bank_order = BANK_INNER,
     };
     setup_src_base_start_addrgen_0(src_base);
