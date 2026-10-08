@@ -53,9 +53,9 @@ export TT_METAL_HOME=$PWD
 ```
 
 Python bindings are on by default; this workload needs them. The build takes roughly 20 minutes
-cold. Nothing beyond a stock build is required -- in particular the `high_power_matmul`
-programming example and its `POWER_CASE` work, which live on other branches, are **not** used
-here. This workload needs only `ttnn` and `build_Release/tools/umd/telemetry`.
+cold. Nothing beyond a stock build is required -- in particular the `long_matmul`
+programming example and its `POWER_CASE` knobs are **not** used here. This workload needs only
+`ttnn` and `build_Release/tools/umd/telemetry`.
 
 ### The tt-metal python venv
 
