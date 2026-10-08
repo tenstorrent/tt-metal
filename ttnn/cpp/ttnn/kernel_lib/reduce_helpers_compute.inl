@@ -366,6 +366,16 @@ ALWI void reduce(
     const uint32_t num_batches = input_block_shape.batches;
 
     constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>();
+    // A post-reduce op that returns bool reports whether it ran SFPU work.
+    constexpr bool post_op_reports = std::is_same_v<std::invoke_result_t<PostReduceOp, uint32_t>, bool>;
+#ifdef ARCH_BLACKHOLE
+    // The SFPU reduce init holds across outputs while no fold init, accumulator reload or SFPU post-reduce op runs.
+    constexpr bool hoist_sfpu_init =
+        is_sfpu && !enable_accumulation && (std::is_same_v<PostReduceOp, NoOp> || post_op_reports);
+#else
+    constexpr bool hoist_sfpu_init = false;
+#endif
+    bool sfpu_init_live = false;
 
     DataflowBuffer input_dfb(input_dfb_id);
     DataflowBuffer scaler_dfb(scaler_dfb_id);
@@ -505,6 +515,7 @@ ALWI void reduce(
                     // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
                     if (Wt > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
                         detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
+                        sfpu_init_live = false;
                     }
                 }
 
@@ -542,13 +553,22 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize
                 if constexpr (is_sfpu) {
-                    sfpu_reduce_init<reduce_type, reduce_format>();
+                    if (!hoist_sfpu_init || !sfpu_init_live) {
+                        sfpu_reduce_init<reduce_type, reduce_format>();
+                        sfpu_init_live = true;
+                    }
                     sfpu_reduce<reduce_type, reduce_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
                 }
 
                 // Call post-reduce operation (e.g., recip_tile for softmax)
                 // User's lambda can include reduce_uninit() if needed before custom ops
-                post_reduce_op(dst_idx);
+                if constexpr (hoist_sfpu_init && post_op_reports) {
+                    if (post_reduce_op(dst_idx)) {
+                        sfpu_init_live = false;
+                    }
+                } else {
+                    post_reduce_op(dst_idx);
+                }
 
                 output_dfb.reserve_back(onetile);
                 tile_regs_commit();
@@ -611,6 +631,7 @@ ALWI void reduce(
                     // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
                     if (Ht > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
                         detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
+                        sfpu_init_live = false;
                     }
                 }
 
@@ -658,7 +679,10 @@ ALWI void reduce(
                 // SFPU intra-tile finalize per output slot
                 if constexpr (is_sfpu) {
                     const uint32_t sfpu_base_dst = get_dst_index(accumulate);
-                    sfpu_reduce_init<reduce_type, reduce_format>();
+                    if (!hoist_sfpu_init || !sfpu_init_live) {
+                        sfpu_reduce_init<reduce_type, reduce_format>();
+                        sfpu_init_live = true;
+                    }
                     for (uint32_t k = 0; k < current_chunk; ++k) {
                         sfpu_reduce<reduce_type, reduce_format, reduce_dim>(
                             sfpu_base_dst + k, /*ct_dim=*/1, /*rt_dim=*/1);
@@ -668,7 +692,13 @@ ALWI void reduce(
                 // Post-reduce operation for each output tile in chunk
                 const uint32_t base_dst = get_dst_index(accumulate);
                 for (uint32_t i = 0; i < current_chunk; ++i) {
-                    post_reduce_op(base_dst + i);
+                    if constexpr (hoist_sfpu_init && post_op_reports) {
+                        if (post_reduce_op(base_dst + i)) {
+                            sfpu_init_live = false;
+                        }
+                    } else {
+                        post_reduce_op(base_dst + i);
+                    }
                 }
 
                 tile_regs_commit();
