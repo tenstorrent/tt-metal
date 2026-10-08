@@ -267,7 +267,7 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
             prefetcher_core.chip,
             prefetcher_translated,
             /*addr=*/0,
-            {.size = prefetch_q_base + mem_map.prefetch_q_size()}));
+            {.size = prefetch_q_base + mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes()}));
 
         tt_cxy_pair completion_queue_writer_core =
             ctx.get_dispatch_core_manager().completion_queue_writer_core(this->device_id, channel, cq_id);
@@ -307,7 +307,8 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
         this->cq_to_event.push_back(0);
         this->cq_to_last_completed_event.push_back(0);
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
-        this->prefetch_q_dev_fences[cq_id] = prefetch_q_base + mem_map.prefetch_q_size();
+        this->prefetch_q_dev_fences[cq_id] =
+            prefetch_q_base + mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes();
     }
 }
 
@@ -753,7 +754,8 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     // Wrap FetchQ if possible
     const auto& mem_map = ctx.dispatch_mem_map();
     uint32_t prefetch_q_base = mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id);
-    uint32_t prefetch_q_limit = prefetch_q_base + mem_map.prefetch_q_size();
+    uint32_t prefetch_q_limit =
+        prefetch_q_base + (mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes());
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
         if (mem_map.prefetch_q_cached()) {
