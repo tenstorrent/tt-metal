@@ -113,8 +113,9 @@ inline void rand_rows() {
 
     // One row fits in the 32-entry replay buffer. Record and execute it once,
     // then replay it for the remaining rows without scalar loop-control gaps.
-    TTI_REPLAY(0, row_instruction_count, 1, 1);
-    rand_row<NORMALIZE_PER_ROW>();
+    // load_replay_buf brackets the record with disable_gathering() /
+    // enable_gathering() when ENABLE_GATHERING is defined.
+    load_replay_buf<Exec>(0, row_instruction_count, [] { rand_row<NORMALIZE_PER_ROW>(); });
 #pragma GCC unroll 7
     for (int d = 1; d < 8; d++) {
         TTI_REPLAY(0, row_instruction_count, 0, 0);
