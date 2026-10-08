@@ -14,10 +14,17 @@ on:
     workflows: ["LLK SFPU report"]
     types: [completed]
     branches: [main]
+  # gh-aw checks that whoever started the report run has write access. A run that
+  # /llk-sfpu-test starts belongs to github-actions[bot] (it dispatches with
+  # GITHUB_TOKEN), which only a workflow running in this repository can be.
+  bots: ["github-actions[bot]"]
 
-# A run replaced by a newer /llk-sfpu-test on the same PR is cancelled and leaves no
-# report; the newer run posts one.
-if: ${{ github.event.workflow_run.conclusion != 'cancelled' }}
+# Only a dispatched report: a fork PR can add a workflow with the same name, but its
+# runs are pull_request events. A run replaced by a newer /llk-sfpu-test on the same
+# PR is cancelled and leaves no report; the newer run posts one.
+if: >-
+  ${{ github.event.workflow_run.event == 'workflow_dispatch'
+  && github.event.workflow_run.conclusion != 'cancelled' }}
 
 timeout-minutes: 10
 
