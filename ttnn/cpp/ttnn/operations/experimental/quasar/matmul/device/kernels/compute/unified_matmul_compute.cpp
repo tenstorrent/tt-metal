@@ -26,6 +26,7 @@ template <
     uint32_t batch_size,
     uint32_t K_chunk_tiles,
     uint32_t K_chunks_per_C_slice,
+    uint32_t K_chunks_per_C_slice_padded,
     uint32_t C_slice_M_padded_tiles,  // C slice dims rounded up to subblock multiples; overshoot is clipped by the
                                       // writer
     uint32_t C_slice_N_padded_tiles,
@@ -56,7 +57,17 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
         for (uint32_t MN_chunk = 0; MN_chunk < num_C_slices; ++MN_chunk) {
-            for (uint32_t K_chunk = 0; K_chunk < K_chunks_per_C_slice; ++K_chunk) {
+            for (uint32_t K_chunk = 0; K_chunk < K_chunks_per_C_slice_padded; ++K_chunk) {
+                if (K_chunk >= K_chunks_per_C_slice) {
+                    // Padding K chunk (rounded up to the reader threads): credits only.
+                    A_slice.wait_front(A_slice_tiles);
+                    B_slice.wait_front(B_slice_tiles);
+                    dummy_unpack(dfb::A_slice);
+                    dummy_unpack(dfb::B_slice);
+                    A_slice.pop_front(A_slice_tiles);
+                    B_slice.pop_front(B_slice_tiles);
+                    continue;
+                }
                 const bool last_K_chunk = K_chunk == K_chunks_per_C_slice - 1;
                 // Without packer L1 accumulation every later K chunk reloads the partials; with it only
                 // the last one does.
