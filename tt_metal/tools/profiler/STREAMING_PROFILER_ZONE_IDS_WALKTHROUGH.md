@@ -1,10 +1,22 @@
-# Debug event ids, one event end to end
+# Debug event ids: a worked example
 
-This follows a single debug event, `T1_Zone5` in the debug event pipeline's demo compute kernel, from its source line
-to the name the host prints. Every value below is real: it was read off the JIT-built ELF and the loader's output on a
-Blackhole p100a (bh-17), running the demo program (`test_streaming_profiler_zones --gx 1 --gy 1 --iters 2 --markers 1`).
-The mechanism is described in [the design document](STREAMING_PROFILER_ZONE_IDS.md); this page only shows it
-happening, and says where every number comes from.
+This page takes one debug event and follows its id through every stage: from the line of kernel source that
+declares it, through compile, link and load, to the device sending the id and the host turning it back into a name.
+
+**The event.** For this example we picked a scoped event, `DeviceZoneScopedN("T1_Zone5")`, which marks the start
+and end of a region of code. It sits in the demo compute kernel next to nine others like it (`T1_Zone0` …
+`T1_Zone9`). We chose it because it is in the middle of the kernel, so its numbers are not zeros. Every other kind of
+debug event gets its id the same way.
+
+**The data.** Every value below is real. It was read from the JIT-built ELF and the loader's output on a Blackhole
+p100a, running the demo program:
+
+```
+test_streaming_profiler_zones --gx 1 --gy 1 --iters 2 --markers 1
+```
+
+Why it works this way is in [the design document](STREAMING_PROFILER_ZONE_IDS.md). This page only shows each step and
+where each number comes from.
 
 Code identifiers on this page (`DeviceZoneScopedN`, the `.tt_zone_*` sections, `TT_PROFILER_TU_ID`, file names and
 log text) are quoted exactly as they are in the source today; they will be renamed separately.
@@ -52,7 +64,7 @@ bytes in file order. So the number `0x06800005` is stored as the bytes `05 00 80
 
 ## 1. Source: the debug event site
 
-The TRISC1 (math) kernel opens a scoped debug event (one with a start and an end):
+The TRISC1 (math) kernel opens the event:
 
 ```cpp
 {
