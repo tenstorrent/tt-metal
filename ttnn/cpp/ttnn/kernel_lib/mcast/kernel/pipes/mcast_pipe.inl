@@ -13,6 +13,7 @@
  */
 
 namespace dataflow_kernel_lib {
+namespace detail {
 
 // =============================================================================
 // SenderPipe
@@ -20,25 +21,25 @@ namespace dataflow_kernel_lib {
 
 template <
     uint8_t NOC_ID,
-    auto DATA_READY_SEM_ID,
+    typename DataReadyBinding,
     bool PRE_HANDSHAKE,
-    auto CONSUMER_READY_SEM_ID,
+    typename ConsumerReadyBinding,
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER,
     SenderMcastMode SENDER_MCAST_MODE,
     uint32_t MAX_RECTS>
-FORCE_INLINE SenderPipe<
+FORCE_INLINE SenderPipeImpl<
     NOC_ID,
-    DATA_READY_SEM_ID,
+    DataReadyBinding,
     PRE_HANDSHAKE,
-    CONSUMER_READY_SEM_ID,
+    ConsumerReadyBinding,
     DATA_READY_SIGNAL,
     ROTATING_SENDER,
     SENDER_MCAST_MODE,
-    MAX_RECTS>::SenderPipe(const Noc& noc, const SenderRuntimeArgumentsFor<MAX_RECTS>& runtime_args) :
+    MAX_RECTS>::SenderPipeImpl(const Noc& noc, const SenderRuntimeArgumentsFor<MAX_RECTS>& runtime_args) :
     noc_(noc),
-    data_ready_(detail::make_mcast_semaphore<DATA_READY_SEM_ID>()),
-    consumer_ready_(detail::make_mcast_semaphore<CONSUMER_READY_SEM_ID>()),
+    data_ready_(detail::make_mcast_semaphore<DataReadyBinding{}>()),
+    consumer_ready_(detail::make_mcast_semaphore<ConsumerReadyBinding{}>()),
     args_(runtime_args) {
     ASSERT(noc_.get_noc_id() == NOC_ID);
     ASSERT(args_.num_rectangles >= 1 && args_.num_rectangles <= MAX_RECTS);
@@ -55,19 +56,19 @@ FORCE_INLINE SenderPipe<
 
 template <
     uint8_t NOC_ID,
-    auto DATA_READY_SEM_ID,
+    typename DataReadyBinding,
     bool PRE_HANDSHAKE,
-    auto CONSUMER_READY_SEM_ID,
+    typename ConsumerReadyBinding,
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER,
     SenderMcastMode SENDER_MCAST_MODE,
     uint32_t MAX_RECTS>
 template <SourceL1Guard SOURCE_GUARD>
-FORCE_INLINE void SenderPipe<
+FORCE_INLINE void SenderPipeImpl<
     NOC_ID,
-    DATA_READY_SEM_ID,
+    DataReadyBinding,
     PRE_HANDSHAKE,
-    CONSUMER_READY_SEM_ID,
+    ConsumerReadyBinding,
     DATA_READY_SIGNAL,
     ROTATING_SENDER,
     SENDER_MCAST_MODE,
@@ -87,13 +88,15 @@ FORCE_INLINE void SenderPipe<
             }
         }
     }
+    // Atomic multicasts exclude their source. Count this completed sending round through the NoC too,
+    // so it serializes with the next rotating sender's increment to this same word.
+    if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Counter) {
+        data_ready_.up(noc_, my_x[NOC_ID], my_y[NOC_ID], 1);
+    }
     // Equal addresses skip the local copy, so only remote source-lifetime
     // guards apply. Wait for ACKED completion only when we wrote a local destination.
+    // The Counter atomic barrier also covers the self-targeted increment above.
     fence_<SOURCE_GUARD>(loopback_ && src_l1 != dst_l1);
-    // Atomic multicasts exclude their source. Count this completed sending round locally too.
-    if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Counter) {
-        data_ready_.up(1);
-    }
     if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag) {
         data_ready_.set(INVALID);
     }
@@ -101,19 +104,19 @@ FORCE_INLINE void SenderPipe<
 
 template <
     uint8_t NOC_ID,
-    auto DATA_READY_SEM_ID,
+    typename DataReadyBinding,
     bool PRE_HANDSHAKE,
-    auto CONSUMER_READY_SEM_ID,
+    typename ConsumerReadyBinding,
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER,
     SenderMcastMode SENDER_MCAST_MODE,
     uint32_t MAX_RECTS>
 template <SenderMcastMode RECTANGLE_MCAST_MODE>
-FORCE_INLINE void SenderPipe<
+FORCE_INLINE void SenderPipeImpl<
     NOC_ID,
-    DATA_READY_SEM_ID,
+    DataReadyBinding,
     PRE_HANDSHAKE,
-    CONSUMER_READY_SEM_ID,
+    ConsumerReadyBinding,
     DATA_READY_SIGNAL,
     ROTATING_SENDER,
     SENDER_MCAST_MODE,
@@ -146,19 +149,19 @@ FORCE_INLINE void SenderPipe<
 
 template <
     uint8_t NOC_ID,
-    auto DATA_READY_SEM_ID,
+    typename DataReadyBinding,
     bool PRE_HANDSHAKE,
-    auto CONSUMER_READY_SEM_ID,
+    typename ConsumerReadyBinding,
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER,
     SenderMcastMode SENDER_MCAST_MODE,
     uint32_t MAX_RECTS>
 template <SourceL1Guard SOURCE_GUARD>
-FORCE_INLINE void SenderPipe<
+FORCE_INLINE void SenderPipeImpl<
     NOC_ID,
-    DATA_READY_SEM_ID,
+    DataReadyBinding,
     PRE_HANDSHAKE,
-    CONSUMER_READY_SEM_ID,
+    ConsumerReadyBinding,
     DATA_READY_SIGNAL,
     ROTATING_SENDER,
     SENDER_MCAST_MODE,
@@ -192,11 +195,13 @@ FORCE_INLINE void SenderPipe<
             }
         }
     }
-    fence_<SOURCE_GUARD>(false);
-    // Count this completed sending round locally once, including local-only groups.
+    // Count this completed sending round once, including local-only groups. Use the NoC so the update
+    // serializes with the next rotating sender's increment to this same word.
     if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Counter) {
-        data_ready_.up(1);
+        data_ready_.up(noc_, my_x[NOC_ID], my_y[NOC_ID], 1);
     }
+    // The Counter atomic barrier also covers the self-targeted increment above.
+    fence_<SOURCE_GUARD>(false);
     if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag) {
         data_ready_.set(INVALID);
     }
@@ -204,18 +209,18 @@ FORCE_INLINE void SenderPipe<
 
 template <
     uint8_t NOC_ID,
-    auto DATA_READY_SEM_ID,
+    typename DataReadyBinding,
     bool PRE_HANDSHAKE,
-    auto CONSUMER_READY_SEM_ID,
+    typename ConsumerReadyBinding,
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER,
     SenderMcastMode SENDER_MCAST_MODE,
     uint32_t MAX_RECTS>
-FORCE_INLINE void SenderPipe<
+FORCE_INLINE void SenderPipeImpl<
     NOC_ID,
-    DATA_READY_SEM_ID,
+    DataReadyBinding,
     PRE_HANDSHAKE,
-    CONSUMER_READY_SEM_ID,
+    ConsumerReadyBinding,
     DATA_READY_SIGNAL,
     ROTATING_SENDER,
     SENDER_MCAST_MODE,
@@ -249,18 +254,18 @@ FORCE_INLINE void SenderPipe<
 
 template <
     uint8_t NOC_ID,
-    auto DATA_READY_SEM_ID,
+    typename DataReadyBinding,
     bool PRE_HANDSHAKE,
-    auto CONSUMER_READY_SEM_ID,
+    typename ConsumerReadyBinding,
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER,
     SenderMcastMode SENDER_MCAST_MODE,
     uint32_t MAX_RECTS>
-FORCE_INLINE void SenderPipe<
+FORCE_INLINE void SenderPipeImpl<
     NOC_ID,
-    DATA_READY_SEM_ID,
+    DataReadyBinding,
     PRE_HANDSHAKE,
-    CONSUMER_READY_SEM_ID,
+    ConsumerReadyBinding,
     DATA_READY_SIGNAL,
     ROTATING_SENDER,
     SENDER_MCAST_MODE,
@@ -287,19 +292,19 @@ FORCE_INLINE void SenderPipe<
 
 template <
     uint8_t NOC_ID,
-    auto DATA_READY_SEM_ID,
+    typename DataReadyBinding,
     bool PRE_HANDSHAKE,
-    auto CONSUMER_READY_SEM_ID,
+    typename ConsumerReadyBinding,
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER,
     SenderMcastMode SENDER_MCAST_MODE,
     uint32_t MAX_RECTS>
 template <SourceL1Guard SOURCE_GUARD>
-FORCE_INLINE void SenderPipe<
+FORCE_INLINE void SenderPipeImpl<
     NOC_ID,
-    DATA_READY_SEM_ID,
+    DataReadyBinding,
     PRE_HANDSHAKE,
-    CONSUMER_READY_SEM_ID,
+    ConsumerReadyBinding,
     DATA_READY_SIGNAL,
     ROTATING_SENDER,
     SENDER_MCAST_MODE,
@@ -312,9 +317,11 @@ FORCE_INLINE void SenderPipe<
         noc_.async_write_barrier();
     } else if constexpr (
         SOURCE_GUARD == SourceL1Guard::Guard || (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag)) {
-        // Guard waits for the remote-only payload source to depart. A rotating Flag sender also
+        // Guard waits until the remote-only payload source has been read. A rotating Flag sender also
         // needs this wait before send() resets the local semaphore cell used as the signal source.
-        noc_.async_writes_flushed();
+        // A plain flush is not enough: NIU_MST_NONPOSTED_WR_REQ_SENT advances before the NIU reads the
+        // source. NIU_MST_WRITE_REQS_OUTGOING_ID drops only after; untagged writes use transaction ID 0.
+        noc_.async_writes_flushed<NocOptions::TXN_ID>({.trid = 0});
     }
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
         // inc_multicast is a NON-POSTED multicast atomic: it expects num_dests acks that the flush
@@ -325,18 +332,18 @@ FORCE_INLINE void SenderPipe<
 
 template <
     uint8_t NOC_ID,
-    auto DATA_READY_SEM_ID,
+    typename DataReadyBinding,
     bool PRE_HANDSHAKE,
-    auto CONSUMER_READY_SEM_ID,
+    typename ConsumerReadyBinding,
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER,
     SenderMcastMode SENDER_MCAST_MODE,
     uint32_t MAX_RECTS>
-FORCE_INLINE void SenderPipe<
+FORCE_INLINE void SenderPipeImpl<
     NOC_ID,
-    DATA_READY_SEM_ID,
+    DataReadyBinding,
     PRE_HANDSHAKE,
-    CONSUMER_READY_SEM_ID,
+    ConsumerReadyBinding,
     DATA_READY_SIGNAL,
     ROTATING_SENDER,
     SENDER_MCAST_MODE,
@@ -361,40 +368,36 @@ FORCE_INLINE void SenderPipe<
 // =============================================================================
 
 template <
-    auto DATA_READY_SEM_ID,
+    typename DataReadyBinding,
     bool PRE_HANDSHAKE,
-    auto CONSUMER_READY_SEM_ID,
+    typename ConsumerReadyBinding,
     DataReadySignal DATA_READY_SIGNAL,
     uint32_t NUM_SENDERS,
     typename SenderCoordinates>
-FORCE_INLINE ReceiverPipe<
-    DATA_READY_SEM_ID,
+template <typename CoordinateSource>
+FORCE_INLINE ReceiverPipeImpl<
+    DataReadyBinding,
     PRE_HANDSHAKE,
-    CONSUMER_READY_SEM_ID,
+    ConsumerReadyBinding,
     DATA_READY_SIGNAL,
     NUM_SENDERS,
-    SenderCoordinates>::ReceiverPipe(const Noc& noc, SenderCoordinates sender_coords) :
+    SenderCoordinates>::ReceiverPipeImpl(const Noc& noc, CoordinateSource sender_coords) :
     noc_(noc),
-    data_ready_(detail::make_mcast_semaphore<DATA_READY_SEM_ID>()),
-    consumer_ready_(detail::make_mcast_semaphore<CONSUMER_READY_SEM_ID>()),
-    coords_(sender_coords) {
-    // Init the flag THIS side waits on. The Counter signal needs no reset/init (monotone).
-    if constexpr (DATA_READY_SIGNAL == DataReadySignal::Flag) {
-        data_ready_.set(INVALID);
-    }
-}
+    data_ready_(detail::make_mcast_semaphore<DataReadyBinding{}>()),
+    consumer_ready_(detail::make_mcast_semaphore<ConsumerReadyBinding{}>()),
+    coords_(sender_coords) {}
 
 template <
-    auto DATA_READY_SEM_ID,
+    typename DataReadyBinding,
     bool PRE_HANDSHAKE,
-    auto CONSUMER_READY_SEM_ID,
+    typename ConsumerReadyBinding,
     DataReadySignal DATA_READY_SIGNAL,
     uint32_t NUM_SENDERS,
     typename SenderCoordinates>
-FORCE_INLINE void ReceiverPipe<
-    DATA_READY_SEM_ID,
+FORCE_INLINE void ReceiverPipeImpl<
+    DataReadyBinding,
     PRE_HANDSHAKE,
-    CONSUMER_READY_SEM_ID,
+    ConsumerReadyBinding,
     DATA_READY_SIGNAL,
     NUM_SENDERS,
     SenderCoordinates>::receive(uint32_t round) {
@@ -417,16 +420,16 @@ FORCE_INLINE void ReceiverPipe<
 }
 
 template <
-    auto DATA_READY_SEM_ID,
+    typename DataReadyBinding,
     bool PRE_HANDSHAKE,
-    auto CONSUMER_READY_SEM_ID,
+    typename ConsumerReadyBinding,
     DataReadySignal DATA_READY_SIGNAL,
     uint32_t NUM_SENDERS,
     typename SenderCoordinates>
-FORCE_INLINE uint32_t ReceiverPipe<
-    DATA_READY_SEM_ID,
+FORCE_INLINE uint32_t ReceiverPipeImpl<
+    DataReadyBinding,
     PRE_HANDSHAKE,
-    CONSUMER_READY_SEM_ID,
+    ConsumerReadyBinding,
     DATA_READY_SIGNAL,
     NUM_SENDERS,
     SenderCoordinates>::receive_signal(uint32_t round) {
@@ -451,5 +454,7 @@ FORCE_INLINE uint32_t ReceiverPipe<
         return value;
     }
 }
+
+}  // namespace detail
 
 }  // namespace dataflow_kernel_lib

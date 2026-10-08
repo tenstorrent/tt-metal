@@ -61,6 +61,11 @@ set(TTNN_CORE_SRCS
 
 set(TTNNCPP_SRCS
     # FIXME: Move these out to appropriate sub targets
+    cpp/ttnn/kernel_lib/mcast/host/mcast.cpp
+    cpp/ttnn/kernel_lib/mcast/host/mcast_impl.cpp
+    cpp/ttnn/kernel_lib/mcast/host/program_adapters/mcast_legacy_program_adapter.cpp
+    cpp/ttnn/kernel_lib/mcast/host/program_adapters/mcast_descriptor_adapter.cpp
+    cpp/ttnn/kernel_lib/mcast/host/program_adapters/mcast_spec_adapter.cpp
     cpp/ttnn/operations/compute_throttle_utils.cpp
     cpp/ttnn/operations/trace.cpp
     cpp/ttnn/graph/capture_program_config_registry.cpp
@@ -92,14 +97,10 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/copy/typecast/device/typecast_rm_chunked_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/typecast.cpp
-    # Keep these two at the end: TTNNCPP_SRCS order drives the unity-build batching,
+    # Keep this at the end: TTNNCPP_SRCS order drives the unity-build batching,
     # and inserting higher up reshuffles the blobs, which collides same-named
     # anonymous-namespace helpers in unrelated files (e.g. the dit_fused factories).
-    cpp/ttnn/kernel_lib/mcast/host/mcast_host.cpp
     cpp/ttnn/operations/generic/device/generic_op_spec_factory.cpp
-    cpp/ttnn/kernel_lib/mcast/host/mcast_resources.cpp
-    cpp/ttnn/kernel_lib/mcast/host/mcast_descriptor.cpp
-    cpp/ttnn/kernel_lib/mcast/host/mcast_spec.cpp
 )
 
 ####################################################################################################

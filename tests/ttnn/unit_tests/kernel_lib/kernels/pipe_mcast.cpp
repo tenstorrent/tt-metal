@@ -18,6 +18,9 @@ static_assert(std::is_same_v<
 static_assert(std::is_same_v<
               decltype(detail::make_mcast_semaphore<SemaphoreBindingToken{0, SemScope::DM_LOCAL_CACHED}>()),
               Semaphore<ProgrammableCoreType::TENSIX>>);
+static_assert(McastSemaphoreBinding{SemaphoreBindingToken{0, SemScope::EXTERNAL}}.scope == SemScope::EXTERNAL);
+static_assert(
+    McastSemaphoreBinding{SemaphoreBindingToken{0, SemScope::DM_LOCAL_CACHED}}.scope == SemScope::DM_LOCAL_CACHED);
 static_assert(std::is_same_v<decltype(detail::make_mcast_semaphore<nullptr>()), std::nullptr_t>);
 
 template <typename Pipe, typename = void>
@@ -83,8 +86,8 @@ void kernel_main() {
     source.reserve_back(2 * max_pages);
     destination.reserve_back(2 * max_pages);
     const uint32_t source_addr = source.get_write_ptr(), destination_addr = destination.get_write_ptr();
-    // Family tests protect sentinel initialization with the attached start barrier.
-    // Wrapper tests have no barrier; initializing their landing region could race
+    // Multicast tests protect sentinel initialization with the attached start barrier.
+    // Positional API tests have no barrier; initializing their landing region could race
     // a valid handshake-free transfer, so leave it untouched.
     if constexpr (barrier.active) {
         for (uint32_t i = 0; i < 4096 * max_pages / 4; ++i) {
@@ -92,6 +95,11 @@ void kernel_main() {
         }
     }
     auto sender = mc.optional_sender(noc);
+#ifdef MCAST_TEST_DELAY_RECEIVER_CONSTRUCTION
+    if (inside) {
+        riscv_wait(1000000);
+    }
+#endif
     auto receiver = mc.optional_receiver(noc);
     auto barrier_sender = barrier.optional_sender(noc);
     auto barrier_receiver = barrier.optional_receiver(noc);
@@ -110,10 +118,18 @@ void kernel_main() {
         const uint32_t signal_value =
             mc.signal == DataReadySignal::Counter ? VALID : control_value + (mixed_events ? r % 3 : 0);
         if (mc.should_send(r)) {
+#ifdef MCAST_TEST_STRESS_FLAG_SOURCE_LIFETIME
+            // Keep writes ahead of the flag multicast so a premature source clear is observable.
+            for (uint32_t i = 0; i < 8; ++i) {
+                noc.async_write(CoreLocalMem<uint32_t>(source_addr), output, 2048, {}, {.page_id = output_base});
+            }
+#endif
             if (control_event) {
                 if constexpr (caller_managed) {
                     sender->send_signal<SourceL1Guard::CallerManaged>(signal_value);
+#ifndef MCAST_TEST_STRESS_FLAG_SOURCE_LIFETIME
                     noc.async_write_barrier();
+#endif
                 } else {
                     sender->send_signal(signal_value);
                 }
@@ -132,7 +148,9 @@ void kernel_main() {
                 noc.async_read_barrier();
                 if constexpr (caller_managed) {
                     sender->send<SourceL1Guard::CallerManaged>(src, dst, 2048 * pages);
+#ifndef MCAST_TEST_STRESS_FLAG_SOURCE_LIFETIME
                     noc.async_write_barrier();
+#endif
                 } else {
                     sender->send(src, dst, 2048 * pages);
                 }
@@ -163,6 +181,7 @@ void kernel_main() {
                 }(*receiver);
             }
         }
+#ifndef MCAST_TEST_SUPPRESS_ROUND_OUTPUT
         if (inside) {
             for (uint32_t p = 0; p < pages; ++p) {
                 noc.async_write(
@@ -174,7 +193,15 @@ void kernel_main() {
             }
             noc.async_write_barrier();
         }
+#endif
     }
+#ifdef MCAST_TEST_SUPPRESS_ROUND_OUTPUT
+    if (inside) {
+        noc.async_write(
+            CoreLocalMem<uint32_t>(destination_addr), output, 2048 * max_pages, {}, {.page_id = output_base});
+        noc.async_write_barrier();
+    }
+#endif
     if (barrier_sender) {
         barrier_sender->send_signal();
     } else if (barrier_receiver) {
