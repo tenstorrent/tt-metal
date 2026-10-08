@@ -2205,3 +2205,25 @@
 - claim: RING decode MoE GSM8K GATE with device-resident decode loop: full 48-layer model, greedy non-thinking, n=128, max_new 512, B=128 (U=32), traced decode, env MIMO_MOE_DECODE=ring MIMO_EXPERT_OP=unified MIMO_ROUTER=fast MIMO_MOE_AR=ag_sum MIMO_FEEDBACK=1 LD_LIBRARY_PATH=/mnt/tt-data/ssinghal/mimo/artifacts/integ_e4ff6c137d3/lib, commit 0f24c7f6c92: run a (host 30) and run b (host 48) both 113/128 = 88.3% (Wilson 81.6-92.8), step median 63.4 ms, same gen_lens, all 128 completion texts identical between runs a and b (moe_AG_gsm_ring_{a,b}_s0_texts.json); gate >=109 passed
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AG_gsm_ring_a_h30_0f24c7f6c92.log
 - paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/layer.py
+
+## E261008-0205-993
+- date: 2026-10-08T02:05:04
+- commit: 7a16eb305aa
+- branch: ssinghal/mimo-ringk
+- host: DC16-2-BG-0204-u20-44
+- track: moe
+- status: verified
+- claim: RING MoE FIDELITY SPLIT (ringk, library artifacts/ringk_full_7a16eb305aa/lib = 5 C++ files + per-matmul fidelity knob MOE_COMPUTE_FID_W01 / MOE_COMPUTE_FID_W2 in moe_compute): W0/W1 needs HiFi3 (W01=HiFi2: rel vs dump L5 T=8 0.0221 vs 0.0081, T=32 0.0137 vs 0.0062); the W2 (down proj) matmul does NOT: W2=LoFi gives results bit-identical to W2=HiFi2 and within noise of HiFi3 (vs dump, L5 T=8 alpha 1.0002 rel 0.0078 vs HiFi3 1.0034/0.0081; T=32 0.9964/0.0072 vs 0.9993/0.0062; L16 alpha 1.0062 rel 0.0077 vs 1.0108/0.0112; vs unified rel 0.0058-0.0072 L5 (0.0045-0.0060 before), alpha vs unified 0.9949-0.9974 because unified sits at 1.003-1.017 vs the dump). Ring layer ms (alternating traced, L1/5/16, same host class): T=1 0.416 -> 0.384, T=8 0.964 -> 0.851, T=32 1.189 -> 1.061 (-8/-12/-11 pct). Other phase experiments: HiFi4 == HiFi3 numerics (slower 1.194 vs 1.022 ms), HiFi2 plain rel 0.0212 at 0.764 ms; fidelity-phase increment 2 or 3 with a 2-phase loop (MOE_COMPUTE_FID_INCR, skipping phase 1) gives the SAME numerics as plain HiFi2 (0.0212), so phase skipping does not give HiFi3 accuracy cheaper. Single-chip ttnn.matmul probe (bf16 x [32,4096] @ [4096,2048], fp32 DEST, rel vs fp64): bfp8 W LoFi 0.0187 / HiFi2 0.0041 / HiFi3 0.00031 / HiFi4 0.00031
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AO_w2lofi_h48_7a16eb305aa.log
+- paths: ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute.cpp, ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/moe_compute_program_factory.cpp
+
+## E261008-0205-61e
+- date: 2026-10-08T02:05:04
+- commit: 7a16eb305aa
+- branch: ssinghal/mimo-ringk
+- host: DC16-2-BG-0204-u20-44
+- track: moe
+- status: verified
+- claim: RING MoE with W2 at LoFi (MOE_COMPUTE_FID_W2=0, W0/W1 HiFi3, fp32 acc, bfp8) GSM8K n=128 max_new 512 full 48 layers, default ring + device loop, MIMO_EXPERT_OP=unified, LD_LIBRARY_PATH=artifacts/ringk_full_7a16eb305aa/lib: run a (host 30) and run b (host 48) both 112/128 = 87.5% (Wilson 80.7-92.2; HiFi3 baseline 113/128), all 128 completion texts identical between a and b, step median 57.6 / 58.9 ms (baseline HiFi3 63.4 ms: -9 pct); gate >=109 passed
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AP_gsm_ringw2lofi_a_h30_7a16eb305aa.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py
