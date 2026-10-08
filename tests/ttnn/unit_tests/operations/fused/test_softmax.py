@@ -1013,6 +1013,70 @@ def test_softmax_sharded_non_tile_aligned_width(device, W, mask_kind, numeric_st
     )
 
 
+@pytest.mark.parametrize(
+    "W, block_h, subblock_w",
+    [
+        (100, 2, 2),  # 4 tiles per row in 2 subblocks: the padding sits in the second
+        (100, 2, 4),
+        (197, 14, 7),  # the sharded ViT attention scores: 197 tokens padded to 224, block 14 x 7
+    ],
+)
+@pytest.mark.parametrize("mask_kind", ["none", "broadcast"])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_softmax_sharded_non_tile_aligned_width_multi_core(device, W, block_h, subblock_w, mask_kind, in_dtype):
+    """Same as test_softmax_sharded_non_tile_aligned_width on 2 cores, with subblock_w below block_w and bfloat8_b
+    input, as the sharded ViT runs it (softmax_in_place on bfloat8_b scores of width 197, subblock_w = block_w = 7).
+    """
+    torch.manual_seed(0)
+
+    num_cores = 2
+    H, Wp = 32 * block_h * num_cores, (W + 31) // 32 * 32
+    scale = 0.125
+    torch_input = torch.randn((1, 1, H, W), dtype=torch.bfloat16) * 4
+    if mask_kind == "none":
+        torch_input = torch_input * scale
+    torch_mask = torch.zeros((1, 1, 1, W))
+    torch_mask[..., W * 4 // 5 :] = -1e4
+    torch_mask = torch_mask.to(torch.bfloat16)
+
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    shard_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [H // num_cores, Wp], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(num_cores, 1), subblock_w=subblock_w, block_h=block_h, block_w=Wp // 32
+    )
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=shard_config
+    )
+    # The golden takes the input as the device holds it (bfloat8_b rounds it), so only the softmax is compared.
+    device_input = ttnn.to_torch(ttnn.to_memory_config(ttnn_input, ttnn.DRAM_MEMORY_CONFIG)).float()
+    if mask_kind == "none":
+        torch_output = F.softmax(device_input, dim=-1)
+        ttnn_output = ttnn.softmax_in_place(ttnn_input, program_config=program_config)
+    else:
+        torch_output = F.softmax(device_input * scale + torch_mask.float(), dim=-1)
+        ttnn_mask = ttnn.from_torch(torch_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_output = ttnn.scale_mask_softmax_in_place(ttnn_input, scale, ttnn_mask, program_config=program_config)
+    ttnn_output = ttnn.to_torch(ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)).float()
+
+    row_sums = ttnn_output.sum(dim=-1)
+    atol = 0.05 if in_dtype == ttnn.bfloat8_b else 0.02
+    assert torch.allclose(
+        row_sums, torch.ones_like(row_sums), atol=atol
+    ), f"row sums {row_sums.min()}..{row_sums.max()}"
+    assert_numeric_metrics(
+        torch_output,
+        ttnn_output,
+        pcc_threshold=0.99 if in_dtype == ttnn.bfloat8_b else 0.999,
+        rtol=0.2 if in_dtype == ttnn.bfloat8_b else 0.09,
+        atol=0.02 if in_dtype == ttnn.bfloat8_b else 0.01,
+        frobenius_threshold=0.1 if in_dtype == ttnn.bfloat8_b else 0.05,
+    )
+
+
 def test_softmax_4096x4096_fp32(device):
     torch.manual_seed(0)
     torch_input_tensor = torch.rand((1, 1, 4096, 4096), dtype=torch.float32)
