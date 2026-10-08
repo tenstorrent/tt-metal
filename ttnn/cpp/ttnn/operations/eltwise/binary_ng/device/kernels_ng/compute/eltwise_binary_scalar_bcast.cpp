@@ -15,7 +15,7 @@
 #ifndef EB_R3_PER_FACE
 #define EB_R3_PER_FACE 0
 #endif
-#define ELTWISE_BINARY_PER_TILE_HANDOFF ((((BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL && !BINARY_NG_MUL_PER_FACE) || BINARY_NG_BLOCK)) && !EB_R3_PER_FACE)
+#define ELTWISE_BINARY_PER_TILE_HANDOFF ((((BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL && !BINARY_NG_MUL_PER_FACE && !EB_R3_PER_FACE) || BINARY_NG_BLOCK)))
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 
