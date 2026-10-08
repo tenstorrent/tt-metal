@@ -83,7 +83,7 @@ ALWI void process_tile(
 #endif
         {
             for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-                copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
+                BINARY_NG_COPY_TILE(cb_post_lhs.get_cb_id(), i, i * 2);
             }
             reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
             if constexpr (rhs_copy_init) {
@@ -92,7 +92,7 @@ ALWI void process_tile(
         }
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             if constexpr (!operand_pair) {
-                copy_tile(cb_post_rhs.get_cb_id(), i, i * 2 + 1);
+                BINARY_NG_COPY_TILE(cb_post_rhs.get_cb_id(), i, i * 2 + 1);
             }
 
 #if HAS_ACTIVATIONS(POST)

@@ -61,7 +61,7 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 #endif
     {
         for (uint32_t i = 0; i < n; ++i) {
-            copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
+            BINARY_NG_COPY_TILE(cb_post_lhs.get_cb_id(), i, i * 2);
         }
         reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
         if constexpr (rhs_copy_init) {
@@ -70,7 +70,7 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
     }
     for (uint32_t i = 0; i < n; ++i) {
         if constexpr (!operand_pair) {
-            copy_tile(cb_post_rhs.get_cb_id(), 0, i * 2 + 1);  // Always use scalar at index 0
+            BINARY_NG_COPY_TILE(cb_post_rhs.get_cb_id(), 0, i * 2 + 1);  // Always use scalar at index 0
         }
 #if HAS_ACTIVATIONS(POST)
         BINARY_SFPU_INIT;
