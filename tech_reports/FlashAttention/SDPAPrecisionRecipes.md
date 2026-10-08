@@ -161,9 +161,10 @@ removing them. The rule is: **the recipe owns the numerics.**
 
 ## Routing
 
-Without `precision`, a call that would reach one of the legacy loops (`sdpa_legacy_loops.hpp`) runs a recipe instead
-(Blackhole and Wormhole B0; `sdpa.cpp`, "Precision routing"). Everything else keeps the streaming kernels
-(`compute_streaming.hpp`).
+Without `precision`, a call that the BF16-DEST streaming kernels (`compute_streaming.hpp`) do not serve runs a recipe
+(Blackhole and Wormhole B0; `sdpa.cpp`, "Precision routing"). The legacy loops these calls used to reach
+(`sdpa_standard`, `sdpa_joint`) are deleted; only the ring joint FP32 gaps below still reach `sdpa_ring`
+(`sdpa_legacy_loops.hpp`).
 The DEST mode is read from `compute_kernel_config` as before (`fp32_dest_acc_en`, default off).
 
 | Entry point | BF16 DEST (default) | `fp32_dest_acc_en=True` |
