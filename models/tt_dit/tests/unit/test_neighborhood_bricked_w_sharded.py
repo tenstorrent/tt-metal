@@ -189,3 +189,93 @@ def test_bricked_2d_sharded_matches_host(*, mesh_device, dims, kernel, brick, he
     )
     got = got.reshape(hs, ws, T, h_local, w_local, channels).permute(2, 0, 3, 1, 4, 5).reshape(1, T, H, W, channels)
     assert_quality(expected, got, pcc=0.999)
+
+
+def _brick_local(x: torch.Tensor, brick: tuple[int, int, int]) -> torch.Tensor:
+    """``(T, h, w, C)`` -> ``(sites, C)`` in the bricked order of ``neighborhood_permute.to_bricked``."""
+    T, h, w, C = x.shape
+    bt, bh, bw = brick
+    x = x.reshape(T // bt, bt, h // bh, bh, w // bw, bw, C).permute(0, 2, 4, 1, 3, 5, 6)
+    return x.reshape(-1, C)
+
+
+def _unbrick_local(x: torch.Tensor, local: tuple[int, int, int], brick: tuple[int, int, int]) -> torch.Tensor:
+    T, h, w = local
+    bt, bh, bw = brick
+    x = x.reshape(T // bt, h // bh, w // bw, bt, bh, bw, -1).permute(0, 3, 1, 4, 2, 5, 6)
+    return x.reshape(T, h, w, -1)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+def test_bricked_2d_key_phase_lean_matches_default(*, mesh_device, monkeypatch):
+    """Stage 5's keep-bricked 2-D split under the key phase, with and without ``DIFFVAE_S5_LEAN``.
+
+    The lean path only drops layout round trips, so its output must equal the default bit for bit.
+    It also hands the key-phase rebrick a row-major K/V, which must not be freed under it.
+    """
+    from ...layers.neighborhood_attention import neighborhood_attention_3d_bricked_w_sharded
+    from ...layers.neighborhood_attention_plan import KEY_PHASE_BRICK, key_phase_applies
+
+    monkeypatch.delenv("DIFFVAE_NA_KEY_PHASE", raising=False)
+    h_axis, sp_axis = 0, 1
+    dims, kernel, brick, heads, head_dim = (8, 48, 96), (11, 11, 11), KEY_PHASE_BRICK, 4, 64
+    T, H, W = dims
+    hs, ws = (list(mesh_device.shape)[axis] for axis in (h_axis, sp_axis))
+    h_local, w_local = H // hs, W // ws
+    channels = heads * head_dim
+    assert key_phase_applies(dims, kernel, w_local, ws, h_local, hs)
+
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(1, T, H, W, heads, head_dim, dtype=torch.float32) for _ in range(3))
+    expected = na3d_torch(q, k, v, kernel, scale=1.0).reshape(1, T, H, W, channels)
+
+    def bricked_shards(x: torch.Tensor) -> torch.Tensor:
+        x = x.reshape(T, hs, h_local, ws, w_local, channels)
+        return torch.stack([torch.stack([_brick_local(x[:, i, :, j], brick) for j in range(ws)]) for i in range(hs)])
+
+    def run() -> torch.Tensor:
+        q_tt, k_tt, v_tt = (
+            from_torch(
+                bricked_shards(x),
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_axes=[h_axis, sp_axis, None, None],
+            )
+            for x in (q, k, v)
+        )
+        # Site-major buffers labelled (batch, heads, sites, head_dim), as stage 5 hands them over.
+        q_tt, k_tt, v_tt = (
+            ttnn.to_layout(ttnn.reshape(x, (1, heads, x.shape[-2], head_dim)), ttnn.TILE_LAYOUT)
+            for x in (q_tt, k_tt, v_tt)
+        )
+        out = neighborhood_attention_3d_bricked_w_sharded(
+            q_tt,
+            k_tt,
+            v_tt,
+            dims=dims,
+            kernel_size=kernel,
+            sp_axis=sp_axis,
+            h_axis=h_axis,
+            ccl_manager=CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear),
+            scale=1.0,
+            already_bricked=True,
+            brick=brick,
+        )
+        out = ttnn.reshape(out, (1, 1, T * h_local * w_local, channels))
+        return to_torch_replicated(out, mesh_axes=[h_axis, sp_axis, None, None]).reshape(hs, ws, -1, channels)
+
+    monkeypatch.delenv("DIFFVAE_S5_LEAN", raising=False)
+    default = run()
+    monkeypatch.setenv("DIFFVAE_S5_LEAN", "1")
+    lean = run()
+    assert torch.equal(default, lean)
+
+    got = torch.stack(
+        [torch.stack([_unbrick_local(lean[i, j], (T, h_local, w_local), brick) for j in range(ws)]) for i in range(hs)]
+    )
+    got = got.permute(2, 0, 3, 1, 4, 5).reshape(1, T, H, W, channels)
+    assert_quality(expected, got, pcc=0.999)
