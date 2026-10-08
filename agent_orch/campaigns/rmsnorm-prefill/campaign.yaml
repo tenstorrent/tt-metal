@@ -1,0 +1,46 @@
+# Campaign: dit_fused_distributed_rmsnorm prefill latency on a 1x4 Blackhole mesh.
+name: rmsnorm-prefill
+op: ttnn.experimental.dit_fused_distributed_rmsnorm
+op_code: DitFusedDistributedRmsnormDeviceOperation   # "OP CODE" column in the ops perf CSV
+
+machine: bh-qbge-12        # 2x p300c = 4 BH chips; the test uses all 4
+test: tests/ttnn/nightly/unit_tests/operations/fused/test_fused_rms_norm_prefill.py
+devices: 4
+calls_per_shape: {warmup: 3, measured: 10}
+shapes:                    # id = pytest param id, case = case_name logged by the test
+  - {id: kimi-k3-latent-moe-h3584, case: kimi_k3_latent_moe_h3584, local_width: 896}
+  - {id: deepseek-v4-flash-h4096, case: deepseek_v4_flash_h4096, local_width: 1024}
+  - {id: glm-5-3-h6144, case: glm_5_3_h6144, local_width: 1536}
+  - {id: kimi-k2-7-h7168, case: kimi_k2_7_h7168, local_width: 1792}
+
+metric:
+  per_shape: >-
+    mean over the measured calls of the per-chip mean
+    DEVICE KERNEL DURATION [ns] (warmup calls dropped)
+  also_report: per-call max across chips (end-to-end latency, noisier because of chip skew)
+  score: geomean over shapes of baseline_us / attempt_us   # root = 1.0, higher is better
+
+accuracy_gate:             # every shape must pass, else valid=false, score=0
+  pcc_min: 0.99999         # baseline is ~0.9999985
+  max_abs_max: 0.05        # baseline is ~0.022
+
+allowed_paths:             # fnmatch globs, relative to the repo root
+  - ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/*
+
+eval:
+  timeout_s: 900           # whole profiled pytest run; on timeout -> fail_class=hang + device reset
+  baseline_runs: 3
+  min_noise_pct: 1.0
+
+policy_defaults:           # v0 plan; later plans come from policy.plan()
+  W: 4                     # parallel workers per step
+  R: 4                     # max attempts per branch per round
+  beta: 0.6
+  max_steps: 30
+
+dreaming:
+  revisions: 5             # M candidate policies per dreaming phase
+  cost_per_attempt: 0.005  # in score units; ~5 min of the only 4-chip mesh
+  parallel_bonus: 0.01
+  beta_sweep: [0.2, 0.4, 0.6, 0.8, 1.0]
+  max_replay_steps: 100
