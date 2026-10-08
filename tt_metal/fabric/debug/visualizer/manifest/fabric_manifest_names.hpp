@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <variant>
 
@@ -21,18 +22,22 @@
 // The names and keys the fabric manifest writes. Changing one changes the manifest format.
 namespace tt::tt_fabric::manifest {
 
-// The manifest's spelling of an enum value: its enumerator name in lower case, e.g.
-// FabricConfig::FABRIC_2D is "fabric_2d". A value with no enumerator name, such as a bitmask combination, is
-// written as its number.
+// The manifest's spelling of an enumerator in lower case, e.g. FABRIC_2D is "fabric_2d".
+inline std::string lower_name(std::string_view enumerator) {
+    std::string name(enumerator);
+    std::ranges::transform(name, name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return name;
+}
+
+// The manifest's spelling of an enum value: its enumerator's lower_name, e.g. FabricConfig::FABRIC_2D is
+// "fabric_2d". A value with no enumerator name, such as a bitmask combination, is written as its number.
 template <typename E>
 std::string lower_enum_name(E value) {
     const auto enumerator = enchantum::to_string(value);
     if (enumerator.empty()) {
         return std::to_string(static_cast<std::underlying_type_t<E>>(value));
     }
-    std::string name(enumerator);
-    std::ranges::transform(name, name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return name;
+    return lower_name(enumerator);
 }
 
 // The manifest's spelling of a field kind: its content type's name in snake case, e.g. content::L1 is "l1".
@@ -78,6 +83,10 @@ inline std::string router_key(eth_chan_directions direction, routing_plane_id_t 
 // The size in bytes of one of a type's elements.
 inline uint32_t element_size(const layout::Type& type) { return type.count == 0 ? type.size : type.size / type.count; }
 
+// The prefixes of a schema that names a struct in the arch's types or an enum in enums, before the type's name.
+inline constexpr std::string_view k_struct_schema = "struct:";
+inline constexpr std::string_view k_enum_schema = "enum:";
+
 // The manifest's spelling of a type's element, which L1 contents and type layouts both use. An element carries no
 // width, so integers take theirs from the size of one element.
 inline std::string schema_name(const layout::Type& type) {
@@ -90,9 +99,9 @@ inline std::string schema_name(const layout::Type& type) {
             } else if constexpr (std::is_same_v<E, element::Int>) {
                 return fmt::format("i{}", element_size(type) * 8);
             } else if constexpr (std::is_same_v<E, element::Enum>) {
-                return fmt::format("enum:{}", e.name);
+                return fmt::format("{}{}", k_enum_schema, e.name);
             } else if constexpr (std::is_same_v<E, element::Struct>) {
-                return fmt::format("struct:{}", e.name);
+                return fmt::format("{}{}", k_struct_schema, e.name);
             } else if constexpr (std::is_same_v<E, element::Packed>) {
                 return fmt::format("packed:{}", e.table);
             } else if constexpr (std::is_same_v<E, element::Bytes>) {
