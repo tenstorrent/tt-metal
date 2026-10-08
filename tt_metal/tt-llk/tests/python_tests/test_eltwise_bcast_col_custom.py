@@ -41,7 +41,11 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     TemplateParameter,
 )
-from helpers.tile_constants import get_tile_params
+from helpers.tile_constants import (
+    DEFAULT_TILE_C_DIM,
+    DEFAULT_TILE_R_DIM,
+    get_tile_params,
+)
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
@@ -270,8 +274,11 @@ def test_eltwise_bcast_col_custom(
     ), "Assert against golden failed"
 
 
-# Smallest positive bf16 denormal, 2^-133.
+# Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
 BF16_DENORMAL_MIN = 2.0**-133
+BF16_DENORMAL_MANTISSAS = 1 << 7
+# SrcA value on the denormal rows: large enough that a kept denormal gives a visibly nonzero product.
+DENORMAL_ROW_SCALE = 2.0**100
 
 
 def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag():
@@ -286,27 +293,41 @@ def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag():
     mathop = MathOperation.Elwmul
 
     formats = input_output_formats([DataFormat.Float16_b])[0]
-    tile_rows, ct_dim = 32, 2
-    tile_dims = [tile_rows, 32]
-    input_dimensions_A = [tile_rows, ct_dim * 32]
-    input_dimensions_B = [tile_rows, 32]
+    tile_rows, ct_dim = DEFAULT_TILE_R_DIM, 2
+    tile_dims = [tile_rows, DEFAULT_TILE_C_DIM]
+    input_dimensions_A = [tile_rows, ct_dim * DEFAULT_TILE_C_DIM]
+    input_dimensions_B = tile_dims
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
     num_faces = num_faces_r_dim * num_faces_c_dim
     denormal_rows = torch.arange(tile_rows) % 2 == 0
 
     torch.manual_seed(0)
     src_A = torch.randn(input_dimensions_A)
-    src_A[denormal_rows] = 2.0**100
+    src_A[denormal_rows] = DENORMAL_ROW_SCALE
     # One value per row, so the column broadcast reads it whichever column it takes.
     row_values = torch.randn(tile_rows)
     row_values[denormal_rows] = (
-        BF16_DENORMAL_MIN * torch.randint(1, 128, (int(denormal_rows.sum()),)).float()
+        BF16_DENORMAL_MIN
+        * torch.randint(1, BF16_DENORMAL_MANTISSAS, (int(denormal_rows.sum()),)).float()
     )
     src_B = row_values[:, None].expand(input_dimensions_B).clone()
-    flushed_B = torch.where(denormal_rows, 0.0, row_values)[:, None]
-    golden = (src_A * flushed_B).to(torch.bfloat16)
-    src_A = src_A.to(torch.bfloat16).flatten()
-    src_B = src_B.to(torch.bfloat16).flatten()
+    src_A = src_A.to(torch.bfloat16)
+    src_B = src_B.to(torch.bfloat16)
+    # LoFi golden on the bf16 operands; the denormal rows are flushed, so their result is exactly 0.
+    golden = (
+        get_golden_generator(EltwiseBinaryGolden)(
+            mathop,
+            src_A.flatten(),
+            src_B.repeat(1, ct_dim).flatten(),
+            formats.output_format,
+            MathFidelity.LoFi,
+        )
+        .reshape(input_dimensions_A)
+        .clone()
+    )
+    golden[denormal_rows] = 0
+    src_A = src_A.flatten()
+    src_B = src_B.flatten()
 
     def _tilize(t, dims):
         return tilize_block(
