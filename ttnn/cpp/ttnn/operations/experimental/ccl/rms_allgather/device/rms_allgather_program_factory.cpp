@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -517,11 +519,11 @@ ProgramDescriptor build_rms_allgather_program_descriptor(
         tt::DataFormat::RawUInt32,
         static_cast<uint32_t>(packet_header_size_bytes));
 
-    uint32_t updated_residual_index = tt::CBIndex::c_21;
-    uint32_t original_input_index = tt::CBIndex::c_22;
+    uint32_t updated_residual_index = rms_allgather_dynamic::kUpdatedResidualCbIndex;
+    uint32_t original_input_index = rms_allgather_dynamic::kOriginalInputCbIndex;
     // All of these take either residual or input as input, one for pre, one for post
-    uint32_t in0_cb_index = tt::CBIndex::c_12;
-    uint32_t pre_in0_cb_index = tt::CBIndex::c_5;
+    uint32_t in0_cb_index = rms_allgather_dynamic::kIn0CbIndex;
+    uint32_t pre_in0_cb_index = rms_allgather_dynamic::kPreIn0CbIndex;
 
     if (b) {
         // Tensors that do the b fusing
@@ -544,7 +546,7 @@ ProgramDescriptor build_rms_allgather_program_descriptor(
     add_cb(ex_global_CB_size, all_cores, ex_global_cb_index, cb_data_format, single_tile_size);
 
     // out
-    uint32_t output_cb_index = tt::CBIndex::c_10;
+    uint32_t output_cb_index = rms_allgather_dynamic::kOutputCbIndex;
     add_cb(
         out_CB_size,
         all_cores,
@@ -571,7 +573,7 @@ ProgramDescriptor build_rms_allgather_program_descriptor(
     uint32_t x_cb_index = tt::CBIndex::c_15;
     add_cb(x_CB_size, all_cores, x_cb_index, cb_data_format, single_tile_size);
 
-    uint32_t output_reshard_cb_index = tt::CBIndex::c_16;
+    uint32_t output_reshard_cb_index = rms_allgather_dynamic::kOutputReshardCbIndex;
     if (!skip_write_back) {
         add_cb(
             out_reshard_CB_size,
@@ -591,7 +593,7 @@ ProgramDescriptor build_rms_allgather_program_descriptor(
     add_cb(stats_reduced_cb_size, CoreRangeSet(sender_cores), cb_stats_reduced_index, cb_data_format, single_tile_size);
 
     // cb_stats
-    uint32_t cb_stats_index = tt::CBIndex::c_19;
+    uint32_t cb_stats_index = rms_allgather_dynamic::kStatsCbIndex;
     add_cb(stats_cb_size, CoreRangeSet(sender_cores), cb_stats_index, cb_data_format, single_tile_size, stats_buffer);
     uint32_t signaling_cb = tt::CBIndex::c_20;
     add_cb(2, all_cores, signaling_cb, tt::DataFormat::Float16_b, 2);
@@ -1246,30 +1248,85 @@ void RMSAllGatherProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const RMSAllGatherParams& operation_attributes,
     const RMSAllGatherInputs& tensor_args,
-    Tensor& /*tensor_return_value*/,
+    Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     namespace dyn = rms_allgather_dynamic;
 
-    // Bindings already refreshed every tensor address (runtime args and tensor-backed CBs). The semaphore is
-    // excluded from RMSAllGatherDeviceOperation::compute_program_hash, so its address is re-applied here.
+    // The semaphore is excluded from RMSAllGatherDeviceOperation::compute_program_hash, so its address is
+    // re-applied here. Every tensor address is re-applied by role as well: when two tensor arguments share a
+    // buffer (a residual aliasing the input), binding resolution yields no bindings or binds a slot to the wrong
+    // tensor, and the workload path has no rebuild fallback.
+    Buffer* const a_buffer = tensor_args.input.buffer();
+    TT_FATAL(a_buffer != nullptr, "rms_allgather input tensor buffer is null");
+    Buffer* const output_buffer = tensor_return_value.buffer();
+    TT_FATAL(output_buffer != nullptr, "rms_allgather output tensor buffer is null");
+    TT_FATAL(tensor_args.stats.has_value(), "rms_allgather requires a stats tensor");
+    Buffer* const stats_buffer = tensor_args.stats.value().buffer();
+    TT_FATAL(stats_buffer != nullptr, "rms_allgather stats tensor buffer is null");
+    Buffer* b_buffer = nullptr;
+    if (tensor_args.residual_input_tensor.has_value()) {
+        b_buffer = tensor_args.residual_input_tensor.value().buffer();
+        TT_FATAL(b_buffer != nullptr, "rms_allgather residual_input_tensor buffer is null");
+    }
+    uint32_t gamma_address = 0;
+    if (tensor_args.weight.has_value()) {
+        Buffer* const gamma_buffer = tensor_args.weight.value().buffer();
+        TT_FATAL(gamma_buffer != nullptr, "rms_allgather weight (gamma) tensor buffer is null");
+        gamma_address = static_cast<uint32_t>(gamma_buffer->address());
+    }
+
     const auto core_layout = CMAKE_UNIQUE_NAMESPACE::compute_core_layout(
         tensor_args.input.shard_spec().value(), tensor_args.input.device()->compute_with_storage_grid_size());
     const auto semaphore_address = static_cast<uint32_t>(operation_attributes.semaphore.address());
+    const auto stats_address = static_cast<uint32_t>(stats_buffer->address());
 
-    const auto patch_semaphore_arg = [&program, semaphore_address](uint32_t kernel_idx) {
+    const auto patch_writer_args = [&program, semaphore_address, stats_address, gamma_address](uint32_t kernel_idx) {
         auto& args_by_core = tt::tt_metal::GetRuntimeArgs(program, kernel_idx);
         for (auto& args_by_y : args_by_core) {
             for (auto& args : args_by_y) {
-                if (args.size() > dyn::kWriterSemaphoreArg) {
-                    args[dyn::kWriterSemaphoreArg] = semaphore_address;
+                if (args.size() <= dyn::kWriterStatsAddrArg) {
+                    continue;
                 }
+                args[dyn::kWriterSemaphoreArg] = semaphore_address;
+                args[dyn::kWriterStatsAddrArg] = stats_address;
+                // args[0] holds the start of the post arguments.
+                const uint32_t gamma_arg = args[0] + dyn::kWriterPostGammaAddrOffset;
+                TT_ASSERT(gamma_arg < args.size(), "rms_allgather writer gamma arg {} out of range", gamma_arg);
+                args[gamma_arg] = gamma_address;
             }
         }
     };
 
-    patch_semaphore_arg(dyn::kWriterAllToAllKernelIdx);
+    patch_writer_args(dyn::kWriterAllToAllKernelIdx);
     if (core_layout.num_none_all_to_all_workers > 0) {
-        patch_semaphore_arg(dyn::kWriterNotAllToAllKernelIdx);
+        patch_writer_args(dyn::kWriterNotAllToAllKernelIdx);
+    }
+
+    // Each tensor-backed CB carries a single CB index. The input-side CBs follow the residual when it is present.
+    Buffer* const in0_buffer = b_buffer != nullptr ? b_buffer : a_buffer;
+    for (const auto& cb : program.circular_buffers()) {
+        if (!cb->globally_allocated()) {
+            continue;
+        }
+        const auto& indices = cb->buffer_indices();
+        const auto has_index = [&indices](uint32_t cb_index) {
+            return indices.contains(static_cast<uint8_t>(cb_index));
+        };
+        Buffer* target = nullptr;
+        if (has_index(dyn::kOriginalInputCbIndex)) {
+            target = a_buffer;
+        } else if (has_index(dyn::kUpdatedResidualCbIndex)) {
+            target = b_buffer;
+        } else if (has_index(dyn::kIn0CbIndex) || has_index(dyn::kPreIn0CbIndex)) {
+            target = in0_buffer;
+        } else if (has_index(dyn::kOutputCbIndex) || has_index(dyn::kOutputReshardCbIndex)) {
+            target = output_buffer;
+        } else if (has_index(dyn::kStatsCbIndex)) {
+            target = stats_buffer;
+        }
+        if (target != nullptr) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *target);
+        }
     }
 }
 

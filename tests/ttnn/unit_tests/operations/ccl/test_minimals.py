@@ -1107,6 +1107,51 @@ def test_rms_fuse_n300_program_cache(
     )
 
 
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.skipif(is_6u(), reason="This test is for N300 (2-chip WH)")
+@pytest.mark.parametrize(
+    "num_devices, elements_per_batch, input_shard_grid",
+    [(2, 2048, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}))],
+)
+@pytest.mark.parametrize(
+    "output_shard_grid, output_shard_width",
+    [
+        pytest.param(None, 32, id="no_reshard"),
+        pytest.param(ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}), 64, id="reshard"),
+    ],
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 1), id="2x1_grid")], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+def test_rms_fuse_n300_program_cache_aliased_residual(
+    mesh_device,
+    num_devices,
+    elements_per_batch,
+    input_shard_grid,
+    output_shard_grid,
+    output_shard_width,
+    topology,
+):
+    if mesh_device.get_num_devices() != 2:
+        pytest.skip("Not N300 - this test targets 2-chip Wormhole")
+    run_rms_fuse_cache_hit_deepseek(
+        mesh_device,
+        num_devices,
+        elements_per_batch,
+        input_shard_grid,
+        output_shard_grid,
+        output_shard_width,
+        topology,
+        fused_add=True,
+        inplace=False,
+        alias_residual_on_miss=True,
+    )
+
+
 # Enumerate the post-commit cases explicitly
 @skip_for_blackhole("This is a wormhole test")
 @pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")

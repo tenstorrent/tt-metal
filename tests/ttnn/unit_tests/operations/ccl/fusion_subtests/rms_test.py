@@ -1061,6 +1061,7 @@ def run_rms_fuse_cache_hit_deepseek(
     input_dtype=ttnn.bfloat16,
     residual_dtype=ttnn.bfloat16,
     epsilon=1e-05,
+    alias_residual_on_miss=False,
 ):
     """Two fused_rms_minimal calls with the same spec on fresh allocations must share one cached program.
 
@@ -1069,7 +1070,12 @@ def run_rms_fuse_cache_hit_deepseek(
     cache hit) and its own stats tensor (backs a circular buffer and is the all-gather destination). A stale input,
     residual, gamma or output binding shows up as a PCC failure against the second call's own golden; a stale stats
     binding leaves the second stats tensor untouched.
+
+    With alias_residual_on_miss, the first call passes the input tensor as its own residual, so binding resolution
+    sees one buffer in two input roles; the second call still gets distinct fresh tensors. Every tensor address on
+    the hit must then come from the factory's own re-application, not from bindings resolved on the miss.
     """
+    assert fused_add or not alias_residual_on_miss, "alias_residual_on_miss requires fused_add"
     ccl_sub_device_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))})
     worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
     worker_sub_device_id = ttnn.SubDeviceId(0)
@@ -1121,7 +1127,7 @@ def run_rms_fuse_cache_hit_deepseek(
     ag_shape = [1, 1, 32, num_devices]
     stats_sentinel = -7.0
 
-    def make_call():
+    def make_call(alias_residual=False):
         call = {
             "input_torch": torch.randn(input_shape),
             "residual_torch": torch.randn(input_shape),
@@ -1135,18 +1141,22 @@ def run_rms_fuse_cache_hit_deepseek(
             layout=ttnn.TILE_LAYOUT,
             memory_config=input_memory_config,
         )
-        call["residual"] = (
-            ttnn.as_tensor(
-                call["residual_torch"],
-                dtype=residual_dtype,
-                device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device=mesh_device, dims=(3, None), mesh_shape=mesh_shape),
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=input_memory_config,
+        if alias_residual:
+            call["residual_torch"] = call["input_torch"]
+            call["residual"] = call["input"]
+        else:
+            call["residual"] = (
+                ttnn.as_tensor(
+                    call["residual_torch"],
+                    dtype=residual_dtype,
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device=mesh_device, dims=(3, None), mesh_shape=mesh_shape),
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=input_memory_config,
+                )
+                if fused_add
+                else None
             )
-            if fused_add
-            else None
-        )
         call["gamma"] = ttnn.as_tensor(
             call["gamma_torch"].reshape([1, 1, padded_dim // 32, 32]),
             dtype=ttnn.bfloat16,
@@ -1202,7 +1212,7 @@ def run_rms_fuse_cache_hit_deepseek(
 
     try:
         # Every tensor is allocated up front so no helper program runs between the two op dispatches.
-        call_miss = make_call()
+        call_miss = make_call(alias_residual=alias_residual_on_miss)
         call_hit = make_call()
 
         mesh_device.enable_program_cache()
