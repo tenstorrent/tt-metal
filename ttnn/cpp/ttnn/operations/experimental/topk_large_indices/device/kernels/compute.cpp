@@ -74,10 +74,11 @@ inline void _topk_large_indices_mark_neginf_indices_() {
 namespace {
 
 constexpr uint32_t elements_per_tile = TILE_R_DIM * TILE_C_DIM;
-// The fused index stamp carries the chunk id in five bits.
-constexpr uint32_t fused_chunk_id_mask = 31;
 
 using ttnn::operations::experimental::topk_large_indices::program::ComputeBodyMode;
+using ttnn::operations::experimental::topk_large_indices::program::max_fused_chunks;
+
+constexpr uint32_t fused_chunk_id_mask = max_fused_chunks - 1;
 
 template <uint32_t K>
 FORCE_INLINE void copy_chunk(CircularBuffer& input, uint32_t dst, uint32_t active_elements) {
@@ -88,20 +89,6 @@ FORCE_INLINE void copy_chunk(CircularBuffer& input, uint32_t dst, uint32_t activ
     topk_xl_copy_tile_init(input_cb);
     topk_xl_copy_tile<K>(input_cb, dst, 0, active_elements);
     input.pop_front(tiles_per_sequence);
-}
-
-template <uint32_t K>
-FORCE_INLINE void sort_classic_chunk(CircularBuffer& input, uint32_t dst, uint32_t active_elements, bool ascending) {
-    copy_chunk<K>(input, dst, active_elements);
-
-    topk_xl_add_lsb_indices_init();
-    topk_xl_add_lsb_indices<K, 0>(dst);
-    topk_xl_init<K, true>();
-    topk_xl_local_sort<K>(dst, ascending);
-
-    topk_xl_separate_indices_row_major_reinit();
-    topk_xl_separate_indices_row_major<K>(dst);
-    topk_xl_separate_indices_row_major_advance_chunk_base<K>();
 }
 
 // FullInit is compile-time and this helper is force-inlined so the hot loop has
@@ -119,7 +106,7 @@ FORCE_INLINE void sort_fused_chunk(
         MATH((ckernel::sfpu::_topk_large_indices_reinit_fused_after_stamp_()));
     }
     if constexpr (Columns) {
-        topk_xl_local_sort_generic<K, true>(dst, ascending);
+        topk_xl_local_sort_generic<K, true /*early_exit_K64*/>(dst, ascending);
     } else {
         topk_xl_local_sort<K>(dst, ascending);
     }
@@ -160,7 +147,7 @@ template <uint32_t K, bool Columns>
 FORCE_INLINE void reduce_segmented_row(
     CircularBuffer& input, uint32_t first_chunk, uint32_t num_chunks, uint32_t tail_elements, bool final_ascending) {
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
-    constexpr uint32_t segment_capacity = 32;
+    constexpr uint32_t segment_capacity = max_fused_chunks;
     constexpr uint32_t accumulator_slot = 0;
     constexpr uint32_t segment_slot = 2 * tiles_per_sequence;
 
@@ -191,10 +178,11 @@ FORCE_INLINE void reduce_segmented_row(
         if constexpr (Columns) {
             for (uint32_t chunk = segment_first + 1; chunk <= last_chunk; ++chunk) {
                 const uint32_t active_elements = chunk + 1 == end_chunk_total ? tail_elements : K;
-                sort_fused_chunk<K, false, true>(input, chunk_slot, active_elements, true, chunk & fused_chunk_id_mask);
+                sort_fused_chunk<K, false /*FullInit*/, true /*Columns*/>(
+                    input, chunk_slot, active_elements, true /*ascending*/, chunk & fused_chunk_id_mask);
                 topk_xl_merge<K, true>(base);
                 if (chunk != last_chunk) {
-                    topk_xl_rebuild_columns<K>(base, false);
+                    topk_xl_rebuild_columns<K>(base, false /*ascending*/);
                 }
             }
             topk_xl_local_sort<K>(base, mirror_final_survivor);
@@ -375,7 +363,8 @@ void kernel_main() {
         }
     }
     if (num_recv_rounds > 0 || sends_survivor) {
-        // One discarded datacopy resets unpack/math sync, else the next program's first tile on this core is corrupt.
+        // Workaround for #57205 until its root cause is known: without one discarded datacopy here the next
+        // program's first tile on this core is corrupt.
         reconfig_data_format_srca(input_cb);
         copy_init(input_cb);
         tile_regs_acquire();

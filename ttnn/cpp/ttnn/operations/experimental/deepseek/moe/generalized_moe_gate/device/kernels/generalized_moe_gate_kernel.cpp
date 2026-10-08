@@ -25,34 +25,40 @@
 #include "api/dataflow/noc.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "tt-metalium/constants.hpp"
 
 // Gathers one token row of a [.., 256] tile tensor into face 0; one 64 B aligned 576 B read per tile spans both faces.
 template <typename Accessor>
 void gather_token_row(const Accessor& input, uint32_t input_cb, uint32_t token, uint32_t width_tiles) {
-    constexpr uint32_t span = 512 + 64;
+    using namespace tt::constants;
+    constexpr uint32_t face_bytes = FACE_HW * sizeof(uint16_t);
+    constexpr uint32_t face_row_bytes = FACE_WIDTH * sizeof(uint16_t);
+    constexpr uint32_t noc_align = 64;
+    constexpr uint32_t span = face_bytes + noc_align;
     CircularBuffer cb(input_cb);
     cb.reserve_back(1);
     const uint32_t page = cb.get_write_ptr();
     const uint32_t slots_l1 = page + get_tile_size(input_cb);
-    const uint32_t r = token % 32;
-    const uint32_t face_row = (r / 16) * 2 * 512 + (r % 16) * 32;
+    const uint32_t r = token % TILE_HEIGHT;
+    const uint32_t face_row = (r / FACE_HEIGHT) * 2 * face_bytes + (r % FACE_HEIGHT) * face_row_bytes;
     Noc noc;
     for (uint32_t t = 0; t < width_tiles; ++t) {
         noc.async_read(
             input,
             CoreLocalMem<uint32_t>(slots_l1 + t * span),
             span,
-            {.page_id = (token / 32) * width_tiles + t, .offset_bytes = face_row & ~63u},
+            {.page_id = (token / TILE_HEIGHT) * width_tiles + t, .offset_bytes = face_row & ~(noc_align - 1)},
             {});
     }
-    noc.async_write_zeros(cb, 3 * 512, {.offset_bytes = 512});
+    noc.async_write_zeros(cb, 3 * face_bytes, {.offset_bytes = face_bytes});
     noc.async_read_barrier();
     noc.write_zeros_l1_barrier();
     // Eight loads ahead of eight stores, so the loads overlap.
-    volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slots_l1 + (face_row & 63u));
+    volatile tt_l1_ptr uint32_t* src =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slots_l1 + (face_row & (noc_align - 1)));
     volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page);
     for (uint32_t s = 0; s < width_tiles * 2; ++s, dst += 8) {
-        volatile tt_l1_ptr uint32_t* row = src + (s / 2) * (span / 4) + (s % 2) * (512 / 4);
+        volatile tt_l1_ptr uint32_t* row = src + (s / 2) * (span / 4) + (s % 2) * (face_bytes / 4);
         const uint32_t w0 = row[0], w1 = row[1], w2 = row[2], w3 = row[3];
         const uint32_t w4 = row[4], w5 = row[5], w6 = row[6], w7 = row[7];
         dst[0] = w0;

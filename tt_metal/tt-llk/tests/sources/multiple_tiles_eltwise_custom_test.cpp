@@ -67,7 +67,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
         _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE>(params.num_faces);
 #ifdef ARCH_BLACKHOLE
-        _llk_math_bcast_cols_reuse_custom_<ELTWISE_BINARY_OP>(params.NUM_TILES_IN_BLOCK, tensor_shape);
+        _llk_math_bcast_cols_reuse_custom_<ELTWISE_BINARY_OP, MATH_FIDELITY>(params.NUM_TILES_IN_BLOCK, tensor_shape);
 #else
         _llk_math_sub_bcast_cols_reuse_custom_(params.NUM_TILES_IN_BLOCK, tensor_shape);
 #endif

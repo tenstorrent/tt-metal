@@ -772,7 +772,9 @@ TEST_F(ReductionSmoke, TopkMultiCoreRows64) {
 // - Among all valid power-of-two splits, the function selects the one that
 //   minimizes the makespan score kLocalCostFactor * Wt_local +
 //   kFinalCostFactor * Wt_final (constants defined next to the sweep in
-//   topk_utils.cpp, fitted to silicon measurements). Warning to future
+//   topk_utils.cpp, fitted to silicon measurements); with tree_merge the score is
+//   kLocalCostFactor * Wt_local + kTreeRoundCostFactor * log2(num_cores) +
+//   kFinalCostFactor * Kt, and only splits wider than k qualify. Warning to future
 //   editors: a greedy first-valid / max-cores pick is NOT equivalent -- it
 //   maximizes the serial final-stage gather and measures slower on silicon,
 //   so don't simplify the sweep back to that.
@@ -794,7 +796,7 @@ TEST_F(ReductionSmoke, TopkMultiCoreRows64) {
 // BH L1; e.g. a 13x10 compute grid on that box -- p150a worker grids vary
 // per unit with harvesting, 12x10 on others, which is why production code
 // queries the grid instead of assuming one). If kLocalCostFactor /
-// kFinalCostFactor or the sweep order changes, these assertions catch it
+// kFinalCostFactor / kTreeRoundCostFactor or the sweep order changes, these assertions catch it
 // even though every numerical topk test stays green.
 TEST(TopkCoreConfigModel, SelectsFittedMakespanMinimum) {
     constexpr uint32_t l1_size = 1536 * 1024;                                       // BH L1 per core

@@ -18,8 +18,8 @@ void kernel_main() {
     constexpr std::uint32_t noc_end_x = get_compile_time_arg_val(4);        // Ending X coordinate of core range
     constexpr std::uint32_t noc_end_y = get_compile_time_arg_val(5);        // Ending Y coordinate of core range
     constexpr std::uint32_t Ht = get_compile_time_arg_val(6);               // Height tiles to process
-    constexpr std::uint32_t Wt_final = get_compile_time_arg_val(7);         // Total width tiles from all cores
-    constexpr std::uint32_t num_dests = get_compile_time_arg_val(8);        // Number of sending cores
+    constexpr std::uint32_t Wt_final = get_compile_time_arg_val(7);         // Width tiles landing here
+    constexpr std::uint32_t num_dests = get_compile_time_arg_val(8);        // Local cores the ready signal reaches
     constexpr std::uint32_t final_values_dfb_index = get_compile_time_arg_val(9);    // Aggregated TopK values
     constexpr std::uint32_t final_indices_dfb_index = get_compile_time_arg_val(10);  // Aggregated TopK indices
 
