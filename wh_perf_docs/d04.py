@@ -3,13 +3,10 @@ from common import *
 FX = "{{FX}}"
 
 D = dict(
-    id="WH-04",
-    short="Idle Threads",
+    id="WH-04", short="Idle Threads",
     summary="In an isolate run type only one thread does work, but the other two still run their exit code while it is measured. Right after the barrier their instruction caches are empty, so they read every code line from L1, and those reads push the packers into the slow rhythm (WH-01). A 4-byte move of the unpack or math code changes PACK_ISOLATE by up to 28.6%.",
-    status="Open in #58068 · fix tested",
-    status_cls="st-open",
-    depends=["WH-01", "WH-02", "WH-03"],
-    used_by=[],
+    status="Open in #58068 · fix tested", status_cls="st-open",
+    depends=["WH-01", "WH-02", "WH-03"], used_by=[],
     problem="no-work change",
     what="""<ul>
 <li>At #58068 head, 4 never-executed bytes in front of every function move 75 of 1,346 TILE_LOOP values by more than 2%, up to 28.6%: 48 PACK_ISOLATE, 2 MATH_ISOLATE, the rest L1_TO_L1 and L1_CONGESTION.</li>
@@ -56,7 +53,7 @@ D = dict(
 <li>UNPACK_ISOLATE and MATH_ISOLATE: only 2 values moved, so pack as the idle thread is not a problem in this set; not proven for every module.</li></ul>""",
     repro="""<ul><li>Branch <code>nstojictt/p58-versim</code>: <code>LLK_FN_NOPS_THREADS=UNPACK,MATH LLK_THREAD_FN_NOPS=1</code>; fix: <code>LLK_ISO_SETTLE=2000</code>; Versim: <code>LLK_SIM_BARRIER=1 LLK_SIM_TIMEOUT=14400</code>.</li>
 <li>Test: <code>perf_math_matmul.py::test_perf_math_matmul[MathFidelity.HiFi2-matmul_config12601-5-1]</code>, <code>LLK_PERF_RUN_TYPES=PACK_ISOLATE</code>.</li>
-<li>Waveforms: <code>pf0|pf1.full.vcd.zst</code>.</li></ul>""",
+<li>Waveforms: <code>pf0|pf1.full.vcd.zst</code> (no fix), <code>fx0|fx1.full.vcd.zst</code> (with the settle).</li></ul>""",
     refs=f"""<ul class="refs"><li>Code: {code("tt_metal/tt-llk/tests/helpers/include/counters.h", 549)}, {code("tt_metal/tt-llk/tests/helpers/include/counters.h", 612)}, {code("tt_metal/tt-llk/tests/sources/math_matmul_test.cpp", 85)}, {code("tt_metal/tt-llk/tests/helpers/src/trisc.cpp", 116)}, {code("tt_metal/tt-llk/tests/helpers/src/brisc.cpp", 165)}.</li>
 <li>ISA docs: {isa("TensixTile/BabyRISCV/InstructionCache.md", "Instruction cache")}, {isa("TensixTile/L1.md", "L1")}.</li></ul>""",
 )

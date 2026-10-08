@@ -1,0 +1,7 @@
+<h3>The fix in Versim</h3>
+<p>Same config with the settle switch (<code>LLK_ISO_SETTLE=2000</code>), 0 and +4 bytes per function in unpack and math:</p>
+<div class="tw"><table><tr><th>Versim</th><th class="n">0 bytes</th><th class="n">+4 bytes</th></tr>
+<tr><td>Without the fix (cycles)</td><td class="n">71,873</td><td class="n">92,263</td></tr>
+<tr><td>With the fix (cycles)</td><td class="n">71,791</td><td class="n">71,791</td></tr>
+<tr><td>Code-line reads by unpack and math within 3,000 cycles of the first DEST read, with the fix</td><td class="n">0</td><td class="n">0</td></tr></table></div>
+<p>With the settle, the idle threads finish their exit code more than 3,000 cycles before the packers start, so none of their L1 reads land in the pack window, and both builds give the card's value (71,791).</p>
