@@ -1,0 +1,49 @@
+name: "Upsert PR comment"
+description: >-
+  Post a report file as one pull request comment, and edit that comment in place on
+  later runs, so a series of pushes leaves one report rather than one per run. The
+  comment is found by a marker string among comments a bot wrote: a person quoting the
+  marker in a reply is never overwritten.
+
+inputs:
+  marker:
+    description: "An HTML comment that identifies this report, e.g. <!-- my-report -->"
+    required: true
+  body-file:
+    description: "Path to the markdown to post. A missing file is a warning, not an error."
+    required: true
+  pr-number:
+    description: "The pull request to comment on. Defaults to the event's own."
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Post or update the comment
+      uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+      env:
+        MARKER: ${{ inputs.marker }}
+        BODY_FILE: ${{ inputs.body-file }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+      with:
+        script: |
+          const fs = require('fs');
+          const { MARKER: marker, BODY_FILE: file } = process.env;
+          if (!fs.existsSync(file)) {
+            core.warning(`${file} does not exist; nothing to post.`);
+            return;
+          }
+          const body = `${marker}\n${fs.readFileSync(file, 'utf8')}`;
+          const { owner, repo } = context.repo;
+          const issue_number = Number(process.env.PR_NUMBER) || context.issue.number;
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            owner, repo, issue_number, per_page: 100,
+          });
+          const mine = comments.find(
+            (c) => c.user?.type === 'Bot' && c.body?.includes(marker));
+          if (mine) {
+            await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+          } else {
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
+          }

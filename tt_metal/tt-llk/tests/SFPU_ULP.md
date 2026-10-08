@@ -252,7 +252,8 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py -q
 
 Two ways, and they mean different things:
 
-- **No row in the table** — the op resolves to today's tolerance and the sweep skips it.
+- **No row in the table** — the op resolves to today's tolerance and the sweep does not
+  collect it.
   Fine as an interim state; from #57520, `test_every_unary_op_is_enrolled_or_excused`
   fails until you pick one of these two deliberately.
 - **`sfpu_domains._UNARY_OPS_NOT_SWEPT`** — the op cannot be swept at all. Say why in a
@@ -274,14 +275,24 @@ does not fail on them, because such a block is hand-maintained by design.
 - **Any host pytest run in `tests/` wipes `/tmp/tt-llk-build`.** Chain
   `--compile-producer` and `--compile-consumer` in one go; if you run a host suite in
   between, recompile.
-- **The sweep is marked `accuracy`**, which every LLK workflow deselects. Run it by name
-  or by `-m accuracy`. `nightly` would *not* have kept it out of `llk-e2e`.
+- **The sweep is marked `accuracy`**, which `llk-e2e` and the other marker-selected LLK
+  workflows deselect; `llk-sfpu-accuracy.yaml` runs it by path. Run it by name or by
+  `-m accuracy`. `nightly` would *not* have kept it out of `llk-e2e`.
 - **Both runs take the same op set**: every unary op with a key line in the table,
   whatever its rows say. The key line is the enrolment, so an op on tolerance everywhere
   is measured on every run and held to the figures its rows record by the headroom
   report, and an op with no block is not swept at all (step 2 adds the block first).
   `--ulp-emit` changes what is written, not what is collected, so the producer and the
   consumer build the same set with or without it.
+- **A plain gate run does not judge tolerance cells.** It fails a gated cell over its
+  budget and *skips* a tolerance cell, with the measured maximum in the skip reason. To
+  hold those cells to the figures their rows record, as the nightly does:
+
+  ```bash
+  CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py -n auto --ulp-measure=ulp.jsonl
+  python3 helpers/ulp_budget_diff.py headroom \
+    --table helpers/sfpu_accuracy_budget.yaml --measured ulp.jsonl
+  ```
 - **`CHIP_ARCH` must be set**, and `--ulp-emit` refuses to run on anything but
   Wormhole, because `_render` does not emit `arch` and the rows would be badged wrongly.
 

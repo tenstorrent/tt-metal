@@ -11,10 +11,18 @@ them: it cannot see a tail the sample never reaches.
 One device run per variant covers the whole format: 65,279 finite bfloat16 values or
 63,487 float16 ones, in 64 tiles. ``Bfp8_b`` is swept in bfloat16 and packed on the way
 in; a ``Float32`` input has 2**32 values, so it is walked with a stride instead.
-Marked ``accuracy``, which every LLK workflow deselects, so it runs only by name or with
-``-m accuracy``. Run it as a gate::
+Marked ``accuracy``, which llk-e2e and the other marker-selected LLK workflows deselect;
+llk-sfpu-accuracy.yaml runs it by path. Run it as a gate::
 
     pytest test_unary_sfpu_ulp.py
+
+which fails a gated cell over its budget and skips a tolerance cell with its measured
+maximum in the reason. To hold the tolerance cells to the figures their rows record, as
+the nightly does, measure and compare::
+
+    pytest test_unary_sfpu_ulp.py --ulp-measure=ulp.jsonl
+    python3 helpers/ulp_budget_diff.py headroom \\
+        --table helpers/sfpu_accuracy_budget.yaml --measured ulp.jsonl
 
 or re-measure and fold the results back into helpers/sfpu_accuracy_budget.yaml::
 
@@ -76,8 +84,9 @@ from helpers.ulp_sweep import (
 )
 from helpers.utils import _record_ulp_measurement, passed_test
 
-#: `accuracy` is the marker every LLK workflow deselects; `nightly` would not do, since
-#: llk-e2e runs it.
+#: `accuracy` is the marker llk-e2e and the other marker-selected LLK workflows deselect;
+#: `nightly` would not do, since llk-e2e runs it. llk-sfpu-accuracy.yaml runs this file
+#: by path.
 pytestmark = [
     pytest.mark.accuracy,
     # Every unkeyed budget is a Wormhole measurement and binds nowhere else
@@ -209,8 +218,9 @@ def _sweep_ops():
 )
 @pytest.mark.parametrize("mathop", _sweep_ops(), ids=lambda op: op.name)
 def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
-    """Every non-special value of a 16-bit input format, or a stride of Float32, against
-    the op's declared budget."""
+    """Every non-special value of a 16-bit input format, or a stride of Float32. A gated
+    cell is held to its step budget here; a tolerance cell is measured and recorded, and
+    the headroom report holds it to the figure its row records."""
     formats = InputOutputFormat(in_fmt, out_fmt)
     cell = (
         f"{mathop.name} {in_fmt.name}->{out_fmt.name} approx={approx_mode.name} "
@@ -275,15 +285,19 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     # bit-exact. A gated cell fails, since an unmeasurable budget is a gate not running.
     # An emit run records the reason as the cell's verdict, so the op's grid stays
     # whole; a tolerance cell skips, having no budget to hold.
-    if lanes == 0:
-        reason = "no lane a step count can describe"
-        unmeasurable = reason
-    elif overflowed.any():
+    # The overflow first: it is the reason that carries the lane count the headroom
+    # report reads back, and a cell whose every judged lane went non-finite also has
+    # `lanes == 0`. Written the other way round, its row recorded no count, so the
+    # report flagged the cell every night and a re-emit could not clear it.
+    if overflowed.any():
         reason = nonfinite_reason(overflowed, src, golden, result, stats, lanes)
         unmeasurable = (
             f"{reason}. No budget buys an overflow, and a step count cannot describe "
             "one."
         )
+    elif lanes == 0:
+        reason = "no lane a step count can describe"
+        unmeasurable = reason
     else:
         unmeasurable = None
     if unmeasurable:
@@ -309,7 +323,15 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         _record_ulp_measurement(distance, mask=mask)
         if ulp_sweep.EMIT:
             ulp_sweep.record(mathop.name, key, int(stats["max"]))
-        return
+            return
+        # A skip, not a pass: nothing here judged the cell. Without --ulp-measure there
+        # is no record for the headroom report either, and a regression would show green.
+        pytest.skip(
+            f"{cell}: on the tolerance metric, so not gated here; measured max "
+            f"{int(stats['max'])} ULP over {lanes} lanes. The headroom report "
+            "(ulp_budget_diff.py headroom over --ulp-measure) holds it to its row's "
+            "recorded figure."
+        )
 
     # The contract's own verdict rather than `stats["max"]`, so a `near_zero_atol` floor
     # (Erfinv Float16_b->Float16_b reads 14704 steps raw, and 2 with it) is honoured.
