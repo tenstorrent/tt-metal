@@ -215,6 +215,15 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       platform: "Ubuntu 22.04"
       tracy: true
+      # No Debian packages from this build. `publish-package` defaults to true, and
+      # create-and-upload-draft-release downloads `pattern: packages-*` with
+      # `merge-multiple: true` -- while CPack encodes neither tracy nor distro in the
+      # .deb filename (DEB-DEFAULT, and the version suffix only fires for non-Release
+      # builds). A profiler .deb would therefore land in debian-packages/ under the
+      # same name as the plain one and could become the released artifact. Nothing
+      # consumes this build's packages: tt-blaze downloads `packages-*`
+      # opportunistically but never installs them.
+      publish-package: false
       # Manylinux, NOT build-inplace-wheel. External repos consume this wheel
       # interchangeably with the released non-profiler one, and the in-place wheel is
       # repaired against Ubuntu 22.04 glibc (manylinux_2_35, "in-family only" per
