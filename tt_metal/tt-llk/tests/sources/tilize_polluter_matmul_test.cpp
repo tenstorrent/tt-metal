@@ -21,8 +21,9 @@
 // `tilize(MatmulGolden(A, B))`.
 //
 // NOTE: run-0 tilize reads `buffer_A[0]` (which holds the tilized matmul operand)
-// as raw row-major input; its packed output goes to a scratch buffer and is
-// discarded. Only the run-1 matmul result is validated.
+// as raw row-major input; the 4-face polluter (two tiles wide) also reads on into
+// `buffer_B[0]`. Its packed output goes to a scratch buffer and is discarded. Only
+// the run-1 matmul result is validated.
 
 #include <algorithm>
 #include <cstdint>
@@ -59,8 +60,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t mm_num_faces = 4; // regular matmul operands
 
     // ---- Run 0: tilize "polluter" (output discarded) ----
+    // Polluter width in tiles, from the Python test (POLLUTER_CT_DIM explains why it is two tiles wide).
+    constexpr std::uint32_t pol_ct_dim   = POLLUTER_CT_DIM;
     int run                              = 0;
-    const std::uint32_t pol_block_ct_dim = _llk_unpack_tilize_block_ct_dim_wrapper_(1);
+    const std::uint32_t pol_block_ct_dim = _llk_unpack_tilize_block_ct_dim_wrapper_(pol_ct_dim);
     const std::uint32_t pol_tilize_nf    = pol_num_faces;
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -73,7 +76,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         pol_num_faces,
         pol_num_faces);
     _llk_unpack_tilize_init_wrapper_(
-        formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, 1 /* ct_dim */, pol_face_r_dim, false /* narrow_tile */, pol_tilize_nf);
+        formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, pol_ct_dim, pol_face_r_dim, false /* narrow_tile */, pol_tilize_nf);
     _llk_unpack_tilize_wrapper_(
         L1_ADDRESS(params.buffer_A[0]),
         0 /* tile_index */,
