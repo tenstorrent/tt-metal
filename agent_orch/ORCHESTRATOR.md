@@ -69,7 +69,7 @@ git -C $L add -A && git -C $L commit -m "[dream:<c>] r<tt> step <k>"
 # end
 write $L/rounds/r<tt>/summary.md, copy history.md to $L/snapshots/history_r<tt>.md, commit the ledger
 publish tree.html, report to the human (§5)
-ask the human before dreaming and before the next round (unless they gave a multi-round budget)
+go straight on to dreaming (§7) and the next round; don't wait for approval between rounds
 ```
 
 `policy_step.py` builds the policy's view from git (the `dream/<c>/n/r<tt>-*`
@@ -217,7 +217,7 @@ ends (§7).
 
 ## 7. Dreaming between rounds
 
-When a round is done and the human agrees:
+When a round is done, without waiting for approval:
 
 1. Spawn one subagent with `POLICY_DEV.md` and these inputs: `CAMPAIGN`,
    `LEDGER=$DREAM_HOME/<c>/ledger`, current version `v<N>`, rounds available
@@ -238,3 +238,7 @@ When a round is done and the human agrees:
 - Never push. Never move `dream/*/n/*` tags. Never rewrite a worker's commit.
 - Never run `pkill`/`kill`/`killall` on processes you didn't start, and never
   reset the device yourself. The eval tool does that.
+- Once the human has said to run the campaign, keep it running (steps, rounds,
+  dreaming) and report progress. Stop only for real blockers: broken
+  infrastructure, baseline drift, cost far above expectations, or a change to
+  the campaign's rules (e.g. widening `allowed_paths`).
