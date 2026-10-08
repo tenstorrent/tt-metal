@@ -213,10 +213,10 @@ std::optional<std::vector<std::uint16_t>> pack_mcast_reverse_tree(const McastRev
             switch (edge.parent_output) {
                 case RoutingDirection::E: output_code = Routing2DCodec::X2_EAST; break;
                 case RoutingDirection::W: output_code = Routing2DCodec::X2_WEST; break;
+                case RoutingDirection::Z: output_code = Routing2DCodec::X2_Z; break;
                 default:
                     return fail(fmt::format(
-                        "edge into row {} leaves its parent {}, which the X axis cannot encode -- X carries no express "
-                        "dimension",
+                        "edge into row {} leaves its parent {}, which the X axis cannot encode",
                         edge.child,
                         dir_name(edge.parent_output)));
             }

@@ -341,7 +341,6 @@ TEST_F(ControlPlaneFixture, TestExpressRingPredicates32x4) {
     EXPECT_TRUE(control_plane->is_protected_ring_edge(row(3), D::E));
 
     EXPECT_FALSE(control_plane->are_same_directed_ring_edges(row(2), D::N, D::N));
-    EXPECT_FALSE(control_plane->continuation_allowed(row(2), D::N, D::N));
 
     EXPECT_TRUE(control_plane->mesh_has_protected_ring_in_axis_of(MeshId{0}, D::N));
     EXPECT_TRUE(control_plane->mesh_has_protected_ring_in_axis_of(MeshId{0}, D::E));

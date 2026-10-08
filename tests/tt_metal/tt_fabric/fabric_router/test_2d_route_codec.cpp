@@ -144,15 +144,16 @@ TEST(Routing2DCodec, PackRejectsOffAxisActions) {
     EXPECT_FALSE(pack_2d_route_vectors(table.data(), table.size(), 8, 4, dor_y, north_on_x));
 }
 
-// Z is legal on the Y axis (an express chord jumps along rows) and never on X.
-TEST(Routing2DCodec, ZIsAYAxisActionOnly) {
+// Z is legal on whichever axis carries the express chords: Y2_Z on the Y leg, X2_Z on the X leg.
+TEST(Routing2DCodec, ZPacksOnEitherAxis) {
     std::vector<std::uint8_t> table(Codec::ACTION_VECTOR_CAPACITY_BYTES, 0);
-    auto z_on_y = [](uint32_t cur, uint32_t dst) {
-        return cur == dst ? eth_chan_directions::NORTH : eth_chan_directions::Z;
-    };
-    auto z_on_x = [](uint32_t, uint32_t) { return eth_chan_directions::Z; };
-    EXPECT_TRUE(pack_2d_route_vectors(table.data(), table.size(), 8, 4, z_on_y, dor_x));
-    EXPECT_FALSE(pack_2d_route_vectors(table.data(), table.size(), 8, 4, dor_y, z_on_x));
+    auto z_on_any = [](uint32_t, uint32_t) { return eth_chan_directions::Z; };
+
+    ASSERT_TRUE(pack_2d_route_vectors(table.data(), table.size(), 8, 4, z_on_any, dor_x));
+    EXPECT_EQ(Codec::get_action_2bit(Codec::y_row(table.data(), 8, /*dst_y=*/5), /*cur=*/0), Codec::Y2_Z);
+
+    ASSERT_TRUE(pack_2d_route_vectors(table.data(), table.size(), 8, 4, dor_y, z_on_any));
+    EXPECT_EQ(Codec::get_action_2bit(Codec::x_row(table.data(), 8, 4, /*dst_x=*/3), /*cur=*/0), Codec::X2_Z);
 }
 
 TEST(Routing2DCodec, WidenMapsEveryTwoBitCode) {
@@ -162,8 +163,8 @@ TEST(Routing2DCodec, WidenMapsEveryTwoBitCode) {
     EXPECT_EQ(Codec::widen_y(Codec::Y2_STOP), 0);
     EXPECT_EQ(Codec::widen_x(Codec::X2_EAST), Codec::ACTION_EAST);
     EXPECT_EQ(Codec::widen_x(Codec::X2_WEST), Codec::ACTION_WEST);
+    EXPECT_EQ(Codec::widen_x(Codec::X2_Z), Codec::ACTION_Z);
     EXPECT_EQ(Codec::widen_x(Codec::X2_STOP), 0);
-    EXPECT_EQ(Codec::widen_x(Codec::X2_INVALID), 0);
 }
 
 // ---------------------------------------------------------------------------------------------
