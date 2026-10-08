@@ -63,7 +63,8 @@ TOKEN_DISPATCH_ENV = "TT_LAGUNA_MOE_TOKEN_DISPATCH"
 FOLD_GATE_QKV_ENV = "TT_LAGUNA_FOLD_GATE_QKV"  # 0 = separate 1-core g_proj matmul in decode
 ROPE_PERMUTE_ENV = "TT_LAGUNA_ROPE_PERMUTE"  # 0 = partial RoPE via rot/pass slices + concat
 MOE_PREFILL_TILE_SPARSE_ENV = "TT_LAGUNA_MOE_PREFILL_TILE_SPARSE"
-TOKEN_DISPATCH_BUCKETS = frozenset({1024, 2048, 4096, 8192})
+# XS p150x2's power-of-two buckets plus S's finer prefill ladder (generator_vllm._PREFILL_FINE_BUCKETS)
+TOKEN_DISPATCH_BUCKETS = frozenset({1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192})
 TOKEN_DISPATCH_MOE_LAYERS = frozenset(range(1, 48))  # XS routes layers 1-39, S layers 1-47
 # (mesh devices, global experts, local experts, hidden, moe intermediate, top-k) the dispatch path was measured on:
 # Laguna-XS-2.1 on p150x2 and Laguna-S-2.1 on p150x4.

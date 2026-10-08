@@ -128,10 +128,10 @@ def test_moe_experimental_flags_are_strict_and_default_off(monkeypatch, env_name
 
 
 def test_token_dispatch_supported_bucket_and_layer_matrix():
-    assert TOKEN_DISPATCH_BUCKETS == {1024, 2048, 4096, 8192}
+    assert TOKEN_DISPATCH_BUCKETS == {1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192}
     assert TOKEN_DISPATCH_MOE_LAYERS == set(range(1, 48))
     for layer_idx in range(48):
-        for seq_len in (32, 64, 128, 256, 512, 1024, 2048, 4096, 8192):
+        for seq_len in (32, 64, 128, 256, 512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192):
             eligible, _ = _token_dispatch_eligibility(
                 **_qualified_dispatch_kwargs(
                     layer_idx=layer_idx,

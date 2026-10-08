@@ -19,6 +19,7 @@ class _Stub:
     _STREAMING_PREFILL_TOPOLOGIES = gv.LagunaForCausalLM._STREAMING_PREFILL_TOPOLOGIES
     _streaming_prefill_active = gv.LagunaForCausalLM._streaming_prefill_active
     _prefill_bucket_lens = gv.LagunaForCausalLM._prefill_bucket_lens
+    _fine_prefill_buckets = gv.LagunaForCausalLM._fine_prefill_buckets
     _bucket_len = gv.LagunaForCausalLM._bucket_len
     _prefill_stream_outer_chunk = gv.LagunaForCausalLM._prefill_stream_outer_chunk
     _prefill_plan_for_range = gv.LagunaForCausalLM._prefill_plan_for_range
@@ -193,3 +194,29 @@ def test_warm_cap_override_is_bounded_and_warns(monkeypatch, capsys, expect_erro
     assert "WARNING" in out and "rejected before device execution" in out
     with expect_error(ValueError, "largest bucket 4096 must equal outer chunk 8192"):
         stub._prefill_plan_for_range(8192, 0, 64)
+
+
+def test_s_d4_fine_ladder_and_own_bucket_tails(monkeypatch):
+    """Laguna-S on D4: buckets every 1024 above 2048 (plus 1536), streamed tails keep their own bucket."""
+    stub = _Stub(1048576)
+    stub.D = 4
+    stub._STREAMING_PREFILL_TOPOLOGIES = (2, 4)
+    stub._PREFILL_FINE_BUCKETS = True
+    lens = stub._prefill_bucket_lens()
+    assert lens == [32, 64, 128, 256, 512, 1024, 1536, 2048, 3072, 4096, 5120, 6144, 7168, 8192]
+    # 4138 real tokens (the perf demo's "4K" prompt after the chat template) compute 5120 rows, not 8192
+    assert [(c.real_len, c.bucket_len) for c in stub._prefill_plan_for_range(4138, 0, 64)] == [(4138, 5120)]
+    # 8234 tokens: one outer chunk + a 42-token tail in the 64 bucket (was two 8192 chunks)
+    assert [(c.real_len, c.bucket_len) for c in stub._prefill_plan_for_range(8234, 0, 64)] == [(8192, 8192), (42, 64)]
+    # a scheduler continuation at a nonzero start also keeps its own bucket
+    assert [(c.real_len, c.bucket_len) for c in stub._prefill_plan_for_range(808, 8192, 64)] == [(808, 1024)]
+    # with prefix caching the canonical 8192 geometry returns
+    stub._PREFIX_CACHE_ENABLED = True
+    assert [(c.real_len, c.bucket_len) for c in stub._prefill_plan_for_range(808, 8192, 64)] == [(808, 8192)]
+
+
+def test_fine_ladder_is_d4_only():
+    stub = _Stub(131072)
+    stub._PREFILL_FINE_BUCKETS = True  # D2 keeps the power-of-two ladder and the canonical tail
+    assert stub._prefill_bucket_lens() == [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
+    assert stub._prefill_plan_for_range(65, 2048, 64)[0].bucket_len == 8192

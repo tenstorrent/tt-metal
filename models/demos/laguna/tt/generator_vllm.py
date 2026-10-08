@@ -157,6 +157,14 @@ class LagunaForCausalLM:
     # XS keeps its qualified monolithic D4 prefill.
     _STREAMING_PREFILL_TOPOLOGIES = (2, 4) if MODEL_ID == "poolside/Laguna-S-2.1" else (2,)
     _PREFILL_STREAM_OUTER_CHUNK = 8192
+    # Laguna-S: finer prefill buckets above 1024 tokens (1536, then every 1024 to the outer chunk) instead of
+    # doubling, and a streamed tail padded only to its own bucket unless prefix caching needs the canonical
+    # 8192 geometry. A 4138-token prompt then computes 5120 rows instead of 8192; an 8234-token prompt 8192 + 64
+    # instead of 2 x 8192. Every bucket is also warmed at a nonzero start (streamed tails). XS keeps the
+    # power-of-two ladder and the canonical tail its prefix-cache qualification relies on.
+    _PREFILL_FINE_BUCKETS = os.environ.get(
+        "TT_LAGUNA_PREFILL_FINE_BUCKETS", "1" if MODEL_ID == "poolside/Laguna-S-2.1" else "0"
+    ) == "1"
     # vLLM 0.24 groups Laguna as four 10-layer block-table groups and aliases
     # equal slots onto ten physical K/V tensor pairs.  The feature remains
     # opt-in until its cache-off hardware gate completes.
@@ -1294,6 +1302,11 @@ class LagunaForCausalLM:
     #       the one-hot in and runs a pre-compiled matmul — no alloc/compile under the resident decode
     #       trace. Sampling likewise reuses persistent B=1 buffers (copy-in, no alloc).
 
+    def _fine_prefill_buckets(self):
+        """Finer prefill ladder + per-bucket streamed tails: Laguna-S on the 4-device mesh only (D2 keeps the
+        canonical-tail geometry its prefix-cache qualification relies on)."""
+        return bool(getattr(self, "_PREFILL_FINE_BUCKETS", False)) and int(getattr(self, "D", 0)) == 4
+
     def _prefill_bucket_lens(self):
         """Finite compute shapes warmed before the resident decode trace.
 
@@ -1333,9 +1346,12 @@ class LagunaForCausalLM:
                 )
                 type(self)._warned_warm_cap = True
         buckets, b = [], 32  # floor 32 (one tile) to match small cached-suffix prefills
-        while b < cap:
+        fine = self._fine_prefill_buckets()
+        while b < cap and not (fine and b > 1024):
             buckets.append(b)
             b *= 2
+        if fine:  # above 1024: 1536, then every 1024 (worst-case padding 1.5x at 1025 / 2049, else <= 1.25x)
+            buckets += [L for L in [1536] + list(range(2048, cap, 1024)) if L < cap]
         buckets.append(cap)
         return sorted(set(x for x in buckets if x >= 1))
 
@@ -1395,7 +1411,9 @@ class LagunaForCausalLM:
             # the established monolithic kernel family's tail reduction while
             # still removing the 32768 power-of-two cliff (16400 real rows
             # compute 24576 rows).
-            canonical_tail=int(self.D) in self._STREAMING_PREFILL_TOPOLOGIES and (start > 0 or length > outer),
+            canonical_tail=int(self.D) in self._STREAMING_PREFILL_TOPOLOGIES
+            and (start > 0 or length > outer)
+            and (bool(self._PREFIX_CACHE_ENABLED) or not self._fine_prefill_buckets()),
         )
         # Prefix hits additionally enforce scheduler alignment.  Their compute
         # plan is already canonical under the D2 long-stream rule above; retain
@@ -1604,6 +1622,9 @@ class LagunaForCausalLM:
         max_tail = min(outer, max(0, int(self.max_model_len) - outer))
         if max_tail <= 0:
             return ()
+        if self._fine_prefill_buckets() and not bool(self._PREFIX_CACHE_ENABLED):
+            # tails keep their own bucket: warm every bucket once at a nonzero absolute start
+            return tuple((L, outer + L) for L in self._prefill_bucket_lens() if L <= max_tail)
         return ((outer, outer + max_tail),)
 
     def _prefill_state(self, block_size=None):
@@ -3373,7 +3394,10 @@ class LagunaForCausalLM:
         # start=block-size probes.
         if self._streaming_prefill_active():
             start_gt_zero_cases = self._prefill_stream_warm_cases(bs)
-            warm_ranges = [(0, end, bucket) for bucket, end in start_gt_zero_cases]
+            # Fine-bucket tails: run only the tail itself at its nonzero start (the outer chunk before it is
+            # already warm); the canonical case runs the whole two-chunk prompt from 0.
+            fine_tails = self._fine_prefill_buckets() and not bool(self._PREFIX_CACHE_ENABLED)
+            warm_ranges = [((end - bucket) if fine_tails else 0, end, bucket) for bucket, end in start_gt_zero_cases]
         else:
             single_shot = (
                 [L for L in self._prefill_bucket_lens() if L <= int(self.model.layers[0].PIPE_CHUNK)]
