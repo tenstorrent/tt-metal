@@ -79,7 +79,7 @@ class POLLUTER_CT_DIM(TemplateParameter):
     """Width of the run-0 tilize polluter in tiles.
 
     Two tiles, so the leaked tilize row pitch differs from one tile row; with one tile the
-    Blackhole matmul read is unaffected and the negative control cannot fail. The 4-face
+    leak cannot corrupt the Blackhole matmul, so the negative control cannot detect it. The 4-face
     polluter then reads past buffer_A[0] into buffer_B[0] (reads only; output discarded).
     """
 
@@ -230,9 +230,8 @@ def test_tilize_polluter_matmul(
         ), "restore (uninit + reconfig) failed: matmul diverged from golden"
     else:
         # Negative control: run-1 performs NO hw_configure and relies entirely on the
-        # restore that we skipped here, so the polluter tilize state (tilize_mode, mutated
-        # Tile_x_dim / Y-stride, and for tiny polluters a <4-face descriptor) leaks into the
-        # regular matmul. The divergence shows that _llk_unpack_AB_matmul_init_ does not
+        # restore that we skipped here, so the polluter tilize state (tilize_mode with its row
+        # pitch, and for tiny polluters a <4-face descriptor) leaks into the regular matmul. The divergence shows that _llk_unpack_AB_matmul_init_ does not
         # reset the leaked tilize mode and row pitch, which is what the matmul read depends on.
         assert (
             not result_matches
