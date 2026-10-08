@@ -1,0 +1,6 @@
+new_cap1m kagent_indexer_op_bench.py --S 1280 --T 56320 --T-alloc 1044480 --chunk-start 51200 --rank 0 --iters 20 --dump /mnt/data/kernel-agent/dev/prefill-indexer/runs/idx1/new_cap1m.pt
+new_fitted kagent_indexer_op_bench.py --S 1280 --T 56320 --chunk-start 51200 --rank 0 --iters 20 --dump /mnt/data/kernel-agent/dev/prefill-indexer/runs/idx1/new_fitted.pt
+base_cap1m BASE=1 kagent_indexer_op_bench.py --S 1280 --T 56320 --T-alloc 1044480 --chunk-start 51200 --rank 0 --iters 20 --dump /mnt/data/kernel-agent/dev/prefill-indexer/runs/idx1/base_cap1m.pt
+base_fitted BASE=1 kagent_indexer_op_bench.py --S 1280 --T 56320 --chunk-start 51200 --rank 0 --iters 20 --dump /mnt/data/kernel-agent/dev/prefill-indexer/runs/idx1/base_fitted.pt
+new_cap1m_r3 kagent_indexer_op_bench.py --S 1280 --T 56320 --T-alloc 1044480 --chunk-start 51200 --rank 3 --iters 20 --dump /mnt/data/kernel-agent/dev/prefill-indexer/runs/idx1/new_cap1m_r3.pt
+base_cap1m_r3 BASE=1 kagent_indexer_op_bench.py --S 1280 --T 56320 --T-alloc 1044480 --chunk-start 51200 --rank 3 --iters 20 --dump /mnt/data/kernel-agent/dev/prefill-indexer/runs/idx1/base_cap1m_r3.pt
