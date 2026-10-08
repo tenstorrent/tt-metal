@@ -25,10 +25,10 @@ The user is away; their hours away are the budget. The two failure modes this sk
    and prints nothing.
 
 Invoking this skill **is** the authorization to: create worktrees/branches, push your own branches
-(force-with-lease on them only), create sub-issues, open **DRAFT** PRs, reply to/resolve **bot** threads,
-dispatch and cancel workflow runs you dispatched. It is **not** authorization to: mark a PR ready for
-review, merge, touch anyone else's PR/branch/runs, reply to a human thread, or file anything without a
-shipped-code repro.
+(force-with-lease on them only), create sub-issues, open **DRAFT** PRs, request **bot** reviews, reply
+to/resolve **bot** threads, dispatch and cancel workflow runs you dispatched. It is **not**
+authorization to: mark a PR ready for review, merge, touch anyone else's PR/branch/runs, reply to a
+human thread, or file anything without a shipped-code repro.
 
 Conventions used below: `<me>` = `gh api user -q .login`; `$SKILL` =
 `tt_metal/tt-llk/.claude/skills/solve-master-issue` (scripts in `$SKILL/scripts/`); `$MASTER_ISSUE_DIR`
@@ -161,13 +161,15 @@ Synthetic mechanism-only kernels and injection-only failures are evidence, not a
 
 **CI silicon as the missing board.** When the test needs a board this box lacks, the A/B runs on a
 CI runner and the gate still holds — both arms, not just pass-with:
-1. **Find the lane.** `grep -l '<sku label>' .github/workflows/*.yaml` for the board's `runs-on`
-   label (`wh_n150`, `wh_n300`, `bh_p150b`, `wh_galaxy`, …), keep the workflows that have
-   `workflow_dispatch`, and read their inputs: the job you need is usually behind an opt-in flag, and
-   a bare dispatch runs nothing. Known lanes: `Nightly tt-metal L2 tests` with `run_llk_unit_tests`
-   (`unit_tests_llk` on wh_n150 + wh_n300), `run_cpp_tests`, `run_wormhole` / `run_blackhole`;
-   `LLK e2e Tests` (tt-llk pytest on wh_n150 + bh_p150b; its "failure" conclusion is a junit-report
-   action crash unless a test job failed — read the job list).
+1. **Find the lane.** `grep -rl '<sku label>' .github/workflows .github/sku_config.yaml` for the
+   board's runner label (`wh_n150`, `wh_n300`, `bh_p150b`, `wh_galaxy`, …). The hit is usually a
+   reusable `*-impl.yaml` (or the SKU config), which is not dispatchable: follow `uses:` back to the
+   caller that has `workflow_dispatch`, and read *its* inputs — the job you need is behind an opt-in
+   flag, and a bare dispatch runs nothing. Known lanes: `Nightly tt-metal L2 tests` with
+   `run_llk_unit_tests` (`unit_tests_llk` on every enabled SKU of each side — `run_wormhole` /
+   `run_blackhole`, both default on, select the sides; the SKU list is computed by its arch-matrix job),
+   `run_cpp_tests`; `LLK e2e Tests` (tt-llk pytest on wh_n150 + bh_p150b; its "failure" conclusion is
+   a junit-report action crash unless a test job failed — read the job list).
 2. **Two branches.** Fix branch = test + fix. **Probe branch** = the same test on shipped code
    (`<me>/probe-<item>-shipped`), pushed with no PR. Keep the split as `item<N>-test-only.patch` /
    `item<N>-fix-only.patch` in the ledger dir.
@@ -216,14 +218,20 @@ Known bots (GitHub account type `Bot`): `copilot-pull-request-reviewer`, `github
 (LLK PR Review, skills reviewers), `cycode-security`. Humans are everyone else, whatever their
 login looks like.
 
-**Dispatch.** The LLK PR Review bot does not run on drafts by itself:
+**On a draft PR no reviewer runs unasked.** The skills reviewers trigger only on `opened` /
+`ready_for_review` and skip drafts outright; Copilot's automatic review fires on ready-for-review,
+never on a push to a draft (checked: zero Copilot reviews on the draft PRs of an earlier run). So
+"bots quiet" on a draft is only meaningful if you asked. **After every push that changes the tree,
+request both:**
 ```bash
 $SKILL/scripts/dispatch.sh "LLK PR Review" main -f pr_number=<PR>     # ~45 min; record the run id
+gh api --method POST repos/<o>/<r>/pulls/<PR>/requested_reviewers \
+    -f 'reviewers[]=copilot-pull-request-reviewer[bot]'                  # Copilot reviews the head SHA
 ```
-The other reviewers (skills reviewers, Repo Assist, Silencer, …) are **workflow runs attached to
-the head SHA** — queued, in progress, or completed — and Copilot, the one reviewer that is a GitHub
-app, sits in the PR's requested reviewers until it submits. So whether bots are done is **observed,
-not guessed**:
+Copilot then sits in the PR's requested reviewers (and shows as a `Running Copilot Code Review` run
+on the head SHA) until it submits; the other reviewers that do fire (static checks, PR gate, Repo
+Assist, Silencer, …) are **workflow runs attached to the head SHA** — queued, in progress, or
+completed. So whether bots are done is **observed, not guessed**:
 ```bash
 pending=$($SKILL/scripts/bots_pending.sh <PR>) && [ -z "$pending" ]   # true = bots quiet on the head SHA
 ```
@@ -236,17 +244,18 @@ runs after a push; after 10 min with nothing registered, nothing is coming), and
 lines. The SETTLE clock starts when the script first sees the SHA, not at the commit date (commits
 are made long before they are pushed), so **run it right after every push**.
 
-**Bots quiet for a SHA** = `bots_pending.sh <PR>` exits 0 and prints nothing. A reviewer run that infra-failed
-counts as completed once it has been re-dispatched once (retry table). Pure rebases (no code change)
-don't need a fresh LLK PR Review dispatch, but `bots_pending.sh` must still be empty before CI is
-spent on the new SHA — reviewers that trigger on `synchronize` will have run again. Waiting for the
-auto-triggered static checks / PR gate here is deliberate: they are already running, and a failure
-there means another push anyway, so it costs nothing and saves a Sanity + Nightly run.
+**Bots quiet for a SHA** = `bots_pending.sh <PR>` exits 0 and prints nothing **and** both reviews
+above were requested for that SHA (the ledger records the dispatch run id and the request). A reviewer
+run that infra-failed counts as completed once it has been re-dispatched once (retry table). Pure
+rebases (no code change) don't need fresh review requests, but `bots_pending.sh` must still be empty
+before CI is spent on the new SHA — the checks that trigger on `synchronize` will have run again.
+Waiting for the auto-triggered static checks / PR gate here is deliberate: they are already running,
+and a failure there means another push anyway, so it costs nothing and saves a Sanity + Nightly run.
 
 Poll it with the same discipline as any wait: a background loop every 2–5 min, not a tight loop.
 
 **Every bot comment gets handled, on every push, for the life of the PR.** A CI fix, a review fix, or a
-rebase is a new head SHA, bots review it again, and those comments are in scope too.
+rebase is a new head SHA, you request the reviews again, and those comments are in scope too.
 ```bash
 $SKILL/scripts/bot_threads.sh <PR>   # THREAD: unresolved threads a bot opened, latest comment from a bot; REVIEW: summaries/comments
 ```
@@ -313,7 +322,9 @@ drafts the PR-Gate llk lanes are skipped; silicon coverage for tt-llk changes co
 `run-llk-sanity-tests` smoke on WH+BH, Nightly's `run_llk_unit_tests`, and LLK e2e, the whole tt-llk
 suite.) Nightly takes hours — arm the watchers and move on.
 
-**Triage every failing job** (`ci_triage.sh <run_id>`) by reading the job log, not the rollup:
+**Triage every failing job** (`ci_triage.sh <run_id>`) by reading the job log, not the rollup. Its
+first line tallies success / skipped / failed jobs: a run whose test jobs are all skipped was
+dispatched without its opt-in inputs — re-dispatch, don't record it.
 
 | verdict | evidence needed | action |
 |---|---|---|

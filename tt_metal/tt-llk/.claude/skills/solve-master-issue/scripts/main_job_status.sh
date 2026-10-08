@@ -1,7 +1,8 @@
 #!/bin/bash
 # usage: main_job_status.sh "<workflow name>" "<job name substring>" [branch=main] [n_runs=5]
 # The matching job(s) in the last n completed runs of <workflow> on <branch>, newest first: conclusion,
-# and for every job that did not succeed, its failing test ids / error lines (same grep as ci_triage.sh).
+# and for every job that did not succeed, its failing test ids (FAIL) and ##[error] lines (ERR) — the
+# same greps as ci_triage.sh, so the two outputs compare line for line.
 # "unrelated, main also broken" needs the SAME failing tests here as in the PR run — a job that fails
 # on main on different tests is not evidence, it is a different failure. A run that prints "no matching
 # job" ran a different matrix — it is NOT evidence that main is green. Repo: $GH_REPO, default
@@ -23,5 +24,6 @@ while IFS=$'\t' read -r rid t sha; do
         log=$(gh api "repos/$repo/actions/jobs/$j/logs" 2>/dev/null) || { echo "     (log unavailable)"; continue; }
         echo "$log" | grep -E "^[0-9TZ:.-]* (FAILED |ERROR |⨯ |\[  FAILED  \] )" |
             sed 's/^[0-9TZ:.-]* //' | sort -u | head -12 | sed 's/^/     FAIL /' || true
+        echo "$log" | grep -iE "##\[error\]" | sed 's/^[0-9TZ:.-]* //' | sort -u | head -4 | sed 's/^/     ERR  /' || true
     done
 done
