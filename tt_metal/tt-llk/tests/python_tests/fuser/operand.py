@@ -238,11 +238,16 @@ class Operand:
         result_name: Optional[str] = None,
     ) -> str:
         assignment = f"const auto {result_name} = " if result_name else ""
+        data_format = (
+            DataFormat.Int16
+            if self.data_format == DataFormat.UInt16
+            else self.data_format
+        )
         return (
             f"{assignment}ckernel::trisc::bfd_alloc_and_program<{engine.value}, {mode.value}>("
             f"{self.tile_shape.cpp_value}, "
             f"{hex(self.l1_address)} / 16, "
-            f"{self.data_format.cpp_underlying_value});\n"
+            f"{data_format.cpp_underlying_value});\n"
         )
 
 

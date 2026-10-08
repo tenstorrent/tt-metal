@@ -36,7 +36,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A          = params.buffer_A;
     const Operand& buffer_B          = params.buffer_B;
 #endif
-    const auto tensor_shape = tensor_shape_from_params(params);
+    const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
         ZONE_SCOPED("INIT")
@@ -113,7 +113,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const std::uint32_t num_faces   = params.num_faces;
 #endif
-    const auto tensor_shape = tensor_shape_from_params(params);
+    const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
         ZONE_SCOPED("INIT")
@@ -189,7 +189,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
-    const auto tensor_shape = tensor_shape_from_params(params);
+    const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
         ZONE_SCOPED("INIT")
