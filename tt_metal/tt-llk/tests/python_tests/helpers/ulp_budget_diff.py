@@ -330,13 +330,22 @@ class _Held:
     gated: bool  # whether that row's step budget binds here
     #: The most specific row declaring ``atol``/``rtol``: what a tolerance compare uses.
     declared: Optional[Row]
+    #: Whether the variant resolves as a measured cell does: every dimension of
+    #: ``_MEASURED_KEY`` named, or pinned by no row of the op (so naming it would
+    #: resolve the same). Only such a cell is ever held to a recorded figure. A query
+    #: that leaves a pinned dimension unset is a registry query, and a re-emit that
+    #: splits a row by that dimension leaves it matching nothing without any measured
+    #: cell losing its baseline.
+    measured_shape: bool = True
 
     @property
     def _tolerance_row(self) -> Optional[Row]:
         """The row, if it is a tolerance row: the only kind whose comment is a baseline.
         A step budget that does not bind on this arch is not one, and its "max N ULP"
         describes the arch it binds on."""
-        return None if self.row is None or self.row.gated else self.row
+        if not self.measured_shape or self.row is None or self.row.gated:
+            return None
+        return self.row
 
     @property
     def baseline(self) -> Optional[int]:
@@ -370,13 +379,23 @@ class _Held:
         return "tolerance" + (f" ({', '.join(parts)})" if parts else "")
 
 
-def _held(table: Dict[Cell, Row], op: str, key) -> _Held:
+#: The key dimensions every ``--ulp-measure`` row names (``arch`` aside, which the
+#: variants always name): the shape of a cell the headroom report can judge.
+_MEASURED_KEY = ("in", "out", "approx", "dest")
+
+
+def _held(table: Dict[Cell, Row], op: str, key, open_dims=frozenset()) -> _Held:
+    """What *key* is held to in *table*. *open_dims* are the dimensions no row of *op*
+    pins in either revision, which a query may leave unset and still be a measured
+    cell's."""
     row = _resolve(table, op, key)
     gated = _gates(row, key)
     declared = (
         None if gated else _resolve(table, op, key, only=lambda r: r.declares_tolerance)
     )
-    return _Held(row, gated, declared)
+    pinned = dict(key)
+    shape = all(k in pinned or k in open_dims for k in _MEASURED_KEY)
+    return _Held(row, gated, declared, shape)
 
 
 def _widened(was: Optional[Row], now: Optional[Row]) -> bool:
@@ -453,8 +472,13 @@ def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
     """
     grouped: Dict[Tuple, Change] = {}
     for op in sorted({c[0] for c in base} | {c[0] for c in head}):
+        pinned_anywhere = {
+            k for table in (base, head) for (o, key) in table if o == op for k, _ in key
+        }
+        open_dims = frozenset(KEY_FIELDS) - pinned_anywhere
         for key in _variants(base, head, op):
-            was, now = _held(base, op, key), _held(head, op, key)
+            was = _held(base, op, key, open_dims)
+            now = _held(head, op, key, open_dims)
             kind = _classify(was, now)
             if kind is None:
                 continue
