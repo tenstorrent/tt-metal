@@ -257,6 +257,10 @@ extern "C" uint32_t _start1() {
     // it lives in, so caching it any earlier would just be discarded.
     uint32_t hartid = internal_::read_hw_thread_idx();
     if (hartid == 0) {
+        do {
+            set_deassert_addresses();
+            assert_trisc_reset();
+        } while (READ_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR) != 0b1111);
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
         // Must precede the ready flag below, which releases the other pushers.
@@ -278,7 +282,11 @@ extern "C" uint32_t _start1() {
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[0] != SHARED_GLOBALS_READY_GO) {
     }
     WAYPOINT("I");
-    DPRINT("DM0-FW: initialized\n");
+    if (hartid == 0) {
+        // Reset the shared print lock and announce from DM0 only.
+        DEVICE_PRINT_INITIALIZE_LOCK();
+        DPRINT("DM0-FW: initialized\n");
+    }
 
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0

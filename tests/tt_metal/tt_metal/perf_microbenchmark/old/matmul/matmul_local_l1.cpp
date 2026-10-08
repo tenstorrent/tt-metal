@@ -308,7 +308,7 @@ int main(int argc, char** argv) {
             "compute_local_l1.cpp",
             all_cores,
             tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .fp32_dest_acc_en = false,
                 .math_approx_mode = false,
                 .compile_args = compute_kernel_args});

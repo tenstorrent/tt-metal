@@ -35,7 +35,7 @@ from .chip_architecture import (
     get_chip_architecture,
     quasar_arch_variant,
 )
-from .data_format_inference import data_formats, is_format_combination_outlier
+from .data_format_inference import data_formats, effective_dest_acc
 from .device import (
     CHIP_DEFAULT_BOOT_MODES,
     KERNEL_COMPLETE,
@@ -1009,17 +1009,14 @@ class TestConfig:
         }
 
         if formats:
-            # Check if this is an outlier format combination that requires dest_acc to be enabled
-            # Automatically enable dest_acc for outlier combinations
-            if (
-                is_format_combination_outlier(
-                    formats.input_format,
-                    formats.output_format,
-                    dest_acc,
-                )
-                and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
-            ):
-                self.dest_acc = DestAccumulation.Yes
+            # An outlier format combination needs a 32-bit Dest; promote dest_acc for it.
+            # The rule lives in effective_dest_acc so its other readers cannot drift.
+            self.dest_acc = effective_dest_acc(
+                formats.input_format,
+                formats.output_format,
+                dest_acc,
+                TestConfig.CHIP_ARCH,
+            )
 
             self.formats_config = data_formats(
                 input_format=formats.input_format,
@@ -1682,6 +1679,9 @@ class TestConfig:
                 f"Failed to parse text size from riscv-tt-elf-size output for {elf_path}:\n{result.stdout}"
             ) from e
 
+    def _compile_kernel_part(self, name, compile_command, source):
+        run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+
     def build_elfs(self):
 
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
@@ -1816,9 +1816,9 @@ class TestConfig:
 
                 logger.trace(" ".join(shlex.quote(part) for part in compile_command))
 
-                run_shell_command(  # %.elf : path/to/kernel/test.cpp trisc.cpp [coverage.o libgcov.a]
+                self._compile_kernel_part(
+                    name,
                     compile_command,
-                    TestConfig.TESTS_WORKING_DIR,
                     (
                         f"{self._barrier_reservation_include()}"
                         f"{self._kernel_source_include()}#include  <trisc.cpp>\n"
