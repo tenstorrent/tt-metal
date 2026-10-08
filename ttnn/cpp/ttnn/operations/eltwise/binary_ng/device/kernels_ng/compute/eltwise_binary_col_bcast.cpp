@@ -7,12 +7,15 @@
 #ifndef BINARY_NG_BLOCK
 #define BINARY_NG_BLOCK 0
 #endif
-// Blackhole: ELWMUL, which binary_ng runs at HiFi4, takes the per-tile hand-off; add and sub keep the per-face one, except
-// in the block sections (BINARY_NG_BLOCK), whose block unpack takes it for every op.
+// Blackhole: ELWMUL, which binary_ng runs at HiFi4, takes the per-tile hand-off unless BINARY_NG_MUL_PER_FACE; add and
+// sub keep the per-face one, except in the block sections (BINARY_NG_BLOCK), whose block unpack takes it for every op.
+#ifndef BINARY_NG_MUL_PER_FACE
+#define BINARY_NG_MUL_PER_FACE 0
+#endif
 #ifndef EB_R3_PER_FACE
 #define EB_R3_PER_FACE 0
 #endif
-#define ELTWISE_BINARY_PER_TILE_HANDOFF ((BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL || BINARY_NG_BLOCK) && !EB_R3_PER_FACE)
+#define ELTWISE_BINARY_PER_TILE_HANDOFF ((((BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL && !BINARY_NG_MUL_PER_FACE) || BINARY_NG_BLOCK)) && !EB_R3_PER_FACE)
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 

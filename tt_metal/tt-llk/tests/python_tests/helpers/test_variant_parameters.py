@@ -804,6 +804,19 @@ class PER_FACE_HANDOFF(TemplateParameter):
 
 
 @dataclass(repr=False)
+class DEST_REUSE_UNPACK_A(TemplateParameter):
+    """Blackhole eltwise binary dest reuse: the folded tiles take the dest-reuse unpack (_llk_unpack_A_ with the reuse type), the
+    unpack the compute API pairs with the dest-reuse math, instead of the two-operand unpack. Not a report column; repr carries it
+    into the variant hash."""
+
+    def __repr__(self) -> str:
+        return "DEST_REUSE_UNPACK_A()"
+
+    def convert_to_cpp(self) -> str:
+        return "#define DEST_REUSE_UNPACK_A"
+
+
+@dataclass(repr=False)
 class UNPACK_AB_BLOCK(TemplateParameter):
     """Blackhole eltwise binary: each block of tile pairs is unpacked with one _llk_unpack_AB_block_ call (1), or with B's
     first tile of the block for every tile, a B stride of 0 (2); 0 is the per-tile call. Not a report column; repr carries

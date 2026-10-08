@@ -69,8 +69,14 @@ inline void llk_unpack_AB_init(
         StateVal<Operand<Exu::Unpack>::NumFacesB>(get_operand_num_faces(operandB_id))));
 
     if constexpr (src_dvalid == SrcDvalid::PerTile && (BType == BroadcastType::COL || BType == BroadcastType::ROW)) {
-        // Its SrcB layout reads B as 16-row faces: a row or column broadcast from a smaller B tile stays per face
-        if (get_operand_face_r_dim(operandB_id) != FACE_R_DIM || get_operand_num_faces(operandB_id) != 4) {
+        // Its SrcB layout reads B as 16-row faces: a row or column broadcast from a smaller B tile stays per face,
+        // except a column broadcast of partial faces from a B tile of A's shape
+        const std::uint32_t b_face_r_dim = get_operand_face_r_dim(operandB_id);
+        const std::uint32_t b_num_faces = get_operand_num_faces(operandB_id);
+        const bool b_like_a_partial_col = BType == BroadcastType::COL && tensor_shape.face_r_dim < FACE_R_DIM &&
+                                          b_face_r_dim == tensor_shape.face_r_dim &&
+                                          b_num_faces == tensor_shape.total_num_faces();
+        if ((b_face_r_dim != FACE_R_DIM || b_num_faces != 4) && !b_like_a_partial_col) {
             llk_unpack_AB_init_impl<BType, SrcDvalid::PerFace>(tensor_shape, transpose);
             return;
         }

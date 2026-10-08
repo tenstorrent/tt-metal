@@ -1155,15 +1155,16 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                  operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B);
     const uint32_t bcast_section_tiles = fp32_dest_acc_en ? 4 : 8;
     // Blackhole: with an operand activation the operand pass runs over up to four DEST sections before one binary init; one
-    // section takes it when partial, or in the no-broadcast kernel with block-float operands or both operands activated.
+    // section takes it in the no-broadcast kernel when partial or with both operands activated.
     const uint32_t c_shard_tiles = c_num_tiles_per_shard.value_or(0);
     const uint32_t shard_sections = tt::div_up(c_shard_tiles, num_tiles_per_cycle);
     const bool one_section_pass =
-        c_shard_tiles < num_tiles_per_cycle ||
-        (b.has_value() && (both_operand_activations || (is_block_float(a_dtype) && is_block_float(b_dtype))));
+        (b.has_value() && (c_shard_tiles < num_tiles_per_cycle || both_operand_activations)) ||
+        (!b.has_value() && eb_r3_env("EB_R3_PRE_ONE_SCALAR"));
+    const uint32_t eb_pre_max = std::getenv("EB_R3_PRE_MAX") ? static_cast<uint32_t>(std::atoi(std::getenv("EB_R3_PRE_MAX"))) : 4u;
     const uint32_t pre_sections_rule = bh_fpu_op && has_operand_activations && num_tiles_per_cycle > 1 && c_shard_tiles > 0 &&
                                           (shard_sections > 1 || one_section_pass)
-                                      ? std::min(shard_sections, 4u)
+                                      ? std::min(shard_sections, eb_pre_max)
                                       : 0;
     // CI only: EB_R3_NO_PRE_SECTIONS main's pass per section; EB_R3_PRE_K2 the fourth pass's two sections from two
     const uint32_t pre_sections =
@@ -1508,6 +1509,21 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
+    // Blackhole: a multiply with operand and post activations (logical_and), its init per tile, keeps the per-face
+    // program on block grids of 4 rows by 2 or 4 columns, where the per-tile one measured slower.
+    const auto& a_shard_spec = a.memory_config().shard_spec();
+    if (bh_fpu_op && fpu_binary_op == OpConfig::FpuBinaryOp::MUL && has_operand_activations && has_post_activations &&
+        !bcast_sections && num_tiles_per_cycle == 1 &&
+        a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED && a_shard_spec.has_value() &&
+        !eb_r3_env("EB_R3_NO_MUL_GATE")) {
+        const auto grid_box = a_shard_spec->grid.bounding_box();
+        const uint32_t grid_rows = grid_box.end_coord.y - grid_box.start_coord.y + 1;
+        const uint32_t grid_cols = grid_box.end_coord.x - grid_box.start_coord.x + 1;
+        if (grid_rows == 4 && (grid_cols == 2 || grid_cols == 4)) {
+            compute_kernel_defines["BINARY_NG_MUL_PER_FACE"] = "1";
+        }
+    }
+
     if (eb_r3_env("EB_R3_MAIN_REINIT")) {
         compute_kernel_defines["EB_R3_MAIN_REINIT"] = "1";
     }
@@ -1525,7 +1541,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             static_cast<int>(has_operand_activations), static_cast<int>(has_post_activations),
             static_cast<int>(a_data_format), static_cast<int>(b_data_format), static_cast<int>(c_data_format),
             c_tiles_per_core);
-        std::fprintf(stderr, "EB_R3_RULE pre_sections=%u\n", pre_sections);
+        std::fprintf(stderr, "EB_R3_RULE pre_sections=%u mul_per_face=%s\n", pre_sections, eb_def("BINARY_NG_MUL_PER_FACE").c_str());
     }
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);

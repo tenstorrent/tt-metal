@@ -8,7 +8,6 @@
  * Uses the unified ReduceToOneB1 op from unified_kernels/reduce_to_one_b1.hpp
  */
 
-#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/reduce_to_one_b1.hpp"

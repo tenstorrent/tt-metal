@@ -841,7 +841,8 @@ NativeBlockBroadcast native_block_broadcast(
     const uint32_t rows = shard_spec->shape[0] / a.tile().get_height();
     const uint32_t tiles = rows * (shard_spec->shape[1] / a.tile().get_width());
     const bool width = a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
-    const bool plain_op = op == BinaryOpType::ADD || op == BinaryOpType::SUB || op == BinaryOpType::MUL;
+    const bool add_or_sub = op == BinaryOpType::ADD || op == BinaryOpType::SUB;
+    const bool plain_op = add_or_sub || op == BinaryOpType::MUL;
 
     if (plain_op && lhs.empty() && attributes.rhs_activations.empty() && post.empty()) {
         // The native op reads b once (scalar) or once per tile row (column) on each core of the shard grid; the op spread
@@ -859,7 +860,7 @@ NativeBlockBroadcast native_block_broadcast(
         }
         // Column b only with the LLK broadcast (one format); without it the reader also fills b's tile on every row.
         const bool column = one_format && ((a_dt == DataType::BFLOAT16 && rows <= 2 * cores) ||
-                                           (a_dt == DataType::BFLOAT8_B && rows <= cores) ||
+                                           (a_dt == DataType::BFLOAT8_B && (rows <= cores || (width && rows <= 4))) ||
                                            (a_dt == DataType::BFLOAT4_B && 2 * rows <= cores));
         return {.column = column, .scalar = scalar};
     }
@@ -885,9 +886,9 @@ NativeBlockBroadcast native_block_broadcast(
         out.column = out.scalar = width && cores >= 32;
     } else if (plain_op && lhs.empty() && act == UnaryOpType::RELU) {
         out.scalar = cores >= (width ? 16u : 32u);
-        out.column = !width && cores >= 64;
+        out.column = !width && cores >= (add_or_sub ? 32u : 64u);
     } else if (plain_op && lhs.empty() && act == UnaryOpType::GELU) {
-        out.scalar = cores >= 32;
+        out.scalar = cores >= 32 || (width && add_or_sub && cores >= 16);
     }
     return out;
 }

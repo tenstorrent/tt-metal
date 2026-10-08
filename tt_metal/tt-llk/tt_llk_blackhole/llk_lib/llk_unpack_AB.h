@@ -153,14 +153,43 @@ template <BroadcastType BType, SrcDvalid src_dvalid>
 inline constexpr bool unpack_AB_tile_dvalid = src_dvalid == SrcDvalid::PerTile;
 
 /**
- * @brief Whether a tile takes the whole-tile hand-off: full 16-row faces, and 2 x 2 faces for a column or row broadcast. Matches the math
- *        side's eltwise_binary_tile_shape.
+ * @brief Whether a column broadcast tile takes the hand-off of @ref _llk_unpack_AB_mop_config_tile_partial_col_: two partial faces side by
+ *        side. Matches the math side's eltwise_binary_tile_partial_col_shape.
+ */
+template <BroadcastType BType>
+inline bool unpack_AB_tile_partial_col_shape(const ckernel::TensorShape tensor_shape)
+{
+    return BType == BroadcastType::COL && tensor_shape.face_r_dim < FACE_R_DIM && tensor_shape.num_faces_r_dim == 1 && tensor_shape.num_faces_c_dim == 2;
+}
+
+/**
+ * @brief Whether a tile takes the whole-tile hand-off: full 16-row faces, and 2 x 2 faces for a column or row broadcast; and the tiles of
+ *        @ref unpack_AB_tile_partial_col_shape. Matches the math side's eltwise_binary_tile_shape.
  */
 template <BroadcastType BType>
 inline bool unpack_AB_tile_shape(const ckernel::TensorShape tensor_shape)
 {
     constexpr bool needs_2x2_faces = BType == BroadcastType::COL || BType == BroadcastType::ROW;
-    return tensor_shape.face_r_dim == FACE_R_DIM && (!needs_2x2_faces || (tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2));
+    return (tensor_shape.face_r_dim == FACE_R_DIM && (!needs_2x2_faces || (tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2))) ||
+           unpack_AB_tile_partial_col_shape<BType>(tensor_shape);
+}
+
+/**
+ * @brief Configure the datum count and the MOP that hand a tile of @ref unpack_AB_tile_partial_col_shape over as one source bank per
+ *        operand: one UNPACR per face of A, each into its own 16-row slot of the bank and published with the last, and B's face 0.
+ *
+ * @param face_r_dim: Rows per face, 1 to 8
+ */
+inline void _llk_unpack_AB_mop_config_tile_partial_col_(const std::uint32_t face_r_dim)
+{
+    config_unpacker_x_end<p_setadc::UNP_AB>(face_r_dim);
+    // AddrMode bits 5:4 step the SrcA row by one face (Ch1 Z), bits 1:0 step the L1 face (Ch0 Z)
+    static constexpr std::uint32_t unpack_srca_face = TT_OP_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_srca_last = TT_OP_UNPACR(SrcA, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_srcb_last = TT_OP_UNPACR(SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    ckernel_template tmp(1, 1, unpack_srca_last, unpack_srcb_last);
+    tmp.set_start_op(unpack_srca_face);
+    tmp.program();
 }
 
 /**
@@ -233,6 +262,11 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
         LLK_ASSERT(
             transpose == ckernel::Transpose::None,
             "SrcDvalid::PerTile publishes per face for a transposed operand; pair a transposed unpack with SrcDvalid::PerFace on both threads");
+        if (transpose == ckernel::Transpose::None && unpack_AB_tile_partial_col_shape<BType>(tensor_shape))
+        {
+            _llk_unpack_AB_mop_config_tile_partial_col_(tensor_shape.face_r_dim);
+            return;
+        }
         if (transpose == ckernel::Transpose::None && unpack_AB_tile_shape<BType>(tensor_shape))
         {
             constexpr std::uint32_t face_datums = FACE_R_DIM * FACE_C_DIM;

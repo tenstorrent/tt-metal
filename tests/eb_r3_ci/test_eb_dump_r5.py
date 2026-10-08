@@ -221,3 +221,41 @@ def test_mp5_dump(device, op, shape_id, d):
         return
     for *_, d_ in diffs:
         d_.report(f"({ncalls} calls, every pattern against {nb} b values, {time.time() - t0:.1f} s)")
+
+
+# sixth pass (#58726): the classes taken in this pass. bfp8 column on 2 width cores at 4 tile rows (W 2048, 4 b values per
+# call); column add and sub with relu on 4x8 block cores (W 2048, 16 tile rows); scalar add and sub with gelu on 2x8 width
+# cores at 32 tiles per core (256x2048, one b value per call).
+NAT6D = [("col_ws2_bfp8", op) for op in ("add", "sub", "mul")] + [("col_bs32_relu", op) for op in ("add", "sub")]
+NAT6D += [("scalar_ws16_gelu", op) for op in ("add", "sub")]
+
+
+@pytest.mark.parametrize("geo, op", NAT6D, ids=["-".join(c) for c in NAT6D])
+def test_nat6_dump(device, geo, op):
+    if geo == "col_ws2_bfp8":
+        _dump_bcast(device, f"nat6_{geo}_{op}", op, "col", "width", 1, 2, 2048, 4, b16_set(), "bfp8", "bfp8", "bfp8")
+    elif geo == "col_bs32_relu":
+        _dump_bcast(device, f"nat6_{geo}_{op}", op, "col", "block", 4, 8, 2048, 64, b16_set(), "bf16", "bf16", None, "relu")
+    else:
+        t0 = time.time()
+        B = b16_small(64)
+        tag = f"nat6_{geo}_{op}"
+        diffs = make_diffs(tag, None)
+        shape = (1, 1, 256, 2048)
+        mc = _mc(shape, 2, 8, "width")
+        done = 0
+        try:
+            for c in range(B.size):
+                a = PATS[(np.arange(256 * 2048) + c * 4099) % 65536]
+                ta = ttnn.from_torch(bf16_from_bits(a).reshape(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+                tb = ttnn.from_torch(bf16_from_bits(B[c:c + 1]).reshape(1, 1, 1, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                run_chunk(device, diffs, lambda: out_bits(_call(op, ta, tb, None, mc, "gelu")), tensor_vals(ta), np.repeat(tensor_vals(tb), a.size))
+                ttnn.deallocate(ta)
+                ttnn.deallocate(tb)
+                done += 1
+        except Exception as e:  # noqa: BLE001
+            print(f"\nDUMP {tag}: NOT RUN ({type(e).__name__}: {str(e).splitlines()[0][:200]})", flush=True)
+            set_env(device, {})
+            return
+        for *_, d in diffs:
+            d.report(f"({done} calls, every pattern against 64 b values, {time.time() - t0:.1f} s)")

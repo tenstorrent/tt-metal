@@ -50,6 +50,9 @@ SH = {
     "ws16_t64": ((1, 1, 512, 2048), 2, 8, ttnn.ShardStrategy.WIDTH),
     "ws8_t32": ((1, 1, 256, 1024), 1, 8, ttnn.ShardStrategy.WIDTH),
     "ws32_t32": ((1, 1, 256, 4096), 4, 8, ttnn.ShardStrategy.WIDTH),
+    "ws8_t128": ((1, 1, 512, 2048), 1, 8, ttnn.ShardStrategy.WIDTH),
+    "ws4_t64": ((1, 1, 256, 1024), 1, 4, ttnn.ShardStrategy.WIDTH),
+    "ws4_r4": ((1, 1, 128, 2048), 1, 4, ttnn.ShardStrategy.WIDTH),
 }
 
 
@@ -188,7 +191,8 @@ def test_one4(device, op, mem, d):
         tb = ttnn.from_torch(b, dtype=DT[d], layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
     fn = {"rsub": lambda: ttnn.rsub(ta, tb, memory_config=mc), "add_arelu": lambda: ttnn.add(ta, tb, input_tensor_a_activations=[U(ttnn.UnaryOpType.RELU)], memory_config=mc),
           "logical_and": lambda: ttnn.logical_and(ta, tb, memory_config=mc), "ldexp": lambda: ttnn.ldexp(ta, tb, memory_config=mc),
-          "div": lambda: ttnn.divide(ta, tb, memory_config=mc), "rsub_s": lambda: ttnn.rsub(ta, 0.375, memory_config=mc)}[op]
+          "div": lambda: ttnn.divide(ta, tb, memory_config=mc), "rsub_s": lambda: ttnn.rsub(ta, 0.375, memory_config=mc),
+          "add_arelu_s": lambda: ttnn.add(ta, 0.375, input_tensor_a_activations=[U(ttnn.UnaryOpType.RELU)], memory_config=mc)}[op]
     for _ in range(3):
         out = fn()
     got = ttnn.to_torch(out)
@@ -211,3 +215,44 @@ def test_mulact3(device, op, grid, kind):
     shape, gy, gx = SH8[grid]
     mc = ttnn.create_sharded_memory_config(shape, core_grid=ttnn.CoreGrid(y=gy, x=gx), strategy=ttnn.ShardStrategy.BLOCK)
     _run(device, op, shape, mc, "bf16", "bf16", "bf16", kind)
+
+
+
+# sixth pass (#58726): the boundaries (bfp4 column on 4 and 8 width cores, scalar relu and gelu on 8 width cores at 32 to 128
+# tiles, bfp8 column on 2 and 4 width cores) and the subsets taken (column add with relu on 32 block cores, scalar add with
+# gelu on 16 width cores)
+NAT8 = [(op, mm, "col", "bfp4-bfp4-bfp4") for op in ("add", "mul") for mm in ("ws4_t64", "ws8_t64", "ws8_t128")]
+NAT8 += [(op, mm, "col", "bfp8-bfp8-bfp8") for op in ("add", "mul") for mm in ("ws2_t64", "ws2_t128", "ws4_r4", "ws4_t64", "ws8_t128")]
+NAT9 = [(a, mm, "scalar") for mm in ("ws8_t32", "ws8_t64", "ws8_t128") for a in ("add_relu", "mul_relu", "add_gelu", "mul_gelu")]
+NAT9 += [(a, mm, "col") for mm in ("bs32_t64", "bs32_t128") for a in ("add_relu", "mul_relu", "sub_relu")]
+NAT9 += [(a, mm, "scalar") for mm in ("ws16_t32", "ws16_t64") for a in ("add_gelu", "mul_gelu", "sub_gelu")]
+ACT7["sub_relu"] = ("sub", "relu", None)
+ACT7["sub_gelu"] = ("sub", "gelu", None)
+
+
+@pytest.mark.parametrize("op, mem, kind, dts", NAT8, ids=["-".join(c) for c in NAT8])
+def test_nat8(device, op, mem, kind, dts):
+    shape, mc = _mc(mem)
+    da, db, do = dts.split("-")
+    _run(device, op, shape, mc, da, db, do, kind)
+
+
+@pytest.mark.parametrize("act, mem, kind", NAT9, ids=["-".join(c) for c in NAT9])
+def test_nat9(device, act, mem, kind):
+    shape, mc = _mc(mem)
+    op, post, lact = ACT7[act]
+    _run(device, op, shape, mc, "bf16", "bf16", "bf16", kind, act=post, lact=lact)
+
+
+# sixth pass (#58725): the operand pass over eight sections against four, from 64 tiles per core
+K8_MEMS = {"hs8_t64": ((1, 1, 2048, 256), 2, 4, ttnn.ShardStrategy.HEIGHT), "hs8_t128": ((1, 1, 1024, 1024), 2, 4, ttnn.ShardStrategy.HEIGHT),
+           "bs64_t80": ((1, 1, 4096, 1280), 8, 8, ttnn.ShardStrategy.BLOCK), "hs8_t256": ((1, 1, 2048, 1024), 2, 4, ttnn.ShardStrategy.HEIGHT),
+           "hs8_t32": ((1, 1, 1024, 256), 2, 4, ttnn.ShardStrategy.HEIGHT)}
+K8 = [(op, mm, d) for op in ("rsub", "add_arelu", "logical_and", "ldexp", "div", "rsub_s", "add_arelu_s") for mm in ("hs8_t64", "hs8_t128", "bs64_t80", "hs8_t32") for d in ("bf16", "bfp8")]
+K8 += [(op, "hs8_t256", d) for op in ("rsub", "logical_and", "rsub_s") for d in ("bfp8", "bfp4")]
+
+
+@pytest.mark.parametrize("op, mem, d", K8, ids=["-".join(c) for c in K8])
+def test_k8(device, op, mem, d):
+    ONE4_MEMS[mem] = K8_MEMS[mem]
+    test_one4(device, op, mem, d)
