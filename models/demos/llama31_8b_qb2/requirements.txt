@@ -3,4 +3,4 @@
 # replace with a version specifier when it is.
 # Install with --no-deps: tt-transformers depends on ttnn, and a resolving
 # install would replace tt-metal's own ttnn build.
-tt-transformers @ git+https://github.com/tenstorrent/tt-transformers.git@b7d1ab5257da73c588a61720fcfafec246c6fa4f
+tt-transformers @ git+https://github.com/tenstorrent/tt-transformers.git@c95935d8934f136833f02f306f32deb8a1136177
