@@ -19,6 +19,7 @@
 // operands' L1 formats and DST_ACCUM_MODE with _llk_unpack_AB_matmul_stream_narrow_ (with a 16-bit DEST an 8-bit
 // streamed operand is streamed at its data rate; false keeps the replay body every format can use). The role swap (in0
 // -> SrcB, in1 -> SrcA) is applied by the callers.
+template <bool ttsync = false>
 inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
@@ -31,7 +32,7 @@ inline void llk_unpack_AB_matmul_init_impl(
     const bool partial_face_a,
     const bool partial_face_b,
     const bool stream_narrow = false) {
-    _llk_unpack_AB_matmul_init_(
+    _llk_unpack_AB_matmul_init_<0, 0, ttsync>(
         transpose,
         ct_dim,
         rt_dim,
@@ -45,6 +46,7 @@ inline void llk_unpack_AB_matmul_init_impl(
         stream_narrow);
 }
 
+template <bool ttsync = false>
 inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -58,7 +60,7 @@ inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t rt_dim,
     const std::uint32_t kt_dim) {
     WAYPOINT("UPMW");
-    _llk_unpack_AB_matmul_(
+    _llk_unpack_AB_matmul_<0, 0, ttsync>(
         base_address_a,
         base_address_b,
         tile_index_a,
@@ -81,6 +83,7 @@ inline void llk_unpack_AB_matmul_set_in1_column_stride(
     _llk_unpack_AB_matmul_set_in1_column_stride_(tile_size, stride_tiles);
 }
 
+template <bool ttsync = false>
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -129,7 +132,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         StateVal<Operand<Exu::Unpack>::NumFacesA>(unpA_num_faces),
         StateVal<Operand<Exu::Unpack>::NumFacesB>(unpB_num_faces)));
 
-    llk_unpack_AB_matmul_init_impl(
+    llk_unpack_AB_matmul_init_impl<ttsync>(
         transpose,
         ct_dim,
         rt_dim,
@@ -144,6 +147,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
             ct_dim, rt_dim, unpack_src_format[operandA_id], unpack_src_format[operandB_id], DST_ACCUM_MODE));
 }
 
+template <bool ttsync = false>
 inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -195,7 +199,7 @@ inline void llk_unpack_AB_matmul(
         StateDiscard<std::uint32_t>(tile_index_a),
         StateDiscard<std::uint32_t>(tile_index_b)));
 
-    llk_unpack_AB_matmul_impl(
+    llk_unpack_AB_matmul_impl<ttsync>(
         base_address_a,
         base_address_b,
         tile_index_a,
