@@ -261,12 +261,17 @@ TINY_MATMUL_SHAPE_CASES = [((16, 16), (16, 16))] + [
     for width in (16, 32)
     if (height, width) != (32, 32)
 ]
-TINY_MATMUL_FORMATS = [
+# With no register-format hint the unpacker decodes MX to Float16_b in SrcA/SrcB,
+# so those rows run the Float16_b math (see quasar_mx_smoke). The MxFp4 2x rows
+# change the math format, are full-tile only (_llk_math_matmul_init_ asserts it),
+# and test_matmul sweeps them with direct indexing on and off.
+NON_MX_MATMUL_FORMATS = [
     format
     for format in MATMUL_FORMAT
     if not format.input_format.is_mx_format()
     and not format.output_format.is_mx_format()
 ]
+TINY_MATMUL_FORMATS = NON_MX_MATMUL_FORMATS
 
 
 _ARCH = get_chip_architecture()

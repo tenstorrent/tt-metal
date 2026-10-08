@@ -7,7 +7,7 @@ from helpers.llk_params import ImpliedMathFormat, PerfRunType
 from helpers.param_config import parametrize, runtime
 from quasar.test_matmul_quasar import (
     FULL_MATMUL_SHAPES,
-    MATMUL_FORMAT,
+    NON_MX_MATMUL_FORMATS,
     matmul_dest_acc_modes,
     matmul_dest_sync_modes,
     matmul_tile_dimensions,
@@ -15,14 +15,6 @@ from quasar.test_matmul_quasar import (
 )
 from quasar.test_matmul_quasar import test_matmul as run_matmul
 
-# Direct indexing is full-tile only, and the MxFp4 2x path already sweeps it in
-# test_matmul, so this covers the plain (non-2x) MVMULDI MOP.
-DIRECT_INDEXING_FORMATS = [
-    format
-    for format in MATMUL_FORMAT
-    if not format.input_format.is_mx_format()
-    and not format.output_format.is_mx_format()
-]
 DIRECT_INDEXING_KT_DIMS = (1, 2)
 
 
@@ -45,14 +37,13 @@ def matmul_direct_indexing_tile_dimensions(dest_acc, dest_sync_mode):
 @pytest.mark.quasar
 @parametrize(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
-    format=DIRECT_INDEXING_FORMATS,
+    format=NON_MX_MATMUL_FORMATS,
     math_fidelity=lambda format: get_valid_math_fidelities(format),
     dest_sync_mode=lambda: matmul_dest_sync_modes(),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(matmul_direct_indexing_tile_dimensions),
     implied_math_format=[ImpliedMathFormat.Yes],
     register_format_hint=[None],
-    enable_direct_indexing=[True, False],
     transpose=matmul_transpose_modes,
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
@@ -66,7 +57,6 @@ def test_matmul_direct_indexing(
     format,
     implied_math_format,
     register_format_hint,
-    enable_direct_indexing,
     transpose,
     run_types,
     loop_factor,
@@ -80,8 +70,8 @@ def test_matmul_direct_indexing(
         format,
         implied_math_format,
         register_format_hint,
-        enable_direct_indexing,
-        transpose,
-        run_types,
-        loop_factor,
+        enable_direct_indexing=True,
+        transpose=transpose,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
