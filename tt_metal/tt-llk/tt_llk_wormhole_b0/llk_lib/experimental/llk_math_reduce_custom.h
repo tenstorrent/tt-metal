@@ -112,8 +112,8 @@ inline void _llk_math_reduce_block_max_row_mop_config_(const ckernel::TensorShap
 
     if (tensor_shape.num_faces_r_dim == 1)
     {
-        // Single face-row (16x32 tiny tile): only F0&F1 exist. Reduce them, transpose once, no F2 jump.
-        // Single face-row: 2 GMPOOLs + one transpose block (6 instrs) + CLR_B = 9 instructions.
+        // Single face-row (16x32 tiny tile): only F0&F1 exist. Reduce them, transpose once, no F2 jump:
+        // 2 GMPOOLs + one transpose block (6 instrs) + CLR_B = 9 instructions.
         lltt::record(0, 9);
 
         TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);

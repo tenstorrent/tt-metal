@@ -414,8 +414,8 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, NIGHTLY_SdpaReduceC) {
         for (uint32_t q_chunk_size : q_chunk_sizes) {
             for (uint32_t k_chunk_size : k_chunk_sizes) {
                 for (bool fp32_dest_acc_en : fp32_dest_acc_ens) {
-                    // fp32 16x32 is covered by the tt-llk fuser cases fpu_reduce_block_max_tiny_*; not
-                    // enabled here yet.
+                    // fp32 16x32 is not enabled here: it has not been validated through this metal path
+                    // (the tt-llk fuser cases fpu_reduce_block_max_tiny_* exercise the LLK directly).
                     if (fp32_dest_acc_en) {
                         continue;
                     }
