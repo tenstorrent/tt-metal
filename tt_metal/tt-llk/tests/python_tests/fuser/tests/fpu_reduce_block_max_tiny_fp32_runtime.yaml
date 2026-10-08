@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Same as fpu_reduce_block_max_tiny_fp32 but the unpacker is configured at runtime instead of compile time.
+# Runtime-configured (unpack and math) variant of fpu_reduce_block_max_tiny_fp32.
+# Source B is all ones as the identity scale; source A spans a wide range so the row maxima differ.
 
 supported_archs: ["wormhole", "blackhole"]
 
@@ -13,6 +14,7 @@ operands:
     dims: [256, 256]
     tile_dims: [16, 32]
     format: "Float32"
+    stimuli: [-1000.0, 1000.0]
   - name: "input_B"
     dims: [256, 256]
     tile_dims: [16, 32]

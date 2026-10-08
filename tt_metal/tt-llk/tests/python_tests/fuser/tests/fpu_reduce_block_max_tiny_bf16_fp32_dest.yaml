@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# 16x32 tiny-tile (one face-row) fpu_reduce_block_max with Float32 operands and a 32-bit DEST.
+# 16x32 tiny-tile (one face-row) fpu_reduce_block_max with Float16_b operands, a 32-bit DEST and a Float32 result.
 # Source B is all ones as the identity scale; source A spans a wide range so the row maxima differ.
 
 supported_archs: ["wormhole", "blackhole"]
@@ -13,14 +13,14 @@ operands:
   - name: "input_A"
     dims: [256, 256]
     tile_dims: [16, 32]
-    format: "Float32"
+    format: "Float16_b"
     stimuli: [-1000.0, 1000.0]
   - name: "input_B"
     dims: [256, 256]
     tile_dims: [16, 32]
-    format: "Float32"
+    format: "Float16_b"
     stimuli: 1.0
-  - name: "reduce_block_max_tiny_fp32_out"
+  - name: "reduce_block_max_tiny_bf16_fp32_dest_out"
     dims: [256, 256]
     tile_dims: [16, 32]
     format: "Float32"
@@ -35,6 +35,6 @@ operations:
         unpacker: "ReduceBlockMaxUnpacker"
         math_fidelity: "HiFi2"
     pack:
-      - output: "reduce_block_max_tiny_fp32_out"
+      - output: "reduce_block_max_tiny_bf16_fp32_dest_out"
         block_size: [16, 128]
         packer: "Packer"
