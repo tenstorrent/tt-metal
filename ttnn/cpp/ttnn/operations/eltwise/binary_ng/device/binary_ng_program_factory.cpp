@@ -1139,8 +1139,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         !(has_operand_activations || has_post_activations) ||
         (!(has_operand_activations && has_post_activations) &&
          a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED);
-    const bool bcast_sections = bh_fpu_op && sections_activations && a_sharded &&
-                                c_sharded &&
+    const bool bcast_sections = bh_fpu_op && sections_activations && a_sharded && c_sharded &&
+                                operation_attributes.bcast_operand_section_fits &&
                                 (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
                                  operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B);
     const uint32_t bcast_section_tiles = fp32_dest_acc_en ? 4 : 8;

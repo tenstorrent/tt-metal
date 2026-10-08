@@ -72,6 +72,8 @@ struct BinaryNgDeviceOperation {
         std::optional<binary::BinaryOpParams> op_params;
         // Blackhole: DEST sections per operand pass, set at invoke from L1 occupancy (0: a pass per section).
         uint32_t operand_pass_sections = 0;
+        // Blackhole: whether a's intermediate CB fits a broadcast section, set at invoke as above.
+        bool bcast_operand_section_fits = true;
 
         DataType get_dtype() const;
 
@@ -103,7 +105,8 @@ struct BinaryNgDeviceOperation {
             "c_shard_volume",
             "c_tensor_shape_in_pages",
             "op_params",
-            "operand_pass_sections");
+            "operand_pass_sections",
+            "bcast_operand_section_fits");
 
         auto attribute_values() const {
             return std::make_tuple(
@@ -130,7 +133,8 @@ struct BinaryNgDeviceOperation {
                 c_shard_volume,
                 c_tensor_shape_in_pages,
                 binary_op_type == BinaryOpType::BIAS_GELU ? op_params : std::optional<binary::BinaryOpParams>{},
-                operand_pass_sections);
+                operand_pass_sections,
+                bcast_operand_section_fits);
         }
     };
 
