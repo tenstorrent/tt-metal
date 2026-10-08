@@ -99,7 +99,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
             global_expert_ids (ttnn.Tensor): [experts_per_chip] uint32 ROW_MAJOR (per device).
             gate_up_weights, down_weights (ttnn.Tensor): the plan's bank layout (bfp4 / bfp8).
             reader_down_weights (ttnn.Tensor, optional): when the plan has reader tails (``rdown``).
-            done_words (ttnn.Tensor): persistent zeroed L1 tensor on the plan's ``coords`` cores.
+            done_words (ttnn.Tensor): persistent zeroed L1 sharded uint32 tensor on the plan's ``coords`` cores:
+                one word per down core and reader tail of a subgrid (64 words per core is enough).
             intermediate (int): the expert intermediate size (per device).
             max_tokens_per_expert (int): the dispatch capacity per expert (>= 256).
 

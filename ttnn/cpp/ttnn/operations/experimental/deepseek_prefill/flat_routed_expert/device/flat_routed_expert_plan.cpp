@@ -464,7 +464,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     const uint32_t x_bytes = p.mt * KBLK * BF8_TILE;
     p.h_tiles = p.It * p.mt;
-    const uint32_t out_tiles = p.mt * pcd;
+    // the out region also holds the reader tails' out CB (pcd_r columns), wider than the down cores' when the down
+    // cores are many (a Galaxy chip's 12 x 10 at H 6144: pcd 5 < pcd_r 6)
+    const uint32_t out_tiles = p.mt * std::max(pcd, p.pcd_r);
     uint32_t rect_min = 1000;
     for (const auto& [x0, x1, y0, y1] : p.rects) {
         rect_min = std::min(rect_min, (x1 - x0 + 1) * (y1 - y0 + 1));

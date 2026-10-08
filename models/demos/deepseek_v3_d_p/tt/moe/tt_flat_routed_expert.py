@@ -220,7 +220,11 @@ def _bank_memory_config(shard_tile_rows, banks):
 
 
 # The down coordinators' done words: zero, and left zero by every launch, so one tensor serves every layer that runs
-# the same plan one after another. Per layer it would pin ~2 KB of L1 per coordinator core for every MoE layer.
+# the same plan one after another. One uint32 per down core / reader tail of a subgrid (<= 43 on a Galaxy chip; the
+# op checks the fit), so 64 words: 256 B, the allocator's 64 B granularity. The L1 allocator gives a sharded buffer one
+# address range on every core, so whatever this pins at the top of L1 is lost to every later op's static CBs
+# (the 2 KB tile this used to be is the likely cause of ring_mla's 448 B static-CB clash on Kimi-K3 L24 chunked).
+DONE_WORDS_PER_CORE = 64
 _DONE_WORDS = {}
 
 
@@ -229,14 +233,14 @@ def _done_words(mesh_device, coords):
     if key not in _DONE_WORDS:
         cores = [ttnn.CoreCoord(x, y) for x, y in coords]
         _DONE_WORDS[key] = ttnn.from_torch(
-            torch.zeros(len(cores) * 32, 32),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            torch.zeros(len(cores), DONE_WORDS_PER_CORE, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
-                ttnn.ShardSpec(crs_rects(cores), (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+                ttnn.ShardSpec(crs_rects(cores), (1, DONE_WORDS_PER_CORE), ttnn.ShardOrientation.ROW_MAJOR),
             ),
         )
     return _DONE_WORDS[key]

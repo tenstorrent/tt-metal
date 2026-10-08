@@ -93,6 +93,13 @@ ttnn::Tensor flat_routed_expert(
     TT_FATAL(
         plan->rdown == reader_down_weights.has_value(),
         "flat_routed_expert: reader_down_weights iff the plan has reader tails");
+    // one done word per down core and reader tail of a subgrid, at done_words + 4 * index on its coordinator
+    TT_FATAL(
+        done_words.buffer()->is_l1() && done_words.is_sharded() &&
+            done_words.buffer()->aligned_size_per_bank() >= 4 * (plan->nd_sg + plan->n_rdn),
+        "flat_routed_expert: done_words must be L1 sharded with >= {} B per coordinator core, got {} B",
+        4 * (plan->nd_sg + plan->n_rdn),
+        done_words.buffer()->aligned_size_per_bank());
     const ttnn::Tensor output = ttnn::empty(
         ttnn::Shape(
             {token_index ? token_index->logical_shape()[-1] : x.logical_shape()[-2] / x_pages_per_row, cfg.hidden}),
