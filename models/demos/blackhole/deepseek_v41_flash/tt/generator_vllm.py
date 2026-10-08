@@ -292,7 +292,7 @@ class DeepseekV41ForCausalLM:
         bphys = torch.tensor([(i // Ub) * U + i % Ub for i in range(rows * Ub)], dtype=torch.long)
         row_of = {int(q): i for i, q in enumerate(bphys.tolist())}
         fill = m.decode_filler()
-        cfgs = [(1.0, -1, 0.95), (1.0, -1, 1.0), (0.6, -1, 0.95), (1.0, 50, 0.95), (1.0, 20, 1.0)]
+        cfgs = [(1.0, 129280, 0.95), (1.0, -1, 0.95), (1.0, -1, 1.0), (0.6, -1, 0.95), (1.0, 50, 0.95), (1.0, 20, 1.0)]
         us = [(j + 0.5) / 24 for j in range(24)]
         tot = {c: [0, 0, 0] for c in cfgs}  # draws, mismatches, fallbacks
         zerr = []

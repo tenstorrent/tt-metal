@@ -988,7 +988,16 @@ def _cand(full, cols=8, k=16, T=1.0):
 
 @pytest.mark.parametrize("scale", [0.3, 3.0, 12.0])  # flat -> peaked distributions
 @pytest.mark.parametrize(
-    "cfg", [(1.0, -1, 0.95), (1.0, -1, 1.0), (0.6, -1, 0.9), (1.0, 7, 0.95), (1.0, 5, 1.0), (1.3, 40, 0.8)]
+    "cfg",
+    [
+        (1.0, -1, 0.95),
+        (1.0, -1, 1.0),
+        (0.6, -1, 0.9),
+        (1.0, 7, 0.95),
+        (1.0, 5, 1.0),
+        (1.3, 40, 0.8),
+        (1.0, 129280, 0.95),
+    ],
 )
 def test_sample_exact_equals_the_full_vocabulary_inverse_cdf(scale, cfg):
     torch.manual_seed(3)
@@ -1009,5 +1018,7 @@ def test_sample_exact_equals_the_full_vocabulary_inverse_cdf(scale, cfg):
         got, fb = VS.sample_exact(v, ids, sums, 16, T, kk, pq, u, lambda: full)
         assert got == ref, (cfg, scale, u)
         fb_n += int(fb)
-    if scale >= 12.0 and 0 < kk <= 16:
-        assert fb_n == 0  # peaked + top-k inside the guaranteed prefix: never needs the full row
+    if scale >= 12.0 and (0 < kk <= 16 or kk == VS.VOCAB_FULL):
+        assert (
+            fb_n == 0
+        )  # (the plugin sends top_k = vocab_size for 'no top-k')  # peaked + top-k inside the guaranteed prefix: never needs the full row
