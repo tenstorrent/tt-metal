@@ -96,14 +96,14 @@ def _pipeline_sigma_defs():
     return ns
 
 
-def test_stage2_default_is_two_steps(monkeypatch):
+def test_stage2_default_is_three_steps(monkeypatch):
     ns = _pipeline_sigma_defs()
-    assert ns["_DEFAULT_S2_SIGMAS"] == [0.909375, 0.421875, 0.0]
+    assert ns["_DEFAULT_S2_SIGMAS"] == [0.909375, 0.725, 0.421875, 0.0]
     monkeypatch.delenv("LTX_S2_SIGMAS", raising=False)
-    assert ns["_sigma_override"]("LTX_S2_SIGMAS", ns["_DEFAULT_S2_SIGMAS"]) == [0.909375, 0.421875, 0.0]
+    assert ns["_sigma_override"]("LTX_S2_SIGMAS", ns["_DEFAULT_S2_SIGMAS"]) == [0.909375, 0.725, 0.421875, 0.0]
 
 
-@pytest.mark.parametrize("raw", ["0.909375,0.725,0.421875,0.0", ltx.FAST_S2_SIGMAS])
+@pytest.mark.parametrize("raw", ["0.909375,0.421875,0.0", ltx.FAST_S2_SIGMAS])
 def test_stage2_schedule_still_selectable(raw, monkeypatch):
     ns = _pipeline_sigma_defs()
     monkeypatch.setenv("LTX_S2_SIGMAS", raw)
