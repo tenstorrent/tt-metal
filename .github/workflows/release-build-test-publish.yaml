@@ -262,8 +262,12 @@ jobs:
       metal-ref: ${{ github.sha }}
       # tt-blaze compiles kernels with this container's SFPI; must be this commit's image.
       dev-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      # Run tt-blaze's full merge gate from its main branch.
-      blaze-ref: main
+      # TEMP -- REVERT TO `main` BEFORE MERGING. Points at the tt-blaze branch
+      # carrying `require-profiler: true` (tenstorrent/tt-blaze @ 95e049dca6), which
+      # has not landed on tt-blaze main yet. With `main` here the gate would still
+      # resolve the PLAIN artifacts and this test would prove nothing about the
+      # profiler path. See the REVERTME commit that introduced this line.
+      blaze-ref: jvega/add_wheel_PnR
 
   # Run-level aggregate of per-job AI summaries from release-demo-tests-impl.
   # expected-jobs is the union of single-host and exabox multihost legs so a
