@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <enchantum/enchantum.hpp>
 #include <map>
+#include <optional>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -338,6 +339,18 @@ TEST(Cluster, ReportSystemHealth) {
                 }
                 eth_ss << " core " << connected_eth_core.str();
                 eth_ss << "\n\tRetrain count: " << read_vec[0];
+                if (cluster.arch() == tt::ARCH::BLACKHOLE) {
+                    auto print_speed = [&](const char* label, std::optional<uint32_t> speed) {
+                        eth_ss << " " << label << ": ";
+                        if (speed.has_value()) {
+                            eth_ss << std::dec << *speed << " Gbps";
+                        } else {
+                            eth_ss << "n/a";
+                        }
+                    };
+                    print_speed("Train speed", cluster.get_ethernet_train_speed(chip_id, chan));
+                    print_speed("Target speed", cluster.get_ethernet_target_speed(chip_id, chan));
+                }
                 if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
                     eth_ss << " CRC Errors: 0x" << std::hex << crc_error_val;
                     eth_ss << " Corrected Codewords: 0x" << std::hex << cw_pair_to_full(corr_val_hi, corr_val_lo)

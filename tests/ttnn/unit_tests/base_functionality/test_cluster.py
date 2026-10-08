@@ -32,3 +32,24 @@ def test_cluster_serialize_descriptor():
     except Exception as e:
         # Non-critical, might not be available in all environments
         pytest.skip(f"Cluster descriptor serialization not available: {e}")
+
+
+def test_cluster_ethernet_train_speed_p300():
+    """At least one ethernet link on a P300 reports a trained speed"""
+    if ttnn.cluster.get_cluster_type() != ttnn.cluster.ClusterType.P300:
+        pytest.skip("Requires P300")
+
+    # Blackhole has at most 14 ethernet channels; harvested ones raise
+    up_links = []
+    for device_id in range(ttnn.GetNumAvailableDevices()):
+        for eth_channel in range(14):
+            try:
+                speed = ttnn.cluster.get_ethernet_train_speed(device_id, eth_channel)
+            except RuntimeError:
+                continue
+            if speed is not None:
+                assert speed > 0, f"Device {device_id} channel {eth_channel}: speed {speed}"
+                up_links.append((device_id, eth_channel, speed))
+
+    assert up_links, "No ethernet links up on P300"
+    print(f"Ethernet links up: {up_links}")

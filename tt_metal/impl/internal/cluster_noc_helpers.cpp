@@ -52,6 +52,14 @@ std::uint32_t noc_read_reg_u32(std::uint32_t device_id, std::uint32_t x, std::ui
     return value;
 }
 
+std::optional<std::uint32_t> get_ethernet_train_speed(std::uint32_t device_id, std::uint32_t eth_channel) {
+    return MetalContext::instance().get_cluster().get_ethernet_train_speed(device_id, eth_channel);
+}
+
+std::optional<std::uint32_t> get_ethernet_target_speed(std::uint32_t device_id, std::uint32_t eth_channel) {
+    return MetalContext::instance().get_cluster().get_ethernet_target_speed(device_id, eth_channel);
+}
+
 // Mirrors RiscFirmwareInitializer::generate_device_bank_to_noc_tables for NOC=0.
 // On virtualized-DRAM architectures the table holds TRANSLATED coords as-is;
 // elsewhere the NOC=0 conversion is the identity.

@@ -1410,6 +1410,24 @@ bool Cluster::is_ethernet_link_up(ChipId chip_id, const tt::tt_metal::CoreCoord&
     return this->get_cluster_desc()->ethernet_core_has_active_ethernet_link(chip_id, eth_chan);
 }
 
+std::optional<uint32_t> Cluster::get_ethernet_train_speed(ChipId chip_id, EthernetChannel eth_chan) const {
+    auto* tt_device = driver_->get_chip(chip_id)->get_tt_device();
+    if (!tt_device) {
+        return std::nullopt;
+    }
+    return tt_device->read_eth_core_train_speed(
+        get_soc_desc(chip_id).get_eth_core_for_channel(eth_chan, CoordSystem::NOC0));
+}
+
+std::optional<uint32_t> Cluster::get_ethernet_target_speed(ChipId chip_id, EthernetChannel eth_chan) const {
+    auto* tt_device = driver_->get_chip(chip_id)->get_tt_device();
+    if (!tt_device) {
+        return std::nullopt;
+    }
+    return tt_device->read_eth_core_target_speed(
+        get_soc_desc(chip_id).get_eth_core_for_channel(eth_chan, CoordSystem::NOC0));
+}
+
 std::tuple<ChipId, tt::tt_metal::CoreCoord> Cluster::get_connected_ethernet_core(std::tuple<ChipId, tt::tt_metal::CoreCoord> eth_core) const {
     const auto& soc_desc = get_soc_desc(std::get<0>(eth_core));
     EthernetChannel eth_chan = soc_desc.logical_eth_core_to_chan_map.at(std::get<1>(eth_core));
