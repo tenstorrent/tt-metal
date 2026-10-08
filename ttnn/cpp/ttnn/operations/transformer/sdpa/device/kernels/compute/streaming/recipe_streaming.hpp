@@ -145,8 +145,8 @@ static bool sdpa_skip_prev_sum_pop = false;
 // Word offset of row r's maximum (column 0) in an FP32 tile: 16 x 16 word faces, rows 16-31 in face 2.
 constexpr uint32_t sdpa_max_word(uint32_t r) { return (r / 16) * 512 + (r % 16) * 16; }
 #endif
-// Blackhole benefits from blocked packing at width four; Wormhole keeps eight (as legacy streaming SDPA)
-// because width-4 blocked-pack reconfiguration costs more than it saves there.
+// Blackhole benefits from blocked packing at width four; Wormhole keeps eight (as legacy streaming SDPA): width-4
+// blocked packs there corrupt the recipe outputs (STANDARD rel-L2 30-50%).
 #ifdef ARCH_BLACKHOLE
 constexpr uint32_t MIN_BLOCKED_PACK_TILES = 4;
 #else
