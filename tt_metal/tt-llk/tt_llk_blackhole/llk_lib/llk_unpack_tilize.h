@@ -468,7 +468,7 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
  * @param ct_dim: Number of column tiles in the block, used to size the column stride.
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
  * @param unpB_face_r_dim: Rows per face for operand B.
- * @param narrow_tile: Whether operand A's tile is narrow (single column of faces).
+ * @param narrow_tile: Whether operand A's tile is narrow (single column of faces); requires num_faces <= 2.
  * @note Call @ref _llk_unpack_tilizeA_B_uninit_ to revert the config it writes, including the SrcA Y stride.
  * @ref _llk_unpack_tilizeA_B_ is the matching execute call.
  */
@@ -523,7 +523,7 @@ inline void _llk_unpack_tilizeA_B_init_(
  * @param tile_index_a: Column tile index into operand A.
  * @param block_ct_dim: Number of column tiles in the block, used to compute face strides.
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
- * @param narrow_tile: Whether operand A's tile is narrow (single column of faces).
+ * @param narrow_tile: Whether operand A's tile is narrow (single column of faces); requires num_faces <= 2.
  * @note Call @ref _llk_unpack_tilizeA_B_init_ with matching template args before this function, and
  *       @ref _llk_unpack_tilizeA_B_uninit_ after it to restore modified state.
  */
