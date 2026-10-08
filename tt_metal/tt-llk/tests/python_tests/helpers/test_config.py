@@ -1418,7 +1418,7 @@ class TestConfig:
             # BRISC restarts the TRISCs at every rendezvous from 512 B aligned points and INIT runs out of line,
             # so a code change outside the measured code cannot move it (see barrier.h); with INIT out of line GCC
             # would save callee saved registers inside the measured loops, so they are saved on entry instead
-            OPTIONS_COMPILE += "-DLLK_DBG_BARRIER -fno-shrink-wrap-separate "
+            OPTIONS_COMPILE += "-DLLK_DBG_BARRIER -fno-shrink-wrap-separate -fpatchable-function-entry=1,1 "  # experiment: one never executed nop before every function
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
