@@ -14,6 +14,12 @@
 #define SDPA_RECIPE_OPTIMIZE_PUSHED
 #pragma GCC push_options
 #pragma GCC optimize("O2")
+#elif defined(ARCH_WORMHOLE) && (defined(SDPA_RECIPE_FUSED) || defined(SDPA_RECIPE_LOFI))
+// Wormhole images are larger (SFPU launcher, four packers): fused and FAST builds at -O3 overflow the kernel config
+// buffer.
+#define SDPA_RECIPE_OPTIMIZE_PUSHED
+#pragma GCC push_options
+#pragma GCC optimize("O2")
 #endif
 
 #include "api/compute/compute_kernel_hw_startup.h"
