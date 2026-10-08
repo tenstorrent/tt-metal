@@ -56,8 +56,11 @@ void py_module(nb::module_& mod) {
             &SDPAProgramConfig::exp_approx_mode,
             "Picks the exponential at the rescale, first column and attention sink sites, and the softmax exponential "
             "of the legacy compute kernel. The streaming prefill kernels always run the approximate softmax "
-            "exponential; with fp32_dest_acc_en set and exp_approx_mode False, SDPA prefill keeps the legacy kernel, "
-            "so its softmax runs the accurate exponential.")
+            "exponential. With fp32_dest_acc_en set, True can select the fp32 streaming kernel on Blackhole, which "
+            "runs "
+            "the polynomial exponential at the other three sites; False keeps the legacy kernel, whose softmax runs "
+            "the "
+            "accurate exponential.")
         .def_rw("max_cores_per_head_batch", &SDPAProgramConfig::max_cores_per_head_batch)
         .def_rw("max_k_splits", &SDPAProgramConfig::max_k_splits)
         .def_rw("matmul_math_fidelity", &SDPAProgramConfig::matmul_math_fidelity)

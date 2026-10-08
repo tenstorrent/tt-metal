@@ -1757,7 +1757,7 @@ class ModelArgs:
                 k_chunk_size=k_chunk,
             )
         grid = self.mesh_device.compute_with_storage_grid_size() if self.mesh_device is not None else None
-        # From batch 8 decode is faster on the full grid (measured on Blackhole); below that the (8, 8) grid is.
+        # From batch 8 decode is faster on the full grid (measured on Blackhole); below that the (8, 8) grid is faster.
         wide_blackhole_grid = (
             is_blackhole() and grid is not None and grid.x > 8 and grid.y > 4 and self.max_batch_size >= 8
         )

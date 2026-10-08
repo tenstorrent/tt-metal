@@ -1440,3 +1440,28 @@ def run_sdpa_block_mask(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, p_
         assert out_pass
     # skipped blocks contributed exact zeros, so the two device results should agree closely
     assert (outs[0] - outs[1]).abs().max().item() < 0.02
+
+    # a new mask and map of the same shapes hit the program cache, which has to read the new buffers
+    entries = device.num_program_cache_entries()
+    masked2 = torch.bernoulli(torch.full(masked.shape, p_masked))
+    masked2[..., 0] = 0
+    mask2 = masked2.repeat_interleave(q_chunk_size, dim=2).repeat_interleave(k_chunk_size, dim=3) * -1e9
+    tt_mask2 = ttnn.from_torch(mask2, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_map2 = ttnn.from_torch(
+        (masked2 == 0).to(torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    out2 = ttnn.transformer.scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        is_causal=False,
+        attn_mask=tt_mask2,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        attn_mask_block_map=tt_map2,
+    )
+    assert device.num_program_cache_entries() == entries
+    gt2 = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False, attn_mask=mask2)
+    out_pass, out_pcc = comp_pcc(gt2, ttnn.to_torch(out2)[:, :, :s, :], 0.994)
+    logger.debug(f"cache hit with a new map: {out_pcc}")
+    assert out_pass
