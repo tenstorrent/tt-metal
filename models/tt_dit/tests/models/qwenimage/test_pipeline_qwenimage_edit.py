@@ -23,9 +23,9 @@ import ttnn
 from ....pipelines.qwenimage_edit.pipeline_qwenimage_edit import QwenImageEditPipeline
 from ....utils.test import line_params_req_exact_devices
 
-SAMPLE_IMAGE = "models/sample_data/huggingface_cat_image.jpg"
-PROMPT = "Give the cat a blue wizard hat."
-OUT_PATH = "models/tt_dit/pipelines/qwenimage_edit/edit_pipeline_output.png"
+SAMPLE_IMAGE = os.environ.get("TT_QWEN_IMAGE", "models/sample_data/huggingface_cat_image.jpg")
+PROMPT = os.environ.get("TT_QWEN_PROMPT", "Give the cat a blue wizard hat.")
+OUT_PATH = os.environ.get("TT_QWEN_OUT", "models/tt_dit/pipelines/qwenimage_edit/edit_pipeline_output.png")
 
 
 @pytest.mark.parametrize(
