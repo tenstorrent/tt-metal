@@ -25,6 +25,15 @@ import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.decoder import DSV41Decoder
 
 
+def corruptible(md):
+    """Context manager for the body of a trace CAPTURE: the buffers it allocates (outputs / intermediates that python keeps referencing, e.g. the logits) are intentionally 'corrupted' by replays of
+    other traces and re-written by their own replay; the trace-allocation tracker (TT_METAL_TRACE_ALLOC_TRACKING=1) must not count them. No-op without tracking.
+    """
+    from ttnn.tools.trace_allocation_tracker import corruptible_allocation_scope
+
+    return corruptible_allocation_scope(md)
+
+
 def check_trace_allocations(md, trace_id, name, seen=set()):
     """TT_METAL_TRACE_ALLOC_TRACKING=1 (+ TT_METAL_TRACE_ALLOC_TRACEBACKS=1): log (once per trace and buffer set) the live buffers that were allocated after ``trace_id`` was captured and can
     be clobbered by its replay: the evidence of a device allocation under a captured trace. Cheap no-op without the env.
@@ -213,7 +222,8 @@ class DecodeBucket:
         md = self.m.md
         snaps = self.dec.snapshot_states()
         self.trace_id = ttnn.begin_trace_capture(md, cq_id=0)
-        self.last_logits = self.dec.forward()
+        with corruptible(md):
+            self.last_logits = self.dec.forward()
         ttnn.end_trace_capture(md, self.trace_id, cq_id=0)
         ttnn.synchronize_device(md)
         self.dec.restore_states(snaps)

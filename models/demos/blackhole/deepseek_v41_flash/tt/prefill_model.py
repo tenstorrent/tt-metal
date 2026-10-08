@@ -685,8 +685,11 @@ class DSV41PrefillModel:
         """Second half of ``capture_dyn``: capture the chunk trace (everything is compiled and allocated)."""
         C_, bufs, t0 = self._dyn_compiled
         assert C_ == C
+        from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import corruptible
+
         self.dyn_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
-        self.forward_device(bufs, C, 0, C, dyn=True)
+        with corruptible(self.md):
+            self.forward_device(bufs, C, 0, C, dyn=True)
         ttnn.end_trace_capture(self.md, self.dyn_trace, cq_id=0)
         ttnn.synchronize_device(self.md)
         self._dyn_compiled = None
