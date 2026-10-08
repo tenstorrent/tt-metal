@@ -23,6 +23,21 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 /**
+ * @brief Whether @ref _llk_unpack_A_ reads the operand from L1 through unpacker A (SEC0).
+ *
+ * Otherwise unpacker B (SEC1) reads it: a broadcast or acc_to_dest operand goes through unpacker B
+ * unless DEST is reused as SrcB or the operand is unpacked to DEST. For example, acc_to_dest with
+ * DEST_TO_SRCA unpacks the operand to SrcB and moves DEST to SrcA.
+ * The address programming and the configuration asserts both use this, so they always agree on
+ * which unpacker reads the operand.
+ */
+template <BroadcastType BType, bool acc_to_dest, EltwiseBinaryReuseDestType binary_reuse_dest, bool unpack_to_dest>
+constexpr bool _llk_unpack_A_reads_via_unpacker_A_()
+{
+    return ((BType == BroadcastType::NONE) && (!acc_to_dest)) || binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB || unpack_to_dest;
+}
+
+/**
  * @brief Program the unpacker MOP for a single-operand (A) unpack.
  *
  * Selects the UNPACR instruction sequence based on broadcast type, dest-reuse mode and
@@ -323,7 +338,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     wait_for_next_context(2);
 
     // Set upk0/1 L1 read addr
-    if constexpr (((BType == BroadcastType::NONE) && (!acc_to_dest)) || binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB || unpack_to_dest)
+    if constexpr (_llk_unpack_A_reads_via_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>())
     {
         const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
         cfg[upk0_reg]                = address;
