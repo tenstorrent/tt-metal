@@ -6,6 +6,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
@@ -173,7 +174,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("max_dispatched_tokens_per_expert"),
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("chunk_m_tiles_override") = nb::none());
+        nb::arg("chunk_m_tiles_override") = nb::none(),
+        nb::arg("output_init") = "zero");
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail

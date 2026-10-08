@@ -1008,6 +1008,9 @@ class MultichipDecoder(OptimizedDecoder):
             seq_len,
             compute_kernel_config=self._ck_moe,
             chunk_m_tiles_override=TOKEN_DISPATCH_CHUNK_M_TILES,
+            # S p150x4: no zero-fill of the shared expert-output buffer; combine forwards only counted rows, proven by a
+            # NaN fill giving identical fp32-reference results. XS keeps the fill. Override: TT_LAGUNA_EXPERT_OUT_INIT.
+            output_init=os.environ.get("TT_LAGUNA_EXPERT_OUT_INIT", "none" if self.D == 4 else "zero"),
         )
         ttnn.deallocate(dispatched_tiled)
 

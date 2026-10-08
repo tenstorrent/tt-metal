@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <string>
+
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -97,7 +99,8 @@ ttnn::Tensor unified_routed_expert_moe_stacked(
     const ttnn::Tensor& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    const std::optional<uint32_t>& chunk_m_tiles_override = std::nullopt);
+    const std::optional<uint32_t>& chunk_m_tiles_override = std::nullopt,
+    const std::string& output_init = "zero");
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 

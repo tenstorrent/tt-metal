@@ -4,6 +4,9 @@
 
 #include "unified_routed_expert_ffn.hpp"
 
+#include <limits>
+#include <string>
+
 #include "device/unified_routed_expert_ffn_device_operation.hpp"
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -89,16 +92,21 @@ ttnn::Tensor unified_routed_expert_ffn_impl(
         expert_region_offsets);
 }
 
-ttnn::Tensor make_shared_expert_output(const ttnn::Tensor& dispatched_buffer) {
-    // Zero-initialized (not ttnn::empty): the FFN writer only writes valid
+ttnn::Tensor make_shared_expert_output(const ttnn::Tensor& dispatched_buffer, const std::string& output_init = "zero") {
+    // Zero-initialized by default (not ttnn::empty): the FFN writer only writes valid
     // expert rows. Padding and zero-count expert regions must remain zero for
-    // combine/reduction.
-    return ttnn::zeros_like(
-        dispatched_buffer,
-        /*dtype=*/std::nullopt,
-        /*layout=*/std::nullopt,
-        /*device=*/std::nullopt,
-        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
+    // combine/reduction. "none" skips the fill for callers whose combine reads only
+    // counted rows; "nan" fills NaN to prove that (any padding read surfaces as NaN).
+    const tt::tt_metal::MemoryConfig dram{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    if (output_init == "none") {
+        return ttnn::empty_like(dispatched_buffer, std::nullopt, std::nullopt, std::nullopt, dram);
+    }
+    if (output_init == "nan") {
+        return ttnn::full_like(
+            dispatched_buffer, std::numeric_limits<float>::quiet_NaN(), std::nullopt, std::nullopt, std::nullopt, dram);
+    }
+    TT_FATAL(output_init == "zero", "output_init must be 'zero', 'none' or 'nan', got '{}'", output_init);
+    return ttnn::zeros_like(dispatched_buffer, std::nullopt, std::nullopt, std::nullopt, dram);
 }
 
 }  // namespace
@@ -215,7 +223,8 @@ ttnn::Tensor unified_routed_expert_moe_stacked(
     const ttnn::Tensor& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    const std::optional<uint32_t>& chunk_m_tiles_override) {
+    const std::optional<uint32_t>& chunk_m_tiles_override,
+    const std::string& output_init) {
     TT_FATAL(
         gate_up_projs.logical_shape().rank() == 4,
         "stacked gate_up_projs must have rank 4, got rank {}",
@@ -237,7 +246,7 @@ ttnn::Tensor unified_routed_expert_moe_stacked(
         experts_per_chip,
         down_projs.logical_shape()[-3]);
 
-    auto expert_outputs = make_shared_expert_output(dispatched_buffer);
+    auto expert_outputs = make_shared_expert_output(dispatched_buffer, output_init);
     for (uint32_t local_expert = 0; local_expert < experts_per_chip; ++local_expert) {
         auto tokens = ttnn::extract(
             dispatched_buffer,
