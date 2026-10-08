@@ -36,6 +36,10 @@ namespace tt::tt_metal::streaming_profiler {
 class Service;
 }
 
+namespace tt::debug_event {
+struct SiteMeta;  // hostdev/debug_event_meta.h
+}
+
 namespace tt::tt_metal::experimental::streaming_profiler {
 
 enum class Risc : uint8_t { BRISC = 0, NCRISC = 1, TRISC0 = 2, TRISC1 = 3, TRISC2 = 4 };
@@ -49,6 +53,9 @@ struct SourceLocation {
 struct MarkerSite {
     std::string_view name;  // Valid for the lifetime of the process.
     SourceLocation location;
+    // The metadata struct the site was declared with (e.g. ZoneColorMeta for DeviceZoneScopedNC); read it with
+    // meta->as<T>(). Null for sites without a record, such as the stall zone. Valid for the lifetime of the process.
+    const tt::debug_event::SiteMeta* meta = nullptr;
 };
 
 /**

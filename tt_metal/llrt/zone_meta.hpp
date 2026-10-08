@@ -17,6 +17,8 @@
 #include <span>
 #include <string>
 
+#include "hostdev/debug_event_meta.h"
+
 namespace ll_api {
 class ElfFile;
 }
@@ -25,9 +27,10 @@ namespace tt::llrt {
 
 struct ZoneMetaEntry {
     uint32_t zone_id = 0;
-    std::string name;
+    std::string name;  // the metadata's first string field, by convention its display name
     std::string file;
     uint32_t line = 0;
+    tt::debug_event::SiteMeta meta;  // the site's metadata struct, unmarshalled; see SiteMeta::as<T>()
 };
 
 class ZoneMetaRegistry {

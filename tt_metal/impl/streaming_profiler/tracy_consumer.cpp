@@ -16,6 +16,7 @@
 #include <client/TracyProfiler.hpp>
 #endif
 
+#include "hostdev/debug_event_meta.h"
 #include "impl/streaming_profiler/service.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
@@ -25,6 +26,19 @@ namespace api = experimental::streaming_profiler;
 namespace {
 
 constexpr uint32_t kStallColor = 0xCD4F39u;
+
+// The stall zone's fixed colour, a DeviceZoneScopedNC site's own, or 0 (Tracy's default).
+uint32_t zone_color(const api::MarkerSite& site) {
+    if (site.name == api::STALL_ZONE_NAME) {
+        return kStallColor;
+    }
+    if (site.meta != nullptr) {
+        if (auto m = site.meta->as<tt::debug_event::ZoneColorMeta>()) {
+            return m->color;
+        }
+    }
+    return 0;
+}
 constexpr size_t kSrclocTableInitial = 1024;
 // A probe pair is good to ~35 ns, so the ratio is only worth measuring over a baseline well above that; the map
 // then takes a new segment this often, and each one sees a longer baseline than the last.
@@ -100,7 +114,7 @@ void TracySink::on_batch(const Batch& batch, uint64_t capture) {
             z.site().name,
             ns_since_epoch(z.start_time()),
             ns_since_epoch(z.end_time()),
-            z.site().name == api::STALL_ZONE_NAME ? kStallColor : 0);
+            zone_color(z.site()));
     }
     for (const api::TimestampedData& d : batch.timestamped_data()) {
         push_marker(d.core(), d.site().name, ns_since_epoch(d.time()), d.runtime_id(), d.payload());

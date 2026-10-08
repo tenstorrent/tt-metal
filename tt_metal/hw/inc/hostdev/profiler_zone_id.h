@@ -23,14 +23,14 @@
 // handle's label is local to the object and guarded by .ifndef, so however many times an inlined site is
 // expanded there is one handle and one record for it; TT_PROFILER_TU_ID (this TU's index in its link, from
 // jit_build/build.cpp) keeps labels apart when LTO merges a link's TUs into one assembly. .tt_zone_str is
-// "MS" so __FILE__ is stored once per file; .tt_zone_meta has a real sh_entsize of 16 so the host walks a
-// plain array.
-// Record layout (little-endian; must match ZoneMetaRecord in llrt/zone_meta.cpp):
-//   [0] u32 zone_id (the handle's VMA)   [4] u32 name_ptr (VMA in .tt_zone_str)   [8] u32 file_ptr   [12] u32 line
+// "MS" so __FILE__ is stored once per file. Each .tt_zone_meta record carries the site's metadata struct; its
+// layout is in hostdev/debug_event_meta.h.
 // The whole path, with diagrams: tools/profiler/STREAMING_PROFILER_ZONE_IDS.md.
 #pragma once
 
 #include <stdint.h>
+
+#include "hostdev/debug_event_meta.h"
 
 // The id space: a process assigns [0, TT_ZONE_STALL_ID) to images in load order.
 #define TT_ZONE_ID_BITS 16
@@ -38,9 +38,6 @@
 #define TT_ZONE_ID_MASK (TT_ZONE_ID_COUNT - 1u)
 // The profiler's own stall zone: recognized by value, so it has no ELF record and no source location.
 #define TT_ZONE_STALL_ID (TT_ZONE_ID_COUNT - 1u)
-
-// Bytes per .tt_zone_meta record. Also the section's sh_entsize -- see the host walk in llrt/zone_meta.cpp.
-#define TT_ZONE_META_RECORD_BYTES 16
 
 // Where the linker script places .tt_zone_ids before the host rebases it (hw/toolchain/main.ld carries the
 // same value). Any address with nonzero upper 20 bits serves: it keeps linker relaxation from folding a site's
@@ -57,34 +54,24 @@
 
 #define TT_ZONE_LABEL(ctr) "__tt_zone_" TT_ZONE_STR(TT_PROFILER_TU_ID) "_" TT_ZONE_STR(ctr)
 
-// Declares `site` as this zone site's type; site::id() returns the site's id in two instructions with no
-// memory access. Usable at namespace or block scope. `ctr` is a parameter because __COUNTER__ increments on
-// every appearance and the label needs one value. The asm is not volatile: beyond its result it has no effect
-// the compiler must order, so repeated uses of one site in a function may share a materialization.
-#define TT_ZONE_DEFINE_ID_AT(site, name, ctr)                                                                   \
-    struct site {                                                                                               \
-        static inline __attribute__((always_inline)) uint32_t id() {                                            \
-            uint32_t v;                                                                                         \
-            asm(".ifndef " TT_ZONE_LABEL(ctr) "\n"                                                            \
-                ".pushsection .tt_zone_ids,\"\",@progbits\n" TT_ZONE_LABEL(ctr) ":\t.byte 0\n"               \
-                ".popsection\n"                                                                               \
-                ".pushsection .tt_zone_str,\"MS\",@progbits,1\n"                                              \
-                "8880:\t.asciz \"" name "\"\n"                                                                \
-                "8881:\t.asciz \"" __FILE__ "\"\n"                                                            \
-                ".popsection\n"                                                                               \
-                ".pushsection .tt_zone_meta,\"M\",@progbits," TT_ZONE_STR(TT_ZONE_META_RECORD_BYTES) "\n"     \
-                ".balign 4\n"                                                                                 \
-                ".long " TT_ZONE_LABEL(ctr) "\n"                                                              \
-                ".long 8880b\n"                                                                               \
-                ".long 8881b\n"                                                                               \
-                ".long " TT_ZONE_STR(__LINE__) "\n"                                                           \
-                ".popsection\n"                                                                               \
-                ".endif\n\t"                                                                                  \
-                "lui %0, %%hi(" TT_ZONE_LABEL(ctr) ")\n\t"                                                    \
-                "addi %0, %0, %%lo(" TT_ZONE_LABEL(ctr) ")"                                                   \
-                : "=r"(v)); \
-            return v;                                                                                           \
-        }                                                                                                       \
+// Declares `site` as this site's type; site::id() returns the site's id in two instructions with no memory
+// access. The variadic argument is the site's metadata, a constant value of any metadata struct (e.g.
+// ::tt::debug_event::ZoneColorMeta{"name", 0xFF0000}); hostdev/debug_event_meta.h marshals it into the site's
+// record. Usable at namespace or block scope. `ctr` is a parameter because __COUNTER__ increments on every
+// appearance and the label needs one value. The asm is not volatile: beyond its result it has no effect the
+// compiler must order, so repeated uses of one site in a function may share a materialization.
+#define TT_DEBUG_SITE_AT(site, ctr, ...)                                                                     \
+    struct site {                                                                                            \
+        static inline __attribute__((always_inline)) uint32_t id() {                                         \
+            uint32_t v;                                                                                      \
+            static constexpr auto tt_site_meta = __VA_ARGS__;                                                \
+            asm((::tt::debug_event::detail::emit_site(tt_site_meta, TT_ZONE_LABEL(ctr), __FILE__, __LINE__)) \
+                : "=r"(v));                                                                                  \
+            return v;                                                                                        \
+        }                                                                                                    \
     }
 
-#define TT_ZONE_DEFINE_ID(site, name) TT_ZONE_DEFINE_ID_AT(site, name, __COUNTER__)
+#define TT_DEBUG_SITE(site, ...) TT_DEBUG_SITE_AT(site, __COUNTER__, __VA_ARGS__)
+
+// A site whose only metadata is its name.
+#define TT_ZONE_DEFINE_ID(site, name) TT_DEBUG_SITE(site, ::tt::debug_event::ZoneMeta{name})

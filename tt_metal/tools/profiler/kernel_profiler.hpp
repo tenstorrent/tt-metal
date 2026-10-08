@@ -1150,3 +1150,8 @@ __attribute__((noinline)) void trace_only_init() {
 #ifndef DeviceZoneScopedNIf
 #define DeviceZoneScopedNIf(name, active) DeviceZoneScopedN(name)
 #endif
+
+// Only the streaming profiler carries per-site metadata; elsewhere the colour is dropped.
+#ifndef DeviceZoneScopedNC
+#define DeviceZoneScopedNC(name, color) DeviceZoneScopedN(name)
+#endif

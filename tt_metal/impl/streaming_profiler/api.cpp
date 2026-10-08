@@ -49,8 +49,8 @@ public:
             auto& slot = api::detail::SiteRegistry::sites[e->zone_id];
             if (slot.load(std::memory_order_relaxed) == nullptr) {
                 slot.store(
-                    &sites_.emplace_back(
-                        api::MarkerSite{.name = e->name, .location = {.file = e->file, .line = e->line}}),
+                    &sites_.emplace_back(api::MarkerSite{
+                        .name = e->name, .location = {.file = e->file, .line = e->line}, .meta = &e->meta}),
                     std::memory_order_release);
             }
         }

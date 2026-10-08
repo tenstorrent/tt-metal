@@ -176,9 +176,9 @@ SECTIONS
     . = ALIGN(4);
   }
 
-  /* Zone source locations: a fixed-stride array of 16-byte {zone_id, name_ptr, file_ptr, line}
-     records emitted by TT_ZONE_DEFINE_ID (hostdev/profiler_zone_id.h), which the host walks
-     by that stride. (INFO) for the same reason as above. */
+  /* Site records: {id, signature_ptr, file_ptr, line} followed by the site's metadata struct,
+     emitted by TT_DEBUG_SITE (hostdev/profiler_zone_id.h, layout in hostdev/debug_event_meta.h);
+     the host sizes each record from its signature. (INFO) for the same reason as above. */
   .tt_zone_meta TT_ZONE_META_VMA (INFO) :
   {
     __tt_zone_meta_start = .;
