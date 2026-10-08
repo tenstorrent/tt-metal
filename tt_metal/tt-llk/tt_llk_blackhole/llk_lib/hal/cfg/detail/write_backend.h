@@ -26,8 +26,8 @@ template <const Field& F>
 inline __attribute__((always_inline)) void write_thread_word(const std::uint32_t section, const std::uint32_t value)
 {
     LLK_ASSERT(section < F.count, "section index out of range for this register");
-    LLK_ASSERT(value <= 0xffffu, "prepacked thread CFG value exceeds 16 bits");
-    TTI_SETC16(F.addr32(static_cast<Sec>(section)), value & 0xffffu);
+    LLK_ASSERT(value <= ThreadCfgWordMask, "prepacked thread CFG value exceeds 16 bits");
+    TTI_SETC16(F.addr32(static_cast<Sec>(section)), value & ThreadCfgWordMask);
 }
 
 template <std::uint32_t Addr>
@@ -140,7 +140,7 @@ inline __attribute__((always_inline)) void write_word(const std::uint32_t value,
     {
         // SETC16 replaces the complete thread word. Bits absent from Mask are
         // written as zero, matching the existing single-field API.
-        TT_SETC16(Addr, ((value << Shamt) & Mask) & 0xffffu);
+        TT_SETC16(Addr, ((value << Shamt) & Mask) & ThreadCfgWordMask);
     }
     else
     {
@@ -155,7 +155,7 @@ inline __attribute__((always_inline)) void write_word()
 {
     if constexpr (Scope == RegisterScope::Thread)
     {
-        TTI_SETC16(Addr, Data & 0xffffu);
+        TTI_SETC16(Addr, Data & ThreadCfgWordMask);
     }
     else
     {
@@ -201,7 +201,7 @@ inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprInd
         }
         if constexpr (GprIndex == hal::detail::DynamicGprIndex)
         {
-            LLK_ASSERT(transfer.source.index < 64u, "WRCFG GPR index must be in [0, 63]");
+            LLK_ASSERT(transfer.source.index < hal::detail::GprCount, "WRCFG GPR index must be in [0, 63]");
             if constexpr (Size == GprTransferSize::Bits128)
             {
                 LLK_ASSERT((transfer.source.index & 0x3u) == 0u, "128-bit WRCFG source GPR must be four-word aligned");
@@ -210,7 +210,7 @@ inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprInd
         }
         else
         {
-            static_assert(GprIndex < 64u, "WRCFG GPR index must be in [0, 63]");
+            static_assert(GprIndex < hal::detail::GprCount, "WRCFG GPR index must be in [0, 63]");
             if constexpr (Size == GprTransferSize::Bits128)
             {
                 static_assert((GprIndex & 0x3u) == 0u, "128-bit WRCFG source GPR must be four-word aligned");

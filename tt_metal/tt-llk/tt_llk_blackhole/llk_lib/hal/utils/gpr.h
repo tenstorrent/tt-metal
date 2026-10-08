@@ -10,8 +10,9 @@ namespace hal
 {
 namespace detail
 {
+inline constexpr std::uint32_t GprCount        = 64u;
 inline constexpr std::uint32_t DynamicGprIndex = 0xffffffffu;
-}
+} // namespace detail
 
 /**
  * @brief Identify one compile-time or runtime-selected Tensix GPR.
