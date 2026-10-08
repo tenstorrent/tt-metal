@@ -6,6 +6,7 @@ This codebase includes the Qwen2.5 family of models and currently supports the m
 - Qwen2.5-VL-7B: [Qwen/Qwen2.5-VL-7B](https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct)
 - Qwen2.5-VL-32B: [Qwen/Qwen2.5-VL-32B](https://huggingface.co/Qwen/Qwen2.5-VL-32B-Instruct)
 - Qwen2.5-VL-72B: [Qwen/Qwen2.5-VL-72B](https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct)
+- olmOCR-2-7B: [allenai/olmOCR-2-7B-1025](https://huggingface.co/allenai/olmOCR-2-7B-1025), a document-OCR fine-tune of Qwen2.5-VL-7B that runs through the same implementation
 
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
@@ -34,6 +35,7 @@ MESH_DEVICE=<device_name> HF_MODEL=<model_name> pytest models/demos/qwen25_vl/de
 | Qwen2.5-VL-7B      | Qwen/Qwen2.5-VL-7B-Instruct                 | `N300`, `T3K`, `TG`                |
 | Qwen2.5-VL-32B     | Qwen/Qwen2.5-VL-32B-Instruct                | `T3K`, `TG`                        |
 | Qwen2.5-VL-72B     | Qwen/Qwen2.5-VL-72B-Instruct                | `T3K`, `TG`                        |
+| olmOCR-2-7B        | allenai/olmOCR-2-7B-1025                    | `N300`, `T3K`, `TG`                |
 
 ### Galaxy (32 chips)
 On a Wormhole Galaxy (`MESH_DEVICE=TG`) every variant runs data-parallel: the 32 chips are opened as a
