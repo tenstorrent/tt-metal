@@ -12,6 +12,11 @@ one tree runs both arms of an A/B. Read once at import (set them before the mode
                            of two reduce-scatters + an add (changes the bf16 summation order)
   M3_KA_MM_FIDELITY     comma list of matmul groups to run LoFi + fp32 dest acc instead of the HiFi2 default:
                            qkv, index, shared, dense (precision-changing -> L2 gate)
+  M3_KA_EXPERT_PLACEMENT  path to a per-layer expert placement (utils/expert_placement.py): relabels the routed
+                           experts of each listed MoE layer so the hot ones spread over the 16 chips. The router's
+                           columns and the cached expert weights are permuted at load (exact bytes); routing
+                           decisions are unchanged. Column-preserving placements are bit-exact; cross-column ones
+                           change the TP reduce-scatter summation grouping (class B). Read at model build.
 """
 
 import os
@@ -25,6 +30,7 @@ ROPE_FUSED = _on("M3_KA_ROPE_FUSED")
 SKIP_IDX_SPLIT = _on("M3_KA_SKIP_IDX_SPLIT")
 MOE_SINGLE_RS = _on("M3_KA_MOE_SINGLE_RS")
 MM_FIDELITY = {g.strip() for g in os.getenv("M3_KA_MM_FIDELITY", "").split(",") if g.strip()}
+EXPERT_PLACEMENT = os.getenv("M3_KA_EXPERT_PLACEMENT", "").strip() or None
 
 
 _LOFI = None

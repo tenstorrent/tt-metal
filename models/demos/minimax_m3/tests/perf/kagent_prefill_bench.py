@@ -48,6 +48,9 @@ Env (defaults = the deployed 16p16d prefill config):
   BENCH_FINALS        comma list of sweep variants: for each, re-fill the prefix under it, then the logits pass
                       and the KV dump into BENCH_DUMP_DIR/<variant> (several gated dumps from one model build)
   BENCH_RESULTS_JSONL append one JSON line with every number                         [unset]
+  BENCH_CAPTURE_ROUTING dir: one extra pass over [0, PREFIX+NEW) recording every MoE layer's router top-k expert
+                      ids per token -> <dir>/routing.pt (MoE balance analysis, utils/expert_placement.py)  [unset]
+  M3_KA_EXPERT_PLACEMENT per-layer expert placement file (utils/expert_placement.py), applied at model build [unset]
   EXPERT_DTYPE        bf4 | bf8                                                      [bf4]
 """
 
@@ -124,6 +127,90 @@ def load_tokens(n):
     if len(src) < n:
         log(f"WARNING: {d} has {len(src)} tokens < {n}: tiling cyclically")
     return [src[i % len(src)] for i in range(n)]
+
+
+def capture_routing(runtime, mesh, rows, cols, chunk, total, run_span, sync, out_dir):
+    """Re-run [0, total) once and record each MoE layer's router top-k expert ids per token (natural order).
+
+    The router runs per device on the row's full-emb hidden states, so the 4 chips of a mesh row hold identical
+    indices (checked); one chip per row gives the row's 1 280 tokens. Saves ``routing.pt`` =
+    {"layers": {global_layer: int16 [total, topk]}, "device_ids": mesh order, "mesh": (rows, cols)} and logs the
+    request rows' per-chip routed-row skew."""
+    from models.demos.minimax_m3.tt.moe.tt_minimax_moe import TtMiniMaxMoE
+
+    layer_cls = type(runtime.model.layers[0])
+    orig_layer_call = layer_cls.__call__
+    orig_fwd = TtMiniMaxMoE.forward
+    cur = {"layer": None, "start": None}
+    per_layer = {}
+    mismatch = []
+
+    def layer_call(self, *a, **k):
+        cur["layer"] = self.layer_idx
+        return orig_layer_call(self, *a, **k)
+
+    def fwd(self, x, topk_indices=None, topk_weights=None, **k):
+        if topk_indices is not None:
+            shards = ttnn.get_device_tensors(topk_indices)
+            got = []
+            for r in range(rows):
+                ref = ttnn.to_torch(shards[r * cols])
+                ref = ref.reshape(-1, ref.shape[-1])
+                for c in range(1, cols):
+                    o = ttnn.to_torch(shards[r * cols + c]).reshape(ref.shape)
+                    if not torch.equal(o, ref):
+                        mismatch.append((cur["layer"], cur["start"], r, c))
+                got.append(ref[:, : self.num_experts_per_tok].to(torch.int64))
+            per_layer.setdefault(cur["layer"], []).append((cur["start"], got))
+        return orig_fwd(self, x, topk_indices=topk_indices, topk_weights=topk_weights, **k)
+
+    orig_pc = runtime.prefill_chunk
+
+    def pc(inp, kv, slot_id=0, actual_start=0, actual_end=None, **k):
+        cur["start"] = (actual_start, actual_end)
+        return orig_pc(inp, kv, slot_id=slot_id, actual_start=actual_start, actual_end=actual_end, **k)
+
+    layer_cls.__call__ = layer_call
+    TtMiniMaxMoE.forward = fwd
+    runtime.prefill_chunk = pc
+    t0 = time.perf_counter()
+    try:
+        run_span(0, total)
+        sync()
+    finally:
+        layer_cls.__call__ = orig_layer_call
+        TtMiniMaxMoE.forward = orig_fwd
+        runtime.prefill_chunk = orig_pc
+    out = {}
+    for L, lst in per_layer.items():
+        full = torch.full((total, 4), -1, dtype=torch.int64)
+        for (a, b), got in lst:
+            pos = rotated_chunk_positions(a, rows, chunk // rows)
+            for r in range(rows):
+                for j, p in enumerate(pos[r]):
+                    if p < b:
+                        full[p] = got[r][j]
+        out[L] = full.to(torch.int16)
+    dev_ids = list(mesh.get_device_ids())
+    os.makedirs(out_dir, exist_ok=True)
+    torch.save({"layers": out, "device_ids": dev_ids, "mesh": (rows, cols)}, Path(out_dir) / "routing.pt")
+    log(
+        f"ROUTING capture: {len(out)} MoE layers x {total} tokens in {time.perf_counter()-t0:.1f} s -> {out_dir}; "
+        f"row-replica mismatches {len(mismatch)} {mismatch[:4]}; mesh device ids {dev_ids}"
+    )
+    # request-row skew (experts of chip (r, g) = 32 g + 8 r + [0, 8), the default ExpertMapping)
+    req = slice(total - int(os.getenv("BENCH_NEW", "5120")), total)
+    ratios = []
+    for L in sorted(out):
+        cnt = torch.bincount(out[L][req].flatten().to(torch.int64).clamp(min=0), minlength=128).float()
+        chip = cnt.view(cols, rows, 8).sum(-1)  # [g, r]
+        ratios.append((L, (chip.max() / chip.mean()).item(), (cnt.max() / cnt.mean()).item()))
+    rs = [x[1] for x in ratios]
+    log(
+        f"ROUTING request rows: per-chip routed rows max/mean median {statistics.median(rs):.3f} "
+        f"[min {min(rs):.3f}, max {max(rs):.3f}] over {len(rs)} layers; per-expert max/mean median "
+        f"{statistics.median([x[2] for x in ratios]):.2f}"
+    )
 
 
 def main():
@@ -311,6 +398,13 @@ def main():
             f"wall median {med*1e3:.1f} ms [min {min(times)*1e3:.1f}, max {max(times)*1e3:.1f}] over {len(times)} "
             f"-> {new/med:.1f} tok/s; host enqueue-return median {statistics.median(enq)*1e3:.1f} ms"
         )
+
+        # ---- routing capture: every MoE layer's router top-k over [0, total) (MoE balance analysis) ---------------
+        if os.getenv("BENCH_CAPTURE_ROUTING"):
+            maybe_stop("routing capture")
+            capture_routing(
+                runtime, mesh, rows, cols, chunk, total, run_span, sync, os.environ["BENCH_CAPTURE_ROUTING"]
+            )
 
         # ---- interleaved in-process A/B sweep (same model, cache and host state; variants alternate) -----------
         # BENCH_SWEEP="name:ack=sync;name2:ack=event,ROPE_FUSED=1;..." keys: ack and any kagent_flags boolean.

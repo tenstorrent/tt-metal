@@ -57,8 +57,12 @@ class TtMiniMaxMoE(LightweightModule):
         layer_idx: int = 0,
         route_scale: float = 1.0,
         reduce_scatter_fn=None,
+        expert_perm=None,
     ):
         super().__init__()
+        # M3_KA_EXPERT_PLACEMENT: the router already emits labels (perm[label] = expert); only the expert weights
+        # have to follow. Every label -> chip table below stays the default.
+        self.expert_perm = expert_perm
         self.mesh_device = mesh_device
         self.num_routed_experts = num_routed_experts
         self.num_experts_per_tok = num_experts_per_tok
@@ -157,7 +161,12 @@ class TtMiniMaxMoE(LightweightModule):
         # M3 routed expert: the fused unified_routed_expert_moe kernel with the clamped swigluoai
         # activation (RoutedExpertActivation.SwiGluOai bakes in M3's alpha=1.702 / limit=7.0). This
         # replaced the earlier host-loop CompositeRoutedExpert once #47825 added swigluoai to the kernel.
-        self.routed_expert = TtRoutedExpert(
+        routed_expert_cls = TtRoutedExpert
+        if expert_perm is not None:
+            from models.demos.minimax_m3.tt.moe.placed_routed_expert import make_placed_routed_expert_cls
+
+            routed_expert_cls = make_placed_routed_expert_cls(expert_perm)
+        self.routed_expert = routed_expert_cls(
             mesh_device=mesh_device,
             experts_per_chip=experts_per_chip,
             global_expert_idx_table=global_expert_idx_tt,
@@ -201,6 +210,7 @@ class TtMiniMaxMoE(LightweightModule):
            gate runs (standalone test path; expects TP-sharded emb).
         """
         if topk_indices is None:
+            assert self.expert_perm is None, "an expert placement needs the (permuted) external router's top-k"
             with zone("gate", FINE):
                 scores, indices, gate_logits = self.gate(ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2])))
                 ttnn.deallocate(gate_logits)

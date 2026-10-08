@@ -72,10 +72,21 @@ def route_tokens_to_experts_fused(
 
 
 class TopKRouter:
-    def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None, num_tokens=None, mesh_config=None):
+    def __init__(
+        self,
+        mesh_device,
+        hf_config,
+        state_dict,
+        tensor_cache_path=None,
+        num_tokens=None,
+        mesh_config=None,
+        expert_perm=None,
+    ):
         """num_tokens: tokens per device per forward (chunk_size // sp_factor). Required — the gate's
         bias is materialized at that width (see below).
-        mesh_config: resolves which mesh axis is SP for build_padding_config; None assumes axis 0."""
+        mesh_config: resolves which mesh axis is SP for build_padding_config; None assumes axis 0.
+        expert_perm: optional expert placement (utils/expert_placement.py, perm[label] = expert): the gate
+        weight's and the correction bias's expert columns are permuted so the router emits labels."""
         self.top_k = hf_config.num_experts_per_tok
         self.num_experts = hf_config.num_local_experts
         self.hidden_dim = hf_config.hidden_size
@@ -122,6 +133,15 @@ class TopKRouter:
             if build_bias
             else None
         )
+
+        if expert_perm is not None:
+            # M3_KA_EXPERT_PLACEMENT: label n is expert perm[n]. Pure bf16 column moves of the cached tensors.
+            from models.demos.minimax_m3.tt.moe.placed_routed_expert import permute_router_columns
+
+            perm_list = [int(x) for x in expert_perm]
+            self.weight = permute_router_columns(self.weight, perm_list, mesh_device)
+            if self.score_bias is not None:
+                self.score_bias = permute_router_columns(self.score_bias, perm_list, mesh_device)
 
         # The fused gate requires bias.logical_shape() == scores.logical_shape(), so the bias is
         # materialized once here at the full [num_tokens, num_experts] width — one ttnn.repeat off the
