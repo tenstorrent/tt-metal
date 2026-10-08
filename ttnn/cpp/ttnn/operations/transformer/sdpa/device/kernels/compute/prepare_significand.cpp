@@ -23,8 +23,14 @@ inline void round_lofi_significand() {
 #pragma GCC unroll 8
     for (int i = 0; i < ITERATIONS; ++i) {
         sfpi::vFloat x = sfpi::dst_reg[0];
+#ifdef ARCH_WORMHOLE
+        // Wormhole has no arithmetic vector shift: shift logically (the & 1 discards the difference).
+        sfpi::vUInt raw = sfpi::as<sfpi::vUInt>(x);
+        sfpi::vUInt odd = (raw >> shift) & 1;
+#else
         sfpi::vInt raw = sfpi::as<sfpi::vInt>(x);
         sfpi::vInt odd = (raw >> shift) & 1;
+#endif
         raw = (raw + bias + odd) & mask;
         sfpi::dst_reg[0] = sfpi::as<sfpi::vFloat>(raw);
         sfpi::dst_reg++;

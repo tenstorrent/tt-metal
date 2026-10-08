@@ -32,9 +32,9 @@
  *     reduce path (real max, theta select, rescale of its O and l rows); every other group keeps m_ref.
  * Same CB protocol as sdpa_inner_loop_step: scores, chunk sums, O and l banks, the max ping-pong.
  */
-// Ring kernels and key-range (SDPA_RECIPE_KRANGE) dense kernels: unpack only issues and waits here, so its copy is
-// size-optimized (their unpack image is the one nearest the kernel config buffer limit).
-#if defined(TRISC_UNPACK) && (defined(SDPA_RECIPE_RING) || defined(SDPA_RECIPE_KRANGE))
+// Ring kernels, key-range (SDPA_RECIPE_KRANGE) dense kernels and Wormhole: unpack only issues and waits here, so
+// its copy is size-optimized (their unpack image is the one nearest the kernel config buffer limit).
+#if defined(TRISC_UNPACK) && (defined(SDPA_RECIPE_RING) || defined(SDPA_RECIPE_KRANGE) || defined(ARCH_WORMHOLE))
 #define SDPA_FUSED_CHUNK_ATTR __attribute__((noinline, optimize("Os")))
 #else
 #define SDPA_FUSED_CHUNK_ATTR __attribute__((noinline))
