@@ -115,20 +115,31 @@ json make_credit_transport_json(const FabricBuilderContext& builder_context, Mes
     return transport;
 }
 
-// ============ Regions ============
+// ============ Contents ============
 
-json l1_region_json(const manifest::L1Region& region) {
+// An array also gets its element count and the size of one element.
+json l1_json(const manifest::content::L1& l1) {
     json out;
-    out["address"] = region.address;
-    out["size"] = region.size;
-    if (region.num_elements.has_value()) {
-        out["num_elements"] = *region.num_elements;
+    out["address"] = l1.address;
+    out["size"] = l1.type.size;
+    if (l1.type.count > 0) {
+        out["num_elements"] = l1.type.count;
+        out["size_per_element"] = manifest::element_size(l1.type);
     }
-    if (region.size_per_element.has_value()) {
-        out["size_per_element"] = *region.size_per_element;
-    }
-    out["schema"] = region.schema;
-    out["cleared_by_host"] = region.cleared_by_host;
+    out["schema"] = manifest::schema_name(l1.type);
+    out["cleared_by_host"] = l1.cleared_by_host;
+    return out;
+}
+
+json ring_buffer_json(const std::optional<manifest::content::L1>& ring) {
+    return ring.has_value() ? l1_json(*ring) : json(nullptr);
+}
+
+json stream_json(const manifest::content::Stream& stream) {
+    json out;
+    out["stream_id"] = stream.stream_id;
+    out["register"] = lower_enum_name(stream.reg);
+    out["schema"] = manifest::schema_name(stream.type);
     return out;
 }
 
@@ -188,8 +199,8 @@ json router_shape_json(const manifest::RouterShape& shape) {
 json credit_counters_json(const manifest::L1CreditCounters& counters) {
     using manifest::CreditCounterArray;
     json out;
-    const auto add = [&out](CreditCounterArray array, const manifest::L1Region& region, const char* index_space) {
-        json entry = l1_region_json(region);
+    const auto add = [&out](CreditCounterArray array, const manifest::content::L1& l1, const char* index_space) {
+        json entry = l1_json(l1);
         entry["index_space"] = index_space;
         out[lower_enum_name(array)] = std::move(entry);
     };
@@ -202,18 +213,10 @@ json credit_counters_json(const manifest::L1CreditCounters& counters) {
 
 // ============ Channels ============
 
-json stream_ref_json(const manifest::StreamRef& stream) {
-    json out;
-    out["stream_id"] = stream.stream_id;
-    out["register"] = lower_enum_name(stream.reg);
-    out["schema"] = stream.schema;
-    return out;
-}
-
 // A counter element names its array by its path within the router, e.g. "credit_counters/to_sender_ack".
 json credit_ref_json(const manifest::CreditRef& credit) {
-    if (const auto* stream = std::get_if<manifest::StreamRef>(&credit)) {
-        return stream_ref_json(*stream);
+    if (const auto* stream = std::get_if<manifest::content::Stream>(&credit)) {
+        return stream_json(*stream);
     }
     const auto& counter = std::get<manifest::CounterRef>(credit);
     json out;
@@ -222,38 +225,25 @@ json credit_ref_json(const manifest::CreditRef& credit) {
     return out;
 }
 
-// Keyed by field. Each carries its category and kind, then its region, its stream register or its value.
+// Keyed by field. Each carries its category and kind, then its memory, its stream register or its value.
 json fields_json(const std::vector<manifest::Field>& fields) {
     json out = json::object();
     for (const auto& field : fields) {
         json entry;
         entry["category"] = lower_enum_name(field.category);
-        entry["kind"] = kind_name(field.kind);
-        const auto schema = [](const manifest::ElementType& element) {
-            return manifest::schema_name(element.type, element.size);
-        };
+        entry["kind"] = kind_name(field.content);
         std::visit(
             ttsl::overloaded{
-                [&](const manifest::kind::L1Value& kind) {
-                    entry.update(l1_region_json(manifest::L1Region{
-                        .address = field.arg,
-                        .size = kind.element.size,
-                        .schema = schema(kind.element),
-                        .cleared_by_host = field.cleared_by_host,
-                    }));
-                },
-                [&](const manifest::kind::Stream& kind) {
-                    entry.update(stream_ref_json(
-                        manifest::StreamRef{.stream_id = field.arg, .reg = kind.reg, .schema = schema(kind.element)}));
-                },
-                [&](const manifest::kind::Number&) { entry["value"] = field.arg; },
-                [&](const manifest::kind::Flag&) { entry["value"] = field.arg != 0; },
-                [&](const manifest::kind::Enum& kind) {
-                    entry["value"] = field.arg;
-                    entry["schema"] = schema(kind.element);
+                [&](const manifest::content::L1& l1) { entry.update(l1_json(l1)); },
+                [&](const manifest::content::Stream& stream) { entry.update(stream_json(stream)); },
+                [&](const manifest::content::Number& number) { entry["value"] = number.value; },
+                [&](const manifest::content::Flag& flag) { entry["value"] = flag.value; },
+                [&](const manifest::content::Enum& enumerator) {
+                    entry["value"] = enumerator.value;
+                    entry["schema"] = manifest::schema_name(enumerator.type);
                 },
             },
-            field.kind);
+            field.content);
         const std::string key(field.key);
         TT_FATAL(!out.contains(key), "Fabric manifest: two fields are keyed {}", key);
         out[key] = std::move(entry);
@@ -298,7 +288,7 @@ json sender_channel_json(
     out["status"] = lower_enum_name(sender.status);
     out["serviced_by"] = serviced_by_json(sender.serviced_by);
     out["producer"] = sender_producer_json(sender.producer, node, identity);
-    out["ring_buffer"] = l1_region_json(sender.ring_buffer);
+    out["ring_buffer"] = ring_buffer_json(sender.ring_buffer);
     out["credits"] = std::move(credits);
     out["fields"] = fields_json(sender.fields);
     return out;
@@ -310,7 +300,7 @@ json receiver_channel_json(const manifest::ReceiverChannel& receiver) {
     out["serviced_by"] = serviced_by_json(receiver.serviced_by);
     out["forwards_on"] =
         receiver.forwards_on.has_value() ? json(fmt::format("vc{}", *receiver.forwards_on)) : json(nullptr);
-    out["ring_buffer"] = l1_region_json(receiver.ring_buffer);
+    out["ring_buffer"] = ring_buffer_json(receiver.ring_buffer);
     out["fields"] = fields_json(receiver.fields);
     return out;
 }
@@ -381,16 +371,16 @@ json enum_names_json() {
     return out;
 }
 
-template <typename... Kinds>
-json kind_names_json(std::type_identity<std::variant<Kinds...>>) {
-    return json::array({kind_name<Kinds>()...});
+template <typename... Contents>
+json kind_names_json(std::type_identity<std::variant<Contents...>>) {
+    return json::array({kind_name<Contents>()...});
 }
 
 // Every category and kind a field can have, so readers can group and read fields without a copy of the enums.
 json make_vocabulary_json() {
     json out;
     out["categories"] = enum_names_json<manifest::FieldCategory>();
-    out["kinds"] = kind_names_json(std::type_identity<manifest::Kind>{});
+    out["kinds"] = kind_names_json(std::type_identity<manifest::Content>{});
     return out;
 }
 
