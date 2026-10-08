@@ -8,8 +8,8 @@
 #include "api/dataflow/circular_buffer.h"
 #include "fp32_state_sfpu.hpp"
 
-#ifndef ARCH_BLACKHOLE
-#error "SDPA FP32 streaming state is currently Blackhole-only"
+#if !defined(ARCH_BLACKHOLE) && !defined(ARCH_WORMHOLE)
+#error "SDPA FP32 streaming state supports Blackhole and Wormhole only"
 #endif
 static_assert(DST_ACCUM_MODE, "SDPA FP32 streaming state requires FP32 destination registers");
 
@@ -78,11 +78,13 @@ ALWI void rescale_and_accumulate(
     if constexpr (pairs > 1) {
         state_unpack_mop(4 * pairs);
         unary_bcast<BroadcastType::NONE>(old_cb, old_index, 0);
+#ifdef ARCH_BLACKHOLE
         MATH(for (uint32_t tile = 1; tile < pairs; ++tile) {
             for (uint32_t face = 0; face < 4; ++face) {
                 TT_ZEROACC(p_zeroacc::CLR_16, 1, 1, ADDR_MOD_3, get_dest_index_in_faces(tile, face));
             }
         })
+#endif
         state_unpack_mop(4);
     } else {
         unary_bcast<BroadcastType::NONE>(old_cb, old_index, 0);
