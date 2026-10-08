@@ -7,8 +7,6 @@
 #include <fmt/format.h>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
-
 #include <algorithm>
 #include <array>
 #include <numeric>
@@ -77,8 +75,7 @@ manifest::RouterIdentity collect_identity(const RouterLocation& location) {
     };
 }
 
-// Return the EthLink based on the router's location and chip-wide facts. The peer the router was built toward
-// must be the one ControlPlane connects its channel to.
+// Return what the router's location and chip-wide facts know about its link.
 manifest::EthLink collect_link(const ManifestRouterInputs& inputs) {
     const auto& location = inputs.location;
     const auto& capability = inputs.chip_facts.per_direction_capabilities.at(location.direction);
@@ -86,16 +83,7 @@ manifest::EthLink collect_link(const ManifestRouterInputs& inputs) {
         capability.has_value(),
         "Fabric manifest: router on channel {} has no classified edge in the direction it faces",
         location.eth_chan);
-    const auto peer = inputs.control_plane.try_get_connected_mesh_chip_chan_ids(
-        inputs.erisc_builder.local_fabric_node_id, location.eth_chan);
-    TT_FATAL(
-        !peer.has_value() || peer->first == location.remote_node,
-        "Fabric manifest: router on channel {} was built toward {}, but ControlPlane connects it to {}",
-        location.eth_chan,
-        location.remote_node,
-        peer->first);
     return {
-        .direction = builder::routing_direction_to_eth_direction(location.direction),
         .edge_capability = *capability,
         .is_dispatch_link = location.is_dispatch_link,
     };
@@ -366,60 +354,17 @@ manifest::ChannelStatus collect_status(
         channel);
 }
 
-// The worker channel is fed by the local worker, or in mux mode by the tensix mux. Any other channel is fed by a
-// sibling router once one has connected to it, which makes the channel's connection static.
-std::optional<manifest::SenderChannelProducer> collect_sender_producer(
+// The worker channel is fed by the local worker, or in mux mode by the tensix mux. A sibling producer comes from the
+// edge that lands on the channel, which the chip pass sets.
+std::optional<manifest::SenderChannelProducer> collect_local_producer(
     const ChannelContext& ctx, const SenderChannelIndex& index) {
-    const auto& erisc_builder = ctx.inputs.erisc_builder;
-    const bool static_connection = erisc_builder.sender_channel_connection_liveness_check_disable_array[index.compact];
-    check_named_arg(
-        ctx.inputs.kernel.named_ct_args,
-        fmt::format("SENDER_CH_{}_WAIT_STATIC_CONNECTION", index.compact),
-        static_connection ? 1 : 0);
-
-    if (ctx.producer_slots.worker_channel(index.vc) == index.channel) {
-        TT_FATAL(
-            !static_connection,
-            "Fabric manifest: VC{} channel {} is the worker channel, but a router connected to it",
-            index.vc,
-            index.channel);
-        if (ctx.mux_mode && index.vc == 0) {
-            return manifest::LocalTensixMux{};
-        }
-        return manifest::LocalWorker{};
-    }
-    if (!static_connection) {
+    if (ctx.producer_slots.worker_channel(index.vc) != index.channel) {
         return std::nullopt;
     }
-
-    if (ctx.is_2d_fabric) {
-        const auto producer = ctx.producer_slots.producer_at(index.vc, index.channel);
-        TT_FATAL(
-            producer.has_value(),
-            "Fabric manifest: a router connected to VC{} channel {}, which is not a producer slot",
-            index.vc,
-            index.channel);
-        return manifest::SiblingRouterRef{.direction = *producer};
+    if (ctx.mux_mode && index.vc == 0) {
+        return manifest::LocalTensixMux{};
     }
-    const auto& connections =
-        erisc_builder.receiver_channel_to_downstream_adapter->get_downstream_connections(index.vc);
-    TT_FATAL(
-        connections.size() == 1,
-        "Fabric manifest: a router connected to 1D VC{} channel {}, but this router forwards to {} routers on VC{}",
-        index.vc,
-        index.channel,
-        connections.size(),
-        index.vc);
-    const auto sibling = connections.front().first;
-    const auto landing_channel = builder::get_downstream_sender_channel_for_vc(
-        false, index.vc, sibling, builder::routing_direction_to_eth_direction(ctx.inputs.location.direction));
-    TT_FATAL(
-        index.channel == landing_channel,
-        "Fabric manifest: a router connected to 1D VC{} channel {}, but 1D routers connect to channel {}",
-        index.vc,
-        index.channel,
-        landing_channel);
-    return manifest::SiblingRouterRef{.direction = sibling};
+    return manifest::LocalWorker{};
 }
 
 // Stream-backed credits are the TO_SENDER_<c>_PKTS_* registers, which the kernel looks up by compact index.
@@ -459,7 +404,7 @@ manifest::SenderChannel collect_sender_channel(const ChannelContext& ctx, const 
         sender.serviced_by,
         ctx.mux_mode && index.vc == 0 && ctx.producer_slots.worker_channel(0) != index.channel,
         ctx.trimming.has_value() && !ctx.trimming->is_sender_channel_used(c));
-    sender.producer = collect_sender_producer(ctx, index);
+    sender.producer = collect_local_producer(ctx, index);
     sender.ring_buffer = ring_buffer_region(
         inputs,
         ctx.allocator.get_sender_channel_base_address(index.vc, index.channel),
@@ -625,19 +570,11 @@ std::vector<manifest::DownstreamEdge> collect_downstream_edges(const ChannelCont
         const uint32_t slot = ctx.is_2d_fabric ? get_receiver_channel_compact_index(my_direction, direction) : 0;
         TT_FATAL((mask & (1u << slot)) == 0, "Fabric manifest: VC{} has two downstream edges in slot {}", vc, slot);
         mask |= 1u << slot;
-
-        std::optional<uint32_t> landing_compact;
-        if (ctx.is_2d_fabric) {
-            const auto id = adapter.get_downstream_sender_channel_id(vc, slot);
-            TT_FATAL(id.has_value(), "Fabric manifest: VC{} edge {} has no landing channel", vc, slot + 1);
-            landing_compact = static_cast<uint32_t>(*id);
-        }
         edges.push_back({
             .edge = slot + 1,
             .target = {.direction = direction},
             .landing_channel =
                 builder::get_downstream_sender_channel_for_vc(ctx.is_2d_fabric, vc, my_direction, direction),
-            .landing_compact = landing_compact,
             .core = core,
         });
     }
