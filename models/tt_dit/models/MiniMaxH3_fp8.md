@@ -223,11 +223,20 @@ predicted velocity identical), so every difference below is the 8-bit change.
 | `w8a8` (+ bfloat8_b activations) | 7.61 s | 924 | 8.75 s | +0.1 % |
 | `w8a8` + Q/K/V cast before SDPA (`FAST_H3_FP8_SDPA=1`) | 7.57 s | 930 | 8.68 s | −0.3 % |
 | `w8a8` + `to_out` weight quantized, epilogue un-fused (`FAST_H3_FP8_OUT_WEIGHT=1`) | 7.40 s | 907 | 8.50 s | −2.6 % |
-| `w8_lofi`, `w8a8_lofi`, `w8a8_lofi` without fp32 accumulation | see 8.6 | | | |
+| `w8_lofi` (fresh process, `to_out` un-fused) | 7.54 s | 920 | 8.71 s | −0.8 % |
+| `w8a8_lofi` (fresh process, `to_out` un-fused) | 7.26 s | 886 | 8.40 s | −4.5 % |
+| `w8a8_lofi` without fp32 accumulation (fresh process) | 7.28 s | 889 | 8.40 s | −4.3 % |
+| **`FAST_H3_FP8=1`** (= `w8a8_lofi`, `to_out` un-fused; fresh process, repeat) | **7.15 s** | **893** | 8.27 s | **−6.0 %** |
+| same, second prompt (that prompt's default: 7.67 s, 938 ms) | 7.24 s | 905 | 8.81 s | −5.7 % |
+| `w8a8_lofi` with the fused `to_out` (second prompt's process) | 7.14 s | 873 | 8.24 s | −7.0 % |
 
-The VAE decode (0.76 s) and audio decode (0.06 s) are untouched. The bytes lever is worth almost nothing here: halving
-the weight reads (`w8`) and the all-gather payloads (`w8a8`) moves the step by under half a percent, and the extra
-typecast passes of `w8a8` eat what the smaller gathers save.
+The LoFi rows come from processes that had the preset set at construction (after the all-gather matmul's cache-key
+fix, 8.6); the first same-process sweep had silently run them at HiFi2. The VAE decode (0.76 s) and audio decode
+(0.06 s) are untouched. The bytes lever is worth almost nothing here: halving the weight reads (`w8`) and the
+all-gather payloads (`w8a8`) moves the step by under half a percent, and the extra typecast passes of `w8a8` eat what
+the smaller gathers save. LoFi is the lever, and only with block-float activations: **about −6 % of the denoise time
+(933 → 886–905 ms per forward)**, with run-to-run spread of about 1.5 %. Nothing else in the step moves: the ring
+attention and the rest of the block are the other 56 % and are outside the matmuls.
 
 ### 8.3 Where the time goes, per matmul (why the bytes lever is flat)
 
@@ -321,16 +330,39 @@ lettering, the passing cars and the musician's expression differ, nothing is blu
 the bf16 run measures how far the sample moved, not whether it got worse; whether a different-but-equivalent sample
 is acceptable for a given use is a product call, and the per-forward error (3–5 %, 26–29 dB) is the number to budget.
 
-LoFi configurations: the first sweep measured them in the same process as the default and found them identical to
-their HiFi2 counterparts on `to_qkv`, `to_out` and `ff1`. That was the all-gather matmul's program cache: its key did
-not include the compute config, so the cached HiFi2 programs served the LoFi requests (fixed in this PR,
-`all_gather_minimal_matmul_async_device_operation_types.hpp`). The second-prompt run happened to compile its
-block-float-input programs under `w8a8_lofi` first, so LoFi really ran there: 7.14 s denoise, 873 ms per forward,
-**−7.0 %** against that process's default (7.67 s, 938 ms). The LoFi presets are re-measured in fresh processes
-after the fix; their rows follow.
+LoFi configurations: the first same-process sweep measured them identical to their HiFi2 counterparts on `to_qkv`,
+`to_out` and `ff1`. That was the all-gather matmul's program cache: its key did not include the compute config, so the
+cached HiFi2 programs served the LoFi requests (fixed in this PR,
+`all_gather_minimal_matmul_async_device_operation_types.hpp`). Measured in fresh processes after the fix
+(`to_out` un-fused, the preset's default):
 
-### 8.7 Conclusion for the shipped default
+| config | forward 0 velocity rel-L2 / SQNR | forward 7 | video PSNR | audio PSNR |
+|---|---|---|---|---|
+| `w8_lofi` | 7.7 % / 22.3 dB | 28.5 % | 23.9 dB | 20.0 dB |
+| `w8a8_lofi` (= `FAST_H3_FP8=1`; two runs, bit-identical) | 7.85 % / 22.1 dB | 28.3 % | 24.5 dB | 19.9 dB |
+| `w8a8_lofi` without fp32 accumulation | 7.7 % / 22.3 dB | 26.6 % | 25.9 dB | 21.5 dB |
+| second prompt: `FAST_H3_FP8=1` | 4.5 % / 26.9 dB | 55 % | 20.3 dB | 18.2 dB |
+| second prompt: `w8a8_lofi` with the fused `to_out` | 5.2 % / 25.7 dB | 68 % | 19.8 dB | 18.5 dB |
 
-`FAST_H3_FP8=1` stays opt-in and off. At the 5 s HyperFlow working point on a 4x8 the block matmuls are not bound by
-operand bytes, so 8-bit storage and transport buy under 1 % while costing a 27 dB per-forward error; the compute
-lever (LoFi) is the only one that can move the step, and its measurement follows the cache-key fix.
+LoFi roughly doubles the model-level first-forward error of the HiFi2 presets on the first prompt (4.3 → 7.8 %) and
+adds about a third on the second (3.5 → 4.5 %); the per-block numbers of 8.5 understate this because the 5-bit
+weight rounding is the same systematic error at every token and compounds coherently through the 50 blocks. The
+un-fused `to_out` is worth 0.7 points of first-forward error on the second prompt (5.2 → 4.5 %) besides being the
+accurate form per matmul. Frame by frame the LoFi clips are, like the HiFi2 ones, the same scene at the same quality
+with different details.
+
+### 8.7 Conclusion
+
+`FAST_H3_FP8` stays opt-in and off by default; `1` selects `w8a8_lofi` with `to_out` un-fused, the fastest point
+measured. What the 8-bit mode buys and costs at the 5 s HyperFlow working point on a 4x8:
+
+- **Speed:** about 6 % of the denoise time (933 → 886–905 ms per forward), all of it from LoFi on `to_qkv` and
+  `ff1` with block-float activations. Bytes alone (`w8`, `w8a8`) buy under 1 %: at 4 864 rows per device the
+  all-gather and reduce-scatter matmuls are not bound by operand bytes, `ff2` is bound by its reduce-scatter, and the
+  linears are only 44 % of a block to begin with.
+- **Error:** 4–8 % relative L2 (22–27 dB) on the first forward's predicted velocity, i.e. a different sample of the
+  same scene after 8 forwards (20–25 dB video PSNR against the bf16 clip). The HiFi2 presets halve the error for a
+  sub-1 % speed gain. Per matmul, weights round at 0.4–1 %, the activation cast costs most on `ff1` (channel
+  outliers), LoFi adds 0.1–0.3 % per matmul, and the fused addcmul epilogue must not run at LoFi.
+- **What to try next if more is wanted:** the attention (56 % of the block, out of scope here; #59522's recipes),
+  un-fusing `to_out`'s epilogue in the bf16 default as well (about 2 %), and smoothing `ff1`'s input before the cast.
