@@ -6,7 +6,7 @@
 # Never resets, never touches other jobs. Marker: $T/drv/driver.marker "T238_DRIVER_DONE stage=.. rc=.. jobs=.."
 F=/var/tmp/fasth3; T=$F/t238; L=$T/drv/driver.log; M=$T/drv/driver.marker; W=$T
 INC=/var/lib/tt-device-broker/health/incidents; FSM=/var/lib/tt-device-broker/health/fsm.json
-PY=$F/t48/python_env/bin/python; CODE=1a47d18ecb5
+PY=$F/t48/python_env/bin/python; CODE=4db17e79d55
 STAGE=start; JOBS=
 trap 'rc=$?; echo "T238_DRIVER_DONE stage=$STAGE rc=$rc jobs=${JOBS# }" > $M' EXIT
 log() { echo "$(date -u '+%F %T') $*" >> $L; }
@@ -77,7 +77,7 @@ log "start; disk: $(df -h / | tail -1)"
 STAGE=build
 for i in $(seq 180); do [ -e $T/build.rc ] && break; sleep 30; done
 [ "$(cat $T/build.rc 2> /dev/null)" = 0 ] || { log "build rc=$(cat $T/build.rc 2> /dev/null)"; exit 9; }
-git -C $F/t48 fetch -q $T/drv/t238.bundle "ttp/t238-diffvae-next-cut-toward-1-s-pick-and-imp:refs/t238/code" || exit 10
+git -C $F/t48 fetch -q $T/drv/t238.bundle HEAD:refs/t238/code || exit 10
 git -C $T/b checkout -q --detach $CODE || exit 10
 log "build ok; b at $(git -C $T/b rev-parse --short=11 HEAD)"
 job AB run.sh $T/out
@@ -92,5 +92,9 @@ for arm in def lean; do
   [ -e $T/out/$arm/decode_times.json ] && $PY $T/drv/cmp238.py $F/diffvae/ref $T/out/$arm $T/out/cmp_$arm.json 0,1 >> $L 2>&1
 done
 grep -q 'T238_EXIT=0' $T/out/run.log || exit 12
+STAGE=ut
+job UT ut.sh $T/ut
+log "UT: status=$S rc=$JRC $(grep -hE 'passed|failed|error' $T/ut/run.log 2> /dev/null | tail -3 | tr '\n' ' ')"
+[ "$JRC" = 0 ] || exit 13
 STAGE=done
 exit 0

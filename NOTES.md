@@ -37,3 +37,22 @@
   origin/ttp/t48-ltx25-integrated with `ttp push --detach`.
 - Test gap: no unit test covers already_bricked + key phase + lean; add one to
   test_neighborhood_bricked_w_sharded.py when landing (device job).
+
+## Driver restart (2026-10-08 00:10 UTC)
+- Build-stage rc=10 cause: t238.bundle carries only a HEAD ref; the driver fetched it by branch name.
+  Fixed (fetch `HEAD:refs/t238/code`).
+- Added code commit 4db17e79d55: unit test `test_bricked_2d_key_phase_lean_matches_default` (2-D split,
+  key phase, already-bricked inputs; lean output must equal default bit for bit, PCC 0.999 vs host).
+  Not yet run on device.
+- Driver (pid 652981, blx01) now: AB job (run.sh, def+lean) -> score -> UT job (ut.sh -> ut/run.log).
+  Marker: drv/driver.marker; exit 13 = unit test failed, 12 = AB failed.
+- DROP: 2026-10-07 23:58:25 UTC, g15blx01, post-job gate after broker job 869 (smarton, t238 AB;
+  job had already failed with the lean traceback), chip 1 off the bus. Broker holds for self-heal
+  (fsm down, no reset). Driver waits for health before submitting.
+
+## Next step
+1. `ssh g15blx01 cat /var/tmp/fasth3/t238/drv/driver.{marker,log}`; out/cmp_{def,lean}.json, ut/run.log.
+2. lean identical + faster + UT passes: commit default flip (DIFFVAE_S5_LEAN default on, =0 opts out),
+   land code commits 1a47d18ecb5 d078c17c9d7 4db17e79d55 + flip on a -land branch from
+   origin/ttp/t48-ltx25-integrated with `ttp push --detach`.
+3. Rank next levers from out/stage_tree_def.txt.
