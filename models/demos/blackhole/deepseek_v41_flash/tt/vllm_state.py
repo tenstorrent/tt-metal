@@ -409,3 +409,52 @@ def sample_from_logits(logits, temperature, top_k=-1, top_p=1.0, gen=None):
     """Same over the FULL vocabulary row (the prefill's first token, reference of the candidate path)."""
     ids = torch.arange(logits.numel())
     return sample_from_candidates(logits.reshape(-1), ids, temperature, top_k, top_p, gen)
+
+
+def _pick(prob_sorted, u, normalise=True):
+    """inverse CDF over a sorted probability vector: first index whose cumulative probability exceeds u * total (``normalise``) or u itself (the vector is a prefix of a distribution that sums to 1)."""
+    cum = prob_sorted.double().cumsum(0)
+    thr = torch.tensor(float(u)) * (cum[-1] if normalise else 1.0)
+    return int(torch.searchsorted(cum, thr, right=True).clamp(max=prob_sorted.numel() - 1))
+
+
+def sample_exact(vals, ids, sums, k, temperature, top_k, top_p, u, fetch_logits):
+    """Exact temperature / top-k / top-p sample from the device's candidates and partition function. ``vals`` / ``ids`` [cols * k] (per-column top-k logits and global ids), ``sums`` [cols]
+    (per column sum_v exp((l_v - column max) / T)), ``u`` a uniform draw in [0, 1) (the caller's generator: seeded requests stay deterministic), ``fetch_logits()`` the exact full logits
+    row. The first k entries of the sorted candidates ARE the global top-k, with exact probabilities exp((l - M) / T) / Z. The result is the inverse-CDF draw of the exact distribution
+    whenever the truncated support (top-k, or the top-p nucleus) lies inside those k entries, or u falls inside their mass when there is no truncation; otherwise (a flat distribution
+    whose support reaches beyond the k-th token) the full logits row is read from the device and the same inverse CDF is evaluated over the full vocabulary: exact in every case.
+    -> (token, used_fallback)."""
+    cols = sums.numel()
+    order = torch.argsort(vals, descending=True)
+    v, ix = vals[order].double(), ids[order]
+    M = v[0]
+    inv = 1.0 / float(temperature)
+    colmax = vals.reshape(cols, -1)[:, 0].double()
+    Z = float((sums.double() * torch.exp((colmax - M) * inv)).sum())  # sum over the vocabulary of exp((l - M) / T)
+    pk = torch.exp((v[:k] - M) * inv) / Z  # exact probabilities of the global top-k
+    tk = int(top_k) if top_k is not None and int(top_k) > 0 else 0
+    tp = float(top_p) if top_p is not None else 1.0
+    if tk and tk <= k:  # top-k inside the guaranteed prefix: renormalise over it, then the nucleus (if any) over that
+        q = pk[:tk] / pk[:tk].sum()
+        if tp < 1.0:
+            q = q * ((q.cumsum(0) - q) < tp)
+        return int(ix[_pick(q, u)]), False
+    mass = float(pk.sum())
+    if not tk:
+        if tp < 1.0:
+            if mass >= tp:  # the nucleus lies inside the top-k: smallest prefix whose probability reaches tp
+                q = pk * ((pk.cumsum(0) - pk) < tp)
+                return int(ix[_pick(q, u)]), False
+        elif u < mass:  # no truncation: the draw lands in the top-k part
+            return int(ix[_pick(pk, u, normalise=False)]), False
+    # exact fallback over the full vocabulary row
+    lg = fetch_logits().double()
+    srt, si = torch.sort(lg, descending=True)
+    pr = torch.softmax(srt * inv, 0)
+    if tk:
+        pr = pr[:tk] / pr[:tk].sum()
+        si = si[:tk]
+    if tp < 1.0:
+        pr = pr * ((pr.cumsum(0) - pr) < tp)
+    return int(si[_pick(pr, u)]), True

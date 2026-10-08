@@ -67,6 +67,32 @@ class DSV41Decoder:
     rows_shard = False  # Engram rows uploaded column-sharded (8x fewer host bytes) and all-gathered over the mesh columns inside the trace
     engram_rows_fn = None  # callable(tokens_u32[T,1], pos_i32[T]) -> {layer_id: rows [T,1,1,Kin] tile bf16}, built from the device Engram table
 
+    def alloc_invT(self, users_per_row):
+        """Persistent 1 / temperature of every row [1,1,U,1] per device (uploaded by ``set_invT`` before a replay that has sampled rows), allocated before any trace capture."""
+        import torch
+
+        rows, cols = tuple(self.md.shape)
+        self._invT_map = ttnn.ShardTensor2dMesh(self.md, dims=(2, None), mesh_shape=(rows, cols))
+        self.invT = ttnn.from_torch(
+            torch.ones(1, 1, rows * users_per_row, 1),
+            device=self.md,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._invT_map,
+        )
+
+    def set_invT(self, inv_temperature):
+        """inv_temperature [rows * U] torch (1 / temperature per row, 1 for greedy rows)."""
+
+        host = ttnn.from_torch(
+            inv_temperature.reshape(1, 1, -1, 1).float(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self._invT_map,
+        )
+        ttnn.copy_host_to_device_tensor(host, self.invT)
+
     def enable_sampling(self, mesh_config, ccl):
         """Add greedy sampling to the traced step (``forward`` then also fills ``self.sampled``)."""
         self.mesh_config, self.ccl = mesh_config, ccl
@@ -239,7 +265,10 @@ class DSV41Decoder:
         if getattr(
             self, "cand_k", 0
         ):  # temperature / top-p sampling candidates (adapter): read by the host only on steps that have a sampled row
-            self.cand = self.head.topk_candidates(logits, self.mesh_config, self.ccl, self.cand_k)
+            self.cand, self.cand_s = self.head.topk_candidates(
+                logits, self.mesh_config, self.ccl, self.cand_k, self.invT
+            )
+            self.last_logits_t = logits
         if self.device_loop:
             nxt = self.head.sample_global(logits, self.mesh_config, self.ccl)
             ttnn.copy(nxt, self.tok_dev)  # feed the sampled token to the next replay ...

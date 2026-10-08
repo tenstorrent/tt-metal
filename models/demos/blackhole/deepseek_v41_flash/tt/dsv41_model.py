@@ -241,6 +241,8 @@ class Model:
             os.environ.get("DSV41_DEV_CAND_K", "0")
         )  # per-column top-k candidates computed inside the decode traces for temperature / top-p sampling (adapter)
         self.dec.cand_k = self.cand_k
+        if self.cand_k:
+            self.dec.alloc_invT(self.U)
         self.prefill_model = GenPrefillModel(
             mesh_device, pls, embedding, self.head, dev_engram, self.host_rows, self.Up
         )
@@ -1432,7 +1434,7 @@ class Model:
         devs = ttnn.get_device_tensors(ttnn.from_device(self.dec.tok_dev))
         return torch.cat([ttnn.to_torch(devs[r * self.cols]).reshape(-1) for r in range(self.rows)]).long()
 
-    def decode_forward(self, tokens, current_pos, enable_trace=True, reload_inputs=True):
+    def decode_forward(self, tokens, current_pos, enable_trace=True, reload_inputs=True, invT=None):
         """One decode step of every user. tokens [B] = the token fed at position current_pos [B] (per user). Returns the next greedy tokens [B].
         ``reload_inputs=False`` (steady state): the device already holds the fed-back token / position (device loop); only the Engram rows of
         ``tokens`` are uploaded."""
@@ -1450,6 +1452,8 @@ class Model:
             self._set_loop_state(tokens, current_pos)
             self._upload_rows(host_rows)
         t2 = time.perf_counter()
+        if invT is not None and self.cand_k:
+            self.dec.set_invT(invT)
         if enable_trace:
             from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import check_trace_allocations
 
@@ -1606,18 +1610,26 @@ class Model:
         out[f"full B={self.B}"] = (time.perf_counter() - t0) / n * 1e3
         return out
 
-    def decode_forward_bucket(self, Ub, tokens, current_pos, phys, enable_trace=True):
+    def decode_forward_bucket(self, Ub, tokens, current_pos, phys, enable_trace=True, invT=None):
         """One decode step at ``Ub`` users per mesh row (``Ub`` = U: the full model). tokens / current_pos [4 Ub] in bucket row order, ``phys`` [4 Ub] the model user of every row
         (``r * U + u``, u < Ub). -> next greedy tokens [4 Ub]."""
         if Ub == self.U:
-            return self.decode_forward(tokens, current_pos, enable_trace=enable_trace, reload_inputs=True)
-        return self.buckets[Ub].step(tokens, current_pos, phys, enable_trace=enable_trace)
+            return self.decode_forward(tokens, current_pos, enable_trace=enable_trace, reload_inputs=True, invT=invT)
+        return self.buckets[Ub].step(tokens, current_pos, phys, enable_trace=enable_trace, invT=invT)
 
     def read_candidates(self, Ub=None):
-        """(values, global ids) [B', cols * cand_k] of the last decode step of the full model (``Ub`` None / U) or of a bucket."""
+        """(values, global ids [B', cols * cand_k], partition sums [B', cols]) of the last decode step of the full model (``Ub`` None / U) or of a bucket."""
         dec = self.dec if Ub is None or Ub == self.U else self.buckets[Ub].dec
         ttnn.synchronize_device(self.md)
-        return self.head.read_candidates(dec.cand, self.cand_k)
+        return self.head.read_candidates(dec.cand, dec.cand_s, self.cand_k)
+
+    def read_logits_row(self, Ub, row):
+        """Exact full logits row of bucket row ``row`` of the last decode step (the exact-sampling fallback)."""
+        full = Ub is None or Ub == self.U
+        dec = self.dec if full else self.buckets[Ub].dec
+        U_ = self.U if full else Ub
+        ttnn.synchronize_device(self.md)
+        return self.head.read_logits_row(dec.last_logits_t, row // U_, row % U_)
 
     def read_logits_bucket(self, Ub):
         return self.read_logits() if Ub == self.U else self.buckets[Ub].read_logits()

@@ -975,3 +975,39 @@ def test_sample_from_candidates_follows_the_truncated_distribution():
     }  # the smallest prefix reaching 0.5 mass: tokens 10 (0.64 alone reaches it) -> only token 10 stays
     top1 = {VS.sample_from_candidates(vals, ids, 0.01, 1, 1.0, g) for _ in range(20)}
     assert top1 == {10}
+
+
+def _cand(full, cols=8, k=16, T=1.0):
+    sh = full.reshape(cols, -1)
+    v, i = torch.topk(sh, k, dim=1)
+    ids = i + (torch.arange(cols) * sh.shape[1]).reshape(cols, 1)
+    colmax = sh.max(1)[0]
+    sums = torch.exp((sh - colmax[:, None]) / T).sum(1)
+    return v.reshape(-1), ids.reshape(-1), sums
+
+
+@pytest.mark.parametrize("scale", [0.3, 3.0, 12.0])  # flat -> peaked distributions
+@pytest.mark.parametrize(
+    "cfg", [(1.0, -1, 0.95), (1.0, -1, 1.0), (0.6, -1, 0.9), (1.0, 7, 0.95), (1.0, 5, 1.0), (1.3, 40, 0.8)]
+)
+def test_sample_exact_equals_the_full_vocabulary_inverse_cdf(scale, cfg):
+    torch.manual_seed(3)
+    full = torch.randn(8 * 200) * scale
+    T, kk, pq = cfg
+    v, ids, _ = _cand(full, T=T)
+    _, _, sums = _cand(full, T=T)
+    srt, si = torch.sort(full.double(), descending=True)
+    pr = torch.softmax(srt / T, 0)
+    if kk > 0:
+        pr, si = pr[:kk] / pr[:kk].sum(), si[:kk]
+    if pq < 1.0:
+        pr = pr * ((pr.cumsum(0) - pr) < pq)
+    fb_n = 0
+    for j in range(200):
+        u = (j + 0.5) / 200
+        ref = int(si[VS._pick(pr, u)])
+        got, fb = VS.sample_exact(v, ids, sums, 16, T, kk, pq, u, lambda: full)
+        assert got == ref, (cfg, scale, u)
+        fb_n += int(fb)
+    if scale >= 12.0 and 0 < kk <= 16:
+        assert fb_n == 0  # peaked + top-k inside the guaranteed prefix: never needs the full row

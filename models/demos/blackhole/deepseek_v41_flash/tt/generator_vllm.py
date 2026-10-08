@@ -258,9 +258,9 @@ class DeepseekV41ForCausalLM:
             self.sample_check()
 
     def sample_check(self, steps=30, every=2):
-        """Start-up distribution check (DSV41_VLLM_SAMPLE_CHECK=1) of the candidate sampler on REAL logits: GSM8K prompts, greedy continuation, and at every ``every``-th step per user the exact
-        distribution of (temperature, top-p) over the FULL vocabulary vs over the device candidates (union of the per-column top-k): total variation distance, KL(full || candidates),
-        and the mass the candidate set drops (softmax at the temperature, before top-p). Also the dropped mass of a global top-{32,64,128,256} for choosing k. Analytic, no sampling noise.
+        """Start-up check (DSV41_VLLM_SAMPLE_CHECK=1) of the exact sampler on REAL logits (GSM8K prompts, greedy continuation): (a) the device partition function against the exact one from the full
+        logits (relative error), (b) for temperature / top-k / top-p settings and a grid of uniform draws u, the token of ``VS.sample_exact`` (candidates + partition function, full-row fallback
+        only when needed) against the reference inverse CDF over the full vocabulary: the number of mismatches (must be 0) and the share of draws that needed the full-row fallback.
         """
         import json as _json
 
@@ -283,61 +283,62 @@ class DeepseekV41ForCausalLM:
         rows = VS.MESH_ROWS
         phys = [r * U + u for r in range(rows) for u in range(min(2, Ub))]
         prompts = {p: torch.tensor(tok.encode(pp[i]["prompt"])) for i, p in enumerate(phys)}
-        chunk = self._interleave_chunk()
         res = m.prefill_interleaved(
-            [(p, prompts[p], 0, int(prompts[p].numel())) for p in phys], chunk, s_pad_max=self.s_pad_cur
+            [(p, prompts[p], 0, int(prompts[p].numel())) for p in phys],
+            self._interleave_chunk(),
+            s_pad_max=self.s_pad_cur,
         )
         fed = {p: int(res[p][0]) for p in phys}
         bphys = torch.tensor([(i // Ub) * U + i % Ub for i in range(rows * Ub)], dtype=torch.long)
         row_of = {int(q): i for i, q in enumerate(bphys.tolist())}
         fill = m.decode_filler()
-        cfgs = [(1.0, 0.95), (1.0, 1.0), (0.6, 0.95)]
-        stats = {c: {"tv": [], "kl": [], "tail": [], **{f"tail_g{g}": [] for g in (32, 64, 128, 256)}} for c in cfgs}
+        cfgs = [(1.0, -1, 0.95), (1.0, -1, 1.0), (0.6, -1, 0.95), (1.0, 50, 0.95), (1.0, 20, 1.0)]
+        us = [(j + 0.5) / 24 for j in range(24)]
+        tot = {c: [0, 0, 0] for c in cfgs}  # draws, mismatches, fallbacks
+        zerr = []
+        sz_T = 1.0
         for step in range(steps):
             tk = fill[bphys].clone()
             ps = torch.zeros(rows * Ub, dtype=torch.long)
             for p in phys:
                 tk[row_of[p]], ps[row_of[p]] = fed[p], int(prompts[p].numel()) + step
-            out = m.decode_forward_bucket(Ub, tk, ps, bphys)
+            out = m.decode_forward_bucket(Ub, tk, ps, bphys, invT=torch.full((rows * Ub,), 1.0 / sz_T))
             if step % every:
                 for p in phys:
                     fed[p] = int(out[row_of[p]])
                 continue
             lg = m.read_logits_bucket(Ub).float()
-            cv, ci = m.read_candidates(Ub)
+            cv, ci, cs = m.read_candidates(Ub)
             for p in phys:
                 r = row_of[p]
-                full, cand_ids, cand_v = lg[r], ci[r], cv[r]
-                for T, tp in cfgs:
-
-                    def dist(vals, ids, size):
-                        o = torch.argsort(vals, descending=True)
-                        v, i = vals[o], ids[o]
-                        pr = torch.softmax(v / T, 0)
-                        if tp < 1.0:
-                            pr = pr * ((pr.cumsum(0) - pr) < tp)
-                            pr = pr / pr.sum()
-                        d = torch.zeros(size)
-                        d[i] = pr
-                        return d
-
-                    Pf = dist(full, torch.arange(full.numel()), full.numel())
-                    Pc = dist(cand_v, cand_ids, full.numel())
-                    st = stats[(T, tp)]
-                    st["tv"].append(float(0.5 * (Pf - Pc).abs().sum()))
-                    msk = Pf > 0
-                    st["kl"].append(float((Pf[msk] * (Pf[msk].log() - Pc[msk].clamp_min(1e-30).log())).sum()))
-                    sm = torch.softmax(full / T, 0)
-                    st["tail"].append(float(1.0 - sm[cand_ids].sum()))
-                    srt = torch.sort(sm, descending=True)[0]
-                    for g in (32, 64, 128, 256):
-                        st[f"tail_g{g}"].append(float(1.0 - srt[:g].sum()))
+                full = lg[r].double()
+                colmax = full.reshape(8, -1).max(1)[0]
+                zref = torch.exp((full.reshape(8, -1) - colmax[:, None]) / sz_T).sum(1)
+                zerr.append(float(((cs[r].double() - zref).abs() / zref).max()))
+                for c in cfgs:
+                    T, kk, pq = c
+                    sums = (
+                        torch.exp((full.reshape(8, -1) - colmax[:, None]) / T).sum(1).float()
+                    )  # (host partition function at this T; the device one is checked above at T=1)
+                    srt, si = torch.sort(full, descending=True)
+                    pr = torch.softmax(srt / T, 0)
+                    if kk > 0:
+                        pr, si = pr[:kk] / pr[:kk].sum(), si[:kk]
+                    if pq < 1.0:
+                        pr = pr * ((pr.cumsum(0) - pr) < pq)
+                    for u in us:
+                        ref = int(si[VS._pick(pr, u)])
+                        got, fb = VS.sample_exact(cv[r], ci[r], sums, m.cand_k, T, kk, pq, u, lambda full=full: full)
+                        tot[c][0] += 1
+                        tot[c][1] += int(got != ref)
+                        tot[c][2] += int(fb)
                 fed[p] = int(out[row_of[p]])
-        for c, st in stats.items():
-            f = lambda k: f"mean {sum(st[k]) / len(st[k]):.2e} max {max(st[k]):.2e}"
+        logger.info(
+            f"DSV4.1 sample check: device partition function vs exact over {len(zerr)} real rows: max relative error {max(zerr):.2e}, mean {sum(zerr) / len(zerr):.2e}"
+        )
+        for c, (n, bad, fb) in tot.items():
             logger.info(
-                f"DSV4.1 sample check T={c[0]} top_p={c[1]} over {len(st['tv'])} real distributions: TV {f('tv')} | KL {f('kl')} | dropped mass (union of per-column top-{m.cand_k}, "
-                f"{8 * m.cand_k} candidates) {f('tail')} | dropped mass of a global top-32 {f('tail_g32')}, top-64 {f('tail_g64')}, top-128 {f('tail_g128')}, top-256 {f('tail_g256')}"
+                f"DSV4.1 sample check T={c[0]} top_k={c[1]} top_p={c[2]}: {n} draws, {bad} mismatches vs the full-vocabulary reference, full-row fallback in {100.0 * fb / n:.1f}% of the draws"
             )
         for p in phys:
             m.release_user(p)
@@ -531,6 +532,7 @@ class DeepseekV41ForCausalLM:
             self.spec_last = torch.full((self.B,), -1, dtype=torch.long)  # the committed token those drafts continue
             self.spec_has = torch.zeros(self.B, dtype=torch.bool)
             self.spec_stats = {"rounds": 0, "accepted": 0, "rows": 0}
+        self.sample_stats = {"rows": 0, "fallback": 0}
         self.gens = {}  # seeded per-request generators by model user
         self.rng = torch.Generator().manual_seed(int(os.environ.get("DSV41_VLLM_SAMPLE_SEED", "9472")))
         self.timing = {}
@@ -884,12 +886,31 @@ class DeepseekV41ForCausalLM:
         t0 = time.perf_counter()
         self.m.admit_idle_users()  # idle / released users own no pages: pool.ensure would fail (KeyError) stepping all B users
         t_in = time.perf_counter()
+        samp, srows_all, inv = None, [], None
+        if device_sampling:
+            samp = VS.row_sampling(sampling_params, W)
+            srows_all = [i for i, _, _ in rows if not VS.row_is_greedy(samp[0][i], samp[1][i])]
+            if (
+                srows_all
+            ):  # 1 / temperature of every sampled row (the traced partition function reads it); greedy rows 1
+                inv = torch.ones(tok_B.numel())
+                for i, idx, _ in rows:
+                    if i in srows_all:
+                        inv[idx] = 1.0 / float(samp[0][i])
         if phys is None:
-            out = self.m.decode_forward(tok_B, pos_B, enable_trace=bool(enable_trace), reload_inputs=True)
+            out = self.m.decode_forward(
+                tok_B,
+                pos_B,
+                enable_trace=bool(enable_trace),
+                reload_inputs=True,
+                **({"invT": inv} if inv is not None else {}),
+            )
             for i, p, pos in rows_p:
                 self.book.note_fed(p, pos, int(tok_B[p]))
         else:
-            out = self.m.decode_forward_bucket(Ub, tok_B, pos_B, phys, enable_trace=bool(enable_trace))
+            out = self.m.decode_forward_bucket(
+                Ub, tok_B, pos_B, phys, enable_trace=bool(enable_trace), **({"invT": inv} if inv is not None else {})
+            )
             for (i, r, pos), (_, p, _) in zip(rows, rows_p):
                 self.book.note_fed(p, pos, int(tok_B[r]))
         self.bucket_calls[Ub] = self.bucket_calls.get(Ub, 0) + 1
@@ -906,21 +927,30 @@ class DeepseekV41ForCausalLM:
             self._decode_stats(t_in, t_out, Ub)
         if device_sampling:
             out = out.reshape(-1).clone()
-            samp = VS.row_sampling(sampling_params, W)
-            srows = [
-                (i, idx, p)
-                for (i, idx, _), (_, p, _) in zip(rows, rows_p)
-                if not VS.row_is_greedy(samp[0][i], samp[1][i])
-            ]
+            srows = [(i, idx, p) for (i, idx, _), (_, p, _) in zip(rows, rows_p) if i in srows_all]
             if (
                 srows
-            ):  # sampled rows: temperature / top-k / top-p / draw over the device's top-k candidates (the greedy token of these rows is replaced)
+            ):  # sampled rows: exact temperature / top-k / top-p draw over the device's candidates + partition function (full-row fallback for flat rows)
                 t_s = time.perf_counter()
-                cv, ci = self.m.read_candidates(Ub if phys is not None else None)
+                cv, ci, cs = self.m.read_candidates(Ub if phys is not None else None)
+                nfb = 0
                 for i, idx, p in srows:
-                    out[idx] = VS.sample_from_candidates(
-                        cv[idx], ci[idx], samp[0][i], samp[1][i], samp[2][i], self._gen_for(p)
+                    u = float(torch.rand(1, generator=self._gen_for(p), dtype=torch.float64))
+                    tk_, fb = VS.sample_exact(
+                        cv[idx],
+                        ci[idx],
+                        cs[idx],
+                        self.m.cand_k,
+                        samp[0][i],
+                        samp[1][i],
+                        samp[2][i],
+                        u,
+                        lambda idx=idx: self.m.read_logits_row(Ub if phys is not None else None, idx),
                     )
+                    out[idx] = tk_
+                    nfb += int(fb)
+                self.sample_stats["rows"] += len(srows)
+                self.sample_stats["fallback"] += nfb
                 self.timing["sample"] = time.perf_counter() - t_s
             return VS.scatter_rows(out.reshape(-1, 1).to(torch.int32), rows, W)
         logits = (
@@ -988,7 +1018,7 @@ class DeepseekV41ForCausalLM:
         if every > 0 and st["n"] % every == 0:
             n, gn = st["n"], max(st["gn"], 1)
             logger.info(
-                f"DSV4.1 decode stats over {n} calls (bucket B'={4 * (bucket or self.U)}, calls per bucket {dict(self.bucket_calls)}): in-adapter {1e3 * st['in'] / n:.1f} ms/call, between-calls (plugin/scheduler/sampling) {1e3 * st['gap'] / gn:.1f} ms/call, "
+                f"DSV4.1 decode stats over {n} calls (bucket B'={4 * (bucket or self.U)}, calls per bucket {dict(self.bucket_calls)}, sampled rows {self.sample_stats['rows']} / full-row fallbacks {self.sample_stats['fallback']}): in-adapter {1e3 * st['in'] / n:.1f} ms/call, between-calls (plugin/scheduler/sampling) {1e3 * st['gap'] / gn:.1f} ms/call, "
                 f"last model timing { {k: round(v * 1e3, 1) for k, v in self.m.timing.items() if k.startswith('decode')} }"
             )
             st.update(n=0, **{"in": 0.0, "gap": 0.0, "gn": 0})
