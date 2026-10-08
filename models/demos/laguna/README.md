@@ -7,7 +7,7 @@
 1,048,576-token context) served as an OpenAI-compatible vLLM server on four Blackhole ASICs: a TT-QuietBox 2 or four
 P150 cards.
 
-- [Results](#results): accuracy, performance vs speed of light
+- [Results](#results): accuracy (batch 1 and 32), performance vs speed of light, batch-32 performance
 - [Quick start](#quick-start): set up, start, check, stop the server
 - [Reproduce the results](#reproduce-the-results): accuracy test, perf demo
 - [Serving options](#serving-options): DFlash, prefix caching, concurrent requests and their context lengths
@@ -18,16 +18,18 @@ P150 cards.
 ### Accuracy
 
 Compared with the original model run in fp32 on the CPU, over an AIME24 prompt plus a fixed 100-token answer; at
-each of the 100 positions both predict the next token.
+each of the 100 positions both predict the next token. The 128-token prompt is the same question cut to 128 tokens.
+At batch 32, 32 users decode together, each with the same prompt and answer; the column shows the worst user (all 32
+measured the same).
 
-| Measure | Result | Bar |
-|---|---:|---:|
-| top-1: Laguna's top token is the reference's | 0.99 | >= 0.90 |
-| top-5: the reference's token is in Laguna's top 5 | 1.00 | >= 0.98 |
-| top-100 | 1.00 | = 1.00 |
-| top-1 of the traced decode the server uses | 0.98 | >= 0.90 |
-| PCC of all 100,352 next-token scores, mean over the 100 positions | 0.97 | >= 0.95 |
-| PCC, lowest single position | 0.74 | - |
+| Measure | 235-token prompt, batch 1 | 128-token prompt, batch 1 | 128-token prompt, batch 32 | Bar |
+|---|---:|---:|---:|---:|
+| top-1: Laguna's top token is the reference's | 0.99 | 0.97 | 0.97 | >= 0.90 |
+| top-5: the reference's token is in Laguna's top 5 | 1.00 | 1.00 | 1.00 | >= 0.98 |
+| top-100 | 1.00 | 1.00 | 1.00 | = 1.00 |
+| top-1 of the traced decode the server uses | 0.98 | 0.96 | 0.97 | >= 0.90 |
+| PCC of all 100,352 next-token scores, mean over the 100 positions | 0.97 | 0.97 | 0.96 | >= 0.95 |
+| PCC, lowest single position | 0.74 | 0.81 | 0.79 | - |
 
 The experts are stored in 4-bit, so the scores carry rounding error while the chosen tokens agree.
 
@@ -59,6 +61,24 @@ With DFlash speculative decoding (same run):
 DFlash only speeds up decode; the prompt is still processed by Laguna itself, so TTFT stays about the same (0.14-0.17 s
 slower). DFlash's decode speedup depends on how much of the draft model's guess Laguna accepts, so it varies from
 prompt to prompt.
+
+### Performance (batch 32)
+
+32 users send their prompts at the same moment (`LAGUNA_MAX_NUM_SEQS=32`, normal decode, 512 output tokens each);
+measured on 2026-10-08 with `perf_demo.py --batch 32`. The server prefills the prompts one after another, so a user's
+TTFT includes waiting for the prefills ahead of it, and users still decoding slow down while later users prefill.
+
+| Input tokens | TTFT, mean | TTFT, first / last user | Decode tok/s/user, mean | Decode tok/s/user, all 32 decoding | Total output tok/s |
+|---:|---:|---:|---:|---:|---:|
+| 128 | 11.2 s | 11.2 / 11.2 s | 11.3 | 11.3 | 291 |
+| 1,024 | 75.4 s | 19.5 / 99.4 s | 7.4 | 11.3 | 113 |
+| 2,048 | 124 s | 19.6 / 184 s | 4.9 | 11.5 | 72 |
+| 4,096 | 218 s | 24.5 / 360 s | 2.7 | 11.2 | 40 |
+| 8,192 | 360 s | 51.3 / 640 s | 1.6 | 11.0 | 24 |
+
+"All 32 decoding" is the fastest user's speed, i.e. a decode step once every prompt is prefilled: about 89 ms per
+step, 360 tok/s across the 32 users. Total output tok/s divides all output tokens by the run's wall time, prefills
+included.
 
 ## Quick start
 
@@ -101,22 +121,36 @@ REPO=$PWD MODEL_DIR=$PWD/models/demos/laguna
 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python -m models.demos.laguna.tests.gen_streamed_reference --dtype fp32 \
   --output generated/laguna_reference/readiness_aime24_chat_s.refpt \
   --save-logits generated/laguna_reference/Laguna-S-2.1-aime24-logits.pt
-# the test (~3 min): prints top-1, top-5, top-100, traced top-1 and PCC; fails if any is below its bar
+# the tests (~6 min): batch 1, then batch 32 (worst user); each prints top-1, top-5, top-100, traced top-1 and PCC
+# and fails if any is below its bar
 cd /tmp && env -u TT_METAL_HOME PYTHONPATH=$REPO \
+  $MODEL_DIR/.venv/bin/python -m pytest -s $MODEL_DIR/tests/test_accuracy.py
+```
+
+For the 128-token prompt, make its reference once and point the tests at it:
+
+```bash
+PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python -m models.demos.laguna.tests.gen_streamed_reference --dtype fp32 \
+  --prompt-len 128 --output generated/laguna_reference/readiness_aime24_chat_s_p128.refpt \
+  --save-logits generated/laguna_reference/Laguna-S-2.1-aime24-p128-logits.pt
+cd /tmp && env -u TT_METAL_HOME PYTHONPATH=$REPO \
+  LAGUNA_REFERENCE_TOKENS=$REPO/generated/laguna_reference/readiness_aime24_chat_s_p128.refpt \
+  LAGUNA_REFERENCE_LOGITS=$REPO/generated/laguna_reference/Laguna-S-2.1-aime24-p128-logits.pt \
   $MODEL_DIR/.venv/bin/python -m pytest -s $MODEL_DIR/tests/test_accuracy.py
 ```
 
 ### Perf demo
 
 ```bash
-python models/demos/laguna/demo/perf_demo.py   # ~20 min
+python models/demos/laguna/demo/perf_demo.py              # batch 1, normal and DFlash, ~20 min
+python models/demos/laguna/demo/perf_demo.py --batch 32   # 32 concurrent users, normal decode, ~40 min
 ```
 
 For normal decode and then DFlash, it starts the server, prints the answers to two real prompts, measures TTFT and
 decode speed for random-token prompts of 128, 1K, 2K, 4K and 8K tokens (batch 1, 512 output tokens), stops the
 server and prints the table. Results go to `generated/laguna_perf_demo/<UTC time>/`. Options: `--modes normal|dflash`,
 `--input-lens 128,16384` (a 128K prefill takes about 6 minutes), `--prompts N` (average N prompts per length),
-`--output-tokens N`.
+`--output-tokens N`, `--batch N` (N concurrent users; adds total output tok/s).
 
 ### Speed of light
 
