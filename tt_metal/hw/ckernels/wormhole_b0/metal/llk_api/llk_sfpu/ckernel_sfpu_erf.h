@@ -30,19 +30,51 @@ namespace ckernel::sfpu {
 // ======================================================================
 
 #ifdef INP_FLOAT32
-constexpr uint32_t ERF_NUM_DEGREE = 16;
-constexpr uint32_t ERF_DEN_DEGREE = 16;
-constexpr uint32_t ERF_NUM_SEGMENTS = 1;
-constexpr uint32_t ERF_LUT_SIZE = 36;
-constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
-    {-1.0000000000e+01f, 1.0000000000e+01f, 0.0000000000e+00f,  1.1283791065e+00f,  0.0000000000e+00f,
-     2.1477432549e-01f,  0.0000000000e+00f, 6.2133435160e-02f,  0.0000000000e+00f,  5.6230435148e-03f,
-     0.0000000000e+00f,  6.1307044234e-04f, 0.0000000000e+00f,  1.7678321456e-05f,  0.0000000000e+00f,
-     2.7384647439e-08f,  0.0000000000e+00f, -2.8632063387e-10f, 0.0000000000e+00f,  1.0000000000e+00f,
-     0.0000000000e+00f,  5.2367275953e-01f, 0.0000000000e+00f,  1.2961706519e-01f,  0.0000000000e+00f,
-     1.9642570987e-02f,  0.0000000000e+00f, 1.9545555115e-03f,  0.0000000000e+00f,  1.3179056987e-04f,
-     0.0000000000e+00f,  1.3156344494e-06f, 0.0000000000e+00f,  -3.5153888689e-09f, 0.0000000000e+00f,
-     -6.7350725691e-12f}};
+constexpr uint32_t ERF_NUM_DEGREE = 7;
+constexpr uint32_t ERF_DEN_DEGREE = 7;
+constexpr uint32_t ERF_NUM_SEGMENTS = 2;
+constexpr uint32_t ERF_LUT_SIZE = 35;
+constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {{
+    // Breakpoints
+    0.0000000000e+00f,
+    2.0000000000e+00f,
+    4.0000000000e+00f,
+    // Segment 0 [0, 2.0]: numerator (degree 7)
+    0.0000000000e+00f,
+    1.1283791673e+00f,
+    -2.4294836001e-01f,
+    1.1550096030e-01f,
+    3.8071311477e-02f,
+    1.4401851258e-02f,
+    -1.0399653688e-03f,
+    1.8679049155e-03f,
+    // Segment 0 [0, 2.0]: denominator (degree 7)
+    1.0000000000e+00f,
+    -2.1530736409e-01f,
+    4.3569306083e-01f,
+    -3.8025706511e-02f,
+    5.7972863184e-02f,
+    8.0125357619e-03f,
+    1.0333525153e-03f,
+    1.6380826498e-03f,
+    // Segment 1 [2.0, 4.0]: numerator (degree 7)
+    2.4292787017e-01f,
+    4.3090919808e-01f,
+    -4.1881809714e-01f,
+    3.6505715113e-01f,
+    -1.0574575215e-01f,
+    -8.4409561021e-03f,
+    1.8356318795e-02f,
+    -3.3304880063e-03f,
+    // Segment 1 [2.0, 4.0]: denominator (degree 7)
+    1.0000000000e+00f,
+    -9.3909573160e-01f,
+    6.4988625012e-01f,
+    -1.0067531205e-01f,
+    1.6677895050e-02f,
+    -2.7846322937e-02f,
+    2.0073265301e-02f,
+    -3.3958820024e-03f}};
 
 #else
 
@@ -65,6 +97,23 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_erf() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
+#ifdef INP_FLOAT32
+        // Abs symmetry: erf(-x) = -erf(x). Clamp |x| to 4.0 before evaluation.
+        // For |x| >= 4.0, erf(|x|) rounds to 1.0f in float32 (< 0.26 ULP error).
+        sfpi::vFloat ax = sfpi::min(sfpi::abs(x), 4.0f);
+        sfpi::vFloat result = piecewise_rational_eval<
+            ERF_NUM_DEGREE,
+            ERF_DEN_DEGREE,
+            ERF_NUM_SEGMENTS,
+            ERF_LUT_SIZE,
+            false,
+            APPROXIMATION_MODE>(ERF_LUT, ax);
+        // Restore sign
+        v_if(x < 0.0f) {
+            result = -result;
+        }
+        v_endif;
+#else
         // Clamp |x| to 10.0 before evaluation (erf is odd, rational is exact at boundary)
         x = sfpi::symmetric_clamp(x, 10.0f);
         sfpi::vFloat result = piecewise_rational_eval<
@@ -78,6 +127,7 @@ inline void calculate_erf() {
         // up to ~3e-8 (FP32) / ~2e-4 (BF16 LUT) in the tail. Persists in FP32
         // dest register and biases downstream ops (e.g. decomposed GELU in CLIP).
         result = sfpi::clamp(result, -1.0f, +1.0f);
+#endif
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
