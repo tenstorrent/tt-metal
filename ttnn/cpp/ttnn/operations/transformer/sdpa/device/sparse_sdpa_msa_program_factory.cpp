@@ -20,6 +20,37 @@
 namespace ttnn::prim {
 
 namespace {
+
+// Compile-time args filled by index name (sparse_sdpa_msa_common.hpp) so the factory and the kernel share one
+// layout; every index must be set exactly once before the accessor blocks are appended.
+template <uint32_t N>
+class CtArgs {
+public:
+    void set(uint32_t index, uint32_t value) {
+        TT_FATAL(index < N && !set_[index], "compile-time arg {} set twice or out of range", index);
+        args_[index] = value;
+        set_[index] = true;
+    }
+    std::vector<uint32_t> take() const {
+        for (uint32_t i = 0; i < N; ++i) {
+            TT_FATAL(set_[i], "compile-time arg {} never set", i);
+        }
+        return {args_.begin(), args_.end()};
+    }
+
+private:
+    std::array<uint32_t, N> args_{};
+    std::array<bool, N> set_{};
+};
+
+// Block-cyclic ("slab") remap in BLOCK units; the defaults are the identity remap.
+struct BlockCyclicCt {
+    uint32_t enabled = 0;
+    uint32_t chunk_local = 1;
+    uint32_t sp = 1;
+    uint32_t shard_stride_gap = 0;
+    uint32_t slab_stride_gap = 0;
+};
 // emplace_runtime_args' vector overload registers each Buffer* as an address binding at its slot,
 // so the args can be filled by enum index instead of positionally.
 using RtArgs = std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>;
@@ -86,44 +117,60 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     // to identity. Units are BLOCKS here (sparse_sdpa works in rows, indexer_score in tiles). Reader and writer
     // take the same block {enable, chunk_local, sp, shard_stride_gap, slab_stride_gap}.
     const auto block_cyclic_ct = [&attrs, &t, block_size]() {
-        std::array<uint32_t, 5> args{0, 1, 1, 0, 0};
+        BlockCyclicCt args;
         if (!attrs.has_block_cyclic()) {
             return args;
         }
         const auto& bc = attrs.block_cyclic.value();
         const uint32_t chunk_local_blk = bc.chunk_local / block_size;
         const uint32_t shard_len_blk = (t.k.logical_shape()[2] / bc.sp) / block_size;
-        args = {
-            1,
-            chunk_local_blk,
-            bc.sp,
-            shard_len_blk - chunk_local_blk,
-            chunk_local_blk * (bc.sp - 1),
-        };
+        args.enabled = 1;
+        args.chunk_local = chunk_local_blk;
+        args.sp = bc.sp;
+        args.shard_stride_gap = shard_len_blk - chunk_local_blk;
+        args.slab_stride_gap = chunk_local_blk * (bc.sp - 1);
         return args;
     }();
 
     // ---- compile-time args ----
     // Reader args: scalars, derived geometry, CB ids, element sizes, then q/k/v/indices accessors.
     // K/V use RuntimeTensorShape.
-    std::vector<uint32_t> reader_ct = {
-        H_logical, H, S, topk, n_kv, q_row_bytes, idx_row_bytes, k_tiles_per_block, v_tiles_per_block, k_half, v_half};
-    for (uint32_t id : {cb_q_rm, cb_k_in, cb_v_in, cb_idx, cb_ctrl, cb_kreq, cb_kack}) {
-        reader_ct.push_back(id);
-    }
-    reader_ct.push_back(k_tile_bytes);                      // K is tiled: per-tile read size
-    reader_ct.push_back(v_tile_bytes);                      // V is tiled: per-tile read size
-    reader_ct.push_back(attrs.causal_enabled() ? 1u : 0u);  // CAUSAL_MASK_ENABLED
-    reader_ct.push_back(block_size);                        // block_size: for diag_block = p/bs, offset = p%bs
-    reader_ct.push_back(cb_vmask);                          // reader builds the per-token partial-column tile
-    reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
-    reader_ct.push_back(kv_cache_slots);  // KV_CACHE_SLOTS (0 = streamed path)
-    reader_ct.push_back(cb_k_cache);
-    reader_ct.push_back(cb_v_cache);
-    reader_ct.push_back(cb_slot);
-    reader_ct.push_back(kv_cache_slot_depth);  // KV_CACHE_SLOT_DEPTH
-    TT_FATAL(
-        reader_ct.size() == sparse_sdpa_msa::READER_CT_ARGS, "reader compile-time args out of step with the kernel");
+    namespace rct = sparse_sdpa_msa::reader_ct;
+    CtArgs<rct::COUNT> reader_args;
+    reader_args.set(rct::H_LOGICAL, H_logical);
+    reader_args.set(rct::H, H);
+    reader_args.set(rct::S, S);
+    reader_args.set(rct::TOPK, topk);
+    reader_args.set(rct::N_KV, n_kv);
+    reader_args.set(rct::Q_ROW_BYTES, q_row_bytes);
+    reader_args.set(rct::IDX_ROW_BYTES, idx_row_bytes);
+    reader_args.set(rct::K_TILES_PER_BLOCK, k_tiles_per_block);
+    reader_args.set(rct::V_TILES_PER_BLOCK, v_tiles_per_block);
+    reader_args.set(rct::K_HALF, k_half);
+    reader_args.set(rct::V_HALF, v_half);
+    reader_args.set(rct::CB_Q_RM, cb_q_rm);
+    reader_args.set(rct::CB_K_IN, cb_k_in);
+    reader_args.set(rct::CB_V_IN, cb_v_in);
+    reader_args.set(rct::CB_IDX, cb_idx);
+    reader_args.set(rct::CB_CTRL, cb_ctrl);
+    reader_args.set(rct::CB_KREQ, cb_kreq);
+    reader_args.set(rct::CB_KACK, cb_kack);
+    reader_args.set(rct::K_TILE_BYTES, k_tile_bytes);  // K is tiled: per-tile read size
+    reader_args.set(rct::V_TILE_BYTES, v_tile_bytes);  // V is tiled: per-tile read size
+    reader_args.set(rct::CAUSAL_MASK_ENABLED, attrs.causal_enabled() ? 1u : 0u);
+    reader_args.set(rct::BLOCK_SIZE, block_size);  // for diag_block = p/bs, offset = p%bs
+    reader_args.set(rct::CB_VMASK, cb_vmask);      // reader builds the per-token partial-column tile
+    reader_args.set(rct::BLOCK_CYCLIC, block_cyclic_ct.enabled);
+    reader_args.set(rct::BC_CHUNK_LOCAL, block_cyclic_ct.chunk_local);
+    reader_args.set(rct::BC_SP, block_cyclic_ct.sp);
+    reader_args.set(rct::BC_SHARD_STRIDE_GAP, block_cyclic_ct.shard_stride_gap);
+    reader_args.set(rct::BC_SLAB_STRIDE_GAP, block_cyclic_ct.slab_stride_gap);
+    reader_args.set(rct::KV_CACHE_SLOTS, kv_cache_slots);  // 0 = streamed path
+    reader_args.set(rct::CB_K_CACHE, cb_k_cache);
+    reader_args.set(rct::CB_V_CACHE, cb_v_cache);
+    reader_args.set(rct::CB_SLOT, cb_slot);
+    reader_args.set(rct::KV_CACHE_SLOT_DEPTH, kv_cache_slot_depth);
+    std::vector<uint32_t> reader_ct = reader_args.take();
     std::vector<uint32_t> reader_crt;
     tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.k.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
@@ -135,32 +182,37 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     // Writer builds persistent compute tiles, co-gathers K/V halves, and drains row-major output.
     const uint32_t row_bytes = vDHt * tt::constants::TILE_WIDTH * out_elem_bytes;
     const uint32_t block_tiles = Sqt * vDHt;
-    std::vector<uint32_t> writer_ct = {
-        H_logical,
-        S,
-        n_kv,
-        row_bytes,
-        block_tiles,
-        k_tiles_per_block,
-        v_tiles_per_block,
-        k_half,
-        v_half,
-        cb_out_rm,
-        cb_scale,
-        cb_col_identity};
-    for (uint32_t id : {cb_k_in, cb_v_in, cb_kreq, cb_kack}) {
-        writer_ct.push_back(id);
-    }
-    writer_ct.push_back(k_tile_bytes);
-    writer_ct.push_back(v_tile_bytes);
-    writer_ct.push_back(attrs.causal_enabled() ? 1u : 0u);  // CAUSAL_MASK_ENABLED
-    writer_ct.push_back(cb_neginf);                         // writer builds the persistent -inf mask tile
-    writer_ct.insert(writer_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
-    writer_ct.push_back(kv_cache_slots);  // KV_CACHE_SLOTS (0 = streamed path)
-    writer_ct.push_back(cb_k_cache);
-    writer_ct.push_back(cb_v_cache);
-    TT_FATAL(
-        writer_ct.size() == sparse_sdpa_msa::WRITER_CT_ARGS, "writer compile-time args out of step with the kernel");
+    namespace wct = sparse_sdpa_msa::writer_ct;
+    CtArgs<wct::COUNT> writer_args;
+    writer_args.set(wct::H_LOGICAL, H_logical);
+    writer_args.set(wct::S, S);
+    writer_args.set(wct::N_KV, n_kv);
+    writer_args.set(wct::ROW_BYTES, row_bytes);
+    writer_args.set(wct::BLOCK_TILES, block_tiles);
+    writer_args.set(wct::K_TILES_PER_BLOCK, k_tiles_per_block);
+    writer_args.set(wct::V_TILES_PER_BLOCK, v_tiles_per_block);
+    writer_args.set(wct::K_HALF, k_half);
+    writer_args.set(wct::V_HALF, v_half);
+    writer_args.set(wct::CB_OUT_RM, cb_out_rm);
+    writer_args.set(wct::CB_SCALE, cb_scale);
+    writer_args.set(wct::CB_COL_IDENTITY, cb_col_identity);
+    writer_args.set(wct::CB_K_IN, cb_k_in);
+    writer_args.set(wct::CB_V_IN, cb_v_in);
+    writer_args.set(wct::CB_KREQ, cb_kreq);
+    writer_args.set(wct::CB_KACK, cb_kack);
+    writer_args.set(wct::K_TILE_BYTES, k_tile_bytes);
+    writer_args.set(wct::V_TILE_BYTES, v_tile_bytes);
+    writer_args.set(wct::CAUSAL_MASK_ENABLED, attrs.causal_enabled() ? 1u : 0u);
+    writer_args.set(wct::CB_NEGINF, cb_neginf);  // writer builds the persistent -inf mask tile
+    writer_args.set(wct::BLOCK_CYCLIC, block_cyclic_ct.enabled);
+    writer_args.set(wct::BC_CHUNK_LOCAL, block_cyclic_ct.chunk_local);
+    writer_args.set(wct::BC_SP, block_cyclic_ct.sp);
+    writer_args.set(wct::BC_SHARD_STRIDE_GAP, block_cyclic_ct.shard_stride_gap);
+    writer_args.set(wct::BC_SLAB_STRIDE_GAP, block_cyclic_ct.slab_stride_gap);
+    writer_args.set(wct::KV_CACHE_SLOTS, kv_cache_slots);  // 0 = streamed path
+    writer_args.set(wct::CB_K_CACHE, cb_k_cache);
+    writer_args.set(wct::CB_V_CACHE, cb_v_cache);
+    std::vector<uint32_t> writer_ct = writer_args.take();
     std::vector<uint32_t> writer_crt;
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.k.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
@@ -168,10 +220,31 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     tt::tt_metal::TensorAccessorArgs(t.v.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_ct, writer_crt);
 
-    std::vector<uint32_t> compute_ct = {
-        H,        DHt,      vDHt,      Skt,       scale_packed, cb_q_rm,         cb_q_in,         cb_k_in,
-        cb_v_in,  cb_scale, cb_qk_im,  cb_max_a,  cb_max_b,     cb_sum_a,        cb_sum_b,        cb_out_a,
-        cb_out_b, cb_corr,  cb_out_im, cb_out_rm, cb_ctrl,      cb_col_identity, cb_recip_scratch};
+    namespace cct = sparse_sdpa_msa::compute_ct;
+    CtArgs<cct::COUNT> compute_args;
+    compute_args.set(cct::H, H);
+    compute_args.set(cct::DHT, DHt);
+    compute_args.set(cct::VDHT, vDHt);
+    compute_args.set(cct::SKT, Skt);
+    compute_args.set(cct::SCALE_FP32, scale_packed);
+    compute_args.set(cct::CB_Q_RM, cb_q_rm);
+    compute_args.set(cct::CB_Q_IN, cb_q_in);
+    compute_args.set(cct::CB_K_IN, cb_k_in);
+    compute_args.set(cct::CB_V_IN, cb_v_in);
+    compute_args.set(cct::CB_SCALE, cb_scale);
+    compute_args.set(cct::CB_QK_IM, cb_qk_im);
+    compute_args.set(cct::CB_MAX_A, cb_max_a);
+    compute_args.set(cct::CB_MAX_B, cb_max_b);
+    compute_args.set(cct::CB_SUM_A, cb_sum_a);
+    compute_args.set(cct::CB_SUM_B, cb_sum_b);
+    compute_args.set(cct::CB_OUT_A, cb_out_a);
+    compute_args.set(cct::CB_OUT_B, cb_out_b);
+    compute_args.set(cct::CB_CORR, cb_corr);
+    compute_args.set(cct::CB_OUT_IM, cb_out_im);
+    compute_args.set(cct::CB_OUT_RM, cb_out_rm);
+    compute_args.set(cct::CB_CTRL, cb_ctrl);
+    compute_args.set(cct::CB_COL_IDENTITY, cb_col_identity);
+    compute_args.set(cct::CB_RECIP_SCRATCH, cb_recip_scratch);
 
     // ---- kernels ----
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/";
@@ -204,16 +277,15 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
             break;
         }
     }
-    compute_ct.push_back(qsb);
-    compute_ct.push_back(attrs.causal_enabled() ? 1u : 0u);  // CAUSAL_MASK_ENABLED
-    compute_ct.push_back(cb_neginf);                         // full -inf mask tile (future key-tiles)
-    compute_ct.push_back(cb_vmask);                          // partial-column mask tile (boundary key-tile)
-    compute_ct.push_back(kv_cache_slots);  // KV_CACHE_SLOTS (0 = compute streams from cb_k_in/cb_v_in)
-    compute_ct.push_back(cb_k_cache);
-    compute_ct.push_back(cb_v_cache);
-    compute_ct.push_back(cb_slot);
-    TT_FATAL(
-        compute_ct.size() == sparse_sdpa_msa::COMPUTE_CT_ARGS, "compute compile-time args out of step with the kernel");
+    compute_args.set(cct::QSB, qsb);
+    compute_args.set(cct::CAUSAL_MASK_ENABLED, attrs.causal_enabled() ? 1u : 0u);
+    compute_args.set(cct::CB_NEGINF, cb_neginf);            // full -inf mask tile (future key-tiles)
+    compute_args.set(cct::CB_VMASK, cb_vmask);              // partial-column mask tile (boundary key-tile)
+    compute_args.set(cct::KV_CACHE_SLOTS, kv_cache_slots);  // 0 = compute streams from cb_k_in/cb_v_in
+    compute_args.set(cct::CB_K_CACHE, cb_k_cache);
+    compute_args.set(cct::CB_V_CACHE, cb_v_cache);
+    compute_args.set(cct::CB_SLOT, cb_slot);
+    const std::vector<uint32_t> compute_ct = compute_args.take();
 
     tt::tt_metal::KernelDescriptor compute_desc;
     compute_desc.kernel_source = kdir + "compute/sparse_sdpa_msa_compute.cpp";

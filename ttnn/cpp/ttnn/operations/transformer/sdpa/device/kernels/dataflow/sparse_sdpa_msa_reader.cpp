@@ -19,52 +19,53 @@ namespace ctrl = sparse_sdpa_msa::ctrl;
 constexpr uint32_t sentinel = 0xFFFFFFFFu;
 
 void kernel_main() {
-    constexpr uint32_t H_logical = get_compile_time_arg_val(0);
-    constexpr uint32_t H = get_compile_time_arg_val(1);
-    constexpr uint32_t S = get_compile_time_arg_val(2);
-    constexpr uint32_t topk = get_compile_time_arg_val(3);
-    constexpr uint32_t n_kv = get_compile_time_arg_val(4);
-    constexpr uint32_t q_row_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t idx_row_bytes = get_compile_time_arg_val(6);
-    constexpr uint32_t k_tiles_per_block = get_compile_time_arg_val(7);
-    constexpr uint32_t v_tiles_per_block = get_compile_time_arg_val(8);
-    constexpr uint32_t k_half = get_compile_time_arg_val(9);  // writer gathers [0, half)
-    constexpr uint32_t v_half = get_compile_time_arg_val(10);
+    namespace ct = sparse_sdpa_msa::reader_ct;
+    constexpr uint32_t H_logical = get_compile_time_arg_val(ct::H_LOGICAL);
+    constexpr uint32_t H = get_compile_time_arg_val(ct::H);
+    constexpr uint32_t S = get_compile_time_arg_val(ct::S);
+    constexpr uint32_t topk = get_compile_time_arg_val(ct::TOPK);
+    constexpr uint32_t n_kv = get_compile_time_arg_val(ct::N_KV);
+    constexpr uint32_t q_row_bytes = get_compile_time_arg_val(ct::Q_ROW_BYTES);
+    constexpr uint32_t idx_row_bytes = get_compile_time_arg_val(ct::IDX_ROW_BYTES);
+    constexpr uint32_t k_tiles_per_block = get_compile_time_arg_val(ct::K_TILES_PER_BLOCK);
+    constexpr uint32_t v_tiles_per_block = get_compile_time_arg_val(ct::V_TILES_PER_BLOCK);
+    constexpr uint32_t k_half = get_compile_time_arg_val(ct::K_HALF);  // writer gathers [0, half)
+    constexpr uint32_t v_half = get_compile_time_arg_val(ct::V_HALF);
 
     // CB ids match the factory's reader compile-arg block (meanings: SparseSDPAMsaOperation::Cb).
-    constexpr uint32_t cb_q_rm = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_k_in = get_compile_time_arg_val(12);
-    constexpr uint32_t cb_v_in = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_idx = get_compile_time_arg_val(14);
-    constexpr uint32_t cb_ctrl = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_kreq = get_compile_time_arg_val(16);
-    constexpr uint32_t cb_kack = get_compile_time_arg_val(17);
+    constexpr uint32_t cb_q_rm = get_compile_time_arg_val(ct::CB_Q_RM);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(ct::CB_K_IN);
+    constexpr uint32_t cb_v_in = get_compile_time_arg_val(ct::CB_V_IN);
+    constexpr uint32_t cb_idx = get_compile_time_arg_val(ct::CB_IDX);
+    constexpr uint32_t cb_ctrl = get_compile_time_arg_val(ct::CB_CTRL);
+    constexpr uint32_t cb_kreq = get_compile_time_arg_val(ct::CB_KREQ);
+    constexpr uint32_t cb_kack = get_compile_time_arg_val(ct::CB_KACK);
 
-    constexpr uint32_t k_tile_bytes = get_compile_time_arg_val(18);  // K is tiled: per-tile read size
-    constexpr uint32_t v_tile_bytes = get_compile_time_arg_val(19);  // V is tiled: per-tile read size
+    constexpr uint32_t k_tile_bytes = get_compile_time_arg_val(ct::K_TILE_BYTES);  // K is tiled: per-tile read size
+    constexpr uint32_t v_tile_bytes = get_compile_time_arg_val(ct::V_TILE_BYTES);  // V is tiled: per-tile read size
 
     // Causal masking (token-level diagonal-block mask)
-    constexpr bool CAUSAL_MASK_ENABLED = get_compile_time_arg_val(20) != 0;
-    constexpr uint32_t block_size = get_compile_time_arg_val(21);  // tokens per block (for p%bs, p/bs)
-    constexpr uint32_t cb_vmask = get_compile_time_arg_val(22);    // per-token partial-column mask tile
+    constexpr bool CAUSAL_MASK_ENABLED = get_compile_time_arg_val(ct::CAUSAL_MASK_ENABLED) != 0;
+    constexpr uint32_t block_size = get_compile_time_arg_val(ct::BLOCK_SIZE);  // tokens per block (for p%bs, p/bs)
+    constexpr uint32_t cb_vmask = get_compile_time_arg_val(ct::CB_VMASK);      // per-token partial-column mask tile
 
     // Block-cyclic ("slab") cache remap in BLOCK units: baked compile-time so a natural-order cache folds to
     // identity (block_cyclic false). Kept in lockstep with the writer's block remap.
-    constexpr bool block_cyclic = get_compile_time_arg_val(23) != 0;
-    constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(24);
-    constexpr uint32_t bc_sp = get_compile_time_arg_val(25);
-    constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(26);
-    constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(27);
+    constexpr bool block_cyclic = get_compile_time_arg_val(ct::BLOCK_CYCLIC) != 0;
+    constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(ct::BC_CHUNK_LOCAL);
+    constexpr uint32_t bc_sp = get_compile_time_arg_val(ct::BC_SP);
+    constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(ct::BC_SHARD_STRIDE_GAP);
+    constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(ct::BC_SLAB_STRIDE_GAP);
 
     // Per-core K/V block cache: KV_CACHE_SLOTS resident blocks (0 = off, the streamed path below). The reader
     // owns the slots and hands compute the slot to read over cb_slot, so a re-selected block costs no DRAM read.
-    constexpr uint32_t KV_CACHE_SLOTS = get_compile_time_arg_val(28);
-    constexpr uint32_t cb_k_cache = get_compile_time_arg_val(29);
-    constexpr uint32_t cb_v_cache = get_compile_time_arg_val(30);
-    constexpr uint32_t cb_slot = get_compile_time_arg_val(31);
+    constexpr uint32_t KV_CACHE_SLOTS = get_compile_time_arg_val(ct::KV_CACHE_SLOTS);
+    constexpr uint32_t cb_k_cache = get_compile_time_arg_val(ct::CB_K_CACHE);
+    constexpr uint32_t cb_v_cache = get_compile_time_arg_val(ct::CB_V_CACHE);
+    constexpr uint32_t cb_slot = get_compile_time_arg_val(ct::CB_SLOT);
     // cb_slot depth = blocks the reader may run ahead of compute, so a miss's DRAM read overlaps the previous
     // block's math.
-    constexpr uint32_t KV_CACHE_SLOT_DEPTH = get_compile_time_arg_val(32);
+    constexpr uint32_t KV_CACHE_SLOT_DEPTH = get_compile_time_arg_val(ct::KV_CACHE_SLOT_DEPTH);
     // Slots compute may still be reading once reserve_back(cb_slot) returns; the busy scan is compiled out at depth 1.
     constexpr uint32_t KV_CACHE_INFLIGHT = KV_CACHE_SLOT_DEPTH > 1 ? KV_CACHE_SLOT_DEPTH - 1 : 1;
     // The victim search skips the in-flight slots, so it terminates only if some slot is never in flight.
@@ -73,7 +74,7 @@ void kernel_main() {
         "cb_slot depth must leave at least one slot outside the in-flight set");
 
     // K/V use RuntimeTensorShape so T can vary without recompilation.
-    constexpr auto q_args = TensorAccessorArgs<sparse_sdpa_msa::READER_CT_ARGS, 0>();
+    constexpr auto q_args = TensorAccessorArgs<ct::COUNT, 0>();
     constexpr auto k_args =
         TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
     constexpr auto v_args =

@@ -32,12 +32,117 @@ constexpr uint32_t BOUNDARY_COL = 3;   // causal: partial-column boundary within
 constexpr uint32_t WORD_COUNT = 4;
 }  // namespace ctrl
 
-// Compile-time arguments each kernel decodes positionally before its TensorAccessorArgs block. The factory checks
-// its vectors against these counts before appending the accessors, so an argument added or dropped on one side
-// fails at program creation instead of shifting the accessor decode.
-constexpr uint32_t READER_CT_ARGS = 33;
-constexpr uint32_t WRITER_CT_ARGS = 28;
-constexpr uint32_t COMPUTE_CT_ARGS = 31;
+// Compile-time argument indices, one enum per kernel. The factory fills each slot by name and the kernel reads it
+// by the same name, so the two cannot drift; COUNT is where the kernel's TensorAccessorArgs block begins.
+namespace reader_ct {
+enum : uint32_t {
+    H_LOGICAL,
+    H,
+    S,
+    TOPK,
+    N_KV,
+    Q_ROW_BYTES,
+    IDX_ROW_BYTES,
+    K_TILES_PER_BLOCK,
+    V_TILES_PER_BLOCK,
+    K_HALF,
+    V_HALF,
+    CB_Q_RM,
+    CB_K_IN,
+    CB_V_IN,
+    CB_IDX,
+    CB_CTRL,
+    CB_KREQ,
+    CB_KACK,
+    K_TILE_BYTES,
+    V_TILE_BYTES,
+    CAUSAL_MASK_ENABLED,
+    BLOCK_SIZE,
+    CB_VMASK,
+    BLOCK_CYCLIC,
+    BC_CHUNK_LOCAL,
+    BC_SP,
+    BC_SHARD_STRIDE_GAP,
+    BC_SLAB_STRIDE_GAP,
+    KV_CACHE_SLOTS,
+    CB_K_CACHE,
+    CB_V_CACHE,
+    CB_SLOT,
+    KV_CACHE_SLOT_DEPTH,
+    COUNT
+};
+}  // namespace reader_ct
+
+namespace writer_ct {
+enum : uint32_t {
+    H_LOGICAL,
+    S,
+    N_KV,
+    ROW_BYTES,
+    BLOCK_TILES,
+    K_TILES_PER_BLOCK,
+    V_TILES_PER_BLOCK,
+    K_HALF,
+    V_HALF,
+    CB_OUT_RM,
+    CB_SCALE,
+    CB_COL_IDENTITY,
+    CB_K_IN,
+    CB_V_IN,
+    CB_KREQ,
+    CB_KACK,
+    K_TILE_BYTES,
+    V_TILE_BYTES,
+    CAUSAL_MASK_ENABLED,
+    CB_NEGINF,
+    BLOCK_CYCLIC,
+    BC_CHUNK_LOCAL,
+    BC_SP,
+    BC_SHARD_STRIDE_GAP,
+    BC_SLAB_STRIDE_GAP,
+    KV_CACHE_SLOTS,
+    CB_K_CACHE,
+    CB_V_CACHE,
+    COUNT
+};
+}  // namespace writer_ct
+
+namespace compute_ct {
+enum : uint32_t {
+    H,
+    DHT,
+    VDHT,
+    SKT,
+    SCALE_FP32,
+    CB_Q_RM,
+    CB_Q_IN,
+    CB_K_IN,
+    CB_V_IN,
+    CB_SCALE,
+    CB_QK_IM,
+    CB_MAX_A,
+    CB_MAX_B,
+    CB_SUM_A,
+    CB_SUM_B,
+    CB_OUT_A,
+    CB_OUT_B,
+    CB_CORR,
+    CB_OUT_IM,
+    CB_OUT_RM,
+    CB_CTRL,
+    CB_COL_IDENTITY,
+    CB_RECIP_SCRATCH,
+    QSB,
+    CAUSAL_MASK_ENABLED,
+    CB_NEGINF,
+    CB_VMASK,
+    KV_CACHE_SLOTS,
+    CB_K_CACHE,
+    CB_V_CACHE,
+    CB_SLOT,
+    COUNT
+};
+}  // namespace compute_ct
 
 // Per-core K/V block cache.
 constexpr uint32_t KV_CACHE_SLOTS_MAX = 64;      // bounds the reader's per-block residency scan

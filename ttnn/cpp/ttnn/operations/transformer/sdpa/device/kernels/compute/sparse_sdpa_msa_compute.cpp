@@ -35,45 +35,47 @@ ALWI void swap_cb(CircularBuffer& a, CircularBuffer& b) {
 }
 
 void kernel_main() {
-    constexpr uint32_t H = get_compile_time_arg_val(0);
-    constexpr uint32_t DHt = get_compile_time_arg_val(1);
-    constexpr uint32_t vDHt = get_compile_time_arg_val(2);
-    constexpr uint32_t Skt = get_compile_time_arg_val(3);
-    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(4);
+    namespace ct = sparse_sdpa_msa::compute_ct;
+    constexpr uint32_t H = get_compile_time_arg_val(ct::H);
+    constexpr uint32_t DHt = get_compile_time_arg_val(ct::DHT);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(ct::VDHT);
+    constexpr uint32_t Skt = get_compile_time_arg_val(ct::SKT);
+    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(ct::SCALE_FP32);
 
     // CB ids match the factory's compute compile-arg block (meanings: SparseSDPAMsaOperation::Cb).
-    constexpr uint32_t cb_q_rm = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_q_in = get_compile_time_arg_val(6);
-    constexpr uint32_t cb_k_in = get_compile_time_arg_val(7);  // streamed build: one K block [Skt, DHt]
-    constexpr uint32_t cb_v_in = get_compile_time_arg_val(8);  // streamed build: one V block [Skt, vDHt]
-    constexpr uint32_t cb_scale = get_compile_time_arg_val(9);
-    constexpr uint32_t cb_qk_im = get_compile_time_arg_val(10);
-    constexpr uint32_t cb_max_a = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_max_b = get_compile_time_arg_val(12);
-    constexpr uint32_t cb_sum_a = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_sum_b = get_compile_time_arg_val(14);
-    constexpr uint32_t cb_out_a = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_out_b = get_compile_time_arg_val(16);
-    constexpr uint32_t cb_corr = get_compile_time_arg_val(17);
-    constexpr uint32_t cb_out_im = get_compile_time_arg_val(18);
-    constexpr uint32_t cb_out_rm = get_compile_time_arg_val(19);
-    constexpr uint32_t cb_ctrl = get_compile_time_arg_val(20);
-    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(21);
-    constexpr uint32_t cb_recip_scratch = get_compile_time_arg_val(22);
+    constexpr uint32_t cb_q_rm = get_compile_time_arg_val(ct::CB_Q_RM);
+    constexpr uint32_t cb_q_in = get_compile_time_arg_val(ct::CB_Q_IN);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(ct::CB_K_IN);  // streamed build: one K block [Skt, DHt]
+    constexpr uint32_t cb_v_in = get_compile_time_arg_val(ct::CB_V_IN);  // streamed build: one V block [Skt, vDHt]
+    constexpr uint32_t cb_scale = get_compile_time_arg_val(ct::CB_SCALE);
+    constexpr uint32_t cb_qk_im = get_compile_time_arg_val(ct::CB_QK_IM);
+    constexpr uint32_t cb_max_a = get_compile_time_arg_val(ct::CB_MAX_A);
+    constexpr uint32_t cb_max_b = get_compile_time_arg_val(ct::CB_MAX_B);
+    constexpr uint32_t cb_sum_a = get_compile_time_arg_val(ct::CB_SUM_A);
+    constexpr uint32_t cb_sum_b = get_compile_time_arg_val(ct::CB_SUM_B);
+    constexpr uint32_t cb_out_a = get_compile_time_arg_val(ct::CB_OUT_A);
+    constexpr uint32_t cb_out_b = get_compile_time_arg_val(ct::CB_OUT_B);
+    constexpr uint32_t cb_corr = get_compile_time_arg_val(ct::CB_CORR);
+    constexpr uint32_t cb_out_im = get_compile_time_arg_val(ct::CB_OUT_IM);
+    constexpr uint32_t cb_out_rm = get_compile_time_arg_val(ct::CB_OUT_RM);
+    constexpr uint32_t cb_ctrl = get_compile_time_arg_val(ct::CB_CTRL);
+    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(ct::CB_COL_IDENTITY);
+    constexpr uint32_t cb_recip_scratch = get_compile_time_arg_val(ct::CB_RECIP_SCRATCH);
 
-    constexpr uint32_t qsb = get_compile_time_arg_val(23);    // query tile-rows per DST group (<= dst_size)
+    constexpr uint32_t qsb = get_compile_time_arg_val(ct::QSB);  // query tile-rows per DST group (<= dst_size)
     // Causal masking (token-level diagonal-block mask).
-    constexpr bool CAUSAL_MASK_ENABLED = get_compile_time_arg_val(24) != 0;
-    constexpr uint32_t cb_neginf = get_compile_time_arg_val(25);  // persistent all -inf tile (future key-tiles)
-    constexpr uint32_t cb_vmask = get_compile_time_arg_val(26);   // per-token partial-column boundary tile
+    constexpr bool CAUSAL_MASK_ENABLED = get_compile_time_arg_val(ct::CAUSAL_MASK_ENABLED) != 0;
+    constexpr uint32_t cb_neginf =
+        get_compile_time_arg_val(ct::CB_NEGINF);  // persistent all -inf tile (future key-tiles)
+    constexpr uint32_t cb_vmask = get_compile_time_arg_val(ct::CB_VMASK);  // per-token partial-column boundary tile
     // Per-core K/V block cache: when on, K/V for a chunk are read in place from the reader's resident slot
     // (slot id over cb_slot, tile offset slot * tiles_per_block) instead of the streamed cb_k_in/cb_v_in. The
     // cache CBs are never pushed or popped by anyone, so tile index 0 stays at the CB base and no wait_front
     // applies; the handshake is cb_slot alone.
-    constexpr uint32_t KV_CACHE_SLOTS = get_compile_time_arg_val(27);
-    constexpr uint32_t cb_k_cache = get_compile_time_arg_val(28);
-    constexpr uint32_t cb_v_cache = get_compile_time_arg_val(29);
-    constexpr uint32_t cb_slot = get_compile_time_arg_val(30);
+    constexpr uint32_t KV_CACHE_SLOTS = get_compile_time_arg_val(ct::KV_CACHE_SLOTS);
+    constexpr uint32_t cb_k_cache = get_compile_time_arg_val(ct::CB_K_CACHE);
+    constexpr uint32_t cb_v_cache = get_compile_time_arg_val(ct::CB_V_CACHE);
+    constexpr uint32_t cb_slot = get_compile_time_arg_val(ct::CB_SLOT);
     constexpr uint32_t cb_k_src = (KV_CACHE_SLOTS > 0) ? cb_k_cache : cb_k_in;
     constexpr uint32_t cb_v_src = (KV_CACHE_SLOTS > 0) ? cb_v_cache : cb_v_in;
     constexpr uint32_t k_tiles_per_block = Skt * DHt;

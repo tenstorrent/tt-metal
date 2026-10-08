@@ -20,42 +20,43 @@ namespace kreq = sparse_sdpa_msa::kreq;
 constexpr uint32_t one_bf16_packed = 0x3F803F80u;  // bf16(1.0) double-packed; generate_bcast_col_scalar uses >>16
 
 void kernel_main() {
-    constexpr uint32_t H_logical = get_compile_time_arg_val(0);
-    constexpr uint32_t S = get_compile_time_arg_val(1);
-    constexpr uint32_t n_kv = get_compile_time_arg_val(2);
-    constexpr uint32_t row_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t block_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t k_tiles_per_block = get_compile_time_arg_val(5);
-    constexpr uint32_t v_tiles_per_block = get_compile_time_arg_val(6);
-    constexpr uint32_t k_half = get_compile_time_arg_val(7);
-    constexpr uint32_t v_half = get_compile_time_arg_val(8);
+    namespace ct = sparse_sdpa_msa::writer_ct;
+    constexpr uint32_t H_logical = get_compile_time_arg_val(ct::H_LOGICAL);
+    constexpr uint32_t S = get_compile_time_arg_val(ct::S);
+    constexpr uint32_t n_kv = get_compile_time_arg_val(ct::N_KV);
+    constexpr uint32_t row_bytes = get_compile_time_arg_val(ct::ROW_BYTES);
+    constexpr uint32_t block_tiles = get_compile_time_arg_val(ct::BLOCK_TILES);
+    constexpr uint32_t k_tiles_per_block = get_compile_time_arg_val(ct::K_TILES_PER_BLOCK);
+    constexpr uint32_t v_tiles_per_block = get_compile_time_arg_val(ct::V_TILES_PER_BLOCK);
+    constexpr uint32_t k_half = get_compile_time_arg_val(ct::K_HALF);
+    constexpr uint32_t v_half = get_compile_time_arg_val(ct::V_HALF);
 
     // CB ids match the factory's writer compile-arg block (meanings: SparseSDPAMsaOperation::Cb).
-    constexpr uint32_t cb_out_rm = get_compile_time_arg_val(9);
-    constexpr uint32_t cb_scale = get_compile_time_arg_val(10);
-    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(11);
+    constexpr uint32_t cb_out_rm = get_compile_time_arg_val(ct::CB_OUT_RM);
+    constexpr uint32_t cb_scale = get_compile_time_arg_val(ct::CB_SCALE);
+    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(ct::CB_COL_IDENTITY);
     // Writer fills the lower half of each block's K/V tiles into reader-reserved CBs.
-    constexpr uint32_t cb_k_in = get_compile_time_arg_val(12);
-    constexpr uint32_t cb_v_in = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_kreq = get_compile_time_arg_val(14);
-    constexpr uint32_t cb_kack = get_compile_time_arg_val(15);
-    constexpr uint32_t k_tile_bytes = get_compile_time_arg_val(16);
-    constexpr uint32_t v_tile_bytes = get_compile_time_arg_val(17);
-    constexpr bool CAUSAL_MASK_ENABLED = get_compile_time_arg_val(18) != 0;
-    constexpr uint32_t cb_neginf = get_compile_time_arg_val(19);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(ct::CB_K_IN);
+    constexpr uint32_t cb_v_in = get_compile_time_arg_val(ct::CB_V_IN);
+    constexpr uint32_t cb_kreq = get_compile_time_arg_val(ct::CB_KREQ);
+    constexpr uint32_t cb_kack = get_compile_time_arg_val(ct::CB_KACK);
+    constexpr uint32_t k_tile_bytes = get_compile_time_arg_val(ct::K_TILE_BYTES);
+    constexpr uint32_t v_tile_bytes = get_compile_time_arg_val(ct::V_TILE_BYTES);
+    constexpr bool CAUSAL_MASK_ENABLED = get_compile_time_arg_val(ct::CAUSAL_MASK_ENABLED) != 0;
+    constexpr uint32_t cb_neginf = get_compile_time_arg_val(ct::CB_NEGINF);
 
     // Block-cyclic ("slab") cache remap in BLOCK units; same constants as the reader (see its comment).
-    constexpr bool block_cyclic = get_compile_time_arg_val(20) != 0;
-    constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(21);
-    constexpr uint32_t bc_sp = get_compile_time_arg_val(22);
-    constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(23);
-    constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(24);
+    constexpr bool block_cyclic = get_compile_time_arg_val(ct::BLOCK_CYCLIC) != 0;
+    constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(ct::BC_CHUNK_LOCAL);
+    constexpr uint32_t bc_sp = get_compile_time_arg_val(ct::BC_SP);
+    constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(ct::BC_SHARD_STRIDE_GAP);
+    constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(ct::BC_SLAB_STRIDE_GAP);
     // Per-core K/V block cache: when on, the writer fills the lower tile halves of each missed block into the
     // reader's victim slot (cb_k_cache/cb_v_cache) instead of cb_k_in/cb_v_in; hits never reach it.
-    constexpr uint32_t KV_CACHE_SLOTS = get_compile_time_arg_val(25);
-    constexpr uint32_t cb_k_cache = get_compile_time_arg_val(26);
-    constexpr uint32_t cb_v_cache = get_compile_time_arg_val(27);
-    constexpr auto out_args = TensorAccessorArgs<sparse_sdpa_msa::WRITER_CT_ARGS, 0>();
+    constexpr uint32_t KV_CACHE_SLOTS = get_compile_time_arg_val(ct::KV_CACHE_SLOTS);
+    constexpr uint32_t cb_k_cache = get_compile_time_arg_val(ct::CB_K_CACHE);
+    constexpr uint32_t cb_v_cache = get_compile_time_arg_val(ct::CB_V_CACHE);
+    constexpr auto out_args = TensorAccessorArgs<ct::COUNT, 0>();
     // K/V use RuntimeTensorShape so T can vary without recompilation.
     constexpr auto k_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
