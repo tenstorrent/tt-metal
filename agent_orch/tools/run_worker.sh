@@ -2,13 +2,15 @@
 # Launch one worker as a headless Claude Code session inside its worktree (on the device machine).
 #
 #   run_worker.sh --campaign C --node r01-b02-a01 --parent root [--timeout-min 120] [--model M]
+#   run_worker.sh --campaign C --node N --parent P --attach <pid>          # re-watch a running session
+#   run_worker.sh --campaign C --node N --parent P --resume <session-id>   # continue an interrupted session
 #
 # Run prepare_worker.sh first. The transcript goes to $DREAM_HOME/<c>/logs/worker_<node>.jsonl;
 # the worker's final message (the commit_node.py JSON) is printed on the last line.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/dream_env.sh"
 
-CAMPAIGN="" NODE="" PARENT="" TIMEOUT_MIN=120 MODEL=""
+CAMPAIGN="" NODE="" PARENT="" TIMEOUT_MIN=120 MODEL="" ATTACH="" RESUME=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --campaign) CAMPAIGN="$2"; shift 2 ;;
@@ -16,6 +18,8 @@ while [[ $# -gt 0 ]]; do
     --parent) PARENT="$2"; shift 2 ;;
     --timeout-min) TIMEOUT_MIN="$2"; shift 2 ;;
     --model) MODEL="$2"; shift 2 ;;
+    --attach) ATTACH="$2"; shift 2 ;;
+    --resume) RESUME="$2"; shift 2 ;;
     *) dream_die "unknown argument $1" ;;
   esac
 done
@@ -49,28 +53,42 @@ kill_tree() {  # kill a process and all its descendants
   kill "$1" 2>/dev/null
 }
 
-echo "[worker $NODE] started $(date -Is), log: $LOG"
+TAG="dream/$CAMPAIGN/n/$NODE"
 cd "$WT" || exit 1
-timeout --kill-after=60 "$((TIMEOUT_MIN * 60))" \
-  claude -p "$PROMPT" --permission-mode bypassPermissions --output-format stream-json --verbose \
-  ${MODEL:+--model "$MODEL"} >"$LOG" 2>&1 &
-pid=$!
-# A worker can leave a background shell running after its final message, which keeps the
-# session alive. Once the result is in the log, give it a minute to exit, then clean up.
+if [[ -n "$ATTACH" ]]; then
+  pid="$ATTACH"
+  echo "[worker $NODE] attached to pid $pid $(date -Is), log: $LOG"
+else
+  args=(-p "$PROMPT")
+  if [[ -n "$RESUME" ]]; then
+    args=(-p --resume "$RESUME" "Your session was interrupted. Check what is already done in your node directory
+(eval/ may already be written), finish the remaining WORKER.md steps (reflection.md, commit_node.py) without
+re-running a finished eval, and end with only the JSON line printed by commit_node.py.")
+  fi
+  echo "[worker $NODE] started $(date -Is), log: $LOG"
+  timeout --kill-after=60 "$((TIMEOUT_MIN * 60))" \
+    claude "${args[@]}" --permission-mode bypassPermissions --output-format stream-json --verbose \
+    ${MODEL:+--model "$MODEL"} >>"$LOG" 2>&1 &
+  pid=$!
+fi
+# The session ends on its own when the worker is done. A "result" event is NOT the end: the
+# worker emits one each time it waits on a background task (e.g. its eval). The only reliable
+# "done" signal is the node tag. A worker can leave a background shell running after it has
+# committed, which keeps the session alive; in that case wait 2 minutes, then clean up.
 while kill -0 "$pid" 2>/dev/null; do
-  if grep -q '"type":"result"' "$LOG" 2>/dev/null; then
-    for _ in $(seq 1 12); do kill -0 "$pid" 2>/dev/null || break; sleep 5; done
+  if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+    for _ in $(seq 1 24); do kill -0 "$pid" 2>/dev/null || break; sleep 5; done
     if kill -0 "$pid" 2>/dev/null; then
-      echo "[worker $NODE] result received but the session is still running; stopping leftover processes"
+      echo "[worker $NODE] committed but the session is still running; stopping leftover processes"
       kill_tree "$pid"
     fi
     break
   fi
   sleep 10
 done
-wait "$pid"
+wait "$pid" 2>/dev/null
 rc=$?
-echo "[worker $NODE] exited rc=$rc $(date -Is)"
+echo "[worker $NODE] exited rc=$rc $(date -Is), tag $(git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && echo present || echo MISSING)"
 "$DREAM_PY" - "$LOG" <<'PY'
 import json, sys
 res = None
