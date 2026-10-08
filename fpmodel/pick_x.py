@@ -25,7 +25,9 @@ d = load(list(SETS))
 d = d[d.arch_ == arch].reset_index(drop=True)
 if "noc" in M.MX:
     d["link_bytes"] = nocload.link_bytes(M.geometry(d), d)
-p = fit.fit(d, np.arange(len(d)))
+p = (
+    json.load(open(os.environ["CONST"])) if os.environ.get("CONST") else fit.fit(d, np.arange(len(d)))
+)  # CONST: frozen constants file
 json.dump(p, open(out.replace(".csv", "_constants.json"), "w"), indent=1)
 e = pd.read_csv(src, low_memory=False).drop_duplicates(KEY, keep="last")
 e = e[e.origin.isin(CAND) & (e.status == "ok")].reset_index(drop=True)
