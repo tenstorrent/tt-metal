@@ -8,7 +8,7 @@ import pytest
 
 import ttnn
 from tests.ttnn.unit_tests.operations.sdpa.gqa_crossing_test_utils import (
-    check_concat_wrap_non_streaming,
+    check_concat_fp32_dest,
     check_gqa_crossing,
 )
 
@@ -22,5 +22,5 @@ def test_sdpa_gqa_crossing(device):
 
 
 @pytest.mark.timeout(300)
-def test_sdpa_gqa_crossing_concat_wrap_non_streaming(device):
-    check_concat_wrap_non_streaming(device, *CASE)
+def test_sdpa_gqa_crossing_concat_fp32_dest(device):
+    check_concat_fp32_dest(device, *CASE)

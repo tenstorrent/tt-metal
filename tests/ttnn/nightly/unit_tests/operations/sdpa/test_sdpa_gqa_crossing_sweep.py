@@ -8,7 +8,7 @@ import pytest
 import ttnn
 from tests.ttnn.unit_tests.operations.sdpa.gqa_crossing_test_utils import (
     CROSSING_CASES,
-    check_concat_wrap_non_streaming,
+    check_concat_fp32_dest,
     check_gqa_crossing,
     check_ineligible_call,
 )
@@ -23,8 +23,8 @@ def test_sdpa_gqa_crossing(device, b, nh, nkv, s, d, q_chunk, k_chunk, grid, dty
 
 @pytest.mark.parametrize("b, nh, nkv, s, d, q_chunk, k_chunk, grid", CROSSING_CASES[:2] + CROSSING_CASES[4:])
 @pytest.mark.timeout(300)
-def test_sdpa_gqa_crossing_concat_wrap_non_streaming(device, b, nh, nkv, s, d, q_chunk, k_chunk, grid):
-    check_concat_wrap_non_streaming(device, b, nh, nkv, s, d, q_chunk, k_chunk, grid)
+def test_sdpa_gqa_crossing_concat_fp32_dest(device, b, nh, nkv, s, d, q_chunk, k_chunk, grid):
+    check_concat_fp32_dest(device, b, nh, nkv, s, d, q_chunk, k_chunk, grid)
 
 
 @pytest.mark.parametrize("kind", ["mask", "sink", "causal"])
