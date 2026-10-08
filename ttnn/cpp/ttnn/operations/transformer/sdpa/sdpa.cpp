@@ -40,7 +40,7 @@ std::optional<ttnn::Tensor> drop_if_empty(const std::optional<ttnn::Tensor>& t) 
 }
 
 // Precision routing (tech_reports/FlashAttention/SDPAPrecisionRecipes.md, "Routing"). A call without `precision`
-// that would reach a legacy compute_common.hpp loop runs a recipe instead: ACCURATE when its compute config asks
+// that would reach a legacy loop (sdpa_legacy_loops.hpp) runs a recipe instead: ACCURATE when its compute config asks
 // for FP32 DEST accumulation, STANDARD on the routes that have no streaming kernel (non-ring joint, exp ring
 // blockings its streaming kernel cannot build). BF16-dest dense, chunked and ring calls keep the streaming kernels
 // (compute_streaming.hpp). Routed dense, chunked and MLA calls choose their blocking (the program_config chunk sizes

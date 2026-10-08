@@ -159,7 +159,7 @@ removing them. The rule is: **the recipe owns the numerics.**
 
 ## Routing
 
-Without `precision`, a call that would reach one of the legacy loops in `compute_common.hpp` runs a recipe instead
+Without `precision`, a call that would reach one of the legacy loops (`sdpa_legacy_loops.hpp`) runs a recipe instead
 (Blackhole; `sdpa.cpp`, "Precision routing"). Everything else keeps the streaming kernels (`compute_streaming.hpp`).
 The DEST mode is read from `compute_kernel_config` as before (`fp32_dest_acc_en`, default off).
 

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Chunked-prefill helpers consumed by the compute kernels (compute_common.hpp,
+// Chunked-prefill helpers consumed by the compute kernels (sdpa_legacy_loops.hpp,
 // compute_streaming.hpp). Kept separate from ring_utils.hpp so the compute
 // headers don't pull in RingIdSequencer. The experimental sibling kernel
 // (exp_ring_joint_sdpa) defines its own copy in exp_ring_utils.hpp, and

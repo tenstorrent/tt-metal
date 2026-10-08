@@ -9,7 +9,8 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "compute_common.hpp"
+#include "sdpa_block_ops.hpp"
+#include "sdpa_legacy_loops.hpp"
 #include "compute_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_mode.hpp"
 

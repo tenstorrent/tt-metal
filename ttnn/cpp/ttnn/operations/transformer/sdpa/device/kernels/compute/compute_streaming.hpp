@@ -4,13 +4,14 @@
 
 // Streaming SDPA compute helpers.
 // Included only by sdpa.cpp when use_streaming_compute is true.
-// Depends on primitives from compute_common.hpp (must be included first).
+// Depends on primitives from sdpa_block_ops.hpp (must be included first).
 
 #pragma once
 
 #include <type_traits>
 
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_streaming_qktv.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"

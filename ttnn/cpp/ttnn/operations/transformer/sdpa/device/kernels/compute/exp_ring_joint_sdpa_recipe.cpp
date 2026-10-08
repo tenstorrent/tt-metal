@@ -32,7 +32,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include <tt-metalium/constants.hpp>
-#include "compute_common.hpp"
+#include "sdpa_block_ops.hpp"
 #include "streaming/recipe_tail.hpp"
 #include "streaming/recipe_sfpu.hpp"
 #include "streaming/recipe_streaming.hpp"
