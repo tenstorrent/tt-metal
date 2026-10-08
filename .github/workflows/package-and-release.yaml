@@ -176,15 +176,8 @@ jobs:
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
       ops-test-categories: ${{ inputs.ops-test-categories || needs.release-precheck.outputs.default-ops-test-categories }}
 
-  # Own harbor lookup: the profiler build sits outside release-build-test-publish.yaml.
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
-
-  # Profiler (tracy) build of the same commit, for buckets that need instrumentation.
-  # Lives here rather than beside the plain build so a tracy failure cannot skip
-  # publish-to-pypi; `continue-on-error` is illegal on a reusable-workflow caller job,
-  # so relocating was the only way to get that. Main platform only -- the 24.04 leg
-  # builds no manylinux image.
   build-artifact-profiler:
     # create-tag already depends on release-precheck, so that edge is transitive.
     needs: [create-tag, check-harbor]
@@ -198,13 +191,8 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       platform: "Ubuntu 22.04"
       tracy: true
-      # Defaults to true. `packages-*` are merged into the draft release and CPack
-      # encodes neither tracy nor distro in the .deb name, so a profiler .deb would
-      # overwrite the plain one. Nothing consumes this build's packages.
       publish-package: false
-      # Manylinux, not in-place: external repos swap this wheel for the released one,
-      # and the in-place wheel is glibc 2.35 ("in-family only"), so it would not
-      # install on the AlmaLinux 9 hosts the released wheel supports.
+      # Needed to ensure the profiler build produces a wheel for blaze to consume.
       build-wheel: true
       fetch-depth: 0
       skip-tt-train: false
@@ -216,12 +204,8 @@ jobs:
   # ===========================================================================
   # Team: blaze -- test list owned by tenstorrent/tt-blaze (its ci.yaml)
   # ===========================================================================
-  # Runs tt-blaze's full merge gate against this release build, so a tt-metal change
-  # that breaks tt-blaze surfaces here rather than at the next uplift.
-  #
-  # needs build-artifact-profiler: tt-blaze passes `require-profiler: true`, so it
-  # resolves the PROFILER artifacts off this run and must not dispatch before they
-  # exist. A failed need skips this gate rather than reporting a false red.
+  # Runs tt-blaze's full merge gate against this release build
+
   blaze-merge-gate:
     needs: [build-artifact-profiler]
     if: ${{ !cancelled() && needs.build-artifact-profiler.result == 'success' }}
@@ -243,10 +227,6 @@ jobs:
       blaze-ref: main
 
   publish-to-pypi:
-    # blaze is in `needs` to keep the blocking behaviour it had inside
-    # release-build-test-publish.yaml: blaze `failure` blocks, blaze `skipped` (dead
-    # profiler build) does not. `!cancelled()` is what allows that distinction, and is
-    # why the other prerequisites must then be checked explicitly.
     needs: [build-test-publish, create-tag, blaze-merge-gate]
     runs-on: ubuntu-latest
     if: >-
@@ -786,10 +766,6 @@ jobs:
           echo "No new commits found since latest release. No RC release needed."
 
   trigger-prod-after-rc-success:
-    # blaze is in `needs` for the same reason publish-to-pypi has it: once the gate
-    # moved out of build-test-publish, `success()` stopped seeing it and an RC could
-    # promote to prod past a red or still-running gate. Same policy as PyPI --
-    # `failure` blocks, `skipped` does not -- which `success()` cannot express.
     needs: [build-test-publish, release-precheck, create-tag, blaze-merge-gate]
     runs-on: ubuntu-slim
     if: >-
