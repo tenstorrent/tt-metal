@@ -52,3 +52,11 @@ Waits behind another project job on blx01 (080, t286). Marker /var/tmp/fasth3/t2
 Old next step (attempt 4): when the marker exists, copy out48d_*/run.log into logs/, quote the gen #0/#1 tables, delete DiT cache
 dirs created after 2026-10-08 15:00 UTC under /var/tmp/fasth3/t220/cache/dit-ltx23 (find -newermt), delete
 t283/ltxrt_tree. Follow-up: t48 gate fold breaks cold-cache bf16 save and bf8.
+
+## Attempt 5 resubmitted (drv283e died without a marker)
+2026-10-08 ~17:06 local (blx01): blx01 broker job 083 = `bash /var/tmp/fasth3/t283/run283e.sh bf8wnf`
+(-w /var/tmp/fasth3/t48, -e env48.yaml, -t 600), submitted directly, no driver. blx01 / at 52%, /var/tmp/fasth3 140G.
+Broker log /var/log/tt-device-broker/2026-10-08_170640_083.log; run log /var/tmp/fasth3/t283/out48d_bf8wnf/run.log.
+q-all_bf8_lofi DiT cache is 23G (may be partial, so 083 may be a cold load).
+Next: when 083 ends, copy run.log to logs/drv283e_bf8wnf.run.log, quote the gen #0/#1 tables; then delete
+t283/out48*, t283/ltxrt_tree, t283/tmp and the bf8 DiT cache; leave models/ symlinks alone.
