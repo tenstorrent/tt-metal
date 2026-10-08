@@ -37,3 +37,13 @@ Simpler than the full edge-slab design (NP volume unchanged); est. ~3.6 of 8.8 b
 - Submit: tt-device-mcp run-bg -w $T -e $T/drv/env.yaml -t 340 "bash $T/drv/run276.sh \"def: dr:DIFFVAE_NA_DIRECT_REPHASE=1\" $T/out_C \"def dr\" \"dr\""
 - Overlay $T/src = git archive models/ @d1d466afe4b. Out /var/tmp/fasth3/t276/out_C.
 - Next: same checks as job 045 (tiles-to-sticks in dr tree, md5 dr == def, decode means, ms/block, cmp241 on out_C/dr).
+
+## Job 049 result (blx01, valid A/B, one arm per process, no drops)
+- dr path ran (tree has tiles-to-sticks scope); md5 dr == def on all 5 seeds (quality-neutral).
+- Decode 1080p 145f 4x8: def 2.310-2.320 s (mean 2.314), dr 2.236-2.243 s (mean 2.240): -74 ms, -3.2%.
+- PCC/PSNR vs #214 ref (dr, same as def): 0.99995/54.71, 0.99995/54.28, 0.99995/54.25, 0.99995/54.86, 0.99995/54.50 dB.
+- Deep-profile trees (seed 0, one run) show dr halo+brick higher in some stage-5 groups (58 vs 31 ms);
+  deep profile is not reliable here (sync per scope, generic_op first-call); timed decode is the metric.
+- Verdict: below the 5% bar (0.116 s). Stays opt-in (DIFFVAE_NA_DIRECT_REPHASE=1), not landed on t48.
+  Remaining copy cost is the NP-H/NP-W exchange itself plus mode-0/mode-1 passes; a further step
+  would gather from band+halo without the stick round trip (full edge-slab design).
