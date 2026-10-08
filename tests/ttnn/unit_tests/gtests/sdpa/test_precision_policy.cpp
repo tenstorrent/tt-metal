@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdexcept>
-
 #include <gtest/gtest.h>
 
 #include "ttnn/operations/transformer/sdpa/sdpa_precision_policy.hpp"
@@ -24,10 +22,16 @@ TEST(SDPAPrecisionPolicy, RecipeTable) {
     }
 }
 
-TEST(SDPAPrecisionPolicy, PackedKVOnlyForLowPrecision) {
-    for (auto recipe : {Recipe::B, Recipe::C, Recipe::D}) {
+TEST(SDPAPrecisionPolicy, PackedKVKeepsTheRecipe) {
+    // K/V storage changes only the CB formats: every recipe keeps its fidelity, destination and state.
+    for (auto recipe : {Recipe::B, Recipe::C, Recipe::D, Recipe::E}) {
+        const auto bf16 = resolve_precision_policy({recipe});
         for (auto storage : {KVStorage::BFP8, KVStorage::BFP4}) {
-            EXPECT_THROW(resolve_precision_policy({recipe, storage}), std::runtime_error);
+            const auto packed = resolve_precision_policy({recipe, storage});
+            EXPECT_EQ(packed.selection, (RecipeSelection{recipe, storage}));
+            EXPECT_EQ(packed.pv_fidelity, bf16.pv_fidelity);
+            EXPECT_EQ(packed.fp32_destination, bf16.fp32_destination);
+            EXPECT_EQ(packed.recurrent_state, bf16.recurrent_state);
         }
     }
 }
