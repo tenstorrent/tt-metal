@@ -35,6 +35,9 @@ elfsum() {  # combined hash per kernel name of the compute ELFs' loaded bytes in
   done
 }
 OUTD=$R/generated/r3ci; mkdir -p $OUTD
+# rtoptions enables LLK asserts when TT_METAL_LLK_ASSERTS is set to any value, 0 included
+if [[ ${BITS_ASSERTS:-1} == 0 ]]; then unset TT_METAL_LLK_ASSERTS; AENV=(); else AENV=(TT_METAL_LLK_ASSERTS=1); fi
+echo "== bits runs: LLK asserts $([[ ${#AENV[@]} -gt 0 ]] && echo on || echo off)"
 i=0
 while read -r tag v tests conf kexp; do
   [[ -z ${tag:-} || $tag == \#* ]] && continue
@@ -50,7 +53,7 @@ while read -r tag v tests conf kexp; do
   echo "== $tag $v ($i) $tests $(date -u +%T)"
   if [[ $tag == bits* ]]; then  # outputs as raw bits, no profiler
     B=$OUTD/bits_$v; mkdir -p $B
-    JSDPA_OUT=$B V12_OUT=$B SYNC_OUT=$B BITID_OUT=$B R14_OUT=$B CONV_OUT=$B TT_METAL_LLK_ASSERTS=${BITS_ASSERTS:-1} timeout -s INT -k 60 ${CI_LIMIT:-900} python -m pytest "${C[@]}" -p no:cacheprovider -o timeout_method=thread -q -rfE "${K[@]}" "${T[@]}" > $OUTD/log_${tag}_${i}_$v.txt 2>&1
+    env JSDPA_OUT=$B V12_OUT=$B SYNC_OUT=$B BITID_OUT=$B R14_OUT=$B CONV_OUT=$B "${AENV[@]}" timeout -s INT -k 60 ${CI_LIMIT:-900} python -m pytest "${C[@]}" -p no:cacheprovider -o timeout_method=thread -q -rfE "${K[@]}" "${T[@]}" > $OUTD/log_${tag}_${i}_$v.txt 2>&1
     rc=$?; echo "== $tag $v ($i) rc=$rc $(date -u +%T): $(grep -E 'passed|failed' $OUTD/log_${tag}_${i}_$v.txt | tail -1)"
     if [[ $rc -ne 0 ]] || ! grep -q passed $OUTD/log_${tag}_${i}_$v.txt; then grep -a -m8 -E "error:|undefined reference" $OUTD/log_${tag}_${i}_$v.txt; tail -40 $OUTD/log_${tag}_${i}_$v.txt; fi
     continue
