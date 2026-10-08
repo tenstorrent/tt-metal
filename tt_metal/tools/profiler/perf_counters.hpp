@@ -55,23 +55,24 @@ union PerfCounter {
 };
 static_assert(sizeof(PerfCounter) == sizeof(std::uint64_t) * 2, "PerfCounter must be 128-bit");
 
-// The RISC that orchestrates the kernel owns the counters: TRISC1 starts and BRISC stops and reads on tt-1xx
-// (the math thread exits early on unpack or pack only kernels); DM0 arms, stops and reads all four NEOs on Quasar.
+// tt-1xx: TRISC1 starts the counters with the compute kernel, BRISC stops and reads them once every TRISC is done
+// (the math thread exits early on unpack or pack only kernels). Quasar has one DM0 for four NEOs: it launches and
+// waits for all of them and reaches every NEO's counters through the NoC window, so it starts, stops and reads.
 #if defined(ARCH_QUASAR)
 #if defined(COMPILE_FOR_DM)
-#define PERF_COUNTER_WRAP_RISC 1
+#define PERF_COUNTER_START_RISC 1
 #define PERF_COUNTER_READ_RISC 1
-#endif
-#else
+#endif  // COMPILE_FOR_DM
+#else   // !ARCH_QUASAR
 #if COMPILE_FOR_TRISC == 1
-#define PERF_COUNTER_WRAP_RISC 1
-#endif
+#define PERF_COUNTER_START_RISC 1
+#endif  // COMPILE_FOR_TRISC == 1
 #if defined(COMPILE_FOR_BRISC)
 #define PERF_COUNTER_READ_RISC 1
-#endif
-#endif
+#endif  // COMPILE_FOR_BRISC
+#endif  // ARCH_QUASAR
 
-#if defined(PROFILE_PERF_COUNTERS) && (defined(PERF_COUNTER_WRAP_RISC) || defined(PERF_COUNTER_READ_RISC))
+#if defined(PROFILE_PERF_COUNTERS) && (defined(PERF_COUNTER_START_RISC) || defined(PERF_COUNTER_READ_RISC))
 
 #include <array>
 #include <type_traits>
@@ -86,9 +87,9 @@ static_assert(sizeof(PerfCounter) == sizeof(std::uint64_t) * 2, "PerfCounter mus
 #define LLK_PERF_TABLES_IN_TEXT
 // Own section name: the shared tables are COMDAT and cannot share a section with these local ones.
 #define PERF_COUNTER_TABLE __attribute__((section(".text.perf_counter_groups")))
-#else
+#else  // !ARCH_QUASAR
 #define PERF_COUNTER_TABLE
-#endif
+#endif  // ARCH_QUASAR
 
 #include "perf_counters/inventory.h"
 #include "perf_counters/registers.h"
@@ -114,7 +115,7 @@ namespace kernel_profiler {
 #error "Quasar has no L1 perf counter groups; valid bits are FPU(1)|PACK(2)|UNPACK(4)|INSTRN(32) = 39"
 #endif
 
-// Counter groups and their enable bits, used by both the wrap thread and the read thread.
+// Counter groups and their enable bits, used by both the start thread and the read thread.
 constexpr std::pair<PerfCounterGroup, std::uint32_t> counter_group_flags[] PERF_COUNTER_TABLE = {
     {PerfCounterGroup::FPU, PROFILE_PERF_COUNTERS_FPU},
     {PerfCounterGroup::PACK, PROFILE_PERF_COUNTERS_PACK},
@@ -170,7 +171,7 @@ constexpr std::uint32_t NUM_NEOS = llk::perf::NUM_NEOS;
 inline llk::perf::BankRegs regs_for(PerfCounterGroup counter_group PERF_COUNTER_NEO_PARAM) {
     return llk::perf::bank_regs(bank_for_group[counter_group], llk::perf::neo_window(neo));
 }
-#else
+#else  // !ARCH_QUASAR
 constexpr std::uint32_t NUM_NEOS = 1;
 constexpr std::uint32_t neo = 0;
 #define PERF_COUNTER_NEO_PARAM
@@ -186,7 +187,7 @@ constexpr std::array<const llk::perf::BankRegs*, 10> regs_for_group = [] {
 }();
 
 inline const llk::perf::BankRegs& regs_for(PerfCounterGroup counter_group) { return *regs_for_group[counter_group]; }
-#endif
+#endif  // ARCH_QUASAR
 
 #if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
 constexpr std::uint32_t QUASAR_L1_CLIENT_SEL = PROFILE_PERF_COUNTERS_L1_SEL;
@@ -210,8 +211,8 @@ inline void stop_l1_client_event_counter(std::uint32_t neo) {
 }
 #endif  // ARCH_QUASAR && PROFILE_PERF_COUNTERS_L1_SEL
 
-#if defined(PERF_COUNTER_WRAP_RISC)
-// --- Wrap thread only: start/stop counters around the compute kernel -------
+#if defined(PERF_COUNTER_START_RISC)
+// --- Start thread only: start the counters with the compute kernel ----------
 
 __attribute__((noinline)) void start_single_group(PerfCounterGroup counter_group PERF_COUNTER_NEO_PARAM) {
 #if !defined(ARCH_QUASAR)
@@ -240,7 +241,7 @@ void start_perf_counter() {
 #endif
 }
 
-#endif  // PERF_COUNTER_WRAP_RISC
+#endif  // PERF_COUNTER_START_RISC
 
 #if defined(PERF_COUNTER_READ_RISC)
 // --- Read thread only: counter readout (BRISC on tt-1xx, DM0 on Quasar) ---
@@ -327,7 +328,7 @@ __attribute__((noinline)) void emit_counter(PerfCounterType type, std::uint32_t 
         kernel_profiler::PacketTypes::TS_DATA_16B>(
         static_cast<std::uint64_t>(ref_cnt) << 32 | value, static_cast<std::uint64_t>(type));
 }
-#endif
+#endif  // !ARCH_QUASAR
 
 #if defined(ARCH_QUASAR) && defined(PROFILE_PERF_COUNTERS_L1_SEL)
 inline void read_l1_client_event_counter(std::uint32_t neo) {
@@ -458,23 +459,23 @@ void read_perf_counters(std::uint32_t trisc_enables) {
 
 }  // namespace kernel_profiler
 
-#if defined(PERF_COUNTER_WRAP_RISC)
+#if defined(PERF_COUNTER_START_RISC)
 #define StartPerfCounters() kernel_profiler::start_perf_counter();
 #define RecordPerfCounters() kernel_profiler::start_perf_counter();
-#else
+#else  // !PERF_COUNTER_START_RISC
 #define StartPerfCounters()
 #define RecordPerfCounters()
-#endif
+#endif  // PERF_COUNTER_START_RISC
 
 #if defined(PERF_COUNTER_READ_RISC)
 #define StopPerfCounters() kernel_profiler::stop_perf_counter();
 #define ReadPerfCounters(trisc_enables) kernel_profiler::read_perf_counters(trisc_enables);
-#else
+#else  // !PERF_COUNTER_READ_RISC
 #define StopPerfCounters()
 #define ReadPerfCounters(trisc_enables)
-#endif
+#endif  // PERF_COUNTER_READ_RISC
 
-#else
+#else  // !(PROFILE_PERF_COUNTERS && (PERF_COUNTER_START_RISC || PERF_COUNTER_READ_RISC))
 
 // null macros when perf counters are disabled
 #define StartPerfCounters()
@@ -482,4 +483,4 @@ void read_perf_counters(std::uint32_t trisc_enables) {
 #define ReadPerfCounters(trisc_enables)
 #define RecordPerfCounters()
 
-#endif
+#endif  // PROFILE_PERF_COUNTERS && (PERF_COUNTER_START_RISC || PERF_COUNTER_READ_RISC)

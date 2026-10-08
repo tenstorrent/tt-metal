@@ -54,7 +54,7 @@ constexpr bool is_action_thread()
 // Semaphores 8 to 11 sit in bank 1, which t6_sem() cannot address, so no LLK op can reach them even by accident.
 // The spare semaphores are free, so each peer waits on its own release level and the peers stay independent.
 constexpr std::uint8_t ARRIVE_SEM       = 8;
-constexpr std::uint8_t RELEASE_SEM_BASE = 9; // unpack 9, math 10, sfpu 11
+constexpr std::uint8_t RELEASE_SEM_BASE = 9; // unpack 9, math 10, sfpu 11; pack, the action thread, flips them
 
 constexpr std::uint8_t release_sem_of(std::uint32_t peer)
 {

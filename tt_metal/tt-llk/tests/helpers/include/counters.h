@@ -104,7 +104,8 @@ constexpr std::uint32_t _perf_cfg(std::uint8_t bank, std::uint16_t cid, std::uin
            (static_cast<std::uint32_t>(cid & PERF_CFG_COUNTER_MASK) << PERF_CFG_COUNTER_SHIFT) | static_cast<std::uint32_t>(bank);
 }
 
-// bank_regs() hands out a reference into a table on tt-1xx and a value (offset plus window) on Quasar.
+// bank_regs() hands out a reference into a table on tt-1xx and a value (offset plus window) on Quasar; use this
+// alias for every local so each arch keeps its own form.
 #if defined(ARCH_QUASAR)
 using BankRegsRef = llk::perf::BankRegs;
 #else
@@ -474,8 +475,8 @@ inline __attribute__((always_inline)) void read_all_counters([[maybe_unused]] st
     {
 #if defined(ARCH_QUASAR)
         // Slot 3 has no reference counter; it is armed within cycles of INSTRN, so it borrows the INSTRN reference.
-        const llk::perf::BankRegs regs = llk::perf::bank_regs(static_cast<Bank>(b));
-        bank_cycles[b]                 = regs.out_l ? llk::perf::read_ref(regs) : bank_cycles[0];
+        const BankRegsRef regs = llk::perf::bank_regs(static_cast<Bank>(b));
+        bank_cycles[b]         = regs.out_l ? llk::perf::read_ref(regs) : bank_cycles[0];
 #else
         bank_cycles[b] = llk::perf::read_ref(llk::perf::bank_regs(static_cast<Bank>(b)));
 #endif
@@ -566,7 +567,8 @@ constexpr bool is_measured_thread(PerfRunType run_type)
 #endif
 }
 
-// The idle peer that reads the last zone of a single thread run type: pack, unless pack is the one measured.
+// The idle peer that reads the last zone of a single thread run type after run_kernel: pack, or unpack when pack is
+// the measured thread. Math and sfpu never read, and span run types read inside their exit rendezvous.
 constexpr bool is_reader_thread(PerfRunType run_type)
 {
     if (!is_single_thread_runtype(run_type))
@@ -644,6 +646,7 @@ struct perf_counter_scoped
     {
         ckernel::fence_compiler();
         const std::uint32_t zid = zone_id;
+        static_assert(!(is_reader_thread(RUN_TYPE) && is_measured_thread(RUN_TYPE)), "the measured thread must not read its own zone");
         static_assert(
             exit_barrier_for(RUN_TYPE) || is_single_thread_runtype(RUN_TYPE),
             "a run type that skips the exit barrier needs a measured thread in is_measured_thread() to freeze the counters");

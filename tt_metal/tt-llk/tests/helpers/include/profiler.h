@@ -80,16 +80,11 @@ static_assert(llk_barrier::NUM_THREADS == NUM_CORES, "llk_barrier::NUM_THREADS d
 
 constexpr std::uint32_t BUFFERS_START = BUFFERS_END - (NUM_CORES * BUFFER_LENGTH * sizeof(std::uint32_t));
 
-constexpr std::uint32_t BARRIER_END   = BUFFERS_START;
-constexpr std::uint32_t BARRIER_START = BARRIER_END - (NUM_CORES * sizeof(std::uint32_t));
+constexpr std::uint32_t EPOCH_ADDR = BUFFERS_START - sizeof(std::uint32_t);
 
-constexpr std::uint32_t EPOCH_ADDR = BARRIER_START - sizeof(std::uint32_t);
+using buffer_ptr_t = std::uint32_t (*)[BUFFER_LENGTH];
+using epoch_ptr_t  = volatile std::uint32_t*;
 
-using barrier_ptr_t = volatile std::uint32_t (*)[NUM_CORES];
-using buffer_ptr_t  = std::uint32_t (*)[BUFFER_LENGTH];
-using epoch_ptr_t   = volatile std::uint32_t*;
-
-extern barrier_ptr_t barrier_ptr;
 extern buffer_ptr_t buffer;
 extern epoch_ptr_t epoch_ptr;
 extern std::uint32_t write_idx;
@@ -100,19 +95,14 @@ __attribute__((always_inline)) inline void sync_threads()
     llk_barrier::rendezvous(llk_barrier::is_action_thread());
 }
 
-// The barrier words are unused since the semaphore rendezvous, but BARRIER_END anchors BUFFERS_START; keep them.
-
 __attribute__((always_inline)) inline void reset()
 {
-    barrier_ptr          = reinterpret_cast<barrier_ptr_t>(BARRIER_START);
     buffer               = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
     epoch_ptr            = reinterpret_cast<epoch_ptr_t>(EPOCH_ADDR);
     write_idx            = 0;
     reserved_words_count = 0;
 
     *epoch_ptr = 0;
-
-    (*barrier_ptr)[TRISC_ID] = 0;
 
     memset(buffer[TRISC_ID], 0, BUFFER_LENGTH * sizeof(buffer[TRISC_ID][0]));
 }

@@ -171,8 +171,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(
                 num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
-            PROFILER_SYNC();
         }
+        PROFILER_SYNC();
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
@@ -220,8 +220,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                 }
             }
-            PROFILER_SYNC();
         }
+        PROFILER_SYNC();
     }
 }
 
