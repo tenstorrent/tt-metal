@@ -1305,6 +1305,9 @@ class Model:
             self._upload_rows(host_rows)
         t2 = time.perf_counter()
         if enable_trace:
+            from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import check_trace_allocations
+
+            check_trace_allocations(self.md, self.trace_id, f"decode B={self.B}")
             ttnn.execute_trace(self.md, self.trace_id, cq_id=0, blocking=False)
         else:
             self.last_logits = self.dec.forward()

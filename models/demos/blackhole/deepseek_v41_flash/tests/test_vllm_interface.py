@@ -912,3 +912,41 @@ def test_bucketing_off_when_disabled_or_spec(monkeypatch, bucket_gen):
     B = VS.padded_batch(32)
     g2 = DeepseekV41ForCausalLM(SimpleNamespace(m=FakeBucketModel(B), prefill_chunk=None, auto_chunk=None), 32, 4096)
     assert not g2.bucketing and g2.bucket_users == [8]
+
+
+def test_compaction_moves_a_straggler_into_the_small_bucket(monkeypatch, bucket_gen):
+    monkeypatch.setenv("DSV41_VLLM_COMPACT", "1")
+    monkeypatch.setenv("DSV41_VLLM_COMPACT_STEPS", "3")
+    gen0, m = bucket_gen
+    gen = DeepseekV41ForCausalLM(SimpleNamespace(m=m, prefill_chunk=None, auto_chunk=None), 32, 4096)
+    assert gen.compact
+    W = 32
+    firsts = {}
+    for s in range(17):
+        firsts[s] = int(
+            gen.prefill_forward(
+                torch.tensor([[s + 1, 2]], dtype=torch.int32), prompt_lens=[2], empty_slots=[s], sampling_params=GREEDY
+            )[0]
+        )
+        gen.inprog.users.clear()
+    for s in range(1, 16):
+        gen.release_request(s)
+    assert gen.slots.users_needed(8) == 5  # slot 16 sits at in-row index 4
+    tok = torch.zeros(W, 1, dtype=torch.int32)
+    pos = torch.full((W,), -1)
+    last = {0: firsts[0], 16: firsts[16]}
+    p_pos = {0: 2, 16: 2}
+    outs = []
+    for step in range(5):
+        for s in (0, 16):
+            tok[s, 0], pos[s] = last[s], p_pos[s]
+        out = gen.decode_forward(tok, pos, sampling_params=GREEDY)
+        for s in (0, 16):
+            last[s] = int(out[s, 0])
+            p_pos[s] += 1
+            outs.append((s, last[s]))
+    assert gen.compact_moves == 1 and m.bucket_log[-1][0] == 4  # moved after 3 steps, then decoded in the small bucket
+    items = m.calls[-1][0]
+    assert items[0][1:] == (0, 4)  # the re-prefill covered the prompt (2) + the 2 tokens fed before the third call
+    # the moved request keeps its logical slot and its token stream: expected greedy chain (t + 1) % 7 every step
+    assert last[16] == (firsts[16] + 5) % 7 and last[0] == (firsts[0] + 5) % 7
