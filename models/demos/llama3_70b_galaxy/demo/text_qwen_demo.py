@@ -535,6 +535,30 @@ def create_tt_qwen_model(
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
         ),
+        (  # prefill-perf-40k-b32 - 32 users x 32 distinct 40928-token local prompts, submitted in one prefill call
+            # The 32-prompt file (5.4 MB, over the repo's 500 KB file limit) is built outside the checkout and passed
+            # with --input_prompts; the case asserts the prompts are distinct, so this 1-prompt default fails loudly.
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_prefill_40k_local.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches (one timed 32-user prefill; the warmup prefill is one user, see b32_case)
+            40960,  # max_seq_len (same config as prefill-perf-40k-b1)
+            32,  # batch_size
+            2,  # max_generated_tokens
+            True,  # paged_attention
+            # Blocks PER MESH COLUMN: single-user prefill writes KV only on the user's column (llama_model.py
+            # prepare_prefill_inputs_host), so each column's pool holds its 8 users: 8 x 40960 / 64 = 5120.
+            {"page_block_size": 64, "page_max_num_blocks": 5120},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # token_accuracy
+            False,  # prefill-only profile
+            64,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
+        ),
     ],
     ids=[
         "batch-32",  # throughput
@@ -554,6 +578,7 @@ def create_tt_qwen_model(
         "prefill-perf-4k-b1",  # warmed 64L prefill TTFT at 4k (local prompt, no download)
         "profile-1L-prefill-40k-b1",  # 1L prefill-only tracy profile at 40k (id avoids the "prefill-profile" -k substring)
         "prefill-golden-40k-b1",  # 64L 40k end-to-end golden: prefill top-5 ids/logits + 32 greedy token ids
+        "prefill-perf-40k-b32",  # warmed 64L prefill of 32 users x 40k in one call (all KV resident, column-local pages)
     ],
 )
 @pytest.mark.parametrize(
@@ -659,6 +684,9 @@ def test_qwen_demo_text(
     # Golden capture (harness): keep the prefill logits on host and log the top-5 ids/logits at the
     # last prompt position, then log the generated ids. No reference model; logs are compared offline.
     golden_check = "prefill-golden-40k-b1" in request.node.callspec.id
+    # Batch-32 x 40k perf case (harness): column-local page table so all users' KV is resident, a one-user
+    # warmup prefill (same 40960 programs; the timed call then prefills all users), DRAM usage logged.
+    b32_case = "prefill-perf-40k-b32" in request.node.callspec.id
 
     if token_accuracy and pcc_check:
         raise ValueError("Token accuracy and PCC check are separate demo modes")
@@ -762,6 +790,11 @@ def test_qwen_demo_text(
         repeat_batch_prompts.append(
             [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:batch_size]
         )
+    if b32_case:
+        assert len(set(repeat_batch_prompts[0])) == batch_size, (
+            f"prefill-perf-40k-b32 needs {batch_size} distinct prompts, got {len(set(repeat_batch_prompts[0]))}: "
+            "pass --input_prompts with the 32-prompt file (tt-ops perf.sh --b32 / make_prompts.py --b32)"
+        )
 
     model_args, model, page_table, tt_kv_cache = create_tt_qwen_model(
         mesh_device,
@@ -778,6 +811,32 @@ def test_qwen_demo_text(
     )
 
     logger.info(f"Model loaded with {len(model.layers)} layers")
+
+    def log_dram(label):
+        view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+        gib = 1024**3
+        logger.info(
+            f"B32_DRAM label={label} allocated_gib={view.total_bytes_allocated_per_bank * view.num_banks / gib:.3f} "
+            f"free_gib={view.total_bytes_free_per_bank * view.num_banks / gib:.3f} "
+            f"largest_free_gib={view.largest_contiguous_bytes_free_per_bank * view.num_banks / gib:.3f} "
+            f"banks={view.num_banks} (per device)"
+        )
+
+    if b32_case:
+        # Column-local page table, as vLLM's per-column (attention DP) block pools: user u lives on mesh column
+        # u // 8, and each column's 8 users get disjoint blocks of that column's page_max_num_blocks pool.
+        # Block ids repeat across columns, which is safe because prefill and decode touch only the owner column.
+        users_per_column = 8
+        blocks_per_user = page_params["page_max_num_blocks"] // users_per_column
+        page_table = torch.zeros(batch_size, blocks_per_user, dtype=torch.int32)
+        for col in range((batch_size + users_per_column - 1) // users_per_column):
+            perm = torch.randperm(page_params["page_max_num_blocks"])[: users_per_column * blocks_per_user]
+            rows = min(users_per_column, batch_size - col * users_per_column)
+            page_table[col * users_per_column : col * users_per_column + rows] = perm.reshape(
+                users_per_column, blocks_per_user
+            )[:rows].int()
+        logger.info(f"B32 page_table shape={tuple(page_table.shape)} blocks_per_user={blocks_per_user}")
+        log_dram("model_and_kv_loaded")
 
     # Use Qwen tokenizer instead of Llama tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_args.TOKENIZER_PATH)
@@ -846,6 +905,9 @@ def test_qwen_demo_text(
             32 if batch_size == 32 else 1
         )  # This is a workaround until page table needs to know that attention is DP
 
+        if b32_case:
+            batch_size_per_device_group = 8  # column-local page pools: 8 users per column share one pool
+
         if paged_attention:
             paged_cache_max_seq_len = (
                 page_params["page_block_size"] * page_params["page_max_num_blocks"] / batch_size_per_device_group
@@ -876,11 +938,13 @@ def test_qwen_demo_text(
                 tt_out_logits_all_users = (
                     torch.zeros(batch_size, 1, model_args.padded_vocab_size) if (pcc_check or golden_check) else None
                 )
+                # b32_case: warm up with user 0 only (every user runs the same 40960 programs).
+                warmup_users = 1 if b32_case else batch_size
                 toks = generator.prefill_forward_text(
-                    input_tokens_prefill_pt,  # Just warmup prefill for 1 user
+                    input_tokens_prefill_pt[:warmup_users],  # Just warmup prefill for 1 user
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
-                    prompt_lens=decoding_pos,
+                    prompt_lens=decoding_pos[:warmup_users],
                     enable_trace=prefill_enable_trace,
                     tt_out_logits_all_users=tt_out_logits_all_users,
                     sampling_params=device_sampling_params,
@@ -890,6 +954,8 @@ def test_qwen_demo_text(
                 raise e
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
+            if b32_case:
+                log_dram("after_warmup")
 
         logger.info(f"Starting prefill...")
 
@@ -952,6 +1018,9 @@ def test_qwen_demo_text(
                 f"prefill_top5_logits=[{', '.join(f'{v:.4f}' for v in golden_top5.values.tolist())}] "
                 f"prefill_token={int(prefilled_token[0].item())}"
             )
+        if b32_case:
+            log_dram("after_timed_prefill")
+            logger.info(f"B32 prefill_tokens={[int(t) for t in prefilled_token.view(-1).tolist()]}")
         logger.info(f"Prefill finished")
 
         if prefill_profile:  # If we are profiling prefill, we stop here
