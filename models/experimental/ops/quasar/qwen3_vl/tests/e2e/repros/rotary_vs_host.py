@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-"""Quasar: rotary_embedding_llama on the captured cases vs the host rope fallback (certified against WH)."""
+"""Quasar: rotary_embedding_llama on the captured cases vs the host rope fallback (certified against WH).
+
+usage: rotary_vs_host.py [case-id prefixes, run in this order in one process]
+"""
 import sys
 
 import ttnn
@@ -17,9 +20,9 @@ def main():
     ref_fn = FALLBACKS["ttnn.experimental.rotary_embedding_llama"].torch_fn
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
     try:
-        for case in CASES:
-            if want and not any(case["id"].startswith(w) for w in want):
-                continue
+        # Cases run in the order given (prefix match), so e.g. `02_ 00_` checks decode rope after prefill rope.
+        order = [c for w in want for c in CASES if c["id"].startswith(w)] if want else CASES
+        for case in order:
             try:
                 args, kwargs, _ = G.build_inputs_for_case(case, mesh)
                 host = [to_host(a) if isinstance(a, ttnn.Tensor) else a for a in args]

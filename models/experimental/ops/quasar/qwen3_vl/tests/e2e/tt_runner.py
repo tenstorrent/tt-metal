@@ -58,7 +58,19 @@ def _build_vision(vision_cls, preset, hf_model, mesh_device, recorder, monkeypat
     return visual
 
 
-def run_tt(cfg, preset, inputs, hf_model, goldens, mesh_device, recorder, monkeypatch, snapshot_out=None, resume=None):
+def run_tt(
+    cfg,
+    preset,
+    inputs,
+    hf_model,
+    goldens,
+    mesh_device,
+    recorder,
+    monkeypatch,
+    snapshot_out=None,
+    resume=None,
+    clear_program_cache_before_decode=False,
+):
     """Run vision, prefill and teacher-forced decode. After prefill, save a snapshot to `snapshot_out` (if given);
     with `resume` (a loaded snapshot) skip vision and prefill and decode from its KV cache instead."""
     text_cls, vision_cls = model_args_classes(force=cfg.quasar_config)
@@ -119,6 +131,8 @@ def run_tt(cfg, preset, inputs, hf_model, goldens, mesh_device, recorder, monkey
                 recorder.to_host,
             )
 
+    if clear_program_cache_before_decode:
+        mesh_device.clear_program_cache()
     gen.update_rope_deltas([rope_delta])
     pos = torch.tensor([decoding_pos])
     for k, tok in enumerate(goldens.teacher_tokens):
