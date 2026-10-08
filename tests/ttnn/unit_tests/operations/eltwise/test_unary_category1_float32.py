@@ -281,7 +281,7 @@ def test_trig_ops(device, ttnn_op, low, high, atol, rtol):
     "ttnn_op, low, high, ulp_threshold",
     [
         (ttnn.asin, -1.0, 1.0, 1),
-        # 10 values land on exactly 2 float32 ULPs. Worst is x=±0.7109375
+        # 10 values land on exactly 2 float32 ULPs. largest err is x=±0.7109375
         # (0.618028998 vs 0.618028879). Nothing is above 2.
         (ttnn.atan, -100.0, 100.0, 2),
     ],
@@ -382,7 +382,7 @@ def test_angle_conversion_ops(device, ttnn_op, low, high):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# erfinv: domain (-1, 1), outputs ±inf at boundaries
+# erfinv: domain [-1, 1]. ±1 are signed inf; allclose accepts matching signs.
 # erfc: complementary error function, valid for all finite inputs but clamps
 #        to 0 or 2 for large magnitude inputs
 # ─────────────────────────────────────────────────────────────────────────────
@@ -391,9 +391,10 @@ def test_angle_conversion_ops(device, ttnn_op, low, high):
 @pytest.mark.parametrize(
     "ttnn_op, low, high, atol, rtol",
     [
-        # Worst x=±0.99609375 (2.037 vs 2.040): max |err|=3.37e-3, max |err|/|device|=1.65e-3.
-        (ttnn.erfinv, -0.999, 0.999, 3.4e-3, 1.7e-3),
-        # Wormhole worst x=-2.5: max |err|=9.70e-5, max |err|/|device|=9.5e-5.
+        # Includes ±1 (signed inf). largest err finite x=±0.99609375 (2.037 vs 2.040):
+        # max |err|=3.37e-3, max |err|/|device|=1.65e-3.
+        (ttnn.erfinv, -1.0, 1.0, 3.4e-3, 1.7e-3),
+        # Wormhole largest err x=-2.5: max |err|=9.70e-5, max |err|/|device|=9.5e-5.
         # Blackhole overrides these below: max |err|=3.88e-3, max |err|/|device|=1.
         (ttnn.erfc, -10.0, 10.0, 1e-4, 1e-4),
     ],
@@ -423,7 +424,7 @@ def test_error_functions(device, ttnn_op, low, high, atol, rtol):
 # that boundary to signed zero, same as every larger magnitude. Measured:
 #   wormhole  |x| < 2^126   within 1 float32 ULP
 #   blackhole |x| < 2^126   allclose rtol=1.1e-2, atol=0
-#                          worst reported point x=±6.9057548e35 is 0.56% off
+#                          largest err reported point x=±6.9057548e35 is 0.56% off
 #                          (1.43998e-36 vs 1.44807e-36)
 #   wormhole  |x| = 2^126   exact signed smallest normal
 #   blackhole |x| = 2^126   signed zero
@@ -552,18 +553,18 @@ def test_square(device):
     tt_result = ttnn.square(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    threshold = 2 * SMALLEST_NORMAL_BF16
-    result = torch.where(torch.abs(result) <= threshold, torch.zeros_like(result), result)
-    golden = torch.where(torch.abs(golden) <= threshold, torch.zeros_like(golden), golden)
+    # Subnormal products flush to zero.
+    flushed = torch.abs(golden) < SMALLEST_NORMAL_BF16
+    assert flushed.any()
+    assert torch.all(result[flushed] == 0), "subnormal squares flush to zero"
 
-    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+    normal = ~flushed
+    assert_with_ulp(expected_result=golden[normal], actual_result=result[normal], ulp_threshold=0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # cbrt: cube root, valid for all finite inputs.
-# Golden is evaluated in float64 and cast back to float32. On the bfloat16
-# lattice, 840 values are exactly 2 float32 ULPs (worst x=±1.414e-38) and
-# none are worse.
+# Golden is evaluated in float64 and cast back to float32.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -576,7 +577,7 @@ def test_cbrt(device):
     golden = golden_function(input_tensor.to(torch.float64)).to(torch.float32)
 
     tt_result = ttnn.cbrt(tt_in)
-    result = ttnn.to_torch(tt_result).to(torch.float32)
+    result = ttnn.to_torch(tt_result)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=2)
 
@@ -698,7 +699,7 @@ def test_expm1_allclose(low, high, expected_atol, expected_rtol, device):
         # ULP is unstable where digamma crosses zero (x ≈ 1.461). Measured on the
         # bfloat16 lattice in float32: max |err| = 1.43e-6, max |err|/|device| = 1.48e-4.
         (ttnn.digamma, 1.0, 102.0, 1.5e-6, 1.5e-4),
-        # Worst point is x = 2.015625 (3.854 vs 3.807): max |err| = 4.76e-2,
+        # largest err point is x = 2.015625 (3.854 vs 3.807): max |err| = 4.76e-2,
         # max |err|/|device| = 1.25e-2.
         (ttnn.multigammaln, 1.6, 100.0, 5e-2, 1.3e-2),
     ],
@@ -748,7 +749,7 @@ def test_digamma_small_x(device):
     golden = torch.digamma(xs.to(torch.float64)).to(torch.float32)
     input_tensor = ttnn.from_torch(xs, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.to_torch(ttnn.digamma(input_tensor))
-    # Worst point is x=0.01: max |err| = 6.03e-4, max |err|/|device| = 6.0e-6.
+    # largest err point is x=0.01: max |err| = 6.03e-4, max |err|/|device| = 6.0e-6.
     assert_allclose(expected_result=golden, actual_result=output_tensor, atol=6.1e-4, rtol=6.1e-6)
 
 
@@ -772,7 +773,7 @@ def test_lgamma(device):
     tt_result = ttnn.lgamma(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    # Worst x=0.51171875 (0.499 vs 0.550): max |err| = 5.04e-2, max |err|/|device| = 1.01e-1.
+    # largest err x=0.51171875 (0.499 vs 0.550): max |err| = 5.04e-2, max |err|/|device| = 1.01e-1.
     assert_allclose(expected_result=golden, actual_result=result, atol=5.1e-2, rtol=1.1e-1)
 
 
@@ -784,9 +785,9 @@ def test_lgamma(device):
 @pytest.mark.parametrize(
     "ttnn_op, low, high, atol, rtol",
     [
-        # Worst x=10: max |err| = 0.630, max |err|/|device| = 2.24e-4.
+        # largest err x=10: max |err| = 0.630, max |err|/|device| = 2.24e-4.
         (ttnn.i0, -10.0, 10.0, 0.64, 2.3e-4),
-        # After the flush below, worst abs is x=9.9375 (4.88e-4) and worst rel
+        # After the flush below, largest err abs is x=9.9375 (4.88e-4) and largest err rel
         # is x=8 (1.07e-6). Unflushed, x≈2.3e-38 returns 0 against golden ≈1.17e-38.
         (ttnn.i1, -10.0, 10.0, 4.9e-4, 1.1e-6),
     ],
