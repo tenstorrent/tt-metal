@@ -28,14 +28,15 @@ import ttnn
 
 
 def _gather_seq_len(sliding_window_size, k_chunk_size, full_seq):
-    """Ring gather-buffer seq length. Pavle's GPT-OSS sliding op requires a COMPACT halo buffer (not the
-    full sequence) — halo = ceil((window-1)/k_chunk)*k_chunk, floored at one tile (per his test). Full
-    layers (sliding_window_size=None) gather the whole sequence. Buffers are keyed by this length so a
-    sliding layer (compact) and a full layer (full) get distinct CCL-manager buffers."""
+    """Reserve two compact predecessor halos for sliding attention.
+
+    Prefix reuse can rotate Q across a ring-group boundary. Full attention
+    instead gathers the entire sequence. The CCL buffer key includes this size.
+    """
     if sliding_window_size is None:
         return full_seq
     halo = math.ceil((sliding_window_size - 1) / k_chunk_size) * k_chunk_size
-    return max(halo, ttnn.TILE_SIZE)
+    return 2 * max(halo, ttnn.TILE_SIZE)
 
 
 def dense_sp_attention(
