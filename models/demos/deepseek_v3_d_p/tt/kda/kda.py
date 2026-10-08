@@ -499,7 +499,6 @@ class ttKDA:
             gate=gate,
             beta=beta,
             initial_state=state.recurrent,
-            selections=selections if self._is_sequence_parallel else None,
             actual_start=actual_start,
             actual_end=actual_end,
         )
