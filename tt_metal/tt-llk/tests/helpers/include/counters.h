@@ -637,6 +637,17 @@ struct perf_counter_scoped
                 }
                 arm_all_counters();
             });
+#if defined(LLK_ISO_SETTLE) && LLK_ISO_SETTLE > 0
+        // Experiment: in a single thread run type the measured thread waits before its TILE_LOOP zone opens, so the idle
+        // threads finish their exit code (code lines read from L1 after the barrier's cache invalidate) before it packs.
+        if constexpr (LOOP_PAD && is_single_thread_runtype(RUN_TYPE) && is_measured_thread(RUN_TYPE))
+        {
+            for (std::uint32_t i = 0; i < LLK_ISO_SETTLE; ++i)
+            {
+                asm volatile("nop");
+            }
+        }
+#endif
         ckernel::fence_compiler();
     }
 
