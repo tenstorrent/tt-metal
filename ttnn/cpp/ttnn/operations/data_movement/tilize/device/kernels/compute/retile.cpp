@@ -89,7 +89,10 @@ void kernel_main() {
         const uint32_t pad_rows = in_rows_per_iter - real_rows;
 
         if (real_rows > 0) {
-            // Four-tile fast untilize chunks: this kernel measured slower with eight (tt-metal#58736).
+            // Eight-tile fast untilize chunks only for rows of two chunks or more: a one-chunk row measured slower
+            // (tt-metal#58736).
+            constexpr auto fast_chunk = tiles_per_block > 8 ? compute_kernel_lib::untilize_config::FastChunk::Auto
+                                                            : compute_kernel_lib::untilize_config::FastChunk::FourTiles;
             compute_kernel_lib::untilize<
                 tiles_per_block,
                 dfb::src,
@@ -98,7 +101,7 @@ void kernel_main() {
                 compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                 compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
                 compute_kernel_lib::untilize_config::RemapMode::Configure,
-                compute_kernel_lib::untilize_config::FastChunk::FourTiles>(real_rows);
+                fast_chunk>(real_rows);
         }
         for (uint32_t k = 0; k < pad_rows; ++k) {
             fill_zeros_pages(mid, tiles_per_block, mid_page_size);

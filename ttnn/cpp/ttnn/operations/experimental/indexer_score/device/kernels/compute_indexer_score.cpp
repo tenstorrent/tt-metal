@@ -716,7 +716,12 @@ void kernel_main() {
                                 /*batches = q-rows */ q_tiles_per_unit));
                     }
                 } else {
-                    // Four-tile fast untilize chunks: this kernel measured slower with eight (tt-metal#58736).
+                    // A Bfp8_b query keeps four-tile fast untilize chunks: that build read slower with eight
+                    // (tt-metal#58736).
+                    constexpr auto fast_chunk =
+                        compute_kernel_lib::dfb_l1_format<cb_q>() == static_cast<uint32_t>(DataFormat::Bfp8_b)
+                            ? compute_kernel_lib::untilize_config::FastChunk::FourTiles
+                            : compute_kernel_lib::untilize_config::FastChunk::Auto;
                     compute_kernel_lib::untilize<
                         k_tiles_per_unit,
                         cb_acc_strip,
@@ -725,7 +730,7 @@ void kernel_main() {
                         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
                         compute_kernel_lib::untilize_config::RemapMode::Configure,
-                        compute_kernel_lib::untilize_config::FastChunk::FourTiles>(q_tiles_per_unit);
+                        fast_chunk>(q_tiles_per_unit);
                 }
             }
 
