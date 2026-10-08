@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import math
-import os
 
 import torch
 
@@ -456,17 +455,14 @@ class VisionAttention(LightweightModule):
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
-        if os.getenv("TT_QWEN25_VL_VISION_KV_BF16") == "1":  # EXPERIMENT: keep Q/K/V in bf16 for SDPA
-            q_heads_1QSD_8b, k_heads_1KSD_8b, v_heads_1VSD_8b = q_heads_1QSD, k_heads_1KSD, v_heads_1VSD
-        else:
-            q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
-            ttnn.deallocate(q_heads_1QSD)
+        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(q_heads_1QSD)
 
-            k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=self.kv_cache_dtype)
-            ttnn.deallocate(k_heads_1KSD)
+        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=self.kv_cache_dtype)
+        ttnn.deallocate(k_heads_1KSD)
 
-            v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
-            ttnn.deallocate(v_heads_1VSD)
+        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(v_heads_1VSD)
 
         # SDPA
         if chunk_start_idx is not None:

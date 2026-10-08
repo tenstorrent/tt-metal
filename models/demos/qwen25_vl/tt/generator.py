@@ -505,8 +505,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         for dp_id in range(self.data_parallel):
             model_inst = self._ttt_generator.model[dp_id]
             dp_deltas = rope_deltas_list[dp_id * batch_per_dp : (dp_id + 1) * batch_per_dp]
-            if not hasattr(model_inst.rope_setup, "rope_deltas"):  # EXPERIMENT: upstream RotarySetup (text-only)
-                continue
             dp_deltas = dp_deltas + [0] * (model_inst.rope_setup.batch_size - len(dp_deltas))
             model_inst.rope_setup.rope_deltas = torch.tensor(dp_deltas)
 
