@@ -214,8 +214,9 @@ void CircularBufferImpl::set_global_buffer(const MeshTensor& tensor, uint32_t to
     const DeviceAddr base_address =
         experimental::per_core_allocation::get_cb_base_address(reference_buffer, &mesh_buffer, this->core_ranges_);
     config_.set_globally_allocated_address_and_total_size(reference_buffer, total_size, address_offset);
-    config_.shadow_global_mesh_buffer = &mesh_buffer;
-    global_mesh_buffer_ = &mesh_buffer;
+    config_.shadow_global_mesh_buffer =
+        experimental::per_core_allocation::is_per_core_allocation(mesh_buffer) ? &mesh_buffer : nullptr;
+    global_mesh_buffer_ = config_.shadow_global_mesh_buffer;
     set_global_base_address(base_address);
 }
 

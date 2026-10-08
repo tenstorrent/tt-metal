@@ -9,6 +9,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include "buffer.hpp"
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 
@@ -198,7 +199,10 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_t
     const Buffer& reference_buffer = *tensor.mesh_buffer().get_reference_buffer();
     set_backing_layout(reference_buffer, total_size, address_offset_);
     this->shadow_global_buffer = &reference_buffer;
-    this->shadow_global_mesh_buffer = &tensor.mesh_buffer();
+    // Only a per-core buffer needs the MeshBuffer; a lockstep one matches the Buffer overload.
+    this->shadow_global_mesh_buffer = experimental::per_core_allocation::is_per_core_allocation(tensor.mesh_buffer())
+                                          ? &tensor.mesh_buffer()
+                                          : nullptr;
     return *this;
 }
 
