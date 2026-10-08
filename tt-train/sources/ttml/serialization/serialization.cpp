@@ -142,14 +142,17 @@ void read_autograd_tensor(FlatBufferFile& file, std::string_view name, ttml::aut
     bool has_grads = false;
     bool requires_grads = false;
     read_ttnn_tensor(file, std::string(name) + "/value", value);
-    tensor->set_value(value);
+    // Cast to the dtype the tensor is stored in: the model decides the precision, not the file.
+    tensor->assign(value);
     requires_grads = file.get_bool(std::string(name) + "/requires_grads");
     has_grads = file.get_bool(std::string(name) + "/has_grads");
     tensor->set_requires_grad(requires_grads);
     if (has_grads) {
         ttnn::Tensor grad;
         read_ttnn_tensor(file, std::string(name) + "/grad", grad);
-        tensor->set_grad(grad);
+        // Gradients are bf16: backward produces them in bf16, and the fused optimizer kernels accept only bf16.
+        tensor->set_grad(
+            grad.dtype() == ttnn::DataType::BFLOAT16 ? grad : ttnn::typecast(grad, ttnn::DataType::BFLOAT16));
     }
 }
 

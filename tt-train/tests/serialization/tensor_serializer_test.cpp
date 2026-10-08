@@ -20,6 +20,7 @@
 #include "serialization/flatbuffer_file.hpp"
 #include "serialization/serialization.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace {
@@ -226,6 +227,62 @@ protected:
         }
     }
 
+    // Stores every parameter as `dtype`, as a run that trains in that precision does. New parameters are bf16.
+    static void store_as(const ttml::serialization::NamedParameters& params, ttnn::DataType dtype) {
+        const auto precision = dtype == ttnn::DataType::FLOAT32 ? ttml::autograd::PreferredPrecision::FULL
+                                                                : ttml::autograd::PreferredPrecision::HALF;
+        for (const auto& [name, param] : params) {
+            param->set_value(param->get_value(precision));
+        }
+    }
+
+    // A loaded tensor keeps the dtype it is stored in and holds the checkpoint's values cast to it.
+    static void expect_loaded(
+        ttml::serialization::FlatBufferFile& file,
+        const std::string& key,
+        const ttml::autograd::TensorPtr& tensor,
+        ttnn::DataType dtype) {
+        ttnn::Tensor saved;
+        ttml::serialization::read_ttnn_tensor(file, key + "/value", saved);
+        const auto& loaded = tensor->get_value(ttml::autograd::PreferredPrecision::NATIVE);
+        EXPECT_EQ(loaded.dtype(), dtype) << key;
+        EXPECT_TRUE(compare_tensors(loaded, ttnn::typecast(saved, dtype))) << key << " does not hold the saved values";
+    }
+
+    // Trains a model stored as `saved` for a step, checkpoints it, and resumes it into a model stored as `resumed`.
+    // The parameters and the AdamW moments must load in the resumed model's dtype, and the fused AdamW step, which
+    // needs the moments in the parameter's dtype, must run.
+    void expect_resume_keeps_the_models_dtype(ttnn::DataType saved, ttnn::DataType resumed) {
+        ttml::modules::LinearLayer model(32, 64);
+        auto params = model.parameters();
+        store_as(params, saved);
+        ttml::optimizers::AdamW optimizer(params, adamw_config());
+        step_with_random_grads(params, optimizer, 1);
+        const auto path = save("saved", model, optimizer);
+
+        ttml::modules::LinearLayer resumed_model(32, 64);
+        auto resumed_params = resumed_model.parameters();
+        store_as(resumed_params, resumed);
+        ttml::optimizers::AdamW resumed_optimizer(resumed_params, adamw_config());
+        ttml::serialization::FlatBufferFile file;
+        file.deserialize(path.string());
+        ttml::serialization::read_module(file, "model", &resumed_model);
+        ttml::serialization::read_optimizer(file, "optimizer", &resumed_optimizer);
+
+        for (const auto& [name, param] : resumed_params) {
+            expect_loaded(file, "model/" + name, param, resumed);
+        }
+        const auto state = resumed_optimizer.get_state_dict();
+        for (const std::string key : {"exp_avg", "exp_avg_sq"}) {
+            const auto& tensors = std::get<ttml::serialization::NamedParameters>(state.at(key));
+            ASSERT_FALSE(tensors.empty()) << key;
+            for (const auto& [name, value] : tensors) {
+                expect_loaded(file, "optimizer/" + key + "/" + name, value, resumed);
+            }
+        }
+        step_with_random_grads(resumed_params, resumed_optimizer, 1);
+    }
+
     std::filesystem::path temp_dir;
 };
 
@@ -286,4 +343,37 @@ TEST_F(CheckpointTrainingTest, CheckpointKeepsFullPrecisionOptimizerState) {
         optimizer,
         {"master_weights", "exp_avg", "exp_avg_sq"},
         ttml::autograd::PreferredPrecision::FULL);
+}
+
+TEST_F(CheckpointTrainingTest, ResumeIntoFp32ModelKeepsItsDtype) {
+    expect_resume_keeps_the_models_dtype(ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32);
+}
+
+TEST_F(CheckpointTrainingTest, ResumeIntoBf16ModelKeepsItsDtype) {
+    expect_resume_keeps_the_models_dtype(ttnn::DataType::FLOAT32, ttnn::DataType::BFLOAT16);
+}
+
+// Gradients load as bf16 whatever dtype they were saved in, also for an fp32 parameter: backward produces bf16
+// gradients, and the fused optimizer kernels accept only bf16.
+TEST_F(CheckpointTrainingTest, GradientLoadsAsBf16) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const ttnn::Shape shape({1, 1, 32, 32});
+    const std::vector<std::size_t> dims(shape.cbegin(), shape.cend());
+    auto& gen = ttml::autograd::ctx().get_generator();
+    const auto grad = ttml::test_utils::make_uniform_xarray<float>(dims, -1.0F, 1.0F, gen());
+    auto saved = ttml::autograd::create_tensor(
+        ttml::core::zeros(shape, device, ttnn::DataType::FLOAT32), /* requires_grad */ true);
+    saved->set_grad(ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(grad, device));
+    ttml::serialization::FlatBufferFile file;
+    ttml::serialization::write_autograd_tensor(file, "theta", saved, /* save_grads */ true);
+    const auto path = temp_dir / "with_grads";
+    file.serialize(path.string());
+
+    ttml::serialization::FlatBufferFile loaded_file;
+    loaded_file.deserialize(path.string());
+    auto loaded = ttml::autograd::create_tensor(
+        ttml::core::zeros(shape, device, ttnn::DataType::FLOAT32), /* requires_grad */ true);
+    ttml::serialization::read_autograd_tensor(loaded_file, "theta", loaded);
+    EXPECT_EQ(loaded->get_grad().dtype(), ttnn::DataType::BFLOAT16);
+    EXPECT_TRUE(compare_tensors(loaded->get_grad(), ttnn::typecast(saved->get_grad(), ttnn::DataType::BFLOAT16)));
 }

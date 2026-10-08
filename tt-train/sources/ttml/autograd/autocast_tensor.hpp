@@ -68,6 +68,10 @@ public:
     ~AutocastTensor() = default;
 
     void set_tensor(const ttnn::Tensor &tensor);
+    // set_tensor() with tensor cast to the native dtype, so loading values (a checkpoint, a weights file) keeps the
+    // stored precision. The cast applies between bf16 and fp32. Any other tensor, or any tensor for an empty
+    // AutocastTensor, is set as is and shares its buffer, as with set_tensor().
+    void assign(const ttnn::Tensor &tensor);
     [[nodiscard]] const ttnn::Tensor &get_tensor(
         PreferredPrecision preferred_precision = PreferredPrecision::HALF) const;
 
