@@ -1015,8 +1015,11 @@ class PerfConfig(TestConfig):
         counter_results_list = []
         code_sizes = {}
 
+        # The Wormhole barrier restart starts every kernel from the same state, so those runs need no warm-up.
+        warmup = [] if self._wormhole_perf_barrier() else self.warmup_configs
+
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
-            for templates, runtimes, run_type in self.warmup_configs:
+            for templates, runtimes, run_type in warmup or self.run_configs:
                 self._select_run_type(templates, runtimes, run_type)
                 self.build_elfs()
 
@@ -1028,7 +1031,7 @@ class PerfConfig(TestConfig):
         # A kernel inherits state from the kernel before it: run each kernel once
         # unrecorded, so no measured kernel follows a kernel of another test.
         if not TestConfig.TEST_TARGET.run_simulator:
-            for templates, runtimes, run_type in self.warmup_configs:
+            for templates, runtimes, run_type in warmup:
                 self._select_run_type(templates, runtimes, run_type)
                 self.write_runtimes_to_L1()
                 self.run_elf_files()
