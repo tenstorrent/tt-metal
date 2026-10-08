@@ -9,6 +9,7 @@ import pytest
 import torch
 import ttnn
 
+from models.common.utility_functions import is_slow_dispatch
 from tests.ttnn.utils_for_testing import assert_equal
 
 TTNN_TO_TORCH_DTYPE = {
@@ -1077,3 +1078,529 @@ def test_untilize_with_unpadding_width_crop(device, padded_width, out_width):
 
     # A bf16 tilize/untilize round trip is an identity, so this is exact.
     assert_equal(ttnn.to_torch(untilized), torch_input[:, :, :out_width])
+
+
+# An empty input gives the factories 0 blocks, so split_blocks_for_tilize returns empty core ranges
+# and no WorkUnitSpec is emitted - while the dataflow buffers have already been declared. The spec
+# then fails CollectSpecData with "DFB 'mci_out' has no producer", which surfaced as a TT_FATAL out
+# of to_layout(TILE -> ROW_MAJOR) on any zero-volume tensor. The op should hand back the empty
+# output instead of building a program with nothing to run.
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (0,),  # rank 1, empty
+        (2, 3, 0),  # empty last dim
+        (2, 0, 4),  # empty interior dim
+        (0, 3, 4),  # empty leading dim
+        (2, 3, 0, 5),  # rank 4
+        (0, 0, 4),  # more than one empty dim
+        # Tile-aligned empty shapes: the padded shape already equals the logical one, so to_layout
+        # takes the ttnn::untilize branch rather than untilize_with_unpadding. These SIGFPE'd
+        # before the guard was added there too.
+        (0, 64),
+        (0, 32),
+        (32, 0),
+    ],
+)
+def test_untilize_with_unpadding_zero_volume(shape, device):
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    tilized = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Must not raise, and must come back with the same (empty) shape.
+    untilized = ttnn.to_layout(tilized, ttnn.ROW_MAJOR_LAYOUT)
+
+    result = ttnn.to_torch(untilized)
+    assert result.shape == torch_input.shape
+    assert result.numel() == 0
+
+
+# The empty output is allocated, not filled: going through a host tensor would upload to the
+# device, and writes are rejected outright during trace capture
+# (fd_mesh_command_queue.cpp: "Writes are not supported during trace capture").
+@pytest.mark.skipif(is_slow_dispatch(), reason="trace capture is not supported in slow dispatch")
+def test_untilize_with_unpadding_zero_volume_in_trace_capture(device):
+    torch_input = torch.rand((2, 3, 0), dtype=torch.bfloat16)
+    tilized = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Compile outside the capture first, as any traced op requires.
+    ttnn.to_layout(tilized, ttnn.ROW_MAJOR_LAYOUT)
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    ttnn.to_layout(tilized, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+    # Replaying it is the real model scenario; releasing stops the trace leaking into later tests
+    # that share the device fixture.
+    ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+    ttnn.release_trace(device, trace_id)
+
+
+# An empty input carries no element to unpad into a non-empty output. to_layout never asks for one
+# (it passes the wrapped sentinel for an empty dim), but a direct caller can, and the empty path
+# skips the device operation's validation - so the op has to reject it rather than invent zeros.
+def test_untilize_with_unpadding_zero_volume_rejects_nonempty_output(device, expect_error):
+    torch_input = torch.rand((0, 32), dtype=torch.bfloat16)
+    tilized = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # output_end is inclusive, so [0, 31] asks for a [1, 32] output out of an empty input.
+    with expect_error(RuntimeError, "zero-volume input requires a zero-volume output"):
+        ttnn.untilize_with_unpadding(tilized, ttnn.Shape([0, 31]))
+
+
+# A sharded empty input is the case that routes to ttnn::untilize rather than
+# untilize_with_unpadding, because its padded shape already equals its logical one. The early
+# return feeds memory_config.value_or(input.memory_config()) into TensorLayout, so this is also the
+# check that a shard spec can be carried on a zero-volume shape at all.
+# Note the tensor has to be built by handing the sharded config to from_torch: routing an existing
+# empty tensor through ttnn.to_memory_config segfaults, which is a separate zero-volume defect in
+# that op.
+@pytest.mark.parametrize("shape", [(0, 64), (0, 32)])
+def test_untilize_with_unpadding_zero_volume_sharded(shape, device):
+    # The shard width has to match the tensor's own width, or from_torch rejects the pairing
+    # before the op is ever reached.
+    sharded_config = ttnn.create_sharded_memory_config(
+        shape=[32, shape[-1]],
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    tilized = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_config,
+    )
+    assert tilized.memory_config().is_sharded()
+
+    untilized = ttnn.to_layout(tilized, ttnn.ROW_MAJOR_LAYOUT)
+
+    result = ttnn.to_torch(untilized)
+    assert result.shape == torch_input.shape
+    assert result.numel() == 0
+
+
+# The empty output is allocated with the input's tensor topology. Filling it through a host tensor
+# instead uploads a single shard, which the mesh then replicates - silently turning a sharded input
+# into a replicated output. Verified against that: with the host-upload version these cases come
+# back as PlacementReplicate() while the input is PlacementShard(0).
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 2), id="1x2_mesh")], indirect=True)
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (2, 0),  # empty, shardable along dim 0
+        (2, 3, 0),  # empty last dim, shardable along dim 0
+    ],
+)
+def test_untilize_with_unpadding_zero_volume_preserves_mesh_topology(mesh_device, shape):
+    if mesh_device.get_num_devices() < 2:
+        pytest.skip("needs at least 2 devices to tell a sharded topology from a replicated one")
+
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    tilized = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    topology_in = str(tilized.tensor_topology())
+
+    untilized = ttnn.to_layout(tilized, ttnn.ROW_MAJOR_LAYOUT)
+
+    assert str(untilized.tensor_topology()) == topology_in
+
+
+# Rank 0 is a scalar, not an empty tensor: with no dimensions its volume is the empty product, 1,
+# so it never reaches the zero-volume guard. A rank-0 *empty* tensor cannot be built for the same
+# reason. Kept as a sanity check because nothing else in the ttnn tests builds a rank-0 tensor.
+def test_untilize_with_unpadding_rank_0(device):
+    torch_input = torch.rand((), dtype=torch.bfloat16)
+    assert torch_input.numel() == 1
+
+    tilized = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    assert tilized.logical_volume() == 1
+
+    untilized = ttnn.to_layout(tilized, ttnn.ROW_MAJOR_LAYOUT)
+
+    result = ttnn.to_torch(untilized)
+    assert result.shape == torch_input.shape
+    assert_equal(result, torch_input)
+
+
+# device() is null for a host tensor and create_device_tensor dereferences it, so without a guard
+# the empty branch segfaults - where the normal path would have fallen through to the device
+# operation's validation error.
+@pytest.mark.parametrize("shape", [(0, 64), (2, 3, 0)])
+def test_untilize_zero_volume_host_tensor_is_rejected(shape, expect_error):
+    host_tensor = ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    with expect_error(RuntimeError, "must be allocated on a device"):
+        ttnn.untilize(host_tensor)
+
+
+# Unpadding only ever shrinks, so no output extent may exceed the padded input. Volume alone does
+# not catch that: [0, 64] with inclusive ends [0, UINT32_MAX] is zero-volume but shaped [1, 0].
+def test_untilize_with_unpadding_zero_volume_rejects_grown_extent(device, expect_error):
+    tilized = ttnn.from_torch(
+        torch.rand((0, 64), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    with expect_error(RuntimeError, "exceeds the padded input extent"):
+        ttnn.untilize_with_unpadding(tilized, ttnn.Shape([0, 4294967295]))
+
+
+# Both empty shortcuts run ahead of the device operation's validation, so they have to repeat its
+# layout check. Without it an empty ROW_MAJOR input is accepted only because it is empty, while the
+# same tensor at any non-zero size raises "Can only untilize tile major data".
+@pytest.mark.parametrize("shape", [(0, 64), (2, 0)])
+def test_untilize_zero_volume_row_major_input_is_rejected(device, shape, expect_error):
+    row_major = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    ends = ttnn.Shape([extent - 1 if extent else 4294967295 for extent in shape])
+
+    with expect_error(RuntimeError, "Can only untilize tile major data"):
+        ttnn.untilize(row_major)
+
+    with expect_error(RuntimeError, "Can only untilize tile major data"):
+        ttnn.untilize_with_unpadding(row_major, ends)
+
+
+# A WIDTH_SHARDED spec pins the shard height to the physical height exactly, and untilizing shrinks
+# that height from tile-padded to logical, so the input's shard spec cannot be reused unchanged.
+# Before the fix this raised "Shard height 32 must match physical height 4 for width sharded".
+# HEIGHT_SHARDED and BLOCK_SHARDED are checked on the width or by div_up and already passed; they
+# are here to keep that true.
+@pytest.mark.parametrize(
+    "memory_layout, shard_shape",
+    [
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, [32, 32]),
+        (ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 32]),
+    ],
+)
+def test_untilize_with_unpadding_zero_volume_width_sharded(device, memory_layout, shard_shape):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    sharded = ttnn.MemoryConfig(
+        memory_layout, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    )
+    tilized = ttnn.from_torch(
+        torch.rand((32, 0), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded,
+    )
+
+    # Inclusive ends, so [3, UINT32_MAX] unpads the tile-padded height 32 down to 4 and keeps the
+    # empty width at 0.
+    output = ttnn.untilize_with_unpadding(tilized, ttnn.Shape([3, 4294967295]))
+
+    assert list(output.shape) == [4, 0]
+    assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert output.memory_config().memory_layout == memory_layout
+
+
+# A zero-WIDTH output is not supported by this op at any size, so the empty shortcut does not
+# support it either -- deliberately, not by omission. Measured on the non-empty twin:
+# height-sharded [32, 64] -> [32, 0] kills the process with SIGFPE, and interleaved
+# [32, 64] -> [32, 0] hangs the device. Raising is strictly better than both, and making the
+# empty path succeed would let an empty input do something no non-empty input can.
+def test_untilize_with_unpadding_zero_volume_zero_width_sharded_is_rejected(device, expect_error):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [32, 64], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tilized = ttnn.from_torch(
+        torch.rand((0, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded,
+    )
+
+    with expect_error(RuntimeError, "must match physical width"):
+        ttnn.untilize_with_unpadding(tilized, ttnn.Shape([4294967295, 4294967295]))
+
+
+# Interleaved has no shard width to contradict, so there the zero-width output is allocatable and
+# the shortcut does return it -- the case the sharded test above cannot have.
+def test_untilize_with_unpadding_zero_volume_zero_width_interleaved(device):
+    tilized = ttnn.from_torch(
+        torch.rand((0, 64), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    output = ttnn.untilize_with_unpadding(tilized, ttnn.Shape([4294967295, 4294967295]))
+
+    assert list(output.shape) == [0, 0]
+    assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+
+
+# The shortcuts run ahead of the device operation, so they also have to repeat its checks on the
+# ARGUMENTS, not just on the shape. Each case below was measured against its non-empty twin: before
+# the fix the empty input and the non-empty one disagreed, and now they raise the same error.
+def _two_cores():
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+
+
+def _height_sharded(shard=[32, 64]):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, shard, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def test_untilize_zero_volume_rejects_sub_core_grids_without_multicore(device, expect_error):
+    tilized = ttnn.from_torch(
+        torch.rand((0, 64), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    with expect_error(RuntimeError, "use_multicore"):
+        ttnn.untilize(tilized, use_multicore=False, sub_core_grids=_two_cores())
+
+
+def test_untilize_with_unpadding_zero_volume_rejects_sub_core_grids_when_sharded(device, expect_error):
+    tilized = ttnn.from_torch(
+        torch.rand((0, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_height_sharded(),
+    )
+
+    with expect_error(RuntimeError, "does not support sub core grid"):
+        ttnn.untilize_with_unpadding(tilized, ttnn.Shape([4294967295, 63]), sub_core_grids=_two_cores())
+
+
+# A sharded memory config that names a layout but carries no shard spec. The device operation fills
+# it in from the input, so the empty path has to as well -- this one FAILED before the fix while the
+# non-empty call succeeded.
+def test_untilize_with_unpadding_zero_volume_inherits_missing_shard_spec(device):
+    tilized = ttnn.from_torch(
+        torch.rand((0, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_height_sharded(),
+    )
+
+    output = ttnn.untilize_with_unpadding(
+        tilized, ttnn.Shape([4294967295, 63]), memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+    )
+
+    assert list(output.shape) == [0, 64]
+    assert output.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+
+
+def test_untilize_with_unpadding_zero_volume_rejects_incompatible_sharded_output(device, expect_error):
+    tilized = ttnn.from_torch(
+        torch.rand((0, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_height_sharded(),
+    )
+    block_sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_two_cores(), [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    with expect_error(RuntimeError, "must be HEIGHT_SHARDED"):
+        ttnn.untilize_with_unpadding(tilized, ttnn.Shape([4294967295, 63]), memory_config=block_sharded)
+
+
+# Output-memory-config handling on the empty path, each case measured against its non-empty twin.
+def _crs(x1=0, y1=0):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(x1, y1))})
+
+
+def _sharded(layout, shard, grid, buffer_type=ttnn.BufferType.L1):
+    return ttnn.MemoryConfig(layout, buffer_type, ttnn.ShardSpec(grid, shard, ttnn.ShardOrientation.ROW_MAJOR))
+
+
+# A padded interleaved input belongs to untilize_with_unpadding, which derives the output shard
+# geometry. ttnn.untilize used to answer it from its own branch and reject the conversion.
+def test_untilize_zero_volume_padded_interleaved_to_width_sharded(device):
+    tilized = ttnn.from_torch(
+        torch.rand((2, 3, 0), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    width_sharded = _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, [32, 32], _crs())
+
+    output = ttnn.untilize(tilized, memory_config=width_sharded)
+
+    assert list(output.shape) == [2, 3, 0]
+    assert output.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
+
+def test_untilize_zero_volume_rejects_dram_block_sharded_output(device, expect_error):
+    tilized = ttnn.from_torch(
+        torch.rand((0, 64), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    dram_block = _sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 64], _crs(), ttnn.BufferType.DRAM)
+
+    with expect_error(RuntimeError, "don't support DRAM block sharding"):
+        ttnn.untilize(tilized, memory_config=dram_block)
+
+
+def test_untilize_with_unpadding_zero_volume_rejects_block_to_height_sharded(device, expect_error):
+    tilized = ttnn.from_torch(
+        torch.rand((0, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 32], _crs(x1=1)),
+    )
+    height_sharded = _sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 64], _crs())
+
+    with expect_error(RuntimeError, "must be BLOCK_SHARDED"):
+        ttnn.untilize_with_unpadding(tilized, ttnn.Shape([4294967295, 63]), memory_config=height_sharded)
+
+
+def test_untilize_with_unpadding_zero_volume_rejects_dram_height_sharded_output(device, expect_error):
+    tilized = ttnn.from_torch(
+        torch.rand((0, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 64], _crs()),
+    )
+    dram_height = _sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 64], _crs(), ttnn.BufferType.DRAM)
+
+    with expect_error(RuntimeError, "must be in L1"):
+        ttnn.untilize_with_unpadding(tilized, ttnn.Shape([4294967295, 63]), memory_config=dram_height)
+
+
+# The caller's shard width of 32 needs four columns for a 128-wide output; the grid has two. The
+# device operation derives 64 from the grid, and so does the empty path now.
+def test_untilize_with_unpadding_zero_volume_derives_block_shard_width(device):
+    tilized = ttnn.from_torch(
+        torch.rand((0, 128), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    block_sharded = _sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 32], _crs(x1=1))
+
+    output = ttnn.untilize_with_unpadding(tilized, ttnn.Shape([4294967295, 127]), memory_config=block_sharded)
+
+    assert list(output.shape) == [0, 128]
+    assert output.memory_config().shard_spec.shape == [32, 64]
+
+
+def test_untilize_zero_volume_rejects_narrow_shard_on_single_core(device, expect_error):
+    tilized = ttnn.from_torch(
+        torch.rand((0, 64), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    narrow = _sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 16], _crs(x1=3))
+
+    with expect_error(RuntimeError, "must be a multiple of tile width"):
+        ttnn.untilize(tilized, memory_config=narrow, use_multicore=False)
+
+
+def test_untilize_with_unpadding_zero_volume_rejects_dram_width_sharded_output(device, expect_error):
+    tilized = ttnn.from_torch(
+        torch.rand((32, 0), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, [32, 32], _crs()),
+    )
+    dram_width = _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, [32, 32], _crs(), ttnn.BufferType.DRAM)
+
+    with expect_error(RuntimeError, "must be in L1"):
+        ttnn.untilize_with_unpadding(tilized, ttnn.Shape([3, 4294967295]), memory_config=dram_width)
+
+
+# A same-layout output is reshaped from the input's shard, not the caller's: an explicit [32, 32]
+# cannot describe a 64-wide height-sharded output, and the non-empty call derives [32, 64] too.
+def test_untilize_with_unpadding_zero_volume_same_layout_output_follows_input_shard(device):
+    tilized = ttnn.from_torch(
+        torch.rand((0, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 64], _crs()),
+    )
+    narrower = _sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 32], _crs())
+
+    output = ttnn.untilize_with_unpadding(tilized, ttnn.Shape([4294967295, 63]), memory_config=narrower)
+
+    assert list(output.shape) == [0, 64]
+    assert output.memory_config().shard_spec.shape == [32, 64]
+
+
+# The validator's batch-dimension loop used `rank() - 2` on an unsigned rank, so a rank-1 input
+# wrapped to 4294967295 and compared the padded height against dim 0. Both of these failed.
+@pytest.mark.parametrize("shape, end", [((0,), 4294967295), ((32,), 31)])
+def test_untilize_with_unpadding_rank_1_width_sharded(device, shape, end):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    width_sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tilized = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=width_sharded,
+    )
+
+    output = ttnn.untilize_with_unpadding(tilized, ttnn.Shape([end]))
+
+    assert list(output.shape) == list(shape)
+
+
+# The zero-extent fallback exists for empty inputs. A NON-empty input asked for an empty sharded
+# output must still be rejected on the zero shard extent, as it was before that fallback existed --
+# otherwise the spec is accepted and the writer targets storage that was never allocated.
+def test_untilize_with_unpadding_nonempty_input_rejects_empty_sharded_output(device, expect_error):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    height_sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [32, 64], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tilized = ttnn.from_torch(
+        torch.rand((32, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=height_sharded,
+    )
+
+    with expect_error(RuntimeError, "greater than 0 in each sharded dim"):
+        ttnn.untilize_with_unpadding(tilized, ttnn.Shape([4294967295, 63]))
+
+
+# sub_core_grids untilize is restricted to tensors one tile row tall, because the writer would
+# otherwise deadlock. An empty input runs no kernel at all, so the restriction does not apply --
+# and rejecting it would mean a valid subgrid works for [32, 32] but not for [32, 0].
+@pytest.mark.parametrize("shape", [(32, 0), (0, 32)])
+def test_untilize_zero_volume_accepts_sub_core_grids(device, shape):
+    tilized = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    output = ttnn.untilize(tilized, use_multicore=True, sub_core_grids=_two_cores())
+
+    assert list(output.shape) == list(shape)
+    assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+
+
+# Rank > 4 reaches validate_on_program_cache_miss at its original rank, since the empty path builds
+# the end indices over the input's rank rather than the squeezed one.
+@pytest.mark.parametrize("shape, ends", [((2, 2, 3, 0, 4), [1, 1, 2, 4294967295, 3]), ((2, 2, 3, 0, 64), None)])
+def test_untilize_with_unpadding_rank_5_zero_volume(device, shape, ends):
+    tilized = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    output = ttnn.untilize(tilized) if ends is None else ttnn.untilize_with_unpadding(tilized, ttnn.Shape(ends))
+
+    assert list(output.shape) == list(shape)
+    assert output.layout == ttnn.ROW_MAJOR_LAYOUT

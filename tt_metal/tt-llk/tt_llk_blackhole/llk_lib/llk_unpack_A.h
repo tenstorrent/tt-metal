@@ -27,7 +27,7 @@ constexpr std::uint32_t dest_reuse_dummy_unpack()
 {
     static_assert(binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA || binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB);
     constexpr std::uint32_t source = binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? SrcA : SrcB;
-    return TT_OP_UNPACR_NOP(source, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1 /* wait like UNPACR */, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    return TT_OP_UNPACR_NOP(source, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 }
 
 } // namespace llk_unpack_a_detail
@@ -72,15 +72,17 @@ inline void _llk_unpack_A_mop_config_(
         TT_OP_UNPACR(SrcA, 0b00100010 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // ch0/ch1 z_inc
     static constexpr std::uint32_t unpack_srca_to_dest_transpose_of_faces =
         TT_OP_UNPACR(SrcA, 0b00010010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // inc srcA ch1_z+=1, ch0_z+=2
-    static constexpr std::uint32_t unpack_srca_set_dvalid = TT_OP_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    static constexpr std::uint32_t unpack_srca_set_dvalid =
+        TT_OP_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
     static constexpr std::uint32_t unpack_srcb =
         TT_OP_UNPACR(SrcB, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb_inc_z_0 =
         TT_OP_UNPACR(SrcB, 0b0 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr std::uint32_t unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-    static constexpr std::uint32_t srca_set_z_1           = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001); // set srcA ch0_z = 1
-    static constexpr std::uint32_t srcb_set_z_2           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001); // set srcB ch0_z = 2
-    static constexpr std::uint32_t srcb_clear_z           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001); // set srcB ch0_z = 0
+    static constexpr std::uint32_t unpack_srcb_set_dvalid =
+        TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    static constexpr std::uint32_t srca_set_z_1 = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001); // set srcA ch0_z = 1
+    static constexpr std::uint32_t srcb_set_z_2 = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001); // set srcB ch0_z = 2
+    static constexpr std::uint32_t srcb_clear_z = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001); // set srcB ch0_z = 0
 
     if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
     {
@@ -118,15 +120,10 @@ inline void _llk_unpack_A_mop_config_(
     {
         if constexpr (acc_to_dest)
         {
-            // Use unpacker-bank readiness for the dummy SrcA publication so unpack can prepare
-            // the next bank while math consumes the current bank.
-            static constexpr std::uint32_t unpack_srca_reuse = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
-                                                                   ? llk_unpack_a_detail::dest_reuse_dummy_unpack<EltwiseBinaryReuseDestType::DEST_TO_SRCA>()
-                                                                   : unpack_srca_set_dvalid;
-
+            // The dummy SrcA publication is the same word whether or not dest is reused as SrcA.
             constexpr std::uint32_t innerloop = 1;
             constexpr std::uint32_t outerloop = 2; // TODO: add support for num_faces, add support for dest to srcB
-            ckernel_template tmp(outerloop, innerloop, unpack_srca_reuse, unpack_srca_reuse);
+            ckernel_template tmp(outerloop, innerloop, unpack_srca_set_dvalid, unpack_srca_set_dvalid);
             tmp.set_start_op(unpack_srcb);
             tmp.set_end_op(srcb_set_z_2);
             tmp.program();
@@ -147,12 +144,9 @@ inline void _llk_unpack_A_mop_config_(
         const std::uint32_t innerloop = tensor_shape.num_faces_c_dim;
         if constexpr (acc_to_dest)
         {
-            // Publish one dummy SrcA DVALID per tensor face, using unpacker-bank readiness so
-            // unpack can prepare the next bank while math consumes the current bank.
-            static constexpr std::uint32_t unpack_srca_reuse = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
-                                                                   ? llk_unpack_a_detail::dest_reuse_dummy_unpack<EltwiseBinaryReuseDestType::DEST_TO_SRCA>()
-                                                                   : unpack_srca_set_dvalid;
-            ckernel_template tmp(outerloop, innerloop, unpack_srcb, unpack_srca_reuse);
+            // Publish one dummy SrcA DVALID per tensor face; the word is the same whether or not
+            // dest is reused as SrcA.
+            ckernel_template tmp(outerloop, innerloop, unpack_srcb, unpack_srca_set_dvalid);
             tmp.set_end_op(srcb_clear_z);
             tmp.program();
         }
@@ -182,7 +176,7 @@ inline void _llk_unpack_A_mop_config_(
                 replay_buf_len,
                 [num_faces]
                 {
-                    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                     if (num_faces > 2)
                     {
                         TTI_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // inc srcA ch0_z+=2

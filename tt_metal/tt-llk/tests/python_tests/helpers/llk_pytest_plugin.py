@@ -214,6 +214,17 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
+        "--ulp-measure",
+        default=None,
+        metavar="PATH",
+        help="Append a JSON row (test, variant, measured max ULP and lane counts) to "
+        "PATH for each comparison made right after exactly one accuracy_contract "
+        "lookup in the same test, on a variant that ran with the dest_acc it names. "
+        "The exhaustive sweep skips tolerance cells before comparing, and under "
+        "--ulp-emit does not compare at all, so those record nothing. PATH is created "
+        "and truncated at session start. Reporting only: it cannot change a verdict.",
+    )
+    parser.addoption(
         "--ulp-emit",
         action="store_true",
         help="Re-measure rather than gate: the exhaustive unary sweep records what it "
@@ -489,9 +500,13 @@ def pytest_configure(config):
         ulp_sweep.EMIT = True
     if config.getoption("--ulp-report"):
         utils_module._ULP_REPORT = True
+    if config.getoption("--ulp-measure"):
+        # Set in the workers too; only the file preparation below is master-only.
+        utils_module._ULP_MEASURE_PATH = config.getoption("--ulp-measure")
 
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
+        utils_module.prepare_ulp_measure_file()
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
         if os.path.exists(log_file):
@@ -661,13 +676,7 @@ def _select_tests_by_op(config, items):
     )
 
 
-@pytest.hookimpl(tryfirst=True)
-def pytest_collection_modifyitems(config, items):
-    _select_tests_by_op(config, items)
-
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
-        _collapse_runtime_only_variants(config, items)
-
+def _restore_test_order(config, items):
     test_order_file = config.getoption("--test-order-file")
 
     if not test_order_file:
@@ -702,6 +711,19 @@ def pytest_collection_modifyitems(config, items):
     logger.info(
         f"Executing {len(items)} variants as they were executed on runner {temp_runner_name} on run recorded to file {test_order_file}"
     )
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    # Choose compile representatives only after other plugins apply selection filters.
+    result = yield
+    _select_tests_by_op(config, items)
+    _restore_test_order(config, items)
+
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
+        _collapse_runtime_only_variants(config, items)
+
+    return result
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
