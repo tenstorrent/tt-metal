@@ -905,3 +905,23 @@ def test_quasar_concat_groups_at_most_32_inputs(monkeypatch):
     calls.clear()
     assert wa.rewrite(concat, ([1] * 33,), {"dim": 3, "memory_config": "mc"}) == 33
     assert calls == [32, 2]  # the lone 33rd tensor is passed through, not concatenated alone
+
+
+def test_prefill_snapshot_round_trip_and_mismatch(tmp_path, expect_error):
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import snapshot as S
+
+    cfg = RunConfig.from_options(_opts(**{"--qwen-quasar-config": True, "--qwen-deepstack-at": 0}))
+    meta = S.meta_for(cfg, (2, 1), [151643])
+    kv = [[torch.randn(8, 8, 32, 128), torch.randn(8, 8, 32, 128)]]
+    stages = {"text.layer0": torch.randn(78, 2560), "text.logits.prefill": torch.randn(16)}
+    S.save(tmp_path / S.SNAPSHOT_NAME, meta, kv, 78, -3.0, torch.tensor([[2, 0, 1]]), stages, lambda t: t)
+    snap = S.load(tmp_path, meta)  # a run folder resolves to its snapshot file
+    assert snap["decoding_pos"] == 78 and snap["rope_delta"] == -3.0
+    assert torch.equal(snap["kv"][0][1], kv[0][1].to(torch.bfloat16)) and torch.equal(
+        snap["stages"]["text.layer0"], stages["text.layer0"]
+    )
+    other = S.meta_for(cfg, (8, 4), [151643])  # a different grid means different configs and weights
+    with expect_error(ValueError, "different run"):
+        S.load(tmp_path, other)
+    with expect_error(ValueError, "teacher_tokens"):
+        S.load(tmp_path, S.meta_for(cfg, (2, 1), [42]))

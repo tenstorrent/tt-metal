@@ -49,6 +49,7 @@ Each run writes `generated/qwen3_vl_quasar/<target>/<UTC time>/`:
 | `verdict.txt` | `PASS`, `FAIL` or `DIAGNOSTIC` |
 | `progress.log` | one `PRE`/`POST` line per ttnn op with shapes, memory configs and model stage. After a hang, the last `PRE` without a `POST` is the op that never finished. |
 | `run.log`, `command.txt`, `env.txt`, `git.txt` | full output, exact command, environment, commit and branch commits |
+| `prefill_snapshot.pt` | KV cache, decode position, rope delta, page table and prefill stage tensors at the end of prefill. `-- --qwen-resume-prefill <run folder>` skips vision and prefill and decodes from it (same size, layers, grid and config only; the run notes it in `pcc.md`) |
 
 Thresholds per stage and preset live in `thresholds.json`.
 
