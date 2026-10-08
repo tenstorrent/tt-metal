@@ -60,9 +60,16 @@ class SpecIndexer(DSV41DecodeIndexer):
 
     def score(self, q, w):
         U, n, R = self.T, self.n, self.R
-        s = ttnn.matmul(
-            q, self.k_cache, transpose_b=True, activation="relu", compute_kernel_config=self.ckc
-        )  # [U,1,32n,T]
+        kc = self.k_cache
+        Us = getattr(self, "U_slab", None)
+        if (
+            Us is not None and Us != U
+        ):  # decode bucket: the users u < U of the shared slab (sliced once per round by the owner's key append)
+            own = getattr(self, "_slab_owner", None) or self
+            kc = own.__dict__.get("_kc_view")
+            if kc is None:
+                kc = ttnn.slice(self.k_cache, [0, 0, 0, 0], [U, 1, self.k_cache.shape[2], self.k_cache.shape[3]])
+        s = ttnn.matmul(q, kc, transpose_b=True, activation="relu", compute_kernel_config=self.ckc)  # [U,1,32n,T]
         s = ttnn.reshape(s, (R, 1, HEADS, self.n_alloc))
         s = ttnn.matmul(w, s, compute_kernel_config=self.ckc)  # [R,1,1(32),T]
         return ttnn.to_layout(ttnn.slice(s, [0, 0, 0, 0], [R, 1, 1, self.n_alloc]), ttnn.ROW_MAJOR_LAYOUT)
@@ -97,10 +104,21 @@ class SpecIndexer(DSV41DecodeIndexer):
         ents = self._ent_per_j(st)
         for j in range(n):
             kj = ttnn.slice(k_rm, [0, j, 0], [U, j + 1, DIM])  # [U,1,128] row-major
-            kj = ttnn.to_layout(ttnn.reshape(kj, (1, U, 1, DIM)), ttnn.TILE_LAYOUT)  # one tile per user, key in row 0
+            Us = getattr(self, "U_slab", None)
+            if Us is not None and Us != U:
+                # decode bucket: the update takes one row per slab user: the users outside the bucket get a zero key and the skip index -1
+                kj = ttnn.pad(kj, [(0, Us - U), (0, 0), (0, 0)], 0.0)
+                ent_j = ttnn.concat([ents[j], self._pad_idx], dim=0)
+                Uk = Us
+            else:
+                ent_j, Uk = ents[j], U
+            kj = ttnn.to_layout(ttnn.reshape(kj, (1, Uk, 1, DIM)), ttnn.TILE_LAYOUT)  # one tile per user, key in row 0
             kj = ttnn.to_memory_config(kj, self._kcfg)
-            ttnn.experimental.paged_update_cache(self.k_cache, kj, update_idxs_tensor=ents[j], page_table=None)
+            ttnn.experimental.paged_update_cache(self.k_cache, kj, update_idxs_tensor=ent_j, page_table=None)
             ttnn.deallocate(kj)
+        Us = getattr(self, "U_slab", None)
+        if Us is not None and Us != U:
+            self._kc_view = ttnn.slice(self.k_cache, [0, 0, 0, 0], [U, 1, self.k_cache.shape[2], self.k_cache.shape[3]])
 
 
 class SpecPagedWindowAttention(_SpecFinish, DSV41PagedAttention):

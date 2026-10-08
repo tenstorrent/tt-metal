@@ -108,7 +108,7 @@ def _moe_view(moe, Tn, buffers):
 
 
 class SpecRunner:
-    def __init__(self, model, k, max_pos=None, drafter=None, draft=True):
+    def __init__(self, model, k, max_pos=None, drafter=None, draft=True, Ub=None):
         """``drafter``: an existing (root) drafter of a sibling runner (adaptive verification length): shared weights + rings, viewed for this block size."""
         assert (
             (0 if drafter is not None else 1) <= k <= BLOCK
@@ -116,6 +116,13 @@ class SpecRunner:
         self.m, self.k, self.n = model, k, k + 1
         self.draft = draft
         self.md, self.U, self.rows, self.cols, self.B = model.md, model.U, model.rows, model.cols, model.B
+        # decode bucket (adapter, Ub < U users per mesh row): the runner steps the users u < Ub of every mesh row (model user r * U + u), over the SAME state (prefix views of prev_cs and of
+        # the index-key slab, the model's pool / rings by user index, the first chunks of the drafter); ``phys`` = the model user of every runner row
+        self.Ufull, self.phys = model.U, None
+        if Ub is not None and Ub < model.U:
+            assert drafter is not None, "a bucket runner needs the drafter (first chunks) of the full runner"
+            self.U, self.B = int(Ub), self.rows * int(Ub)
+            self.phys = torch.tensor([(i // self.U) * model.U + i % self.U for i in range(self.B)], dtype=torch.long)
         n, U = self.n, self.U
         # tail-replay seeding: rows q in [S-128, S) read the window [q-127, q] => the prefill-written ring must hold 255 rows (+k slack) below S
         assert model.pool.ring_rows >= 255 + k or (
@@ -126,6 +133,7 @@ class SpecRunner:
         t0 = time.time()
         model.log_dram("spec: before runner build")
         views, by_id, idx_views, layers, groups = {}, {}, {}, [], {}
+        idx_by_id = {}
         buffers, first = None, True
         for L, layer, key in model.built:
             a = model.attns[L]
@@ -135,11 +143,30 @@ class SpecRunner:
                 v.__class__ = SpecPagedCompressedAttention
                 v.source = by_id[id(a.source)] if a.source is not None else None
                 v.indexer = None
+                if self.phys is not None and getattr(a, "prev_cs", None) is not None:
+                    from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import view_rows
+
+                    v.prev_cs = view_rows(a.prev_cs, U)  # [1,1,Ub,1024] over the SAME buffer
                 if a.indexer is not None:
                     assert a.indexer.backend == "matmul", "spec verify needs the matmul indexer backend"
                     iv = copy.copy(a.indexer)
                     iv.__class__ = SpecIndexer
                     iv.n, iv.R = n, U * n
+                    if self.phys is not None:
+                        iv.T = U
+                        iv.U_slab = int(a.indexer.k_cache.shape[0])
+                        iv._kc_view = None
+                        own = getattr(a.indexer, "_slab_owner", None)
+                        iv._slab_owner = idx_by_id[id(own)] if own is not None else None
+                        iv._pad_idx = ttnn.from_torch(
+                            torch.full((iv.U_slab - U,), -1, dtype=torch.int32),
+                            device=self.md,
+                            dtype=ttnn.int32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
+                        )
+                    idx_by_id[id(a.indexer)] = iv
                     v.indexer = iv
             else:
                 v.__class__ = SpecPagedWindowAttention
@@ -204,7 +231,7 @@ class SpecRunner:
         m, B, n = self.m, self.B, self.n
         rows_d = {}
         if m.host_rows is not None:
-            hs = m.hasher(X, base)
+            hs = m.hasher(X, base, rows=self.phys)
             rows_d = {l: r.reshape(B * n, 1, -1) for l, r in m.host_rows.rows_all(hs, m.engram_ids).items()}
         pos = (base.reshape(B, 1) + torch.arange(n).reshape(1, n)).reshape(-1)
         self.dec.set_packed_inputs(X.reshape(-1), rows_d, pos)
@@ -229,8 +256,17 @@ class SpecRunner:
         )  # confidence head: P(draft j accepted | drafts < j accepted), j = 1..5 (see tools/spec_conf)
         return a, mm, d
 
+    def _ensure(self, base):
+        """pages of the block rows (no-op / in-place upload); a bucket runner maps its rows to the model users (the others stay at position 0)."""
+        if self.phys is None:
+            self.m.pool.ensure(base + self.n, lookahead=self.n + 16)
+        else:
+            full = torch.zeros(self.m.B, dtype=torch.long)
+            full[self.phys] = base.long()
+            self.m.pool.ensure(full + self.n, lookahead=self.n + 16)
+
     def _round(self, X, base, force=None):
-        self.m.pool.ensure(base + self.n, lookahead=self.n + 16)  # pages of the block rows (no-op / in-place upload)
+        self._ensure(base)
         self.dec.set_force(-1 if force is None else force)
         self._feed(X, base)
         ttnn.execute_trace(self.md, self.tid, cq_id=0, blocking=False)
@@ -249,7 +285,7 @@ class SpecRunner:
         """
         dec = self.dec
         self.snaps = dec.snapshot_states()
-        self.m.pool.ensure(base + self.n, lookahead=self.n + 16)
+        self._ensure(base)
         dec.set_force(self.n - 1)
         self._feed(X, base)
         dec.forward()

@@ -181,6 +181,22 @@ class DeepseekV41ForCausalLM:
             sp = generator.spec
             generator.m._admit_idle()  # every user owns a page (the verify round's pool.ensure grows all of them)
             sp.prepare(torch.zeros(B, sp.n, dtype=torch.long), torch.full((B,), 130, dtype=torch.long))
+            generator.spec_buckets = {}
+            dr = sp.drafter_root
+            if os.environ.get("DSV41_VLLM_BUCKETING", "1") == "1" and getattr(dr, "G", 1) > 1:
+                # decode buckets of the verify round (VLLM_BUCKETS_NOTES.md): the users u < Ub of every mesh row, Ub a multiple of the drafter chunk (4): one runner per bucket sharing the
+                # weights, the pool and the drafter rings; every runner is COMPILED here, before any trace exists (the traces are captured after each seeding)
+                from models.demos.blackhole.deepseek_v41_flash.tt.spec_model import SpecRunner
+
+                for g in range(1, dr.G):
+                    Ub = dr.Uc * g
+                    br = SpecRunner(generator.m, sp.k, drafter=dr.first(g), Ub=Ub)
+                    br.prepare(
+                        torch.zeros(VS.MESH_ROWS * Ub, br.n, dtype=torch.long),
+                        torch.full((VS.MESH_ROWS * Ub,), 130, dtype=torch.long),
+                    )
+                    generator.spec_buckets[Ub] = br
+                    logger.info(f"DSV4.1 vLLM: spec decode bucket B'={VS.MESH_ROWS * Ub} compiled")
             logger.info(f"DSV4.1 vLLM: speculative decoding ON, {generator.spec_choice.describe()}")
         self = cls(generator, max_batch_size, max_seq_len)
         if self.bucketing and os.environ.get("DSV41_VLLM_WARM", "1") == "1":
@@ -390,6 +406,10 @@ class DeepseekV41ForCausalLM:
                 "speculative decoding (speculative_config) and DSV41_VLLM_INTERLEAVE=1 are not combined: the drafter seeding needs whole-prompt prefill hand-off states"
             )
         self.spec_k = self.spec.k if self.spec is not None else 0
+        self.spec_bucket_calls = {}
+        self.spec_buckets = dict(
+            getattr(generator, "spec_buckets", {}) or {}
+        )  # {users per mesh row: SpecRunner of that bucket}
         if self.spec is not None:
             self.spec_drafts = torch.zeros(
                 self.B, self.spec.k, dtype=torch.int32
@@ -518,7 +538,13 @@ class DeepseekV41ForCausalLM:
             empty_slots = free[:N]
         empty_slots = [int(s) for s in empty_slots]
         t0 = time.perf_counter()
-        phys_new = self.slots.claim(empty_slots)
+        if self.spec_buckets:  # lowest in-row index first: the live set stays inside the smallest verify bucket
+            load, phys_new = {}, []
+            for s_ in empty_slots:
+                phys_new.append(self.slots.claim_packed(int(s_), load, self.U))
+            load.clear()
+        else:
+            phys_new = self.slots.claim(empty_slots)
         live_other = sorted(self.slots.live - set(phys_new))
         live_other = [p for p in live_other if int(self.book.n[p]) > 0]
         # shared index-key slabs: re-prefill the live users too (module docstring). With speculative decoding ALWAYS: the drafter is seeded from a prefill hand-off state of every row
@@ -532,6 +558,8 @@ class DeepseekV41ForCausalLM:
         self.m.release_trace()  # decode trace: recaptured by the next decode step
         if self.spec is not None:
             self.spec.release()  # spec trace: a prefill replay (or its allocations) must not clobber it; re-captured by the seeding below
+            for b_ in self.spec_buckets.values():
+                b_.release()
         self._first_decode_after_prefill = True
         logger.info(
             f"DSV4.1 prefill: {N} new request(s) in slots {empty_slots} (users {phys_new}), lens max {S}, chunk {chunk}, S_pad {s_pad}, "
@@ -849,6 +877,13 @@ class DeepseekV41ForCausalLM:
         firstB[firstB < 0] = 0
         t0 = time.perf_counter()
         self.spec.seed(tokens, lens, firstB)  # compile + trace capture on first use after every release
+        for (
+            b_
+        ) in (
+            self.spec_buckets.values()
+        ):  # the bucket runners are compiled (init): only the capture, which executes nothing, with the post-seeding compressor state as the restore point
+            b_.snaps = b_.dec.snapshot_states()
+            b_.capture_trace()
         d = self.spec.d_final
         act = active_B.nonzero().reshape(-1)
         self.spec_drafts[act] = d[act, :K].to(torch.int32)
@@ -873,7 +908,13 @@ class DeepseekV41ForCausalLM:
         K = self.spec.k
         if n != K + 1:
             raise ValueError(f"verify block width {n} != 1 + K ({1 + K})")
-        B = self.B
+        runner, Ub = self.spec, self.U
+        if self.spec_buckets:
+            need = VS.pick_bucket(self.slots.users_needed(self.U), sorted(self.spec_buckets) + [self.U])
+            if need < self.U:
+                runner, Ub = self.spec_buckets[need], need
+        B = VS.MESH_ROWS * Ub if runner is not self.spec else self.B
+        row_of = None if runner is self.spec else {int(q): r for r, q in enumerate(runner.phys.tolist())}
         X = torch.zeros(B, n, dtype=torch.long)
         base = torch.zeros(B, dtype=torch.long)
         force = torch.zeros(B)  # idle users: commit nothing beyond the (dummy) first token
@@ -890,21 +931,22 @@ class DeepseekV41ForCausalLM:
                 raise ValueError(
                     f"row {i}: {nv} valid drafts of {K}: the device round verifies all K or forces 0 accepted"
                 )
-            X[p] = tokens[i].long().clamp(min=0)
-            base[p] = pos
-            force[p] = -1.0 if nv > 0 else 0.0
-            rows.append((i, p, pos))
+            r = p if row_of is None else row_of[p]
+            X[r] = tokens[i].long().clamp(min=0)
+            base[r] = pos
+            force[r] = -1.0 if nv > 0 else 0.0
+            rows.append((i, p, pos, r))
         t0 = time.perf_counter()
-        a, mm, d = self.spec._round(X, base, force)
+        a, mm, d = runner._round(X, base, force)
         t1 = time.perf_counter()
         self.timing["decode"] = t1 - t0
         self._calls["decode"] += 1
-        for i, p, pos in rows:
-            m = int(mm[p])
+        for i, p, pos, r in rows:
+            m = int(mm[r])
             for j in range(m + 1):  # fed to the model: the committed token and the accepted drafts
-                self.book.note_fed(p, pos + j, int(X[p, j]))
-            self.spec_drafts[p] = d[p, :K].to(torch.int32)
-            self.spec_last[p] = int(a[p, m])
+                self.book.note_fed(p, pos + j, int(X[r, j]))
+            self.spec_drafts[p] = d[r, :K].to(torch.int32)
+            self.spec_last[p] = int(a[r, m])
             self.spec_has[p] = True
             self.spec_stats["accepted"] += m
         self.spec_stats["rounds"] += 1
@@ -920,10 +962,11 @@ class DeepseekV41ForCausalLM:
             ss = self.spec_stats
             logger.info(
                 f"DSV4.1 spec stats over {st['n']} rounds: round {1e3 * st['t'] / st['n']:.1f} ms, between rounds {1e3 * st['g'] / st['n']:.1f} ms, "
-                f"{ss['accepted'] / max(ss['rows'], 1):.2f} accepted drafts per row-round (k={K}; cumulative since start)"
+                f"{ss['accepted'] / max(ss['rows'], 1):.2f} accepted drafts per row-round (k={K}; cumulative since start; rounds per bucket {dict(self.spec_bucket_calls)})"
             )
             st.update(n=0, t=0.0, g=0.0)
-        out = VS.scatter_rows(a.to(torch.int32), [(i, p, pos) for i, p, pos in rows], W)
+        out = VS.scatter_rows(a.to(torch.int32), [(i, r, pos) for i, p, pos, r in rows], W)
+        self.spec_bucket_calls[Ub] = self.spec_bucket_calls.get(Ub, 0) + 1
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=out.reshape(W, n))
 
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
