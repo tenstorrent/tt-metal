@@ -23,8 +23,8 @@ Blackhole only: the Wormhole copy of this header is not changed by the fix.
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import DataFormat
+from conftest import blackhole_only
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
@@ -32,7 +32,8 @@ from helpers.llk_params import (
     VectorMode,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import build_param_id
+from helpers.sfpu_domains import negative_zero_delivered
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -42,10 +43,8 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 
-pytestmark = pytest.mark.skipif(
-    get_chip_architecture() != ChipArchitecture.BLACKHOLE,
-    reason="tt-llk#1701 item 4: only the Blackhole _calculate_zero_comp_ handles -0.0 so far",
-)
+# https://github.com/tenstorrent/tt-llk/issues/1701 item 4: only the Blackhole _calculate_zero_comp_ is fixed.
+pytestmark = blackhole_only
 
 ELEMENTS_PER_TILE = 1024
 
@@ -58,7 +57,7 @@ INPUTS = (
     -1.0e-45,  # smallest -denormal
     1.1754944e-38,  # smallest +normal
     -1.1754944e-38,
-    3.0e38,
+    3.0e38,  # large finite, just below FLT_MAX
     -3.0e38,
     float("inf"),
     float("-inf"),
@@ -78,11 +77,18 @@ def _fmt(value: float) -> str:
     return f"{value:g}"
 
 
-@parametrize(
-    formats=input_output_formats([DataFormat.Float32], same=True),
-    mathop=list(_TORCH_COMPARE),
+# A one-axis @parametrize hands the test 1-tuples, so parametrize mathop with pytest directly.
+@pytest.mark.parametrize(
+    "mathop",
+    list(_TORCH_COMPARE),
+    ids=[build_param_id(["mathop"], (op,)) for op in _TORCH_COMPARE],
 )
-def test_sfpu_zero_comp_signed_zero(formats, mathop):
+def test_sfpu_zero_comp_signed_zero(mathop):
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    # Without a real -0.0 in Dest the -0.0 lanes would pass on the unfixed kernel too.
+    assert negative_zero_delivered(formats.input_format, dest_acc)
+
     reps = ELEMENTS_PER_TILE // len(INPUTS) + 1
     src_A = torch.tensor((list(INPUTS) * reps)[:ELEMENTS_PER_TILE], dtype=torch.float32)
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.float32)
@@ -107,7 +113,7 @@ def test_sfpu_zero_comp_signed_zero(formats, mathop):
             tile_count_B=1,
             tile_count_res=1,
         ),
-        dest_acc=DestAccumulation.Yes,
+        dest_acc=dest_acc,
         unpack_to_dest=True,
         compile_time_formats=True,
     )
