@@ -190,7 +190,7 @@ within 60 min of the push, and treat that set as "the auto reviewers" for the ru
 **Bots quiet for a SHA** = (a) every review run you dispatched for that SHA has completed (or
 infra-failed and been re-dispatched once), **and** (b) 45 min have passed since the push with no new
 bot comment, **and** (c) `bot_threads.sh <PR>` is empty. Pure rebases (no code change) don't need a
-fresh LLK PR Review dispatch — but watch for auto reviewers anyway.
+fresh LLK PR Review dispatch — but the 45-min quiet window still applies before any CI is spent on it.
 
 **Every bot comment gets handled, on every push, for the life of the PR.** A CI fix, a review fix, or a
 rebase is a new head SHA, bots review it again, and those comments are in scope too.
@@ -235,6 +235,13 @@ run is in flight unless you will re-dispatch — batch the fixes instead. These 
 
 ## 6. CI
 
+**CI is spent only on a SHA the bots are already quiet on (§5) — never on a push you expect bots
+to comment on.** The review loop converges first; CI comes after. The target is **one full CI run
+per PR**; every additional run must be justified in the ledger by exactly one of: a code change made
+*after* bots were quiet (review had nothing left, CI exposed a real defect), or a rebase past main
+breakage. A bot finding that arrives while CI is already running is handled, but the fix is held
+(batched) until that CI run reports, so one re-run covers both.
+
 Once bots are quiet on the current head SHA, dispatch on the branch and record run ids:
 ```bash
 $SKILL/scripts/dispatch.sh "Sanity tests"               <branch>
@@ -249,7 +256,7 @@ the only silicon run for LLK changes.) Nightly takes hours — arm the watchers 
 | verdict | evidence needed | action |
 |---|---|---|
 | **caused by PR** | failure touches changed code/test, or reproduces locally with the PR and not without | fix (with a test if the failure exposed a gap), push → §5 for the new SHA, then full re-dispatch |
-| **unrelated, main also broken** | same job fails on `main` in the same window (`main_job_status.sh "<workflow>" "<job substring>"`; "no matching job" is *not* evidence) | arm a watcher on main's runs of that workflow; when main's job goes green (cap 4 h), `git rebase origin/main`, `push --force-with-lease`, full re-dispatch, handle any bot comments the new SHA draws |
+| **unrelated, main also broken** | same job fails on `main` in the same window (`main_job_status.sh "<workflow>" "<job substring>"`; "no matching job" is *not* evidence) | arm a watcher on main's runs of that workflow; when main's job goes green (cap 4 h), `git rebase origin/main`, `push --force-with-lease`, wait for bots quiet on the new SHA (§5), *then* full re-dispatch |
 | **flaky / infra** | runner setup, rate limit, `infra:timeout`, card off bus, perf a hair past band; main passes | `gh api --method POST repos/<o>/<r>/actions/runs/<id>/rerun-failed-jobs` (max 2) |
 | **can't tell** | | rerun once; if still ambiguous, run the failing test locally with/without the PR if the box can |
 
@@ -266,8 +273,8 @@ on the new head. Only PR-body edits and replies (no new commit) need none.
 **Convergence loop, per PR:**
 ```
 push → bots review new SHA → address all (§5) ─┬─ code changed? → push → (back to top)
-                                               └─ no change    → dispatch full CI on this SHA
-CI done → triage ─┬─ PR-caused failure → fix → push → (back to top)
+                                               └─ bots quiet   → NOW dispatch full CI on this SHA
+CI done → triage ─┬─ PR-caused failure → fix → push → (back to top: bots first, CI after)
                   ├─ unrelated, main broken → wait main green (≤4 h) → rebase → push → (back to top)
                   └─ green / proven unrelated → DONE
 ```
