@@ -57,21 +57,24 @@ class TTModulatedDeformConv2dPack:
             weights_dtype=weights_dtype,
             fp32_dest_acc_en=True,
             input_dtype=input_dtype,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
             output_dtype=ttnn.bfloat16,
         )
 
     def __call__(self, x):
         """``x`` is a (1, 1, B*H*W, C_in) tensor in conv2d's layout. Returns the
         (1, 1, B*H_out*W_out, C_out) output, also in conv2d's layout, and its height and width."""
+        # One ROW_MAJOR copy feeds both conv_offset and the DCN: conv2d reshapes its input
+        # between flat and NHWC, which in TILE copies whenever the width is not a tile multiple.
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         out, out_h, out_w = self.conv_offset(x)
         out = ttnn.reshape(out, (self.batch_size, out_h, out_w, out.shape[-1]))
         offset = out[:, :, :, : self.num_offset_channels]
         mask = ttnn.sigmoid(out[:, :, :, self.num_offset_channels :])
         ttnn.deallocate(out)
 
-        # At stride 1 the input has the output's height and width. To ROW_MAJOR first, the layout
-        # the DCN reads, where the reshape to NHWC moves no data.
-        x_nhwc = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (self.batch_size, out_h, out_w, x.shape[-1]))
+        # At stride 1 the input has the output's height and width.
+        x_nhwc = ttnn.reshape(x, (self.batch_size, out_h, out_w, x.shape[-1]))
         out = self.device_dcn(x_nhwc, offset, mask)
         ttnn.deallocate(offset)
         ttnn.deallocate(mask)
