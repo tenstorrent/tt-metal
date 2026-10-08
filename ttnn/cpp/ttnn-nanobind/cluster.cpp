@@ -192,9 +192,19 @@ void bind_ttnn_cluster(nb::module_& mod) {
         nb::arg("device_id"),
         nb::arg("eth_channel"),
         R"doc(
-            Trained link speed of ``eth_channel`` on ``device_id``, in Gbps.
-            None if the link is not up, or not supported
-            (Wormhole, simulation). Raises on an invalid channel.
+            Trained link speed of an ethernet channel.
+
+            Args:
+                device_id (int): Logical chip id.
+                eth_channel (int): Logical ethernet channel, after harvesting.
+                    Channels are dense: 0 to N-1 for N unharvested channels.
+
+            Returns:
+                int or None: Speed in Gbps. None if the link is not up, or not
+                supported (Wormhole, simulation, mock).
+
+            Raises:
+                RuntimeError: On an invalid ``device_id`` or ``eth_channel``.
         )doc");
 
     mod.def(
@@ -203,9 +213,20 @@ void bind_ttnn_cluster(nb::module_& mod) {
         nb::arg("device_id"),
         nb::arg("eth_channel"),
         R"doc(
-            Target link speed of ``eth_channel`` on ``device_id``, from the
-            ethernet boot params, in Gbps. None if not
-            supported (Wormhole, simulation). Raises on an invalid channel.
+            Target link speed of an ethernet channel. This is the requested
+            speed from the ethernet boot params. Present in any port state.
+
+            Args:
+                device_id (int): Logical chip id.
+                eth_channel (int): Logical ethernet channel, after harvesting.
+                    Channels are dense: 0 to N-1 for N unharvested channels.
+
+            Returns:
+                int or None: Speed in Gbps. None if not supported
+                (Wormhole, simulation, mock).
+
+            Raises:
+                RuntimeError: On an invalid ``device_id`` or ``eth_channel``.
         )doc");
 
     // Per-bank DRAM NOC routing table, mirroring what

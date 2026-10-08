@@ -77,23 +77,6 @@ void noc_write_immediate(
 std::uint32_t noc_read_reg_u32(std::uint32_t device_id, std::uint32_t x, std::uint32_t y, std::uint64_t addr);
 
 /**
- * @brief Trained link speed in Gbps of an ethernet channel,
- *        via @c Cluster::get_ethernet_train_speed.
- *
- * @return nullopt if the link is not up, or not supported (Wormhole, simulation, mock).
- *         Throws on an invalid channel.
- */
-std::optional<std::uint32_t> get_ethernet_train_speed(std::uint32_t device_id, std::uint32_t eth_channel);
-
-/**
- * @brief Target link speed in Gbps from the boot params of an
- *        ethernet channel, via @c Cluster::get_ethernet_target_speed.
- *
- * @return nullopt if not supported (Wormhole, simulation, mock). Throws on an invalid channel.
- */
-std::optional<std::uint32_t> get_ethernet_target_speed(std::uint32_t device_id, std::uint32_t eth_channel);
-
-/**
  * @brief One entry of the per-bank DRAM NOC routing table.
  *
  * Maps a logical @c bank_id to the NOC coordinate of the DRAM controller backing it
@@ -119,5 +102,30 @@ struct DramBankInfo {
  * @return One entry per DRAM bank, indexed by @c bank_id.
  */
 std::vector<DramBankInfo> get_dram_bank_table(std::uint32_t device_id);
+
+/**
+ * @brief Trained link speed of an ethernet channel, via
+ *        @c Cluster::get_ethernet_train_speed.
+ *
+ * @param device_id Logical chip id (matches @c IDevice::id()).
+ * @param eth_channel Logical ethernet channel, after harvesting. Channels are
+ *                    dense: 0 to N-1 for N unharvested channels.
+ * @return Speed in Gbps. nullopt if the link is not up, or not supported
+ *         (Wormhole, simulation, mock). Throws on an invalid device_id or channel.
+ */
+std::optional<std::uint32_t> get_ethernet_train_speed(std::uint32_t device_id, std::uint32_t eth_channel);
+
+/**
+ * @brief Target link speed of an ethernet channel, via
+ *        @c Cluster::get_ethernet_target_speed. This is the requested speed from
+ *        the ethernet boot params. Present in any port state, link up or not.
+ *
+ * @param device_id Logical chip id (matches @c IDevice::id()).
+ * @param eth_channel Logical ethernet channel, after harvesting. Channels are
+ *                    dense: 0 to N-1 for N unharvested channels.
+ * @return Speed in Gbps. nullopt if not supported (Wormhole, simulation, mock).
+ *         Throws on an invalid device_id or channel.
+ */
+std::optional<std::uint32_t> get_ethernet_target_speed(std::uint32_t device_id, std::uint32_t eth_channel);
 
 }  // namespace tt::tt_metal::internal
