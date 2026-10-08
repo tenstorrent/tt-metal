@@ -109,7 +109,8 @@ def rank_positions(cached_len, sp):
     [0, 32, 128, 640, 736],
     ids=["slab_aligned", "mid_block_straddle", "block_aligned_straddle", "rotated", "rotated_straddle"],
 )
-def test_msa_sp_cache_read_mid_slab(mesh_device, device_params, start_offset, reset_seeds):
+@pytest.mark.parametrize("index_k_tp_shard", [False, True], ids=["ik_tp_replicated", "ik_tp_dedup"])
+def test_msa_sp_cache_read_mid_slab(mesh_device, device_params, start_offset, index_k_tp_shard, reset_seeds):
     from models.demos.minimax_m3.tt.attention.kv_cache import allocate_kv_caches, write_index_k_chunk, write_kv_chunk
     from models.demos.minimax_m3.tt.attention.msa import msa_cache_read_extent, msa_sp_attention_cache_read
 
@@ -141,7 +142,13 @@ def test_msa_sp_cache_read_mid_slab(mesh_device, device_params, start_offset, re
         )
 
     kv = allocate_kv_caches(
-        mesh_device, num_layers=1, max_seq_len=capacity, sp_axis=sp_axis, head_dim=HEAD_DIM, cache_dtype=ttnn.bfloat16
+        mesh_device,
+        num_layers=1,
+        max_seq_len=capacity,
+        sp_axis=sp_axis,
+        head_dim=HEAD_DIM,
+        cache_dtype=ttnn.bfloat16,
+        index_k_tp_shard=index_k_tp_shard,
     )
 
     def write(kv_actual, idx):

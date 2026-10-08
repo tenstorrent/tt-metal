@@ -139,10 +139,11 @@ _FLUSHES_SUBNORMALS: Dict[torch.dtype, bool] = {
 #: 140 steps from a correct kernel, and an exact unary op read 512 steps on
 #: Float16_b->Float16 from that band alone. One policy, named once: every step-budget gate
 #: hands it to ``passed_test_kwargs`` -- the binary and ternary gate
-#: (:func:`helpers.sfpu_accuracy_budget.assert_against_contract`), the unary step-budget drivers, and the exhaustive
-#: unary sweep's emit and gate -- and their rows were measured that way. Also the
-#: ``--ulp-report``/``--ulp-measure`` reading of a tolerance cell in ``passed_test``,
-#: so that figure is the one its gate would see if enrolled.
+#: (:func:`helpers.sfpu_accuracy_budget.assert_against_contract`), the scalar binop
+#: driver, the unary step-budget drivers, and the exhaustive unary sweep's emit and gate
+#: -- and their rows were measured that way. Also the ``--ulp-report``/``--ulp-measure``
+#: reading of a tolerance cell in ``passed_test``, so that figure is the one its gate
+#: would see if enrolled.
 FLUSH_SUBNORMAL_OUTPUTS = True
 
 # ttnn's sanity ceiling: 2**mantissa_bits is exactly one binade, so a budget past it says
