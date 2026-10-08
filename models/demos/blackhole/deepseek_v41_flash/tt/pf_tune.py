@@ -19,6 +19,7 @@ matmul program: DSV41_PFA_MM=minimal uses ttnn.experimental.minimal_matmul (as t
 sparse kv table: DSV41_PFA_SP_FP8=1 stores the sparse_sdpa kv table (latents + window rows) as fp8_e4m3 (the kernel gathers 640 rows of 1 KB per query: DRAM-bound)
 indexer fp4 simulation: DSV41_PFA_FP4=fast runs the 32-wide block chain in bf16 (every step is an exact power-of-two scaling or a small-integer grid value, floor(t + 0.5) stays fp32)
   on the four 32-column slices of q / k instead of a fp32 [N, 32] relayout: the same values as the fp32 chain, about half the DRAM traffic and no [..,128] <-> [N,32] reshapes.
+  DSV41_PFA_FP4=fused: ONE fused generic_op kernel (tt/pf_fp4.py, tt/pf_kernels/fp4_*), bit-identical to fast (tests/test_pf_fp4_fused.py).
 RoPE: DSV41_PFA_ROPE_PE=1 rotates only the last 64 (rotary) dims of the 512-wide q / kv / latent / output rows (a 64x64 pair-swap matmul on the slice, the 448 other dims pass
   through unchanged; bit-identical to the full-width 512x512 matmul formulation, whose cos = 1 / sin = 0 columns are an identity).
 indexer linears of the prefill (wproj, wq_b, wk): DSV41_PFA_IDX_FID, DSV41_PFA_IDX_FP32 (default 1)
@@ -38,9 +39,10 @@ _OPT = {
     "DSV41_PFA_LIN_FID": "HiFi2",
     "DSV41_PFA_SH_FID": "HiFi2",
     "DSV41_PFA_MM": "minimal",
-    "DSV41_PFA_FP4": "fast",
+    "DSV41_PFA_FP4": "fused",
     "DSV41_PFA_ENGRAM_BATCH": "1",  # one T=256 Engram forward per 8-chunk group (bit-identical)
     "DSV41_PF_MHC": "packed",  # packed mHC carrier + own-chunk routing (tt/mhc_packed.py; DSV41_PF_ROUTE_OWN defaults to 1 with it)
+    "DSV41_PF_MHC_UMOE": "1",  # packed mHC carrier also with the unified MoE (moe_cols on the packed hh); =0 restores the 32-token chunk-loop mHC
 }
 
 
