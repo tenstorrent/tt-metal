@@ -15,6 +15,7 @@
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <umd/device/types/arch.hpp>
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
@@ -93,8 +94,8 @@ struct SiblingRouterRef {
     eth_chan_directions direction = eth_chan_directions::EAST;
 };
 
-// A router on another chip, named by its chip and its key there.
-struct PeerRouterRef {
+// A router on any chip, named by its chip and its key there.
+struct RouterRef {
     FabricNodeId node{MeshId{0}, 0};
     eth_chan_directions direction = eth_chan_directions::EAST;
     routing_plane_id_t routing_plane = 0;
@@ -156,7 +157,7 @@ struct EthLink {
     EdgeCapability edge_capability = EdgeCapability::INTRAMESH_CARDINAL;
     bool is_dispatch_link = false;
     // Null when ControlPlane connects the channel to nothing, or to a channel with no active router.
-    std::optional<PeerRouterRef> peer;
+    std::optional<RouterRef> peer;
     bool cross_host = false;
     bool wrap = false;
 };
@@ -278,6 +279,8 @@ struct Router {
 // (KernelCreationContext).
 struct LocalSync {
     uint32_t master_eth_chan = 0;
+    // The router on master_eth_chan.
+    std::optional<RouterRef> master;
     uint32_t num_routers = 0;
     // Bit N is set for the router on Ethernet channel N.
     uint32_t router_channels_mask = 0;
@@ -289,6 +292,33 @@ struct Chip {
     // Null when the chip has no routers.
     std::optional<LocalSync> local_sync;
     std::vector<Router> routers;
+};
+
+// The word the router kernel writes every period_iters main-loop iterations: magic | its 16-bit iteration count.
+struct Heartbeat {
+    content::L1 word;
+    uint32_t magic = 0;
+    uint32_t magic_mask = 0;
+    uint32_t period_iters = 0;
+};
+
+// The L1 areas on every router core that the architecture fixes, rather than the builder allocates.
+struct ArchAreas {
+    Heartbeat heartbeat;
+    content::L1 fabric_telemetry;
+    content::L1 routing_table;
+    content::L1 go_msg;
+    // The ring of launch messages, indexed by launch_msg_rd_ptr.
+    content::L1 launch;
+    content::L1 launch_msg_rd_ptr;
+    // Null when the architecture has no Ethernet firmware mailbox.
+    std::optional<content::L1> eth_fw_mailbox;
+};
+
+// What the manifest describes of the architecture the routers run on.
+struct Arch {
+    tt::ARCH arch = tt::ARCH::Invalid;
+    ArchAreas areas;
 };
 
 }  // namespace tt::tt_fabric::manifest

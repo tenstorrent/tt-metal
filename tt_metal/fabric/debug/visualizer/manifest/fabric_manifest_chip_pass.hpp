@@ -12,6 +12,10 @@ namespace tt {
 class Cluster;
 }
 
+namespace tt::tt_metal {
+class Hal;
+}
+
 namespace tt::tt_fabric {
 
 class ControlPlane;
@@ -24,5 +28,8 @@ manifest::Chip join_chip(
     FabricType fabric_type,
     FabricNodeId node,
     ChipId physical_chip_id);
+
+// The L1 areas the HAL fixes on every router core.
+manifest::Arch describe_arch(const tt::tt_metal::Hal& hal);
 
 }  // namespace tt::tt_fabric
