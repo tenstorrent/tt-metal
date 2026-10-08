@@ -20,18 +20,20 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def make_plan(replicas=1, *, batches=CONCURRENCIES, input_lengths=INPUT_LENGTHS):
+def make_plan(replicas=1, *, batches=CONCURRENCIES, input_lengths=INPUT_LENGTHS, max_pool_tokens=MAX_POOL_TOKENS):
     if replicas not in (1, 8):
         raise ValueError("Sweep supports one TP4 replica or eight independent replicas")
     if not batches or not input_lengths or any(type(n) is not int or n <= 0 for n in (*batches, *input_lengths)):
         raise ValueError("Batch sizes and input lengths must be positive integers")
     if len(set(batches)) != len(batches) or len(set(input_lengths)) != len(input_lengths):
         raise ValueError("Sweep axes must not repeat configurations")
+    if type(max_pool_tokens) is not int or not 32 <= max_pool_tokens <= 32 * MAX_CONTEXT or max_pool_tokens % 32:
+        raise ValueError("Pool budget must be a multiple of 32 within 32..32*MAX_CONTEXT tokens")
     cells = []
     for length in input_lengths:
         for batch in batches:
             pool_tokens = batch * ((length + 127 + 31) // 32 * 32)
-            allowed = length + 127 <= MAX_CONTEXT and pool_tokens <= MAX_POOL_TOKENS
+            allowed = length + 127 <= MAX_CONTEXT and pool_tokens <= max_pool_tokens
             status = "implementation_guard" if batch > 32 else "queued" if allowed else "capacity_guard"
             reason = (
                 "Batches above 32 require wider token buffers and a projection supporting multiple tile rows"
@@ -60,6 +62,7 @@ def make_plan(replicas=1, *, batches=CONCURRENCIES, input_lengths=INPUT_LENGTHS)
         output_tokens=128,
         warmup_runs=1,
         measured_runs=3,
+        max_pool_tokens_per_replica=max_pool_tokens,
         methodology=(
             "Full 64-layer native generator; fresh full prefills, no prefix reuse; fixed 128-token output "
             "including tokens beyond EOS. Warm measurements exclude weight loading and first-use compilation. "

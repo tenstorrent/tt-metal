@@ -64,6 +64,34 @@ class BatchedPrefillDispatchTests(unittest.TestCase):
         self.assertEqual([c[2].get("return_logits", True) for c in self.calls], [False, True])
         self.assertEqual([c[2]["start_pos"] for c in self.calls], [32, 4128])
 
+    def test_budget_preserves_every_token_slot_and_nonzero_prefix(self):
+        self.gen.prefill_max_batch_tokens = 32768
+        self.gen.skip_intermediate_prefill_head = True
+        self.cache.batch_size = 32
+        slots = list(range(32))
+        expected = torch.arange(32 * 4129).reshape(32, 4129) % 997
+        self.forward(
+            expected,
+            page_table=self.table,
+            kv_cache=self.cache,
+            prompt_lens=[4129] * 32,
+            slots=slots,
+            start_pos=[32] * 32,
+        )
+        self.assertEqual([c[2]["length"] for c in self.calls], [1024, 1024, 1024, 1024, 33])
+        self.assertEqual([c[2]["start_pos"] for c in self.calls], [32, 1056, 2080, 3104, 4128])
+        self.assertEqual([c[2].get("return_logits", True) for c in self.calls], [False] * 4 + [True])
+        for _, tokens, kwargs in self.calls:
+            self.assertLessEqual(tokens.numel(), 32768)
+            self.assertEqual(kwargs["slots"], slots)
+        combined = torch.cat([c[1] for c in self.calls], dim=1)
+        self.assertTrue(torch.equal(combined, expected))
+
+    def test_budget_keeps_single_user_trace_chunk_geometry(self):
+        self.gen.prefill_max_batch_tokens = 4096
+        self.run_prefill([4128], [0])
+        self.assertEqual([c[2]["length"] for c in self.calls], [4096, 32])
+
     def test_ragged_reordered_unaligned_and_single_fall_back(self):
         for lengths, slots, starts in [
             ([64, 128], [0, 1], [0, 0]),

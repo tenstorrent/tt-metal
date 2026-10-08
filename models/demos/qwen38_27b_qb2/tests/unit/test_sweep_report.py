@@ -68,3 +68,21 @@ def test_wider_batch_plan_marks_implementation_limit_separately_from_memory():
     assert status[(8192, 64)] == "implementation_guard"
     assert status[(131072, 16)] == "capacity_guard"
     assert status[(131072, 64)] == "implementation_guard"
+
+
+def test_explicit_capacity_experiment_retains_context_and_implementation_guards():
+    plan = make_plan(batches=(8, 16, 32, 64), input_lengths=(131072, 262016, 262144), max_pool_tokens=2359296)
+    cells = {(c["input_tokens"], c["batch_per_replica"]): c for c in plan["cells"]}
+    assert plan["max_pool_tokens_per_replica"] == 2359296
+    assert cells[(131072, 16)]["status"] == "queued"
+    assert cells[(262016, 8)]["status"] == "queued"
+    assert cells[(131072, 32)]["status"] == "capacity_guard"
+    assert cells[(262144, 8)]["status"] == "capacity_guard"
+    assert cells[(131072, 64)]["status"] == "implementation_guard"
+    assert all("summary" not in c for c in plan["cells"])
+
+
+def test_invalid_capacity_budget_cannot_disable_guards(expect_error):
+    for budget in (0, -32, 33, 32.0, True, 32 * MAX_CONTEXT + 32):
+        with expect_error(ValueError, "Pool budget must"):
+            make_plan(max_pool_tokens=budget)

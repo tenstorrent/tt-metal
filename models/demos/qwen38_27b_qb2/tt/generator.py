@@ -14,6 +14,7 @@ from transformers import AutoTokenizer
 import ttnn
 from models.common.sampling.tt_sampling import TTSampling
 from models.demos.qwen38_27b_qb2.tt.model import Qwen38Model
+from models.demos.qwen38_27b_qb2.tt.prefill_schedule import DEFAULT_MAX_BATCH_TOKENS, prefill_chunk_size
 from models.demos.qwen38_27b_qb2.tt.topology import resolve_tp4_topology
 
 
@@ -32,6 +33,8 @@ class Qwen38Generator:
         self.tokenizer = AutoTokenizer.from_pretrained(model.snapshot, local_files_only=True)
         self.host_sampling = host_sampling
         self.batched_prefill = os.getenv("QWEN_BATCHED_PREFILL", "0") == "1"
+        self.prefill_max_batch_tokens = int(os.getenv("QWEN_PREFILL_MAX_BATCH_TOKENS", str(DEFAULT_MAX_BATCH_TOKENS)))
+        prefill_chunk_size(32, self.prefill_max_batch_tokens)
         self.skip_intermediate_prefill_head = os.getenv("QWEN_PREFILL_SKIP_INTERMEDIATE_HEAD", "0") == "1"
         self.seed = 0
         args = SimpleNamespace(
@@ -414,8 +417,11 @@ class Qwen38Generator:
             length, start = prompt_lens[0], starts[0]
             if not 1 <= length <= tokens.shape[-1] or start < 0 or start + length > kv_cache.capacity:
                 raise ValueError("Invalid batched prompt length or prefix")
-            for offset in range(0, length, 4096):
-                count = min(4096, length - offset)
+            chunk_size = prefill_chunk_size(
+                len(slots), getattr(self, "prefill_max_batch_tokens", DEFAULT_MAX_BATCH_TOKENS)
+            )
+            for offset in range(0, length, chunk_size):
+                count = min(chunk_size, length - offset)
                 ids = self.model.upload(
                     tokens[:, offset : offset + count].int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
                 )

@@ -170,3 +170,95 @@ failed process cleanly and finished the other cells in a second process.
 The complete baseline graphs and raw attempts are in
 [`../gdn-native-sweep-v4/`](../gdn-native-sweep-v4/README.md). The candidate
 sweep has started at 128K / B8; full-Galaxy scaling remains pending.
+
+## Fixed-precision long-context bandwidth work
+
+The user prioritizes output throughput at total contexts 32K, 128K and 256K,
+targeting 2,680 output tokens/s per Galaxy. Lower precision is explicitly
+deferred. Preserve BFP4 projection weights, BFP8 KV, BF16 activations and FP32
+recurrent state, plus the existing numerical tolerances. The measured TP4
+rates at B16/32K, B8/128K and B4/near256K are 209.28, 123.58 and 65.68 output
+tokens/s. Eight-replica projections are not measured Galaxy throughput.
+
+The running matched sweep varies workload geometry and recurrence variant;
+it does not vary DRAM reader placement. Prior accurate-attention sweeps tried
+KV chunks 128/256/512 and core caps 16/32. With 110 available cores and one
+local KV head, B8 gets 13 cores/user under either cap; that comparison did
+not change its allocation. At B4, the caps select different allocations.
+Chunk/core-count tests therefore do not establish that bank-to-core mapping,
+NoC routes or read pipelining have been optimized.
+
+Relevant references, present unchanged in the pinned native runtime:
+
+- `models/demos/deepseek_v3_b1/micro_ops/flash_mla/op.py`: explicit NOC0
+  core groups near their assigned DRAM banks, matching bank ordering and tree
+  reductions. MLA's shared K/V representation is not Qwen's attention
+  contract; use the placement/dataflow ideas, not a model-architecture change.
+- `models/demos/deepseek_v3_b1/micro_ops/dram_streaming_matmul/op.py` and
+  `unified_kernels/dram_streaming_matmul.hpp`: bank-local worker assignment,
+  contiguous K sticks, tensor-backed circular buffers, triple-buffered reads
+  and transaction-specific barriers to keep another block in flight.
+- `tech_reports/Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md`:
+  bank-local readers, route/virtual-channel balance and pipelining. Its
+  Wormhole/Grayskull utilization results are reference evidence, not measured
+  Blackhole or Qwen model throughput.
+
+Next comparisons should hold precision and mathematical work fixed, testing
+bank-aware reader placement, bank/NoC distribution, buffering depth and read
+granularity. Record useful bytes/time per operation, recurrence/projection/
+attention/collective latency and full-model decode throughput separately.
+Existing long-context standalone attention timings imply about 70--74% of
+the plan's 512 GB/s/device in useful KV bytes/time; the roughly 40% full-model
+roofline fraction is not a DRAM-counter measurement and cannot all be blamed
+on attention's reader. Projection, GDN and inter-operation time still need
+stage-level attribution.
+
+The separate prefill token-budget change reduces transient activation rows
+to test more resident decode users. `QWEN_PREFILL_MAX_BATCH_TOKENS=32768`
+uses 4,096/2,048/1,024-token chunks per user at B8/B16/B32 respectively. The
+default 131,072-row budget preserves all existing chunk sizes. Cache capacity,
+precision and decode batch remain unchanged. It is a capacity experiment,
+not proof of increased bandwidth, and has not yet been hardware-qualified.
+
+CPU validation passes 228 tests plus 40 subtests, including preservation of
+every prompt token/slot/nonzero prefix, aligned chunk budgets and persistent
+queue behavior. All pre-commit checks pass. The raw compressed JUnit receipt
+and exact launch command are in [`../long-context-capacity-v1/`](../long-context-capacity-v1/).
+
+`qwen38-long-context-capacity-v1-20261007.service` is running persistently on
+the allocated host, waiting for `qwen38-gdn-perf-sweeps-v4-20261007.service` to
+finish. Source is the isolated `long-context-source-v1` snapshot; existing
+runtime libraries, checkpoint and JIT cache are reused. No installed native
+library or precision file changes. The launcher has a 14-hour overall bound,
+six hours for its sweep and the shared safe runner's device lock. A live
+dependency PID always keeps it waiting, even if a report says completed.
+A terminal/missing dependency must also have both clean terminal receipts;
+failed service results stop the queue. Source hashes are checked again before
+execution. Each hardware allocation failure remains explicit and only restarts
+the remaining cells after confirmed device cleanup.
+
+The hardware plan is B16/32K as a control, B32/32K, B16/128K and B8/near256K.
+Its explicit 2,359,296-token pool budget overrides only this experiment's
+planning guard. Allocator snapshots are recorded after model load, before and
+after KV allocation, after warmup and after measurement; timing windows omit
+the snapshots. Numerical repeatability and fixed-precision configuration checks
+do not replace future reference-evaluation qualification.
+
+Reproduce with the pinned source on `PYTHONPATH` and the isolated runtime's
+Python environment:
+
+```sh
+python -m models.demos.qwen38_27b_qb2.demo.run_long_context_capacity \
+  --task /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006 \
+  --source /home/ttuser/qwen38-artifacts-20261007/long-context-source-v1 \
+  --weights /home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2 \
+  --results /home/ttuser/qwen38-artifacts-20261007/long-context-capacity-NEW \
+  --after-unit qwen38-gdn-perf-sweeps-v4-20261007.service \
+  --after-results /home/ttuser/qwen38-artifacts-20261007/gdn-perf-sweeps-v4
+```
+
+Use a new results directory and launch through systemd using the saved command
+for persistence. Inspect `queue.json` for waiting/running state and
+`capacity/attempt-*/sweep.json` for live per-cell progress. To cancel only this
+experiment, stop `qwen38-long-context-capacity-v1-20261007.service` with
+`systemctl --user stop`; this does not remove the runtime or weights.

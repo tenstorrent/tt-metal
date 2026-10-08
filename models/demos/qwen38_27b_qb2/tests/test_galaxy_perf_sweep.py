@@ -19,6 +19,26 @@ from models.demos.qwen38_27b_qb2.tests.sweep_report import render, save_report, 
 from models.demos.qwen38_27b_qb2.tt.generator import build_generator, configure_fabric
 
 
+def dram_allocation(generators):
+    """Host allocator snapshots outside timing windows; no allocator block-table dump."""
+    fields = (
+        "num_banks",
+        "total_bytes_per_bank",
+        "total_bytes_allocated_per_bank",
+        "total_bytes_free_per_bank",
+        "largest_contiguous_bytes_free_per_bank",
+    )
+    return [
+        {
+            "replica": replica,
+            "device_ids": list(gen.mesh.get_device_ids()),
+            **{key: int(getattr(view, key)) for key in fields},
+        }
+        for replica, gen in enumerate(generators)
+        for view in [ttnn.get_memory_view(gen.mesh, ttnn.BufferType.DRAM)]
+    ]
+
+
 def drop_request_buffers(gen):
     """Release previous geometry before allocating a larger KV pool."""
     ttnn.synchronize_device(gen.mesh)
@@ -132,6 +152,7 @@ def test_galaxy_perf_sweep():
             assert len(gen.model.layers) == 64
             report.setdefault("setup_s_per_replica", []).append(time.perf_counter() - tick)
         report["precision"] = generators[0].model.precision
+        report["dram_after_model_load"] = dram_allocation(generators)
         resume_measurements(report, json.loads(os.environ.get("QWEN_SWEEP_RESUME_FROM", "[]")))
         report["state"] = "running"
         passage = (
@@ -156,10 +177,15 @@ def test_galaxy_perf_sweep():
             print(f"SWEEP_CELL_BEGIN isl={length} batch={batch} replicas={len(generators)}", flush=True)
             for gen in generators:
                 drop_request_buffers(gen)
+            cell["dram_before_cache"] = dram_allocation(generators)
+            for gen in generators:
                 gen._ensure_cache(batch, length + report["output_tokens"] - 1)
                 gen._ensure_history(report["output_tokens"] - 1)
                 ttnn.synchronize_device(gen.mesh)
+            cell["dram_after_cache"] = dram_allocation(generators)
+            save_report(report, directory)
             cell["warmup"] = run_batch(generators, prompts, report["output_tokens"])
+            cell["dram_after_warmup"] = dram_allocation(generators)
             reference = cell["warmup"]["output_sha256_per_replica"]
             assert len(set(reference)) == 1, "Independent replicas produced different greedy outputs"
             cell["samples"] = []
@@ -177,6 +203,7 @@ def test_galaxy_perf_sweep():
                 input_tokens=length,
             )
             cell["status"] = "completed"
+            cell["dram_after_measurement"] = dram_allocation(generators)
             save_report(report, directory)
             render(report, directory)
             print(f"SWEEP_CELL_COMPLETE {json.dumps(cell['summary'])}", flush=True)
@@ -191,6 +218,8 @@ def test_galaxy_perf_sweep():
             active_cell["status"] = "oom" if allocation_failure else "failed"
             active_cell["error"] = report["error"]
             active_cell["reason"] = report["error"]["message"]
+            if allocation_failure:
+                active_cell["dram_after_allocation_failure"] = dram_allocation(generators)
         for cell in report["cells"]:
             if cell["status"] == "queued":
                 cell["status"] = "not_run"
