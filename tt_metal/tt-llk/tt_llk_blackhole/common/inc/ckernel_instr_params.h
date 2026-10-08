@@ -97,6 +97,11 @@ struct p_unpacr_nop
 
     constexpr static std::uint32_t SET_DVALID = 0x1;
 
+    // Stall_Clr_Cntrl: wait for the unpacker's own Src bank (as UNPACR does) instead of the
+    // Matrix Unit's bank. Only for single-bank clears: an own-bank wait must not be paired with
+    // Bank_Clr_Ctrl = 1, which also clears the bank the Matrix Unit may still own.
+    constexpr static std::uint32_t WAIT_LIKE_UNPACR = 0x1;
+
     constexpr static std::uint32_t UNP0 = 0x0;
     constexpr static std::uint32_t UNP1 = 0x1;
 

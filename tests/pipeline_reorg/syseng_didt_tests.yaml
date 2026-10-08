@@ -156,3 +156,32 @@
   owner_id: U019C3M7J57 # Reem Tawfik
   team: syseng
   budget_type: integration
+
+- name: didt_matmul_run_to_run_determinism_p150
+  cmd: pytest tests/didt/test_matmul_run_to_run_determinism.py::test_matmul_run_to_run_determinism -k "p150"
+  skus:
+    bh_p150b_civ2:
+      timeout: 5
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: syseng
+  budget_type: integration
+
+- name: didt_matmul_run_to_run_determinism_p300
+  cmd: pytest tests/didt/test_matmul_run_to_run_determinism.py::test_matmul_run_to_run_determinism -k "p300"
+  skus:
+    bh_p300:
+      timeout: 5
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: syseng
+  budget_type: integration
+
+- name: didt_mm_mcast_write_ack_failure
+  cmd: pytest tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_scan
+  skus:
+    bh_p150b_civ2:
+      timeout: 5
+    bh_p300:
+      timeout: 5
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: syseng
+  budget_type: integration
