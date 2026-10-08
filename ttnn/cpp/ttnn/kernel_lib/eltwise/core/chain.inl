@@ -2804,7 +2804,7 @@ ALWI void elem_apply_pack(
         elem.configure_relu();
     }
     if constexpr (!eltwise_chain_skip_compute_v) {
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) && !defined(CKL_ELTWISE_CHAIN_PACK_PER_TILE)
         if constexpr (
             BlockLaneWidth == 1 && ElemT::Addressing == TileAddressing::Direct && !ElemT::uses_l1_accumulation) {
             pack_block_mop(to_u32(ElemT::pack_dst_slot), ElemT::dfb, inner_count);

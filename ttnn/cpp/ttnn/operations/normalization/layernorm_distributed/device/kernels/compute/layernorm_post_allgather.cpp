@@ -12,6 +12,9 @@
 
 #include <cstdint>
 
+// The eltwise chain packs its blocks per tile here: its block pack measured slower in this kernel.
+#define CKL_ELTWISE_CHAIN_PACK_PER_TILE
+
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
