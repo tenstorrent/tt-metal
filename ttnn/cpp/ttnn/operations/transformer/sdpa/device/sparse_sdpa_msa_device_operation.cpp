@@ -130,13 +130,13 @@ void validate_non_hashed(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaIn
 void SparseSDPAMsaOperation::validate_on_program_cache_hit(
     const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
     validate_non_hashed(attrs, t);
-    validate_kv_cache_request(attrs, t);
+    validate_kv_cache_request(attrs);
 }
 
 // An explicit slot count that cannot be honoured at all is a caller error; auto (0) falls back to the streamed
 // kernels instead. Checked on hits too: an auto call that fell back and an explicit request with no room resolve
 // to the same (streamed) program, so the miss-only validator would not see the second.
-void SparseSDPAMsaOperation::validate_kv_cache_request(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
+void SparseSDPAMsaOperation::validate_kv_cache_request(const SparseSDPAMsaParams& attrs) {
     if (attrs.kv_cache_blocks.value_or(0) == 0) {  // off or auto
         return;
     }
@@ -179,7 +179,7 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
         "fp8 q requires fp32_dest_acc_en=true (32-bit DEST for the fp8 tilize)");
 
     validate_non_hashed(attrs, t);
-    validate_kv_cache_request(attrs, t);
+    validate_kv_cache_request(attrs);
 
     const auto qs = q.logical_shape();
     const auto is = idx.logical_shape();
