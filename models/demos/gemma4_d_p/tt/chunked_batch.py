@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fixed 8x1K batches in CP-major, request-major, local-row order.
+"""Fixed 4x1K batches in CP-major, request-major, local-row order.
 
 Unlike request-major ragged packing, every CP rank already owns its 128 rows
 from every request. Attention needs only local slices and concatenation.
-The durable cache geometry is 1K per request, never the combined 8K size.
+The durable cache geometry is 1K per request, never the combined 4K size.
 """
 
 from dataclasses import dataclass
@@ -25,14 +25,14 @@ class ChunkedRequest:
 
 @dataclass(frozen=True)
 class ChunkedBatchPlan:
-    batch_size: int = 8
+    batch_size: int = 4
     chunk_size: int = 1024
     cp: int = 8
     tp: int = 4
 
     def __post_init__(self):
-        if (self.batch_size, self.chunk_size, self.cp, self.tp) != (8, 1024, 8, 4):
-            raise ValueError("Fixed chunked batching currently supports only 8x1024 on CP8/TP4")
+        if (self.batch_size, self.chunk_size, self.cp, self.tp) != (4, 1024, 8, 4):
+            raise ValueError("Fixed chunked batching currently supports only 4x1024 on CP8/TP4")
 
     @property
     def local_rows(self):

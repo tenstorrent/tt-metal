@@ -305,7 +305,7 @@ class Gemma4Model:
         if chunked_batch is not None:
             plan = chunked_batch.plan
             if self.prefill_chunk_size != plan.chunk_size or seq_len != plan.packed_size // plan.cp:
-                raise ValueError("Fixed batching requires 1K cache geometry and 8K packed tokenwise inputs")
+                raise ValueError("Fixed batching requires 1K cache geometry and 4K packed tokenwise inputs")
             if self._rope_prefill_positions is None or not self._prefill_metadata_external:
                 raise ValueError("Fixed batching requires staged per-request positions and metadata")
             if d2h_service is not None or on_layer_complete is not None:

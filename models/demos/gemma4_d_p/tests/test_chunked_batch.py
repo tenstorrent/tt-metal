@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fixed 8x1K output/KV, isolation, migration and trace comparisons with independent 1K calls."""
+"""Fixed 4x1K output/KV, isolation, migration and trace comparisons with independent 1K calls."""
 
 import os
 
@@ -70,7 +70,7 @@ def assert_similar(actual, expected, name):
 @parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": 256_000_000})
 def test_chunked_batch_outputs_cache_and_replay(mesh_device, tmp_path):
     layers = int(os.environ.get("GEMMA4_BATCH_TEST_LAYERS", "6"))
-    model, caches = build_model(mesh_device, chunk_size=1024, num_slots=16, context_len=8192, num_layers=layers)
+    model, caches = build_model(mesh_device, chunk_size=1024, num_slots=8, context_len=8192, num_layers=layers)
     mesh = model.mesh_config
     model._prefill_metadata_external = True
 
@@ -85,7 +85,7 @@ def test_chunked_batch_outputs_cache_and_replay(mesh_device, tmp_path):
     inp = ttnn.to_device(host([0] * 1024), mesh_device)
     pos = ttnn.to_device(host(range(1024)), mesh_device)
     model.set_prefill_rope_positions(pos)
-    first = tuple(ChunkedRequest(i, i, 0, tokens(i + 1)) for i in range(8))
+    first = tuple(ChunkedRequest(i, i, 0, tokens(i + 1)) for i in range(4))
     mixed = tuple(
         reversed(
             tuple(
@@ -95,17 +95,17 @@ def test_chunked_batch_outputs_cache_and_replay(mesh_device, tmp_path):
                     1024 if i % 2 == 0 else 0,
                     tokens(20 + i, 1024 if i % 2 == 0 else (1, 31, 33, 1023)[i // 2]),
                 )
-                for i in range(8)
+                for i in range(4)
             )
         )
     )
-    isolation = (*first[:7], ChunkedRequest(7, 7, 0, tokens(99)))
+    isolation = (*first[:3], ChunkedRequest(3, 3, 0, tokens(99)))
     cases = (first, mixed, isolation)
     # All independent references complete before capturing the shared batch.
     for boundary, batch in enumerate(cases):
         outputs, kv = {}, {}
         for req in batch:
-            slot = req.slot_id + 8
+            slot = req.slot_id + 4
             ttnn.copy_host_to_device_tensor(host((*req.token_ids, *([0] * (1024 - len(req.token_ids))))), inp)
             ttnn.copy_host_to_device_tensor(host(range(req.actual_start, req.actual_start + 1024)), pos)
             model.prefill_metadata.update(slot_idx=slot, kv_actual_global=req.actual_start)
@@ -125,20 +125,20 @@ def test_chunked_batch_outputs_cache_and_replay(mesh_device, tmp_path):
 
     # Compile all cache readback geometries before trace capture, including slots.
     for tensor in (caches.layers[0].k, caches.layers[5].kv):
-        for slot in range(8):
+        for slot in range(4):
             for extent in (1024, 2048):
                 read_cache_tensor(tensor, slot, extent, chunk_size=1024)
     migration_caches = Gemma4KvCaches(
         layers=caches.layers[:6],
         layer_types=caches.layer_types[:6],
-        num_users=16,
+        num_users=8,
         max_seq_len=8192,
         cp=8,
         tp=4,
     )
     table = build_kv_chunk_address_table(mesh_device=mesh_device, kv_caches=migration_caches, chunk_size=1024)
     device_map = {(mesh_id, chip_id): uid for mesh_id, chip_id, uid in _build_device_map(mesh_device, (8, 4))}
-    runtime = ChunkedBatchRuntime(model, num_slots=16)
+    runtime = ChunkedBatchRuntime(model, num_slots=8)
     runtime.capture()
     first_outputs = None
     try:
@@ -185,7 +185,7 @@ def test_chunked_batch_outputs_cache_and_replay(mesh_device, tmp_path):
             if boundary == 0:
                 first_outputs = outputs
             if boundary == 2:
-                for req_id in range(7):
+                for req_id in range(3):
                     torch.testing.assert_close(outputs[req_id], first_outputs[req_id], rtol=0, atol=0)
             runtime.layer_completion_sink = None
             runtime.execute()

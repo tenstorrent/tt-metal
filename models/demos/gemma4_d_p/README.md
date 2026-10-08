@@ -64,25 +64,25 @@ Global layers use tied QK projection; sliding layers use QKV. Weight caches are 
 
 Each model call prefills one user's chunk and returns post-norm hidden states. `max_batch_size` controls the number of durable user cache slots; `user_id` selects a slot. The constructor returns the ring caches, also exposed through `model.tt_kv_cache`. Physical capacity is at least two chunks so single-chunk prompts use the same ring SDPA path. External allocations accept `prefill_chunk_size`; `Gemma4KvCaches.max_seq_len` reports physical capacity for migration offsets. Callers can supply external caches and receive per-layer migration acknowledgements through callbacks, segmented traces, or a D2H socket service. Traced callers stage ring metadata and absolute RoPE positions before replay. This prefill model does not expose a logits projection API.
 
-## Fixed 8×1K chunked batching
+## Fixed 4×1K chunked batching
 
-`tt/runners/chunked_batch_runtime.py::ChunkedBatchRuntime` runs exactly eight
+`tt/runners/chunked_batch_runtime.py::ChunkedBatchRuntime` runs exactly four
 requests per batch on CP8/TP4. Create its model with `prefill_chunk_size=1024`
-and at least eight KV slots. Each rank holds 128 consecutive token rows from
+and at least four KV slots. Each rank holds 128 consecutive token rows from
 each request, in lane order. Embedding, projections, norms, RoPE and MLP operate
-on the combined 8K rows. Attention locally slices each lane, writes its own
+on the combined 4K rows. Attention locally slices each lane, writes its own
 cache slot, executes the existing 1K ring-attention operation, and concatenates
 the local outputs. There are no additional CP all-gathers or per-request 8K
-padding. The eight attention calls execute sequentially within the trace.
+padding. The four attention calls execute sequentially within the trace.
 
 ```python
 from models.demos.gemma4_d_p.tt.chunked_batch import ChunkedRequest
 from models.demos.gemma4_d_p.tt.runners.chunked_batch_runtime import ChunkedBatchRuntime
 
-# model was created with 1K chunks and eight or more cache slots.
-runtime = ChunkedBatchRuntime(model, num_slots=8)
+# model was created with 1K chunks and four or more cache slots.
+runtime = ChunkedBatchRuntime(model, num_slots=4)
 runtime.capture()  # Warm up and capture before populating request histories.
-requests = tuple(ChunkedRequest(i, i, 0, tuple(prompts[i][:1024])) for i in range(8))
+requests = tuple(ChunkedRequest(i, i, 0, tuple(prompts[i][:1024])) for i in range(4))
 runtime.prefill_batch(requests)
 outputs = runtime.to_torch()  # Independent host copies, keyed by request_id.
 runtime.close()
@@ -90,7 +90,7 @@ runtime.close()
 
 Each lane supplies 1–1024 valid tokens. Short final chunks are zero-padded to
 1K; only valid output rows are returned. KV writes stop at the last 32-token
-page containing valid tokens, preserving subsequent cache pages. All eight
+page containing valid tokens, preserving subsequent cache pages. All four
 lanes are active: fewer requests must be queued until a full batch is available.
 Starting at zero replaces a slot's request; continuations require the same
 request identity and the preceding full chunk's end. Lane order and prefix
@@ -110,21 +110,22 @@ performance modes in separate processes:
 pytest models/demos/gemma4_d_p/tests/test_chunked_batch.py -sv --timeout=7200
 GEMMA4_BATCH_TEST_LAYERS=60 pytest models/demos/gemma4_d_p/tests/test_chunked_batch.py -sv --timeout=7200
 GEMMA4_BATCH_PERF_MODE=canonical pytest models/demos/gemma4_d_p/tests/test_chunked_batch_perf.py -sv --timeout=7200
-GEMMA4_BATCH_PERF_MODE=chunked8 pytest models/demos/gemma4_d_p/tests/test_chunked_batch_perf.py -sv --timeout=7200
+GEMMA4_BATCH_PERF_MODE=chunked4 pytest models/demos/gemma4_d_p/tests/test_chunked_batch_perf.py -sv --timeout=7200
 ```
 
-The perf test defaults to 60 layers and 192K context, populates histories using
+The perf test defaults to 60 layers and 256K context, populates histories using
 real model calls, and measures five warmed replays at selected prefix positions.
-Both full cases process 8,192 useful tokens: one canonical 8K request or eight
-1K requests. `GEMMA4_BATCH_PERF_CONTEXT` controls capacity and
+A canonical call processes 8,192 useful tokens; a fixed batch processes 4,096
+useful tokens across four requests. Compare useful tokens/s, or explicitly
+normalize the fixed batch to an 8K token budget. `GEMMA4_BATCH_PERF_CONTEXT`
+controls capacity and
 `GEMMA4_BATCH_PERF_OUTPUT` selects the JSON output. Host staging is reported
 separately from trace execution; compilation, output downloads and KV migration
-are excluded. Two final-batch samples retain the fixed 8K execution shape with
-fewer useful tokens. Cache capacity is per request, so eight long histories
+are excluded. Two final-batch samples retain the fixed 4K execution shape with
+fewer useful tokens. Cache capacity is per request, so four long histories
 require more memory than the single-request canonical comparison.
-Eight full 256K caches plus the model weights exceeded this Galaxy's DRAM
-capacity during allocation. The 192K default keeps the comparison on the
-existing full-history cache implementation.
+The earlier eight-request configuration exceeded DRAM capacity at 256K;
+four requests halve its KV-cache storage.
 
 ## Host verification
 
