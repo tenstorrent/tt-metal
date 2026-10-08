@@ -94,3 +94,14 @@ def test_packed_lane_norm_and_rope_match_the_per_head_form():
     tile_swap = torch.block_diag(*[pair_swap_matrix(TILE).double()] * (heads * head_dim // TILE))
     actual = packed * cos + (packed @ tile_swap) * sin
     assert torch.allclose(actual, expected, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("flag, enabled", [(None, True), ("1", True), ("0", False)])
+def test_packed_lanes_default_on(monkeypatch, flag, enabled):
+    from models.tt_dit.models.vae.diffvae_ltx_stage5 import packed_lanes_enabled
+
+    if flag is None:
+        monkeypatch.delenv("DIFFVAE_S5_PACKED_LANES", raising=False)
+    else:
+        monkeypatch.setenv("DIFFVAE_S5_PACKED_LANES", flag)
+    assert packed_lanes_enabled() is enabled

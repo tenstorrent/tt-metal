@@ -108,8 +108,9 @@ def s5_2d_enabled(gna_stride: tuple[int, int, int] = (1, 1, 1)) -> bool:
 def packed_lanes_enabled() -> bool:
     """Whether the keep-bricked W-sharded stage 5 norms and rotates Q and K in the packed
     ``(sites, heads * head_dim)`` qkv layout, which is already the op's site-major layout, instead
-    of retiling each lane to one row per head and back. Opt-in with ``DIFFVAE_S5_PACKED_LANES=1``."""
-    return os.environ.get("DIFFVAE_S5_PACKED_LANES") == "1"
+    of retiling each lane to one row per head and back. On by default, off with
+    ``DIFFVAE_S5_PACKED_LANES=0``."""
+    return os.environ.get("DIFFVAE_S5_PACKED_LANES") != "0"
 
 
 @dataclass(frozen=True)
