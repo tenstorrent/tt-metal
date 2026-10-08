@@ -50,10 +50,14 @@ constexpr uint32_t kRecipeMaskTileBytes = 576;
 constexpr uint32_t kRecipeMaskExponents = 0xE3E3E3E3;  // 127 + 100
 constexpr uint32_t kRecipeMaskedNibbles = 0xCCCCCCCC;
 
-// A core's Q chunks are a contiguous range of one head's zigzag order 0, J-1, 1, J-2, ...: under a causal mask
-// chunk j costs about j + 1 K chunks, so consecutive pairs cost the same (host: recipe_zigzag_split).
-FORCE_INLINE uint32_t recipe_zigzag_job(uint32_t z, uint32_t jobs_per_head) {
-    return z % 2 == 0 ? z / 2 : jobs_per_head - 1 - z / 2;
+// Q chunks are dealt to the cores in snake order over all heads' chunks sorted by cost: the latest chunks (the most
+// keys under a causal mask or chunked-prefill offset) first, heads interleaved; round r gives core c sorted entry
+// r * cores + c (r even) or r * cores + cores - 1 - c (r odd). The qi-th Q chunk of core `core` (host:
+// run_recipe_segments).
+FORCE_INLINE uint32_t
+recipe_snake_job(uint32_t core, uint32_t qi, uint32_t cores, uint32_t heads, uint32_t jobs_per_head) {
+    const uint32_t s = qi * cores + (qi % 2 == 0 ? core : cores - 1 - core);
+    return (s % heads) * jobs_per_head + jobs_per_head - 1 - s / heads;
 }
 
 #ifdef SDPA_RECIPE_Q_SLAB_JOBS
@@ -69,7 +73,22 @@ struct RecipeQSlabs {
 
 struct RecipeChunkRange {
     uint32_t first, end;            // K chunks to process
-    uint32_t full_begin, full_end;  // the ones every row sees whole (no mask)
+    uint32_t full_begin, full_end;  // the ones every row sees whole (no mask), within [first, end)
+
+    uint32_t count() const { return end - first; }
+    uint32_t edges() const { return count() - (full_end - full_begin); }
+    // The K chunk processed i-th: the edge chunks first (trailing, then leading), then the full ones. A Q chunk's
+    // first K chunk always runs the unfused path, so starting on an edge leaves every full chunk to the fused path
+    // (compute: recipe_k_chunk_at).
+    uint32_t at(uint32_t i) const {
+        const uint32_t trailing = end - full_end;
+        if (i < trailing) {
+            return full_end + i;
+        }
+        i -= trailing;
+        const uint32_t leading = full_begin - first;
+        return i < leading ? first + i : full_begin + (i - leading);
+    }
 };
 
 struct RecipeKeyRange {
@@ -140,6 +159,9 @@ struct RecipeKeyRange {
         if (r.full_end < r.full_begin || hi_first <= lo_last) {
             r.full_end = r.full_begin;
         }
+        // Within [first, end): leading edges [first, full_begin), full [full_begin, full_end), trailing edges.
+        r.full_begin = r.full_begin < r.first ? r.first : r.full_begin > r.end ? r.end : r.full_begin;
+        r.full_end = r.full_end < r.full_begin ? r.full_begin : r.full_end > r.end ? r.end : r.full_end;
         return r;
     }
 
