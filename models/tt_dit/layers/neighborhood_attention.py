@@ -945,7 +945,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
                 parts,
                 table=index,
             )
-        ttnn.deallocate(exchanged)
+        # ``exchanged`` is the manager's cached, zero-padded neighbor_pad buffer: never free it.
         return phased
 
     if key_phase:
