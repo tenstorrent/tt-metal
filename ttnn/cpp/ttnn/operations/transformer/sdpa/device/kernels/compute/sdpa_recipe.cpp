@@ -29,11 +29,17 @@ constexpr uint32_t scale = get_named_compile_time_arg_val("scale");
 constexpr uint32_t q_tiles = get_named_compile_time_arg_val("q_tiles");
 constexpr uint32_t k_tiles = get_named_compile_time_arg_val("k_tiles");
 constexpr uint32_t d_tiles = get_named_compile_time_arg_val("d_tiles");
-// QK and PV matmul subblock widths: the largest of 4, 2, 1 dividing the K chunk and head dim.
+// V and output head dim: narrower than Q/K's for MLA.
+#ifdef SDPA_RECIPE_V_DHT
+constexpr uint32_t vd_tiles = SDPA_RECIPE_V_DHT;
+#else
+constexpr uint32_t vd_tiles = d_tiles;
+#endif
+// QK and PV matmul subblock widths: the largest of 4, 2, 1 dividing the K chunk and V head dim.
 constexpr uint32_t qk_subblock_w = SDPA_RECIPE_QK_W;
 constexpr uint32_t pv_subblock_w = SDPA_RECIPE_PV_W;
-static_assert(q_tiles >= 1 && k_tiles >= 1 && d_tiles >= 1);
-static_assert(k_tiles % qk_subblock_w == 0 && d_tiles % pv_subblock_w == 0);
+static_assert(q_tiles >= 1 && k_tiles >= 1 && d_tiles >= 1 && vd_tiles >= 1 && vd_tiles <= d_tiles);
+static_assert(k_tiles % qk_subblock_w == 0 && vd_tiles % pv_subblock_w == 0);
 
 // Circular buffers (host: recipe_compute_program).
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_identity_scale = 3, cb_col_identity = 4, cb_recip_scratch = 5;
@@ -48,9 +54,23 @@ void recipe_run(uint32_t jobs) {
     constexpr uint32_t subblock_h = 2;
 #endif
     sdpa_standard_v2<
-        q_tiles, k_tiles, d_tiles, d_tiles, scale,
-        subblock_h, qk_subblock_w, subblock_h, pv_subblock_w,
-        cb_q, cb_k, cb_v, cb_qk, cb_identity_scale, cb_exp_max_diff, cb_col_identity, cb_recip_scratch,
+        q_tiles,
+        k_tiles,
+        d_tiles,
+        vd_tiles,
+        scale,
+        subblock_h,
+        qk_subblock_w,
+        subblock_h,
+        pv_subblock_w,
+        cb_q,
+        cb_k,
+        cb_v,
+        cb_qk,
+        cb_identity_scale,
+        cb_exp_max_diff,
+        cb_col_identity,
+        cb_recip_scratch,
         cb_out>(jobs, k_chunks, cb_out_a, cb_out_b, cb_max_a, cb_max_b, cb_sum_a, cb_sum_b);
 }
 }  // namespace

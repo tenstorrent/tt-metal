@@ -129,7 +129,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     constexpr uint32_t H = Sq_chunk_t <= kH1MaxQTiles ? 1 : 2;
     constexpr uint32_t sbw = qkt_subblock_w;
     constexpr uint32_t n_kb = Sk_chunk_t / sbw;
-    static_assert(Sk_chunk_t % sbw == 0 && vDHt % qktv_subblock_w == 0 && DHt == vDHt);
+    static_assert(Sk_chunk_t % sbw == 0 && vDHt % qktv_subblock_w == 0 && vDHt <= DHt);
     // PV of a pipelined group runs in n_pieces K pieces, each after QK subblocks of the next group.
     constexpr uint32_t n_pieces = n_kb % 2 == 0 ? 2 : 1;
     constexpr uint32_t kb_per_piece = n_kb / n_pieces;
@@ -460,8 +460,17 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         }
 #endif
         if (is_last_iter) {
-            normalize_row_streaming<false, vDHt, dst_size, cb_col_identity, cb_recip_scratch, cb_normalized_out>(
-                cur.sum, out_cb, h);
+#ifdef SDPA_RECIPE_SINK
+            recipe_sink_max_cb = prev.max;
+#endif
+            normalize_row_streaming<
+                false,
+                vDHt,
+                dst_size,
+                cb_col_identity,
+                cb_recip_scratch,
+                cb_normalized_out,
+                scale_fp32>(cur.sum, out_cb, h);
             srca = cb_normalized_out;
             pack_cb = cb_recip_scratch;
             arm_exp();

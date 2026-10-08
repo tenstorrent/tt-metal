@@ -34,8 +34,9 @@ std::optional<ttnn::Tensor> drop_if_empty(const std::optional<ttnn::Tensor>& t) 
     return t;
 }
 
-// The recipe path of scaled_dot_product_attention and chunked_scaled_dot_product_attention: an optional additive
-// attn_mask or a key range (causal, sliding window, chunked prefill, windowed), never both.
+// The recipe path of scaled_dot_product_attention, chunked_scaled_dot_product_attention and the MLA prefills: an
+// optional additive attn_mask or a key range (causal, sliding window, chunked prefill, windowed), never both, plus the
+// dense options (MLA V head dim, attention sink, concatenated-heads output).
 ttnn::Tensor dense_recipe(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
@@ -46,7 +47,8 @@ ttnn::Tensor dense_recipe(
     const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     SDPAPrecision precision,
-    const operations::transformer::sdpa::detail::RecipeKeyRange& key_range) {
+    const operations::transformer::sdpa::detail::RecipeKeyRange& key_range,
+    operations::transformer::sdpa::detail::RecipeDenseOptions options = {}) {
     namespace numeric = operations::transformer::sdpa::detail;
     const auto output_memory_config = memory_config.value_or(DRAM_MEMORY_CONFIG);
     TT_FATAL(
@@ -74,8 +76,14 @@ ttnn::Tensor dense_recipe(
     // back in Q's dtype like legacy SDPA. The BF16 intermediate then stays in DRAM.
     const auto query = numeric::recipe_bf16_query(input_tensor_q);
     const bool narrow_output = input_tensor_q.dtype() != DataType::BFLOAT16;
+    // The reader takes the sink logit straight from a BF16 or FP32 tile; a BFP8/BFP4 sink is widened first.
+    if (options.attention_sink && options.attention_sink->dtype() != DataType::BFLOAT16 &&
+        options.attention_sink->dtype() != DataType::FLOAT32) {
+        options.attention_sink = ttnn::typecast(*options.attention_sink, DataType::BFLOAT16, DRAM_MEMORY_CONFIG);
+    }
     const auto kernel_memory_config = narrow_output ? DRAM_MEMORY_CONFIG : output_memory_config;
     const auto& qs = input_tensor_q.padded_shape();
+    const uint32_t out_head_dim = options.head_dim_v ? options.head_dim_v : qs[3];
     // Op-selected blocking when program_config leaves chunks unset; the chooser budgets the
     // mask CB (at least one row group) so a masked call never picks a blocking that overflows L1,
     // and an L1 output's share of each core's L1 (it is allocated after the choice).
@@ -88,8 +96,9 @@ ttnn::Tensor dense_recipe(
         program_config,
         recipe_mask ? &*recipe_mask : nullptr,
         numeric::recipe_output_l1_bytes(
-            query, uint64_t{qs[0]} * qs[1] * (qs[2] / 32) * (qs[3] / 32), 2048, kernel_memory_config),
-        &key_range);
+            query, uint64_t{qs[0]} * qs[1] * (qs[2] / 32) * (out_head_dim / 32), 2048, kernel_memory_config),
+        &key_range,
+        &options);
     auto output = numeric::run_recipe(
         query,
         input_tensor_k,
@@ -99,12 +108,13 @@ ttnn::Tensor dense_recipe(
         recipe_mask,
         recipe_scale,
         kernel_memory_config,
-        key_range);
+        key_range,
+        options);
     return narrow_output ? ttnn::typecast(output, input_tensor_q.dtype(), output_memory_config) : output;
 }
 
 // Chunked prefill on a named recipe: causal with the Q chunk at chunk_start_idx (scalar, or read on device from
-// chunk_start_idx_tensor), over one K/V cache block per sequence.
+// chunk_start_idx_tensor), over the paged K/V cache blocks the page table names. MLA (head_dim_v) reads V from K.
 ttnn::Tensor chunked_recipe(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
@@ -119,30 +129,40 @@ ttnn::Tensor chunked_recipe(
     const std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride>& paged_cache_geometry,
     std::optional<uint32_t> sliding_window_size,
     const std::optional<ttnn::Tensor>& attention_sink,
-    SDPAPrecision precision) {
+    SDPAPrecision precision,
+    uint32_t head_dim_v = 0) {
     namespace numeric = operations::transformer::sdpa::detail;
     TT_FATAL(q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
-    TT_FATAL(
-        !paged_cache_geometry && !attention_sink,
-        "Named SDPA recipes do not yet support paged_cache_geometry or attention_sink in chunked SDPA");
-    if (chunk_start_idx) {
-        TT_FATAL(*chunk_start_idx >= 0, "chunk_start_idx must be non-negative");
-        TT_FATAL(
-            k.logical_shape()[2] >= q.logical_shape()[2] + *chunk_start_idx,
-            "K's sequence length must be >= Q's sequence length + chunk_start_idx. Got K: {}, Q: {}, chunk_start_idx: "
-            "{}",
-            k.logical_shape()[2],
-            q.logical_shape()[2],
-            *chunk_start_idx);
-    }
     const numeric::RecipeKeyRange key_range{
         .causal = true,
         .sliding_window = sliding_window_size.value_or(0),
         .q_offset = static_cast<uint32_t>(chunk_start_idx.value_or(0)),
         .q_offset_tensor = chunk_start_idx_tensor,
-        .page_table = page_table};
+        .page_table = page_table,
+        .paged_geometry = paged_cache_geometry.value_or(operations::transformer::PagedCacheGeometryOverride{})};
+    if (chunk_start_idx) {
+        const uint32_t k_rows = numeric::recipe_k_rows(k, key_range);
+        TT_FATAL(*chunk_start_idx >= 0, "chunk_start_idx must be non-negative");
+        TT_FATAL(
+            k_rows >= q.logical_shape()[2] + *chunk_start_idx,
+            "K's sequence length must be >= Q's sequence length + chunk_start_idx. Got K: {}, Q: {}, chunk_start_idx: "
+            "{}",
+            k_rows,
+            q.logical_shape()[2],
+            *chunk_start_idx);
+    }
     return dense_recipe(
-        q, k, v, std::nullopt, scale, memory_config, program_config, compute_kernel_config, precision, key_range);
+        q,
+        k,
+        v,
+        std::nullopt,
+        scale,
+        memory_config,
+        program_config,
+        compute_kernel_config,
+        precision,
+        key_range,
+        {.head_dim_v = head_dim_v, .attention_sink = attention_sink});
 }
 }  // namespace
 
@@ -166,9 +186,6 @@ ttnn::Tensor scaled_dot_product_attention(
     if (precision) {
         namespace numeric = operations::transformer::sdpa::detail;
         TT_FATAL(input_tensor_q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
-        TT_FATAL(
-            !attention_sink && !output_concat_heads,
-            "Named SDPA recipes do not yet support attention_sink or output_concat_heads");
         // Causal, sliding-window and windowed calls run the K-range model (numeric::RecipeKeyRange), with the
         // legacy op's shape rules: causal and sliding windows need Sq == Sk; a windowed Q may be a slice of the
         // sequence starting at windowed_q_token_offset.
@@ -183,6 +200,7 @@ ttnn::Tensor scaled_dot_product_attention(
             "SDPA recipes take either attn_mask or is_causal / sliding_window_size / cu_window_seqlens");
         if (windowed) {
             TT_FATAL(window == 0, "Windowed SDPA does not support sliding_window_size");
+            TT_FATAL(!attention_sink, "Windowed SDPA does not support attention_sink");
             TT_FATAL(sq <= sk, "windowed Q shard has {} rows, more than the K sequence length {}", sq, sk);
             TT_FATAL(
                 windowed_q_token_offset_tensor || windowed_q_token_offset <= sk - sq,
@@ -214,7 +232,8 @@ ttnn::Tensor scaled_dot_product_attention(
             program_config,
             compute_kernel_config,
             *precision,
-            key_range);
+            key_range,
+            {.attention_sink = attention_sink, .output_concat_heads = output_concat_heads});
     }
     operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -792,7 +811,32 @@ ttnn::Tensor flash_mla_prefill(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<SDPAPrecision> precision) {
+    if (precision) {
+        // V is K's first head_dim_v columns unless given. Causal needs Sq == Sk, as for legacy SDPA.
+        TT_FATAL(input_tensor_q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
+        TT_FATAL(
+            !attn_mask || !is_causal,
+            "SDPA recipes take either attn_mask or is_causal, got both for flash_mla_prefill");
+        TT_FATAL(
+            !is_causal || input_tensor_q.logical_shape()[2] == input_tensor_k.logical_shape()[2],
+            "Causal MLA prefill requires Q and K to have the same sequence length. Got Q: {}, K: {}",
+            input_tensor_q.logical_shape()[2],
+            input_tensor_k.logical_shape()[2]);
+        return dense_recipe(
+            input_tensor_q,
+            input_tensor_k,
+            input_tensor_v.value_or(input_tensor_k),
+            attn_mask,
+            scale,
+            memory_config,
+            program_config,
+            compute_kernel_config,
+            *precision,
+            {.causal = is_causal},
+            {.head_dim_v = head_dim_v});
+    }
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -824,7 +868,26 @@ ttnn::Tensor chunked_flash_mla_prefill(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<SDPAPrecision> precision) {
+    if (precision) {
+        return chunked_recipe(
+            input_tensor_q,
+            input_tensor_k,
+            input_tensor_k,  // V is K's first head_dim_v columns
+            page_table_tensor,
+            chunk_start_idx,
+            std::nullopt,
+            scale,
+            memory_config,
+            program_config,
+            compute_kernel_config,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            *precision,
+            head_dim_v);
+    }
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 

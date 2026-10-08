@@ -15,6 +15,8 @@
 // chains; args 3/4 are a range of positions in the heads' zigzag orders; 12 scalar Q offset, 13-15 the Q offset,
 // cu_window_seqlens and page table addresses (0 when absent). Each Q chunk reads only its K range; the writer
 // generates the edge chunks' masks.
+// Attention sink (SDPA_RECIPE_SINK_CB): runtime arg SDPA_RECIPE_SINK_ARG is the sink tensor's address; each Q chunk
+// gets a page holding its head's sink logit.
 //
 // Host invariants:
 // - Chains (length > 1): one head per core; one chain per head; positive, nonincreasing Q-job counts.
@@ -52,6 +54,11 @@ constexpr uint32_t reader_barrier_tiles = SDPA_RECIPE_READ_BARRIER_TILES;
 constexpr uint32_t reader_barrier_tiles = 16;
 #endif
 constexpr uint32_t kv_tiles = SDPA_K_CHUNK_TILES * SDPA_RECIPE_DHT;
+#ifdef SDPA_RECIPE_V_DHT
+constexpr uint32_t v_tiles = SDPA_K_CHUNK_TILES * SDPA_RECIPE_V_DHT;
+#else
+constexpr uint32_t v_tiles = kv_tiles;
+#endif
 
 template <uint32_t tile_bytes, bool transpose, typename Accessor>
 FORCE_INLINE void read_kv_from_dram(const Noc& noc, const Accessor& tensor, uint32_t first_page, uint32_t write_ptr) {
@@ -80,6 +87,54 @@ FORCE_INLINE void read_kv_from_dram(const Noc& noc, const Accessor& tensor, uint
         }
     }
 }
+
+#ifdef SDPA_RECIPE_KV_ROWS
+// One K chunk of K or V, `width` tiles of K tile row t starting at page row_page(t) (paged K/V: through the page table;
+// MLA: V narrower than its source rows, or read from K). Tile rows past the SDPA_RECIPE_KV_ROWS keys are zero, as is
+// the padding of a partial last row.
+template <uint32_t tile_bytes, bool transpose, uint32_t width, typename Accessor, typename RowPage>
+FORCE_INLINE void read_kv_rows(
+    const Noc& noc, const Accessor& tensor, uint32_t row0, const RowPage& row_page, uint32_t write_ptr) {
+    constexpr uint32_t row_tiles = (SDPA_RECIPE_KV_ROWS + 31) / 32;
+    auto tile = [](uint32_t r, uint32_t c) { return transpose ? c * SDPA_K_CHUNK_TILES + r : r * width + c; };
+    uint32_t issued = 0;
+    bool zeroed = false;
+    for (uint32_t r = 0; r < SDPA_K_CHUNK_TILES; ++r) {
+        const uint32_t t = row0 + r;
+        if (t >= row_tiles) {
+            for (uint32_t c = 0; c < width; ++c) {
+                noc.async_write_zeros(CoreLocalMem<uint32_t>(write_ptr + tile(r, c) * tile_bytes), tile_bytes);
+            }
+            zeroed = true;
+            continue;
+        }
+        const uint32_t page = row_page(t);
+        for (uint32_t c = 0; c < width; ++c) {
+            noc.async_read(
+                tensor,
+                CoreLocalMem<uint32_t>(write_ptr + tile(r, c) * tile_bytes),
+                tile_bytes,
+                {.page_id = page + c},
+                {});
+            if (++issued % reader_barrier_tiles == 0) {
+                noc.async_read_barrier();
+            }
+        }
+    }
+    if (zeroed) {
+        noc.write_zeros_l1_barrier();
+    }
+    noc.async_read_barrier();
+    if constexpr (SDPA_RECIPE_KV_ROWS % 32 != 0) {
+        if (row0 < row_tiles && row_tiles <= row0 + SDPA_K_CHUNK_TILES) {
+            for (uint32_t c = 0; c < width; ++c) {
+                zero_tile_padding<tile_bytes>(
+                    write_ptr + tile(row_tiles - 1 - row0, c) * tile_bytes, SDPA_RECIPE_KV_ROWS % 32);
+            }
+        }
+    }
+}
+#endif
 
 #ifdef SDPA_RECIPE_MASK
 // Additive attn_mask [1|B, 1|H, Sq, Sk]: stream one Q chunk x K chunk of tiles, one Q tile row
@@ -135,7 +190,12 @@ void kernel_main() {
     constexpr uint32_t kv_joint_rows = get_compile_time_arg_val(6);
     constexpr auto qa = TensorAccessorArgs<7>();
     constexpr auto ka = TensorAccessorArgs<qa.next_compile_time_args_offset()>();
+#ifdef SDPA_RECIPE_V_IS_K
+    // MLA without a V tensor: V is K's first SDPA_RECIPE_V_DHT tile columns (runtime arg 2 is K's address).
+    constexpr auto va = ka;
+#else
     constexpr auto va = TensorAccessorArgs<ka.next_compile_time_args_offset()>();
+#endif
 #ifdef SDPA_JOINT
     constexpr auto jqa = TensorAccessorArgs<va.next_compile_time_args_offset()>();
     constexpr auto jka = TensorAccessorArgs<jqa.next_compile_time_args_offset()>();
@@ -152,6 +212,15 @@ void kernel_main() {
         sequence_accessor<kv_primary_rows, SDPA_K_CHUNK_TILES * 32, SDPA_RECIPE_DHT>(TensorAccessor(ka, get_arg_val<uint32_t>(1)));
     const auto v =
         sequence_accessor<kv_primary_rows, SDPA_K_CHUNK_TILES * 32, SDPA_RECIPE_DHT>(TensorAccessor(va, get_arg_val<uint32_t>(2)));
+#endif
+#ifdef SDPA_RECIPE_KV_ROWS
+    const auto k_tensor = TensorAccessor(ka, get_arg_val<uint32_t>(1));
+    const auto v_tensor = TensorAccessor(va, get_arg_val<uint32_t>(2));
+#endif
+#ifdef SDPA_RECIPE_SINK_CB
+    const auto sink =
+        TensorAccessor(TensorAccessorArgs<SDPA_RECIPE_SINK_CTA>(), get_arg_val<uint32_t>(SDPA_RECIPE_SINK_ARG));
+    CircularBuffer scb(SDPA_RECIPE_SINK_CB);
 #endif
 #ifdef SDPA_RECIPE_MASK
 #ifdef SDPA_JOINT
@@ -253,8 +322,10 @@ void kernel_main() {
     keys.segments = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + RecipeScratch::Segments);
 #endif
 #ifdef SDPA_RECIPE_PAGE_TABLE_PAGE
+    // The current batch's page-table row: its cache blocks in sequence order, after both scratch halves.
     const auto page_table = TensorAccessor(page_table_args, get_arg_val<uint32_t>(15));
-    uint32_t page_table_batch = UINT32_MAX, block = 0;
+    uint32_t page_table_batch = UINT32_MAX;
+    const auto* blocks = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + SDPA_RECIPE_PAGE_TABLE_OFFSET);
 #endif
 #endif
     for (uint32_t qi = 0; qi < jobs; ++qi) {
@@ -272,15 +343,25 @@ void kernel_main() {
         uint32_t kv_head = job_head;
 #endif
 #ifdef SDPA_RECIPE_PAGE_TABLE_PAGE
-        // Chunked prefill with one cache block per sequence: K/V head = block * KV heads + head within the batch.
-        // A multi-block page table would translate each K tile row in read_kv_from_dram instead.
+        // Chunked prefill: K/V tile row t of the sequence is row t % block of cache block blocks[t / block], and
+        // kv_head the head within the batch.
         const uint32_t batch = job_head / SDPA_RECIPE_Q_HEADS;
         if (batch != page_table_batch) {
-            block = recipe_read_index_page(
-                noc, page_table, batch, SDPA_RECIPE_PAGE_TABLE_PAGE, scratch + RecipeScratch::PageTable);
+            recipe_read_index_page(
+                noc, page_table, batch, SDPA_RECIPE_PAGE_TABLE_PAGE, scratch + SDPA_RECIPE_PAGE_TABLE_OFFSET);
             page_table_batch = batch;
         }
-        kv_head = block * SDPA_RECIPE_KV_HEADS + kv_head % SDPA_RECIPE_KV_HEADS;
+        kv_head %= SDPA_RECIPE_KV_HEADS;
+        constexpr uint32_t block_tiles = SDPA_RECIPE_PAGE_BLOCK_TILES;
+        auto kv_row = [&](uint32_t t) {
+            return (blocks[t / block_tiles] * SDPA_RECIPE_KV_HEADS + kv_head) * block_tiles + t % block_tiles;
+        };
+#elif defined(SDPA_RECIPE_KV_ROWS)
+        auto kv_row = [&](uint32_t t) { return kv_head * ((SDPA_RECIPE_KV_ROWS + 31) / 32) + t; };
+#endif
+#ifdef SDPA_RECIPE_KV_ROWS
+        auto k_row = [&](uint32_t t) { return kv_row(t) * SDPA_RECIPE_DHT; };
+        auto v_row = [&](uint32_t t) { return kv_row(t) * SDPA_RECIPE_V_SRC_DHT; };
 #endif
         const uint32_t kvbase = kv_head * k_chunks * kv_tiles;
         const uint32_t qbase = job * q_tiles * SDPA_RECIPE_DHT;
@@ -314,6 +395,14 @@ void kernel_main() {
             }
         }
         qcb.push_back(q_push_tiles);
+#ifdef SDPA_RECIPE_SINK_CB
+        // The head's sink logit: the first value of its [1, H, 1, 1] tile (compute reads word 0).
+        scb.reserve_back(1);
+        noc.async_read(
+            sink, CoreLocalMem<uint32_t>(scb.get_write_ptr()), 64, {.page_id = job_head % SDPA_RECIPE_SINK_HEADS}, {});
+        noc.async_read_barrier();
+        scb.push_back(1);
+#endif
 
 #ifdef SDPA_RECIPE_KRANGE
         // K chunks of this Q chunk (recipe_key_range.hpp; the writer sends compute the range and the edge masks).
@@ -322,26 +411,40 @@ void kernel_main() {
         const uint32_t q_row_end = q_row0 + q_tiles * 32 < q_primary_rows ? q_row0 + q_tiles * 32 : q_primary_rows;
         const RecipeChunkRange range = keys.chunks(q_row0, q_row_end, SDPA_K_CHUNK_TILES * 32, k_chunks);
         for (uint32_t ki = range.first; ki < range.end; ++ki) {
-            const uint32_t first_kv_page = kvbase + ki * kv_tiles;
+            [[maybe_unused]] const uint32_t first_kv_page = kvbase + ki * kv_tiles;
             kcb.reserve_back(kv_tiles);
+#ifdef SDPA_RECIPE_KV_ROWS
+            read_kv_rows<kbytes, true, SDPA_RECIPE_DHT>(
+                noc, k_tensor, ki * SDPA_K_CHUNK_TILES, k_row, kcb.get_write_ptr());
+#else
             read_kv_from_dram<kbytes, true>(noc, k, first_kv_page, kcb.get_write_ptr());
+#endif
             kcb.push_back(kv_tiles);
-            vcb.reserve_back(kv_tiles);
+            vcb.reserve_back(v_tiles);
+#ifdef SDPA_RECIPE_KV_ROWS
+            read_kv_rows<vbytes, false, SDPA_RECIPE_V_DHT>(
+                noc, v_tensor, ki * SDPA_K_CHUNK_TILES, v_row, vcb.get_write_ptr());
+#else
             read_kv_from_dram<vbytes, false>(noc, v, first_kv_page, vcb.get_write_ptr());
-            vcb.push_back(kv_tiles);
+#endif
+            vcb.push_back(v_tiles);
         }
 #else
         const bool receive = link.should_receive(head);
         const bool forward = link.should_forward(head, qi);
         for (uint32_t ki = 0; ki < k_chunks; ++ki) {
-            const uint32_t first_kv_page = kvbase + ki * kv_tiles;
+            [[maybe_unused]] const uint32_t first_kv_page = kvbase + ki * kv_tiles;
 
             kcb.reserve_back(kv_tiles);
             const uint32_t kptr = kcb.get_write_ptr();
             if (receive) {
                 link.receive(noc);
             } else {
+#ifdef SDPA_RECIPE_KV_ROWS
+                read_kv_rows<kbytes, true, SDPA_RECIPE_DHT>(noc, k_tensor, ki * SDPA_K_CHUNK_TILES, k_row, kptr);
+#else
                 read_kv_from_dram<kbytes, true>(noc, k, first_kv_page, kptr);
+#endif
             }
             if (forward) {
                 // Production ChainLink waits for downstream reservation, sends
@@ -358,17 +461,21 @@ void kernel_main() {
                 noc, mask, mcb, job_head, (job % queries_per_head) * q_tiles, ki * SDPA_K_CHUNK_TILES);
 #endif
 
-            vcb.reserve_back(kv_tiles);
+            vcb.reserve_back(v_tiles);
             const uint32_t vptr = vcb.get_write_ptr();
             if (receive) {
                 link.receive(noc);
             } else {
+#ifdef SDPA_RECIPE_KV_ROWS
+                read_kv_rows<vbytes, false, SDPA_RECIPE_V_DHT>(noc, v_tensor, ki * SDPA_K_CHUNK_TILES, v_row, vptr);
+#else
                 read_kv_from_dram<vbytes, false>(noc, v, first_kv_page, vptr);
+#endif
             }
             if (forward) {
-                link.forward(noc, vptr, kv_tiles, vbytes);
+                link.forward(noc, vptr, v_tiles, vbytes);
             }
-            vcb.push_back(kv_tiles);
+            vcb.push_back(v_tiles);
         }
 #endif
     }

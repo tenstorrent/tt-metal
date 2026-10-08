@@ -225,7 +225,8 @@ ttnn::Tensor flash_mla_prefill_wrapper(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<ttnn::transformer::SDPAPrecision> precision) {
     return ttnn::transformer::flash_mla_prefill(
         input_tensor_q,
         input_tensor_k,
@@ -236,7 +237,8 @@ ttnn::Tensor flash_mla_prefill_wrapper(
         scale,
         memory_config,
         program_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        precision);
 }
 
 ttnn::Tensor flash_mla_prefill_wrapper_input_tensor(
@@ -248,7 +250,8 @@ ttnn::Tensor flash_mla_prefill_wrapper_input_tensor(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<ttnn::transformer::SDPAPrecision> precision) {
     return ttnn::transformer::flash_mla_prefill(
         input_tensor_q,
         input_tensor_k,
@@ -259,7 +262,8 @@ ttnn::Tensor flash_mla_prefill_wrapper_input_tensor(
         scale,
         memory_config,
         program_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        precision);
 }
 
 // Dispatch: chunk_start_idx_tensor present → flexible (runtime offset); else legacy (chunk_start_idx int).
@@ -383,12 +387,12 @@ void bind_sdpa(nb::module_& mod) {
             output_concat_heads (bool): Defaults to `False`. Write the heads side by side as [b x 1 x s x nqh*dh] (what `nlp_concat_heads` produces from the default layout) without that op. Plain SDPA only.
 
 
-        Precision recipes run on Blackhole with noncausal attention and an optional additive
-        attn_mask ([1|b, 1|nqh, s, s_kv], BF16/BFP8/BFP4, or FP32 for BALANCED/ACCURATE). Batch and
-        GQA are supported; Q/K/V lengths and chunk sizes need not divide each other. Head dim and
-        chunk sizes must be tile multiples, and the chunks must fit in L1. Inputs are tiled,
-        interleaved DRAM; Q and output are BF16. STANDARD-ACCURATE take BF16 K/V; FAST also
-        accepts BFLOAT8_B/BFLOAT4_B K/V. Unsupported arguments raise; they never fall back.
+        Precision recipes run on Blackhole with an optional additive attn_mask ([1|b, 1|nqh, s, s_kv],
+        BF16/BFP8/BFP4, or FP32 for BALANCED/ACCURATE) or a causal / sliding-window / windowed key
+        range, and take attention_sink and output_concat_heads. Batch and GQA are supported; Q/K/V
+        lengths and chunk sizes need not divide each other. Head dim and chunk sizes must be tile
+        multiples, and the chunks must fit in L1. Inputs are tiled and interleaved. Unsupported
+        arguments raise; they never fall back.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh] (or [b x 1 x s x nqh*dh] with output_concat_heads).
@@ -586,9 +590,9 @@ void bind_sdpa(nb::module_& mod) {
             attention_sink (ttnn.Tensor, optional): Per-head learned sink logit [1 x nqh x 1 x 1],
                 as for `scaled_dot_product_attention`. Defaults to `None`.
             precision (ttnn.SDPAPrecision, optional): Named numerical recipe, as for
-                `scaled_dot_product_attention`. Recipes take one cache block per sequence (page table
-                [b x 1]), any chunk_start_idx, and no paged_cache_geometry or attention_sink yet.
-                Omit for the legacy kernel. Defaults to `None`.
+                `scaled_dot_product_attention`. Recipes take any chunk_start_idx (a multiple of neither chunk
+                size is needed), paged_cache_geometry and attention_sink. Omit for the legacy kernel.
+                Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -1020,7 +1024,9 @@ void bind_sdpa(nb::module_& mod) {
             scale (float, optional): Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
-
+            precision (ttnn.SDPAPrecision, optional): Named numerical recipe, as for
+                `scaled_dot_product_attention` (V and the output are head_dim_v wide; without input_tensor_v, V is
+                K's first head_dim_v columns). Omit for the legacy kernel. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -1042,7 +1048,8 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("scale") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("precision") = nb::none()),
         // Overload: input_tensor_v as Tensor (V in embedding space)
         ttnn::overload_t(
             &flash_mla_prefill_wrapper_input_tensor,
@@ -1055,7 +1062,8 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("scale") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("precision") = nb::none()));
 
     const auto* const chunked_mla_doc =
         R"doc(
@@ -1077,9 +1085,12 @@ void bind_sdpa(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+            precision (ttnn.SDPAPrecision, optional): Named numerical recipe, as for
+                `chunked_scaled_dot_product_attention`; V is K's first head_dim_v columns. Omit for the legacy
+                kernel. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: the output tensor [b x nqh x s x dh].
+            ttnn.Tensor: the output tensor [b x nqh x s x head_dim_v].
 
         )doc";
 
@@ -1096,7 +1107,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("scale") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("precision") = nb::none());
 
     const auto* const ring_distributed_doc =
         R"doc(
