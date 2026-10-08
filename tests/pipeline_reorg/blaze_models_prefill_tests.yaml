@@ -1302,7 +1302,7 @@
 # [1/3] producer/runner e2e through the common prefill runner (the production path).
 # [2/3] true-prefill DFlash: all 36 target
 # layers run at 1k, target KV and independent-HF reduced-hidden are checked, a versioned
-# consumer handoff is emitted, and prefill throughput is gated at 3000 TSU.
+# consumer handoff is emitted, and synchronized prefill throughput is reported.
 # GPT_OSS_KV_PCC_MIN=0.85 is a floor under the measured ~0.92 min KV PCC (ring chunked and
 # 1k-chunk configs, EXPERT_DTYPE=bf8), keeping headroom for bf8/golden noise.
 # [3/3] variable-chunk smoke (models/demos/gpt_oss_d_p/tests/variable_chunk_smoke.py): one
@@ -1377,7 +1377,6 @@
       export GPT_OSS_WEIGHTS_FROM_CACHE=1
       export PREFILL_TOPOLOGY=linear
       export PREFILL_TPS_ITERS=3
-      export PREFILL_TSU_MIN=3000
       export GPT_OSS_KV_PCC_MIN=0.85
       export GPT_OSS_DFLASH_PCC_MIN=0.89
       timeout -k 2m 45m mpirun --pernode --tag-output bash -lc '

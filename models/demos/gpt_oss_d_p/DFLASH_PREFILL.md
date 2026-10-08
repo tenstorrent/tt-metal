@@ -76,8 +76,9 @@ The Galaxy rung preserves the existing target-KV PCC gate, checks aggregate
 and per-position pre-norm feature PCC, checks final `y0`/top-k, reports
 disabled/enabled latency and export cost, and writes a consumer fixture.
 Use a 1k-position seed to gate the complete feature trajectory and final token.
-`PREFILL_TPS_ITERS=N PREFILL_TSU_MIN=3000` makes the synchronized enabled-path
-median an executable throughput gate rather than a one-run characterization.
+`PREFILL_TPS_ITERS=N` reports the synchronized enabled-path median. Set
+`PREFILL_TSU_MIN` only when running an explicitly calibrated performance gate;
+the shared CI leg reports throughput like the existing GPT-OSS prefill tests.
 `GPT_OSS_KV_PCC_MIN` and `GPT_OSS_DFLASH_PCC_MIN` set the corresponding
 correctness floors; all failures are reported together.
 

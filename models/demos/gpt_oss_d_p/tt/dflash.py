@@ -310,7 +310,10 @@ class TtDFlashFeatureAccumulator:
         }
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            # Match Blaze's production FCMatmulForward. These five projections
+            # feed a BF8 DFlash KV cache; HiFi2 spends extra cycles without
+            # improving the consumer-visible precision.
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -363,14 +366,15 @@ class TtDFlashFeatureAccumulator:
         if self._accumulator is None:
             self._accumulator = projected
         else:
-            summed = ttnn.add(
+            # Reuse the persistent accumulation buffer. This is the same
+            # output-tensor pattern used by the target residual path and avoids
+            # four full-sequence DRAM allocations/copies per prefill.
+            ttnn.add(
                 self._accumulator,
                 projected,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                output_tensor=self._accumulator,
             )
-            ttnn.deallocate(self._accumulator)
             ttnn.deallocate(projected)
-            self._accumulator = summed
         self._tapped.append(global_layer_idx)
 
     def export(self):
