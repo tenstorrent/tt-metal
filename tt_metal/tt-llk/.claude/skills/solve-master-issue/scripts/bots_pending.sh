@@ -30,9 +30,10 @@ while read -r wid; do
         -q ".workflow_runs[]|select(.name|test(\"PR #$pr\\\\b\"))|\"\(.status)\t\(.conclusion)\t\(.id)\t\(.html_url)\t\(.name)\"")
     echo "$mine" | awk -F'\t' '$1!="" && $1!="completed" {print "DISPATCH " $1 " " $5 " (run " $3 ")"}'
     latest=$(echo "$mine" | head -1)
-    case $latest in completed$'\t'success*|"") ;; *)
-        url=$(echo "$latest" | cut -f4)
-        grep -qxF "$url" "$ack" 2>/dev/null || echo "FAILED   LLK PR Review $(echo "$latest" | cut -f2) $url — re-dispatch once, then ack";;
+    case $latest in completed$'\t'success*|completed$'\t'skipped*|"") ;;
+        completed*)
+            url=$(echo "$latest" | cut -f4)
+            grep -qxF "$url" "$ack" 2>/dev/null || echo "FAILED   LLK PR Review $(echo "$latest" | cut -f2) $url — re-dispatch once, then ack";;
     esac
 done
 
