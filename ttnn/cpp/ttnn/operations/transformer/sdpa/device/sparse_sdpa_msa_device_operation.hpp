@@ -166,7 +166,7 @@ struct SparseSDPAMsaOperation {
         tt::DataFormat out_df = tt::DataFormat::Invalid;
         bool q_is_fp8 = false;
     };
-    static Geometry geometry(const operation_attributes_t& attrs, const tensor_args_t& t);
+    static Geometry derive_kernel_geometry(const operation_attributes_t& attrs, const tensor_args_t& t);
 
     struct CbSpec {
         uint32_t id;

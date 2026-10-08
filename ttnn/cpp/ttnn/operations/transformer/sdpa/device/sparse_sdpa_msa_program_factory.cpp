@@ -35,7 +35,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     tt::tt_metal::ProgramDescriptor desc;
 
     // K/V are separate pre-tiled caches, gathered one block at a time by the reader and writer together.
-    const Geometry g = geometry(attrs, t);
+    const Geometry g = derive_kernel_geometry(attrs, t);
     const uint32_t H_logical = g.H_logical, H = g.H, S = g.S, topk = g.topk, n_kv = g.n_kv;
     const uint32_t DHt = g.DHt, vDHt = g.vDHt, Skt = g.Skt, Sqt = g.Sqt;
     const uint32_t k_tiles_per_block = g.k_tiles_per_block, v_tiles_per_block = g.v_tiles_per_block;

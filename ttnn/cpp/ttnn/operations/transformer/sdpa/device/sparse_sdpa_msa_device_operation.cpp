@@ -254,7 +254,7 @@ SparseSDPAMsaOperation::tensor_return_value_t SparseSDPAMsaOperation::create_out
     return create_device_tensor(compute_output_specs(attrs, t), t.q.device());
 }
 
-SparseSDPAMsaOperation::Geometry SparseSDPAMsaOperation::geometry(
+SparseSDPAMsaOperation::Geometry SparseSDPAMsaOperation::derive_kernel_geometry(
     const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
     Geometry g;
     const uint32_t H_total = t.q.logical_shape()[1];
@@ -598,7 +598,8 @@ Tensor sparse_sdpa_msa(
     };
     const OperationType::tensor_args_t tensors{.q = q, .k = k, .v = v, .indices = indices};
     // One resolution per call, against the L1 free now; the hash, the validation and the factory read this plan.
-    attrs.kv_cache_plan = OperationType::resolve_kv_cache(OperationType::geometry(attrs, tensors), attrs, tensors);
+    attrs.kv_cache_plan =
+        OperationType::resolve_kv_cache(OperationType::derive_kernel_geometry(attrs, tensors), attrs, tensors);
     return ttnn::device_operation::launch<OperationType>(attrs, tensors);
 }
 
