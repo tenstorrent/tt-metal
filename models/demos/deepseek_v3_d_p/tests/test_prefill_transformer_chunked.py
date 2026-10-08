@@ -254,29 +254,29 @@ MISTRAL4_UNTRACED_MAX_OUT_OF_BAND = 1
 # is armed; other parametrizations have no key and stay record-only. Values are per-chunk medians
 # from a CI run, not a galaxy box.
 MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Cut on bh_sc1_high_power, run 36924348392. Must be cut there: on plain bh_sc1 the same rows
-    # split into two clusters 1.5x apart depending which box the pool gave them.
+    # Cut on bh_sc1_high_power, run 37547408320 (LoFi SDPA + 8256 B packets). Must be cut there: on
+    # plain bh_sc1 the same rows split into two clusters 1.5x apart depending which box the pool gave them.
     (36, 20, 10): [
-        0.111,
-        0.116,
+        0.104,
+        0.109,
+        0.113,
         0.120,
-        0.129,
-        0.134,
-        0.141,
-        0.151,
-        0.153,
-        0.157,
+        0.124,
+        0.131,
+        0.140,
+        0.142,
+        0.145,
+        0.152,
+        0.161,
+        0.160,
         0.165,
+        0.170,
         0.175,
-        0.172,
-        0.179,
-        0.185,
-        0.190,
-        0.197,
-        0.204,
-        0.212,
-        0.218,
-        0.222,
+        0.181,
+        0.186,
+        0.195,
+        0.199,
+        0.202,
     ],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
