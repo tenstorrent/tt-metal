@@ -63,7 +63,7 @@ gh api "repos/$repo/pulls/$pr/requested_reviewers" -q '.users[]|select(.type=="B
     sed 's/^/COPILOT  review requested, not yet submitted: /'
 
 if [ -z "$runs" ]; then
-    first=$(awk -v s="$sha" '$1==s{print $2}' "$seen")
+    first=$(awk -v s="$sha" '$1==s{print $2; exit}' "$seen")   # first record only: concurrent polls may append twice
     if [ -z "$first" ]; then first=$(date +%s); echo "$sha $first" >> "$seen"; fi
     age=$(( $(date +%s) - first ))
     if [ "$age" -lt 600 ]; then
