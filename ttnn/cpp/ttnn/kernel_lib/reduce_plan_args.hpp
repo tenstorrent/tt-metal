@@ -230,7 +230,7 @@ public:
     static ReduceRuntimeShape runtime_shape() {
         if constexpr (tail_runtime_arg_offset != reduce_plan_args::no_runtime_arg) {
             const auto height = get_arg_val<std::uint32_t>(tail_runtime_arg_offset);
-            // A zero height selects full work; the remaining words need not exist.
+            // A zero height selects full work.
             if (height == 0) {
                 return {};
             }

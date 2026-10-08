@@ -462,7 +462,7 @@ ReducePlan make_tiled_plan(
 std::vector<std::uint32_t> ReducePlan::get_runtime_shape_args(bool use_tail) const {
     TT_FATAL(tail.has_value(), "Reduce planner: a static core does not take runtime shape arguments");
     return use_tail ? std::vector<std::uint32_t>{tail->shape.height, tail->shape.width, tail->shape.batches}
-                    : std::vector<std::uint32_t>{0};
+                    : std::vector<std::uint32_t>(3, 0);
 }
 
 std::uint32_t ReducePlan::append_runtime_args(std::vector<std::uint32_t>& runtime_args, bool use_tail) const {
@@ -1205,7 +1205,7 @@ std::vector<std::uint32_t> ReduceSequencePlan::get_runtime_shape_args(bool use_t
     if (tail_runtime_args.empty()) {
         return {};
     }
-    return use_tail ? tail_runtime_args : std::vector<std::uint32_t>{0};
+    return use_tail ? tail_runtime_args : std::vector<std::uint32_t>(tail_runtime_args.size(), 0);
 }
 
 std::uint32_t ReduceSequencePlan::append_runtime_args(std::vector<std::uint32_t>& runtime_args, bool use_tail) const {

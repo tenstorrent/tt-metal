@@ -390,7 +390,7 @@ TEST(ReduceHostPlanner, TailPlanningResolvesExactScalersAndMasks) {
             EXPECT_EQ(full.logical_h, 256U);
             EXPECT_EQ(full.logical_w, 256U);
             EXPECT_EQ(full.batches, 2U);
-            EXPECT_EQ(full.get_runtime_shape_args(false), (std::vector<uint32_t>{0}));
+            EXPECT_EQ(full.get_runtime_shape_args(false), (std::vector<uint32_t>{0, 0, 0}));
             if (!add) {
                 EXPECT_FLOAT_EQ(full.auxiliary_tiles[0].value, 1.0F / 256);
             }
@@ -653,7 +653,7 @@ TEST(ReduceHostPlanner, TailAuxiliaryRecipesShareOnlyIdenticalPlannedMasks) {
     EXPECT_EQ(runtime_args, (std::vector<uint32_t>{111, 222, 65, 231, 1, 65, 233, 1}));
     runtime_args = {111, 222};
     EXPECT_EQ(distinct.append_runtime_args(runtime_args, false), 2U);
-    EXPECT_EQ(runtime_args, (std::vector<uint32_t>{111, 222, 0}));
+    EXPECT_EQ(runtime_args, (std::vector<uint32_t>{111, 222, 0, 0, 0, 0, 0, 0}));
     second.block.tail->shape.width = 231;
     const auto shared = make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware);
     EXPECT_EQ(shared.auxiliary.tiles.size(), 3U);
@@ -675,8 +675,8 @@ TEST(ReduceHostPlanner, TailAuxiliaryRecipesShareOnlyIdenticalPlannedMasks) {
     const auto static_sequence = make_reduce_sequence_plan({{0, static_first}, {3, second}}, {1, 2, 16}, hardware);
     EXPECT_TRUE(static_sequence.get_runtime_shape_args().empty());
     EXPECT_TRUE(static_sequence.get_runtime_shape_args(false).empty());
-    EXPECT_EQ(static_sequence.append_runtime_args(runtime_args), 3U);
-    EXPECT_EQ(runtime_args, (std::vector<uint32_t>{111, 222, 0}));
+    EXPECT_EQ(static_sequence.append_runtime_args(runtime_args), 8U);
+    EXPECT_EQ(runtime_args, (std::vector<uint32_t>{111, 222, 0, 0, 0, 0, 0, 0}));
 }
 
 TEST(ReduceHostPlanner, FullAndTailAverageUsesTheirCombinedValidExtent) {
