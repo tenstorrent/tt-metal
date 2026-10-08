@@ -166,6 +166,7 @@ struct FabricEriscDatamoverConfig {
 
     // Performance telemetry buffer address (16B aligned)
     std::size_t perf_telemetry_buffer_address = 0;
+    static constexpr std::size_t perf_telemetry_buffer_size = 32;
 
     // Code profiling buffer address (16B aligned)
     std::size_t code_profiling_buffer_address = 0;
