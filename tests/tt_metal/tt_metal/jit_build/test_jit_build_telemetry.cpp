@@ -457,6 +457,7 @@ TEST_F(BuildCacheTelemetryTest, CaptureCollectsRecordsFromOtherThreads) {
 
     const uint64_t id = tel.begin_capture();
     std::vector<std::thread> threads;
+    threads.reserve(num_threads);
     for (int t = 0; t < num_threads; ++t) {
         threads.emplace_back([&token, t] {
             for (int i = 0; i < records_per_thread; ++i) {
