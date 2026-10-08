@@ -177,7 +177,8 @@ void check_top_level(
     std::filesystem::file_time_type suite_start) {
     EXPECT_EQ(
         keys_of(manifest),
-        (std::set<std::string>{"manifest_version", "kind", "run", "fabric_context", "vocabulary", "archs", "meshes"}));
+        (std::set<std::string>{
+            "manifest_version", "kind", "run", "fabric_context", "vocabulary", "archs", "enums", "meshes"}));
     EXPECT_EQ(keys_of(manifest.at("vocabulary")), (std::set<std::string>{"categories", "kinds"}));
     EXPECT_EQ(manifest.at("manifest_version"), FABRIC_MANIFEST_VERSION);
     EXPECT_EQ(manifest.at("kind"), "fabric_manifest");
@@ -1206,6 +1207,9 @@ void check_archs(const json& manifest) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto core = tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     EXPECT_EQ(keys_of(manifest.at("archs")), (std::set<std::string>{lower_enum_name(BaseFabricFixture::arch_)}));
+    EXPECT_EQ(
+        keys_of(manifest.at("archs").at(lower_enum_name(BaseFabricFixture::arch_))),
+        (std::set<std::string>{"areas", "types"}));
     const auto& areas = arch_areas(manifest);
     EXPECT_EQ(
         keys_of(areas),
@@ -1245,12 +1249,28 @@ void check_archs(const json& manifest) {
     EXPECT_EQ(launch.at("address").get<uint64_t>(), hal.get_dev_addr(core, HalL1MemAddrType::LAUNCH));
     EXPECT_EQ(launch.at("size_per_element"), hal.get_dev_size(core, HalL1MemAddrType::LAUNCH));
     EXPECT_EQ(launch.at("num_elements"), tt::tt_metal::dev_msgs::launch_msg_buffer_num_entries);
+    EXPECT_EQ(launch.at("schema"), "struct:launch_msg_t");
 
     const auto& heartbeat = areas.at("heartbeat");
     EXPECT_EQ(
         keys_of(heartbeat),
         (std::set<std::string>{"address", "size", "schema", "cleared_by_host", "magic", "magic_mask", "period_iters"}));
     EXPECT_EQ(heartbeat.at("size"), sizeof(uint32_t));
+}
+
+// Enum values are written by name, with the values the enums define.
+void check_enums(const json& manifest) {
+    const auto& enums = manifest.at("enums");
+    const auto value_of = [&](const char* type, const char* name) {
+        return enums.at(type).at("values").at(name).get<uint32_t>();
+    };
+    EXPECT_EQ(value_of("EDMStatus", "ready_for_traffic"), static_cast<uint32_t>(EDMStatus::READY_FOR_TRAFFIC));
+    EXPECT_EQ(value_of("EDMStatus", "terminated"), static_cast<uint32_t>(EDMStatus::TERMINATED));
+    EXPECT_EQ(
+        value_of("TerminationSignal", "immediately_terminate"),
+        static_cast<uint32_t>(TerminationSignal::IMMEDIATELY_TERMINATE));
+    EXPECT_EQ(value_of("RouterState", "running"), static_cast<uint32_t>(RouterState::RUNNING));
+    EXPECT_EQ(value_of("NocCmdBuf", "at_cmd_buf"), static_cast<uint32_t>(manifest::NocCmdBuf::AT_CMD_BUF));
 }
 
 }  // namespace
@@ -1387,6 +1407,9 @@ TEST_F(Fabric2DManifestFixture, RouterRegionsDisjoint) { check_router_regions_di
 
 TEST_F(Fabric1DManifestFixture, Archs) { check_archs(manifest_); }
 TEST_F(Fabric2DManifestFixture, Archs) { check_archs(manifest_); }
+
+TEST_F(Fabric1DManifestFixture, Enums) { check_enums(manifest_); }
+TEST_F(Fabric2DManifestFixture, Enums) { check_enums(manifest_); }
 
 TEST_F(Fabric1DManifestFixture, RouterDiagnostics) { check_router_diagnostics(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterDiagnostics) { check_router_diagnostics(routers_); }
