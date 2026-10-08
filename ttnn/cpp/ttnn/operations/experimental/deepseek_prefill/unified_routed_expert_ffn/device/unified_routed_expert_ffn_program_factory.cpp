@@ -222,7 +222,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // exceeding this max; the CBs below are sized to the max so a smaller pick
     // simply uses fewer of the reserved tiles.
     uint32_t GRID_X = ring_weights ? 8u : kCoreGridX;  // ring weights: one N column per ring core / DRAM bank
-    uint32_t GRID_Y = kCoreGridY;                      // ring weights: 8 columns x 8 rows
+    // ring weights: 8 columns x GRID_Y rows (MIMO_RING_GRID_Y experiment, default 8)
+    uint32_t GRID_Y = (ring_weights && std::getenv("MIMO_RING_GRID_Y"))
+                          ? static_cast<uint32_t>(std::atoi(std::getenv("MIMO_RING_GRID_Y")))
+                          : kCoreGridY;
     // chunk_M_tiles is the CB-sized MAXIMUM chunk (per_core_M_max = 4). The host
     // deliberately does NOT pick a chunk from M_tiles_full any more: all three
     // kernels derive the ACTUAL chunk_M_tiles / per_core_M / num_chunks at runtime
