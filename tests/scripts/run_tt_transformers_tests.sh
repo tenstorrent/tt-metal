@@ -10,19 +10,31 @@
 #   tests/scripts/run_tt_transformers_tests.sh tests/modules/mlp/test_mlp_1d.py -m "not slow"
 #
 # The checkout is pinned by tests/scripts/tt_transformers_ref.txt. Override with
-# TT_TRANSFORMERS_REF=<sha> to try another revision, and TT_TRANSFORMERS_DIR=<dir>
-# to reuse an existing checkout (it must be clean).
+# TT_TRANSFORMERS_REF=<full sha> to try another revision, and TT_TRANSFORMERS_DIR=<dir>
+# to use an existing checkout instead (it must be clean and at that revision; it is
+# never replaced).
+#
+# With TT_TRANSFORMERS_REQUIRE_PASS=1, a run in which no test passed fails.
 set -euo pipefail
 
 tt_metal_home="${TT_METAL_HOME:-$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)}"
+# Resolve TT_TRANSFORMERS_DIR from the caller's directory, before the cd below.
+user_checkout=""
+if [ -n "${TT_TRANSFORMERS_DIR:-}" ]; then
+    user_checkout="$(cd "$TT_TRANSFORMERS_DIR" && pwd)"
+fi
 cd "$tt_metal_home"
 ref="${TT_TRANSFORMERS_REF:-$(grep -v '^#' tests/scripts/tt_transformers_ref.txt | tr -d '[:space:]')}"
-checkout="${TT_TRANSFORMERS_DIR:-$tt_metal_home/generated/tt-transformers}"
+checkout="${user_checkout:-$tt_metal_home/generated/tt-transformers}"
 reports="$tt_metal_home/generated/test_reports"
 mkdir -p "$reports"
 
 # Clone once per job. Later calls in the same job reuse the checkout.
 if [ "$(git -C "$checkout" rev-parse HEAD 2>/dev/null)" != "$ref" ]; then
+    if [ -n "$user_checkout" ]; then
+        echo "TT_TRANSFORMERS_DIR=$checkout is not at $ref; check out that revision there or set TT_TRANSFORMERS_REF to its full sha" >&2
+        exit 1
+    fi
     rm -rf "$checkout"
     git init -q "$checkout"
     git -C "$checkout" fetch -q --depth 1 https://github.com/tenstorrent/tt-transformers.git "$ref"
@@ -58,7 +70,21 @@ trap collect_benchmark_data EXIT
 # checkout first on sys.path and keep conftest discovery inside it.
 cd "$checkout"
 export PYTHONPATH="$checkout${PYTHONPATH:+:$PYTHONPATH}"
+report="$reports/tt_transformers_$(date +%Y%m%d_%H%M%S_%N).xml"
 python -m pytest \
     --rootdir "$checkout" -c "$checkout/pyproject.toml" --confcutdir "$checkout" \
-    -o timeout=300 --junitxml "$reports/tt_transformers_$(date +%Y%m%d_%H%M%S_%N).xml" \
+    -o timeout=300 --junitxml "$report" \
     "$@"
+
+# A skipped e2e case writes no benchmark data, so the e2e workflow also skips its
+# perf and accuracy check. The e2e legs set TT_TRANSFORMERS_REQUIRE_PASS=1 to fail instead.
+if [ "${TT_TRANSFORMERS_REQUIRE_PASS:-0}" = 1 ]; then
+    python - "$report" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+cases = ET.parse(sys.argv[1]).iter("testcase")
+if not any(all(case.find(tag) is None for tag in ("skipped", "failure", "error")) for case in cases):
+    sys.exit(f"No tt-transformers test passed (report: {sys.argv[1]})")
+PY
+fi
