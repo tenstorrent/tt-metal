@@ -141,6 +141,8 @@ def run_ring(
     logical_n,
     logical_l,
     is_cross,
+    is_causal=False,
+    is_balanced=False,
     **options,
 ):
     return ttnn.transformer.ring_joint_scaled_dot_product_attention(
@@ -151,7 +153,8 @@ def run_ring(
         joint_strategy="rear",
         logical_n=logical_n,
         logical_l=logical_l,
-        is_causal=options.pop("is_causal", False),
+        is_causal=is_causal,
+        is_balanced=is_balanced,
         is_cross=is_cross,
         program_config=ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid, q_chunk_size=q_chunk, k_chunk_size=k_chunk
@@ -385,3 +388,90 @@ def test_ring_joint_sdpa_precision_routing(ring_mesh):
             # The causal call still runs the legacy FP32 loop (about 2% here): hold it to STANDARD's bound.
             bound = L2_PCT_BOUND["standard" if causal else "accurate"] + rounding
             assert l2_pct(per_chip(out[0])[chip], want) < bound, f"causal {causal} chip {chip}"
+
+
+# Causal ring attention: batch, heads, kv_heads, local rows (Q = K), head_dim, q_chunk, k_chunk, SDPA grid. A balanced
+# ring needs Q chunks dividing half the local rows; the K half may straddle a K chunk ("straddle": 480 / 192).
+CAUSAL_CASES = {
+    "q256_k512_d128": (1, 2, 2, 1024, 128, 256, 512, (4, 2)),
+    "q512_k128": (1, 2, 2, 1024, 128, 512, 128, (2, 2)),
+    "gqa_batch2": (2, 4, 2, 1024, 128, 128, 256, (8, 2)),
+    "straddle_q96_k192_d64": (1, 2, 2, 960, 64, 96, 192, (4, 2)),
+    # Several Q chunks per core: checkpointed state, and the balanced early half finishing before the last step.
+    "multi_q_checkpoint": (1, 4, 4, 1024, 128, 128, 256, (2, 2)),
+}
+
+
+def causal_layout(x, balanced):
+    """The global sequence as the ring holds it: device d gets chunk d (or, balanced, chunks d and 2R - 1 - d)."""
+    if not balanced:
+        return x, torch.arange(x.shape[2])
+    chunks = torch.arange(x.shape[2]).chunk(2 * RING)
+    order = torch.cat([torch.cat([chunks[d], chunks[2 * RING - 1 - d]]) for d in range(RING)])
+    return x[:, :, order], order
+
+
+@pytest.mark.parametrize("balanced", [False, True], ids=["causal", "balanced"])
+@pytest.mark.parametrize("case", CAUSAL_CASES)
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_ring_joint_sdpa_recipe_causal(ring_mesh, variant, case, balanced):
+    """is_causal (and is_balanced): the local step masks its diagonal, later shards are skipped (or, balanced, halved
+    and the early Q half skipped), against an FP64 causal reference over the global sequence."""
+    mesh, semaphores, ccl_column = ring_mesh
+    b, nh, nkv, local, d, q_chunk, k_chunk, grid = CAUSAL_CASES[case]
+    s = RING * local
+    q, k, v = randn(b, nh, s, d, seed=21), randn(b, nkv, s, d, seed=22), randn(b, nkv, s, d, seed=23)
+    shard = ttnn.ShardTensorToMesh(mesh, dim=2)
+    layout = [causal_layout(x, balanced) for x in (q, k, v)]
+    inputs = precision_inputs(mesh, variant, [x for x, _ in layout], shard)
+    if VARIANTS[variant][0] == ttnn.SDPAPrecision.FAST:
+        # The reference takes the prepared values, back in sequence order.
+        order = layout[0][1]
+        q, k, v = (torch.cat(per_chip(x), dim=2)[:, :, torch.argsort(order)] for x in inputs)
+    backing = [
+        ttnn.allocate_tensor_on_device(list(k.shape), x.dtype, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+        for x in inputs[1:]
+    ]
+    out = run_ring(
+        mesh,
+        semaphores,
+        ccl_column,
+        inputs,
+        [None] * 3,
+        backing,
+        grid=grid,
+        q_chunk=q_chunk,
+        k_chunk=k_chunk,
+        logical_n=s,
+        logical_l=0,
+        is_cross=False,
+        is_causal=True,
+        is_balanced=balanced,
+        precision=VARIANTS[variant][0],
+    )
+    expected = reference(q, k, v, key_mask(s, s, causal=True))
+    rows = layout[0][1].chunk(RING)
+    for chip in range(RING):
+        got = per_chip(out[0])[chip]
+        assert l2_pct(got, expected[:, :, rows[chip]]) < L2_PCT_BOUND[variant], f"chip {chip}"
+
+
+@pytest.mark.parametrize("variant", ["standard", "accurate"])
+def test_ring_joint_sdpa_recipe_rejects_sliding_window(ring_mesh, variant, expect_error):
+    """The legacy FP32 ring kernel ignores sliding_window_size; the recipes reject it rather than ignore it."""
+    mesh, semaphores, ccl_column = ring_mesh
+    inputs, joints, backing, logical_n, kwargs, _, _ = ring_case(mesh, variant, "multi_q_checkpoint")
+    with expect_error(RuntimeError, "do not support sliding_window_size"):
+        run_ring(
+            mesh,
+            semaphores,
+            ccl_column,
+            inputs,
+            joints,
+            backing,
+            logical_n=logical_n,
+            is_causal=True,
+            sliding_window_size=512,
+            precision=VARIANTS[variant][0],
+            **kwargs,
+        )
