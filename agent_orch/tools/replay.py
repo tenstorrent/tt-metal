@@ -98,7 +98,7 @@ def simulate(policy_path, beta, rr: RecordedRound, history, defaults, noise_pct,
     res = {"round": rr.round, "beta": beta, "V": round(V, 4), "attempts": n, "steps": view.steps_done, "best": best}
     if error:
         res["error"] = error
-    trace.update(res)
+    trace.update({k: v for k, v in res.items() if k != "steps"}, n_steps=res["steps"])  # keep the per-step list
     return res, trace
 
 
