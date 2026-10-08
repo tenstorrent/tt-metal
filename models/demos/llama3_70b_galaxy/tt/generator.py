@@ -22,6 +22,7 @@ from models.common.sampling import (
     format_sampling_params,
 )
 from models.common.warmup import WarmupForwardMixin
+from models.demos.llama3_70b_galaxy.tt.llama_ccl import PREFILL_SUPPORT_SEQLENS
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
 from models.tt_transformers.tt.common import (
     InterleavedTextMedia,
@@ -71,11 +72,19 @@ def _fill_inactive_params_from_active(params, active_slots, max_batch):
     return replace(params, **updates)
 
 
-def get_prefill_warmup_sequence_lengths(max_seq_len: int) -> list[int]:
+def get_prefill_warmup_sequence_lengths(max_seq_len: int, pad_multiple: int | None = None) -> list[int]:
     """
-    Returns powers of 2 from 128 up to max_seq_len (inclusive).
+    Returns the prefill lengths the warmup compiles, ascending, all <= max_seq_len:
+    128 and the powers of 2 from 1024 up to max_seq_len (inclusive). With pad_multiple
+    (model_args.prefill_pad_multiple), also every multiple of pad_multiple above
+    MAX_TRACED_PREFILL_LEN up to max_seq_len, which are the lengths get_padded_prefill_len
+    returns for prompts longer than the traced buckets. None returns the powers of 2 only.
     """
-    return [128] + [2**i for i in range(10, max_seq_len.bit_length()) if 2**i <= max_seq_len]
+    lengths = [128] + [2**i for i in range(10, max_seq_len.bit_length()) if 2**i <= max_seq_len]
+    if pad_multiple:
+        first_bucket = (MAX_TRACED_PREFILL_LEN // pad_multiple + 1) * pad_multiple
+        lengths = sorted(set(lengths).union(range(first_bucket, max_seq_len + 1, pad_multiple)))
+    return lengths
 
 
 def _acknowledge_trace_io_corruptible(tensors):
@@ -90,18 +99,18 @@ def _acknowledge_trace_io_corruptible(tensors):
             trace_allocation_tracker.acknowledge_corruptible(tensor)
 
 
-# Largest traced prefill bucket (TT_CCL.support_seqlens). Lengths up to here keep power-of-2 padding.
-MAX_TRACED_PREFILL_LEN = 4096
+# Largest traced prefill bucket. Lengths up to here keep power-of-2 padding.
+MAX_TRACED_PREFILL_LEN = max(PREFILL_SUPPORT_SEQLENS)
 
 
 def get_padded_prefill_len(seq_len: int, pad_multiple: int | None = None) -> int:
     """
-    Get the padded prefill length for a given sequence length.
-    This is used to pad the sequence length to the nearest power of 2.
+    Get the padded prefill length for a given sequence length: 128, 1024, then the next power of 2.
 
     pad_multiple (model_args.prefill_pad_multiple, None by default): above the traced buckets
     (> MAX_TRACED_PREFILL_LEN), pad to the next multiple of pad_multiple instead of the next power
-    of 2, whichever is smaller. None keeps power-of-2 padding for every length.
+    of 2. pad_multiple must divide 2 * MAX_TRACED_PREFILL_LEN, so the result is never above the
+    power of 2. None keeps power-of-2 padding for every length.
     """
     if seq_len <= 128:
         return 128
@@ -110,7 +119,10 @@ def get_padded_prefill_len(seq_len: int, pad_multiple: int | None = None) -> int
     # next power of 2 greater than or equal to seq_len
     pow2_len = 2 ** (seq_len - 1).bit_length()
     if pad_multiple and pow2_len > MAX_TRACED_PREFILL_LEN:
-        return min(pow2_len, -(-seq_len // pad_multiple) * pad_multiple)
+        assert (
+            2 * MAX_TRACED_PREFILL_LEN
+        ) % pad_multiple == 0, f"pad_multiple {pad_multiple} must divide {2 * MAX_TRACED_PREFILL_LEN}"
+        return -(-seq_len // pad_multiple) * pad_multiple
     return pow2_len
 
 
@@ -332,7 +344,10 @@ class Generator(WarmupForwardMixin):
 
         self.model.switch_mode("prefill")
         logger.info("Warming up prefill for all supported sequence lengths up to max sequence length")
-        warmup_sequence_lengths = get_prefill_warmup_sequence_lengths(self.model.args.max_seq_len)
+        # Phase 1 compiles every bucket get_padded_prefill_len can return, including the multiples of
+        # model_args.prefill_pad_multiple (Qwen) above the traced buckets. None (Llama): powers of 2 only.
+        prefill_pad_multiple = getattr(self.model_args, "prefill_pad_multiple", None)
+        warmup_sequence_lengths = get_prefill_warmup_sequence_lengths(self.model.args.max_seq_len, prefill_pad_multiple)
         block_size = get_block_size(kv_cache[0]) if kv_cache else 64
         # Phase 1: sp0 traces (no prefix caching) - batch 1 and 32
         for warmup_sequence_length in warmup_sequence_lengths:
@@ -422,15 +437,19 @@ class Generator(WarmupForwardMixin):
 
         # Phase 2: sp1 traces (prefix caching): batch 1 only, one per supported length.
         # Uses a fixed cached prefix aligned to both SDPA chunk size and page block size.
+        # Powers of 2 only, as before pad_multiple. A non-power-of-2 bucket L (24576, 40960, ... for
+        # Qwen's 8192) keeps a cached prefix only when the padded total is >= 8 * L
+        # (_should_skip_prefix_caching), so it needs no sp1 trace while max_seq_len < 8 * 24576.
+        prefix_warmup_sequence_lengths = get_prefill_warmup_sequence_lengths(self.model.args.max_seq_len)
         num_cached = SDPA_CHUNK_ALIGN
         num_blocks_for_prefix_cache = max(
-            num_blocks_in_seq(num_cached + sl, block_size) for sl in warmup_sequence_lengths
+            num_blocks_in_seq(num_cached + sl, block_size) for sl in prefix_warmup_sequence_lengths
         )
 
         # Use all-zero block IDs for phase-2 warmup page table.
         page_table_phase2 = torch.zeros(1, num_blocks_for_prefix_cache, dtype=torch.int32)
 
-        for supported_length in warmup_sequence_lengths:
+        for supported_length in prefix_warmup_sequence_lengths:
             # Warmup records all sp1 traces regardless of the inference heuristic.
             # _should_skip_prefix_caching is for inference-time only.
             total_seq_len = num_cached + supported_length
