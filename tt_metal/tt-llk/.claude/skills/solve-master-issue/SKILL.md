@@ -318,6 +318,7 @@ test jobs skipped. "Full Nightly" for this skill is the set of scheduled suites 
 $SKILL/scripts/dispatch.sh "Sanity tests"              <branch> -f run-llk-sanity-tests=true
 $SKILL/scripts/dispatch.sh "Nightly tt-metal L2 tests" <branch> \
     -f run_llk_unit_tests=true -f run_cpp_tests=true -f run_p100_sanity_tests=true \
+    -f run_triage_tests=false \
     -f additional_test_categories=<union of the category lists the `schedule` arms pass>
 $SKILL/scripts/dispatch.sh "LLK e2e Tests"             <branch>     # if tt-llk files changed
 ```
@@ -326,8 +327,9 @@ Build the category list at dispatch time from `.github/workflows/tt-metal-l2-nig
 (the ops unit-test list, `compute_fused`, `ops_docs_check` — there are several, take the union). The
 scheduled suites **not** dispatched, and why: DIDT (power stress, not correctness), tutorials and
 tt-cnn (ttnn front-end flows already covered by the ops categories), TT-Train unit + perf and
-tt-triage (own stacks; perf jobs are not pass/fail evidence). If the PR touches code one of those
-owns, add its flag (`run_didt_tests`, `run_tutorials_tests`, `run_tt_cnn_unit_tests`,
+tt-triage (own stacks; perf jobs are not pass/fail evidence). All of those default off except
+`run_triage_tests`, which defaults **on** — hence the explicit `=false`. If the PR touches code one
+of those owns, turn its flag on (`run_didt_tests`, `run_tutorials_tests`, `run_tt_cnn_unit_tests`,
 `run_tt_train_*`, `run_triage_tests`) and say so in the ledger. Then **check the run's job list**,
 not its conclusion: a green rollup whose test jobs are all skipped is not a pass. ("PR - Sanity tests" is not dispatchable. On
 drafts the PR-Gate llk lanes are skipped; silicon coverage for tt-llk changes comes from Sanity's
