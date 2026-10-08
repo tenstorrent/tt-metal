@@ -590,15 +590,14 @@ def an_compare_runs(args, sweep, output_root, opts, log) -> int:
 def an_op_breakdown(args, sweep, output_root, opts, log) -> int:
     rc = 0
     for spec in sweep.runs:
-        rc = _script(
-            [
-                args.python_exe,
-                str(HERE / "op_power_breakdown" / "preview_op_breakdown.py"),
-                str(output_root / spec.subdir),
-            ],
-            log,
-            args.dry_run,
-        )
+        cmd = [
+            args.python_exe,
+            str(HERE / "op_power_breakdown" / "preview_op_breakdown.py"),
+            str(output_root / spec.subdir),
+        ]
+        if "board" in opts:
+            cmd += ["--board", str(opts["board"])]
+        rc = _script(cmd, log, args.dry_run)
         if rc != 0:
             return rc
     return rc

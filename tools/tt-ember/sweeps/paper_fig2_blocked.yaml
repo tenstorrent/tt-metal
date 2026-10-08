@@ -4,7 +4,9 @@
 name: paper_fig2_blocked
 workload: long_matmul
 app_args: [1024, 2048, 2048, 160]
-telemetry_freq_hz: 50
+# 20000 Hz = a 50 us polling period (telemetry -f 50), what the paper's captures used; telemetry
+# tops out near 9.7 kHz. Writes about 1.5 MB of telemetry.txt per second of run.
+telemetry_freq_hz: 20000
 trim_ms: 1.0
 runs:
   power_cases: [0]
