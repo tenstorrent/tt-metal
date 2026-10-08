@@ -157,7 +157,7 @@ def decay_projection_config(grid: ttnn.CoreCoord, rows: int) -> ttnn.MinimalMatm
     return ttnn.MinimalMatmulConfig(
         M_block_size=2,
         K_block_size=4,
-        N_block_size=8,
+        N_block_size=4,
         subblock_h=1,
         subblock_w=4,
         compute_with_storage_grid_size=grid,
