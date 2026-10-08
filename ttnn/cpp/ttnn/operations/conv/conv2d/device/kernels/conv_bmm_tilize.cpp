@@ -201,6 +201,11 @@ inline void reblock_and_untilize(
 }
 
 void kernel_main() {
+#ifdef ARCH_BLACKHOLE
+    if constexpr (DST_ACCUM_MODE) {
+        UNPACK((ckernel::reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1u << 3)));  // r3-09 measurement: LFSR grant, fp32 dest
+    }
+#endif
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
     constexpr uint32_t in0_block_num_tiles =
