@@ -96,21 +96,13 @@ FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
 
         // pack value tiles into transposed buffer
         pack_reconfig_data_format(input_transposed_dfb.get_id());
-#ifdef ARCH_BLACKHOLE
-        pack_block_mop(0, input_transposed_dfb.get_id(), 2);
-#else
         pack_tile(0, input_transposed_dfb.get_id());
         pack_tile(1, input_transposed_dfb.get_id());
-#endif
 
         // pack index tiles into index transposed buffer
         pack_reconfig_data_format(index_transposed_dfb.get_id());
-#ifdef ARCH_BLACKHOLE
-        pack_block_mop(2, index_transposed_dfb.get_id(), 2);
-#else
         pack_tile(2, index_transposed_dfb.get_id());
         pack_tile(3, index_transposed_dfb.get_id());
-#endif
         input_dfb.pop_front(2);
         index_dfb.pop_front(2);
 

@@ -243,12 +243,8 @@ void kernel_main() {
 
                                 tile_regs_wait();
                                 pack_reconfig_data_format(dfb::input_tensor_output);
-#ifdef ARCH_BLACKHOLE
-                                pack_block_mop(input_dest_start, dfb::input_tensor_output, 2);
-#else
                                 pack_tile(input_dest_start, dfb::input_tensor_output);
                                 pack_tile(input_dest_end, dfb::input_tensor_output);
-#endif
                                 tile_regs_release();
 
                                 // Push tiles to writer
@@ -270,12 +266,8 @@ void kernel_main() {
 
                                 tile_regs_wait();
                                 pack_reconfig_data_format(dfb::index_tensor_output);
-#ifdef ARCH_BLACKHOLE
-                                pack_block_mop(input_dest_start, dfb::index_tensor_output, 2);
-#else
                                 pack_tile(input_dest_start, dfb::index_tensor_output);
                                 pack_tile(input_dest_end, dfb::index_tensor_output);
-#endif
                                 tile_regs_release();
 
                                 index_tensor_output_dfb.push_back(2 * one_tile);
