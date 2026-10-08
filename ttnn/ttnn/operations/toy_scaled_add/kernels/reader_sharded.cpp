@@ -17,12 +17,12 @@
 using namespace toy_scaled_add;
 
 void kernel_main() {
-    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+    constexpr uint32_t Wt = get_compile_time_arg_val(ct_arg::WIDTH_TILES);
 
     const uint32_t num_rows = get_arg_val<uint32_t>(core_arg::NUM_ROWS);
     const uint32_t shard_tiles = num_rows * Wt;
 
-    [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<0>();
+    [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<ct_arg::COUNT>();
 
 #ifdef TOY_SCALED_ADD_HAS_GAMMA
     Noc noc;

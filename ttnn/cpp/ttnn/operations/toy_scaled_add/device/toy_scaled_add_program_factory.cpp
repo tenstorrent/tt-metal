@@ -6,6 +6,7 @@
 #include <bit>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/hal.hpp>
@@ -65,6 +66,13 @@ KernelDescriptor::Defines gamma_defines(const ToyScaledAddInputs& t) {
     return {};
 }
 
+// The compile-time args every kernel starts with, by name; a kernel's tensor accessor args follow them.
+std::vector<uint32_t> leading_ct_args(uint32_t width_tiles) {
+    std::vector<uint32_t> args(ct_arg::COUNT);
+    args[ct_arg::WIDTH_TILES] = width_tiles;
+    return args;
+}
+
 // A null Buffer* stands for an absent optional tensor: as a runtime arg it writes 0, and its tensor
 // accessor args are a placeholder of the usual layout, so the slots and offsets after it do not move.
 Buffer* gamma_buffer(const ToyScaledAddInputs& t) { return t.gamma.has_value() ? t.gamma->buffer() : nullptr; }
@@ -85,7 +93,7 @@ KernelDescriptor compute_kernel(
     KernelDescriptor compute;
     compute.kernel_source = kernel_path("compute.cpp");
     compute.core_ranges = cores;
-    compute.named_compile_time_args = {{"Wt", width_tiles}};
+    compute.compile_time_args = leading_ct_args(width_tiles);
     compute.defines = gamma_defines(t);
     // alpha is a common runtime arg, not a compile-time arg: one compiled program serves every alpha.
     compute.common_runtime_args = {std::bit_cast<uint32_t>(attrs.alpha)};
@@ -137,7 +145,7 @@ ProgramDescriptor InterleavedProgramFactory::create_descriptor(
     KernelDescriptor reader;
     reader.kernel_source = kernel_path("reader_interleaved.cpp");
     reader.core_ranges = all_cores;
-    reader.named_compile_time_args = {{"Wt", width_tiles}};
+    reader.compile_time_args = leading_ct_args(width_tiles);
     reader.defines = gamma_defines(t);
     TensorAccessorArgs(*t.a.buffer()).append_to(reader.compile_time_args);
     TensorAccessorArgs(*t.b.buffer()).append_to(reader.compile_time_args);
@@ -151,7 +159,7 @@ ProgramDescriptor InterleavedProgramFactory::create_descriptor(
     KernelDescriptor writer;
     writer.kernel_source = kernel_path("writer_interleaved.cpp");
     writer.core_ranges = all_cores;
-    writer.named_compile_time_args = {{"Wt", width_tiles}};
+    writer.compile_time_args = leading_ct_args(width_tiles);
     TensorAccessorArgs(*output.buffer()).append_to(writer.compile_time_args);
     writer.emplace_common_runtime_args({output.buffer()});
     writer.config = WriterConfigDescriptor{};
@@ -222,7 +230,7 @@ ProgramDescriptor HeightShardedProgramFactory::create_descriptor(
     KernelDescriptor reader;
     reader.kernel_source = kernel_path("reader_sharded.cpp");
     reader.core_ranges = cores;
-    reader.named_compile_time_args = {{"Wt", width_tiles}};
+    reader.compile_time_args = leading_ct_args(width_tiles);
     reader.defines = gamma_defines(t);
     TensorAccessorArgs(gamma_buffer(t)).append_to(reader.compile_time_args);
     reader.emplace_common_runtime_args({gamma_buffer(t)});
@@ -231,7 +239,7 @@ ProgramDescriptor HeightShardedProgramFactory::create_descriptor(
     KernelDescriptor writer;
     writer.kernel_source = kernel_path("writer_sharded.cpp");
     writer.core_ranges = cores;
-    writer.named_compile_time_args = {{"Wt", width_tiles}};
+    writer.compile_time_args = leading_ct_args(width_tiles);
     writer.config = WriterConfigDescriptor{};
 
     TT_FATAL(
