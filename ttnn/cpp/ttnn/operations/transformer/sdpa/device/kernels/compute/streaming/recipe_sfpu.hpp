@@ -21,6 +21,14 @@
 //   combined with values from a different exp implementation. Emulating the cubic over m in [1, 2), the
 //   relative ripple around K is +-0.24% for BALANCED's coefficients and +-0.10% for ACCURATE's.
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
+// Raw SFPU load/store address modes. Wormhole encodes two bits; its SFPU launcher's base offset selects 4-7.
+#ifdef ARCH_WORMHOLE
+#define SDPA_SFPU_ADDR_MOD_6 ADDR_MOD_2
+#define SDPA_SFPU_ADDR_MOD_7 ADDR_MOD_3
+#else
+#define SDPA_SFPU_ADDR_MOD_6 ADDR_MOD_6
+#define SDPA_SFPU_ADDR_MOD_7 ADDR_MOD_7
+#endif
 #ifdef SDPA_RECIPE_SINK
 #include "sfpu/ckernel_sfpu_converter.h"
 #endif
@@ -152,16 +160,16 @@ inline void calculate_sdpa_exp_refine_loadmacro() {
     TTI_SFPMUL(4, 0, p_sfpu::LCONST_0, 13, 0);
     TTI_SFPMUL(5, 0, p_sfpu::LCONST_0, 14, 0);
     TTI_REPLAY(8, 10, 1, 1);
-    TTI_SFPLOADMACRO(6, 0, ADDR_MOD_6, 0);
-    TTI_SFPLOADMACRO(7, 0, ADDR_MOD_6, 2);
+    TTI_SFPLOADMACRO(6, 0, SDPA_SFPU_ADDR_MOD_6, 0);
+    TTI_SFPLOADMACRO(7, 0, SDPA_SFPU_ADDR_MOD_6, 2);
     TTI_SFPMAD(2, 6, 12, 4, 0);
     TTI_SFPMAD(3, 6, 12, 5, 0);
     TTI_SFPMAD(2, 4, 13, 4, 0);
     TTI_SFPMAD(3, 5, 13, 5, 0);
     TTI_SFPMAD(2, 4, 14, 4, 0);
     TTI_SFPMAD(3, 5, 14, 5, 0);
-    TTI_SFPLOADMACRO(8, 0, ADDR_MOD_6, 0);
-    TTI_SFPLOADMACRO(13, 0, ADDR_MOD_7, 2);
+    TTI_SFPLOADMACRO(8, 0, SDPA_SFPU_ADDR_MOD_6, 0);
+    TTI_SFPLOADMACRO(13, 0, SDPA_SFPU_ADDR_MOD_7, 2);
 #pragma GCC unroll 8
     for (int i = 2; i < iterations; i += 2) {
         lltt::replay(8, 10);
