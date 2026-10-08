@@ -1,0 +1,130 @@
+name: LLK PR Review Command
+run-name: "/llk-review on PR #${{ github.event.issue.number }}"
+
+# Starts the LLK PR Review workflow (llk-pr-review.yaml) from a PR comment:
+#
+#   /llk-review            review at the default effort (xhigh)
+#   /llk-review <effort>   review at low, medium, high, xhigh or max
+#
+# Only the first line of the comment is read. This workflow only dispatches;
+# the review itself, its concurrency limit and its output checks all live in
+# llk-pr-review.yaml. Debug output is deliberately not exposed here: it can
+# print private review context to the Actions log, so it stays a manual
+# dispatch option.
+#
+# The human gate is the same as for a manual dispatch: the commenter must have
+# write access to the repository.
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  dispatch:
+    # Cheap pre-filter so unrelated comments start no run; the write-access
+    # check below is the real control. Exact command only: `/llk-reviewer`
+    # does not fire it.
+    if: "github.repository == 'tenstorrent/tt-metal'
+      && github.event.issue.pull_request != null
+      && contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'),
+                  github.event.comment.author_association)
+      && (github.event.comment.body == '/llk-review'
+          || startsWith(github.event.comment.body, '/llk-review ')
+          || startsWith(github.event.comment.body, '/llk-review\n')
+          || startsWith(github.event.comment.body, '/llk-review\r'))"
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      actions: write             # dispatch llk-pr-review.yaml
+      pull-requests: write       # react to and reply on the PR comment
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.issue.number }}
+      COMMENT_ID: ${{ github.event.comment.id }}
+    steps:
+      - name: Acknowledge the command
+        continue-on-error: true
+        run: |
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=eyes --silent
+
+      - name: Refuse anyone without write access
+        env:
+          ACTOR: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+          if ! level="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${ACTOR}/permission" \
+                 --jq .permission 2>"$RUNNER_TEMP/err")"; then
+            # Only 404 means "not a collaborator"; any other failure is the token, not a verdict.
+            if ! grep -q "HTTP 404" "$RUNNER_TEMP/err"; then
+              cat "$RUNNER_TEMP/err" >&2
+              echo "::error::Cannot read ${ACTOR}'s access to ${GITHUB_REPOSITORY}"
+              exit 1
+            fi
+            level=none
+          fi
+          case "$level" in
+            admin|maintain|write)
+              echo "${ACTOR} has ${level} access" ;;
+            *)
+              echo "FAILURE_REASON=starting an LLK review needs write access to this repository" >> "$GITHUB_ENV"
+              echo "::error::${ACTOR} has ${level} access; /llk-review needs write"
+              exit 1 ;;
+          esac
+
+      - name: Parse the effort
+        id: parse
+        env:
+          # Attacker-controlled: read through env, never interpolated, and
+          # matched against a fixed list.
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          line="${COMMENT_BODY%%$'\n'*}"
+          line="${line%$'\r'}"
+          read -r _ effort extra <<< "$line"
+          effort="${effort:-xhigh}"
+          effort="${effort,,}"
+          case "$effort" in
+            low|medium|high|xhigh|max) ;;
+            *)
+              echo "FAILURE_REASON=the effort must be one of low, medium, high, xhigh or max" >> "$GITHUB_ENV"
+              echo "::error::Unrecognized effort on the /llk-review command line"
+              exit 1 ;;
+          esac
+          if [ -n "$extra" ]; then
+            echo "FAILURE_REASON=it takes at most one argument, the effort" >> "$GITHUB_ENV"
+            echo "::error::Unexpected extra arguments on the /llk-review command line"
+            exit 1
+          fi
+          echo "effort=$effort" >> "$GITHUB_OUTPUT"
+
+      # Dispatched with GITHUB_TOKEN: workflow_dispatch is one of the events
+      # that token may still start a run with. The review runs from the default
+      # branch, so a PR cannot change the workflow that reviews it.
+      - name: Start the review
+        env:
+          EFFORT: ${{ steps.parse.outputs.effort }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          gh workflow run llk-pr-review.yaml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH" \
+            -f pr_number="$PR_NUMBER" -f effort="$EFFORT"
+          echo "Started an LLK review of PR #${PR_NUMBER} at effort ${EFFORT}"
+
+      - name: Confirm the review started
+        continue-on-error: true
+        run: |
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=rocket --silent
+
+      - name: Explain why the review did not start
+        if: failure()
+        env:
+          LOG_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          reason="${FAILURE_REASON:-the workflow could not dispatch it}"
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+            "\`/llk-review\` did not start a review: ${reason} ([log](${LOG_URL})).
+
+          Usage: \`/llk-review [low|medium|high|xhigh|max]\`; the effort defaults to \`xhigh\`."

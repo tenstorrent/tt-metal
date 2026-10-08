@@ -4,9 +4,9 @@ run-name: "LLK PR Review — PR #${{ inputs.pr_number }} (effort: ${{ inputs.eff
 # On-demand AI code review for LLK pull requests.
 #
 # Run it manually from the Actions tab (workflow_dispatch) against any PR
-# number. The job runs the repository-local LLK review command against the PR's
-# diff,
-# with:
+# number, or comment `/llk-review [effort]` on the PR, which dispatches it via
+# llk-pr-review-command.yaml. The job runs the repository-local LLK review
+# command against the PR's diff, with:
 #   * the LLK MCP servers (tt_metal/tt-llk/.mcp.json — DeepWiki, Atlassian, Glean),
 #   * the team's private LLK review knowledge, fetched at runtime and routed to
 #     each reviewer by role, with repository-local review instructions and a
@@ -14,7 +14,8 @@ run-name: "LLK PR Review — PR #${{ inputs.pr_number }} (effort: ${{ inputs.eff
 # It posts findings as inline review comments, or an issue-level no-findings
 # summary when no actionable findings survive.
 #
-# The human gate is that a person with write access must dispatch the workflow.
+# The human gate is that a person with write access must dispatch the workflow
+# or post the comment.
 
 on:
   # Manual on-demand trigger: review any open PR by number at a chosen effort.
