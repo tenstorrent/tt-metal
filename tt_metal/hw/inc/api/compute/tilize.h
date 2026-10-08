@@ -70,6 +70,9 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
     // tile-by-tile and have no equivalent concept. Deferred: not on the Quasar critical path.
     UNPACK((llk_unpack_tilize_init(icb, block /*full_ct_dim*/)));  // block_ct_dim defaults to 1
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en>(icb)));
+    // The packer MOP is whatever the last pack init programmed -- after a pack untilize, a PACR_UNTILIZE
+    // into that untilize's output -- so reprogram it for a plain tile pack into ocb.
+    PACK((llk_pack_init(ocb)));
 #endif
 }
 
