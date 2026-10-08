@@ -90,23 +90,34 @@ def _acknowledge_trace_io_corruptible(tensors):
             trace_allocation_tracker.acknowledge_corruptible(tensor)
 
 
-def get_padded_prefill_len(seq_len: int) -> int:
+# Largest traced prefill bucket (TT_CCL.support_seqlens). Lengths up to here keep power-of-2 padding.
+MAX_TRACED_PREFILL_LEN = 4096
+
+
+def get_padded_prefill_len(seq_len: int, pad_multiple: int | None = None) -> int:
     """
     Get the padded prefill length for a given sequence length.
     This is used to pad the sequence length to the nearest power of 2.
+
+    pad_multiple (model_args.prefill_pad_multiple, None by default): above the traced buckets
+    (> MAX_TRACED_PREFILL_LEN), pad to the next multiple of pad_multiple instead of the next power
+    of 2, whichever is smaller. None keeps power-of-2 padding for every length.
     """
     if seq_len <= 128:
         return 128
     if seq_len <= 1024:
         return 1024
-    else:
-        # return next power of 2 greater than seq_len
-        return 2 ** (seq_len - 1).bit_length()
+    # next power of 2 greater than or equal to seq_len
+    pow2_len = 2 ** (seq_len - 1).bit_length()
+    if pad_multiple and pow2_len > MAX_TRACED_PREFILL_LEN:
+        return min(pow2_len, -(-seq_len // pad_multiple) * pad_multiple)
+    return pow2_len
 
 
 def _should_skip_prefix_caching(
     seq_len: int,  # Full sequence length: cached+new tokens
     num_cached: int,  # Number of cached tokens
+    pad_multiple: int | None = None,  # model_args.prefill_pad_multiple, passed to get_padded_prefill_len
 ) -> bool:
     """Decide whether prefix-caching overhead exceeds compute savings.
 
@@ -133,8 +144,8 @@ def _should_skip_prefix_caching(
         return False
 
     new_tokens = seq_len - num_cached
-    padded_new = get_padded_prefill_len(new_tokens)
-    padded_total = get_padded_prefill_len(seq_len)
+    padded_new = get_padded_prefill_len(new_tokens, pad_multiple)
+    padded_total = get_padded_prefill_len(seq_len, pad_multiple)
 
     # If padding erases the compute savings, always skip caching.
     if padded_new >= padded_total:
@@ -514,9 +525,11 @@ class Generator(WarmupForwardMixin):
         # replication).  Overwriting cached KV blocks with identical data is
         # harmless, so this is functionally safe.
         # Skip during warmup so we record all sp1 traces regardless.
+        # None (Llama) keeps power-of-2 prefill padding; Qwen sets a multiple for untraced lengths.
+        prefill_pad_multiple = getattr(self.model_args, "prefill_pad_multiple", None)
         if not self.warming_up_prefill:
             for idx, seq_len in enumerate(prompt_lens):
-                if _should_skip_prefix_caching(int(seq_len), num_cached_tokens_list[idx]):
+                if _should_skip_prefix_caching(int(seq_len), num_cached_tokens_list[idx], prefill_pad_multiple):
                     logger.info(
                         f"Prefix-caching heuristic: skipping cache for user {idx} "
                         f"(seq_len={int(seq_len)}, cached={num_cached_tokens_list[idx]})"
@@ -525,7 +538,8 @@ class Generator(WarmupForwardMixin):
 
         # Calculate and pad prefill_seq_lens excluding cached tokens
         prefill_seq_lens = [
-            get_padded_prefill_len(seq_len - num_cached_tokens_list[idx]) for idx, seq_len in enumerate(prompt_lens)
+            get_padded_prefill_len(seq_len - num_cached_tokens_list[idx], prefill_pad_multiple)
+            for idx, seq_len in enumerate(prompt_lens)
         ]
         if page_table is not None:
             assert isinstance(
