@@ -319,12 +319,12 @@ class MiMoDecoderLayer:
         if live is not None:
             if (
                 getattr(self, "moe_dec", None) is None
-                and os.environ.get("MIMO_MOE_DECODE", "unified") == "ring"
+                and os.environ.get("MIMO_MOE_DECODE", "ring") == "ring"
                 and __import__("models.demos.blackhole.mimo_v26.tt.moe_ring", fromlist=["ring_enabled"]).ring_enabled(
                     self.mesh
                 )
             ):
-                # RING decode MoE (tt/moe_ring.py): second, ring-layout bfp8 weight copy of this layer (NFS cache MIMO_WCACHE; build it once with tests/build_ring_cache.py)
+                # RING decode MoE, the default (MIMO_MOE_DECODE=unified is the documented fallback; ring_enabled() also falls back to unified when DRAM headroom < 1 GiB per chip; needs the integ_e4ff6c137d3 library): second, ring-layout bfp8 weight copy of this layer (NFS cache MIMO_WCACHE; build it once with tests/build_ring_cache.py)
                 from models.demos.blackhole.mimo_v26.tt.moe_ring import MiMoRingMoEDecode, RingExpertWeights
 
                 self.moe_dec = MiMoRingMoEDecode(
