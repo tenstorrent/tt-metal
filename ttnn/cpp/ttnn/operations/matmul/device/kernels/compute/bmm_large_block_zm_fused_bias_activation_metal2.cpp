@@ -189,6 +189,9 @@ void kernel_main() {
         return;
     }
 #endif
+#ifdef ARCH_BLACKHOLE
+    UNPACK((ckernel::reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1u << 3)));  // r3-09 measurement: L1 arbiter LFSR grant
+#endif
 
     constexpr auto in0_block_w = get_arg(args::in0_block_w);              // inner block size in tiles
     constexpr auto in0_num_subblocks = get_arg(args::in0_num_subblocks);  // outer row block size (in inner row blocks)
