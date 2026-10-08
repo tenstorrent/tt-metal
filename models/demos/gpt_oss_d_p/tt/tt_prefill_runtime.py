@@ -469,10 +469,14 @@ class TtPrefillRuntime:
                 coordinates[self.config.tp_axis] = tp_coordinate
                 return coordinates[0] * mesh_cols + coordinates[1]
 
-            logits = torch.cat(
-                [ttnn.to_torch(shards[shard_index(tp_coordinate)]) for tp_coordinate in range(self.config.tp_factor)],
-                dim=-1,
-            )
+            # Queue every TP shard's D2H first, then materialize them. Calling
+            # to_torch directly in the comprehension serializes eight blocking
+            # transfers even though the shards live on independent devices.
+            host_shards = [
+                ttnn.from_device(shards[shard_index(tp_coordinate)], blocking=False)
+                for tp_coordinate in range(self.config.tp_factor)
+            ]
+            logits = torch.cat([ttnn.to_torch(shard) for shard in host_shards], dim=-1)
             logits = logits[..., final_in_tile, : self.model.vocab_size].reshape(-1).float()
             y0 = int(torch.argmax(logits).item())
             ttnn.deallocate(logits_tt)
