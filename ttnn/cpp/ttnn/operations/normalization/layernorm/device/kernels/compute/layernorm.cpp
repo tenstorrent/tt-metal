@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define CKL_ELTWISE_CHAIN_PACK_BLOCK
+
 #include <cstdint>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL

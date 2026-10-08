@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define CKL_ELTWISE_CHAIN_PACK_BLOCK
+
 #include <cstdint>
 
 #include "api/compute/eltwise_binary.h"

@@ -295,12 +295,8 @@ void mask_and_topk() {
             tile_regs_commit();
             tile_regs_wait();
             pack_reconfig_data_format(masked_input_dfb_index);
-#ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, masked_input_dfb_index, 2);
-#else
             pack_tile(0, masked_input_dfb_index);
             pack_tile(1, masked_input_dfb_index);
-#endif
             masked_input_dfb.push_back(2);
             input_dfb.pop_front(2);
             tile_regs_release();
@@ -329,21 +325,13 @@ void mask_and_topk() {
             tile_regs_wait();
             // pack value tiles into cb_intermed0
             pack_reconfig_data_format(input_transposed_dfb_index);
-#ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, input_transposed_dfb_index, 2);
-#else
             pack_tile(0, input_transposed_dfb_index);
             pack_tile(1, input_transposed_dfb_index);
-#endif
 
             // pack index tiles into cb_intermed1
             pack_reconfig_data_format(index_transposed_dfb_index);
-#ifdef ARCH_BLACKHOLE
-            pack_block_mop(2, index_transposed_dfb_index, 2);
-#else
             pack_tile(2, index_transposed_dfb_index);
             pack_tile(3, index_transposed_dfb_index);
-#endif
             tile_regs_release();
         }
 

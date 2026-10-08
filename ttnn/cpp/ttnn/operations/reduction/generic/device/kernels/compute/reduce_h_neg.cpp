@@ -89,13 +89,9 @@ void kernel_main() {
                 dfb_ineg.reserve_back(static_cast<uint16_t>(ntiles));
                 tile_regs_wait();
                 pack_reconfig_data_format(dfb::ineg);
-#ifdef ARCH_BLACKHOLE
-                pack_block_mop(0, dfb::ineg, ntiles);
-#else
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     pack_tile(i, dfb::ineg);
                 }
-#endif
                 tile_regs_release();
                 dfb_ineg.push_back(static_cast<uint16_t>(ntiles));
 
@@ -132,13 +128,9 @@ void kernel_main() {
                 }
                 dfb_acc.reserve_back(static_cast<uint16_t>(ntiles));
                 tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-                pack_block_mop(0, dfb::acc, ntiles);
-#else
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     pack_tile(i, dfb::acc);
                 }
-#endif
                 tile_regs_release();
                 dfb_acc.push_back(static_cast<uint16_t>(ntiles));
             }
@@ -174,13 +166,9 @@ void kernel_main() {
             dfb_output.reserve_back(static_cast<uint16_t>(ntiles));
             tile_regs_wait();
             pack_reconfig_data_format(dfb::out);
-#ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, dfb::out, ntiles);
-#else
             for (uint32_t i = 0; i < ntiles; ++i) {
                 pack_tile(i, dfb::out);
             }
-#endif
             tile_regs_release();
             dfb_output.push_back(static_cast<uint16_t>(ntiles));
         }

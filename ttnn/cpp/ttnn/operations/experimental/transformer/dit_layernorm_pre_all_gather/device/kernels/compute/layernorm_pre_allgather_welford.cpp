@@ -100,12 +100,8 @@ void kernel_main() {
         cb_reserve_back(cb_x2, 2);
         tile_regs_commit();
         tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-        pack_block_mop(dst1, cb_x2, 2);
-#else
         pack_tile(dst1, cb_x2);
         pack_tile(dst2, cb_x2);
-#endif
         cb_push_back(cb_x2, 2);
         tile_regs_release();
         reconfig_data_format(cb_x2, cb_x2);
@@ -120,12 +116,8 @@ void kernel_main() {
 
         tile_regs_commit();
         tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-        pack_block_mop(dst0, cb_out, 2);
-#else
         pack_tile(dst0, cb_out);
         pack_tile(dst1, cb_out);
-#endif
         cb_push_back(cb_out, 2);
         tile_regs_release();
     }
