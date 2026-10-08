@@ -33,11 +33,10 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape);
  * Only used for MAX pool (GMPOOL does column wise max of SrcA only).
  *
  * @tparam is_int_fpu_en: Cast int32 dest datums to int8 (via SFPU) before moving to SrcB.
- * @note The MOVD2B/ELWADD below read the Src zero-substitution flag (FlushDenormals = !flag): a datum whose
- *       low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction. The flag is held in
- *       PRESERVE for the whole op by @ref _llk_math_reduce_init_ (MAX/REDUCE_ROW) and returned to the
- *       operand-driven baseline by @ref _llk_math_reduce_uninit_; toggling it here per face row cost two
- *       FPU pipe drains (STALLWAIT + cfg write) per face row.
+ * @note The ELWADD below reads the Src zero-substitution flag as it consumes the transposed SrcB rows (MOVD2B
+ *       only stages them; see the reader list in cmath_common.h). At the operand default it flushes any datum
+ *       whose Src low byte is zero: a zero-exponent float (-0.0 loses its sign) or an integer datum whose low
+ *       magnitude byte is zero. Run with the flag in PRESERVE, which @ref _llk_math_reduce_ asserts.
  */
 template <bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
@@ -240,6 +239,10 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
  * @param tensor_shape: Tensor shape describing tile dimensions.
  * @note Call @ref _llk_math_reduce_init_ with matching template args before this
  *       function, and @ref _llk_math_reduce_uninit_ after it to restore modified state.
+ * @note MAX/REDUCE_ROW sets the Src zero-substitution flag to PRESERVE on every call (a skip-if-set compare
+ *       once init has set it), so a hw_configure or data-format reconfig issued after init cannot put its
+ *       transpose back under the operand default. The flag stays in PRESERVE until
+ *       @ref _llk_math_reduce_uninit_.
  */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
@@ -260,6 +263,10 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 
         if constexpr (type == PoolType::MAX)
         {
+            // The transposes below need PRESERVE. Asserted here as well as in init so it survives a
+            // hw_configure / reconfig issued after the init, as _llk_math_transpose_dest_ does.
+            math::_configure_preserve_zero_flag_state_();
+
             reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
             reduce_row_perform_transpose<is_int_fpu_en>();
 
@@ -463,6 +470,8 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
  * @param tensor_shape: Tile shape describing tile dimensions.
  * @note Call @ref _llk_math_reduce_ with matching template args after this function,
  *       and @ref _llk_math_reduce_uninit_ after the last reduce to restore modified state.
+ * @note Sets the Src zero-substitution flag: PRESERVE for MAX/REDUCE_ROW, which holds it until
+ *       @ref _llk_math_reduce_uninit_, and the operand-driven default for every other reduce.
  */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
 inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
@@ -480,14 +489,12 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
-    // Src zero-substitution flag ownership for the whole op:
-    //  - MAX/REDUCE_ROW: hold PRESERVE. Its per-face-row transpose (reduce_row_perform_transpose) moves the
-    //    pooled row through SrcB with MOVD2B/ELWADD, which flush any datum with a zero low byte when the flag
-    //    is at the operand default. Setting it once here instead of around every transpose removes two FPU
-    //    pipe drains (STALLWAIT + cfg write) per face row; GMPOOL itself does not consult the flag.
-    //  - Everything else: establish the operand-driven DEFAULT, mirroring _llk_math_matmul_init_ /
-    //    _llk_math_eltwise_binary_init_, so a preceding copy_init that left PRESERVE cannot leak into the
-    //    pool instructions.
+    // Src zero-substitution flag, held for the whole op:
+    //  - MAX/REDUCE_ROW: PRESERVE, for the ELWADD in each per-face-row transpose (reduce_row_perform_transpose).
+    //    Set here so the first _llk_math_reduce_ finds it in place and its own assert is a compare, not a
+    //    pipe drain. GMPOOL does not read the flag.
+    //  - Everything else: the operand-driven DEFAULT, as _llk_math_matmul_init_ / _llk_math_eltwise_binary_init_
+    //    do, so a preceding copy_init that left PRESERVE does not carry into the reduce.
     // _llk_math_reduce_uninit_ returns the flag to the operand-driven baseline.
     if constexpr (type == PoolType::MAX && dim == ReduceDim::REDUCE_ROW)
     {
@@ -503,7 +510,7 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
  * @brief Uninitialize after a reduce operation, undoing any init/execute-time workarounds.
  *
  * Returns the Src zero-substitution flag to the operand-driven baseline; MAX/REDUCE_ROW holds it in
- * PRESERVE for the whole op (see @ref _llk_math_reduce_init_). Skip-if-set, so a no-op for the other paths.
+ * PRESERVE from @ref _llk_math_reduce_init_ to here. Skip-if-set, so a no-op for the other paths.
  *
  * @note Reverses @ref _llk_math_reduce_init_
  */
