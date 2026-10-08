@@ -12,10 +12,9 @@ from loguru import logger
 from PIL import Image, ImageFilter
 
 import ttnn
-
-from ....parallel.config import DiTParallelConfig, EncoderParallelConfig
-from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
-from ....utils.test import line_params_req_exact_devices
+from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig
+from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
+from models.tt_dit.utils.test import line_params_req_exact_devices
 
 DOG_IMAGE_PATH = Path(__file__).resolve().parents[4] / "demos" / "multimodal" / "gemma3" / "dog.jpg"
 
@@ -32,11 +31,11 @@ DOG_IMAGE_PATH = Path(__file__).resolve().parents[4] / "demos" / "multimodal" / 
 )
 @pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 50)])
 @pytest.mark.parametrize(
-    "mesh_device, cfg, sp, tp, encoder_tp, encoder_fsdp, topology, num_links",
+    ("mesh_device", "cfg", "sp", "tp", "encoder_tp", "encoder_fsdp", "topology", "num_links"),
     [
-        [(2, 2), (2, 0), (1, 0), (2, 1), (2, 1), None, ttnn.Topology.Linear, 1],
-        [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (2, 0), ttnn.Topology.Linear, 1],
-        [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), None, ttnn.Topology.Linear, 4],
+        ((2, 2), (2, 0), (1, 0), (2, 1), (2, 1), None, ttnn.Topology.Linear, 1),
+        ((2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (2, 0), ttnn.Topology.Linear, 1),
+        ((4, 8), (2, 1), (4, 0), (4, 1), (4, 1), None, ttnn.Topology.Linear, 4),
     ],
     ids=[
         "2x2sp1tp2",
@@ -106,15 +105,15 @@ def test_qwenimage_pipeline(
         'Steamy ramen shop entrance at dusk; fabric noren curtain gently swaying; print "しょうゆラーメン" across the curtain in thick brush-style kana; warm lantern light, photorealistic.',
         'Minimalist tea poster, cream background, elegant layout; vertical calligraphy "抹茶" centered in sumi ink; small red hanko-style seal "本格" in the corner; high-resolution graphic design.',
         'Hardcover fantasy novel cover, textured paper, gold foil; title text "物語のはじまり" centered; author line "山本ひかり" below; tasteful serif typography, dramatic vignette illustration.',
-        'Anime manga panel, dynamic action lines; speech bubble with clear Japanese text "大丈夫、行こう！"; bold hand-lettered style; black-and-white screentone shading.',
+        'Anime manga panel, dynamic action lines; speech bubble with clear Japanese text "大丈夫、行こう！"; bold hand-lettered style; black-and-white screentone shading.',  # noqa: RUF001
         'Shinto shrine ema (wooden wish plaque) close-up; handwritten ink message "合格祈願"; tied with a red cord; shallow depth of field, natural morning light.',
         'Bento box label design, clean packaging mockup; headline "手作り弁当"; small ingredient list: "鮭・卵焼き・梅干し"; price sticker "650円"; modern sans-serif Japanese fonts.',
         'Japanese train platform signage, realistic JR-style; overhead sign with station name "新宿駅" and platform number "3番線"; add direction arrow and destination "快速 高尾行"; crisp transport typography.',
         'Ukiyo-e inspired poster, textured washi paper; bold brushstroke kanji "旅" dominating the composition; red seal mark "江戸風"; muted indigo palette.',
         'Coffee cup + sleeve mockup on café counter; sleeve text "本日のおすすめ" and below it "深煎りブレンド"; chalkboard menu bokeh background; cozy light, photoreal.',
         'Smartphone weather app UI screen; header text "今日の天気"; weekday labels in Japanese: "月", "火", "水", "木", "金"; include the condition tag "晴れ"; temperature readouts; sleek flat design.',
-        'Dramatic sci-fi movie poster; title "最後の光：遥かなる記憶の果て" in large metallic Japanese type; tagline "希望は消えない" below; cinematic grading, star field background.',
-        'Classroom chalkboard, dusty chalk texture; handwritten announcements: "テストは金曜日" and "がんばろう！"; eraser marks and doodles; warm afternoon light.',
+        'Dramatic sci-fi movie poster; title "最後の光：遥かなる記憶の果て" in large metallic Japanese type; tagline "希望は消えない" below; cinematic grading, star field background.',  # noqa: RUF001
+        'Classroom chalkboard, dusty chalk texture; handwritten announcements: "テストは金曜日" and "がんばろう！"; eraser marks and doodles; warm afternoon light.',  # noqa: RUF001
         'Summer festival poster, bold typography; headline "夏祭り"; date "8月15日" and location "中央公園"; lantern graphics; vibrant, printable A3 layout.',
         'City safety billboard near crosswalk; big, high-contrast warnings "安全第一" and "スピード注意"; reflective materials, urban street scene, twilight.',
         'Hanging calligraphy scroll (kakejiku), tatami room; vertical brush poem "静けさの中に光あり、心は波のようにおだやかに満ち、ひとすじの風が時を運ぶ"; red artist seal "青風"; soft morning light and paper texture.',

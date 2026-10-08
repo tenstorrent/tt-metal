@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
 
-PROMPT_TEMPLATE = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"  # noqa: E501
+PROMPT_TEMPLATE = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"
 PROMPT_DROP_IDX = 34
 
 
@@ -71,7 +71,9 @@ class TextEncoder:
             logger.info("loading text encoder weights to device...")
             checkpoint = Qwen25VlCheckpoint(checkpoint_name, subfolder="text_encoder")
             with self._reshape():
-                self._encoder = checkpoint.build(device=device, parallel_config=parallel_config, ccl_manager=ccl_manager)
+                self._encoder = checkpoint.build(
+                    device=device, parallel_config=parallel_config, ccl_manager=ccl_manager
+                )
             ttnn.synchronize_device(device)
 
     @torch.no_grad()

@@ -4,28 +4,22 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import diffusers
 import torch
 from diffusers.configuration_utils import FrozenDict
 from diffusers.models.transformers.transformer_qwenimage import QwenEmbedRope
 
 import ttnn
-
-from ...blocks.transformer_block import TransformerBlock
-from ...layers.embeddings import SD35CombinedTimestepTextProjEmbeddings
-from ...layers.linear import ColParallelLinear, Linear
-from ...layers.module import Module, ModuleList
-from ...layers.normalization import DistributedLayerNorm, RMSNorm
-from ...utils import cache
-from ...utils.padding import PaddingConfig
-from ...utils.substate import rename_substate
-from ...utils.tensor import from_torch
-
-if TYPE_CHECKING:
-    from ...parallel.config import DiTParallelConfig
-    from ...parallel.manager import CCLManager
+from models.tt_dit.blocks.transformer_block import TransformerBlock
+from models.tt_dit.layers.embeddings import SD35CombinedTimestepTextProjEmbeddings
+from models.tt_dit.layers.linear import ColParallelLinear, Linear
+from models.tt_dit.layers.module import Module, ModuleList
+from models.tt_dit.layers.normalization import DistributedLayerNorm, RMSNorm
+from models.tt_dit.parallel.config import DiTParallelConfig
+from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils import cache, tensor
+from models.tt_dit.utils.padding import PaddingConfig
+from models.tt_dit.utils.substate import rename_substate
 
 
 class QwenImageTransformerBlock(TransformerBlock):
@@ -146,17 +140,16 @@ class QwenImageTransformer(Module):
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         spatial_sequence_length: int,
-        prompt_sequence_length: int,
     ) -> ttnn.Tensor:
         """Run the model forward.
 
         Args:
             spatial: Tensor with shape [batch_size, spatial_sequence_length / sp_factor, in_channels].
             prompt: Tensor with shape [batch_size, prompt_sequence_length, joint_attention_dim].
-            pooled: Tensor with shape [batch_size, pooled_projection_dim].
             timestep: Tensor with shape [batch_size, 1].
             spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
             prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim] (sequence is not sharded!).
+            spatial_sequence_length: Length of the spatial sequence, before sharding.
         """
         time_embed = self.time_text_embed(timestep=timestep)
         ttnn.silu(time_embed, output_tensor=time_embed)
@@ -261,12 +254,16 @@ class QwenImageCheckpoint:
         )
 
         spatial_rope = (
-            from_torch(spatial_freqs.real.repeat_interleave(2, dim=-1), device=device, mesh_axes=[sp_axis, None]),
-            from_torch(spatial_freqs.imag.repeat_interleave(2, dim=-1), device=device, mesh_axes=[sp_axis, None]),
+            tensor.from_torch(
+                spatial_freqs.real.repeat_interleave(2, dim=-1), device=device, mesh_axes=[sp_axis, None]
+            ),
+            tensor.from_torch(
+                spatial_freqs.imag.repeat_interleave(2, dim=-1), device=device, mesh_axes=[sp_axis, None]
+            ),
         )
         prompt_rope = (
-            from_torch(prompt_freqs.real.repeat_interleave(2, dim=-1), device=device),
-            from_torch(prompt_freqs.imag.repeat_interleave(2, dim=-1), device=device),
+            tensor.from_torch(prompt_freqs.real.repeat_interleave(2, dim=-1), device=device),
+            tensor.from_torch(prompt_freqs.imag.repeat_interleave(2, dim=-1), device=device),
         )
         return spatial_rope, prompt_rope
 

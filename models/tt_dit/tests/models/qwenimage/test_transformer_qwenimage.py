@@ -8,15 +8,14 @@ import torch
 from loguru import logger
 
 import ttnn
-
-from ....models.transformers.transformer_qwenimage import QwenImageTransformer
-from ....parallel.config import DiTParallelConfig, ParallelFactor
-from ....parallel.manager import CCLManager
-from ....utils import cache, tensor
-from ....utils.check import assert_quality
-from ....utils.padding import PaddingConfig
-from ....utils.test import line_params_req_exact_devices
-from ....utils.tracing import Tracer
+from models.tt_dit.models.transformers.transformer_qwenimage import QwenImageTransformer
+from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
+from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils import cache, tensor
+from models.tt_dit.utils.check import assert_quality
+from models.tt_dit.utils.padding import PaddingConfig
+from models.tt_dit.utils.test import line_params_req_exact_devices
+from models.tt_dit.utils.tracing import Tracer
 
 
 @pytest.mark.parametrize(
@@ -157,7 +156,6 @@ def test_transformer(
             spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
             prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
             spatial_sequence_length=spatial_seq_len,
-            prompt_sequence_length=prompt_seq_len,
         )
 
     logger.info("running torch model...")

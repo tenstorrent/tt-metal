@@ -10,25 +10,24 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-
-from ....parallel.config import DiTParallelConfig, EncoderParallelConfig
-from ....pipelines.events import profiler_event_callback
-from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
-from ....utils.test import line_params_req_exact_devices
+from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig
+from models.tt_dit.pipelines.events import profiler_event_callback
+from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
+from models.tt_dit.utils.test import line_params_req_exact_devices
 
 
 @pytest.mark.parametrize(
-    "image_w, image_h, num_inference_steps",
+    ("image_w", "image_h", "num_inference_steps"),
     [
         (1024, 1024, 50),
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, cfg, sp, tp, encoder_tp, encoder_fsdp, topology, num_links",
+    ("mesh_device", "cfg", "sp", "tp", "encoder_tp", "encoder_fsdp", "topology", "num_links"),
     [
-        [(2, 2), (2, 0), (1, 0), (2, 1), (2, 1), None, ttnn.Topology.Linear, 1],
-        [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (2, 0), ttnn.Topology.Linear, 1],
-        [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), None, ttnn.Topology.Linear, 4],
+        ((2, 2), (2, 0), (1, 0), (2, 1), (2, 1), None, ttnn.Topology.Linear, 1),
+        ((2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (2, 0), ttnn.Topology.Linear, 1),
+        ((4, 8), (2, 1), (4, 0), (4, 1), (4, 1), None, ttnn.Topology.Linear, 4),
     ],
     ids=[
         "2x2cfg2sp1tp2",
@@ -60,7 +59,6 @@ def test_qwenimage_pipeline_performance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Performance test for QwenImage pipeline with detailed timing analysis."""
-
     benchmark_profiler = BenchmarkProfiler()
 
     # Set TT_DIT_CACHE in CI environment
@@ -109,40 +107,23 @@ def test_qwenimage_pipeline_performance(
     logger.info("Running performance measurement iterations...")
     num_perf_runs = 2  # len(prompts)
 
-    # optional tracy profiling (if available)
-    profiler = None
-    try:
-        from tracy import Profiler
+    for i in range(num_perf_runs):
+        logger.info(f"Performance run {i+1}/{num_perf_runs}...")
 
-        profiler = Profiler()
-        profiler.enable()
-        logger.info("Tracy profiling enabled")
-    except ImportError:
-        logger.info("Tracy profiler not available, continuing without profiling")
+        # run pipeline with different prompt
+        prompt_idx = (i + 1) % len(prompts)
 
-    try:
-        for i in range(num_perf_runs):
-            logger.info(f"Performance run {i+1}/{num_perf_runs}...")
+        with benchmark_profiler("run", iteration=i):
+            images = pipeline(
+                prompts=[prompts[prompt_idx]],
+                num_inference_steps=num_inference_steps,
+                traced=True,
+                on_event=profiler_event_callback(benchmark_profiler, i),
+            )
 
-            # run pipeline with different prompt
-            prompt_idx = (i + 1) % len(prompts)
+        logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
 
-            with benchmark_profiler("run", iteration=i):
-                images = pipeline(
-                    prompts=[prompts[prompt_idx]],
-                    num_inference_steps=num_inference_steps,
-                    traced=True,
-                    on_event=profiler_event_callback(benchmark_profiler, i),
-                )
-
-            logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
-
-            images[0].save(f"qwenimage_{image_w}_{image_h}_perf_run{i}.png")
-
-    finally:
-        if profiler:
-            profiler.disable()
-            logger.info("Tracy profiling disabled")
+        images[0].save(f"qwenimage_{image_w}_{image_h}_perf_run{i}.png")
 
     total_encoding_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
     vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
@@ -160,7 +141,7 @@ def test_qwenimage_pipeline_performance(
     print("\n" + "=" * 100)
     print("QWEN IMAGE PIPELINE PERFORMANCE RESULTS")
     print("=" * 100)
-    print(f"Model: QwenImage")
+    print("Model: QwenImage")
     print(f"Image Size: {image_w}x{image_h}")
     print(f"Inference Steps: {num_inference_steps}")
     print(f"Configuration: cfg={cfg[0]}, sp={sp[0]}, tp={tp[0]}, encoder_tp={encoder_tp[0]}")
@@ -168,7 +149,7 @@ def test_qwenimage_pipeline_performance(
     print(f"Topology: {topology}")
     print("-" * 100)
 
-    def print_stats(name, times):
+    def print_stats(name: str, times: list[float]) -> None:
         if not times:
             print(f"{name:25} | No data available")
             return
@@ -177,7 +158,8 @@ def test_qwenimage_pipeline_performance(
         min_time = min(times)
         max_time = max(times)
         print(
-            f"{name:25} | Mean: {mean_time:8.4f}s | Std: {std_time:8.4f}s | Min: {min_time:8.4f}s | Max: {max_time:8.4f}s"
+            f"{name:25} | Mean: {mean_time:8.4f}s | Std: {std_time:8.4f}s | "
+            f"Min: {min_time:8.4f}s | Max: {max_time:8.4f}s"
         )
 
     print_stats("Total Encoding", total_encoding_times)
@@ -201,7 +183,7 @@ def test_qwenimage_pipeline_performance(
         avg_encoding_time = statistics.mean(total_encoding_times)
         avg_vae_time = statistics.mean(vae_times)
 
-        print(f"\nTime breakdown:")
+        print("\nTime breakdown:")
         print(f"  Encoding: {avg_encoding_time/avg_total_time*100:.1f}%")
         print(f"  Denoising: {total_denoising_time/avg_total_time*100:.1f}%")
         print(f"  VAE: {avg_vae_time/avg_total_time*100:.1f}%")
@@ -239,7 +221,7 @@ def test_qwenimage_pipeline_performance(
             "total_time": 26,
         }
     else:
-        assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
+        pytest.fail(f"Unknown mesh device for performance comparison: {mesh_device}")
 
     if is_ci_env:
         # in ci, dump a performance report
@@ -253,6 +235,7 @@ def test_qwenimage_pipeline_performance(
                     expected_metrics["vae_decoding_time"],
                     expected_metrics["total_time"],
                 ],
+                strict=True,
             ):
                 benchmark_data.add_measurement(
                     profiler=benchmark_profiler,
@@ -288,10 +271,11 @@ def test_qwenimage_pipeline_performance(
 
     pass_perf_check = True
     assert_msgs = []
-    for k in expected_metrics.keys():
+    for k in expected_metrics:
         if measurements[k] > expected_metrics[k]:
             assert_msgs.append(
-                f"Warning: {k} is outside of the tolerance range. Expected: {expected_metrics[k]}, Actual: {measurements[k]}"
+                f"Warning: {k} is outside of the tolerance range. "
+                f"Expected: {expected_metrics[k]}, Actual: {measurements[k]}"
             )
             pass_perf_check = False
 

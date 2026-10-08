@@ -26,7 +26,7 @@ from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, Se
 from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
 from models.tt_dit.pipelines.qwenimage.text_encoder import TextEncoder
 from models.tt_dit.solvers import EulerSolver, calculate_shift
-from models.tt_dit.utils.tensor import from_torch, from_torch_to_devices, zeros
+from models.tt_dit.utils import tensor
 from models.tt_dit.utils.tracing import Tracer
 
 _VAE_SCALE_FACTOR = 8
@@ -266,9 +266,9 @@ class QwenImagePipeline(PipelineAPIMixin):
         mesh_axes = [None, self._sp_axis, None]
         self._inpaint_inputs = [
             _InpaintInputs(
-                image_latents=zeros(inpaint_shape, device=d, mesh_axes=mesh_axes),
-                noise=zeros(inpaint_shape, device=d, mesh_axes=mesh_axes),
-                mask=zeros(inpaint_shape, device=d, mesh_axes=mesh_axes),
+                image_latents=tensor.zeros(inpaint_shape, device=d, mesh_axes=mesh_axes),
+                noise=tensor.zeros(inpaint_shape, device=d, mesh_axes=mesh_axes),
+                mask=tensor.zeros(inpaint_shape, device=d, mesh_axes=mesh_axes),
             )
             for d in self._devices
         ]
@@ -375,11 +375,11 @@ class QwenImagePipeline(PipelineAPIMixin):
         first_step = first_step if inpaint else 0
 
         logger.info("preparing inputs...")
-        context = [from_torch(c, device=d) for c, d in zip(torch_contexts, self._devices, strict=True)]
+        context = [tensor.from_torch(c, device=d) for c, d in zip(torch_contexts, self._devices, strict=True)]
         noise = self._random_latents(batch_size=prompt_count * num_images_per_prompt, seed=seed, inpaint=inpaint)
         if inpaint:
             noise = self._prepare_inpainting(image, mask_image, noise=noise, first_step=first_step, traced=vae_traced)
-        latents = from_torch_to_devices(noise, devices=self._devices, mesh_axes=[None, self._sp_axis, None])
+        latents = tensor.from_torch_to_devices(noise, devices=self._devices, mesh_axes=[None, self._sp_axis, None])
         ropes = [
             self._checkpoint.rope_tables(
                 latents_height=self._latents_height,
@@ -418,7 +418,6 @@ class QwenImagePipeline(PipelineAPIMixin):
                         spatial_rope=spatial_rope if step == first_step else tracer.inputs["spatial_rope"],
                         prompt_rope=prompt_rope if step == first_step else tracer.inputs["prompt_rope"],
                         spatial_sequence_length=self._latents_sequence_length,
-                        prompt_sequence_length=prompt_sequence_lengths[idx],
                         traced=traced,
                         tracer_blocking_execution=False,
                     )
@@ -506,7 +505,7 @@ class QwenImagePipeline(PipelineAPIMixin):
                 (noise, buffers.noise),
                 (mask, buffers.mask),
             ):
-                host = from_torch(
+                host = tensor.from_torch(
                     source,
                     device=d,
                     mesh_axes=[None, self._sp_axis, None],
