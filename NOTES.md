@@ -19,3 +19,7 @@
   DET_A2A on (t48 default) and 2797bc... with DET_A2A=0. #274 ran on 5833f56096f (no A2A), hence
   its 2797bc.... So edge order is bit-identical on t48: OK to land.
 - Next: on ttp/t277-land `ttp push --detach`; then back on this branch `ttp push --own --detach`.
+- Landed: a5a774ea17f on origin/ttp/t48-ltx25-integrated (push t277-20261008-121310, exit 0).
+- Own-branch push failed (exit 4): branch was based on b9f8587ce6c, which predates
+  test_vae_ltx_*_ref.py, so the push check's glob found no file. Rebased the notes commits
+  onto t48 a5a774ea17f and pushed again with `ttp push --own --detach`.
