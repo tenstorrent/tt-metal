@@ -28,12 +28,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
-    const std::uint32_t num_blocks     = params.INPUT_NUM_BLOCKS;
-    const std::uint32_t tiles_in_block = params.INPUT_NUM_TILES_IN_BLOCK;
-    const int num_faces_r_dim_A        = params.num_faces_r_dim_A;
-    const int num_faces_c_dim_A        = params.num_faces_c_dim_A;
-    const Operand& buffer_B            = params.buffer_B;
+    const std::uint32_t INPUT_NUM_BLOCKS         = params.INPUT_NUM_BLOCKS;
+    const std::uint32_t INPUT_NUM_TILES_IN_BLOCK = params.INPUT_NUM_TILES_IN_BLOCK;
+    const int num_faces_r_dim_A                  = params.num_faces_r_dim_A;
+    const int num_faces_c_dim_A                  = params.num_faces_c_dim_A;
+    const Operand& buffer_B                      = params.buffer_B;
 #endif
+    const std::uint32_t num_blocks     = static_cast<std::uint32_t>(INPUT_NUM_BLOCKS);
+    const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(INPUT_NUM_TILES_IN_BLOCK);
     // Unpack to dest must use the num tiles per unpack parameter in order to unpack multiple tiles per Dest bank
     const std::uint32_t num_tiles_per_unpack = unpack_to_dest ? tiles_in_block : 1;
 
@@ -162,9 +164,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
     const std::uint32_t num_faces      = params.num_faces;
-    const std::uint32_t tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
-    const std::uint32_t num_blocks     = params.INPUT_NUM_BLOCKS;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t INPUT_NUM_BLOCKS          = params.INPUT_NUM_BLOCKS;
 #endif
+    const std::uint32_t tiles_in_block      = static_cast<std::uint32_t>(OUTPUT_NUM_TILES_IN_BLOCK);
+    const std::uint32_t num_blocks          = static_cast<std::uint32_t>(INPUT_NUM_BLOCKS);
     const DataFormat math_format            = static_cast<DataFormat>(formats.math);
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
@@ -190,14 +194,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        if (is_fp32_dest_acc_en && static_cast<DataFormat>(formats.pack_src) == DataFormat::Int32)
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-        }
-        else
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(math_format, math_format);
-        }
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+
         if constexpr (unpack_to_dest)
         {
             _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
@@ -287,10 +285,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR           = params.LOOP_FACTOR;
-    const std::uint32_t output_num_blocks     = params.OUTPUT_NUM_BLOCKS;
-    const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
-    const Operand& buffer_Res                 = params.buffer_Res;
+    const std::uint32_t OUTPUT_NUM_BLOCKS         = params.OUTPUT_NUM_BLOCKS;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const Operand& buffer_Res                     = params.buffer_Res;
 #endif
+    const std::uint32_t output_num_blocks     = static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS);
+    const std::uint32_t output_tiles_in_block = static_cast<std::uint32_t>(OUTPUT_NUM_TILES_IN_BLOCK);
 
     {
         ZONE_SCOPED("INIT")

@@ -29,11 +29,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
-    const std::uint32_t tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
-    const std::uint32_t num_blocks     = static_cast<std::uint32_t>(params.INPUT_NUM_BLOCKS);
-    const Operand& buffer_A            = params.buffer_A;
-    const Operand& buffer_B            = params.buffer_B;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t INPUT_NUM_BLOCKS          = params.INPUT_NUM_BLOCKS;
+    const Operand& buffer_A                       = params.buffer_A;
+    const Operand& buffer_B                       = params.buffer_B;
 #endif
+    const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(OUTPUT_NUM_TILES_IN_BLOCK);
+    const std::uint32_t num_blocks     = static_cast<std::uint32_t>(INPUT_NUM_BLOCKS);
 
     {
         ZONE_SCOPED("INIT")
@@ -197,12 +199,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
-    const std::uint32_t tiles_in_block  = params.OUTPUT_NUM_TILES_IN_BLOCK;
-    const std::uint32_t num_blocks      = params.INPUT_NUM_BLOCKS;
-    const std::uint32_t num_faces       = params.num_faces;
-    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
-    const int DST_INDEX                 = params.DST_INDEX;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t INPUT_NUM_BLOCKS          = params.INPUT_NUM_BLOCKS;
+    const std::uint32_t num_faces                 = params.num_faces;
+    const std::uint32_t TEST_FACE_R_DIM           = params.TEST_FACE_R_DIM;
+    const int DST_INDEX                           = params.DST_INDEX;
 #endif
+    const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(OUTPUT_NUM_TILES_IN_BLOCK);
+    const std::uint32_t num_blocks     = static_cast<std::uint32_t>(INPUT_NUM_BLOCKS);
     const DataFormat math_format = static_cast<DataFormat>(formats.math);
     {
         ZONE_SCOPED("INIT")
@@ -224,7 +228,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        configure_math_hardware_for_float32_int32_or_default<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, static_cast<DataFormat>(formats.pack_src));
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
         PROFILER_SYNC();
     }
     {
@@ -279,11 +283,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR           = params.LOOP_FACTOR;
-    const std::uint32_t output_num_blocks     = params.OUTPUT_NUM_BLOCKS;
-    const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
-    const int DST_INDEX                       = params.DST_INDEX;
-    const Operand& buffer_Res                 = params.buffer_Res;
+    const std::uint32_t OUTPUT_NUM_BLOCKS         = params.OUTPUT_NUM_BLOCKS;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const int DST_INDEX                           = params.DST_INDEX;
+    const Operand& buffer_Res                     = params.buffer_Res;
 #endif
+    const std::uint32_t output_num_blocks     = static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS);
+    const std::uint32_t output_tiles_in_block = static_cast<std::uint32_t>(OUTPUT_NUM_TILES_IN_BLOCK);
 
     {
         ZONE_SCOPED("INIT")

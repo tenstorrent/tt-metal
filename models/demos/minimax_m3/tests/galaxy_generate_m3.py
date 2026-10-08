@@ -28,6 +28,7 @@ import sys
 import torch
 
 import ttnn
+from models.demos.minimax_m3.tt.moe import shared_overlap
 
 NUM_GEN = int(os.getenv("NUM_GEN", "6"))
 TARGET_LEN = 5120  # 8 * 640 — divisible by SP=8 and by 32 (tile)
@@ -193,6 +194,7 @@ def main():
         print(f"[sp-gen] text={tok.decode(gen)!r}", flush=True)
         print("[sp-gen] DONE", flush=True)
     finally:
+        shared_overlap.release_all()
         ttnn.close_mesh_device(mesh)
 
 

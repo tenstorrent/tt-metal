@@ -58,17 +58,20 @@ template <bool out_of_order_output, bool untilize>
 inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t output_tile_index) {
     std::uint32_t l1_tile_index;
     LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
+    const std::uint32_t wr_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx;
+    const std::uint32_t stride_size_tiles = local_dfb_interface.stride_size_tiles;
+
     if constexpr (out_of_order_output) {
-        // Use the write tile index to track position within DFB
-        l1_tile_index = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx + output_tile_index;
+        // Consecutive tiles of a batch are stride_size_tiles entries apart, so step a full stride per tile (#56194).
+        l1_tile_index = wr_entry_idx + output_tile_index * stride_size_tiles;
     } else {
         if constexpr (untilize) {
             // TODO: uplift this option from BBE
         } else {
-            // In-order packing: use fifo_wr_tile_ptr as the incrementing tile offset
-            l1_tile_index = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx +
-                            local_dfb_interface.wr_entry_ptr;
-            local_dfb_interface.wr_entry_ptr++;
+            // In-order packing: use wr_entry_ptr as the incrementing tile offset, stepping a full stride
+            // per tile (#56194).
+            l1_tile_index = wr_entry_idx + local_dfb_interface.wr_entry_ptr;
+            local_dfb_interface.wr_entry_ptr += stride_size_tiles;
         }
     }
     return l1_tile_index;
