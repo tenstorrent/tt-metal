@@ -126,14 +126,9 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
-    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        in_cb_id, in_tile_index)));
-#else
-    // Quasar's llk_unpack_A also takes dst_tile_index: on the unpack-to-dest path the unpacker writes DEST directly,
-    // so math cannot place the tile. WH/BH place it from math and their llk_unpack_A has no such argument.
+#endif
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, in_tile_index, dst_tile_index)));
-#endif
     MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
         dst_tile_index, in_cb_id)));
 }
@@ -171,12 +166,9 @@ ALWI void copy_block(
     std::uint32_t ntiles) {
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
-    UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        in_cb_id, start_in_tile_index, ntiles)));
-#else
+#endif
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, start_in_tile_index, ntiles, start_dst_tile_index)));
-#endif
     MATH((llk_math_eltwise_unary_datacopy_block<
           DataCopyType::A2D,
           is_fp32_dest_acc_en,

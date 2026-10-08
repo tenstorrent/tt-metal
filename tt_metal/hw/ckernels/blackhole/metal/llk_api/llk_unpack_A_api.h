@@ -82,12 +82,17 @@ inline void llk_unpack_A_init(
         unpack_dst_format[operand_id]);
 }
 
+// dst_tile_index is unused here: math places the tile. Kept so the Compute API makes one call on every arch; Quasar's
+// unpack-to-dest path reads it because there the unpacker writes DEST itself.
 template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
-inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
+inline void llk_unpack_A(
+    const std::uint32_t operand,
+    const std::uint32_t tile_index,
+    [[maybe_unused]] const std::uint32_t dst_tile_index = 0) {
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
@@ -118,13 +123,18 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
         address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
 }
 
+// start_dst_tile_index is unused here: math places the tiles. Kept for the same reason as llk_unpack_A's
+// dst_tile_index.
 template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_block(
-    const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
+    const std::uint32_t operand,
+    const std::uint32_t start_tile_index,
+    const std::uint32_t ntiles,
+    [[maybe_unused]] const std::uint32_t start_dst_tile_index = 0) {
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size;
