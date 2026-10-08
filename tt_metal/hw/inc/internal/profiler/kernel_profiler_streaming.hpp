@@ -513,9 +513,16 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 #include "perf_counters.hpp"
 #include "internal/profiler/synchronization_event_profiler.hpp"
 
-#define DeviceZoneScopedN(name)                   \
-    TT_OBSERVABILITY_EVENT_DEFINE_ID(hash, name); \
+// Scoped zones. The metadata struct a macro builds is what the host gets back for the zone's site
+// (hostdev/debug_event_meta.h); the device only ever sends the id.
+#define DeviceZoneScopedWith(...)     \
+    TT_DEBUG_SITE(hash, __VA_ARGS__); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
+
+#define DeviceZoneScopedN(name) DeviceZoneScopedWith(::tt::debug_event::ZoneMeta{name})
+
+// `color` is 0xRRGGBB, a compile-time constant.
+#define DeviceZoneScopedNC(name, color) DeviceZoneScopedWith(::tt::debug_event::ZoneColorMeta{name, color})
 
 #define DeviceZoneScopedNIf(name, active)         \
     TT_OBSERVABILITY_EVENT_DEFINE_ID(hash, name); \
@@ -570,6 +577,8 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 #define DeviceZoneScopedMainChildN(name) (void(name))
 
 #define DeviceZoneScopedN(name) (void(name))
+
+#define DeviceZoneScopedNC(name, color) (void(name), void(sizeof(color)))
 
 #define DeviceZoneScopedNIf(name, active) (void(name), void(sizeof(active)))
 

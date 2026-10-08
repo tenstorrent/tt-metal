@@ -34,9 +34,10 @@
 // profiler-off build.
 static constexpr int kWallClockLowIdx = 0;
 
-#define ZONE_WALL(NAME, CYC)                                                               \
+#define ZONE_WALL(NAME, CYC) ZONE_WALL_AS(DeviceZoneScopedN(NAME), CYC)
+#define ZONE_WALL_AS(SCOPE, CYC)                                                           \
     {                                                                                      \
-        DeviceZoneScopedN(NAME);                                                           \
+        SCOPE;                                                                             \
         volatile tt_reg_ptr uint32_t* _zwc =                                               \
             reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); \
         uint32_t _zt0 = _zwc[kWallClockLowIdx];                                            \
@@ -46,9 +47,10 @@ static constexpr int kWallClockLowIdx = 0;
     }
 
 // `volatile` forces load/increment/store/compare per iteration, the calibrated 10 cycles.
-#define ZONE_NOPS(NAME, ITERS)                                            \
+#define ZONE_NOPS(NAME, ITERS) ZONE_NOPS_AS(DeviceZoneScopedN(NAME), ITERS)
+#define ZONE_NOPS_AS(SCOPE, ITERS)                                        \
     {                                                                     \
-        DeviceZoneScopedN(NAME);                                          \
+        SCOPE;                                                            \
         for (volatile uint32_t _zj = 0; _zj < (uint32_t)(ITERS); _zj++) { \
             asm volatile("nop");                                          \
         }                                                                 \
@@ -56,10 +58,13 @@ static constexpr int kWallClockLowIdx = 0;
 
 // ZONE_MODE == 0 keeps the wall-clock spin: it needs durations calibrated in microseconds, which a
 // nop-iteration count cannot express.
+// ZONE_C is a ZONE with a colour, carried to the host as the site's ZoneColorMeta.
 #if ZONE_MODE
 #define ZONE(NAME, GRADUATED) ZONE_NOPS(NAME, ZONE_CYC)
+#define ZONE_C(NAME, GRADUATED, COLOR) ZONE_NOPS_AS(DeviceZoneScopedNC(NAME, COLOR), ZONE_CYC)
 #else
 #define ZONE(NAME, GRADUATED) ZONE_WALL(NAME, GRADUATED)
+#define ZONE_C(NAME, GRADUATED, COLOR) ZONE_WALL_AS(DeviceZoneScopedNC(NAME, COLOR), GRADUATED)
 #endif
 
 // Marker-cost microbench (--bench): bursts of one marker kind, each burst timed against the wall clock, the totals
@@ -110,16 +115,16 @@ void kernel_main() {
 void kernel_main() {
     // Durations span ~1..100 us. CYC = us * 2500, per the ZONE_WALL calibration above.
     for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
-        ZONE(ZTAG "_Zone0", 2500u);    // ~1 us
-        ZONE(ZTAG "_Zone1", 5000u);    // ~2 us
-        ZONE(ZTAG "_Zone2", 7500u);    // ~3 us
-        ZONE(ZTAG "_Zone3", 12500u);   // ~5 us
-        ZONE(ZTAG "_Zone4", 20000u);   // ~8 us
-        ZONE(ZTAG "_Zone5", 30000u);   // ~12 us
-        ZONE(ZTAG "_Zone6", 50000u);   // ~20 us
-        ZONE(ZTAG "_Zone7", 100000u);  // ~40 us
-        ZONE(ZTAG "_Zone8", 175000u);  // ~70 us
-        ZONE(ZTAG "_Zone9", 250000u);  // ~100 us
+        ZONE_C(ZTAG "_Zone0", 2500u, 0xE6194Bu);    // ~1 us, red
+        ZONE_C(ZTAG "_Zone1", 5000u, 0xF58231u);    // ~2 us, orange
+        ZONE_C(ZTAG "_Zone2", 7500u, 0xFFE119u);    // ~3 us, yellow
+        ZONE_C(ZTAG "_Zone3", 12500u, 0xBFEF45u);   // ~5 us, lime
+        ZONE_C(ZTAG "_Zone4", 20000u, 0x3CB44Bu);   // ~8 us, green
+        ZONE_C(ZTAG "_Zone5", 30000u, 0x42D4F4u);   // ~12 us, cyan
+        ZONE_C(ZTAG "_Zone6", 50000u, 0x4363D8u);   // ~20 us, blue
+        ZONE_C(ZTAG "_Zone7", 100000u, 0x911EB4u);  // ~40 us, purple
+        ZONE_C(ZTAG "_Zone8", 175000u, 0xF032E6u);  // ~70 us, magenta
+        ZONE_C(ZTAG "_Zone9", 250000u, 0xA9A9A9u);  // ~100 us, grey
     }
 }
 #endif  // ZONE_MODE == 2

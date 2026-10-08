@@ -50,17 +50,18 @@ private:
 
     int64_t timeline_ns(int64_t tsc) const;
     Lane lane(const Core& core);
-    const tracy::SourceLocationData* srcloc(std::string_view name, uint32_t processor);
-    const tracy::SourceLocationData* srcloc_slow(std::string_view name, uint32_t processor);
-    void push_zone(const Core& core, std::string_view name, int64_t start_tsc, int64_t end_tsc);
+    // COLOR is a site's own colour (0xRRGGBB), or 0 for its processor's.
+    const tracy::SourceLocationData* srcloc(std::string_view name, uint32_t processor, uint32_t color);
+    const tracy::SourceLocationData* srcloc_slow(std::string_view name, uint32_t processor, uint32_t color);
+    void push_zone(const Core& core, std::string_view name, uint32_t color, int64_t start_tsc, int64_t end_tsc);
     void push_marker(
         const Core& core, std::string_view name, int64_t tsc, uint32_t runtime_id, std::span<const uint64_t> values);
 
     int64_t anchor_tracy_ = 0;
     Lane lane_hit_;
     std::unordered_map<uint64_t, CoreEntry> cores_;
-    // An open-addressing table from a zone name and processor to its source location in srclocs_. It is keyed by the
-    // name's address, which the zone-name registry keeps valid for the process, and probed in place.
+    // An open-addressing table from a zone name, processor and colour to its source location in srclocs_. It is keyed
+    // by the name's address, which the zone-name registry keeps valid for the process, and probed in place.
     std::vector<SrclocEntry> srcloc_table_;
     size_t srcloc_count_ = 0;
     // The source locations handed to Tracy, keyed by name and color. Tracy keeps the pointers for the rest of the

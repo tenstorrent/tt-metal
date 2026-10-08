@@ -8,6 +8,8 @@
 
 #if defined(TRACY_ENABLE)
 
+#include "hostdev/debug_event_meta.h"
+
 #include <algorithm>
 
 #include <fmt/format.h>
@@ -21,8 +23,8 @@ namespace {
 
 constexpr size_t kSrclocTableInitial = 1024;
 
-uint64_t srcloc_key(std::string_view name, uint32_t processor) {
-    return (static_cast<uint64_t>(name.size()) << 32) | processor;
+uint64_t srcloc_key(std::string_view name, uint32_t processor, uint32_t color) {
+    return (static_cast<uint64_t>(name.size()) << 32) | (color << 8) | processor;
 }
 
 size_t srcloc_hash(const char* name, uint64_t key) {
@@ -37,6 +39,16 @@ constexpr uint32_t kProcessorColors[kProcessorCount] = {
     tracy::Color::CadetBlue1,
     tracy::Color::Yellow3,
     tracy::Color::Yellow2};
+
+// A DeviceZoneScopedNC site's own colour (0xRRGGBB), or 0 for its processor's.
+uint32_t site_color(const experimental::streaming_profiler::ObservabilityEventInfo& site) {
+    if (site.meta != nullptr) {
+        if (auto m = site.meta->as<tt::debug_event::ZoneColorMeta>()) {
+            return m->color & 0xFFFFFFu;
+        }
+    }
+    return 0;
+}
 
 // Each processor's row on the timeline, in the lane id space Tracy keeps apart from host threads. It uses the physical
 // coordinate, because an eth core's logical coordinate can equal a Tensix core's, and the low 3 bits are the processor.
@@ -55,7 +67,12 @@ void TracyConsumer::operator()(const Batch& batch) {
     using experimental::streaming_profiler::TimestampedData;
     using experimental::streaming_profiler::Zone;
     for (const Zone& zone : batch.records<Zone>()) {
-        push_zone(zone.core(), zone.observability_event().name, zone.start_host_cycles(), zone.end_host_cycles());
+        push_zone(
+            zone.core(),
+            zone.observability_event().name,
+            site_color(zone.observability_event()),
+            zone.start_host_cycles(),
+            zone.end_host_cycles());
     }
     for (const TimestampedData& data : batch.records<TimestampedData>()) {
         push_marker(
@@ -106,12 +123,12 @@ TracyConsumer::Lane TracyConsumer::lane(const Core& core) {
     return lane_hit_;
 }
 
-const tracy::SourceLocationData* TracyConsumer::srcloc(std::string_view name, uint32_t processor) {
+const tracy::SourceLocationData* TracyConsumer::srcloc(std::string_view name, uint32_t processor, uint32_t color) {
     static constexpr char kUnnamed[] = "";
     if (name.data() == nullptr) {
         name = kUnnamed;  // a null address would read as an empty table slot
     }
-    const uint64_t key = srcloc_key(name, processor);
+    const uint64_t key = srcloc_key(name, processor, color);
     const size_t mask = srcloc_table_.size() - 1;
     const char* const name_ptr = name.data();  // NOLINT(bugprone-suspicious-stringview-data-usage)
     for (size_t i = srcloc_hash(name_ptr, key) & mask;; i = (i + 1) & mask) {
@@ -120,19 +137,20 @@ const tracy::SourceLocationData* TracyConsumer::srcloc(std::string_view name, ui
             return e.srcloc;
         }
         if (e.name == nullptr) {
-            return srcloc_slow(name, processor);
+            return srcloc_slow(name, processor, color);
         }
     }
 }
 
-const tracy::SourceLocationData* TracyConsumer::srcloc_slow(std::string_view name, uint32_t processor) {
+const tracy::SourceLocationData* TracyConsumer::srcloc_slow(std::string_view name, uint32_t processor, uint32_t color) {
     const char* const name_ptr = name.data();  // NOLINT(bugprone-suspicious-stringview-data-usage)
-    const uint64_t key = srcloc_key(name, processor);
-    const uint32_t color =
-        name == experimental::streaming_profiler::STALL_ZONE_NAME ? tracy::Color::Tomato3 : kProcessorColors[processor];
-    auto [it, fresh] = srclocs_.try_emplace({std::string(name), color});
+    const uint64_t key = srcloc_key(name, processor, color);
+    const uint32_t drawn = name == experimental::streaming_profiler::STALL_ZONE_NAME ? tracy::Color::Tomato3
+                           : color != 0                                              ? color
+                                                                                     : kProcessorColors[processor];
+    auto [it, fresh] = srclocs_.try_emplace({std::string(name), drawn});
     if (fresh) {
-        it->second = {it->first.first.c_str(), "kernel_profiler", "kernel_profiler", 0, color};
+        it->second = {it->first.first.c_str(), "kernel_profiler", "kernel_profiler", 0, drawn};
     }
     auto insert = [](std::vector<SrclocEntry>& table, const SrclocEntry& e) {
         const size_t mask = table.size() - 1;
@@ -156,11 +174,12 @@ const tracy::SourceLocationData* TracyConsumer::srcloc_slow(std::string_view nam
     return &it->second;
 }
 
-void TracyConsumer::push_zone(const Core& core, std::string_view name, int64_t start_tsc, int64_t end_tsc) {
+void TracyConsumer::push_zone(
+    const Core& core, std::string_view name, uint32_t color, int64_t start_tsc, int64_t end_tsc) {
     const Lane zone_lane = lane(core);
     TracyTTPushZone(
         zone_lane.ctx,
-        srcloc(name, static_cast<uint32_t>(core.processor)),
+        srcloc(name, static_cast<uint32_t>(core.processor), color),
         zone_lane.thread,
         static_cast<uint64_t>(timeline_ns(start_tsc)),
         static_cast<uint64_t>(timeline_ns(end_tsc)));
