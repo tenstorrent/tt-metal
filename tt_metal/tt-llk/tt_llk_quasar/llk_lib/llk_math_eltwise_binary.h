@@ -132,7 +132,7 @@ inline void _llk_math_eltwise_binary_mop_config_(const ckernel::TensorShape& ten
     const std::uint32_t eltwise_binary_op = eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, p_elwise::SRCB_NO_BCAST, addrmod_fid>(EN_DST_ACC);
 
     const std::uint32_t MOP_OUTER_LOOP     = (rows_per_mop_run >> rows_log2(ELTWISE_MATH_ROWS));
-    constexpr std::uint32_t MOP_INNER_LOOP = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
+    constexpr std::uint32_t MOP_INNER_LOOP = math_fidelity_phases<MATH_FIDELITY_TYPE>();
     LLK_ASSERT(MOP_OUTER_LOOP > 0, "Eltwise binary must consume at least one group of rows");
 
     const std::uint32_t eltwise_binary_op_clr_valid =
@@ -173,7 +173,7 @@ inline void _llk_math_eltwise_di_binary_mop_config_(const ckernel::TensorShape& 
     const std::uint32_t total_num_rows_per_tile = _eltwise_binary_dest_rows_per_tile_(tensor_shape);
     const std::uint32_t REPLAY_BUF_LEN          = total_num_rows_per_tile >> rows_log2(ELTWISE_MATH_ROWS);
     LLK_ASSERT(REPLAY_BUF_LEN > 0, "Eltwise binary replay must consume at least one group of rows");
-    constexpr std::uint32_t MOP_INNER_LOOP = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
+    constexpr std::uint32_t MOP_INNER_LOOP = math_fidelity_phases<MATH_FIDELITY_TYPE>();
     constexpr bool high_fidelity           = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(high_fidelity && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
     const std::uint32_t EN_DST_ACC = acc_to_dest ? 1u : static_cast<std::uint32_t>(high_fidelity);
@@ -302,6 +302,8 @@ inline void _llk_math_eltwise_di_binary_addrmod_()
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam ENABLE_DIRECT_INDEXING: Enable the direct-indexing instruction variant
+ * @param src_a_format: Effective SrcA register format.
+ * @param src_b_format: Effective SrcB register format.
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
  * @param acc_to_dest: When true, accumulate the result into the destination register instead of overwriting
  * @note On the unpack thread (T0): for reuse_dest == NONE pair with @ref _llk_unpack_binary_operands_init_; for DEST_TO_SRCA/DEST_TO_SRCB pair with
@@ -315,8 +317,13 @@ template <
     ckernel::MathFidelity MATH_FIDELITY_TYPE,
     EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool ENABLE_DIRECT_INDEXING           = false>
-inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
+inline void _llk_math_eltwise_binary_init_(
+    const DataFormat src_a_format, const DataFormat src_b_format, const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
+    if constexpr (ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWMUL)
+    {
+        validate_math_fidelity<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
+    }
     LLK_ASSERT(
         reuse_dest == EltwiseBinaryReuseDestType::NONE || tensor_shape.face_r_dim == MAX_FACE_R_DIM, "Eltwise binary destination reuse requires 16-row faces");
     LLK_ASSERT(tensor_shape.total_num_faces() != NUM_FACES || tensor_shape.face_r_dim == MAX_FACE_R_DIM, "Eltwise binary four-face tiles require 16-row faces");

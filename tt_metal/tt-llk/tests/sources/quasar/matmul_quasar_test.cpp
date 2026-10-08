@@ -127,7 +127,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // configured as MxFp4_2x_A or MxFp4_2x_B.
         // ENABLE_DIRECT_INDEXING selects the DI variant (MVMULDI with explicit indices) vs
         // the auto-increment-addr_mod MVMUL variant.
-        _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM, tensor_shape_A, tensor_shape_B);
+        _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(
+            static_cast<DataFormat>(IMPLIED_MATH_FORMAT ? formats.unpack_B_dst : formats.math),
+            static_cast<DataFormat>(IMPLIED_MATH_FORMAT ? formats.unpack_A_dst : formats.math),
+            CT_DIM,
+            RT_DIM,
+            tensor_shape_A,
+            tensor_shape_B);
         PROFILER_SYNC();
     }
     {

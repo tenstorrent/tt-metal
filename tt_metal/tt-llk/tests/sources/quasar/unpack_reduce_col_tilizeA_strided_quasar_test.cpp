@@ -127,7 +127,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         DataFormat math_format = static_cast<DataFormat>(formats.math);
         _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
 
-        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(tensor_shape);
+        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(
+            static_cast<DataFormat>(IMPLIED_MATH_FORMAT ? formats.unpack_A_dst : formats.math),
+            static_cast<DataFormat>(IMPLIED_MATH_FORMAT ? formats.unpack_B_dst : formats.math),
+            tensor_shape);
         PROFILER_SYNC();
     }
     {

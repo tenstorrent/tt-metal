@@ -122,14 +122,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if (is_int_fpu_en)
         {
             // Int Scalar SUM is unsupported, see SFPU reduce.
-            if constexpr (!(REDUCE_DIM == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::SUM))
+            if constexpr (MATH_FIDELITY == MathFidelity::LoFi && !(REDUCE_DIM == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::SUM))
             {
-                _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, true /* is_int_fpu_en */>(tensor_shape_A);
+                _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, true /* is_int_fpu_en */>(
+                    IMPLIED_MATH_FORMAT ? static_cast<DataFormat>(formats.unpack_A_dst) : src_format,
+                    IMPLIED_MATH_FORMAT ? static_cast<DataFormat>(formats.unpack_B_dst) : src_format,
+                    tensor_shape_A);
             }
         }
         else
         {
-            _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, false /* is_int_fpu_en */>(tensor_shape_A);
+            _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, false /* is_int_fpu_en */>(
+                IMPLIED_MATH_FORMAT ? static_cast<DataFormat>(formats.unpack_A_dst) : src_format,
+                IMPLIED_MATH_FORMAT ? static_cast<DataFormat>(formats.unpack_B_dst) : src_format,
+                tensor_shape_A);
         }
         PROFILER_SYNC();
     }

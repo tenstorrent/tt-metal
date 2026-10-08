@@ -11,6 +11,102 @@
 namespace ckernel::math
 {
 
+/**
+ * @brief Return the FPU phase count.
+ * @tparam fidelity: Requested approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
+ */
+template <MathFidelity fidelity>
+constexpr std::uint32_t math_fidelity_phases()
+{
+    static_assert(
+        fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2 || fidelity == MathFidelity::HiFi3 || fidelity == MathFidelity::HiFi4,
+        "Invalid math fidelity");
+    return fidelity == MathFidelity::LoFi ? 1 : to_underlying(fidelity);
+}
+
+/**
+ * @brief Check whether the requested final phase contributes for these source formats.
+ * @param fidelity: Requested approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
+ * @param src_a_format: Effective SrcA register format.
+ * @param src_b_format: Effective SrcB register format.
+ * @note Pass register formats, not L1 MX formats; unpacked MX normally uses Float16_b.
+ */
+constexpr bool is_math_fidelity_supported(const MathFidelity fidelity, const DataFormat src_a_format, const DataFormat src_b_format)
+{
+    const auto has_low_mantissa = [](const DataFormat format)
+    { return format == DataFormat::Float16 || format == DataFormat::Tf32 || format == DataFormat::Float32; };
+    const auto is_float = [&](const DataFormat format)
+    { return has_low_mantissa(format) || format == DataFormat::Float16_b || format == DataFormat::MxFp4_2x_A || format == DataFormat::MxFp4_2x_B; };
+    const auto is_integer = [](const DataFormat format)
+    { return format == DataFormat::Int8 || format == DataFormat::UInt8 || format == DataFormat::Int8_2x || format == DataFormat::UInt8_2x; };
+
+    if (is_integer(src_a_format) && is_integer(src_b_format))
+    {
+        return fidelity == MathFidelity::LoFi;
+    }
+    if (!is_float(src_a_format) || !is_float(src_b_format))
+    {
+        return false;
+    }
+
+    switch (fidelity)
+    {
+        case MathFidelity::LoFi:
+            return true;
+        case MathFidelity::HiFi2:
+            return has_low_mantissa(src_a_format);
+        case MathFidelity::HiFi3:
+            return has_low_mantissa(src_b_format);
+        case MathFidelity::HiFi4:
+            return has_low_mantissa(src_a_format) && has_low_mantissa(src_b_format);
+        default:
+            return false;
+    }
+}
+
+/**
+ * @brief Assert that the format/fidelity combination is supported and nonredundant.
+ * @tparam fidelity: Requested approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
+ * @param src_a_format: Effective SrcA register format.
+ * @param src_b_format: Effective SrcB register format.
+ * @note Reinitialize the operation whenever either effective source format changes.
+ */
+template <MathFidelity fidelity>
+inline void validate_math_fidelity(const DataFormat src_a_format, const DataFormat src_b_format)
+{
+    static_assert(math_fidelity_phases<fidelity>() >= 1);
+    LLK_ASSERT(is_math_fidelity_supported(fidelity, src_a_format, src_b_format), "Unsupported or redundant math fidelity for source register formats");
+}
+
+// Each mask lists allowed requests in LoFi, HiFi2, HiFi3, HiFi4 order.
+constexpr unsigned fidelity_mask(const DataFormat src_a, const DataFormat src_b)
+{
+    return is_math_fidelity_supported(MathFidelity::LoFi, src_a, src_b) | (is_math_fidelity_supported(MathFidelity::HiFi2, src_a, src_b) << 1) |
+           (is_math_fidelity_supported(MathFidelity::HiFi3, src_a, src_b) << 2) | (is_math_fidelity_supported(MathFidelity::HiFi4, src_a, src_b) << 3);
+}
+
+static_assert(math_fidelity_phases<MathFidelity::LoFi>() == 1);
+static_assert(math_fidelity_phases<MathFidelity::HiFi2>() == 2);
+static_assert(math_fidelity_phases<MathFidelity::HiFi3>() == 3);
+static_assert(math_fidelity_phases<MathFidelity::HiFi4>() == 4);
+static_assert(fidelity_mask(DataFormat::Float16_b, DataFormat::Float16_b) == 0b0001);
+static_assert(fidelity_mask(DataFormat::Float16, DataFormat::Float16_b) == 0b0011);
+static_assert(fidelity_mask(DataFormat::Float16_b, DataFormat::Float16) == 0b0101);
+static_assert(fidelity_mask(DataFormat::Float16, DataFormat::Float16) == 0b1111);
+static_assert(fidelity_mask(DataFormat::Tf32, DataFormat::Float16_b) == 0b0011);
+static_assert(fidelity_mask(DataFormat::Float16_b, DataFormat::Tf32) == 0b0101);
+static_assert(fidelity_mask(DataFormat::Tf32, DataFormat::Tf32) == 0b1111);
+static_assert(fidelity_mask(DataFormat::Float32, DataFormat::Float32) == 0b1111);
+static_assert(fidelity_mask(DataFormat::MxFp4_2x_A, DataFormat::MxFp4_2x_B) == 0b0001);
+static_assert(fidelity_mask(DataFormat::Int8, DataFormat::Int8) == 0b0001);
+static_assert(fidelity_mask(DataFormat::UInt8, DataFormat::UInt8) == 0b0001);
+static_assert(fidelity_mask(DataFormat::Int8_2x, DataFormat::Int8_2x) == 0b0001);
+static_assert(fidelity_mask(DataFormat::UInt8_2x, DataFormat::UInt8_2x) == 0b0001);
+static_assert(fidelity_mask(DataFormat::Int8, DataFormat::Float16) == 0);
+static_assert(fidelity_mask(DataFormat::MxFp4, DataFormat::MxFp4) == 0);
+static_assert(fidelity_mask(DataFormat::Invalid, DataFormat::Float16) == 0);
+static_assert(!is_math_fidelity_supported(static_cast<MathFidelity>(1), DataFormat::Float16, DataFormat::Float16));
+
 // Rows one FPU instruction covers: 8 on the base Quasar part, 4 on the narrow one.
 constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS;
 static_assert(ELTWISE_MATH_ROWS == 4 || ELTWISE_MATH_ROWS == 8, "the math LLKs support a 4-row or 8-row FPU");

@@ -171,7 +171,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_math_eltwise_unary_datacopy_(i);
                 }
 
-                _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, REUSE_DEST_TYPE>(ckernel::DEFAULT_TENSOR_SHAPE);
+                _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, REUSE_DEST_TYPE>(
+                    static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), ckernel::DEFAULT_TENSOR_SHAPE);
                 for (int block = 0; block < num_blocks; block++)
                 {
                     for (int n = 0; n < num_tiles_accum; n++)
