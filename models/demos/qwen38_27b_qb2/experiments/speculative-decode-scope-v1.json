@@ -1,0 +1,333 @@
+{
+  "date_utc": "2026-10-08",
+  "scope": "Read-only speculative-decoding scoping, no device run or runtime promotion",
+  "checkpoint_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "local_worktree_head": "5374a048cd2ce142bcb5fce92777de9b7fcaea42",
+  "native_base": "a08819ddbe23077f8037d3802303939064868ff6",
+  "upstream_pr": {
+    "url": "https://github.com/tenstorrent/tt-metal/pull/55548",
+    "state": "MERGED",
+    "merged_at": "2026-10-02T00:34:47Z",
+    "merge_sha": "54bb6f982e3fce9ab534b4666ea56be60fca9346",
+    "merge_is_ancestor_of_native_base": true,
+    "scope": "batch=1 QB2"
+  },
+  "checkpoint": {
+    "mtp_tensors": [
+      {
+        "name": "mtp.fc.weight",
+        "file": "model-00018-of-00018.safetensors",
+        "dtype": "BF16",
+        "shape": [
+          5120,
+          10240
+        ],
+        "data_offsets": [
+          2542796800,
+          2647654400
+        ]
+      },
+      {
+        "name": "mtp.layers.0.input_layernorm.weight",
+        "file": "model-00018-of-00018.safetensors",
+        "dtype": "BF16",
+        "shape": [
+          5120
+        ],
+        "data_offsets": [
+          2647654400,
+          2647664640
+        ]
+      },
+      {
+        "name": "mtp.layers.0.mlp.down_proj.weight",
+        "file": "model-00018-of-00018.safetensors",
+        "dtype": "BF16",
+        "shape": [
+          5120,
+          17408
+        ],
+        "data_offsets": [
+          2647664640,
+          2825922560
+        ]
+      },
+      {
+        "name": "mtp.layers.0.mlp.gate_proj.weight",
+        "file": "model-00018-of-00018.safetensors",
+        "dtype": "BF16",
+        "shape": [
+          17408,
+          5120
+        ],
+        "data_offsets": [
+          2825922560,
+          3004180480
+        ]
+      },
+      {
+        "name": "mtp.layers.0.mlp.up_proj.weight",
+        "file": "model-00018-of-00018.safetensors",
+        "dtype": "BF16",
+        "shape": [
+          17408,
+          5120
+        ],
+        "data_offsets": [
+          3004180480,
+          3182438400
+        ]
+      },
+      {
+        "name": "mtp.layers.0.post_attention_layernorm.weight",
+        "file": "model-00018-of-00018.safetensors",
+        "dtype": "BF16",
+        "shape": [
+          5120
+        ],
+        "data_offsets": [
+          3182438400,
+          3182448640
+        ]
+      },
+      {
+        "name": "mtp.layers.0.self_attn.k_norm.weight",
+        "file": "model-00018-of-00018.safetensors",
+        "dtype": "BF16",
+        "shape": [
+          256
+        ],
+        "data_offsets": [
+          3182448640,
+          3182449152
+        ]
+      },
+      {
+        "name": "mtp.layers.0.self_attn.k_proj.weight",
+        "file": "model-00018-of-00018.safetensors",
+        "dtype": "BF16",
+        "shape": [
+          1024,
+          5120
+        ],
+        "data_offsets": [
+          3182449152,
+          3192934912
+        ]
+      },
+      {
+        "name": "mtp.layers.0.self_attn.o_proj.weight",
+        "file": "model-00018-of-00018.safetensors",
+        "dtype": "BF16",
+        "shape": [
+          5120,
+          6144
+        ],
+        "data_offsets": [
+          3192934912,
+          3255849472
+        ]
+      },
+      {
+        "name": "mtp.layers.0.self_attn.q_norm.weight",
+        "file": "model-00018-of-00018.safetensors",
+        "dtype": "BF16",
+        "shape": [
+          256
+        ],
+        "data_offsets": [
+          3255849472,
+          3255849984
+        ]
+      },
+      {
+        "name": "mtp.layers.0.self_attn.q_proj.weight",
+        "file": "model-00018-of-00018.safetensors",
+        "dtype": "BF16",
+        "shape": [
+          12288,
+          5120
+        ],
+        "data_offsets": [
+          3255849984,
+          3381679104
+        ]
+      },
+      {
+        "name": "mtp.layers.0.self_attn.v_proj.weight",
+        "file": "model-00018-of-00018.safetensors",
+        "dtype": "BF16",
+        "shape": [
+          1024,
+          5120
+        ],
+        "data_offsets": [
+          3381679104,
+          3392164864
+        ]
+      },
+      {
+        "name": "mtp.norm.weight",
+        "file": "model-00018-of-00018.safetensors",
+        "dtype": "BF16",
+        "shape": [
+          5120
+        ],
+        "data_offsets": [
+          3392164864,
+          3392175104
+        ]
+      },
+      {
+        "name": "mtp.pre_fc_norm_embedding.weight",
+        "file": "model-00018-of-00018.safetensors",
+        "dtype": "BF16",
+        "shape": [
+          5120
+        ],
+        "data_offsets": [
+          3392175104,
+          3392185344
+        ]
+      },
+      {
+        "name": "mtp.pre_fc_norm_hidden.weight",
+        "file": "model-00018-of-00018.safetensors",
+        "dtype": "BF16",
+        "shape": [
+          5120
+        ],
+        "data_offsets": [
+          3392185344,
+          3392195584
+        ]
+      }
+    ],
+    "parameter_count": 424699392,
+    "stored_bytes": 849398784
+  },
+  "assumptions": {
+    "measured_tp4_32k_b32_output_tps": 350.417099357,
+    "physical_full_galaxy_measurement": false,
+    "replicas_in_projection": 8,
+    "baseline_galaxy_output_tps_projection": 2803.336794856,
+    "draft_tokens": 3,
+    "verification_positions": 4,
+    "current_decode_projection_rows": 32,
+    "recurrent_state_bytes_per_user_chip": 37748736,
+    "conv_state_bytes_per_user_chip": 737280,
+    "kv_base_bytes_per_token_chip": 8704,
+    "kv_mtp_bytes_per_token_chip": 544,
+    "mtp_bf16_sharded_matrix_replicated_norm_bytes_per_chip": 212388864,
+    "memory_exclusions": [
+      "allocator padding beyond tensors listed",
+      "logits",
+      "activations",
+      "trace regions",
+      "persistent scratch",
+      "temporary packing copies",
+      "implementation-dependent additional snapshots"
+    ],
+    "memory_model_not_capacity_qualification": true,
+    "throughput_model_not_measurement": true
+  },
+  "memory": [
+    {
+      "context": 16384,
+      "base_request_mib": 172.703125,
+      "mtp_kv_mib": 8.5,
+      "extra_four_snapshot_request_mib": 155.3125,
+      "extra_one_scratch_plus_replay_request_mib": 45.203125,
+      "theoretical_resident_capacity_ratio_four_snapshots": 0.5265088362787596,
+      "theoretical_resident_capacity_ratio_replay": 0.7925570055930016,
+      "ratio_ignores_fixed_mtp_weight_and_workspace_costs": true
+    },
+    {
+      "context": 32768,
+      "base_request_mib": 308.703125,
+      "mtp_kv_mib": 17,
+      "extra_four_snapshot_request_mib": 163.8125,
+      "extra_one_scratch_plus_replay_request_mib": 53.703125,
+      "theoretical_resident_capacity_ratio_four_snapshots": 0.6533183426473992,
+      "theoretical_resident_capacity_ratio_replay": 0.8518151246011899,
+      "ratio_ignores_fixed_mtp_weight_and_workspace_costs": true
+    },
+    {
+      "context": 131072,
+      "base_request_mib": 1124.703125,
+      "mtp_kv_mib": 68,
+      "extra_four_snapshot_request_mib": 214.8125,
+      "extra_one_scratch_plus_replay_request_mib": 104.703125,
+      "theoretical_resident_capacity_ratio_four_snapshots": 0.8396341961296644,
+      "theoretical_resident_capacity_ratio_replay": 0.9148343966853918,
+      "ratio_ignores_fixed_mtp_weight_and_workspace_costs": true
+    },
+    {
+      "context": 262144,
+      "base_request_mib": 2212.703125,
+      "mtp_kv_mib": 136,
+      "extra_four_snapshot_request_mib": 282.8125,
+      "extra_one_scratch_plus_replay_request_mib": 172.703125,
+      "theoretical_resident_capacity_ratio_four_snapshots": 0.8866717173930738,
+      "theoretical_resident_capacity_ratio_replay": 0.9276001205245438,
+      "ratio_ignores_fixed_mtp_weight_and_workspace_costs": true
+    }
+  ],
+  "sensitivity": [
+    {
+      "conditional_acceptance_each_depth": 0.3,
+      "expected_committed_tokens": 1.417,
+      "cycle_cost_in_baseline_steps": 1.7,
+      "same_concurrency_speedup": 0.833529411764706,
+      "same_concurrency_galaxy_tps_projection": 2336.6636695946777
+    },
+    {
+      "conditional_acceptance_each_depth": 0.5,
+      "expected_committed_tokens": 1.875,
+      "cycle_cost_in_baseline_steps": 1.7,
+      "same_concurrency_speedup": 1.1029411764705883,
+      "same_concurrency_galaxy_tps_projection": 3091.915582561765
+    },
+    {
+      "conditional_acceptance_each_depth": 0.7,
+      "expected_committed_tokens": 2.533,
+      "cycle_cost_in_baseline_steps": 1.7,
+      "same_concurrency_speedup": 1.49,
+      "same_concurrency_galaxy_tps_projection": 4176.97182433544
+    },
+    {
+      "conditional_acceptance_each_depth": 0.85,
+      "expected_committed_tokens": 3.186625,
+      "cycle_cost_in_baseline_steps": 1.7,
+      "same_concurrency_speedup": 1.874485294117647,
+      "same_concurrency_galaxy_tps_projection": 5254.813596416471
+    }
+  ],
+  "row_budget": [
+    {
+      "draft_tokens": 0,
+      "verification_rows_per_user": 1,
+      "users_per_32_row_projection_pass": 32
+    },
+    {
+      "draft_tokens": 1,
+      "verification_rows_per_user": 2,
+      "users_per_32_row_projection_pass": 16
+    },
+    {
+      "draft_tokens": 3,
+      "verification_rows_per_user": 4,
+      "users_per_32_row_projection_pass": 8
+    },
+    {
+      "draft_tokens": 7,
+      "verification_rows_per_user": 8,
+      "users_per_32_row_projection_pass": 4
+    }
+  ],
+  "illustrative_b32_k3_extra_memory_gib_per_chip": {
+    "four_snapshots": 5.316943168640137,
+    "scratch_plus_replay": 1.8760251998901367
+  },
+  "formula": "E[committed] = 1 + sum_{i=1..K} product_{j=1..i} conditional_acceptance[j]; TPS = users * E[committed] / (draft + verify + commit + reseed + sampling time)"
+}

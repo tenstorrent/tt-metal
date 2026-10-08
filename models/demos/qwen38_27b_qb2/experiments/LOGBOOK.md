@@ -385,7 +385,73 @@ tool, not a replacement for hardware, long-horizon state checks, or model evals.
   layout overhead, tune bank-local KV traffic, qualify B64 to amortize weights,
   and measure physical eight-replica scaling. No precision reduction promoted.
 
+## Shared FP32 Q/K experiment queued, Oct 8 UTC
+
+- **07:44:45:** v4's fresh native 32K/B16 profile completed and passed the
+  corrected collector on all four ranks. The queue advanced to single-step.
+  The last full-model capacity arm, 256K/B8 single-step, owns the device next;
+  its weights finished loading at **07:49:53**. Native 256K/B8 completed at
+  89.983 output tok/s per TP4 and 3687.09 prefill input tok/s, three repeats.
+- Implemented an isolated shared-Q/K candidate: normalize each shared head
+  once in FP32, keep persistent compact scratch and remove repeated Q/K
+  expansion from the adapter. Recurrence math/state precision stay FP32.
+  Extra preparation launch/traffic can erase benefits at small batch; no
+  default change or measured gain is claimed before hardware results.
+- **07:45:40:** `qwen38-gdn-shared-qk-v1-20261008.service` launched after
+  **314 CPU tests plus 40 subtests** passed. Frozen source:
+  `/home/ttuser/qwen38-artifacts-20261007/gdn-shared-qk-source-v1`.
+  Five batches (32/16/8/64/1), fused/shared/fused adapter controls and 4096
+  changing-input updates require original accuracy gates, bit-identical
+  output/state, stable addresses and two alternating scratch allocations.
+  Times include preparation and layouts. The unit is bounded to 32 GiB/5 h.
+- **07:53:04:** `qwen38-gdn-shared-qk-layer-v1-20261008.service` launched
+  persistently after the same CPU suite passed. It waits for the first job's
+  authoritative success and matching kernel hashes. A qualified >=2% adapter
+  gain at B16/B32 triggers six real-weight layer-0 comparisons, including
+  convolution, gates, output normalization and projection. Otherwise it records
+  the result and skips further hardware work. B16/B32 controls must retain
+  FP32-reference accuracy and identical projected outputs. Unit: 48 GiB/6 h.
+- **07:59:21:** all four controller PIDs were verified active. One of twelve
+  profile captures is complete. Hardware work serializes through
+  `/tmp/tt-device.lock`; the conditional layer job waits without opening a
+  device. These are disconnect-persistent jobs, not reboot-resuming services.
+- Source formatting/static hooks passed. Native compilation, shared numerical
+  results and performance remain pending. Keep this runtime prototype out of
+  the qualified source until those receipts are available; host snapshots and
+  launch JSON pin all experimental files for reproduction.
+
 ## Remaining gates and next experiments
+
+### Oct 8: speculative-decoding scope requested alongside bandwidth work
+
+- Confirmed the installed checkpoint contains all 15 MTP tensors (424.7M
+  parameters), using only its index and safetensors headers. No weight download,
+  device opening, runtime change or new speculative hardware job.
+- Refreshed Metal PR #55548: merged Oct 2; its merge is already an ancestor of
+  the pinned native build. Reusable MTP, rejection sampling and multi-position
+  SDPA exist, but the model loop is batch-one. Our custom model does not invoke
+  them. The upstream recurrent factory also limits B*12 heads to 120 cores.
+- Found the key high-concurrency blocker: existing fast projections accept 32
+  token rows. K=3 needs four verify positions per user, so retaining B32 needs
+  128-row verification; a naive 32-row port schedules only eight users/pass.
+  This changes the priority from simply loading MTP to preserving batch width.
+- Computed explicit memory/acceptance sensitivities. At B32/32K, four FP32
+  snapshot planes plus MTP KV/weights add roughly 5.32 GiB/chip before workspace.
+  Replaying selected recurrence from the original state is a lower-memory,
+  extra-compute alternative. Neither implementation is qualified.
+- A +33-69% throughput example assumes K=3, 70% conditional acceptance, the
+  same user concurrency and a 1.5-1.9-step complete cycle. It is not a measured
+  speedup or a forecast for a naive port. Lower acceptance or fewer active
+  users can regress throughput. See [scope and gates](SPECULATIVE-DECODE-SCOPE.md)
+  and its JSON receipt for sources, assumptions and arithmetic.
+- User clarified the promotion rule: no speculative default in the main demo
+  if total throughput decreases. Require matched offered concurrency and
+  committed output tokens/s including every draft/verify/commit/sampling cost;
+  a latency win at lower user count is insufficient. Keep ordinary fallback.
+- **08:14 UTC:** all four existing systemd controller PIDs remained active.
+  The 256K/B8 single-step model completed its first measured repetition;
+  the other hardware jobs were still waiting. Bank-local read experiment
+  remains under design and is not queued. No reboot or running-source edits.
 
 1. Finish the fresh-process capacity pairs; keep OOM, accuracy, and timing outcomes
    distinct. Then choose the useful batch/context operating points.
