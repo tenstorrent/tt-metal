@@ -27,3 +27,9 @@ tables) and cmp.txt and report the table vs #251. If FILL_NOT_OK, read out_fill*
   `ssh g15blx01 'cd /var/tmp/fasth3/t221; setsid nohup bash drv221b.sh > drv221b.out 2>&1 < /dev/null &' < /dev/null`
   (only after checking `pgrep -u smarton -f "bash drv221b.sh"` is empty and no drv221b.done exists).
 - Same config dropping twice in a row on blx01 -> skip there and report the partial numbers above.
+
+## Attempt 2 (2026-10-08 05:18 UTC)
+- blx01 back (rebooted ~04:53 UTC, broker recovered, DiffVAE jobs 946/947 ran clean after). blx03 HELD (tray 2,
+  chips 8-15 off the bus since 05:01 UTC), no t221 job there.
+- drv221b.sh copied to blx01 and started (pgid 85242). Timed job 948 (seeds 0-4, out_time2/) running from 05:18:17 UTC.
+- Marker /var/tmp/fasth3/t221/drv221b.done. Next: parse out_time2/run.log + cmp.txt, report vs #251.
