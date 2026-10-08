@@ -1402,6 +1402,12 @@ class TT_CCL:
             num_workers_per_link = 4
         else:
             num_workers_per_link = 1
+        # Qwen long prefill (batch 1): per-buffer worker/sync/buffer overrides from qwen_model_config
+        # (qwen_prefill_ring_rs_params). Llama never takes this branch (is_qwen False, no config key).
+        rs_overrides = {}
+        if self.is_qwen and batch_size == 1 and "QWEN_PREFILL_RING_RS_PARAMS" in self.model_config:
+            rs_overrides = self.model_config["QWEN_PREFILL_RING_RS_PARAMS"](B * seqlen, buffer_key) or {}
+            num_workers_per_link = rs_overrides.pop("num_workers_per_link", num_workers_per_link)
         ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor=input_tensor_mesh,
             persistent_output_buffers=persistent_buffers_list,
@@ -1414,6 +1420,7 @@ class TT_CCL:
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
             num_workers_per_link=num_workers_per_link,
+            **rs_overrides,
         )
 
         # reshape input back
