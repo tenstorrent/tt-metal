@@ -558,3 +558,48 @@ def test_distributed_rmsnorm_2d_core_grid_multi_row(mesh_device, batch_size, seq
         f"#56908: 2D-core-grid RMS norm corrupted output for tiles_per_core_x > 1 | "
         f"max_abs_diff={max_abs_diff:.6e} | max_rel_diff={max_rel_diff:.6e}"
     )
+
+
+# Regression test for bounty #56908, Welford post-all-gather path. The RMS multi-row test above runs with
+# use_welford=False and therefore never exercises the Welford post-all-gather program factory, whose 2D reader/
+# writer/compute block-size were corrected in this PR (the reader was compiled with the global Wt and the writer/
+# compute used the global-width block size instead of each core's local tiles_per_core_y slice). LayerNorm with
+# use_welford=True on a 2D grid with seq_len=1024 (tiles_per_core_x > 1) exercises exactly that corrected path.
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("seq_len", [1024])
+@pytest.mark.parametrize("hidden_dim", [2048])
+@pytest.mark.parametrize("eps", [1e-5])
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+    ],
+    indirect=True,
+)
+def test_distributed_layernorm_welford_2d_core_grid_multi_row(mesh_device, batch_size, seq_len, hidden_dim, eps):
+    """Regression for #56908: 2D-core-grid LayerNorm with use_welford=True and tiles_per_core_x > 1
+    (seq_len=1024 -> 32 row-tiles), exercising the Welford post-all-gather factory corrected in this PR."""
+    passes, max_abs_diff, max_rel_diff, mean_rel_diff = run_distributed_norm_test(
+        mesh_device=mesh_device,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        hidden_dim=hidden_dim,
+        eps=eps,
+        norm_type="layer_norm",
+        input_dtype=ttnn.bfloat16,
+        mean=0,
+        var=1,
+        outlier_pct=0,
+        outlier_var=0,
+        use_legacy=False,
+        use_high_precision=True,
+        verbose=False,
+        use_welford=True,
+        use_2d_core_grid=True,
+    )
+
+    assert passes, (
+        f"#56908: 2D-core-grid Welford LayerNorm corrupted output for tiles_per_core_x > 1 | "
+        f"max_abs_diff={max_abs_diff:.6e} | max_rel_diff={max_rel_diff:.6e}"
+    )
