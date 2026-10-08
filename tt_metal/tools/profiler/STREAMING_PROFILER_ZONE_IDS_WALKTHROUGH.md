@@ -1,14 +1,17 @@
-# Zone ids, one zone end to end
+# Debug event ids, one event end to end
 
-This follows a single zone, `T1_Zone5` in the streaming-profiler demo's compute kernel, from its source line to the
-name the host prints. Every value below is real: it was read off the JIT-built ELF and the loader's output on a
-Blackhole p100a (bh-17), running `test_streaming_profiler_zones --gx 1 --gy 1 --iters 2 --markers 1`. The mechanism
-is described in [`STREAMING_PROFILER_ZONE_IDS.md`](STREAMING_PROFILER_ZONE_IDS.md); this page only shows it
+This follows a single debug event, `T1_Zone5` in the debug event pipeline's demo compute kernel, from its source line
+to the name the host prints. Every value below is real: it was read off the JIT-built ELF and the loader's output on a
+Blackhole p100a (bh-17), running the demo program (`test_streaming_profiler_zones --gx 1 --gy 1 --iters 2 --markers 1`).
+The mechanism is described in [the design document](STREAMING_PROFILER_ZONE_IDS.md); this page only shows it
 happening, and says where every number comes from.
+
+Code identifiers on this page (`DeviceZoneScopedN`, the `.tt_zone_*` sections, `TT_PROFILER_TU_ID`, file names and
+log text) are quoted exactly as they are in the source today; they will be renamed separately.
 
 | step | stage | action | the id is |
 |---|---|---|---|
-| 1 | source | the zone site is written | — |
+| 1 | source | the debug event site is written | — |
 | 2 | preprocess | the macro names the site's handle `__tt_zone_0_6` (a name, not the id) | not yet a number |
 | 3 | compile | the site becomes assembler directives + `lui`/`addi` | not yet a number |
 | 4 | link | the linker places the handle | `0x06800005` |
@@ -47,9 +50,9 @@ bytes in file order. So the number `0x06800005` is stored as the bytes `05 00 80
 
 ---
 
-## 1. Source: the zone site
+## 1. Source: the debug event site
 
-The TRISC1 (math) kernel opens a zone:
+The TRISC1 (math) kernel opens a scoped debug event (one with a start and an end):
 
 ```cpp
 {
@@ -59,11 +62,11 @@ The TRISC1 (math) kernel opens a zone:
 ```
 
 It sits at **line 118** of `test_streaming_profiler_zones/kernels/zones_compute.cpp`; the host reports that line at
-the end. It is the sixth of the kernel's ten zones, `T1_Zone0` … `T1_Zone9`.
+the end. It is the sixth of the kernel's ten scoped events, `T1_Zone0` … `T1_Zone9`.
 
 ## 2. Preprocess: the site gets a label name
 
-> **Neither number below is the zone id, and neither is part of it.** They only spell the *name* of an
+> **Neither number below is the event id, and neither is part of it.** They only spell the *name* of an
 > assembler label, so the next steps can refer to the handle. The id is the label's *address*, which the
 > linker (step 4) and the loader (step 9) decide. The name is gone once the file is assembled.
 
@@ -78,13 +81,13 @@ Label name: **`__tt_zone_0_6`**. Two different sites must not share a name; noth
 
 > **This step is not strictly required; it is an optimization.** The id would work without a fixed name: a site could
 > give its handle an anonymous local label and still get a correct, unique id. What the name buys is
-> deduplication. When the compiler expands one zone site many times (a zone inside an `inline` function or a
+> deduplication. When the compiler expands one event site many times (an event inside an `inline` function or a
 > template called from ten places), every copy of the site's asm carries the same label name, and the `.ifndef`
-> from step 3 emits the handle and the record only for the first copy. So the zone gets **one id, one record and
+> from step 3 emits the handle and the record only for the first copy. So the event gets **one id, one record and
 > one name entry** however many copies of its code exist, instead of one per copy. That saves id space and keeps
 > the host's table to one entry per site.
 >
-> The deduplication works within one source file. A zone in a header that two sources include still gets two ids,
+> The deduplication works within one source file. An event in a header that two sources include still gets two ids,
 > one per source: `TT_PROFILER_TU_ID` is part of the name precisely to keep those two apart.
 
 ## 3. Compile: directives plus two instructions
@@ -131,11 +134,11 @@ offset  address   label            site
   2     06800002  __tt_zone_0_3    T1_Zone2
   3     06800003  __tt_zone_0_4    T1_Zone3
   4     06800004  __tt_zone_0_5    T1_Zone4
-  5     06800005  __tt_zone_0_6    T1_Zone5     ← this zone
+  5     06800005  __tt_zone_0_6    T1_Zone5     ← this event
   6     06800006  __tt_zone_0_7    T1_Zone6
    …
   9     06800009  __tt_zone_0_10   T1_Zone9
- 10     0680000a  __tt_zone_0_11   TRISC-KERNEL (the whole-kernel zone opened by the wrapper `trisck.cc`)
+ 10     0680000a  __tt_zone_0_11   TRISC-KERNEL (the whole-kernel event opened by the wrapper `trisck.cc`)
  11     0680000b  __tt_zone_0_0    STACK-OVERFLOW
 ```
 
@@ -200,7 +203,7 @@ strings of all sites packed back to back, each ending in a `\0` byte, in the ord
 | `0x066000a0` | 160 | `T1_Zone4` | 9 |
 | **`0x066000a9`** | **169** | **`T1_Zone5`** | 9 |
 
-`169` is not a size of anything in this zone. It is how many bytes of strings came **before** it:
+`169` is not a size of anything in this event. It is how many bytes of strings came **before** it:
 `9 + 124 + 4 × 9 = 169`. The long file path appears only once: the section is marked mergeable (`"MS"` in step 3),
 so the linker keeps one copy and every `T1_ZoneN` record's file field points at it, `0x06600009`.
 
@@ -256,8 +259,8 @@ compiles three point markers into them (`_Event`, `_Data`, `_Iter`); the compute
 | **4th** | **`zones_compute/…/trisc1.elf`** | **12** | **`[42, 54)`** |
 | 5th | `zones_compute/…/trisc2.elf` | 12 | `[54, 66)` |
 
-`base = 15 + 15 + 12 = 42`. Our zone was at offset 5 in step 4, so its id becomes **`42 + 5 = 47`**. The total,
-66, is what the receiver reports at teardown: `zone ids: 66 of 65535 assigned`.
+`base = 15 + 15 + 12 = 42`. Our event was at offset 5 in step 4, so its id becomes **`42 + 5 = 47`**. The total,
+66, is what the receiver reports at teardown: 66 of 65,535 ids assigned.
 
 ## 10. Load: the instructions are rewritten
 
@@ -283,8 +286,8 @@ Only the immediate digits change (`06800 → 00000`, `005 → 02f`). The `lui` n
 
 **Why the linker script uses a high address.** At link time the `lui` is only kept if it has something to load.
 Had the section been linked at a small address (below 4096), the `lui` would have loaded 0 and the linker would
-have deleted it, leaving just the `addi`, which can hold at most 2047. The loader could then never give that zone
-an id above 2047. Linking at the high address `0x06800000` guarantees every zone keeps its `lui`, so the loader
+have deleted it, leaving just the `addi`, which can hold at most 2047. The loader could then never give that event
+an id above 2047. Linking at the high address `0x06800000` guarantees every event keeps its `lui`, so the loader
 can write any id up to `0xFFFE`.
 
 ## 11. Load: the record is rewritten
@@ -301,7 +304,7 @@ whole 32-bit word (`R_RISCV_32`, stored as the bytes `2f 00 00 00`):
 
 ```
 field at 0x06700050 holds          0x06800005      (step 6)
-minus where .tt_zone_ids was linked − 0x06800000   = 5, the zone's offset
+minus where .tt_zone_ids was linked − 0x06800000   = 5, the event's offset
 plus this image's block start      + 42            (step 9)
                                    = 47
 ```
@@ -329,7 +332,7 @@ step 6), and publishes:
 sites[47] = { name "T1_Zone5", file ".../kernels/zones_compute.cpp", line 118 }
 ```
 
-This happens before the image's bytes are copied to the device, so the name exists before the zone can fire.
+This happens before the image's bytes are copied to the device, so the name exists before the event can fire.
 
 ## 13. Run: the device packs the marker
 
@@ -337,7 +340,7 @@ This happens before the image's bytes are copied to the device, so the name exis
 code before the kernel is copied to the device. Nothing the device does at run time chooses, computes or looks up
 the id.
 
-What the device does need is the value *in a register*, to store it into the marker. So when the zone closes, the
+What the device does need is the value *in a register*, to store it into the marker. So when the event closes, the
 two instructions from step 10 copy that constant into register `s4`, the same way a kernel loads any literal
 number such as `x = 47`:
 
@@ -348,15 +351,15 @@ number such as `x = 47`:
 
 They read no memory and depend on nothing at run time; they would produce 47 on any core, every time.
 
-**Building the marker word.** The first word of a zone packet holds two things side by side: a packet type in the
-top 5 bits and the zone id in the bottom 27 bits. The source line that builds it is `ppfmt::w0` in
+**Building the marker word.** The first word of an event packet holds two things side by side: a packet type in the
+top 5 bits and the event id in the bottom 27 bits. The source line that builds it is `ppfmt::w0` in
 `kernel_profiler_streaming.hpp`:
 
 ```cpp
 word0 = (type << 27) | (id & 0x7FFFFFF);      // 0x7FFFFFF = the low 27 bits set
 ```
 
-For this zone, `type` is 3 (`ZONE_S`, the 2-word zone packet) and `id` is 47:
+For this event, `type` is 3 (`ZONE_S`, the short 2-word packet for a scoped event) and `id` is 47:
 
 ```
 type << 27        = 3 << 27   = 0x18000000
@@ -375,9 +378,9 @@ The compiler turns that line into these instructions:
 ```
 
 > The `5` in `slli`/`srli` is the **width of the type field** (32 − 27 = 5 bits). It has nothing to do with our
-> zone being at offset 5; that is a coincidence of this example.
+> event being at offset 5; that is a coincidence of this example.
 
-word0 = **`0x1800002F`**: type 3 in the top 5 bits, id 47 (`0x2f`) in the bottom 27. A zone too long for the
+word0 = **`0x1800002F`**: type 3 in the top 5 bits, id 47 (`0x2f`) in the bottom 27. An event too long for the
 2-word packet ships type 2 (`ZONE_ATOMIC`) instead, giving `0x1000002F`; the id part is the same.
 
 ## 14. Decode: the host names it
@@ -389,7 +392,7 @@ The relay carries the ring buffer to the host. The decoder masks off the type to
 sites[47]  →  "T1_Zone5"  zones_compute.cpp:118
 ```
 
-The run's subscriber saw all of them: `subscriber saw 105 zones, 12 points, 0 stalls`.
+The run's subscriber received all of them: 105 scoped events and 12 point events, with 0 stalls.
 
 ---
 
