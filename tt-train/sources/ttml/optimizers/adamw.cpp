@@ -27,6 +27,12 @@ bool is_effectively_1d(const ttnn::Tensor& tensor) {
     }
     return non_unit_dims < 2;
 }
+
+// A zero optimizer-state tensor for a parameter. The kernel needs the state in the parameter's own dtype.
+autograd::TensorPtr zeros_state_like(const autograd::TensorPtr& parameter) {
+    return autograd::create_tensor(
+        core::zeros_like(parameter->get_value(autograd::PreferredPrecision::NATIVE)), /* requires_grad */ false);
+}
 }  // namespace
 
 std::string AdamW::get_name() const {
@@ -37,17 +43,8 @@ AdamW::AdamW(ttml::serialization::NamedParameters parameters, const AdamWConfig&
     OptimizerBase(std::move(parameters)), m_config(config) {
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
-            // The kernel needs the moments in the parameter's own dtype.
-            m_exp_avg.emplace(
-                name,
-                autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE)),
-                    /* requires_grad */ false));
-            m_exp_avg_sq.emplace(
-                name,
-                autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE)),
-                    /* requires_grad */ false));
+            m_exp_avg.emplace(name, zeros_state_like(tensor_ptr));
+            m_exp_avg_sq.emplace(name, zeros_state_like(tensor_ptr));
         }
     }
     if (m_config.amsgrad) {
@@ -234,11 +231,7 @@ void AdamW::set_stochastic_rounding(bool stochastic_rounding) {
 void AdamW::init_max_exp_avg_sq() {
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
-            m_max_exp_avg_sq.emplace(
-                name,
-                autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE)),
-                    /* requires_grad */ false));
+            m_max_exp_avg_sq.emplace(name, zeros_state_like(tensor_ptr));
         }
     }
 }

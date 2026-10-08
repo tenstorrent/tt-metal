@@ -253,10 +253,10 @@ class FSDPState:
         """
         for parameter, shard_dim in self.managed:
             param_tensor = parameter.tensor
-            # NATIVE: gather the shard in the dtype it is stored in, so swapping the gathered value in keeps it.
-            current = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
-            self._cached_shards[id(param_tensor)] = current
-            gathered = ttml.core.distributed.all_gather(current, shard_dim, self.axis_index)
+            # Cache the shard as stored (NATIVE), so restoring it keeps the parameter's dtype. Gather the bf16 view:
+            # forward and backward read it anyway, and it is half the bytes of an fp32 shard.
+            self._cached_shards[id(param_tensor)] = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
+            gathered = ttml.core.distributed.all_gather(param_tensor.get_value(), shard_dim, self.axis_index)
             param_tensor.set_value(gathered)
 
     def _gather_accumulated_grads(self) -> None:

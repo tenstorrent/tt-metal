@@ -34,25 +34,18 @@ bool is_float_dtype(ttnn::DataType dtype) {
     return dtype == ttnn::DataType::FLOAT32 || dtype == ttnn::DataType::BFLOAT16;
 }
 
-// Takes the tensor by value: it may be a reference into this state, e.g. set_tensor(get_tensor(FULL)).
-void reset_state(detail::AutocastState &state, ttnn::Tensor tensor) {
-    state.native = tensor;
-    state.derived = ttnn::Tensor();
-    // Non-float tensors (e.g. UINT32 embedding indices) count as FULL and are returned as stored for every
-    // precision: typecast does not apply to them.
-    state.native_precision =
-        tensor.dtype() == ttnn::DataType::BFLOAT16 ? PreferredPrecision::HALF : PreferredPrecision::FULL;
-    state.native_version = 0;
-    state.derived_version = 0;
-    state.write_in_progress = false;
+// A fresh state holding tensor. Non-float tensors (e.g. UINT32 embedding indices) count as FULL and are returned as
+// stored for every precision: typecast does not apply to them.
+detail::AutocastState make_state(const ttnn::Tensor &tensor) {
+    return detail::AutocastState{
+        .native = tensor,
+        .native_precision =
+            tensor.dtype() == ttnn::DataType::BFLOAT16 ? PreferredPrecision::HALF : PreferredPrecision::FULL};
 }
 
 }  // namespace
 
 MutableTensorView::MutableTensorView(std::shared_ptr<detail::AutocastState> state) : m_state(std::move(state)) {
-}
-
-MutableTensorView::MutableTensorView(MutableTensorView &&other) noexcept : m_state(std::move(other.m_state)) {
 }
 
 MutableTensorView::~MutableTensorView() {
@@ -70,8 +63,8 @@ const ttnn::Tensor &MutableTensorView::tensor() const {
 AutocastTensor::AutocastTensor() : m_state(std::make_shared<detail::AutocastState>()) {
 }
 
-AutocastTensor::AutocastTensor(const ttnn::Tensor &tensor) : m_state(std::make_shared<detail::AutocastState>()) {
-    reset_state(*m_state, tensor);
+AutocastTensor::AutocastTensor(const ttnn::Tensor &tensor) :
+    m_state(std::make_shared<detail::AutocastState>(make_state(tensor))) {
 }
 
 AutocastTensor::AutocastTensor(AutocastTensor &&other) noexcept : m_state(other.m_state) {
@@ -84,13 +77,14 @@ AutocastTensor &AutocastTensor::operator=(AutocastTensor &&other) noexcept {
 
 void AutocastTensor::set_tensor(const ttnn::Tensor &tensor) {
     TT_FATAL(!m_state->write_in_progress, "set_tensor called while the tensor is being written in place");
-    // Sole owner: reset in place, so references returned by get_tensor() stay valid (they now see the new
-    // tensor). Shared with copies: detach this copy and leave the others on the old state.
+    // Built before the current state changes: tensor may be a reference into it, e.g. set_tensor(get_tensor(FULL)).
+    auto state = make_state(tensor);
+    // Sole owner: reset in place, so a reference returned by get_tensor(NATIVE) follows the new tensor. Shared with
+    // copies: detach this copy and leave the others on the old state.
     if (m_state.use_count() == 1) {
-        reset_state(*m_state, tensor);
+        *m_state = std::move(state);
     } else {
-        m_state = std::make_shared<detail::AutocastState>();
-        reset_state(*m_state, tensor);
+        m_state = std::make_shared<detail::AutocastState>(std::move(state));
     }
 }
 
@@ -125,19 +119,18 @@ const ttnn::Tensor &AutocastTensor::get_tensor(PreferredPrecision preferred_prec
 
     const auto dtype =
         preferred_precision == PreferredPrecision::HALF ? ttnn::DataType::BFLOAT16 : ttnn::DataType::FLOAT32;
-    if (!core::is_tensor_initialized(state.derived)) {
-        state.derived = ttnn::typecast(state.native, dtype);
-        state.derived_version = native_version();
-    } else if (state.derived_version != native_version()) {
-        if (state.native.storage_type() == ttnn::StorageType::DEVICE) {
-            // Refresh into the existing buffer: no allocation, and the buffer address stays the same.
-            ttnn::typecast(state.native, dtype, std::nullopt, state.derived);
-        } else {
-            // ttnn has no in-place typecast for host tensors.
-            state.derived = ttnn::typecast(state.native, dtype);
-        }
-        state.derived_version = native_version();
+    const bool has_derived = core::is_tensor_initialized(state.derived);
+    if (has_derived && state.derived_version == native_version()) {
+        return state.derived;
     }
+    if (has_derived && state.native.storage_type() == ttnn::StorageType::DEVICE) {
+        // Refresh into the existing buffer: no allocation, and the buffer address stays the same.
+        ttnn::typecast(state.native, dtype, std::nullopt, state.derived);
+    } else {
+        // First use, or a host tensor: ttnn has no in-place typecast for host tensors.
+        state.derived = ttnn::typecast(state.native, dtype);
+    }
+    state.derived_version = native_version();
     return state.derived;
 }
 

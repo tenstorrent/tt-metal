@@ -72,11 +72,8 @@ TEST_F(Bf16ParameterGuardTest, FusedAdamWAcceptsFp32Parameters) {
 }
 
 TEST_F(Bf16ParameterGuardTest, MessageNamesTheParameterAndTheOptimizer) {
-    try {
-        optimizers::SGD optimizer(parameters(ttnn::DataType::FLOAT32), optimizers::SGDConfig{});
-        FAIL() << "SGD accepted an fp32 parameter";
-    } catch (const std::exception &e) {
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("SGD supports bf16 parameters only"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("'theta'"));
-    }
+    EXPECT_THAT(
+        [] { optimizers::SGD optimizer(parameters(ttnn::DataType::FLOAT32), optimizers::SGDConfig{}); },
+        ::testing::ThrowsMessage<std::exception>(::testing::AllOf(
+            ::testing::HasSubstr("SGD supports bf16 parameters only"), ::testing::HasSubstr("'theta'"))));
 }

@@ -26,7 +26,7 @@ class MutableTensorView {
 public:
     MutableTensorView(const MutableTensorView &) = delete;
     MutableTensorView &operator=(const MutableTensorView &) = delete;
-    MutableTensorView(MutableTensorView &&other) noexcept;
+    MutableTensorView(MutableTensorView &&) noexcept = default;
     MutableTensorView &operator=(MutableTensorView &&) = delete;
     ~MutableTensorView();
 
@@ -79,7 +79,8 @@ public:
     [[nodiscard]] bool has_full() const;
 
 private:
-    // Version of the native tensor. The one place to swap in a buffer-level version if ttnn ever offers one.
+    // Version of the native tensor; every read goes through here. A buffer-level version from ttnn would be
+    // returned here instead, and MutableTensorView would no longer need to bump one.
     [[nodiscard]] uint64_t native_version() const;
 
     std::shared_ptr<detail::AutocastState> m_state;
