@@ -511,7 +511,6 @@ class ttKDA:
             beta=projected.beta,
             beta_logits_column_offset=projected.beta_offset,
             initial_state=state.recurrent,
-            selections=selections if self._is_sequence_parallel else None,
             actual_start=actual_start,
             actual_end=actual_end,
             release_gate=True,

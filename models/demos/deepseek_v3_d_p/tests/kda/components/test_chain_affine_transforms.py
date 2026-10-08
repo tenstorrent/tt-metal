@@ -8,7 +8,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _AffineTransform, _distributed_prefix
+from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _AffineTransform, _distributed_prefix, _pack_transform
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -75,7 +75,7 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=False
     )
     entry, final = _distributed_prefix(
-        _AffineTransform(per_rank(a), per_rank(b)),
+        _pack_transform(_AffineTransform(per_rank(a), per_rank(b))),
         replicated(initial, ttnn.float32),
         sequence_parallel_axis=0,
         compute_config=compute_config,
