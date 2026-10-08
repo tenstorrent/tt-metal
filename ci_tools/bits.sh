@@ -26,7 +26,9 @@ for n in ("maxrow", "denorm", "bitid"):
         elif isinstance(v, (list, tuple)):
             for i, x in enumerate(v): walk(f"{prefix}/{i}", x)
         elif torch.is_tensor(v):
-            print("HASH", prefix, tuple(v.shape), str(v.dtype), hashlib.sha256(v.contiguous().view(torch.uint8).numpy().tobytes() if v.dtype != torch.bool else v.numpy().tobytes()).hexdigest()[:16])
+            t = v.detach().contiguous().reshape(-1)
+            raw = t.numpy().tobytes() if t.dtype in (torch.bool, torch.int64, torch.int32, torch.float32) else t.view(torch.int16 if t.element_size() == 2 else torch.uint8).numpy().tobytes()
+            print("HASH", prefix, tuple(v.shape), str(v.dtype), hashlib.sha256(raw).hexdigest()[:16])
         else:
             print("HASH", prefix, repr(v)[:80])
     walk(n, d)
