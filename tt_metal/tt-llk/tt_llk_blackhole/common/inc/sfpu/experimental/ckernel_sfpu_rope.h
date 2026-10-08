@@ -76,8 +76,8 @@ inline void sfpu_rope_configure_addrmod()
 
 inline void sfpu_rope_dest_setup()
 {
+    // SFPLOAD.md: the SETC16 and the SETRWC are two of the three slots; the rope bodies fill the third.
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base());
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
@@ -98,12 +98,22 @@ inline void sfpu_rope_load_cos_sin(const std::uint32_t cos_addr, const std::uint
 /**
  * Scales the cos/sin in LREG0/LREG1 by ``scale_fp32``, an fp32 bit pattern.
  */
-inline void sfpu_rope_scale_cos_sin(const std::uint32_t scale_fp32)
+inline void sfpu_rope_load_scale(const std::uint32_t scale_fp32)
 {
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, scale_fp32 & 0xFFFFu);
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, scale_fp32 >> 16);
+}
+
+inline void sfpu_rope_mul_cos_sin()
+{
     TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
     TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+}
+
+inline void sfpu_rope_scale_cos_sin(const std::uint32_t scale_fp32)
+{
+    sfpu_rope_load_scale(scale_fp32);
+    sfpu_rope_mul_cos_sin();
 }
 
 /**
@@ -203,16 +213,25 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
 
     constexpr std::uint32_t head_stride = Wt * x_stride;
 
+    if constexpr (!has_scale)
+    {
+        TTI_NOP;
+    }
     for (std::uint32_t w = 0; w < Wt; w++)
     {
         for (std::uint32_t f = 0; f < 2; f++)
         {
             const std::uint32_t cs_off = w * cs_stride + f * F;
+            if constexpr (has_scale)
+            {
+                // The scale's SFPLOADIs read no DEST: ahead of the cos/sin loads they fill the SFPLOAD.md slots.
+                sfpu_rope_load_scale(scale_fp32);
+            }
             sfpu_rope_load_cos_sin(cos_base + cs_off, sin_base + cs_off);
             if constexpr (has_scale)
             {
                 // Amortized over the Ht heads that reuse this cos/sin pair.
-                sfpu_rope_scale_cos_sin(scale_fp32);
+                sfpu_rope_mul_cos_sin();
             }
             std::uint32_t x_addr = x_base + w * x_stride + f * F;
             for (std::uint32_t h = 0; h < Ht; h++)
@@ -268,6 +287,10 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
     constexpr std::uint32_t live_rows_per_half = (tile_h > 16) ? 16 : tile_h;
     constexpr std::uint32_t num_row_groups     = (live_rows_per_half + 3) / 4;
 
+    if constexpr (!has_scale)
+    {
+        TTI_NOP;
+    }
     rope::unroll<Wt>(
         [&](auto w_index)
         {
@@ -281,10 +304,14 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
                         // One shared phase per column-face; reused for every row-group
                         // and (for tile_h==32) the matching bottom face.
                         constexpr std::uint32_t cs_addr = cs_base + w * cs_stride + f * F;
+                        if constexpr (has_scale)
+                        {
+                            sfpu_rope_load_scale(scale_fp32);
+                        }
                         sfpu_rope_load_cos_sin_imm<cs_addr, cs_addr + 2, is_fp32_dest_acc_en>();
                         if constexpr (has_scale)
                         {
-                            sfpu_rope_scale_cos_sin(scale_fp32);
+                            sfpu_rope_mul_cos_sin();
                         }
                     }
                     rope::unroll<num_row_halves>(
@@ -297,10 +324,14 @@ inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
                                     if constexpr (cos_sin_per_row)
                                     {
                                         constexpr std::uint32_t cs_addr = cs_base + w * cs_stride + row;
+                                        if constexpr (has_scale)
+                                        {
+                                            sfpu_rope_load_scale(scale_fp32);
+                                        }
                                         sfpu_rope_load_cos_sin_imm<cs_addr, cs_addr + 2, is_fp32_dest_acc_en>();
                                         if constexpr (has_scale)
                                         {
-                                            sfpu_rope_scale_cos_sin(scale_fp32);
+                                            sfpu_rope_mul_cos_sin();
                                         }
                                     }
                                     rope::unroll<Ht>(
