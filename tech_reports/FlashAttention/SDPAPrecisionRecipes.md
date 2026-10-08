@@ -167,7 +167,7 @@ The DEST mode is read from `compute_kernel_config` as before (`fp32_dest_acc_en`
 |---|---|---|
 | `scaled_dot_product_attention` (any mask / causal / sliding window / windowed / sink / concat heads), `chunked_scaled_dot_product_attention`, `flash_mla_prefill`, `chunked_flash_mla_prefill` | streaming kernel | ACCURATE |
 | `joint_scaled_dot_product_attention` | STANDARD | ACCURATE |
-| `ring_joint_scaled_dot_product_attention` | streaming kernel | ACCURATE; legacy loop for causal, balanced, sink, sliding window, indexed / padded KV cache, V head dim ≠ Q's and chunked prefill (ring recipe gaps) |
+| `ring_joint_scaled_dot_product_attention` | streaming kernel | ACCURATE; legacy loop only for combinations the legacy FP32 loop rejects too (sink, sliding window, KV-pad rotation, circular cache) or a V wider than Q |
 | `exp_ring_joint_scaled_dot_product_attention` | streaming kernel; STANDARD for a blocking the streaming kernel cannot build (QK subblock taller than two tiles, K chunk not a multiple of the subblock row, one Q subblock), which failed to compile before | ACCURATE (failed to compile before) |
 | `ring_distributed_scaled_dot_product_attention` | legacy loop (no recipe path yet) | legacy loop |
 
@@ -269,9 +269,11 @@ chunk in L1 across all ring steps. They mask key tails (shard padding, `logical_
 normalize once, on the last active step. Exp ring rows with several head segments (up to three passes) run
 pass-outer and ring-inner.
 
-- Ring: noncausal, `is_causal` and `is_balanced` (see [Causal rings](#causal-rings)); exp ring: noncausal.
-  Cache, window and sink features are rejected (`sliding_window_size` with an explicit error: the legacy FP32 ring
-  kernel ignores it). A BFP8/BFP4 Q is widened to BF16 first and the outputs narrowed back, as on the dense path;
+- Ring: noncausal, `is_causal` and `is_balanced` (see [Causal rings](#causal-rings)), chunked prefill, indexed
+  caches (`kv_cache_batch_idx`, or `slot_id` with the metadata tensors outside chunked prefill) and a V head dim
+  below Q's (MLA with a separate V); exp ring: noncausal. KV-pad rotation (`kv_actual_isl`, metadata on chunked
+  prefill), circular caches, sinks and sliding windows are rejected (`sliding_window_size` with an explicit error:
+  the legacy FP32 ring kernel ignores it). A BFP8/BFP4 Q is widened to BF16 first and the outputs narrowed back, as on the dense path;
   K/V may be BF16, BFP8 or BFP4 under every recipe. `scale`, `compute_kernel_config` and `exp_approx_mode` follow
   [Legacy arguments](#legacy-arguments-with-a-recipe).
 - `ring_distributed_scaled_dot_product_attention` takes `precision` too (see
@@ -285,6 +287,17 @@ pass-outer and ring-inner.
   K chunk hands finished O row groups to the writer, a restore acks maxima and sums first and then each O row as
   it lands, and compute waits only for the rows it is about to accumulate onto. On a BH Galaxy this takes
   FAST BFP8 Wan 2.2 720p attention from 19.32 to 18.80 ms (480p 5.87 to 5.74 ms), bit-identical.
+
+### Chunked prefill
+
+With Q shorter than the K/V shard (and not `is_cross`), Q is the newest chunk group's slab on each device and K/V the
+cache of every group so far: device d's shard holds its slab of each group back to back, so local K tile t is global
+tile (t / slab) · group + d · slab + t mod slab. Every step masks in the sequence's frame
+(`SDPA_RECIPE_RING_CHUNKED`): compute walks the K chunks the reader sends (before `logical_n`, or the device's last Q
+row with the reader's dense causal skip), pops those past a Q chunk's last row, and stamps the per-tile mask on the
+rest from that mapping, as the causal diagonal does. A first chunk group's step on a later device's K has no visible
+key; the recipes mark it inactive on the host. The legacy FP32 tests of the feature (Kimi-style D576 / V128 with BFP8
+K/V, and an indexed ND-sharded cache with V narrower than Q) now route to ACCURATE.
 
 ### Causal rings
 
