@@ -51,6 +51,7 @@ INT32_MIN = torch.iinfo(torch.int32).min  # 0x80000000
 # additive-order minimum, but ttnn's get_pad_value uses INT32_MIN + 1, so we match it.
 INT32_PAD_MIN = INT32_MIN + 1  # -0x7FFFFFFF
 UINT16_MAX = torch.iinfo(torch.uint16).max  # 0xFFFF
+UINT32_MAX = torch.iinfo(torch.uint32).max  # 0xFFFFFFFF
 
 dimension_combinations = [
     [m, n]
@@ -140,7 +141,7 @@ def get_reduce_pad_value(reduce_pool: ReducePool, input_format: DataFormat):
         if input_format == DataFormat.Int32:
             return INT32_MAX
         if input_format == DataFormat.UInt32:
-            return 0xFFFFFFFF  # UInt32 MAX/MIN orders the full unsigned range
+            return UINT32_MAX  # UInt32 MAX/MIN orders the full unsigned range
         if input_format == DataFormat.UInt16:
             # 0xFFFF fits in the 31-bit sign-magnitude positive range the comparator orders.
             return UINT16_MAX
@@ -459,18 +460,19 @@ def test_sfpu_reduce(
     )
 
 
-def _run_int32_reduce(
+def _run_integer_reduce(
     mathop,
     reduce_pool,
-    injected_value,
+    injected_value=None,
     base_range=(-1000, 1000),
     input_format=DataFormat.Int32,
     tile=None,
 ):
-    """Build a single 32x32 Int32 tile, inject `injected_value` at a few scattered
-    positions, run the SFPU reduce on device, and return (golden_slice, device_slice).
+    """Reduce one 32x32 integer tile on device and return (golden_slice, device_slice).
 
-    With ``tile`` (a 32x32 tensor) that tile is reduced as given instead, and the golden slice is None.
+    By default the tile is random Int32 in ``base_range`` with ``injected_value`` at a few scattered
+    positions, checked against the golden model. With ``tile`` (a 32x32 tensor) that tile is reduced as
+    given in ``input_format`` and the golden slice is None.
     """
     formats = InputOutputFormat(input_format, input_format)
     dest_acc = DestAccumulation.Yes  # 32-bit formats require dest accumulation
@@ -602,7 +604,7 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
     if reduce_pool == ReducePool.Min and TestConfig.WITH_COVERAGE:
         pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
 
-    golden_slice, res_slice = _run_int32_reduce(
+    golden_slice, res_slice = _run_integer_reduce(
         mathop, reduce_pool, injected_value, base_range=base_range
     )
 
@@ -653,8 +655,14 @@ def test_uint32_reduce_max_min_bit31(mathop, reduce_pool):
         2**31 - 16, 2**31 + 16, (TILE_DIM, TILE_DIM), dtype=torch.int64
     )
     values[::3] = torch.randint(0, 1000, values[::3].shape, dtype=torch.int64)
-    for i, extreme in enumerate([0, 3, 0x7FFFFFFF, 0x80000000, 0x80000005, 0xFFFFFFFF]):
+    for i, extreme in enumerate([3, INT32_MAX, 0x80000005]):
         values[(5 * i) % TILE_DIM, (7 * i + 1) % TILE_DIM] = extreme
+    # 0, 0x80000000 and UINT32_MAX in one row and one column, so they meet in a compare-and-swap
+    # (after the flip, 0 and 0x80000000 are the -0 / +0 pair).
+    meet = 20
+    values[meet, 0:3] = torch.tensor([0, 0x80000000, UINT32_MAX])
+    values[21:23, meet] = torch.tensor([0x80000000, UINT32_MAX])
+    values[meet, meet] = 0
     reduce_axis = 0 if mathop == MathOperation.ReduceColumn else 1
     golden = (
         values.max(dim=reduce_axis).values
@@ -662,7 +670,7 @@ def test_uint32_reduce_max_min_bit31(mathop, reduce_pool):
         else values.min(dim=reduce_axis).values
     )
 
-    _, res = _run_int32_reduce(
+    _, res = _run_integer_reduce(
         mathop,
         reduce_pool,
         injected_value=None,
@@ -771,7 +779,7 @@ def _build_reduce_specials_tile(edge_class, torch_format, mathop):
 def _run_float_reduce_specials(mathop, reduce_pool, edge_class, formats, dest_acc):
     """Drive one specials class through the float reduce and return (golden, device) slices.
 
-    A near-copy of _run_int32_reduce's body rather than a shared helper: that one hardcodes Int32,
+    A near-copy of _run_integer_reduce's body rather than a shared helper: that one assumes an integer format,
     the two's-complement pack path and an integer stimulus, and threading a format axis plus a
     float builder through it would need a flag per difference. If a third caller appears, factor.
     """
