@@ -6,12 +6,15 @@
 
 On Blackhole, moe_compute runs the expert-row program plus a second program: metadata and placement
 (ComputeOnly), or metadata, the double-buffer feed and selective_reduce_combine's own kernels (FullLocal);
-TT_METAL_MOE_COMPUTE_KERNEL=ring|expert_rows forces a path. These tests check, for both paths on the same inputs:
+TT_METAL_MOE_COMPUTE_KERNEL=ring|expert_rows forces a path and TT_METAL_MOE_COMPUTE_ROW_TILES=M the expert rows
+path's row tiles per job (M > 1: weight-stationary jobs). These tests check, for both paths on the same inputs:
   - outputs 0-2 (counts, activation rows, e_t) against the 6U goldens, and equal between the two paths;
   - output 4: every row of the last two local experts (what moe_compute leaves in its double buffer) against an FP32
     golden on the BFP4-rounded weights;
   - FullLocal output 5 (the combine output): bitwise equal between the paths, and against the FP32 golden;
-  - a repeated call and a traced call bitwise equal to the eager call, in every DEST mode and with the defaults.
+  - a repeated call and a traced call bitwise equal to the eager call, in every DEST mode and with the defaults;
+  - rows (output 4, and every row through the FullLocal combine) of jobs of M row tiles bitwise equal to one row
+    tile per job, in every DEST mode.
 """
 
 import os
@@ -57,19 +60,24 @@ DEVICE_PARAMS = [
     {"l1_small_size": 16384, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 8 << 20}
 ]
 KERNEL_ENV = "TT_METAL_MOE_COMPUTE_KERNEL"
+ROW_TILES_ENV = "TT_METAL_MOE_COMPUTE_ROW_TILES"
 
 
 @contextmanager
-def _kernel(name):
-    old = os.environ.get(KERNEL_ENV)
-    os.environ[KERNEL_ENV] = name
+def _env(key, value):
+    old = os.environ.get(key)
+    os.environ[key] = str(value)
     try:
         yield
     finally:
         if old is None:
-            os.environ.pop(KERNEL_ENV, None)
+            os.environ.pop(key, None)
         else:
-            os.environ[KERNEL_ENV] = old
+            os.environ[key] = old
+
+
+def _kernel(name):
+    return _env(KERNEL_ENV, name)
 
 
 def _skip_unless_blackhole(mesh_device):
@@ -86,7 +94,9 @@ def _bfp4_round(w):
 def _routing(kind, T, E, K, seed=2003):
     """Token-major top-k lists: random (uniform, distinct ids), skewed (expert 0 in every token, the upper half never
     chosen), empty (only the even experts), dup (one id twice per token, at random k), all_one (every k of every token
-    names expert 0: K T entries for one expert, more than its e_t page holds)."""
+    names expert 0: K T entries for one expert, more than its e_t page holds), hot_last (the last two experts in every
+    token: T rows each), cold_last (the last two experts in the first 20 tokens only, the others about
+    T (K - 2) / (E - 2) rows each)."""
     rng = random.Random(seed)
     out = []
     for _ in range(T):
@@ -101,6 +111,12 @@ def _routing(kind, T, E, K, seed=2003):
             ids.insert(rng.randrange(K), ids[rng.randrange(K - 1)])
         elif kind == "all_one":
             ids = [0] * K
+        elif kind == "hot_last":
+            ids = [E - 1, E - 2] + rng.sample(range(E - 2), K - 2)
+            rng.shuffle(ids)
+        elif kind == "cold_last":
+            ids = ([E - 1, E - 2] + rng.sample(range(E - 2), K - 2)) if len(out) < 20 else rng.sample(range(E - 2), K)
+            rng.shuffle(ids)
         else:
             raise ValueError(kind)
         out.append(ids)
@@ -648,3 +664,107 @@ def test_moe_compute_expert_rows_listing_over_tokens(mesh_device, mesh_shape, co
     expected = [t for t in range(T // K) for _ in range(K)]
     assert got["e_t"][0, : 4 * T : 4].tolist() == expected, "expert 0's page: the first T entries in token order"
     assert int(got["e_t"][0, 4 * T]) & 0xFFFFFFFF == 0xFFFFFFFF, "page terminator"
+
+
+# weight-stationary jobs: (E, T, K, N, H, activation, limit, bias); hot_last routing gives the two experts output 4
+# keeps T rows (jobs of several row tiles), cold_last gives them 20 (one-row-tile jobs among jobs of several)
+ROW_TILE_SHAPES = {
+    "deepseek_e16_t128": (16, 128, 8, 2048, 7168, MoEActivationFunction.SILU, None, False),
+    "glm53_e18_t96_clamped": (18, 96, 8, 2048, 4096, MoEActivationFunction.CLAMPED_SILU, 10.0, False),
+    "qwen36_e32_t128": (32, 128, 8, 512, 2048, MoEActivationFunction.SILU, None, False),
+    "gpt_oss_e8_t128_bias": (8, 128, 4, 2880, 2880, MoEActivationFunction.SWIGLU, None, True),
+}
+
+
+def _rows_with(case, row_tiles, **precision):
+    """One ComputeOnly expert rows call with jobs of `row_tiles` row tiles (fresh program cache), read back and
+    checked."""
+    case.mesh_device.disable_and_clear_program_cache()
+    case.mesh_device.enable_program_cache()
+    with _kernel("expert_rows"), _env(ROW_TILES_ENV, row_tiles):
+        outs, added = _programs_added(case.mesh_device, lambda: case.call(**precision))
+        assert added == 2, f"row tiles {row_tiles}: compiled {added} programs, expected the 2 expert rows programs"
+        return case.read(outs, check=True)
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("kind", ["hot_last", "cold_last"])
+@pytest.mark.parametrize("row_tiles", [2, 4])
+@pytest.mark.parametrize("shape", sorted(ROW_TILE_SHAPES))
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_expert_rows_row_tiles(mesh_device, mesh_shape, shape, row_tiles, kind):
+    """Jobs of several row tiles (each expert's weights read once for up to 32 M rows), and jobs of one row tile in the
+    same program, give the rows of one row tile per job bitwise, and those equal the ring's."""
+    _skip_unless_blackhole(mesh_device)
+    E, T, K, N, H, act, limit, bias = ROW_TILE_SHAPES[shape]
+    case = _Case(mesh_device, E, T, K, N, H, act=act, limit=limit, has_bias=bias, kind=kind)
+    precision = dict(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    one = _rows_with(case, 1, **precision)
+    many = _rows_with(case, row_tiles, **precision)
+    assert (diff := case.defined_equal(one, many)) is None, f"{row_tiles} row tiles per job differ: {diff}"
+    with _kernel("ring"):
+        ring = case.read(case.call(**precision), check=True)
+    # against the ring: counts and rows, as _expert_rows_and_ring (outputs 1 / 2 are checked against the goldens above)
+    assert torch.equal(ring["counts"][:, :E], many["counts"][:, :E]), "counts differ from the ring's"
+    for e in range(E - 2, E):
+        n = int(case.counts[0, e])
+        assert torch.equal(
+            ring["rows"][e % 2, :n].view(torch.int16), many["rows"][e % 2, :n].view(torch.int16)
+        ), f"expert {e}: {row_tiles} row tiles per job differ from the ring's rows"
+    rel = case.rows_rel_l2(many)
+    logger.info(f"{shape} {kind} M {row_tiles}: rows rel L2 {rel:.5f} (HiFi4, FP32 DEST)")
+    assert rel <= 0.01, f"rows rel L2 {rel}"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("kind", ["hot_last", "cold_last"])
+@pytest.mark.parametrize("mode", sorted(PRECISION_MODES))
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_expert_rows_row_tiles_deterministic(mesh_device, mesh_shape, mode, kind):
+    """In every DEST mode: jobs of 4 row tiles (and of one row tile in the same program) give one row tile per job's
+    rows bitwise; eager, repeated eager and two trace replays are bitwise equal."""
+    _skip_unless_blackhole(mesh_device)
+    precision = PRECISION_MODES[mode]
+    case = _Case(mesh_device, 16, 128, 8, 2048, 7168, kind=kind)
+    one = _rows_with(case, 1, **precision)
+    first = _rows_with(case, 4, **precision)
+    assert (diff := case.defined_equal(one, first)) is None, f"4 row tiles per job differ from 1: {diff}"
+    with _kernel("expert_rows"), _env(ROW_TILES_ENV, 4):
+        second = case.read(case.call(**precision))
+        assert (diff := case.defined_equal(first, second)) is None, f"repeated eager call differs: {diff}"
+        ttnn.synchronize_device(mesh_device)
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        try:
+            outs = case.call(**precision)
+        finally:
+            ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        traced = case.read(outs, free=False)
+        ttnn.release_trace(mesh_device, tid)
+    assert (diff := case.defined_equal(first, traced)) is None, f"traced call differs: {diff}"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mode", ["hifi4_fp32", "lofi_bf16"])
+@pytest.mark.parametrize("kind", ["random", "hot_last", "cold_last"])
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_expert_rows_row_tiles_full_local(mesh_device, mesh_shape, kind, mode):
+    """FullLocal: the combine output (every routed row of every expert) with jobs of 4 row tiles is bitwise equal to
+    one row tile per job and to the ring path's."""
+    _skip_unless_blackhole(mesh_device)
+    precision = PRECISION_MODES[mode]
+    case = _Case(mesh_device, 16, 128, 8, 2048, 7168, kind=kind)
+    res = _full_local(case, **precision)
+    case.mesh_device.disable_and_clear_program_cache()
+    case.mesh_device.enable_program_cache()
+    with _kernel("expert_rows"), _env(ROW_TILES_ENV, 4):
+        out = case.new_combine_output()
+        outs, added = _programs_added(case.mesh_device, lambda: case.call(compute_only=False, out=out, **precision))
+        assert added == 2, f"FullLocal call with 4 row tiles per job compiled {added} programs, expected 2"
+        many = ttnn.to_torch(outs[5]).reshape(case.K, case.T, case.H)
+        case.read(outs[:5], check=True)
+        ttnn.deallocate(outs[5])
+    assert torch.equal(
+        many.view(torch.int16), res["expert_rows"].view(torch.int16)
+    ), "combine output differs from M = 1"
