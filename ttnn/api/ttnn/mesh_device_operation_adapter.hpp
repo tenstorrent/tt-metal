@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include <algorithm>
+#include <cstdlib>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -37,6 +38,22 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::device_operation {
+
+// Whether a cache hit also rebuilds the program from its descriptor and checks that the fast path left the
+// cached program identical (assert_fastpath_parity). Always on in a build configured with
+// ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK; otherwise off unless TT_METAL_DESCRIPTOR_PARITY_CHECK=1 is set
+// when the process starts, so a test run can turn the check on without a separately compiled ttnn.
+inline bool descriptor_parity_check_enabled() {
+#ifdef TT_DESCRIPTOR_PATCHING_PARITY_CHECK
+    return true;
+#else
+    static const bool enabled = [] {
+        const char* value = std::getenv("TT_METAL_DESCRIPTOR_PARITY_CHECK");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+#endif
+}
 
 template <typename T>
 using AdaptedCachedMeshWorkload = tt::tt_metal::program_cache::detail::AdaptedCachedMeshWorkload<T>;
@@ -687,10 +704,9 @@ public:
                         tensor_args,
                         tensor_return_value,
                         std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
-#ifdef TT_DESCRIPTOR_PATCHING_PARITY_CHECK
                     // Same regression net as the legacy fast path: assert the op's override reproduced a
                     // full rebuild exactly (rt-args AND CB addresses).
-                    {
+                    if (descriptor_parity_check_enabled()) {
                         auto parity_desc = invoke_per_coord(
                             attrs,
                             tensor_args,
@@ -701,7 +717,6 @@ public:
                         tt::tt_metal::assert_fastpath_parity(
                             program, parity_scratch, parity_desc, ttsl::get_type_name<DeviceOperation>());
                     }
-#endif
                 } else {
                     // ProgramDescriptor variant — simple per-coord factory.  Fast-path when the
                     // factory declared rt-arg buffer bindings via emplace_runtime_args(), OR the op
@@ -740,11 +755,10 @@ public:
                             collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
                         tt::tt_metal::apply_dynamic_runtime_args(program, dynamic_args);
-#ifdef TT_DESCRIPTOR_PATCHING_PARITY_CHECK
                         // Regression net: assert the fast path reproduced a full rebuild exactly (rt-args
                         // AND CB addresses). Fires loudly at the exact stale arg for any op whose cache-hit
                         // re-application is incomplete (SDXL in-place silu / MorehAdamW). Debug/CI only.
-                        {
+                        if (descriptor_parity_check_enabled()) {
                             auto parity_desc = invoke_per_coord(
                                 attrs,
                                 tensor_args,
@@ -755,7 +769,6 @@ public:
                             tt::tt_metal::assert_fastpath_parity(
                                 program, parity_scratch, parity_desc, ttsl::get_type_name<DeviceOperation>());
                         }
-#endif
                     } else {
                         const ttnn::MeshCoordinate mesh_coord = coordinate_range.start_coord();
                         const std::optional<ttnn::MeshCoordinate> mesh_dispatch_coordinate(mesh_coord);
