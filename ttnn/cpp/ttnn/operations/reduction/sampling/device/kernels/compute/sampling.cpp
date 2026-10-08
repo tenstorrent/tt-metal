@@ -31,10 +31,12 @@ static void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
 
     DataflowBuffer dfb_obj(static_cast<uint16_t>(dfb_id));
 
-    // The random tile is packed to BF16 before the strict cumulative-probability
-    // comparison. Keep the FP32 endpoint below the BF16 midpoint to 1.0 so the
-    // packed threshold remains strictly less than 1.0.
-    constexpr uint32_t rand_scale = 0x3F7F7FFFU;
+    // The random threshold reaches the writer as BF16 (8-bit mantissa), which near 1.0 means
+    // ~1/256 resolution: tokens whose cumulative slice lies in the last 0.4% of the mass could
+    // never be drawn and the rest of the tail was under-sampled (unit test
+    // test_sampling_distribution.py). Draw values in [0, 256] (integers up to 256 are exact in
+    // BF16); the writer combines two elements of the tile into a 16-bit threshold.
+    constexpr uint32_t rand_scale = 0x43800000U;  // 256.0f
     constexpr uint32_t rand_from = 0;
 
     if (seed != 0) {

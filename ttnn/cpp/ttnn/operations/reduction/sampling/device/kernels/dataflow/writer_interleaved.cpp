@@ -109,7 +109,10 @@ void kernel_main() {
     // get random number
     dfb_rand.wait_front(1);
     const CoreLocalMem<volatile uint16_t> rand_values(dfb_rand.get_read_ptr());
-    const uint16_t rand = rand_values[0];
+    // Two independent BF16 draws in [0, 256] (elements 0 and 1 of the random tile) combined
+    // into one threshold with ~16-bit resolution: hi/256 + lo/65536, clamped below 1.0.
+    const float rand_hi = bf16_to_f32(rand_values[0]);
+    const float rand_lo = bf16_to_f32(rand_values[1]);
     // wait for compute kernel
     dfb_final_indices.wait_front(num_users);
     dfb_local_values.wait_front(1);
@@ -185,7 +188,10 @@ void kernel_main() {
     }
 
     // Stochastic sampling in float32
-    const float rand_f = bf16_to_f32(rand);
+    float rand_f = rand_hi * (1.0f / 256.0f) + rand_lo * (1.0f / 65536.0f);
+    if (rand_f >= 1.0f) {
+        rand_f = 0.99998474f;  // 1 - 2^-16
+    }
     float cum_sum_f = 0.0f;
     index_out[core_id] = final_indices[local_indices[start_id_local_phase_0]];
     bool index_found = false;
