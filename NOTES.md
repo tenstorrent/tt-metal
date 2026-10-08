@@ -92,3 +92,7 @@ The ref used LTX25_ROOT=/mnt/MLPerf/... -> FORBIDDEN now (job 086 D-state hang).
 - Wake: `ssh blx01 test -e /var/tmp/fasth3/t295/drv295.done`. Then: read drv295.done + drv295.done.log; 6x MATCH
   -> revert verified; report job ids + md5s; copy run logs to tmp/t295/res/; rm -rf /var/tmp/fasth3/t295 on blx01.
 - Follow-up for t48: publishing a fresh LTX-2.3 transformer cache fails with `parameter has no data`.
+- 19:41 UTC (coordinator rule 1198.1): run295b.sh is now a wrapper that runs run295c.sh (the old arm script) under
+  setsid and kills the process group on TERM/INT/EXIT. Arm B (submitted later by the driver) uses it; arm A (job 119)
+  had already started with the old script. On wake: `ps -o pid,args -u smarton | grep -E 'pytest|run295'` on blx01
+  must show nothing of t295.
