@@ -4,7 +4,6 @@
 
 #include <tt_stl/fmt.hpp>
 #include "inspector.hpp"
-#include "context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/inspector/data.hpp"
 #include "impl/debug/inspector/rpc_server_generated.hpp"

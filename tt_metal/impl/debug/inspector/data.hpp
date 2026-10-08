@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "impl/context/context_types.hpp"
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/rpc_server_controller.hpp"
 #include <tt-metalium/mesh_trace_id.hpp>
@@ -30,10 +29,7 @@ public:
 
 private:
     // `context` must outlive this object.
-    Data(
-        MetalContext& context,
-        std::optional<int> rank,
-        uint64_t fw_compile_hash);  // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
+    Data(MetalContext& context, std::optional<int> rank, uint64_t fw_hash);
 
     // Whether tensor specs should be captured on op dispatch.
     bool capture_tensor_specs() const;
