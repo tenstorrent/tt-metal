@@ -24,6 +24,10 @@ neighbor_pad's local copy moves one stick per NOC read barrier, so 512 B sticks 
 - Score: F=/var/tmp/fasth3; $F/t48/python_env/bin/python $F/t264/drv/cmp241.py $F/diffvae/ref $O/<arm> $O/cmp_<arm>.json 0,1
   and md5 lines in run.log (expect h2d md5 == def md5: exact change).
 
+## Job 022 result (2026-10-08)
+- def: decode 2.704/2.705 s (mean 2.705), md5 s0 2797bc15..., s1 13ee4b04...
+- h2d: CRASHED at first decode: program.cpp:2471 'Statically allocated circular buffers on core range [0-0 - 3-0] grow to 4969472 B > 1572864 B L1'. The fused 2-D neighbor_pad sizes its CB from the 4 KB sticks (too big). Fix CB sizing (page-chunk the stick) before rerun. No drop.
+
 ## Next
 - If h2d >= 5% faster (>= ~0.136 s): flip default (=0 off), ttp checks, land via -land branch + ttp push --detach.
 - Else: try PARTS=32 arm (def vs h2d+parts32) as a separate job if the profile says NP is not stick-bound; else stop with notes.
