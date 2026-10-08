@@ -176,9 +176,10 @@ The DEST mode is read from `compute_kernel_config` as before (`fp32_dest_acc_en`
   closest match to an FP32-DEST request; FP32 DEST was often a shared linear config rather than an SDPA choice.
 - `program_config` chunk sizes are hints, since they were tuned for the legacy kernels: kept when the recipe
   supports the geometry and (dense, joint) it fits L1 next to the call's mask and outputs, otherwise the op chooses
-  the blocking ([Blocking](#blocking)). The grid and `max_cores_per_head_batch` are kept; `sub_core_grids`, which
-  prefill ignored, is dropped. Zero chunk sizes still need an explicit `precision`; no `program_config` means
-  op-chosen blocking.
+  the blocking ([Blocking](#blocking)). Without a key range, keys that fit one K chunk (up to 512) run as one
+  chunk when it fits (no running rescale; 1.03-1.16x on S256-S512 encoder shapes). The grid and
+  `max_cores_per_head_batch` are kept; `sub_core_grids`, which prefill ignored, is dropped. Zero chunk sizes still
+  need an explicit `precision`; no `program_config` means op-chosen blocking.
 - Routed ring calls return the recipe's scratch as the third output, not an LSE (no caller reads it).
 - Wormhole keeps the legacy loops until the recipes run there.
 
@@ -192,17 +193,18 @@ the legacy column the same call before routing):
 | tt_transformers chunked prefill: Q2048 at 6144, paged BFP8 cache (64-row blocks), tensor start | 12.75 | 6.20 | 5.33 |
 | Gemma-style: causal + window 1024, scale 1, 16/8 heads, D256, S8192, Q128/K128 | 12.61 | 3.65 | 4.44 |
 | bge_m3: 16 heads, D64, S8192, padding mask, Q128/K256, LoFi + FP32 | 10.02 | 8.72 | 7.66 |
-| bge_m3: B8, S512, padding mask, Q256/K256, HiFi4 + FP32 | 0.464 | 0.545 | 0.589 |
-| nomic embed v2: 12 heads, D64, S512, padding mask, scale 1, HiFi3 + FP32 | 0.104 | 0.261 | 0.250 |
+| bge_m3: B8, S512, padding mask, Q256/K256, HiFi4 + FP32 | 0.463 | 0.468 | 0.516 |
+| nomic embed v2: 12 heads, D64, S512, padding mask, scale 1, HiFi3 + FP32 | 0.096 | 0.090 | 0.093 |
 | Qwen3-VL text: causal, 32/8 heads, D128, S4096, Q128/K512 | 4.99 | 3.57 | 3.61 |
 | Qwen3-VL vision: 16 heads, D96, S4096, Q128/K128 | 4.63 | 3.57 | 2.06 |
 | qwen_image joint: 24 heads, D128, N4096 + L128, Q512/K256, HiFi2 + FP32 (ACCURATE) | 10.60 | 3.57 | 3.52 |
 | qwen_image joint, BF16 DEST (STANDARD) | 6.16 | 1.41 | 1.44 |
 | Flux-style joint: 24 heads, D128, N4096 + L512, Q256/K512, BF16 DEST (STANDARD) | 5.30 | 1.65 | 1.61 |
 
-The routed FP32-DEST calls are faster than the legacy FP32 loop except the small encoder shapes (bge_m3 B8 S512
-1.17x, nomic S512 2.5x: few heads at S512 put a recipe's per-call floor, about 0.23 ms here, above the legacy
-op). For reference, the BF16-DEST streaming kernel (unchanged) runs the tt_transformers rows in 2.28 / 8.72 ms.
+The routed FP32-DEST calls are faster than the legacy FP32 loop, the small encoders included (nomic S512) or level
+with it (bge_m3 B8 S512: the same device time, 0.452 ms traced, bound by reading the head-broadcast mask once per
+head). Recipe calls are a cached device operation, about 0.02 ms of host time per call; while every call rebuilt
+its program on the host these two rows ran 0.545 and 0.261 ms. For reference, the BF16-DEST streaming kernel (unchanged) runs the tt_transformers rows in 2.28 / 8.72 ms.
 
 ## Causal, sliding-window, chunked and windowed attention
 
