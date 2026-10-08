@@ -63,4 +63,31 @@ struct ValueBlockDistribution {
 ValueBlockDistribution distribute_value_blocks(
     tt::tt_metal::CoreCoord grid, uint32_t batch_heads, uint32_t value_tiles);
 
+// The physical row segment a core's value-block multicast addresses, ordered for NoC 0: value block 0 (the
+// sender) gets its siblings' segment, every other block gets the sender. All zero when a head has one block.
+struct ValueBlockPeers {
+    uint32_t x0 = 0;
+    uint32_t y0 = 0;
+    uint32_t x1 = 0;
+    uint32_t y1 = 0;
+};
+
+template <typename Device>
+ValueBlockPeers value_block_peers(const Device& device, const ValueBlockDistribution& distribution, uint32_t index) {
+    if (distribution.value_blocks == 1) {
+        return {};
+    }
+    const uint32_t value_block = distribution.value_block[index];
+    const uint32_t sender_index = index - value_block;
+    const auto first =
+        device.worker_core_from_logical_core(distribution.cores[value_block == 0 ? sender_index + 1 : sender_index]);
+    const auto last =
+        device.worker_core_from_logical_core(distribution.cores[sender_index + distribution.value_blocks - 1]);
+    return {
+        static_cast<uint32_t>(first.x),
+        static_cast<uint32_t>(first.y),
+        static_cast<uint32_t>(last.x),
+        static_cast<uint32_t>(last.y)};
+}
+
 }  // namespace ttnn::experimental::prim::kda_factory_detail
