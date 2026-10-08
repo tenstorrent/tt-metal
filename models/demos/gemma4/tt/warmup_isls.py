@@ -14,16 +14,23 @@ prefill per listed length at boot, once per process. Unset (default) warms
 nothing extra, so serving behaviour is unchanged unless an entry opts in.
 Lengths above the served context, or at or below the longest length the
 existing warmup already covers, are skipped.
+
+This module is host-only (no ttnn import) so the selection and the
+orchestration can be unit-tested with a fake generator.
 """
 
 import os
-from typing import Iterable, List, Optional
+from typing import Callable, Iterable, List, Optional
+
+from loguru import logger
 
 ENV_VAR = "GEMMA4_WARMUP_PREFILL_ISLS"
 
 
 def parse_warmup_isls(raw: Optional[str]) -> List[int]:
-    """``"4096, 8192,abc,,16384"`` -> ``[4096, 8192, 16384]`` (sorted, unique, > 0)."""
+    """``"4096, 8192,abc,,16384"`` -> ``[4096, 8192, 16384]`` (sorted, unique, > 0).
+    Invalid or non-positive entries are dropped with a warning, so a mis-set
+    env var is visible in the boot log instead of silently warming nothing."""
     if not raw:
         return []
     out = set()
@@ -34,9 +41,12 @@ def parse_warmup_isls(raw: Optional[str]) -> List[int]:
         try:
             value = int(item)
         except ValueError:
+            logger.warning("Ignoring invalid {} entry {!r} (not an integer)", ENV_VAR, item)
             continue
-        if value > 0:
-            out.add(value)
+        if value <= 0:
+            logger.warning("Ignoring invalid {} entry {!r} (must be > 0)", ENV_VAR, item)
+            continue
+        out.add(value)
     return sorted(out)
 
 
@@ -45,8 +55,10 @@ def warmup_prefill_isls(
     already_warmed: Iterable[int] = (),
     env: Optional[dict] = None,
 ) -> List[int]:
-    """The ladder to run: env lengths within the served context and longer
-    than anything ``already_warmed`` (the base/trace warmup lengths)."""
+    """The ladder to run: env lengths within the served context and strictly
+    longer than ``max(already_warmed)`` (the longest length the base/trace
+    warmup covers). This is a floor, not set membership: anything at or below
+    that longest length is treated as covered."""
     env = os.environ if env is None else env
     floor = max([int(x) for x in already_warmed] or [0])
     ladder = []
@@ -57,3 +69,50 @@ def warmup_prefill_isls(
             continue
         ladder.append(isl)
     return ladder
+
+
+def run_prefill_ladder(
+    generator,
+    kv_cache,
+    prefill_forward: Callable,
+    ladder: List[int],
+    *,
+    chunk: int,
+) -> List[int]:
+    """Run one eager batch-1 prefill per ``ladder`` length on every data-parallel
+    model of ``generator``, once per process. Returns the lengths warmed.
+
+    The once-per-process flag is set before the prefills run, deliberately: the
+    plugin calls the prefill warmup twice (compile pass, then capture pass) and
+    the ladder must not run a second time; a prefill that raises propagates and
+    fails the boot, so there is nothing to retry on the second pass.
+
+    With paged attention off (no page table) a length beyond one chunk cannot
+    be prefilled, so the ladder stops at the first such length.
+    """
+    if getattr(generator, "_warmed_prefill_isl_ladder", False):
+        return []
+    generator._warmed_prefill_isl_ladder = True
+    warmed: List[int] = []
+    for model_id in range(generator.data_parallel):
+        for isl in ladder:
+            warmup_args = generator._mock_tokens(1, isl, kv_cache, model_id)
+            if warmup_args.get("page_table") is None and isl > chunk:
+                logger.warning(
+                    "Skipping prefill warmup at ISL {}: longer than the {}-token chunk with paged attention off",
+                    isl,
+                    chunk,
+                )
+                break
+            logger.info("Warming up eager prefill at ISL {} ({})", isl, ENV_VAR)
+            prefill_forward(
+                **warmup_args,
+                kv_cache=kv_cache,
+                enable_trace=False,
+                model_id_warmup=model_id,
+                sampling_params=None,
+                warmup_prefill=False,
+            )
+            if model_id == 0:
+                warmed.append(isl)
+    return warmed
