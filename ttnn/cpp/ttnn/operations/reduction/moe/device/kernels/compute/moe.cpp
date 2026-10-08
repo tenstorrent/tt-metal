@@ -73,11 +73,10 @@ static void add_block_bcast_rows_inplace(
     DataflowBuffer in1_dfb_obj(static_cast<uint16_t>(in1_dfb));
 
     const uint32_t num_tiles = rows * cols;
+    reconfig_data_format(in0_dfb, in1_dfb);
     if (first_call) {
-        compute_kernel_hw_startup(in0_dfb, in1_dfb, in0_dfb);
         bcast_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(in0_dfb, in1_dfb);
     } else {
-        reconfig_data_format(in0_dfb, in1_dfb);
         add_bcast_rows_init(in0_dfb, in1_dfb);
     }
     in0_dfb_obj.wait_front(static_cast<uint16_t>(num_tiles));
