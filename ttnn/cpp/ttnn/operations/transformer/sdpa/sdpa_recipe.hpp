@@ -25,8 +25,10 @@ uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_co
 // chunk as is, ending with a single-row group, which lets the chooser balance Q chunks over the grid (Wan2.2
 // 720p ring: Q288, 330 chunks on 110 cores). STANDARD's unfused kernel (one-tile-wide QK subblocks, attn_mask)
 // does not fit the kernel config buffer with that second group path, so there an odd chunk is padded with one
-// zero row (read as zeros, output dropped).
-uint32_t recipe_compute_q_tiles(const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, bool masked = false);
+// zero row (read as zeros, output dropped). Key-range calls (`keyed`) pad FAST's odd chunk too: its single-row
+// group mishandles a row whose keys are all masked in the Q chunk's first K chunk.
+uint32_t recipe_compute_q_tiles(
+    const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, bool masked = false, bool keyed = false);
 
 // Fused STANDARD / FAST chunks add CBs 29-31 (recipe_compute_program). A layout whose fused CBs do not
 // fit L1 drops them and the SDPA_RECIPE_FUSED define, so the kernel runs every K chunk on the reduce path.
@@ -86,6 +88,29 @@ uint64_t recipe_output_l1_bytes(
 // Checks an additive attn_mask for the dense recipe path (shape, dtype, layout) before any dispatch.
 void validate_recipe_mask(const Tensor& q, const Tensor& k, const Tensor& mask, const PrecisionPolicy& policy);
 
+// Which keys each query row sees (the K-range + edge-mask model, dataflow/recipe_key_range.hpp). Query row q
+// sits at global position q_offset + q and sees the keys k with
+//   causal:                  k <= q
+//   sliding_window w:        k > q - w (causal), |k - q| <= w / 2 (otherwise)
+//   segments (windowed):     k in q's window [cu[i], cu[i + 1]) of cu_window_seqlens
+// The reader skips K chunks no row sees, masks the edge chunks with generated {0, -2^100} tiles and leaves the
+// rest unmasked, so compute keeps its one loop.
+struct RecipeKeyRange {
+    bool causal = false;
+    uint32_t sliding_window = 0;  // 0: none
+    uint32_t q_offset = 0;
+    std::optional<Tensor> q_offset_tensor;  // device int32 [1]: overrides q_offset when the kernel runs (trace-safe)
+    std::optional<Tensor> segments;         // cu_window_seqlens, int32/uint32 [n], row-major
+    // Chunked prefill: K/V are cache blocks [blocks, KV heads, block size, D] and this int32 [B, 1] page table names
+    // each batch's block (one block per sequence).
+    std::optional<Tensor> page_table;
+    bool active() const { return causal || sliding_window > 0 || segments.has_value(); }
+};
+
+// L1 bytes the key-range CBs add to a recipe layout (mask row groups excluded): the control pages, the all-masked
+// template tile and the scratch page for the device tensors.
+uint32_t recipe_key_range_extra_bytes(const RecipeKeyRange& key_range);
+
 // attn_mask: optional additive mask [1|B, 1|H, Sq, Sk] (BF16/BFP8/BFP4, tiled, interleaved), already
 // multiplied by 1/scale like legacy SDPA; it is L1-accumulated onto the QK scores before the row max.
 // The BF16 output is allocated in `output_memory_config` (interleaved DRAM or L1).
@@ -97,6 +122,7 @@ Tensor run_recipe(
     const std::optional<SDPAProgramConfig>& program_config,
     const std::optional<Tensor>& attn_mask = std::nullopt,
     std::optional<float> scale = std::nullopt,
-    const tt::tt_metal::MemoryConfig& output_memory_config = ttnn::DRAM_MEMORY_CONFIG);
+    const tt::tt_metal::MemoryConfig& output_memory_config = ttnn::DRAM_MEMORY_CONFIG,
+    const RecipeKeyRange& key_range = {});
 
 }  // namespace ttnn::operations::transformer::sdpa::detail

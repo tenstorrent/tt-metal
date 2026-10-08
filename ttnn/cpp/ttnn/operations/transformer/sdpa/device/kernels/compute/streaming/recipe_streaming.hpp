@@ -355,6 +355,17 @@ void blocked_matmul_and_pack(
     tile_regs_release();
 }
 
+// Whether the current K chunk takes the additive mask: every chunk with an attn_mask, a key-range call's edge
+// chunks only (the reader's control page per Q chunk, recipe_read_key_range), none otherwise.
+#if defined(SDPA_RECIPE_KRANGE)
+static bool recipe_edge_chunk;
+ALWI bool recipe_chunk_masked() { return recipe_edge_chunk; }
+#elif defined(SDPA_RECIPE_MASK)
+ALWI constexpr bool recipe_chunk_masked() { return true; }
+#else
+ALWI constexpr bool recipe_chunk_masked() { return false; }
+#endif
+
 // Row maxima combine the current QK block with the previous online maximum.
 //
 // Reference-max state (STANDARD, FAST): P = exp(scale * (s - m_ref)) with m_ref a row's
@@ -381,8 +392,10 @@ constexpr uint32_t kRefMaxExpOctaves = 28;
 // Rescale threshold: keep m_ref until the row max exceeds it by theta (natural-log units of the
 // scaled scores). theta + 0.72 must stay below tau, so P never saturates.
 constexpr float kRefMaxTheta = 16.0f * 0.69314718055994531f;
-// Fused chunks (SDPA_RECIPE_FUSED: STANDARD and FAST without an attn_mask), see sdpa_fused_chunk.
-#if defined(SDPA_RECIPE_FUSED) && !defined(SDPA_RECIPE_MASK)
+// Fused chunks (SDPA_RECIPE_FUSED: STANDARD and FAST without an attn_mask), see sdpa_fused_chunk. Key-range
+// calls (SDPA_RECIPE_KRANGE: causal, sliding window, chunked, windowed) mask only their edge K chunks, so their
+// full chunks stay fused.
+#if defined(SDPA_RECIPE_FUSED) && (!defined(SDPA_RECIPE_MASK) || defined(SDPA_RECIPE_KRANGE))
 #define SDPA_RECIPE_FUSED_ACTIVE 1
 // One BF16 tile: a row group's saturation check (max of its chunk row-sum tiles).
 constexpr uint32_t kFusedCheckCb = 31;
@@ -1303,7 +1316,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
     })
 #endif
 #ifdef SDPA_RECIPE_FUSED_ACTIVE
-    if (!is_first_iter) {
+    if (!is_first_iter && !recipe_chunk_masked()) {
         sdpa_fused_chunk<
             Sq_chunk_t,
             Sk_chunk_t,
@@ -1365,12 +1378,8 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
         // When q_subblock == 0, no sub_exp → global stays set → skip there too.
         configure_row_pack_width(cb_qkt_im, actual_sbw);
 
-#ifdef SDPA_RECIPE_MASK
         // The first-half max reduce must not read scores before the mask lands on them.
-        constexpr bool overlap_first_half = false;
-#else
-        const bool overlap_first_half = reduce_trigger;
-#endif
+        const bool overlap_first_half = reduce_trigger && !recipe_chunk_masked();
         // PACK posts the first-half token after the subblock covering the last first-half column
         // [active_Sk/2 - 1]; committing a superset of [0, active_Sk/2) is safe (run()#1's cols are a subset).
         const uint32_t first_half_last_sb = (active_Sk / 2 - 1) / actual_sbw;
@@ -1454,7 +1463,9 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
 #endif
 
 #ifdef SDPA_RECIPE_MASK
-        recipe_add_attn_mask<cb_qkt_im, KT_stride, qkt_subblock_h>(q_subblock * qkt_subblock_h, cur_qk_h);
+        if (recipe_chunk_masked()) {
+            recipe_add_attn_mask<cb_qkt_im, KT_stride, qkt_subblock_h>(q_subblock * qkt_subblock_h, cur_qk_h);
+        }
 #endif
 
         // Push row (visible for UNPACK reads) but keep wr_ptr stable
@@ -2161,6 +2172,22 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
     return false;
 }
 
+#ifdef SDPA_RECIPE_KRANGE
+// Key-range calls: the reader's control page per Q chunk (reader_recipe.cpp, recipe_key_range.hpp) holds its K
+// chunks [first, end) and the fully visible ones [full_begin, full_end); the rest are edge chunks.
+constexpr uint32_t kRecipeKeyRangeCb = 17;
+static uint32_t recipe_k_first, recipe_full_begin, recipe_full_end;
+static __attribute__((noinline)) uint32_t recipe_read_key_range() {
+    CircularBuffer(kRecipeKeyRangeCb).wait_front(1);
+    recipe_k_first = ckernel::read_tile_value(kRecipeKeyRangeCb, 0, 0);
+    const uint32_t end = ckernel::read_tile_value(kRecipeKeyRangeCb, 0, 1);
+    recipe_full_begin = ckernel::read_tile_value(kRecipeKeyRangeCb, 0, 2);
+    recipe_full_end = ckernel::read_tile_value(kRecipeKeyRangeCb, 0, 3);
+    CircularBuffer(kRecipeKeyRangeCb).pop_front(1);
+    return end - recipe_k_first;
+}
+#endif
+
 // One Q chunk over k_num_chunks K chunks: the online-softmax loop for recipes B-E. Called once per Q chunk
 // by sdpa_standard_v2 (dense and joint). A caller may split one Q chunk's K range into several segments,
 // setting final_segment on the last.
@@ -2197,7 +2224,13 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
     const uint32_t cb_out_im_B = cur.out;
 #endif
     for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
+#ifdef SDPA_RECIPE_KRANGE
+        const uint32_t k_index = recipe_k_first + state.processed_chunks + k_chunk;
+        recipe_edge_chunk = k_index < recipe_full_begin || k_index >= recipe_full_end;
 #ifdef SDPA_RECIPE_K_PRIMARY_ROWS
+        recipe_k_tile_offset = k_index * Sk_chunk_t;
+#endif
+#elif defined(SDPA_RECIPE_K_PRIMARY_ROWS)
         recipe_k_tile_offset = (state.processed_chunks + k_chunk) * Sk_chunk_t;
 #endif
         const bool is_first = state.processed_chunks == 0 && k_chunk == 0;
@@ -2286,6 +2319,9 @@ void sdpa_standard_v2(
     init_sdpa_streaming_semaphores();
     for (uint32_t q = 0; q < q_chunks_per_core; ++q) {
         RecipeAccumulatorState state{{cb_sum_A, cb_max_A, cb_out_im_A}, {cb_sum_B, cb_max_B, cb_out_im_B}};
+#ifdef SDPA_RECIPE_KRANGE
+        k_num_chunks = recipe_read_key_range();
+#endif
         sdpa_segment_v2<Configuration...>(state, k_num_chunks, true, true);
     }
 }
