@@ -37,8 +37,13 @@ case $1 in
     export HF_MODEL=Qwen/Qwen3-0.6B HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-0.6B
     run pytest --timeout 720 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --sampling_params "'{\"temperature\": 1.0, \"top_k\": 1, \"top_p\": 0.5}'"
     ;;
+  llama8bdemo)
+    export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    ls /mnt/MLPerf/huggingface | head; ls /mnt/MLPerf/huggingface/hub 2>/dev/null | grep -i llama | head
+    run pytest --timeout 900 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --sampling_params "'{\"temperature\": 1.0, \"top_k\": 1, \"top_p\": 0.5}'"
+    ;;
   llama8b)
-    export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     run pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-131072-2-2-1-1-False"
     run pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-131072-2-10-1-1-False"
     ;;
