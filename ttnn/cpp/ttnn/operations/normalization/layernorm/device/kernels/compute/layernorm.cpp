@@ -253,8 +253,8 @@ void kernel_main() {
 
         // Preserve dfb_xmm_id for the normalization pass; the variance path consumes only its square.
         // compute temp = xmm*xmm = (x-E[x])^2
-#if defined(ARCH_QUASAR) && !defined(RMSNORM)
-        pack_init(dfb_xmm2_id);  // Quasar: retarget the packer from dfb_xmm (the RMSNORM path did this above)
+#if defined(ARCH_QUASAR) && (!defined(RMSNORM) || defined(FUSE_PRE_ADD))
+        pack_init(dfb_xmm2_id);  // Quasar: retarget the packer after producing dfb_xmm.
 #endif
         ckl::square<
             ckl::input(
