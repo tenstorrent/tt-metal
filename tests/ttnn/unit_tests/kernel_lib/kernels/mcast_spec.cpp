@@ -2,7 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_spec.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_metal2.hpp"
+
+// Numeric IDs retain the legacy scope; native tokens preserve every supported scope.
+static_assert(std::is_same_v<decltype(dataflow_kernel_lib::detail::make_mcast_semaphore<3>()), Semaphore<>>);
+static_assert(std::is_same_v<decltype(dataflow_kernel_lib::detail::make_mcast_semaphore<nullptr>()), std::nullptr_t>);
+static_assert(std::is_same_v<
+              decltype(dataflow_kernel_lib::detail::make_mcast_semaphore<SemaphoreBindingToken{
+                           3, SemScope::DM_LOCAL_CACHED}>()),
+              Semaphore<ProgrammableCoreType::TENSIX>>);
+static_assert(
+    std::is_same_v<
+        decltype(dataflow_kernel_lib::detail::make_mcast_semaphore<SemaphoreBindingToken{3, SemScope::EXTERNAL}>()),
+        Semaphore<ProgrammableCoreType::TENSIX>>);
+static_assert(dataflow_kernel_lib::McastSemaphoreBinding{SemaphoreBindingToken{3, SemScope::EXTERNAL}}.id == 3);
+static_assert(
+    dataflow_kernel_lib::McastSemaphoreBinding{SemaphoreBindingToken{3, SemScope::EXTERNAL}}.scope ==
+    SemScope::EXTERNAL);
 
 void kernel_main() {
     using namespace dataflow_kernel_lib;
@@ -53,7 +69,7 @@ void kernel_main() {
         }
         words[32 + round] = result;
     }
-    // A second attached family has its own resources and vararg slice.
+    // A second attached multicast has its own resources and vararg slice.
     auto second_sender = second.optional_sender(noc);
     auto second_receiver = second.optional_receiver(noc);
     words[40] = 0;

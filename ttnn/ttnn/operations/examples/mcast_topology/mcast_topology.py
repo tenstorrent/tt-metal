@@ -19,9 +19,9 @@ both variants; only HOW those bytes arrive differs:
 
   mcast_1d_pair (optimized): an operand is broadcast along the axis it does NOT vary with. `A` does
       not vary along a grid ROW, so column 0 of each row reads `A[M_r, :]` once and multicasts it
-      across its row (`Mcast1D(PerRow)`). `B` does not vary down a grid COLUMN, so row 0 of each
-      column reads `B[:, N_c]` once and multicasts it down (`Mcast1D(PerColumn)`). Each slice crosses
-      DRAM exactly once; the copies travel core-to-core.
+      across its row (an `Mcast` grouped row-major). `B` does not vary down a grid COLUMN, so row 0 of
+      each column reads `B[:, N_c]` once and multicasts it down (an `Mcast` grouped column-major). Each
+      slice crosses DRAM exactly once; the copies travel core-to-core.
 
 The topology follows from the split, and the naming inverts in a way worth internalising: a **2-D**
 work split needs **1-D** multicasts (a source per line, feeding its own row / column), whereas a
@@ -161,7 +161,7 @@ void kernel_main() {
     Noc noc;
     CircularBuffer a_buf(cb_a), b_buf(cb_b);
 
-    // ---- A: shared ACROSS the grid row -> Mcast1D(PerRow) ----
+    // ---- A: shared ACROSS the grid row -> one multicast group per row ----
     a_buf.reserve_back(Mloc * Kt);
     if constexpr (A_SENDS) {
         const auto a = TensorAccessor(a_args, a_addr);
@@ -181,7 +181,7 @@ void kernel_main() {
     }
     a_buf.push_back(Mloc * Kt);
 
-    // ---- B: shared DOWN the grid column -> Mcast1D(PerColumn) ----
+    // ---- B: shared DOWN the grid column -> one multicast group per column ----
     b_buf.reserve_back(Kt * Nloc);
     if constexpr (B_SENDS) {
         const auto b = TensorAccessor(b_args, b_addr);
@@ -359,17 +359,24 @@ def create_program_descriptor(a, b, probes, *, variant):
             )
         ]
     else:
-        # Two channels share the grid; attachment allocates distinct semaphore pairs.
-        # A rides rows from column 0; B rides columns from row 0.
-        mc_a = ttnn.Mcast1D(
-            device, all_crs, ttnn.Mcast1DShape.PerRow, ttnn.Mcast1DFixedSenderConfig(), ttnn.McastConfig(handshake=True)
-        )
-        mc_b = ttnn.Mcast1D(
+        # Two channels share the grid; chained attachment gives each its own semaphore IDs.
+        # A rides rows from column 0 (row-major groups of `cols`); B rides columns from row 0
+        # (column-major groups of `rows`).
+        mc_a = ttnn.Mcast(
             device,
-            all_crs,
-            ttnn.Mcast1DShape.PerColumn,
-            ttnn.Mcast1DFixedSenderConfig(),
             ttnn.McastConfig(handshake=True),
+            all_crs,
+            cols,
+            ttnn.McastFixedSenderConfig(),
+            ttnn.McastCoreOrder.RowMajor,
+        )
+        mc_b = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(handshake=True),
+            all_crs,
+            rows,
+            ttnn.McastFixedSenderConfig(),
+            ttnn.McastCoreOrder.ColumnMajor,
         )
 
         groups = {
@@ -414,8 +421,8 @@ def create_program_descriptor(a, b, probes, *, variant):
     ]
     descriptor = ttnn.ProgramDescriptor(cbs=cbs)
     if variant == "mcast_1d_pair":
-        mc_a.attach(descriptor, "a", kernels)
-        mc_b.attach(descriptor, "b", kernels)
+        mc_a.attach(descriptor, "a", kernels, 0)
+        mc_b.attach(descriptor, "b", kernels, mc_a.next_semaphore_id())
     descriptor.kernels = [*kernels, writer]
     return descriptor
 

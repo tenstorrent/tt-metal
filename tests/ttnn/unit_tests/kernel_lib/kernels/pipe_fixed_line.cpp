@@ -4,7 +4,7 @@
 // mcast_pipe + mcast_host END-TO-END fixed-sender LINE test kernel.
 //
 // The fixed-mode counterpart of pipe_rotating_line.cpp. Every core on the grid runs this ONE kernel
-// and decodes the host::Mcast1D fixed-sender wire with McastArgs.
+// and decodes the fixed-sender host::Mcast wire with McastArgs.
 //
 // This is the 2D dual-mcast matmul in0/in1 shape: one fixed sender per line broadcasts to the rest.
 // The sender streams `num_blocks` blocks of its line (the K-block loop of a matmul), each staged from
@@ -55,7 +55,7 @@ void kernel_main() {
 
     if (mc.can_send()) {
         // SENDER — built ONCE above the block loop and reused for every staged block. An inactive
-        // single-line family has no receivers, so it skips send() below.
+        // A sender-only multicast has no receivers, so it skips send() below.
         auto pipe = mc.sender(noc);
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
             for (uint32_t i = 0; i < payload_pages; ++i) {

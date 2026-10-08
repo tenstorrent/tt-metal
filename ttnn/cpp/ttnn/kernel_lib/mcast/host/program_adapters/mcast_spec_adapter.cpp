@@ -1,14 +1,22 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_spec_common.hpp"
+
+// Attaches multicast to Metal 2.0 ProgramSpec using named semaphore bindings and compile-time/runtime metadata.
+// Validates kernel placement and names, populates run arguments, and supports absent channels.
+
+#include "ttnn/kernel_lib/mcast/host/mcast_impl.hpp"
+#include "ttnn/kernel_lib/mcast/mcast_protocol.hpp"
+#include "ttnn/kernel_lib/mcast/mcast_common_metal2.hpp"
 
 #include <algorithm>
 #include <cctype>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <set>
-#include <type_traits>
+#include <string>
+#include <utility>
+#include <tt_stl/overloaded.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt_stl/assert.hpp>
@@ -23,18 +31,15 @@ using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::NOC;
 
 std::string spec_name(std::string_view prefix, std::string_view field) {
-    return std::string(prefix) + TT_MCAST_SPEC_STRING(TT_MCAST_SPEC_STEM) + std::string(field);
+    return std::string(prefix) + TT_MCAST_METAL2_STRING(TT_MCAST_METAL2_STEM) + std::string(field);
 }
 
 CoreRangeSet node_ranges(const m2::Nodes& nodes) {
     return std::visit(
-        [](const auto& value) {
-            if constexpr (std::is_same_v<std::decay_t<decltype(value)>, CoreCoord>) {
-                return CoreRangeSet(CoreRange(value, value));
-            } else {
-                return CoreRangeSet(value);
-            }
-        },
+        ttsl::overloaded{
+            [](const CoreCoord& value) { return CoreRangeSet(CoreRange(value, value)); },
+            [](const CoreRange& value) { return CoreRangeSet(value); },
+            [](const CoreRangeSet& value) { return value; }},
         nodes);
 }
 
@@ -67,18 +72,15 @@ std::vector<size_t> validate_targets(
         TT_FATAL(std::isalnum(ch) || ch == '_', "Multicast prefix must be a C++ identifier");
     }
     std::vector<std::string> reserved;
-#define ADD_RESERVED(P, field) reserved.push_back(spec_name(P, #field));
-    TT_MCAST_SPEC_METADATA(ADD_RESERVED, prefix)
-#undef ADD_RESERVED
     for (const auto* field :
-         {"tag",
+         {"ct_base",
           "rt_base",
           "data_ready",
           "consumer_ready",
           "signal_source",
-          "data_ready_token",
-          "consumer_ready_token",
-          "signal_source_token"}) {
+          "data_ready_type",
+          "consumer_ready_type",
+          "signal_source_type"}) {
         reserved.push_back(spec_name(prefix, field));
     }
     for (const auto& name : reserved) {
@@ -100,7 +102,7 @@ std::vector<size_t> validate_targets(
                         name) == kernel.runtime_arg_schema.common_runtime_arg_names.end(),
                 "Multicast prefix or argument name is already in use: {}",
                 name);
-            const auto check_bindings = [&](const auto& bindings) {
+            const auto check_bindings = [&]<typename Binding>(const m2::Group<Binding>& bindings) {
                 for (const auto& binding : bindings) {
                     TT_FATAL(binding.accessor_name != name, "Multicast resource accessor is already in use: {}", name);
                 }
@@ -116,8 +118,9 @@ std::vector<size_t> validate_targets(
     std::vector<size_t> indices;
     for (const auto& target : targets) {
         TT_FATAL(selected.insert(target).second, "Duplicate multicast attachment kernel");
-        auto it = std::find_if(
-            spec.kernels.begin(), spec.kernels.end(), [&](const auto& kernel) { return kernel.unique_id == target; });
+        auto it = std::find_if(spec.kernels.begin(), spec.kernels.end(), [&](const m2::KernelSpec& kernel) {
+            return kernel.unique_id == target;
+        });
         TT_FATAL(it != spec.kernels.end(), "Unknown multicast attachment kernel");
         TT_FATAL(it->is_data_movement_kernel(), "Multicast attachment requires a data-movement kernel");
         TT_FATAL(it->num_threads == 1, "Multicast topology requires one kernel thread per node");
@@ -128,7 +131,7 @@ std::vector<size_t> validate_targets(
 
 NOC spec_noc(const m2::KernelSpec& kernel) {
     const auto& hw = std::get<m2::DataMovementHardwareConfig>(kernel.hw_config);
-    if (hw.config_1xx) {
+    if (hw.config_1xx.has_value()) {
         return hw.config_1xx->noc;
     }
     return NOC::NOC_0;  // Gen2 has one unified NoC.
@@ -157,32 +160,34 @@ uint32_t uniform_varargs(const m2::KernelSpec& kernel, const CoreRangeSet& nodes
 void add_metadata(
     m2::KernelSpec& kernel,
     std::string_view prefix,
-    const wire::FamilyMetadata& metadata,
+    const wire::ArgumentMetadata& metadata,
     bool present,
     uint32_t base) {
-    kernel.compile_time_args.emplace(spec_name(prefix, "tag"), present ? wire::FAMILY : wire::ABSENT);
+    const uint32_t control = present ? wire::compile_time_control(metadata) : wire::ABSENT;
+    const wire::CompileTimeLayout layout(control, false);
+    auto& ct = kernel.advanced_options.compile_time_varargs;
+    TT_FATAL(ct.size() <= std::numeric_limits<uint32_t>::max() - layout.words, "Multicast CT varargs overflow");
+    kernel.compile_time_args.emplace(spec_name(prefix, "ct_base"), static_cast<uint32_t>(ct.size()));
     kernel.compile_time_args.emplace(spec_name(prefix, "rt_base"), base);
-#define ADD_METADATA(P, field) \
-    kernel.compile_time_args.emplace(spec_name(P, #field), static_cast<uint32_t>(metadata.field));
-    TT_MCAST_SPEC_METADATA(ADD_METADATA, prefix)
-#undef ADD_METADATA
+    std::vector<uint32_t> words(layout.words, wire::ABSENT);
+    if (present) {
+        wire::encode_compile_time_metadata(words, metadata, false);
+    }
+    ct.insert(ct.end(), words.begin(), words.end());
 }
 
 constexpr std::array<std::string_view, 3> resource_roles{"data_ready", "consumer_ready", "signal_source"};
 }  // namespace
 
-void McastFamily::attach(
+void McastImpl::attach(
     m2::ProgramSpec& spec,
     m2::ProgramRunArgs& run_args,
     std::string_view prefix,
-    std::span<const m2::KernelSpecName> targets,
-    std::span<const m2::SemaphoreSpecName> adopted) const {
-    require_arguments_prepared_();
+    std::span<const m2::KernelSpecName> targets) const {
+    prepare_arguments_();
     require_unbound_();
-    TT_FATAL(!cfg_.base_sem_id && !cfg_.sem_ids, "ProgramSpec multicast attachment uses named semaphore resources");
     const auto indices = validate_targets(spec, prefix, targets);
     const auto count = required_semaphores_();
-    TT_FATAL(adopted.empty() || adopted.size() == count, "Adopt exactly the required multicast semaphore roles");
     // Native value objects provide the transaction boundary; no retained invocation state.
     auto staged = spec;
     auto staged_args = run_args;
@@ -192,23 +197,9 @@ void McastFamily::attach(
     }
     std::array<m2::SemaphoreSpecName, 3> names;
     for (uint32_t role = 0; role < count; ++role) {
-        names[role] = adopted.empty() ? m2::SemaphoreSpecName(spec_name(prefix, resource_roles[role])) : adopted[role];
-        for (uint32_t previous = 0; previous < role; ++previous) {
-            TT_FATAL(names[role] != names[previous], "Multicast semaphore roles must use distinct resources");
-        }
-        if (adopted.empty()) {
-            TT_FATAL(semaphore_names.insert(names[role]).second, "Multicast semaphore name is already in use");
-            staged.semaphores.push_back({.unique_id = names[role], .target_nodes = participating_});
-        } else {
-            auto it = std::find_if(staged.semaphores.begin(), staged.semaphores.end(), [&](const auto& sem) {
-                return sem.unique_id == names[role];
-            });
-            TT_FATAL(it != staged.semaphores.end(), "Unknown adopted multicast semaphore");
-            TT_FATAL(it->advanced_options.initial_value == 0, "Adopted multicast semaphores must start at zero");
-            TT_FATAL(
-                participating_.subtract(node_ranges(it->target_nodes)).empty(),
-                "Adopted multicast semaphore does not cover participating nodes");
-        }
+        names[role] = m2::SemaphoreSpecName(spec_name(prefix, resource_roles[role]));
+        TT_FATAL(semaphore_names.insert(names[role]).second, "Multicast semaphore name is already in use");
+        staged.semaphores.push_back({.unique_id = names[role], .target_nodes = participating_});
     }
     std::set<m2::KernelSpecName> runtime_kernels;
     for (const auto& args : staged_args.kernel_run_args) {
@@ -216,17 +207,17 @@ void McastFamily::attach(
     }
     const bool chain = wire::transfer_mode(layout_.flags) == dataflow_kernel_lib::TransferMode::ChainUnicast;
     const auto grid = prepared_device_grid_;
-    const uint32_t words =
-        wire::runtime_words(layout_.rotating_span, layout_.rectangle_capacity, wire::transfer_mode(layout_.flags));
     for (const auto index : indices) {
         auto& kernel = staged.kernels[index];
         const auto nodes = placement(staged, kernel.unique_id);
+        const auto metadata = argument_metadata_(&nodes);
+        const uint32_t words = wire::RuntimeLayout(metadata).words;
         const auto base = uniform_varargs(kernel, nodes);
         TT_FATAL(base <= std::numeric_limits<uint32_t>::max() - words, "Multicast runtime vararg count overflows");
-        auto args =
-            std::find_if(staged_args.kernel_run_args.begin(), staged_args.kernel_run_args.end(), [&](const auto& item) {
-                return item.kernel == kernel.unique_id;
-            });
+        auto args = std::find_if(
+            staged_args.kernel_run_args.begin(),
+            staged_args.kernel_run_args.end(),
+            [&](const m2::ProgramRunArgs::KernelRunArgs& item) { return item.kernel == kernel.unique_id; });
         if (args == staged_args.kernel_run_args.end()) {
             TT_FATAL(base == 0, "Missing caller runtime prefix for multicast attachment");
             staged_args.kernel_run_args.push_back({.kernel = kernel.unique_id});
@@ -243,31 +234,34 @@ void McastFamily::attach(
                     std::find(group->senders_.begin(), group->senders_.end(), node) != group->senders_.end();
                 TT_FATAL(
                     !(sender || chain) || spec_noc(kernel) == cfg_.noc,
-                    "Multicast sender/forwarder NoC differs from its family");
+                    "Multicast sender/forwarder NoC differs from the configured multicast NoC");
             }
             auto entry = values.find(node);
             TT_FATAL(entry != values.end() || base == 0, "Missing caller runtime prefix for multicast attachment");
             auto& args_for_node = values[node];
             TT_FATAL(args_for_node.size() == base, "Multicast runtime varargs must match the declared prefix count");
-            const auto payload = runtime_args_(node);
+            const auto payload = runtime_args_(node, metadata);
             args_for_node.insert(args_for_node.end(), payload.begin(), payload.end());
         }
         kernel.advanced_options.num_runtime_varargs = base + words;
         kernel.advanced_options.num_runtime_varargs_per_node.clear();
-        add_metadata(kernel, prefix, layout_, true, base);
+        add_metadata(kernel, prefix, metadata, true, base);
         for (uint32_t role = 0; role < resource_roles.size(); ++role) {
             const auto accessor = spec_name(prefix, resource_roles[role]);
             if (role < count) {
                 kernel.semaphore_bindings.push_back({.semaphore_spec_name = names[role], .accessor_name = accessor});
             }
-            kernel.compiler_options.defines.emplace(accessor + "_token", role < count ? "sem::" + accessor : "nullptr");
+            kernel.compiler_options.defines.emplace(
+                accessor + "_type",
+                role < count ? "dataflow_kernel_lib::detail::McastSemaphoreToken<sem::" + accessor + ">"
+                             : "std::nullptr_t");
         }
     }
     spec = std::move(staged);
     run_args = std::move(staged_args);
 }
 
-void attach_absent(m2::ProgramSpec& spec, std::string_view prefix, std::span<const m2::KernelSpecName> targets) {
+void attach_absent_mcast(m2::ProgramSpec& spec, std::string_view prefix, std::span<const m2::KernelSpecName> targets) {
     const auto indices = validate_targets(spec, prefix, targets);
     auto staged = spec;
     for (const auto index : indices) {
@@ -275,26 +269,10 @@ void attach_absent(m2::ProgramSpec& spec, std::string_view prefix, std::span<con
         placement(staged, kernel.unique_id);
         add_metadata(kernel, prefix, {}, false, 0);
         for (const auto role : resource_roles) {
-            kernel.compiler_options.defines.emplace(spec_name(prefix, role) + "_token", "nullptr");
+            kernel.compiler_options.defines.emplace(spec_name(prefix, role) + "_type", "std::nullptr_t");
         }
     }
     spec = std::move(staged);
 }
 
-void Mcast1D::attach(
-    m2::ProgramSpec& spec,
-    m2::ProgramRunArgs& args,
-    std::string_view prefix,
-    std::span<const m2::KernelSpecName> kernels,
-    std::span<const m2::SemaphoreSpecName> adopted) const {
-    family_->attach(spec, args, prefix, kernels, adopted);
-}
-void Mcast2D::attach(
-    m2::ProgramSpec& spec,
-    m2::ProgramRunArgs& args,
-    std::string_view prefix,
-    std::span<const m2::KernelSpecName> kernels,
-    std::span<const m2::SemaphoreSpecName> adopted) const {
-    family_->attach(spec, args, prefix, kernels, adopted);
-}
 }  // namespace ttnn::kernel_lib::host

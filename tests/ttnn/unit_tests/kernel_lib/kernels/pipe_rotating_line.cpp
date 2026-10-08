@@ -4,7 +4,7 @@
 // mcast_pipe + mcast_host END-TO-END rotating-LINE test kernel.
 //
 // Every core on a 1D line runs this ONE kernel and plays BOTH faces of the channel over
-// `num_rounds`, decoding the host::Mcast1D(rotating) wire with
+// `num_rounds`, decoding the rotating host::Mcast wire with
 // McastArgs<get_named_compile_time_arg_val("mcast_ct_offset"), get_named_compile_time_arg_val("mcast_rt_offset")>.
 //
 // Sender selection cycles every mc.num_senders rounds. Receiver-capable cores receive every other
