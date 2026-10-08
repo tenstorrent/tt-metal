@@ -57,6 +57,41 @@ def _build_galaxy_sub_core_grids(max_y=9):
     )
 
 
+RING_SDPA_Q_CHUNK_CANDIDATES = (64, 128, 160, 192, 256, 320)
+
+
+def ring_sdpa_balanced_q_chunk(seq_len, n_local_heads, num_cores, ring_size=4, default_q_chunk=256):
+    """q_chunk_size for ring_distributed SDPA that minimizes the busiest core's Q rows.
+
+    The ring factory (ring_distributed_sdpa_program_factory.cpp) gives each device two Q slices of
+    seq_len / (2 * ring_size) rows, splits each into n_q = slice / q_chunk chunks per head, and hands each
+    core whole pairs of chunks (light + heavy, causal zigzag) out of n_local_heads * n_q / 2 pairs. Every
+    pair costs about the same (q_chunk rows x ~2 * seq_len keys over both phases), so the op time follows
+    the busiest core: ceil(pairs / num_cores) * 2 * q_chunk rows. With q_chunk 256 at seq_len 40960 that is
+    80 pairs on 70 cores -> 2 pairs on 10 cores, 1 on the rest (1024 rows max vs 585 mean).
+    Only q_chunk changes (k_chunk stays), so each output row sees the same K chunks in the same order.
+    Returns default_q_chunk unless a candidate cuts the busiest core's rows by >= 10%.
+    """
+    q_slice = seq_len // (2 * ring_size)
+
+    def busiest_core_rows(q):
+        n_q = q_slice // q
+        if n_q % 2 == 0:
+            return -(-(n_local_heads * n_q // 2) // num_cores) * 2 * q
+        return -(-(n_local_heads * n_q) // num_cores) * q
+
+    if q_slice % default_q_chunk != 0:
+        return default_q_chunk
+    # Even n_q keeps the factory's pair (zigzag) distribution, so the row count above is the work bound.
+    valid = [q for q in RING_SDPA_Q_CHUNK_CANDIDATES if q_slice % q == 0 and (q_slice // q) % 2 == 0]
+    if not valid:
+        return default_q_chunk
+    best = min(valid, key=lambda q: (busiest_core_rows(q), -q))
+    if busiest_core_rows(best) <= 0.9 * busiest_core_rows(default_q_chunk):
+        return best
+    return default_q_chunk
+
+
 def set_tg_attention_config(
     model_config,
     dim,
@@ -515,6 +550,23 @@ class TtQwenModelArgs(TtModelArgs):
                 if seqlen >= 2048
                 else min(64, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx)),
             )
+
+            # ring_distributed SDPA (llama_attention.forward_prefill, batch 1, no prefix) above the traced
+            # buckets (> 4096): same config but with a q_chunk that balances Q-chunk pairs over the 70 cores
+            # (ring_sdpa_balanced_q_chunk). Wormhole only (measured there); <= 4096 and Blackhole use SDPA_PROGCFG.
+            def _sdpa_ring_progcfg(seqlen, chunk_start_idx=0):
+                if self.is_blackhole or seqlen <= 4096 or chunk_start_idx != 0:
+                    return self.model_config["SDPA_PROGCFG"](seqlen, chunk_start_idx=chunk_start_idx)
+                return ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=(7, 10),
+                    exp_approx_mode=False,
+                    q_chunk_size=ring_sdpa_balanced_q_chunk(
+                        seqlen, n_local_heads=self.n_heads // self.n_kv_heads, num_cores=7 * 10
+                    ),
+                    k_chunk_size=512,
+                )
+
+            self.model_config["SDPA_RING_PROGCFG"] = _sdpa_ring_progcfg
 
             # For flexible chunked SDPA (prefix caching with chunk_start_idx_tensor): chunk sizes must
             # match KV cache block_size so one trace works for any block-aligned chunk at replay.
