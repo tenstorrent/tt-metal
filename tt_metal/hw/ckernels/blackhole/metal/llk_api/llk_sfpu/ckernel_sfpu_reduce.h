@@ -469,8 +469,12 @@ struct RowFoldSwap {
 };
 
 // One butterfly for both accumulators: after the first stage LREG4 takes LREG0's odd lanes (whole pairs) and the last
-// two stages run once; results in column 0 of LREG0 / LREG4 only. Needs an associative, commutative fold.
-template <typename Fold, std::uint32_t MASK = p_sfpu::LREG2, bool mask_ready = false>
+// two stages run once; results in column 0 of OUT_A / LREG4 only. Needs an associative, commutative fold.
+template <
+    typename Fold,
+    std::uint32_t MASK = p_sfpu::LREG2,
+    bool mask_ready = false,
+    std::uint32_t OUT_A = p_sfpu::LREG0>
 inline void horizontal_reduce_merged() {
     TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
@@ -488,7 +492,7 @@ inline void horizontal_reduce_merged() {
     TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     Fold::template apply<p_sfpu::LREG4, p_sfpu::LREG5>();
 
-    TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG4, OUT_A, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
 }
 
 /**
@@ -505,7 +509,8 @@ inline void horizontal_reduce_merged() {
  * 5. Store the per-row max, reading column 0
  *
  * On the LOADMACRO path the four compare-and-swaps with a freshly loaded register run inside SFPLOADMACRO sequences
- * 0 to 3 (SFPLOADMACRO loads LREG0-3 only); a scheduled SFPSWAP holds the simple sub-unit for two cycles.
+ * 0 to 3 (SFPLOADMACRO loads LREG0-3 only); a scheduled SFPSWAP holds the simple sub-unit for two cycles. The group's
+ * results (LREG7, LREG4) are stored by the next group: LREG4 before its reload, LREG7 in an SFPNOP slot.
  *
  * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B, or INT32 for sign-magnitude int max)
  * @param tile_row_offset Base row offset for this tile in the dest register
@@ -522,6 +527,8 @@ inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset, std::uint
     if constexpr (fused_vertical_swap) {
         load_odd_lane_mask<p_sfpu::LREG6>();
     }
+    std::uint32_t previous_first = 0;
+    std::uint32_t previous_second = 0;
 
 #pragma GCC unroll 2
     for (std::uint32_t face_pair = 0; face_pair < 2; face_pair++) {
@@ -543,14 +550,23 @@ inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset, std::uint
                 TT_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, first + 2);
                 TT_SFPLOADMACRO((3 << 2) | p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, first + ROWS_PER_FACE + 2);
 
+                const bool store_previous = (face_pair | row_group) != 0;
+                if (store_previous) {
+                    TT_SFPSTORE(p_sfpu::LREG4, result_store_mode, ADDR_MOD_7, previous_second);
+                }
+
                 // Rows r+4..r+7: sequences 0 and 1 with the accumulators LREG4 and LREG5.
                 TT_SFPLOAD(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, second);
                 TT_SFPLOADMACRO((0 << 2) | p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, second + ROWS_PER_FACE);
                 TT_SFPLOAD(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, second + 2);
                 TT_SFPLOADMACRO((1 << 2) | p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, second + ROWS_PER_FACE + 2);
 
-                // The last scheduled swap runs on the two cycles after its load.
-                TTI_SFPNOP;
+                // The last scheduled swap runs on the two cycles after its load; a store needs neither sub-unit.
+                if (store_previous) {
+                    TT_SFPSTORE(p_sfpu::LREG7, result_store_mode, ADDR_MOD_7, previous_first);
+                } else {
+                    TTI_SFPNOP;
+                }
                 TTI_SFPNOP;
 
                 // Combine the even and odd column extremes of each 4-row group.
@@ -603,19 +619,26 @@ inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset, std::uint
             }
 
             if constexpr (fused_vertical_swap) {
-                horizontal_reduce_merged<RowFoldSwap, p_sfpu::LREG6, true>();
+                horizontal_reduce_merged<RowFoldSwap, p_sfpu::LREG6, true, p_sfpu::LREG7>();
+                previous_first = tile_row_offset + face_pair_base + row_offset_first;
+                previous_second = tile_row_offset + face_pair_base + row_offset_second;
             } else {
                 horizontal_reduce_merged<RowFoldSwap>();
-            }
 
-            // result_store_mode is mode 9 (SFPSTORE_MOD0_FMT_LO16) only when this per-tile store is the
-            // final, packer-visible result (single column tile); otherwise it is intermediate and stays
-            // in the low 16 bits.
-            TT_SFPSTORE(
-                p_sfpu::LREG0, result_store_mode, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_first);
-            TT_SFPSTORE(
-                p_sfpu::LREG4, result_store_mode, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_second);
+                // result_store_mode is mode 9 (SFPSTORE_MOD0_FMT_LO16) only when this per-tile store is the
+                // final, packer-visible result (single column tile); otherwise it is intermediate and stays
+                // in the low 16 bits.
+                TT_SFPSTORE(
+                    p_sfpu::LREG0, result_store_mode, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_first);
+                TT_SFPSTORE(
+                    p_sfpu::LREG4, result_store_mode, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_second);
+            }
         }
+    }
+
+    if constexpr (fused_vertical_swap) {
+        TT_SFPSTORE(p_sfpu::LREG7, result_store_mode, ADDR_MOD_7, previous_first);
+        TT_SFPSTORE(p_sfpu::LREG4, result_store_mode, ADDR_MOD_7, previous_second);
     }
 }
 
