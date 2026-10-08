@@ -9,6 +9,7 @@ README for complete shapes, cache ownership and trace-lifetime contracts.
 """
 
 import math
+import os
 from dataclasses import dataclass
 
 import ttnn
@@ -17,6 +18,32 @@ from models.demos.gpt_oss.tt.ccl import CCLManager
 from .optimized_decoder import OptimizedDecoder
 
 DRAM = ttnn.DRAM_MEMORY_CONFIG
+# Experiment (tt-agentic-bringup-qb2#75): route batched decode (B > 1) through the
+# token-grouped dispatch/fused-SwiGLU/combine expert path that prefill already uses,
+# instead of the dense 384-expert sparse-matmul path.
+GROUPED_DECODE = os.environ.get("KOLIBRI_GROUPED_DECODE", "0") == "1"
+
+
+def _env_grid(name):
+    value = os.environ.get(name)
+    return tuple(int(part) for part in value.split(",")) if value else None
+
+
+# Experiment knobs for the grouped decode path: fused-SwiGLU core grid (x,y) and a padded
+# top-k width (>384 enables the multicore top-k kernel, as the B1 path already does).
+GROUPED_DECODE_GRID = _env_grid("KOLIBRI_GROUPED_DECODE_GRID")
+DECODE_TOPK_WIDTH = int(os.environ.get("KOLIBRI_DECODE_TOPK_WIDTH", "0"))
+GROUPED_DECODE_REDUCE = os.environ.get("KOLIBRI_GROUPED_DECODE_REDUCE", "fused")
+# Experiment: expert-parallel layout for the grouped (dispatch/fused-SwiGLU/combine) path.
+# Rank r holds the FULL-width experts 96r..96r+95 instead of a 128-wide slice of all 384.
+# The residual is replicated and the MoE output is already all-reduced, so no new collectives:
+# every rank routes all tokens, computes only its local experts, and the all-reduce sums the
+# per-rank partial routed outputs. The fused SwiGLU then sees 512-wide experts (16 tiles), which
+# lifts its 4x4 core-grid cap (columns must divide the expert width).
+EP_EXPERTS = os.environ.get("KOLIBRI_EP_EXPERTS", "0") == "1"
+EP_GRID = _env_grid("KOLIBRI_EP_GRID") or (8, 8)
+EP_RANKS = 4
+EP_LOCAL = 384 // EP_RANKS
 
 
 class MeshCCLManager(CCLManager):
@@ -124,8 +151,22 @@ class CollectiveWorkspace:
             tuple(policy.residual_grid),
         )
 
+    def ep_output(self, rows):
+        """Persistent zero-initialised fused-SwiGLU output buffer per dispatch capacity (EP layout).
+
+        A rank writes only its local experts' regions. The other regions hold stale but finite
+        values (zero at first), which matters because post_combine_reduce multiplies a zero weight
+        into one slot of any token that has no local expert on this rank.
+        """
+        if rows not in self.ep_outputs:
+            self.ep_outputs[rows] = ttnn.zeros(
+                (rows, 2560), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=DRAM
+            )
+        return self.ep_outputs[rows]
+
     def __init__(self, mesh_device, policy):
         self.device, self.policy = mesh_device, policy
+        self.ep_outputs = {}
         self.ccl = MeshCCLManager(mesh_device, policy.num_links, ttnn.Topology.Linear)
         if self.policy.ccl_mode == "direct":
             gx, gy = policy.residual_grid
@@ -363,24 +404,57 @@ class MultichipDecoder(OptimizedDecoder):
         if self.policy.grouped_prefill:
             if self.policy.prefix_matmul:
                 self.expert_prefix_sum = convert(torch.triu(torch.ones(384, 384, dtype=torch.bfloat16)))
-            self.prefill_experts = {
-                role: [
-                    convert(
-                        w[f"mlp.experts.{e}.{role}.weight"].T,
-                        getattr(ttnn, self.policy.prefill_expert_dtype),
-                        dim=0 if role == "down_proj" else 1,
-                    )
-                    for e in range(384)
-                ]
-                for role in ("gate_proj", "up_proj", "down_proj")
-            }
-            self.expert_ids = ttnn.from_torch(
-                torch.arange(384, dtype=torch.int32),
-                device=self.device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=DRAM,
-            )
+            if EP_EXPERTS:
+                # Local expert j of rank r is global expert r*96+j: stack the four ranks' full
+                # experts along dim 0 and shard that dim, so each rank gets one full-width expert.
+                def ep_expert(role, j):
+                    parts = [w[f"mlp.experts.{r * EP_LOCAL + j}.{role}.weight"].T for r in range(EP_RANKS)]
+                    return convert(torch.cat(parts, dim=0), getattr(ttnn, self.policy.prefill_expert_dtype), dim=0)
+
+                self.prefill_experts = {
+                    role: [ep_expert(role, j) for j in range(EP_LOCAL)]
+                    for role in ("gate_proj", "up_proj", "down_proj")
+                }
+                # Per-rank local->global id table (counts/offsets stay global on every rank).
+                self.expert_ids = ttnn.from_torch(
+                    torch.arange(384, dtype=torch.int32),
+                    device=self.device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=DRAM,
+                    mesh_mapper=mapper(0),
+                )
+                # Per-rank post-combine table: 0 for local experts, -1 (skip) for the rest.
+                table = torch.full((EP_RANKS, 384), -1, dtype=torch.int32)
+                for r in range(EP_RANKS):
+                    table[r, r * EP_LOCAL : (r + 1) * EP_LOCAL] = 0
+                self.ep_reduce_table = ttnn.from_torch(
+                    table,
+                    device=self.device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=DRAM,
+                    mesh_mapper=mapper(0),
+                )
+            else:
+                self.prefill_experts = {
+                    role: [
+                        convert(
+                            w[f"mlp.experts.{e}.{role}.weight"].T,
+                            getattr(ttnn, self.policy.prefill_expert_dtype),
+                            dim=0 if role == "down_proj" else 1,
+                        )
+                        for e in range(384)
+                    ]
+                    for role in ("gate_proj", "up_proj", "down_proj")
+                }
+                self.expert_ids = ttnn.from_torch(
+                    torch.arange(384, dtype=torch.int32),
+                    device=self.device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=DRAM,
+                )
             self.expert_compute = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=getattr(ttnn.MathFidelity, self.policy.prefill_expert_fidelity),
                 math_approx_mode=False,
@@ -509,7 +583,12 @@ class MultichipDecoder(OptimizedDecoder):
         if x.is_sharded():
             x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         tokens = x.shape[-2]
-        if self.policy.grouped_prefill and prefill and tokens >= self.policy.prefill_grouped_min:
+        grouped = (
+            self.policy.grouped_prefill
+            and tokens >= self.policy.prefill_grouped_min
+            and (prefill or (GROUPED_DECODE and tokens > 1))
+        )
+        if grouped:
             x = ttnn.to_memory_config(x, DRAM)
         packed_router = tokens == 1 and hasattr(self, "decode_router")
         if packed_router:
@@ -527,6 +606,8 @@ class MultichipDecoder(OptimizedDecoder):
         if tokens == 1 and self.policy.router_choice_bf16:
             choice = ttnn.typecast(choice, ttnn.bfloat16)
         topk_width = 512 if self.policy.padded_topk else self.policy.decode_topk_width if tokens == 1 else 384
+        if grouped and not prefill and DECODE_TOPK_WIDTH > topk_width:
+            topk_width = DECODE_TOPK_WIDTH
         if topk_width > choice.shape[-1]:
             # Negative-infinity columns cannot select nonexistent experts. This
             # enables the multicore top-k kernel without adding logical users.
@@ -534,8 +615,8 @@ class MultichipDecoder(OptimizedDecoder):
         _, ids = ttnn.topk(choice, k=6, dim=-1)
         if self.policy.indexed_experts and tokens == 1:
             return self._indexed_moe(x, logits, ids)
-        if self.policy.grouped_prefill and prefill and tokens >= self.policy.prefill_grouped_min:
-            return self._grouped_prefill_moe(x, logits, ids)
+        if grouped:
+            return self._grouped_prefill_moe(x, logits, ids, decode=not prefill)
         scores = logits
         if tokens <= 128:
             zero, one = self.mask_zero_rm, self.mask_one_rm
@@ -971,9 +1052,12 @@ class MultichipDecoder(OptimizedDecoder):
             results.append(ttnn.concat(outputs, dim=2) if len(outputs) > 1 else outputs[0])
         return ttnn.concat(results, dim=1) if batch > 1 else results[0]
 
-    def _grouped_prefill_moe(self, x, logits, ids):
+    def _grouped_prefill_moe(self, x, logits, ids, decode=False):
         """Dispatch only routed rows; compute and reduce six contributions per token."""
         tokens = x.shape[-2]
+        expert_grid = EP_GRID if EP_EXPERTS else self.policy.prefill_expert_grid
+        if decode and GROUPED_DECODE_GRID:
+            expert_grid = GROUPED_DECODE_GRID
         if 128 < tokens <= self.prefill_mask_zero_rm.shape[-2]:
             zero = ttnn.slice(self.prefill_mask_zero_rm, (0, 0, 0, 0), (1, 1, tokens, 384))
             one = ttnn.slice(self.prefill_mask_one_rm, (0, 0, 0, 0), (1, 1, tokens, 6))
@@ -1038,9 +1122,12 @@ class MultichipDecoder(OptimizedDecoder):
             cluster_axis=0,
         )
         routed = ttnn.reshape(routed, (capacity, 2560))
-        output = ttnn.empty(
-            (capacity, 2560), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=DRAM
-        )
+        if EP_EXPERTS:
+            output = self.collective_workspace.ep_output(capacity)
+        else:
+            output = ttnn.empty(
+                (capacity, 2560), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=DRAM
+            )
         down = ttnn.experimental.deepseek_prefill.moe_fused_swiglu(
             routed,
             self.prefill_experts["gate_proj"],
@@ -1050,7 +1137,7 @@ class MultichipDecoder(OptimizedDecoder):
             self.expert_ids,
             input_m_tiles=(tokens + 31) // 32,
             compute_kernel_config=self.expert_compute,
-            core_grid=ttnn.CoreCoord(*self.policy.prefill_expert_grid),
+            core_grid=ttnn.CoreCoord(*expert_grid),
             output=output,
             expert_region_offsets=ttnn.reshape(offsets, (384,)),
             read_x_at_offset=True,
@@ -1067,11 +1154,24 @@ class MultichipDecoder(OptimizedDecoder):
             cluster_axis=0,
         )
         scores = ttnn.sigmoid(ttnn.gather(logits, -1, index=ids))
-        scores = ttnn.to_layout(ttnn.typecast(scores, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
-        scores = ttnn.reshape(scores, (1, 1, tokens, 6, 1))
-        routed = ttnn.experimental.deepseek_prefill.post_combine_reduce(
-            combined, scores, dispatch_ids, self.dispatch_table, expert_dim=3, output_memory_config=DRAM
-        )
+        scores = ttnn.typecast(scores, ttnn.bfloat16)
+        if decode and GROUPED_DECODE_REDUCE == "ttnn":
+            # Every expert is local, so the DeepSeek skip logic is moot: a plain weighted sum
+            # over the six top-k slots on many cores replaces the single-core fused reduce.
+            contributions = ttnn.to_layout(ttnn.reshape(combined, (1, tokens, 6, 2560)), ttnn.TILE_LAYOUT)
+            weights = ttnn.to_layout(ttnn.reshape(scores, (1, tokens, 6, 1)), ttnn.TILE_LAYOUT)
+            weighted = ttnn.multiply(contributions, weights)
+            routed = ttnn.reshape(ttnn.sum(weighted, dim=2, keepdim=True), (1, 1, tokens, 2560))
+        else:
+            scores = ttnn.reshape(ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT), (1, 1, tokens, 6, 1))
+            routed = ttnn.experimental.deepseek_prefill.post_combine_reduce(
+                combined,
+                scores,
+                dispatch_ids,
+                self.ep_reduce_table if EP_EXPERTS else self.dispatch_table,
+                expert_dim=3,
+                output_memory_config=DRAM,
+            )
         both = self._linear(x, self.shared["gate_up"])
         gate = ttnn.slice(both, (0, 0, 0, 0), (1, 1, tokens, 128))
         up = ttnn.slice(both, (0, 0, 0, 128), (1, 1, tokens, 256))

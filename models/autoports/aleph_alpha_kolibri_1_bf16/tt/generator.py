@@ -334,10 +334,12 @@ class KolibriGenerator(Generator):
         for key, pages in page_table.items():
             if pages.shape != self.state.host_page_tables[key].shape:
                 raise ValueError("Page table must retain the configured physical shape")
+            pool_pages = getattr(self, "page_table_pool_pages", {})
             physical_pages = (
                 self.state.layers[key][0].shape[0]
                 if isinstance(key, int)
-                else self.batch_size * (min(self.capacity, 8704) if key == "sliding" else self.capacity) // 32
+                else pool_pages.get(key)
+                or self.batch_size * (min(self.capacity, 8704) if key == "sliding" else self.capacity) // 32
             )
             if pages.dtype != torch.int32 or (pages < 0).any() or (pages >= physical_pages).any():
                 raise ValueError("Invalid physical page mapping")
