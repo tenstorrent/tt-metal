@@ -377,8 +377,8 @@ def test_demo(
         pytest.skip("Qwen2.5-VL-7B does not support running on N150")
 
     logger.info(f"mesh_device: {mesh_device}")
-    use_tt_vision = os.environ.get("TT_QWEN_USE_HF_VISION") != "1"  # EXPERIMENT
-    enable_trace = os.environ.get("TT_QWEN_DISABLE_DECODE_TRACE") != "1"  # EXPERIMENT
+    use_tt_vision = True
+    enable_trace = True  # Use tracing for better perf
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
     # Override parameters from command line if they are provided
@@ -465,10 +465,6 @@ def test_demo(
     processor = model_args.processor
     tokenizer = model_args.tokenizer
 
-    for m_args in model_args_list:
-        m_args.use_qk_fused = os.environ.get("TT_QWEN_USE_QK_FUSED") == "1"  # EXPERIMENT (default False)
-        if os.environ.get("TT_QWEN_DISABLE_BATCHED_PREFILL") == "1":  # EXPERIMENT
-            m_args.disable_batched_prefill = True
     generator = Generator(model_list, model_args_list, mesh_device, processor=processor, tokenizer=tokenizer)
 
     from transformers import logging as transformers_logging
@@ -589,7 +585,7 @@ def test_demo(
             page_table=page_table,
             kv_cache=tt_kv_cache_list,
             prompt_lens=decoding_pos,
-            enable_trace=os.environ.get("TT_QWEN_DISABLE_PREFILL_TRACE") != "1",  # EXPERIMENT
+            enable_trace=enable_trace,
         )
         profiler.end(f"compile_prefill", iteration=batch_idx)
         logger.info("Finished prefill warmup")
@@ -602,7 +598,7 @@ def test_demo(
             page_table=page_table,
             kv_cache=tt_kv_cache_list,
             prompt_lens=decoding_pos,
-            enable_trace=os.environ.get("TT_QWEN_DISABLE_PREFILL_TRACE") != "1",  # EXPERIMENT
+            enable_trace=enable_trace,
         )
         generator.update_rope_deltas([rope_delta.item() for rope_delta in rope_deltas])
         prefilled_token = torch.argmax(logits, dim=-1)

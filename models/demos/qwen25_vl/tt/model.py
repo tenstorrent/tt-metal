@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
-
 import torch
 from loguru import logger
 
@@ -384,7 +382,7 @@ class Transformer(TTTransformer):
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
             attention_class=Attention,
-            rope_setup_class=None if os.environ.get("TT_QWEN_UPSTREAM_ROPE") == "1" else RotarySetup,  # EXPERIMENT
+            rope_setup_class=RotarySetup,
         )
 
     def _prepare_cos_sin(self, rot_mats):

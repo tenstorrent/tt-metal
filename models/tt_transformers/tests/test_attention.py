@@ -99,8 +99,8 @@ def test_attention_inference(
 
     seq_len = 1
 
-    generation_start_pos = int(os.environ.get("TT_TEST_GEN_START", 0))  # EXPERIMENT
-    generation_length = int(os.environ.get("TT_TEST_GEN_LEN", 10))  # EXPERIMENT
+    generation_start_pos = 0
+    generation_length = 10
     all_tests_pass = True
 
     DefaultRopeSetup = HfRotarySetup if model_args.use_hf_rope else RotarySetup
@@ -316,7 +316,7 @@ def test_attention_inference(
                 cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + i + 1)
                 cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
                 cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
-                if cache_pt.shape != cache_tt.shape:  # EXPERIMENT: padded KV heads (Qwen2.5-VL-7B on T3K)
+                if cache_pt.shape != cache_tt.shape:  # padded/duplicated KV heads (PAD_HEADS_FOR_TP_MODELS)
                     logger.warning(
                         f"{label} cache shape mismatch {tuple(cache_pt.shape)} vs {tuple(cache_tt.shape)}; skipping"
                     )

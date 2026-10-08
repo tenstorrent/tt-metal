@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
 
 import torch
 
@@ -138,15 +137,7 @@ class Attention(LightweightModule):
         # reduction for large head_dim. Config-gated flag; False for every other model.
         if getattr(configuration, "sdpa_decode_use_default_compute_config", False):
             self.sdpa_decode_compute_kernel_cfg = None
-        if os.environ.get("TT_SDPA_DECODE_DEFAULT_CFG") == "1":  # EXPERIMENT
-            self.sdpa_decode_compute_kernel_cfg = None
-        if os.environ.get("TT_SDPA_DECODE_NO_L1ACC") == "1":  # EXPERIMENT: fp32 acc without packer L1 acc
-            self.sdpa_decode_compute_kernel_cfg = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=False,
-            )
+
         self.li_o_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_O_DECODE, configuration=configuration
         )
