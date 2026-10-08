@@ -30,10 +30,10 @@ template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, c
 inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& tensor_shape, bool acc_to_dest = false)
 {
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
-    // A face shorter than one FPU instruction still needs that instruction, or the
-    // inner loop is 0 and math never clears the Src dvalids unpack raised.
-    const std::uint32_t num_eltwise_instrn_per_face =
-        (tensor_shape.face_r_dim < ELTWISE_MATH_ROWS) ? 1u : (tensor_shape.face_r_dim >> rows_log2(ELTWISE_MATH_ROWS));
+    // Match the non-broadcast path: pad a short face out to the FPU row stride, then
+    // count instructions. On quasar_4row that is two ELWs per tiny face, so SrcA and
+    // dest stay aligned with unpack and pack, which space faces MAX_FPU_ROWS apart.
+    const std::uint32_t num_eltwise_instrn_per_face = _eltwise_binary_rows_per_face_(tensor_shape) >> rows_log2(ELTWISE_MATH_ROWS);
 
     constexpr auto SRCB_BROADCAST_TYPE = (BROADCAST_TYPE == BroadcastType::COL)
                                              ? p_elwise::SRCB_BCAST_COL
@@ -83,33 +83,14 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& te
     ckernel_template temp = high_fidelity ? ckernel_template(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), eltwise_binary_op)
                                           : ckernel_template(MOP_OUTER_LOOP, MOP_INNER_LOOP, eltwise_binary_op);
 
-    // Only need to clear per face for ROW/COL, since SCALAR only has 1 face from the unpacker
+    // Only need to clear per face for ROW/COL, since SCALAR only has 1 face from the unpacker.
+    // COL clears the SrcB counter (ADDR_MOD_2); ROW keeps the counter (ADDR_MOD_0).
     if constexpr (BROADCAST_TYPE != BroadcastType::SCALAR)
     {
-        // A face that fits in one FPU instruction never advanced SrcB. Clearing the SrcB
-        // counter on that only instruction samples the column before the face is visible.
-        // Longer faces keep the counter clear programmed in the address-mod setup.
-        if constexpr (BROADCAST_TYPE == BroadcastType::COL)
-        {
-            if (num_eltwise_instrn_per_face == 1u)
-            {
-                addr_mod_t {
-                    .srca     = {.incr = ELTWISE_MATH_ROWS},
-                    .srcb     = {.incr = 0},
-                    .dest     = {.incr = ELTWISE_MATH_ROWS},
-                    .fidelity = {.incr = 0, .clr = high_fidelity}}
-                    .set(ADDR_MOD_2);
-            }
-            const std::uint32_t eltwise_binary_op_clr_srcB =
-                eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCB_VLD, SRCB_BROADCAST_TYPE, ADDR_MOD_2>(advancing_acc);
-            temp.set_last_inner_loop_instr(eltwise_binary_op_clr_srcB);
-        }
-        else
-        {
-            const std::uint32_t eltwise_binary_op_clr_srcB =
-                eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCB_VLD, SRCB_BROADCAST_TYPE, ADDR_MOD_0>(advancing_acc);
-            temp.set_last_inner_loop_instr(eltwise_binary_op_clr_srcB);
-        }
+        constexpr std::uint8_t last_inner_addr_mod = (BROADCAST_TYPE == BroadcastType::COL) ? ADDR_MOD_2 : ADDR_MOD_0;
+        const std::uint32_t eltwise_binary_op_clr_srcB =
+            eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCB_VLD, SRCB_BROADCAST_TYPE, last_inner_addr_mod>(advancing_acc);
+        temp.set_last_inner_loop_instr(eltwise_binary_op_clr_srcB);
     }
 
     temp.set_last_outer_loop_instr(eltwise_binary_op_clr_srcAB_valid);
@@ -199,6 +180,10 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_shape, bool acc_to_dest = false)
 {
+    LLK_ASSERT(
+        tensor_shape.total_num_faces() != NUM_FACES || tensor_shape.face_r_dim == MAX_FACE_R_DIM,
+        "Eltwise binary broadcast four-face tiles require 16-row faces");
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_binary_broadcast_init_", tensor_shape);
     _llk_math_eltwise_binary_broadcast_addrmod_<BROADCAST_TYPE, MATH_FIDELITY_TYPE>();
     _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE, MATH_FIDELITY_TYPE>(tensor_shape, acc_to_dest);
 

@@ -4,6 +4,7 @@
 import pytest
 import torch
 from helpers.constraints import get_valid_dest_accumulation_modes
+from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -190,15 +191,6 @@ def _fp32_dest_pair(formats):
     )
 
 
-def _expb_to_float16(formats):
-    """Packer cannot convert an exponent-B input to Float16 without 32-bit DEST."""
-    return (
-        formats.input_format.is_exponent_B()
-        and not formats.input_format.is_float32()
-        and formats.output_format == DataFormat.Float16
-    )
-
-
 def _get_valid_formats(dest_acc):
     """Valid pairs for this dest_acc, minus the ones the packer cannot do."""
     all_formats = input_output_formats(
@@ -219,7 +211,9 @@ def _get_valid_formats(dest_acc):
         if dest_acc not in get_valid_dest_accumulation_modes(formats):
             continue
         if dest_acc == DestAccumulation.Yes:
-            if _fp32_dest_pair(formats) or _expb_to_float16(formats):
+            if _fp32_dest_pair(formats) or is_format_combination_outlier(
+                formats.input_format, formats.output_format, DestAccumulation.No
+            ):
                 selected.append(formats)
             continue
         if formats.output_format != DataFormat.Float32:

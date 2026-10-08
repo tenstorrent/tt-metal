@@ -8,6 +8,7 @@
 
 #include "llk_unpack_common.h"
 #include "tensor_shape.h"
+#include "tensor_shape_coverage_unpack.h"
 using namespace ckernel;
 
 /**
@@ -19,6 +20,8 @@ using namespace ckernel;
  * @tparam BROADCAST_TYPE: Broadcast type for SrcB, values = <COL/ROW/SCALAR>
  * @param buf_desc_id_0/1: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 0 - 16
+ * @param tensor_shape: Face grid and face row/column dimensions. A full 32x32 tile unpacks as one
+ *        hardware tile; two-face and tiny shapes take the per-face L1 path.
  * @param num_tiles: Number of tiles to unpack at a time for both inputs.
  */
 template <BroadcastType BROADCAST_TYPE>
@@ -55,15 +58,17 @@ inline void _llk_unpack_binary_broadcast_operands_mop_config_(
         // One unpack per posted face. The source increment on that unpack steps L1 to the next face.
         const std::uint32_t srcb_replay_len = srcb_posts;
 
-        const std::uint32_t srca_replay_len   = 1u + num_faces;
-        const std::uint32_t srca_replay_start = srcb_replay_len;
+        // The leading 1 counts TTI_SET_DST_TILE_FACE_ROW_IDX at the head of the SrcA replay.
+        constexpr std::uint32_t srca_row_idx_reset = 1u;
+        const std::uint32_t srca_replay_len        = srca_row_idx_reset + num_faces;
+        const std::uint32_t srca_replay_start      = srcb_replay_len;
 
         load_replay_buf(
             0u,
             srcb_replay_len,
-            false,
-            0,
-            0,
+            false /*exec_while_loading*/,
+            0 /*set_mutex*/,
+            0 /*last*/,
             [=]
             {
                 for (std::uint32_t face = 0; face < srcb_posts; ++face)
@@ -72,16 +77,16 @@ inline void _llk_unpack_binary_broadcast_operands_mop_config_(
                     const std::uint32_t next_src = (face + 1u < srcb_posts) ? srcb_face_index(face + 1u) : num_faces;
                     // Math re-reads SrcB at row 0. The source increment runs after the read and
                     // lands on the next face, or on the next software tile after the last post.
-                    TT_UNPACR1_TILE_INC(0 /*Dst Tile Idx*/, next_src - src_face, buf_desc_id_1, 1 /*Set Dvalid*/);
+                    TT_UNPACR1_TILE_INC(0 /*Dst Tile Idx*/, next_src - src_face /*Src_Tile_Idx_Inc*/, buf_desc_id_1, 1 /*Set Dvalid*/);
                 }
             });
 
         load_replay_buf(
             srca_replay_start,
             srca_replay_len,
-            false,
-            0,
-            0,
+            false /*exec_while_loading*/,
+            0 /*set_mutex*/,
+            0 /*last*/,
             [=]
             {
                 TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
@@ -105,14 +110,14 @@ inline void _llk_unpack_binary_broadcast_operands_mop_config_(
     load_replay_buf(
         0u,
         replay_buf_len,
-        false,
-        0,
-        0,
+        false /*exec_while_loading*/,
+        0 /*set_mutex*/,
+        0 /*last*/,
         [buf_desc_id_1, replay_buf_len, srcb_face_index]
         {
             for (std::uint32_t face = 0; face < replay_buf_len; ++face)
             {
-                TT_UNPACR1_FACE(0 /*Dst Face Idx*/, srcb_face_index(face), 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
+                TT_UNPACR1_FACE(0 /*Dst Face Idx*/, srcb_face_index(face) /*Src_Face_Idx*/, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
             }
         });
 
@@ -136,21 +141,29 @@ inline void _llk_unpack_binary_broadcast_operands_mop_config_(
  * @tparam BROADCAST_TYPE: Broadcast type for SrcB, values = <COL/ROW/SCALAR>
  * @param buf_desc_id_0/1: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 0 - 16
+ * @param tensor_shape: Face grid and face row/column dimensions. A full 32x32 tile unpacks as one
+ *        hardware tile; two-face and tiny shapes take the per-face L1 path. The matching run call
+ *        must pass this same shape.
  * @param num_tiles: Number of tiles to unpack at a time for both inputs.
  * @note On the math thread, pair with @ref _llk_math_eltwise_binary_broadcast_init_ (T1) with matching BROADCAST_TYPE; on the pack thread, pair with
  *       @ref _llk_pack_init_ (T2).
  * @note @ref _llk_unpack_binary_broadcast_operands_ is the matching execute call on this thread.
+ * @note Four-face tiles require 16-row faces, as required by validate_buffer_desc.
  */
 template <BroadcastType BROADCAST_TYPE>
 inline void _llk_unpack_binary_broadcast_operands_init_(
     const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const TensorShape& tensor_shape, const std::uint32_t num_tiles = NUM_TILES)
 {
+    LLK_ASSERT(
+        tensor_shape.total_num_faces() != NUM_FACES || tensor_shape.face_r_dim == MAX_FACE_R_DIM,
+        "Binary broadcast unpack four-face tiles require 16-row faces");
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_binary_broadcast_operands_init_", tensor_shape);
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
     _llk_unpack_binary_broadcast_operands_mop_config_<BROADCAST_TYPE>(buf_desc_id_0, buf_desc_id_1, tensor_shape, num_tiles);
 }
 
-// Full-tile entry point used by fused kernels that do not pass a tile shape.
+// Full-tile entry point. The only caller is metal llk_unpack_AB_init, which is 32x32 only.
 template <BroadcastType BROADCAST_TYPE>
 inline void _llk_unpack_binary_broadcast_operands_init_(
     const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t num_tiles = NUM_TILES)
@@ -163,7 +176,8 @@ inline void _llk_unpack_binary_broadcast_operands_init_(
  *
  * @param start_l1_tile_idx_0/1: Start tile index into the L1 buffer;
  *        start_l1_tile_idx_0 -> UNPACKER0 -> SRCA, start_l1_tile_idx_1 -> UNPACKER1 -> SRCB.
- * @param tensor_shape: Shape shared by both operands. 32x32 keeps one hardware tile per software tile; other shapes count L1 in faces.
+ * @param tensor_shape: Shape shared by both operands. Must match the shape passed to init. 32x32 keeps one hardware tile per software tile; other shapes count
+ * L1 in faces.
  * @note Call @ref _llk_unpack_binary_broadcast_operands_init_ with matching template args before this function.
  */
 inline void _llk_unpack_binary_broadcast_operands_(
