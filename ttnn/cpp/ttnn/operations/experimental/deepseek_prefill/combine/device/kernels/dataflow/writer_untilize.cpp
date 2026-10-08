@@ -285,6 +285,9 @@ void kernel_main() {
                             off += chunk;
                         }
                         noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);  // zone measures only row-data landing
+                        // A transaction ID is retained by the command buffer after its barrier. Clear it before
+                        // the next row so a later local write remains untagged. Port of upstream 07478d422b3.
+                        noc_async_write_set_trid(0);
                     }
 
                     noc_semaphore_inc<true>(sender_data_ready_noc_addr, 1);
@@ -318,5 +321,7 @@ void kernel_main() {
     noc_async_write_barrier();
     noc_semaphore_inc(sender_data_ready_noc_addr, 1);
     noc_async_atomic_barrier();
+    // Clear the transaction ID at exit as well, so the next kernel on this core inherits an idle command buffer.
+    noc_async_write_set_trid(0);
     cb_pop_front(cb_experts_tok_counter_id, cb_counter_total_pages);
 }

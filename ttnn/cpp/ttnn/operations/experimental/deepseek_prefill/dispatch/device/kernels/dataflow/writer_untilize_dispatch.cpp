@@ -262,6 +262,10 @@ void kernel_main() {
                     // Wait only on this entry's cross-device writes — in-flight local
                     // DRAM writes are tagged-out by TRID and keep flying.
                     noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
+                    // The transaction ID is a command-buffer register, not a per-write argument. Restore the
+                    // default ID before this worker hands its NOC interface to another kernel (or issues an
+                    // untagged local write). Port of upstream 0525492ccb6 (#52432).
+                    noc_async_write_set_trid(0);
 
                     noc_semaphore_inc<true>(sender_data_avail_noc_addr, 1);
 
@@ -305,6 +309,7 @@ void kernel_main() {
     noc_async_write_one_packet_with_trid(
         route_info_scratch_addr, sentinel_c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);
     noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
+    noc_async_write_set_trid(0);
     noc_semaphore_inc(sender_data_avail_noc_addr, 1);
 
     // noc_async_full_barrier flushes everything in-flight (including the inc) before exit.
