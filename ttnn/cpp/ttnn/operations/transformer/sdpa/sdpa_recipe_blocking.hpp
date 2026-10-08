@@ -26,7 +26,8 @@
 
 namespace ttnn::operations::transformer::sdpa::detail {
 
-struct RecipeKeyRange;  // sdpa_recipe.hpp
+struct RecipeKeyRange;      // sdpa_recipe.hpp
+struct RecipeDenseOptions;  // sdpa_recipe.hpp
 
 enum class RecipeOp : uint8_t { Dense, Joint, Ring, ExpRing };
 
@@ -54,7 +55,8 @@ inline bool recipe_geometry_supported(uint32_t q_tiles, uint32_t k_tiles, uint32
 // Schedule facts that change the circular-buffer layout.
 struct RecipeL1Context {
     uint32_t mask_page_bytes = 0;      // dense: attn_mask tile bytes (0 = no mask)
-    uint32_t extra_bytes = 0;          // dense key ranges: control pages, template tile, scratch
+    uint32_t extra_bytes = 0;          // dense key ranges: control pages, template tile, scratch; the sink page
+    uint32_t vd_tiles = 0;             // dense MLA: V / output head dim in tiles (0: d_tiles)
 };
 
 // Dense attn_mask circular buffer: one QK row group of mask tiles per buffer slot (the factory
@@ -92,6 +94,7 @@ struct RecipeBlockingProblem {
     uint32_t joint_k_rows = 0;
     uint32_t ring_size = 1;
     uint32_t d_tiles = 4;
+    uint32_t vd_tiles = 0;  // dense MLA: V / output head dim in tiles (0: d_tiles)
     // Dense/joint: the grid the op may use. Ring: the SDPA worker grid. Exp ring: the program
     // config grid including the fabric MUX column (the chooser may narrow its width).
     tt::tt_metal::CoreCoord grid{1, 1};
@@ -143,7 +146,8 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     const std::optional<SDPAProgramConfig>& program_config,
     const Tensor* attn_mask = nullptr,
     uint64_t reserved_l1_bytes = 0,
-    const RecipeKeyRange* key_range = nullptr);
+    const RecipeKeyRange* key_range = nullptr,
+    const RecipeDenseOptions* options = nullptr);
 
 SDPAProgramConfig resolve_ring_recipe_blocking(
     const PrecisionPolicy& policy,
