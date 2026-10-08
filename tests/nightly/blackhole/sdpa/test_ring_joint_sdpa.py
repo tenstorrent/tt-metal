@@ -7856,6 +7856,24 @@ def test_ring_joint_attention_gemma4_global_ksplit_accuracy(tokens_per_device, q
 
 
 @pytest.mark.timeout(900)
+def test_ring_joint_attention_gemma4_global_q128_ksplit5_accuracy():
+    """Chunk 2048 as Gemma4 runs it: 4-tile Q chunks (16 units, two grid rows per band) over five K-split bands, above
+    the old cap of four, with a bfp8 Q, the packed K/V cache and LoFi matmuls. Five bands over two or three K chunks
+    per ring iteration leave a band empty on some iterations and not on others (chunks 1 and 2)."""
+    chunk_size = 256 * MESH_CONFIG.sp_size
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        replace(GEMMA4_GLOBAL_CHUNKED_MODEL, d_k=640, q_dtype=ttnn.bfloat8_b),
+        chunk_size=chunk_size,
+        total_seq=5 * chunk_size,
+        qk_configs=[(128, 256)],
+        max_k_splits=5,
+        use_ring_mla=True,
+        matmul_math_fidelity=ttnn.MathFidelity.LoFi,
+    )
+
+
+@pytest.mark.timeout(900)
 @pytest.mark.parametrize(
     "tokens_per_device,q_chunk_size,max_k_splits",
     [(256, 64, 3), (1024, 96, 1)],

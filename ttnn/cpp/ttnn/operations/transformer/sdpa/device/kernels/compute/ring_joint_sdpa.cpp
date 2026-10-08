@@ -233,6 +233,10 @@ void kernel_main() {
     // Largest valid K chunk count over the ring iterations: a slice is non-empty on some iteration iff it is non-empty
     // at the largest count, so the reducer knows which senders have state.
     [[maybe_unused]] uint32_t ksplit_max_valid = 0;
+    // Dense K split: bit s is set once sender band s owned K chunks on some ring iteration. Band slices are not
+    // monotone in the chunk count (with five bands, band 2 owns [0, 1) of two chunks but nothing of three), so the
+    // largest count alone does not say which senders staged state.
+    [[maybe_unused]] uint32_t ksplit_sender_mask = 0;
     // Only sdpa_ring_v2 decodes the rotated schedule; the sdpa_ring branch below would keep using
     // global_q_start/global_q_end and silently desync from the reader and writer. The host pairs
     // latent-V with streaming compute, but only via a chain of implications, so pin it here.
@@ -419,6 +423,11 @@ void kernel_main() {
                     Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, ksplit_causal_end_nt);
                 ksplit_k_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count);
                 ksplit_max_valid = num_valid > ksplit_max_valid ? num_valid : ksplit_max_valid;
+                for (uint32_t sender = 0; sender + 1 < ksplit_count; ++sender) {
+                    if (!ring_joint::ksplit_range(num_valid, sender, ksplit_count).empty()) {
+                        ksplit_sender_mask |= 1u << sender;
+                    }
+                }
             }
         }
         // A K-split slice can be empty on some iterations; accumulators start at the first non-empty one.
@@ -784,10 +793,11 @@ void kernel_main() {
                 constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
                 const AccumulatorHalf incoming = {ksplit_cb_sum_in, cb_max_in, cb_prev_out};
                 for (uint32_t sender = 0; sender + 1 < ksplit_count; ++sender) {
-                    const auto sender_range = has_sliding_window
-                                                  ? ring_joint::sliding_ksplit_range(ksplit_max_valid, sender, ksplit_count)
-                                                  : ring_joint::ksplit_range(ksplit_max_valid, sender, ksplit_count);
-                    if (sender_range.empty()) {
+                    const bool sender_empty =
+                        has_sliding_window
+                            ? ring_joint::sliding_ksplit_range(ksplit_max_valid, sender, ksplit_count).empty()
+                            : ((ksplit_sender_mask >> sender) & 1u) == 0;
+                    if (sender_empty) {
                         for (uint32_t cb : {cb_max_in, ksplit_cb_sum_in}) {
                             CircularBuffer(cb).wait_front(Sq_chunk_t);
                             sdpa_cb_pop_front_out_of_line(cb, Sq_chunk_t);
