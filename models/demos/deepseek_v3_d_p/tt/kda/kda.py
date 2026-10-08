@@ -16,6 +16,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import Chronol
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import _layout as _selection_layout
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
+    KDA_NORM_MEMORY_CONFIG,
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
@@ -410,7 +411,7 @@ class ttKDA:
             weights.norm,
             config.num_heads,
             epsilon=config.norm_eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=KDA_NORM_MEMORY_CONFIG,
             compute_kernel_config=self.kda_compute_config,
             output_dtype=self.gated_rms_output_dtype,
             gate_column_offset=output_gate_offset,

@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_PREP_OUTPUT_BF16_MASK,
     KDA_PREPARATION_MEMORY_CONFIG,
+    KDA_SCAN_MEMORY_CONFIG,
     KDARecurrenceProgramConfig,
 )
 
@@ -198,12 +199,13 @@ def _scan_chunks(
     sequence_parallel_axis: int,
     compute_config: ttnn.DeviceComputeKernelConfig,
     groups_per_head: int = 1,
+    memory_config: ttnn.MemoryConfig = KDA_OUTPUT_MEMORY_CONFIG,
 ) -> RecurrenceResult:
     output, final_states = ttnn.experimental.kda.recurrent_chunk_scan(
         *prepared.as_kernel_args(),
         group_entry_states,
         groups_per_head=groups_per_head,
-        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+        memory_config=memory_config,
         compute_kernel_config=compute_config,
         actual_start=actual_start,
         actual_end=actual_end,
@@ -528,6 +530,8 @@ def _scan_sp_grouped_chunks(
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
         compute_config=compute_config.scan,
+        # The norm reads the output and the final state is reselected, so neither leaves L1.
+        memory_config=KDA_SCAN_MEMORY_CONFIG,
     )
     output = ttnn.reshape(
         scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
