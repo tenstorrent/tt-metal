@@ -12,6 +12,8 @@ Run:
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 from loguru import logger
 from PIL import Image
@@ -51,6 +53,7 @@ def test_qwenimage_edit_pipeline(
 ) -> None:
     pipeline = QwenImageEditPipeline.create_pipeline(
         mesh_device=mesh_device,
+        checkpoint_name=os.environ.get("TT_QWEN_CHECKPOINT", "Qwen/Qwen-Image-Edit"),
         cfg_parallel=cfg_parallel,
         device_vae=device_vae,
         device_vae_encode=device_vae_encode,

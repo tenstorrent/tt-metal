@@ -54,6 +54,27 @@ _DEFAULT_CHECKPOINT = "Qwen/Qwen-Image-Edit"
 # prompt), which perturbs the output slightly; None disables padding.
 _DEFAULT_PROMPT_BUCKET: int | None = None
 
+# Edit-Plus (2509/2511) uses a separate reference pipeline with multi-image conditioning: the VL
+# encoder sees the condition image(s) at CONDITION_IMAGE_SIZE and the VAE encodes at VAE_IMAGE_SIZE.
+_CONDITION_IMAGE_SIZE = 384 * 384
+_VAE_IMAGE_SIZE = 1024 * 1024
+
+
+def _is_edit_plus(checkpoint_name: str) -> bool:
+    """Whether ``checkpoint_name`` is an Edit-Plus variant (2509/2511), which needs the Plus pipeline."""
+    name = checkpoint_name.lower()
+    return any(tag in name for tag in ("2509", "2511", "edit-plus", "edit_plus"))
+
+
+def _trim_to_mask(embeds: torch.Tensor, mask: torch.Tensor | None) -> torch.Tensor:
+    """Drop padded prompt tokens (batch size 1). The device path has no prompt attention mask, so
+    variable-length Qwen2.5-VL prompts must be trimmed to their valid length before the forward."""
+    if mask is None:
+        return embeds
+    valid = int(mask[0].sum().item())
+    return embeds[:, :valid]
+
+
 # WH Galaxy preset: all 32 chips on one image, cfg replicated, TP across heads, SP across tokens.
 #   axis 0 -> sequence parallel (4),  axis 1 -> tensor parallel (8)
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
@@ -406,11 +427,18 @@ class QwenImageEditPipeline:
             f"(SP={sp.factor}@axis{sp.mesh_axis}, TP={tp.factor}@axis{tp.mesh_axis})"
         )
 
-        logger.info("loading reference QwenImageEditPipeline (host: VL encode, scheduler)...")
-        self._hf = reference.QwenImageEditPipeline.from_pretrained(config.checkpoint_name, torch_dtype=torch.bfloat16)
+        self._edit_plus = _is_edit_plus(config.checkpoint_name)
+        ref_cls = reference.QwenImageEditPlusPipeline if self._edit_plus else reference.QwenImageEditPipeline
+        logger.info(f"loading reference {ref_cls.__name__} (host: VL encode, scheduler)...")
+        self._hf = ref_cls.from_pretrained(config.checkpoint_name, torch_dtype=torch.bfloat16)
         _VisionFeatureCache(self._hf.text_encoder.model)
         hf_transformer = self._hf.transformer
         cfg = hf_transformer.config
+        # 2511 marks the condition-image tokens for timestep-0 modulation (noise tokens keep the real
+        # timestep). Applied in the device transformer; see _generate for how the split is passed.
+        self._zero_cond_t = bool(getattr(cfg, "zero_cond_t", False))
+        if self._zero_cond_t:
+            logger.warning("checkpoint sets zero_cond_t=True; device zero_cond_t handling is Stage 2 (not yet applied)")
         self._transformer_config = cfg
         self._pos_embed = hf_transformer.pos_embed
 
@@ -556,35 +584,71 @@ class QwenImageEditPipeline:
         hf = self._hf
         timings: dict[str, float] = {}
 
-        t = time.time()
-        calc_w, calc_h, _ = calculate_dimensions(1024 * 1024, image.size[0] / image.size[1])
         multiple_of = hf.vae_scale_factor * 2
         height, width = side // multiple_of * multiple_of, side // multiple_of * multiple_of
-        prompt_image = hf.image_processor.resize(image, calc_h, calc_w)
-        image_tensor = hf.image_processor.preprocess(prompt_image, calc_h, calc_w).unsqueeze(2)
-
-        prompt_embeds, _ = hf.encode_prompt(image=prompt_image, prompt=prompt, device="cpu")
+        aspect = image.size[0] / image.size[1]
         do_true_cfg = true_cfg_scale > 1 and negative_prompt is not None
-        if do_true_cfg:
-            negative_prompt_embeds, _ = hf.encode_prompt(image=prompt_image, prompt=negative_prompt, device="cpu")
-        if self.prompt_bucket:
-            prompt_embeds = _pad_to_bucket(prompt_embeds, self.prompt_bucket)
-            if do_true_cfg:
-                negative_prompt_embeds = _pad_to_bucket(negative_prompt_embeds, self.prompt_bucket)
-        timings["vl_encode"] = time.time() - t
+        num_channels_latents = self._transformer_config.in_channels // 4
 
         t = time.time()
-        num_channels_latents = self._transformer_config.in_channels // 4
-        latents, image_latents = hf.prepare_latents(
-            image_tensor, 1, num_channels_latents, height, width, prompt_embeds.dtype, "cpu", generator, None
-        )
-        timings["vae_encode"] = time.time() - t
-        img_shapes = [
-            [
-                (1, height // hf.vae_scale_factor // 2, width // hf.vae_scale_factor // 2),
-                (1, calc_h // hf.vae_scale_factor // 2, calc_w // hf.vae_scale_factor // 2),
+        if self._edit_plus:
+            # Edit-Plus: VL encoder sees the condition image at CONDITION_IMAGE_SIZE; the VAE encodes
+            # at VAE_IMAGE_SIZE. encode_prompt takes a list of condition images and returns a mask.
+            cond_w, cond_h, _ = calculate_dimensions(_CONDITION_IMAGE_SIZE, aspect)
+            vae_w, vae_h, _ = calculate_dimensions(_VAE_IMAGE_SIZE, aspect)
+            condition_image = hf.image_processor.resize(image, cond_h, cond_w)
+            vae_image = hf.image_processor.preprocess(image, vae_h, vae_w).unsqueeze(2)
+            prompt_embeds, prompt_mask = hf.encode_prompt(image=[condition_image], prompt=prompt, device="cpu")
+            neg_mask = None
+            if do_true_cfg:
+                negative_prompt_embeds, neg_mask = hf.encode_prompt(
+                    image=[condition_image], prompt=negative_prompt, device="cpu"
+                )
+            timings["vl_encode"] = time.time() - t
+            prompt_embeds = _trim_to_mask(prompt_embeds, prompt_mask)
+            if do_true_cfg:
+                negative_prompt_embeds = _trim_to_mask(negative_prompt_embeds, neg_mask)
+            if self.prompt_bucket:
+                prompt_embeds = _pad_to_bucket(prompt_embeds, self.prompt_bucket)
+                if do_true_cfg:
+                    negative_prompt_embeds = _pad_to_bucket(negative_prompt_embeds, self.prompt_bucket)
+
+            t = time.time()
+            latents, image_latents = hf.prepare_latents(
+                [vae_image], 1, num_channels_latents, height, width, prompt_embeds.dtype, "cpu", generator, None
+            )
+            timings["vae_encode"] = time.time() - t
+            img_shapes = [
+                [
+                    (1, height // hf.vae_scale_factor // 2, width // hf.vae_scale_factor // 2),
+                    (1, vae_h // hf.vae_scale_factor // 2, vae_w // hf.vae_scale_factor // 2),
+                ]
             ]
-        ]
+        else:
+            calc_w, calc_h, _ = calculate_dimensions(_VAE_IMAGE_SIZE, aspect)
+            prompt_image = hf.image_processor.resize(image, calc_h, calc_w)
+            image_tensor = hf.image_processor.preprocess(prompt_image, calc_h, calc_w).unsqueeze(2)
+
+            prompt_embeds, _ = hf.encode_prompt(image=prompt_image, prompt=prompt, device="cpu")
+            if do_true_cfg:
+                negative_prompt_embeds, _ = hf.encode_prompt(image=prompt_image, prompt=negative_prompt, device="cpu")
+            timings["vl_encode"] = time.time() - t
+            if self.prompt_bucket:
+                prompt_embeds = _pad_to_bucket(prompt_embeds, self.prompt_bucket)
+                if do_true_cfg:
+                    negative_prompt_embeds = _pad_to_bucket(negative_prompt_embeds, self.prompt_bucket)
+
+            t = time.time()
+            latents, image_latents = hf.prepare_latents(
+                image_tensor, 1, num_channels_latents, height, width, prompt_embeds.dtype, "cpu", generator, None
+            )
+            timings["vae_encode"] = time.time() - t
+            img_shapes = [
+                [
+                    (1, height // hf.vae_scale_factor // 2, width // hf.vae_scale_factor // 2),
+                    (1, calc_h // hf.vae_scale_factor // 2, calc_w // hf.vae_scale_factor // 2),
+                ]
+            ]
 
         sigmas = np.linspace(1.0, 1 / num_inference_steps, num_inference_steps)
         mu = calculate_shift(
