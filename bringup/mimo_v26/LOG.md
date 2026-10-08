@@ -2273,3 +2273,14 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AP_gsm_ringw2lofi_a_h30_7a16eb305aa.log
 - paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute.cpp
 - supersedes: E261008-0205-61e, E261008-0205-993
+
+## E261008-0248-dac
+- date: 2026-10-08T02:48:05
+- commit: 4a04692a81f
+- branch: ssinghal/mimo-ringk
+- host: DC16-2-BG-0204-u20-44
+- track: moe
+- status: verified
+- claim: RING MoE fidelity facts (ringk, per-matmul knobs MOE_COMPUTE_FID_W01 / MOE_COMPUTE_FID_W2, 0 LoFi 2 HiFi2 3 HiFi3 4 HiFi4): W0/W1 needs HiFi3 (W01=HiFi2: rel vs dump L5 T=8 0.0221 vs 0.0081, T=32 0.0137 vs 0.0062); HiFi4 == HiFi3 numerics (rel 0.0081, slower 1.194 vs 1.022 ms); HiFi2 plain rel 0.0212 at 0.764 ms; skipping fidelity phase 1 (MOE_COMPUTE_FID_INCR=2 or 3 on a 2-phase loop) gives the same numerics as plain HiFi2 (0.0212), so no cheaper route to HiFi3 accuracy; single-chip ttnn.matmul probe (bf16 x [32,4096] @ [4096,2048], fp32 DEST, rel vs fp64) bfp8 W: LoFi 0.0187, HiFi2 0.0041, HiFi3 0.00031, HiFi4 0.00031 (moe_AK_fidprobe.jsonl)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AM_w01hi2_w2hi3_h47_7a16eb305aa.log
+- paths: ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute.cpp
