@@ -644,25 +644,33 @@ def _pcc_gate_baseline(repo_root: Path, mcp_env: dict, devices: str) -> None:
     from agent.probes import adaptive_backstop
 
     _op = "pcc"
-    rc, out = _run_device_step(
-        [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
-        repo_root / PERF_DIR,
-        env,
-        devices,
-        # never shorter than the runner's own inner backstop, or this outer bound would kill a gate
-        # the runner was still prepared to wait for
-        max(adaptive_timer(repo_root, _op, env_key="PERF_MCP_PCC_BACKSTOP"), adaptive_backstop()),
-        "correctness gate (BEFORE)",
-        observe_op=_op,
-        observe_root=repo_root,
-    )
+    # Observed here, not by _run_device_step: a record REUSED at this HEAD runs nothing, and its
+    # sub-second wall time logged as the gate's cost made every later "pcc"-derived budget its 30 s
+    # floor -- a 10-minute full-pipeline check was then SIGKILLed at 30 s on every attempt of a run
+    # (an image-edit port, 2026-10-07: "pcc": [0.618] after a --persist relaunch). A run that did go to
+    # the device is observed as before, a kill included.
     doc = {}
-    for line in (out or "").splitlines():
-        if line.startswith("PCC_BASELINE="):
-            try:
-                doc = json.loads(line.split("=", 1)[1]) or {}
-            except ValueError:
-                doc = {}
+    _t0 = time.monotonic()
+    try:
+        rc, out = _run_device_step(
+            [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
+            repo_root / PERF_DIR,
+            env,
+            devices,
+            # never shorter than the runner's own inner backstop, or this outer bound would kill a gate
+            # the runner was still prepared to wait for
+            max(adaptive_timer(repo_root, _op, env_key="PERF_MCP_PCC_BACKSTOP"), adaptive_backstop()),
+            "correctness gate (BEFORE)",
+        )
+        for line in (out or "").splitlines():
+            if line.startswith("PCC_BASELINE="):
+                try:
+                    doc = json.loads(line.split("=", 1)[1]) or {}
+                except ValueError:
+                    doc = {}
+    finally:
+        if not doc.get("reused"):
+            record_observed(repo_root, _op, time.monotonic() - _t0)
     failed = doc.get("failed_tests") if isinstance(doc.get("failed_tests"), list) else None
     if rc is None or not doc.get("recorded") or failed is None:
         why = str(doc.get("status") or ("killed" if rc is None else "unknown"))
@@ -687,16 +695,7 @@ def _pcc_gate_baseline(repo_root: Path, mcp_env: dict, devices: str) -> None:
 
 
 def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> float | None:
-    _fp_t0 = time.monotonic()
-    try:
-        return _fullpipe_e2e_inner(repo_root, mcp_env, devices, label)
-    finally:
-        # BUG 4 (#3): the full-pipeline gate is the dominant cost of a round on a big
-        # model (llama's is ~1400 s); record it so the pcc/round budgets learn from it.
-        try:
-            record_observed(repo_root, "pcc", time.monotonic() - _fp_t0)
-        except Exception:  # noqa: BLE001
-            pass
+    return _fullpipe_e2e_inner(repo_root, mcp_env, devices, label)
 
 
 def _fullpipe_e2e_inner(repo_root: Path, mcp_env: dict, devices: str, label: str) -> float | None:
@@ -710,7 +709,7 @@ def _fullpipe_e2e_inner(repo_root: Path, mcp_env: dict, devices: str, label: str
     # so a pipeline whose run emits none used to display the PREVIOUS pipeline's throughput.
     _LAST_SCORECARD.clear()
     if os.environ.get("PERF_MCP_FULLPIPE_E2E", "1") != "1":
-        return None
+        return (None, "")
     code = (
         "import sys; sys.path.insert(0, sys.argv[1]); import perf_mcp as P; "
         "g=P.check_full_pipeline_latency\n"
@@ -742,17 +741,24 @@ def _fullpipe_e2e_inner(repo_root: Path, mcp_env: dict, devices: str, label: str
     # (6 x a 281 s capped baseline) when it needed 1734 s. `fullpipe` has its own history and its own
     # cold start, expressed in baseline-profile units like every other op.
     _fp_op = "fullpipe"
-    rc, out = _run_device_step(
-        [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
-        repo_root / PERF_DIR,
-        env,
-        devices,
-        adaptive_timer(repo_root, _fp_op, env_key="PERF_MCP_FULLPIPE_BACKSTOP"),
-        f"full-pipeline ({label})",
-        stall_s=adaptive_timer(repo_root, _fp_op, env_key="PERF_MCP_FULLPIPE_STALL_SEC"),
-        observe_op=_fp_op,
-        observe_root=repo_root,
-    )
+    _fp_t0 = time.monotonic()
+    try:
+        rc, out = _run_device_step(
+            [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
+            repo_root / PERF_DIR,
+            env,
+            devices,
+            adaptive_timer(repo_root, _fp_op, env_key="PERF_MCP_FULLPIPE_BACKSTOP"),
+            f"full-pipeline ({label})",
+            stall_s=adaptive_timer(repo_root, _fp_op, env_key="PERF_MCP_FULLPIPE_STALL_SEC"),
+            observe_op=_fp_op,
+            observe_root=repo_root,
+        )
+    finally:
+        # BUG 4 (#3): the full-pipeline gate is the dominant cost of a round on a big model (llama's is
+        # ~1400 s); record it so the pcc/round budgets learn from it -- only around the device run, so a
+        # bookend that never ran (disabled above) logs no near-zero cost for those budgets to shrink to.
+        record_observed(repo_root, "pcc", time.monotonic() - _fp_t0)
     if rc is None:
         return (None, "")
     mode = ""

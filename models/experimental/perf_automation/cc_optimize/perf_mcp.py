@@ -3685,9 +3685,11 @@ def _run_full_pipeline_ms():
             if _svals:
                 stage_ms[_sn] = float(statistics.median(_svals))
                 # The evidence for what counts as a change in THIS stage, kept beside its timing.
-                _sp = _sample_spread(_svals)
-                if _sp is not None:
-                    stage_spread[_sn] = _sp
+                # (not `_sp`: that is this module's subprocess, and binding it here made the timeout
+                # handler above raise UnboundLocalError instead of reporting the timeout)
+                _spread = _sample_spread(_svals)
+                if _spread is not None:
+                    stage_spread[_sn] = _spread
         # The read set has the same last-write-wins defect and a worse consequence: it is pinned
         # write-once. Take the median here, before the doc is written, so the recorded number and the
         # pinned number are the same one.
@@ -4818,12 +4820,12 @@ def _stage_deltas(now: dict, bar: dict, spread: dict | None = None) -> dict:
     that cannot state its own wobble still has to be judged by something.
     """
     out = {}
-    _sp = spread or {}
+    _tol_by_stage = spread or {}
     for name, ms in sorted(now.items()):
         prev = bar.get(name)
         row = {"ms": round(ms, 4), "best": (round(prev, 4) if prev else None)}
         if prev and prev > 0:
-            tol = _sp.get(name)
+            tol = _tol_by_stage.get(name)
             tol = float(tol) if isinstance(tol, (int, float)) and tol > 0 else _FULLPIPE_TOL
             row["delta_pct"] = round((ms - prev) / prev * 100.0, 2)
             # A FRACTION OF A STAGE IS NOT A QUANTITY OF TIME. The percentages are each measured
