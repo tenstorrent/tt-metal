@@ -79,6 +79,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #ifndef SDPA_MASK_REENTRY
 #define SDPA_MASK_REENTRY false
 #endif
+#ifndef SDPA_PRESERVE_SRC_ZERO_FLAG
+#define SDPA_PRESERVE_SRC_ZERO_FLAG 0
+#endif
 constexpr std::uint32_t SDPA_PASSES = SDPA_MASK_REENTRY ? 2 : 1;
 
 #ifdef LLK_TRISC_UNPACK
@@ -157,6 +160,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+
+#if SDPA_PRESERVE_SRC_ZERO_FLAG
+    // Leave the Src zero flag at keep, as a preceding copy_tile_init does. The init must restore the
+    // operand-driven value, or MVMUL keeps the denormal SrcB operands it should flush.
+    math::_configure_preserve_zero_flag_state_();
+#endif
 
     // init: operandB_face_r_dim = in0 row count (M), ct_dim programs the MVMUL template.
     _llk_math_sdpa_custom_mm_init_<MM_TRANSPOSE>(params.in0_face_r_dim, CT_DIM);

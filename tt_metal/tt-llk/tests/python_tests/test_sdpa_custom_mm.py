@@ -198,7 +198,30 @@ def _pack_in1(torch_b, kt, ct, read_transposed=False):
     return out
 
 
-def _run(M, K, N, signal_granularity, read_transposed, mm_transpose):
+@dataclass
+class SDPA_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
+    """Math sets the Src zero flag to keep before the sdpa_custom_mm init, as a preceding copy_tile_init does."""
+
+    preserve: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SDPA_PRESERVE_SRC_ZERO_FLAG {int(self.preserve)}"
+
+
+def _run(
+    M,
+    K,
+    N,
+    signal_granularity,
+    read_transposed,
+    mm_transpose,
+    preserve_zero_flag=False,
+    operands=None,
+):
+    """Run sdpa_custom_mm and check it against the golden; return the (M, N) result.
+
+    ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
+    """
     kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM
     assert M in {1, 2, 4, 8}, "in0 row count M must be in {1,2,4,8}"
     assert kt >= 2 and kt % 2 == 0, "kt_dim must be an even number >= 2"
@@ -207,9 +230,12 @@ def _run(M, K, N, signal_granularity, read_transposed, mm_transpose):
         ct % signal_granularity == 0
     ), "ct_dim must be divisible by signal_granularity"
 
-    torch.manual_seed(0)
-    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_b = torch.randn((K, N), dtype=torch.bfloat16)
+    if operands is None:
+        torch.manual_seed(0)
+        torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+        torch_b = torch.randn((K, N), dtype=torch.bfloat16)
+    else:
+        torch_a, torch_b = operands
 
     # Golden: LoFi tiled matmul A@B, row-major (tilize handled device-side). Instantiate
     # MatmulGolden directly (not via get_golden_generator) so the compile-producer's dummy
@@ -239,6 +265,7 @@ def _run(M, K, N, signal_granularity, read_transposed, mm_transpose):
                 read_transposed=read_transposed,
                 mm_transpose=mm_transpose,
             ),
+            SDPA_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
         ],
         runtimes=[
             # in1 (SrcA) = [32,32] -> 4 faces of 16 rows; in0 (SrcB) = [M,32] -> 2 faces of M
@@ -285,6 +312,7 @@ def _run(M, K, N, signal_granularity, read_transposed, mm_transpose):
         custom_atol=acc_atol,
         print_pcc=True,
     ), f"sdpa_custom_mm failed for (M={M}, K={K}, N={N}, sg={signal_granularity}, read_transposed={read_transposed})"
+    return res_tensor
 
 
 # Shapes: kt = K/32 (even, >=2), ct = N/32 (1..16), M in {1,2,4,8}. Kept small so the sweep
@@ -423,3 +451,48 @@ def test_sdpa_custom_mm_mask_extent_restore(request, M, ct, read_transposed):
     assert torch.equal(
         result, golden
     ), "Mask extent or SrcB geometry restoration changed the matmul"
+
+
+# Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
+BF16_DENORMAL_MIN = 2.0**-133
+BF16_DENORMAL_MANTISSAS = 1 << 7
+# B is scaled up so a kept denormal gives a visibly nonzero product; the normal rows of A are scaled down
+# by the same amount so their products stay O(1).
+OPERAND_SCALE = 2.0**100
+
+
+@pytest.mark.parametrize("N", [32, 64])
+def test_sdpa_custom_mm_flushes_denormal_srcb_after_keep_flag(request, N):
+    """The init must restore the Src zero flag a preceding datacopy left at keep.
+
+    Rows 0-3 of A (SrcB) are bf16 denormals, which a bf16 MVMUL flushes to zero; scaled by B they give nonzero
+    products if kept, so those rows must come out exactly 0. The golden cannot tell flushed rows from kept
+    ones at its tolerance, so only the exact-zero check guards them. Rows 4-7 are normal and check the rest
+    of the product.
+    """
+    _skip_on_simulator(request)
+    M, K = 8, 64
+    denormal_rows = 4
+
+    torch.manual_seed(0)
+    torch_a = torch.randn((M, K), dtype=torch.float32) / OPERAND_SCALE
+    torch_a[:denormal_rows] = (
+        BF16_DENORMAL_MIN
+        * torch.randint(1, BF16_DENORMAL_MANTISSAS, (denormal_rows, K)).float()
+    )
+    torch_b = torch.randn((K, N), dtype=torch.float32) * OPERAND_SCALE
+
+    res = _run(
+        M,
+        K,
+        N,
+        signal_granularity=1,
+        read_transposed=False,
+        mm_transpose=False,
+        preserve_zero_flag=True,
+        operands=(torch_a.to(torch.bfloat16), torch_b.to(torch.bfloat16)),
+    )
+    kept = res[:denormal_rows].float()
+    assert (
+        torch.count_nonzero(kept) == 0
+    ), f"denormal SrcB rows were not flushed: max |value| {kept.abs().max().item():.3e}"
