@@ -108,7 +108,7 @@ inline __attribute__((always_inline)) std::uint32_t read_word()
     static_assert(WordOffset < detail::anchor_word_limit(F, S), "CFG word offset extends past its anchor field");
 
     constexpr std::uint64_t addr       = std::uint64_t {F.addr32(S)} + WordOffset;
-    constexpr std::uint32_t word_count = F.scope == RegisterScope::Thread ? detail::ThreadCfgWordCount : detail::StateCfgWordCount;
+    constexpr std::uint32_t word_count = detail::cfg_word_count(F.scope);
     static_assert(addr < word_count, "CFG word offset crosses the selected bank");
 
     if constexpr (F.scope == RegisterScope::Thread)
