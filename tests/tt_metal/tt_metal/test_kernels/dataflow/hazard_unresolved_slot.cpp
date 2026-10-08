@@ -15,5 +15,5 @@ void kernel_main() {
     Noc noc;
     noc.async_read(in, pad, pad.size_in_bytes(), {.page_id = 0}, {});
     noc.async_read_barrier();
-    tt_buf_rw::note<0x4000, tt_buf_rw::READ>();  // no binding at this CRTA offset
+    tt_buf_rw::note<0x4000, tt_buf_rw::kRead>();  // no binding at this CRTA offset
 }
