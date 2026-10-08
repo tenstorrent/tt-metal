@@ -282,6 +282,17 @@ class MultichipDecoder(OptimizedDecoder):
         # Prefill attention gate without head reshapes: a 0/1 [nh, nh*hd] matrix expands the per-head softplus gate
         # to full width (each output = 1.0 x one gate value, fp32 accumulation -> exact), then one flat multiply.
         # The [seq, nh, hd] reshape pads nh to a full tile (12 or 18 -> 32) and copied ~2.7x the attention output.
+        qk = os.environ.get("TT_LAGUNA_PREFILL_SDPA_QK", "64,64")
+        self._prefill_chunked_sdpa_pc = None
+        if qk != "0":
+            q, k = (int(v) for v in qk.split(","))
+            grid = mesh_device.compute_with_storage_grid_size()
+            self._prefill_chunked_sdpa_pc = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+                q_chunk_size=q,
+                k_chunk_size=k,
+                exp_approx_mode=False,
+            )
         self._gate_expand = None
         if _parse_binary_env("TT_LAGUNA_PREFILL_GATE_EXPAND", True):
             nh, hd = cfg.num_heads, cfg.head_dim
@@ -328,19 +339,8 @@ class MultichipDecoder(OptimizedDecoder):
         """Program config for the streamed (paged) prefill SDPA. TTNN's default (no config) runs 32/32 chunks; 64/64
         measured 160.3 -> 143.4 ms (8192 rows) and 85.0 -> 81.7 ms (4096) for layers 0/1/4 on S p150x4. Chunk starts
         are block (64) aligned, so q/k chunks must divide 64. TT_LAGUNA_PREFILL_SDPA_QK="q,k" overrides ("0" = default)."""
-        qk = os.environ.get("TT_LAGUNA_PREFILL_SDPA_QK", "64,64")
-        if qk == "0":
-            return {}
-        q, k = (int(v) for v in qk.split(","))
-        grid = self.device.compute_with_storage_grid_size()
-        return {
-            "program_config": ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
-                q_chunk_size=q,
-                k_chunk_size=k,
-                exp_approx_mode=False,
-            )
-        }
+        pc = getattr(self, "_prefill_chunked_sdpa_pc", None)  # built in __init__
+        return {"program_config": pc} if pc is not None else {}
 
     def _gate(self, attn, ln, g=None):
         """Prefill: flat attention [1, seq, nh*hd] times the per-head softplus gate expanded by one matmul."""
