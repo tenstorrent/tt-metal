@@ -29,3 +29,11 @@ On marker: read driver.log `summ` lines (neighborhood-sdpa ms per arm).
   Report that; the next lever is on the compute side (bigger kv chunk / fewer per-chunk ops).
 - math ≈ def: the op is reader-bound. Then reader-side levers (fewer per-tile NOC issues: one read per ring
   entry for K too, cheaper index math) are worth a knob.
+
+## Run 2 (2026-10-08 ~10:50 UTC)
+- blx01 host rebooted 09:51 UTC (second drop, t272 job 984, chips 16-23, 09:45 UTC); driver263 died with it.
+  $F/t252/b was deleted, so a fresh worktree build $F/t263/b @6a23f8dfe10 (log t263/build2_*.log).
+- Update from #267: cherry-picked 47e19132826 (DIFFVAE_NA_BF8) as e5f71e2f899. Found that the reader sized
+  bf16 mask pages with the Q/K/V tile size, wrong for bf8 operands: fixed in 51ecd3ac3e2 (kernel only).
+- Tree runs @51ecd3ac3e2 (python/kernel-only on top of the 6a23f8dfe10 C++ build).
+- Jobs submitted by hand from the run (no driver): A = def + reads, B = math + bf8 (bf8 scored, HOST_SEEDS=0,1).
