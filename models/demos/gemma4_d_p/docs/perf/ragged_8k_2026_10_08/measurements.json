@@ -1,0 +1,1549 @@
+{
+  "chunk_size": 8192,
+  "useful_tokens_per_batch": 8192,
+  "layers": 60,
+  "mesh": [
+    8,
+    4
+  ],
+  "repeats": 5,
+  "measurements": {
+    "regular8192": {
+      "tails4_early": {
+        "label": "tails4_early",
+        "lengths": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "starts": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "ends": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "useful_tokens": 8192,
+        "capture_needed": false,
+        "first_call_seconds": 0.5202428560005501,
+        "median_seconds": 0.5197228130127769,
+        "useful_tokens_per_second": 15762.248250200646,
+        "median_request_completion_seconds": [
+          0.1295346450060606,
+          0.26001493298099376,
+          0.3905399880022742,
+          0.5197190470062196
+        ],
+        "samples": [
+          {
+            "seconds": 0.5148531850136351,
+            "request_completion_seconds": [
+              0.12777403500513174,
+              0.2580911380064208,
+              0.38678296402213164,
+              0.5148475560126826
+            ]
+          },
+          {
+            "seconds": 0.5109580110001843,
+            "request_completion_seconds": [
+              0.12831257499055937,
+              0.25631628499832004,
+              0.3844337070186157,
+              0.5109540949924849
+            ]
+          },
+          {
+            "seconds": 0.5197228130127769,
+            "request_completion_seconds": [
+              0.13061466001090594,
+              0.2624504179984797,
+              0.3907637750089634,
+              0.5197190470062196
+            ]
+          },
+          {
+            "seconds": 0.5211361910041887,
+            "request_completion_seconds": [
+              0.1295346450060606,
+              0.26001493298099376,
+              0.3905399880022742,
+              0.5211322849791031
+            ]
+          },
+          {
+            "seconds": 0.5224539850023575,
+            "request_completion_seconds": [
+              0.13043687300523743,
+              0.26118065798073076,
+              0.3918685279786587,
+              0.5224506600061432
+            ]
+          }
+        ]
+      },
+      "tails4_late": {
+        "label": "tails4_late",
+        "lengths": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "starts": [
+          253952,
+          253952,
+          253952,
+          253952
+        ],
+        "ends": [
+          256000,
+          256000,
+          256000,
+          256000
+        ],
+        "useful_tokens": 8192,
+        "capture_needed": false,
+        "first_call_seconds": 1.2446317749854643,
+        "median_seconds": 1.2426793560152873,
+        "useful_tokens_per_second": 6592.207362539643,
+        "median_request_completion_seconds": [
+          0.31128377802087925,
+          0.6224817069887649,
+          0.9322731390129775,
+          1.2426756200147793
+        ],
+        "samples": [
+          {
+            "seconds": 1.2426793560152873,
+            "request_completion_seconds": [
+              0.31081291000009514,
+              0.6223001940234099,
+              0.9322731390129775,
+              1.2426756200147793
+            ]
+          },
+          {
+            "seconds": 1.2418323599849828,
+            "request_completion_seconds": [
+              0.312122900999384,
+              0.6224817069887649,
+              0.9322402790130582,
+              1.2418286349857226
+            ]
+          },
+          {
+            "seconds": 1.2425203949969728,
+            "request_completion_seconds": [
+              0.3110209919977933,
+              0.6213011789950542,
+              0.9319044119911268,
+              1.2425171099894214
+            ]
+          },
+          {
+            "seconds": 1.2461395419959445,
+            "request_completion_seconds": [
+              0.31128377802087925,
+              0.6233826620155014,
+              0.934934463002719,
+              1.2461365070194006
+            ]
+          },
+          {
+            "seconds": 1.247224124002969,
+            "request_completion_seconds": [
+              0.3125635539763607,
+              0.6235625919944141,
+              0.9357400150038302,
+              1.2472201279888395
+            ]
+          }
+        ]
+      },
+      "tails4_mixed": {
+        "label": "tails4_mixed",
+        "lengths": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "starts": [
+          0,
+          8192,
+          131072,
+          253952
+        ],
+        "ends": [
+          2048,
+          10240,
+          133120,
+          256000
+        ],
+        "useful_tokens": 8192,
+        "capture_needed": false,
+        "first_call_seconds": 0.7965865230071358,
+        "median_seconds": 0.7987332729971968,
+        "useful_tokens_per_second": 10256.23981990888,
+        "median_request_completion_seconds": [
+          0.13133363201632164,
+          0.2667519120150246,
+          0.487938923004549,
+          0.7987300490203779
+        ],
+        "samples": [
+          {
+            "seconds": 0.7987332729971968,
+            "request_completion_seconds": [
+              0.13199576799524948,
+              0.2677285319950897,
+              0.4881571910227649,
+              0.7987300490203779
+            ]
+          },
+          {
+            "seconds": 0.7933144069975242,
+            "request_completion_seconds": [
+              0.13119671499589458,
+              0.26467675800086,
+              0.48423115198966116,
+              0.7933107109856792
+            ]
+          },
+          {
+            "seconds": 0.8013838730112184,
+            "request_completion_seconds": [
+              0.13133363201632164,
+              0.2667519120150246,
+              0.487938923004549,
+              0.8013793060090393
+            ]
+          },
+          {
+            "seconds": 0.8003543429949787,
+            "request_completion_seconds": [
+              0.13451898598577827,
+              0.2702692259917967,
+              0.49076754998532124,
+              0.8003509379923344
+            ]
+          },
+          {
+            "seconds": 0.7965446180023719,
+            "request_completion_seconds": [
+              0.13122999601182528,
+              0.26669875101651996,
+              0.4872095549944788,
+              0.7965412829944398
+            ]
+          }
+        ]
+      },
+      "tails4_one_late": {
+        "label": "tails4_one_late",
+        "lengths": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "starts": [
+          0,
+          0,
+          0,
+          253952
+        ],
+        "ends": [
+          2048,
+          2048,
+          2048,
+          256000
+        ],
+        "useful_tokens": 8192,
+        "capture_needed": false,
+        "first_call_seconds": 0.7047588100249413,
+        "median_seconds": 0.6998169310099911,
+        "useful_tokens_per_second": 11705.91855812509,
+        "median_request_completion_seconds": [
+          0.13294271400081925,
+          0.2629417259886395,
+          0.39191595700685866,
+          0.6998134560126346
+        ],
+        "samples": [
+          {
+            "seconds": 0.700571948022116,
+            "request_completion_seconds": [
+              0.13165330301853828,
+              0.26181757502490655,
+              0.3935534820193425,
+              0.7005691740196198
+            ]
+          },
+          {
+            "seconds": 0.7001652760081924,
+            "request_completion_seconds": [
+              0.1332447280001361,
+              0.263268918992253,
+              0.39191595700685866,
+              0.7001623919932172
+            ]
+          },
+          {
+            "seconds": 0.698698878986761,
+            "request_completion_seconds": [
+              0.13315501299803145,
+              0.26314289899892174,
+              0.39180275599937886,
+              0.698695372993825
+            ]
+          },
+          {
+            "seconds": 0.6998169310099911,
+            "request_completion_seconds": [
+              0.13294271400081925,
+              0.2629417259886395,
+              0.3929602380085271,
+              0.6998134560126346
+            ]
+          },
+          {
+            "seconds": 0.6959959599771537,
+            "request_completion_seconds": [
+              0.1316883449908346,
+              0.2624889749858994,
+              0.3886972919863183,
+              0.6959929360018577
+            ]
+          }
+        ]
+      },
+      "tails4_two_late": {
+        "label": "tails4_two_late",
+        "lengths": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "starts": [
+          0,
+          0,
+          253952,
+          253952
+        ],
+        "ends": [
+          2048,
+          2048,
+          256000,
+          256000
+        ],
+        "useful_tokens": 8192,
+        "capture_needed": false,
+        "first_call_seconds": 0.8851189609849826,
+        "median_seconds": 0.8827137300104368,
+        "useful_tokens_per_second": 9280.471937264578,
+        "median_request_completion_seconds": [
+          0.1320417679962702,
+          0.2625730110157747,
+          0.5710461770067923,
+          0.8827098140027374
+        ],
+        "samples": [
+          {
+            "seconds": 0.8819037410139572,
+            "request_completion_seconds": [
+              0.13363687801756896,
+              0.26373338801204227,
+              0.5712548410228919,
+              0.8819003460230306
+            ]
+          },
+          {
+            "seconds": 0.8827137300104368,
+            "request_completion_seconds": [
+              0.1320417679962702,
+              0.2625730110157747,
+              0.5710461770067923,
+              0.8827098140027374
+            ]
+          },
+          {
+            "seconds": 0.8832605929928832,
+            "request_completion_seconds": [
+              0.13164027300081216,
+              0.26311248299316503,
+              0.571029451006325,
+              0.883257056993898
+            ]
+          },
+          {
+            "seconds": 0.8796860419970471,
+            "request_completion_seconds": [
+              0.13261592100025155,
+              0.261021765996702,
+              0.5682120099954773,
+              0.879682596976636
+            ]
+          },
+          {
+            "seconds": 0.8853767270047683,
+            "request_completion_seconds": [
+              0.13158613099949434,
+              0.26164637599140406,
+              0.571133777993964,
+              0.885373402008554
+            ]
+          }
+        ]
+      },
+      "tails4_three_late": {
+        "label": "tails4_three_late",
+        "lengths": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "starts": [
+          0,
+          253952,
+          253952,
+          253952
+        ],
+        "ends": [
+          2048,
+          256000,
+          256000,
+          256000
+        ],
+        "useful_tokens": 8192,
+        "capture_needed": false,
+        "first_call_seconds": 1.0645074479980394,
+        "median_seconds": 1.0702655730128754,
+        "useful_tokens_per_second": 7654.17500717969,
+        "median_request_completion_seconds": [
+          0.13197466600104235,
+          0.4419288890203461,
+          0.7551084280130453,
+          1.0702620280208066
+        ],
+        "samples": [
+          {
+            "seconds": 1.0643781120015774,
+            "request_completion_seconds": [
+              0.13197466600104235,
+              0.44028717902256176,
+              0.7518732890021056,
+              1.0643753680051304
+            ]
+          },
+          {
+            "seconds": 1.0702655730128754,
+            "request_completion_seconds": [
+              0.13171915101702325,
+              0.4419288890203461,
+              0.7551084280130453,
+              1.0702620280208066
+            ]
+          },
+          {
+            "seconds": 1.072833228012314,
+            "request_completion_seconds": [
+              0.133673522999743,
+              0.44317631801823154,
+              0.7556158420047723,
+              1.072830132994568
+            ]
+          },
+          {
+            "seconds": 1.0693136189947836,
+            "request_completion_seconds": [
+              0.13144811301026493,
+              0.43946634299936704,
+              0.752586381015135,
+              1.069309743004851
+            ]
+          },
+          {
+            "seconds": 1.0807023200031836,
+            "request_completion_seconds": [
+              0.1356024359993171,
+              0.44910508999601007,
+              0.7686497580143623,
+              1.0806994260055944
+            ]
+          }
+        ]
+      },
+      "tails2_early": {
+        "label": "tails2_early",
+        "lengths": [
+          4096,
+          4096
+        ],
+        "starts": [
+          0,
+          0
+        ],
+        "ends": [
+          4096,
+          4096
+        ],
+        "useful_tokens": 8192,
+        "capture_needed": false,
+        "first_call_seconds": 0.26192255099886097,
+        "median_seconds": 0.26100731300539337,
+        "useful_tokens_per_second": 31386.093767536404,
+        "median_request_completion_seconds": [
+          0.12940169300418347,
+          0.26100388800841756
+        ],
+        "samples": [
+          {
+            "seconds": 0.26100731300539337,
+            "request_completion_seconds": [
+              0.1300465629901737,
+              0.26100388800841756
+            ]
+          },
+          {
+            "seconds": 0.2575067349825986,
+            "request_completion_seconds": [
+              0.12783836998278275,
+              0.2575034199981019
+            ]
+          },
+          {
+            "seconds": 0.2613927440252155,
+            "request_completion_seconds": [
+              0.1282894690230023,
+              0.2613891580258496
+            ]
+          },
+          {
+            "seconds": 0.259357259987155,
+            "request_completion_seconds": [
+              0.12940169300418347,
+              0.25935406499775127
+            ]
+          },
+          {
+            "seconds": 0.26456302500446327,
+            "request_completion_seconds": [
+              0.13033652000012808,
+              0.2645597900263965
+            ]
+          }
+        ]
+      },
+      "tails2_late": {
+        "label": "tails2_late",
+        "lengths": [
+          4096,
+          4096
+        ],
+        "starts": [
+          253952,
+          253952
+        ],
+        "ends": [
+          258048,
+          258048
+        ],
+        "useful_tokens": 8192,
+        "capture_needed": false,
+        "first_call_seconds": 0.6222878879925702,
+        "median_seconds": 0.6265325360000134,
+        "useful_tokens_per_second": 13075.13900602893,
+        "median_request_completion_seconds": [
+          0.3130646050267387,
+          0.6265300019877031
+        ],
+        "samples": [
+          {
+            "seconds": 0.626676383020822,
+            "request_completion_seconds": [
+              0.3130646050267387,
+              0.626673639024375
+            ]
+          },
+          {
+            "seconds": 0.627707965002628,
+            "request_completion_seconds": [
+              0.31311069399816915,
+              0.6277054819802288
+            ]
+          },
+          {
+            "seconds": 0.6238095280132256,
+            "request_completion_seconds": [
+              0.3102217059931718,
+              0.6238075149885844
+            ]
+          },
+          {
+            "seconds": 0.6265325360000134,
+            "request_completion_seconds": [
+              0.3134791479969863,
+              0.6265300019877031
+            ]
+          },
+          {
+            "seconds": 0.6247945400245953,
+            "request_completion_seconds": [
+              0.31201395302196033,
+              0.624790544010466
+            ]
+          }
+        ]
+      },
+      "tails2_mixed": {
+        "label": "tails2_mixed",
+        "lengths": [
+          4096,
+          4096
+        ],
+        "starts": [
+          0,
+          253952
+        ],
+        "ends": [
+          4096,
+          258048
+        ],
+        "useful_tokens": 8192,
+        "capture_needed": false,
+        "first_call_seconds": 0.44444424399989657,
+        "median_seconds": 0.4413923299871385,
+        "useful_tokens_per_second": 18559.45254018959,
+        "median_request_completion_seconds": [
+          0.13174215599428862,
+          0.44138981599826366
+        ],
+        "samples": [
+          {
+            "seconds": 0.4408816419891082,
+            "request_completion_seconds": [
+              0.1315073419827968,
+              0.44087813698570244
+            ]
+          },
+          {
+            "seconds": 0.4442269469727762,
+            "request_completion_seconds": [
+              0.13466366298962384,
+              0.44422365198261105
+            ]
+          },
+          {
+            "seconds": 0.4397693770006299,
+            "request_completion_seconds": [
+              0.13185298201278783,
+              0.4397661219991278
+            ]
+          },
+          {
+            "seconds": 0.4413923299871385,
+            "request_completion_seconds": [
+              0.13164201399195008,
+              0.44138981599826366
+            ]
+          },
+          {
+            "seconds": 0.4415268230077345,
+            "request_completion_seconds": [
+              0.13174215599428862,
+              0.44152354801190086
+            ]
+          }
+        ]
+      },
+      "single_early": {
+        "label": "single_early",
+        "lengths": [
+          8192
+        ],
+        "starts": [
+          0
+        ],
+        "ends": [
+          8192
+        ],
+        "useful_tokens": 8192,
+        "capture_needed": false,
+        "first_call_seconds": 0.13227579699014314,
+        "median_seconds": 0.13051288301358,
+        "useful_tokens_per_second": 62767.749902112075,
+        "median_request_completion_seconds": [
+          0.13050932800979353
+        ],
+        "samples": [
+          {
+            "seconds": 0.13097530999220908,
+            "request_completion_seconds": [
+              0.1309717049880419
+            ]
+          },
+          {
+            "seconds": 0.1289582340104971,
+            "request_completion_seconds": [
+              0.1289420890097972
+            ]
+          },
+          {
+            "seconds": 0.13055493700085208,
+            "request_completion_seconds": [
+              0.130552082991926
+            ]
+          },
+          {
+            "seconds": 0.13051288301358,
+            "request_completion_seconds": [
+              0.13050932800979353
+            ]
+          },
+          {
+            "seconds": 0.13043026899686083,
+            "request_completion_seconds": [
+              0.13042727499851026
+            ]
+          }
+        ]
+      },
+      "single_late": {
+        "label": "single_late",
+        "lengths": [
+          8192
+        ],
+        "starts": [
+          253952
+        ],
+        "ends": [
+          262144
+        ],
+        "useful_tokens": 8192,
+        "capture_needed": false,
+        "first_call_seconds": 0.3086508179840166,
+        "median_seconds": 0.3144837970030494,
+        "useful_tokens_per_second": 26049.036796387212,
+        "median_request_completion_seconds": [
+          0.3144804520125035
+        ],
+        "samples": [
+          {
+            "seconds": 0.31368725799256936,
+            "request_completion_seconds": [
+              0.31368382298387587
+            ]
+          },
+          {
+            "seconds": 0.3144837970030494,
+            "request_completion_seconds": [
+              0.3144804520125035
+            ]
+          },
+          {
+            "seconds": 0.31285096998908557,
+            "request_completion_seconds": [
+              0.31284774499363266
+            ]
+          },
+          {
+            "seconds": 0.31460968698957004,
+            "request_completion_seconds": [
+              0.3146061110019218
+            ]
+          },
+          {
+            "seconds": 0.3169347360089887,
+            "request_completion_seconds": [
+              0.31693115999223664
+            ]
+          }
+        ]
+      }
+    },
+    "ragged": {
+      "tails4_early": {
+        "label": "tails4_early",
+        "lengths": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "starts": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "ends": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "useful_tokens": 8192,
+        "activation_storage": "default L1",
+        "capture_needed": true,
+        "first_call_seconds": 12.879921459010802,
+        "median_seconds": 0.668237140023848,
+        "useful_tokens_per_second": 12259.121065476313,
+        "median_request_completion_seconds": [
+          0.668237140023848,
+          0.668237140023848,
+          0.668237140023848,
+          0.668237140023848
+        ],
+        "samples": [
+          {
+            "seconds": 0.6713363600138109,
+            "request_completion_seconds": [
+              0.6713363600138109,
+              0.6713363600138109,
+              0.6713363600138109,
+              0.6713363600138109
+            ]
+          },
+          {
+            "seconds": 0.6636670699808747,
+            "request_completion_seconds": [
+              0.6636670699808747,
+              0.6636670699808747,
+              0.6636670699808747,
+              0.6636670699808747
+            ]
+          },
+          {
+            "seconds": 0.6686210289772134,
+            "request_completion_seconds": [
+              0.6686210289772134,
+              0.6686210289772134,
+              0.6686210289772134,
+              0.6686210289772134
+            ]
+          },
+          {
+            "seconds": 0.6662318019953091,
+            "request_completion_seconds": [
+              0.6662318019953091,
+              0.6662318019953091,
+              0.6662318019953091,
+              0.6662318019953091
+            ]
+          },
+          {
+            "seconds": 0.668237140023848,
+            "request_completion_seconds": [
+              0.668237140023848,
+              0.668237140023848,
+              0.668237140023848,
+              0.668237140023848
+            ]
+          }
+        ]
+      },
+      "tails4_late": {
+        "label": "tails4_late",
+        "lengths": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "starts": [
+          253952,
+          253952,
+          253952,
+          253952
+        ],
+        "ends": [
+          256000,
+          256000,
+          256000,
+          256000
+        ],
+        "useful_tokens": 8192,
+        "activation_storage": "default L1",
+        "capture_needed": false,
+        "first_call_seconds": 1.3339265119866468,
+        "median_seconds": 1.3342770370072685,
+        "useful_tokens_per_second": 6139.654489126439,
+        "median_request_completion_seconds": [
+          1.3342770370072685,
+          1.3342770370072685,
+          1.3342770370072685,
+          1.3342770370072685
+        ],
+        "samples": [
+          {
+            "seconds": 1.3363612049724907,
+            "request_completion_seconds": [
+              1.3363612049724907,
+              1.3363612049724907,
+              1.3363612049724907,
+              1.3363612049724907
+            ]
+          },
+          {
+            "seconds": 1.3333647009858396,
+            "request_completion_seconds": [
+              1.3333647009858396,
+              1.3333647009858396,
+              1.3333647009858396,
+              1.3333647009858396
+            ]
+          },
+          {
+            "seconds": 1.3341104709834326,
+            "request_completion_seconds": [
+              1.3341104709834326,
+              1.3341104709834326,
+              1.3341104709834326,
+              1.3341104709834326
+            ]
+          },
+          {
+            "seconds": 1.3349435729905963,
+            "request_completion_seconds": [
+              1.3349435729905963,
+              1.3349435729905963,
+              1.3349435729905963,
+              1.3349435729905963
+            ]
+          },
+          {
+            "seconds": 1.3342770370072685,
+            "request_completion_seconds": [
+              1.3342770370072685,
+              1.3342770370072685,
+              1.3342770370072685,
+              1.3342770370072685
+            ]
+          }
+        ]
+      },
+      "tails4_mixed": {
+        "label": "tails4_mixed",
+        "lengths": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "starts": [
+          0,
+          8192,
+          131072,
+          253952
+        ],
+        "ends": [
+          2048,
+          10240,
+          133120,
+          256000
+        ],
+        "useful_tokens": 8192,
+        "activation_storage": "default L1",
+        "capture_needed": false,
+        "first_call_seconds": 0.9231036849960219,
+        "median_seconds": 0.9169320760120172,
+        "useful_tokens_per_second": 8934.14050430998,
+        "median_request_completion_seconds": [
+          0.9169320760120172,
+          0.9169320760120172,
+          0.9169320760120172,
+          0.9169320760120172
+        ],
+        "samples": [
+          {
+            "seconds": 0.9170029670058284,
+            "request_completion_seconds": [
+              0.9170029670058284,
+              0.9170029670058284,
+              0.9170029670058284,
+              0.9170029670058284
+            ]
+          },
+          {
+            "seconds": 0.9165024120011367,
+            "request_completion_seconds": [
+              0.9165024120011367,
+              0.9165024120011367,
+              0.9165024120011367,
+              0.9165024120011367
+            ]
+          },
+          {
+            "seconds": 0.91529675500351,
+            "request_completion_seconds": [
+              0.91529675500351,
+              0.91529675500351,
+              0.91529675500351,
+              0.91529675500351
+            ]
+          },
+          {
+            "seconds": 0.9169320760120172,
+            "request_completion_seconds": [
+              0.9169320760120172,
+              0.9169320760120172,
+              0.9169320760120172,
+              0.9169320760120172
+            ]
+          },
+          {
+            "seconds": 0.919474933994934,
+            "request_completion_seconds": [
+              0.919474933994934,
+              0.919474933994934,
+              0.919474933994934,
+              0.919474933994934
+            ]
+          }
+        ]
+      },
+      "tails4_one_late": {
+        "label": "tails4_one_late",
+        "lengths": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "starts": [
+          0,
+          0,
+          0,
+          253952
+        ],
+        "ends": [
+          2048,
+          2048,
+          2048,
+          256000
+        ],
+        "useful_tokens": 8192,
+        "activation_storage": "default L1",
+        "capture_needed": false,
+        "first_call_seconds": 0.8286018820072059,
+        "median_seconds": 0.8258743699989282,
+        "useful_tokens_per_second": 9919.184197483488,
+        "median_request_completion_seconds": [
+          0.8258743699989282,
+          0.8258743699989282,
+          0.8258743699989282,
+          0.8258743699989282
+        ],
+        "samples": [
+          {
+            "seconds": 0.8248612479947042,
+            "request_completion_seconds": [
+              0.8248612479947042,
+              0.8248612479947042,
+              0.8248612479947042,
+              0.8248612479947042
+            ]
+          },
+          {
+            "seconds": 0.8252402269863524,
+            "request_completion_seconds": [
+              0.8252402269863524,
+              0.8252402269863524,
+              0.8252402269863524,
+              0.8252402269863524
+            ]
+          },
+          {
+            "seconds": 0.8296366160211619,
+            "request_completion_seconds": [
+              0.8296366160211619,
+              0.8296366160211619,
+              0.8296366160211619,
+              0.8296366160211619
+            ]
+          },
+          {
+            "seconds": 0.8258743699989282,
+            "request_completion_seconds": [
+              0.8258743699989282,
+              0.8258743699989282,
+              0.8258743699989282,
+              0.8258743699989282
+            ]
+          },
+          {
+            "seconds": 0.8285439799947198,
+            "request_completion_seconds": [
+              0.8285439799947198,
+              0.8285439799947198,
+              0.8285439799947198,
+              0.8285439799947198
+            ]
+          }
+        ]
+      },
+      "tails4_two_late": {
+        "label": "tails4_two_late",
+        "lengths": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "starts": [
+          0,
+          0,
+          253952,
+          253952
+        ],
+        "ends": [
+          2048,
+          2048,
+          256000,
+          256000
+        ],
+        "useful_tokens": 8192,
+        "activation_storage": "default L1",
+        "capture_needed": false,
+        "first_call_seconds": 0.9921464579820167,
+        "median_seconds": 0.9941465979791246,
+        "useful_tokens_per_second": 8240.233398829192,
+        "median_request_completion_seconds": [
+          0.9941465979791246,
+          0.9941465979791246,
+          0.9941465979791246,
+          0.9941465979791246
+        ],
+        "samples": [
+          {
+            "seconds": 0.9957018600252923,
+            "request_completion_seconds": [
+              0.9957018600252923,
+              0.9957018600252923,
+              0.9957018600252923,
+              0.9957018600252923
+            ]
+          },
+          {
+            "seconds": 0.9941465979791246,
+            "request_completion_seconds": [
+              0.9941465979791246,
+              0.9941465979791246,
+              0.9941465979791246,
+              0.9941465979791246
+            ]
+          },
+          {
+            "seconds": 0.9942747080058325,
+            "request_completion_seconds": [
+              0.9942747080058325,
+              0.9942747080058325,
+              0.9942747080058325,
+              0.9942747080058325
+            ]
+          },
+          {
+            "seconds": 0.9918340620060917,
+            "request_completion_seconds": [
+              0.9918340620060917,
+              0.9918340620060917,
+              0.9918340620060917,
+              0.9918340620060917
+            ]
+          },
+          {
+            "seconds": 0.9897314629924949,
+            "request_completion_seconds": [
+              0.9897314629924949,
+              0.9897314629924949,
+              0.9897314629924949,
+              0.9897314629924949
+            ]
+          }
+        ]
+      },
+      "tails4_three_late": {
+        "label": "tails4_three_late",
+        "lengths": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "starts": [
+          0,
+          253952,
+          253952,
+          253952
+        ],
+        "ends": [
+          2048,
+          256000,
+          256000,
+          256000
+        ],
+        "useful_tokens": 8192,
+        "activation_storage": "default L1",
+        "capture_needed": false,
+        "first_call_seconds": 1.1602189280092716,
+        "median_seconds": 1.1631086900015362,
+        "useful_tokens_per_second": 7043.193873815164,
+        "median_request_completion_seconds": [
+          1.1631086900015362,
+          1.1631086900015362,
+          1.1631086900015362,
+          1.1631086900015362
+        ],
+        "samples": [
+          {
+            "seconds": 1.162809367000591,
+            "request_completion_seconds": [
+              1.162809367000591,
+              1.162809367000591,
+              1.162809367000591,
+              1.162809367000591
+            ]
+          },
+          {
+            "seconds": 1.16238588799024,
+            "request_completion_seconds": [
+              1.16238588799024,
+              1.16238588799024,
+              1.16238588799024,
+              1.16238588799024
+            ]
+          },
+          {
+            "seconds": 1.1717043980024755,
+            "request_completion_seconds": [
+              1.1717043980024755,
+              1.1717043980024755,
+              1.1717043980024755,
+              1.1717043980024755
+            ]
+          },
+          {
+            "seconds": 1.1632407509896439,
+            "request_completion_seconds": [
+              1.1632407509896439,
+              1.1632407509896439,
+              1.1632407509896439,
+              1.1632407509896439
+            ]
+          },
+          {
+            "seconds": 1.1631086900015362,
+            "request_completion_seconds": [
+              1.1631086900015362,
+              1.1631086900015362,
+              1.1631086900015362,
+              1.1631086900015362
+            ]
+          }
+        ]
+      },
+      "tails2_early": {
+        "label": "tails2_early",
+        "lengths": [
+          4096,
+          4096
+        ],
+        "starts": [
+          0,
+          0
+        ],
+        "ends": [
+          4096,
+          4096
+        ],
+        "useful_tokens": 8192,
+        "activation_storage": "default L1",
+        "capture_needed": true,
+        "first_call_seconds": 6.496419516013702,
+        "median_seconds": 0.5247347230033483,
+        "useful_tokens_per_second": 15611.697951133543,
+        "median_request_completion_seconds": [
+          0.5247347230033483,
+          0.5247347230033483
+        ],
+        "samples": [
+          {
+            "seconds": 0.5248694669862743,
+            "request_completion_seconds": [
+              0.5248694669862743,
+              0.5248694669862743
+            ]
+          },
+          {
+            "seconds": 0.523986326996237,
+            "request_completion_seconds": [
+              0.523986326996237,
+              0.523986326996237
+            ]
+          },
+          {
+            "seconds": 0.5235175809939392,
+            "request_completion_seconds": [
+              0.5235175809939392,
+              0.5235175809939392
+            ]
+          },
+          {
+            "seconds": 0.5247347230033483,
+            "request_completion_seconds": [
+              0.5247347230033483,
+              0.5247347230033483
+            ]
+          },
+          {
+            "seconds": 0.5264471310074441,
+            "request_completion_seconds": [
+              0.5264471310074441,
+              0.5264471310074441
+            ]
+          }
+        ]
+      },
+      "tails2_late": {
+        "label": "tails2_late",
+        "lengths": [
+          4096,
+          4096
+        ],
+        "starts": [
+          253952,
+          253952
+        ],
+        "ends": [
+          258048,
+          258048
+        ],
+        "useful_tokens": 8192,
+        "activation_storage": "default L1",
+        "capture_needed": false,
+        "first_call_seconds": 0.8517824540031143,
+        "median_seconds": 0.8550556509871967,
+        "useful_tokens_per_second": 9580.6629551445,
+        "median_request_completion_seconds": [
+          0.8550556509871967,
+          0.8550556509871967
+        ],
+        "samples": [
+          {
+            "seconds": 0.8550910250050947,
+            "request_completion_seconds": [
+              0.8550910250050947,
+              0.8550910250050947
+            ]
+          },
+          {
+            "seconds": 0.8550556509871967,
+            "request_completion_seconds": [
+              0.8550556509871967,
+              0.8550556509871967
+            ]
+          },
+          {
+            "seconds": 0.8553262269997504,
+            "request_completion_seconds": [
+              0.8553262269997504,
+              0.8553262269997504
+            ]
+          },
+          {
+            "seconds": 0.8539016720023938,
+            "request_completion_seconds": [
+              0.8539016720023938,
+              0.8539016720023938
+            ]
+          },
+          {
+            "seconds": 0.8521731479850132,
+            "request_completion_seconds": [
+              0.8521731479850132,
+              0.8521731479850132
+            ]
+          }
+        ]
+      },
+      "tails2_mixed": {
+        "label": "tails2_mixed",
+        "lengths": [
+          4096,
+          4096
+        ],
+        "starts": [
+          0,
+          253952
+        ],
+        "ends": [
+          4096,
+          258048
+        ],
+        "useful_tokens": 8192,
+        "activation_storage": "default L1",
+        "capture_needed": false,
+        "first_call_seconds": 0.6879330430238042,
+        "median_seconds": 0.688294583989773,
+        "useful_tokens_per_second": 11901.880663529559,
+        "median_request_completion_seconds": [
+          0.688294583989773,
+          0.688294583989773
+        ],
+        "samples": [
+          {
+            "seconds": 0.6884474070102442,
+            "request_completion_seconds": [
+              0.6884474070102442,
+              0.6884474070102442
+            ]
+          },
+          {
+            "seconds": 0.6893134499841835,
+            "request_completion_seconds": [
+              0.6893134499841835,
+              0.6893134499841835
+            ]
+          },
+          {
+            "seconds": 0.6882207140151877,
+            "request_completion_seconds": [
+              0.6882207140151877,
+              0.6882207140151877
+            ]
+          },
+          {
+            "seconds": 0.6878265700070187,
+            "request_completion_seconds": [
+              0.6878265700070187,
+              0.6878265700070187
+            ]
+          },
+          {
+            "seconds": 0.688294583989773,
+            "request_completion_seconds": [
+              0.688294583989773,
+              0.688294583989773
+            ]
+          }
+        ]
+      },
+      "single_early": {
+        "label": "single_early",
+        "lengths": [
+          8192
+        ],
+        "starts": [
+          0
+        ],
+        "ends": [
+          8192
+        ],
+        "useful_tokens": 8192,
+        "activation_storage": "default L1",
+        "capture_needed": true,
+        "first_call_seconds": 4.852310911985114,
+        "median_seconds": 0.4184684780193493,
+        "useful_tokens_per_second": 19576.14594717745,
+        "median_request_completion_seconds": [
+          0.4184684780193493
+        ],
+        "samples": [
+          {
+            "seconds": 0.4165323829802219,
+            "request_completion_seconds": [
+              0.4165323829802219
+            ]
+          },
+          {
+            "seconds": 0.4184684780193493,
+            "request_completion_seconds": [
+              0.4184684780193493
+            ]
+          },
+          {
+            "seconds": 0.41853293500025757,
+            "request_completion_seconds": [
+              0.41853293500025757
+            ]
+          },
+          {
+            "seconds": 0.4188495109847281,
+            "request_completion_seconds": [
+              0.4188495109847281
+            ]
+          },
+          {
+            "seconds": 0.41845843198825605,
+            "request_completion_seconds": [
+              0.41845843198825605
+            ]
+          }
+        ]
+      },
+      "single_late": {
+        "label": "single_late",
+        "lengths": [
+          8192
+        ],
+        "starts": [
+          253952
+        ],
+        "ends": [
+          262144
+        ],
+        "useful_tokens": 8192,
+        "activation_storage": "default L1",
+        "capture_needed": false,
+        "first_call_seconds": 0.5830230349965859,
+        "median_seconds": 0.5832188089843839,
+        "useful_tokens_per_second": 14046.186223427074,
+        "median_request_completion_seconds": [
+          0.5832188089843839
+        ],
+        "samples": [
+          {
+            "seconds": 0.5834056700114161,
+            "request_completion_seconds": [
+              0.5834056700114161
+            ]
+          },
+          {
+            "seconds": 0.5832188089843839,
+            "request_completion_seconds": [
+              0.5832188089843839
+            ]
+          },
+          {
+            "seconds": 0.5831409819948021,
+            "request_completion_seconds": [
+              0.5831409819948021
+            ]
+          },
+          {
+            "seconds": 0.5825887300015893,
+            "request_completion_seconds": [
+              0.5825887300015893
+            ]
+          },
+          {
+            "seconds": 0.5834389390074648,
+            "request_completion_seconds": [
+              0.5834389390074648
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

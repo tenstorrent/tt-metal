@@ -139,6 +139,20 @@ There is no automatic retile or cache reinterpretation fallback.
 
 ## Validation and measurements
 
+For a direct comparison of **8K chunked prefill and full 8K ragged batches**, see
+the [three-page PDF](perf/ragged_8k_2026_10_08/comparison.pdf) or the
+[focused report and data](perf/ragged_8k_2026_10_08/report.html). Every ragged batch
+contains exactly 8,192 useful tokens, divided across one, two, or four requests.
+Both methods process the same requests at the same positions. The report covers
+early, late, mostly early/late, and mixed positions, using the completed study's
+five-replay medians. Recreate it from the committed measurements with:
+
+```bash
+python -m models.demos.gemma4_d_p.scripts.ragged_8k_report \
+    --input models/demos/gemma4_d_p/docs/perf/ragged_load_2026_10_08/measurements.json \
+    --output models/demos/gemma4_d_p/docs/perf/ragged_8k_2026_10_08
+```
+
 For the 256K canonical 2K/4K/8K sweep and loaded early/late/mixed-prefix
 comparisons, see the [performance report](perf/ragged_load_2026_10_08/report.html)
 and [all charts as PDF](perf/ragged_load_2026_10_08/charts.pdf). The artifact includes
