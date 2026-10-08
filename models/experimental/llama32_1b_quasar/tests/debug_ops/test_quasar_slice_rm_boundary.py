@@ -77,15 +77,24 @@ def qsr_device():
 
 
 def _upload(t, dev, layout):
-    """Upload a torch tensor to DRAM in the requested layout (ROW_MAJOR mirrors the SDPA output)."""
-    return ttnn.from_torch(
+    """Upload a torch tensor to DRAM in the requested layout (ROW_MAJOR mirrors the SDPA output).
+
+    NB: NEVER use from_torch(TILE_LAYOUT) on Quasar -- that routes to the unported tilize factory and
+    faults in the unpacker (ILLEGAL_FORMAT_CONVERSION), which has nothing to do with the slice under
+    test. For the TILE case, upload ROW_MAJOR then tilize via ttnn.experimental.quasar.tilize (the
+    Quasar-safe path, same as the lm_head repro's _dram_bf16)."""
+    rm = ttnn.from_torch(
         t,
         dtype=ttnn.bfloat16,
-        layout=layout,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=dev,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(dev),
     )
+    if layout == ttnn.TILE_LAYOUT:
+        qt = getattr(getattr(ttnn.experimental, "quasar", None), "tilize", None)
+        return (qt or ttnn.tilize)(rm, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+    return rm
 
 
 def _readback(x):
