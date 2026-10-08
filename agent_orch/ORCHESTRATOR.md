@@ -89,12 +89,23 @@ writes a skeleton `node.json`:
   the parent, and cleans leftovers of a lost attempt. The node is the next
   `a<nn>`.
 
-Spawn each worker as a subagent whose prompt has only:
+Launch each worker with `run_worker.sh`. It starts a headless Claude Code
+session on the device machine inside the worker's worktree, so the worker's
+edits, git and evaluations all run where the device is:
 
-1. "Follow `agent_orch/WORKER.md` exactly." Inline the file if the subagent
-   can't read the repo.
+```bash
+ssh <device machine> $T/run_worker.sh --campaign <c> --node <node> --parent <parent>   # run in the background
+```
+
+The transcript goes to `$DREAM_HOME/<c>/logs/worker_<node>.jsonl`, and the last
+line printed is the worker's report. The prompt has only:
+
+1. "Follow `agent_orch/WORKER.md` exactly."
 2. The inputs from WORKER.md §0: `CAMPAIGN`, `NODE_ID`, `PARENT` (`root` or a
    node id), `WORKTREE`, `HISTORY` (`$DREAM_HOME/<c>/history.md`).
+
+If the orchestrator itself runs on the device machine, plain subagents work
+too. Give them the same two items.
 
 Don't add advice about what to try. The paper found that injecting directional
 guidance into workers' prompts made discovery worse (Dream-RSI §5.1). Workers

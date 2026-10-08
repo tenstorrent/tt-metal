@@ -81,6 +81,7 @@ Nothing under `dream/` is pushed unless a human asks.
 | `tools/setup_campaign.sh` | orchestrator | Root tag, ledger with policy v0, eval checkout + first build |
 | `tools/eval_attempt.sh` | worker, orchestrator | Snapshot the worktree, take the device lock, build if needed, run the profiled test, write `eval/`; also `--baseline` / `--measure` |
 | `tools/prepare_worker.sh` | orchestrator | Create or reuse a branch worktree for one node, write a skeleton `node.json` |
+| `tools/run_worker.sh` | orchestrator | Run one worker as a headless Claude Code session in its worktree, log the transcript, print its report |
 | `tools/commit_node.py` | worker | Validate the node, commit + tag it, print the report |
 | `tools/verify_node.py` | orchestrator | Check a returned node, record overrides / lost attempts |
 | `tools/policy_step.py` | orchestrator | Load the active policy, rebuild the revealed tree from git tags, return the next batch (or stop) |
