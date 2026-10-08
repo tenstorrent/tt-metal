@@ -29,6 +29,12 @@ def pytest_addoption(parser):
     g.addoption("--qwen-run-dir", default="generated/qwen3_vl_quasar/adhoc")
     g.addoption("--qwen-dump-stages", action="store_true", default=False, help="Save golden and TT stage tensors.")
     g.addoption(
+        "--qwen-clear-program-cache-before-decode",
+        action="store_true",
+        default=False,
+        help="Debug: clear the program cache between prefill and decode.",
+    )
+    g.addoption(
         "--qwen-resume-prefill",
         default=None,
         help="Skip vision and prefill: decode from the prefill_snapshot.pt of an earlier run folder (same config).",
