@@ -86,7 +86,7 @@ inline void snake_beta_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // The body runs sfpu_reciprocal_iter's Newton step in every mode, so program its 2.0 constant in every mode:
     // sfpu_reciprocal_init<true> leaves vConstFloatPrgm0 to whichever init ran before.
-    sfpu_reciprocal_init<false>();
+    sfpu_reciprocal_init<false /*APPROXIMATE*/>();
 }
 
 }  // namespace ckernel::sfpu

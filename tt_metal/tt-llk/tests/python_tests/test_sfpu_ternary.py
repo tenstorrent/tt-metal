@@ -43,8 +43,8 @@ from helpers.test_variant_parameters import (
 
 _SCALAR_VALUE = 2.0
 
-#: The approximation mode every test here compiles sfpu_ternary_test.cpp with, and so the
-#: one test_sfpu_ternary's contract names.
+#: The default approximation mode sfpu_ternary_test.cpp is compiled with, and so the one
+#: test_sfpu_ternary's contract names. test_sfpu_ternary_approx_after_prior_init overrides it.
 _APPROX_MODE = ApproximationMode.No
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
 
@@ -208,6 +208,8 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
 
 # Ops whose body runs sfpu_reciprocal_iter's Newton-Raphson step in every approximation
 # mode, so their init must program the vConstFloatPrgm0 = 2.0 that step reads in every mode.
+# MathOperation.SfpuAddcdiv has the same shape; it joins this list with its own init fix
+# (tenstorrent/tt-metal#59860, tenstorrent/tt-llk#1701 item 5).
 _TERNARY_RECIP_NEWTON_OPS = [
     MathOperation.SfpuSnakeBeta,
 ]
@@ -228,7 +230,8 @@ def test_sfpu_ternary_approx_after_prior_init(formats, dest_acc, mathop):
     """
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip(
-            "Blackhole regression for tenstorrent/tt-llk#1701 items 2 and 5: Wormhole's "
+            "Blackhole regression for https://github.com/tenstorrent/tt-llk/issues/1701 "
+            "item 2, verified on Blackhole silicon only; Wormhole's "
             "sfpu_reciprocal_init programs its constants in both modes"
         )
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
