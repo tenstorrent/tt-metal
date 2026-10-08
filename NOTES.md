@@ -26,6 +26,17 @@
 - Out: /var/tmp/fasth3/t261/out_AB/{run.log, stage_tree_*.txt, cmp_*.json}.
 - Baseline (job 912): decode 3.379 s; det tree 1408.7 ms, of which stage 1 is 606.6 ms.
 
+## Drops
+- 2026-10-08 04:46:45 UTC, blx01, broker job 931 (smarton t261 AB), chips 24-31 (one tray) dropped; job killed by
+  device recovery. Driver died waiting on recovery (no marker). Partial out: /var/tmp/fasth3/t261/out_AB_drop1.
+- (not ours) 2026-10-08 09:45:03 UTC blx01 chips 16-23 dropped, no job; recovered 09:55.
+
+## Resubmit (run 1080)
+- 2026-10-08 10:49:57 UTC: blx01 broker job 000 (ID counter wrapped past 999), same command as 931, submitted
+  directly with run-bg (no driver), -t 480. Out: /var/tmp/fasth3/t261/out_AB/run.log.
+- Scoring is NOT automatic now: on wake run cmp241.py per arm vs $F/diffvae/ref, plus s1x vs def and md5s
+  (see the score block in drv/driver261.sh).
+
 ## Next
 On wake: read driver.log and run.log. Check DECODE_MEAN_S per arm, the PCC/PSNR lines (cmp vs
 refs) and stage 1 in stage_tree_s1x.txt.
