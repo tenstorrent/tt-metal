@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define SDPA_BCAST_COL_REUSE_PER_TILE_HANDOFF true
-
 #include <cstdint>
 
 #define REDUCE_OP (PoolType::MAX)

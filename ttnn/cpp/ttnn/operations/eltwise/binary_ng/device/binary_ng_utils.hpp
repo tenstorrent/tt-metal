@@ -131,11 +131,6 @@ struct AllShardSpecs {
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
 
-struct NativeBlockBroadcast {
-    bool column = false;
-    bool scalar = false;
-};
-
 struct AllShardVolumes {
     std::optional<std::uint32_t> a_shard_volume;
     std::optional<std::uint32_t> b_shard_volume;
@@ -145,27 +140,16 @@ struct AllShardVolumes {
 std::optional<AllShardVolumes> get_shard_volumes(
     const tt::tt_metal::TensorSpec& a,
     const std::optional<tt::tt_metal::TensorSpec>& b,
-    const tt::tt_metal::TensorSpec& c,
-    NativeBlockBroadcast block_broadcast = {});
+    const tt::tt_metal::TensorSpec& c);
 
 const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec);
 
 bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
-// Blackhole: whether a block or width sharded a with a column or scalar b takes the native sharded path, which computes on the
-// shard grid only: by formats, cores, tile rows or tiles per core, and activation, where that measured faster.
-NativeBlockBroadcast native_block_broadcast(
-    const BinaryNgDeviceOperation::operation_attributes_t& attributes,
-    const tt::tt_metal::TensorSpec& a,
-    std::optional<tt::tt_metal::DataType> b,
-    tt::tt_metal::DataType c);
-
 // Blackhole: the DEST sections binary_ng's operand pass covers, up to 4 (8 with two operand passes or a Python scalar),
 // fewer where its CBs would not fit below the lowest L1 buffer once c is allocated; 0 for a pass per section.
 struct OperandSections {
     uint32_t pass = 0;
-    // a's intermediate CB holds a broadcast section only where it fits as above
-    bool bcast_fits = true;
 };
 OperandSections operand_sections(
     const BinaryNgDeviceOperation::operation_attributes_t& attributes,
@@ -173,10 +157,7 @@ OperandSections operand_sections(
     const tt::tt_metal::TensorSpec& c);
 
 bool is_native_L1_sharding(
-    const tt::tt_metal::TensorSpec& a,
-    const std::optional<tt::tt_metal::TensorSpec>& b,
-    const MemoryConfig& c,
-    NativeBlockBroadcast block_broadcast = {});
+    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c);
 
 ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::Shape& shape_b);
 

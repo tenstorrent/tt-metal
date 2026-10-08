@@ -97,8 +97,7 @@ TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor
 std::optional<AllShardSpecs> get_shard_specs(
     const tt::tt_metal::TensorSpec& a,
     const std::optional<tt::tt_metal::TensorSpec>& b,
-    const tt::tt_metal::TensorSpec& c,
-    NativeBlockBroadcast block_broadcast = {}) {
+    const tt::tt_metal::TensorSpec& c) {
     bool a_sharded = a.memory_config().is_sharded();
     bool b_sharded = b.has_value() && b->memory_config().is_sharded();
     bool c_sharded = c.memory_config().is_sharded();
@@ -107,7 +106,7 @@ std::optional<AllShardSpecs> get_shard_specs(
         return std::nullopt;
     }
 
-    if (!is_native_L1_sharding(a, b, c.memory_config(), block_broadcast)) {
+    if (!is_native_L1_sharding(a, b, c.memory_config())) {
         return std::nullopt;
     }
 
@@ -379,9 +378,8 @@ namespace ttnn::operations::binary_ng {
 std::optional<AllShardVolumes> get_shard_volumes(
     const tt::tt_metal::TensorSpec& a,
     const std::optional<tt::tt_metal::TensorSpec>& b,
-    const tt::tt_metal::TensorSpec& c,
-    NativeBlockBroadcast block_broadcast) {
-    const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c, block_broadcast);
+    const tt::tt_metal::TensorSpec& c) {
+    const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c);
 
     if (not shard_specs.has_value()) {
         return std::nullopt;
@@ -454,14 +452,7 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
     const auto [cD, cN, cC, cHt, cWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(c);
 
     const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(
-        a.tensor_spec(),
-        b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
-        c.tensor_spec(),
-        native_block_broadcast(
-            operation_attributes,
-            a.tensor_spec(),
-            b.has_value() ? std::optional<tt::tt_metal::DataType>{b->dtype()} : std::nullopt,
-            c.dtype()));
+        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{}, c.tensor_spec());
     const bool rt_has_sharding = shard_specs.has_value();
     auto grid = rt_has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
 
@@ -708,16 +699,6 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
 
             auto [freq, counter] = CMAKE_UNIQUE_NAMESPACE::calculate_compute_kernel_args(
                 operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
-            // A block or width shard repeats a column b over its own row width and a scalar b over the whole shard
-            if (rt_has_sharding && a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
-                if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B) {
-                    freq = c_current_shard_width;
-                    counter = 0;
-                } else if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
-                    freq = c_num_tiles_core;
-                    counter = 0;
-                }
-            }
             if (operation_attributes.binary_op_type == BinaryOpType::WHERE_TTS ||
                 operation_attributes.binary_op_type == BinaryOpType::WHERE_TST) {
                 // The kernel bit-casts float scalars as one fp32 word, so pack them as fp32.
@@ -860,11 +841,9 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
 
 }  // namespace
 
-// Implements c = a op b
-namespace {
 bool eb_r3_env(const char* name) { return std::getenv(name) != nullptr; }  // CI only (ci5)
-}  // namespace
 
+// Implements c = a op b
 tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t& c) {
     using namespace tt;
@@ -885,14 +864,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     const auto shard_volumes = get_shard_volumes(
-        a.tensor_spec(),
-        b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
-        c.tensor_spec(),
-        native_block_broadcast(
-            operation_attributes,
-            a.tensor_spec(),
-            b.has_value() ? std::optional<tt::tt_metal::DataType>{b->dtype()} : std::nullopt,
-            c.dtype()));
+        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{}, c.tensor_spec());
     const auto has_sharding = shard_volumes.has_value();
     const auto a_sharded = has_sharding and shard_volumes->a_shard_volume.has_value();
     const auto b_sharded = has_sharding and shard_volumes->b_shard_volume.has_value();
@@ -982,11 +954,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["ISCLOSE_ATOL_RT_ARG_IDX"] = "4";
     }
 
-    // FPU op's activations, for the Blackhole block and broadcast sections
+    // FPU op's activations, for the Blackhole block sections and operand pass
     bool has_operand_activations = false;
     bool has_post_activations = false;
     bool post_zero_point = false;
-    bool mul_at_hifi3 = false;
     {
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
@@ -1052,16 +1023,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             });
         }
 
-        // Blackhole: a block-float SrcB (the math right-hand operand) has no bits for the last fidelity phase, so HiFi3
-        // gives HiFi4's products; with a 16-bit DEST only (with fp32 DEST it measured equal or slower).
-        const auto block_float = [](DataType dt) { return dt == DataType::BFLOAT8_B || dt == DataType::BFLOAT4_B; };
-        const DataType srca_dtype = scalar_first ? b_dtype : a_dtype;
-        const DataType srcb_dtype = scalar_first ? a_dtype : b_dtype;
-        mul_at_hifi3 = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op &&
-                       std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
-                       std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) == OpConfig::FpuBinaryOp::MUL &&
-                       lhs_activations.empty() && rhs_activations.empty() && block_float(srcb_dtype) &&
-                       (block_float(srca_dtype) || srca_dtype == DataType::BFLOAT16) && !eb_r3_env("EB_R3_NO_HIFI3");
         has_operand_activations = !lhs_activations.empty() || !rhs_activations.empty();
         has_post_activations = !post_activations.empty();
         post_zero_point = has_post_activations && post_activations[0].type() == unary::UnaryOpType::ZERO_POINT;
@@ -1138,28 +1099,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
-    // Blackhole FPU op whose sharded a and c with a column or scalar broadcast b run DEST sections (below); with an
-    // activation (operand or post, not both) only a height-sharded a. An operand activation there runs a section at a
-    // time, so a's intermediate CB holds one.
+    // Blackhole FPU op, for the block sections and the operand pass (below)
     const bool bh_fpu_op = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
                            std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) && !post_zero_point;
-    const bool sections_activations =
-        !(has_operand_activations || has_post_activations) ||
-        (!(has_operand_activations && has_post_activations) &&
-         a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED);
-    const bool bcast_sections = bh_fpu_op && sections_activations && a_sharded && c_sharded &&
-                                !eb_r3_env("EB_R3_NO_BCAST_CHUNK") &&
-                                !(eb_r3_env("EB_R3_NO_BCAST_ACT") && (has_operand_activations || has_post_activations)) &&
-                                operation_attributes.bcast_operand_section_fits &&
-                                (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
-                                 operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B);
-    const uint32_t bcast_section_tiles = fp32_dest_acc_en ? 4 : 8;
     // Blackhole: the operand pass covers these DEST sections, then one init (operand_pass_sections, at invoke).
     const uint32_t pre_sections = operation_attributes.operand_pass_sections;
     TT_ASSERT(pre_sections == 0 || (bh_fpu_op && has_operand_activations && num_tiles_per_cycle > 1));
-    const uint32_t a_intermediate_tiles =
-        (bcast_sections ? std::max(num_tiles_per_cycle, bcast_section_tiles) : num_tiles_per_cycle) *
-        std::max(pre_sections, 1u);
     bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
     const bool inputs_row_major =
@@ -1186,7 +1131,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                                   : a_data_format;
         uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
-            .total_size = a_intermediate_single_tile_size * a_intermediate_tiles,
+            .total_size = a_intermediate_single_tile_size * num_tiles_per_cycle * std::max(pre_sections, 1u),
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
@@ -1485,33 +1430,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["BINARY_NG_PRE_SECTIONS"] = std::to_string(pre_sections);
     }
 
-    // Blackhole: a sharded a with a column or scalar broadcast b, into a sharded c, computes a DEST section of tiles per
-    // acquire; without activations an add or sub into bf16 unpacks it with one call.
-    if (bcast_sections) {
-        compute_kernel_defines["BCAST_OTHER_CHUNK"] = fp32_dest_acc_en ? "4" : "8";
-        if (!has_operand_activations && !has_post_activations && unpack_alone_formats &&
-            c_data_format == tt::DataFormat::Float16_b && !eb_r3_env("EB_R3_NO_BLOCK")) {
-            compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
-        }
-    }
-
-    // Blackhole: logical_and (operand and post activations, its init per tile) keeps the per-face multiply on block
-    // grids of 4 rows by 2 or 4 columns, where per tile measured slower (a scalar b from 128 tiles a core).
-    const auto& a_shard_spec = a.memory_config().shard_spec();
-    if (bh_fpu_op && fpu_binary_op == OpConfig::FpuBinaryOp::MUL && has_operand_activations && has_post_activations &&
-        !bcast_sections && num_tiles_per_cycle == 1 &&
-        a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED && a_shard_spec.has_value() &&
-        !eb_r3_env("EB_R3_NO_MUL_GATE")) {
-        const auto grid_box = a_shard_spec->grid.bounding_box();
-        const uint32_t grid_rows = grid_box.end_coord.y - grid_box.start_coord.y + 1;
-        const uint32_t grid_cols = grid_box.end_coord.x - grid_box.start_coord.x + 1;
-        const uint32_t shard_tiles = (a_shard_spec->shape[0] / a.tensor_spec().tile().get_height()) *
-                                     (a_shard_spec->shape[1] / a.tensor_spec().tile().get_width());
-        const bool small_scalar =
-            operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B && shard_tiles < 128;
-        if (grid_rows == 4 && (grid_cols == 2 || grid_cols == 4) && !small_scalar) {
-            compute_kernel_defines["BINARY_NG_MUL_PER_FACE"] = "1";
-        }
+    // Blackhole: a multiply with operand and post activations (logical_and), whose init runs per tile, keeps the
+    // per-face program; no Blackhole caller runs one.
+    if (bh_fpu_op && fpu_binary_op == OpConfig::FpuBinaryOp::MUL && has_operand_activations && has_post_activations) {
+        compute_kernel_defines["BINARY_NG_MUL_PER_FACE"] = "1";
     }
 
     if (eb_r3_env("EB_R3_MAIN_REINIT")) {
@@ -1519,19 +1441,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
     if (eb_r3_env("EB_R3_PER_FACE")) {
         compute_kernel_defines["EB_R3_PER_FACE"] = "1";
-    }
-    if (eb_r3_env("EB_R3_LOG_RULE")) {
-        auto eb_def = [&](const char* k) {
-            const auto it = compute_kernel_defines.find(k);
-            return it == compute_kernel_defines.end() ? std::string("-") : it->second;
-        };
-        std::fprintf(stderr, "EB_R3_RULE kernel=%d block=%s block_pack=%s chunk=%s opact=%d post=%d a=%d b=%d c=%d n=%u\n",
-            static_cast<int>(compute_kernel), eb_def("BINARY_NG_BLOCK").c_str(),
-            eb_def("BINARY_NG_BLOCK_PACK").c_str(), eb_def("BCAST_OTHER_CHUNK").c_str(),
-            static_cast<int>(has_operand_activations), static_cast<int>(has_post_activations),
-            static_cast<int>(a_data_format), static_cast<int>(b_data_format), static_cast<int>(c_data_format),
-            c_tiles_per_core);
-        std::fprintf(stderr, "EB_R3_RULE pre_sections=%u mul_per_face=%s\n", pre_sections, eb_def("BINARY_NG_MUL_PER_FACE").c_str());
     }
     if (const char* eb_log = std::getenv("EB_R3_LOG_CALLS")) {  // CI only: one line per program built
         auto eb_def = [&](const char* k) {
@@ -1554,18 +1463,14 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             for (const auto& x : v) { r += std::string(enchantum::to_string(x.type())) + ","; }
             return r.empty() ? std::string("-") : r;
         };
-        const auto eb_native = native_block_broadcast(operation_attributes, a.tensor_spec(),
-            b.has_value() ? std::optional<tt::tt_metal::DataType>{b->dtype()} : std::nullopt, c.dtype());
         if (FILE* f = std::fopen(eb_log, "a")) {
-            std::fprintf(f, "EB_CALL op=%s kern=%d bcast=%s a=%s b=%s c=%s lhs=%s rhs=%s post=%s scalar=%d native=%d%d block=%s pack=%s chunk=%s pre=%u mulpf=%s hifi3=%d ntpc=%u tiles=%u\n",
+            std::fprintf(f, "EB_CALL op=%s kern=%d bcast=%s a=%s b=%s c=%s lhs=%s rhs=%s post=%s scalar=%d block=%s pack=%s pre=%u mulpf=%s ntpc=%u tiles=%u\n",
                 std::string(enchantum::to_string(operation_attributes.binary_op_type)).c_str(), static_cast<int>(compute_kernel),
                 std::string(enchantum::to_string(operation_attributes.subtile_broadcast_type)).c_str(), eb_t(a).c_str(),
                 b.has_value() ? eb_t(*b).c_str() : "-", eb_t(c).c_str(), eb_acts(operation_attributes.lhs_activations).c_str(),
                 eb_acts(operation_attributes.rhs_activations).c_str(), eb_acts(operation_attributes.post_activations).c_str(),
-                static_cast<int>(!b.has_value()), static_cast<int>(eb_native.column), static_cast<int>(eb_native.scalar),
-                eb_def("BINARY_NG_BLOCK").c_str(), eb_def("BINARY_NG_BLOCK_PACK").c_str(), eb_def("BCAST_OTHER_CHUNK").c_str(),
-                pre_sections, eb_def("BINARY_NG_MUL_PER_FACE").c_str(), static_cast<int>(mul_at_hifi3 && !fp32_dest_acc_en),
-                num_tiles_per_cycle, c_tiles_per_core);
+                static_cast<int>(!b.has_value()), eb_def("BINARY_NG_BLOCK").c_str(), eb_def("BINARY_NG_BLOCK_PACK").c_str(),
+                pre_sections, eb_def("BINARY_NG_MUL_PER_FACE").c_str(), num_tiles_per_cycle, c_tiles_per_core);
             std::fclose(f);
         }
     }
@@ -1576,7 +1481,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_desc.defines = {compute_kernel_defines.begin(), compute_kernel_defines.end()};
     compute_desc.compile_time_args = {num_tiles_per_cycle, static_cast<uint32_t>(fill_with_value_int)};
     compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = mul_at_hifi3 && !fp32_dest_acc_en ? MathFidelity::HiFi3 : MathFidelity::HiFi4,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
     };

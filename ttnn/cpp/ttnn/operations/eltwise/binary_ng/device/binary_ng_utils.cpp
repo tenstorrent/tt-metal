@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdlib>
 #include <cstdio>
 #include <cstdlib>
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include <tt-metalium/math.hpp>
@@ -813,92 +811,6 @@ bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
 }
 
-NativeBlockBroadcast native_block_broadcast(
-    const BinaryNgDeviceOperation::operation_attributes_t& attributes,
-    const tt::tt_metal::TensorSpec& a,
-    std::optional<tt::tt_metal::DataType> b,
-    tt::tt_metal::DataType c) {
-    using tt::tt_metal::DataType;
-    using unary::UnaryOpType;
-    const auto& shard_spec = a.memory_config().shard_spec();
-    if (std::getenv("EB_R3_NATIVE_ALL") != nullptr) {
-        return {.column = true, .scalar = true};  // CI only: native for every format and activation
-    }
-    if (std::getenv("EB_R3_NATIVE_OLD") != nullptr) {  // CI only: the fourth pass's rule
-        const auto op4 = attributes.binary_op_type;
-        const bool take = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE &&
-                          (op4 == BinaryOpType::ADD || op4 == BinaryOpType::SUB || op4 == BinaryOpType::MUL) &&
-                          attributes.lhs_activations.empty() && attributes.rhs_activations.empty() &&
-                          attributes.post_activations.empty() && a.data_type() == DataType::BFLOAT16 &&
-                          b == DataType::BFLOAT16 && c == DataType::BFLOAT16 && shard_spec.has_value() &&
-                          shard_spec->grid.num_cores() >= 4;
-        return {.column = take, .scalar = take};
-    }
-    if (tt::tt_metal::hal::get_arch() != tt::ARCH::BLACKHOLE || !shard_spec.has_value() || !b.has_value() ||
-        std::getenv("EB_R3_NO_NATIVE") != nullptr) {
-        return {};
-    }
-    const auto op = attributes.binary_op_type;
-    const auto& lhs = attributes.lhs_activations;
-    const auto& post = attributes.post_activations;
-    const DataType a_dt = a.data_type();
-    const uint32_t cores = shard_spec->grid.num_cores();
-    const uint32_t rows = shard_spec->shape[0] / a.tile().get_height();
-    const uint32_t tiles = rows * (shard_spec->shape[1] / a.tile().get_width());
-    const bool width = a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
-    const bool add_or_sub = op == BinaryOpType::ADD || op == BinaryOpType::SUB;
-    const bool plain_op = add_or_sub || op == BinaryOpType::MUL;
-
-    if (plain_op && lhs.empty() && attributes.rhs_activations.empty() && post.empty()) {
-        // The native op reads b once (scalar) or once per tile row (column) on each core of the shard grid; the op spread
-        // over the device takes longer with the tensor's bytes, so native pays up to a per-core count scaled by tile size.
-        const bool one_format = *b == a_dt && c == a_dt;
-        bool scalar = false;
-        if (a_dt == DataType::BFLOAT16 && *b == DataType::BFLOAT16 && (c == DataType::BFLOAT16 || c == DataType::FLOAT32)) {
-            scalar = tiles <= 128 * cores;
-        } else if (one_format && a_dt == DataType::BFLOAT8_B) {
-            scalar = tiles <= 64 * cores;
-        } else if (one_format && a_dt == DataType::BFLOAT4_B) {
-            scalar = cores >= 2 && tiles <= 32 * cores;
-        } else if (a_dt == DataType::BFLOAT16 && *b == DataType::BFLOAT8_B && c == DataType::BFLOAT16) {
-            scalar = cores >= 2 && tiles <= 64 * cores;
-        }
-        // Column b only with the LLK broadcast (one format); without it the reader also fills b's tile on every row.
-        const bool column =
-            one_format && ((a_dt == DataType::BFLOAT16 && rows <= 2 * cores) ||
-                           (a_dt == DataType::BFLOAT8_B && (rows <= cores || (width && (rows <= 4 || cores >= 8)))) ||
-                           (a_dt == DataType::BFLOAT4_B && (2 * rows <= cores || (width && cores >= 8 && rows <= 8))));
-        return {.column = column, .scalar = scalar};
-    }
-
-    // bf16 with one activation after the op or on a (or rsub's and logical_and's own), where it measured faster
-    if (a_dt != DataType::BFLOAT16 || *b != DataType::BFLOAT16 || c != DataType::BFLOAT16 ||
-        !attributes.rhs_activations.empty() || lhs.size() + post.size() > 1) {
-        return {};
-    }
-    const bool none = lhs.empty() && post.empty();
-    const auto act = !lhs.empty() ? lhs[0].type() : !post.empty() ? post[0].type() : UnaryOpType::IDENTITY;
-    const bool cheap = (plain_op && (act == UnaryOpType::RELU || (act == UnaryOpType::GELU && lhs.empty()))) ||
-                       (op == BinaryOpType::RSUB && none);
-    const bool silu = plain_op && act == UnaryOpType::SILU;
-    const bool small = rows == 1 && tiles <= 4;
-    NativeBlockBroadcast out;
-    if (small && cheap) {
-        out.column = out.scalar = cores >= (width ? 8u : 16u);
-    } else if (small && op == BinaryOpType::LOGICAL_AND && none) {
-        out.scalar = cores >= 16;
-        out.column = width && cores >= 16;
-    } else if (small && silu) {
-        out.column = out.scalar = width && cores >= 32;
-    } else if (plain_op && lhs.empty() && act == UnaryOpType::RELU) {
-        out.scalar = cores >= (width ? 16u : 32u) || (width && add_or_sub && cores >= 8 && tiles >= 64);
-        out.column = !width && cores >= (add_or_sub ? 32u : 64u);
-    } else if (plain_op && lhs.empty() && act == UnaryOpType::GELU) {
-        out.scalar = cores >= 32 || (width && add_or_sub && cores >= 16);
-    }
-    return out;
-}
-
 // the check is based on user facing information, input tensors and output memory config
 // more info may be checked in other places, such as actual output is uneven or not
 // this function is called in both earlier and later stages of the program execution
@@ -915,10 +827,8 @@ OperandSections operand_sections(
     const auto op_type = attributes.binary_op_type;
     const bool multi_tile = !b.has_value() || (attributes.subtile_broadcast_type == SubtileBroadcastType::NONE &&
                                                attributes.b_shard_volume.has_value());
-    const bool bcast_b = b.has_value() && (attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
-                                           attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B);
     if (tt::tt_metal::hal::get_arch() != tt::ARCH::BLACKHOLE || attributes.is_sfpu || attributes.is_where_op ||
-        !(multi_tile || bcast_b) || !attributes.a_shard_volume.has_value() || !attributes.c_shard_volume.has_value()) {
+        !multi_tile || !attributes.a_shard_volume.has_value() || !attributes.c_shard_volume.has_value()) {
         return out;
     }
     const DataType a_dtype = a.dtype();
@@ -967,23 +877,6 @@ OperandSections operand_sections(
         }
         return available * ttnn::operations::core::kProgramL1UsagePercent / 100;
     };
-    if (bcast_b) {
-        // The broadcast sections' operand pass, with no post activation on a height-sharded a.
-        const bool has_post = first_post.has_value() || binary::utils::is_typecast(a_dtype, c.data_type());
-        if (lhs_act && !has_post && a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-            // b's CB unless sharded, its broadcast CB, and its intermediate CB of a tile
-            const uint64_t b_tile = tt::tile_size(b_format);
-            const uint64_t fixed_bytes = (attributes.b_shard_volume.has_value() ? 0 : 2 * b_tile) + 2 * b_tile +
-                                         (rhs_act ? b_intermediate_tile : 0);
-            out.bcast_fits = fixed_bytes + section_tiles * a_intermediate_tile <= usable_l1();
-            if (std::getenv("EB_R3_LOG_RULE")) {  // CI only
-                std::fprintf(stderr, "EB_R3_RULE l1 bcast usable=%llu need=%llu fits=%d\n",
-                    static_cast<unsigned long long>(usable_l1()),
-                    static_cast<unsigned long long>(fixed_bytes + section_tiles * a_intermediate_tile), int(out.bcast_fits));
-            }
-        }
-        return out;
-    }
     const uint32_t shard_sections = tt::div_up(c_shard_tiles, section_tiles);
     const bool both = lhs_act && rhs_act;
     const bool one_section_pass = b.has_value() && (c_shard_tiles < section_tiles || both);
@@ -996,7 +889,6 @@ OperandSections operand_sections(
     const uint32_t eb_pre_max = std::getenv("EB_R3_PRE_MAX") ? static_cast<uint32_t>(std::atoi(std::getenv("EB_R3_PRE_MAX")))
                                                               : ((both || !b.has_value()) ? 8u : 4u);
     uint32_t sections = std::min(shard_sections, eb_pre_max);
-    const uint32_t eb_planned = sections;
     if (sections > 1) {
         // The intermediate CBs hold the sections; the Python scalar's CB is the only other one outside a tensor.
         const uint64_t section_bytes =
@@ -1007,21 +899,13 @@ OperandSections operand_sections(
             --sections;
         }
         sections = sections > 1 ? sections : 0;
-        if (std::getenv("EB_R3_LOG_RULE")) {  // CI only
-            std::fprintf(stderr, "EB_R3_RULE l1 usable=%llu fixed=%llu section=%llu planned=%u fitting=%u\n",
-                static_cast<unsigned long long>(usable), static_cast<unsigned long long>(fixed_bytes),
-                static_cast<unsigned long long>(section_bytes), eb_planned, sections);
-        }
     }
     out.pass = sections;
     return out;
 }
 
 bool is_native_L1_sharding(
-    const tt::tt_metal::TensorSpec& a,
-    const std::optional<tt::tt_metal::TensorSpec>& b,
-    const MemoryConfig& c,
-    NativeBlockBroadcast block_broadcast) {
+    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c) {
     if (!c.is_sharded()) {
         return false;
     }
@@ -1065,14 +949,12 @@ bool is_native_L1_sharding(
         auto subtile_bcast = get_subtile_broadcast_type(
             a.logical_shape()[-2], a.logical_shape()[-1], b->logical_shape()[-2], b->logical_shape()[-1]);
         [[maybe_unused]] bool is_height = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
-        // A scalar b is one tile per plane, so a block or width shard takes it only within one plane
-        const bool shard_in_plane = a.padded_shape()[-2] % a.memory_config().shard_spec()->shape[0] == 0;
 
         switch (subtile_bcast) {
-            case SubtileBroadcastType::COL_B: return is_height || block_broadcast.column;
-            case SubtileBroadcastType::SCALAR_B: return is_height || (block_broadcast.scalar && shard_in_plane);
             case SubtileBroadcastType::COL_A:
-            case SubtileBroadcastType::SCALAR_A: return is_height;
+            case SubtileBroadcastType::COL_B:
+            case SubtileBroadcastType::SCALAR_A:
+            case SubtileBroadcastType::SCALAR_B: return is_height;
             case SubtileBroadcastType::ROW_A:
             case SubtileBroadcastType::ROW_B:
             case SubtileBroadcastType::ROW_A_COL_B:
