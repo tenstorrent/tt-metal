@@ -44,14 +44,13 @@ using namespace tt::tt_metal;
 
 namespace {
 
-// Zeros selected realtime_profiler_msg_t fields on dispatch_s L1 (REALTIME_PROFILER_MSG carve); order matches
-// former cq_dispatch_subordinate kernel_main init (signalling fields before FIFO, then timestamp .id words).
+// Zeros selected realtime_profiler_msg_t fields on dispatch_s L1 (REALTIME_PROFILER_MSG carve): signalling
+// fields and record ring indices before the FIFO, then the record slots.
 void zero_dispatch_s_realtime_profiler_msg_fields(
     IDevice* device, const CoreCoord& logical_core, tt::CoreType core_type, const Hal& hal, uint32_t msg_base_l1_addr) {
     const auto& factory = hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
     // WriteToDeviceL1(..., vector<uint32_t>&) requires a mutable vector (non-const ref overload).
     std::vector<uint32_t> zero_word = {0u};
-    const uint32_t ts_id_byte_off = offsetof(realtime_profiler_timestamp_t, id);
 
     auto write_u32 = [&](uint32_t addr) {
         tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, addr, zero_word, core_type);
@@ -63,10 +62,19 @@ void zero_dispatch_s_realtime_profiler_msg_fields(
                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_core_noc_xy));
     write_u32(
         base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_remote_state_addr));
+                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_remote_wr_idx_addr));
     write_u32(
         base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::realtime_profiler_state));
+    write_u32(
+        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::record_wr_idx));
+    write_u32(
+        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::record_rd_idx));
+    write_u32(
+        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::record_full_wait_count));
     write_u32(
         base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::program_id_fifo_start));
@@ -74,18 +82,16 @@ void zero_dispatch_s_realtime_profiler_msg_fields(
         base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::program_id_fifo_end));
 
-    const uint32_t ksa = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_a);
-    const uint32_t kea = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_end_a);
-    const uint32_t ksb = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_b);
-    const uint32_t keb = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
-        realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_end_b);
-    write_u32(base + ksa + ts_id_byte_off);
-    write_u32(base + kea + ts_id_byte_off);
-    write_u32(base + ksb + ts_id_byte_off);
-    write_u32(base + keb + ts_id_byte_off);
+    // Zero every record slot, so a slot published before its id is written reads as unprofiled.
+    std::vector<uint32_t> zero_records(
+        REALTIME_PROFILER_RECORD_SLOTS * sizeof(realtime_profiler_record_t) / sizeof(uint32_t), 0u);
+    tt::tt_metal::detail::WriteToDeviceL1(
+        device,
+        logical_core,
+        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::records),
+        zero_records,
+        core_type);
 }
 
 }  // namespace
@@ -170,10 +176,19 @@ void DispatchSKernel::GenerateStaticConfigs() {
 
     // Configuration for DEVICE_PRINT dispatch.
     static_config_.device_print_dispatch_enabled = 0;
+    // Under an ATT map dispatch_s cannot compose the aggregator's raw NOC_XY / DRAM operands, so
+    // DPRINT stays on per-core L1 polling there.
+    const bool aggregation_enabled = !descriptor_.rtoptions().get_noc_att_map().has_value();
+    if (cq_id_ == 0 && !aggregation_enabled && descriptor_.metal_context().dprint_server()) {
+        log_debug(
+            tt::LogMetal,
+            "DPRINT dispatch_s DRAM aggregation disabled on device {}: an ATT NoC map is active",
+            device_->id());
+    }
     // With multiple CQs there is one dispatch_s per CQ, but they all read the same per-core
     // DEVICE_PRINT L1 buffers. Only enable the DRAM-aggregation work on cq_id 0 so the buffers
     // aren't drained twice (which would race the host's rpos updates and reorder/drop messages).
-    if (cq_id_ == 0 && get_dispatch_query_manager_ref().dispatch_s_enabled() &&
+    if (cq_id_ == 0 && aggregation_enabled && get_dispatch_query_manager_ref().dispatch_s_enabled() &&
         descriptor_.metal_context().dprint_server()) {
         auto* dprint_server = descriptor_.metal_context().dprint_server().get();
         auto print_cores = dprint_server->get_print_cores(device_->id());
@@ -357,6 +372,11 @@ void DispatchSKernel::CreateKernel() {
         {"DEVICE_PRINT_CYCLES_FOR_FULL",
          std::to_string(static_config_.device_print_cycles_for_full.value_or(0)) + "ULL"},
     };
+
+    if (get_dispatch_query_manager_ref().fds_signalling_enabled()) {
+        defines["FDS_SIGNALLING"] = "1";
+    }
+
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines);
 
     if (GetCoreType() == CoreType::WORKER && device_->arch() != tt::ARCH::QUASAR) {

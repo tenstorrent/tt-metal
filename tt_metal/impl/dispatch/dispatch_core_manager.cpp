@@ -8,6 +8,7 @@
 #include <functional>
 #include <list>
 #include <optional>
+#include <tuple>
 #include <unordered_set>
 
 #include <tt_stl/assert.hpp>
@@ -226,6 +227,45 @@ void dispatch_core_manager::add_dispatch_core_to_device_locked(ChipId device_id,
 
 std::vector<CoreCoord> dispatch_core_manager::get_all_logical_dispatch_cores(ChipId device_id) {
     return tt::get_logical_dispatch_cores(this->env_, device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_);
+}
+
+std::vector<CoreCoord> dispatch_core_manager::get_assigned_dispatch_cores(ChipId chip_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
+    std::vector<CoreCoord> cores;
+    auto add_core = [&](const tt_cxy_pair& placement) {
+        if (placement.chip == static_cast<std::size_t>(chip_id)) {
+            cores.emplace_back(placement.x, placement.y);
+        }
+    };
+    auto add_if_assigned = [&](const std::optional<tt_cxy_pair>& placement) {
+        if (placement.has_value()) {
+            add_core(placement.value());
+        }
+    };
+    // Assignments are keyed by the device a command queue targets, but a placement records the chip
+    // the core is physically on (a remote device's issue-queue cores sit on its MMIO device), so every
+    // assignment is scanned and filtered by placement chip.
+    for (const auto& device_entry : this->dispatch_core_assignments) {
+        for (const auto& channel_entry : device_entry.second) {
+            for (const auto& cq_entry : channel_entry.second) {
+                const dispatch_core_placement_t& assignment = cq_entry.second;
+                add_if_assigned(assignment.prefetcher);
+                add_if_assigned(assignment.prefetcher_d);
+                add_if_assigned(assignment.completion_queue_writer);
+                add_if_assigned(assignment.dispatcher);
+                add_if_assigned(assignment.dispatcher_d);
+                add_if_assigned(assignment.dispatcher_s);
+                for (const auto& mux_entry : assignment.fabric_mux) {
+                    add_core(mux_entry.second);
+                }
+            }
+        }
+    }
+    std::sort(cores.begin(), cores.end(), [](const CoreCoord& a, const CoreCoord& b) {
+        return std::tie(a.x, a.y) < std::tie(b.x, b.y);
+    });
+    cores.erase(std::unique(cores.begin(), cores.end()), cores.end());
+    return cores;
 }
 
 std::optional<tt_cxy_pair> dispatch_core_manager::get_reserved_realtime_profiler_core(ChipId device_id) {

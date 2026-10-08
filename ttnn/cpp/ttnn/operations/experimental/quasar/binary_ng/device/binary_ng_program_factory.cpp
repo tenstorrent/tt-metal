@@ -25,7 +25,9 @@ uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
     const auto& shape = x.logical_shape();
     uint32_t nD_dim = 1;
     if (out_rank >= 6 && shape.rank() >= 6) {
-        for (int i = -6; i >= -out_rank; --i) {
+        // A lower-rank operand has no dims beyond its own rank; they broadcast as 1.
+        const int rank = std::min<int>(out_rank, shape.rank());
+        for (int i = -6; i >= -rank; --i) {
             auto dim = shape[i];
             nD_dim *= dim;
         }
@@ -446,8 +448,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     // TODO: when handling mixed types, we must identify the appropriate dtype and pass it here to define the respective
     // LLK APIs
-    const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)
-                                      : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
+    const auto& op_params = operation_attributes.op_params;
+    const auto op_config = is_sfpu_op
+                               ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype, op_params)
+                               : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype, op_params);
 
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
 

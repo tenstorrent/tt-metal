@@ -1,0 +1,75 @@
+# clamped_silu_glu = silu(min(gate, 10)) * clamp(up, -10, 10) and situ_glu = 4 tanh(gate / 4)
+# sigmoid(gate) * 25 tanh(up / 25), gate at Dest tile 0 and up at tile 1: both sides of the clamp
+# limit and the saturating tails.
+#
+# Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
+# dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
+# the FPU datacopy path, and stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN).
+# Special points sit outside the random ranges, so each is drawn about as often as a unit of range.
+
+dest_acc: false
+
+operands:
+  - name: "gate"
+    dims: [32, 32]
+    format: [Float16_b]
+    stimuli:
+      include:
+        - [-15.0, -12.01]
+        - [-11.99, -3.01]
+        - [-2.99, -1.01]
+        - [-0.99, -0.01]
+        - [0.01, 0.99]
+        - [1.01, 1.99]
+        - [2.01, 9.49]
+        - [9.51, 9.99]
+        - [10.01, 11.99]
+        - [12.01, 15.0]
+        - -100.0
+        - -12.0
+        - -3.0
+        - -1.0
+        - 0.0
+        - 1.0
+        - 2.0
+        - 9.5
+        - 10.0
+        - 12.0
+        - 100.0
+  - name: "up"
+    dims: [32, 32]
+    format: [Float16_b]
+    stimuli:
+      include:
+        - [-40.0, -30.01]
+        - [-29.99, -11.01]
+        - [-10.99, -0.01]
+        - [0.01, 0.99]
+        - [1.01, 1.99]
+        - [2.01, 2.99]
+        - [3.01, 10.99]
+        - [11.01, 40.0]
+        - -30.0
+        - -11.0
+        - 0.0
+        - 1.0
+        - 2.0
+        - 3.0
+        - 11.0
+        - 100.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float16_b
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "gate", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32], indexes: {in0: 0, dest: 0}}
+      - {type: "Fpu", in0: "up", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32], indexes: {in0: 0, dest: 1}}
+      - type: "BinarySfpu"
+        operation: [SfpuClampedSiluGlu, SfpuSituGlu]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {src0: 0, src1: 1, dest: 2}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 2, out: 0}}

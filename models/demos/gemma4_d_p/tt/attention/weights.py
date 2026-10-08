@@ -69,64 +69,67 @@ def load_attention_weights(
     padded_local_hidden = ((local_hidden + 31) // 32) * 32
     o_proj_pad_size = padded_local_hidden - local_hidden
 
-    q_w = state_dict["q_proj.weight"]  # [q_size, H]
-    k_w = state_dict["k_proj.weight"]  # [kv_size, H]
-    if is_global and is_context_parallel:
-        rotary, nonrotary, value_order = global_kv_indices(config.head_dim, GLOBAL_ROTARY_DIM)
-        query_order = torch.cat((rotary, nonrotary))
-        q_w = q_w.reshape(config.num_attention_heads, config.head_dim, -1).index_select(1, query_order)
-        q_w = q_w.reshape(q_size, -1)
-        k_w = k_w.reshape(config.num_key_value_heads, config.head_dim, -1).index_select(1, value_order)
-        k_w = k_w.reshape(kv_size, -1)
-    elif is_context_parallel:
-        adjacent_order = sliding_kv_indices(config.head_dim)
-        q_w = q_w.reshape(config.num_attention_heads, config.head_dim, -1).index_select(1, adjacent_order)
-        q_w = q_w.reshape(q_size, -1)
-        k_w = k_w.reshape(config.num_key_value_heads, config.head_dim, -1).index_select(1, adjacent_order)
-        k_w = k_w.reshape(kv_size, -1)
+    # A warm-cache state_dict holds placeholders that ttnn.as_tensor ignores; skip the host reorder and fuse.
+    qk = qkv = o_w = None
+    if not getattr(state_dict, "is_placeholder", False):
+        q_w = state_dict["q_proj.weight"]  # [q_size, H]
+        k_w = state_dict["k_proj.weight"]  # [kv_size, H]
+        if is_global and is_context_parallel:
+            rotary, nonrotary, value_order = global_kv_indices(config.head_dim, GLOBAL_ROTARY_DIM)
+            query_order = torch.cat((rotary, nonrotary))
+            q_w = q_w.reshape(config.num_attention_heads, config.head_dim, -1).index_select(1, query_order)
+            q_w = q_w.reshape(q_size, -1)
+            k_w = k_w.reshape(config.num_key_value_heads, config.head_dim, -1).index_select(1, value_order)
+            k_w = k_w.reshape(kv_size, -1)
+        elif is_context_parallel:
+            adjacent_order = sliding_kv_indices(config.head_dim)
+            q_w = q_w.reshape(config.num_attention_heads, config.head_dim, -1).index_select(1, adjacent_order)
+            q_w = q_w.reshape(q_size, -1)
+            k_w = k_w.reshape(config.num_key_value_heads, config.head_dim, -1).index_select(1, adjacent_order)
+            k_w = k_w.reshape(kv_size, -1)
 
-    if tied_qkv:
-        projection_weights = (q_w, k_w)
-    else:
-        projection_weights = (q_w, k_w, state_dict["v_proj.weight"])
+        if tied_qkv:
+            projection_weights = (q_w, k_w)
+        else:
+            projection_weights = (q_w, k_w, state_dict["v_proj.weight"])
 
-    if tp > 1:
-        # Fuse each TP device's QK or QKV weights before concatenating devices.
-        num_q_heads = config.num_attention_heads
-        num_kv_heads = config.num_key_value_heads
-        head_dim = config.head_dim
-        q_per_device = num_q_heads // tp
+        if tp > 1:
+            # Fuse each TP device's QK or QKV weights before concatenating devices.
+            num_q_heads = config.num_attention_heads
+            num_kv_heads = config.num_key_value_heads
+            head_dim = config.head_dim
+            q_per_device = num_q_heads // tp
 
-        projection_chunks = []
-        for i in range(tp):
-            chunks = [torch.chunk(q_w, tp, dim=0)[i].transpose(-2, -1)]
-            for weight in projection_weights[1:]:
-                if kv_replicated:
-                    # Assign each device the KV head its Q heads map to.
-                    kv_idx = (i * q_per_device) * num_kv_heads // num_q_heads
-                    chunk = weight[kv_idx * head_dim : (kv_idx + 1) * head_dim]
-                else:
-                    chunk = torch.chunk(weight, tp, dim=0)[i]
-                chunks.append(chunk.transpose(-2, -1))
-            projection_chunks.append(torch.cat(chunks, dim=-1))
-        projection = torch.cat(projection_chunks, dim=-1).unsqueeze(0).unsqueeze(0)
-    else:
-        projection = torch.cat([weight.transpose(-2, -1) for weight in projection_weights], dim=-1)
-        projection = projection.unsqueeze(0).unsqueeze(0)
+            projection_chunks = []
+            for i in range(tp):
+                chunks = [torch.chunk(q_w, tp, dim=0)[i].transpose(-2, -1)]
+                for weight in projection_weights[1:]:
+                    if kv_replicated:
+                        # Assign each device the KV head its Q heads map to.
+                        kv_idx = (i * q_per_device) * num_kv_heads // num_q_heads
+                        chunk = weight[kv_idx * head_dim : (kv_idx + 1) * head_dim]
+                    else:
+                        chunk = torch.chunk(weight, tp, dim=0)[i]
+                    chunks.append(chunk.transpose(-2, -1))
+                projection_chunks.append(torch.cat(chunks, dim=-1))
+            projection = torch.cat(projection_chunks, dim=-1).unsqueeze(0).unsqueeze(0)
+        else:
+            projection = torch.cat([weight.transpose(-2, -1) for weight in projection_weights], dim=-1)
+            projection = projection.unsqueeze(0).unsqueeze(0)
 
-    qk = projection if tied_qkv else None
-    qkv = None if tied_qkv else projection
+        qk = projection if tied_qkv else None
+        qkv = None if tied_qkv else projection
 
-    # Output projection
-    o_w = state_dict["o_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
-    if is_global and is_context_parallel:
-        _, _, value_order = global_kv_indices(config.head_dim, GLOBAL_ROTARY_DIM)
-        o_w = o_w.reshape(1, 1, config.num_attention_heads, config.head_dim, config.hidden_size)
-        o_w = o_w.index_select(3, value_order)
-        o_w = o_w.reshape(1, 1, q_size, config.hidden_size)
-    if o_proj_pad_size > 0 and tp > 1:
-        padded_hidden = padded_local_hidden * tp
-        o_w = torch.nn.functional.pad(o_w, (0, padded_hidden - hidden_size), "constant", 0.0)
+        # Output projection
+        o_w = state_dict["o_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+        if is_global and is_context_parallel:
+            _, _, value_order = global_kv_indices(config.head_dim, GLOBAL_ROTARY_DIM)
+            o_w = o_w.reshape(1, 1, config.num_attention_heads, config.head_dim, config.hidden_size)
+            o_w = o_w.index_select(3, value_order)
+            o_w = o_w.reshape(1, 1, q_size, config.hidden_size)
+        if o_proj_pad_size > 0 and tp > 1:
+            padded_hidden = padded_local_hidden * tp
+            o_w = torch.nn.functional.pad(o_w, (0, padded_hidden - hidden_size), "constant", 0.0)
 
     # Per-head norm weights: [head_dim] -> [1, 1, head_dim/TILE_SIZE, TILE_SIZE]
     q_norm_flat = state_dict["q_norm.weight"].reshape(-1)

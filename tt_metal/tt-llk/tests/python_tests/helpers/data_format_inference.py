@@ -10,7 +10,7 @@ architecture-specific differences between Wormhole and Blackhole.
 """
 from typing import List, Optional
 
-from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .chip_architecture import ChipArchitecture, get_chip_architecture, is_4row_arch
 from .format_config import DataFormat, FormatConfig
 from .llk_params import DestAccumulation
 
@@ -25,6 +25,8 @@ VALID_QUASAR_SRC_REG_FORMATS = [
     DataFormat.Int16,
     DataFormat.MxFp4_2x_A,
     DataFormat.MxFp4_2x_B,
+    DataFormat.Int8_2x,
+    DataFormat.UInt8_2x,
 ]
 
 VALID_QUASAR_DEST_REG_FORMATS = [
@@ -113,9 +115,37 @@ def is_format_combination_outlier(
     )
 
 
+def effective_dest_acc(
+    input_format: DataFormat,
+    output_format: DataFormat,
+    dest_acc: DestAccumulation,
+    arch: Optional[ChipArchitecture] = None,
+) -> DestAccumulation:
+    """The Dest width a kernel built for this variant actually runs with.
+
+    ``TestConfig`` promotes ``dest_acc`` to ``Yes`` for an outlier combination (an
+    exponent-B input packed to Float16, see :func:`is_format_combination_outlier`) on
+    every architecture but Quasar, and does so silently. Everything that reasons about
+    the kernel that ran -- the Dest capacity in block sizing, the distinct modes of a
+    perf sweep, the cells an exhaustive sweep can key a measurement on -- has to apply
+    the same rule, and used to spell it out again each time. *arch* defaults to the
+    chip this session targets; a host check of another architecture's table passes
+    its own. It is looked up only for an outlier, so sizing an ordinary combination
+    stays a host-only call.
+    """
+    if not is_format_combination_outlier(input_format, output_format, dest_acc):
+        return dest_acc
+    if arch is None:
+        arch = get_chip_architecture()
+    return DestAccumulation.Yes if arch != ChipArchitecture.QUASAR else dest_acc
+
+
 _SRCAB_ONLY_FORMATS = {
     DataFormat.MxFp4_2x_A: ChipArchitecture.QUASAR,
     DataFormat.MxFp4_2x_B: ChipArchitecture.QUASAR,
+    # Integer 2x formats additionally require the four-row variant in infer_unpack_out.
+    DataFormat.Int8_2x: ChipArchitecture.QUASAR,
+    DataFormat.UInt8_2x: ChipArchitecture.QUASAR,
 }
 
 
@@ -169,10 +199,31 @@ def infer_unpack_out(
                 f"{register_format_hint.name} is only valid on "
                 f"{_SRCAB_ONLY_FORMATS[register_format_hint].value}"
             )
+        if (
+            register_format_hint
+            in (
+                DataFormat.Int8_2x,
+                DataFormat.UInt8_2x,
+            )
+            and not is_4row_arch()
+        ):
+            raise ValueError(
+                f"{register_format_hint.name} is only valid on the four-row Quasar variant"
+            )
         if input_format == DataFormat.MxFp4 and register_format_hint not in [
             DataFormat.MxFp4_2x_A,
             DataFormat.MxFp4_2x_B,
         ]:
+            raise ValueError(
+                f"register_format_hint={register_format_hint.name} is not compatible with input_format={input_format.name}."
+            )
+        if (
+            input_format == DataFormat.Int8
+            and register_format_hint != DataFormat.Int8_2x
+        ) or (
+            input_format == DataFormat.UInt8
+            and register_format_hint != DataFormat.UInt8_2x
+        ):
             raise ValueError(
                 f"register_format_hint={register_format_hint.name} is not compatible with input_format={input_format.name}."
             )
@@ -353,6 +404,10 @@ def infer_downstream_unpack_out(unpack_out: DataFormat) -> DataFormat:
         return DataFormat.Float16
     if unpack_out == DataFormat.MxFp4_2x_B:
         return DataFormat.Float16_b
+    if unpack_out == DataFormat.Int8_2x:
+        return DataFormat.Int8
+    if unpack_out == DataFormat.UInt8_2x:
+        return DataFormat.UInt8
     return unpack_out
 
 

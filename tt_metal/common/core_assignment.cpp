@@ -217,12 +217,33 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     std::vector<CoreCoord> dram_interface_workers;
     uint32_t num_dram_banks = dram_phy_coords.size();
     dram_interface_workers.reserve(num_dram_banks);
+
+    if (arch == ARCH::QUASAR) {
+        // Quasar DRAM controllers sit outside the Tensix rows (e.g. y=0 and y=7 on the 32-core
+        // part), so the WH/BH "walk right from the DRAM core" heuristic below does not produce a
+        // worker. Until a NOC-distance-aware placement exists for Quasar, hand out worker cores
+        // round-robin in row-major order over the worker grid. Each bank gets a distinct worker
+        // as long as there are at least as many workers as DRAM banks.
+        TT_FATAL(
+            !worker_phy_x.empty() && !worker_phy_y.empty(),
+            "Cannot assign DRAM interface workers on Quasar with an empty worker grid");
+        const uint32_t num_worker_cols = worker_phy_x.size();
+        const uint32_t num_worker_rows = worker_phy_y.size();
+        for (uint32_t i = 0; i < num_dram_banks; ++i) {
+            const uint32_t col = i % num_worker_cols;
+            const uint32_t row = (i / num_worker_cols) % num_worker_rows;
+            dram_interface_workers.push_back(CoreCoord(worker_phy_x[col], worker_phy_y[row]));
+        }
+        return dram_interface_workers;
+    }
+
     // Get the optimal dram -> worker configuration here.
     // For WH and BH, worker cores are placed to the right of the DRAM Controller.
     // Need to shift down if the row is a non-tensix row (0 or 6 on WH and 0 or 1 on BH)
     TT_ASSERT(
-        arch == ARCH::WORMHOLE_B0 or arch == ARCH::BLACKHOLE,
-        "Only Wormhole and Blackhole are supported to get optimal worker placement for interfacing with DRAM");
+        arch == ARCH::WORMHOLE_B0 or arch == ARCH::BLACKHOLE or arch == ARCH::QUASAR,
+        "Only Wormhole, Blackhole and Quasar are supported to get optimal worker placement for interfacing with "
+        "DRAM");
     for (int i = 0; i < num_dram_banks; ++i) {
         auto dram_core = dram_phy_coords[i];
         uint32_t dram_core_y;
