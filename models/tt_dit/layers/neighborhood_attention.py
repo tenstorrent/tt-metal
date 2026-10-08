@@ -738,8 +738,11 @@ def neighborhood_attention_3d_bricked_w_sharded(
         cut_h, cut_w = halo_h - low_h, halo - low_w
         assert cut_h >= 0 and cut_w >= 0 and cut_h + phased_h <= resident[1] and cut_w + phased_w <= resident[2]
         with timing_tree.span(device, f"{lane}: key-phase rebrick", category=timing_tree.RESHAPE, deep=True):
-            rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
-            if rows is not tensor:
+            # to_layout on a row-major tensor returns a new handle to the same buffer.
+            if tensor.layout == ttnn.ROW_MAJOR_LAYOUT:
+                rows = tensor
+            else:
+                rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
                 ttnn.deallocate(tensor)
             flat = ttnn.reshape(rows, (batch, bricked_sites, channels))
             natural = to_natural(flat, volume=resident, brick=brick)
