@@ -248,8 +248,9 @@ ALWI void custom_mm_block_math(
  * Prepares the second configuration bank for banked custom_mm_block calls on these CBs: copies the unpacker
  * configuration that custom_mm_block_init(_short) and the format reconfiguration left in the first bank, unless the
  * second already holds it for CBs with the same formats and face geometry. Call it after the init, with the init's CBs
- * and transpose, outside a banked sequence; it waits for every earlier unpack call, and in a kernel that keeps one
- * configuration it copies once. compute_kernel_hw_cleanup rewrites the second bank: no banked calls after it.
+ * and transpose, outside a banked sequence; the sequence's first call waits for every earlier unpack call, and in a
+ * kernel that keeps one configuration the bank is copied once. compute_kernel_hw_cleanup rewrites the second bank: no
+ * banked calls after it.
  */
 template <bool transpose = false>
 ALWI void custom_mm_block_bank_init(const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id) {

@@ -298,6 +298,11 @@ inline void _llk_unpack_AB_custom_mm_run_(
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
+// Key of the configuration the second bank holds, and whether the next banked call starts a sequence; kernel data, so
+// each kernel starts with no configuration in the second bank
+inline std::uint64_t custom_mm_bank_key   = ~std::uint64_t {0};
+inline bool custom_mm_bank_sequence_start = true;
+
 /**
  * @brief Unpack a kt_dim x ct_dim block of weight tiles into SrcA and the matching activation tiles into SrcB.
  *
@@ -342,8 +347,10 @@ inline void _llk_unpack_AB_custom_mm_(
     {
         // SCRATCH_SEC0/1 are global, not banked: the calls of a sequence must write the same increments
         static_assert(!read_transposed, "banked custom_mm calls do not support read_transposed");
-        // The other bank was last read by the call before the one in flight: write it while that call runs
-        wait_for_next_context(2);
+        // The first call of a sequence waits for every earlier call, which may read bank 1 or SCRATCH; a later call
+        // writes the bank the call before the one in flight used, while that call runs
+        wait_for_next_context(custom_mm_bank_sequence_start ? 1 : 2);
+        custom_mm_bank_sequence_start = false;
         flip_cfg_state_id();
         cfg = get_cfg_pointer();
     }
@@ -357,9 +364,6 @@ inline void _llk_unpack_AB_custom_mm_(
     _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
 }
 
-// Key of the configuration the second bank holds; kernel data, so each kernel starts with none
-inline std::uint64_t custom_mm_bank_key = ~std::uint64_t {0};
-
 /**
  * @brief Prepare the second configuration bank for @ref _llk_unpack_AB_custom_mm_ with banked = true.
  *
@@ -368,22 +372,22 @@ inline std::uint64_t custom_mm_bank_key = ~std::uint64_t {0};
  *
  * @param key: Identifies the configuration the init and the format configuration leave in the first bank: the two
  *             operands' formats and face geometry and the transpose. Any value but ~0.
- * @note Call after @ref _llk_unpack_AB_custom_mm_init_ and outside a banked sequence; it waits for every earlier
- *       unpack call. No unpack LLK writes the second bank, so a copy serves every later banked sequence of the kernel
- *       with the same key; the hardware cleanup (compute_kernel_hw_cleanup) rewrites both banks, so a kernel that runs it
+ * @note Call after @ref _llk_unpack_AB_custom_mm_init_ and outside a banked sequence; the next banked call waits for
+ *       every earlier unpack call. No unpack LLK writes the second bank, so a copy serves every later banked sequence of
+ *       the kernel with the same key; the hardware cleanup (compute_kernel_hw_cleanup) rewrites both banks, so a kernel that runs it
  *       must not run banked calls after it.
  */
 inline void _llk_unpack_AB_custom_mm_bank_init_(const std::uint64_t key)
 {
     LLK_ASSERT(ckernel::cfg_state_id == 0, "custom_mm bank init: call outside a banked sequence");
-    // The first call writes bank 1 and the global SCRATCH words: no earlier call may still run
-    wait_for_idle();
+    custom_mm_bank_sequence_start = true;
     if (key == custom_mm_bank_key)
     {
         return;
     }
     custom_mm_bank_key = key;
-    // The first bank's words must have landed
+    // No call may still read bank 1, and the first bank's words must have landed
+    wait_for_idle();
     tensix_sync();
     volatile std::uint32_t* bank0 = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE);
     volatile std::uint32_t* bank1 = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 16);
@@ -407,4 +411,5 @@ inline void _llk_unpack_AB_custom_mm_bank_end_()
     {
         flip_cfg_state_id();
     }
+    custom_mm_bank_sequence_start = true;
 }

@@ -91,9 +91,9 @@ inline void llk_unpack_AB_custom_mm(
  * @tparam transpose: The transpose the init was called with, values = <true/false>
  * @param operand0: CB of the activations, as passed to the init.
  * @param operand1: CB of the weights, as passed to the init.
- * @note Call after @ref llk_unpack_AB_custom_mm_init with the same operands, outside a banked sequence; it waits for
- *       every earlier unpack call. The bank is copied only when it does not already hold the configuration of operands
- *       with these formats and face geometry.
+ * @note Call after @ref llk_unpack_AB_custom_mm_init with the same operands, outside a banked sequence; the next banked
+ *       call waits for every earlier unpack call. The bank is copied only when it does not already hold the
+ *       configuration of operands with these formats and face geometry.
  */
 template <bool transpose = false>
 inline void llk_unpack_AB_custom_mm_bank_init(const std::uint32_t operand0, const std::uint32_t operand1) {
