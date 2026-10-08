@@ -8,7 +8,9 @@ layout per cache — k, v, index_k) and a stub kv_cache (the merged path reads o
 addresses, fabric nodes, hosts and bank counts all come from the gathered layouts), then asserts the
 table's addressing against the layouts: per-(stage, cache) base addresses at global layer indices,
 single-member per-head device groups vs the full-row index_k replica group, and the per-(config, stage,
-row) bank-walk restart, and the index_k rows limited to the MSA layers.
+row) bank-walk restart, and the index_k rows limited to the MSA layers. The ``dedup_table`` cases rebuild
+it with index_k TP-deduped (``index_k_tp_axis``): index_k stays one config but every chip owns a distinct
+stripe, addressed by a single-chip group and its own bank walk, while K / V are unchanged.
 """
 
 import os
@@ -64,26 +66,34 @@ def _stage_layouts():
     return layouts
 
 
-def _stub_cache(num_layers):
-    def t(dtype):
-        return SimpleNamespace(shape=(NUM_USERS * num_layers, 1, SEQ_LEN, HEAD_DIM), dtype=dtype)
+def _stub_cache(num_layers, seq_len=SEQ_LEN, index_k_tp_axis=None):
+    def t(dtype, rows):
+        return SimpleNamespace(shape=(NUM_USERS * num_layers, 1, rows, HEAD_DIM), dtype=dtype)
 
+    ik_rows = seq_len if index_k_tp_axis is None else seq_len // COLS
     # Migration requires a bf8 index_k (the decode peer's dtype); the builder rejects bf16.
-    return SimpleNamespace(k=t(ttnn.bfloat8_b), v=t(ttnn.bfloat8_b), index_k=t(ttnn.bfloat8_b))
+    return SimpleNamespace(
+        k=t(ttnn.bfloat8_b, seq_len),
+        v=t(ttnn.bfloat8_b, seq_len),
+        index_k=t(ttnn.bfloat8_b, ik_rows),
+        index_k_tp_axis=index_k_tp_axis,
+    )
 
 
-def _build(tmp_path, stage_layouts, index_k_layers=None):
+def _build(
+    tmp_path, stage_layouts, *, index_k_layers=None, seq_len=SEQ_LEN, chunk_size=CHUNK_SIZE, index_k_tp_axis=None
+):
     path = os.path.join(str(tmp_path), "m3_merge_table.pb")
     # num_layers is THIS rank's stage count (rank 0 builds), used only for the local shape assert.
     return build_and_serialize_kv_chunk_table(
         mesh_device=None,
-        kv_cache=_stub_cache(STAGE_COUNTS[0]),
-        seq_len=SEQ_LEN,
+        kv_cache=_stub_cache(STAGE_COUNTS[0], seq_len=seq_len, index_k_tp_axis=index_k_tp_axis),
+        seq_len=seq_len,
         num_layers=STAGE_COUNTS[0],
         mesh_shape=(SP, COLS),
         sp_axis=0,
         num_users=NUM_USERS,
-        chunk_size=CHUNK_SIZE,
+        chunk_size=chunk_size,
         num_kv_heads=COLS,
         head_dim=HEAD_DIM,
         path=path,
@@ -214,3 +224,111 @@ def test_index_k_rows_limited_to_msa_layers(tmp_path):
                         want.size_bytes,
                         want.device_group_index,
                     ), f"config {cfg_id} slot {slot} layer {layer} pos {pos} moved"
+
+
+# --- index_k TP dedup -----------------------------------------------------------------------------------------
+# Each SP row's chunk_local rows split into COLS stripes of whole 32-token chunks: chunk_local = 128, stripe = 32.
+DEDUP_CHUNK_SIZE = SP * COLS * NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK  # 256
+DEDUP_SEQ_LEN = 2 * DEDUP_CHUNK_SIZE  # 512: two slabs, so the walk crosses a slab boundary
+DEDUP_CHUNK_LOCAL = DEDUP_CHUNK_SIZE // SP
+DEDUP_STRIPE = DEDUP_CHUNK_LOCAL // COLS
+
+
+@pytest.fixture(scope="module")
+def dedup_table(tmp_path_factory):
+    path = _build(
+        tmp_path_factory.mktemp("m3_merge_dedup"),
+        _stage_layouts(),
+        seq_len=DEDUP_SEQ_LEN,
+        chunk_size=DEDUP_CHUNK_SIZE,
+        index_k_tp_axis=1,
+    )
+    return ttnn.experimental.disaggregation.import_from_protobuf_file(path)
+
+
+def _ids(group):
+    return [(int(f.mesh_id), int(f.chip_id)) for f in group]
+
+
+def _dedup_owner(position):
+    """(row, col, local row) of the chip holding ``position`` in a TP-deduped cache."""
+    n, off = divmod(position, DEDUP_CHUNK_SIZE)
+    row, in_row = divmod(off, DEDUP_CHUNK_LOCAL)
+    col, i = divmod(in_row, DEDUP_STRIPE)
+    return row, col, n * DEDUP_STRIPE + i
+
+
+def test_dedup_keeps_config_list(dedup_table):
+    # Same 2N+1 configs in the same order: the src<->dst contract does not change.
+    assert dedup_table.num_configs() == 2 * COLS + 1
+    assert dedup_table.config(2 * COLS).chunk_size_bytes == _chunk_size_bytes(ttnn.bfloat8_b, HEAD_DIM)
+
+
+def test_dedup_index_k_single_chip_groups_and_addresses(dedup_table):
+    """Every 32-token index_k chunk resolves to the ONE chip owning it, at that chip's own ND-shard page
+    (ROUND_ROBIN_1D over its [B, 1, rows, D] pages, B = slot * stage_count + local_layer)."""
+    ik_bytes = _chunk_size_bytes(ttnn.bfloat8_b, HEAD_DIM)
+    rows_per_chip = DEDUP_SEQ_LEN // (SP * COLS)
+    for stage_idx, stage in enumerate(_stage_layouts()[2]):
+        for slot in range(NUM_USERS):
+            for local_layer in range(stage["count"]):
+                batch = slot * stage["count"] + local_layer
+                for position in range(0, DEDUP_SEQ_LEN, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                    row, col, local_row = _dedup_owner(position)
+                    loc = dedup_table.lookup(stage["first_layer"] + local_layer, position, slot, 2 * COLS)
+                    assert _ids(dedup_table.get_device_group(loc.device_group_index).fabric_node_ids) == _ids(
+                        [stage["fnids"][row][col]]
+                    ), f"stage {stage_idx} pos {position}: index_k must live on chip ({row}, {col}) alone"
+                    page = (batch * rows_per_chip + local_row) // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+                    bank, offset = page % NUM_BANKS, (page // NUM_BANKS) * ik_bytes
+                    assert loc.noc_addr == (bank << 32) | (_base(stage_idx, 2) + offset), (
+                        f"stage {stage_idx} slot {slot} layer {local_layer} pos {position}: {loc.noc_addr:#x}, "
+                        f"expected bank {bank} offset {offset:#x}"
+                    )
+
+
+def test_dedup_leaves_k_v_layout(dedup_table):
+    # K / V stay TP-head-sharded: whole chunk_local rows per SP row, a single-member group on the head's column.
+    stage = _stage_layouts()[0][0]
+    for position in range(0, DEDUP_CHUNK_SIZE, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+        row = position // DEDUP_CHUNK_LOCAL
+        for h in range(COLS):
+            for cfg in (h, COLS + h):
+                loc = dedup_table.lookup(0, position, 0, cfg)
+                assert _ids(dedup_table.get_device_group(loc.device_group_index).fabric_node_ids) == _ids(
+                    [stage["fnids"][row][h]]
+                )
+
+
+def test_dedup_index_k_rows_limited_to_msa_layers(dedup_table, tmp_path):
+    # The MSA-layer filter composes with the TP dedup: dense layers 0 and 2 get no index_k rows on any
+    # stripe, and every other row (K / V everywhere, index_k on MSA layers) keeps its unfiltered address
+    # and single-chip group, since each chip's own bank walk still steps over the dense layers' regions.
+    total = sum(STAGE_COUNTS)
+    msa = {1, 3, 4}
+    filtered = ttnn.experimental.disaggregation.import_from_protobuf_file(
+        _build(
+            tmp_path,
+            _stage_layouts(),
+            index_k_layers=msa,
+            seq_len=DEDUP_SEQ_LEN,
+            chunk_size=DEDUP_CHUNK_SIZE,
+            index_k_tp_axis=1,
+        )
+    )
+    for cfg_id in range(2 * COLS + 1):
+        for slot in range(NUM_USERS):
+            for layer in range(total):
+                for pos in range(0, DEDUP_SEQ_LEN, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                    want = dedup_table.lookup(layer, pos, slot, cfg_id)
+                    got = filtered.lookup(layer, pos, slot, cfg_id)
+                    if cfg_id == 2 * COLS and layer not in msa:
+                        assert got.size_bytes == 0, f"index_k row published on dense layer {layer} pos {pos}"
+                        continue
+                    assert (got.noc_addr, got.size_bytes) == (
+                        want.noc_addr,
+                        want.size_bytes,
+                    ), f"config {cfg_id} slot {slot} layer {layer} pos {pos} moved"
+                    assert _ids(filtered.get_device_group(got.device_group_index).fabric_node_ids) == _ids(
+                        dedup_table.get_device_group(want.device_group_index).fabric_node_ids
+                    ), f"config {cfg_id} slot {slot} layer {layer} pos {pos} changed device group"
