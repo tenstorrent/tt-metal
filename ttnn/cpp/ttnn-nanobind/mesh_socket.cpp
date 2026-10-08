@@ -159,7 +159,12 @@ void py_module_types(nb::module_& mod) {
                     memory_config (SocketMemoryConfig): The memory config of the socket
                     sender_mesh_id (int): The system mesh ID of the sender mesh
                     receiver_mesh_id (int): The system mesh ID of the receiver mesh
-            )doc");
+            )doc")
+        .def_rw(
+            "num_lanes",
+            &tt::tt_metal::distributed::SocketConfig::num_lanes,
+            "Independently ordered streams the sender splits each page over. Each lane has its own bytes_sent "
+            "word and the receiver waits until every one covers the page. 1 (default) is the single-counter socket.");
     nb::class_<tt::tt_metal::distributed::MeshSocket>(mod, "MeshSocket")
         .def(
             nb::init<

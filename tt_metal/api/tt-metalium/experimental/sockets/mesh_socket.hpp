@@ -107,6 +107,9 @@ struct SocketConfig {
     multihost::Rank sender_rank{0};
     multihost::Rank receiver_rank{0};
     std::shared_ptr<multihost::DistributedContext> distributed_context = nullptr;
+    // Independently ordered streams the sender splits each page over (see receiver_socket_md in hostdev/socket.h).
+    // Each lane gets its own bytes_sent word and the receiver waits until every one covers the page.
+    uint32_t num_lanes = 1;
 
     SocketConfig() = default;
 
@@ -140,10 +143,17 @@ struct SocketConfig {
         "sender_mesh_id",
         "receiver_mesh_id",
         "sender_rank",
-        "receiver_rank");
+        "receiver_rank",
+        "num_lanes");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            socket_connection_config, socket_mem_config, sender_mesh_id, receiver_mesh_id, sender_rank, receiver_rank);
+            socket_connection_config,
+            socket_mem_config,
+            sender_mesh_id,
+            receiver_mesh_id,
+            sender_rank,
+            receiver_rank,
+            num_lanes);
     }
 };
 

@@ -57,6 +57,13 @@ struct d2d_recv_socket_md {
     uint32_t upstream_bytes_acked_addr;
 };
 
+// A lane is one sender writing in order along one route (one NoC, or one fabric link). Lanes do not order against
+// each other, so when a page is split over several lanes one shared counter cannot tell the receiver it has all of
+// it: one lane's shares of pages n and n+1 can add up to a page before another lane's share of page n lands. Each
+// lane therefore has its own bytes_sent word. Lane 0's is bytes_sent; lanes 1..num_lanes-1 follow the struct. After
+// its share of a page, a lane adds the page's bytes_sent increment to its word, so every word tracks the sender's
+// bytes_sent once that lane's share has landed, and the receiver takes a page once every word covers it. num_lanes
+// 0 or 1 is the single-counter socket.
 struct receiver_socket_md {
     uint32_t bytes_sent;
     uint32_t read_ptr;
@@ -68,7 +75,13 @@ struct receiver_socket_md {
         h2d_socket_md h2d;
         d2d_recv_socket_md d2d;
     } __attribute__((packed));
+    uint32_t num_lanes;
 };
+
+// Receiver config size: the struct, then a bytes_sent word for each lane after lane 0.
+constexpr uint32_t receiver_socket_config_size_bytes(uint32_t num_lanes) {
+    return sizeof(receiver_socket_md) + (num_lanes > 1 ? num_lanes - 1 : 0) * sizeof(uint32_t);
+}
 
 struct H2DSocketInterface {
     uint32_t bytes_acked_addr_lo;
@@ -128,4 +141,6 @@ struct SocketReceiverInterface {
         H2DSocketInterface h2d;
         D2DSocketRecvInterface d2d;
     } __attribute__((packed));
+    uint32_t num_lanes;
+    uint32_t extra_lanes_bytes_sent_addr;
 };

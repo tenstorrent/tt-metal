@@ -119,6 +119,15 @@ void set_sender_socket_page_size(SocketSenderInterface& socket, uint32_t page_si
     socket.downstream_fifo_curr_size = fifo_page_aligned_size;
 }
 
+// L1 address, on the receiver core, of the bytes_sent word `lane` credits (see receiver_socket_md).
+FORCE_INLINE uint32_t socket_lane_bytes_sent_addr(const SocketSenderInterface& socket, uint32_t lane) {
+    if (lane == 0) {
+        return socket.downstream_bytes_sent_addr;
+    }
+    return socket.downstream_bytes_sent_addr - offsetof(receiver_socket_md, bytes_sent) + sizeof(receiver_socket_md) +
+           (lane - 1) * sizeof(uint32_t);
+}
+
 void socket_reserve_pages(const SocketSenderInterface& socket, uint32_t num_pages) {
     uint32_t num_bytes = num_pages * socket.page_size;
     volatile tt_l1_ptr uint32_t* bytes_acked_ptr =
@@ -230,6 +239,8 @@ SocketReceiverInterface create_receiver_socket_interface(uint32_t config_addr) {
     socket.fifo_addr = socket_config->fifo_addr;
     socket.fifo_total_size = socket_config->fifo_total_size;
     socket.is_h2d = socket_config->is_h2d;
+    socket.num_lanes = socket_config->num_lanes;
+    socket.extra_lanes_bytes_sent_addr = config_addr + sizeof(receiver_socket_md);
     if (socket.is_h2d) {
         socket.h2d.bytes_acked_addr_lo = socket_config->h2d.bytes_acked_addr_lo;
         socket.h2d.bytes_acked_addr_hi = socket_config->h2d.bytes_acked_addr_hi;
@@ -246,6 +257,34 @@ SocketReceiverInterface create_receiver_socket_interface(uint32_t config_addr) {
 #endif
     return socket;
 }
+
+#if !(defined TRISC_PACK || defined TRISC_MATH)
+// Waits until every lane after lane 0 has credited num_bytes past bytes_acked; lane 0 is the caller's bytes_sent
+// wait. Takes scalars rather than the socket: a socket whose address escapes is kept in memory instead of
+// registers, which slows every pop and wait on single-lane sockets too.
+bool socket_wait_for_extra_lanes(
+    uint32_t extra_lanes_bytes_sent_addr,
+    uint32_t num_extra_lanes,
+    uint32_t bytes_acked,
+    uint32_t num_bytes,
+    uint32_t early_exit_iter_count,
+    uint32_t iter_count) {
+    volatile tt_l1_ptr uint32_t* lane_bytes_sent =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(extra_lanes_bytes_sent_addr);
+    for (uint32_t lane = 0; lane < num_extra_lanes; ++lane) {
+        uint32_t bytes_recv;
+        do {
+            invalidate_l1_cache();
+            bytes_recv = lane_bytes_sent[lane] - bytes_acked;
+            if (early_exit_iter_count && iter_count >= early_exit_iter_count) {
+                return false;
+            }
+            iter_count++;
+        } while (bytes_recv < num_bytes);
+    }
+    return true;
+}
+#endif
 
 void set_receiver_socket_page_size(SocketReceiverInterface& socket, uint32_t page_size) {
 #if !(defined TRISC_PACK || defined TRISC_MATH)
@@ -294,6 +333,15 @@ bool socket_wait_for_pages(
         }
         iter_count++;
     } while (bytes_recv < num_bytes);
+    if (__builtin_expect(socket.num_lanes > 1, 0)) {
+        return socket_wait_for_extra_lanes(
+            socket.extra_lanes_bytes_sent_addr,
+            socket.num_lanes - 1,
+            socket.bytes_acked,
+            num_bytes,
+            early_exit_iter_count,
+            iter_count);
+    }
     return true;
 #endif
     return true;

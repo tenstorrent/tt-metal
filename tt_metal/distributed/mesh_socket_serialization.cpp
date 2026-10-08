@@ -145,7 +145,8 @@ std::vector<uint8_t> serialize_to_bytes(const SocketPeerDescriptor& socket_peer_
         *socket_config.sender_rank,
         *socket_config.receiver_rank,
         *socket_config.sender_mesh_id.value(),
-        *socket_config.receiver_mesh_id.value());
+        *socket_config.receiver_mesh_id.value(),
+        socket_config.num_lanes);
     // Build the SocketPeerDescriptor FlatBuffer (root object)
     auto local_chip_ids_fb = builder.CreateVector(socket_peer_desc.local_chip_ids);
     auto socket_peer_desc_fb = distributed::flatbuffer::CreateSocketPeerDescriptor(
@@ -182,6 +183,7 @@ SocketPeerDescriptor deserialize_from_bytes(const std::vector<uint8_t>& data) {
     socket_peer_desc.config.receiver_mesh_id = tt::tt_fabric::MeshId{socket_config_fb->receiver_mesh_id()};
     socket_peer_desc.config.sender_rank = multihost::Rank{static_cast<int>(socket_config_fb->sender_rank())};
     socket_peer_desc.config.receiver_rank = multihost::Rank{static_cast<int>(socket_config_fb->receiver_rank())};
+    socket_peer_desc.config.num_lanes = socket_config_fb->num_lanes();
     socket_peer_desc.config_buffer_address = socket_peer_desc_fb->config_buffer_address();
     socket_peer_desc.data_buffer_address = socket_peer_desc_fb->data_buffer_address();
     socket_peer_desc.exchange_tag = multihost::Tag{static_cast<int>(socket_peer_desc_fb->exchange_tag())};

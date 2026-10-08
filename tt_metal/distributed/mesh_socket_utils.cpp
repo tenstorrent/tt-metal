@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstring>
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -196,6 +197,11 @@ void validate_remote_desc(
         local_desc.config.socket_mem_config.per_core_allocation ==
             remote_desc.config.socket_mem_config.per_core_allocation,
         "Mismatch in socket per-core allocation flag during handshake.");
+    TT_FATAL(
+        local_desc.config.num_lanes == remote_desc.config.num_lanes,
+        "Mismatch in socket lane count during handshake: {} here, {} at the peer.",
+        local_desc.config.num_lanes,
+        remote_desc.config.num_lanes);
     if (validate_buffer_addresses) {
         TT_FATAL(
             local_desc.config_buffer_address == remote_desc.config_buffer_address,
@@ -296,7 +302,8 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
         config_buffer_size =
             sender_size.md_size_bytes + max_num_downstreams * (sender_size.ack_size_bytes + sender_size.enc_size_bytes);
     } else {
-        config_buffer_size = sizeof(receiver_socket_md);
+        TT_FATAL(config.num_lanes >= 1, "Socket num_lanes must be at least 1, got {}", config.num_lanes);
+        config_buffer_size = receiver_socket_config_size_bytes(config.num_lanes);
     }
     std::set<CoreRange> all_cores_set;
     std::unordered_map<MeshCoordinate, std::set<CoreRange>> socket_cores_per_device;
@@ -501,7 +508,8 @@ void write_socket_configs(
                 config_data[md_offset++] = 0;                     // bytes_sent
                 config_data[md_offset++] = connections.size();    // num_downstreams
                 config_data[md_offset++] = 0;                     // write_ptr (offset from downstream_fifo_addr)
-                config_data[md_offset++] = peer_config_buf_addr;  // downstream_bytes_sent_addr
+                config_data[md_offset++] =
+                    peer_config_buf_addr + offsetof(receiver_socket_md, bytes_sent);  // downstream_bytes_sent_addr
                 config_data[md_offset++] = peer_descriptor.data_buffer_address;  // downstream_fifo_addr
                 config_data[md_offset++] = config.socket_mem_config.fifo_size;   // downstream_fifo_total_size
                 config_data[md_offset++] = 0;                                    // is_d2h
@@ -539,8 +547,9 @@ void write_socket_configs(
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }
     } else {
-        std::vector<receiver_socket_md> config_data(
-            config_buffer->size() / sizeof(receiver_socket_md), receiver_socket_md());
+        // One config per receiver core: receiver_socket_md, then the extra lanes' bytes_sent words, left zero.
+        const uint32_t config_size_bytes = receiver_socket_config_size_bytes(config.num_lanes);
+        std::vector<uint32_t> config_data(config_buffer->size() / sizeof(uint32_t), 0);
 
         for (const auto& [device_coord, cores_map] : grouped_connections) {
             // See the sender branch: use MeshDevice::is_local so submesh-local rank-scoped
@@ -572,19 +581,22 @@ void write_socket_configs(
                     SocketEndpoint::RECEIVER);
 
                 uint32_t idx = core_to_core_id.at(recv_core.core_coord);
-                auto& md = config_data[idx];
+                receiver_socket_md md{};
                 md.bytes_sent = 0;
                 md.bytes_acked = 0;
                 md.read_ptr = local_descriptor.data_buffer_address;
                 md.fifo_addr = local_descriptor.data_buffer_address;
                 md.fifo_total_size = config.socket_mem_config.fifo_size;
                 md.is_h2d = 0;
+                md.num_lanes = config.num_lanes;
                 md.d2d.upstream_mesh_id = *upstream_mesh_id;
                 md.d2d.upstream_chip_id = upstream_chip_id;
                 md.d2d.upstream_noc_y = sender_virtual_core.y;
                 md.d2d.upstream_noc_x = sender_virtual_core.x;
                 md.d2d.upstream_bytes_acked_addr = peer_config_buf_addr + sender_size.md_size_bytes +
                                                    sender_size.ack_size_bytes * receiver_ids_per_sender.at(connection);
+                std::memcpy(
+                    reinterpret_cast<uint8_t*>(config_data.data()) + idx * config_size_bytes, &md, sizeof(md));
             }
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }

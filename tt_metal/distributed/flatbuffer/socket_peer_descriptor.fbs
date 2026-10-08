@@ -32,6 +32,8 @@ table SocketConfig {
     receiver_rank: uint32;
     sender_mesh_id: uint32;
     receiver_mesh_id: uint32;
+    // Appended last with the single-lane default, so a peer that predates it deserializes as 1.
+    num_lanes: uint32 = 1;
 }
 
 table SocketPeerDescriptor {
