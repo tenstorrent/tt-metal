@@ -129,7 +129,7 @@ void kernel_main() {
                                                                                   : local_padded_N;
             const uint32_t joint_rows = do_joint_kv ? L : 0;
             // Consumes the reader's per-pass phase-alignment K/V pair (sent iff the chunk count is even).
-            sdpa_recipe_ring_segment<Sq_chunk_t, scale_fp32, recipe_subblock_h, Sk_chunk_t, DHt>(
+            sdpa_recipe_ring_segment<Sq_chunk_t, scale_fp32, recipe_subblock_h, Sk_chunk_t, DHt, DHt>(
                 resident,
                 0,
                 1,
