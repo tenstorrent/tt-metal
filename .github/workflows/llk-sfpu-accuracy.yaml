@@ -150,12 +150,29 @@ jobs:
                 `the '${label}' label was applied by the pull request's author (${by}); ` +
                 'it stands for a second person\'s judgement, so someone else has to apply it');
             }
-            // When the head commit was pushed: GitHub opens its check suites then. A
-            // commit's own dates say when it was written, not when it arrived.
+            // When this PR last moved to its head commit. A commit's own dates say when
+            // it was written, not when it arrived. GitHub opens a check suite when a
+            // commit is pushed to a branch, so the earliest suite on the head SHA *from
+            // this PR's branch* is the push that brought it here; a suite from another
+            // branch the same commit was pushed to first does not count. That misses
+            // only a branch moved back to a commit it already carried, which takes a
+            // force-push (or a restored branch, or a reopened PR), and each of those
+            // leaves an event on the PR: the later of the two is when the head moved.
             const suites = await github.paginate(github.rest.checks.listSuitesForRef, {
               owner, repo, ref: pr.head.sha, per_page: 100,
             });
-            const pushed = Math.min(...suites.map((s) => Date.parse(s.created_at)));
+            const pushes = suites
+              .filter((s) => s.head_branch === pr.head.ref)
+              .map((s) => Date.parse(s.created_at));
+            if (!pushes.length) {
+              return decide(false,
+                `no check suite on ${pr.head.sha.slice(0, 10)} comes from this PR's branch, ` +
+                'so there is no push time to hold the label against');
+            }
+            const moves = events
+              .filter((e) => ['head_ref_force_pushed', 'head_ref_restored', 'reopened'].includes(e.event))
+              .map((e) => Date.parse(e.created_at));
+            const pushed = Math.max(Math.min(...pushes), ...moves);
             if (Date.parse(applied.created_at) < pushed) {
               return decide(false,
                 `the '${label}' label was applied by ${by} at ${applied.created_at}, before ` +
@@ -288,10 +305,14 @@ jobs:
         run: pip3 install PyYAML
       - name: Build test matrix
         id: build-matrix
-        # @main, as the other LLK pipelines do: the current script, not whatever copy a
-        # stale or stacked branch carries. The event routes the merge queue to its
-        # priority SKU.
-        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        # The checkout's own copy, not @main: a required check must run the code its
+        # change was reviewed with, not a ref that can move under it. It is still
+        # current, since a PR checks out its merge with the base branch and a queue
+        # entry the queue's commit. The event would route the merge queue to a
+        # priority SKU, but wh_n150_civ2 has no `merge_queue_sku` (there is no
+        # priority N150 pool), so the queue runs on the regular N150s, as
+        # llk_smoke_wormhole does.
+        uses: ./.github/actions/prepare-test-matrix
         with:
           tests-yaml: ./tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml
           enabled-skus: "ALL_SKUS_IN_TESTS"
