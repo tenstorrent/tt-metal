@@ -3,7 +3,8 @@
 `ttnn.transformer.scaled_dot_product_attention` and `joint_scaled_dot_product_attention` take an optional
 `precision=ttnn.SDPAPrecision.<RECIPE>`. A recipe fixes every numerical choice in the attention kernel, so
 callers pick an accuracy/throughput point instead of tuning compute-kernel fields. Omitting `precision`
-keeps the legacy kernel and its `compute_kernel_config` / `exp_approx_mode` controls.
+keeps the legacy kernel and its `compute_kernel_config` / `exp_approx_mode` controls; with a recipe both are
+accepted and ignored (see [Legacy arguments](#legacy-arguments-with-a-recipe)).
 
 ```python
 out = ttnn.transformer.scaled_dot_product_attention(
@@ -28,7 +29,7 @@ PV and row sums are added. The recipes differ in the arithmetic of each step.
 | Row sum l | BF16 | BF16 per chunk, FP32 L1 add | P·1 matmul, LoFi | P·1 matmul, HiFi2 | BF16 per chunk, FP32 L1 add |
 | Running O, l | BF16 | FP32 in L1, reference max | FP32 | FP32 | FP32 in L1, reference max |
 | O / l | reciprocal, multiply | reciprocal, multiply | reciprocal (2 Newton steps), multiply | same as BALANCED | reciprocal, HiFi2 multiply |
-| K/V storage | BF16 | BF16 | BF16 | BF16 | BF16, BFP8 or BFP4 |
+| K/V storage | BF16, BFP8 or BFP4 | BF16, BFP8 or BFP4 | BF16, BFP8 or BFP4 | BF16, BFP8 or BFP4 | BF16, BFP8 or BFP4 |
 | Input rounding (caller) | none | none | none | none | `prepare_sdpa_input` |
 
 - **Legacy** is the existing streaming kernel (`compute_streaming.hpp`) that runs when `precision` is omitted.
@@ -107,11 +108,44 @@ compute level; they cut K/V bandwidth and L1 to about a half or a quarter.
 
 - Blackhole. Noncausal attention with an optional additive `attn_mask` of shape [1|B, 1|H, Sq, Sk] (BF16, BFP8,
   BFP4, or FP32 for BALANCED/ACCURATE). Joint attention supports the `"rear"` strategy without a mask.
-- Batch and GQA are supported. Q/K lengths need not be tile or chunk multiples. Head dim and chunk sizes must be
-  tile multiples, and the chunks must fit in L1.
-- Tiled, interleaved DRAM inputs and output. Q and the output are BF16.
-- A recipe cannot be combined with `compute_kernel_config` or `exp_approx_mode=False`, and `scale` must be the
-  default 1/√D. Unsupported arguments raise before dispatch; there is no fallback.
+- Batch and GQA are supported, with any number of batch/heads (more than the grid's cores is fine). Q/K lengths
+  need not be tile or chunk multiples. Head dim and chunk sizes must be tile multiples, and the chunks must fit in
+  L1.
+- Tiled, interleaved inputs, mask and output, in DRAM or L1 (sharded tensors are rejected). Q and K/V may be BF16,
+  BFP8 or BFP4 (see below); the output has Q's dtype, like the legacy kernel.
+- Any finite positive `scale` (default 1/√D). Unsupported arguments raise before dispatch; there is no fallback.
+
+## Legacy arguments with a recipe
+
+The legacy kernel's numerical controls are accepted with a recipe, so a caller can name a recipe without first
+removing them. The rule is: **the recipe owns the numerics.**
+
+- `compute_kernel_config` is ignored: its math fidelity, `math_approx_mode`, `fp32_dest_acc_en`, `packer_l1_acc`
+  and `dst_full_sync_en` are what the recipe table above fixes per recipe. A config shared with other ops (for
+  example a HiFi4 FP32-dest config used for the linears) therefore runs exactly the named recipe, bit for bit.
+  Routing a call *without* `precision` by its config (FP32 dest to ACCURATE) is a separate, op-level decision.
+- `exp_approx_mode=False` (in `SDPAProgramConfig`) is ignored. Each recipe already picks its exp: STANDARD and
+  FAST the approximate exp the legacy kernel uses by default, BALANCED and ACCURATE an FP32 exp more accurate than
+  the legacy kernel's non-approximate one. A caller that wants an accurate exp names BALANCED or ACCURATE.
+- `scale` is honored. As in the legacy kernel, the kernels fold it into the exp, P = exp(scale·(S − m)), and never
+  into Q or K; the reference-max thresholds (θ, τ) are in units of the scaled scores, so they hold at any scale.
+  An `attn_mask` is pre-multiplied by 1/scale (0 and −inf stay exact; FP32 for BALANCED/ACCURATE), and the
+  pre-scale is skipped at scale 1.
+- **Packed inputs.** Every recipe takes BF16, BFP8 or BFP4 K/V. The unpacker expands them into the matmul source
+  registers, so the stored values enter the recipe's arithmetic unchanged and the recipe's error
+  against FP64 on those values is the same as with BF16 K/V. A BFP8/BFP4 Q is widened to BF16 in DRAM before the
+  kernel (exact), and the BF16 result is narrowed back to Q's dtype after it, matching the legacy output dtype.
+  The narrowing adds that format's rounding (about 0.5% rel-L2 for BFP8).
+- **FAST and scale.** `prepare_sdpa_input` rounds Q to 7 and K to 5 significant bits for the LoFi matmul; the
+  scale multiplies S = QKᵀ afterwards, inside the exp, so the two do not interact. A caller that folds the scale
+  into Q itself (and passes `scale=1`) must do so before `prepare_sdpa_input`, like any other Q transform. A BFP8
+  Q already has at most 7 significant bits, so it is exact at LoFi without preparation; BFP8/BFP4 K/V for FAST
+  still need it (the 5-bit rounding).
+- **Memory.** Inputs, mask and output may be L1-interleaved. The op-selected blocking reserves an L1 output's share
+  of each core's L1, and the L1 fit check counts every live L1 buffer.
+- **Many heads.** Up to one batch/head per core, each head's Q chunks run on a chain of cores that forwards K/V.
+  With more batch/heads than cores, all Q chunks of all heads split evenly over the grid without chains, and
+  each core's reader follows the head of every chunk it reads.
 
 ## Blocking
 
@@ -131,7 +165,11 @@ chunk in L1 across all ring steps. They mask key tails (shard padding, `logical_
 normalize once, on the last active step. Exp ring rows with several head segments (up to three passes) run
 pass-outer and ring-inner.
 
-- Noncausal only; cache, window and sink features are rejected.
+- Noncausal only; cache, window and sink features are rejected. Q must be BF16; K/V may be BF16, BFP8 or BFP4
+  under every recipe. `scale`, `compute_kernel_config` and `exp_approx_mode` follow
+  [Legacy arguments](#legacy-arguments-with-a-recipe).
+- `ring_distributed_scaled_dot_product_attention` has no recipe path yet: it is always causal (two Q slabs per
+  device) and needs the recipes' causal K-range model first.
 - `logical_n` (and ring's `logical_l`) may be a host scalar or a single-value device tensor, so a captured
   trace can replay with new lengths.
 - For FAST, prepare K/V before they are communicated.
