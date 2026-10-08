@@ -46,6 +46,11 @@ agent_orch/tools/eval_attempt.sh and agent_orch/tools/commit_node.py.
 Set \"worker\" in node.json to your model id.
 Never push, never edit files outside WORKTREE, never kill processes you did not start, never reset the device.
 Your final message must be only the JSON line printed by commit_node.py."
+RULES="$(dream_py -c "from dream.campaign import load_campaign; print('\n'.join('- ' + r for r in load_campaign('$CAMPAIGN').cfg.get('rules', [])))")"
+[[ -n "$RULES" ]] && PROMPT="$PROMPT
+
+Campaign rules (these override anything older in your worktree's campaign.yaml):
+$RULES"
 
 kill_tree() {  # kill a process and all its descendants
   local p

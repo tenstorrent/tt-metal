@@ -51,6 +51,15 @@ def main():
         for k in ("valid", "fail_class", "score"):
             if meta.get(k) != score.get(k):
                 issues.append(f"node.json {k}={meta.get(k)} != score.json {score.get(k)}")
+        for pat in c.cfg.get("forbidden_patterns", []):
+            hits = [
+                p
+                for p in c.cfg.get("allowed_paths", [])
+                if c.git("grep", "-lE", pat, sha, "--", p.rstrip("*"), check=False)
+            ]
+            if hits:
+                issues.append(f"code matches forbidden pattern {pat!r} (campaign rules)")
+                fail_class = "forbidden_edit"
         files = c.git("diff", "--name-only", f"{sha}^", sha).split()
         bad = [p for p in files if not c.allowed(p, args.node)]
         if bad:

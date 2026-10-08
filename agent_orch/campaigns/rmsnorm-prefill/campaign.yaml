@@ -24,6 +24,13 @@ accuracy_gate:             # every shape must pass, else valid=false, score=0
   pcc_min: 0.99999         # baseline is ~0.9999985
   max_abs_max: 0.05        # baseline is ~0.022
 
+rules:                     # told to every worker; violations are marked invalid (fail_class forbidden_edit)
+  - "Do not reduce math fidelity: every compute op stays at MathFidelity::HiFi4 (no HiFi3/HiFi2/LoFi), even if PCC holds. Decided 2026-10-08: lower fidelity raised mean abs error."
+  - "Do not enable approximate math modes (math_approx_mode / APPROX) that the baseline does not use."
+
+forbidden_patterns:        # regexes checked by verify_node.py on the node's code (added lines and the resulting op directory)
+  - 'MathFidelity::(HiFi3|HiFi2|LoFi)'
+
 allowed_paths:             # fnmatch globs, relative to the repo root
   - ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/*
 
