@@ -15,7 +15,13 @@ import torch
 import ttnn
 
 from models.common.utility_functions import is_blackhole
-from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import L2_PCT_BOUND, VARIANTS, l2_pct, reference
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
+    L2_PCT_BOUND,
+    VARIANTS,
+    l2_pct,
+    reference,
+    stored,
+)
 
 RING = 2
 
@@ -270,3 +276,54 @@ def test_ring_joint_sdpa_recipe_op_selected_blocking(ring_mesh, variant):
     for chip in range(RING):
         got = torch.cat([per_chip(out[0])[chip], per_chip(out[1])[chip]], dim=2)
         assert l2_pct(got, expected(chip)) < L2_PCT_BOUND[variant], f"chip {chip}"
+
+
+@pytest.mark.parametrize("variant", ["standard", "balanced", "accurate"])
+def test_ring_joint_sdpa_recipe_legacy_arguments(ring_mesh, variant):
+    """BFP8 K/V on the BF16-input recipes, a custom scale, and an ignored compute config / exp_approx_mode."""
+    mesh, semaphores, ccl_column = ring_mesh
+    b, nh, nkv, q_local, k_local, d, q_chunk, k_chunk, _, _, grid = RING_CASES["gqa_batch2"]
+    q = randn(b, nh, RING * q_local, d, seed=1)
+    k, v = (stored(randn(b, nkv, RING * k_local, d, seed=s), ttnn.bfloat8_b) for s in (2, 3))
+    shard = ttnn.ShardTensorToMesh(mesh, dim=2)
+    inputs = [
+        ttnn.from_torch(x, dtype=dtype, device=mesh, layout=ttnn.TILE_LAYOUT, mesh_mapper=shard)
+        for x, dtype in ((q, ttnn.bfloat16), (k, ttnn.bfloat8_b), (v, ttnn.bfloat8_b))
+    ]
+    backing = [
+        ttnn.allocate_tensor_on_device(list(k.shape), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+        for _ in range(2)
+    ]
+    out = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+        *inputs,
+        None,
+        None,
+        None,
+        persistent_output_buffer_k=backing[0],
+        persistent_output_buffer_v=backing[1],
+        joint_strategy="rear",
+        logical_n=RING * k_local,
+        logical_l=0,
+        is_causal=False,
+        is_cross=q_local != k_local,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid, q_chunk_size=q_chunk, k_chunk_size=k_chunk, exp_approx_mode=False
+        ),
+        dim=2,
+        multi_device_global_semaphore=semaphores,
+        num_links=1,
+        cluster_axis=1,
+        mesh_device=mesh,
+        topology=ttnn.Topology.Linear,
+        subdevice_id=ttnn.SubDeviceId(0),
+        ccl_core_grid_offset=(ccl_column, 0),
+        use_column_major_ccl=True,
+        scale=0.0625,  # FP32-exact: the binding takes scale with noconvert
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+        ),
+        precision=VARIANTS[variant][0],
+    )
+    for chip in range(RING):
+        expected = reference(q.chunk(RING, dim=2)[chip], k, v, scale=0.0625)
+        assert l2_pct(per_chip(out[0])[chip], expected) < L2_PCT_BOUND[variant], f"chip {chip}"

@@ -18,6 +18,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     blackhole_only,
     check_accuracy,
     check_attn_mask,
+    check_legacy_arguments,
     check_joint,
     check_op_selected_blocking,
     inputs_for,
@@ -76,19 +77,36 @@ def test_sdpa_recipe_program_cache_and_trace(device, variant):
         ttnn.release_trace(device, trace)
 
 
+# What legacy callers pass, on the recipes the legacy routes move to: STANDARD and ACCURATE with BFP8 Q/K/V (the
+# output comes back as BFP8), a custom scale with an attn_mask, L1 inputs and output, an FP32-dest HiFi4
+# compute_kernel_config with exp_approx_mode=False (ignored), and six batch/heads (GQA) on a 2x2 grid, so each
+# core runs Q chunks of several heads. The sweeps are in the nightly file.
+@pytest.mark.parametrize("variant", ["standard", "accurate"])
+def test_sdpa_recipe_legacy_arguments(device, variant):
+    check_legacy_arguments(
+        device,
+        variant,
+        q_dtype=ttnn.bfloat8_b,
+        kv_dtype=ttnn.bfloat8_b,
+        scale=0.3,
+        mask=True,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=True,
+        shape=(2, 3, 1, 288, 640, 64, 96, 160),
+        grid=(2, 2),
+    )
+
+
 @pytest.mark.parametrize(
     "invalid",
     [
         "causal",
         "sliding_window",
         "attention_sink",
-        "compute_kernel_config",
-        "exp_approx_mode_false",
         "sub_core_grids",
-        "non_default_scale",
-        "packed_kv_for_bf16_recipe",
+        "zero_scale",
+        "sharded_output",
         "padded_head_dim",
-        "l1_output",
         "mask_shape",
         "fp32_mask_for_bf16_recipe",
     ],
@@ -106,19 +124,12 @@ def test_sdpa_recipe_rejects_unsupported(expect_error, device, invalid):
         kwargs["sliding_window_size"] = 256
     elif invalid == "attention_sink":
         kwargs["attention_sink"] = tensors[0]
-    elif invalid == "compute_kernel_config":
-        kwargs["compute_kernel_config"] = ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4)
-    elif invalid == "exp_approx_mode_false":
-        cfg["exp_approx_mode"] = False
     elif invalid == "sub_core_grids":
         cfg["sub_core_grids"] = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-    elif invalid == "non_default_scale":
-        kwargs["scale"] = 0.5
-    elif invalid == "packed_kv_for_bf16_recipe":
-        kwargs["precision"] = ttnn.SDPAPrecision.STANDARD
-        tensors[1] = to_device(device, k, ttnn.bfloat8_b)
-    elif invalid == "l1_output":
-        kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG
+    elif invalid == "zero_scale":
+        kwargs["scale"] = 0.0
+    elif invalid == "sharded_output":
+        kwargs["memory_config"] = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
     elif invalid == "mask_shape":
         kwargs["attn_mask"] = to_device(device, torch.zeros(1, 1, 256, 256))
     elif invalid == "fp32_mask_for_bf16_recipe":

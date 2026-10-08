@@ -42,11 +42,11 @@ L2_PCT_BOUND = {
 }
 
 
-def reference(q, k, v, mask=None):
+def reference(q, k, v, mask=None, scale=None):
     q, k, v = q.double(), k.double(), v.double()
     rep = q.shape[1] // k.shape[1]
     k, v = k.repeat_interleave(rep, 1), v.repeat_interleave(rep, 1)
-    scores = q @ k.transpose(-1, -2) / math.sqrt(q.shape[-1])
+    scores = (q @ k.transpose(-1, -2)) * (1 / math.sqrt(q.shape[-1]) if scale is None else scale)
     if mask is not None:
         scores = scores + mask.double()
     return torch.softmax(scores, -1) @ v
@@ -58,10 +58,16 @@ def l2_pct(actual, expected):
     return 100 * ((actual - expected).norm() / expected.norm()).item()
 
 
-def to_device(device, x, dtype=ttnn.bfloat16):
-    return ttnn.from_torch(
-        x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+def to_device(device, x, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    return ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+
+
+def stored(x, dtype):
+    """The values x holds once stored as dtype (BFP8/BFP4 share an exponent per 16 values); the FP64 reference
+    of a packed-input call uses these, so the bound measures the recipe, not the input format."""
+    if dtype == ttnn.bfloat16:
+        return x
+    return ttnn.to_torch(ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT)).bfloat16()
 
 
 def inputs_for(device, variant, q, k, v):
@@ -85,10 +91,11 @@ def randn(*shape, seed):
     return torch.randn(shape, generator=torch.Generator().manual_seed(seed)).bfloat16()
 
 
-def sdpa(device, variant, q, k, v, q_chunk, k_chunk, mask=None):
+def sdpa(device, variant, q, k, v, q_chunk, k_chunk, mask=None, scale=None):
     return ttnn.transformer.scaled_dot_product_attention(
         *inputs_for(device, variant, q, k, v),
         is_causal=False,
+        scale=scale,
         attn_mask=None if mask is None else to_device(device, mask),
         program_config=program_config(device, q_chunk, k_chunk),
         precision=VARIANTS[variant][0],
@@ -183,3 +190,77 @@ def check_op_selected_blocking(device, variant, shape):
         actual = torch.cat([ttnn.to_torch(out), ttnn.to_torch(joint_out)], 2)
         expected = reference(torch.cat([q, jq], 2), torch.cat([k, jk], 2), torch.cat([v, jv], 2))
     assert l2_pct(actual, expected) < L2_PCT_BOUND[variant]
+
+
+def check_legacy_arguments(
+    device,
+    variant,
+    *,
+    q_dtype=ttnn.bfloat16,
+    kv_dtype=ttnn.bfloat16,
+    scale=None,
+    mask=False,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    compute_kernel_config=False,
+    shape=(1, 2, 2, 288, 640, 64, 96, 160),
+    grid=None,
+    q_multiplier=1.0,
+):
+    """Arguments legacy SDPA callers pass, with a recipe: a custom scale (with an attn_mask, which is pre-scaled by
+    1/scale), BFP8/BFP4 Q and K/V, L1 inputs and output, and a compute_kernel_config plus exp_approx_mode=False
+    (ignored: the recipe owns the numerics). FP64 reference on the stored input values. Returns the output."""
+    b, nh, nkv, sq, sk, d, q_chunk, k_chunk = shape
+    precision = VARIANTS[variant][0]
+    q, k, v = randn(b, nh, sq, d, seed=33), randn(b, nkv, sk, d, seed=34), randn(b, nkv, sk, d, seed=35)
+    q = (q * q_multiplier).bfloat16()
+    if precision == ttnn.SDPAPrecision.FAST:
+        assert q_dtype == ttnn.bfloat16 and kv_dtype == ttnn.bfloat16, "FAST inputs come from prepare_sdpa_input"
+        tq, tk, tv = inputs_for(device, variant, q, k, v)
+        if memory_config != ttnn.DRAM_MEMORY_CONFIG:
+            tq, tk, tv = (ttnn.to_memory_config(x, memory_config) for x in (tq, tk, tv))
+    else:
+        q, k, v = stored(q, q_dtype), stored(k, kv_dtype), stored(v, kv_dtype)
+        tq = to_device(device, q, q_dtype, memory_config)
+        tk, tv = (to_device(device, x, kv_dtype, memory_config) for x in (k, v))
+    host_mask, kwargs = None, {}
+    if mask:
+        generator = torch.Generator().manual_seed(36)
+        host_mask = torch.randn(1, 1, sq, sk, generator=generator)
+        host_mask[torch.rand(host_mask.shape, generator=generator) < 0.2] = -math.inf
+        host_mask = host_mask.bfloat16()
+        kwargs["attn_mask"] = to_device(device, host_mask, memory_config=memory_config)
+    if compute_kernel_config:
+        kwargs["compute_kernel_config"] = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+    out = ttnn.transformer.scaled_dot_product_attention(
+        tq,
+        tk,
+        tv,
+        is_causal=False,
+        scale=scale,
+        memory_config=memory_config,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid or device.compute_with_storage_grid_size(),
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+            exp_approx_mode=False if compute_kernel_config else None,
+        ),
+        precision=precision,
+        **kwargs,
+    )
+    assert out.dtype == q_dtype and out.memory_config() == memory_config
+    actual = ttnn.to_torch(out)
+    if precision == ttnn.SDPAPrecision.FAST:
+        q, k, v = (ttnn.to_torch(x) for x in (tq, tk, tv))
+    expected = reference(q, k, v, host_mask, scale)
+    # A BFP8/BFP4 output adds its own rounding (legacy SDPA returns Q's dtype too): allow a multiple of the error of
+    # storing the exact result in that format on the host. The device's BFP4 packing loses about 1.8x that.
+    factor = {ttnn.bfloat16: 0.0, ttnn.bfloat8_b: 1.5, ttnn.bfloat4_b: 2.2}[q_dtype]
+    output_rounding = factor * l2_pct(stored(expected.bfloat16(), q_dtype), expected) if factor else 0.0
+    assert l2_pct(actual, expected) < L2_PCT_BOUND[variant] + output_rounding
+    return out
