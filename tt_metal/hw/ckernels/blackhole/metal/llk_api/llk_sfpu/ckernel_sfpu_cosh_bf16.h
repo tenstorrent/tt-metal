@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "ckernel_sfpu_bf16_sfpi_isa.h"
 #include <cstdint>
 namespace ckernel::sfpu {
 struct CoshBf16Config {

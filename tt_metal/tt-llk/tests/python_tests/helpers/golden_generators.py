@@ -8,7 +8,6 @@ from hashlib import sha256
 from pathlib import Path
 from typing import ClassVar, Optional
 
-import mpmath
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
@@ -37,6 +36,7 @@ from helpers.sfpu_dispatch_constants import (
     CLAMP_MAX,
     CLAMP_MIN,
     CLAMPED_SILU_GLU_LIMIT,
+    EXP_WITH_BASE_SCALE,
     HARDSHRINK_LAMBDA,
     INT_MAXMIN_SCALAR,
     LRELU_NEGATIVE_SLOPE,
@@ -2479,81 +2479,6 @@ class UnarySFPUGolden:
         self.dst_format = None
         self.dest_acc = DestAccumulation.No
 
-    def _round_once_to_dest(self, value) -> float:
-        """The mpmath *value* rounded once, to nearest even, onto Dest's grid (its subnormals included).
-
-        A float64 or float32 intermediate would round twice. A magnitude past the format's largest
-        finite value is an infinity; a nonzero value that rounds to zero keeps its sign.
-        """
-        if mpmath.isnan(value):
-            return math.nan
-        if mpmath.isinf(value) or value == 0:
-            return float(value)
-        info = torch.finfo(format_dict[self.dst_format])
-        significand_bits = 1 - round(math.log2(info.eps))
-        _, exponent = mpmath.frexp(value)
-        exponent = max(exponent, round(math.log2(info.smallest_normal)) + 1)
-        quantum = mpmath.ldexp(1, exponent - significand_bits)
-        rounded = mpmath.nint(value / quantum) * quantum
-        if abs(rounded) > info.max:
-            return math.copysign(math.inf, value)
-        return float(rounded) if rounded != 0 else math.copysign(0.0, value)
-
-    def _round_fast(self, value, margin):
-        """*value* (a float64 within ``margin * |value|`` of the exact result) rounded to nearest even onto
-        Dest's grid (an infinity past its overflow threshold), or None where that error could reach a rounding
-        boundary or the overflow threshold, or the value is NaN or below 2^-1000 in magnitude.
-        """
-        if value is None or math.isnan(value) or value == 0 or abs(value) < 2.0**-1000:
-            return None
-        if math.isinf(value):
-            return value  # float64 overflowed: the exact value is past every Dest grid's largest
-        info = torch.finfo(format_dict[self.dst_format])
-        significand_bits = 1 - round(math.log2(info.eps))
-        # Past the largest finite value plus half its spacing, the result rounds to an infinity.
-        overflow = info.max + math.ldexp(
-            1.0, math.frexp(info.max)[1] - significand_bits - 1
-        )
-        if abs(value) * (1 - margin) > overflow:
-            return math.copysign(math.inf, value)
-        if abs(value) * (1 + margin) >= overflow:
-            return None
-        _, exponent = math.frexp(value)
-        exponent = max(exponent, round(math.log2(info.smallest_normal)) + 1)
-        quantum = math.ldexp(1.0, exponent - significand_bits)
-        scaled = value / quantum
-        if abs(abs(scaled - math.floor(scaled)) - 0.5) * quantum <= margin * abs(value):
-            return None
-        rounded = round(scaled) * quantum
-        return rounded if rounded != 0 else math.copysign(0.0, value)
-
-    def _bf16_table(self, source):
-        """*source*, torch float64 over a tensor ``x``, at every BF16 encoding: computed once, then kept."""
-        tables = UnarySFPUGolden.__dict__.get("_fast_tables")
-        if tables is None:
-            tables = {}
-            UnarySFPUGolden._fast_tables = tables
-        if source not in tables:
-            x = (
-                torch.arange(65536, dtype=torch.int32)
-                .to(torch.int16)
-                .view(torch.bfloat16)
-                .to(torch.float64)
-            )
-            with torch.no_grad():
-                tables[source] = eval(
-                    source, {"math": math, "torch": torch, "x": x}
-                ).tolist()
-        return tables[source]
-
-    def _infinite(self, value: float) -> float:
-        """An infinite result as Dest's format returns it (see handle_infinite_numbers)."""
-        return (
-            math.copysign(self.handle_infinite_numbers(math.inf), value)
-            if math.isinf(value)
-            else value
-        )
-
     def __call__(
         self,
         operation,
@@ -2839,12 +2764,44 @@ class UnarySFPUGolden:
         else:  # self.data_format == DataFormat.Float16:
             return math.nan
 
-    def _torch_unary(self, x, torch_fn) -> float:
-        """Apply torch_fn to scalar x in fp32, then enforce the
-        format-aware NaN rule: convert +/-inf to NaN when the dest is
-        A-exponent (Float16).
+    def _work_dtype(self) -> torch.dtype:
+        """The dtype a torch-built golden computes in: the Dest dtype, except fp64 in
+        place of fp32. At a 32-bit Dest the fp32 dtype judged a Float32 output against
+        torch's own fp32 error. A 16-bit Dest keeps its dtype on purpose: computing in
+        it rounds to the Dest lattice before the golden flushes that format's
+        subnormals, as the hardware does -- in fp64, elu(-6.1e-5) would land below
+        fp16's smallest normal and be flushed to 0 instead of rounding up to it.
         """
-        result = torch_fn(torch.tensor(x, dtype=torch.float32)).item()
+        dtype = format_dict[self.dst_format]
+        return torch.float64 if dtype == torch.float32 else dtype
+
+    def _work_tensor(self, x) -> torch.Tensor:
+        """*x* as a tensor in the work dtype (:meth:`_work_dtype`); a tensor as given."""
+        if isinstance(x, torch.Tensor):
+            return x
+        return torch.tensor(x, dtype=self._work_dtype())
+
+    def _in_fp64(self, x, fn) -> float:
+        """*fn* of *x* in fp64, rounded once to the dtype *x* arrives in: the work dtype
+        (:meth:`_work_dtype`) for a scalar. What torch does for a 16-bit tensor anyway,
+        which computes in fp32 and rounds once; at a 32-bit Dest it is the fp64 golden
+        the Float32 cells are measured against, where torch on an fp32 tensor would be
+        judging them against its own fp32 error.
+        """
+        tensor = self._work_tensor(x)
+        return fn(tensor.to(torch.float64)).to(tensor.dtype).item()
+
+    def _torch_unary(self, x, torch_fn) -> float:
+        """Apply torch_fn to scalar x in fp64, then enforce the format-aware NaN rule:
+        convert +/-inf to NaN when the dest is A-exponent (Float16). fp64 so that a
+        Float32-output cell is measured against a correctly rounded reference rather
+        than one carrying torch's own fp32 error.
+
+        Not for an op that overflows a finite input: the NaN it makes of the overflow is
+        excused outright by the sweep (``isnan(golden)``), so any answer would pass there
+        -- see :meth:`_sinh`.
+        """
+        result = torch_fn(torch.tensor(x, dtype=torch.float64)).item()
         if (
             math.isinf(result)
             and not self.data_format.is_exponent_B()
@@ -3016,33 +2973,19 @@ class UnarySFPUGolden:
         # Domain restricted to [-1, 1] by the stimuli spec -- same caveat as _asin.
         return self._torch_unary(x, torch.acos)
 
+    # Through torch in fp64, not `math`: `math.cosh(3.4e38)` raises OverflowError, which
+    # made the full-range ULP sweep skip every Cosh/Sinh cell and never re-verify their
+    # enrolled budgets. torch returns inf. And not through `_torch_unary`, whose Float16
+    # inf -> NaN rule turned the fp64 overflow past |x| ~ 710 into a NaN golden, which
+    # the sweep excuses outright: `sinh(-1000)` -> +65504 passed there while the same
+    # answer at |x| = 700 failed. Kept an infinity, as `_exp` keeps it, the overflow is
+    # judged everywhere: the WH store's NaN or same-sign inf is excused against it as
+    # saturation, a finite or wrong-signed answer is not.
     def _sinh(self, x):
-        return math.sinh(x)
+        return torch.sinh(torch.tensor(x, dtype=torch.float64)).item()
 
     def _cosh(self, x):
-        # Generated from activations/cosh.json and torch 2.11's recorded results: torch's own result at its
-        # special inputs, the exact cosh(x) elsewhere, evaluated at
-        # 320 bits and rounded once onto Dest's grid. The golden this replaces disagreed with torch on
-        # 30,364 of the 65,536 BF16 inputs, raising on 30,364.
-        if math.isnan(x):
-            return math.nan
-        if math.isinf(x):
-            return math.inf if x > 0 else math.inf
-        if x == 0.0:
-            return 1.0 if math.copysign(1.0, x) > 0 else 1.0
-        fast = None
-        bits = struct.unpack("<I", struct.pack("<f", x))[0]
-        if bits & 0xFFFF == 0 and struct.unpack("<f", struct.pack("<f", x))[0] == x:
-            try:
-                fast = math.cosh(x)
-            except (ArithmeticError, ValueError):
-                fast = None
-        rounded = self._round_fast(fast, 3.5527136788005e-15)
-        if rounded is not None:
-            return rounded
-        with mpmath.workprec(320):
-            x = mpmath.mpf(x)
-            return self._round_once_to_dest(mpmath.cosh(x))
+        return torch.cosh(torch.tensor(x, dtype=torch.float64)).item()
 
     def _square(self, x):
         # A finite input that overflows saturates, and handle_infinite_numbers picks inf or NaN
@@ -3054,20 +2997,11 @@ class UnarySFPUGolden:
         return x * x
 
     def _celu(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
-        )
+        input_tensor = self._work_tensor(x)
         return torch.nn.functional.celu(input_tensor, alpha=1.0).item()
 
     def _silu(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
-        )
-        return torch.nn.functional.silu(input_tensor).item()
+        return self._in_fp64(x, torch.nn.functional.silu)
 
     def _erfinv(self, x):
         # domain (-1, 1); |x| >= 1 is excluded by the stimuli domain registry.
@@ -3093,12 +3027,7 @@ class UnarySFPUGolden:
 
     def _softsign(self, x):
         # softsign(x) = x / (1 + |x|).
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
-        )
-        return torch.nn.functional.softsign(input_tensor).item()
+        return self._in_fp64(x, torch.nn.functional.softsign)
 
     def _mish(self, x):
         # mish(x) = x * tanh(softplus(x)).
@@ -3133,39 +3062,23 @@ class UnarySFPUGolden:
         return sfpu_clamp(x, min_val, max_val)
 
     def _elu(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
-        )
+        input_tensor = self._work_tensor(x)
         return torch.nn.functional.elu(input_tensor, alpha=1.0).item()
 
     def _exp(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
-        )
+        input_tensor = self._work_tensor(x)
         return torch.exp(input_tensor).item()
 
     def _exp2(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
-        )
+        input_tensor = self._work_tensor(x)
         return torch.exp2(input_tensor).item()
 
     def _exp_with_base(self, x):
         # Matches the dispatch: calculate_exponential with SCALE_EN and a bf16
-        # scale of 0.5, i.e. exp(0.5 * x). 0.5 is exact in bf16, so the only error
-        # versus this golden is the shared exp approximation itself.
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
-        )
-        return torch.exp(0.5 * input_tensor).item()
+        # scale of EXP_WITH_BASE_SCALE (0.5), i.e. exp(0.5 * x). 0.5 is exact in bf16, so
+        # the only error versus this golden is the shared exp approximation itself.
+        input_tensor = self._work_tensor(x)
+        return torch.exp(EXP_WITH_BASE_SCALE * input_tensor).item()
 
     def _call_tile_structural(
         self,
@@ -3389,22 +3302,30 @@ class UnarySFPUGolden:
         return x
 
     def _gelu(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
+        # At a 16-bit Dest the kernel's contract is torch's own bf16 gelu, staircase and
+        # all: ckernel_sfpu_gelu.h answers 0 for x <= -5.54 because torch's fp32
+        # 1 + erf(...) cancels there ("matches torch.gelu BF16 saturation"). Judged
+        # against the exact tail, that designed 0 read 13,088 bf16 steps.
+        if self._work_dtype() != torch.float64:
+            return torch.nn.functional.gelu(self._work_tensor(x)).item()
+        # At a 32-bit Dest, x * Phi(x) as 0.5 * x * erfc(-x / sqrt(2)): torch's
+        # 0.5 * x * (1 + erf(...)) cancels to 0 below x ~ -8.4 even in fp64, where the
+        # answer is still -1.9e-16.
+        return self._in_fp64(
+            x, lambda v: 0.5 * v * torch.special.erfc(-v / math.sqrt(2.0))
         )
-        return torch.nn.functional.gelu(input_tensor).item()
 
     def _gelu_tanh(self, x):
         # Matches calculate_gelu_tanh: the tanh approximation of GELU,
-        # 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3))).
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
-        )
-        return torch.nn.functional.gelu(input_tensor, approximate="tanh").item()
+        # 0.5 * x * (1 + tanh(u)), u = sqrt(2/pi) * (x + 0.044715 * x^3). Evaluated as
+        # x * sigmoid(2u), the same function: 1 + tanh(u) cancels -- in fp32 at x = -6,
+        # where the answer is -8.4e-11 and torch reads -0.0, and in fp64 below x ~ -7.25
+        # -- and sigmoid never forms the difference.
+        def gelu_tanh(v):
+            u = math.sqrt(2.0 / math.pi) * (v + 0.044715 * v**3)
+            return v * torch.sigmoid(2.0 * u)
+
+        return self._in_fp64(x, gelu_tanh)
 
     def _gelu_derivative(self, x):
         # d/dx [x * Phi(x)] = Phi(x) + x * phi(x), with the erf-based standard
@@ -3436,11 +3357,7 @@ class UnarySFPUGolden:
         )
 
     def _sigmoid(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
-        )
+        input_tensor = self._work_tensor(x)
         return torch.nn.functional.sigmoid(input_tensor).item()
 
     def _threshold(self, x, t=THRESHOLD_T, v=THRESHOLD_V):
@@ -3634,6 +3551,15 @@ class UnarySFPUGolden:
         return sfpu_min(x, self._UNARY_MAX_MIN_VALUE)
 
     def _polygamma(self, x):
+        # At a pole (an integer <= 0) torch answers a large finite number -- 1.8e31 at
+        # x = -6 in fp64, 4.3e15 in fp32 -- where the function is +inf for an odd order
+        # (every term of sum 1 / (x + k)**(n + 1) is positive) and has no limit for an
+        # even one. A block-quantized input lands on these, and the kernel's correct inf
+        # read as a failure against the finite golden. Not through `_torch_unary`: its
+        # Float16 rule would make the pole's inf a NaN, which the sweep never judges, so
+        # any answer there would pass (see `_sinh`).
+        if x <= 0 and float(x).is_integer():
+            return math.inf if self._POLYGAMMA_ORDER % 2 else math.nan
         return self._torch_unary(x, lambda t: torch.polygamma(self._POLYGAMMA_ORDER, t))
 
     def _xielu(self, x):

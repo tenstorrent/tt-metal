@@ -81,13 +81,12 @@ case "${MODEL}" in
     # baseline for sc4 -- 24 layers against 93 -- which is why the summary job reports sc4 alone.
     SC1_NUM_LAYERS=24
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized;"
-    # PREFILL_TRACE_DIR is the one K3 path still on NFS, deliberately. The sc4 93-layer leg's KV PCC
+    # The sc4 93-layer leg's KV PCC
     # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
     # run 36524165128), and the two candidates -- the Weka golden copy and the Weka TTNN cache -- give
-    # the same symptom. This is pinned here as the one-variable test; do not move it until sc4 has
-    # produced a clean run, which the bh_sc4 pool has been failing to do in multihost setup.
+    # the same symptom.
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
-        export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
+        export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"

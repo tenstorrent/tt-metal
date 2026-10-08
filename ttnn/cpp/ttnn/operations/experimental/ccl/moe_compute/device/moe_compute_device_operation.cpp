@@ -172,13 +172,15 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         intermediate_tiles,
         matmul_num_cores);
 
-    TT_FATAL(
-        matmul_num_cores % combine_data_parallel_cores == 0,
-        "matmul_num_cores ({}) must be divisible by num_data_parallel_cores ({}) "
-        "so RING_CORES_PER_COMBINE_COL is integral",
-        matmul_num_cores,
-        combine_data_parallel_cores);
     const uint32_t hidden_tiles = hidden_size / 32;
+    // Every ring core must own a non-empty w2 width slice: dm1 and the program factory derive the
+    // combine columns a core feeds from its last tile.
+    TT_FATAL(
+        hidden_tiles >= matmul_num_cores,
+        "hidden_size ({}) must yield at least 1 tile per ring core ({} tiles < {} cores)",
+        hidden_size,
+        hidden_tiles,
+        matmul_num_cores);
     TT_FATAL(
         hidden_tiles % combine_data_parallel_cores == 0,
         "hidden_tiles ({}) must be divisible by num_data_parallel_cores ({}) "
@@ -447,14 +449,15 @@ std::vector<ttnn::Tensor> moe_compute(
             : 12u);
     // NOTE: the public API auto-detects the ring from the device and does not expose it as a knob.
 
-    // Auto-compute num_data_parallel_cores: largest divisor d of hidden_tiles with d <= 4
-    // AND ring_n % d == 0. dm1 maps ring cores to combine columns via
-    // RING_CORES_PER_COMBINE_COL = num_cores / width_shard_dim, so both must divide evenly.
-    // E.g. GPT-OSS (Ht=90) picks d=3 on WH (N=12) but falls back to d=2 on BH (N=8/7).
+    // Auto-compute num_data_parallel_cores: largest divisor d of hidden_tiles with d <= 4.
+    // The ring size does not constrain d: each ring core signals every combine column its w2
+    // width slice overlaps, and each combine core releases exactly the ring cores feeding it.
+    // Keeping d large matters for the fabric combine, which sends each token segment as one
+    // packet (e.g. DeepSeek at d=1 would need a 14 KB segment).
     const uint32_t hidden_tiles = hidden_size / 32;
     uint32_t num_data_parallel_cores = 1;
     for (uint32_t d = 4; d >= 1; --d) {
-        if (hidden_tiles % d == 0 && ring_n % d == 0) {
+        if (hidden_tiles % d == 0) {
             num_data_parallel_cores = d;
             break;
         }
