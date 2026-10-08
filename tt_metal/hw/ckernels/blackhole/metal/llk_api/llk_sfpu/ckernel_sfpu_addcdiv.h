@@ -43,7 +43,9 @@ inline void calculate_addcdiv(
 
 template <bool APPROXIMATION_MODE>
 void init_addcdiv() {
-    sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    // The body runs sfpu_reciprocal_iter<2> in every mode, so program its 2.0 constant in every mode:
+    // sfpu_reciprocal_init<true> leaves vConstFloatPrgm0 to whichever init ran before.
+    sfpu_reciprocal_init<false>();
 }
 
 }  // namespace ckernel::sfpu
