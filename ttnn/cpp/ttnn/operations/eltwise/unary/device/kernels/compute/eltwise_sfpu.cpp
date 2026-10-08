@@ -13,6 +13,11 @@
 #include "api/compute/eltwise_unary/rdiv.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/dataflow/dataflow_buffer.h"
+// the start opt-in is inert if llk_math_eltwise_sfpu_common.h is included before the defines (Metal 2.0 prolog)
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_MATH) && defined(SFPU_START_AFTER_COPY) && \
+    !defined(LLK_SFPU_START_AFTER_COPY_SEEN)
+#error "SFPU_START_AFTER_COPY was defined after llk_math_eltwise_sfpu_common.h was included"
+#endif
 #if defined(ARCH_BLACKHOLE) && defined(SFPU_OP_CHAIN_0_TILE)
 
 // The chain forms the program factory emits into SFPU_OP_CHAIN_0_TILE: a later tile's init re-programs only the op's
