@@ -390,11 +390,14 @@ inline void _llk_pack_fast_untilize_emit_phase_(
  * @tparam full_ct_dim: Width of the whole output row in tiles; must exceed block_ct_dim.
  * @param address: L1 address, in 16B units, of this chunk's row-0 column in the row-major output.
  * @param unit_dim: Width of this chunk in tiles, in [2, block_ct_dim].
- * @param prev_unit_dim: Chunk width of the previous call; reprograms the MOP when it changes.
+ * @param prev_unit_dim: In/out. Chunk width the strided MOP was last built for; the MOP is rebuilt and this updated
+ *        when unit_dim differs. Pass 0 on the first call after init, which does not build the strided MOP.
  * @param output_row_stride_16B: Distance between output rows in 16B units. Must equal the row pitch
  *        @ref _llk_pack_fast_untilize_init_ programmed, SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * TILE_C_DIM) / 16,
  *        and stay fixed across calls sharing prev_unit_dim: rows inside a run advance by the programmed pitch,
  *        while this value decides whether one base can carry all 32 rows and spaces the run bases.
+ * @note Call @ref _llk_pack_fast_untilize_init_ with the same block_ct_dim / full_ct_dim first, and
+ *       @ref _llk_pack_fast_untilize_uninit_ after the last call.
  */
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
 inline void _llk_pack_fast_untilize_block_strided_(

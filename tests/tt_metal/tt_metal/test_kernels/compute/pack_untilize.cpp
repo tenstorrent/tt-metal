@@ -39,7 +39,7 @@ void fast_untilize_block_at_address(uint32_t icb, uint32_t ocb) {
         const std::uint32_t unit_dim = fast_untilize_next_unit_dim(full_ct_dim - tiles_done);
         MATH((_llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
         UNPACK((llk_unpack_fast_untilize_block<DST_ACCUM_MODE>(icb, tiles_done, unit_dim, prev_unpack_unit_dim)));
-        MATH((llk_math_fast_untilize_block<DST_ACCUM_MODE>(/*dst_index=*/0, unit_dim)));
+        MATH((llk_math_fast_untilize_block<DST_ACCUM_MODE>(0 /*dst_index*/, unit_dim)));
         MATH((_llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, DST_ACCUM_MODE>()));
 
         PACK((llk_packer_wait_for_math_done()));
@@ -47,8 +47,8 @@ void fast_untilize_block_at_address(uint32_t icb, uint32_t ocb) {
             const std::uint32_t output_id = get_output_id(ocb);
             constexpr std::uint32_t bytes_per_16B_unit = 16;
             const std::uint32_t address =
-                get_output_tile_address</*out_of_order_output=*/true, PackMode::Default>(
-                    output_id, /*output_tile_index=*/0) +
+                get_output_tile_address<true /*out_of_order_output*/, PackMode::Default>(
+                    output_id, 0 /*output_tile_index*/) +
                 SCALE_DATUM_SIZE(pack_dst_format[output_id], tiles_done * TILE_C_DIM) / bytes_per_16B_unit;
             const std::uint32_t output_row_stride_16B =
                 SCALE_DATUM_SIZE(pack_dst_format[output_id], full_ct_dim * TILE_C_DIM) / bytes_per_16B_unit;
