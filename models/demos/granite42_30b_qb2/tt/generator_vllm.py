@@ -43,7 +43,8 @@ class GraniteForCausalLM:
 
     @classmethod
     def get_max_tokens_all_users(cls, **kwargs):
-        return 131072
+        # KV pool pilot: 2.5x the release pool while per-request context stays 131072.
+        return 327680
 
     @classmethod
     def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, **kwargs):
