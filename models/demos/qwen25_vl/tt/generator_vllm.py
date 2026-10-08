@@ -30,7 +30,7 @@ from models.demos.qwen25_vl.tt.common import (
 )
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
-from models.demos.qwen25_vl.tt.model_config import ModelArgs, VisionModelArgs
+from models.demos.qwen25_vl.tt.model_config import MAX_IMAGE_PIXELS, ModelArgs, VisionModelArgs
 from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
@@ -120,6 +120,13 @@ class CustomNamespace(SimpleNamespace):
 
 
 class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
+    def get_hf_processor(self, **kwargs: object):
+        # Keep every image within the windowed-attention budget (see MAX_IMAGE_PIXELS); a smaller
+        # user-supplied ``max_pixels`` (mm_processor_kwargs) is honoured.
+        requested = kwargs.get("max_pixels")
+        kwargs["max_pixels"] = MAX_IMAGE_PIXELS if requested is None else min(int(requested), MAX_IMAGE_PIXELS)
+        return super().get_hf_processor(**kwargs)
+
     def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
         return {"image": 1, "video": 0}  # [INFO] videos are not supported yet, only supporting 1 image for now
 
@@ -274,12 +281,14 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         for i, plen in enumerate(prompt_lens):
             inputs.attention_mask[i, :plen] = 1
 
-        if "pixel_values" in kwargs and len(kwargs["pixel_values"]) > 0 and kwargs["pixel_values"][0] is not None:
-            inputs.pixel_values = torch.concat(
-                [im for user_pixel_values in kwargs["pixel_values"] for im in user_pixel_values], dim=0
-            )
+        # A batched prefill may mix users with and without an image (per-user entries are None for text-only
+        # prompts); the image token positions in input_ids carry the user mapping, so only the users with
+        # images contribute to the flattened pixel / grid lists.
+        user_pixel_values = [pv for pv in kwargs.get("pixel_values", []) if pv is not None]
+        if user_pixel_values:
+            inputs.pixel_values = torch.concat([im for pv in user_pixel_values for im in pv], dim=0)
             assert "image_grid_thw" in kwargs, "Expected image_grid_thw when pixel_values are provided."
-            _grid_items = [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw]
+            _grid_items = [im for g in kwargs["image_grid_thw"] if g is not None for im in g]
             assert _grid_items and all(
                 im is not None for im in _grid_items
             ), "Expected non-empty image_grid_thw for image inputs."
