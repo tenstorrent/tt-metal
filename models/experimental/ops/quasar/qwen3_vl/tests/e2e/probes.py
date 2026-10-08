@@ -70,3 +70,30 @@ def run(names, dev):
         ttnn.synchronize_device(dev)
         for t in out if isinstance(out, (list, tuple)) else [out]:
             ttnn.deallocate(t)
+
+
+def device_tensors(root, skip=()):
+    """name -> ttnn.Tensor for every device tensor reachable from `root` through attributes, lists and dicts."""
+    found, seen, skip_ids = {}, set(), {id(t) for t in skip}
+    stack = [("model", root)]
+    while stack:
+        name, obj = stack.pop()
+        if id(obj) in seen or id(obj) in skip_ids:
+            continue
+        seen.add(id(obj))
+        if isinstance(obj, ttnn.Tensor):
+            if obj.storage_type() == ttnn.StorageType.DEVICE and obj.is_allocated():
+                found[name] = obj
+        elif isinstance(obj, dict):
+            stack += [(f"{name}[{k!r}]", v) for k, v in obj.items()]
+        elif isinstance(obj, (list, tuple)):
+            stack += [(f"{name}[{i}]", v) for i, v in enumerate(obj)]
+        elif hasattr(obj, "__dict__") and type(obj).__module__.startswith("models."):
+            stack += [(f"{name}.{k}", v) for k, v in vars(obj).items()]
+    return found
+
+
+def checksums(tensors):
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e.recorder import to_host
+
+    return {name: (t.buffer_address(), float(to_host(t).double().abs().sum())) for name, t in tensors.items()}

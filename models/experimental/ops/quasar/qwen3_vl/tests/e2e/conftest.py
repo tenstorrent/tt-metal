@@ -40,6 +40,12 @@ def pytest_addoption(parser):
         help="Debug: comma-separated probes (tests/e2e/probes.py) to run on dummy tensors right before decode.",
     )
     g.addoption(
+        "--qwen-check-tensor-integrity",
+        action="store_true",
+        default=False,
+        help="Debug: report model device tensors (KV cache excluded) whose contents change between model build and decode.",
+    )
+    g.addoption(
         "--qwen-resume-prefill",
         default=None,
         help="Skip vision and prefill: decode from the prefill_snapshot.pt of an earlier run folder (same config).",
