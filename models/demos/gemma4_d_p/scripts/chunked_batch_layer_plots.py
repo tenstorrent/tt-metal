@@ -23,13 +23,14 @@ def paragraphs(fig, texts, y, width=135, size=10):
         y -= 0.023 * (wrapped.count("\n") + 1) + 0.012
 
 
-def style_table(table, rows, total_row=None):
+def style_table(table, rows, total_row=None, header_scale=2):
     table.auto_set_font_size(False)
     table.set_fontsize(9)
     for (row, col), cell in table.get_celld().items():
         cell.set_edgecolor("#dce2e8")
         cell.set_linewidth(0.45)
         if row == 0:
+            cell.set_height(cell.get_height() * header_scale)
             cell.set_facecolor("#243c53")
             cell.get_text().set_color("white")
             cell.get_text().set_fontweight("bold")
@@ -78,19 +79,22 @@ def append_layer_pages(pdf, finish, data, root):
         extra = b["kernel_ms"] - a["kernel_ms"]
         attention_extra = (b["grouped"]["Attention (SDPA)"]["us"] - a["grouped"]["Attention (SDPA)"]["us"]) / 1000
         notes.append(
-            f"{label}, last chunk: batching adds {extra:.3f} ms per layer; {attention_extra:.3f} ms of that is inside attention (SDPA)."
+            f"{label}, last: batching adds {extra:.3f} ms per layer. The four attention calls total "
+            f"{b['grouped']['Attention (SDPA)']['us']/1000:.3f} ms versus "
+            f"{a['grouped']['Attention (SDPA)']['us']/1000:.3f} ms for canonical's one call, "
+            f"explaining {100*attention_extra/extra:.1f}% of the increase."
         )
     control = next(c for c in cells if c["mode"] == "chunked4" and c["layer"] == "global" and c["start"] == 258048)
     last = select(cells, "global", "chunked4", "last")
     notes += [
-        f"Prefix control: batched global time is {control['kernel_ms']:.3f} ms at a 252K prefix and {last['kernel_ms']:.3f} ms at 255K. This measures the effect of the different final-chunk starts.",
+        f"Prefix control: batched global time is {control['kernel_ms']:.3f} ms at a 252K prefix and {last['kernel_ms']:.3f} ms at 255K. The extra 3K prefix does not explain the slowdown.",
         "Token ranges (K = 1024): first = canonical [0, 4K), batch 4 × [0, 1K). Last = canonical [252K, 256K), batch 4 × [255K, 256K).",
         "These are profiled kernel sums, not full-model latency. The layer test uses random KV histories and token embeddings; the full-model charts use actual model histories. Each panel has its own vertical scale.",
     ]
     paragraphs(fig, notes, 0.31)
     finish(fig, "layer_overview", pdf)
 
-    for layer, title in (("global", "Global attention layer"), ("local", "Sliding-window attention layer")):
+    for layer, title in (("global", "Global layer"), ("local", "Sliding-window layer")):
         selected = {(m, p): select(cells, layer, m, p) for m in ("canonical", "chunked4") for p in ("first", "last")}
         labels = list(dict.fromkeys(op["label"] for c in selected.values() for op in c["operations"]))
         rows = []
@@ -152,7 +156,7 @@ def append_layer_pages(pdf, finish, data, root):
             fig,
             [
                 "The five projection/MLP matmuls have the same packed row count in both paths. Attention, cache writes and local slicing operate per request in the batch. Counts include all four requests.",
-                "Local slices/concatenation copy tensor rows within each device. Norm redistribution changes each device's local memory layout. TP all-gather/reduce-scatter communicate between devices; these are listed separately.",
+                "Slices/concatenation copy rows locally; norm redistribution changes local memory layout. The SDPA operation includes its internal ring KV exchange. The separate TP all-gather/reduce-scatter operations communicate between tensor-parallel devices.",
                 "Timing source: tt-perf-report main (version 1.4.1), with the final warmed replay selected by signposts. Ordinary ops use the slowest device; collectives use the device average. Full per-call tables follow.",
             ],
             0.19,
@@ -205,7 +209,7 @@ def append_layer_pages(pdf, finish, data, root):
                         )
                     fig = plt.figure(figsize=(14, 10))
                     suffix = f" — {page_start//64+1}" if len(source) > 64 else ""
-                    title = f"{layer.capitalize()}, {position}: {'canonical 1×4K' if mode=='canonical' else 'batch 4×1K'}{suffix}"
+                    title = f"{'Global' if layer == 'global' else 'Sliding'}, {position}: {'canonical 1×4K' if mode=='canonical' else 'batch 4×1K'}{suffix}"
                     fig.suptitle(title, x=0.04, y=0.97, ha="left", fontsize=23, fontweight="bold")
                     fig.text(
                         0.04,
@@ -232,7 +236,7 @@ def append_layer_pages(pdf, finish, data, root):
                         bbox=[0, 0, 1, 1],
                         cellLoc="right",
                     )
-                    style_table(table, rows)
+                    style_table(table, rows, header_scale=2.8)
                     table.set_fontsize(8)
                     for i in range(1, len(rows) + 1):
                         table[i, 1].get_text().set_ha("left")

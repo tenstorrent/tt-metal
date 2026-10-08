@@ -115,7 +115,9 @@ def main():
         fig.savefig(path)
         svg = "\n".join(line.rstrip() for line in path.read_text().splitlines()) + "\n"
         path.write_text(svg)
-        pages.append(f'<section><img src="{name}.svg" alt="{name.replace("_", " ")}" loading="lazy"></section>')
+        pages.append(
+            f'<section id="{name}"><img src="{name}.svg" alt="{name.replace("_", " ")}" loading="lazy"></section>'
+        )
         pdf.savefig(fig)
         plt.close(fig)
 
@@ -202,10 +204,27 @@ def main():
             from models.demos.gemma4_d_p.scripts.chunked_batch_layer_plots import append_layer_pages
 
             append_layer_pages(pdf, finish, layer_data, args.layers.parent)
+    layer_links = ""
+    if layer_data:
+        reports = "".join(
+            f'<li>{cell["mode"]}, {cell["layer"]}, chunk {cell["chunk_index"]}: '
+            f'<a href="{cell["perf_report_csv"]}">tt-perf-report CSV</a> · '
+            f'<a href="{cell["perf_report_csv"].replace(".csv", ".txt")}">text and advice</a></li>'
+            for cell in layer_data["cells"]
+        )
+        layer_links = (
+            '<p>Layer profiles: <a href="#layer_overview">Overview</a> · '
+            '<a href="#global_op_comparison">Global operations</a> · '
+            '<a href="#local_op_comparison">Sliding operations</a> · '
+            '<a href="layer_comparison.csv">Comparison CSV</a> · '
+            '<a href="layer_measurements.json">All measurements</a></p>'
+            f"<details><summary>Per-layer tt-perf-report output</summary><ul>{reports}</ul></details>"
+        )
     body = f"""<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Gemma4 fixed 4×1K batching</title><style>body{{font:16px/1.5 system-ui;max-width:1200px;margin:30px auto;color:#223147}}img{{width:100%;height:auto}}</style>
 <h1>Fixed 4×1K batching versus canonical 4K</h1>
 <p><a href="comparison.pdf">PDF</a> · <a href="comparison.csv">Comparison CSV</a> · <a href="study.json">Method and validation</a> · <a href="reproduce.sh">Reproduction commands</a></p>
+{layer_links}
 {''.join(pages)}<p>{html.escape(method)}</p>
 <p>Raw runs: <a href="canonical.json">canonical</a>, <a href="chunked4.json">fixed batch</a>.</p></html>
 """

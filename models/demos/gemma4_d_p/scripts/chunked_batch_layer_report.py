@@ -146,6 +146,10 @@ def read_cells(root, mode, output):
         ]
         assert write_cell_ops_csv(fieldnames, bounded, cell["start_signpost"], cell["stop_signpost"], sliced)
         assert run_tt_perf_report(sliced, cell["start_signpost"], cell["stop_signpost"], report)
+        text_report = report.with_suffix(".txt")
+        text_report.write_text(
+            "\n".join(line.rstrip() for line in text_report.read_text().splitlines()).rstrip() + "\n"
+        )
         with report.open(newline="") as handle:
             report_rows = [row for row in csv.DictReader(handle) if row.get("Device Time")]
         assert len(report_rows) == len(ops)
