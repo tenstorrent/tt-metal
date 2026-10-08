@@ -124,6 +124,10 @@ def test_ctx64k(mesh_device):
             # order so that the repeats of a depth land on different mesh rows: i%4
             order = [j * rep + r_ for r_ in range(rep) for j in range(len(depths))]
             prompts, meta = [prompts[i] for i in order], [meta[i] for i in order]
+        cold = None
+        if E("CTX_WARM", "0") == "1" and mode == "decode":
+            # warm-up generation (captures the prefill and decode traces); the measured generation below is a trace replay: prefill_s is then the WARM TTFT of the same run
+            cold = round(gen.generate(prompts, 2, S=isl)["prefill_s"], 3)
         res = gen.generate(prompts, new, S=isl)
         times = res["times"]
         steady = sorted(times[5:])
@@ -134,6 +138,9 @@ def test_ctx64k(mesh_device):
             isl=isl,
             B=B,
             prefill_s=round(res["prefill_s"], 1),
+            ttft_warm_s=round(res["prefill_s"], 3),
+            ttft_cold_s=cold,
+            prefill_tok_s_warm=round(len(prompts) * isl / res["prefill_s"]),
             prefill_steps=gen.last_prefill_steps,
             decode_steps=len(times),
             step0_ms=round(times[0] * 1e3, 1) if times else None,
