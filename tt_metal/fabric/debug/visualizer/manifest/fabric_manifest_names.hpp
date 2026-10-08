@@ -35,7 +35,7 @@ std::string lower_enum_name(E value) {
     return name;
 }
 
-// The manifest's spelling of a field kind: its type's name in snake case, e.g. kind::L1Value is "l1_value".
+// The manifest's spelling of a field kind: its content type's name in snake case, e.g. content::L1 is "l1".
 template <typename K>
 std::string kind_name() {
     std::string name;
@@ -75,36 +75,35 @@ inline std::string router_key(eth_chan_directions direction, routing_plane_id_t 
     return fmt::format("{}{}", direction_letter(direction), routing_plane);
 }
 
-// The manifest's spelling of a FieldType, which regions and type layouts both use. FieldType carries no width,
-// so integers take theirs from `element_size`, the size in bytes of one element.
-inline std::string schema_name(const FieldType& type, uint32_t element_size) {
+// The size in bytes of one of a type's elements.
+inline uint32_t element_size(const layout::Type& type) { return type.count == 0 ? type.size : type.size / type.count; }
+
+// The manifest's spelling of a type's element, which L1 contents and type layouts both use. An element carries no
+// width, so integers take theirs from the size of one element.
+inline std::string schema_name(const layout::Type& type) {
+    namespace element = layout::element;
     return std::visit(
-        [element_size](const auto& t) -> std::string {
-            using T = std::decay_t<decltype(t)>;
-            if constexpr (std::is_same_v<T, field::Uint>) {
-                return fmt::format("u{}", element_size * 8);
-            } else if constexpr (std::is_same_v<T, field::Int>) {
-                return fmt::format("i{}", element_size * 8);
-            } else if constexpr (std::is_same_v<T, field::Enum>) {
-                return fmt::format("enum:{}", t.name);
-            } else if constexpr (std::is_same_v<T, field::Struct>) {
-                return fmt::format("struct:{}", t.name);
-            } else if constexpr (std::is_same_v<T, field::Packed>) {
-                return fmt::format("packed:{}", t.table);
-            } else if constexpr (std::is_same_v<T, field::Bytes>) {
+        [&type](const auto& e) -> std::string {
+            using E = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<E, element::Uint>) {
+                return fmt::format("u{}", element_size(type) * 8);
+            } else if constexpr (std::is_same_v<E, element::Int>) {
+                return fmt::format("i{}", element_size(type) * 8);
+            } else if constexpr (std::is_same_v<E, element::Enum>) {
+                return fmt::format("enum:{}", e.name);
+            } else if constexpr (std::is_same_v<E, element::Struct>) {
+                return fmt::format("struct:{}", e.name);
+            } else if constexpr (std::is_same_v<E, element::Packed>) {
+                return fmt::format("packed:{}", e.table);
+            } else if constexpr (std::is_same_v<E, element::Bytes>) {
                 return "bytes";
-            } else {
-                static_assert(std::is_same_v<T, field::Pad>);
+            } else if constexpr (std::is_same_v<E, element::Pad>) {
                 return "pad";
+            } else { /* always fails if we get here */
+                static_assert(!sizeof(E*), "schema_name has no spelling for this element");
             }
         },
-        type);
-}
-
-// The schema of an L1 element of type T.
-template <typename T>
-std::string schema_name_of() {
-    return schema_name(field_type<T>(), sizeof(T));
+        type.element);
 }
 
 }  // namespace tt::tt_fabric::manifest
