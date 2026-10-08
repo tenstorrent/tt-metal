@@ -18,7 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sfpu_report"))
 
 import accuracy  # noqa: E402
 import cli  # noqa: E402
+import detect  # noqa: E402
 import overlay  # noqa: E402
+import perf  # noqa: E402
 import report  # noqa: E402
 
 NAN = float("nan")
@@ -182,6 +184,42 @@ def test_binary_ops_are_their_own_family():
     assert cli._family_of("Typecast") == "typecast"
     assert cli._family_of("SfpuLogsigmoid") == "binary"
     assert cli._family_of("SfpuDivInt32") == "binary"
+
+
+@pytest.mark.parametrize("family", sorted(detect.MODULES))
+def test_detection_compiles_modules_and_kernels_that_exist(family):
+    here = Path(__file__).resolve().parent
+    assert (here / detect.MODULES[family]).is_file()
+    assert (here.parent / "sources" / detect.SOURCES[family]).is_file()
+
+
+def test_broadcast_variants_get_their_own_perf_row():
+    plain = {
+        "mathop": "MathOperation.SfpuElwadd",
+        "formats.input_A": "Float16_b",
+        "formats.output": "Float16_b",
+        "dest_acc": "DestAccumulation.No",
+        "approx_mode": "ApproximationMode.No",
+        "fast_mode": "FastMode.No",
+        "sfpu_bcast_dim": "BroadcastType.None_",
+    }
+    assert perf._row_key(plain)[0] == "SfpuElwadd"
+    row = dict(plain, sfpu_bcast_dim="BroadcastType.Row")
+    assert perf._row_key(row)[0] == "SfpuElwadd (bcast Row)"
+    # Families without the column (unary, typecast) and empty CSV cells keep the bare op.
+    unary = {k: v for k, v in plain.items() if k != "sfpu_bcast_dim"}
+    assert perf._row_key(unary) == perf._row_key(plain)
+    assert perf._row_key(dict(plain, sfpu_bcast_dim=NAN)) == perf._row_key(plain)
+
+
+def test_reproduce_commands_drop_the_broadcast_label():
+    summary = _summary()
+    for rows in summary["perf"]["unary"].values():
+        for r in rows:
+            r["op"] = "Square (bcast Row)"
+    text = report.render([summary])
+    assert "| Square (bcast Row) |" in text
+    assert "--ops Square --formats Float16_b,Float16 --check" in text
 
 
 def test_binary_enum_names_map_to_math_operations():

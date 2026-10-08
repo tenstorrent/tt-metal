@@ -159,10 +159,28 @@ def _text_sizes(csvs):
     return out
 
 
+#: ``sfpu_bcast_dim`` values that mean no broadcast; ``nan`` is a row from a family
+#: without the column.
+_NO_BCAST = {"None_", "None", "nan"}
+
+
+def _op_label(cfg, get):
+    """The op, plus the Dest broadcast when the variant has one: ``SfpuElwadd (bcast Row)``.
+
+    The binary float perf family sweeps the broadcast (``sfpu_bcast_dim`` in the CSV);
+    without it in the label, the broadcast variants would share one row with the
+    plain variant.
+    """
+    op = str(get("mathop")).split(".")[-1]
+    bcast = str(cfg.get("sfpu_bcast_dim") if hasattr(cfg, "get") else None)
+    bcast = bcast.split(".")[-1]
+    return op if bcast in _NO_BCAST else f"{op} (bcast {bcast})"
+
+
 def _row_key(cfg):
     get = cfg.get if hasattr(cfg, "get") else cfg.__getitem__
     return (
-        str(get("mathop")).split(".")[-1],
+        _op_label(cfg, get),
         f'{get("formats.input_A")}->{get("formats.output")}',
         str(get("dest_acc")).split(".")[-1],
         str(get("approx_mode")).split(".")[-1],
