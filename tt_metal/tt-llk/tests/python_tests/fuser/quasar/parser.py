@@ -98,8 +98,8 @@ def _validate_math_fidelities(operation, config):
             config, node, output_format, operation
         )
         src_a, src_b = formats[1], formats[3]
-        if node.unpacker is not None and node.unpacker.reverse_operands:
-            src_a, src_b = src_b, src_a
+        if node.unpacker is not None:
+            src_a, src_b = node.unpacker.physical_order(src_a, src_b)
         allowed = [MathFidelity.LoFi]
         if src_a in wide_formats:
             allowed.append(MathFidelity.HiFi2)
