@@ -192,6 +192,8 @@ class Attention(LightweightModule):
         # Initialize bias tensors as None
         self.wqkv_bias_decode = None
         self.wqkv_bias_prefill = None
+        self.k_bias_shift_decode = None
+        self.k_bias_shift_prefill = None
 
         # Create combined QKV bias if present in state dict
         if f"{wq_str}.bias" in state_dict:
@@ -202,6 +204,9 @@ class Attention(LightweightModule):
 
             if self._needs_head_rearrangement():
                 wq_bias, wk_bias, wv_bias = self._rearrange_qkv_1d(wq_bias, wk_bias, wv_bias)
+
+            if configuration.subtract_k_bias_post_rope:
+                self._create_k_bias_shift(wk_bias, bias_num_devices, configuration, cache_name)
 
             qkv_bias = torch.concat(
                 [
@@ -485,6 +490,42 @@ class Attention(LightweightModule):
         new_k = torch.cat([wk_bias[idx * hd : (idx + 1) * hd] for idx in kv_order])
         new_v = torch.cat([wv_bias[idx * hd : (idx + 1) * hd] for idx in kv_order])
         return new_q, new_k, new_v
+
+    def _create_k_bias_shift(self, wk_bias, bias_num_devices, configuration, cache_name):
+        """Device tensors holding this device's K-projection bias, one per KV head, in the
+        same head layout as the keys written to the cache.
+
+        Softmax is invariant to adding a per-query constant, and the K bias contributes
+        exactly such a constant: for a query q, q . (k_pos - b_k) = q . k_pos - q . b_k at every
+        position. Subtracting b_k from every post-RoPE key therefore leaves attention
+        unchanged mathematically, but it removes the large position-independent component
+        of the scores (Qwen2.5 K biases reach ~170, giving raw QK^T scores of ~1e4 whose
+        bf16 rounding inside the decode SDPA kernel is coarser than the gaps between
+        competing positions). Subtracting the bias *before* RoPE would not work: the
+        rotation would turn it into a position-dependent term.
+        """
+        # wk_bias is laid out as [device][local kv head][head_dim], matching the fused QKV bias chunks
+        shift = wk_bias.reshape(bias_num_devices, self.n_local_kv_heads, self.head_dim)
+        shift_decode = shift.reshape(1, 1, bias_num_devices * self.n_local_kv_heads, self.head_dim)  # [1,1,B*K,D]
+        shift_prefill = shift.reshape(1, bias_num_devices * self.n_local_kv_heads, 1, self.head_dim)  # [1,B*K,1,D]
+        suffix = f"2d_{configuration.cluster_shape[1]}" if self.TG else "1d"
+        common = dict(
+            device=self.mesh_device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+        )
+        if self.TG:
+            mapper = lambda dim: ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=(dim, None), mesh_shape=configuration.cluster_shape
+            )
+        else:
+            mapper = lambda dim: ttnn.ShardTensorToMesh(self.mesh_device, dim=dim)
+        # Broadcast over users (dim 1) against the [1, B, K, D] decode keys
+        self.k_bias_shift_decode = ttnn.as_tensor(
+            shift_decode, mesh_mapper=mapper(2), cache_file_name=cache_name(f"k_bias_shift_decode_{suffix}"), **common
+        )
+        # Broadcast over the sequence (dim 2) against the [1, K, S, D] prefill keys
+        self.k_bias_shift_prefill = ttnn.as_tensor(
+            shift_prefill, mesh_mapper=mapper(1), cache_file_name=cache_name(f"k_bias_shift_prefill_{suffix}"), **common
+        )
 
     def _rearrange_qkv_2d(self, wq, wk, wv):
         """Rearrange 2D Q/K/V weight matrices [out_features, in_features] to preserve GQA mapping."""
@@ -935,6 +976,14 @@ class Attention(LightweightModule):
 
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
+
+        if self.k_bias_shift_decode is not None:
+            # Softmax-invariant shift, see _create_k_bias_shift
+            k_heads_shifted = ttnn.subtract(
+                k_heads_1BKD, self.k_bias_shift_decode, memory_config=k_heads_1BKD.memory_config()
+            )
+            ttnn.deallocate(k_heads_1BKD)
+            k_heads_1BKD = k_heads_shifted
         ###
         # KV update
         ###
@@ -1239,6 +1288,14 @@ class Attention(LightweightModule):
         q_heads_1QSD, k_heads_1KSD = self.rotary_embedding_prefill(q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats)
         ttnn.deallocate(q_heads_1QSD_pre_rot)
         ttnn.deallocate(k_heads_1KSD_pre_rot)
+
+        if self.k_bias_shift_prefill is not None:
+            # Softmax-invariant shift, see _create_k_bias_shift
+            k_heads_shifted = ttnn.subtract(
+                k_heads_1KSD, self.k_bias_shift_prefill, memory_config=k_heads_1KSD.memory_config()
+            )
+            ttnn.deallocate(k_heads_1KSD)
+            k_heads_1KSD = k_heads_shifted
 
         # Fill KV-Cache
         if kv_cache:

@@ -298,6 +298,20 @@ def test_attention_inference(
                     )[:batch_size, :, :, :]
                     for cache in tt_model.layer_past
                 ]
+            if getattr(tt_model, "k_bias_shift_prefill", None) is not None:
+                # The cache holds post-RoPE keys minus the K bias (softmax-invariant shift,
+                # see Attention._create_k_bias_shift); add it back before comparing.
+                k_shift = ttnn.to_torch(
+                    tt_model.k_bias_shift_prefill,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device,
+                        dims=(1, 3) if model_args.is_galaxy else (0, 1),
+                        mesh_shape=model_args.cluster_shape,
+                    ),
+                )[
+                    :, : model_args.n_kv_heads, :, : model_args.head_dim
+                ]  # [1, n_kv_heads, 1, head_dim]
+                tt_layer_present[0] = tt_layer_present[0] + k_shift.to(tt_layer_present[0].dtype)
             for label, cache_pt, cache_tt in zip(["K", "V"], pytorch_layer_present, tt_layer_present):
                 cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + i + 1)
                 cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
