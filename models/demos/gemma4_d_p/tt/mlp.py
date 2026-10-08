@@ -172,7 +172,16 @@ class MLP:
             hidden_states.deallocate(True)
             if x is not hidden_states:
                 x.deallocate(True)
-            hidden = geglu_shard(fused, self.mesh_device)
+            if os.environ.get("G4X_GEGLU_DIRECT"):
+                from models.demos.gemma4_d_p.tt.experimental.geglu_shard import geglu_shard_to
+                from models.demos.gemma4_d_p.tt.matmul_config import short_m_sharded_memcfg
+
+                target = short_m_sharded_memcfg(
+                    self.mesh_device, fused.padded_shape[-2], fused.padded_shape[-1] // ttnn.TILE_SIZE // 2
+                )
+                hidden = geglu_shard_to(fused, self.mesh_device, target)
+            else:
+                hidden = geglu_shard(fused, self.mesh_device)
             fused.deallocate(True)
         elif self.gateup_proj is not None:
             fused = self._project(x, self.gateup_proj, act_mc, per_core_n=4)
@@ -201,7 +210,8 @@ class MLP:
         down_mc = ttnn.DRAM_MEMORY_CONFIG
         if short_m:
             sharded = to_l1_width_sharded(hidden)
-            hidden.deallocate(True)
+            if sharded is not hidden:
+                hidden.deallocate(True)
             hidden = sharded
             down_mc = short_m_output_memcfg(hidden, self.down_proj, per_core_n=_DOWN_PER_CORE_N)
         output = self._project(hidden, self.down_proj, down_mc, per_core_n=_DOWN_PER_CORE_N)

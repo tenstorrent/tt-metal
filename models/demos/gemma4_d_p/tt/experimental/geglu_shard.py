@@ -113,7 +113,7 @@ def geglu_shard(fused, mesh_device):
         ttnn.BufferType.L1,
         ttnn.ShardSpec(spec.grid, (sh, sw // 2), spec.orientation),
     )
-    out = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), fused.dtype, ttnn.TILE_LAYOUT, mesh_device, out_mc)
+    out = ttnn.empty(out_shape, fused.dtype, ttnn.TILE_LAYOUT, mesh_device, out_mc)
     cores = spec.grid
     in_cb = ttnn.cb_descriptor_from_sharded_tensor(0, fused, core_ranges=cores)
     out_cb = ttnn.cb_descriptor_from_sharded_tensor(16, out, core_ranges=cores)
@@ -129,6 +129,106 @@ def geglu_shard(fused, mesh_device):
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
         core_ranges=cores,
         compile_time_args=[16, rows * in_w // 2],
+        config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default),
+    )
+    cc = ttnn.ComputeConfigDescriptor()
+    cc.fp32_dest_acc_en = True
+    cc.math_fidelity = ttnn.MathFidelity.HiFi4
+    compute = ttnn.KernelDescriptor(
+        kernel_source=_COMPUTE,
+        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+        core_ranges=cores,
+        compile_time_args=[0, 16, rows, in_w],
+        config=cc,
+    )
+    pd = ttnn.ProgramDescriptor(cbs=[in_cb, out_cb], kernels=[reader, writer, compute])
+    mesh_pd = ttnn.MeshProgramDescriptor()
+    rows_m, cols_m = tuple(mesh_device.shape)
+    mesh_pd[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(rows_m - 1, cols_m - 1))] = pd
+    ttnn.generic_op([fused, out], mesh_pd)
+    return out
+
+
+_WRITER_REMOTE = """
+#include "api/dataflow/dataflow_api.h"
+void kernel_main() {
+    constexpr uint32_t out_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t rows = get_compile_time_arg_val(1);
+    constexpr uint32_t half = get_compile_time_arg_val(2);
+    constexpr uint32_t target_w = get_compile_time_arg_val(3);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(4);
+    const uint32_t tx = get_arg_val<uint32_t>(0);
+    const uint32_t ty = get_arg_val<uint32_t>(1);
+    const uint32_t base = get_arg_val<uint32_t>(2);
+    const uint32_t col_off = get_arg_val<uint32_t>(3);
+    cb_wait_front(out_cb, rows * half);
+    uint32_t src = get_read_ptr(out_cb);
+    for (uint32_t r = 0; r < rows; ++r) {
+        for (uint32_t j = 0; j < half; ++j) {
+            const uint32_t dst = base + (r * target_w + col_off + j) * tile_bytes;
+            noc_async_write(src, get_noc_addr(tx, ty, dst), tile_bytes);
+            src += tile_bytes;
+        }
+    }
+    noc_async_write_barrier();
+    cb_pop_front(out_cb, rows * half);
+}
+"""
+
+
+def _cores_row_major(grid):
+    cores = []
+    for r in grid.ranges():
+        for y in range(r.start.y, r.end.y + 1):
+            for x in range(r.start.x, r.end.x + 1):
+                cores.append((x, y))
+    return sorted(cores, key=lambda c: (c[1], c[0]))
+
+
+def geglu_shard_to(fused, mesh_device, target_memcfg):
+    """Like geglu_shard, but each core NoC-writes its result straight into a width-sharded target layout (e.g. the
+    down projection's input), skipping the reshard."""
+    spec = fused.memory_config().shard_spec
+    sh, sw = spec.shape
+    tile = ttnn.TILE_SIZE
+    rows, in_w = sh // tile, sw // tile
+    half = in_w // 2
+    out_shape = list(fused.padded_shape)
+    out_shape[-1] //= 2
+    out = ttnn.empty(out_shape, fused.dtype, ttnn.TILE_LAYOUT, mesh_device, target_memcfg)
+    tspec = target_memcfg.shard_spec
+    target_w = tspec.shape[1] // tile
+    tile_bytes = tile * tile * 2  # bf16
+    src_cores = _cores_row_major(spec.grid)
+    dst_cores = _cores_row_major(tspec.grid)
+    base = out.buffer_address()
+    cores = spec.grid
+    in_cb = ttnn.cb_descriptor_from_sharded_tensor(0, fused, core_ranges=cores)
+    out_cb = ttnn.CBDescriptor(
+        total_size=rows * half * tile_bytes,
+        core_ranges=cores,
+        format_descriptors=[ttnn.CBFormatDescriptor(16, fused.dtype, tile_bytes)],
+    )
+    reader = ttnn.KernelDescriptor(
+        kernel_source=_READER,
+        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+        core_ranges=cores,
+        compile_time_args=[0, rows * in_w],
+        config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_1_default),
+    )
+    wargs = ttnn.RuntimeArgs()
+    for c, (x, y) in enumerate(src_cores):
+        first = c * half  # first hidden tile column this core produces
+        d = first // target_w
+        tx, ty = dst_cores[d]
+        phys = mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(tx, ty))
+        wargs[x][y] = [phys.x, phys.y, base, first % target_w]
+    writer = ttnn.KernelDescriptor(
+        kernel_source=_WRITER_REMOTE,
+        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+        core_ranges=cores,
+        compile_time_args=[16, rows, half, target_w, tile_bytes],
+        runtime_args=wargs,
         config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default),
     )
     cc = ttnn.ComputeConfigDescriptor()
