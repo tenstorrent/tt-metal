@@ -140,8 +140,7 @@ def _run_custom_mm(
 ):
     """Run custom_mm and check it against the golden; return the (M, N) result.
 
-    ``operands`` optionally supplies ``(A, B, golden_A)``; ``golden_A`` is the A the golden multiplies,
-    for operands the device is expected to change on the way in (flushed denormals).
+    ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
     """
     K = kt * DEFAULT_TILE_R_DIM
     N = ct * DEFAULT_TILE_C_DIM
@@ -155,9 +154,8 @@ def _run_custom_mm(
         torch.manual_seed(0)
         torch_a = torch.randn((M, K), dtype=torch.float32)
         torch_b = torch.randn((K, N), dtype=torch.float32)
-        golden_a = torch_a
     else:
-        torch_a, torch_b, golden_a = operands
+        torch_a, torch_b = operands
 
     # in0 (A -> SrcB): kt*2 faces of [M, 16], column-face order along K, contiguous.
     packed_a = b""
@@ -200,7 +198,7 @@ def _run_custom_mm(
     # get_golden_generator) so the compile-producer's dummy generator does not break the
     # narrow-M reshape.
     golden = MatmulGolden()(
-        golden_a,
+        torch_a,
         golden_b,
         out_format,
         MathFidelity.LoFi,
@@ -377,8 +375,12 @@ def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format):
     )
 
 
-# Smallest positive bf16 denormal, 2^-133.
+# Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
 BF16_DENORMAL_MIN = 2.0**-133
+BF16_DENORMAL_MANTISSAS = 1 << 7
+# B is scaled up so a kept denormal gives a visibly nonzero product; the normal rows of A are scaled down
+# by the same amount so their products stay O(1).
+OPERAND_SCALE = 2.0**100
 
 
 @blackhole_only
@@ -386,22 +388,22 @@ BF16_DENORMAL_MIN = 2.0**-133
 def test_custom_mm_flushes_denormal_srcb_after_keep_flag(ct):
     """The init must restore the Src zero flag a preceding datacopy left at keep.
 
-    Rows 0-3 of A (SrcB) are bf16 denormals, which a bf16 MVMUL flushes to zero; scaled by B ~ 2^100 they
-    give nonzero products if kept, so those rows must come out exactly 0. Rows 4-7 are normal and check the
-    rest of the product.
+    Rows 0-3 of A (SrcB) are bf16 denormals, which a bf16 MVMUL flushes to zero; scaled by B they give nonzero
+    products if kept, so those rows must come out exactly 0. The golden cannot tell flushed rows from kept
+    ones at its tolerance, so only the exact-zero check guards them. Rows 4-7 are normal and check the rest
+    of the product.
     """
     M, kt = 8, 2
     K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
     denormal_rows = 4
 
     torch.manual_seed(0)
-    torch_a = torch.randn((M, K), dtype=torch.float32) * 2.0**-100
+    torch_a = torch.randn((M, K), dtype=torch.float32) / OPERAND_SCALE
     torch_a[:denormal_rows] = (
-        BF16_DENORMAL_MIN * torch.randint(1, 128, (denormal_rows, K)).float()
+        BF16_DENORMAL_MIN
+        * torch.randint(1, BF16_DENORMAL_MANTISSAS, (denormal_rows, K)).float()
     )
-    torch_b = torch.randn((K, N), dtype=torch.float32) * 2.0**100
-    golden_a = torch_a.clone()
-    golden_a[:denormal_rows] = 0.0
+    torch_b = torch.randn((K, N), dtype=torch.float32) * OPERAND_SCALE
 
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     res = _run_custom_mm(
@@ -411,7 +413,7 @@ def test_custom_mm_flushes_denormal_srcb_after_keep_flag(ct):
         formats,
         DestAccumulation.No,
         preserve_zero_flag=True,
-        operands=(torch_a, torch_b, golden_a),
+        operands=(torch_a, torch_b),
     )
     kept = res[:denormal_rows].float()
     assert (

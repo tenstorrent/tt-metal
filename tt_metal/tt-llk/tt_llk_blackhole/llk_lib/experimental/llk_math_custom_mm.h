@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -162,6 +163,17 @@ inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, con
     tmp.program();
 }
 
+/**
+ * @brief Configure the math thread for custom_mm: programs address mods and the MVMUL MOP.
+ *
+ * @tparam transpose: Transpose in1 faces during the multiply.
+ * @tparam split_acc: Accumulate into split DEST halves that the finalize pass merges.
+ * @tparam dense_packing: Lay output tiles 32 DEST rows apart instead of 64.
+ * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
+ * @param ct_dim: Number of output column tiles.
+ * @note Establishes the operand-driven default Src zero-substitution state, as @ref _llk_math_matmul_init_ does;
+ *       @ref _llk_math_custom_mm_ asserts it under LLK asserts.
+ */
 template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
 inline void _llk_math_custom_mm_init_(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim = 1)
 {
@@ -178,6 +190,11 @@ template <bool finalize = true>
 inline void _llk_math_custom_mm_(
     const std::uint32_t operandB_face_r_dim, const std::uint32_t dst_index, const std::uint32_t kt_dim, const std::uint32_t ct_dim = 1)
 {
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "custom_mm: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
+        "this call left it at keep, so denormal Src operands would not be flushed");
+
     const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
