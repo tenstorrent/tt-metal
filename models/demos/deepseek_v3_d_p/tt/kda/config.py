@@ -111,12 +111,13 @@ def tuned_projection_matmul_configs(
     per_core_n = math.ceil(output_n // ttnn.TILE_SIZE / grid.x)
     if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8:
         return None, None
-    # HiFi4 is compute-bound with short blocks. At HiFi2 the math halves, and longer K and N blocks
-    # cut the per-block overhead that then dominates (K3 at 640 rows: 829 -> 654 us per device).
+    # HiFi4 is compute-bound with short blocks. At HiFi2 the math halves, and longer N blocks cut the
+    # per-block overhead that then dominates (K3 at 640 rows: 829 -> 654 us per device). With the weight
+    # stream bound by each column's DRAM reader, 8-tile K blocks keep its reads flowing better than 16.
     if input_projection_math_fidelity == ttnn.MathFidelity.HiFi4:
         k_block, n_block = 8, 3
     else:
-        k_block, n_block = 16, 12
+        k_block, n_block = 8, 12
     input_projection = ttnn.MinimalMatmulConfig(
         M_block_size=2,
         K_block_size=k_block,
