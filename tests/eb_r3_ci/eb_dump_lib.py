@@ -33,6 +33,7 @@ TOGGLES = (
     "EB_R3_PRE_SECTIONS",
     "EB_R3_PER_FACE",
     "EB_R3_PER_TILE",
+    "EB_R3_NO_SWITCH",
     "EB_R3_FIDELITY",
     "EB_R3_NO_BLOCK",
     "EB_R3_NO_BLOCK_PACK",

@@ -18,7 +18,11 @@
 #define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_NG_BLOCK || (EB_R3_PER_TILE && BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL))
 #define ELTWISE_BINARY_BLOCK_UNPACK BINARY_NG_BLOCK
 #include "api/compute/eltwise_binary.h"
-#if BINARY_NG_BLOCK_PACK
+#ifndef EB_R3_NO_SWITCH  // CI only
+#define EB_R3_NO_SWITCH 0
+#endif
+#include "api/compute/pack.h"
+#if EB_R3_NO_SWITCH
 #include "api/compute/experimental/pack_block.h"
 #endif
 #include "eltwise_utils_common.hpp"
@@ -44,7 +48,7 @@ void kernel_main() {
 #ifdef PACK_RELU
     pack_relu_config(ReluConfig::zero());
 #endif
-#if BINARY_NG_BLOCK_PACK
+#if BINARY_NG_BLOCK_PACK && EB_R3_NO_SWITCH
     pack_block_contiguous_init(cb_out.get_cb_id());
 #endif
 
@@ -84,7 +88,11 @@ void kernel_main() {
 
         tile_regs_wait();
 #if BINARY_NG_BLOCK_PACK
+#if EB_R3_NO_SWITCH
         pack_block_contiguous(0, cb_out.get_cb_id(), n);
+#else
+        pack_block_mop(0, cb_out.get_cb_id(), n);
+#endif
 #else
         for (uint32_t i = 0; i < n; ++i) {
             pack_tile(i, cb_out.get_cb_id());
