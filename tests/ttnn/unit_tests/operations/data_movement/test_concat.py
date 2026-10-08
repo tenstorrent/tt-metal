@@ -598,28 +598,46 @@ def test_concat_1d(device, layout, dim, input_shapes):
     assert_equal(torch_output_tensor, output)
 
 
-@pytest.mark.parametrize("num_inputs", [47, 48, 100])
-def test_concat_many_inputs(device, num_inputs):
+@pytest.mark.parametrize(
+    "num_inputs, shape, dim, layout",
+    [
+        (47, (1,), 0, ttnn.TILE_LAYOUT),
+        (48, (1,), 0, ttnn.TILE_LAYOUT),
+        (100, (1,), 0, ttnn.TILE_LAYOUT),
+        # Row-major reader. Split over the full grid, cores start mid-block and cross input boundaries.
+        (33, (1, 1, 8, 64), 2, ttnn.ROW_MAJOR_LAYOUT),
+        (119, (1, 1, 8, 64), 2, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+)
+def test_concat_many_inputs(device, num_inputs, shape, dim, layout):
     """
-    Regression test for concat hang with many tiled inputs.
-    Fixed by commit 85d11279d27 (re-calculated batch size).
-    Previously hung at 48+ inputs with ETH dispatch on N300.
+    Regression test for concat with many interleaved inputs.
+    TILE: hung at 48+ inputs with ETH dispatch on N300; fixed by commit 85d11279d27 (re-calculated batch size).
+    TILE and ROW_MAJOR: above 32 inputs the readers' per-input stack frame overwrote TLS on Quasar
+    (abort at 33-36 inputs, hang at 40+), #59906.
+    Every input is distinct, so a reader that reads the wrong input or page shows up as a mismatch.
     """
-    torch_input = torch.zeros((1,), dtype=torch.bfloat16)
-    torch_expected = torch.concat([torch_input] * num_inputs, dim=0)
+    torch_inputs = [torch.rand(shape, dtype=torch.float32).to(torch.bfloat16) for _ in range(num_inputs)]
+    torch_expected = torch.concat(torch_inputs, dim=dim)
 
-    input_tensor = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    tiled_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(input_tensor)
+    input_tensors = []
+    for torch_input in torch_inputs:
+        input_tensor = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if layout == ttnn.TILE_LAYOUT:
+            tiled_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(input_tensor)
+            input_tensor = tiled_tensor
+        input_tensors.append(input_tensor)
 
-    output_tensor = ttnn.concat([tiled_tensor] * num_inputs, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(tiled_tensor)
+    output_tensor = ttnn.concat(input_tensors, dim=dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for input_tensor in input_tensors:
+        ttnn.deallocate(input_tensor)
 
     output_host = ttnn.to_torch(output_tensor)
     assert_equal(torch_expected, output_host)
