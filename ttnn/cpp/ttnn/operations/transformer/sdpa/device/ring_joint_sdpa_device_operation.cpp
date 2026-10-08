@@ -1151,6 +1151,13 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     for (const auto& tensor : sdpa_input_tensors) {
         validate_padding(tensor);
     }
+
+    // The ring joint kernel accumulates in BF16 DEST only; FP32-DEST calls run the ACCURATE recipe. Checked last
+    // so the feature-specific FP32 messages above (split KV, attention sink) are reported first.
+    TT_FATAL(
+        args.precision.has_value() || !get_fp32_dest_acc_en(args.compute_kernel_config),
+        "Ring joint SDPA without a precision recipe requires fp32_dest_acc_en=false (FP32 DEST runs "
+        "SDPAPrecision.ACCURATE)");
 }
 
 void RingJointSDPADeviceOperation::validate_on_program_cache_hit(
