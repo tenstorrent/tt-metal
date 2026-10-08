@@ -530,6 +530,9 @@ class Model:
             self.index_owner[L] = idx
         else:
             idx.k_cache = self.index_owner[meta["kv_source"]].k_cache
+            idx._slab_owner = self.index_owner[
+                meta["kv_source"]
+            ]  # (decode buckets share one prefix view of the slab per step: tt/decode_buckets.py)
         self.dec_idx[L] = idx
         return idx
 
@@ -1531,6 +1534,19 @@ class Model:
             self.buckets[Ub] = b
             feeds[Ub] = (tok, pos)
             self.log_dram(f"decode bucket U'={Ub} compiled")
+        self.buckets_x = {}
+        for name in [
+            x for x in os.environ.get("DSV41_BUCKET_ABLATE", "").split(",") if x
+        ]:  # timing experiments (see DecodeBucket)
+            Ub = min(self.buckets) if self.buckets else None
+            if Ub is None:
+                break
+            b = DecodeBucket(self, Ub, self.log, ablate=tuple(name.split("+")))
+            phys = torch.tensor([(i // Ub) * U + i % Ub for i in range(rows * Ub)], dtype=torch.long)
+            tok, pos = filler[phys].clone(), torch.zeros(rows * Ub, dtype=torch.long)
+            b.prepare(tok, pos, phys)
+            b.compile(tok, pos, phys)
+            self.buckets_x[name] = (b, tok, pos, phys)
         ttnn.synchronize_device(self.md)
         gc.collect()
         t2 = time.perf_counter()
@@ -1542,6 +1558,8 @@ class Model:
         self.release_trace()
         for Ub, b in self.buckets.items():
             b.capture(*feeds[Ub])
+        for name, (b, tok, pos, phys) in self.buckets_x.items():
+            b.capture(tok, pos)
         if self.trace_id is None:
             self._capture_decode(filler, zeros, compile_pass=False)
         self.log_dram("serving warm-up done (all traces captured)")
@@ -1551,6 +1569,32 @@ class Model:
             f"warm_serving: prefill chunk {chunk} / S_pad {s_pad}, decode buckets U' {sorted(self.buckets)} + {U}: compile {t2 - t0:.1f} s, capture {t3 - t2:.1f} s"
         )
         return self.timing["warm_serving"]
+
+    def bench_buckets(self, n=40):
+        """Device time per replay (ms, blocking replay + token read) of every decode bucket, the ablation variants (DSV41_BUCKET_ABLATE) and the full step, on idle filler inputs."""
+        out = {}
+        items = [(f"bucket B'={4 * u}", b, None) for u, b in sorted(self.buckets.items())]
+        items += [(f"ablation {k} (B'={4 * v[0].U})", v[0], v) for k, v in self.buckets_x.items()]
+        for name, b, v in items:
+            tok = (
+                v[1]
+                if v
+                else self.decode_filler()[torch.tensor([(i // b.U) * self.U + i % b.U for i in range(self.rows * b.U)])]
+            )
+            pos = torch.zeros(self.rows * b.U, dtype=torch.long)
+            phys = torch.tensor([(i // b.U) * self.U + i % b.U for i in range(self.rows * b.U)])
+            b.step(tok, pos, phys)
+            t0 = time.perf_counter()
+            for _ in range(n):
+                b.step(tok, pos, phys, reload_inputs=False)
+            out[name] = (time.perf_counter() - t0) / n * 1e3
+        zeros = torch.zeros(self.B, dtype=torch.long)
+        self.decode_forward(self.decode_filler(), zeros, enable_trace=True, reload_inputs=True)
+        t0 = time.perf_counter()
+        for _ in range(n):
+            self.decode_forward(self.decode_filler(), zeros, enable_trace=True, reload_inputs=False)
+        out[f"full B={self.B}"] = (time.perf_counter() - t0) / n * 1e3
+        return out
 
     def decode_forward_bucket(self, Ub, tokens, current_pos, phys, enable_trace=True):
         """One decode step at ``Ub`` users per mesh row (``Ub`` = U: the full model). tokens / current_pos [4 Ub] in bucket row order, ``phys`` [4 Ub] the model user of every row

@@ -198,6 +198,9 @@ class DeepseekV41ForCausalLM:
         self.m.warm_serving(chunk, s_pad, [u for u in self.bucket_users if u < self.U])
         self._warm = True
         logger.info(f"DSV4.1 vLLM: warm-up done in {time.perf_counter() - t0:.1f} s")
+        if os.environ.get("DSV41_VLLM_BUCKET_BENCH", "0") == "1":
+            for k, v in self.m.bench_buckets().items():
+                logger.info(f"DSV4.1 bucket bench: {k}: {v:.2f} ms per step (host loop, replay + token read)")
         if os.environ.get("DSV41_VLLM_BUCKET_SELFTEST", "0") == "1":
             self.bucket_selftest()
 
