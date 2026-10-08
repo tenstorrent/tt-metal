@@ -13,6 +13,13 @@ import torch.nn.functional as F
 
 import ttnn
 
+# The statistics need ~10^5 device draws per test (USERS x N); on the ttsim simulator that is
+# a timeout, not a measurement, so the module is hardware-only (same gate as test_reduction.py).
+pytestmark = pytest.mark.skipif(
+    bool(os.environ.get("TT_METAL_SIMULATOR")),
+    reason="distribution-level sampling checks need ~10^5 draws; too slow on the ttsim simulator",
+)
+
 USERS, W = 32, 128  # production candidate row: max_top_k 32 x 4 devices
 K, P = 20, 0.95  # the gpqa eval's sampling parameters, temperature 1
 N = int(os.environ.get("SAMPLING_DRAWS", "3000"))
