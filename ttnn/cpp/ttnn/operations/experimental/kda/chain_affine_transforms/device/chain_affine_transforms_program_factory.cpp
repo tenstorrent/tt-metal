@@ -144,31 +144,17 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
     m2::KernelRunArgs dataflow_run{.kernel = dataflow_kernel_name};
     for (uint32_t index = 0; index < dist.cores.size(); ++index) {
         const uint32_t value_block = dist.value_block[index];
-        // The sender (value block 0) addresses its siblings' row segment; receivers address the sender. The
-        // dataflow kernel runs on NoC 0, so the segment starts at its lowest coordinate.
-        uint32_t peer_x0 = 0;
-        uint32_t peer_y0 = 0;
-        uint32_t peer_x1 = 0;
-        uint32_t peer_y1 = 0;
-        if (mcast_shared) {
-            const uint32_t sender_index = index - value_block;
-            const auto first =
-                device.worker_core_from_logical_core(dist.cores[value_block == 0 ? sender_index + 1 : sender_index]);
-            const auto last = device.worker_core_from_logical_core(dist.cores[sender_index + value_blocks - 1]);
-            peer_x0 = first.x;
-            peer_y0 = first.y;
-            peer_x1 = last.x;
-            peer_y1 = last.y;
-        }
+        // The dataflow kernel multicasts on NoC 0, so its segment starts at the lowest coordinate.
+        const auto peers = kda_factory_detail::value_block_peers(device, dist, index);
         m2::AddRuntimeArgsForNode(
             dataflow_run.runtime_arg_values,
             dist.cores[index],
             {{"head", dist.head[index]},
              {"value_block", value_block},
-             {"peer_x0", peer_x0},
-             {"peer_y0", peer_y0},
-             {"peer_x1", peer_x1},
-             {"peer_y1", peer_y1},
+             {"peer_x0", peers.x0},
+             {"peer_y0", peers.y0},
+             {"peer_x1", peers.x1},
+             {"peer_y1", peers.y1},
              {"receivers", value_blocks - 1}});
     }
     m2::KernelRunArgs compute_run{.kernel = compute_kernel_name};
