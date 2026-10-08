@@ -60,3 +60,20 @@ def test_capacity_dependency_requires_its_own_terminal_receipt(tmp_path):
     )
     with patch(MODULE + ".subprocess.run", return_value=finished):
         wait_for_sweep("capacity.service", tmp_path, {}, tmp_path / "queue.json", variants=("capacity",))
+
+
+def test_placement_dependency_requires_clean_terminal_diagnostic(tmp_path, expect_error):
+    receipt = tmp_path / "placement.json"
+    finished = SimpleNamespace(
+        stdout="LoadState=loaded\nActiveState=inactive\nSubState=dead\nMainPID=0\nResult=success\n"
+    )
+    with patch(MODULE + ".subprocess.run", return_value=finished):
+        receipt.write_text(json.dumps(dict(state="completed", cleanup_completed=False)))
+        with expect_error(RuntimeError, "no terminal sweep and clean-device receipt"):
+            wait_for_sweep(
+                "placement.service", tmp_path, {}, tmp_path / "queue.json", receipt_names=("placement.json",)
+            )
+        receipt.write_text(json.dumps(dict(state="completed", cleanup_completed=True)))
+        wait_for_sweep("placement.service", tmp_path, {}, tmp_path / "queue.json", receipt_names=("placement.json",))
+        with expect_error(ValueError, "At least one dependency receipt"):
+            wait_for_sweep("placement.service", tmp_path, {}, tmp_path / "queue.json", receipt_names=())

@@ -321,3 +321,64 @@ To cancel this diagnostic alone, stop its named user service; leave the running
 GDN and capacity services intact. Bank-local KV ownership, read-buffer depth,
 transaction-specific barriers and NoC channel scheduling remain follow-up kernel
 experiments, rather than knobs implemented by this placement diagnostic.
+
+## Paged-KV reader barrier experiment
+
+Inspection of the pinned native reader found that both paged K and V use
+`get_barrier_read_threshold<q_tile_bytes, num_active_cores>()`. With full BF16
+Q tiles this is `((512 / readers) * 1152) / 2048`: two tiles between read
+barriers at B8/B16/B32, and four at B4 with the native 16-core-per-user cap.
+Each 256-token K or V chunk contains 64 BFP8 tiles of 1,088 bytes. The helper
+also waits for all reads at each chunk boundary before publishing the CB.
+The barriers intentionally limit simultaneous NoC traffic; they are a tuning
+candidate, not an established correctness bug or proven throughput bottleneck.
+
+`tests/attention_reader.py` builds a private copy of that reader with intermediate
+paged-KV barrier thresholds 4, 8 or 16. Q/mask/unpaged reads, final completion
+barriers, CB ownership, compute, placement and precision remain unchanged.
+A compile-time assertion restricts candidates to the exact full-tile Qwen
+geometry, preventing a silently inapplicable experiment. Source anchors and
+SHA-256 values for the original reader, common helper and native factory must
+match the pinned runtime before generating an override. Original source and
+libraries are never edited.
+
+The test uses the same six long-context/batch combinations as the placement
+diagnostic. Each variant runs in a fresh process with `TT_METAL_KERNEL_PATH`
+pointing at its own source override and a separate `TT_METAL_CACHE`. This avoids
+binary reuse across overrides that retain the same public kernel name. The
+receipt must include JIT-generated `kernel_includes.hpp` evidence naming the
+exact override file; checking an environment variable alone is insufficient.
+The controller rejects working-directory shadowing or changed dependencies.
+
+Run order is native, KV4, KV8, KV16, native again. All six geometries must pass
+the unchanged per-user/per-rank FP32 reference checks, including shuffled page
+tables and masked future-cache sentinels. Internal repeat timing and the final
+native control gate comparisons at 3% drift. No candidate is promoted to the
+model automatically. Whole-model timing and online evaluation remain separate
+qualification gates. Transaction-tagged overlap and bank-local KV assignment
+are still follow-up work; this experiment only varies intermediate barriers.
+
+CPU validation passed 248 tests plus 40 subtests, and the hardware test collects.
+At 2026-10-08 00:49 UTC, `qwen38-attention-reader-v1-20261007.service` was live
+with PID 2236920, waiting for the live placement service. It uses immutable
+`attention-reader-source-v1` and requires a terminal dependency plus its clean
+`placement.json` receipt. Each variant uses the shared safe runner/device lock,
+a 30-minute timeout and a three-minute termination grace; the outer service is
+bounded to 14 hours. A compile, numerical or dispatch failure stops the queue.
+No reader hardware results are claimed yet. Launch details and the compressed
+CPU receipt are in [`../attention-reader-v1/`](../attention-reader-v1/).
+
+```sh
+python -m models.demos.qwen38_27b_qb2.demo.run_attention_reader \
+  --task /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006 \
+  --source /home/ttuser/qwen38-artifacts-20261007/attention-reader-source-v1 \
+  --weights /home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2 \
+  --results /home/ttuser/qwen38-artifacts-20261007/attention-reader-NEW \
+  --after-unit qwen38-attention-placement-v1-20261007.service \
+  --after-results /home/ttuser/qwen38-artifacts-20261007/attention-placement-v1
+```
+
+Use a new results directory and the saved systemd launch command. Per-variant
+`reader.json` files contain correctness, timing, source and compilation evidence;
+the final `queue.json` contains comparisons. Stopping only this named service
+cancels this experiment without changing earlier queues or the installed runtime.

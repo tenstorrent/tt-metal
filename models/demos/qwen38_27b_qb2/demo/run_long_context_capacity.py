@@ -18,7 +18,7 @@ def save(path, data):
     temporary.replace(path)
 
 
-def wait_for_sweep(unit, results, status, status_path, *, variants=("native", "single-step")):
+def wait_for_sweep(unit, results, status, status_path, *, variants=("native", "single-step"), receipt_names=None):
     """A quiet log or observation timeout is not evidence that hardware is idle."""
     while True:
         observed = subprocess.run(
@@ -53,13 +53,16 @@ def wait_for_sweep(unit, results, status, status_path, *, variants=("native", "s
             # handle is only sufficient together with both clean terminal receipts.
             if not missing and properties.get("Result") != "success":
                 raise RuntimeError(f"Dependency sweep did not exit successfully: {properties}")
-            for variant in variants:
-                receipt = json.loads((results / variant / "sweep.json").read_text())
+            names = receipt_names if receipt_names is not None else [f"{variant}/sweep.json" for variant in variants]
+            if not names:
+                raise ValueError("At least one dependency receipt is required")
+            for name in names:
+                receipt = json.loads((results / name).read_text())
                 if (
                     receipt.get("state") not in ("completed", "completed_with_oom")
                     or receipt.get("cleanup_completed") is not True
                 ):
-                    raise RuntimeError(f"Dependency {variant} has no terminal sweep and clean-device receipt")
+                    raise RuntimeError(f"Dependency {name} has no terminal sweep and clean-device receipt")
             return
         time.sleep(20)
 
