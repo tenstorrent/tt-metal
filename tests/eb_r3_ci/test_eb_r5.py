@@ -256,3 +256,14 @@ K8 += [(op, "hs8_t256", d) for op in ("rsub", "logical_and", "rsub_s") for d in 
 def test_k8(device, op, mem, d):
     ONE4_MEMS[mem] = K8_MEMS[mem]
     test_one4(device, op, mem, d)
+
+
+# sixth pass (#58725): the largest height shard of 8 cores that allocates, logical_and and the Python-scalar rsub in bf16, with
+# the pass per section (main), over four sections and over eight
+L1P = [(op, t) for op in ("logical_and", "rsub_s", "rsub") for t in (128, 144, 160, 176, 192, 208, 224, 240)]
+
+
+@pytest.mark.parametrize("op, t", L1P, ids=[f"{op}-t{t}" for op, t in L1P])
+def test_l1probe(device, op, t):
+    ONE4_MEMS[f"hs8_t{t}"] = ((1, 1, 32 * t, 256), 2, 4, ttnn.ShardStrategy.HEIGHT)
+    test_one4(device, op, f"hs8_t{t}", "bf16")
