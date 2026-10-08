@@ -25,3 +25,15 @@
 - def: 4.488/4.490 s (mean 4.489), host-noise PCC 0.99996, PSNR 55.6/55.2 dB vs ref. Deep tree: out/stage_tree_def.txt.
 - lean: CRASHED after 64 s, TT_THROW storage.cpp:164 (run.log ~line 3672-3713). No timing, no output.
 - Next: debug the lean path : "Tensor is not allocated" in neighborhood_attention.py:744 rephased() reshape of K after exchange_only — lean path deallocates the tensor it still reads, then rerun A/B.
+
+## Lean fix and rerun (2026-10-08 00:03 UTC)
+- Cause: in rephased(), `ttnn.to_layout(row_major_tensor, ROW_MAJOR)` returns a new handle to the same
+  buffer, so `rows is not tensor` was true and `deallocate(tensor)` freed rows. Fix: code commit
+  d078c17c9d7 (skip to_layout/deallocate when already row-major).
+- blx01: job-869 outputs moved to /var/tmp/fasth3/t238/out_869, log drv/driver_869.log.
+  driver.sh now checks out d078c17c9d7; restarted 00:03 UTC (broker was mid health-gate reset, driver waits).
+- Next: read drv/driver.{marker,log}, out/cmp_{def,lean}.json. If lean identical to def and faster:
+  commit default flip, land code commits (1a47d18ecb5, d078c17c9d7, flip) on a -land branch from
+  origin/ttp/t48-ltx25-integrated with `ttp push --detach`.
+- Test gap: no unit test covers already_bricked + key phase + lean; add one to
+  test_neighborhood_bricked_w_sharded.py when landing (device job).
