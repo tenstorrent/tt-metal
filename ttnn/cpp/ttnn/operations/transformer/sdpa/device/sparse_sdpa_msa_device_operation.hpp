@@ -81,8 +81,6 @@ struct SparseSDPAMsaOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     // Re-checks invariants excluded from the program hash, such as interleaved K/V length and cache_batch_idx.
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
-    // Rejects an explicit block-cache slot request that L1 cannot honour at all; runs on misses and hits.
-    static void validate_kv_cache_request(const operation_attributes_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
@@ -156,7 +154,7 @@ struct SparseSDPAMsaOperation {
     };
 
     // Kernel geometry every circular-buffer size and compile-time argument derives from; computed once per call
-    // and passed to base_cbs / resolve_kv_cache so the hash and the factory see the same values.
+    // and passed to base_cbs / resolve_kv_cache_slots so the hash and the factory see the same values.
     struct Geometry {
         uint32_t H_logical = 0, H = 0, S = 0, topk = 0, n_kv = 0, d = 0, v_dim = 0;
         uint32_t DHt = 0, vDHt = 0, Skt = 0, Sqt = 0, k_tiles_per_block = 0, v_tiles_per_block = 0;
@@ -181,10 +179,9 @@ struct SparseSDPAMsaOperation {
     // records on L1-aligned addresses, so a page is rounded up to the larger of the two.
     static uint32_t message_page_bytes(uint32_t words);
 
-    using KvCachePlan = operation_attributes_t::KvCachePlan;
-    // Resolves kv_cache_blocks against the current L1; sparse_sdpa_msa() calls it once per invocation. Off returns
-    // the zero plan without deriving the geometry.
-    static KvCachePlan resolve_kv_cache(const operation_attributes_t& attrs, const tensor_args_t& t);
+    // Sizes the block cache from the current L1; sparse_sdpa_msa() calls it once per invocation. Off returns the
+    // zero plan without deriving the geometry.
+    static uint32_t resolve_kv_cache_slots(const operation_attributes_t& attrs, const tensor_args_t& t);
 };
 
 Tensor sparse_sdpa_msa(
@@ -199,6 +196,6 @@ Tensor sparse_sdpa_msa(
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
     std::optional<uint32_t> cluster_axis = std::nullopt,
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt,
-    std::optional<uint32_t> kv_cache_blocks = std::nullopt);
+    bool enable_kv_block_cache = false);
 
 }  // namespace ttnn::prim

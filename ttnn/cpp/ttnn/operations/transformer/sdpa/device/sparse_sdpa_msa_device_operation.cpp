@@ -130,32 +130,11 @@ void validate_non_hashed(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaIn
 void SparseSDPAMsaOperation::validate_on_program_cache_hit(
     const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
     validate_non_hashed(attrs, t);
-    validate_kv_cache_request(attrs);
 }
 
 // An explicit slot count that cannot be honoured at all is a caller error; auto (0) falls back to the streamed
 // kernels instead. Checked on hits too: an auto call that fell back and an explicit request with no room resolve
 // to the same (streamed) program, so the miss-only validator would not see the second.
-void SparseSDPAMsaOperation::validate_kv_cache_request(const SparseSDPAMsaParams& attrs) {
-    if (attrs.kv_cache_blocks.value_or(0) == 0) {  // off or auto
-        return;
-    }
-    TT_FATAL(
-        attrs.kv_cache_blocks.value() >= sparse_sdpa_msa::KV_CACHE_SLOTS_MIN,
-        "sparse_sdpa_msa: kv_cache_blocks={} but the block cache needs at least {} slots (0 = auto, unset = off)",
-        attrs.kv_cache_blocks.value(),
-        sparse_sdpa_msa::KV_CACHE_SLOTS_MIN);
-    const KvCachePlan& kv = attrs.kv_cache_plan;
-    TT_FATAL(
-        kv.slots > 0,
-        "sparse_sdpa_msa: kv_cache_blocks={} but no L1 is left for {} {} B K+V block slots ({} B free after the "
-        "op's own CBs)",
-        attrs.kv_cache_blocks.value(),
-        sparse_sdpa_msa::KV_CACHE_SLOTS_MIN,
-        kv.block_bytes,
-        kv.free_l1);
-}
-
 void SparseSDPAMsaOperation::validate_on_program_cache_miss(
     const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
     const auto& q = t.q;
@@ -185,7 +164,6 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
         "fp8 q requires fp32_dest_acc_en=true (32-bit DEST for the fp8 tilize)");
 
     validate_non_hashed(attrs, t);
-    validate_kv_cache_request(attrs);
 
     const auto qs = q.logical_shape();
     const auto is = idx.logical_shape();
@@ -337,17 +315,16 @@ uint32_t SparseSDPAMsaOperation::message_page_bytes(uint32_t words) {
     return tt::align(words * static_cast<uint32_t>(sizeof(uint32_t)), quantum);
 }
 
-SparseSDPAMsaOperation::KvCachePlan SparseSDPAMsaOperation::resolve_kv_cache(
+uint32_t SparseSDPAMsaOperation::resolve_kv_cache_slots(
     const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
-    KvCachePlan plan;
-    if (!attrs.kv_cache_blocks.has_value()) {  // off: zero slots, no geometry derived on the host path
-        return plan;
+    if (!attrs.enable_kv_block_cache) {  // off: zero slots, no geometry derived on the host path
+        return 0;
     }
     const Geometry g = derive_kernel_geometry(attrs, t);
-    plan.block_bytes = g.k_tiles_per_block * g.k_tile_bytes + g.v_tiles_per_block * g.v_tile_bytes;
+    const uint64_t block_bytes = g.k_tiles_per_block * g.k_tile_bytes + g.v_tiles_per_block * g.v_tile_bytes;
     // The hash runs before validation, so a not-yet-rejected block_size or d below a tile can give block_bytes == 0.
-    if (plan.block_bytes == 0) {
-        return plan;
+    if (block_bytes == 0) {
+        return 0;
     }
     // Free L1 for the slots: [CB base, lowest live L1 buffer) minus the base CBs and the slot queue, each rounded up
     // to the CB placement alignment as the program allocator does; the cache CBs are whole tiles, already aligned.
@@ -366,15 +343,10 @@ SparseSDPAMsaOperation::KvCachePlan SparseSDPAMsaOperation::resolve_kv_cache(
     const uint64_t l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const uint64_t l1_end = l1_base + device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
     const uint64_t l1_top = std::min<uint64_t>(device->lowest_occupied_compute_l1_address().value_or(l1_end), l1_end);
-    plan.free_l1 = l1_top > l1_base + base_bytes ? l1_top - l1_base - base_bytes : 0;
+    const uint64_t free_l1 = l1_top > l1_base + base_bytes ? l1_top - l1_base - base_bytes : 0;
     const uint32_t n_fit =
-        static_cast<uint32_t>(std::min<uint64_t>(plan.free_l1 / plan.block_bytes, sparse_sdpa_msa::KV_CACHE_SLOTS_MAX));
-    const uint32_t requested = attrs.kv_cache_blocks.value();
-    plan.slots = requested == 0 ? n_fit : std::min(requested, n_fit);
-    if (plan.slots < sparse_sdpa_msa::KV_CACHE_SLOTS_MIN) {
-        plan.slots = 0;
-    }
-    return plan;
+        static_cast<uint32_t>(std::min<uint64_t>(free_l1 / block_bytes, sparse_sdpa_msa::KV_CACHE_SLOTS_MAX));
+    return n_fit < sparse_sdpa_msa::KV_CACHE_SLOTS_MIN ? 0 : n_fit;
 }
 
 ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
@@ -403,7 +375,7 @@ ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
         // The RESOLVED slot count: the CB layout and kernels bake it in, and auto depends on free L1 at this call.
         // A request that resolves to no slots aliases the cache-off program (same layout, same kernels).
-        attrs.kv_cache_plan.slots,
+        attrs.kv_cache_slots,
         t.indices.logical_shape(),
         t.indices.dtype());
 }
@@ -595,7 +567,7 @@ Tensor sparse_sdpa_msa(
     std::optional<uint32_t> chunk_start_idx,
     std::optional<uint32_t> cluster_axis,
     std::optional<BlockCyclicLayout> block_cyclic,
-    std::optional<uint32_t> kv_cache_blocks) {
+    bool enable_kv_block_cache) {
     using OperationType = ttnn::prim::SparseSDPAMsaOperation;
     OperationType::operation_attributes_t attrs{
         .scale = scale,
@@ -605,11 +577,11 @@ Tensor sparse_sdpa_msa(
         .block_cyclic = block_cyclic,
         .chunk_start_idx = chunk_start_idx,
         .cluster_axis = cluster_axis,
-        .kv_cache_blocks = kv_cache_blocks,
+        .enable_kv_block_cache = enable_kv_block_cache,
     };
     const OperationType::tensor_args_t tensors{.q = q, .k = k, .v = v, .indices = indices};
-    // One resolution per call, against the L1 free now; the hash, the validation and the factory read this plan.
-    attrs.kv_cache_plan = OperationType::resolve_kv_cache(attrs, tensors);
+    // One resolution per call, against the L1 free now; the hash and the factory read this count.
+    attrs.kv_cache_slots = OperationType::resolve_kv_cache_slots(attrs, tensors);
     return ttnn::device_operation::launch<OperationType>(attrs, tensors);
 }
 

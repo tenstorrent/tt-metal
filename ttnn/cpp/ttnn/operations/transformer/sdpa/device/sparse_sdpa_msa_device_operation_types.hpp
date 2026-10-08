@@ -29,21 +29,14 @@ struct SparseSDPAMsaParams {
     // with a block-cyclic cache, the KV writer's rotated position (see compute_causal_geometry).
     std::optional<uint32_t> cluster_axis = std::nullopt;
     // Per-core L1 cache for the gathered K/V blocks: a block re-selected by a later query on the same core is read
-    // from L1 instead of DRAM. Unset = off (byte-identical to the streamed kernels). 0 = auto: as many slots as fit
-    // in the L1 below the lowest live L1 buffer after the op's own CBs, at most KV_CACHE_SLOTS_MAX; the count is
-    // resolved at program creation and is part of the program-cache key, so a trace replays the program it
-    // captured; fewer than two fitting selects the streamed kernels. N >= 2 = min(N, that limit); raises if two do not
-    // fit.
-    std::optional<uint32_t> kv_cache_blocks = std::nullopt;
-    // kv_cache_blocks resolved against the L1 free at this call, once, at the prim entry; the program hash, the
-    // validation and the program factory all read this plan. slots == 0 selects the streamed kernels. Not
-    // user-facing.
-    struct KvCachePlan {
-        uint32_t slots = 0;
-        uint32_t block_bytes = 0;
-        uint64_t free_l1 = 0;
-    };
-    KvCachePlan kv_cache_plan;
+    // from L1 instead of DRAM; byte-identical to the streamed kernels. The slot count is as many as fit in the L1
+    // below the lowest live L1 buffer after the op's own CBs, at most KV_CACHE_SLOTS_MAX, resolved per call and part
+    // of the program-cache key, so a trace replays the program it captured; fewer than KV_CACHE_SLOTS_MIN fitting
+    // runs the streamed kernels.
+    bool enable_kv_block_cache = false;
+    // The slot count resolved against the L1 free at this call, once, at the prim entry; the program hash and the
+    // program factory both read it. 0 selects the streamed kernels. Not user-facing.
+    uint32_t kv_cache_slots = 0;
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
     bool causal_enabled() const { return chunk_start_idx.has_value(); }
     bool has_block_cyclic() const { return block_cyclic.has_value(); }

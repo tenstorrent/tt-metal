@@ -44,9 +44,9 @@ def _natural_to_block_cyclic(t, sp, n_chunks, chunk_local):
 @pytest.mark.parametrize("n_chunks", [8])
 @pytest.mark.parametrize("causal", [False, True])  # True: diagonal-block mask must stay on the logical id
 @pytest.mark.parametrize(
-    "kv_cache_blocks", [None, 0], ids=["stream", "kv_cache"]
+    "enable_kv_block_cache", [False, True], ids=["stream", "kv_cache"]
 )  # block-cyclic run only; plain streams
-def test_msa_native_block_cyclic_sp_gt1_matches_plain(mesh_device, n_chunks, causal, kv_cache_blocks):
+def test_msa_native_block_cyclic_sp_gt1_matches_plain(mesh_device, n_chunks, causal, enable_kv_block_cache):
     rows, cols = tuple(mesh_device.shape)
     sp_axis, sp = 1, cols
     if sp < 2:
@@ -86,10 +86,10 @@ def test_msa_native_block_cyclic_sp_gt1_matches_plain(mesh_device, n_chunks, cau
 
     # Both runs get the same per-device chunk_start (compute_chunk_start_local, from the mesh coord); the only
     # difference is K/V layout + the remap, so equal outputs prove the remap is correctness-transparent.
-    def run_op(k_in, v_in, bc, cache=None):
+    def run_op(k_in, v_in, bc, cache=False):
         kw = dict(scale=d**-0.5, block_size=BLK_KV, chunk_start_idx=0 if causal else None)
         if bc:
-            kw.update(block_cyclic_sp_axis=sp_axis, block_cyclic_chunk_local=chunk_local, kv_cache_blocks=cache)
+            kw.update(block_cyclic_sp_axis=sp_axis, block_cyclic_chunk_local=chunk_local, enable_kv_block_cache=cache)
         out = ttnn.transformer.sparse_sdpa_msa(
             dev_rm(q.to(torch.float32), ttnn.bfloat16),
             dev_tile(k_in),
@@ -100,8 +100,8 @@ def test_msa_native_block_cyclic_sp_gt1_matches_plain(mesh_device, n_chunks, cau
         return [ttnn.to_torch(s)[:, :H] for s in ttnn.get_device_tensors(out)]
 
     plain = run_op(k, v, bc=False)
-    blockc = run_op(k_bc, v_bc, bc=True, cache=kv_cache_blocks)
-    if kv_cache_blocks is not None:
+    blockc = run_op(k_bc, v_bc, bc=True, cache=enable_kv_block_cache)
+    if enable_kv_block_cache:
         # The block cache only changes where bytes come from: bit-identical to the same remapped layout streamed.
         for i, (s_out, c_out) in enumerate(zip(run_op(k_bc, v_bc, bc=True), blockc)):
             assert torch.equal(s_out, c_out), f"sp={sp} causal={causal}: block cache != streamed on dev {i}"
