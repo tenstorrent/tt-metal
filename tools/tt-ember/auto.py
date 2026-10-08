@@ -391,14 +391,16 @@ def main() -> int:
         help="Arguments passed to the application. Put this option last.",
     )
     parser.add_argument(
+        "--fixed-blocks-per-core",
         "--fixed-tiles-per-core",
+        dest="fixed_blocks_per_core",
         type=int,
         default=None,
         help=(
             "If set, appends this value as the 5th positional arg to the app, "
-            "enabling fixed-per-core mode in high_power_matmul. "
-            "Each core always computes exactly this many tiles regardless of grid size, "
-            "so power scales linearly with core count."
+            "enabling fixed-per-core mode in long_matmul. "
+            "Each core always computes exactly this many output blocks (tiles, at the default "
+            "1x1 block) regardless of grid size, so power scales linearly with core count."
         ),
     )
 
@@ -503,8 +505,8 @@ def main() -> int:
     )
 
     app_args = list(args.app_args)
-    if args.fixed_tiles_per_core is not None:
-        app_args.append(str(args.fixed_tiles_per_core))
+    if args.fixed_blocks_per_core is not None:
+        app_args.append(str(args.fixed_blocks_per_core))
 
     return run_workflow(
         telemetry_exe=args.telemetry_exe.expanduser().resolve(),

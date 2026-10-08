@@ -1,14 +1,14 @@
 # tt-ember — Device-Side Kernel Instrumentation
 
 This document covers everything added on top of the core tt-ember pipeline
-(`auto.py` + `parser.py` + telemetry): correlating `high_power_matmul`'s reader/compute/writer
+(`auto.py` + `parser.py` + telemetry): correlating `long_matmul`'s reader/compute/writer
 kernel activity with the existing voltage/current/power telemetry, and the power-experiment
-flags added to `high_power_matmul` itself. For the core telemetry-only pipeline, see
+flags added to `long_matmul` itself. For the core telemetry-only pipeline, see
 [`README.md`](../README.md).
 
 ## 1. What's new, in one sentence
 
-`high_power_matmul`'s reader/compute/writer kernels now emit device-side timestamps
+`long_matmul`'s reader/compute/writer kernels now emit device-side timestamps
 (`DeviceTimestampedData`), and `parser.py` converts those into host wall-clock time and joins
 them with the same run's telemetry — producing a per-core, per-kernel **wait vs. active vs.
 overhead** breakdown, plus new charts in `FiguresNew/`.
@@ -19,7 +19,7 @@ overhead** breakdown, plus new charts in `FiguresNew/`.
 auto.py (orchestrator)
   ├── starts telemetry exe (background)
   ├── deletes any stale generated/profiler/.logs/profile_log_device.csv
-  ├── runs high_power_matmul (foreground) -- app emits device profiler markers if
+  ├── runs long_matmul (foreground) -- app emits device profiler markers if
   │   TT_METAL_DEVICE_PROFILER=1 is set
   ├── waits, stops telemetry
   └── invokes parser.py, passing --device-profiler-csv if the file exists
@@ -44,8 +44,8 @@ invocation (not per-iteration — see §7 for why):
 | Compute | `COMPUTE_KERNEL_START/END`, `COMPUTE_WAIT_CYCLES`, `COMPUTE_COMPUTE_CYCLES` (once **per TRISC** — 3x per core) | `cb_wait_front` (no input yet) | `matmul_tiles` + `pack_tile` |
 | Writer  | `WRITER_KERNEL_START/END`, `WRITER_WAIT_CYCLES`, `WRITER_TRANSFER_CYCLES` | `cb_wait_front` (no output tile yet) | `noc_async_write_tile` + barrier |
 
-Source: `tt_metal/programming_examples/high_power_matmul/kernels/{dataflow,compute}/*.cpp`.
-The host (`high_power_matmul.cpp`) drains these via `ReadMeshDeviceProfilerResults(*mesh_device)`
+Source: `tt_metal/programming_examples/long_matmul/kernels/{dataflow,compute}/*.cpp`.
+The host (`long_matmul.cpp`) drains these via `ReadMeshDeviceProfilerResults(*mesh_device)`
 after every grid run, into `generated/profiler/.logs/profile_log_device.csv`.
 
 **Compute runs on 3 separate physical cores** (TRISC0=unpack, TRISC1=math, TRISC2=pack) — the
@@ -116,7 +116,7 @@ No other changes — the existing `run_all.py` / `compare_runs.py` are untouched
 
 ## 6. Why compute has 3 separate charts, and why they can't be summed
 
-`mm_power.cpp` is compiled once but **runs independently on 3 physical cores**
+`compute.cpp` is compiled once but **runs independently on 3 physical cores**
 (TRISC0/1/2). Comparing/summing their percentages across roles is like adding two different
 people's hours in the same meeting — each has its own 100% (its own lifetime), and they
 overlap in wall-clock time rather than partitioning it. Empirically:
@@ -148,11 +148,11 @@ barrier.
 **Fix: derive it instead.** `overhead_s = max(0, lifetime_s - wait_s - active_s)`. This is
 exact by construction, since `lifetime_s` (from `KERNEL_START`/`KERNEL_END`) and `wait_s`/
 `active_s` are all independently measured across real hardware operations. All on-device
-overhead-measurement code and the `HIGH_POWER_MEASURE_OVERHEAD` flag that gated it have since
+overhead-measurement code and the `LONG_MATMUL_MEASURE_OVERHEAD` flag that gated it have since
 been **removed** — don't look for them, they no longer exist.
 
 One consequence worth knowing: for TRISC1/TRISC2, "overhead" often dominates once
-`HIGH_POWER_DISABLE_COMPUTE=1` removes their real work (§9) — this does *not* mean they're
+`LONG_MATMUL_DISABLE_COMPUTE=1` removes their real work (§9) — this does *not* mean they're
 doing pointless work. It means their *real* idle/handshake time isn't captured by the `wait`
 label (which only brackets `cb_wait_front`, and that call resolves almost instantly on
 TRISC1/TRISC2 — the real blocking likely happens inside `tile_regs_acquire`/`tile_regs_wait`,
@@ -175,23 +175,23 @@ kernels start/finish together). Since reader/compute/writer run *concurrently*, 
 own active+overhead+wait stacks should exceed this reference — if one does, something's wrong
 (mismatched run assignment, a fresh measurement bug, etc.).
 
-## 9. Power-experiment flags on `high_power_matmul` itself
+## 9. Power-experiment flags on `long_matmul` itself
 
 These are separate from the profiler markers above — they change what the kernels *do*, to
-isolate where power is actually going. All are env vars read by `high_power_matmul.cpp` at
+isolate where power is actually going. All are env vars read by `long_matmul.cpp` at
 startup; none require a rebuild of the host binary (kernels are JIT-compiled, so a plain rerun
-picks them up — a host rebuild is only needed if `high_power_matmul.cpp` itself changed).
+picks them up — a host rebuild is only needed if `long_matmul.cpp` itself changed).
 
 ### 9.1 Individual flags
 
 | Env var | Effect |
 |---|---|
-| `HIGH_POWER_DISABLE_READER=1` | Reader still cycles `cb_reserve_back`/`cb_push_back` on both input CBs (so compute never deadlocks) but skips the real `noc_async_read_tile` + barrier. Input tiles contain stale L1 data. |
-| `HIGH_POWER_DISABLE_COMPUTE=1` | Compute still cycles `cb_wait_front`/`cb_pop_front`, `tile_regs_acquire/commit/wait/release`, `cb_reserve_back`/`cb_push_back` (so reader/writer never deadlock) but skips `matmul_tiles` + `pack_tile`. Output tiles contain garbage. |
-| `HIGH_POWER_DISABLE_WRITER=1` | Writer still cycles `cb_wait_front`/`cb_pop_front` (so compute never deadlocks) but skips `noc_async_write_tile` + barrier. Output DRAM buffer stays stale/uninitialized. |
-| `HIGH_POWER_WRITE_AMPLIFICATION_PCT=<pct>` | For any real K, reader does `2*Kt` NoC reads per output tile but writer only ever did 1 — this re-writes each output tile `round((pct/100) * 2*Kt)` times (min 1) to load up the write-side NoC path symmetrically. `100` = match the reader's own NoC read volume exactly. Purely a power-stress knob; re-writes the *same* tile to the *same* address, so it doesn't affect correctness. Unset/0 = normal (1 write/tile). |
+| `LONG_MATMUL_DISABLE_READER=1` | Reader still cycles `cb_reserve_back`/`cb_push_back` on both input CBs (so compute never deadlocks) but skips the real `noc_async_read_tile` + barrier. Input tiles contain stale L1 data. |
+| `LONG_MATMUL_DISABLE_COMPUTE=1` | Compute still cycles `cb_wait_front`/`cb_pop_front`, `tile_regs_acquire/commit/wait/release`, `cb_reserve_back`/`cb_push_back` (so reader/writer never deadlock) but skips `matmul_tiles` + `pack_tile`. Output tiles contain garbage. |
+| `LONG_MATMUL_DISABLE_WRITER=1` | Writer still cycles `cb_wait_front`/`cb_pop_front` (so compute never deadlocks) but skips `noc_async_write_tile` + barrier. Output DRAM buffer stays stale/uninitialized. |
+| `LONG_MATMUL_WRITE_AMPLIFICATION_PCT=<pct>` | For any real K, reader does `2*Kt` NoC reads per output tile but writer only ever did 1 — this re-writes each output tile `round((pct/100) * 2*Kt)` times (min 1) to load up the write-side NoC path symmetrically. `100` = match the reader's own NoC read volume exactly. Purely a power-stress knob; re-writes the *same* tile to the *same* address, so it doesn't affect correctness. Unset/0 = normal (1 write/tile). |
 
-None of these need a correctness check on the result — `high_power_matmul.cpp` never verifies
+None of these need a correctness check on the result — `long_matmul.cpp` never verifies
 `result_vec` against expected values, so stale/garbage output data is harmless; don't use these
 modes for anything other than a power comparison. All four can be combined for finer manual
 control; `POWER_CASE` (below) overrides all of them at once with one of 5 pre-defined
@@ -213,7 +213,7 @@ Setting `POWER_CASE` **overrides all four flags above** for one of 5 pre-defined
 never deadlock) but skips its real NoC read/write or FPU work.
 
 ```bash
-POWER_CASE=2 ./build/programming_examples/metal_example_high_power_matmul 4096 8192 8192 160
+POWER_CASE=2 ./build/programming_examples/metal_example_long_matmul 4096 8192 8192 160
 ```
 
 Cases `0`–`3` each remove one more "real" component while keeping writer maximally stressed,
@@ -257,12 +257,12 @@ export TT_METAL_HOME=/path/to/tt-metal
 
 export TT_METAL_DEVICE_PROFILER=1
 export TT_METAL_PROFILER_SYNC=1
-export POWER_CASE=1        # or any of the individual HIGH_POWER_* flags instead
+export POWER_CASE=1        # or any of the individual LONG_MATMUL_* flags instead
 
 python3 auto.py \
   --telemetry-exe "$TT_METAL_HOME"/build_Release/tools/umd/telemetry \
   --telemetry-freq 50 \
-  --app-exe "$TT_METAL_HOME"/build_Release/programming_examples/metal_example_high_power_matmul \
+  --app-exe "$TT_METAL_HOME"/build_Release/programming_examples/metal_example_long_matmul \
   --parser-script ./parser.py \
   --tt-venv-activate /path/to/tt-metal-venv/bin/activate \
   --tt-metal-root "$TT_METAL_HOME" \

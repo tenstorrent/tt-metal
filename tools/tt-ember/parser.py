@@ -43,13 +43,13 @@ RE_PROGRAM_ROW = re.compile(
 )
 
 # Matches the device-side profiler "zone name" markers emitted by DeviceTimestampedData()
-# in the reader/compute/writer kernels (see high_power_matmul), e.g. "READER_KERNEL_START".
+# in the reader/compute/writer kernels (see long_matmul), e.g. "READER_KERNEL_START".
 # The initial version of this analysis only looks at whole-kernel start/end, not the
 # per-iteration TRANSFER_START/END or SHMEM_READ/WRITE markers.
 RE_KERNEL_ZONE = re.compile(r"^(?P<kernel>READER|COMPUTE|WRITER)_KERNEL_(?P<edge>START|END)$")
 
 # Matches the aggregate wait-vs-active cycle counters emitted once per kernel invocation (see
-# high_power_matmul's reader/compute/writer kernels), e.g. "READER_WAIT_CYCLES",
+# long_matmul's reader/compute/writer kernels), e.g. "READER_WAIT_CYCLES",
 # "READER_TRANSFER_CYCLES", "COMPUTE_WAIT_CYCLES", "COMPUTE_COMPUTE_CYCLES". WAIT = blocked on
 # the circular buffer; TRANSFER/COMPUTE (grouped as "active" below) = actual NoC transfer or
 # matmul/pack work. There's no on-device OVERHEAD marker (see compute_kernel_utilization_rows
