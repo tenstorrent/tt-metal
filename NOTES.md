@@ -52,3 +52,7 @@ on /var/tmp, survives), then from /var/tmp/fasth3/t263:
 Then score: $F/t48/python_env/bin/python $F/t260/drv/cmp241.py $F/diffvae/ref $T/out_B/bf8 $T/out_B/cmp_bf8.json 0,1
 Compare bf8 md5 vs def 13802b012e19cf652be8d9c88cdd9316 (must differ), decode vs def 3.113-3.115 s (946/949).
 reads arm: skipped on blx01 (2 drops); follow-up on another box.
+
+## 2026-10-08 11:19 UTC: job B submitted
+blx01 broker job 020 (math + bf8), -t 540, log /var/log/tt-device-broker/2026-10-08_111857_020.log.
+On wake: `ssh g15blx01 tt-device-mcp status -j 020`; then score bf8 per 'Next step (exact)' and compare.
