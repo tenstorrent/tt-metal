@@ -161,7 +161,8 @@ void kernel_main() {
                 // Unused rows are unspecified, unlike the zero-padded final output.
                 dfb_partial.reserve_back(2);
                 tile_regs_wait();
-                pack_block(mean_dst, dfb::partial, 2);
+                pack_tile(mean_dst, dfb::partial);
+                pack_tile(mean_dst + 1, dfb::partial);
 #ifdef ARCH_BLACKHOLE
                 tile_regs_release_math_clear();
 #else
