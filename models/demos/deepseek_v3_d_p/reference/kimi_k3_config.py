@@ -75,6 +75,9 @@ class KimiK3Config:
     # 1.30x the faster existing op at 32 / 512 / 2048 tokens per expert (one Blackhole, balanced experts).
     # $TT_DS_PREFILL_ROUTED_EXPERT_IMPL=unified runs the unified path instead.
     ROUTED_EXPERT_IMPL = "flat"
+    # The MoE block (tt/moe/moe_block.py): "auto" runs the all-gather block on <= 2 mesh rows (LoudBox, QuietBox) and
+    # dispatch / combine on the Galaxy. $TT_DS_PREFILL_MOE_BLOCK overrides it per run.
+    MOE_BLOCK_IMPL = "auto"
 
     # Above this, moe_grouped_topk's circular buffers (sized from NUM_ROUTED_EXPERTS/32) no longer fit
     # L1 alongside the height-sharded gate input, and the program fails to validate. Enforced by

@@ -17,6 +17,7 @@ add_subdirectory(masked_bincount)
 add_subdirectory(mhc_split_sinkhorn)
 add_subdirectory(moe_fused_swiglu)
 add_subdirectory(moe_grouped_topk)
+add_subdirectory(moe_ag)
 add_subdirectory(moe_hash_gate)
 add_subdirectory(moe_padding_config)
 add_subdirectory(offset_cumsum)
@@ -48,6 +49,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::DispatchFabric2d
         TTNN::Ops::Experimental::DeepSeekPrefill::Extract
         TTNN::Ops::Experimental::DeepSeekPrefill::FlatRoutedExpert
+        TTNN::Ops::Experimental::DeepSeekPrefill::MoeAg
         TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync
         TTNN::Ops::Experimental::DeepSeekPrefill::HybridRoutedExpertFfn
         TTNN::Ops::Experimental::DeepSeekPrefill::Insert
@@ -93,6 +95,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::DispatchFabric2d>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Extract>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::FlatRoutedExpert>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeAg>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::HybridRoutedExpertFfn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Insert>

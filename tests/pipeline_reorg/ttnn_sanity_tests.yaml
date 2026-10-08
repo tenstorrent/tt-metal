@@ -354,6 +354,17 @@
   budget_type: sanity
   owner_id: U08T3JQEB36 # stevendae
 
+- name: "ttnn deepseek_prefill moe_ag ops (all-gather MoE block)"
+  # Correctness vs host references, program-cache hits, determinism at the deepseek_v3_d_p shapes (Kimi-K2.7, GLM-5.3,
+  # Kimi-K3's 3584 latent on the LoudBox, Kimi-K3 on the Galaxy). The perf cases stay out of sanity.
+  cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_ag_ops.py -k "not perf and (k27_lb or glm_lb or k3_lb or k3_glx)" -v'
+  skus:
+    bh_p150b_civ2:
+      timeout: 10
+  team: ttnn
+  budget_type: sanity
+  owner_id: U08RL15T4N8 # Danilo Djekic
+
 - name: "ttnn deepseek_prefill group"
   cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_deepseek_moe_post_combine_reduce.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_deepseek_prefill_per_token_cast.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_grouped_topk.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_single_routed_expert.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_swigluoai_routed_expert.py -k "(test_skip_nonlocal_experts and dsv3) or (test_moe_grouped_topk and kimi-1g384e and sigmoid and in_bf16 and realistic and pad0) or (test_single_routed_expert_functional and x_rm and dsv3-isl-3001) or (test_swigluoai_routed_expert_m3_shapes and (t128 or t4k)) or (test_cast_to_fp8_scale_values and bfloat16 and TILE and 7168) or (test_round_trip_random and bfloat16 and TILE and 1152)" -v'
   skus:

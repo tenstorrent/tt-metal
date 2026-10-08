@@ -33,6 +33,9 @@ class KimiK27Config:
     # the faster existing op at 32 / 512 / 2048 tokens per expert (one Blackhole, balanced experts). The hybrid
     # threshold above does not apply to it; $TT_DS_PREFILL_ROUTED_EXPERT_IMPL=unified runs the hybrid path.
     ROUTED_EXPERT_IMPL = "flat"
+    # The MoE block (tt/moe/moe_block.py): "auto" runs the all-gather block on <= 2 mesh rows (LoudBox, QuietBox) and
+    # dispatch / combine on the Galaxy. $TT_DS_PREFILL_MOE_BLOCK overrides it per run.
+    MOE_BLOCK_IMPL = "auto"
     INTERMEDIATE_SIZE = 18432  # Dense FFN hidden dimension
 
     # MoE configuration

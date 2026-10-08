@@ -25,10 +25,12 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
+from models.demos.deepseek_v3_d_p.tt.moe.moe_block import pick_moe_block
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_flat_routed_expert import TtFlatRoutedExpert, flat_routed_expert_supported
 from models.demos.deepseek_v3_d_p.tt.moe.tt_latent_proj import TtLatentMoeProjections
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_ag import TtMoeAgRouted
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_intermediates import TtMoEIntermediates
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
@@ -212,6 +214,7 @@ class TtMoe(LightweightModule):
         routed_expert_hybrid_token_threshold=None,
         routed_expert_weights_dram_nd_sharded: Optional[bool] = None,
         routed_expert_impl: str = "unified",
+        moe_block: str = "dispatch_combine",
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation: str = ACTIVATION_SILU,
@@ -323,6 +326,12 @@ class TtMoe(LightweightModule):
                 (not Blackhole, < 256 tokens per expert of capacity, > 64 local experts, an unsupported
                 activation / dtype, a shape the op's planner has no layout for) it logs why and falls back to
                 "unified".
+            moe_block: the routed data movement (moe_block.py; "auto" picks by the mesh's row count). "dispatch_combine"
+                (default): routing setup,
+                dispatch, routed expert, combine, post-combine reduce. "all_gather": the column's tokens all-gathered
+                to every chip of the column, an on-device route plan, the flat expert in indexed mode, a local
+                weighted reduce and a send-back (tt_moe_ag.py). It needs the flat routed expert; where that cannot
+                run it logs why and falls back to "dispatch_combine". Both return the same routed output.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -353,7 +362,33 @@ class TtMoe(LightweightModule):
         else:
             self.row_topology = self.col_topology = topology
 
-        self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
+        moe_block = pick_moe_block(moe_block, tuple(mesh_device.shape)[0])
+        if moe_block == "all_gather":
+            reason = (
+                "routed_expert_impl is not 'flat'"
+                if routed_expert_impl != "flat"
+                else flat_routed_expert_supported(
+                    mesh_device,
+                    routed_expert_activation,
+                    routed_expert_weights_dtype,
+                    self.routed_emb_dim,
+                    hidden_dim,
+                    max_dispatched_tokens_per_expert,
+                    has_biases=False,
+                    experts_per_chip=experts_per_chip,
+                    num_routed_experts=num_routed_experts,
+                )
+            )
+            if reason is not None:
+                logger.warning(
+                    f"TtMoe layer {layer_idx}: all-gather MoE block unavailable ({reason}); dispatch_combine"
+                )
+                moe_block = "dispatch_combine"
+        self.moe_block = moe_block
+        # The all-gather block has no dispatch to overlap the shared expert with: no sub-devices.
+        self.overlap_shared_expert_with_dispatch = (
+            overlap_shared_expert_with_dispatch and moe_block == "dispatch_combine"
+        )
         # Optional SubDeviceTraceController (capture phase): the shared-expert/dispatch overlap's
         # sub-device load/clear go through it so the trace can be split at those boundaries instead of
         # resetting worker state mid-capture. None => load/clear the mesh device directly.
@@ -423,13 +458,16 @@ class TtMoe(LightweightModule):
             hash_table=gate_hash_table,
         )
 
-        self.routing_setup = TtMoERoutingSetup(
-            mesh_device,
-            expert_dispatch_table,
-            num_links=gate_config.ccl_config["NUM_LINKS"],
-            experts_per_chip=experts_per_chip,
-            use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
-        )
+        if self.moe_block == "dispatch_combine":
+            self.routing_setup = TtMoERoutingSetup(
+                mesh_device,
+                expert_dispatch_table,
+                num_links=gate_config.ccl_config["NUM_LINKS"],
+                experts_per_chip=experts_per_chip,
+                use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+            )
+        else:
+            self.routing_setup = None
         logger.debug(f"Initializing TtMoe")
         logger.debug(f"  mesh_device.shape={mesh_device.shape}")
         logger.debug(f"  dispatch_group_size={dispatch_group_size}, num_dispatch_groups={num_dispatch_groups}")
@@ -437,9 +475,12 @@ class TtMoe(LightweightModule):
         logger.debug(f"  num_experts_per_tok={num_experts_per_tok}")
         logger.debug(f"  seq_len_per_chip={seq_len_per_chip}, emb_dim={emb_dim}, hidden_dim={hidden_dim}")
 
-        self.tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(
-            mesh_device, expert_dispatch_table, dispatch_axis=0
-        )
+        if self.moe_block == "dispatch_combine":
+            self.tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(
+                mesh_device, expert_dispatch_table, dispatch_axis=0
+            )
+        else:
+            self.tt_expert_dispatch_table = None
 
         # ========================================
         # Sub-devices: when overlap is enabled, split the Tensix grid into a "dispatch"
@@ -481,35 +522,41 @@ class TtMoe(LightweightModule):
             logger.debug("Sub-devices disabled: shared expert and dispatch will run sequentially")
 
         # Initialize dispatch module (row axis: axis 0)
-        self.dispatch_module = TtDispatchModule(
-            mesh_device=mesh_device,
-            dispatch_group_size=dispatch_group_size,
-            experts_per_chip=experts_per_chip,
-            num_routed_experts=num_routed_experts,
-            num_experts_per_tok=num_experts_per_tok,
-            metadata_len=metadata_len,
-            max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
-            seq_len_per_chip=seq_len_per_chip,
-            emb_dim=self.routed_emb_dim,
-            cluster_axis=0,
-            num_links=self.row_num_links,
-            topology=self.row_topology,
-            subdevice_id=self.dispatch_sd_id,
-        )
+        if self.moe_block == "dispatch_combine":
+            self.dispatch_module = TtDispatchModule(
+                mesh_device=mesh_device,
+                dispatch_group_size=dispatch_group_size,
+                experts_per_chip=experts_per_chip,
+                num_routed_experts=num_routed_experts,
+                num_experts_per_tok=num_experts_per_tok,
+                metadata_len=metadata_len,
+                max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
+                seq_len_per_chip=seq_len_per_chip,
+                emb_dim=self.routed_emb_dim,
+                cluster_axis=0,
+                num_links=self.row_num_links,
+                topology=self.row_topology,
+                subdevice_id=self.dispatch_sd_id,
+            )
+        else:
+            self.dispatch_module = None
 
         # Initialize combine module (row axis: axis 0)
-        self.combine_module = TtCombineModule(
-            mesh_device=mesh_device,
-            dispatch_group_size=dispatch_group_size,
-            num_dispatch_groups=num_dispatch_groups,
-            experts_per_chip=experts_per_chip,
-            num_experts_per_tok=num_experts_per_tok,
-            seq_len_per_chip=seq_len_per_chip,
-            cluster_axis=0,
-            num_links=self.row_num_links,
-            topology=self.row_topology,
-            init_zeros=False,
-        )
+        if self.moe_block == "dispatch_combine":
+            self.combine_module = TtCombineModule(
+                mesh_device=mesh_device,
+                dispatch_group_size=dispatch_group_size,
+                num_dispatch_groups=num_dispatch_groups,
+                experts_per_chip=experts_per_chip,
+                num_experts_per_tok=num_experts_per_tok,
+                seq_len_per_chip=seq_len_per_chip,
+                cluster_axis=0,
+                num_links=self.row_num_links,
+                topology=self.row_topology,
+                init_zeros=False,
+            )
+        else:
+            self.combine_module = None
 
         # Initialize routed expert
         if routed_expert_impl not in ("unified", "flat"):
@@ -582,6 +629,20 @@ class TtMoe(LightweightModule):
             )
 
         # Initialize shared expert (col axis: axis 1)
+        self.moe_ag = None
+        if self.moe_block == "all_gather":
+            self.moe_ag = TtMoeAgRouted.get(
+                mesh_device,
+                seq_len_per_chip=seq_len_per_chip,
+                hidden=self.routed_emb_dim,
+                k=num_experts_per_tok,
+                n_global=num_routed_experts,
+                gids=self.routed_expert.gids,
+                row_num_links=self.row_num_links,
+                col_num_links=self.col_num_links,
+                row_topology=self.row_topology,
+                col_topology=self.col_topology,
+            )
         self.shared_expert = TtSharedExpert(
             mesh_device=mesh_device,
             # The shared expert reads the pre-projection hidden, so it stays at the full emb_dim.
@@ -624,13 +685,16 @@ class TtMoe(LightweightModule):
         # Initialize reduce module for post-combine reduction (col axis: axis 1)
         # topk_dim=3 because combine output is (1, dispatch_group_size, seq_len, topk, emb_dim)
         # cluster_axis=1 to reduce-scatter across TP axis (same as shared expert)
-        self.reduce_module = TtReduceModule(
-            mesh_device=mesh_device,
-            topk_dim=3,  # topk is at dim 3 in 5D tensor from combine
-            cluster_axis=1,  # TP axis for reduce-scatter
-            num_links=self.col_num_links,
-            topology=self.col_topology,
-        )
+        if self.moe_block == "dispatch_combine":
+            self.reduce_module = TtReduceModule(
+                mesh_device=mesh_device,
+                topk_dim=3,  # topk is at dim 3 in 5D tensor from combine
+                cluster_axis=1,  # TP axis for reduce-scatter
+                num_links=self.col_num_links,
+                topology=self.col_topology,
+            )
+        else:
+            self.reduce_module = None
 
         # Load debug flags from environment
         self.debug_token_count = os.getenv("TT_DS_PREFILL_DEBUG_TOKEN_COUNT", "0").lower() in ("1", "true", "yes")
@@ -730,6 +794,45 @@ class TtMoe(LightweightModule):
             )
         except Exception as exc:  # diagnostics must never fail a run
             logger.warning(f"[TtMoe] routing dump for layer {self.layer_idx} failed: {exc}")
+
+    def _forward_all_gather(self, x, routed_x, scores, indices, gate_logits, return_intermediates):
+        """The "all_gather" MoE block (tt_moe_ag.py) from the gate's top-k on: x [.., S, emb_dim] replicated over TP
+        (the shared expert's input), routed_x its routed_emb_dim projection (x itself without a latent MoE). Same
+        output as the dispatch / combine path."""
+        ttnn.tracy_message("`TT_SIGNPOST: moe_ag_start`")
+        shared_output = self.shared_expert(x)
+        if routed_x.layout != ttnn.ROW_MAJOR_LAYOUT or routed_x.dtype != ttnn.bfloat16:
+            routed_x = ttnn.to_layout(routed_x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+        if routed_x.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+            routed_x = ttnn.to_memory_config(routed_x, ttnn.DRAM_MEMORY_CONFIG)
+        routed_output = self.moe_ag(routed_x, indices, scores, self.routed_expert)
+        latent_input = None
+        if self.use_latent_moe and return_intermediates:
+            latent_input = routed_x
+        else:
+            if routed_x is not x:
+                ttnn.deallocate(routed_x, force=True)
+        ttnn.deallocate(x, force=True)
+        latent_routed_output = None
+        if self.use_latent_moe:
+            if return_intermediates:
+                latent_routed_output = ttnn.squeeze(routed_output, dim=0)
+            routed_output = self.latent_projections.from_latent(routed_output)
+        routed_output = ttnn.squeeze(routed_output, dim=0)
+        final_output = ttnn.add(routed_output, shared_output)
+        intermediates = None
+        if return_intermediates:
+            intermediates = TtMoEIntermediates(
+                gate_scores=scores,
+                gate_indices=indices,
+                gate_logits=gate_logits,
+                shared_output=shared_output,
+                routed_output=routed_output,
+                latent_routed_output=latent_routed_output,
+                latent_input=latent_input,
+            )
+        ttnn.tracy_message("`TT_SIGNPOST: MoE_END`")
+        return final_output, intermediates
 
     def forward(
         self,
@@ -846,11 +949,14 @@ class TtMoe(LightweightModule):
 
         self._dump_routing(indices, scores, actual_start or 0, cache_user_id, metadata is not None)
 
-        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _, _ = self.routing_setup(
-            ttnn_top_k_experts_indices=indices,
-            num_routed_experts=self.num_routed_experts,
-            num_experts_per_tok=self.num_experts_per_tok,
-        )
+        if self.moe_block == "dispatch_combine":
+            tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _, _ = self.routing_setup(
+                ttnn_top_k_experts_indices=indices,
+                num_routed_experts=self.num_routed_experts,
+                num_experts_per_tok=self.num_experts_per_tok,
+            )
+        else:  # the all-gather block plans the routing itself, on the gathered top-k
+            tt_expert_offsets = tt_expert_token_counts = tt_expert_region_offsets = None
 
         gate_logits = (
             ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
@@ -858,7 +964,7 @@ class TtMoe(LightweightModule):
             else ttnn.deallocate(gate_logits)
         )  # gate_logits is only used for debugging/intermediates, move to DRAM or deallocate immediately
 
-        if self.debug_token_count:
+        if self.debug_token_count and self.moe_block == "dispatch_combine":
             # DEBUG: Print full token counts per expert for monitoring (controlled by env var)
             _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
             _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
@@ -909,6 +1015,9 @@ class TtMoe(LightweightModule):
         # Outside the sub-device window below: the down-projection feeds dispatch, so it cannot
         # overlap it. x stays full-width for the shared expert, which reads the pre-projection hidden.
         routed_x = self.latent_projections.to_latent(x) if self.use_latent_moe else x
+
+        if self.moe_block == "all_gather":
+            return self._forward_all_gather(x, routed_x, scores, indices, gate_logits, return_intermediates)
         if self.use_latent_moe and DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] routed_x (latent) shape: {routed_x.shape}")
 

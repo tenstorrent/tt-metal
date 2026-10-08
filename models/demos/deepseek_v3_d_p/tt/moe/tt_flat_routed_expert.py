@@ -441,15 +441,21 @@ class TtFlatRoutedExpert(LightweightModule):
         dispatched_buffer: ttnn.Tensor,
         expert_token_counts: ttnn.Tensor,
         expert_region_offsets: ttnn.Tensor,
+        token_index: ttnn.Tensor = None,
+        y_row_major: bool = False,
     ) -> ttnn.Tensor:
         """
         Args:
-            dispatched_buffer: (max_dispatch_buffer_token_size, emb_dim) bf16 ROW_MAJOR, DRAM interleaved.
+            dispatched_buffer: (max_dispatch_buffer_token_size, emb_dim) bf16 ROW_MAJOR, DRAM interleaved. With
+                ``token_index``: the gathered tokens (rows, emb_dim) instead (the all-gather MoE block).
             expert_token_counts / expert_region_offsets: (1, num_routed_experts) uint32 ROW_MAJOR (offset_cumsum).
+            token_index: optional (1, flat_rows) uint32: indexed mode, flat row r reads token token_index[r].
+            y_row_major: write y as row-major bf16 (pack-untilized on the down cores) instead of bf8 tiles.
 
         Returns:
-            (max_dispatch_buffer_token_size, emb_dim) bf8 TILE, each local expert's rows at its region (the rest
-            unwritten; combine reads only the counted rows).
+            (max_dispatch_buffer_token_size, emb_dim) bf8 TILE (bf16 ROW_MAJOR with ``y_row_major``; flat_rows rows
+            with ``token_index``), each local expert's rows at its region (the rest unwritten; combine reads only the
+            counted rows).
         """
         if dispatched_buffer.layout != ttnn.ROW_MAJOR_LAYOUT or dispatched_buffer.dtype != ttnn.bfloat16:
             dispatched_buffer = ttnn.to_layout(dispatched_buffer, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
@@ -467,4 +473,6 @@ class TtFlatRoutedExpert(LightweightModule):
             max_tokens_per_expert=self.max_tokens,
             activation=self.activation,
             pin=self.pin,
+            token_index=token_index,
+            y_row_major=y_row_major,
         )

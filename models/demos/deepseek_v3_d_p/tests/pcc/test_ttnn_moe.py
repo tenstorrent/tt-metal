@@ -53,6 +53,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_sp_mesh_composer,
     get_tp_mesh_composer,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.moe_block import resolve_moe_block
 from models.demos.deepseek_v3_d_p.tt.moe.tt_flat_routed_expert import resolve_routed_expert_impl
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
@@ -141,6 +142,7 @@ def run_model(
     score_func=None,
     skip_upstream_reference=False,
     routed_expert_impl=None,
+    moe_block=None,
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -165,6 +167,9 @@ def run_model(
     the clamp; it is part of the weight-cache key. ``score_func`` is the gate's router affinity,
     None keeping the gate config's default. ``skip_upstream_reference`` drops the vendored-model
     cross-check.
+
+    ``moe_block`` picks TtMoe's MoE block (moe_block.py; None: the variant's MOE_BLOCK_IMPL / $TT_DS_PREFILL_MOE_BLOCK).
+    The dispatch / combine path's own buffers (dispatch buffer, metadata, combine output) are only graded on it.
 
     A HASH_HOST / HASH_DEVICE ``gate_fallback_mode`` selects hash routing: the tid2eid table and
     per-token ids are built here and handed to both sides, and the torch reference takes the
@@ -544,6 +549,7 @@ def run_model(
         # Same source as TtPrefillBlock (flat on the models whose config names it, unless overridden by env).
         # A test that borrows another variant's gate config passes its own model's choice.
         routed_expert_impl=routed_expert_impl or resolve_routed_expert_impl(variant.model_config),
+        moe_block=moe_block or resolve_moe_block(variant.model_config),
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation=shared_activation,
@@ -699,7 +705,7 @@ def run_model(
     del torch_moe
     gc.collect()
 
-    if gate_fallback_mode == GateComputeMode.HOST_ALL:
+    if gate_fallback_mode == GateComputeMode.HOST_ALL and tt_moe.moe_block == "dispatch_combine":
         # Sparse tensor validation using slot-aware comparisons
         # fmt: off
         sparse_checks = [
