@@ -61,6 +61,16 @@ if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
 
     _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
 
+# tt_llk_perf lives in tools/python, outside the test tree, so it goes on sys.path before the helpers import it.
+# LLK_HOME wins when set, matching init_llk_home() further down.
+_TT_LLK_TOOLS_PYTHON = str(
+    Path(os.environ.get("LLK_HOME") or Path(__file__).resolve().parents[3])
+    / "tools"
+    / "python"
+)
+if _TT_LLK_TOOLS_PYTHON not in sys.path:
+    sys.path.insert(0, _TT_LLK_TOOLS_PYTHON)
+
 import helpers.order_processing as order_processing
 import helpers.utils as utils_module
 import pytest
