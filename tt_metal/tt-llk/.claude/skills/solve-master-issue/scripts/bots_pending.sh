@@ -5,6 +5,10 @@
 # Observed, not guessed:
 #   RUN      a workflow run on the head SHA (auto-triggered reviewers, static checks, PR gate — any
 #            event, incl. pull_request_target) that is still queued / in progress
+#   CHECK    a completed run on the head SHA that FAILED (failure / timed_out / cancelled / startup
+#            failure) — an automatic check that posts no comment, e.g. the static checks. Fix it, or
+#            record an evidence-backed unrelated verdict (same check fails on main the same way), then
+#            ack its URL in the ack file. Distinct from the review-bot retry cap.
 #   DISPATCH an "LLK PR Review" run for this PR (found by name — its run name embeds "PR #<n>" — among
 #            every run of that workflow since the PR was opened), or a run id you passed, not completed
 #   FAILED   the latest "LLK PR Review" run for this PR did not succeed (infra failure, cancelled):
@@ -28,8 +32,12 @@ prinfo=$(gh api "repos/$repo/pulls/$pr" -q '"\(.head.sha) \(.created_at)"')
 sha=${prinfo%% *}; opened=${prinfo#* }
 
 runs=$(gh api "repos/$repo/actions/runs?head_sha=$sha&per_page=100" --paginate \
-        -q '.workflow_runs[]|"\(.status)\t\(.name)\t\(.id)\t\(.created_at)"')
+        -q '.workflow_runs[]|"\(.status)\t\(.name)\t\(.id)\t\(.created_at)\t\(.conclusion // "-")\t\(.html_url)"')
 echo "$runs" | awk -F'\t' '$1!="" && $1!="completed" {print "RUN      " $2 " (" $1 ", run " $3 ")"}'
+echo "$runs" | awk -F'\t' '$1=="completed" && ($5=="failure" || $5=="timed_out" || $5=="cancelled" || $5=="startup_failure") {print $6 "\t" $2 "\t" $5}' |
+    while IFS=$'\t' read -r url name concl; do
+        grep -qxF "$url" "$ack" || echo "CHECK    $name $concl $url — fix, or ack with an unrelated verdict"
+    done
 
 wid=$(gh api "repos/$repo/actions/workflows?per_page=100" --paginate -q '.workflows[]|select(.name=="LLK PR Review")|.id')
 wid=${wid%%$'\n'*}

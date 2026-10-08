@@ -39,7 +39,7 @@ so a run can be resumed from another machine. Scripts avoid `gh run list --branc
 | script | use |
 |---|---|
 | `mkwt.sh <name> <branch>` | worktree off origin/main (or the existing branch on resume) |
-| `dispatch.sh "<workflow>" <ref> [-f k=v]` | dispatch a workflow **and get its run id** (gh prints none) |
+| `dispatch.sh [--match <regex>] "<workflow>" <ref> [-f k=v]` | dispatch a workflow **and get its run id** (gh prints none); `--match` pins the run's identity when the workflow+ref is shared |
 | `ci_triage.sh <run_id>` | every non-green job of a run with its failing tests |
 | `main_job_status.sh "<workflow>" "<job>"` | is the same job failing on main — on the same tests? |
 | `bot_threads.sh <pr>` | bot feedback still unanswered; ack handled summaries by URL |
@@ -224,7 +224,7 @@ never on a push to a draft (checked: zero Copilot reviews on the draft PRs of an
 "bots quiet" on a draft is only meaningful if you asked. **After every push that changes the tree,
 request both:**
 ```bash
-$SKILL/scripts/dispatch.sh "LLK PR Review" main -f pr_number=<PR>     # ~45 min; record the run id
+$SKILL/scripts/dispatch.sh --match "PR #<PR>\b" "LLK PR Review" main -f pr_number=<PR>   # ~45 min; record the run id
 printf '{"reviewers":["copilot-pull-request-reviewer[bot]"]}' |
     gh api --method POST repos/<o>/<r>/pulls/<PR>/requested_reviewers --input -   # Copilot on the head SHA
 ```
@@ -237,7 +237,10 @@ are done is **observed, not guessed**:
 pending=$($SKILL/scripts/bots_pending.sh <PR>) && [ -z "$pending" ]   # true = bots quiet on the head SHA
 ```
 It lists: `RUN` (a run on the head SHA still queued/in progress — reviewers, static checks, PR gate;
-any event, incl. `pull_request_target`), `DISPATCH` (an LLK PR Review run for this PR, or a run id you
+any event, incl. `pull_request_target`), `CHECK` (a completed run on the head SHA that failed — an
+automatic check that posts no comment, such as the static checks; fix it, or ack its URL with an
+evidence-backed unrelated verdict in the ledger: the same check fails on `main` the same way —
+distinct from the review-bot retry cap), `DISPATCH` (an LLK PR Review run for this PR, or a run id you
 pass, not completed), `FAILED` (the latest LLK PR Review run for this PR did not succeed — re-dispatch
 once, then ack its URL), `COPILOT` (review requested, not submitted), `SETTLE` (no run has registered
 yet and the script first saw this head SHA under 10 min ago — GitHub needs a minute or two to queue

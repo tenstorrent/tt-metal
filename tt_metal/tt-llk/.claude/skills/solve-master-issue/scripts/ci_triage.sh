@@ -1,7 +1,8 @@
 #!/bin/bash
 # usage: ci_triage.sh <run_id>
 # A tally of the run's jobs by conclusion, then for each non-successful, non-skipped job: conclusion,
-# pytest/gtest summary line, failing test ids (FAIL) and ##[error] lines (ERR).
+# pytest/gtest summary line, failing test ids (FAIL) and ##[error] lines (ERR) — complete, never capped,
+# so the set compares exactly with main_job_status.sh's.
 # Exit non-zero = GitHub could not be read (the listing is incomplete).
 # Repo: $GH_REPO, default tenstorrent/tt-metal.
 set -euo pipefail
@@ -19,6 +20,6 @@ while IFS=$'\t' read -r j c n; do
     echo "$log" | grep -E "[0-9]+ (passed|failed).* in [0-9.]+s|\[  (PASSED|FAILED)  \] [0-9]+ test" |
         sed 's/^[0-9TZ:.-]* //' | tail -2 | sed 's/^/   /' || true
     echo "$log" | grep -E "^[0-9TZ:.-]* (FAILED |ERROR |⨯ |\[  FAILED  \] )" |
-        sed 's/^[0-9TZ:.-]* //' | sort -u | head -12 | sed 's/^/   FAIL /' || true
-    echo "$log" | grep -iE "##\[error\]" | sed 's/^[0-9TZ:.-]* //' | sort -u | head -4 | sed 's/^/   ERR  /' || true
+        sed 's/^[0-9TZ:.-]* //' | sort -u | sed 's/^/   FAIL /' || true
+    echo "$log" | grep -iE "##\[error\]" | sed 's/^[0-9TZ:.-]* //' | sort -u | sed 's/^/   ERR  /' || true
 done
