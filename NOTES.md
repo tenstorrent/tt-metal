@@ -19,3 +19,11 @@ Marker: /var/tmp/fasth3/t260/drv/driver.marker. Log: driver.log, out_AB/run.log,
 md5-identical to def (or PCC >= 0.9999 and PSNR within 0.1 dB of ~55 dB), NA op <= 60 ms/block,
 decode <= 2.75 s (def 3.378 s). The factory log line "neighborhood sdpa kv ring: mode=" shows K+V(2)/K(1)/off(0).
 If accepted: make it the default (=0 turns it off), land via a -land branch from origin/ttp/t48-ltx25-integrated with ttp push --detach.
+
+## Result (blx01 job 946, 2026-10-08 04:56-05:05 UTC, 383 s, no drops)
+One process per arm, seeds 0-1. Ring log lines appear only in the ring arm (mode=2, stage 5 columns=3, ring 336 KB).
+- decode: def 3.383/3.374 s, ring 3.113/3.113 s (-0.265 s, -7.8%)
+- stage-5 NA op: 152.3 -> 121.0 ms/block; stage-4 NA 37.5 -> 22.4 ms
+- md5 ring vs def identical (raw seeds and host-noise seeds 0,1); vs #214 refs PCC 0.99995, PSNR 55.04/54.59 dB
+- Spec targets missed (NA <= 60 ms, decode <= 2.75 s): L1 fits only 3 brick columns at stage 5, not the full 7x4x4 union.
+Lossless gain above the 5% bar, so made default (3dfc583566b, =0 off) and landed on t48.
