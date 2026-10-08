@@ -522,7 +522,7 @@ execute_step_hide_existing_kernel() {
 # hook would reformat staged test files and abort these bookkeeping commits.
 _infra_commit() {
     local out
-    if out="$(git -C "$wt" -c user.name=llk_code_gen -c user.email=llk_code_gen@tenstorrent.com \
+    if out="$(git -C "$wt" -c user.name=llk-code-gen -c user.email=llk-code-gen@tenstorrent.com \
                 commit -q --no-verify -m "$1" 2>&1)"; then
         return 0
     fi

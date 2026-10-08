@@ -1744,7 +1744,6 @@ execute_step_write_generated_patch() {
     ss SUPERVISOR_PHASE finalization
     rj metric --patch-json '{"supervisor_phase":"finalization"}' || return $?
     local wt num title; wt="$(_wt)"; num="$(sg ISSUE_NUMBER)"; title="$(sg ISSUE_TITLE)"
-    local mode; mode="$(sg RUN_MODE)"
     local cf cfj base fix packaged tmp_patch candidate_tree candidate_digest current_digest
     # Input validation requires either a clean dedicated worktree or the exact
     # content-addressed resumed candidate, so every non-ignored change belongs to
@@ -1817,9 +1816,15 @@ execute_step_write_generated_patch() {
 
     fix=""
     if ! git -C "$wt" diff --cached --quiet 2>/dev/null; then
-        local cm="AI issue-solver: fix #${num} ${title}"
-        [ "$mode" = multi ] && cm="AI issue-solver: multi-arch fix #${num} ${title}"
-        if ! git -C "$wt" -c user.name="ai-code-gen" -c user.email="ai-code-gen@tenstorrent.com" \
+        # tt-metal style subject: "[LLK] #<issue>: <What it does>". A review round
+        # (PR_NUMBER set) says so instead of repeating the issue title.
+        local subject cm
+        subject="$(printf '%s' "$title" | sed -E 's/^[[:space:]]*(\[[^]]*\][[:space:]]*)+//')"
+        subject="${subject^}"
+        cm="[LLK] #${num}: ${subject:-Fix issue}"
+        [ -n "$(sg PR_NUMBER)" ] && cm="[LLK] #${num}: Address review comments"
+        cm="${cm:0:120}"
+        if ! git -C "$wt" -c user.name="llk-code-gen" -c user.email="llk-code-gen@tenstorrent.com" \
             commit -q "${no_verify[@]}" -m "$cm"; then
             ss PACKAGING_ERROR "packaging failed: could not commit the complete fix"
             echo "PACKAGING_FAILED: git commit failed; fix remains staged" >&2
