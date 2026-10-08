@@ -18,6 +18,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
 #include <cmath>
 
 using namespace tt::constants;
@@ -30,6 +31,7 @@ struct CoreHeadWork {
     uint32_t batch = 0;
     uint32_t head = 0;
     uint32_t q_chunk_count = 0;
+    uint32_t q_chunks_before = 0;  // Q chunks this core processes before this head
 };
 
 struct CoreWork {
@@ -1038,7 +1040,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             work.logical_core = core;
             work.physical_core = device->worker_core_from_logical_core(core);
 
-            auto push_head_work = [&](uint32_t nb, uint32_t nh, uint32_t q_count) {
+            auto push_head_work = [&](uint32_t nb, uint32_t nh, uint32_t q_count, uint32_t q_before) {
                 if (q_count == 0) {
                     return;
                 }
@@ -1046,6 +1048,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
                     .batch = nb,
                     .head = nh,
                     .q_chunk_count = q_count,
+                    .q_chunks_before = q_before,
                 });
                 const uint32_t head_id = (nb * NQH) + nh;
                 if (head_id < head_segments.size()) {
@@ -1079,7 +1082,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
                 const uint32_t remaining_in_head = q_num_chunks - q_in_head;
                 const uint32_t remaining_in_range = g_end - cursor;
                 const uint32_t span = std::min(remaining_in_head, remaining_in_range);
-                push_head_work(nb, nq, span);
+                push_head_work(nb, nq, span, cursor - g_start);
                 cursor += span;
             }
 
@@ -1153,6 +1156,18 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
                 }
                 chain_order.push_back(idx);
             }
+
+            // A sender writes K/V to its own cb_k / cb_v write address on the receiver, so every chain core must
+            // start the head in the same slot of the two-chunk K/V CBs. Each Q chunk pushes k_num_chunks K/V chunks,
+            // so with an odd k_num_chunks the slot is the parity of the Q chunks done before the head; a core that
+            // starts in the other slot reads K/V from DRAM instead of joining (it would get the chunk in the wrong
+            // slot, corrupting the one compute is reading).
+            const auto start_slot = [&](std::size_t idx) {
+                const auto& seg = segments[idx];
+                return (core_work[seg.core_idx].head_work[seg.head_work_index].q_chunks_before * k_num_chunks) % 2;
+            };
+            const uint32_t chain_slot = start_slot(chain_order[0]);
+            std::erase_if(chain_order, [&](std::size_t idx) { return start_slot(idx) != chain_slot; });
 
             if (chain_order.size() < 2) {
                 chains_skipped++;

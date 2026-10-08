@@ -128,6 +128,44 @@ def test_sdpa_single_k_chunk_full_sync(device, d, q_chunk):
     assert worst < 0.1, f"an output row is off by a factor {1 + worst:.4f}"
 
 
+# K/V chains forward a K/V chunk to the receiver's CB at the sender's own write address. With one K chunk a core's
+# double-buffered K/V CB slot alternates per Q chunk, so cores that reach the shared head after an odd and an even
+# number of Q chunks disagree on the slot: on an 8x7 grid these shapes put such cores on the same chain.
+@pytest.mark.parametrize("q_chunk", [192, 320])
+@pytest.mark.timeout(300)
+def test_sdpa_single_k_chunk_kv_chains(device, q_chunk):
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 8 or grid.y < 7:
+        pytest.skip("needs an 8x7 grid")
+    torch.manual_seed(0)
+    b, nh, sq, sk, d = 8, 8, 2048, 512, 128
+    q = torch.randn(b, nh, sq, d)
+    k, v = torch.randn(b, nh, sk, d), torch.randn(b, nh, sk, d)
+    tq, tk, tv = (ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, v))
+    pc = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 7),
+        q_chunk_size=q_chunk,
+        k_chunk_size=sk,
+        exp_approx_mode=False,
+    )
+    ck = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
+    )
+    outs = [
+        ttnn.to_torch(
+            ttnn.transformer.scaled_dot_product_attention(
+                tq, tk, tv, is_causal=False, program_config=pc, compute_kernel_config=ck
+            )
+        )
+        for _ in range(3)
+    ]
+    gt = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+    for out in outs:
+        ok, pcc = comp_pcc(gt, out, 0.999)
+        assert ok, f"single K chunk with K/V chains vs torch: {pcc}"
+        assert torch.equal(out, outs[0]), "single K chunk with K/V chains is not deterministic"
+
+
 def test_sdpa_single_k_chunk_row_sums_off_by_default(device):
     """The pack-thread row sums stay the default: a call without the flag is bit-identical to math_thread_row_sums=False,
     and the flag only changes the denominators, so the two paths agree to bf16 noise."""
