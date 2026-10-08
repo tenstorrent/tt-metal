@@ -132,9 +132,6 @@ void SparseSDPAMsaOperation::validate_on_program_cache_hit(
     validate_non_hashed(attrs, t);
 }
 
-// An explicit slot count that cannot be honoured at all is a caller error; auto (0) falls back to the streamed
-// kernels instead. Checked on hits too: an auto call that fell back and an explicit request with no room resolve
-// to the same (streamed) program, so the miss-only validator would not see the second.
 void SparseSDPAMsaOperation::validate_on_program_cache_miss(
     const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
     const auto& q = t.q;
