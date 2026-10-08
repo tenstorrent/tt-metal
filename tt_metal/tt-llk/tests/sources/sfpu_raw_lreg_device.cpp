@@ -3,7 +3,9 @@
 // Blackhole hardware allocation experiment. Per-row values provide an
 // address-sensitive oracle. An intervening typed load/store must not
 // change the raw value. SCHEME: 0 unannotated, 1 read/write pairs, 2 effects,
-// 3 explicitly thread the producer value to the consumer.
+// 3 explicitly thread the producer value to the consumer; 4 also pins the
+// capture so its point clobber survives when the result is unused; 5 additionally
+// threads a partial write's old destination across a preceding typed gap.
 #include <array>
 #include <cstdint>
 #include <utility>
@@ -43,11 +45,20 @@ template <unsigned Word> __attribute__((always_inline)) inline void issue_word()
 
 template <unsigned Row> __attribute__((always_inline)) inline void probe_row()
 {
+    __xtt_vector old_destination;
     if constexpr (PARTIAL) {
         issue_word<static_cast<unsigned>(TT_OP_SFPENCC(3, 0, 0, 10))>();
         issue_word<TT_OP_SFPLOADI(LREG, 0, 0x4040)>(); // inactive lanes: 3.0
         if constexpr (SCHEME == 2)
             __builtin_rvtt_sfprawlreg_effect(1u << LREG, 1u << LREG);
+        if constexpr (SCHEME == 5) {
+            old_destination = __builtin_rvtt_sfpreadlreg(LREG);
+            __builtin_rvtt_sfpwritelreg(old_destination, LREG);
+        }
+        if constexpr (OLD_DESTINATION_GAP) {
+            auto gap = __builtin_rvtt_sfpload(nullptr, 2 * Row, 0, 0, 0, 7);
+            __builtin_rvtt_sfpstore(nullptr, gap, 2 * Row, 0, 0, 0, 7);
+        }
         constexpr unsigned predicate_reg = (LREG + 1) % 8;
         issue_word<TT_OP_SFPLOAD(predicate_reg, 0, 7, 2 * Row)>();
         if constexpr (SCHEME == 2)
@@ -55,6 +66,8 @@ template <unsigned Row> __attribute__((always_inline)) inline void probe_row()
         issue_word<TT_OP_SFPSETCC(0, predicate_reg, 0, 0)>();
         if constexpr (SCHEME == 2)
             __builtin_rvtt_sfprawlreg_effect(1u << predicate_reg, 0);
+        if constexpr (SCHEME == 5)
+            __builtin_rvtt_sfpwritelreg(old_destination, LREG);
     }
     __xtt_vector temporary;
     if constexpr (LIVE_BEFORE)
@@ -69,6 +82,12 @@ template <unsigned Row> __attribute__((always_inline)) inline void probe_row()
     __xtt_vector saved;
     if constexpr (SCHEME == 3 && !DEAD_OUTPUT) saved = __builtin_rvtt_sfpreadlreg(LREG);
     else if constexpr (SCHEME == 3) (void)__builtin_rvtt_sfpreadlreg(LREG);
+    else if constexpr (SCHEME == 4 || SCHEME == 5) {
+        saved = __builtin_rvtt_sfpreadlreg(LREG);
+        // Retain the producer clobber even if no consumer uses saved.
+        // When saved is used, its C++ lifetime also spans the typed work.
+        __builtin_rvtt_sfpwritelreg(saved, LREG);
+    }
     if constexpr (!LIVE_BEFORE)
         temporary = __builtin_rvtt_sfpload(nullptr, 2 * Row, 0, 0, 0, 7);
     __builtin_rvtt_sfpstore(nullptr, temporary, 2 * Row, 0, 0, 0, 7);
@@ -76,7 +95,7 @@ template <unsigned Row> __attribute__((always_inline)) inline void probe_row()
         __builtin_rvtt_sfpwritelreg(temporary, LREG);
     if constexpr (SCHEME == 1)
         __builtin_rvtt_sfpwritelreg(__builtin_rvtt_sfpreadlreg(LREG), LREG);
-    else if constexpr (SCHEME == 3 && !DEAD_OUTPUT)
+    else if constexpr ((SCHEME == 3 || SCHEME == 4 || SCHEME == 5) && !DEAD_OUTPUT)
         __builtin_rvtt_sfpwritelreg(saved, LREG);
     if constexpr (PARTIAL) issue_word<static_cast<unsigned>(TT_OP_SFPENCC(3, 0, 0, 10))>();
     if constexpr (!DEAD_OUTPUT) {

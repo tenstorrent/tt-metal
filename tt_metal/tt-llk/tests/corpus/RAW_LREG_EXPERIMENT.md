@@ -1,5 +1,17 @@
 # Raw LREG lifetime experiment — 2026-10-07
 
+## Current conclusion
+
+Existing read/write builtins can express a working explicit-state alternative
+for the tested regions, even with the live-in pass disabled. Independent pairs
+alone are insufficient: preserve input lifetimes (including inactive destination
+lanes), retain output clobbers, and carry live outputs to their consumers.
+
+The complete current O2 device suite finished **370 PASS / 14 diagnostic XFAIL**,
+zero unexpected failures, 384 cases. The broader and focused matrices below
+establish additional configuration coverage, not universal compiler correctness.
+No production wrapper rewrite or compiler-pass removal is justified yet.
+
 ## Question and controlled intervention
 
 Do independent read/write identity pairs preserve a raw L0 value across a typed
@@ -65,12 +77,13 @@ done
 For a separately built compiler, prepend `-B/path/to/compiler/backend/` and
 `-I/path/to/matching/sfpi/include` to the options, as in this experiment.
 Do not use `--compile-producer`: that does not execute the hardware assertions.
-XFAIL for schemes 0/1 means wrong output was observed, not correctness success.
-Schemes 2/3 are required to produce correct output.
+XFAIL means wrong output was observed in an intentionally incomplete diagnostic
+scheme, not correctness success. Effect and complete threaded cases must pass;
+discarded reads and output-only threading across an old-input gap are controls.
 
 The companion `raw_lreg_full_annotation.cpp` is an assembly-only comparator;
 `selftest_raw_lreg_metadata.sh --target-cxx /path/to/riscv-tt-elf-g++` exercises
-all four schemes. Allocation scans alone are not a correctness oracle because
+all five straight-line schemes plus the pressure matrix. Allocation scans alone are not a correctness oracle because
 a compiler may legally preserve a value with moves.
 
 ## Decision and remaining scope
@@ -155,8 +168,26 @@ The runner records separate logs, JUnit results and build directories for O2/O3,
 default/explicit scheduling, and pass enabled/disabled. Disabled-pass groups
 exclude effect cases because those markers require their implementing pass.
 It runs sequentially, does not reset a board, and returns failure if any group
-fails. The full matrix was launched after the first strengthened run; do not
-infer completion from the earlier 230/10 result.
+fails. Use a fresh results directory; an existing path reuses/overwrites its
+named outputs. Base compiler options should select backend/headers, not override
+scheduling. The runner now explicitly enables or disables the live-in pass and
+records compiler options in each log.
+
+The original strengthened suite (schemes 0–3, test commit `3a670507bee`)
+completed the full matrix. Parsed JUnit records confirm:
+
+| Optimization/scheduling | Pass enabled: PASS / XFAIL | Pass disabled: PASS / XFAIL |
+|---|---:|---:|
+| O2 / default | 230 / 10 | 166 / 10 |
+| O2 / explicit scheduling | 230 / 10 | 166 / 10 |
+| O3 / default | 230 / 10 | 166 / 10 |
+| O3 / explicit scheduling | 230 / 10 | 166 / 10 |
+
+Total: **1,584 PASS, 80 diagnostic XFAIL, zero failures or errors**, 1,664 cases.
+All 80 JUnit skipped entries have type `pytest.xfail`; they are observed wrong
+outputs in diagnostic controls, not unexecuted hardware cases. Each device case
+uses at least two executions with sentinel clearing. This is not an LLK corpus
+or performance result. Later-added schemes have separate measurements below.
 
 Current evidence logs are on quietbox under `/tmp/lreg-review.Y7HFRq`:
 `strengthened.log`, `matrix.log`, `matrix/`, and `dead-*` compiler artifacts.
@@ -165,3 +196,63 @@ These temporary paths are evidence locations, not required reproduction paths.
 Production integration remains open: TopK carries coupled value/index banks;
 Welford carries state across helpers and loops; LOADMACRO has configured effects
 not recoverable from its word alone. A wrapper-local rewrite is not justified.
+
+## Combined annotations and the old-destination counterexample
+
+Scheme 4 retains the producer capture with `saved = readlreg(R)` followed by
+`writelreg(saved,R)`, then uses the same `saved` at the consumer. Unlike a
+discarded read, the initial pair survives when the output is dead. This combines
+point-clobber modeling with a genuine output lifetime; it is still a caller-owned
+region interface, not a substitute inside independent macros.
+
+The new `test_raw_lreg_old_destination` inserts typed work between initializing
+the raw destination to 3.0 and partially overwriting it. Output-only threading
+(schemes 3 and 4) does not model this earlier implicit input. On L0, both TT and
+TTI lose **512/1024 elements**, exactly the inactive half. Effect annotations
+preserve that input lifetime. Scheme 5 explicitly captures the old destination,
+threads it across the early gap, and restores it before the partial raw write;
+it then uses the retained output-threading pattern. Both mechanisms pass this
+counterexample with the implementing pass enabled; the explicit-state version
+also passes with it disabled.
+
+The follow-up selection is `-k 'pinned or old_destination'`; when the pass is
+disabled, use `-k '(pinned or old_destination) and not effects'`. This selects
+the new cases without presenting a repeated original matrix as additional
+coverage. The full runner also includes them automatically. O2/O3 with explicit
+scheduling, pass-enabled/disabled follow-up results in `combined-*.log` and
+`combined-*.xml`:
+
+| Follow-up configuration | PASS | Diagnostic XFAIL |
+|---|---:|---:|
+| O2 scheduled, pass enabled | 140 | 4 |
+| O2 scheduled, pass disabled | 124 | 4 |
+| O3 scheduled, pass enabled | 140 | 4 |
+| O3 scheduled, pass disabled | 124 | 4 |
+
+Total **528 PASS, 16 diagnostic XFAIL**, zero failures/errors, 544 cases.
+All 64 scheme-5 cases have zero input/output mismatches. This follow-up does not
+establish default-scheduling coverage for every new scheme; do not combine it
+with the older matrix as though the schemes had identical configuration coverage.
+
+A fresh full-current-suite O2/default-scheduling/pass-enabled run finished
+**370 PASS, 14 diagnostic XFAIL**, 384 cases in 173.56 seconds (`final-suite.xml`,
+`final-suite.log`). This establishes that configuration for all current cases.
+A separate eight-case L0 observation run (`lane-split.log`) logs the mask split:
+post-only variants have **zero active-lane errors and 512 inactive-lane errors**;
+effect and full input/output-threaded variants have zero in both classes. This
+is direct measurement of which lanes fail, not an inference from the total.
+
+The resulting annotation obligations are:
+
+1. Before a raw operation, preserve and supply every input, including old
+   destinations whose inactive lanes survive.
+2. After a raw write, retain a point definition/clobber even if its output is
+   otherwise unused.
+3. Carry each live result through C++ state to subsequent consumers, updating
+   that state after every raw write rather than restoring stale entry values.
+
+The existing effect interface encodes these obligations through masks and the
+compiler pass. Explicit state can encode them at region boundaries instead.
+The tests support neither removing the pass globally nor claiming it is the
+only possible solution. No production policy changes or new compiler passes
+were made in this experiment.

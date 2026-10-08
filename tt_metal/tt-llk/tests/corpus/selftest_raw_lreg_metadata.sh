@@ -13,7 +13,7 @@ if [[ ${1:-} == --target-cxx ]]; then
     }
     target_cxx=$2
     scratch=$(mktemp -d)
-    trap 'rm -f "$scratch/WH.s" "$scratch/BH.s" "$scratch/QSR.s" "$scratch/gap.s" "$scratch/mul-int.s" "$scratch/baseline.s"; rmdir "$scratch"' EXIT
+    trap 'rm -f "$scratch/WH.s" "$scratch/BH.s" "$scratch/QSR.s" "$scratch/gap.s" "$scratch/mul-int.s" "$scratch/baseline.s" "$scratch/pressure.s" "$scratch/pressure.log"; rmdir "$scratch"' EXIT
     for arch in WH BH QSR; do
         case $arch in
             WH) cpu=tt-wh-tensix ;;
@@ -66,7 +66,7 @@ if [[ ${1:-} == --target-cxx ]]; then
         for scheduling in default scheduled; do
             schedule_flags=()
             [[ $scheduling == scheduled ]] && schedule_flags+=(-fschedule-insns -fschedule-insns2)
-            for scheme in 0 1 2 3; do
+            for scheme in 0 1 2 3 4; do
                 "$target_cxx" -O2 -mcpu=tt-bh-tensix "${issue_flags[@]}" "${schedule_flags[@]}" \
                     "-DSCHEME=$scheme" -S "$here/raw_lreg_full_annotation.cpp" -o "$scratch/gap.s"
                 if grep -Eq 'SFPLOAD[[:space:]]+L0, 1, 0, 0' "$scratch/gap.s"; then
@@ -77,6 +77,24 @@ if [[ ${1:-} == --target-cxx ]]; then
                 else
                     echo "FAIL: unrecognized allocation; inspect comparator assembly" >&2; exit 1
                 fi
+            done
+            for live in 2 4 7 8; do
+                for scheme in 2 3; do
+                    pass_flags=()
+                    [[ $scheme == 3 ]] && pass_flags+=(-fdisable-rtl-rvtt_lreg_livein)
+                    if "$target_cxx" -std=c++17 -O2 -mcpu=tt-bh-tensix \
+                        "${issue_flags[@]}" "${schedule_flags[@]}" "${pass_flags[@]}" \
+                        "-DSCHEME=$scheme" "-DLIVE_REGS=$live" \
+                        -S "$here/raw_lreg_threading_pressure.cpp" -o "$scratch/pressure.s" \
+                        > "$scratch/pressure.log" 2>&1; then
+                        echo "OBSERVED: $issue $scheduling scheme=$scheme $live raw values + temporary compiled (not a device result)"
+                    elif [[ $live == 8 ]] && grep -q 'too few lregs' "$scratch/pressure.log"; then
+                        echo "OBSERVED: $issue $scheduling scheme=$scheme register-capacity rejection (not a correctness pass)"
+                    else
+                        cat "$scratch/pressure.log" >&2
+                        exit 1
+                    fi
+                done
             done
         done
     done
