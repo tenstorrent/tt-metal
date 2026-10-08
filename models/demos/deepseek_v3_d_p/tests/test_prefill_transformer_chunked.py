@@ -204,26 +204,30 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
     # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
-    # then re-cut five times.
+    # then re-cut five times. PROVISIONAL since the flat_routed_expert backend (2026-10-08): the previous
+    # centre minus the per-chunk saving the untraced twin measured (job 112915004614; the traced run was
+    # skipped behind it). Recalibrate from the first traced run on that backend.
     (61, 11, 10): [
-        0.390,
-        0.397,
-        0.429,
-        0.453,
-        0.494,
-        0.526,
+        0.357,
+        0.371,
+        0.402,
+        0.430,
+        0.463,
+        0.492,
+        0.519,
         0.550,
-        0.578,
-        0.623,
-        0.652,
-        0.684,
+        0.590,
+        0.632,
+        0.670,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
     # 55k / code_debug: per-chunk medians over nine post-warmup iterations on a Galaxy with
-    # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%.
-    (61, 11, 10): [0.396, 0.399, 0.430, 0.455, 0.496, 0.528, 0.552, 0.579, 0.624, 0.652, 0.681],
+    # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%. Re-centred 2026-10-08 to
+    # run 37655642008 / job 112915004614 when the routed expert moved to flat_routed_expert: 14-34 ms
+    # off every chunk (was [0.396, 0.399, 0.430, 0.455, 0.496, 0.528, 0.552, 0.579, 0.624, 0.652, 0.681]).
+    (61, 11, 10): [0.363, 0.373, 0.403, 0.432, 0.465, 0.494, 0.521, 0.551, 0.591, 0.632, 0.667],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured

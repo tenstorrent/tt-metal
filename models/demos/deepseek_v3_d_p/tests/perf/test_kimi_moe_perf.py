@@ -123,10 +123,14 @@ _K2_7 = _MoEPerfCase(
 # so issuing dispatch ahead of the shared expert moves it. A midpoint that goes stale downward is
 # fixed by lowering it, never by widening the margin. Check the logged program count first: a drop
 # with fewer programs is a record window closing early, not a speedup.
+#
+# Re-centred 2026-10-08 to 4,960,323 ns (job 112915004453), one sample, when the routed expert moved to
+# flat_routed_expert. Same 34-program count as main, which read 5,841,394 ns the day before (job
+# 113025581798), so this is a 15% speedup, not a short record window.
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    expected_ns=5_815_453,
+    expected_ns=4_960_323,
     # 3% retained: K3 runs second on an already-warm device and four samples on the previous shape
     # spanned just 0.44% peak to peak, so 3% is already generous -- the midpoint is what goes stale
     # here, not the width. Sub-nominal DDR doubles it to 6% via adjust_margin_for_ddr_speed.
