@@ -36,7 +36,13 @@ def test_sd_numerics(mesh_device):
     w2 = torch.randn(1, 1, 2304, D, generator=g_) * 0.02
     sh = DSV41SharedExpertV2(md, w0, w1, w2)
     ov = SDOverlap.get(md)
+    mv0 = ttnn.get_memory_view(md, ttnn.BufferType.DRAM).total_bytes_allocated_per_bank
     ov.split_weights(sh)
+    mv1 = ttnn.get_memory_view(md, ttnn.BufferType.DRAM).total_bytes_allocated_per_bank
+    print(
+        f"SDN DRAM split weights: +{(mv1 - mv0) / 2**20:.2f} MiB/bank per layer -> x40 layers = {40 * (mv1 - mv0) / 2**20:.1f} MiB/bank",
+        flush=True,
+    )
     x = torch.randn(1, 1, M, D, generator=g_).to(torch.bfloat16)
     h = ttnn.from_torch(
         x,
