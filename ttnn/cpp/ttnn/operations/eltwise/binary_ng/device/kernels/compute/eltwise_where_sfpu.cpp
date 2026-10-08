@@ -11,7 +11,6 @@
 #include "eltwise_utils_sfpu.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 
-template <bool operand_pair = false>
 ALWI void process_tile(
     tt::CBIndex cb_in0_id,
     tt::CBIndex cb_in1_id,
@@ -43,61 +42,37 @@ ALWI void process_tile(
 
         tile_regs_acquire();
         copy_init(dfb_in0.get_id());
-#if defined(ARCH_BLACKHOLE)
-        if constexpr (operand_pair) {
-            // Condition and tensor under one handshake: the tensor to reg 1 and the scalar to reg 2 in both variants
-            for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-                copy_operands_to_dest<2>({dfb_in0.get_id(), dfb_in1.get_id()}, {i, i}, i * 3, 1);
-            }
-            for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-                fill_tile_init();
-#ifdef FILL_WITH_VALUE_FLOAT
-                FILL_LLK(i * 3 + 2, *scalar_val);
-#endif
-#ifdef FILL_WITH_VALUE_INT
-                FILL_LLK(i * 3 + 2, scalar_value);
-#endif
-#if WHERE_TST
-                BINARY_SFPU_OP(i * 3, i * 3 + 2, i * 3 + 1, i * 3);
-#else
-                BINARY_SFPU_OP(i * 3, i * 3 + 1, i * 3 + 2, i * 3);
-#endif
-            }
-        } else
-#endif
-        {
-            for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-                copy_tile(dfb_in0.get_id(), i, i * 3);
-            }
-            copy_init(dfb_in1.get_id());
-            for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-                // TTS: tensor is true value, goes to dst_reg 1
+        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
+            copy_tile(dfb_in0.get_id(), i, i * 3);
+        }
+        copy_init(dfb_in1.get_id());
+        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
+            // TTS: tensor is true value, goes to dst_reg 1
 #if WHERE_TTS
-                copy_tile(dfb_in1.get_id(), i, i * 3 + 1);  // Copy true tensor to dst_reg 1
-                fill_tile_init();
-                // TTS: scalar is false value, goes to dst_reg 2
+            copy_tile(dfb_in1.get_id(), i, i * 3 + 1);  // Copy true tensor to dst_reg 1
+            fill_tile_init();
+// TTS: scalar is false value, goes to dst_reg 2
 #ifdef FILL_WITH_VALUE_FLOAT
-                FILL_LLK(i * 3 + 2, *scalar_val);
+            FILL_LLK(i * 3 + 2, *scalar_val);
 #endif
 #ifdef FILL_WITH_VALUE_INT
-                FILL_LLK(i * 3 + 2, scalar_value);
+            FILL_LLK(i * 3 + 2, scalar_value);
 #endif
 #endif
 
-                // TST: tensor is false value, goes to dst_reg 2
+// TST: tensor is false value, goes to dst_reg 2
 #if WHERE_TST
-                copy_tile(dfb_in1.get_id(), i, i * 3 + 2);  // Copy false tensor to dst_reg 2
-                fill_tile_init();
-                // TST: scalar is true value, goes to dst_reg 1
+            copy_tile(dfb_in1.get_id(), i, i * 3 + 2);  // Copy false tensor to dst_reg 2
+            fill_tile_init();
+// TST: scalar is true value, goes to dst_reg 1
 #ifdef FILL_WITH_VALUE_FLOAT
-                FILL_LLK(i * 3 + 1, *scalar_val);
+            FILL_LLK(i * 3 + 1, *scalar_val);
 #endif
 #ifdef FILL_WITH_VALUE_INT
-                FILL_LLK(i * 3 + 1, scalar_value);
+            FILL_LLK(i * 3 + 1, scalar_value);
 #endif
 #endif
-                BINARY_SFPU_OP(i * 3, i * 3 + 1, i * 3 + 2, i * 3);
-            }
+            BINARY_SFPU_OP(i * 3, i * 3 + 1, i * 3 + 2, i * 3);
         }
 
         tile_regs_commit();
@@ -131,12 +106,6 @@ void kernel_main() {
     constexpr auto cb_in1_id = tt::CBIndex::c_1;
     constexpr auto cb_out_id = tt::CBIndex::c_2;
 
-#if defined(ARCH_BLACKHOLE)
-    constexpr bool operand_pair = operands_to_dest<cb_in0_id, cb_in1_id>();
-#else
-    constexpr bool operand_pair = false;
-#endif
-
     compute_kernel_hw_startup(cb_in0_id, cb_out_id);
     copy_init(cb_in0_id);
     BINARY_SFPU_INIT
@@ -145,7 +114,7 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile<operand_pair>(
+        process_tile(
             cb_in0_id,
             cb_in1_id,
             cb_out_id,
@@ -157,7 +126,7 @@ void kernel_main() {
     }
 
     if (remaining_iterations > 0) {
-        process_tile<operand_pair>(
+        process_tile(
             cb_in0_id,
             cb_in1_id,
             cb_out_id,
