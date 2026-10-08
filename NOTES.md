@@ -74,3 +74,7 @@
   10:58 UTC chips 16-23 drop.
 - 2026-10-08 11:12:44 UTC: submitted blx01 broker job 019 (run261r.sh, src 5833f56096f, build t272/b cae4b52657d,
   arms off vs def, -t 480). Log /var/log/tt-device-broker/2026-10-08_111244_019.log, out /var/tmp/fasth3/t261/out_R.
+- Job 019 result (11:12-11:18 UTC, exit 0, no drop): off (split=0) 3.112 s (md5 13802b01.../4a47f7a9..., same as
+  pre-ring def: ring is md5-neutral); def (split on) 2.714 s (-0.40 s, -12.8%). Deep tree def: det 971 ms.
+  vs host-noise refs: off PCC 0.99995/0.99995 PSNR 55.04/54.59; def PCC 0.99995/0.99995 PSNR 54.71/54.28 (-0.3 dB).
+  def vs off PSNR 55.1/54.7. md5s differ (valid). Accepted on the ring build: landing 5833f56096f via ttp push.
