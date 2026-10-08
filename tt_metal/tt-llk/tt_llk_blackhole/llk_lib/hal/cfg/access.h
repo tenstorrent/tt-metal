@@ -136,7 +136,7 @@ inline __attribute__((always_inline)) std::uint32_t read_word()
 template <Access A, const Field& F, Sec S, ThreadTarget Target = ThreadTarget::Current>
 inline __attribute__((always_inline)) std::uint32_t read()
 {
-    return extract<F, S>(read_word<A, F, S, 0, Target>());
+    return extract<F, S>(read_word<A, F, S, 0 /*WordOffset*/, Target>());
 }
 
 /**

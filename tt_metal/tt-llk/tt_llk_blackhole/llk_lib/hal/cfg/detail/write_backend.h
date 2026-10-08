@@ -257,7 +257,7 @@ inline __attribute__((always_inline)) void write_planned_operation(
             }
             else
             {
-                write_word<A, group.scope, group.addr, 0, group.mask>(group.data, cfg);
+                write_word<A, group.scope, group.addr, 0 /*Shamt*/, group.mask>(group.data, cfg);
             }
         }
         else if constexpr (is_gpr_write_v<Operation>)
@@ -271,11 +271,11 @@ inline __attribute__((always_inline)) void write_planned_operation(
         }
         else if constexpr (A == Access::TensixCfgUnit && group.scope == RegisterScope::State)
         {
-            rmw_write_word<group.addr, 0, group.mask, group.runtime_mask, group.data>(group.data | data[group_index]);
+            rmw_write_word<group.addr, 0 /*Shamt*/, group.mask, group.runtime_mask, group.data>(group.data | data[group_index]);
         }
         else
         {
-            write_word<A, group.scope, group.addr, 0, group.mask>(group.data | data[group_index], cfg);
+            write_word<A, group.scope, group.addr, 0 /*Shamt*/, group.mask>(group.data | data[group_index], cfg);
         }
     }
 }
