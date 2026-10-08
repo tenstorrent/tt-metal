@@ -59,10 +59,12 @@
 - 2026-10-08 ~10:59 UTC blx01 chips 16-23 (tray), broker post-job gate right after our job 002 (smarton t261),
   which had completed exit 0; bridge-reset jobs 005/006 failed, broker recovering.
 
-## Next
-On wake: read driver.log and run.log. Check DECODE_MEAN_S per arm, the PCC/PSNR lines (cmp vs
-refs) and stage 1 in stage_tree_s1x.txt.
-Accept: PCC >= 0.9999, PSNR within 0.5 dB, decode -0.7 s (unlikely from stage 1 alone; expect
-about -0.4 s).
-If it is a clear gain with neutral quality: make it the default, land it via a cherry-pick branch
-with `ttp push --detach`, and remove the old cache if it is unused.
+## Next (run 1082 hand-off)
+1. When blx01 is ready for tenants, submit ONE job:
+   ssh blx01 "tt-device-mcp run-bg \"bash /var/tmp/fasth3/t261/drv/run261r.sh 5833f56096f 'off:DIFFVAE_DET_S1_SPLIT=0 def' /var/tmp/fasth3/t261/out_R 'def'\" -w /var/tmp/fasth3/t261 -e /var/tmp/fasth3/t261/drv/env.yaml -t 480"
+   (each arm ~105 s process wall; check t272/b is still at cae4b52657d first: run261r.sh refuses otherwise.)
+2. Score: cmp241.py per arm vs /var/tmp/fasth3/diffvae/ref, def vs off, md5s differ (see job 002 scoring).
+   Expect off ~3.11 s (ring default), def ~2.7 s.
+3. If def is faster and PCC >= 0.9999, PSNR within 0.5 dB: in this worktree
+   `git switch ttp/t261-r2-diffvae-det-stages-1-4-on-all-32-chip-land` (local branch, head 5833f56096f),
+   `ttp push --detach`, then switch back. If t48 moved, ttp push rebases.
