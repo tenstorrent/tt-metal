@@ -85,8 +85,10 @@ SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
 # are untouched.
 SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 
-# GLM rows only; the Kimi/Mistral rows keep their own device params.
-GLM_L1_SMALL_SIZE = 1216
+# GLM rows only; the Kimi/Mistral rows keep their own device params. 1216 overflowed on the traced path
+# once #58681 added a second all_gather semaphore; 1536 verified on HW for both traced CI legs. Keep in
+# sync with the glm_5_3 runner adapter.
+GLM_L1_SMALL_SIZE = 1536
 GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
 
 
@@ -204,26 +206,29 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
     # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
-    # then re-cut five times.
+    # then re-cut six times. Latest: CI run 37730295536 / job 113160290655 (main 36dc937428d), ~2-4%
+    # faster on chunks 0-8 than the previous centre, in both modes (likely Fabric express link
+    # routing, #57785).
     (61, 11, 10): [
-        0.390,
-        0.397,
-        0.429,
-        0.453,
-        0.494,
-        0.526,
-        0.550,
-        0.578,
-        0.623,
-        0.652,
-        0.684,
+        0.375,
+        0.381,
+        0.413,
+        0.436,
+        0.477,
+        0.506,
+        0.529,
+        0.558,
+        0.603,
+        0.634,
+        0.670,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
     # 55k / code_debug: per-chunk medians over nine post-warmup iterations on a Galaxy with
-    # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%.
-    (61, 11, 10): [0.396, 0.399, 0.430, 0.455, 0.496, 0.528, 0.552, 0.579, 0.624, 0.652, 0.681],
+    # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%. Re-cut from the same run
+    # as the traced table (CI run 37730295536 / job 113160290655).
+    (61, 11, 10): [0.380, 0.384, 0.415, 0.439, 0.479, 0.509, 0.531, 0.560, 0.604, 0.634, 0.670],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
@@ -237,9 +242,9 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Recentered to CI run 36882661594 / job 110557773564: fused prefill RMSNorm takes ~13-15 ms off
-    # every chunk versus the previous centre (run 36356786056 / job 108727344674).
-    (78, 11, 10): [0.510, 0.509, 0.521, 0.516, 0.527, 0.526, 0.525, 0.530, 0.543, 0.550, 0.559],
+    # Recentered to CI run 37809088320 / job 113425373669: ~4% faster than the previous centre
+    # (run 36882661594 / job 110557773564).
+    (78, 11, 10): [0.489, 0.486, 0.497, 0.493, 0.505, 0.505, 0.502, 0.507, 0.521, 0.527, 0.536],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
@@ -1292,7 +1297,7 @@ def test_kimi_prefill_transformer_chunked_padded(
         pytest.param(
             (8, 4),
             # L1_SMALL holds the routing semaphores plus the sparse-MLA high-bandwidth-gather
-            # semaphores; GLM needs 1216, not Kimi's 768 (see GLM_L1_SMALL_SIZE).
+            # semaphores; GLM needs 1536, not Kimi's 768 (see GLM_L1_SMALL_SIZE).
             torus_xy_device_params(
                 fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
                 l1_small_size=GLM_L1_SMALL_SIZE,
