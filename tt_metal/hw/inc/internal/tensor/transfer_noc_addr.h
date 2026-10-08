@@ -50,28 +50,13 @@ inline uint64_t transfer_shard_noc_addr(
 
 // Whether the page iterators may leave a page's software address uncomputed (AccessorPage::kLazyNocAddr): when the
 // Quasar address generator serves the accessor's transfers (a bound accessor, in a Quasar DM build with the ATT
-// backend), the transfer doesn't need it, and AccessorPage::noc_addr() computes it if anything asks. Not for
-// interleaved tensors whose banks the host found unwalkable (TT_TA_ADDRGEN_INTERLEAVED_{DRAM,L1}_SW): every transfer
-// of those uses the software address, which the iterator computes incrementally.
+// backend), the transfer doesn't need it, and AccessorPage::noc_addr() computes it if anything asks.
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM) && defined(NOC_ATT_ENABLED) && !defined(TT_TA_ADDRGEN_DISABLE)
-#if defined(TT_TA_ADDRGEN_INTERLEAVED_DRAM_SW)
-inline constexpr bool kInterleavedDramSwOnly = true;
-#else
-inline constexpr bool kInterleavedDramSwOnly = false;
-#endif
-#if defined(TT_TA_ADDRGEN_INTERLEAVED_L1_SW)
-inline constexpr bool kInterleavedL1SwOnly = true;
-#else
-inline constexpr bool kInterleavedL1SwOnly = false;
-#endif
-template <typename DSpec>
-inline constexpr bool interleaved_sw_only_v =
-    DSpec::is_interleaved && (DSpec::is_dram ? kInterleavedDramSwOnly : kInterleavedL1SwOnly);
 template <typename Accessor, typename = void>
 inline constexpr bool lazy_page_addr_v = false;
 template <typename Accessor>
 inline constexpr bool lazy_page_addr_v<Accessor, std::void_t<decltype(Accessor::DSpec::binding_id)>> =
-    Accessor::DSpec::binding_id != NO_BINDING_ID && !interleaved_sw_only_v<typename Accessor::DSpec>;
+    Accessor::DSpec::binding_id != NO_BINDING_ID;
 #else
 template <typename Accessor>
 inline constexpr bool lazy_page_addr_v = false;

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // One DFB -> three tensors, round-robin: page p of dst0, dst1, dst2, then page p + 1 of each, ... A direction has two
-// address-generator sides and the first stream on a side keeps it, so two tensors use the hardware and the third uses
+// address-generator sides and the first sequence on a side keeps it, so two tensors use the hardware and the third uses
 // software (TensorAccessorAddrgenContention rows).
 //
 // Named RTAs: num_pages (per tensor), report_addr (4 stats words, see ta_reader_to_dfb.cpp)

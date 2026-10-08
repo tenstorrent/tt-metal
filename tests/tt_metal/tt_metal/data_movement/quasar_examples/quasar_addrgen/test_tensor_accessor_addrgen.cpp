@@ -113,10 +113,9 @@ std::string iter_mode_name(IterMode m) {
 // TT_METAL_NOC_ATT is set); without it every transfer address is software.
 bool att_enabled() { return std::getenv("TT_METAL_NOC_ATT") != nullptr; }
 
-// Bring-up check, on the host: can one BankingConfig walk this device's interleaved `type` banks in page-id order?
-// Needs bank i's ATT selector == bank 0's + i and no per-bank offset (see interleaved_walkable in
-// addrgen_sequencer.h). The device assumes yes; kernels for a device where it's no are built with
-// TT_TA_ADDRGEN_INTERLEAVED_{DRAM,L1}_SW (see make_kernel). Only the map this suite targets is known here.
+// Host check: can one BankingConfig walk this device's interleaved `type` banks in page-id order? Needs bank i's ATT
+// selector == bank 0's + i and no per-bank offset. The device code assumes it (the allocator and ATT map guarantee it);
+// interleaved rows skip where it doesn't hold (skip_reason). Only the map this suite targets is known here.
 bool interleaved_banks_walkable(distributed::MeshDevice& device, BufferType type) {
     const char* map_name = std::getenv("TT_METAL_NOC_ATT");
     if (map_name == nullptr || std::string_view(map_name) != "quasar_aether_2x3") {
@@ -148,18 +147,6 @@ bool interleaved_banks_walkable(distributed::MeshDevice& device, BufferType type
         }
     }
     return true;
-}
-
-// Defines that route interleaved transfers to software on a device whose banks the recipe can't walk.
-std::map<std::string, std::string> addrgen_bringup_defines(distributed::MeshDevice& device) {
-    std::map<std::string, std::string> defines;
-    if (!interleaved_banks_walkable(device, BufferType::DRAM)) {
-        defines.emplace("TT_TA_ADDRGEN_INTERLEAVED_DRAM_SW", "1");
-    }
-    if (!interleaved_banks_walkable(device, BufferType::L1)) {
-        defines.emplace("TT_TA_ADDRGEN_INTERLEAVED_L1_SW", "1");
-    }
-    return defines;
 }
 
 // Row-major UINT32 tensors throughout: one page is one row (interleaved / HEIGHT) or one
@@ -332,6 +319,11 @@ std::string skip_reason(distributed::MeshDevice& device, const LayoutCase& lc) {
         return fmt::format(
             "needs a worker grid with > 1 row for a genuine 2D block split (have {}x{})", grid.x, grid.y);
     }
+    if (att_enabled() && lc.memory_layout == TensorMemoryLayout::INTERLEAVED &&
+        !interleaved_banks_walkable(device, lc.buffer_type)) {
+        return "interleaved banks are not one ascending ATT selector run on this device (the address generator path "
+               "requires it)";
+    }
     return {};
 }
 
@@ -393,7 +385,7 @@ std::shared_ptr<distributed::MeshBuffer> make_l1_region(distributed::MeshDevice&
 }
 
 // Checks one tensor-side kernel's {hw, pushes, transfers, unused stack} report: the hardware served every transfer it
-// should. `expected_sw`: transfers the stream policy sends to software (several tensors per direction); by default
+// should. `expected_sw`: transfers the sequence policy sends to software (several tensors per direction); by default
 // none, except Strided, whose jump back from the even pages to page 1 may take up to two.
 void expect_transfer_stats(
     const std::string& kernel,
@@ -402,7 +394,6 @@ void expect_transfer_stats(
     uint32_t pages,
     IterMode iter_mode,
     bool addrgen_allowed,
-    bool interleaved_walkable,
     std::optional<uint32_t> expected_sw = std::nullopt) {
     ASSERT_EQ(stats.size(), static_cast<size_t>(kNumStatsWords));
     ASSERT_NE(stats[0], 0xDEADBEEFu) << kernel << " never wrote its transfer stats";
@@ -421,10 +412,7 @@ void expect_transfer_stats(
         EXPECT_EQ(transfers, pages) << counts;
     }
     pages = transfers;
-    // No hardware: the path is off, or the device's interleaved banks can't be walked (host-checked, see
-    // interleaved_banks_walkable); sharded layouts always have a recipe.
-    if (!addrgen_allowed || !att_enabled() ||
-        (lc.memory_layout == TensorMemoryLayout::INTERLEAVED && !interleaved_walkable)) {
+    if (!addrgen_allowed || !att_enabled()) {
         EXPECT_EQ(hw, 0u) << counts << " -- expected the software path only";
         return;
     }
@@ -441,7 +429,7 @@ void expect_transfer_stats(
     if (iter_mode == IterMode::ShardView) {
         EXPECT_EQ(pushes, 0u) << counts << " -- this endpoint never takes a pushed address";
     } else if (!expected_sw.has_value()) {
-        // One tensor per direction: its stream keeps the push side, so in-order hits push.
+        // One tensor per direction: its sequence keeps the push side, so in-order hits push.
         EXPECT_GT(pushes, 0u) << counts << " -- in-order hits should push";
     }
     EXPECT_LE(pushes, hw) << counts;
@@ -528,17 +516,6 @@ void run_case(
         implicit_sync,
         /*disable_addrgen=*/shape == KernelShape::ReadOnly);
 
-    // Bring-up: interleaved banks this device can't walk go to software (host-checked; the device assumes walkable).
-    const auto bringup_defines = addrgen_bringup_defines(device);
-    for (m2::KernelSpec* kernel : {&producer, &consumer}) {
-        if (kernel->compiler_options.defines.contains(kAddrgenStatsDefine)) {
-            for (const auto& [name, value] : bringup_defines) {
-                kernel->compiler_options.defines.emplace(name, value);
-            }
-        }
-    }
-    const bool walkable = interleaved_banks_walkable(device, lc.buffer_type);
-
     auto dfb = m2::test_helpers::MakeMinimalDFB("staging", page_size, kNumDfbEntries);
     dfb.data_format_metadata = to_data_format(lc.dtype);
 
@@ -622,11 +599,10 @@ void run_case(
     std::vector<uint32_t> stats;
     if (producer_is_ta) {
         slow_dispatch::ReadFromL1(device, node, producer_report, kNumStatsWords * sizeof(uint32_t), stats);
-        expect_transfer_stats("reader", stats, lc, pages, iter_mode, /*addrgen_allowed=*/true, walkable);
+        expect_transfer_stats("reader", stats, lc, pages, iter_mode, /*addrgen_allowed=*/true);
     }
     slow_dispatch::ReadFromL1(device, node, consumer_report, kNumStatsWords * sizeof(uint32_t), stats);
-    expect_transfer_stats(
-        "writer", stats, lc, pages, iter_mode, /*addrgen_allowed=*/shape != KernelShape::ReadOnly, walkable);
+    expect_transfer_stats("writer", stats, lc, pages, iter_mode, /*addrgen_allowed=*/shape != KernelShape::ReadOnly);
 
     expect_buf_rw(
         "producer",
@@ -1069,7 +1045,7 @@ void PrintTo(const MatrixParam& p, std::ostream* os) {
         << (p.implicit_sync ? "" : "/Explicit");
 }
 
-// Every row is a Copy: the reader and the writer kernel each run their own stream (one DM thread each), so one row
+// Every row is a Copy: the reader and the writer kernel each run their own sequence (one DM thread each), so one row
 // covers the read and the write direction of a layout. The fuzz layer below still draws ReadOnly / WriteOnly rows.
 std::vector<MatrixParam> matrix() {
     std::vector<MatrixParam> params;
@@ -1248,14 +1224,14 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 // ============================================================================
-// Stream contention: three tensors per DM core, two address generators
+// Sequence contention: three tensors per DM core, two address generators
 // ============================================================================
 //
 // ta_multi_reader_to_dfb reads page p of src0, src1, src2 round-robin; ta_multi_writer_from_dfb writes dst0..2 the same
-// way. A direction has two address-generator sides for three streams:
-//   - Spill (default): the stream that needs a side spills the least recently used one and reloads itself if it was
-//     parked, so after the first three transfers every transfer reloads a parked stream; each stream is seeked only as
-//     it would be alone (the run-time stand-in for compiler-placed spill/reload).
+// way. A direction has two address-generator sides for three sequences:
+//   - Spill (default): the sequence that needs a side spills the least recently used one and reloads itself if it was
+//     parked, so after the first three transfers every transfer reloads a parked sequence; each sequence is seeked only
+//     as it would be alone (the run-time stand-in for compiler-placed spill/reload).
 //   - NoSpill (TT_TA_ADDRGEN_NO_SPILL): first use is sticky, so tensors 0 and 1 use the hardware and every transfer of
 //     tensor 2 uses software.
 namespace contention {
@@ -1333,14 +1309,8 @@ TEST_P(TensorAccessorAddrgenContention, ThreeTensorsTwoAddrgens) {
             m2::test_helpers::BindTensorParameterToKernel(kernel, tensor, tensor);
         }
         kernel.compiler_options.defines.emplace(kAddrgenStatsDefine, "1");
-        for (const auto& [define, value] : addrgen_bringup_defines(device)) {
-            kernel.compiler_options.defines.emplace(define, value);
-        }
         if (!p.spill) {
             kernel.compiler_options.defines.emplace("TT_TA_ADDRGEN_NO_SPILL", "1");
-        }
-        if (std::getenv("TT_TA_ADDRGEN_TRACE") != nullptr) {  // debug: per-transfer address trace (device print)
-            kernel.compiler_options.defines.emplace("TT_TA_ADDRGEN_TRACE", "1");
         }
         return kernel;
     };
@@ -1415,8 +1385,6 @@ TEST_P(TensorAccessorAddrgenContention, ThreeTensorsTwoAddrgens) {
           std::pair<std::string, uint32_t>{"writer", consumer_report}}) {
         std::vector<uint32_t> stats;
         slow_dispatch::ReadFromL1(device, node, report_addr, kNumStatsWords * sizeof(uint32_t), stats);
-        const bool walkable =
-            lc.memory_layout != TensorMemoryLayout::INTERLEAVED || interleaved_banks_walkable(device, lc.buffer_type);
         expect_transfer_stats(
             kernel,
             stats,
@@ -1424,8 +1392,7 @@ TEST_P(TensorAccessorAddrgenContention, ThreeTensorsTwoAddrgens) {
             transfers,
             IterMode::PageIdLoop,
             /*addrgen_allowed=*/true,
-            interleaved_banks_walkable(device, lc.buffer_type),
-            /*expected_sw=*/walkable && !p.spill ? pages : 0u);  // NoSpill: the third tensor, every page
+            /*expected_sw=*/p.spill ? 0u : pages);  // NoSpill: the third tensor, every page
     }
 
     // Op-to-op R/W inference: three bound tensors per kernel must be three distinct records.
@@ -1444,7 +1411,7 @@ TEST_P(TensorAccessorAddrgenContention, ThreeTensorsTwoAddrgens) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    Streams,
+    Sequences,
     TensorAccessorAddrgenContention,
     ::testing::ValuesIn(contention::params()),
     [](const ::testing::TestParamInfo<contention::Param>& info) {
@@ -1457,9 +1424,10 @@ INSTANTIATE_TEST_SUITE_P(
 //
 // ta_mixed_reader_writer reads three tensors and writes one, page by page. Reads use the address generators'
 // source sides and writes their destination sides, so:
-//   - the three read streams share two source sides: each is seeked once, then every read after the first three reloads
-//     a parked stream (spilling the least recently used one);
-//   - the write stream has a destination side to itself: seeked once and never spilled, however the reads behave.
+//   - the three read sequences share two source sides: each is seeked once, then every read after the first three
+//   reloads
+//     a parked sequence (spilling the least recently used one);
+//   - the write sequence has a destination side to itself: seeked once and never spilled, however the reads behave.
 // Sources and destinations may have different layouts (even different memories: an L1-sharded source with a DRAM
 // destination walks two different ATT windows on the two sides of one address generator). The copied page size and
 // page count must match.
@@ -1534,12 +1502,6 @@ TEST_P(TensorAccessorAddrgenMixed, ReadsAndWritesDoNotCompete) {
         add_tensor("dst" + std::to_string(t), dst_tensor_spec);
     }
     spec.kernels[0].compiler_options.defines.emplace(kAddrgenStatsDefine, "1");
-    for (const auto& [define, value] : addrgen_bringup_defines(device)) {
-        spec.kernels[0].compiler_options.defines.emplace(define, value);
-    }
-    if (std::getenv("TT_TA_ADDRGEN_TRACE") != nullptr) {  // debug: per-transfer address trace (device print)
-        spec.kernels[0].compiler_options.defines.emplace("TT_TA_ADDRGEN_TRACE", "1");
-    }
     Program program = m2::MakeProgramFromSpec(device, spec);
 
     auto scratch = make_l1_region(device, kNumSrc * page_size);
@@ -1598,7 +1560,6 @@ TEST_P(TensorAccessorAddrgenMixed, ReadsAndWritesDoNotCompete) {
         transfers,
         IterMode::PageIdLoop,
         /*addrgen_allowed=*/true,
-        interleaved_banks_walkable(device, lc.buffer_type),
         /*expected_sw=*/0u);  // several tensors per direction: the reads share their sides by reloading
 
     // Every tensor is a distinct record, reads and writes separate (dst0/dst1 never appear as read).
@@ -1609,7 +1570,7 @@ TEST_P(TensorAccessorAddrgenMixed, ReadsAndWritesDoNotCompete) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    Streams,
+    Sequences,
     TensorAccessorAddrgenMixed,
     ::testing::Values(
         MixedParam{"InterleavedDram", "InterleavedDram"},
@@ -1737,9 +1698,6 @@ TEST_P(TensorAccessorAddrgenApi, CopiesThroughWalker) {
     m2::test_helpers::BindTensorParameterToKernel(kernel, "src", "src");
     m2::test_helpers::BindTensorParameterToKernel(kernel, "dst", "dst");
     kernel.compiler_options.defines.emplace(kAddrgenStatsDefine, "1");
-    for (const auto& [name, value] : addrgen_bringup_defines(device)) {
-        kernel.compiler_options.defines.emplace(name, value);
-    }
     m2::ProgramSpec spec{
         .name = "ta_api_copy",
         .kernels = {kernel},
@@ -1796,7 +1754,6 @@ TEST_P(TensorAccessorAddrgenApi, CopiesThroughWalker) {
 
     std::vector<uint32_t> r;
     ASSERT_TRUE(slow_dispatch::ReadFromL1(device, node, report_addr, p.threads * api_cov::kReportStride, r));
-    const bool walkable = interleaved_banks_walkable(device, lc.buffer_type);
     uint32_t hw = 0, requests = 0, pushes = 0;
     for (uint32_t t = 0; t < p.threads; ++t) {
         const uint32_t* w = &r[t * api_cov::kReportStride / sizeof(uint32_t)];
@@ -1813,9 +1770,7 @@ TEST_P(TensorAccessorAddrgenApi, CopiesThroughWalker) {
         EXPECT_EQ(hw, 0u);
         return;
     }
-    if (lc.memory_layout != TensorMemoryLayout::INTERLEAVED || walkable) {
-        EXPECT_GT(hw, 0u) << "a bound accessor's transfers should use the address generator";
-    }
+    EXPECT_GT(hw, 0u) << "a bound accessor's transfers should use the address generator";
     if (api_cov::may_push(p.mode)) {
         EXPECT_GT(pushes, 0u) << "streaming transfers through Noc::async_read / async_write should push";
         EXPECT_LE(pushes, hw);
@@ -2241,9 +2196,6 @@ TEST_P(TensorAccessorAddrgenPerf, CyclesPerTransfer) {
     for (uint32_t t = 0; t < perf::kMaxTensors; ++t) {
         const std::string name = "src" + std::to_string(t);
         m2::test_helpers::BindTensorParameterToKernel(kernel, name, name);
-    }
-    for (const auto& [define, value] : addrgen_bringup_defines(device)) {
-        kernel.compiler_options.defines.emplace(define, value);
     }
     if (p.path == perf::Path::Sw) {
         kernel.compiler_options.defines.emplace(kDisableAddrgenDefine, "1");
