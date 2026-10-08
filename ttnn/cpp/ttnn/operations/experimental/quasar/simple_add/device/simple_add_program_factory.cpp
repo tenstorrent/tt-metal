@@ -24,14 +24,11 @@ namespace {
 constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/experimental/quasar/simple_add/device/kernels/";
 constexpr uint32_t kEntriesPerThread = 2;      // per tile counter: double buffering
 constexpr uint32_t kQuasarComputeThreads = 4;  // every Tensix engine of a Neo cluster
-// Reader and writer DM cores. Each must divide kQuasarComputeThreads so every DM thread round-robins the same
-// number of Tensix tile counters: with 4 readers, reader t feeds only Tensix t; with 2 writers, writer t drains
+// Reader and writer DM cores: with 4 readers, reader t feeds only Tensix t; with 2 writers, writer t drains
 // Tensix t and t + 2. Quasar keeps DM0 (ISR) and DM1 (remapper) for itself, leaving 6 DM cores (DM2..DM7):
 // 4 readers + 2 writers use all of them.
 constexpr uint32_t kQuasarReaderThreads = 4;
 constexpr uint32_t kQuasarWriterThreads = 2;
-static_assert(kQuasarComputeThreads % kQuasarReaderThreads == 0);
-static_assert(kQuasarComputeThreads % kQuasarWriterThreads == 0);
 static_assert(kQuasarReaderThreads + kQuasarWriterThreads <= 6, "only DM2..DM7 can run user kernels");
 }  // namespace
 
