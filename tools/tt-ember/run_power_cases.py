@@ -7,12 +7,12 @@
 Top-level driver for the POWER_CASE power-experiment sweep.
 
 For each requested POWER_CASE value (see the "POWER_CASE Power-Experiment Scenarios" section
-in README.md, and tt_metal/programming_examples/high_power_matmul/README.md for what each case
+in README.md, and tt_metal/programming_examples/long_matmul/README.md for what each case
 actually disables/amplifies in the kernels), and for each requested --ops entry (which per-tile
-FPU instruction the compute kernel runs, via HIGH_POWER_OP -- see mm_power.cpp), this script:
+FPU instruction the compute kernel runs, via LONG_MATMUL_OP -- see compute.cpp), this script:
 
   1. Resets the hardware (`tt-smi -r`) and waits for it to re-initialize.
-  2. Runs auto.py with POWER_CASE=<i> and HIGH_POWER_OP=<op> exported into the application's
+  2. Runs auto.py with POWER_CASE=<i> and LONG_MATMUL_OP=<op> exported into the application's
      environment, writing that case's results to <output-root>/<op>/<subdir>.
   3. After every requested case has completed for a given op, writes a cases file
      (`Case N: subdir : label`) describing the POWER_CASE -> subdir mapping for that op, and
@@ -27,7 +27,7 @@ FPU instruction the compute kernel runs, via HIGH_POWER_OP -- see mm_power.cpp),
 
 This automates exactly the manual sequence, repeated once per op in --ops:
     tt-smi -r
-    export POWER_CASE=<i> HIGH_POWER_OP=<op>
+    export POWER_CASE=<i> LONG_MATMUL_OP=<op>
     python3 auto.py --telemetry-exe ... --app-exe ... --output-root <output-root>/<op> \\
         --subdir <name-for-that-case> --app-args ...
 run once per case, followed by:
@@ -36,7 +36,7 @@ run once per case, followed by:
 Usage:
     python3 run_power_cases.py \\
         --telemetry-exe /path/to/telemetry \\
-        --app-exe /path/to/metal_example_high_power_matmul \\
+        --app-exe /path/to/metal_example_long_matmul \\
         --parser-script /path/to/parser.py \\
         --tt-venv-activate /path/to/tt-metal-venv/bin/activate \\
         --tt-metal-root /path/to/tt-metal \\
@@ -91,7 +91,7 @@ POWER_CASE_SPECS: Dict[int, Tuple[str, str]] = {
 # sides, so (case 1 - case X) isolates engine X's own contribution to dynamic power.
 DEFAULT_POWER_CASES: List[int] = [5, 1, 2, 4]
 
-# Which per-tile FPU instruction the compute kernel runs (HIGH_POWER_OP, see mm_power.cpp's
+# Which per-tile FPU instruction the compute kernel runs (LONG_MATMUL_OP, see compute.cpp's
 # USE_ADD / USE_SILU / USE_EXP / USE_SIGMOID / USE_GELU / USE_RECIP / MATMUL_FNN_DN). The full
 # POWER_CASE sweep runs once per entry here, into its own <output-root>/<op>/ subtree, so the
 # operations can be compared like-for-like. Each op/case directory is skipped individually if
@@ -172,7 +172,7 @@ def run_case(
 
     env = dict(os.environ)
     env["POWER_CASE"] = str(power_case)
-    env["HIGH_POWER_OP"] = op
+    env["LONG_MATMUL_OP"] = op
 
     print(f"\n{'=' * 60}", flush=True)
     print(f" op={op} POWER_CASE={power_case} -> subdir={subdir}", flush=True)
@@ -845,7 +845,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         nargs="+",
         default=DEFAULT_OPS,
         choices=ALL_OPS,
-        help=f"Which per-tile operation(s) to sweep (HIGH_POWER_OP). The full --power-cases "
+        help=f"Which per-tile operation(s) to sweep (LONG_MATMUL_OP). The full --power-cases "
         f"sweep runs once per op, into <output-root>/<op>/. Default: {DEFAULT_OPS}",
     )
     ap.add_argument("--auto-script", type=Path, default=Path(__file__).parent / "auto.py")
@@ -893,7 +893,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--app-args",
         nargs=argparse.REMAINDER,
         default=[],
-        help="Arguments passed to the application (M N K num_iterations [fixed_tiles_per_core]). Put this option last.",
+        help="Arguments passed to the application (M N K num_iterations [fixed_blocks_per_core]). Put this option last.",
     )
 
     args = ap.parse_args(argv)
@@ -909,7 +909,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # FLOPs per interval, for the energy-per-FLOP-by-engine chart -- fixed regardless of grid
     # since split mode divides the same total work across however many cores are active.
-    # --app-args is M N K num_iterations [fixed_tiles_per_core]; the chart is skipped (with a
+    # --app-args is M N K num_iterations [fixed_blocks_per_core]; the chart is skipped (with a
     # note) if fewer than 4 positional args were given.
     flops: Optional[float] = None
     if len(args.app_args) >= 4:

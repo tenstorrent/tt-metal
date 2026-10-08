@@ -24,7 +24,7 @@ tt-ember collects and analyzes power metrics (voltage, current, power) from Tens
 
 ## Overview
 
-tt-ember runs a measured application (by default a high-power matmul benchmark) while a telemetry binary samples the device's power sensors, then joins the two by wall-clock time to attribute power and energy to each phase of execution. Everything is driven by six Python scripts and a set of diagnostic utilities — no build step for the tooling itself; only the `tt-metal` binaries it drives need to be compiled.
+tt-ember runs a measured application (by default the `long_matmul` programming example) while a telemetry binary samples the device's power sensors, then joins the two by wall-clock time to attribute power and energy to each phase of execution. Everything is driven by six Python scripts and a set of diagnostic utilities — no build step for the tooling itself; only the `tt-metal` binaries it drives need to be compiled.
 
 ## Repository Structure
 
@@ -65,7 +65,7 @@ export TT_METAL_HOME=/path/to/tt-metal
 
 ```
 $TT_METAL_HOME/build_Release/tools/umd/telemetry
-$TT_METAL_HOME/build_Release/programming_examples/metal_example_high_power_matmul
+$TT_METAL_HOME/build_Release/programming_examples/metal_example_long_matmul
 ```
 
 ## Quick Start
@@ -76,7 +76,7 @@ Run one full measurement — telemetry capture, application, and analysis — in
 python3 auto.py \
   --telemetry-exe "$TT_METAL_HOME"/build_Release/tools/umd/telemetry \
   --telemetry-freq 50 \
-  --app-exe "$TT_METAL_HOME"/build_Release/programming_examples/metal_example_high_power_matmul \
+  --app-exe "$TT_METAL_HOME"/build_Release/programming_examples/metal_example_long_matmul \
   --parser-script ./parser.py \
   --tt-venv-activate /path/to/tt-metal-venv/bin/activate \
   --tt-metal-root "$TT_METAL_HOME" \
@@ -120,7 +120,7 @@ Runs a predefined sequence of measurements by invoking `auto.py` once per config
 ```bash
 python3 run_all.py \
   --telemetry-exe "$TT_METAL_HOME"/build_Release/tools/umd/telemetry \
-  --app-exe "$TT_METAL_HOME"/build_Release/programming_examples/metal_example_high_power_matmul \
+  --app-exe "$TT_METAL_HOME"/build_Release/programming_examples/metal_example_long_matmul \
   --parser-script ./parser.py \
   --tt-venv-activate /path/to/tt-metal-venv/bin/activate \
   --tt-metal-root "$TT_METAL_HOME" \
@@ -142,7 +142,7 @@ python3 compare_runs.py --out-root ./out --filter prefill_2048 fixed_power_sweep
 ### `compare_runs2.py` — Named Use-Case Comparison
 
 Compares a small, explicitly-named set of runs (e.g. the `POWER_CASE` power-experiment
-scenarios — see [§9 of the device-side instrumentation doc](docs/device-side-instrumentation.md#9-power-experiment-flags-on-high_power_matmul-itself))
+scenarios — see [§9 of the device-side instrumentation doc](docs/device-side-instrumentation.md#9-power-experiment-flags-on-long_matmul-itself))
 against each other, grouped by grid (core combination), as grouped bar charts. Unlike
 `compare_runs.py` — which auto-discovers and overlays *all* runs under a root as line plots —
 `compare_runs2.py` takes an explicit, ordered list of run subdirectories from a small text
@@ -192,7 +192,7 @@ reset/export/`auto.py` sequence once per case and then invoking `compare_runs2.p
 ```bash
 python3 run_power_cases.py \
   --telemetry-exe "$TT_METAL_HOME"/build_Release/tools/umd/telemetry \
-  --app-exe "$TT_METAL_HOME"/build_Release/programming_examples/metal_example_high_power_matmul \
+  --app-exe "$TT_METAL_HOME"/build_Release/programming_examples/metal_example_long_matmul \
   --parser-script ./parser.py \
   --tt-venv-activate /path/to/tt-metal-venv/bin/activate \
   --tt-metal-root "$TT_METAL_HOME" \
@@ -214,7 +214,7 @@ Notes:
 - Writes `<output-root>/power_cases.txt` (overridable with `--cases-file-name`), then calls
   `compare_runs2.py -i <output-root> -c <output-root>/power_cases.txt`.
 
-See [§9 of the device-side instrumentation doc](docs/device-side-instrumentation.md#9-power-experiment-flags-on-high_power_matmul-itself)
+See [§9 of the device-side instrumentation doc](docs/device-side-instrumentation.md#9-power-experiment-flags-on-long_matmul-itself)
 for what each `POWER_CASE` actually disables or amplifies in the kernels.
 
 ### Diagnostic Utilities (`diagnostics/`)
@@ -270,12 +270,12 @@ The application runs a sequence of matrix multiplications across a predefined sw
 ### Arguments
 
 ```
-metal_example_high_power_matmul  M  N  K  num_iterations  [fixed_tiles_per_core]
+metal_example_long_matmul  M  N  K  num_iterations  [fixed_blocks_per_core]
 ```
 
 The first four arguments define the matrix dimensions and workload intensity. **M** is the number of rows of matrix A and the output matrix C, **N** is the number of columns of matrix B and the output C, and **K** is the shared inner dimension. All three must be divisible by 32, since the hardware processes data exclusively in 32×32 BFloat16 tiles. **`num_iterations`** controls how many times the full matmul is repeated per grid configuration, directly setting the duration of each measurement window.
 
-The optional fifth argument, **`fixed_tiles_per_core`**, selects the operating mode. When omitted or set to zero, the application runs in **split mode**: total output tiles are divided equally across all active cores, so adding more cores reduces per-core work while keeping total computation constant — useful for measuring execution time scaling and efficiency. When set to a positive integer, every core computes exactly that many tiles per iteration regardless of grid size (**fixed-per-core mode**), meaning total work and power scale linearly with core count — useful for exposing how power delivery scales with the number of active compute units.
+The optional fifth argument, **`fixed_blocks_per_core`**, selects the operating mode. When omitted or set to zero, the application runs in **split mode**: total output tiles are divided equally across all active cores, so adding more cores reduces per-core work while keeping total computation constant — useful for measuring execution time scaling and efficiency. When set to a positive integer, every core computes exactly that many output blocks (single tiles unless `LONG_MATMUL_BLOCK_M/N` are set) per iteration regardless of grid size (**fixed-per-core mode**), meaning total work and power scale linearly with core count — useful for exposing how power delivery scales with the number of active compute units.
 
 ## Power Metrics
 
