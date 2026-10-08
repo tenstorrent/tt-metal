@@ -73,7 +73,7 @@ inline constexpr uint32_t kDstTiles = GDN_DST_TILES;
 
 inline void mm(
     uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr, bool skip_reconfig = false) {
-    cb_reserve_back(o, Mt * Nt);
+    CircularBuffer(o).reserve_back(Mt * Nt);
     if (!skip_reconfig) {
         pack_reconfig_data_format(o);  // mixed bf16/fp32 CBs: set packer to this output's format
         // matmul_tiles(a,b): in0=a->srcB, in1=b->srcA. Reconfig unpack src formats to match (the
@@ -97,7 +97,7 @@ inline void mm(
                 tile_regs_release();
             }
         }
-        cb_push_back(o, Mt * Nt);
+        CircularBuffer(o).push_back(Mt * Nt);
         return;
     }
     const uint32_t n_out = Mt * Nt;
@@ -120,7 +120,7 @@ inline void mm(
         }
         tile_regs_release();
     }
-    cb_push_back(o, Mt * Nt);
+    CircularBuffer(o).push_back(Mt * Nt);
 }
 
 // Elementwise binary op selector for ew() / ewt().
@@ -128,7 +128,7 @@ enum class EwOp : uint8_t { Add, Sub, Mul };
 
 // out = A (op) B elementwise, n tiles.
 inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, EwOp op, bool skip_reconfig = false) {
-    cb_reserve_back(o, n);
+    CircularBuffer(o).reserve_back(n);
     if (!skip_reconfig) {
         pack_reconfig_data_format(o);
         reconfig_data_format(a, b);  // binary(a,b): a->srcA, b->srcB
@@ -155,7 +155,7 @@ inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, EwOp op, bool ski
             pack_tile(0, o, i);
             tile_regs_release();
         }
-        cb_push_back(o, n);
+        CircularBuffer(o).push_back(n);
         return;
     }
     for (uint32_t i0 = 0; i0 < n; i0 += kDstTiles) {
@@ -177,7 +177,7 @@ inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, EwOp op, bool ski
         }
         tile_regs_release();
     }
-    cb_push_back(o, n);
+    CircularBuffer(o).push_back(n);
 }
 
 // The SFPU DST<->DST ops are inlined LLK bodies of several hundred bytes each and the fused windows below call
@@ -198,9 +198,9 @@ inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, EwOp op, bool ski
 // decay_exp -> o_exp[i], decayfac -> o_fac[i], dl -> o_fac[Ct] (from tile 0's window; every row holds g_sum).
 inline void decay_all(
     uint32_t tril, uint32_t ones, uint32_t g, uint32_t o_decay, uint32_t o_exp, uint32_t o_fac, uint32_t Ct) {
-    cb_reserve_back(o_decay, Ct);
-    cb_reserve_back(o_exp, Ct);
-    cb_reserve_back(o_fac, Ct + 1);
+    CircularBuffer(o_decay).reserve_back(Ct);
+    CircularBuffer(o_exp).reserve_back(Ct);
+    CircularBuffer(o_fac).reserve_back(Ct + 1);
     pack_reconfig_data_format(o_decay);  // all fp32
     reconfig_data_format(g, tril);       // matmul(tril|ones, g): in0->srcB, g->srcA
     matmul_init(tril, g, 0);
@@ -230,16 +230,16 @@ inline void decay_all(
         }
         tile_regs_release();
     }
-    cb_push_back(o_decay, Ct);
-    cb_push_back(o_exp, Ct);
-    cb_push_back(o_fac, Ct + 1);
+    CircularBuffer(o_decay).push_back(Ct);
+    CircularBuffer(o_exp).push_back(Ct);
+    CircularBuffer(o_fac).push_back(Ct + 1);
 }
 
 // L_mask[i,j] = tril * exp(decay_i - decay_j), one DST pass per output tile: decay_i (col broadcast of
 // `decay`) in DST0, decay_j (row broadcast of `decay_row`) in DST1, then SFPU: DST0 -= DST1, the tril
 // tile is copied to DST1 and applied before the exp (the upper triangle would overflow) and again after.
 inline void lmask_fused(uint32_t ones, uint32_t decay, uint32_t decay_row, uint32_t tril, uint32_t o, uint32_t Ct) {
-    cb_reserve_back(o, Ct * Ct);
+    CircularBuffer(o).reserve_back(Ct * Ct);
     pack_reconfig_data_format(o);
     for (uint32_t mi = 0; mi < Ct; mi++) {
         for (uint32_t ni = 0; ni < Ct; ni++) {
@@ -264,12 +264,12 @@ inline void lmask_fused(uint32_t ones, uint32_t decay, uint32_t decay_row, uint3
             tile_regs_release();
         }
     }
-    cb_push_back(o, Ct * Ct);
+    CircularBuffer(o).push_back(Ct * Ct);
 }
 
 // dl*I: the identity tile scaled by column 0 of tile `col_tile` of `col` (dl in every row).
 inline void dl_tile(uint32_t eye, uint32_t col, uint32_t col_tile, uint32_t o) {
-    cb_reserve_back(o, 1);
+    CircularBuffer(o).reserve_back(1);
     pack_reconfig_data_format(o);
     reconfig_data_format(eye, col);  // bcast(a,col): a->srcA, col->srcB
     mul_bcast_cols_init(eye, col);
@@ -279,13 +279,13 @@ inline void dl_tile(uint32_t eye, uint32_t col, uint32_t col_tile, uint32_t o) {
     tile_regs_wait();
     pack_tile(0, o, 0);
     tile_regs_release();
-    cb_push_back(o, 1);
+    CircularBuffer(o).push_back(1);
 }
 
 // out[Mt,Nt] = -(A[Mt,Nt] * col[Mt,1]): the broadcast product lands in DST, the sign flip is an exact SFPU op on
 // it before the pack (the same values as negating the column first, without staging the negated column).
 inline void bcast_cols_mul_neg(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, uint32_t Nt) {
-    cb_reserve_back(o, Mt * Nt);
+    CircularBuffer(o).reserve_back(Mt * Nt);
     pack_reconfig_data_format(o);
     reconfig_data_format(a, col);  // bcast(a,col): a->srcA, col->srcB
     mul_bcast_cols_init(a, col);
@@ -301,7 +301,7 @@ inline void bcast_cols_mul_neg(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt
             tile_regs_release();
         }
     }
-    cb_push_back(o, Mt * Nt);
+    CircularBuffer(o).push_back(Mt * Nt);
 }
 
 // negN = -strictly_lower(kk * L_mask), kk = k_beta @ k^T, one DST pass per output tile: kk lands in
@@ -310,7 +310,7 @@ inline void bcast_cols_mul_neg(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt
 // diagonal and flips the sign of the strictly-lower part exactly (the upper triangle is already zero from
 // L_mask).
 inline void negn_fused(uint32_t kbeta, uint32_t k, uint32_t lmask, uint32_t eye, uint32_t o, uint32_t Ct, uint32_t Kt) {
-    cb_reserve_back(o, Ct * Ct);
+    CircularBuffer(o).reserve_back(Ct * Ct);
     pack_reconfig_data_format(o);
     for (uint32_t mi = 0; mi < Ct; mi++) {
         for (uint32_t ni = 0; ni < Ct; ni++) {
@@ -336,13 +336,13 @@ inline void negn_fused(uint32_t kbeta, uint32_t k, uint32_t lmask, uint32_t eye,
             tile_regs_release();
         }
     }
-    cb_push_back(o, Ct * Ct);
+    CircularBuffer(o).push_back(Ct * Ct);
 }
 
 // intra = (q @ k^T) * L_mask, one DST pass per output tile: qk in DST0 (Kt products), L_mask copied to
 // DST1 and multiplied in on the SFPU.
 inline void intra_fused(uint32_t q, uint32_t k, uint32_t lmask, uint32_t o, uint32_t Ct, uint32_t Kt) {
-    cb_reserve_back(o, Ct * Ct);
+    CircularBuffer(o).reserve_back(Ct * Ct);
     pack_reconfig_data_format(o);
     for (uint32_t mi = 0; mi < Ct; mi++) {
         for (uint32_t ni = 0; ni < Ct; ni++) {
@@ -363,7 +363,7 @@ inline void intra_fused(uint32_t q, uint32_t k, uint32_t lmask, uint32_t o, uint
             tile_regs_release();
         }
     }
-    cb_push_back(o, Ct * Ct);
+    CircularBuffer(o).push_back(Ct * Ct);
 }
 
 // ---- fused qk-norm (C5). rowsum(x^2) is the diagonal of x @ x^T, so the per-row inverse rms comes out of one
@@ -383,7 +383,7 @@ inline void inv_rms_diag(
     uint32_t eps_bits,
     uint32_t scale_bits,
     bool do_scale) {
-    cb_reserve_back(o, Ct);
+    CircularBuffer(o).reserve_back(Ct);
     pack_reconfig_data_format(o);
     for (uint32_t mi = 0; mi < Ct; mi++) {
         tile_regs_acquire();
@@ -412,12 +412,12 @@ inline void inv_rms_diag(
         pack_tile(0, o, mi);
         tile_regs_release();
     }
-    cb_push_back(o, Ct);
+    CircularBuffer(o).push_back(Ct);
 }
 
 // out[mi, ki] = D[mi] @ x[mi, ki]: block-diagonal left multiply (D holds Ct diagonal tiles), one product per tile.
 inline void mm_diag(uint32_t d, uint32_t x, uint32_t o, uint32_t Ct, uint32_t Kt) {
-    cb_reserve_back(o, Ct * Kt);
+    CircularBuffer(o).reserve_back(Ct * Kt);
     pack_reconfig_data_format(o);
     reconfig_data_format(x, d);  // matmul(d, x): d->srcB, x->srcA
     matmul_init(d, x, 0);
@@ -431,12 +431,12 @@ inline void mm_diag(uint32_t d, uint32_t x, uint32_t o, uint32_t Ct, uint32_t Kt
             tile_regs_release();
         }
     }
-    cb_push_back(o, Ct * Kt);
+    CircularBuffer(o).push_back(Ct * Kt);
 }
 
 // out[Mt,Nt] = A[Mt,Nt] * col[Mt,1]  (broadcast the single column of `col` across N)
 inline void bcast_cols_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, uint32_t Nt) {
-    cb_reserve_back(o, Mt * Nt);
+    CircularBuffer(o).reserve_back(Mt * Nt);
     pack_reconfig_data_format(o);
     reconfig_data_format(a, col);  // bcast(a,col): a->srcA, col->srcB
     mul_bcast_cols_init(a, col);
@@ -450,12 +450,12 @@ inline void bcast_cols_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, ui
             tile_regs_release();
         }
     }
-    cb_push_back(o, Mt * Nt);
+    CircularBuffer(o).push_back(Mt * Nt);
 }
 
 // out[0] = copy of src[src_tile] (single 32x32 tile). src must be available.
 inline void cpy_t(uint32_t src, uint32_t src_tile, uint32_t o, bool skip_reconfig = false) {
-    cb_reserve_back(o, 1);
+    CircularBuffer(o).reserve_back(1);
     if (!skip_reconfig) {  // see mm() for the skip_reconfig contract
         pack_reconfig_data_format(o);
         reconfig_data_format_srca(src);
@@ -467,12 +467,12 @@ inline void cpy_t(uint32_t src, uint32_t src_tile, uint32_t o, bool skip_reconfi
     tile_regs_wait();
     pack_tile(0, o, 0);
     tile_regs_release();
-    cb_push_back(o, 1);
+    CircularBuffer(o).push_back(1);
 }
 
 // out[0] = a[ai] (op) b[bi], single tile; Add or Mul. (Like ew but with free tile indices.)
 inline void ewt(uint32_t a, uint32_t ai, uint32_t b, uint32_t bi, uint32_t o, EwOp op, bool skip_reconfig = false) {
-    cb_reserve_back(o, 1);
+    CircularBuffer(o).reserve_back(1);
     if (!skip_reconfig) {  // see mm() for the skip_reconfig contract
         pack_reconfig_data_format(o);
         reconfig_data_format(a, b);
@@ -492,7 +492,7 @@ inline void ewt(uint32_t a, uint32_t ai, uint32_t b, uint32_t bi, uint32_t o, Ew
     tile_regs_wait();
     pack_tile(0, o, 0);
     tile_regs_release();
-    cb_push_back(o, 1);
+    CircularBuffer(o).push_back(1);
 }
 
 // (I32 - Nq)^-1 for a strictly-lower 16-block Nq isolated in one 16-quadrant (rest zero),
@@ -511,7 +511,7 @@ inline void invert16(uint32_t nq, uint32_t out, uint32_t tmp, uint32_t cb_eye) {
         reconfig_data_format(cb_eye, nq);  // all operands fp32: one unpack config serves mm and ew
     }
     auto add1 = [&](uint32_t a, uint32_t b, uint32_t o) {  // o = a + b, 1 tile
-        cb_reserve_back(o, 1);
+        CircularBuffer(o).reserve_back(1);
         if (!kGdnHoistReconfig) {  // per-call reconfigs, exactly as the plain ew() would issue
             pack_reconfig_data_format(o);
             reconfig_data_format(a, b);
@@ -523,12 +523,12 @@ inline void invert16(uint32_t nq, uint32_t out, uint32_t tmp, uint32_t cb_eye) {
         tile_regs_wait();
         pack_tile(0, o, 0);
         tile_regs_release();
-        cb_push_back(o, 1);
+        CircularBuffer(o).push_back(1);
     };
     add1(cb_eye, nq, out);  // out = I + Nq
     CircularBuffer(out).wait_front(1);
     for (uint32_t m = 2; m < 16; m++) {  // sum_{k<16} Nq^k
-        cb_reserve_back(tmp, 1);
+        CircularBuffer(tmp).reserve_back(1);
         if (!kGdnHoistReconfig) {  // per-call reconfigs, exactly as the plain mm() would issue
             pack_reconfig_data_format(tmp);
             reconfig_data_format(out, nq);
@@ -540,7 +540,7 @@ inline void invert16(uint32_t nq, uint32_t out, uint32_t tmp, uint32_t cb_eye) {
         tile_regs_wait();
         pack_tile(0, tmp, 0);
         tile_regs_release();
-        cb_push_back(tmp, 1);
+        CircularBuffer(tmp).push_back(1);
         CircularBuffer(tmp).wait_front(1);
         CircularBuffer(out).pop_front(1);
         add1(cb_eye, tmp, out);  // out = I + Nq @ out
@@ -562,7 +562,7 @@ inline void asm4(
     uint32_t o) {
     const uint32_t src[4] = {s0, s1, s2, s3};
     const uint32_t tl[4] = {t0, t1, t2, t3};
-    cb_reserve_back(o, 4);
+    CircularBuffer(o).reserve_back(4);
     pack_reconfig_data_format(o);
     for (uint32_t i = 0; i < 4; i++) {
         reconfig_data_format_srca(src[i]);
@@ -574,7 +574,7 @@ inline void asm4(
         pack_tile(0, o, i);
         tile_regs_release();
     }
-    cb_push_back(o, 4);
+    CircularBuffer(o).push_back(4);
 }
 
 // Invert one 32x32 diagonal tile-block: out[0] = (I32 - negN)^-1, negN = src[tile] (strictly-lower
@@ -652,7 +652,7 @@ inline void invert_block(
 //   cb_eye : CB holding the identity tile.
 //   out    : fp32 CB that receives T_inv (one tile pushed).
 inline void sfpu_tinv(uint32_t negN, uint32_t cb_eye, uint32_t out) {
-    cb_reserve_back(out, 1);
+    CircularBuffer(out).reserve_back(1);
     // copy_tile reads the identity through SrcA; the solve's DEST loads and stores are fp32 under fp32 dest
     // accumulation.
     reconfig_data_format_srca(cb_eye);
@@ -667,13 +667,13 @@ inline void sfpu_tinv(uint32_t negN, uint32_t cb_eye, uint32_t out) {
     tile_regs_wait();
     pack_tile(DST_X, out, 0);
     tile_regs_release();
-    cb_push_back(out, 1);
+    CircularBuffer(out).push_back(1);
 }
 #endif
 
 // out[1,Ct] row-form = transpose of col[Ct,1]; produces Ct tiles (each row0 = a 32-chunk of col).
 inline void transpose_col(uint32_t in, uint32_t o, uint32_t Ct) {
-    cb_reserve_back(o, Ct);
+    CircularBuffer(o).reserve_back(Ct);
     pack_reconfig_data_format(o);
     reconfig_data_format_srca(in);  // unary: in->srcA
     transpose_init(in);
@@ -685,7 +685,7 @@ inline void transpose_col(uint32_t in, uint32_t o, uint32_t Ct) {
         pack_tile(0, o, i);
         tile_regs_release();
     }
-    cb_push_back(o, Ct);
+    CircularBuffer(o).push_back(Ct);
 }
 
 // CB map for prep_chunk — one field per CB the body touches. dl/mask are the prep kernel's
@@ -919,7 +919,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         POP(Kk, ck);
         // decayfac kept alive: reused at the scan to recompute dl = exp(g_sum).
         // k_dec_t = transpose(k_dec) [K,C]: transpose each [Ct,Kt] tile block into [Kt,Ct].
-        cb_reserve_back(cb.kdec_t, Kt * Ct);
+        CircularBuffer(cb.kdec_t).reserve_back(Kt * Ct);
         pack_reconfig_data_format(cb.kdec_t);
         reconfig_data_format_srca(cb.scr1);  // unary: in->srcA
         transpose_init(cb.scr1);
@@ -933,7 +933,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
                 tile_regs_release();
             }
         }
-        cb_push_back(cb.kdec_t, Kt * Ct);
+        CircularBuffer(cb.kdec_t).push_back(Kt * Ct);
         POP(cb.scr1, ck);
     }
 
@@ -980,7 +980,7 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
         WAIT(cb.nkd, ck);
         WAIT(cb.vbeta, cv);
         WAIT(cur_S, kv);
-        cb_reserve_back(cb.ointer, cv);
+        CircularBuffer(cb.ointer).reserve_back(cv);
         matmul_init(cb.nkd, cur_S, 0);  // one init serves both products: matmul_tiles binds its CBs per call
         for (uint32_t t0 = 0; t0 < cv; t0 += kDstTiles) {
             const uint32_t nb = (cv - t0 < kDstTiles) ? (cv - t0) : kDstTiles;
@@ -1001,7 +1001,7 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
             }
             tile_regs_release();
         }
-        cb_push_back(cb.ointer, cv);
+        CircularBuffer(cb.ointer).push_back(cv);
         POP(cb.nkd, ck);
         WAIT(cb.ointer, cv);  // the next block's unpacker must not run ahead of this block's packer
         POP(cb.vbeta, cv);
@@ -1024,7 +1024,7 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
         GDN_ZONE("st_o");
         WAIT(cb.qdecay, ck);
         WAIT(cb.intra, cc);
-        cb_reserve_back(cb.out, cv);
+        CircularBuffer(cb.out).reserve_back(cv);
         matmul_init(cb.qdecay, cur_S, 0);
         for (uint32_t t0 = 0; t0 < cv; t0 += kDstTiles) {
             const uint32_t nb = (cv - t0 < kDstTiles) ? (cv - t0) : kDstTiles;
@@ -1047,7 +1047,7 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
             }
             tile_regs_release();
         }
-        cb_push_back(cb.out, cv);
+        CircularBuffer(cb.out).push_back(cv);
         POP(cb.qdecay, ck);
         POP(cb.intra, cc);
     }
@@ -1057,7 +1057,7 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
         GDN_ZONE("st_snew");
         WAIT(cb.kdec_t, kc);
         WAIT(cb.dl, 1);
-        cb_reserve_back(dst, kv);
+        CircularBuffer(dst).reserve_back(kv);
         matmul_init(cb.dl, cur_S, 0);
         for (uint32_t t0 = 0; t0 < kv; t0 += kDstTiles) {
             const uint32_t nb = (kv - t0 < kDstTiles) ? (kv - t0) : kDstTiles;
@@ -1080,7 +1080,7 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
             }
             tile_regs_release();
         }
-        cb_push_back(dst, kv);
+        CircularBuffer(dst).push_back(kv);
         POP(cb.kdec_t, kc);
         POP(cb.dl, 1);
     }

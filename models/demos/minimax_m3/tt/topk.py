@@ -33,6 +33,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.chunk_layout import rotated_chunk_real_counts
+from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
 from models.demos.minimax_m3.utils.general_utils import cache_file_exists, get_cache_file_name
 
 
@@ -94,6 +95,7 @@ class TopKRouter:
             dtype=ttnn.bfloat16,
             cache_file_name=get_cache_file_name(tensor_cache_path, "weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_dump_mode=CACHE_DUMP_MODE,
         )
 
         # e_score_correction_bias [num_experts] -> [1, num_experts], replicated; added to
@@ -118,6 +120,7 @@ class TopKRouter:
                 mesh_mapper=(
                     ttnn.ReplicateTensorToMesh(mesh_device) if isinstance(mesh_device, ttnn.MeshDevice) else None
                 ),
+                cache_dump_mode=CACHE_DUMP_MODE,
             )
             if build_bias
             else None

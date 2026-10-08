@@ -5,7 +5,7 @@ import struct
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import ScalarBinopGolden, get_golden_generator
 from helpers.llk_params import (
@@ -15,7 +15,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.sfpu_accuracy_budget import accuracy_contract
+from helpers.sfpu_accuracy_budget import assert_against_contract
 from helpers.sfpu_domains import (
     SPECIALS_READY_OPS,
     edge_spec,
@@ -30,7 +30,6 @@ from helpers.test_variant_parameters import (
     SFPU_BINOP_MODE,
     SFPU_UNARY_SCALAR,
 )
-from helpers.utils import passed_test
 
 
 def _bits(value: float) -> int:
@@ -141,25 +140,17 @@ def _run_sfpu_binop_scalar(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    # The registry's tolerance arm, as the unary functional driver uses it. A step
-    # budget from the exhaustive sweep is derived from a whole format, far wider than
-    # this sampled domain, and would loosen the gate here.
-    contract = accuracy_contract(
+    # The whole contract, step budget included, as the binary and ternary drivers gate:
+    # every Scalar* row was measured over this driver's own variants. The mode the
+    # kernel compiled: an unset query dimension would not match a row keyed on it.
+    assert_against_contract(
         mathop,
-        output_format=formats.output_format,
-        input_format=formats.input_format,
-        # The mode the kernel compiled: an unset query dimension would not match a row
-        # keyed on it.
-        approx_mode=_APPROX_MODE,
-        dest_acc=dest_acc,
-        arch=get_chip_architecture(),
-    )
-    assert passed_test(
+        formats,
+        dest_acc,
         golden_tensor,
         res_tensor,
-        formats.output_format,
-        **contract.tolerance_kwargs(),
-    ), "Assert against golden failed"
+        approx_mode=_APPROX_MODE,
+    )
 
 
 _SCALAR_FORMATS = input_output_formats(

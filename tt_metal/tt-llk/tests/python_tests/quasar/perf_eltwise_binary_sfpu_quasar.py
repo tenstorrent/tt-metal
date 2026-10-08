@@ -119,6 +119,40 @@ def test_perf_eltwise_binary_sfpu_bf16_rne_quasar(
     )
 
 
+_BCAST_PERF_SWEEP = {
+    **_func.BCAST_SWEEP,
+    "implied_math_format": [ImpliedMathFormat.Yes],
+}
+
+
+@pytest.mark.perf
+@pytest.mark.quasar
+@parametrize(
+    **_BCAST_PERF_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_bcast_quasar(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    broadcast_type,
+    implied_math_format,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_bcast_quasar(
+        formats,
+        dest_acc,
+        mathop,
+        broadcast_type,
+        implied_math_format,
+        _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
+        **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
+    )
+
+
 _MAX_MIN_FLOAT_PERF_SWEEP = dict(
     formats_dest_acc_implied_math_is_max_input_dims=_func._generate_max_min_combinations(
         _func.SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
