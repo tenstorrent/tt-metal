@@ -198,6 +198,41 @@ tool, not a replacement for hardware, long-horizon state checks, or model evals.
   selection/rounding differ from standard Metal, so its BFP4 helpers are not
   drop-in Qwen correctness or qualification evidence.
 
+### Oct 8: long-context placement follow-up and plan audit
+
+- **05:10 UTC:** fresh native 128K/B16 full-model run completed with clean
+  device close. Three measurements agree on output hashes and give **142.06
+  output tok/s per TP4**, 8.879 tok/s/user, 112.63-ms TPOT. The prior mixed-
+  geometry allocation failure was not a cold-process capacity limit. The
+  single-step comparison began next and has not yet supplied a paired uplift.
+- **05:16:12 UTC:** launched persistent
+  `qwen38-attention-placement-long-v1-20261008.service`. New source snapshot,
+  unchanged native runtime and BFP8 KV precision. **263 CPU tests + 40 subtests
+  pass**; service PID 2559056 was observed live waiting for `/tmp/tt-device.lock`
+  behind the full-model run. No active hardware job was interrupted.
+- New experiment: 78 synthetic TP4 cases, prioritizing 256K/B8 and 128K/B16.
+  Compare 80-/96-core row-major and outside-column placements at equal work
+  counts, explicit full-grid sharded-output controls, and 256/512-token chunks.
+  Retain the original numerical tolerances; record exact output hashes and
+  bracketed native timing. No speedup is claimed while queued. Source hashes,
+  launch command, CPU JUnit and native 128K receipt are preserved in
+  [placement-long-launch-v1](../galaxy-evidence/placement-long-launch-v1).
+- User explicitly authorized a parallel BFP4 KV experiment. A separate agent
+  runs only the CPU simulator with isolated cache/resource caps; physical
+  performance work stays on BFP8 KV. This is distinct from the already completed
+  BFP4 **weight** probe. Long-context KV results and compatibility differences
+  will be appended with terminal receipts.
+- Audited the requested P1/P2/overlap milestones against code and receipts.
+  [Plan status](PLAN-STATUS.md) records that recurrence correctness passes but
+  full epilogue fusion and P1 latency do not; P2/B64/resident buckets, complete
+  stage attribution, prefill MFU, mixed-step overlap and reference evals remain
+  open. The 4.7-ms fixed overhead and 85% DRAM numbers remain assumptions.
+- The same status report records current measured-TP4 projections and the
+  explicit BFP8 traffic model. At 256K, KV-only full-scan bandwidth is already
+  an optimistic ~1.8K output tok/s/Galaxy bound at assumed 512 GB/s/chip, before
+  weights/state. The 2,680 target there needs lower traffic per accepted token;
+  it cannot be credited solely to better placement.
+
 ## Remaining gates and next experiments
 
 1. Finish the fresh-process capacity pairs; keep OOM, accuracy, and timing outcomes

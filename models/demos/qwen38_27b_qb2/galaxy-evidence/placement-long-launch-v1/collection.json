@@ -1,0 +1,7 @@
+{
+  "collected_at": "2026-10-08T05:22:36Z",
+  "units": {
+    "qwen38-attention-placement-long-v1-20261008.service": "MainPID=2559056\nResult=success\nActiveState=active\nSubState=running\n",
+    "qwen38-capacity-pairs-v1-20261007.service": "MainPID=2502739\nResult=success\nActiveState=active\nSubState=running\n"
+  }
+}

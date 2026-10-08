@@ -1,7 +1,12 @@
 {
-  "generated_at": "2026-10-08T05:02:23.202610+00:00",
+  "generated_at": "2026-10-08T05:25:14.806431+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
+    {
+      "path": "experiments/PLAN-STATUS.md",
+      "bytes": 8340,
+      "sha256": "ba2fb0a3f0ed95f52c99c60deec3d1dc57a88815012e24a4909c9bf236b8ae4e"
+    },
     {
       "path": "experiments/TT-LAB-REVIEW.md",
       "bytes": 5227,
@@ -1923,6 +1928,54 @@
       "path": "galaxy-evidence/perf-sweep-tp4-v1/sweep.svg",
       "bytes": 116977,
       "sha256": "2c1d570911ae72bab06bbe18717c206b323152128c279e2d2c6e515137793810"
+    },
+    {
+      "path": "galaxy-evidence/placement-long-launch-v1/attention-placement-long-launch-v1.json",
+      "bytes": 2797,
+      "sha256": "4b0a72c0d8029c82a7e7e229a47091824b29894d85e7e65b7c62c120083c407f",
+      "scope": "78 synthetic TP4 attention cases; serialized behind existing hardware lock; no serving promotion"
+    },
+    {
+      "path": "galaxy-evidence/placement-long-launch-v1/attention-placement-long-v1/queue.json",
+      "bytes": 14375,
+      "sha256": "049565fdc2eb8211aa573d06cda41ad854fba0deff1ced5bd51fa91f96afdd26",
+      "state": "waiting_for_device_lock_or_running",
+      "updated_at": "2026-10-08T05:16:20Z"
+    },
+    {
+      "path": "galaxy-evidence/placement-long-launch-v1/attention-placement-long-v1/unit.xml.gz",
+      "bytes": 5391,
+      "sha256": "3ab841a0de5585290978bd4657eb53bb907941130f839c079768ce59bd12118b",
+      "junit": {
+        "tests": 303,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/placement-long-launch-v1/capacity-pairs-v1/s131072-b16/native/attempt-01/hardware.xml.gz",
+      "bytes": 303,
+      "sha256": "8dd7acccc5214b041d90368e4d5a5d5ba9b2bded1640ad0037802c864bdd5857",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/placement-long-launch-v1/capacity-pairs-v1/s131072-b16/native/sweep.json",
+      "bytes": 14198,
+      "sha256": "5bd8e483e4fd49a9f3adf3cb97f40538102cd7ffa0fc794f7e5f1aa6a48768d3",
+      "state": "completed",
+      "updated_at": "2026-10-08T05:10:46.938726+00:00",
+      "cleanup_completed": true
+    },
+    {
+      "path": "galaxy-evidence/placement-long-launch-v1/collection.json",
+      "bytes": 320,
+      "sha256": "9c5b675ad61dfeadd84166d8c92627a803ab0f3a9418dcf83ab18e35629d4430"
     },
     {
       "path": "galaxy-evidence/profile-harness-host-v4.xml",

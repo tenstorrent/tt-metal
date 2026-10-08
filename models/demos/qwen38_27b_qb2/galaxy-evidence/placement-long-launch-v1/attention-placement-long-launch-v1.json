@@ -1,0 +1,43 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-attention-placement-long-v1-20261008",
+    "--property=RuntimeMaxSec=4h",
+    "--property=TimeoutStopSec=180",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=64G",
+    "--property=CPUQuota=800%",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/attention-placement-long-v1.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/attention-placement-long-v1.log",
+    "--working-directory=/home/ttuser/qwen38-artifacts-20261007/attention-placement-long-source-v1",
+    "--setenv=PATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin:/usr/bin:/bin",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/attention-placement-long-source-v1:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tools",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "--setenv=OMP_NUM_THREADS=8",
+    "--setenv=TT_METAL_INSPECTOR_RPC=0",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "models.demos.qwen38_27b_qb2.demo.run_attention_placement_long",
+    "--task",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "--source",
+    "/home/ttuser/qwen38-artifacts-20261007/attention-placement-long-source-v1",
+    "--weights",
+    "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "--results",
+    "/home/ttuser/qwen38-artifacts-20261007/attention-placement-long-v1"
+  ],
+  "created_at": "2026-10-08T05:16:12Z",
+  "source_lineage": "8e854b55e189f7f4597f4b05d62caacee0259cdb plus explicit placement patch",
+  "source_sha256": {
+    "models/demos/qwen38_27b_qb2/tests/attention_placement.py": "738cb3aef58c236ee24250e54c363c0ad9b72c01dd196adcb3f057fb2e7cae6b",
+    "models/demos/qwen38_27b_qb2/tests/attention_placement_long.py": "fdc344caae6d9226f8a90303eaefd2dd2bf64e367ab4c44e4339ec0c6f545034",
+    "models/demos/qwen38_27b_qb2/tests/test_long_context_attention.py": "4c66dc91cde8f6fed00326406210f34e0c41b5b2322891cd1a5241a513fc8f39",
+    "models/demos/qwen38_27b_qb2/tests/test_attention_placement_long.py": "d151815db0f730f2f491b0061845d1e255b33ea4452e03a5bdd852c6a5910b8a",
+    "models/demos/qwen38_27b_qb2/tests/unit/test_attention_placement_long.py": "84e4be9f7f841ef6df03694138862de33e0ed31a30bc8d7696a71a732f4b7b08",
+    "models/demos/qwen38_27b_qb2/demo/run_attention_placement_long.py": "aa7a09402071b52108e22d91ae13622f2858693d4d36dcb644805884ffb2fdbf"
+  },
+  "precision": "BFP8 KV, BF16 Q/output, HiFi4 FP32dest accurate full-tile attention",
+  "scope": "78 synthetic TP4 attention cases; serialized behind existing hardware lock; no serving promotion"
+}

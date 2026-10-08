@@ -145,6 +145,8 @@ def run_case(
     key_quantized = ttnn.to_torch(ttnn.get_device_tensors(key)[0])
     value_quantized = ttnn.to_torch(ttnn.get_device_tensors(value)[0])
     expected = reference(query, key_quantized, value_quantized, table, case["positions"])
+    case["query_bf16_sha256"] = hashlib.sha256(query.contiguous().view(torch.uint8).numpy().tobytes()).hexdigest()
+    case["reference_fp32_sha256"] = hashlib.sha256(expected.contiguous().numpy().tobytes()).hexdigest()
     del key_quantized, value_quantized
     grid = mesh.compute_with_storage_grid_size()
     case["worker_grid"] = [grid.x, grid.y]
@@ -234,6 +236,9 @@ def run_case(
             median_traced_call_us=statistics.median(samples),
             accuracy_per_rank=checks,
             accuracy_passed=all(check["passed"] for check in checks),
+            output_fp32_sha256_per_rank=[
+                hashlib.sha256(actual.contiguous().numpy().tobytes()).hexdigest() for actual in actuals
+            ],
         )
         case["candidates"].append(candidate)
         save(path, report)
@@ -252,6 +257,9 @@ def run_case(
         passed=baseline_passed,
         baseline_repeat_us=samples,
         baseline_repeat_accuracy_per_rank=repeat_checks,
+        baseline_repeat_output_fp32_sha256_per_rank=[
+            hashlib.sha256(actual.contiguous().numpy().tobytes()).hexdigest() for actual in actuals
+        ],
         passing_chunks=[candidate["chunk"] for candidate in case["candidates"] if candidate["accuracy_passed"]],
         selection=select_candidate(case["candidates"], case["native_chunk"], samples) if baseline_passed else None,
     )
