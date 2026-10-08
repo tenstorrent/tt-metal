@@ -163,7 +163,9 @@ def test_spl_value_check_ops(device, ttnn_op):
 
 
 def test_logical_not_ops(device):
-    input_tensor = generate_float32_bits()
+    input_tensor = generate_float32_bits(include_spl_values=True)
+    # Replace -0.0 with 0.0
+    input_tensor = torch.where(input_tensor == -0.0, torch.zeros_like(input_tensor), input_tensor)
     ttnn_op = ttnn.logical_not
     tt_in = to_tt_tensor(input_tensor, device)
 
@@ -240,8 +242,8 @@ def test_rounding_ops(device, ttnn_op):
 
 
 # Bounds sit just above the measured max |err| and max |err|/|device|.
-# Relative error is about 1.2e-7 for every op. Absolute error follows the
-# output magnitude, so sinh and cosh near ±9 need a larger atol.
+# Relative error is about 1.2e-7. The 2.44e-4 absolute error of sinh and cosh
+# near ±9 is one float32 ULP of that output, so rtol covers it and atol stays 0.
 @pytest.mark.parametrize(
     "ttnn_op, low, high, atol, rtol",
     [
@@ -250,8 +252,8 @@ def test_rounding_ops(device, ttnn_op):
         (ttnn.acosh, 1.0, 100.0, 4.8e-7, 1.2e-7),
         (ttnn.asinh, -100.0, 100.0, 4.8e-7, 1.3e-7),
         (ttnn.sin, -10.0, 10.0, 6.0e-8, 1.2e-7),
-        (ttnn.sinh, -9.0, 9.0, 2.5e-4, 1.3e-7),
-        (ttnn.cosh, -9.0, 9.0, 2.5e-4, 1.2e-7),
+        (ttnn.sinh, -9.0, 9.0, 0, 1.3e-7),
+        (ttnn.cosh, -9.0, 9.0, 0, 1.2e-7),
         (ttnn.tan, -1.45, 1.45, 4.8e-7, 1.2e-7),
     ],
 )
@@ -383,56 +385,100 @@ def test_angle_conversion_ops(device, ttnn_op, low, high):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # erfinv: domain [-1, 1]. ±1 are signed inf; allclose accepts matching signs.
-# erfc: complementary error function, valid for all finite inputs but clamps
-#        to 0 or 2 for large magnitude inputs
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "ttnn_op, low, high, atol, rtol",
-    [
-        # Includes ±1 (signed inf). largest err finite x=±0.99609375 (2.037 vs 2.040):
-        # max |err|=3.37e-3, max |err|/|device|=1.65e-3.
-        (ttnn.erfinv, -1.0, 1.0, 3.4e-3, 1.7e-3),
-        # Wormhole largest err x=-2.5: max |err|=9.70e-5, max |err|/|device|=9.5e-5.
-        # Blackhole overrides these below: max |err|=3.88e-3, max |err|/|device|=1.
-        (ttnn.erfc, -10.0, 10.0, 1e-4, 1e-4),
-    ],
-)
-def test_error_functions(device, ttnn_op, low, high, atol, rtol):
-    if is_blackhole() and ttnn_op is ttnn.erfc:
-        # The relative error of 1 is a small output. Its absolute error is inside this atol.
-        atol, rtol = 3.9e-3, 0
-
-    input_tensor = generate_float32_bits_in_range(low, high)
+def test_erfinv(device):
+    # Includes ±1 (signed inf). largest err finite x=±0.99609375 (2.037 vs 2.040):
+    # max |err|=3.37e-3, max |err|/|device|=1.65e-3.
+    input_tensor = generate_float32_bits_in_range(-1.0, 1.0)
 
     tt_in = to_tt_tensor(input_tensor, device)
 
-    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden_function = ttnn.get_golden_function(ttnn.erfinv)
     golden = golden_function(input_tensor, device=device)
 
-    tt_result = ttnn_op(tt_in)
-    result = ttnn.to_torch(tt_result)
+    result = ttnn.to_torch(ttnn.erfinv(tt_in))
+    assert_allclose(expected_result=golden, actual_result=result, atol=3.4e-3, rtol=1.7e-3)
 
-    assert_allclose(expected_result=golden, actual_result=result, atol=atol, rtol=rtol)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# erfc: the rational is fit on [0, 5] and the input is clamped there (#51137),
+#       so x >= 5 returns one constant instead of decaying toward 0.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# erfc(2) ≈ 4.68e-3. Blackhole's body atol sits under that, so a zero result fails.
+ERFC_BODY_END = 2.0
+ERFC_CLAMP = 5.0
+# Wormhole clamp measured as 0x2c4efece; 0x2c4efed0 is 2 float32 ULPs away.
+# Blackhole returns that value rounded to bfloat16, 0x2c4f0000.
+ERFC_CLAMP_WORMHOLE = torch.tensor([0x2C4EFECE], dtype=torch.int32).view(torch.float32).item()
+ERFC_CLAMP_BLACKHOLE = torch.tensor([0x2C4F0000], dtype=torch.int32).view(torch.float32).item()
+
+
+def _assert_erfc(x, golden, result):
+    body = x <= ERFC_BODY_END
+    mid = (x > ERFC_BODY_END) & (x < ERFC_CLAMP)
+    tail = x >= ERFC_CLAMP
+    assert body.any() and mid.any() and tail.any()
+
+    if is_blackhole():
+        assert_allclose(expected_result=golden[body], actual_result=result[body], atol=3.9e-3, rtol=0)
+    else:
+        assert_allclose(expected_result=golden[body], actual_result=result[body], atol=1e-4, rtol=1e-4)
+
+    assert_allclose(expected_result=golden[mid], actual_result=result[mid], atol=0, rtol=3.2e-1)
+
+    tail_result = result[tail]
+    if is_blackhole():
+        assert torch.equal(tail_result, torch.full_like(tail_result, ERFC_CLAMP_BLACKHOLE))
+    else:
+        assert_with_ulp(
+            expected_result=torch.full_like(tail_result, ERFC_CLAMP_WORMHOLE),
+            actual_result=tail_result,
+            ulp_threshold=2,
+        )
+
+
+def test_erfc(device):
+    """Float32 sweep on [-10, 10]. The fit is [-5, 5]; |x| above 5 is clamped (#51137).
+
+    | slice     | wormhole                  | blackhole                     |
+    |-----------|---------------------------|-------------------------------|
+    | x <= 2    | atol=1e-4, rtol=1e-4      | atol=3.9e-3, rtol=0           |
+    |           | max abs 9.70e-5 at x=-2.5 | max abs 3.883e-3 near x=-6e-8 |
+    | 2 < x < 5 | atol=0, rtol=0.32         | atol=0, rtol=0.32             |
+    |           | max rel 0.311             | max rel 0.312 at x=3.453125   |
+    | x >= 5    | 2.94e-12, within 2 ULP    | 2.94e-12 exactly            |
+    """
+    input_tensor = generate_float32_bits_in_range(-10.0, 10.0)
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.erfc)
+    golden = golden_function(input_tensor, device=device)
+
+    result = ttnn.to_torch(ttnn.erfc(tt_in))
+    _assert_erfc(input_tensor, golden, result)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # reciprocal: 1/x, swept over the bfloat16 lattice stored as float32
 #
 # Float32 on wormhole keeps 1/2^126, the smallest normal. Blackhole flushes
-# that boundary to signed zero, same as every larger magnitude. Measured:
-#   wormhole  |x| < 2^126   within 1 float32 ULP
-#   blackhole |x| < 2^126   allclose rtol=1.1e-2, atol=0
-#                          largest err reported point x=±6.9057548e35 is 0.56% off
-#                          (1.43998e-36 vs 1.44807e-36)
+# that boundary to signed zero, same as every larger magnitude. Below 2^126,
+# wormhole is within 1 ULP. Blackhole (#55797) is tested only for |x| < 2^112,
+# also at 1 ULP; the error above that is documented in test_reciprocal.
 #   wormhole  |x| = 2^126   exact signed smallest normal
-#   blackhole |x| = 2^126   signed zero
+#   blackhole |x| = 2^126   signed zero (+0 for +2^126, -0 for -2^126)
 #   both      |x| > 2^126   signed zero (subnormal reciprocal flushed)
 # ─────────────────────────────────────────────────────────────────────────────
 
 RECIPROCAL_FTZ_INPUT = 2.0**126
 RECIPROCAL_MAX_INPUT = RECIPROCAL_FTZ_INPUT * (1 - 2.0**-8)  # largest bfloat16 below it
+
+# Largest bfloat16 strictly below 2^112. Blackhole is 1 ULP on this side (#55797).
+RECIPROCAL_BH_MAX_INPUT = 2.0**112 * (1 - 2.0**-8)
 
 
 @pytest.mark.parametrize(
@@ -444,11 +490,28 @@ RECIPROCAL_MAX_INPUT = RECIPROCAL_FTZ_INPUT * (1 - 2.0**-8)  # largest bfloat16 
     ids=["positive", "negative"],
 )
 def test_reciprocal(device, low, high):
-    """Bfloat16-lattice inputs of one sign with |x| < 2^126.
+    """Float32 reciprocal. Wormhole sweeps |x| < 2^126 and stays within 1 ULP.
 
-    1/x stays a normal float32 on this side of the cutoff, from 2^126 at the
-    small-input end down to just above the smallest normal.
+    Blackhole (#55797) is tested only for |x| < 2^112, also at 1 ULP. Above that the Newton step flushes.
+    Measured |err|/|golden|, not asserted:
+
+    | |x|            | measured |
+    |----------------|----------|
+    | < 2^112        | 1 ULP    |
+    | [2^112, 2^114) | 6.10e-5  |
+    | [2^114, 2^115) | 2.44e-4  |
+    | [2^115, 2^116) | 4.27e-4  |
+    | [2^116, 2^117) | 7.93e-4  |
+    | [2^117, 2^118) | 1.92e-3  |
+    | [2^118, 2^119) | 3.66e-3  |
+    | [2^119, 2^126) | 5.58e-3  |
     """
+    if is_blackhole():
+        if low >= 0:
+            high = RECIPROCAL_BH_MAX_INPUT
+        else:
+            low = -RECIPROCAL_BH_MAX_INPUT
+
     input_tensor = generate_float32_bits_in_range(low, high)
 
     tt_in = to_tt_tensor(input_tensor, device)
@@ -459,13 +522,7 @@ def test_reciprocal(device, low, high):
     tt_result = ttnn.reciprocal(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    if is_blackhole():
-        # 90174 ULPs at x=±6.9057548e35 is 0.56% relative. Across this range a
-        # float32 ULP is at most 2^-23 of the value, so that ULP cap is a
-        # relative error under 1.09%. atol stays 0: every output here is normal.
-        assert_allclose(expected_result=golden, actual_result=result, atol=0, rtol=1.1e-2)
-    else:
-        assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -723,8 +780,8 @@ def test_digamma_large_x(device):
 
     The LUT kernel is fit on [0.01, 102]; beyond it a Bernoulli asymptotic branch
     (ln(x) - 1/2x - 1/12x^2 + ...) restores the (1, inf) support the pre-LUT composite
-    op had. ``test_digamma`` only exercises [2, 102], so this covers the LUT->asymptotic
-    crossover (102) and several decades past x=1000.
+    op had. ``test_digamma_multigammaln`` sweeps [1, 102], so this covers the LUT-to-asymptotic
+    crossover at 102 and several decades past x=1000.
     """
     xs = torch.tensor(
         [[101.0, 102.0, 103.0, 150.0, 500.0, 1000.0, 5000.0, 1e4, 5e4, 1e5, 5e5, 1e6, 1e7, float("inf")]],
@@ -738,9 +795,11 @@ def test_digamma_large_x(device):
 
 
 def test_digamma_small_x(device):
-    """Guard the steep near-pole region [0.01, 2): psi has a pole at 0 (psi(x) ~ -1/x),
-    the steepest part of the fitted domain. test_digamma only exercises [2, 102].
-    Sample avoids the zero-crossing at x~=1.4616 where ULP is ill-defined.
+    """Guard the steep near-pole region below 1. psi has a pole at 0 (psi(x) ~ -1/x).
+
+    ``test_digamma_multigammaln`` starts at 1, so the samples below 1 are the ones it misses.
+    The points from 1 to 2 overlap that sweep. The sample skips the zero-crossing at x ~= 1.4616,
+    where an ULP count is unstable.
     """
     xs = torch.tensor(
         [[0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 0.75, 1.0, 1.25, 1.75, 1.9, 1.99]],
@@ -759,10 +818,19 @@ def test_digamma_small_x(device):
 
 
 def test_lgamma(device):
+    """lgamma on [-1000, 1000]. Poles are checked in test_lgamma_poles and left out of these slices.
+
+    The 11% error is only 0.4 < x < 0.7 (x=0.51171875, 0.499 vs 0.550). atol=0 on every slice.
+
+    | x                | rtol   | measured |err|/|device| |
+    |------------------|--------|-------------------------|
+    | 0.4 < x < 0.7    | 1.1e-1 | 1.01e-1                 |
+    | rest of (0, 1)   | 1.9e-2 | 1.85e-2                 |
+    | outside (0, 1)   | 5.1e-4 | 4.98e-4                 |
+    """
     input_tensor = generate_float32_bits_in_range(-1000, 1000).flatten()
-    input_tensor_f32 = input_tensor.to(torch.float32)
     # masking poles at 0, -1, -2, ...
-    is_non_positive_int = (input_tensor_f32 <= 0) & (input_tensor_f32 == torch.floor(input_tensor_f32))
+    is_non_positive_int = (input_tensor <= 0) & (input_tensor == torch.floor(input_tensor))
     input_tensor = input_tensor[~is_non_positive_int]
 
     tt_in = to_tt_tensor(input_tensor, device)
@@ -773,8 +841,29 @@ def test_lgamma(device):
     tt_result = ttnn.lgamma(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    # largest err x=0.51171875 (0.499 vs 0.550): max |err| = 5.04e-2, max |err|/|device| = 1.01e-1.
-    assert_allclose(expected_result=golden, actual_result=result, atol=5.1e-2, rtol=1.1e-1)
+    pocket = (input_tensor > 0.4) & (input_tensor < 0.7)
+    unit_interval = (input_tensor > 0) & (input_tensor < 1) & ~pocket
+    outside = ~((input_tensor > 0) & (input_tensor < 1))
+    assert pocket.any() and unit_interval.any() and outside.any()
+
+    assert_allclose(expected_result=golden[pocket], actual_result=result[pocket], atol=0, rtol=1.1e-1)
+    assert_allclose(expected_result=golden[unit_interval], actual_result=result[unit_interval], atol=0, rtol=1.9e-2)
+    assert_allclose(expected_result=golden[outside], actual_result=result[outside], atol=0, rtol=5.1e-4)
+
+
+def test_lgamma_poles(device):
+    """0, -0, and the negative integers in [-1000, 1000] return +inf, matching torch."""
+    values = generate_float32_bits_in_range(-1000, 1000).flatten()
+    poles = values[(values <= 0) & (values == torch.floor(values))]
+    if not torch.any(torch.signbit(poles) & (poles == 0)):
+        poles = torch.cat((poles, torch.tensor([-0.0], dtype=torch.float32)))
+    assert torch.any(poles == 0) and torch.any(poles == -1)
+
+    golden = ttnn.get_golden_function(ttnn.lgamma)(poles, device=device)
+    result = ttnn.to_torch(ttnn.lgamma(to_tt_tensor(poles, device)))
+
+    assert torch.all(torch.isposinf(golden))
+    assert torch.all(torch.isposinf(result))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
