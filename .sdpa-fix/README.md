@@ -181,6 +181,16 @@ offsets: lower groups with at least 3x headroom, preferring the same owner as
 the raised group, or shrink the PR's own increase. After 2 failed repairs it
 asks in bold.
 
+## Lessons (learning loop)
+
+`LESSONS.md` holds the rules learned from real mistakes, one line each, tagged
+with the agents that must follow them (`triage`, `fix`, `judge`, `skeptic`,
+`watcher`, `ops`). Every run injects the matching lines into its prompt:
+`fixer.sh`'s `lessons_for <role>` for triage, fix, judge and skeptic, and
+`watch.sh` / `dryrun.sh` for the digest agent. **When a human corrects a bot,
+add one rule there** (and fix the source if a hint or prompt taught the wrong
+thing). It also lists known open gaps.
+
 ## No duplicate PRs
 
 Deduplication is by regression **signature** = `sha1(workflow :: job-without-SKU :: test-id)`,
