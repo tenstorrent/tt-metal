@@ -199,9 +199,14 @@ struct RingJointSDPAInputs {
     // whole slabs, and at least two of them, before this is read).
     uint32_t kv_slab_count() const { return local_kv_seq_len() / static_cast<uint32_t>(input_q.logical_shape()[2]); }
 
-    // Latent-V optimization: absent V means the reader reuses K's buffer
-    // and reads the first vDHt head-dim tiles (V's logical head dim).
+    // Latent V: V is omitted and read from K's rows (a prefix of K, or its last vDHt columns when packed).
     bool has_latent_v() const { return !input_v.has_value(); }
+
+    // Packed latent V: K rows are wider than Q's head dim; QK reads K's first DH columns and V its last VDH columns.
+    bool has_packed_kv() const { return has_latent_v() && input_k.logical_shape()[3] > input_q.logical_shape()[3]; }
+
+    // Latent V copied from the K chunk in L1.
+    bool v_shares_k_buffer() const { return has_latent_v() && !has_packed_kv(); }
 
     uint32_t v_num_heads() const {
         return input_v.has_value() ? static_cast<uint32_t>(input_v->logical_shape()[1])

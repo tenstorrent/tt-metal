@@ -100,7 +100,7 @@ public:
 
     // Returns the optimal DRAM bank coordinates to logical worker assignment based on which noc will be issuing DRAM
     // requests
-    virtual std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) = 0;
+    virtual std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const = 0;
 
     // Convert a logical coordinate to virtual coordinate
     virtual CoreCoord virtual_core_from_logical_core(
