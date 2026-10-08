@@ -18,11 +18,13 @@ name: "LLK SFPU accuracy"
 # tolerance` or a gated row deleted all weaken a gate, and all fail. So does loosening
 # what a tolerance cell is still held to: its declared `atol`/`rtol`, or the measurement
 # and non-finite count its row records for the sweep's headroom comparison. The report
-# says for each one whether the deciding row's provenance comment changed too, which is
-# what separates a genuine re-measurement from a number edited until a test went green.
-# To land a deliberate raise: re-measure, update the row's comment in the same commit,
-# and have a reviewer add the override label below; then re-run this job ("Re-run
-# failed jobs" on the PR Gate run), since PR Gate does not trigger on a label.
+# says for each one whether the deciding row's provenance changed too, which is what
+# separates a genuine re-measurement from a number edited until a test went green. How
+# a row records its provenance is the table's business (its header, and
+# tt_metal/tt-llk/tests/SFPU_ULP.md); this workflow only runs the comparison.
+# To land a deliberate raise: re-measure, update the row's provenance in the same
+# commit, and have a reviewer add the override label below; then re-run this job
+# ("Re-run failed jobs" on the PR Gate run), since PR Gate does not trigger on a label.
 #
 # Sweep: a gated cell over its budget fails in pytest; a tolerance cell past the
 # `max N ULP` or the non-finite lane count its row records fails the `headroom`
@@ -185,10 +187,10 @@ jobs:
             --base /tmp/base_budget.yaml \
             --head "$TABLE" \
             --label-hint "$OVERRIDE_LABEL" \
-            --out ulp_budget_report.md \
+            --out "$RUNNER_TEMP/ulp_budget_report.md" \
             "${ARGS[@]}" || status=$?
-          if grep -q "loosen a gate" ulp_budget_report.md 2> /dev/null; then
-            printf '\n_Override label: %s._\n' "$WHY" >> ulp_budget_report.md
+          if grep -q "loosen a gate" "$RUNNER_TEMP/ulp_budget_report.md" 2> /dev/null; then
+            printf '\n_Override label: %s._\n' "$WHY" >> "$RUNNER_TEMP/ulp_budget_report.md"
           fi
           # A verdict word rather than the exit code: the Fail step below compares it
           # with 'pass', so an output that was never written fails the job instead of
@@ -203,8 +205,8 @@ jobs:
         if: ${{ !cancelled() && steps.base.outputs.changed == 'true' }}
         shell: bash
         run: |
-          if [[ -s ulp_budget_report.md ]]; then
-            cat ulp_budget_report.md >> "$GITHUB_STEP_SUMMARY"
+          if [[ -s "$RUNNER_TEMP/ulp_budget_report.md" ]]; then
+            cat "$RUNNER_TEMP/ulp_budget_report.md" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "The comparison produced no report; see the step above." \
               >> "$GITHUB_STEP_SUMMARY"
@@ -214,16 +216,17 @@ jobs:
         # A fork PR's token is read-only, so the comment is best effort. The job
         # summary and the check result carry the same verdict either way. The merge
         # queue does not comment: the PR's own run already did.
-        if: >-
-          ${{ !cancelled() && github.event_name == 'pull_request'
-              && hashFiles('ulp_budget_report.md') != '' }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.base.outputs.changed == 'true' }}
         continue-on-error: true
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           script: |
             const fs = require('fs');
+            // Written outside the checkout, so nothing in the tree has to ignore it.
+            const report = `${process.env.RUNNER_TEMP}/ulp_budget_report.md`;
+            if (!fs.existsSync(report)) return;
             const marker = '<!-- llk-ulp-budget-guard -->';
-            const body = `${marker}\n${fs.readFileSync('ulp_budget_report.md', 'utf8')}`;
+            const body = `${marker}\n${fs.readFileSync(report, 'utf8')}`;
             const { owner, repo } = context.repo;
             const issue_number = context.payload.pull_request.number;
             // One comment, edited in place, so a series of pushes does not bury the
@@ -246,7 +249,7 @@ jobs:
         if: ${{ steps.compare.outputs.verdict == 'pass' && steps.label.outputs.overridden == 'true' }}
         shell: bash
         run: |
-          if grep -q "loosen a gate" ulp_budget_report.md; then
+          if grep -q "loosen a gate" "$RUNNER_TEMP/ulp_budget_report.md"; then
             echo "::warning title=SFPU ULP budget loosened under label::A gate was \
           loosened and the '$OVERRIDE_LABEL' label admitted it. See the job summary \
           for which rows, and whether each was re-measured."
@@ -261,7 +264,7 @@ jobs:
           echo "::error title=SFPU ULP budget loosened::A budget was raised, a row lost its \
           step gate, or a tolerance cell's recorded figures loosened -- or the table cannot \
           load. See the job summary and the PR comment. Override: $WHY. If this is a \
-          genuine re-measurement, update the row's provenance comment in the same change, \
+          genuine re-measurement, update the row's provenance in the same change, \
           have a reviewer add the '$OVERRIDE_LABEL' label, and re-run this job."
           exit 1
 
