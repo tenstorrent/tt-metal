@@ -152,12 +152,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t dest_idx = block_rt * BLOCK_CT_DIM;
             if (tensor_shape.total_num_faces() == NUM_FACES)
             {
-                _llk_pack_untilize_set_dst_offset_(tensor_shape, y * y_stride_external);
+                _llk_pack_untilize_set_dst_offset_(tensor_shape, y * y_stride_external /*l1_base_idx*/);
                 _llk_pack_untilize_(dest_idx, 0 /*l1_tile_idx*/);
             }
             else
             {
-                _llk_pack_untilize_strided_<FULL_CT_DIM>(bfd_pack, tensor_shape, y * y_stride_external, dest_idx /*src_tile_idx*/);
+                _llk_pack_untilize_strided_<FULL_CT_DIM>(bfd_pack, tensor_shape, y * y_stride_external /*l1_tile_idx*/, dest_idx /*src_tile_idx*/);
             }
         }
         _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
