@@ -46,7 +46,7 @@ Each sub-directory README has a "Listed invariants" section that reflects the in
 The section includes: The definition of constructs within the respective headers with their invariant marked as comments.
 
 Keep a listing in step with its header: when a struct gains, loses or renames a field, update the listing; when a new
-check is added to `tt_metal/impl/metal2_host_api/program_spec_validation/`, list the rule on the struct that owns it and
+check is added to `tt_metal/impl/metal2_host_api/program_spec/validation/`, list the rule on the struct that owns it and
 add a test. The `*AdvancedOptions` structs have no listing yet.
 
 ### Example: `SemaphoreSpec` in `semaphore_spec.hpp`

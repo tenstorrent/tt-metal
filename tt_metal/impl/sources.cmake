@@ -67,36 +67,36 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/uint8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dataflow_buffer/dataflow_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/llk_metadata.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/metadata_collection/collect_metadata.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/validate_spec.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/hardware_config.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/kernel_spec.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/placement/dfb.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/placement/kernel.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/placement/placement.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/placement/scratchpad.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/placement/work_unit.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/program_spec.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/resource/dfb/aliasing.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/resource/dfb/dfb.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/resource/dfb/endpoints.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/resource/prefetcher_pipe/lanes_and_relays.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/resource/prefetcher_pipe/prefetcher_pipe.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/resource/prefetcher_pipe/roles.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/resource/resource.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/resource/scratchpad.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/resource/semaphore.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/resource/tensor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_construction/construct_program.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_construction/kernel_lowering.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_construction/resource/dfb.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_construction/resource/prefetcher_pipe.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_construction/resource/resource.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_construction/resource/scratchpad.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_construction/resource/semaphore.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_construction/resource/tensor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_construction/processor_assignment/processor_assignment.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/collection/collect_metadata.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/program_spec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/validate_spec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/hardware_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/kernel_spec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/placement/dfb.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/placement/kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/placement/placement.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/placement/scratchpad.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/placement/work_unit.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/program_spec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/dfb/aliasing.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/dfb/dfb.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/dfb/endpoints.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/prefetcher_pipe/lanes_and_relays.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/prefetcher_pipe/prefetcher_pipe.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/prefetcher_pipe/roles.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/resource.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/scratchpad.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/semaphore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/construct_program.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/kernel_lowering.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/dfb.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/prefetcher_pipe.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/resource.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/scratchpad.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/semaphore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/processor_assignment/processor_assignment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_run_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/tensor_spec_relaxations.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
