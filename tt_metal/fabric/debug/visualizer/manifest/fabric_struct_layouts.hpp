@@ -5,16 +5,21 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <string_view>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
+#include <enchantum/enchantum.hpp>
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "tt_metal/fabric/channel_trimming_import.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
 
 namespace tt::tt_metal {
@@ -235,14 +240,104 @@ using DescribedStructs = std::tuple<
     CodeProfilingTimerResult,
     ChannelTrimmingOverrides>;
 
-// ============ Go message ============
+template <Described T>
+StructType struct_type() {
+    const auto& members = StructLayout<T>::members;
+    return {detail::struct_name<T>(), sizeof(T), {members.begin(), members.end()}};
+}
+
+inline std::vector<StructType> described_struct_types() {
+    return []<typename... Ts>(std::type_identity<std::tuple<Ts...>>) {
+        return std::vector<StructType>{struct_type<Ts>()...};
+    }(std::type_identity<DescribedStructs>{});
+}
+
+// ============ HAL messages ============
 
 // The layout of go_msg_t on the active Ethernet core, built at run time from the HAL's generated accessors. The host
 // cannot name the raw go_msg_t (dev_msgs.h is compiled only inside the HAL's per-arch files), so this layout is not
-// in DescribedStructs, and instead a gtest (test: ) checks its coverage for each arch.
+// in DescribedStructs, and instead a gtest (test_struct_layouts.cpp) checks its coverage for each arch.
 std::vector<Member> go_msg_layout(const tt::tt_metal::Hal& hal);
 
 // The struct name go_msg_layout describes.
 inline constexpr std::string_view go_msg_name = "go_msg_t";
+
+// The HAL messages the manifest describes on the active Ethernet core: go_msg_t, and launch_msg_t with every struct
+// it holds, each member named by the HAL's generated field. Sizes, offsets and array lengths are the arch's.
+std::vector<StructType> hal_struct_types(const tt::tt_metal::Hal& hal);
+
+// ============ Enums ============
+
+struct Enumerator {
+    std::string_view name;
+    uint32_t value;
+};
+
+// An enum's name and every value it names.
+struct EnumType {
+    std::string_view name;
+    std::vector<Enumerator> enumerators;
+};
+
+template <typename E>
+EnumType enum_type() {
+    static_assert(
+        sizeof(E) <= sizeof(uint32_t) && std::is_unsigned_v<std::underlying_type_t<E>>,
+        "an enumerator's value must fit a uint32_t");
+    EnumType out{enchantum::type_name<E>, {}};
+    for (const auto& [value, name] : enchantum::entries<E>) {
+        out.enumerators.push_back({name, static_cast<uint32_t>(value)});
+    }
+    return out;
+}
+
+// enchantum cannot reflect EDMStatus: its values lie far outside the range it scans. So its enumerators are listed
+// here, once. edm_status_listed's switch has no default, so an enumerator missing from the list fails the build.
+#define FABRIC_MANIFEST_EDM_STATUSES(X) \
+    X(STARTED)                          \
+    X(REMOTE_HANDSHAKE_COMPLETE)        \
+    X(LOCAL_HANDSHAKE_COMPLETE)         \
+    X(READY_FOR_TRAFFIC)                \
+    X(TERMINATED)                       \
+    X(INITIALIZATION_STARTED)           \
+    X(TXQ_INITIALIZED)                  \
+    X(STREAM_REG_INITIALIZED)           \
+    X(DOWNSTREAM_EDM_SETUP_STARTED)     \
+    X(EDM_VCS_SETUP_COMPLETE)           \
+    X(WORKER_INTERFACES_INITIALIZED)    \
+    X(ETHERNET_HANDSHAKE_COMPLETE)      \
+    X(VCS_OPENED)                       \
+    X(ROUTING_TABLE_INITIALIZED)        \
+    X(INITIALIZATION_COMPLETE)
+
+constexpr bool edm_status_listed(EDMStatus status) {
+    switch (status) {
+#define FABRIC_MANIFEST_EDM_STATUS_CASE(name) case EDMStatus::name:
+        FABRIC_MANIFEST_EDM_STATUSES(FABRIC_MANIFEST_EDM_STATUS_CASE)
+#undef FABRIC_MANIFEST_EDM_STATUS_CASE
+        return true;
+    }
+    return false;
+}
+
+template <>
+inline EnumType enum_type<EDMStatus>() {
+#define FABRIC_MANIFEST_EDM_STATUS_ENUMERATOR(name) Enumerator{#name, EDMStatus::name},
+    return {enchantum::type_name<EDMStatus>, {FABRIC_MANIFEST_EDM_STATUSES(FABRIC_MANIFEST_EDM_STATUS_ENUMERATOR)}};
+#undef FABRIC_MANIFEST_EDM_STATUS_ENUMERATOR
+}
+
+#undef FABRIC_MANIFEST_EDM_STATUSES
+
+// Every enum a field or a described struct names. The manifest writes each one's values (enum_type).
+using DescribedEnums = std::tuple<
+    EDMStatus,
+    TerminationSignal,
+    CoordinatedEriscContextSwitchState,
+    eth_chan_directions,
+    manifest::NocCmdBuf,
+    RouterState,
+    RouterCommand,
+    DynamicStatistics>;
 
 }  // namespace tt::tt_fabric::layout
