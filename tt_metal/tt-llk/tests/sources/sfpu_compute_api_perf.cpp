@@ -108,7 +108,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 static constexpr ckernel::compute_api_perf::ApiOp API_OP = ckernel::compute_api_perf::ApiOp::API_OP_NAME;
 static constexpr DataFormat API_FMT                      = DataFormat::API_FMT_NAME;
 
-inline void api_init()
+inline void api_init([[maybe_unused]] std::uint32_t math_format)
 {
     ckernel::compute_api_perf::api_init<API_OP, APPROX_MODE, API_FMT>();
 }
@@ -121,7 +121,7 @@ inline void api_tile(std::uint32_t tile, [[maybe_unused]] std::uint32_t math_for
 // A unary registry body in the form its <op>_tile issues it: four 8-row calls per tile.
 #include "sfpu_operations.h"
 
-inline void api_init()
+inline void api_init(std::uint32_t math_format)
 {
     test_utils::call_unary_sfpu_operation_init<
         SFPU_UNARY_OPERATION,
@@ -133,7 +133,7 @@ inline void api_init()
         CLAMP_NEGATIVE,
         DataFormat::Invalid /* TYPECAST_IN */,
         DataFormat::Invalid /* TYPECAST_OUT */,
-        FUSED_SORT>();
+        FUSED_SORT>(math_format);
 }
 
 inline void api_tile(std::uint32_t tile, std::uint32_t math_format)
@@ -174,7 +174,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-        api_init();
+        api_init(formats.math);
         PROFILER_SYNC();
     }
     {
