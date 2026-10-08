@@ -118,7 +118,7 @@ inline void reduce_max_row_configure_addrmod_reinit_minimal()
  * - The scaler doesn't change for the duration of the whole block operation
  * - Operand and scaler data format is bfloat16_b
  * - Operand tile size is 32x32
- * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
+ * - Records the same sequence for 16-bit and 32-bit DEST; the execute applies the 32-bit SrcA override
  * - Does only MAX pool on ROW dimension
  *
  * For num_faces=4 the per-tile MOP reduces F0&F1 into DEST rows 0-15, jumps DEST to row 32 via a
@@ -341,24 +341,23 @@ inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const
     {
         // Single face-row: transpose only the one recorded face-row. The 2-face record has no
         // ADDR_MOD_3 F2 jump, so no spurious DEST advance occurs.
+        // MOVD2B/MOVB2D depend on the SrcA ALU format: force it to the Tf32 the pool wrote (and disable the
+        // zero-flag source) for the transpose, as the num_faces=4 path does below.
         if constexpr (is_fp32_dest_acc_en)
         {
-            // Same mode-0 transpose as the 16-bit path, with SrcA forced to the Tf32 the pool wrote, as the
-            // num_faces=4 path does below.
             TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
             math::_configure_src_zero_flag_(true);
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
+        }
 
-            lltt::replay(2, 7);
+        // Replay the 7 instructions (recorded slots 2-8) to transpose the single reduced face-row. The 7th
+        // (CLR_B) releases the SrcB bank and clears all address counters.
+        lltt::replay(2, 7);
 
+        if constexpr (is_fp32_dest_acc_en)
+        {
             TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
             math::_configure_src_zero_flag_(false);
-        }
-        else
-        {
-            // Replay the 7 instructions (recorded slots 2-8) to transpose the single reduced
-            // face-row. 7th instruction (CLR_B) releases SrcB bank and clears all address counters.
-            lltt::replay(2, 7);
         }
         return;
     }

@@ -414,8 +414,8 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, NIGHTLY_SdpaReduceC) {
         for (uint32_t q_chunk_size : q_chunk_sizes) {
             for (uint32_t k_chunk_size : k_chunk_sizes) {
                 for (bool fp32_dest_acc_en : fp32_dest_acc_ens) {
-                    // 16x32 tiny-tile reduce_block_max_row is only supported in non-fp32 dest mode
-                    // (the LLK static_asserts fp32 + num_faces==2). fp32 16x32 is a future item.
+                    // fp32 16x32 is covered by the tt-llk fuser cases fpu_reduce_block_max_tiny_*; not
+                    // enabled here yet.
                     if (fp32_dest_acc_en) {
                         continue;
                     }
