@@ -452,6 +452,93 @@ def test_prepare_chunk_recurrence_unbounded_legacy_call_matches_explicit_bounds(
         ttnn.deallocate(tensor)
 
 
+@pytest.mark.parametrize(
+    "case",
+    [_UNIT_TEST_CASE, _TestCase("h40-n2-k32-v32", 40, 2, 32, 32)],
+    ids=lambda case: case.case_id,
+)
+def test_prepare_chunk_recurrence_token_major_beta_matches_by_chunk_beta(device: ttnn.Device, case: _TestCase) -> None:
+    """Token-major [1, rows, heads] beta must give the same outputs as [heads, chunks, 32, 1] beta."""
+    host_inputs = _case_host_inputs(case, seed=1913)
+    beta_by_chunk = host_inputs[4]
+    beta_token_major = beta_by_chunk.reshape(case.num_heads, case.num_chunks * CHUNK_SIZE).T.unsqueeze(0).contiguous()
+    by_chunk_inputs = _device_inputs(host_inputs, device)
+    token_major_beta = _to_device(beta_token_major, device, ttnn.float32)
+    # Production always passes the start metadata, so bind it explicitly.
+    start = make_actual_start(device, 0)
+
+    def run(inputs: tuple[ttnn.Tensor, ...]) -> list[ttnn.Tensor]:
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            return ttnn.experimental.kda.prepare_chunk_recurrence(
+                *inputs, case.num_heads, actual_start=start, output_bf16_mask=_PRODUCTION_OUTPUT_BF16_MASK
+            )
+
+    by_chunk = run(by_chunk_inputs)
+    by_token = run((*by_chunk_inputs[:4], token_major_beta))
+    for name, expected, actual in zip(OUTPUT_NAMES, by_chunk, by_token, strict=True):
+        assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name=f"{name} token-major beta")
+    for tensor in (*by_chunk, *by_token, *by_chunk_inputs, token_major_beta, start):
+        ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize("beta_offset", [0, 64])
+def test_prepare_chunk_recurrence_beta_logits_match_activated_beta(device: ttnn.Device, beta_offset: int) -> None:
+    """Beta logits read in place from a wider BF16 tensor must match the device-activated FP32 beta."""
+    case = _TestCase("h40-n2-k32-v32", 40, 2, 32, 32)
+    host_inputs = _case_host_inputs(case, seed=1937)
+    rows = case.num_chunks * CHUNK_SIZE
+    logits = torch.randn(1, rows, case.num_heads, generator=torch.Generator().manual_seed(3)).to(torch.bfloat16)
+    wide = torch.zeros(1, rows, beta_offset + 64, dtype=torch.bfloat16)
+    wide[..., beta_offset : beta_offset + case.num_heads] = logits
+    inputs = _device_inputs(host_inputs, device)
+    logits_tt = _to_device(logits.float(), device, ttnn.bfloat16)
+    activated = ttnn.sigmoid(ttnn.typecast(logits_tt, ttnn.float32))
+    wide_tt = _to_device(wide.float(), device, ttnn.bfloat16)
+    start = make_actual_start(device, 0)
+
+    def run(beta: ttnn.Tensor, **kwargs) -> list[ttnn.Tensor]:
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            return ttnn.experimental.kda.prepare_chunk_recurrence(
+                *inputs[:4],
+                beta,
+                case.num_heads,
+                actual_start=start,
+                output_bf16_mask=_PRODUCTION_OUTPUT_BF16_MASK,
+                **kwargs,
+            )
+
+    expected = run(activated)
+    actual = run(wide_tt, beta_logits_column_offset=beta_offset)
+    for name, want, got in zip(OUTPUT_NAMES, expected, actual, strict=True):
+        assert_bit_identical(ttnn.to_torch(want), ttnn.to_torch(got), name=f"{name} beta logits")
+    for tensor in (*expected, *actual, *inputs, logits_tt, activated, wide_tt, start):
+        ttnn.deallocate(tensor)
+
+
+def test_prepare_chunk_recurrence_gate_scale_matches_prescaled_gate(device: ttnn.Device) -> None:
+    """gate_scale must equal scaling g on the host; a power of two keeps both paths exact."""
+    case = _UNIT_TEST_CASE
+    gate_scale = -4.0
+    host_inputs = _case_host_inputs(case, seed=1931)
+    unscaled_gate = tuple(host_inputs[:3]) + (host_inputs[3] / gate_scale,) + tuple(host_inputs[4:])
+    prescaled_inputs = _device_inputs(host_inputs, device)
+    unscaled_inputs = _device_inputs(unscaled_gate, device)
+    start = make_actual_start(device, 0)
+
+    def run(inputs: tuple[ttnn.Tensor, ...], **kwargs) -> list[ttnn.Tensor]:
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            return ttnn.experimental.kda.prepare_chunk_recurrence(
+                *inputs, case.num_heads, actual_start=start, output_bf16_mask=_PRODUCTION_OUTPUT_BF16_MASK, **kwargs
+            )
+
+    prescaled = run(prescaled_inputs)
+    scaled = run(unscaled_inputs, gate_scale=gate_scale)
+    for name, expected, actual in zip(OUTPUT_NAMES, prescaled, scaled, strict=True):
+        assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name=f"{name} gate_scale")
+    for tensor in (*prescaled, *scaled, *prescaled_inputs, *unscaled_inputs, start):
+        ttnn.deallocate(tensor)
+
+
 def test_prepare_chunk_recurrence_rejects_end_without_start(device, expect_error):
     inputs = _device_inputs(_host_inputs(2, 2, 32, 32), device)
     end = make_actual_start(device, 64)

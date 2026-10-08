@@ -24,6 +24,8 @@ std::vector<ttnn::Tensor> prepare_chunk_recurrence(
     uint32_t output_bf16_mask = 0,
     const std::optional<Tensor>& actual_start = std::nullopt,
     const std::optional<Tensor>& actual_end = std::nullopt,
-    uint32_t sequence_parallel_axis = 0);
+    uint32_t sequence_parallel_axis = 0,
+    float gate_scale = 1.0F,
+    const std::optional<uint32_t>& beta_logits_column_offset = std::nullopt);
 
 }  // namespace ttnn::experimental::kda

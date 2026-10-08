@@ -17,7 +17,7 @@ from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kda.weights import normalize_kda_state_dict
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
 
-_CACHE_SCHEMA_VERSION = 2
+_CACHE_SCHEMA_VERSION = 3
 
 
 def _parallel_geometry(device: ttnn.Device | ttnn.MeshDevice, tensor_parallel_axis: int) -> tuple[tuple[int, int], int]:
@@ -232,6 +232,12 @@ def _prepare_kda_host_weights(
     decay_bias = state_dict["dt_bias"].reshape(1, 1, config.num_heads, config.head_k_dim)
     decay_scale_flat = decay_scale.expand(-1, -1, -1, config.head_k_dim).reshape(1, 1, config.q_dim)
     decay_bias_flat = decay_bias.reshape(1, 1, config.q_dim)
+    decay_output_projection = state_dict["f_b_proj.weight"].T
+    if config.gate_lower_bound is not None:
+        # The bounded gate is lower_bound * sigmoid(scale * (x @ W + bias)); fold the per-head scale into the
+        # projection and bias so the device applies the sigmoid as the projection's fused activation.
+        decay_output_projection = decay_output_projection.float() * decay_scale_flat.reshape(1, -1)
+        decay_bias_flat = decay_bias_flat.float() * decay_scale_flat
 
     convolution_taps = []
     for tap in range(config.conv_kernel_size):
@@ -245,7 +251,7 @@ def _prepare_kda_host_weights(
 
     return _KDAHostWeights(
         input_projection=input_projection,
-        decay_output_projection=state_dict["f_b_proj.weight"].T,
+        decay_output_projection=decay_output_projection,
         output_projection=state_dict["o_proj.weight"].T,
         decay_scale_flat=decay_scale_flat,
         decay_bias_flat=decay_bias_flat,

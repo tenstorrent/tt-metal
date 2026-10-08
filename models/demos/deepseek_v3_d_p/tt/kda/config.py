@@ -130,3 +130,18 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
     )
+
+
+def decay_projection_config(grid: ttnn.CoreCoord, rows: int) -> ttnn.MinimalMatmulConfig | None:
+    """Return the decay projection's minimal_matmul schedule, tuned at _TUNED_PROJECTION_ROWS; None elsewhere keeps
+    the op's default blocking."""
+    if rows != _TUNED_PROJECTION_ROWS:
+        return None
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=2,
+        K_block_size=4,
+        N_block_size=8,
+        subblock_h=1,
+        subblock_w=4,
+        compute_with_storage_grid_size=grid,
+    )

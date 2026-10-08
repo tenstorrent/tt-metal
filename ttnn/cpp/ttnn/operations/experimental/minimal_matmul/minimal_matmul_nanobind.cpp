@@ -76,6 +76,9 @@ void bind_minimal_matmul(nb::module_& mod) {
             can be used to produce this layout). The op computes silu(gate) * up and the output width is therefore N/2.
             The bias (if provided) must use the same column layout. N must be divisible by 2*32 (two
             tile-aligned halves). Mutually exclusive with fused_activation.
+        in0_column_offset : int, optional
+            Read in0 as the K-wide column window of ``input_tensor`` starting at this tile-aligned column, where K is
+            the weight's K. Lets the matmul read its operand in place from a wider tensor. Defaults to None.
 
         config : Optional[MinimalMatmulConfig], default: None
             Execution configuration in tile units. If omitted, reasonable defaults are selected based on tensor
@@ -159,7 +162,8 @@ void bind_minimal_matmul(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("fuse_swiglu") = false);
+        nb::arg("fuse_swiglu") = false,
+        nb::arg("in0_column_offset") = nb::none());
 
     auto py_minimal_matmul_config = nb::class_<MinimalMatmulConfig>(
                                         mod,
