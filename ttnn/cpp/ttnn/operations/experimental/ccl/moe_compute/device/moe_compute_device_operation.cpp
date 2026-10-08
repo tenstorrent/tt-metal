@@ -29,8 +29,23 @@ constexpr auto DOUBLE_BUFFER_SIZE = 2;
 
 }  // namespace detail
 MoEComputeDeviceOperation::program_factory_t MoEComputeDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    if (tensor_args.expert_rows_tensor.has_value()) {
+        return MoEComputePlaceFactory{};
+    }
     return MoEComputeMeshWorkloadFactory{};
+}
+
+ttsl::hash::hash_t MoEComputeDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // The ring program compiles the layer in; the expert rows path's second program never reads the weights, so one
+    // program serves every layer (the expert-row program takes the layer as a runtime offset).
+    if (tensor_args.expert_rows_tensor.has_value()) {
+        operation_attributes_t keyed = args;
+        keyed.layer_id = 0;
+        return ttsl::hash::hash_objects_with_default_seed(keyed, tensor_args);
+    }
+    return ttsl::hash::hash_objects_with_default_seed(args, tensor_args);
 }
 
 void MoEComputeDeviceOperation::validate_on_program_cache_hit(
@@ -588,32 +603,48 @@ std::vector<ttnn::Tensor> moe_compute(
             .optional_cross_device_semaphore = optional_cross_device_semaphore};
     }
 
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .layer_id = layer_id,
-            .output_height_shard_dim = output_height_shard_dim,
-            .intermediate_size = intermediate_size,
-            .num_shared_experts_per_device = num_shared_experts_per_device,
-            .has_bias = has_bias,
-            .num_token_parallel_cores = num_token_parallel_cores,
-            .num_data_parallel_cores = num_data_parallel_cores,
-            .path = compute_only ? experimental::prim::MoEComputePath::ComputeOnly
-                                 : (full_local ? experimental::prim::MoEComputePath::FullLocal
-                                               : experimental::prim::MoEComputePath::FullCcl),
-            .bh_ring_size = ring_n,
-            .combine_params = combine_params,
-            .activation_type = resolved_activation,
-            .activation_limit = activation_limit.value_or(0.0f),
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en},
-        OperationType::tensor_args_t{
-            .tilize_input_tensor = tilize_input_tensor,
-            .tilize_expert_indices_tensor = tilize_expert_indices_tensor,
-            .tilize_expert_scores_tensor = tilize_expert_scores_tensor,
-            .tilize_expert_mapping_tensor = tilize_expert_mapping_tensor,
-            .matmul_w0_w1_tensor = matmul_w0_w1_tensor,
-            .matmul_w2_tensor = matmul_w2_tensor,
-            .optional_output_tensor = optional_output_tensor});
+    const OperationType::operation_attributes_t attributes{
+        .layer_id = layer_id,
+        .output_height_shard_dim = output_height_shard_dim,
+        .intermediate_size = intermediate_size,
+        .num_shared_experts_per_device = num_shared_experts_per_device,
+        .has_bias = has_bias,
+        .num_token_parallel_cores = num_token_parallel_cores,
+        .num_data_parallel_cores = num_data_parallel_cores,
+        .path = compute_only ? experimental::prim::MoEComputePath::ComputeOnly
+                             : (full_local ? experimental::prim::MoEComputePath::FullLocal
+                                           : experimental::prim::MoEComputePath::FullCcl),
+        .bh_ring_size = ring_n,
+        .combine_params = combine_params,
+        .activation_type = resolved_activation,
+        .activation_limit = activation_limit.value_or(0.0f),
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en};
+    std::optional<ttnn::Tensor> expert_rows;
+    std::optional<ttnn::Tensor> expert_rows_table;
+    const OperationType::tensor_args_t tensor_args{
+        .tilize_input_tensor = tilize_input_tensor,
+        .tilize_expert_indices_tensor = tilize_expert_indices_tensor,
+        .tilize_expert_scores_tensor = tilize_expert_scores_tensor,
+        .tilize_expert_mapping_tensor = tilize_expert_mapping_tensor,
+        .matmul_w0_w1_tensor = matmul_w0_w1_tensor,
+        .matmul_w2_tensor = matmul_w2_tensor,
+        .optional_output_tensor = optional_output_tensor,
+        .expert_rows_tensor = expert_rows,
+        .expert_rows_table_tensor = expert_rows_table};
+    if (const auto params = experimental::prim::select_moe_compute_expert_rows(attributes, tensor_args)) {
+        auto rows_and_table = ttnn::prim::moe_expert_rows(
+            tilize_input_tensor,
+            tilize_expert_indices_tensor,
+            tilize_expert_scores_tensor,
+            tilize_expert_mapping_tensor,
+            matmul_w0_w1_tensor,
+            matmul_w2_tensor,
+            *params);
+        expert_rows = std::move(rows_and_table[0]);
+        expert_rows_table = std::move(rows_and_table[1]);
+    }
+    return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

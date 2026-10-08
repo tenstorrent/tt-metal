@@ -1073,7 +1073,7 @@ def test_moe_compute_other_activations_reject_limit(mesh_device, mesh_shape, exp
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": 500000}], indirect=True)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_clamped_silu_limit_is_program_cache_key(mesh_device, mesh_shape):
-    """A second limit compiles one new program; returning to the first hits its cached program."""
+    """A second limit compiles the call's programs anew; returning to the first hits its cached programs."""
     mesh_device.disable_and_clear_program_cache()
     mesh_device.enable_program_cache()
     hidden_size = 512
@@ -1098,7 +1098,8 @@ def test_moe_compute_clamped_silu_limit_is_program_cache_key(mesh_device, mesh_s
         )
         ttnn.synchronize_device(mesh_device)
         cache_entries.append(mesh_device.num_program_cache_entries())
-    assert cache_entries[1] == cache_entries[0] + 1, "changing the clamp must compile exactly one new MoE program"
+    # one MoE call is one program on the ring path and two on the expert rows path (expert rows + combine side)
+    assert cache_entries[1] - cache_entries[0] in (1, 2), "changing the clamp must compile the MoE call anew"
     assert cache_entries[2] == cache_entries[1], "returning to the original clamp must hit its cached program"
 
 
@@ -1175,5 +1176,7 @@ def test_moe_compute_precision_is_program_cache_key(mesh_device, mesh_shape):
         )
         ttnn.synchronize_device(mesh_device)
         cache_entries.append(mesh_device.num_program_cache_entries())
-    assert cache_entries[1:4] == [cache_entries[0] + n for n in (1, 2, 3)], cache_entries
+    # one MoE call is one program on the ring path and two on the expert rows path (expert rows + combine side)
+    added = [b - a for a, b in zip(cache_entries[0:3], cache_entries[1:4])]
+    assert added[0] in (1, 2) and added == [added[0]] * 3, cache_entries
     assert cache_entries[4] == cache_entries[3], "returning to default precision must hit its cached program"

@@ -96,6 +96,9 @@ struct MoEComputeInputs {
     const ttnn::Tensor& matmul_w0_w1_tensor;
     const ttnn::Tensor& matmul_w2_tensor;
     const std::optional<ttnn::Tensor>& optional_output_tensor;
+    // expert rows: the expert-row program's row buffer and routing table (MoEComputePlaceFactory); empty for the ring
+    const std::optional<ttnn::Tensor>& expert_rows_tensor;
+    const std::optional<ttnn::Tensor>& expert_rows_table_tensor;
 };
 
 }  // namespace ttnn::experimental::prim

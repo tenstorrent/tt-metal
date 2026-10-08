@@ -397,6 +397,10 @@ void kernel_main() {
     cb_data.push_back(1);
 
     noc1_obj.async_write_barrier();
+    // Blackhole issues every atomic non-posted (noc_fast_atomic_increment), the double-buffer releases above
+    // included: wait for their responses, or one landing after the next kernel on this NoC has read its counters
+    // leaves that kernel's atomic barrier waiting forever.
+    noc1_obj.async_atomic_barrier();
 
 #ifndef LOCAL_COMBINE
     // In order to ensure that the barrier semaphores land after all of the data has arrived we must wait for the mux
