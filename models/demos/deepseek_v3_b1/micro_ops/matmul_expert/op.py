@@ -381,6 +381,7 @@ def _build_program_for_device(
     num_loop_iters: int = 1,
     primary_at_last_offset: bool = False,
     gather_sync_sem_addr: int = 0,
+    sram_use_compression: bool = True,
 ) -> ttnn.ProgramDescriptor:
     """Build a ProgramDescriptor for one device — handles SRAM-only, DRAM-only, and hybrid.
 
@@ -421,6 +422,21 @@ def _build_program_for_device(
     # CB descriptors.
     cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, a_tensor)
     cb1_descs = sram_cts[0].cb_descriptor_from_compressed_tensor(cb_in1, device_coord=coord) if sram_cts else []
+    if not sram_use_compression:
+        # Plain custom_mm steps by the CB page, so declare one uniform bfp4_b tile, as the fused MoE op does
+        from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import _TILE_SIZES
+
+        bfp4_tile_size = _TILE_SIZES[1]
+        for desc in cb1_descs:
+            desc.total_size = bfp4_tile_size
+            desc.format_descriptors = [
+                ttnn.CBFormatDescriptor(
+                    buffer_index=cb_in1,
+                    data_format=ttnn.bfloat4_b,
+                    page_size=bfp4_tile_size,
+                    tile=ttnn.TileDescriptor(ttnn.Tile([32, 32])),
+                )
+            ]
     cb2_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out, out_tensor)
     cb3_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_index, index_tensor)
     cb_internal_acc_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_internal_acc, out_tensor)
@@ -569,6 +585,8 @@ def _build_program_for_device(
         # cb_internal_acc: aliases cb_out's L1; per-expert push/pop bookkeeping
         # routes through it so cb_out's metadata only updates once at the end.
         ("cb_internal_acc", cb_internal_acc),
+        # 0 = the plain custom_mm path, for SRAM weights that are uniform bfp4_b.
+        ("sram_use_compression", 1 if sram_use_compression else 0),
     ]
 
     # Per-core descriptors.
@@ -1305,6 +1323,7 @@ class ExpertKernel:
         subblock_n: int = 1,
         num_loop_iters: int = 1,
         primary_at_last_offset: bool = False,
+        sram_use_compression: bool = True,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -1324,6 +1343,7 @@ class ExpertKernel:
             n_parallel_per_bank: N-parallel cores per DRAM bank (total cores per bank =
                                  n_parallel_per_bank * k_parallel_per_bank).
             sram_output_tensor: Separate SRAM output tensor on sram_core_grid (required when has_sram).
+            sram_use_compression: False runs the plain custom_mm path, for SRAM weights that are uniform bfp4_b.
         """
         cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
         mesh_device = a_tensor.device()
@@ -1445,6 +1465,7 @@ class ExpertKernel:
                     num_loop_iters=num_loop_iters,
                     primary_at_last_offset=primary_at_last_offset,
                     gather_sync_sem_addr=gather_sync_sem_addr,
+                    sram_use_compression=sram_use_compression,
                 )
                 mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
 

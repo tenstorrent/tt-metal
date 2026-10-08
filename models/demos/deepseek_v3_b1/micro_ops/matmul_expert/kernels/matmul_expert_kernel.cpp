@@ -111,7 +111,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("accum_experts"),
         get_named_compile_time_arg_val("sram_k_per_core"),
         get_named_compile_time_arg_val("sram_k_offset"),
-        get_named_compile_time_arg_val("cb_out_sram")>;
+        get_named_compile_time_arg_val("cb_out_sram"),
+        0 /* compact_in0 */,
+        1 /* enable_indexing */,
+        get_named_compile_time_arg_val("sram_use_compression")>;
 
     using DRAMArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ComputeCTArgs<
         get_named_compile_time_arg_val("cb_in0"),

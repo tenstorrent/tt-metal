@@ -1382,6 +1382,7 @@ def _run_accum(
     fmt_ratios=None,
     num_loop_iters=1,
     primary_at_last_offset=False,
+    sram_use_compression=True,
 ):
     """Accumulation path: WIDTH_SHARDED SRAM, expert outputs summed in-place.
 
@@ -1565,6 +1566,7 @@ def _run_accum(
         tp_expert=tp_expert,
         num_loop_iters=num_loop_iters,
         primary_at_last_offset=primary_at_last_offset,
+        sram_use_compression=sram_use_compression,
     )
     if active_sram:
         _validate_sram_output_accum(
@@ -1844,6 +1846,7 @@ def _run_hybrid_expert_multi_device(
     k_parallel_per_bank=1,
     num_loop_iters=1,
     primary_at_last_offset=False,
+    sram_use_compression=True,
 ):
     """Dispatcher: delegate to the appropriate variant.
 
@@ -1867,6 +1870,9 @@ def _run_hybrid_expert_multi_device(
         assert (
             not accum_experts
         ), "Expert parallel (tp_expert=False) processes 1 expert per device, accum not applicable"
+    assert sram_use_compression or (
+        accum_experts and sram_k_parallel == 1
+    ), "the plain SRAM path runs only in the accum path without a K split"
     slice_k = sram_k_parallel > 1
     if slice_k:
         _run_slice_k(
@@ -1917,6 +1923,7 @@ def _run_hybrid_expert_multi_device(
             fmt_ratios,
             num_loop_iters=num_loop_iters,
             primary_at_last_offset=primary_at_last_offset,
+            sram_use_compression=sram_use_compression,
         )
     else:
         _run_standard(
@@ -2116,6 +2123,33 @@ def test_hybrid_expert_single_device_sparse_accum_experts(device):
         sram_n_parallel=56,
         num_subblocks_k=1,
         accum_experts=True,
+    )
+
+
+@pytest.mark.parametrize("num_loop_iters", [1, 3], ids=["one_iter", "three_iters"])
+@pytest.mark.parametrize(
+    "K, N, sram_n_parallel",
+    [(256, 3584, 56), (896, 1792, 56)],
+    ids=["kt8_ct2", "kt28_ct1"],
+)
+def test_hybrid_expert_single_device_accum_experts_plain(device, K, N, sram_n_parallel, num_loop_iters):
+    """Uniform bfp4 SRAM weights on the plain custom_mm path, as the MoE runs them without BSPM: 4 SRAM experts of 6
+    active, summed in one DEST section by calls that alternate the configuration banks."""
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=K,
+        N=N,
+        num_experts=8,
+        sram_expert_ids=[1, 3, 4, 6],
+        dram_expert_ids=[0, 2, 5, 7],
+        active_expert_ids=[0, 1, 3, 4, 6, 7],
+        formats_per_device=[["bfp4"]],
+        sram_n_parallel=sram_n_parallel,
+        num_subblocks_k=1,
+        accum_experts=True,
+        num_loop_iters=num_loop_iters,
+        sram_use_compression=False,
     )
 
 
