@@ -264,6 +264,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     max_chunk_tokens = MAX_BATCHED_PREFILL_SEQ_LEN * num_devices // 8
                 else:
                     max_chunk_tokens = MAX_BATCHED_PREFILL_SEQ_LEN
+                max_chunk_tokens = min(max_chunk_tokens, self._max_batched_prefill_tokens())
                 chunk_size = min(chunk_size, max(1, max_chunk_tokens // batch_seq_len))
 
                 # Both the attention and MLP reshape the fused batch sequence
@@ -320,7 +321,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     output_logits[abs_start:abs_end] = self.__finish_batched_prefill(lane_pending)
         else:
             use_trace = (
-                enable_trace and page_table is not None and batch_seq_len <= self.model_args.max_prefill_chunk_size
+                enable_trace
+                and getattr(self.model_args, "trace_prefill", True)
+                and page_table is not None
+                and batch_seq_len <= self.model_args.max_prefill_chunk_size
             )
             total_tokens = batch_seq_len * batch
             if batch > 1:
@@ -398,6 +402,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
+
+    def _max_batched_prefill_tokens(self) -> int:
+        """Total tokens one batched prefill may fuse: never more than the largest single-user prefill chunk the
+        model is configured for, so the batched MLP/attention working set stays within what the per-model
+        chunk size already budgets for (e.g. 32B on 1x8: 64k tokens, not the 128k T3K default)."""
+        return int(getattr(self.model_args, "max_prefill_chunk_size", MAX_BATCHED_PREFILL_SEQ_LEN))
 
     def __prefill_forward_batched_text(
         self,
@@ -752,6 +762,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             max_chunk_tokens = (
                 MAX_BATCHED_PREFILL_SEQ_LEN * num_devices // 8 if num_devices < 8 else MAX_BATCHED_PREFILL_SEQ_LEN
             )
+            max_chunk_tokens = min(max_chunk_tokens, self._max_batched_prefill_tokens())
             for seq_len in warmup_seq_lens:
                 max_batch_for_seq = min(max_batch, max(1, max_chunk_tokens // seq_len))
                 batch_sizes = [1 << i for i in range(max_batch_for_seq.bit_length())]

@@ -62,11 +62,12 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
 def get_platform_specific_optimizations(model_name):
     max_seq_len = 131072
 
-    # performance_opt = lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
-    accuracy_opt = lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name)
+    # Same policy as upstream: the Qwen2.5-7B class (7B / olmOCR-2) already keeps BF16 attention + BFP8 MLPs under
+    # ``performance``; the larger variants need the BFP4 MLPs / BFP8 attention of this policy to fit (72B on 1x8 runs
+    # out of DRAM while loading the vision tower with the ``accuracy`` policy).
+    performance_opt = lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
 
-    # return performance_opt, max_seq_len
-    return accuracy_opt, max_seq_len
+    return performance_opt, max_seq_len
 
 
 def initialize_vllm_text_transformer(
@@ -165,6 +166,11 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         devices_per_dp_cache = num_devices // tt_data_parallel
         if "Qwen2.5-VL-72B" in model_name and devices_per_dp_cache == 8 and is_wormhole_b0():
             return 65_536
+        # 32B on a 1x8 Wormhole cache: ~4.5 GB of the 12 GB DRAM holds weights (bfp4 MLPs / bfp8 attention), the
+        # bfp8 KV cache costs 17 KB per token per chip, so 256k tokens (4.5 GB) still leave room for the prefill
+        # working set of the full 128k context.
+        if "Qwen2.5-VL-32B" in model_name and devices_per_dp_cache == 8 and is_wormhole_b0():
+            return 262_144
         # 7B-class models on a 1x8 Wormhole cache: one padded KV head per chip at bf16 costs 14 KB per
         # token per chip (3B: 18 KB), and ~1.5 GB of the 12 GB DRAM holds weights, so three times the
         # fallback budget (5.6 GB of KV) leaves room for the 128k prefill working set.
