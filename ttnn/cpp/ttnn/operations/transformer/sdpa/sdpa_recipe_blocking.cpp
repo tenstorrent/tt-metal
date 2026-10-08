@@ -232,13 +232,18 @@ RecipeL1Estimate recipe_l1_bytes(
     switch (op) {
         case RecipeOp::Dense:
         case RecipeOp::Joint: {
-            const uint32_t rows = recipe_compute_q_tiles(policy, q_tiles, k_tiles, context.mask_page_bytes > 0);
+            // Key ranges mask only their edge K chunks and keep the fused chunks; an attn_mask build has none.
+            const bool masked = context.mask_page_bytes > 0 && !context.keyed;
+            const uint32_t rows =
+                recipe_compute_q_tiles(policy, q_tiles, k_tiles, context.mask_page_bytes > 0, context.keyed);
             const auto build = recipe_build(policy, rows, k_tiles, d_tiles);
             // attn_mask CB: two row groups when they fit, one otherwise (sdpa_recipe.cpp). A masked build has no
             // fused chunks' CBs; the minimum layout drops them in any case (check_recipe_l1_fit).
             const uint64_t mask_group = uint64_t{recipe_mask_group_rows(policy)} * k_tiles * context.mask_page_bytes;
-            const uint64_t cbs = build.cb_bytes - (context.mask_page_bytes > 0 ? build.fused_cb_bytes : 0);
-            return {cbs + 2 * mask_group, build.cb_bytes - droppable_fused(rows, build) + mask_group};
+            const uint64_t cbs = build.cb_bytes - (masked ? build.fused_cb_bytes : 0);
+            return {
+                cbs + 2 * mask_group + context.extra_bytes,
+                build.cb_bytes - droppable_fused(rows, build) + mask_group + context.extra_bytes};
         }
         case RecipeOp::Ring: {
             const auto build = recipe_build(policy, q_tiles, k_tiles, d_tiles);
@@ -286,8 +291,14 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
             }
             // Dense/joint L1 grows with Q and K: stop at the first K that does not fit.
             if (dense &&
-                recipe_l1_bytes(p.op, p.policy, qt, kt, p.d_tiles, {.mask_page_bytes = p.mask_page_bytes}).minimum >
-                    p.l1_bytes) {
+                recipe_l1_bytes(
+                    p.op,
+                    p.policy,
+                    qt,
+                    kt,
+                    p.d_tiles,
+                    {.mask_page_bytes = p.mask_page_bytes, .extra_bytes = p.extra_l1_bytes, .keyed = p.key_range})
+                        .minimum > p.l1_bytes) {
                 break;
             }
             any_fit = true;
@@ -325,7 +336,10 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
                         chain == 0 ? div_up(batch_heads * jobs_per_head, cores) : div_up(jobs_per_head, chain),
                         div_up(p.k_rows + p.joint_k_rows, k_chunk),
                         p.grid,
-                        RecipeL1Context{.mask_page_bytes = p.mask_page_bytes});
+                        RecipeL1Context{
+                            .mask_page_bytes = p.mask_page_bytes,
+                            .extra_bytes = p.extra_l1_bytes,
+                            .keyed = p.key_range});
                     break;
                 }
                 case RecipeOp::Ring: {
@@ -505,7 +519,8 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     const Tensor* joint_k,
     const std::optional<SDPAProgramConfig>& program_config,
     const Tensor* attn_mask,
-    uint64_t reserved_l1_bytes) {
+    uint64_t reserved_l1_bytes,
+    const RecipeKeyRange* key_range) {
     if (!recipe_blocking_requested(program_config) || q.storage_type() != StorageType::DEVICE) {
         return program_config;
     }
@@ -524,6 +539,11 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     const uint64_t free_l1 = recipe_free_l1(*device);
     problem.l1_bytes = free_l1 > reserved_l1_bytes ? free_l1 - reserved_l1_bytes : 0;
     problem.mask_page_bytes = attn_mask ? attn_mask->buffer()->page_size() : 0;
+    if (key_range && key_range->active()) {
+        problem.mask_page_bytes = 576;  // BFP4 mask tiles
+        problem.extra_l1_bytes = recipe_key_range_extra_bytes(*key_range);
+        problem.key_range = true;
+    }
     const auto choice = invalid_fixed(config) ? std::nullopt : choose_recipe_blocking(problem);
     return apply_choice(config, choice, problem, joint_q ? "joint" : "dense");
 }
