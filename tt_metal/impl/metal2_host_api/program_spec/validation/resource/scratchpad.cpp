@@ -53,7 +53,7 @@ void ValidateScratchpadBindings(const KernelSpec& kernel) {
     }
 }
 
-void ValidateScratchpadsBound(const ValidationContext& ctx) {
+void ValidateScratchpadsUsed(const ValidationContext& ctx) {
     const ProgramSpec& spec = ctx.spec;
     const CollectedSpecData& collected = ctx.collected;
 

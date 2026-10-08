@@ -43,7 +43,7 @@ void ValidateResourceUsage(const ValidationContext& ctx, tt::ARCH arch) {
     ValidatePrefetcherPipeLanesAndRelays(ctx, pipe_roles, arch);
     ValidateDFBAliasing(ctx);
 
-    ValidateScratchpadsBound(ctx);
+    ValidateScratchpadsUsed(ctx);
     ValidateTensorParametersUsed(ctx);
     ValidatePrefetcherPipesUsed(ctx);
 }

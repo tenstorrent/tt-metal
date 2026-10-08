@@ -49,6 +49,7 @@ void ValidateDFBSpec(
 void ValidateDFBBindings(const KernelSpec& kernel, const ValidationContext& ctx);
 void ValidateDFBEndpoints(const ValidationContext& ctx, tt::ARCH arch);
 void ValidateDFBAliasing(const ValidationContext& ctx);
+// all dfb used are validated in metadata collection step.
 
 // prefetcher_pipe.cpp
 void ValidatePrefetcherPipeParameter(const PrefetcherPipeParameter& pipe, uint32_t l1_alignment);
@@ -65,12 +66,13 @@ void ValidatePrefetcherPipeLanesAndRelays(
 // scratchpad.cpp
 void ValidateScratchpadSpec(const ScratchpadSpec& scratchpad, tt::ARCH arch);
 void ValidateScratchpadBindings(const KernelSpec& kernel);
-void ValidateScratchpadsBound(const ValidationContext& ctx);
+void ValidateScratchpadsUsed(const ValidationContext& ctx);
 
 // semaphore.cpp
 void ValidateSemaphoreSpec(const SemaphoreSpec& sem, tt::ARCH arch);
 void ValidateSemaphoreBindings(const KernelSpec& kernel, tt::ARCH arch);
 void ValidateComputeSemaphores(const ValidationContext& ctx);
+// no all-used requirement for semaphore
 
 // tensor.cpp
 void ValidateTensorBindings(const KernelSpec& kernel);
