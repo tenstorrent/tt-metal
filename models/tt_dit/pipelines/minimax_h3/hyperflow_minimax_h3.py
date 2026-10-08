@@ -188,5 +188,10 @@ class MiniMaxH3HyperFlow:
         """
         return 1.0 - sigmas[1:].to(torch.float32)
 
+    def identity(self) -> str:
+        """A cache-key term covering everything about this contract that changes a table's rows."""
+        grid = ",".join(f"{sigma:.9g}" for sigma in self.sigmas)
+        return f"hyperflow={self.version}@gate{self.gate:g}@[{grid}]"
+
 
 __all__ = ["MARKER_KEY", "MiniMaxH3HyperFlow", "validate_sigmas"]

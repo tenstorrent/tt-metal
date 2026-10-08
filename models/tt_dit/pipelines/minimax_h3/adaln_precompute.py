@@ -369,7 +369,7 @@ def precompute_adaln_table(
     LoRA adapter's AdaLN half is applied: these weights never reach the device, so the on-device
     adapter path cannot touch them, and folding here keeps the streaming property -- one block
     resident at a time -- that reading the whole 26 GB to patch it would destroy. Anything it
-    changes must also change :meth:`MiniMaxH3Pipeline._adaln_cache_path`'s key, or a later run
+    changes must also change :meth:`MiniMaxH3TurboPipeline._adaln_cache_path`'s key, or a later run
     silently loads the unadapted table.
 
     ``two_time`` turns the levels' second column from decoration into conditioning -- see
@@ -447,8 +447,8 @@ def precompute_adaln_table(
         block_params = None
         for layer in range(num_layers):
             prefixes = (f"blocks.{layer}.adaln_proj.linear", f"transformer_blocks.{layer}.adaln_proj.linear")
-            weight = get_any(*(f"{prefix}.weight" for prefix in prefixes)).to(device)
-            bias = get_any(*(f"{prefix}.bias" for prefix in prefixes)).to(device)
+            weight = get_any(*(f"{prefix}.weight" for prefix in prefixes), hook=weight_hook).to(device)
+            bias = get_any(*(f"{prefix}.bias" for prefix in prefixes), hook=weight_hook).to(device)
             params = torch.cat(
                 [project_block_adaln(temb, weight, bias, hidden_size) for temb in step_temb],
                 dim=0,
@@ -458,8 +458,9 @@ def precompute_adaln_table(
                 block_params = torch.empty((num_layers, *params.shape), dtype=params.dtype, device=device)
             block_params[layer] = params
 
-        final_weight = get_any("final_layer.adaln_proj.linear.weight", "norm_out.linear.weight").to(device)
-        final_bias = get_any("final_layer.adaln_proj.linear.bias", "norm_out.linear.bias").to(device)
+        final = ("final_layer.adaln_proj.linear", "norm_out.linear")
+        final_weight = get_any(*(f"{prefix}.weight" for prefix in final), hook=weight_hook).to(device)
+        final_bias = get_any(*(f"{prefix}.bias" for prefix in final), hook=weight_hook).to(device)
         finals = [project_final_adaln(temb, final_weight, final_bias) for temb in step_temb]
         shift = torch.cat([pair[0] for pair in finals], dim=0)
         scale = torch.cat([pair[1] for pair in finals], dim=0)
