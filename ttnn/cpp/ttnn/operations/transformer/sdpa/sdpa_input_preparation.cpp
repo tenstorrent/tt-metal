@@ -15,7 +15,9 @@ using namespace tt::tt_metal;
 
 Tensor prepare_sdpa_input(const Tensor& input, bool is_query, DataType dtype) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "SDPA preparation requires a device tensor");
-    TT_FATAL(input.device()->arch() == tt::ARCH::BLACKHOLE, "SDPA preparation currently supports Blackhole only");
+    TT_FATAL(
+        input.device()->arch() == tt::ARCH::BLACKHOLE || input.device()->arch() == tt::ARCH::WORMHOLE_B0,
+        "SDPA preparation supports Blackhole and Wormhole B0 only");
     TT_FATAL(input.tensor_spec().tile() == Tile({32, 32}), "SDPA preparation requires standard 32x32 tiles");
     TT_FATAL(
         input.dtype() == DataType::BFLOAT16 && input.layout() == Layout::TILE,

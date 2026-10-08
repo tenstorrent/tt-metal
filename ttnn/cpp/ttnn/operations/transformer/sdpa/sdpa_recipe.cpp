@@ -254,7 +254,9 @@ PrecisionPolicy resolve_recipe_policy(
         !scale || (std::isfinite(*scale) && *scale > 0.0f),
         "SDPA recipes require a finite positive scale, got {}",
         scale.value_or(0.0f));
-    TT_FATAL(q.device()->arch() == tt::ARCH::BLACKHOLE, "SDPA precision recipes support Blackhole only");
+    TT_FATAL(
+        q.device()->arch() == tt::ARCH::BLACKHOLE || q.device()->arch() == tt::ARCH::WORMHOLE_B0,
+        "SDPA precision recipes support Blackhole and Wormhole B0 only");
     // The recipe owns the numerics: an explicit compute_kernel_config (math fidelity, approx mode, FP32 dest,
     // packer L1 accumulation) and exp_approx_mode are accepted and ignored, so a caller that passes a shared
     // config (or its legacy exp choice) gets the recipe it named. See SDPAPrecisionRecipes.md.
