@@ -23,8 +23,13 @@ ALWI void sfpu_sum_int_row(uint32_t idst) {
 }
 
 ALWI void sfpu_add_int(uint32_t idst, uint32_t dst_offset = 2, int32_t iterations = 8) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, add_int, (APPROX, 32 /*ITERATIONS*/), idst, VectorMode::None, dst_offset));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, add_int, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, dst_offset));
+#endif
 }
 
 }  // namespace ckernel
