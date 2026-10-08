@@ -5,8 +5,8 @@
 // Ring joint SDPA compute for the named precision recipes B/C/D/E (precision unset keeps ring_joint_sdpa.cpp).
 // Every active ring contribution continues one recurrent state (streaming/recipe_ring.hpp); only the last
 // active contribution normalizes. Compile-time and runtime arguments share the ring-joint layout built by
-// RingJointSDPARecipeMeshWorkloadFactory. Causal/balanced, sliding-window, chunked, KV-pad rotation and
-// attention sinks are rejected on the host. Device-tensor logical lengths arrive from the reader through
+// RingJointSDPARecipeMeshWorkloadFactory. Causal and balanced attention build with SDPA_RECIPE_RING_CAUSAL
+// (streaming/recipe_ring.hpp); sliding-window, chunked, KV-pad rotation and attention sinks are rejected on the host. Device-tensor logical lengths arrive from the reader through
 // cb_kv_pad_derived. Any tile-aligned Q/K chunk and head dim (subblock widths: SDPA_RECIPE_QK_W/PV_W).
 
 #include <cstdint>
@@ -23,8 +23,9 @@
 // size-optimized on every thread.
 #if defined(WATCHER_ENABLED)
 #pragma GCC optimize("Os")
-#elif defined(TRISC_MATH) || defined(SDPA_RECIPE_FUSED)
-// Fused FAST chunks add enough code that -O3 unpack/pack overflows the kernel config buffer.
+#elif defined(TRISC_MATH) || defined(SDPA_RECIPE_FUSED) || defined(SDPA_RECIPE_RING_CAUSAL)
+// Fused FAST chunks (and the causal ring step's masking and skips) add enough code that -O3 unpack/pack overflows
+// the kernel config buffer.
 #pragma GCC optimize("O2")
 #else
 #pragma GCC optimize("O3")
@@ -67,11 +68,22 @@ void kernel_main() {
     constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(43));
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(44);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(45);
+    // Slots 30-32: causal, balanced, the balanced zigzag Q order.
+#ifdef SDPA_RECIPE_RING_CAUSAL
+    static_assert(get_compile_time_arg_val(30) == 1, "SDPA_RECIPE_RING_CAUSAL builds serve causal ring attention");
+    constexpr bool is_balanced = get_compile_time_arg_val(31) == 1;
+    constexpr bool zigzag = get_compile_time_arg_val(32) == 1;
+    constexpr uint32_t NH = get_compile_time_arg_val(0);
+    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(14);
+#else
     static_assert(
-        get_compile_time_arg_val(30) == 0 && get_compile_time_arg_val(31) == 0 && get_compile_time_arg_val(33) == 0 &&
-            get_compile_time_arg_val(35) == 0 && get_compile_time_arg_val(37) == 0 &&
+        get_compile_time_arg_val(30) == 0 && get_compile_time_arg_val(31) == 0,
+        "Causal ring recipes build with SDPA_RECIPE_RING_CAUSAL");
+#endif
+    static_assert(
+        get_compile_time_arg_val(33) == 0 && get_compile_time_arg_val(35) == 0 && get_compile_time_arg_val(37) == 0 &&
             get_compile_time_arg_val(38) == 0 && get_compile_time_arg_val(39) == 0,
-        "Named ring recipes reject causal/balanced, chunked, KV-pad rotation, sinks and sliding windows");
+        "Named ring recipes reject chunked, KV-pad rotation, sinks and sliding windows");
     // Slots 47-48: logical_n / logical_l arrive as device tensors; the compile-time values are placeholders.
     constexpr bool has_logical_n_tensor = get_compile_time_arg_val(47) == 1;
     constexpr bool has_logical_l_tensor = get_compile_time_arg_val(48) == 1;
@@ -148,6 +160,25 @@ void kernel_main() {
     init_sdpa_streaming_semaphores();
     CircularBuffer(cb_col_identity).wait_front(1);
 
+#ifdef SDPA_RECIPE_RING_CAUSAL
+    const uint32_t ring_index = ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+        fused_op_indexer.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
+    // Balanced: the last active step on K from this or an earlier device, after which the early half's Q chunks
+    // see nothing more (walks the reader's ring order without its syncs).
+    uint32_t early_last_iter = 0;
+    if constexpr (is_balanced) {
+        RingIdSequencer order = fused_op_indexer.seq;
+        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+            const uint32_t ring_id =
+                ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                    order.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
+            if (((active_ring_iter_mask >> ring_iter) & 1u) != 0 && ring_id <= ring_index) {
+                early_last_iter = ring_iter;
+            }
+        }
+    }
+#endif
+
     // The first active iter starts with fresh state; restoring would read stale staging.
     bool seen_active_iter = false;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
@@ -172,9 +203,23 @@ void kernel_main() {
         // column) clipped to this shard, and the joint logical tail clipped to this iteration's joint shard.
         const uint32_t valid_n_rows = logical_nt * 32 - (global_n_partial_col ? 32 - global_n_partial_col : 0);
         const uint32_t n_origin = ring_id * kv_local_padded_Nt * 32;
-        const uint32_t primary_rows = valid_n_rows <= n_origin                            ? 0
-                                      : valid_n_rows - n_origin < kv_local_padded_Nt * 32 ? valid_n_rows - n_origin
-                                                                                          : kv_local_padded_Nt * 32;
+        uint32_t primary_rows = valid_n_rows <= n_origin                            ? 0
+                                : valid_n_rows - n_origin < kv_local_padded_Nt * 32 ? valid_n_rows - n_origin
+                                                                                    : kv_local_padded_Nt * 32;
+#ifdef SDPA_RECIPE_RING_CAUSAL
+        // Balanced, K from an earlier device: only its shard's early half precedes this device's Q (the reader
+        // sends the chunks up to the one straddling the half; the tail mask covers the straddle).
+        if (is_balanced && ring_index > ring_id && primary_rows > kv_local_padded_Nt * 16) {
+            primary_rows = kv_local_padded_Nt * 16;
+        }
+        const RecipeRingCausal causal{
+            .q_chunks = num_q_chunks,
+            .heads = NH,
+            .zigzag = zigzag,
+            .diagonal = ring_id == ring_index,
+            .skip_early = is_balanced && ring_index < ring_id,
+            .early_last = is_balanced && ring_iter == early_last_iter};
+#endif
         const uint32_t valid_l_rows = logical_lt * 32 - (joint_l_partial_col ? 32 - joint_l_partial_col : 0);
         const uint32_t l_origin = joint_shard_base_tiles * 32;
         const uint32_t joint_rows = !do_joint_kv || valid_l_rows <= l_origin           ? 0
@@ -198,6 +243,11 @@ void kernel_main() {
             primary_rows,
             joint_rows,
             is_first_active_iter,
-            is_last_ring_iter);
+            is_last_ring_iter
+#ifdef SDPA_RECIPE_RING_CAUSAL
+            ,
+            causal
+#endif
+        );
     }
 }

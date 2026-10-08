@@ -497,6 +497,8 @@ inline uint32_t get_end_seq_tile(const QChunkInfo& qi, uint32_t ring_id, uint32_
 
 // Resident ring state (Policy::kResidentRingState): service compute's raw state checkpoints for multi-Q
 // workers and drain the output only on the last active ring iteration. Instantiated only by such policies.
+// Balanced causal rings (streaming/recipe_ring.hpp: RecipeRingCausal) skip the early half's Q chunks on steps
+// over a later device's K (skip_early) and drain them on the last step that reaches them (early_last).
 template <
     typename Policy,
     uint32_t state_args_offset,
@@ -509,6 +511,7 @@ template <
     uint32_t q_local_padded_Nt,
     bool has_joint_q,
     bool output_has_no_padding,
+    bool use_zigzag,
     typename OutGenerator,
     typename JointOutGenerator>
 FORCE_INLINE void drain_resident_ring_iter(
@@ -517,6 +520,8 @@ FORCE_INLINE void drain_resident_ring_iter(
     uint32_t q_end,
     bool first_active_iter,
     bool last_ring,
+    bool skip_early,
+    bool early_last,
     uint32_t ring_id,
     const OutGenerator& out_generator,
     const JointOutGenerator& joint_out_generator,
@@ -526,11 +531,15 @@ FORCE_INLINE void drain_resident_ring_iter(
     const auto state_backing = Policy::template state_backing<state_args_offset>();
     const bool staged = q_end - q_begin > 1;
     for (uint32_t q = q_begin; q < q_end; ++q) {
+        const auto decoded = decompose_global_q_index(q, num_q_chunks, NH, use_zigzag);
+        const bool early = decoded.q_chunk < num_q_chunks / 2;
+        if (early && skip_early) {
+            continue;
+        }
         if (staged && !first_active_iter) {
             Policy::template transfer_state<Sq_chunk_t, vDHt>(noc, state_backing);
         }
-        if (last_ring) {
-            const auto decoded = decompose_global_q_index(q, num_q_chunks, NH, false);
+        if (last_ring || (early && early_last)) {
             const auto qi = get_q_chunk_info<has_joint_q>(
                 decoded.q_chunk, decoded.nb, decoded.nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
             const auto& gen = [&]() -> const auto& {
@@ -864,7 +873,8 @@ void kernel_main() {
         ring_joint::partial_tile_present(joint_l_partial_col, has_logical_l_tensor)
             ? (joint_l_partial_col > 0 ? joint_l_partial_col : 1u)
             : 0u;
-    if constexpr (needs_lightweight_mask) {
+    // The recipes (resident ring state) mask in the pack thread and never read these tiles.
+    if constexpr (needs_lightweight_mask && !Policy::kResidentRingState) {
         generate_lightweight_mask_tiles<
             global_n_partial_col_layout,
             joint_l_partial_col_layout,
@@ -894,6 +904,21 @@ void kernel_main() {
         uint32_t flat_q = 0;
     } deferred = {};
 
+    // Resident ring state, balanced causal: the early half's Q chunks see no step on a later device's K and finish
+    // on the last step on this or an earlier device's (streaming/recipe_ring.hpp: RecipeRingCausal). Walks the ring
+    // order without its syncs, before the loop advances it.
+    [[maybe_unused]] uint32_t early_last_iter = 0;
+    if constexpr (Policy::kResidentRingState && is_causal && is_balanced) {
+        RingIdSequencer order = fused_op_receiver.seq;
+        for (uint32_t it = 0; it < ring_size; ++it) {
+            const uint32_t id = ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                order.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
+            if (((active_ring_iter_mask >> it) & 1u) != 0 && id <= ring_index) {
+                early_last_iter = it;
+            }
+        }
+    }
+
     // Track non-skipped iters so the first active iter starts with fresh accumulators (matches compute).
     bool seen_active_iter = false;
     constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
@@ -919,6 +944,7 @@ void kernel_main() {
         const bool single_valid_kv_chunk = ((single_valid_kv_chunk_mask >> ring_iter) & 1u) != 0;
 
         if constexpr (Policy::kResidentRingState) {
+            constexpr bool balanced_causal = is_causal && is_balanced;
             drain_resident_ring_iter<
                 Policy,
                 cb_arg_offset + 24,
@@ -930,12 +956,15 @@ void kernel_main() {
                 Lt,
                 q_local_padded_Nt,
                 has_joint_q,
-                output_has_no_padding>(
+                output_has_no_padding,
+                use_zigzag_balancing>(
                 noc,
                 global_q_start,
                 global_q_end,
                 is_first_active_iter,
                 is_last_active_ring_iter(active_ring_iter_mask, ring_iter),
+                balanced_causal && ring_index < ring_id,
+                balanced_causal && ring_iter == early_last_iter,
                 ring_id,
                 out_generator,
                 joint_out_generator,
