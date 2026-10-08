@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Blackhole hardware allocation experiment. Input is 2.0; raw L0 is 1.0.
 // Output tile 1 must contain 1.0. An intervening typed load/store must not
-// change the raw value. SCHEME: 0 unannotated, 1 read/write pairs, 2 effects.
+// change the raw value. SCHEME: 0 unannotated, 1 read/write pairs, 2 effects,
+// 3 explicitly thread the producer value to the consumer.
 #include <array>
 #include <cstdint>
 #include <utility>
@@ -47,10 +48,16 @@ template <unsigned Row> __attribute__((always_inline)) inline void probe_row()
         __builtin_rvtt_sfpwritelreg(__builtin_rvtt_sfpreadlreg(0), 0);
     else if constexpr (SCHEME == 2)
         __builtin_rvtt_sfprawlreg_effect(1, 1);
+    // A real C++ use-def edge, unlike two independent identity pairs.
+    // Reading is deliberately after the raw producer, not before it.
+    __xtt_vector saved;
+    if constexpr (SCHEME == 3) saved = __builtin_rvtt_sfpreadlreg(0);
     auto temporary = __builtin_rvtt_sfpload(nullptr, 0, 0, 0, 0, 7);
     __builtin_rvtt_sfpstore(nullptr, temporary, 2, 0, 0, 0, 7);
     if constexpr (SCHEME == 1)
         __builtin_rvtt_sfpwritelreg(__builtin_rvtt_sfpreadlreg(0), 0);
+    else if constexpr (SCHEME == 3)
+        __builtin_rvtt_sfpwritelreg(saved, 0);
     issue_word<TT_OP_SFPSTORE(0, 0, 7, 64 + 2 * Row)>();
     if constexpr (SCHEME == 2) __builtin_rvtt_sfprawlreg_effect(1, 0);
 }

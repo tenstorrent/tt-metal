@@ -7,7 +7,8 @@ From tests/python_tests, with matching SFPI headers/compiler installed:
 
 Requires the sfprawlreg_effect builtin. Do not use --compile-producer for
 hardware validation. Schemes 0/1 are diagnostic controls: XFAIL means actual
-wrong output was observed, not that correctness passed. Scheme 2 must pass.
+wrong output was observed, not that correctness passed. Schemes 2/3 must pass.
+Scheme 3 threads a C++ value; it does not implement the proposed sfpvalue API.
 Only all-active lanes are covered; partial predicates need separate tests.
 """
 from dataclasses import dataclass
@@ -31,7 +32,7 @@ class RawLregCase(TemplateParameter):
         return f"constexpr unsigned SCHEME = {self.scheme}; constexpr bool USE_MMIO = {self.mmio};"
 
 
-@pytest.mark.parametrize("scheme", [0, 1, 2])
+@pytest.mark.parametrize("scheme", [0, 1, 2, 3])
 @pytest.mark.parametrize("mmio", [0, 1])
 def test_raw_lreg_device(scheme, mmio):
     if TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE:
@@ -56,7 +57,7 @@ def test_raw_lreg_device(scheme, mmio):
     assert torch.all((observed == 1.0) | (observed == 2.0)), "unexpected output: inspect harness/encoding"
     bad = int((observed != 1.0).sum())
     print(f"RAW_LREG_DEVICE scheme={scheme} mmio={mmio} mismatches={bad}/1024 values={torch.unique(observed).tolist()}")
-    if scheme == 2:
-        assert bad == 0, "effect-annotated raw L0 was corrupted"
+    if scheme in (2, 3):
+        assert bad == 0, "protected raw L0 was corrupted"
     elif bad:
         pytest.xfail("observed raw L0 corruption without effect interval protection")

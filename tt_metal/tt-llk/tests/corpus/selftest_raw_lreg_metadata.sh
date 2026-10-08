@@ -66,7 +66,7 @@ if [[ ${1:-} == --target-cxx ]]; then
         for scheduling in default scheduled; do
             schedule_flags=()
             [[ $scheduling == scheduled ]] && schedule_flags+=(-fschedule-insns -fschedule-insns2)
-            for scheme in 0 1 2; do
+            for scheme in 0 1 2 3; do
                 "$target_cxx" -O2 -mcpu=tt-bh-tensix "${issue_flags[@]}" "${schedule_flags[@]}" \
                     "-DSCHEME=$scheme" -S "$here/raw_lreg_full_annotation.cpp" -o "$scratch/gap.s"
                 if grep -Eq 'SFPLOAD[[:space:]]+L0, 1, 0, 0' "$scratch/gap.s"; then
