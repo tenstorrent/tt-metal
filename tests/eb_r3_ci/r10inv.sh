@@ -6,7 +6,7 @@
 cd /work
 export EB_R3_LOG_CALLS=/tmp/eb_calls.txt TT_METAL_CACHE=/tmp/r10cache
 rm -f $EB_R3_LOG_CALLS; mkdir -p $TT_METAL_CACHE
-run() { echo "##### $(date -u +%T) $*"; timeout -s INT -k 60 ${EB_RUN_LIMIT:-2400} bash -c "$*" > /tmp/r10_last.txt 2>&1; rc=$?; echo "rc=$rc $(grep -E 'passed|failed|error' /tmp/r10_last.txt | tail -1 | cut -c1-200)"; [[ $rc != 0 ]] && grep -E "^E |Error|error:|FAILED|Exception" /tmp/r10_last.txt | grep -v digest | head -15 | cut -c1-300; }
+run() { echo "##### $(date -u +%T) $*"; timeout -s INT -k 60 ${EB_RUN_LIMIT:-2400} bash -c "$*" > /tmp/r10_last.txt 2>&1; rc=$?; echo "rc=$rc $(grep -E 'passed|failed|error' /tmp/r10_last.txt | tail -1 | cut -c1-200)"; [[ $rc != 0 ]] && grep -E "^E  |Error|error:|Exception" /tmp/r10_last.txt | grep -v "digest\|teardown" | sort | uniq -c | sort -rn | head -12 | cut -c1-300; }
 case $1 in
   gemma)
     uv pip install -q -r models/demos/gemma4/requirements.txt > /dev/null 2>&1
@@ -18,11 +18,11 @@ case $1 in
     run pytest --timeout 600 models/demos/audio/whisper/tests/test_whisper_modules.py
     ;;
   sdvae)
-    export HF_HUB_OFFLINE=0
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
     run pytest --timeout 600 models/demos/stable_diffusion_xl_base/vae/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/vae/tests/pcc/test_welford_state_leak_regression.py
     ;;
   sdbase)
-    export HF_HUB_OFFLINE=0
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
     run pytest --timeout 600 models/demos/stable_diffusion_xl_base/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --ignore=models/demos/stable_diffusion_xl_base/tests/pcc/test_euler_discrete_scheduler.py
     ;;
   misc)
