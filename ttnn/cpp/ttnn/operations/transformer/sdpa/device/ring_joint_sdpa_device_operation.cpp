@@ -586,7 +586,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(!tensor_args.has_latent_v(), "Named ring recipes require explicit K and V");
         ttnn::operations::transformer::sdpa::detail::resolve_precision_policy(
             ttnn::operations::transformer::sdpa::detail::select_recipe(*args.precision, tensor_args.input_k.dtype()));
-        TT_FATAL(input_tensor_q.device()->arch() == tt::ARCH::BLACKHOLE, "Named ring recipes require Blackhole");
+        TT_FATAL(
+            input_tensor_q.device()->arch() == tt::ARCH::BLACKHOLE ||
+                input_tensor_q.device()->arch() == tt::ARCH::WORMHOLE_B0,
+            "Named ring recipes require Blackhole or Wormhole B0");
         TT_FATAL(dtype == DataType::BFLOAT16, "Named ring recipes require BF16 Q");
         const auto kv_dtype = tensor_args.input_k.dtype();
         TT_FATAL(
