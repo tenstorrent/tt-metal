@@ -64,10 +64,29 @@ constexpr std::array<float, 15> DIGAMMA_LUT = {
 
 #endif
 
+// pi*cot(pi*f) = 1/f + f*P(f^2) on f in [-1/2, 1/2], minimax in absolute error of f*P
+// (Lawson-weighted least squares; P(0) = -pi^2/3). Max abs error 1.7e-7 (fp32) / 3.3e-5 (bf16).
+#ifdef INP_FLOAT32
+constexpr std::array<float, 6> DIGAMMA_COT_P = {
+    {-3.2898638248e+00f, -2.1651117802e+00f, -2.0204892159e+00f, -2.1911485195e+00f, -8.9092332125e-01f,
+     -4.9770970345e+00f}};
+#else
+constexpr std::array<float, 4> DIGAMMA_COT_P = {
+    {-3.2892913818e+00f, -2.1935572624e+00f, -1.6509494781e+00f, -3.7803785801e+00f}};
+#endif
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_digamma() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
+
+        // The rational and the asymptotic below are positive-axis approximations; evaluating the [0.01, 102]
+        // rational at a negative argument returned unrelated values (-7.19 for psi(-0.9375) = -15.43). For
+        // x < 0, evaluate them at 1 - x (> 1) and apply the reflection psi(x) = psi(1 - x) - pi*cot(pi*x)
+        // at the end. Positive lanes are unchanged.
+        v_if(x < 0.0f) { x = 1.0f - x; }
+        v_endif;
+
         // Piecewise-rational LUT, fit on [0.01, 102].
         sfpi::vFloat result =
             piecewise_rational_eval<DIGAMMA_NUM_DEGREE, DIGAMMA_DEN_DEGREE, DIGAMMA_NUM_SEGMENTS, DIGAMMA_LUT_SIZE>(
@@ -92,6 +111,32 @@ inline void calculate_digamma() {
             // digamma(+inf) = +inf; the log approximation clamps inf to a finite value, so
             // restore it explicitly (exp field all-ones, zero mantissa => infinity).
             v_if(sfpi::exexp(x) == 128 && sfpi::exman(x) == 0) { result = std::numeric_limits<float>::infinity(); }
+            v_endif;
+        }
+        v_endif;
+
+        // Reflection term, from the original input (re-read from Dest: holding it across the body above
+        // exceeds the LREG file). cot(pi*x) has period 1, so reduce x by its nearest integer:
+        // f = x - round(x) is exact and lies in [-1/2, 1/2]. For -2^23 <= x < 0, x - 2^23 lies in
+        // [-2^24, -2^23], where the float spacing is exactly 1, so adding the -2^23 bias rounds x to nearest
+        // (kernels build with -fno-associative-math, so (x + b) - b is not folded back to x). Every float
+        // below -2^23 is an integer. At a pole (the non-positive integers) psi is undefined: return NaN, as
+        // torch.digamma does. x = -inf gives f = NaN, which propagates to NaN.
+        x = sfpi::dst_reg[0];
+        v_if(x < 0.0f) {
+            sfpi::vFloat rounding_bias = sfpi::sFloat16b(-0x1p23f);
+            sfpi::vFloat j = x + rounding_bias;
+            j = j - rounding_bias;
+            sfpi::vFloat f = x - j;
+            sfpi::vFloat s = f * f;
+            constexpr uint32_t COT_DEG = DIGAMMA_COT_P.size() - 1;
+            sfpi::vFloat p = DIGAMMA_COT_P[COT_DEG];
+#pragma GCC unroll 8
+            for (int i = COT_DEG - 1; i >= 0; i--) {
+                p = p * s + DIGAMMA_COT_P[i];
+            }
+            result = result - (sfpu_reciprocal_iter<2>(f) + f * p);
+            v_if(f == 0.0f || x < -0x1p23f) { result = std::numeric_limits<float>::quiet_NaN(); }
             v_endif;
         }
         v_endif;
