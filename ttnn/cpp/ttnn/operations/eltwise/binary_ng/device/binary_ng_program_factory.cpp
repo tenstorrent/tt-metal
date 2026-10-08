@@ -952,7 +952,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     bool has_operand_activations = false;
     bool has_post_activations = false;
     bool post_zero_point = false;
-    bool mul_at_hifi3 = false;
     {
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
@@ -1018,16 +1017,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             });
         }
 
-        // Blackhole: a block-float SrcB (the math right-hand operand) has no bits for the last fidelity phase, so HiFi3
-        // gives HiFi4's products; with a 16-bit DEST only (with fp32 DEST it measured equal or slower).
-        const auto block_float = [](DataType dt) { return dt == DataType::BFLOAT8_B || dt == DataType::BFLOAT4_B; };
-        const DataType srca_dtype = scalar_first ? b_dtype : a_dtype;
-        const DataType srcb_dtype = scalar_first ? a_dtype : b_dtype;
-        mul_at_hifi3 = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op &&
-                       std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
-                       std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) == OpConfig::FpuBinaryOp::MUL &&
-                       lhs_activations.empty() && rhs_activations.empty() && block_float(srcb_dtype) &&
-                       (block_float(srca_dtype) || srca_dtype == DataType::BFLOAT16);
         has_operand_activations = !lhs_activations.empty() || !rhs_activations.empty();
         has_post_activations = !post_activations.empty();
         post_zero_point = has_post_activations && post_activations[0].type() == unary::UnaryOpType::ZERO_POINT;
@@ -1435,22 +1424,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["BINARY_NG_PRE_SECTIONS"] = std::to_string(pre_sections);
     }
 
-    // Blackhole: logical_and (operand and post activations, its init per tile) keeps the per-face multiply on block
-    // grids of 4 rows by 2 or 4 columns, where per tile measured slower (a scalar b from 128 tiles a core).
-    const auto& a_shard_spec = a.memory_config().shard_spec();
-    if (bh_fpu_op && fpu_binary_op == OpConfig::FpuBinaryOp::MUL && has_operand_activations && has_post_activations &&
-        num_tiles_per_cycle == 1 && a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
-        a_shard_spec.has_value()) {
-        const auto grid_box = a_shard_spec->grid.bounding_box();
-        const uint32_t grid_rows = grid_box.end_coord.y - grid_box.start_coord.y + 1;
-        const uint32_t grid_cols = grid_box.end_coord.x - grid_box.start_coord.x + 1;
-        const uint32_t shard_tiles = (a_shard_spec->shape[0] / a.tensor_spec().tile().get_height()) *
-                                     (a_shard_spec->shape[1] / a.tensor_spec().tile().get_width());
-        const bool small_scalar =
-            operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B && shard_tiles < 128;
-        if (grid_rows == 4 && (grid_cols == 2 || grid_cols == 4) && !small_scalar) {
-            compute_kernel_defines["BINARY_NG_MUL_PER_FACE"] = "1";
-        }
+    // Blackhole: a multiply with operand and post activations (logical_and), whose init runs per tile, keeps the
+    // per-face program; no Blackhole caller runs one.
+    if (bh_fpu_op && fpu_binary_op == OpConfig::FpuBinaryOp::MUL && has_operand_activations && has_post_activations) {
+        compute_kernel_defines["BINARY_NG_MUL_PER_FACE"] = "1";
     }
 
     KernelDescriptor compute_desc;
@@ -1460,7 +1437,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_desc.defines = {compute_kernel_defines.begin(), compute_kernel_defines.end()};
     compute_desc.compile_time_args = {num_tiles_per_cycle, static_cast<uint32_t>(fill_with_value_int)};
     compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = mul_at_hifi3 && !fp32_dest_acc_en ? MathFidelity::HiFi3 : MathFidelity::HiFi4,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
     };
