@@ -32,6 +32,35 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 !tensors.chunk_start_idx_tensor.has_value(),
             "output_concat_heads is supported for the plain (non-chunked, non-paged) SDPA only");
     }
+    if (attrs.reuse_kv) {
+        TT_FATAL(
+            !attrs.is_causal && !tensors.attn_mask.has_value() && !attrs.chunk_start_idx.has_value() &&
+                !tensors.chunk_start_idx_tensor.has_value() && !tensors.page_table.has_value() &&
+                !attrs.sliding_window_size.has_value() && !tensors.attention_sink.has_value() &&
+                attrs.windowed_mode == WindowedMode::None && !attrs.use_mla,
+            "SDPA reuse_kv supports non-causal, unmasked, unchunked, non-windowed, non-MLA attention only");
+    }
+    // pack_gqa_heads is a no-op without GQA (NQH == NKH), so MHA calls that set it take no extra constraints.
+    if (attrs.pack_gqa_heads && tensors.q.logical_shape()[1] != tensors.k.logical_shape()[1]) {
+        const auto& q_shape = tensors.q.logical_shape();
+        const auto& k_shape = tensors.k.logical_shape();
+        TT_FATAL(k_shape[1] > 0, "SDPA pack_gqa_heads needs a nonzero K head count");
+        TT_FATAL(
+            !attrs.is_causal && !tensors.attn_mask.has_value() && !attrs.chunk_start_idx.has_value() &&
+                !tensors.chunk_start_idx_tensor.has_value() && !tensors.page_table.has_value() &&
+                !attrs.sliding_window_size.has_value() && !tensors.attention_sink.has_value() &&
+                attrs.windowed_mode == WindowedMode::None && !attrs.use_mla,
+            "SDPA pack_gqa_heads supports non-causal, unmasked, unchunked, non-windowed, non-MLA attention only");
+        TT_FATAL(
+            tensors.v.has_value() && tensors.v->logical_shape()[1] == k_shape[1] && q_shape[1] % k_shape[1] == 0,
+            "SDPA pack_gqa_heads needs NQH ({}) to be a multiple of NKH ({}) and NVH == NKH",
+            q_shape[1],
+            k_shape[1]);
+        TT_FATAL(
+            q_shape[2] % tt::constants::TILE_HEIGHT == 0 && tensors.q.padded_shape()[2] == q_shape[2],
+            "SDPA pack_gqa_heads needs an unpadded, tile-aligned Q sequence length (got {})",
+            q_shape[2]);
+    }
 
     const Tensor& q = tensors.q;
     const Tensor& k = tensors.k;
@@ -660,7 +689,10 @@ Tensor sdpa(
     uint32_t windowed_q_token_offset,
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
-    bool output_concat_heads) {
+    bool output_concat_heads,
+    bool pack_gqa_heads,
+    bool reuse_kv,
+    bool math_thread_row_sums) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -681,6 +713,9 @@ Tensor sdpa(
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
             .output_concat_heads = output_concat_heads,
+            .pack_gqa_heads = pack_gqa_heads,
+            .reuse_kv = reuse_kv,
+            .math_thread_row_sums = math_thread_row_sums,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

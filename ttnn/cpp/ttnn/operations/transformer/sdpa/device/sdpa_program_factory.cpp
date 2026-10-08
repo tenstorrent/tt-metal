@@ -242,6 +242,76 @@ WindowedSetup setup_windowed_cbs(
     return w;
 }
 
+// pack_gqa_heads: Q [B, NQH, Sq, d] is scheduled as [B, NKH, gqa_pack * Sq, d] (identical memory for a tile-aligned,
+// unpadded Sq), so the per-head K/V chains cover a whole GQA group. Without GQA (NQH == NKH) it is a no-op.
+uint32_t gqa_pack_factor(bool pack_gqa_heads, uint32_t nqh, uint32_t nkh_tensor, uint32_t nkh) {
+    return pack_gqa_heads && nqh != nkh_tensor ? nqh / nkh : 1;
+}
+
+// Writer args 23 / 24. pack_gqa_heads with output_concat_heads: the writer maps packed row r of packed head g back to
+// row r % head_sq_tiles of query head g * gqa_pack + r / head_sq_tiles in the [B, 1, Sq, NQH*vDH] output. 1 / 1
+// otherwise, which reduces the writer's concat-heads layout to the unpacked one.
+struct WriterGqaPackArgs {
+    uint32_t gqa_pack = 1;
+    uint32_t gqa_pack_sqt = 1;
+};
+WriterGqaPackArgs writer_gqa_pack_args(bool output_concat_heads, uint32_t gqa_pack, uint32_t head_sq_tiles) {
+    if (output_concat_heads && gqa_pack > 1) {
+        return {gqa_pack, head_sq_tiles};
+    }
+    return {};
+}
+
+// Single-K-chunk row sums on the math thread (compute_streaming.hpp), opt-in (math_thread_row_sums): normalize takes a
+// whole row group's denominators from the exp'd scores, so the recip scratch CB must hold a row group. Off by default:
+// the sum accumulates in one 16-bit DST tile per row, which rounds the whole running sum on every K tile, while the
+// pack thread's per-position L1 sums average their rounding out over the row (SDXL's 0.993 / 0.997 PCC bars fail on
+// it). The kernel uses the path only where `enabled` allows it (compute arg 30), so sizing and use cannot disagree;
+// every other call keeps the 1-tile scratch. The kernel derives the row group from its DEST_AUTO_LIMIT, which full sync
+// doubles (dest_helpers.hpp).
+struct SingleKChunkRowSums {
+    bool enabled = false;
+    uint32_t recip_scratch_tiles = 1;
+};
+SingleKChunkRowSums single_k_chunk_row_sums(
+    bool requested,
+    tt::ARCH arch,
+    bool use_streaming_compute,
+    bool use_attention_sink,
+    bool dst_full_sync_en,
+    uint32_t dst_size,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t Sq_chunk_t) {
+    const uint32_t kernel_dst_size = dst_full_sync_en ? 2 * dst_size : dst_size;
+    const uint32_t norm_row_h =
+        ttnn::transformer::sdpa::streaming_qktv_h(out_subblock_h, out_subblock_w, kernel_dst_size, Sq_chunk_t);
+    if (requested && use_streaming_compute && arch == tt::ARCH::BLACKHOLE && !use_attention_sink &&
+        Sq_chunk_t % norm_row_h == 0) {
+        return {true, norm_row_h};
+    }
+    return {};
+}
+
+// reuse_kv: a core keeps K/V in its CBs across consecutive Q chunks of the same (batch, KV head), so it needs the whole
+// K sequence in one chunk and the streaming kernel; the K/V chains between cores are not built.
+void validate_reuse_kv(
+    bool reuse_kv, uint32_t k_num_chunks, std::size_t k_chunk_size, uint32_t Sk, bool use_streaming_compute) {
+    if (!reuse_kv) {
+        return;
+    }
+    TT_FATAL(
+        k_num_chunks == 1,
+        "SDPA reuse_kv needs a single K chunk (k_chunk_size {} >= Sk {}), got {} chunks",
+        k_chunk_size,
+        Sk,
+        k_num_chunks);
+    TT_FATAL(use_streaming_compute, "SDPA reuse_kv needs the streaming compute kernel (fp32_dest_acc_en=False)");
+}
+
+// Compute arg 29: the scheduled Q heads per KV head, which the kernel keys K/V reuse on; 0 = reuse_kv off.
+uint32_t kv_reuse_group(bool reuse_kv, uint32_t nqh, uint32_t nkh) { return reuse_kv ? nqh / nkh : 0; }
+
 }  // namespace
 
 ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
@@ -292,7 +362,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = input_tensor_k.logical_shape();
     const auto& v_shape = input_tensor_v.logical_shape();
-    const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
+    const uint32_t B = q_shape[0], DH = q_shape[3];
     // Geometry overrides for an HMA-shared paged buffer (see PagedCacheGeometryOverride): when
     // the paged K/V cache was allocated for a different layer's view, the reader must address it
     // with this call's num_kv_heads / block_size (Q already drives head_dim via DHt) rather than
@@ -304,6 +374,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t NKH = kv_geo.nkh;
     const uint32_t NVH = kv_geo.nvh;
     const uint32_t effective_kv_block_size = kv_geo.block_size;
+    // pack_gqa_heads (gqa_pack_factor): only the concatenated output layout needs the true head and sequence length
+    // (writer args 23 / 24).
+    const uint32_t gqa_pack = gqa_pack_factor(operation_attributes.pack_gqa_heads, q_shape[1], k_shape[1], NKH);
+    const uint32_t NQH = q_shape[1] / gqa_pack, Sq = q_shape[2] * gqa_pack;
 
     // In flash mla prefill, we have to support the case where NKH != NVH
     // We are calling op with the following shapes:
@@ -585,6 +659,21 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     const bool use_zigzag_balancing = use_causal_kernel;
 
+    const SingleKChunkRowSums row_sums = single_k_chunk_row_sums(
+        operation_attributes.math_thread_row_sums,
+        device->arch(),
+        use_streaming_compute,
+        use_attention_sink,
+        dst_full_sync_en,
+        dst_size,
+        out_out_subblock_h,
+        out_out_subblock_w,
+        Sq_chunk_t);
+    const bool reuse_kv = operation_attributes.reuse_kv;  // the K/V chains are not built (below)
+    validate_reuse_kv(reuse_kv, k_num_chunks, k_chunk_size, Sk, use_streaming_compute);
+    const WriterGqaPackArgs writer_gqa_pack =
+        writer_gqa_pack_args(operation_attributes.output_concat_heads, gqa_pack, q_shape[2] / TILE_HEIGHT);
+
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       B,
                                                       NQH,
@@ -624,6 +713,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 32
     reader_compile_time_args.push_back(static_cast<uint32_t>(windowed_mode));         // arg 33: K-range narrowing
+    reader_compile_time_args.push_back(static_cast<uint32_t>(reuse_kv));              // arg 34: K/V reuse
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -690,6 +780,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         static_cast<uint32_t>(use_zigzag_balancing),   // arg 20
         static_cast<uint32_t>(windowed_mode),          // arg 21: windowed block-diagonal mask generation
         static_cast<uint32_t>(operation_attributes.output_concat_heads),  // arg 22: concat-heads output layout
+        writer_gqa_pack.gqa_pack,                                         // arg 23: query heads per packed head
+        writer_gqa_pack.gqa_pack_sqt,                                     // arg 24: row tiles per query head
     };
 
     // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the
@@ -732,6 +824,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         k_partial_col,                                // arg 28: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 29: unified zigzag remap
         static_cast<uint32_t>(windowed_mode),         // arg 28: K-range narrowing (bounds from the ctrl CB)
+        kv_reuse_group(reuse_kv, NQH, NKH),           // arg 29: K/V reuse, scheduled Q heads per KV head (0 = off)
+        static_cast<uint32_t>(row_sums.enabled),      // arg 30: single-K-chunk row sums on the math thread
     };
 
     std::map<std::string, std::string> defines_map;
@@ -856,10 +950,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         cb_ids.attention_sink = allocate_tile_cb(attention_sink_tiles, sink_tile_size, sink_df);
     }
 
-    // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
+    // Streaming compute v2: recip scratch CB for normalize_row_streaming, one tile, or one per row of a normalize row
+    // group when the single-K-chunk path may compute a whole row group's 1/sum at once (single_k_chunk_row_sums).
     // No row buffers needed — cb_push_back_hold_wr_ptr writes directly to cb_qkt_im.
     if (use_streaming_compute) {
-        cb_ids.recip_scratch = allocate_tile_cb(1, im_tile_size, im_df);
+        cb_ids.recip_scratch = allocate_tile_cb(row_sums.recip_scratch_tiles, im_tile_size, im_df);
     }
 
     cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
@@ -927,7 +1022,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // lock-step-forward K between cores whose Q chunks now need DIFFERENT K ranges — the semaphore
     // handshake counts diverge and the cores deadlock. Narrowing saves far more K reads than
     // forwarding did.
-    if (!use_causal_kernel && !is_chunked && !has_sliding_window && !is_windowed) {
+    if (!use_causal_kernel && !is_chunked && !has_sliding_window && !is_windowed && !reuse_kv) {
         head_segments.resize(total_heads);
 
         log_debug(tt::LogOp, "=== Building KV chain forwarding topology ===");
