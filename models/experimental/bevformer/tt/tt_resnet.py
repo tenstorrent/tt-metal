@@ -32,7 +32,7 @@ class TTModulatedDeformConv2dPack:
 
         kernel_size = offset_args.kernel_size[0]
         self.device_dcn = TTModulatedDeformConv2dDevice(
-            weight_chunks=conv_pth.weight_chunks,
+            weight=conv_pth.weight,
             bias=conv_pth.bias,
             kernel_size=kernel_size,
             stride=tuple(offset_args.stride),
@@ -43,13 +43,12 @@ class TTModulatedDeformConv2dPack:
             relu=relu,
         )
 
-        # conv_offset emits the offsets in grid units, in the device DCN's (x, y) order (see
-        # model_preprocessing), then the mask logits. Its output is bfloat16 whatever the
-        # input dtype, since the offsets set the sampling positions.
-        # Offsets can reach tens of pixels, and accumulating in a bfloat16 destination
-        # register errs by up to a few of them, so the register is fp32. The partial sums conv2d
-        # writes back between reduction blocks stay bfloat16 (packer_l1_acc is off): fp32 partial
-        # sums gain no accuracy here.
+        # conv_offset emits DCNv2's offsets, in pixels and (y, x) order, then the mask logits.
+        # Its output is bfloat16 whatever the input dtype, since the offsets set the sampling
+        # positions. Trained offsets reach tens of pixels, and accumulating in a bfloat16
+        # destination register errs by up to a few of them, so the register is fp32. The partial
+        # sums conv2d writes back between reduction blocks stay bfloat16 (packer_l1_acc is off):
+        # fp32 partial sums gain no accuracy here.
         self.num_offset_channels = 2 * kernel_size * kernel_size
         self.conv_offset = TTConv2D(
             offset_args,
@@ -66,15 +65,15 @@ class TTModulatedDeformConv2dPack:
         (1, 1, B*H_out*W_out, C_out) output, also in conv2d's layout, and its height and width."""
         out, out_h, out_w = self.conv_offset(x)
         out = ttnn.reshape(out, (self.batch_size, out_h, out_w, out.shape[-1]))
-        grid_offset = out[:, :, :, : self.num_offset_channels]
+        offset = out[:, :, :, : self.num_offset_channels]
         mask = ttnn.sigmoid(out[:, :, :, self.num_offset_channels :])
         ttnn.deallocate(out)
 
         # At stride 1 the input has the output's height and width. To ROW_MAJOR first, the layout
-        # grid_sample reads, where the reshape to NHWC moves no data.
+        # the DCN reads, where the reshape to NHWC moves no data.
         x_nhwc = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (self.batch_size, out_h, out_w, x.shape[-1]))
-        out = self.device_dcn(x_nhwc, grid_offset, mask)
-        ttnn.deallocate(grid_offset)
+        out = self.device_dcn(x_nhwc, offset, mask)
+        ttnn.deallocate(offset)
         ttnn.deallocate(mask)
         return out, out_h, out_w
 
