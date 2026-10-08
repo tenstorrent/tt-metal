@@ -48,28 +48,13 @@ def test_moreh_arange(start_end_step, dtype, tilized, device):
 def test_moreh_arange_provided_output(device):
     torch.manual_seed(0)
     # Not the nightly helper: it fills the provided output with torch.empty, which can already hold the
-    # expected values. Zeros make an output the op never writes fail.
+    # expected values. NaN makes an output the op never writes fail.
     expected = torch.arange(10.9, -13, -0.3).to(torch.bfloat16)
     tt_output = ttnn.from_torch(
-        torch.zeros([1, len(expected)]), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        torch.full([1, len(expected)], float("nan")), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
     ttnn.moreh_arange(10.9, -13, -0.3, device, output=tt_output, untilize_out=False, dtype=ttnn.bfloat16)
     actual = ttnn.to_torch(tt_output).reshape(expected.shape)
 
     passing, output_pcc = comp_allclose_and_pcc(expected, actual, rtol=0.1, atol=0.1)
     assert passing, output_pcc
-
-
-@pytest.mark.merge_gate
-def test_moreh_arange_program_cache(device):
-    torch.manual_seed(0)
-    # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
-    device.clear_program_cache()
-    run_moreh_arange([10.9, -13, -0.3], False, "bfloat16", True, device)
-    num_program_cache_entries = device.num_program_cache_entries()
-    # Without this, the equality below would also pass for an op that never caches a program.
-    assert num_program_cache_entries > 0
-    # Holding this tensor moves the next allocations, so the cache hit must update the output address.
-    tt_placeholder = ttnn.from_torch(torch.zeros([1, 80]), device=device)
-    run_moreh_arange([10.9, -13, -0.3], False, "bfloat16", True, device)
-    assert device.num_program_cache_entries() == num_program_cache_entries

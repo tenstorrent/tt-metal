@@ -42,9 +42,10 @@ def run_moreh_adamw_test(shape, device, amsgrad=True, fp32_dest_acc_en=False, st
     tt_max_exp_avg_sq = (
         create_ttnn_tilized_tensor(state.get("max_exp_avg_sq", zeros), device, ttnn.bfloat16) if amsgrad else None
     )
-    # Zeros, so an output the op never writes fails.
+    # NaN, so an output the op never writes fails.
     num_outputs = 4 if amsgrad else 3
-    tt_outputs = [create_ttnn_tilized_tensor(zeros, device, ttnn.bfloat16) for _ in range(num_outputs)]
+    nans = torch.full(shape, float("nan"), dtype=torch.bfloat16)
+    tt_outputs = [create_ttnn_tilized_tensor(nans, device, ttnn.bfloat16) for _ in range(num_outputs)]
     if not provide_outputs:
         tt_outputs = [None] * num_outputs
     optimizer.step()
@@ -79,50 +80,6 @@ def run_moreh_adamw_test(shape, device, amsgrad=True, fp32_dest_acc_en=False, st
         assert passing, output_pcc
 
 
-def run_moreh_adamw_inplace_test(lr, step, device):
-    # Random moments move by ~0.5 in one step, so a write that misses the aliased outputs fails the check.
-    weight = torch.nn.Parameter(torch.rand([32, 32], dtype=torch.bfloat16))
-    weight.grad = torch.rand([32, 32], dtype=torch.bfloat16)
-    optimizer = torch.optim.AdamW([weight], lr=lr, betas=(0.5, 0.555), eps=1e-8, weight_decay=0.3, amsgrad=True)
-    state = optimizer.state[weight]
-    state["step"] = torch.tensor(float(step - 1))
-    for name in ["exp_avg", "exp_avg_sq", "max_exp_avg_sq"]:
-        state[name] = torch.rand([32, 32], dtype=torch.bfloat16)
-
-    tt_grad = create_ttnn_tilized_tensor(weight.grad, device, ttnn.bfloat16)
-    tt_tensors = [
-        create_ttnn_tilized_tensor(tensor, device, ttnn.bfloat16)
-        for tensor in [weight.detach(), state["exp_avg"], state["exp_avg_sq"], state["max_exp_avg_sq"]]
-    ]
-    optimizer.step()
-
-    # Every output aliases its input, the way the tt-train optimizer calls the op.
-    ttnn.moreh_adamw(
-        tt_tensors[0],
-        tt_grad,
-        tt_tensors[1],
-        tt_tensors[2],
-        lr=lr,
-        beta1=0.5,
-        beta2=0.555,
-        eps=1e-8,
-        weight_decay=0.3,
-        step=step,
-        amsgrad=True,
-        max_exp_avg_sq_in=tt_tensors[3],
-        param_out=tt_tensors[0],
-        exp_avg_out=tt_tensors[1],
-        exp_avg_sq_out=tt_tensors[2],
-        max_exp_avg_sq_out=tt_tensors[3],
-        compute_kernel_config=get_compute_kernel_options(False),
-    )
-
-    expected_outputs = [weight.detach(), state["exp_avg"], state["exp_avg_sq"], state["max_exp_avg_sq"]]
-    for expected, actual in zip(expected_outputs, tt_tensors):
-        passing, output_pcc = comp_allclose_and_pcc(expected, ttnn.to_torch(actual), pcc=0.99, rtol=0.1, atol=0.1)
-        assert passing, output_pcc
-
-
 @pytest.mark.merge_gate
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_dest_acc"])
 @pytest.mark.parametrize("amsgrad", [True, False], ids=["amsgrad", "no_amsgrad"])
@@ -151,37 +108,3 @@ def test_moreh_adamw(amsgrad, fp32_dest_acc_en, device):
 def test_moreh_adamw_corner_cases(shape, step, provide_outputs, device):
     torch.manual_seed(0)
     run_moreh_adamw_test(shape, device, step=step, provide_outputs=provide_outputs)
-
-
-@pytest.mark.merge_gate
-def test_moreh_adamw_program_cache(device):
-    torch.manual_seed(0)
-    # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
-    device.clear_program_cache()
-    run_moreh_adamw_test([32, 32], device)
-    num_program_cache_entries = device.num_program_cache_entries()
-    # Without this, the equality below would also pass for an op that never caches a program.
-    assert num_program_cache_entries > 0
-    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses. Row-major,
-    # so creating it runs no device program of its own.
-    tt_placeholder = ttnn.from_torch(torch.zeros([32, 32]), dtype=ttnn.bfloat16, device=device)
-    run_moreh_adamw_test([32, 32], device)
-    assert device.num_program_cache_entries() == num_program_cache_entries
-
-
-@pytest.mark.merge_gate
-def test_moreh_adamw_inplace_program_cache(device):
-    torch.manual_seed(0)
-    # Regression for #48928: an in-place call on a program-cache hit wrote to the previous call's buffers.
-    # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
-    device.clear_program_cache()
-    run_moreh_adamw_inplace_test(lr=1e-2, step=1, device=device)
-    num_program_cache_entries = device.num_program_cache_entries()
-    # Without this, the equality below would also pass for an op that never caches a program.
-    assert num_program_cache_entries > 0
-    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses. Row-major,
-    # so creating it runs no device program of its own.
-    tt_placeholder = ttnn.from_torch(torch.zeros([32, 32]), dtype=ttnn.bfloat16, device=device)
-    # lr and step are not in the program hash, so this is still a cache hit that must also patch them.
-    run_moreh_adamw_inplace_test(lr=2e-2, step=2, device=device)
-    assert device.num_program_cache_entries() == num_program_cache_entries

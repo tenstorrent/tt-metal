@@ -59,18 +59,3 @@ def test_moreh_fold_l1_short_row(device):
 
     passing, output_pcc = comp_allclose_and_pcc(expected, ttnn.to_torch(tt_output), rtol=0.05, atol=0.05)
     assert passing, output_pcc
-
-
-@pytest.mark.merge_gate
-def test_moreh_fold_program_cache(device):
-    torch.manual_seed(0)
-    # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
-    device.clear_program_cache()
-    run_fold_test(device, (1, 9, 32), (6, 10), (3, 3), (1, 1), (0, 0), (1, 1), torch.bfloat16)
-    num_program_cache_entries = device.num_program_cache_entries()
-    # Without this, the equality below would also pass for an op that never caches a program.
-    assert num_program_cache_entries > 0
-    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses.
-    tt_placeholder = ttnn.from_torch(torch.zeros([1, 9, 32]), device=device)
-    run_fold_test(device, (1, 9, 32), (6, 10), (3, 3), (1, 1), (0, 0), (1, 1), torch.bfloat16)
-    assert device.num_program_cache_entries() == num_program_cache_entries

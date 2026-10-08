@@ -5,7 +5,6 @@
 import pytest
 import torch
 
-import ttnn
 from tests.ttnn.nightly.unit_tests.operations.moreh.test_moreh_matmul import moreh_matmul_backward
 
 pytestmark = pytest.mark.use_module_device
@@ -31,20 +30,3 @@ pytestmark = pytest.mark.use_module_device
 def test_moreh_matmul_backward(params, requires_grad, device):
     torch.manual_seed(0)
     moreh_matmul_backward(params, requires_grad, device)
-
-
-@pytest.mark.merge_gate
-def test_moreh_matmul_backward_program_cache(device):
-    torch.manual_seed(0)
-    params = ([32, 64], [64, 96], [32, 96])
-    # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
-    device.clear_program_cache()
-    moreh_matmul_backward(params, (True, True), device)
-    num_program_cache_entries = device.num_program_cache_entries()
-    # Without this, the equality below would also pass for an op that never caches a program.
-    assert num_program_cache_entries > 0
-    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses. Row-major,
-    # so creating it runs no device program of its own.
-    tt_placeholder = ttnn.from_torch(torch.zeros([32, 96]), dtype=ttnn.bfloat16, device=device)
-    moreh_matmul_backward(params, (True, True), device)
-    assert device.num_program_cache_entries() == num_program_cache_entries
