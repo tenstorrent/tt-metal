@@ -26,16 +26,18 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/operations/matmul/device/kernels/gather_in0_shard_k.hpp"
 
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
 #endif
 
-// Moves in1's front past num_tiles tiles without reading them, once they are published.
-FORCE_INLINE void step_over_in1(DataflowBuffer& in1_dfb, uint32_t num_tiles) {
-    if (num_tiles > 0) {
-        in1_dfb.wait_front(num_tiles);
-        in1_dfb.pop_front(num_tiles);
+// Moves in1's front past num_blocks K-blocks without reading them, once they are published. One K-block
+// at a time: in1's ring holds whole K-blocks, so no single pop then runs past its end.
+FORCE_INLINE void step_over_in1_blocks(DataflowBuffer& in1_dfb, uint32_t num_blocks, uint32_t in1_block_num_tiles) {
+    for (uint32_t block = 0; block < num_blocks; ++block) {
+        in1_dfb.wait_front(in1_block_num_tiles);
+        in1_dfb.pop_front(in1_block_num_tiles);
     }
 }
 
@@ -87,6 +89,8 @@ void kernel_main() {
     constexpr auto k_tiles = get_arg(args::k_tiles);
     // Whether in1's K-blocks arrive in ring order, this core's own first, or in K order, a whole layer.
     constexpr bool in1_in_ring_order = get_arg(args::in1_in_ring_order);
+    // In K order: the K-blocks of in1's ring past the layer.
+    constexpr auto rest_of_ring_blocks = get_arg(args::rest_of_ring_blocks);
 
     // This core's position in the ring: it holds activation shard ring_idx.
     const uint32_t ring_idx = get_arg(args::ring_idx);
@@ -125,23 +129,18 @@ void kernel_main() {
 
     // In K order the layer starts at in1's front. This kernel steps over its first ring_idx K-blocks to
     // reach its own, and after the layer's last K-block over the rest of the ring, which holds none of
-    // this layer, to come back round to the layer's first. in1's ring is the PrefetcherPipe's, so its
-    // size is read off in1 (as 0 on the math thread, which leaves in1's pointers to the unpacker). The
-    // in1 reader publishes both spans for this kernel to step over.
-    constexpr uint32_t layer_tiles = num_blocks * in1_block_num_tiles;
+    // this layer, to come back round to the layer's first. The in1 reader publishes both spans for this
+    // kernel to step over.
     if constexpr (!in1_in_ring_order) {
-        step_over_in1(in1_dfb, ring_idx * in1_block_num_tiles);
+        step_over_in1_blocks(in1_dfb, ring_idx, in1_block_num_tiles);
     }
 
     bool enable_reload = false;
     for (uint32_t block = 0; block < num_blocks; block++) {
         // The in1 K-block at the front pairs with the in0 shard this step holds, that of ring position
-        // ring_pos. Shard ring_pos holds the K tiles from shard_k_start up to K: a padded shard fewer,
-        // or none.
+        // ring_pos. A padded shard holds fewer K tiles, or none.
         const uint32_t ring_pos = (ring_idx + block) % ring_size;
-        const uint32_t shard_k_start = ring_pos * in0_block_w;
-        const uint32_t k_tiles_left = shard_k_start < k_tiles ? k_tiles - shard_k_start : 0;
-        const uint32_t unpadded_in0_block_w = k_tiles_left < in0_block_w ? k_tiles_left : in0_block_w;
+        const uint32_t unpadded_in0_block_w = in0_shard_k_tiles(ring_pos, in0_block_w, k_tiles);
 
         in1_dfb.wait_front(in1_block_num_tiles);
 
@@ -282,9 +281,8 @@ void kernel_main() {
         // the pop publishes the consumer ack only after the unpacker has drained the block.
         in1_dfb.pop_front(in1_block_num_tiles);
         if constexpr (!in1_in_ring_order) {
-            if (ring_pos == ring_size - 1 && block + 1 < num_blocks) {
-                const uint32_t ring_tiles = in1_dfb.get_total_num_entries();
-                step_over_in1(in1_dfb, ring_tiles > layer_tiles ? ring_tiles - layer_tiles : 0);
+            if (ring_pos == ring_size - 1 && ring_idx > 0) {
+                step_over_in1_blocks(in1_dfb, rest_of_ring_blocks, in1_block_num_tiles);
             }
         }
     }

@@ -92,12 +92,10 @@ def make_recv_contig_weight(
     ring_size: int,
     dtype,
     distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-    shard_k=None,
 ):
     """Allocate ``pt_weight`` ((1, 1, K, N)) as a DRAM-sharded ND tensor in
     receiver-contiguous layout: ``num_shards = ring_size`` distributed across
-    ``num_dram_banks`` DRAM cores, each shard ``(K, N // ring_size)``. ``shard_k``
-    deepens each shard past K, as a gather ring whose last in0 shards are padded needs.
+    ``num_dram_banks`` DRAM cores, each shard ``(K, N // ring_size)``.
 
     ``distribution_strategy`` selects how shards map to banks: ROUND_ROBIN_1D
     (shard s -> bank s % num_dram_banks) or CONTIGUOUS_1D (shard s -> bank
@@ -111,7 +109,7 @@ def make_recv_contig_weight(
     path. The tensor keeps its (K, N) logical shape; only buffer placement changes.
     """
     mem_config = recv_contig_weight_memory_config(
-        pt_weight.shape[-2], pt_weight.shape[-1], num_dram_banks, ring_size, distribution_strategy, shard_k
+        pt_weight.shape[-2], pt_weight.shape[-1], num_dram_banks, ring_size, distribution_strategy
     )
     return ttnn.as_tensor(pt_weight, device=device, dtype=dtype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
 
@@ -124,7 +122,8 @@ def recv_contig_weight_memory_config(
     distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
     shard_k=None,
 ):
-    """The memory config ``make_recv_contig_weight`` allocates a (K, N) weight with."""
+    """The memory config ``make_recv_contig_weight`` allocates a (K, N) weight with. ``shard_k``
+    deepens each shard past K, as a gather ring whose last in0 shards are padded needs."""
     assert N % ring_size == 0, f"N={N} must be divisible by ring_size={ring_size}"
     n_per_recv = N // ring_size
     dram_core_range_set = ttnn.CoreRangeSet(

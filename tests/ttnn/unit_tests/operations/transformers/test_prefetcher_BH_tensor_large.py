@@ -1181,17 +1181,12 @@ def _streaming_gather_in0_setup(
     # (ROUND_ROBIN_1D strided / CONTIGUOUS_1D contiguous) is matched by the bank pairing below.
     torch.manual_seed(zlib.crc32(name.encode()))
     pt_weight = torch.randn(1, 1, K, N)
+    weight_mem_config = _recv_contig_weight_memory_config(
+        K, N, num_dram_banks, ring_size, distribution_strategy, shard_k=K_padded
+    )
 
     def make_weight(pt):
-        return _make_recv_contig_weight(
-            device,
-            pt,
-            num_dram_banks=num_dram_banks,
-            ring_size=ring_size,
-            dtype=dtype,
-            distribution_strategy=distribution_strategy,
-            shard_k=K_padded,
-        )
+        return ttnn.as_tensor(pt, device=device, dtype=dtype, memory_config=weight_mem_config, layout=ttnn.TILE_LAYOUT)
 
     # Activation (A): width-sharded across the receiver grid; K split across the ring.
     pt_act = torch.randn(1, 1, M, K)
@@ -1224,10 +1219,7 @@ def _streaming_gather_in0_setup(
         poison_addrs = (poison_weight.buffer_address(), poison_act.buffer_address())
         ttnn.deallocate(poison_weight)
         ttnn.deallocate(poison_act)
-        tt_weight = ttnn.to_memory_config(
-            weight_source,
-            _recv_contig_weight_memory_config(K, N, num_dram_banks, ring_size, distribution_strategy, K_padded),
-        )
+        tt_weight = ttnn.to_memory_config(weight_source, weight_mem_config)
         tt_act = ttnn.to_memory_config(act_source, act_mem_config)
         assert (tt_weight.buffer_address(), tt_act.buffer_address()) == poison_addrs, "NaN padding did not land"
         # The copies' cached programs hold the receiver cores, and pipe rings come from the persistent
@@ -1655,6 +1647,24 @@ def _prefetch_and_check_over_pipes(
     assert passing, f"{label} PCC failed: {output_str}"
 
 
+def _prefetch_and_check_runs_over_pipes(device, setup, pipes, compute_kernel_config, label, runs, pcc_threshold=0.999):
+    """``_prefetch_and_check_over_pipes`` ``runs`` times against the setup's torch matmul, every run
+    after the first hitting the program cache."""
+    expected = setup["pt_act"].float() @ setup["pt_weight"].float()
+    cache_entries_after_first = None
+    with tensor_prefetcher_session(device):
+        for run in range(runs):
+            _prefetch_and_check_over_pipes(
+                setup, pipes, expected, compute_kernel_config, f"{label} run={run}", pcc_threshold=pcc_threshold
+            )
+            if run == 0:
+                cache_entries_after_first = device.num_program_cache_entries()
+
+    assert (
+        device.num_program_cache_entries() == cache_entries_after_first
+    ), f"{label}: a run after the first did not hit the program cache"
+
+
 @pytest.mark.parametrize("weight_layout", list(_MCAST_IN0_PIPE_LAYOUTS), ids=list(_MCAST_IN0_PIPE_LAYOUTS))
 @pytest.mark.parametrize(
     "ring_half_blocks,per_core_N",
@@ -1822,11 +1832,12 @@ def test_tensor_prefetcher_mcast_in0_pipes_block_size_change(device, ring_narrow
 
 
 # ---------------------------------------------------------------------------
-# Streaming gather-in0 over PrefetcherPipes
+# Gather-in0 over PrefetcherPipes
 # ---------------------------------------------------------------------------
 # test_tensor_prefetcher_streaming_matmul with PrefetcherPipes in place of the GCB: the prefetcher
 # streams each worker its in1 K-blocks in ring order (identity rotation), and the matmul consumes them
-# through a relay over the pipe ring as they land, keeping one K-block of lookahead.
+# through a relay over the pipe ring as they land, keeping one K-block of lookahead. With
+# stream_in1=False they arrive in K order instead, into a ring that holds the whole layer.
 
 
 def _lofi_compute_kernel_config(device):
@@ -1973,25 +1984,14 @@ def test_tensor_prefetcher_gather_in0_pipes_ring_shapes(device, stream_in1, num_
         device, setup["bank_to_receivers"], setup["entry_size"] * ring_half_blocks // 2
     )
 
-    compute_kernel_config = _hifi4_compute_kernel_config(device)
-    expected = setup["pt_act"].float() @ setup["pt_weight"].float()
-    cache_entries_after_first = None
-    with tensor_prefetcher_session(device):
-        for run in range(2):
-            _prefetch_and_check_over_pipes(
-                setup,
-                pipes,
-                expected,
-                compute_kernel_config,
-                f"gather_in0_pipes_ring_shapes stream_in1={stream_in1} hops={num_hops} "
-                f"k_tiles_short={k_tiles_short} run={run}",
-            )
-            if run == 0:
-                cache_entries_after_first = device.num_program_cache_entries()
-
-    assert (
-        device.num_program_cache_entries() == cache_entries_after_first
-    ), "second gather_in0 pipes invocation did not hit the program cache"
+    _prefetch_and_check_runs_over_pipes(
+        device,
+        setup,
+        pipes,
+        _hifi4_compute_kernel_config(device),
+        f"gather_in0_pipes_ring_shapes stream_in1={stream_in1} hops={num_hops} k_tiles_short={k_tiles_short}",
+        runs=2,
+    )
 
 
 @pytest.mark.parametrize(
@@ -2054,26 +2054,15 @@ def test_tensor_prefetcher_gather_in0_pipes_k_order(
         device, setup["bank_to_receivers"], setup["entry_size"] * ring_half_blocks // 2
     )
 
-    compute_kernel_config = _hifi4_compute_kernel_config(device) if hifi4 else _lofi_compute_kernel_config(device)
-    expected = setup["pt_act"].float() @ setup["pt_weight"].float()
-    pcc_threshold = 0.999 if dtype == ttnn.bfloat16 else 0.99
-    cache_entries_after_first = None
-    with tensor_prefetcher_session(device):
-        for run in range(3):
-            _prefetch_and_check_over_pipes(
-                setup,
-                pipes,
-                expected,
-                compute_kernel_config,
-                f"gather_in0_pipes_k_order {name} {distribution_strategy} half_blocks={ring_half_blocks} run={run}",
-                pcc_threshold=pcc_threshold,
-            )
-            if run == 0:
-                cache_entries_after_first = device.num_program_cache_entries()
-
-    assert (
-        device.num_program_cache_entries() == cache_entries_after_first
-    ), "later gather_in0 pipes invocations did not hit the program cache"
+    _prefetch_and_check_runs_over_pipes(
+        device,
+        setup,
+        pipes,
+        _hifi4_compute_kernel_config(device) if hifi4 else _lofi_compute_kernel_config(device),
+        f"gather_in0_pipes_k_order {name} {distribution_strategy} half_blocks={ring_half_blocks}",
+        runs=3,
+        pcc_threshold=0.999 if dtype == ttnn.bfloat16 else 0.99,
+    )
 
 
 def test_tensor_prefetcher_gather_in0_pipes_rejects_k_order_short_ring(device, expect_error):
@@ -2204,12 +2193,11 @@ def test_tensor_prefetcher_gather_and_mcast_in0_share_pipes(device, gather_strea
     mcast = _mcast_in0_pipe_setup(device, "recv_contig_contiguous", per_core_N=2)
     assert gather["entry_size"] != mcast["entry_size"]
 
-    if ring_depth == "three_blocks":
-        ring_size = 3 * max(gather["entry_size"], mcast["entry_size"])
-    elif ring_depth == "layer_and_a_half":
-        ring_size = (3 * gather["ring_size"] + 1) * gather["entry_size"] // 2
-    else:
-        ring_size = (2 * gather["ring_size"] + 7) * gather["entry_size"] // 2
+    ring_size = {
+        "three_blocks": 3 * max(gather["entry_size"], mcast["entry_size"]),
+        "layer_and_a_half": (3 * gather["ring_size"] + 1) * gather["entry_size"] // 2,
+        "layer_plus_3p5": (2 * gather["ring_size"] + 7) * gather["entry_size"] // 2,
+    }[ring_depth]
     _space, pipes = _make_tensor_prefetcher_pipes(device, gather["bank_to_receivers"], ring_size)
 
     compute_kernel_config = _hifi4_compute_kernel_config(device)
