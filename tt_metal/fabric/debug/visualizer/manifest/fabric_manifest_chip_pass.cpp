@@ -7,8 +7,10 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt_stl/assert.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include <algorithm>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <set>
@@ -346,7 +348,11 @@ manifest::Arch describe_arch(const tt::tt_metal::Hal& hal) {
     const layout::Type go_msg{
         layout::element::Struct{layout::go_msg_name}, static_cast<uint32_t>(factory.size_of<dev_msgs::go_msg_t>()), 0};
     const layout::Type launch_msg{
-        layout::element::Bytes{}, static_cast<uint32_t>(factory.size_of<dev_msgs::launch_msg_t>()), 0};
+        layout::element::Struct{enchantum::type_name<dev_msgs::launch_msg_t>},
+        static_cast<uint32_t>(factory.size_of<dev_msgs::launch_msg_t>()),
+        0};
+    std::vector<layout::StructType> types = layout::described_struct_types();
+    std::ranges::move(layout::hal_struct_types(hal), std::back_inserter(types));
     return manifest::Arch{
         .arch = hal.get_arch(),
         .areas =
@@ -367,6 +373,7 @@ manifest::Arch describe_arch(const tt::tt_metal::Hal& hal) {
                         ? std::optional(hal_area(hal, HalL1MemAddrType::ETH_FW_MAILBOX, layout::type_of<uint32_t>()))
                         : std::nullopt,
             },
+        .types = std::move(types),
     };
 }
 

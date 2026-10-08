@@ -96,7 +96,6 @@ constexpr content::Enum enum_of() {
             },
     };
 }
-
 // A member every entry sets: it has no default, so an entry that leaves it out does not compile.
 template <typename T>
 struct Required {
