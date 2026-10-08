@@ -6,7 +6,7 @@
 either for a row (tt-metal#58736). Every bf16 bit pattern, special values included, every bfp8_b tile byte pair (each of
 the 256 shared exponents with each of the 256 sign and mantissa bytes, written as raw tile bytes) and every bfp4_b
 exponent with every 4-bit code, untilized to bf16 with a 16-bit DEST: rows of one fast untilize chunk (5 to 8 tiles)
-and of several (9 tiles and more).
+and of several (9 tiles and more, with tails of 2 to 7 tiles).
 """
 
 import pytest
@@ -219,14 +219,14 @@ def _bfp4_raw_tiles(width):
     return torch.cat([exponents, datums], dim=1), tile_rows * TILE
 
 
-@pytest.mark.parametrize("width", [5, 6, 7, 8, 9, 13, 16, 24])
+@pytest.mark.parametrize("width", [5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 24])
 def test_fast_and_pack_untilize_match_bf16(device, width):
     values = _bf16_patterns(width)
     tt_in = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     _compare(device, tt_in, ttnn.bfloat16, values.shape[0], width)
 
 
-@pytest.mark.parametrize("width", [5, 6, 7, 8, 9, 12, 16, 24])
+@pytest.mark.parametrize("width", [5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 24])
 def test_fast_and_pack_untilize_match_bfp8(device, width):
     raw, num_rows = _bfp8_raw_tiles(width)
     # One page per tile: a row-major uint8 tensor of the raw tile bytes, read into a Bfp8_b input CB.
@@ -234,7 +234,7 @@ def test_fast_and_pack_untilize_match_bfp8(device, width):
     _compare(device, tt_in, ttnn.bfloat8_b, num_rows, width)
 
 
-@pytest.mark.parametrize("width", [5, 6, 7, 8, 9, 12, 16, 24])
+@pytest.mark.parametrize("width", [5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 24])
 def test_fast_and_pack_untilize_match_bfp4(device, width):
     raw, num_rows = _bfp4_raw_tiles(width)
     tt_in = ttnn.from_torch(raw, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
