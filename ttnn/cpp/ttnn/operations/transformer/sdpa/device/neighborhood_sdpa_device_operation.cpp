@@ -163,6 +163,15 @@ bool NeighborhoodSDPAOperation::kv_ring_requested() {
     return value == nullptr || std::string_view(value) != "0";
 }
 
+uint32_t NeighborhoodSDPAOperation::ablation_requested() {
+    const char* value = std::getenv("DIFFVAE_NA_ABLATE");
+    if (value == nullptr) {
+        return 0;
+    }
+    const std::string_view mode(value);
+    return mode == "reads" ? 1u : mode == "math" ? 2u : 0u;
+}
+
 ttsl::hash::hash_t NeighborhoodSDPAOperation::compute_program_hash(
     const NeighborhoodSDPAParams& attributes, const NeighborhoodSDPAInputs& tensors) {
     // The eight stage-5 blocks share one geometry, so they must share one compiled program.
@@ -207,7 +216,8 @@ ttsl::hash::hash_t NeighborhoodSDPAOperation::compute_program_hash(
             ? std::optional<tt::tt_metal::MemoryConfig>(tensors.interior_mask->memory_config())
             : std::nullopt,
         tensors.output_tensor.has_value() ? tensors.output_tensor->memory_config() : attributes.output_memory_config,
-        kv_ring_requested());
+        kv_ring_requested(),
+        ablation_requested());
 }
 
 Tensor neighborhood_sdpa(

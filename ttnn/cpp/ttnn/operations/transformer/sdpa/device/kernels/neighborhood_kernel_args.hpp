@@ -175,6 +175,9 @@ enum : uint32_t {
     kv_ring_mode,
     kv_ring_columns,
 
+    // Timing diagnostic (DIFFVAE_NA_ABLATE=reads): skip every K/V read. Output is garbage.
+    ablate_kv_reads,
+
     COUNT
 };
 }  // namespace reader_arg
@@ -201,6 +204,9 @@ enum : uint32_t {
     // bricks share one context window. tiles_per_kv_chunk gives each brick its OWN mask, which
     // is what a chunk wider than the stride needs.
     mask_subblock_stride,
+
+    // Timing diagnostic (DIFFVAE_NA_ABLATE=math): drain the inputs, skip the math. Output is garbage.
+    ablate_math,
     COUNT
 };
 }  // namespace compute_arg

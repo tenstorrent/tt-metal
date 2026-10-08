@@ -43,6 +43,10 @@ struct NeighborhoodSDPAOperation {
     // DIFFVAE_NA_KV_RING=0 turns it off). Read from the environment on every call, so it is part
     // of the program hash.
     static bool kv_ring_requested();
+
+    // Timing diagnostic, DIFFVAE_NA_ABLATE=reads|math: 1 skips the K/V reads, 2 skips the math.
+    // Either one makes the output garbage. Part of the program hash.
+    static uint32_t ablation_requested();
 };
 
 Tensor neighborhood_sdpa(
