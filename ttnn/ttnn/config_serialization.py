@@ -6,10 +6,28 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+import sys
+from typing import TYPE_CHECKING, Any
+
+
+class _OptionalModule:
+    """Attribute access reads a module already in sys.modules, else Any."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    def __getattr__(self, attr: str) -> Any:
+        module = sys.modules.get(self._name)
+        if module is None:
+            return Any
+        return getattr(module, attr, Any)
+
 
 if TYPE_CHECKING:
     import ttnn
+else:
+    # Hints stay resolvable without importing ttnn (cycle through decorators).
+    ttnn = _OptionalModule("ttnn")
 
 
 def memory_config_to_dict(memory_config: ttnn.MemoryConfig):
