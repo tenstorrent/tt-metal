@@ -225,13 +225,14 @@ never on a push to a draft (checked: zero Copilot reviews on the draft PRs of an
 request both:**
 ```bash
 $SKILL/scripts/dispatch.sh "LLK PR Review" main -f pr_number=<PR>     # ~45 min; record the run id
-gh api --method POST repos/<o>/<r>/pulls/<PR>/requested_reviewers \
-    -f 'reviewers[]=copilot-pull-request-reviewer[bot]'                  # Copilot reviews the head SHA
+printf '{"reviewers":["copilot-pull-request-reviewer[bot]"]}' |
+    gh api --method POST repos/<o>/<r>/pulls/<PR>/requested_reviewers --input -   # Copilot on the head SHA
 ```
-Copilot then sits in the PR's requested reviewers (and shows as a `Running Copilot Code Review` run
-on the head SHA) until it submits; the other reviewers that do fire (static checks, PR gate, Repo
-Assist, Silencer, …) are **workflow runs attached to the head SHA** — queued, in progress, or
-completed. So whether bots are done is **observed, not guessed**:
+(JSON body on purpose: `-f 'reviewers[]=…'` is a 422 on gh 2.4.) Within seconds Copilot shows as a
+`Running Copilot Code Review` run on the head SHA (queued, then in progress) — it does not stay in
+the requested-reviewers list — and the other checks that do fire on a push (static checks, PR gate,
+Repo Assist, Silencer, …) are likewise **workflow runs attached to the head SHA**. So whether bots
+are done is **observed, not guessed**:
 ```bash
 pending=$($SKILL/scripts/bots_pending.sh <PR>) && [ -z "$pending" ]   # true = bots quiet on the head SHA
 ```
