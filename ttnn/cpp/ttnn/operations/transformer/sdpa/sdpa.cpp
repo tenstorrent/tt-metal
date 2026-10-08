@@ -46,11 +46,8 @@ std::optional<ttnn::Tensor> drop_if_empty(const std::optional<ttnn::Tensor>& t) 
 // (compute_streaming.hpp). Routed dense, chunked and MLA calls choose their blocking (the program_config chunk sizes
 // were tuned for the legacy kernels; resolve_dense_recipe_blocking); joint, ring, exp ring and ring-distributed calls
 // keep them when the recipe supports them.
-// TODO(SDPA recipes on Wormhole): the recipes run on Blackhole only, so Wormhole keeps the legacy loops until the
-// Wormhole port lands; remove this arch gate (one use per entry point) with it.
-bool routes_to_recipes(const ttnn::Tensor& q) {
-    return q.storage_type() == StorageType::DEVICE && q.device()->arch() == tt::ARCH::BLACKHOLE;
-}
+// The recipes run on Blackhole and Wormhole; only device inputs are routed (host inputs fail the op's validation).
+bool routes_to_recipes(const ttnn::Tensor& q) { return q.storage_type() == StorageType::DEVICE; }
 
 // The compute config the legacy kernels would run with (the defaults every SDPA prefill op applies).
 DeviceComputeKernelConfig legacy_compute_config(
@@ -1217,7 +1214,7 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& page_table,
     std::optional<int64_t> chunk_start_idx,
     std::optional<SDPAPrecision> precision) {
-    // Without precision, Blackhole runs STANDARD, or ACCURATE with FP32 DEST (this op always left the streaming
+    // Without precision, the op runs STANDARD, or ACCURATE with FP32 DEST (this op always left the streaming
     // kernels for the legacy loop).
     const bool routed = !precision && routes_to_recipes(input_tensor_q);
     if (routed) {

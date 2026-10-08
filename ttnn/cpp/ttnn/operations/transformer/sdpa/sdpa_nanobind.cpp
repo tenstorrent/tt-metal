@@ -379,7 +379,7 @@ void bind_sdpa(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
-            precision (ttnn.SDPAPrecision, optional): Named numerical recipe: FAST, STANDARD, BALANCED or ACCURATE. When omitted, BF16 DEST runs the streaming kernel and fp32_dest_acc_en=True in compute_kernel_config runs ACCURATE on Blackhole (the legacy FP32 kernel on Wormhole); program_config chunk sizes are then hints. The recipe owns the numerics: compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored. FAST expects inputs rounded by prepare_sdpa_input.
+            precision (ttnn.SDPAPrecision, optional): Named numerical recipe: FAST, STANDARD, BALANCED or ACCURATE. When omitted, BF16 DEST runs the streaming kernel and fp32_dest_acc_en=True in compute_kernel_config runs ACCURATE; program_config chunk sizes are then hints. The recipe owns the numerics: compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored. FAST expects inputs rounded by prepare_sdpa_input.
             attention_sink (ttnn.Tensor, optional): Defaults to `None`. [1 x nqh x 1 x 1]. Single attention sink value per head. The kernel will efficiently replicate this value across all query positions.
             cu_window_seqlens (ttnn.Tensor, optional): Defaults to `None`. 1D int32/uint32 ROW_MAJOR tensor of cumulative window boundaries [0, w1, w1+w2, ..., s]. When provided, computes block-diagonal (windowed) attention where each token attends only within its window; the mask is built on-device. With `is_causal=False` a token attends to its whole window; with `is_causal=True` token t in window [cu[i], cu[i+1]) attends to cu[i]..t (packed variable-length causal sequences). Mutually exclusive with attn_mask/sliding_window_size.
             windowed_q_token_offset (int): Defaults to `0`. Windowed mode only. Global row index of Q row 0, for a Q holding a contiguous slice of a longer sequence: Q and the output are indexed locally while `cu_window_seqlens` and K/V stay global, so this locates the slice among the windows. Must be a multiple of TILE_HEIGHT, and `offset + Sq` must not exceed `Sk`. Use it to split the Q dimension across devices under sequence parallelism.
@@ -592,7 +592,7 @@ void bind_sdpa(nb::module_& mod) {
             precision (ttnn.SDPAPrecision, optional): Named numerical recipe, as for
                 `scaled_dot_product_attention`. Recipes take any chunk_start_idx (a multiple of neither chunk
                 size is needed), paged_cache_geometry and attention_sink. When omitted, routed as for
-                `scaled_dot_product_attention` (FP32 DEST runs ACCURATE on Blackhole). Defaults to `None`.
+                `scaled_dot_product_attention` (FP32 DEST runs ACCURATE). Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -643,7 +643,7 @@ void bind_sdpa(nb::module_& mod) {
             program_config (ttnn.SDPAProgramConfig)
             scale (float, optional): Scale factor for QK^T. Defaults to None.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):Defaults to None.
-            precision (ttnn.SDPAPrecision, optional): Named numerical recipe, with the same support rules as scaled_dot_product_attention (no attn_mask). When omitted, STANDARD on Blackhole (ACCURATE with fp32_dest_acc_en=True in compute_kernel_config; program_config chunk sizes are then hints); the legacy kernel on Wormhole.
+            precision (ttnn.SDPAPrecision, optional): Named numerical recipe, with the same support rules as scaled_dot_product_attention (no attn_mask). When omitted, STANDARD (ACCURATE with fp32_dest_acc_en=True in compute_kernel_config; program_config chunk sizes are then hints).
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor):
@@ -970,7 +970,7 @@ void bind_sdpa(nb::module_& mod) {
                 tech_reports/FlashAttention/SDPAPrecisionRecipes.md). Each Q chunk's online-softmax state stays
                 in L1 across ring steps and is normalized once, on the last. logical_n may be a scalar or a
                 device tensor. When omitted, the streaming kernel runs; FP32 DEST, or a blocking it cannot build,
-                runs STANDARD (ACCURATE with FP32 DEST) on Blackhole. compute_kernel_config and exp_approx_mode are
+                runs STANDARD (ACCURATE with FP32 DEST). compute_kernel_config and exp_approx_mode are
                 accepted and ignored; scale is honored.
 
         Returns:
@@ -1029,8 +1029,7 @@ void bind_sdpa(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             precision (ttnn.SDPAPrecision, optional): Named numerical recipe, as for
                 `scaled_dot_product_attention` (V and the output are head_dim_v wide; without input_tensor_v, V is
-                K's first head_dim_v columns). When omitted, FP32 DEST runs ACCURATE on Blackhole. Defaults to
-                `None`.
+                K's first head_dim_v columns). When omitted, FP32 DEST runs ACCURATE. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -1091,7 +1090,7 @@ void bind_sdpa(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             precision (ttnn.SDPAPrecision, optional): Named numerical recipe, as for
                 `chunked_scaled_dot_product_attention`; V is K's first head_dim_v columns. When omitted, FP32
-                DEST runs ACCURATE on Blackhole. Defaults to `None`.
+                DEST runs ACCURATE. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x head_dim_v].
