@@ -88,6 +88,15 @@ void kernel_main() {
     DataflowBuffer dfb_max_obj(dfb::max);
 #endif
 
+#ifdef MASK_PADDED_DATA
+    // The last dimension is not a multiple of the tile width: the reader pushes one -inf padding tile that the
+    // last tile of every row gets added before the exp.
+    DataflowBuffer dfb_mask_padded_obj(dfb::mask_padded);
+    constexpr std::uint32_t block_w_unpadded = block_w - 1;
+#else
+    [[maybe_unused]] constexpr std::uint32_t block_w_unpadded = block_w;
+#endif
+
 #ifdef FUSED_SCALE_MASK
     DataflowBuffer dfb_fused_scale_obj(dfb::fused_scale);
     DataflowBuffer dfb_fused_attn_obj(dfb::fused_attn);
@@ -99,14 +108,33 @@ void kernel_main() {
 
     for (std::uint32_t i = 0; i < block_h; i++) {
 #ifdef FUSED_SCALE_MASK
-        ckl::mul<
-            ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
-            ckl::input(dfb::fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
-            ckl::output(dfb::scale_mask, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-            ckl::IterationShape::tiles(block_w).block_size(subblock_w),
-            dfb_in0_obj,
-            dfb_fused_scale_obj,
-            dfb_scale_mask_obj);
+        if constexpr (block_w_unpadded > 0) {
+            ckl::mul<
+                ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                ckl::input(dfb::fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+                ckl::output(dfb::scale_mask, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+                ckl::IterationShape::tiles(block_w_unpadded).block_size(subblock_w),
+                dfb_in0_obj,
+                dfb_fused_scale_obj,
+                dfb_scale_mask_obj);
+        }
+#ifdef MASK_PADDED_DATA
+        // The user mask does not cover the tile padding, so the last tile also gets the -inf padding mask.
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Mul,
+                ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd),
+                ckl::input(
+                    dfb::fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{
+                dfb_in0_obj, dfb_fused_scale_obj},
+            ckl::DestReuseBinary<
+                ckl::BinaryFpuOp::Add,
+                ckl::input(dfb::mask_padded, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+                ckl::DestReuseType::DEST_TO_SRCA>{dfb_mask_padded_obj},
+            ckl::PackTile<ckl::output(dfb::scale_mask, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile)>{
+                dfb_scale_mask_obj});
+#endif
 
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(block_w).block_size(subblock_w),
@@ -134,7 +162,32 @@ void kernel_main() {
 
 #else
 
+#ifdef MASK_PADDED_DATA
+        // Copy the row so the last tile can get the -inf padding mask before the max and the exp.
+        if constexpr (block_w_unpadded > 0) {
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(block_w_unpadded).block_size(subblock_w),
+                ckl::CopyTile<
+                    ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                    ckl::Dst::D0>{dfb_in0_obj},
+                ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+                ckl::PackTile<ckl::output(dfb_x_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{dfb_x_obj});
+        }
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Add,
+                ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd),
+                ckl::input(dfb::mask_padded, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{
+                dfb_in0_obj, dfb_mask_padded_obj},
+            ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+            ckl::PackTile<ckl::output(dfb_x_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile)>{dfb_x_obj});
 #ifdef NUMERIC_STABLE
+        dfb_x_obj.wait_front(block_w);
+        calc_numeric_stable<block_w, subblock_w, dfb_x_id, dfb::max_scaler, dfb::max, dfb::exps>(
+            dfb_x_obj, dfb_max_scaler_obj, dfb_max_obj, dfb_exps_obj);
+#endif
+#elif defined(NUMERIC_STABLE)
         calc_numeric_stable<block_w, subblock_w, dfb::in0, dfb::max_scaler, dfb::max, dfb::exps>(
             dfb_in0_obj, dfb_max_scaler_obj, dfb_max_obj, dfb_exps_obj);
 #else
@@ -200,4 +253,8 @@ void kernel_main() {
     dfb_max_scaler_obj.pop_front(1);
 #endif
     dfb_sum_scaler_obj.pop_front(1);
+#ifdef MASK_PADDED_DATA
+    // The padding mask is a single tile re-waited on the last tile of every row; pop it once here.
+    dfb_mask_padded_obj.pop_front(1);
+#endif
 }
