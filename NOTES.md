@@ -37,3 +37,13 @@ All arms md5-distinct (knobs apply in fresh processes). Lofi fails quality and i
 Approx passes the rule (PCC>=0.9999, within 0.5 dB, borderline) and is 135 ms faster: to land default-on with =0 off switch.
 Outputs: g15blx01:/var/tmp/fasth3/t246/outA. Job B (combo) not run since lofi failed.
 The earlier #244 'both knobs inert' result was wrong: one process reused the cached program (compute_program_hash omits compute_kernel_config).
+
+## t246 land (2026-10-08)
+- Branch ttp/t246-land (worktree tt-project/worktrees/t246) = t48 @34a571c5f47 + 946a37952bd: DIFFVAE_NA_APPROX_EXP
+  on unless =0 (approx_exp_enabled() in neighborhood_attention.py, unit test test_na_approx_exp_default_on).
+  Pushed to t48 with `ttp push` (state/pushes/t246-20261008-021245-1424851.json).
+- Visual check seed 0 frame 72: approx vs def 55.2 dB, side-by-side identical to the eye, x16 difference image
+  is unstructured noise (no seams, no blocking).
+- Stills: tt-project/t246/media/{approx_seed0_f72,sbs_def_vs_approx_seed0_f72,diffx16_def_vs_approx_seed0_f72}.jpg
+  (main checkout). Video: g15blx01:/var/tmp/fasth3/t246/outA/approx/approx_seed0.mp4.
+- New quality baseline for later DiffVAE A/Bs: approx arm, PSNR 55.04/54.59 dB vs the #214 refs.
