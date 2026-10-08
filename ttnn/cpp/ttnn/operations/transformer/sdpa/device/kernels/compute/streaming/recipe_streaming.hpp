@@ -334,7 +334,7 @@ ALWI void pack_contiguous_rows(
  * Always uses pack_tile<true> at row-major positions in out_cb.
  */
 template <bool transpose, uint32_t in1_stride, uint32_t out_num_cols>
-#if defined(ARCH_WORMHOLE)
+#if defined(ARCH_WORMHOLE) && !defined(SDPA_RECIPE_RING)
 // Wormhole (as legacy streaming SDPA): keeps the callers' frames small on the 2 KiB TRISC stack.
 __attribute__((noinline))
 #endif
@@ -1131,8 +1131,12 @@ template <
     uint32_t scratch_cb,
     uint32_t normalized_out_cb,
     uint32_t scale_fp32 = 0>
-static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_streaming(
-    uint32_t cur_sum_cb, uint32_t cur_out_cb, uint32_t sbh) {
+#if defined(ARCH_WORMHOLE) && defined(TRISC_UNPACK) && defined(SDPA_RECIPE_RING)
+// Wormhole ring kernels: the normalization's callees inlined, so their frames do not stack on the fused chunk's.
+__attribute__((flatten))
+#endif
+static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void
+normalize_row_streaming(uint32_t cur_sum_cb, uint32_t cur_out_cb, uint32_t sbh) {
 #ifdef SDPA_RECIPE_FP32
 #ifdef SDPA_RECIPE_SINK
     sdpa::streaming::normalize_rows<head_dim_t_, col_identity_cb>(

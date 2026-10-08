@@ -39,6 +39,16 @@
 #else
 #define SDPA_FUSED_CHUNK_ATTR __attribute__((noinline))
 #endif
+// Wormhole unpack/pack: the chunk's steps are inlined. Called out of line, each step's closure (one pointer per
+// captured variable, ~160 B in all) and the captured variables themselves sit on the 2 KiB TRISC stack.
+#if defined(ARCH_WORMHOLE) && (defined(TRISC_UNPACK) || defined(TRISC_PACK))
+#define SDPA_FUSED_STEP __attribute__((always_inline))
+// The rare redo step too: it has one call site, and out of line its closure captures almost every local.
+#define SDPA_FUSED_REDO __attribute__((always_inline))
+#else
+#define SDPA_FUSED_STEP
+#define SDPA_FUSED_REDO SDPA_RECIPE_COLD
+#endif
 static bool fused_neg_unit_ready = false;
 #ifdef SDPA_RING_STREAM_STATE
 #include "../../recipe_state_layout.hpp"
@@ -239,7 +249,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
 #define SDPA_FUSED_LEAVE_QK() leave_qk()
 #endif
     // QK subblock (g, kb): DEST = -m_ref + Q K^T, exp in place, P and its row sums packed.
-    auto qk_subblock = [&](uint32_t g, uint32_t kb) {
+    auto qk_subblock = [&](uint32_t g, uint32_t kb) SDPA_FUSED_STEP {
         const uint32_t h = rows(g);
         const uint32_t row0 = H * g;
         const uint32_t col0 = kb * sbw;
@@ -334,7 +344,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
 #else
     constexpr uint32_t CG = 2;
 #endif
-    auto check_groups = [&](uint32_t g0, uint32_t n) {
+    auto check_groups = [&](uint32_t g0, uint32_t n) SDPA_FUSED_STEP {
         SDPA_FUSED_LEAVE_QK();
         const uint32_t last = g0 + n - 1;
         const uint32_t row_end = H * last + rows(last);
@@ -360,7 +370,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         CircularBuffer(check_cb).push_back(1);
     };
     // The verdict of the oldest issued check: does any of its groups' partial sums reach the redo threshold.
-    auto read_check = [&]() -> bool {
+    auto read_check = [&]() SDPA_FUSED_STEP -> bool {
         uint32_t redo = 0;
         UNPACK({
             CircularBuffer(check_cb).wait_front(1);
@@ -388,7 +398,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     // PV of group g over K tiles [k0, k0 + k_len), L1-accumulated into O plane `plane` (0: O, vDHt: a redone
     // group's chunk PV, written by the first piece).
     bool v_ready = false;
-    auto pv_piece = [&](uint32_t g, uint32_t k0, uint32_t k_len, uint32_t plane, bool accumulate) {
+    auto pv_piece = [&](uint32_t g, uint32_t k0, uint32_t k_len, uint32_t plane, bool accumulate) SDPA_FUSED_STEP {
         SDPA_FUSED_LEAVE_QK();
         const uint32_t h = rows(g);
         const uint32_t row0 = H * g;
@@ -426,7 +436,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     };
 
     // l += this chunk's sums for an unchanged group.
-    auto fold_sums = [&](uint32_t g) {
+    auto fold_sums = [&](uint32_t g) SDPA_FUSED_STEP {
         SDPA_FUSED_LEAVE_QK();
         const uint32_t h = rows(g);
         static_assert(H * qkt_subblock_w <= 8 || true);
@@ -451,7 +461,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     };
 
     // Publish group g's O and l rows; the last chunk normalizes them.
-    auto finish_group = [&](uint32_t g) {
+    auto finish_group = [&](uint32_t g) SDPA_FUSED_STEP {
         SDPA_FUSED_LEAVE_QK();
         const uint32_t h = rows(g);
         CircularBuffer(cur.sum).push_back(h);
@@ -482,7 +492,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
 
     // Redo group g on the reduce path (rare): scores, the real max with the theta select, P and sums,
     // its PV into plane 1, then O = O * c + PV and l = l * c + l_chunk row by row.
-    auto redo_group = [&](uint32_t g) SDPA_RECIPE_COLD {
+    auto redo_group = [&](uint32_t g) SDPA_FUSED_REDO {
         SDPA_FUSED_LEAVE_QK();
         const uint32_t h = rows(g);
         const uint32_t row0 = H * g;
@@ -719,4 +729,6 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     set_pack(cb_qkt_im);
 }
 #undef SDPA_FUSED_LEAVE_QK
+#undef SDPA_FUSED_STEP
+#undef SDPA_FUSED_REDO
 #endif
