@@ -69,13 +69,9 @@ void matmul_blocks(
 
             out_cb_obj.reserve_back(out_subblock_num_tiles);
             tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, out_cb, out_subblock_num_tiles);
-#else
             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                 pack_tile(i, out_cb);
             }
-#endif
             out_cb_obj.push_back(out_subblock_num_tiles);
             tile_regs_release();
             in1_index_offset += subblock_w;
@@ -157,13 +153,9 @@ void matmul_blocks_split(
 
             out_cb_obj.reserve_back(out_subblock_num_tiles);
             tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, out_cb, out_subblock_num_tiles);
-#else
             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                 pack_tile(i, out_cb);
             }
-#endif
             out_cb_obj.push_back(out_subblock_num_tiles);
             tile_regs_release();
             in1_index_offset += subblock_w;
@@ -226,13 +218,9 @@ void add_bias_inplace(uint32_t inout_cb, uint32_t bias_cb) {
             tile_regs_wait();
             inout_cb_obj.pop_front(cols_cur);
             inout_cb_obj.reserve_back(cols_cur);
-#ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, inout_cb, cols_cur);
-#else
             for (uint32_t j = 0; j < cols_cur; ++j) {
                 pack_tile_with_wh_destination_wait(j, inout_cb, i * cols + col_start + j);
             }
-#endif
             inout_cb_obj.push_back(cols_cur);
             tile_regs_release();
         }
@@ -256,13 +244,9 @@ void add_block_inplace_math(uint32_t inout_cb, uint32_t add_cb) {
         inout_cb_obj.pop_front(tiles_cur);
         add_cb_obj.pop_front(tiles_cur);
         inout_cb_obj.reserve_back(tiles_cur);
-#ifdef ARCH_BLACKHOLE
-        pack_block_mop(0, inout_cb, tiles_cur);
-#else
         for (uint32_t tile = 0; tile < tiles_cur; ++tile) {
             pack_tile_with_wh_destination_wait(tile, inout_cb, i + tile);
         }
-#endif
         inout_cb_obj.push_back(tiles_cur);
         tile_regs_release();
     }
