@@ -236,8 +236,10 @@ def test_moe_real_layer(mesh_device):
     if "unified_ring" in outs_by_op and "unified" in outs_by_op:
         for k, nm in ((0, "(A) dump routing"), (1, "(B) exact router")):
             rc = pr(outs_by_op["unified_ring"][k], outs_by_op["unified"][k])
+            eqb = bool(torch.equal(outs_by_op["unified_ring"][k], outs_by_op["unified"][k]))
+            mx = float((outs_by_op["unified_ring"][k] - outs_by_op["unified"][k]).abs().max())
             print(
-                f"RESULT layer {LAYER} ring-vs-copy {nm}: PCC unified_ring vs unified (per-expert copy) per row {rc}",
+                f"RESULT layer {LAYER} ring-vs-copy {nm}: PCC unified_ring vs unified (per-expert copy) per row {rc}; bit-identical {eqb}, max abs diff {mx:.3e}",
                 flush=True,
             )
             if min(rc) < 0.9998:

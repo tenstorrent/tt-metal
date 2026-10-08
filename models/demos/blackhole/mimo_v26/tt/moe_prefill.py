@@ -173,6 +173,10 @@ def uni_ring_active(md, expert_op="unified", log=print):
             why = "the chip does not have 8 live DRAM banks (ring size != 8)"
         if why:
             log(f"[moe_prefill] one-copy ring weights OFF, using the per-expert copy: {why}")
+        else:
+            log(
+                "[moe_prefill] one-copy ring weights ON: the unified prefill op reads the decode ring-layout bfp8 weights in place (no per-expert copy)"
+            )
         _UNI_RING[key] = why is None
     return _UNI_RING[key]
 
