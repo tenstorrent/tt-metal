@@ -792,11 +792,10 @@ void bind_sdpa(nb::module_& mod) {
                 UINT32 contract as slot_id; requires the metadata path (slot_id / kv_actual_isl_tensor on
                 chunked-shaped prefill) and no sliding window. Defaults to None.
             precision (ttnn.SDPAPrecision, optional): Named numerical recipe (see
-                tech_reports/FlashAttention/SDPAPrecisionRecipes.md). Not supported: sliding windows, attention
-                sinks, KV-pad rotation, circular caches. logical_n/logical_l may be scalars or device tensors. When
-                omitted, BF16 DEST runs the streaming kernel and FP32 DEST runs ACCURATE unless the call uses one of
-                the unsupported features. compute_kernel_config and exp_approx_mode are accepted and ignored; scale
-                is honored.
+                tech_reports/FlashAttention/SDPAPrecisionRecipes.md). Without KV-pad rotation, circular caches,
+                sinks or sliding windows; logical_n/logical_l may be scalars or device tensors. When omitted, BF16
+                DEST runs the streaming kernel and FP32 DEST runs ACCURATE (an error with those features).
+                compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -885,7 +884,8 @@ void bind_sdpa(nb::module_& mod) {
             logical_n (int): Logical global sequence length before sharding.
             program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
             scale (float, optional): Scale factor for QK^T. Defaults to None.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to None.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): fp32_dest_acc_en must be
+                False (latent-V ring attention has no FP32-DEST kernel). Defaults to None.
             dim (int): Dimension for ring all-gather.
             multi_device_global_semaphore (List[ttnn.GlobalSemaphore]): Global semaphores for CCL synchronization.
             num_links (int): Number of CCL links.
@@ -1014,8 +1014,8 @@ void bind_sdpa(nb::module_& mod) {
                 tech_reports/FlashAttention/SDPAPrecisionRecipes.md). Each Q chunk's online-softmax state stays
                 in L1 across ring steps and is normalized once, on the last. logical_n may be a scalar or a
                 device tensor. When omitted, the streaming kernel runs; FP32 DEST, or a blocking it cannot build,
-                runs STANDARD (ACCURATE with FP32 DEST) at op-chosen chunks on the program_config grid.
-                compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored.
+                runs STANDARD (ACCURATE with FP32 DEST) on Blackhole at op-chosen chunks on the program_config
+                grid. compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):

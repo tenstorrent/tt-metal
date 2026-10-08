@@ -473,6 +473,54 @@ def test_ring_joint_sdpa_precision_routing(ring_mesh):
             assert l2_pct(per_chip(out[0])[chip], want) < L2_PCT_BOUND["accurate"], f"causal {causal} chip {chip}"
 
 
+def test_ring_mla_fp32_dest_rejected(ring_mesh, expect_error):
+    """Ring MLA (latent V, not split) has no recipe: with FP32 DEST and no precision the host rejects it; the same call
+    with BF16 DEST runs, against an FP64 causal reference."""
+    mesh, semaphores, ccl_column = ring_mesh
+    nh, local, d, dv = 4, 256, 128, 64
+    s = RING * local
+    q, kv = randn(1, nh, s, d, seed=51), randn(1, 1, s, d, seed=52)
+    shard = ttnn.ShardTensorToMesh(mesh, dim=2)
+    tt_q, tt_kv = (
+        ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=shard)
+        for x in (q, kv)
+    )
+    backing = ttnn.allocate_tensor_on_device(
+        list(kv.shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+    )
+    call = lambda config: ttnn.transformer.ring_mla(
+        tt_q,
+        tt_kv,
+        persistent_output_buffer_kv=backing,
+        head_dim_v=dv,
+        logical_n=s,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(4, 2), q_chunk_size=128, k_chunk_size=128
+        ),
+        compute_kernel_config=config,
+        dim=2,
+        multi_device_global_semaphore=semaphores,
+        num_links=1,
+        cluster_axis=1,
+        mesh_device=mesh,
+        topology=ttnn.Topology.Linear,
+        subdevice_id=ttnn.SubDeviceId(0),
+        ccl_core_grid_offset=(ccl_column, 0),
+        use_column_major_ccl=True,
+    )
+    with expect_error(RuntimeError, "without a precision recipe requires fp32_dest_acc_en=false"):
+        call(fp32_dest_config(mesh))
+    out, _ = call(
+        ttnn.init_device_compute_kernel_config(
+            mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
+        )
+    )
+    expected = reference(q, kv, kv[..., :dv], key_mask(s, s, causal=True)).chunk(RING, dim=2)
+    for chip in range(RING):
+        got = per_chip(out)[chip][..., :dv]
+        assert l2_pct(got, expected[chip]) < L2_PCT_BOUND["standard"], f"chip {chip}"
+
+
 # Causal ring attention: batch, heads, kv_heads, local rows (Q = K), head_dim, q_chunk, k_chunk, SDPA grid. A balanced
 # ring needs Q chunks dividing half the local rows; the K half may straddle a K chunk ("straddle": 480 / 192).
 CAUSAL_CASES = {

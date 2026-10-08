@@ -421,8 +421,7 @@ void kernel_main() {
         //   gate counts a core's Q chunks of one segment. A non-causal segment spans the chain key; a causal one
         //   stays one Q head, since causal chains pool a key's per Q head segments (segment_index counts them).
         // - is_chunked: page-table read on nb transition, single-entry CB rotated forward.
-        // - use_attention_sink: pushed every iter, since compute pops Sq_chunk_t per
-        //   sdpa_inner_loop call and under global_q each iter is exactly one call.
+        // - use_attention_sink: pushed every iter; compute pops it once per Q chunk.
         uint32_t prev_nb = static_cast<uint32_t>(-1);
         uint32_t prev_segment_key = static_cast<uint32_t>(-1);
         uint32_t per_head_q_iter = 0;
