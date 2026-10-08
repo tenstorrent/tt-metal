@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.common.utility_functions import comp_pcc
+from models.experimental.bevformer.config.decoder_config import REG_XY, REG_Z
 from models.experimental.bevformer.reference.decoder import DetectionTransformerDecoder, inverse_sigmoid
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
 
@@ -26,11 +27,18 @@ CODE_SIZE = 10
 BEV_SHAPES = {"tiny": (50, 50), "base": (200, 200)}
 
 # Spread of the random weights on top of the upstream init, so the test sees trained-like
-# behaviour: sampling offsets that move a few BEV cells off the init pattern, and attention
-# logits that make the softmaxes neither uniform nor one-hot.
-SAMPLING_OFFSET_STD_PX = 2.0
-ATTENTION_LOGIT_STD = 2.0
-SELF_ATTENTION_LOGIT_STD = 2.0
+# behaviour: sampling offsets off the init pattern, attention logits that make the softmaxes
+# neither uniform nor one-hot, and refinement steps of the reference points (the (x, y) and z
+# rows of the reg branches' last Linear). Each is the largest per-layer value of the
+# BEVFormer-base checkpoint's weight spread, rounded up. A wider spread is not a stricter
+# test: every layer then moves the points by pixels in a random direction, which amplifies any
+# input error layer over layer (the trained decoder's points settle instead), until even the
+# fp32 reference stops agreeing with itself on bfloat16-rounded inputs.
+SAMPLING_OFFSET_STD_PX = 0.65
+ATTENTION_LOGIT_STD = 0.5
+SELF_ATTENTION_LOGIT_STD = 1.7
+REG_XY_WEIGHT_STD = 0.022
+REG_Z_WEIGHT_STD = 0.062
 
 # Correlation length of the random BEV features, in cells. The encoder's BEV features are
 # spatially smooth; white noise instead makes every sample position error an O(1) change in
@@ -105,7 +113,8 @@ def build_reference_decoder(seed=0):
 
 
 def build_reg_branches(seed=1):
-    """BEVFormer's per-layer box regression head: ``Linear-ReLU-Linear-ReLU-Linear(code_size)``."""
+    """BEVFormer's per-layer box regression head: ``Linear-ReLU-Linear-ReLU-Linear(code_size)``,
+    PyTorch's default init with the refinement rows rescaled to ``REG_*_WEIGHT_STD``."""
     torch.manual_seed(seed)
     branches = nn.ModuleList(
         nn.Sequential(
@@ -117,6 +126,11 @@ def build_reg_branches(seed=1):
         )
         for _ in range(NUM_LAYERS)
     )
+    with torch.no_grad():
+        for branch in branches:
+            last = branch[-1]
+            for rows, std in ((REG_XY, REG_XY_WEIGHT_STD), (REG_Z, REG_Z_WEIGHT_STD)):
+                last.weight[rows] *= std / last.weight[rows].std()
     return branches.eval().requires_grad_(False)
 
 

@@ -35,7 +35,8 @@ def _check(torch_outputs, tt_outputs):
     for torch_output, tt_output in zip(torch_outputs, tt_outputs, strict=True):
         tt_output = ttnn.to_torch(tt_output).float()
         assert torch.isfinite(tt_output).all(), "non-finite values in the decoder output"
-        assert_pcc(torch_output, tt_output, 0.99)
+        for expected_layer, actual_layer in zip(torch_output, tt_output, strict=True):
+            assert_pcc(expected_layer, actual_layer, 0.99)
 
 
 @torch.no_grad()
