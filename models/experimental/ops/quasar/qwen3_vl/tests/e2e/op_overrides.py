@@ -258,6 +258,7 @@ class HostFallback:
     source: str  # "golden" (ttnn golden function), "graph_case" (qwen3_vl_ops reference) or "hand"
     torch_fn: Callable  # (host args, host kwargs) -> tensor, list of tensors, or None when updating in place
     inplace_arg: int | None = None  # index of the device tensor the op updates in place
+    output_like_input: bool = False  # without a memory_config kwarg the op returns its input's layout (e.g. sharded)
 
 
 _GOLDENS: dict = {}  # target -> golden function, looked up on the real op before a fallback replaces it
@@ -385,7 +386,7 @@ FALLBACKS = {
             "graph_case",
             _graph_case("_ref_concat_heads_decode", lambda a, k: [()]),
         ),
-        HostFallback("ttnn.experimental.rotary_embedding_llama", "hand", _rope_llama),
+        HostFallback("ttnn.experimental.rotary_embedding_llama", "hand", _rope_llama, output_like_input=True),
         HostFallback("ttnn.experimental.paged_update_cache", "hand", _paged_update, inplace_arg=0),
         HostFallback("ttnn.experimental.paged_fill_cache", "hand", _paged_fill, inplace_arg=0),
     ]
@@ -474,6 +475,8 @@ class OverrideSession:
                 return None
             ref = next(a for a in args if isinstance(a, ttnn.Tensor))
             want = kwargs.get("memory_config")
+            if want is None and fb.output_like_input:
+                want = ref.memory_config()
 
             def upload(t):
                 r = ttnn.from_torch(

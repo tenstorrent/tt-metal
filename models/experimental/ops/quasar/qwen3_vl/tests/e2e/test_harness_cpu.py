@@ -899,3 +899,11 @@ def test_prefill_snapshot_round_trip_and_mismatch(tmp_path, expect_error):
         S.load(tmp_path, other)
     with expect_error(ValueError, "teacher_tokens"):
         S.load(tmp_path, S.meta_for(cfg, (2, 1), [42]))
+
+
+def test_rotary_fallback_keeps_input_layout():
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    # Decode rope returns its height-sharded input layout; paged_update_cache then requires a sharded input.
+    assert O.FALLBACKS["ttnn.experimental.rotary_embedding_llama"].output_like_input
+    assert not O.FALLBACKS["ttnn.linear"].output_like_input
