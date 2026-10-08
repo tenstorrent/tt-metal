@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 
 #include "ckernel_sfpu_is_fp16_zero.h"
 #include "llk_sfpu_types.h"
@@ -423,12 +424,19 @@ sfpi_inline void _calculate_comp_unary_int_(int scalar)
     }
 }
 
+// SFPGT/SFPLE, which the ordered vFloat compares lower to, order floats by sign and magnitude:
+//   -NaN < -inf < ... < -0 < +0 < ... < +inf < +NaN
+// IEEE-754 instead has -0 == +0, and every ordered compare involving a NaN is false. Two things close the gap:
+//   - _unary_comp_order_scalar_ moves the (loop-invariant) scalar to where the sign-magnitude order gives the
+//     IEEE answer, once per call.
+//   - nan_bound rejects the one NaN sign that the order would rank on the true side of the compare: +NaN for
+//     gt/ge (bound +inf), -NaN for lt/le (bound -inf). It costs one compare per row. eq/ne ignore it.
 template <SfpuType COMP_MODE>
-sfpi_inline void apply_unary_float_comp(sfpi::vFloat v, sfpi::vFloat scalar, sfpi::vFloat& out_val);
+sfpi_inline void apply_unary_float_comp(sfpi::vFloat v, sfpi::vFloat scalar, sfpi::vFloat nan_bound, sfpi::vFloat& out_val);
 
 // a[i] == scalar
 template <>
-sfpi_inline void apply_unary_float_comp<SfpuType::unary_eq>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat& out_val)
+sfpi_inline void apply_unary_float_comp<SfpuType::unary_eq>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat /*nan_bound*/, sfpi::vFloat& out_val)
 {
     v_if (v == s)
     {
@@ -443,7 +451,7 @@ sfpi_inline void apply_unary_float_comp<SfpuType::unary_eq>(sfpi::vFloat v, sfpi
 
 // a[i] != scalar
 template <>
-sfpi_inline void apply_unary_float_comp<SfpuType::unary_ne>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat& out_val)
+sfpi_inline void apply_unary_float_comp<SfpuType::unary_ne>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat /*nan_bound*/, sfpi::vFloat& out_val)
 {
     v_if (v == s)
     {
@@ -458,9 +466,9 @@ sfpi_inline void apply_unary_float_comp<SfpuType::unary_ne>(sfpi::vFloat v, sfpi
 
 // a[i] > scalar
 template <>
-sfpi_inline void apply_unary_float_comp<SfpuType::unary_gt>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat& out_val)
+sfpi_inline void apply_unary_float_comp<SfpuType::unary_gt>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat nan_bound, sfpi::vFloat& out_val)
 {
-    v_if (v > s)
+    v_if (v > s && v <= nan_bound)
     {
         out_val = 1.0f;
     }
@@ -473,9 +481,9 @@ sfpi_inline void apply_unary_float_comp<SfpuType::unary_gt>(sfpi::vFloat v, sfpi
 
 // a[i] < scalar
 template <>
-sfpi_inline void apply_unary_float_comp<SfpuType::unary_lt>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat& out_val)
+sfpi_inline void apply_unary_float_comp<SfpuType::unary_lt>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat nan_bound, sfpi::vFloat& out_val)
 {
-    v_if (v < s)
+    v_if (v < s && v >= nan_bound)
     {
         out_val = 1.0f;
     }
@@ -488,9 +496,9 @@ sfpi_inline void apply_unary_float_comp<SfpuType::unary_lt>(sfpi::vFloat v, sfpi
 
 // a[i] >= scalar
 template <>
-sfpi_inline void apply_unary_float_comp<SfpuType::unary_ge>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat& out_val)
+sfpi_inline void apply_unary_float_comp<SfpuType::unary_ge>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat nan_bound, sfpi::vFloat& out_val)
 {
-    v_if (v >= s)
+    v_if (v >= s && v <= nan_bound)
     {
         out_val = 1.0f;
     }
@@ -503,9 +511,9 @@ sfpi_inline void apply_unary_float_comp<SfpuType::unary_ge>(sfpi::vFloat v, sfpi
 
 // a[i] <= scalar
 template <>
-sfpi_inline void apply_unary_float_comp<SfpuType::unary_le>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat& out_val)
+sfpi_inline void apply_unary_float_comp<SfpuType::unary_le>(sfpi::vFloat v, sfpi::vFloat s, sfpi::vFloat nan_bound, sfpi::vFloat& out_val)
 {
-    v_if (v <= s)
+    v_if (v <= s && v >= nan_bound)
     {
         out_val = 1.0f;
     }
@@ -516,10 +524,53 @@ sfpi_inline void apply_unary_float_comp<SfpuType::unary_le>(sfpi::vFloat v, sfpi
     v_endif;
 }
 
+// Place the scalar of an ordered compare so the sign-magnitude order agrees with IEEE-754 (see above):
+//   - a zero scalar becomes -0 for lt/ge and +0 for gt/le. Then v < -0 holds exactly for v < 0 and v >= -0
+//     exactly for v >= 0, counting both zeros; v > +0 and v <= +0 likewise.
+//   - a NaN scalar becomes +NaN for gt/ge and -NaN for lt/le, the end of the order that no non-NaN v reaches.
+//     A NaN v that does reach it is rejected by nan_bound.
+template <SfpuType COMP_MODE>
+sfpi_inline sfpi::vFloat _unary_comp_order_scalar_(sfpi::vFloat s)
+{
+    constexpr int zero_sign = (COMP_MODE == SfpuType::unary_lt || COMP_MODE == SfpuType::unary_ge) ? 1 : 0;
+    constexpr int nan_sign  = (COMP_MODE == SfpuType::unary_lt || COMP_MODE == SfpuType::unary_le) ? 1 : 0;
+    v_if (sfpi::abs(s) == 0.0f)
+    {
+        s = sfpi::setsgn(s, zero_sign);
+    }
+    v_endif;
+    v_if (sfpi::is_nan(s))
+    {
+        s = sfpi::setsgn(s, nan_sign);
+    }
+    v_endif;
+    return s;
+}
+
+// Compare every Dest element against a threshold already decoded into a vFloat (defined below). Pass a vFloat:
+// a float argument converts to std::uint32_t and selects the overload below.
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+sfpi_inline void _calculate_comp_unary_(sfpi::vFloat s);
+
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_comp_unary_(std::uint32_t value)
 {
     const sfpi::vFloat s = value;
+
+    _calculate_comp_unary_<APPROXIMATION_MODE, COMP_MODE, ITERATIONS>(s);
+}
+
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS>
+sfpi_inline void _calculate_comp_unary_(sfpi::vFloat s)
+{
+    constexpr bool ordered =
+        COMP_MODE == SfpuType::unary_gt || COMP_MODE == SfpuType::unary_lt || COMP_MODE == SfpuType::unary_ge || COMP_MODE == SfpuType::unary_le;
+    constexpr float INF = std::numeric_limits<float>::infinity();
+    if constexpr (ordered)
+    {
+        s = _unary_comp_order_scalar_<COMP_MODE>(s);
+    }
+    const sfpi::vFloat nan_bound = (COMP_MODE == SfpuType::unary_lt || COMP_MODE == SfpuType::unary_le) ? -INF : INF;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
@@ -527,7 +578,7 @@ sfpi_inline void _calculate_comp_unary_(std::uint32_t value)
         sfpi::vFloat v   = sfpi::dst_reg[0];
         sfpi::vFloat val = 0.0f;
 
-        apply_unary_float_comp<COMP_MODE>(v, s, val);
+        apply_unary_float_comp<COMP_MODE>(v, s, nan_bound, val);
 
         sfpi::dst_reg[0] = val;
         sfpi::dst_reg++;
