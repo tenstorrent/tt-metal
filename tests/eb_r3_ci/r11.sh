@@ -35,6 +35,9 @@ case $1 in
              ab lnint_h $O/off_lnint_h.txt - "(sdxl_transformer and d1) or (llama8b_prefill and accuracy)"
              ab lnint_b $O/off_lnint_b.txt - "(sdxl_transformer and d1) or (llama8b_prefill and accuracy)"
            done ;;
+  clnh)    for i in 1 2 3; do ab ln_h $O/off_ln_h.txt - "(llama8b_decode and performance) or (sdxl_transformer and d2)"; done ;;
+  clnb)    for i in 1 2 3; do ab ln_b $O/off_ln_b.txt - "(llama8b_decode and performance) or (sdxl_transformer and d2)"; done ;;
+  csm)     for i in 1 2 3; do ab sm_b $O/off_sm_b.txt - "softmax_cfg"; done ;;
   smsa)    ab sm_b $O/off_sm_b.txt - "softmax_cfg"
            ab sa_b $O/off_sa_b.txt - "llama8b_sampling" ;;
 esac
