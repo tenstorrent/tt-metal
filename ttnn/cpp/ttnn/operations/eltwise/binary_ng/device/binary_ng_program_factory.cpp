@@ -93,8 +93,7 @@ TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor
 std::optional<AllShardSpecs> get_shard_specs(
     const tt::tt_metal::TensorSpec& a,
     const std::optional<tt::tt_metal::TensorSpec>& b,
-    const tt::tt_metal::TensorSpec& c,
-    NativeBlockBroadcast block_broadcast = {}) {
+    const tt::tt_metal::TensorSpec& c) {
     bool a_sharded = a.memory_config().is_sharded();
     bool b_sharded = b.has_value() && b->memory_config().is_sharded();
     bool c_sharded = c.memory_config().is_sharded();
@@ -103,7 +102,7 @@ std::optional<AllShardSpecs> get_shard_specs(
         return std::nullopt;
     }
 
-    if (!is_native_L1_sharding(a, b, c.memory_config(), block_broadcast)) {
+    if (!is_native_L1_sharding(a, b, c.memory_config())) {
         return std::nullopt;
     }
 
@@ -375,9 +374,8 @@ namespace ttnn::operations::binary_ng {
 std::optional<AllShardVolumes> get_shard_volumes(
     const tt::tt_metal::TensorSpec& a,
     const std::optional<tt::tt_metal::TensorSpec>& b,
-    const tt::tt_metal::TensorSpec& c,
-    NativeBlockBroadcast block_broadcast) {
-    const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c, block_broadcast);
+    const tt::tt_metal::TensorSpec& c) {
+    const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c);
 
     if (not shard_specs.has_value()) {
         return std::nullopt;
@@ -450,14 +448,7 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
     const auto [cD, cN, cC, cHt, cWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(c);
 
     const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(
-        a.tensor_spec(),
-        b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
-        c.tensor_spec(),
-        native_block_broadcast(
-            operation_attributes,
-            a.tensor_spec(),
-            b.has_value() ? std::optional<tt::tt_metal::DataType>{b->dtype()} : std::nullopt,
-            c.dtype()));
+        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{}, c.tensor_spec());
     const bool rt_has_sharding = shard_specs.has_value();
     auto grid = rt_has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
 
@@ -704,16 +695,6 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
 
             auto [freq, counter] = CMAKE_UNIQUE_NAMESPACE::calculate_compute_kernel_args(
                 operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
-            // A block or width shard repeats a column b over its own row width and a scalar b over the whole shard
-            if (rt_has_sharding && a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
-                if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B) {
-                    freq = c_current_shard_width;
-                    counter = 0;
-                } else if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
-                    freq = c_num_tiles_core;
-                    counter = 0;
-                }
-            }
             if (operation_attributes.binary_op_type == BinaryOpType::WHERE_TTS ||
                 operation_attributes.binary_op_type == BinaryOpType::WHERE_TST) {
                 // The kernel bit-casts float scalars as one fp32 word, so pack them as fp32.
@@ -877,14 +858,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     const auto shard_volumes = get_shard_volumes(
-        a.tensor_spec(),
-        b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
-        c.tensor_spec(),
-        native_block_broadcast(
-            operation_attributes,
-            a.tensor_spec(),
-            b.has_value() ? std::optional<tt::tt_metal::DataType>{b->dtype()} : std::nullopt,
-            c.dtype()));
+        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{}, c.tensor_spec());
     const auto has_sharding = shard_volumes.has_value();
     const auto a_sharded = has_sharding and shard_volumes->a_shard_volume.has_value();
     const auto b_sharded = has_sharding and shard_volumes->b_shard_volume.has_value();
@@ -974,7 +948,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["ISCLOSE_ATOL_RT_ARG_IDX"] = "4";
     }
 
-    // FPU op's activations, for the Blackhole block and broadcast sections
+    // FPU op's activations, for the Blackhole block sections and operand pass
     bool has_operand_activations = false;
     bool has_post_activations = false;
     bool post_zero_point = false;
@@ -1130,26 +1104,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
-    // Blackhole FPU op whose sharded a and c with a column or scalar broadcast b run DEST sections (below); with an
-    // activation (operand or post, not both) only a height-sharded a. An operand activation there runs a section at a
-    // time, so a's intermediate CB holds one.
+    // Blackhole FPU op, for the block sections and the operand pass (below)
     const bool bh_fpu_op = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
                            std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) && !post_zero_point;
-    const bool sections_activations =
-        !(has_operand_activations || has_post_activations) ||
-        (!(has_operand_activations && has_post_activations) &&
-         a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED);
-    const bool bcast_sections = bh_fpu_op && sections_activations && a_sharded && c_sharded &&
-                                operation_attributes.bcast_operand_section_fits &&
-                                (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
-                                 operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B);
-    const uint32_t bcast_section_tiles = fp32_dest_acc_en ? 4 : 8;
     // Blackhole: the operand pass covers these DEST sections, then one init (operand_pass_sections, at invoke).
     const uint32_t pre_sections = operation_attributes.operand_pass_sections;
     TT_ASSERT(pre_sections == 0 || (bh_fpu_op && has_operand_activations && num_tiles_per_cycle > 1));
-    const uint32_t a_intermediate_tiles =
-        (bcast_sections ? std::max(num_tiles_per_cycle, bcast_section_tiles) : num_tiles_per_cycle) *
-        std::max(pre_sections, 1u);
     bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
     const bool inputs_row_major =
@@ -1176,7 +1136,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                                   : a_data_format;
         uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
-            .total_size = a_intermediate_single_tile_size * a_intermediate_tiles,
+            .total_size = a_intermediate_single_tile_size * num_tiles_per_cycle * std::max(pre_sections, 1u),
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
@@ -1475,22 +1435,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["BINARY_NG_PRE_SECTIONS"] = std::to_string(pre_sections);
     }
 
-    // Blackhole: a sharded a with a column or scalar broadcast b, into a sharded c, computes a DEST section of tiles per
-    // acquire; without activations an add or sub into bf16 unpacks it with one call.
-    if (bcast_sections) {
-        compute_kernel_defines["BCAST_OTHER_CHUNK"] = fp32_dest_acc_en ? "4" : "8";
-        if (!has_operand_activations && !has_post_activations && unpack_alone_formats &&
-            c_data_format == tt::DataFormat::Float16_b) {
-            compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
-        }
-    }
-
     // Blackhole: logical_and (operand and post activations, its init per tile) keeps the per-face multiply on block
     // grids of 4 rows by 2 or 4 columns, where per tile measured slower (a scalar b from 128 tiles a core).
     const auto& a_shard_spec = a.memory_config().shard_spec();
     if (bh_fpu_op && fpu_binary_op == OpConfig::FpuBinaryOp::MUL && has_operand_activations && has_post_activations &&
-        !bcast_sections && num_tiles_per_cycle == 1 &&
-        a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED && a_shard_spec.has_value()) {
+        num_tiles_per_cycle == 1 && a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+        a_shard_spec.has_value()) {
         const auto grid_box = a_shard_spec->grid.bounding_box();
         const uint32_t grid_rows = grid_box.end_coord.y - grid_box.start_coord.y + 1;
         const uint32_t grid_cols = grid_box.end_coord.x - grid_box.start_coord.x + 1;
