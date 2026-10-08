@@ -242,6 +242,27 @@ def test_a_tolerance_rows_recorded_measurement_is_a_baseline(head_row, kind):
     assert all(c.is_regression for c in changes)
 
 
+def test_a_re_emit_that_splits_a_tolerance_row_drops_no_baseline():
+    """The emitter writes one row per ``dest`` when the two measure apart. A query that
+    leaves ``dest`` unset then matches nothing, but no measured cell -- every one names
+    in, out, approx and dest -- loses its figure, so nothing the headroom report judges
+    has loosened. Raising either half still reads as a raise."""
+    one = '{in: Float16_b, out: Float32, approx: "Yes", metric: tolerance}  # max 9 ULP'
+
+    def split(no, yes):
+        return _head(
+            '{in: Float16_b, out: Float32, approx: "Yes", dest: "No", metric: '
+            f"tolerance}}  # max {no} ULP",
+            '{in: Float16_b, out: Float32, approx: "Yes", dest: "Yes", metric: '
+            f"tolerance}}  # max {yes} ULP",
+        )
+
+    assert not [c for c in _changes(_head(one), split(9, 8)) if c.is_regression]
+    (raised,) = [c for c in _changes(_head(one), split(9, 12)) if c.is_regression]
+    assert raised.kind == "baseline_raised"
+    assert dict(raised.cell[1])["dest"] == "Yes"
+
+
 def test_deleting_a_tolerance_row_with_a_baseline_drops_it():
     """Before, a vanished tolerance row was "no loss": it gated nothing. It did hold the
     sweep's figure, and an op block on tolerance everywhere going away took every
