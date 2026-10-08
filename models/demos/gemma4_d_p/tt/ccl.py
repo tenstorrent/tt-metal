@@ -311,7 +311,49 @@ def ccl_partition_rows(tensor, mesh_config):
     return ttnn.mesh_partition(tensor, dim=2, cluster_axis=mesh_config.tp_axis)
 
 
-def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None):
+def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None, *, stable=False):
+    """Sum row-parallel projection partials across TP and keep this device's 1/TP of the rows.
+
+    With ccl_allgather(dim=2) this is an all-reduce split around the norms and residual adds, which then run on
+    1/TP of the rows.
+    """
+    if mesh_config is None or mesh_config.tp_degree <= 1:
+        return tensor
+    if not stable:
+        return _ring_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config)
+    # Ring reductions can add partials in different orders when packing moves
+    # tokens between TP destinations or communication worker ranges. Gather
+    # rank-ordered partials, then add them locally in FP32 before partitioning
+    # rows. Use elementwise adds: the NC reduction's FPU datapath truncates its
+    # intermediate FP32 values. Both batch one and packing use this same order.
+    gathered = ttnn.all_gather(tensor, dim=0, cluster_axis=mesh_config.tp_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    dtype = tensor.dtype
+    tensor.deallocate(True)
+    reduced = None
+    for rank in range(mesh_config.tp_degree):
+        partial = ttnn.slice(gathered, (rank, 0, 0, 0), (rank + 1, *tuple(gathered.shape)[1:]))
+        wide = partial
+        if dtype != ttnn.float32:
+            wide = ttnn.typecast(partial, ttnn.float32)
+            partial.deallocate(True)
+        if reduced is None:
+            reduced = wide
+        else:
+            total = ttnn.add(reduced, wide)
+            reduced.deallocate(True)
+            wide.deallocate(True)
+            reduced = total
+    gathered.deallocate(True)
+    rounded = reduced
+    if dtype != ttnn.float32:
+        rounded = ttnn.typecast(reduced, dtype, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG)
+        reduced.deallocate(True)
+    result = ccl_partition_rows(rounded, mesh_config)
+    rounded.deallocate(True)
+    return result
+
+
+def _ring_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None):
     """Sum row-parallel projection partials across TP and keep this device's 1/TP of the rows.
 
     With ccl_allgather(dim=2) this is an all-reduce split around the norms and residual adds, which then run on

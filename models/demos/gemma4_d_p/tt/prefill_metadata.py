@@ -11,10 +11,11 @@ import ttnn
 class PrefillMetadata:
     """Slot and KV position tensors whose addresses remain stable across trace replays."""
 
-    def __init__(self, mesh_config):
+    def __init__(self, mesh_config, *, clamp_valid=False):
         self.mesh_config = mesh_config
         self.slot_idx = self._device_scalar()
         self.kv_actual_global = self._device_scalar()
+        self.valid_global = self._device_scalar() if clamp_valid else None
 
     def _host_scalar(self, value):
         return ttnn.from_torch(
@@ -27,7 +28,17 @@ class PrefillMetadata:
     def _device_scalar(self):
         return ttnn.to_device(self._host_scalar(0), self.mesh_config.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    def update(self, *, slot_idx, kv_actual_global):
+    def update(self, *, slot_idx, kv_actual_global, valid_global=None):
         """Update the existing device buffers before executing or replaying a chunk."""
-        for tensor, value in ((self.slot_idx, slot_idx), (self.kv_actual_global, kv_actual_global)):
+        if self.valid_global is not None and (valid_global is None or valid_global < kv_actual_global):
+            raise ValueError("Clamped metadata requires the actual end of this request")
+        values = [(self.slot_idx, slot_idx), (self.kv_actual_global, kv_actual_global)]
+        if self.valid_global is not None:
+            values.append((self.valid_global, valid_global))
+        for tensor, value in values:
             ttnn.copy_host_to_device_tensor(self._host_scalar(value), tensor)
+
+    def deallocate(self):
+        for tensor in (self.slot_idx, self.kv_actual_global, self.valid_global):
+            if tensor is not None:
+                tensor.deallocate(True)

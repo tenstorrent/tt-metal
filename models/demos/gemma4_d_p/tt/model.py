@@ -3,6 +3,8 @@
 
 """Gemma4 Galaxy prefill model with context-parallel ring attention."""
 
+import os
+
 import torch
 
 import ttnn
@@ -189,6 +191,13 @@ class Gemma4Model:
         # When True the caller refreshes the ring metadata itself, outside any trace.
         self.prefill_metadata = PrefillMetadata(mesh_config)
         self._prefill_metadata_external = False
+        # Set before capture when comparing independent calls with packed
+        # arithmetic. Ordinary single-request execution retains its ring sum.
+        self.stable_prefill_reductions = os.getenv("GEMMA4_PREFILL_STABLE_REDUCTIONS", "0").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
         self._prefill_trace_controller = None
         self.max_seq_len = max_seq_len
         n_layers = num_layers or hf_config.num_hidden_layers
@@ -290,8 +299,10 @@ class Gemma4Model:
         on_layer_complete=None,
         d2h_service=None,
         metadata_msg=None,
+        ragged_layout=None,
+        rope_positions=None,
     ):
-        """Prefill one user's chunk and return its final decoder hidden states.
+        """Prefill a single chunk or packed request segments and return hidden states.
 
         ``hidden_states`` holds this TP device's 1/TP of the chunk's rows, as
         ``transform_and_embed_prefill_inputs_device`` returns them. The caller owns
@@ -303,16 +314,27 @@ class Gemma4Model:
             raise ValueError("Ring prefill processes one user per call")
         if d2h_service is not None and metadata_msg is None:
             raise ValueError("metadata_msg is required for D2H layer acknowledgements")
-        if not self._prefill_metadata_external:
+        if ragged_layout is not None and rope_positions is None:
+            raise ValueError("Ragged prefill requires packed absolute RoPE positions")
+        if ragged_layout is not None:
+            plan = ragged_layout.plan
+            if plan.chunk_size != self.prefill_chunk_size:
+                raise ValueError("Ragged attention must preserve the model's original cache chunk geometry")
+            if seq_len != plan.packed_size // self.mesh_config.cp_degree:
+                raise ValueError("Packed hidden-state rows do not match the CP/TP packing plan")
+            if d2h_service is not None:
+                raise ValueError("Dispatch per-request batch acknowledgements through prefill_batch")
+        if ragged_layout is None and not self._prefill_metadata_external:
             self.prefill_metadata.update(slot_idx=user_id, kv_actual_global=chunk_start_idx)
 
         gathered_rope = {}
-        if self._rope_prefill_positions is not None:
+        positions = self._rope_prefill_positions if rope_positions is None else rope_positions
+        if positions is not None:
             for layer_type in set(self.hf_config.layer_types[: len(self.layers)]):
                 cos, sin = self.rope_caches_2d[layer_type]
                 gathered_rope[layer_type] = (
-                    ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, cos, layout=ttnn.TILE_LAYOUT)),
-                    ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, sin, layout=ttnn.TILE_LAYOUT)),
+                    ttnn.unsqueeze_to_4D(ttnn.embedding(positions, cos, layout=ttnn.TILE_LAYOUT)),
+                    ttnn.unsqueeze_to_4D(ttnn.embedding(positions, sin, layout=ttnn.TILE_LAYOUT)),
                 )
 
         packed_rope_by_type = {}
@@ -336,6 +358,8 @@ class Gemma4Model:
                 chunk_start_idx=chunk_start_idx,
                 packed_global_rope=packed_rope if layer_type == "full_attention" else None,
                 packed_sliding_rope=packed_rope if layer_type == "sliding_attention" else None,
+                ragged_layout=ragged_layout,
+                stable_reductions=ragged_layout is not None or getattr(self, "stable_prefill_reductions", False),
             )
             if d2h_service is not None:
                 ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)

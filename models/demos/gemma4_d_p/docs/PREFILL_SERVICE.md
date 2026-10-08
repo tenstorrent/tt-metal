@@ -2,6 +2,10 @@
 
 The service supports **Gemma4-31B-it, Blackhole 8×4, 262144 tokens per slot, 8192-token chunks, and batch 1**, with up to six resident KV slots. Defaults are in [the model manifest](../tt/runners/manifest.json).
 
+Queue-aware callers can opt into [packed multi-request prefill](RAGGED_PREFILL.md)
+through `Gemma4PrefillRuntime.prefill_batch` or its host request scheduler. The
+blocking socket runner keeps its existing batch-one protocol.
+
 Run this setup from the repository root in both terminals:
 
 ```bash

@@ -8,6 +8,7 @@ from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_
 from models.demos.gemma4_d_p.tt.ccl import ccl_reduce_scatter_rows
 from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config, prefill_matmul_program_config
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
+from models.demos.gemma4_d_p.tt.ragged_prefill import map_packed_rows
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
 
@@ -106,9 +107,13 @@ class MLP:
         )
         return program_config, compute_kernel_config
 
-    def _project(self, hidden_states, weight, memory_config, gelu=False):
+    def _project(self, hidden_states, weight, memory_config, gelu=False, max_rows=None):
         """hidden_states @ weight, on the explicit config when there is one and the core grid otherwise.
         With gelu, the GELU is fused either way."""
+        if max_rows is not None:
+            return map_packed_rows(
+                hidden_states, max_rows, lambda rows: self._project(rows, weight, memory_config, gelu)
+            )
         fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH) if gelu else None
         program_config, compute_kernel_config = self._matmul_configs(hidden_states, weight, fused_activation)
         return ttnn.linear(
@@ -121,19 +126,19 @@ class MLP:
             memory_config=memory_config,
         )
 
-    def __call__(self, hidden_states):
+    def __call__(self, hidden_states, max_rows=None, stable_reductions=False):
         """Apply column-parallel gate/up projections and row-parallel down projection."""
         # All three intermediates are short-lived, deallocated in this call, and
         # touch no SDPA input and no collective, so they are L1 candidates.
         act_mc = prefill_short_lived_memcfg()
 
-        gate = self._project(hidden_states, self.gate_proj, act_mc, gelu=True)
-        up = self._project(hidden_states, self.up_proj, act_mc)
+        gate = self._project(hidden_states, self.gate_proj, act_mc, gelu=True, max_rows=max_rows)
+        up = self._project(hidden_states, self.up_proj, act_mc, max_rows=max_rows)
         hidden = ttnn.mul(gate, up, memory_config=act_mc)
         gate.deallocate(True)
         up.deallocate(True)
-        # Pack output to DRAM ahead of the reduce-scatter.
-        output = self._project(hidden, self.down_proj, ttnn.DRAM_MEMORY_CONFIG)
+        # Pack output to DRAM ahead of the TP reduction.
+        output = self._project(hidden, self.down_proj, ttnn.DRAM_MEMORY_CONFIG, max_rows=max_rows)
         hidden.deallocate(True)
-        output = ccl_reduce_scatter_rows(output, self.mesh_config, self.ccl_manager)
+        output = ccl_reduce_scatter_rows(output, self.mesh_config, self.ccl_manager, stable=stable_reductions)
         return output

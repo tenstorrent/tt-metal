@@ -4,26 +4,25 @@
 """Gemma4 context-parallel prefill attention with local and packed global ring caches."""
 
 import ttnn
-
 from models.demos.gemma4_d_p.tt.ccl import ccl_reduce_scatter_rows
-
-from .weights import load_attention_weights
-from .ring_prefill import init_global_ring_kv_cache, init_sliding_ring_kv_cache
 
 from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_ROTARY_DIM, pack_global_kv_device
 from .operations import (
     apply_per_head_norm,
+    apply_projection,
     apply_qkv_projection,
-    projection_matmul_configs,
     prefill_short_lived_memcfg,
     split_qkv_heads_prefill,
 )
 from .ring_prefill import (
     global_ring_prefill_attention,
+    init_global_ring_kv_cache,
+    init_sliding_ring_kv_cache,
     sliding_ring_prefill_attention,
     write_chunk_to_global_ring_cache,
     write_chunk_to_sliding_ring_cache,
 )
+from .weights import load_attention_weights
 
 # One buffer pair for each of the five sliding layers between global layers.
 NUM_SWA_HALO_BUFFER_PAIRS = 5
@@ -128,6 +127,8 @@ class Gemma4Attention:
         chunk_start_idx=0,
         packed_global_rope=None,
         packed_sliding_rope=None,
+        ragged_layout=None,
+        stable_reductions=False,
     ):
         """Write a user's chunk and attend its cached prefix."""
         if self.ring_kv_cache is None:
@@ -135,7 +136,8 @@ class Gemma4Attention:
         tp = self.mesh_config.tp_degree
         chunk_offset = int(chunk_start_idx)
         kv_tied = self.config.is_kv_tied
-        xqkv = apply_qkv_projection(hidden_states, self.weights, kv_tied=kv_tied)
+        reference_rows = ragged_layout.plan.chunk_size // self.mesh_config.cp_degree if ragged_layout else None
+        xqkv = apply_qkv_projection(hidden_states, self.weights, kv_tied=kv_tied, reference_rows=reference_rows)
 
         # Short-lived prefill activations in L1 when GEMMA4_PREFILL_L1_ACT=1 (Qwen36
         # #48861). o_proj / allreduce stay DRAM (CB clash with CCL).
@@ -212,9 +214,7 @@ class Gemma4Attention:
                 k_unrotated, sliding_cos, sliding_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
             )
             k_unrotated.deallocate(True)
-        sliding_window_size = self.config.sliding_window_size
         if is_global:
-            packed_q = tt_q
             packed_kv = pack_global_kv_device(
                 tt_v,
                 self.weights.k_norm_rotary_weight,
@@ -225,6 +225,45 @@ class Gemma4Attention:
                 value_is_packed=True,
                 memory_config=act_mc,
             )
+        else:
+            packed_kv = None
+
+        if ragged_layout is None:
+            tt_sdpa = self._attend_chunk(tt_q, tt_k, tt_v, packed_kv, prefill_metadata, chunk_offset)
+        else:
+            # Projection, normalization, both RoPE variants and global KV packing
+            # operate once on the shared rows. Split before any cache write.
+            tensors = (tt_q, packed_kv) if is_global else (tt_q, tt_k, tt_v)
+            gathered = [ragged_layout.gather(tensor) for tensor in tensors]
+            segments = []
+            for lane, metadata in enumerate(ragged_layout.metadata):
+                local = [ragged_layout.split(tensor, lane) for tensor in gathered]
+                q, k, v, kv = (local[0], None, None, local[1]) if is_global else (*local, None)
+                output = self._attend_chunk(q, k, v, kv, metadata, 0)
+                for tensor in local:
+                    tensor.deallocate(True)
+                segments.append(ragged_layout.compact(output, lane))
+            for tensor in gathered:
+                tensor.deallocate(True)
+            tt_sdpa = ragged_layout.concatenate(segments)
+        for tensor in (tt_q, tt_k, tt_v, packed_kv):
+            if tensor is not None:
+                tensor.deallocate(True)
+
+        # Concat heads + apply out proj + all_reduce
+        tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_sdpa.deallocate(True)
+        projected = apply_projection(tt_out, self.weights.o_proj, reference_rows=reference_rows)
+        tt_out.deallocate(True)
+        tt_out = ccl_reduce_scatter_rows(projected, self.mesh_config, self.ccl_manager, stable=stable_reductions)
+
+        return tt_out
+
+    def _attend_chunk(self, tt_q, tt_k, tt_v, packed_kv, prefill_metadata, chunk_offset):
+        """One request, with Q/K/V restored to the durable cache's chunk geometry."""
+        is_global = not self.config.is_sliding
+        sliding_window_size = self.config.sliding_window_size
+        if is_global:
             write_chunk_to_global_ring_cache(
                 self.ring_kv_cache.kv,
                 packed_kv,
@@ -235,7 +274,6 @@ class Gemma4Attention:
                 prefill_metadata=prefill_metadata,
             )
         else:
-            packed_q = None
             write_chunk_to_sliding_ring_cache(
                 self.ring_kv_cache.k,
                 self.ring_kv_cache.v,
@@ -255,11 +293,11 @@ class Gemma4Attention:
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
-        num_local_kv_heads_ring = tt_v.shape[1]
+        num_local_kv_heads_ring = (packed_kv if is_global else tt_v).shape[1]
         ring_logical_n = self.ring_max_seq_len
         if is_global:
             tt_sdpa = global_ring_prefill_attention(
-                packed_q,
+                tt_q,
                 self.ring_kv_cache.kv,
                 mesh_config=self.mesh_config,
                 prefill_metadata=prefill_metadata,
@@ -273,7 +311,6 @@ class Gemma4Attention:
                 layer_idx=self.ring_layer_idx,
                 num_layers=self.ring_num_layers,
             )
-            packed_kv.deallocate(True)
         else:
             tt_sdpa = sliding_ring_prefill_attention(
                 tt_q,
@@ -294,18 +331,4 @@ class Gemma4Attention:
                 layer_idx=self.ring_layer_idx,
                 num_layers=self.ring_num_layers,
             )
-        tt_q.deallocate(True)
-        if tt_k is not None:
-            tt_k.deallocate(True)
-        tt_v.deallocate(True)
-
-        # Concat heads + apply out proj + all_reduce
-        tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        program_config, compute_kernel_config = projection_matmul_configs(tt_out, self.weights.o_proj)
-        projected = ttnn.linear(
-            tt_out, self.weights.o_proj, program_config=program_config, compute_kernel_config=compute_kernel_config
-        )
-        tt_out.deallocate(True)
-        tt_out = ccl_reduce_scatter_rows(projected, self.mesh_config, self.ccl_manager)
-
-        return tt_out
+        return tt_sdpa

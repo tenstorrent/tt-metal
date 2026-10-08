@@ -13,7 +13,8 @@ from models.demos.gemma4_d_p.tt.model import Gemma4Model
 
 
 @pytest.mark.parametrize("ack_mode", ["callback", "segmented_trace", "socket"])
-def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
+@pytest.mark.parametrize("stable_reductions", [False, True])
+def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode, stable_reductions):
     events = []
     hidden = SimpleNamespace(shape=(1, 1, 1024, 64))
     model = object.__new__(Gemma4Model)
@@ -31,6 +32,7 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
     )
     model.mesh_config = SimpleNamespace(cp_degree=8, tp_degree=1)
     model.ccl_manager = None
+    model.stable_prefill_reductions = stable_reductions
     model._get_rope_mats = lambda idx, **kwargs: (idx, idx)
 
     def layer(idx):
@@ -38,6 +40,7 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
             assert kwargs["prefill_metadata"] is model.prefill_metadata
             assert kwargs["chunk_start_idx"] == 8192
             assert kwargs["rope_mats"] == (idx, idx)
+            assert kwargs["stable_reductions"] is stable_reductions
             events.append(("write", idx))
             return x
 

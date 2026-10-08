@@ -99,13 +99,24 @@ class Gemma4DecoderLayer:
         chunk_start_idx=0,
         packed_global_rope=None,
         packed_sliding_rope=None,
+        ragged_layout=None,
+        stable_reductions=False,
     ):
         """Prefill one CP-sharded chunk."""
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
         # hidden_states holds this TP device's 1/TP of the rows: gather the normed rows before each block, whose
-        # closing reduce-scatter returns 1/TP again.
+        # closing reduction partitions the rows across TP again.
+        norm_options = (
+            {
+                "reference_rows": ragged_layout.plan.chunk_size
+                // self.mesh_config.cp_degree
+                // self.mesh_config.tp_degree
+            }
+            if ragged_layout is not None
+            else {}
+        )
         residual = hidden_states
-        normed = self.input_layernorm.forward(hidden_states)
+        normed = self.input_layernorm.forward(hidden_states, **norm_options)
         normed = ccl_allgather(normed, self.mesh_config, self.ccl_manager, dim=2)
         attn_output = self.self_attn(
             normed,
@@ -114,24 +125,32 @@ class Gemma4DecoderLayer:
             chunk_start_idx=chunk_start_idx,
             packed_global_rope=packed_global_rope,
             packed_sliding_rope=packed_sliding_rope,
+            ragged_layout=ragged_layout,
+            stable_reductions=stable_reductions,
         )
 
         act_mc = prefill_short_lived_memcfg()
-        attn_output = self.post_attention_layernorm.forward(attn_output, memory_config=act_mc)
+        attn_output = self.post_attention_layernorm.forward(attn_output, memory_config=act_mc, **norm_options)
         hidden_states = ttnn.add(residual, attn_output, memory_config=act_mc)
         residual.deallocate(True)
         attn_output.deallocate(True)
 
         # 2. Dense MLP block
         residual = hidden_states
-        normed = self.pre_feedforward_layernorm.forward(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        normed = self.pre_feedforward_layernorm.forward(
+            hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG, **norm_options
+        )
         normed = ccl_allgather(normed, self.mesh_config, self.ccl_manager, dim=2)
-        mlp_output = self.mlp(normed)
+        mlp_output = self.mlp(
+            normed,
+            max_rows=ragged_layout.plan.chunk_size // self.mesh_config.cp_degree if ragged_layout else None,
+            stable_reductions=stable_reductions,
+        )
         normed.deallocate(True)
 
         hidden_states = mlp_output
 
-        normed = self.post_feedforward_layernorm.forward(hidden_states, memory_config=act_mc)
+        normed = self.post_feedforward_layernorm.forward(hidden_states, memory_config=act_mc, **norm_options)
         hidden_states = ttnn.add(
             residual,
             normed,

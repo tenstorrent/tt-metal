@@ -19,6 +19,7 @@ import os
 
 import ttnn
 from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config, prefill_matmul_program_config
+from models.demos.gemma4_d_p.tt.ragged_prefill import map_packed_rows
 
 from .weights import AttentionWeights
 
@@ -38,7 +39,7 @@ def projection_math_fidelity(rows):
     return ttnn.MathFidelity.LoFi if rows >= _LOFI_PROJECTION_MIN_ROWS else ttnn.MathFidelity.HiFi2
 
 
-def projection_matmul_configs(hidden_states, weight):
+def projection_matmul_configs(hidden_states, weight, reference_rows=None):
     """(program_config, compute_kernel_config) for an attention projection: explicit blocking with fp32
     accumulation, or (None, None) for ttnn's defaults.
 
@@ -56,7 +57,7 @@ def projection_matmul_configs(hidden_states, weight):
         return None, None
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=projection_math_fidelity(hidden_states.shape[-2]),
+        math_fidelity=projection_math_fidelity(reference_rows or hidden_states.shape[-2]),
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
@@ -64,17 +65,26 @@ def projection_matmul_configs(hidden_states, weight):
     return program_config, compute_kernel_config
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
+def apply_projection(hidden_states, weight, memory_config=None, reference_rows=None):
+    def project(rows):
+        program_config, compute_kernel_config = projection_matmul_configs(rows, weight, reference_rows)
+        return ttnn.linear(
+            rows,
+            weight,
+            memory_config=memory_config,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+    return map_packed_rows(hidden_states, reference_rows, project)
+
+
+def apply_qkv_projection(
+    hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False, reference_rows=None
+):
     """Project to QKV, or QK when kv_tied selects the narrow tied weight."""
     w_tensor = weights.wqk if kv_tied else weights.wqkv
-    program_config, compute_kernel_config = projection_matmul_configs(hidden_states, w_tensor)
-    return ttnn.linear(
-        hidden_states,
-        w_tensor,
-        memory_config=memory_config,
-        program_config=program_config,
-        compute_kernel_config=compute_kernel_config,
-    )
+    return apply_projection(hidden_states, w_tensor, memory_config, reference_rows)
 
 
 def split_qkv_heads_prefill(

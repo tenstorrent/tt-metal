@@ -6,6 +6,7 @@ import functools
 from torch import nn
 
 import ttnn
+from models.demos.gemma4_d_p.tt.ragged_prefill import map_packed_rows
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
 # Block-shard geometry: core columns split the width, up to 8 rows of cores split the rows.
@@ -97,8 +98,29 @@ class RMSNorm(nn.Module):
             packer_l1_acc=False,
         )
 
-    def forward(self, x, memory_config=None):
+    def forward(self, x, memory_config=None, reference_rows=None):
+        if reference_rows is not None and x.shape[-2] > reference_rows:
+            return map_packed_rows(x, reference_rows, lambda rows: self.forward(rows, memory_config, reference_rows))
         geometry = _block_shard_geometry(x.padded_shape[-2], x.padded_shape[-1])
+        original_rows = x.shape[-2]
+        padded_input = None
+        if reference_rows is not None:
+            # Packing must not change the width reduction used by batch one.
+            # An odd number of tile rows otherwise selects the interleaved
+            # implementation, whose rounding differences accumulate in depth.
+            reference = _block_shard_geometry(reference_rows, x.padded_shape[-1])
+            if reference is not None:
+                block_h, block_w, _, grid_x = reference
+                rows_t = x.padded_shape[-2] // ttnn.TILE_SIZE
+                block_h = max(block_h, ttnn.core.divup(rows_t, _MAX_GRID_Y))
+                grid_y = ttnn.core.divup(rows_t, block_h)
+                geometry = (block_h, block_w, grid_y, grid_x)
+                padded_rows = block_h * grid_y * ttnn.TILE_SIZE
+                if padded_rows != original_rows:
+                    padded_input = ttnn.pad(x, [(0, 0), (0, 0), (0, padded_rows - original_rows), (0, 0)], 0.0)
+                    x = padded_input
+            else:
+                geometry = None
         if geometry is None:
             return ttnn.rms_norm(
                 x,
@@ -121,4 +143,9 @@ class RMSNorm(nn.Module):
         x_sharded.deallocate(True)
         out = ttnn.sharded_to_interleaved(out_sharded, memory_config or ttnn.DRAM_MEMORY_CONFIG)
         out_sharded.deallocate(True)
+        if padded_input is not None:
+            padded_input.deallocate(True)
+            trimmed = ttnn.slice(out, (0, 0, 0, 0), (*tuple(out.shape)[:2], original_rows, out.shape[-1]))
+            out.deallocate(True)
+            out = trimmed
         return out

@@ -1,0 +1,221 @@
+{
+  "date_utc": "2026-10-08",
+  "model": "google/gemma-4-31B-it",
+  "architecture": "blackhole",
+  "mesh": [
+    8,
+    4
+  ],
+  "layers": 60,
+  "chunk_size": 8192,
+  "max_seq_len": 32768,
+  "allocated_slots": 4,
+  "timings_include": [
+    "host packing",
+    "token/position/metadata staging",
+    "CP redistribution",
+    "slicing/padding/concatenation",
+    "device execution",
+    "device synchronization"
+  ],
+  "timings_exclude": [
+    "host hidden-state downloads",
+    "external KV migration"
+  ],
+  "cold_timing_note": "Weights and JIT cache are warm; the full-chunk shape was also exercised in correctness checks before timing.",
+  "correctness": {
+    "boundaries": 7,
+    "requests": 12,
+    "comparisons": 1332,
+    "bitwise_equal": 1332,
+    "trace_allocation_tracking": true,
+    "reference_arithmetic": "fixed-order FP32"
+  },
+  "samples": [
+    {
+      "lengths": [
+        33,
+        1025
+      ],
+      "repeat": 0,
+      "layers": 60,
+      "cold_seconds": 9.976561585004674,
+      "independent_seconds": 0.6147124010021798,
+      "packed_seconds": 0.2666788279893808,
+      "independent_request_seconds": [
+        0.30735354201169685,
+        0.6147124010021798
+      ],
+      "packed_request_seconds": [
+        0.2666788279893808,
+        0.2666788279893808
+      ],
+      "useful_tokens": 1058,
+      "packed_rows": 2048,
+      "independent_tokens_per_second": 1721.130073633,
+      "packed_tokens_per_second": 3967.319070571773
+    },
+    {
+      "lengths": [
+        33,
+        1025
+      ],
+      "repeat": 1,
+      "layers": 60,
+      "cold_seconds": 9.976561585004674,
+      "independent_seconds": 0.6146403930033557,
+      "packed_seconds": 0.26989838600275107,
+      "independent_request_seconds": [
+        0.30728589999489486,
+        0.6146403930033557
+      ],
+      "packed_request_seconds": [
+        0.26989838600275107,
+        0.26989838600275107
+      ],
+      "useful_tokens": 1058,
+      "packed_rows": 2048,
+      "independent_tokens_per_second": 1721.3317120767617,
+      "packed_tokens_per_second": 3919.993800886293
+    },
+    {
+      "lengths": [
+        33,
+        1025
+      ],
+      "repeat": 2,
+      "layers": 60,
+      "cold_seconds": 9.976561585004674,
+      "independent_seconds": 0.6148087850015145,
+      "packed_seconds": 0.27144911099458113,
+      "independent_request_seconds": [
+        0.3074115079944022,
+        0.6148087850015145
+      ],
+      "packed_request_seconds": [
+        0.27144911099458113,
+        0.27144911099458113
+      ],
+      "useful_tokens": 1058,
+      "packed_rows": 2048,
+      "independent_tokens_per_second": 1720.8602508784804,
+      "packed_tokens_per_second": 3897.5997973377803
+    },
+    {
+      "lengths": [
+        8192,
+        8192
+      ],
+      "repeat": 0,
+      "layers": 60,
+      "cold_seconds": 7.207497274997877,
+      "independent_seconds": 0.6166488279995974,
+      "packed_seconds": 0.9191006340261083,
+      "independent_request_seconds": [
+        0.30750509499921463,
+        0.6166488279995974
+      ],
+      "packed_request_seconds": [
+        0.9191006340261083,
+        0.9191006340261083
+      ],
+      "useful_tokens": 16384,
+      "packed_rows": 16384,
+      "independent_tokens_per_second": 26569.417237278358,
+      "packed_tokens_per_second": 17826.121964719034
+    },
+    {
+      "lengths": [
+        8192,
+        8192
+      ],
+      "repeat": 1,
+      "layers": 60,
+      "cold_seconds": 7.207497274997877,
+      "independent_seconds": 0.620733076997567,
+      "packed_seconds": 0.9223468020209111,
+      "independent_request_seconds": [
+        0.3130114960076753,
+        0.620733076997567
+      ],
+      "packed_request_seconds": [
+        0.9223468020209111,
+        0.9223468020209111
+      ],
+      "useful_tokens": 16384,
+      "packed_rows": 16384,
+      "independent_tokens_per_second": 26394.597947394737,
+      "packed_tokens_per_second": 17763.38353870993
+    },
+    {
+      "lengths": [
+        8192,
+        8192
+      ],
+      "repeat": 2,
+      "layers": 60,
+      "cold_seconds": 7.207497274997877,
+      "independent_seconds": 0.6193034540046938,
+      "packed_seconds": 0.9236048449820373,
+      "independent_request_seconds": [
+        0.31154057101230137,
+        0.6193034540046938
+      ],
+      "packed_request_seconds": [
+        0.9236048449820373,
+        0.9236048449820373
+      ],
+      "useful_tokens": 16384,
+      "packed_rows": 16384,
+      "independent_tokens_per_second": 26455.52821327527,
+      "packed_tokens_per_second": 17739.18801857156
+    }
+  ],
+  "canonical_baseline": {
+    "context_tokens": 262144,
+    "chunk_size": 8192,
+    "layers": 60,
+    "passed": true,
+    "device_seconds": 6.8474,
+    "wall_seconds": 6.9382,
+    "useful_tokens_per_second": 37782,
+    "test": "demo/text_demo_prefill.py::test_prefill_long_context_traced[blackhole-ctx_256k-chunk8192-text-8x4]",
+    "timeout_seconds": 3600,
+    "arithmetic": "original ring reduction (default)"
+  },
+  "comparison_arithmetic": "Fixed-order FP32 elementwise TP reduction in both independent and packed calls; default ring reduction is measured separately.",
+  "gpu_accuracy": {
+    "test": "tests/test_prefill_migration.py::test_prefill_migration[mock-8k]",
+    "tokens": 8192,
+    "passed": false,
+    "required": {
+      "overall_pcc_min": 0.978,
+      "worst_head_pcc_min": 0.928,
+      "relative_rmse_max_exclusive": 0.208
+    },
+    "original_reduction": {
+      "overall_pcc": 0.9819750785827637,
+      "relative_rmse": 0.19015738788458025,
+      "worst_head": {
+        "layer": 39,
+        "head": 11,
+        "cache_type": "sliding_v",
+        "pcc": 0.9188033938407898
+      }
+    },
+    "fp32": {
+      "overall_pcc": 0.9775591492652893,
+      "relative_rmse": 0.21217284977253742,
+      "worst_head": {
+        "layer": 39,
+        "head": 11,
+        "cache_type": "sliding_v",
+        "pcc": 0.8978687524795532
+      }
+    }
+  },
+  "external_migration": {
+    "run": false,
+    "reason": "Documented external endpoint/client was not installed. Device source-address byte checks passed; transfer latency and destination-byte verification were not measured."
+  }
+}
