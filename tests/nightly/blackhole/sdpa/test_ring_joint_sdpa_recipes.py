@@ -18,6 +18,8 @@ from models.common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     L2_PCT_BOUND,
     VARIANTS,
+    fp32_dest_config,
+    key_mask,
     l2_pct,
     reference,
     stored,
@@ -149,7 +151,7 @@ def run_ring(
         joint_strategy="rear",
         logical_n=logical_n,
         logical_l=logical_l,
-        is_causal=False,
+        is_causal=options.pop("is_causal", False),
         is_cross=is_cross,
         program_config=ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid, q_chunk_size=q_chunk, k_chunk_size=k_chunk
@@ -327,3 +329,59 @@ def test_ring_joint_sdpa_recipe_legacy_arguments(ring_mesh, variant):
     for chip in range(RING):
         expected = reference(q.chunk(RING, dim=2)[chip], k, v, scale=0.0625)
         assert l2_pct(per_chip(out[0])[chip], expected) < L2_PCT_BOUND[variant], f"chip {chip}"
+
+
+def test_ring_joint_sdpa_precision_routing(ring_mesh):
+    """Without precision, FP32 dest runs ACCURATE when the ring recipe has the call's features: bitwise the explicit
+    ACCURATE call (sharded joint), and BFP8 Q/K/V (Q widened to BF16, outputs narrowed back). A causal FP32 call
+    keeps the legacy loop until the ring recipe takes causal attention."""
+    mesh, semaphores, ccl_column = ring_mesh
+    fp32 = fp32_dest_config(mesh)
+    inputs, joints, backing, logical_n, kwargs, expected, _ = ring_case(mesh, "accurate", "joint_sharded")
+    call = lambda **extra: run_ring(
+        mesh, semaphores, ccl_column, inputs, joints, backing, logical_n=logical_n, **kwargs, **extra
+    )
+    routed, explicit = call(compute_kernel_config=fp32), call(precision=ttnn.SDPAPrecision.ACCURATE)
+    for chip in range(RING):
+        got = torch.cat([per_chip(routed[0])[chip], per_chip(routed[1])[chip]], dim=2)
+        assert torch.equal(got, torch.cat([per_chip(explicit[0])[chip], per_chip(explicit[1])[chip]], dim=2))
+        assert l2_pct(got, expected(chip)) < L2_PCT_BOUND["accurate"], f"chip {chip}"
+
+    b, nh, nkv, q_local, k_local, d, q_chunk, k_chunk, _, _, grid = RING_CASES["gqa_batch2"]
+    q = stored(randn(b, nh, RING * k_local, d, seed=20), ttnn.bfloat8_b)
+    k, v = (stored(randn(b, nkv, RING * k_local, d, seed=s), ttnn.bfloat8_b) for s in (21, 22))
+    shard = ttnn.ShardTensorToMesh(mesh, dim=2)
+    packed = [
+        ttnn.from_torch(x, dtype=ttnn.bfloat8_b, device=mesh, layout=ttnn.TILE_LAYOUT, mesh_mapper=shard)
+        for x in (q, k, v)
+    ]
+    packed_backing = [
+        ttnn.allocate_tensor_on_device(list(k.shape), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+        for _ in range(2)
+    ]
+    for causal in (False, True):
+        out = run_ring(
+            mesh,
+            semaphores,
+            ccl_column,
+            packed,
+            [None] * 3,
+            packed_backing,
+            grid=grid,
+            q_chunk=q_chunk,
+            k_chunk=k_chunk,
+            logical_n=RING * k_local,
+            logical_l=0,
+            is_cross=False,
+            is_causal=causal,
+            compute_kernel_config=fp32,
+        )
+        assert out[0].dtype == ttnn.bfloat8_b
+        for chip in range(RING):
+            rows = RING * k_local
+            mask = key_mask(k_local, rows, causal=True, q_offset=chip * k_local) if causal else None
+            want = reference(q.chunk(RING, dim=2)[chip], k, v, mask)
+            rounding = 1.5 * l2_pct(stored(want.bfloat16(), ttnn.bfloat8_b), want)
+            # The causal call still runs the legacy FP32 loop (about 2% here): hold it to STANDARD's bound.
+            bound = L2_PCT_BOUND["standard" if causal else "accurate"] + rounding
+            assert l2_pct(per_chip(out[0])[chip], want) < bound, f"causal {causal} chip {chip}"
