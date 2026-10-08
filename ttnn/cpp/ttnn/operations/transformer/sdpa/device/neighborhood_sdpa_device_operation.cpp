@@ -163,6 +163,11 @@ bool NeighborhoodSDPAOperation::kv_ring_requested() {
     return value == nullptr || std::string_view(value) != "0";
 }
 
+bool NeighborhoodSDPAOperation::edge_order_requested() {
+    const char* value = std::getenv("DIFFVAE_NA_EDGE_ORDER");
+    return value != nullptr && std::string_view(value) == "1";
+}
+
 uint32_t NeighborhoodSDPAOperation::ablation_requested() {
     const char* value = std::getenv("DIFFVAE_NA_ABLATE");
     if (value == nullptr) {
@@ -225,6 +230,7 @@ ttsl::hash::hash_t NeighborhoodSDPAOperation::compute_program_hash(
             : std::nullopt,
         tensors.output_tensor.has_value() ? tensors.output_tensor->memory_config() : attributes.output_memory_config,
         kv_ring_requested(),
+        edge_order_requested(),
         ablation_requested());
 }
 

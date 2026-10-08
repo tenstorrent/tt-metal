@@ -279,6 +279,21 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     reader_compile_args[kernel_args::reader_arg::ablate_mask] =
         (NeighborhoodSDPAOperation::ablation_requested() & 4u) != 0 ? 1u : 0u;
 
+    // Edge-grouped work order: a chunk's H or W clamp differs from the interior one when its
+    // window reaches past the volume edge, which only the first and last `depth` chunks can do.
+    uint32_t edge_order_height = 0, edge_order_width = 0;
+    if (NeighborhoodSDPAOperation::edge_order_requested()) {
+        const auto edge_depth = [](uint32_t window, uint32_t chunk_sites) {
+            return (window / 2 + chunk_sites - 1) / chunk_sites;
+        };
+        edge_order_height =
+            edge_depth(config.context_window.height(), config.brick.height() * config.query_chunk_bricks.height());
+        edge_order_width =
+            edge_depth(config.context_window.width(), config.brick.width() * config.query_chunk_bricks.width());
+    }
+    reader_compile_args[kernel_args::reader_arg::edge_order_height] = edge_order_height;
+    reader_compile_args[kernel_args::reader_arg::edge_order_width] = edge_order_width;
+
     // Accessor args come after the named block, in the order the reader constructs them.
     tt::tt_metal::TensorAccessorArgs(tensors.query_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(tensors.key_tensor.buffer()).append_to(reader_compile_args);
@@ -302,6 +317,8 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     writer_compile_args[kernel_args::writer_arg::volume_bricks_time] = plan.query_bricks.time();
     writer_compile_args[kernel_args::writer_arg::volume_bricks_height] = plan.query_bricks.height();
     writer_compile_args[kernel_args::writer_arg::volume_bricks_width] = plan.query_bricks.width();
+    writer_compile_args[kernel_args::writer_arg::edge_order_height] = edge_order_height;
+    writer_compile_args[kernel_args::writer_arg::edge_order_width] = edge_order_width;
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_args);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_enabled, packer_l1_accumulate, dst_full_sync_enabled] =

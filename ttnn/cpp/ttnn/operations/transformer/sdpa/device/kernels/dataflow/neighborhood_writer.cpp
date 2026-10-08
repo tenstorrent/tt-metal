@@ -12,6 +12,7 @@
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_chunk_layout.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_edge_order.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_args.hpp"
 
 // Drains one query brick's normalized output per work item.
@@ -50,6 +51,8 @@ void kernel_main() {
         get_compile_time_arg_val(kernel_args::writer_arg::volume_bricks_height),
         get_compile_time_arg_val(kernel_args::writer_arg::volume_bricks_width));
     constexpr uint32_t chunk_count = volume_chunks.time() * volume_chunks.height() * volume_chunks.width();
+    constexpr uint32_t edge_order_height = get_compile_time_arg_val(kernel_args::writer_arg::edge_order_height);
+    constexpr uint32_t edge_order_width = get_compile_time_arg_val(kernel_args::writer_arg::edge_order_width);
 
     constexpr auto output_accessor_args = TensorAccessorArgs<kernel_args::writer_arg::COUNT>();
 
@@ -84,7 +87,11 @@ void kernel_main() {
     // within-tile row reduction is deferred out of the KV loop and done as a matmul here.
     generate_bcast_col_scalar(CircularBuffer(kernel_args::cb_column_identity), reduce_identity_bits);
 
-    for (uint32_t work_item = work_item_start; work_item < work_item_start + work_item_count; ++work_item) {
+    // Must match the reader's order: the compute kernel hands over outputs in the reader's order.
+    layout::EdgeGroupedOrder<edge_order_height, edge_order_width, chunk_count> order(
+        work_item_start, work_item_count, volume_chunks);
+    for (uint32_t step = 0; step < work_item_count; ++step) {
+        const uint32_t work_item = order.next();
         // Same decomposition as the reader: one work item is one query chunk.
         const uint32_t chunk_index = work_item % chunk_count;
         const uint32_t head_index = (work_item / chunk_count) % head_count;

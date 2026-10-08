@@ -15,6 +15,7 @@
 #include "neighborhood_mask_gen.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_chunk_layout.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_edge_order.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_args.hpp"
 
 // Feeds one query CHUNK at a time: the Q tiles of every brick in the chunk, then the context
@@ -536,7 +537,14 @@ void kernel_main() {
     uint32_t ring_batch = 0, ring_head = 0, ring_time = 0, ring_height = 0;
     uint32_t ring_first_column = 0, ring_end_column = 0;
 
-    for (uint32_t work_item = work_item_start; work_item < work_item_start + work_item_count; ++work_item) {
+    // The writer walks the same order. Any order is correct: the ring checks its row and column
+    // range and the mask block checks its clamp before reuse.
+    constexpr uint32_t edge_order_height = get_compile_time_arg_val(kernel_args::reader_arg::edge_order_height);
+    constexpr uint32_t edge_order_width = get_compile_time_arg_val(kernel_args::reader_arg::edge_order_width);
+    layout::EdgeGroupedOrder<edge_order_height, edge_order_width, chunk_count> order(
+        work_item_start, work_item_count, volume_chunks);
+    for (uint32_t step = 0; step < work_item_count; ++step) {
+        const uint32_t work_item = order.next();
         // A work item is one (batch, head, query brick). Bricks vary fastest so that
         // neighbouring bricks -- which share most of their context window -- land on the same
         // core, which is what later lets their K/V stay resident.
@@ -1023,7 +1031,7 @@ void kernel_main() {
             resident_query_brick_window_clamp = query_brick_window_clamp;
         }
 #if defined(DEBUG_PRINT_ENABLED)
-        if (work_item + 1 == work_item_start + work_item_count) {
+        if (step + 1 == work_item_count) {
             DPRINT("mp items={} skip={} refill={} gen={}\n", dbg_items, dbg_skipped, dbg_refilled, dbg_generated);
         }
 #endif
