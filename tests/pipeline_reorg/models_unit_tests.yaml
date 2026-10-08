@@ -213,8 +213,9 @@
     pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py -k "not test_model_tp_decode_batched and not test_model_tp_long_prefill_traced"
     # test_all_buckets_fit_trace_region is deselected here and runs last on its own budget (see below);
-    # the three kept here are host-only (monkeypatched, no device), so 120 s is ample.
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_bucket_trace_teardown_releases_all_stores or test_condense_remaps_gdn_before_decode_in_both_sampling_modes"
+    # the tests kept here are host-only (monkeypatched, no device), so 120 s is ample.
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_bucket_trace_teardown_releases_all_stores or test_condense_remaps_gdn_before_decode_in_both_sampling_modes or test_decode_warmup_stages_every_width_before_capture or test_decode_warmup_restages_when_num_blocks_changes or test_prefill_warmup_prepares_eagerly_and_only_records_when_traced or test_prefill_prepare_is_idempotent_and_record_requires_it"
+    TT_METAL_TRACE_ALLOC_TRACKING=1 pytest --timeout 900 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_vllm_warmup_leaves_no_late_allocations"
     # MTP speculative decode (unit-test coverage only until batch>1 lands; e2e runs plain decode).
     # QWEN36_SPEC_TEST_N_LAYERS=8: lossless/determinism hold on a truncated model, and the 8 layers are
     # already in the tensor cache from test_model_tp, so no 64-layer load happens in this leg.
