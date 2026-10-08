@@ -8,10 +8,26 @@ import torch
 import ttnn
 
 
-def hifi4_config(fp32_acc: bool = True):
+def hifi4_config(fp32_acc: bool = True, fidelity=None):
+    """HiFi4 + fp32 dest by default; ``fidelity`` overrides the math fidelity (see attn_fidelity)."""
     return ttnn.types.BlackholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=fp32_acc, packer_l1_acc=False
+        math_fidelity=fidelity or ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_acc,
+        packer_l1_acc=False,
     )
+
+
+def env_fidelity(name: str, default: str = "HiFi4"):
+    """A ttnn.MathFidelity from the environment (LoFi, HiFi2, HiFi3, HiFi4)."""
+    import os
+
+    return getattr(ttnn.MathFidelity, os.environ.get(name, default))
+
+
+def attn_fidelity():
+    """Math fidelity of the attention matmuls (MLA, sparse SDPA, indexer, q_a, KDA): GLM_ATTN_FIDELITY, default HiFi4."""
+    return env_fidelity("GLM_ATTN_FIDELITY")
 
 
 def replicate(mesh, t: torch.Tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:

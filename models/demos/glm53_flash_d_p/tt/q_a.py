@@ -15,7 +15,7 @@ import torch
 
 import ttnn
 from models.demos.glm53_flash_d_p.reference.weights import PREFIX
-from models.demos.glm53_flash_d_p.tt.common import hifi4_config, replicate
+from models.demos.glm53_flash_d_p.tt.common import attn_fidelity, hifi4_config, replicate
 from models.demos.glm53_flash_d_p.tt.rms_norm import TtRMSNorm
 
 
@@ -25,7 +25,7 @@ class TtQA:
         rank, hidden = w_q_a.shape
         self.w = replicate(mesh, w_q_a.float().T.reshape(1, 1, hidden, rank).to(torch.bfloat16))
         self.norm = TtRMSNorm(mesh, norm_w, eps)
-        self.cfg = hifi4_config()
+        self.cfg = hifi4_config(fidelity=attn_fidelity())
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x: replicated [1, 1, S, H] TILE bf16 (attn_norm output). Returns replicated [1, 1, S, q_lora_rank] bf16."""

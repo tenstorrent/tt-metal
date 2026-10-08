@@ -35,7 +35,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.glm53_flash_d_p.reference.weights import PackedExpert
-from models.demos.glm53_flash_d_p.tt.common import hifi4_config
+from models.demos.glm53_flash_d_p.tt.common import env_fidelity, hifi4_config
 
 REPO = Path(__file__).resolve().parents[4]
 CACHE_ROOT = REPO / "generated/glm53_flash_d_p/tt_cache"
@@ -166,9 +166,10 @@ class TtExperts:
                 fast_cache_checker._checker = None
         assert torch_weights is not None or cache, "no weights and no cache"
         # HiFi4 + fp32 dest for every expert matmul (owner rule; high_precision honours it).
-        self.cfg = hifi4_config()
+        fid = env_fidelity("GLM_EXPERTS_FIDELITY")  # HiFi4 by default; LoFi is exact on the bfp4 weight side
+        self.cfg = hifi4_config(fidelity=fid)
         self.cfg_fused = ttnn.types.BlackholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+            math_fidelity=fid, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
         )
         self.routed = TtRoutedExpert(
             mesh_device=mesh,
@@ -389,6 +390,7 @@ def build_experts(mesh, loader, cfg, layer: int, max_chunk: int, weights_dtype=t
         limit=cfg.swiglu_limit,
         max_seq_len=max_chunk,
         weights_dtype=weights_dtype,
+        num_links=int(os.environ.get("GLM_MOE_LINKS", "1")),  # dispatch / combine / offset_cumsum fabric links
         cache=os.environ.get("GLM_EXPERTS_CACHE", "1") != "0",  # 0: convert straight to the device, no tensorbins
         mode=os.environ.get("GLM_EXPERTS_MODE", "unified"),
     )
