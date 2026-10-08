@@ -173,27 +173,6 @@ struct RingStreamingMaskCtx {
     static constexpr uint32_t global_n_partial_tile_idx = GlobalNPartialTileIdx;
     static constexpr uint32_t joint_l_partial_tile_idx = JointLPartialTileIdx;
     static constexpr uint32_t straddle_mask_chunk_id = StraddleMaskChunkId;
-
-    // Materialize a full LightweightMaskContext. Only used on the if-constexpr-discarded v1
-    // (sdpa_ring) path so it type-checks; DCE'd on the streaming v2 path (which deduces this type
-    // directly and keeps the compact frame).
-    operator LightweightMaskContext() const {
-        LightweightMaskContext m;
-        m.is_causal = is_causal;
-        m.neginf_tile_idx = neginf_tile_idx;
-        m.causal_diag_tile_idx = causal_diag_tile_idx;
-        m.primary_diag_tile_idx = primary_diag_tile_idx;
-        m.global_n_padded_tiles = global_n_padded_tiles;
-        m.local_n_padded_tiles = local_n_padded_tiles;
-        m.joint_n_padded_tiles = joint_n_padded_tiles;
-        m.global_n_partial_col = global_n_partial_col;
-        m.joint_l_partial_col = joint_l_partial_col;
-        m.global_n_partial_tile_idx = global_n_partial_tile_idx;
-        m.joint_l_partial_tile_idx = joint_l_partial_tile_idx;
-        m.straddle_num_padded_tiles = straddle_num_padded_tiles;
-        m.straddle_mask_chunk_id = straddle_mask_chunk_id;
-        return m;
-    }
 };
 
 // Sentinel for "no CB" — beyond the valid 0-31 range.

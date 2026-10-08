@@ -382,6 +382,12 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     validate_metadata_tensors(tensor_args);
 
+    // The ring joint kernel accumulates in BF16 DEST only; FP32-DEST calls run the ACCURATE recipe.
+    TT_FATAL(
+        args.precision.has_value() || !get_fp32_dest_acc_en(args.compute_kernel_config),
+        "Ring joint SDPA without a precision recipe requires fp32_dest_acc_en=false (FP32 DEST runs "
+        "SDPAPrecision.ACCURATE)");
+
     // The sliding-window halo and the per-device slab checks below divide by the chunk sizes.
     TT_FATAL(
         args.get_q_chunk_size() > 0 && args.get_q_chunk_size() % tt::constants::TILE_WIDTH == 0,

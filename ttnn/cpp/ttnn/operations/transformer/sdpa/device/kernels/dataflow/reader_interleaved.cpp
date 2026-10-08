@@ -328,8 +328,7 @@ void kernel_main() {
         // - per_head_q_iter resets on (nb, nq) transition: chain forwarding's
         //   `q_iter < next_core_q_chunks` gate expects this (chains are non-causal only).
         // - is_chunked: page-table read on nb transition, single-entry CB rotated forward.
-        // - use_attention_sink: pushed every iter, since compute pops Sq_chunk_t per
-        //   sdpa_inner_loop call and under global_q each iter is exactly one call.
+        // - use_attention_sink: pushed every iter; compute pops it once per Q chunk.
         uint32_t prev_nb = static_cast<uint32_t>(-1);
         uint32_t prev_nq = static_cast<uint32_t>(-1);
         uint32_t per_head_q_iter = 0;
