@@ -1,0 +1,1 @@
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true

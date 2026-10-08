@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
+# Round 3 eltwise binary, rules of 16:40 / 17:40: each kept caller edit against main's program at shapes Blackhole models run
+# (test_eb_r11.py: Llama 3.1-8B P150 decoder layer and sampling, SDXL BH modules, r10 op replicas). ab_r10.sh: main optin optin
+# main in one tree (path-matched), EB_REPS repetitions per test, per op configuration. usage: r11.sh <job>
+cd /work
+export EB_RUN_LIMIT=2400 EB_REPS=${EB_REPS:-4} TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+T=tests/eb_r3_ci/test_eb_r11.py; O=tests/eb_r3_ci/r11
+ab() { echo "##### $(date -u +%T) $1: off=$2 main_env=$3 k=$4"; EB_K_EXPR="$4" bash tests/eb_r3_ci/ab_r10.sh "$2" "$3" -p eb_k_plugin $T; }
+case $1 in
+  f6llama) ab f6 - EB_R3_PER_FACE=1 "llama8b_decode or llama8b_prefill" ;;
+  f6ops)   ab f6 - EB_R3_PER_FACE=1 "test_mul_cfg or sdxl_transformer" ;;
+  f1)      ab f1 - EB_R3_NO_BLOCK=1 "llama8b_decode or sdxl_resnet or sdxl_transformer" ;;
+  f4f3)    ab f4 - EB_R3_NO_PRE_SECTIONS=1 "llama8b_decode"
+           ab f3 - EB_R3_MAIN_REINIT=1 "sdxl_temb_add" ;;
+  lnh)     ab ln_h $O/off_ln_h.txt - "llama8b_decode or sdxl_transformer" ;;
+  lnb)     ab ln_b $O/off_ln_b.txt - "llama8b_decode or sdxl_transformer" ;;
+  sdpa)    ab fd_h $O/off_fd_h.txt - "llama8b_decode"
+           ab sdpa_b $O/off_sdpa_b.txt - "llama8b_prefill or sdxl_transformer" ;;
+  smsa)    ab sm_b $O/off_sm_b.txt - "softmax_cfg"
+           ab sa_b $O/off_sa_b.txt - "llama8b_sampling" ;;
+esac
+echo "##### end $(date -u +%T)"
