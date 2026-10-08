@@ -32,6 +32,7 @@ from models.demos.common.prefill.runners.runner_utils import (
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_rows as d2d_rows_for
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_width as d2d_width
 from models.demos.common.prefill.runners.runner_utils import make_h2d_spec, num_mtp_tokens, open_mesh_device
+from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 
 
 def _apply_manifest_env():
@@ -207,8 +208,13 @@ def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
     if meta["actual_end"] < meta["actual_start"] + CHUNK_SIZE:
         return 0
     assert mtp_tokens is not None, "MTP is on but no lookahead tensor arrived with this chunk"
-    last_chip = ttnn.get_device_tensors(mtp_tokens)[-1]
-    ids = ttnn.to_torch(last_chip).view(torch.int32).flatten()
+    lookahead = mtp_lookahead_positions(meta["actual_start"], _sp, CHUNK_SIZE // _sp, meta["actual_end"], MTP_LEVELS)
+    chips = [c for c, slots in enumerate(lookahead) if slots[0] == meta["actual_end"]]
+    assert len(chips) == 1, f"expected one chip whose lookahead starts at {meta['actual_end']}, got {chips}"
+    device_tensors = ttnn.get_device_tensors(mtp_tokens)
+    assert len(device_tensors) == _sp * _tp, f"got {len(device_tensors)} device tensors for a {_sp}x{_tp} mesh"
+    # H2D_MAPPER_CONFIG shards SP over mesh axis 0 and device tensors are row-major, so chip c is device c * _tp
+    ids = ttnn.to_torch(device_tensors[chips[0] * _tp]).view(torch.int32).flatten()
     assert ids.numel() >= MTP_LEVELS, f"lookahead row is {ids.numel()} ids, need at least {MTP_LEVELS}"
     provided = 0
     for tok in ids[:MTP_LEVELS].tolist():
@@ -665,6 +671,11 @@ def main() -> None:
     )
 
     runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    if USE_TRACE and getattr(runtime, "capture_trace", None) is None:
+        raise RuntimeError(
+            f"PREFILL_USE_TRACE=1 but runtime {type(runtime).__name__} does not implement "
+            "capture_trace(kv_caches); run with PREFILL_USE_TRACE=0."
+        )
     kv_caches = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     runtime.compile(kv_caches)
 
@@ -739,6 +750,12 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # worker attaches to it during its pipeline bring-up and only then issues the KV-manager connect
     # that the migration layer needs before it can report WORKER_READY to wait_ready() below.
     use_d2h = os.environ.get("PREFILL_LAYER_ACK_D2H", "0") == "1"
+    if use_d2h and getattr(runtime, "set_d2h_ack_service", None) is None:
+        raise RuntimeError(
+            f"PREFILL_LAYER_ACK_D2H=1 but runtime {type(runtime).__name__} does not implement "
+            "set_d2h_ack_service(service); it reports layer completion through set_layer_completion_sink "
+            "only, so run with PREFILL_LAYER_ACK_D2H=0."
+        )
 
     from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionRouter
 

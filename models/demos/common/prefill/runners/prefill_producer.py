@@ -20,7 +20,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
-from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens, rotated_chunk_positions
+from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
 from models.demos.common.prefill.runners.migration import (
     is_per_host_storage,
     migration_table_path,
@@ -33,6 +33,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     num_mtp_tokens,
     resolve_trace_dir,
 )
+from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 
 
 def _apply_manifest_env(manifest_path: str) -> dict:
@@ -152,17 +153,19 @@ def _h2d_rows(tokens, actual_start: int = 0):
     return _to_host_array(torch.tensor(tokens, dtype=torch.int64).view(sp, 1, stride))
 
 
-def _mtp_rows(pool, actual_start: int, actual_isl=None):
+def _mtp_rows(pool, actual_start: int, actual_isl=None, actual_end=None):
+    """``[sp, 1, num_mtp_tokens]`` lookahead ids sent after each chip's chunk ids: the ``MTP_LEVELS`` ids after the
+    chip's last position, then pad; a split chip whose second run lies at or past ``actual_end`` takes the next
+    chip's first ids."""
     n_mtp = num_mtp_tokens(MTP_LEVELS)
     if not n_mtp:
         return None
     sp = GLOBAL_MESH_SHAPE[0]
     stride = h2d_row_len(CHUNK_SIZE, sp)
+    actual_end = actual_start + CHUNK_SIZE if actual_end is None else actual_end
+    slots = mtp_lookahead_positions(actual_start, sp, stride, actual_end, MTP_LEVELS)
     align_pad = [MTP_PAD_TOKEN_ID] * (n_mtp - MTP_LEVELS)
-    # Each chip's lookahead follows its own last row: actual_start + (c + 1) * stride for a chunk-aligned start,
-    # the rotated last position otherwise (see _h2d_rows).
-    last = [row[-1] for row in rotated_chunk_positions(actual_start, sp, stride)]
-    rows = [_pool_slice(pool, last[c] + 1, MTP_LEVELS, actual_isl) + align_pad for c in range(sp)]
+    rows = [_pool_slice(pool, chip_slots[0], MTP_LEVELS, actual_isl) + align_pad for chip_slots in slots]
     return _to_host_array(torch.tensor(rows, dtype=torch.int64).unsqueeze(1))
 
 
@@ -621,6 +624,12 @@ def _config_names(table) -> list:
 
 def _num_model_configs(table) -> int:
     return sum(1 for name in _config_names(table) if name.isdigit())
+
+
+def _has_index_config(table) -> bool:
+    """Whether config 1 is a DSA indexer key cache. Asked of the adapter, not inferred from the count:
+    Kimi-K3 publishes three decimal configs (kvpe + two KDA state configs) and none is an index."""
+    return _num_model_configs(table) > 1 and ADAPTER.cache_kind(1) == "index"
 
 
 def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, *, start=0):
@@ -1158,7 +1167,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     mins = {"kvpe": min_pcc}
     if mtp_min is not None:
         mins["mtp"] = mtp_min
-    if _num_model_configs(table) > 1:
+    if _has_index_config(table):
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
         index_hadamard = normalized_hadamard_matrix(index_head_dim).float()
         n_index_layers = table.config(1).num_layers
@@ -1602,7 +1611,11 @@ def main() -> None:
         logger.info(f"[producer] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
         push_start = time.perf_counter()
         _push(
-            service, payload_bytes, _h2d_rows(tokens, actual_start), _mtp_rows(pool, actual_start, actual_isl), metadata
+            service,
+            payload_bytes,
+            _h2d_rows(tokens, actual_start),
+            _mtp_rows(pool, actual_start, actual_isl, actual_end=actual_end),
+            metadata,
         )
         return (time.perf_counter() - push_start) * 1000.0
 

@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Vendored copy of ttnn/operations/transformer/sdpa/device/kernels/dataflow/windowed_mask_gen.hpp for the
-// quasar sdpa fork. Identical to the main-tree header except that Quasar fills masked positions with a
-// large finite negative instead of -inf (see quasar_mask_neg_bf16); vendored to
+// quasar sdpa fork. Differs from the main-tree header in that Quasar fills masked positions with a
+// large finite negative instead of -inf (see quasar_mask_neg_bf16), that the mainline header grew
+// WindowedMode::Causal support in #59055 which this bidirectional-only fork does not take, and that
+// the two #59055 bidirectional bug fixes (empty-window cursor walk, partial-tile async-copy barrier)
+// are ported here without the causal overlay; vendored to
 // insulate the fork from future in-place Metal 2.0 ports of the prefill sdpa op. Transitive includes
 // (windowed_loop_geometry.hpp, dataflow_common.hpp) still resolve to the unmodified main-tree headers.
 
@@ -109,7 +112,7 @@ inline void generate_windowed_mask_for_q_chunk(
     // K/V streaming and to feed compute — the three kernels' per-Q-chunk counts must agree exactly.
     // Skipping the out-of-range chunks cannot change the cursor walk below: their tiles all take the
     // -inf `continue` branches, which never advance `local_window_idx`.
-    const auto k_range = windowed_k_chunk_range(
+    const auto k_range = windowed_k_chunk_range<WindowedMode::Bidirectional>(
         q_chunk,
         Sq_chunk_t,
         valid_Sqt,
@@ -158,16 +161,23 @@ inline void generate_windowed_mask_for_q_chunk(
                     continue;
                 }
 
-                if (inf_tile_idx == -1) {
-                    fill_neginf_tile<mask_tile_bytes, quasar_mask_neg_bf16>(dfb_mask_in, in_mask_tile_id);
-                } else {
+                const bool inf_copied = inf_tile_idx != -1;
+                if (inf_copied) {
                     copy_tile<mask_tile_bytes>(
                         noc, mask_write_ptr_base, mask_write_ptr_base, inf_tile_idx, in_mask_tile_id);
+                } else {
+                    fill_neginf_tile<mask_tile_bytes, quasar_mask_neg_bf16>(dfb_mask_in, in_mask_tile_id);
                 }
                 if (!found_mask_windows || k_end_idx <= window_low_idx || k_start_idx >= window_high_idx ||
                     window_low_idx >= window_high_idx) {
                     inf_tile_idx = in_mask_tile_id;
                     continue;
+                }
+                // Partial tile: the mask-neg copy above is an async NoC read. Let it land before the direct
+                // zero writes below, or it can overwrite them. (fill_neginf_tile writes directly; nothing to
+                // wait on.) Ported from the mainline generator fix in #59055.
+                if (inf_copied) {
+                    noc.async_read_barrier();
                 }
 
                 uint32_t cqs, cks, cqe, cke;
@@ -188,8 +198,14 @@ inline void generate_windowed_mask_for_q_chunk(
                     }
 
                     if (cqe >= window_high_idx && cke >= window_high_idx) {
-                        local_window_idx += 1;
-                        auto nxt = get_window_indices(local_window_idx);
+                        // Step past empty windows (repeated cu values): stopping on one would end the
+                        // loop below and leave the cursor stuck, masking every later window as -inf.
+                        // Ported from the mainline generator fix in #59055.
+                        std::pair<uint32_t, uint32_t> nxt;
+                        do {
+                            local_window_idx += 1;
+                            nxt = get_window_indices(local_window_idx);
+                        } while (nxt.first == nxt.second && local_window_idx + 1 < cu_window_seqlens_eles);
                         window_low_idx = nxt.first;
                         window_high_idx = nxt.second;
                     }

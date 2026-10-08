@@ -252,6 +252,11 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_dfb_id = dfb::bias;
     constexpr auto bias_ntiles = get_arg(args::bias_ntiles);
+#ifdef BIAS_PER_GROUP
+    constexpr bool bias_per_group = true;
+#else
+    constexpr bool bias_per_group = false;
+#endif
     constexpr uint32_t mm_out_dfb_id = mm_partials_dfb_id;
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
     constexpr bool row_broadcast_bias = (bool)get_arg(args::row_broadcast_bias);
@@ -273,6 +278,12 @@ void kernel_main() {
     constexpr uint32_t last_subblock_w_valid = out_subblock_w;
 #endif
     constexpr bool last_subblock_padded = last_subblock_w_valid < out_subblock_w;
+#ifdef ARCH_QUASAR
+    // Quasar's matmul LLK bakes ct_dim/rt_dim into the unpack/math MOPs at matmul_block_init; the
+    // narrowed matmul_block call below (effective_subblock_w < out_subblock_w) desynchronizes the
+    // src-register handshake and hangs. The factory must not pad per_core_N_compute on Quasar.
+    static_assert(!last_subblock_padded, "a narrowed last in1 subblock (padded per_core_N) is not supported on Quasar");
+#endif
 
 #ifdef SFPU_ACTIVATION
     constexpr KernelActivation activation_type = static_cast<KernelActivation>(get_arg(args::activation_type));
@@ -582,7 +593,8 @@ void kernel_main() {
                 }
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the buffer for reuse across bh/batch iterations.
-                if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
+                // With BIAS_PER_GROUP (sparse matmul, per-group bias) every batch gets its own tiles.
+                if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     bias_dfb.wait_front(bias_ntiles);
                 }
 #ifdef ARCH_QUASAR
@@ -669,7 +681,7 @@ void kernel_main() {
                         in1_index_subblock_offset += out_subblock_w;
                     }
                 }
-                if constexpr (num_blocks_w_dim > 1) {
+                if constexpr (bias_per_group || num_blocks_w_dim > 1) {
                     bias_dfb.pop_front(bias_ntiles);
                 }
 #endif  // FUSE_BIAS
@@ -714,7 +726,7 @@ void kernel_main() {
     // reusing it across all batch/bh/block iterations without popping. Pop it once here, after the
     // last use, so the buffer is balanced. (For num_blocks_w_dim > 1 the per-block pop above already
     // balances each re-pushed bias block.)
-    if constexpr (num_blocks_w_dim == 1) {
+    if constexpr (!bias_per_group && num_blocks_w_dim == 1) {
         bias_dfb.pop_front(bias_ntiles);
     }
 #endif

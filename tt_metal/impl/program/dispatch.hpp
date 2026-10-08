@@ -11,6 +11,7 @@
 #include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
 #include <array>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <utility>
@@ -231,6 +232,14 @@ void pack_program_command_sequence(
     bool stall_before_program,
     bool send_binary,
     vector_aligned<uint32_t>& packed);
+
+// Visits the command chunks in their canonical device-execution order.
+void for_each_program_command_sequence_chunk(
+    const ProgramCommandSequence& sequence,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    const std::function<void(const void*, uint32_t)>& process_chunk);
 
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,

@@ -113,6 +113,21 @@ class BROADCAST_TYPE(TemplateParameter):
 
 
 @dataclass
+class SFPU_BCAST_DIM(TemplateParameter):
+    """Dest-side SFPU row/col broadcast for ``sfpu_binary_bcast_test.cpp``.
+
+    Distinct from :class:`BROADCAST_TYPE`, which selects unpack-A broadcast on
+    the pairing kernel. ``None_`` is unused by the 3-tile kernel; pairing and
+    add_top_row pass it so every binary-SFPU variant emits the same CSV column.
+    """
+
+    sfpu_bcast_dim: BroadcastType = BroadcastType.None_
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto BCAST_DIM = ckernel::BroadcastType::{self.sfpu_bcast_dim.value};"
+
+
+@dataclass
 class ACC_TO_DEST(TemplateParameter):
     acc_to_dest: bool
 
@@ -307,6 +322,30 @@ class SFPU_UNARY_THRESHOLD(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t SFPU_UNARY_THRESHOLD = {self.threshold_bits}u;"
+
+
+@dataclass
+class RAND_RANGE(TemplateParameter):
+    """rand output interval ``[from, from + scale]`` as fp32 bits; emitted as macros over the dispatcher defaults."""
+
+    rand_from_bits: int = 0x3F800000  # 1.0f
+    rand_scale_bits: int = 0x40000000  # 2.0f
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"#define RAND_FROM_BITS {self.rand_from_bits:#010x}u\n"
+            f"#define RAND_SCALE_BITS {self.rand_scale_bits:#010x}u"
+        )
+
+
+@dataclass
+class RAND_SEED(TemplateParameter):
+    """rand PRNG seed; emitted as a macro over the dispatcher default."""
+
+    rand_seed: int = 0x12345678
+
+    def convert_to_cpp(self) -> str:
+        return f"#define RAND_SEED {self.rand_seed:#010x}u"
 
 
 @dataclass

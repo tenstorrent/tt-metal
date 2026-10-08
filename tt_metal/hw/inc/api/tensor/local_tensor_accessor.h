@@ -9,6 +9,7 @@
 #include <tuple>
 
 #include "api/core_local_mem.h"
+#include "api/dataflow/buf_rw_note.h"
 #include "api/debug/assert.h"
 #include "api/tensor/tensor_accessor_args.h"
 #include "api/tensor/tensor_binding_token.h"
@@ -65,6 +66,10 @@ public:
         // ADDR_CRTA_OFFSET is a byte offset; dividing recovers the word index
         static_assert(
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0, "TensorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
+        // Op-to-op R/W inference: this hands the kernel the tensor's local memory (CPU loads/stores, LLK operands, raw
+        // NoC addresses), none of which carries the binding. Note it as both read and written; the slot is the binding
+        // id a TensorAccessor built from the same token uses.
+        tt_buf_rw::note_read_write<ADDR_CRTA_OFFSET>();
     }
 
     // Construct from the "binding not present" token.

@@ -25,7 +25,11 @@
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
-// Forward declaration
+// Forward declarations
+namespace tt {
+class Cluster;
+}  // namespace tt
+
 namespace tt::tt_metal {
 class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
@@ -224,7 +228,9 @@ public:
     // arch-specific files. The default descriptor is used only when none of those exist.
     // Returns nullopt when no descriptor file is present. Throws if an explicit path or env path
     // is set but the file is missing.
+    // `cluster` selects the arch- and cluster-type-specific file.
     static std::optional<PhysicalGroupingDescriptor> find_and_load(
+        const tt::Cluster& cluster,
         const std::optional<std::filesystem::path>& pgd_path = std::nullopt,
         const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor = nullptr);
 

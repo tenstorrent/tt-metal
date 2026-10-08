@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Pinned to the same image the scheduled fleet run uses.
-DEFAULT_IMAGE="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh:v0.80.0-dev20260930"
+DEFAULT_IMAGE="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh:v0.80.0-dev20261006-45-g1d758e27faf"
 
 # The suite as it ships in the image. --entrypoint "" means nothing else sets
 # the environment up, so run_diag.sh does it itself off its own location.

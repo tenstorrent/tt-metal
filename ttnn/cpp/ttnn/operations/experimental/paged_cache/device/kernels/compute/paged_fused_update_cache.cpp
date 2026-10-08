@@ -38,6 +38,13 @@ void kernel_main() {
         compute_kernel_lib::untilize<Wt, dfb::cache, dfb::untilized_cache>(1);
 
         // Wait on writer to update block. Tilize with reconfiguration
+#ifdef ARCH_QUASAR
+        // Quasar: tilize_init programs unpack+math only and pack_reconfig_data_format is gasket-only, so
+        // the packer's L1 destination (BFD) still points at dfb::untilized_cache from the untilize above
+        // -> the re-tilized block would land in the untilize ring and dfb::out would never be written
+        // (all-zero cache block). Retarget the packer BFD before packing. Same fix as update_cache.cpp.
+        pack_init(dfb::out);
+#endif
         compute_kernel_lib::tilize<Wt, dfb::untilized_cache2, dfb::out>(1);
     }
 }
