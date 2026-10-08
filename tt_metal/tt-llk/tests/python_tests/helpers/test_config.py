@@ -1239,6 +1239,9 @@ class TestConfig:
         """
         if self.skip_build_header or self.profiler_build != ProfilerBuild.Yes:
             return ""
+        # The Wormhole barrier restarts every measured loop from a 512 B aligned point, which keeps its layout without this.
+        if self._wormhole_perf_barrier():
+            return ""
         return '#include "kernel_placement.h"\n'
 
     def _kernel_source_include(self) -> str:
