@@ -1307,11 +1307,13 @@ MoEComputeMeshWorkloadFactory::create_at(
     if (const char* fi = std::getenv("MOE_COMPUTE_FID_INCR")) {
         matmul_compute_defines["MM_FIDELITY_INCR"] = fi;
     }
-    if (const char* f1 = std::getenv("MOE_COMPUTE_FID_W01")) {
-        matmul_compute_defines["MM_FID_W01"] = f1;  // 0 LoFi, 2 HiFi2, 3 HiFi3, 4 HiFi4
-    }
-    if (const char* f2 = std::getenv("MOE_COMPUTE_FID_W2")) {
-        matmul_compute_defines["MM_FID_W2"] = f2;
+    {
+        const char* f1 = std::getenv(
+            "MOE_COMPUTE_FID_W01");  // 0 LoFi, 2 HiFi2, 3 HiFi3, 4 HiFi4; default = the kernel's math fidelity
+        const char* f2 = std::getenv("MOE_COMPUTE_FID_W2");
+        const std::string kf = std::to_string(static_cast<int>(moe_compute_env_fidelity()));
+        matmul_compute_defines["MM_FID_W01"] = f1 ? f1 : kf;
+        matmul_compute_defines["MM_FID_W2"] = f2 ? f2 : kf;
     }
     auto matmul_compute_kernel_handle = tt::tt_metal::CreateKernel(
         program,

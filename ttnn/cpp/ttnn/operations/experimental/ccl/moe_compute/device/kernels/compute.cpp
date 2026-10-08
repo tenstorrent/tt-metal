@@ -28,18 +28,12 @@
 
 // Per-matmul math fidelity (experiment): MM_FID_W01 / MM_FID_W2 (0 LoFi, 2 HiFi2, 3 HiFi3, 4 HiFi4) override the
 // kernel's MATH_FIDELITY for the W0/W1 and the W2 matmul.
-#ifdef MM_FID_W01
-constexpr ckernel::MathFidelity kFidW01 = static_cast<ckernel::MathFidelity>(MM_FID_W01);
-#else
-constexpr ckernel::MathFidelity kFidW01 = MATH_FIDELITY;
-#endif
-#ifdef MM_FID_W2
-constexpr ckernel::MathFidelity kFidW2 = static_cast<ckernel::MathFidelity>(MM_FID_W2);
-#else
-constexpr ckernel::MathFidelity kFidW2 = MATH_FIDELITY;
-#endif
+// (both defines are always set by the program factory: the env override, else the kernel's math fidelity)
+namespace ckernel {
+constexpr MathFidelity kFidW01 = static_cast<MathFidelity>(MM_FID_W01);
+constexpr MathFidelity kFidW2 = static_cast<MathFidelity>(MM_FID_W2);
 
-template <ckernel::MathFidelity F>
+template <MathFidelity F>
 ALWI void mm_init_f(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -48,13 +42,13 @@ ALWI void mm_init_f(
     std::uint32_t rt_dim,
     std::uint32_t kt_dim,
     std::uint32_t call_line = __builtin_LINE()) {
-    ckernel::state_configure(in1_cb_id, in0_cb_id, call_line);
+    state_configure(in1_cb_id, in0_cb_id, call_line);
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init<F, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
-    MATH((ckernel::throttled_mop_status = 0));
+    MATH((throttled_mop_status = 0));
 }
 
-template <ckernel::MathFidelity F>
+template <MathFidelity F>
 ALWI void mm_block_f(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -66,10 +60,16 @@ ALWI void mm_block_f(
     std::uint32_t rt_dim,
     std::uint32_t kt_dim,
     std::uint32_t call_line = __builtin_LINE()) {
-    ckernel::state_configure(in1_cb_id, in0_cb_id, call_line);
+    state_configure(in1_cb_id, in0_cb_id, call_line);
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul<F, MM_THROTTLE>(idst, ct_dim, rt_dim)));
 }
+}  // namespace ckernel
+
+using ckernel::kFidW01;
+using ckernel::kFidW2;
+using ckernel::mm_block_f;
+using ckernel::mm_init_f;
 
 namespace detail {
 
