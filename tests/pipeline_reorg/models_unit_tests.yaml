@@ -1617,8 +1617,8 @@
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
-    # The shared offline cache lacks this adapter. Fetch its pinned revision into
-    # writable job storage before pytest opens any devices; keep the tests offline.
+    # Resolve the adapter before pytest opens any devices; keep the tests offline. A hit in the
+    # shared /mnt/models cache is used in place; only a missing adapter is fetched into job storage.
     LORA_PATH=$(mpirun -np 1 --bind-to none --wdir "${TT_METAL_HOME}" \
       env HF_HUB_OFFLINE=0 python3 -m models.tt_dit.utils.ltx_lora_asset \
       --download-dir "${PIPELINE_DIR:?CI staging directory required}/.lora") || exit 1
