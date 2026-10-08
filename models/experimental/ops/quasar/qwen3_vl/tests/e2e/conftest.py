@@ -35,6 +35,11 @@ def pytest_addoption(parser):
         help="Debug: clear the program cache between prefill and decode.",
     )
     g.addoption(
+        "--qwen-probe-before-decode",
+        default="",
+        help="Debug: comma-separated probes (tests/e2e/probes.py) to run on dummy tensors right before decode.",
+    )
+    g.addoption(
         "--qwen-resume-prefill",
         default=None,
         help="Skip vision and prefill: decode from the prefill_snapshot.pt of an earlier run folder (same config).",
