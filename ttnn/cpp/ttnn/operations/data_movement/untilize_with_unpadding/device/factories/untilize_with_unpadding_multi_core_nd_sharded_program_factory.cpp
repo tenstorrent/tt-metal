@@ -220,7 +220,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
     }
 
     ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (fp32_dest_acc_en) {
+    if (fp32_dest_acc_en && input.dtype() != DataType::UINT8) {
         compute_hw_config.unpack_modes = {{ND_IN, UnpackMode::UnpackToDest}};
     }
 

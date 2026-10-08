@@ -32,8 +32,10 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     tt::DataFormat output_dfb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_dfb_data_format);
 
+    // UInt8 needs 32-bit Dest on WH/BH; UnpackToDest skipped for UInt8 below (int-FPU path).
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
-                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
+                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B ||
+                        a.dtype() == DataType::UINT8;
 
     auto input_shard_spec = a.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();
@@ -163,7 +165,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     // fp32_llk_acc — c_0 is this factory's staging buffer, i.e. the tilize input DFB (Default ==
     // UnpackToSrc is expressed by omitting the entry).
     ComputeHardwareConfig compute_gen1{.enable_32_bit_dest = fp32_llk_acc};
-    if (fp32_llk_acc) {
+    if (fp32_llk_acc && a.dtype() != DataType::UINT8) {
         compute_gen1.unpack_modes = ComputeHardwareConfig::ComputeUnpackModes{{STAGE, UnpackMode::UnpackToDest}};
     }
     // Quasar gets only the common fields set above; WH/BH use compute_gen1 as is.

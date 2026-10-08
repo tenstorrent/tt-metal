@@ -221,7 +221,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     }
     auto make_compute = [&](const KernelSpecName& id) {
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-        if (fp32_dest_acc_en) {
+        if (fp32_dest_acc_en && a.dtype() != DataType::UINT8) {
             compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
         }
         return KernelSpec{

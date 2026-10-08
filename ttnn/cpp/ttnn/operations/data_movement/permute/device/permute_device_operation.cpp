@@ -8,11 +8,14 @@
 #include <numeric>
 #include <utility>
 
+#include <tt-logger/tt-logger.hpp>
+
 #include "ttnn/tensor/types.hpp"
 #include "permute_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -179,6 +182,23 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
     std::optional<Tensor> optional_output_tensor,
     float pad_value) {
     using OperationType = ttnn::operations::data_movement::PermuteDeviceOperation;
+
+    // BH UInt8 RM permute workaround (issue #58106): cast UInt8->UInt32, permute, cast back; delete once LLK handles 8-bit in 32-bit Dest.
+    if (input_tensor.dtype() == DataType::UINT8 && input_tensor.layout() == Layout::ROW_MAJOR &&
+        input_tensor.device() != nullptr && input_tensor.device()->arch() == tt::ARCH::BLACKHOLE &&
+        !dims.empty() && dims.back() != static_cast<uint32_t>(dims.size() - 1)) {
+        log_warning(tt::LogOp, "ttnn::prim::permute: BH UInt8 RM workaround (issue #58106): casting UInt8->UInt32->permute->UInt8.");
+        auto as_u32 = ttnn::typecast(input_tensor, DataType::UINT32);
+        auto effective_memory_config = memory_config.value_or(input_tensor.memory_config());
+        auto permuted_u32 = ttnn::device_operation::launch<OperationType>(
+            OperationType::operation_attributes_t{.dims = dims, .output_mem_config = effective_memory_config, .pad_value = pad_value},
+            OperationType::tensor_args_t{.input_tensor = as_u32, .optional_output_tensor = std::nullopt});
+        if (optional_output_tensor.has_value()) {
+            return ttnn::typecast(permuted_u32, DataType::UINT8, std::nullopt, optional_output_tensor);
+        }
+        return ttnn::typecast(permuted_u32, DataType::UINT8);
+    }
+
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .dims = dims,

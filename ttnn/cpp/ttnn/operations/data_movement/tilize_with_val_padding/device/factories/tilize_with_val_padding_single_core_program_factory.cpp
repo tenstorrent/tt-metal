@@ -34,8 +34,10 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
     tt::DataFormat output_dfb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_dfb_data_format);
 
+    // UInt8 needs 32-bit Dest; UnpackToDest skipped below (int-FPU path, output DFB stays UInt8).
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
-                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
+                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B ||
+                        a.dtype() == DataType::UINT8;
 
     int32_t num_tiles = output.physical_volume() / TILE_HW;
 
@@ -209,7 +211,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
     // fp32_llk_acc, i.e. UnpackToDest on the tilize input DFB (Default == UnpackToSrc is expressed by
     // omitting the entry).
     ComputeHardwareConfig compute_gen1{.enable_32_bit_dest = fp32_llk_acc};
-    if (fp32_llk_acc) {
+    if (fp32_llk_acc && a.dtype() != DataType::UINT8) {
         compute_gen1.unpack_modes = ComputeHardwareConfig::ComputeUnpackModes{{IN, UnpackMode::UnpackToDest}};
     }
     // Quasar gets only the common fields set above; WH/BH use compute_gen1 as is.

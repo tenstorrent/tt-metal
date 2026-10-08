@@ -240,6 +240,9 @@ ttnn::Tensor transpose_impl(
     const std::optional<MemoryConfig>& memory_config_arg,
     float pad_value = 0.0f) {
     {
+        // BH UInt8 RM workaround (issue #58106) handled centrally in ttnn::prim::permute.
+    }
+    {
         // Irregular RM block/width sharded hits a pages_per_shard misread in noc_async_*_sharded.
         // Unshard until the kernel-side helpers handle irregular RM geometries.
         const bool rm = input_tensor.layout() == Layout::ROW_MAJOR;
