@@ -52,7 +52,7 @@ public:
             if (slot.load(std::memory_order_relaxed) == nullptr) {
                 slot.store(
                     &sites_.emplace_back(api::ObservabilityEventDescriptor{
-                        .name = e->name, .location = {.file = e->file, .line = e->line}}),
+                        .name = e->name, .location = {.file = e->file, .line = e->line}, .meta = &e->meta}),
                     std::memory_order_release);
             }
         }
