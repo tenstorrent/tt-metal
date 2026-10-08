@@ -50,17 +50,17 @@ class EthCoreCheckData:
     crc_errors: int | None = triage_field("CRC Errors")
     corrected_codewords: int | None = triage_field("Corr CW")
     uncorrected_codewords: int | None = triage_field("Uncorr CW")
-    mailbox_host: int | None = triage_field("Mailbox HOST", hex_serializer)
-    mailbox_risc1: int | None = triage_field("Mailbox RISC1", hex_serializer)
-    mailbox_cmfw: int | None = triage_field("Mailbox CMFW", hex_serializer)
-    mailbox_other: int | None = triage_field("Mailbox OTHER", hex_serializer)
-    eth_fw: str | None = triage_field("ETH FW")
-    fw_signature: int | None = triage_field("FW Signature", hex_serializer)  # 0xABCD base FW, 0xDCBA fabric router
     rx_link_up: str | None = triage_field("RX Link Up")
     err_stat: int | None = triage_field("ERR_STAT", hex_serializer)
     txq_resends: int | None = triage_field("TXQ Resends")
     rxq_drops: int | None = triage_field("RXQ Drops")
-    link_raw: int | None = triage_field("Link Raw", hex_serializer)
+    eth_fw: str | None = triage_field("ETH FW")
+    fw_signature: int | None = triage_field("FW Signature", hex_serializer, verbose=1)  # 0xABCD base FW, 0xDCBA router
+    link_raw: int | None = triage_field("Link Raw", hex_serializer, verbose=1)
+    mailbox_host: int | None = triage_field("Mailbox HOST", hex_serializer, verbose=1)
+    mailbox_risc1: int | None = triage_field("Mailbox RISC1", hex_serializer, verbose=1)
+    mailbox_cmfw: int | None = triage_field("Mailbox CMFW", hex_serializer, verbose=1)
+    mailbox_other: int | None = triage_field("Mailbox OTHER", hex_serializer, verbose=1)
 
     def __init__(self):
         for field in fields(self):
