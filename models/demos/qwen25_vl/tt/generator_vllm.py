@@ -165,6 +165,15 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         devices_per_dp_cache = num_devices // tt_data_parallel
         if "Qwen2.5-VL-72B" in model_name and devices_per_dp_cache == 8 and is_wormhole_b0():
             return 65_536
+        # 7B-class models on a 1x8 Wormhole cache: one padded KV head per chip at bf16 costs 14 KB per
+        # token per chip (3B: 18 KB), and ~1.5 GB of the 12 GB DRAM holds weights, so three times the
+        # fallback budget (5.6 GB of KV) leaves room for the 128k prefill working set.
+        if (
+            devices_per_dp_cache == 8
+            and is_wormhole_b0()
+            and any(n in model_name for n in ("Qwen2.5-VL-7B", "Qwen2.5-VL-3B", "olmOCR-2-7B"))
+        ):
+            return 393_216
         return super().get_max_tokens_all_users(
             model_name=model_name,
             num_devices=num_devices,
