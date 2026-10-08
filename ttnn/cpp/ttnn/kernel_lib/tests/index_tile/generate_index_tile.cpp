@@ -20,7 +20,7 @@
 template <typename T>
 void generate_wt_tiles(uint32_t wt_dim, uint32_t start_wt) {
     for (uint32_t wt = start_wt; wt < start_wt + wt_dim; ++wt) {
-        generate_index_tile<T>(0, wt);
+        dataflow_kernel_lib::generate_index_tile<T>(0, wt);
     }
 }
 

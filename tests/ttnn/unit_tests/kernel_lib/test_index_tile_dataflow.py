@@ -35,9 +35,10 @@ QUASAR_U32_WTS = [0, 1, 255, 256, 257]
 
 
 def index_tile_golden(wt: int, dtype: torch.dtype) -> torch.Tensor:
-    """The helper contract: tile[r][c] = c + 32 * wt for every row."""
+    """The helper contract: tile[r][c] = c + 32 * wt for every row — a [1,1,32,32·wt_dim] window when
+    concatenated over wt (the multi-tile stream tests rely on the dim-1 cat)."""
     base = torch.arange(32, dtype=torch.int64) + 32 * wt
-    return base.repeat(32, 1).to(dtype)
+    return base.reshape(1, 1, 1, 32).expand(1, 1, 32, 32).contiguous().to(dtype)
 
 
 def build_program(device, index_width_bytes: int, wt_dim: int, start_wt: int):
@@ -54,28 +55,37 @@ def build_program(device, index_width_bytes: int, wt_dim: int, start_wt: int):
 
     tile_bytes = 32 * 32 * index_width_bytes
     tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    # generic_op needs >= 2 io tensors (one input + one output); the generator writes c_0 from
+    # constants alone, so the input is a placeholder the kernels never read.
+    tt_in = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32, 32]), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
 
     fmt = ttnn.CBFormatDescriptor(buffer_index=0, data_format=dt, page_size=tile_bytes)
     cbs = [ttnn.CBDescriptor(total_size=tile_bytes * 2, core_ranges=core_grid, format_descriptors=[fmt])]
 
+    rt = ttnn.RuntimeArgs()
+    rt[0][0] = [wt_dim, start_wt]
     generator = ttnn.KernelDescriptor(
         kernel_source=GENERATOR_KERNEL,
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_grid,
         compile_time_args=[index_width_bytes],
-        runtime_args=ttnn.RuntimeArgs([[wt_dim, start_wt]]),
+        runtime_args=rt,
         config=ttnn.ReaderConfigDescriptor(),
     )
+    rt = ttnn.RuntimeArgs()
+    rt[0][0] = [tt_out.buffer_address(), wt_dim, 0]
     writer = ttnn.KernelDescriptor(
         kernel_source="ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_grid,
         compile_time_args=[0] + ttnn.TensorAccessorArgs(tt_out).get_compile_time_args(),
-        runtime_args=ttnn.RuntimeArgs([[tt_out.buffer_address(), wt_dim, start_wt]]),
+        runtime_args=rt,
         config=ttnn.WriterConfigDescriptor(),
     )
     program = ttnn.ProgramDescriptor(kernels=[generator, writer], semaphores=[], cbs=cbs)
-    return program, [tt_out]
+    return program, [tt_in, tt_out]
 
 
 def run_case(device, index_width_bytes: int, wt_dim: int, start_wt: int = 0) -> torch.Tensor:
@@ -87,12 +97,13 @@ def run_case(device, index_width_bytes: int, wt_dim: int, start_wt: int = 0) -> 
 def assert_bit_exact(actual: torch.Tensor, index_width_bytes: int, start_wt: int, label: str) -> None:
     dtype = torch.uint32 if index_width_bytes == 4 else torch.uint16
     golden = torch.cat(
-        [index_tile_golden(wt, dtype) for wt in range(start_wt, start_wt + actual.shape[3] // 32)], dim=1
+        [index_tile_golden(wt, dtype).expand(1, 1, 32, 32) for wt in range(start_wt, start_wt + actual.shape[3] // 32)],
+        dim=3,
     )
-    identical = torch.equal(actual, golden)
+    identical = torch.equal(actual.to(torch.int64), golden.to(torch.int64))
     if not identical:
-        mismatch = (actual != golden).sum().item()
-        diff_pos = (actual != golden).nonzero()[0].tolist()
+        mismatch = (actual.to(torch.int64) != golden.to(torch.int64)).sum().item()
+        diff_pos = (actual.to(torch.int64) != golden.to(torch.int64)).nonzero()[0].tolist()
         logger.error(
             f"{label}: {mismatch} mismatched elements, first at {diff_pos}: "
             f"got {actual[tuple(diff_pos)].item()}, want {golden[tuple(diff_pos)].item()}"
