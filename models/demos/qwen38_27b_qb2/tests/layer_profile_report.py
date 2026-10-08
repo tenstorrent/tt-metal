@@ -73,11 +73,11 @@ def accumulate(bucket, row):
             bucket[key] += value
 
 
-def analyze(rows, receipt):
+def analyze(rows, receipt, *, expected_cases=PROFILE_CASES):
     if receipt.get("passed") is not True or receipt.get("state") != "completed":
         raise ValueError("A completed passing diagnostic receipt is required")
     expected = {(cell["input_tokens"], cell["batch"]) for cell in receipt["cells"]}
-    if expected != set(PROFILE_CASES) or len(receipt["cells"]) != len(expected):
+    if not expected_cases or expected != set(expected_cases) or len(receipt["cells"]) != len(expected):
         raise ValueError("Diagnostic receipt is missing required long-context cases")
     devices = set(receipt["device_ids"])
     if len(devices) != 4:
@@ -194,7 +194,7 @@ def write_report(report, output):
             f"| {row.get('firmware_ns', 0)/1e6:.3f} | {row.get('kernel_ns', 0)/1e6:.3f} |"
         )
     lines.extend(["", "## Most expensive device ops per geometry", ""])
-    for length, batch in PROFILE_CASES:
+    for length, batch in sorted({(r["input_tokens"], r["batch"]) for r in report["device_totals"]}):
         rows = [r for r in report["device_totals"] if r["input_tokens"] == length and r["batch"] == batch]
         device = max(rows, key=lambda r: r.get("firmware_ns", 0))["device"]
         lines.extend(

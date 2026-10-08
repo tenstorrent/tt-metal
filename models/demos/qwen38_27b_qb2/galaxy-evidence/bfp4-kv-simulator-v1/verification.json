@@ -1,0 +1,17 @@
+{
+  "original_artifact_hashes_verified": 17,
+  "identical_smoke_outputs": 6,
+  "completed_finite_cases_with_kernel_gate_passed": 24,
+  "published_source_provenance_verified": true,
+  "experiment_rerun": false,
+  "python_sources_compiled": 3,
+  "readme_relative_links_valid": true,
+  "format_hooks_passed": [
+    "black23.10.1",
+    "autoflake2.3.1",
+    "isort5.13.2"
+  ],
+  "git_diff_check_passed": true,
+  "published_probe_sha256": "160f612722935206e88c3c10855d57d1994ec85f5f983baddf730dfb878797dc",
+  "readme_whitespace_and_eof_hooks_passed": true
+}

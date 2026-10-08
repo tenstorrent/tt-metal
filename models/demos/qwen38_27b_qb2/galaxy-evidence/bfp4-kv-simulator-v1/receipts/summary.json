@@ -1,0 +1,2854 @@
+{
+  "state": "completed",
+  "completed_variants": 24,
+  "cleanup_completed": true,
+  "simulator_sha256": "d01be2a094f9f0f6a00e771defeae2311cb82f051b8af89c2df509e78b8432b7",
+  "native_revision": "a08819ddbe23077f8037d3802303939064868ff6",
+  "probe_sha256": "241176996e994a39b9ef0134f084843d2f207e855f7e6c5c2fe16e96854fe53f",
+  "model_accuracy_qualified": false,
+  "physical_devices_accessed": false,
+  "compiler_arithmetic_fallback": {
+    "enabled": true,
+    "flag": "TT_METAL_DISABLE_SFPLOADMACRO=1",
+    "meaning": "Native LLK plain-instruction arithmetic implementation; no simulator error or instruction checks disabled",
+    "hardware_instruction_parity_qualified": false
+  },
+  "kernel_gate": {
+    "reference": "CPU FP32 using roundtripped device-quantized K/V",
+    "per_user_relative_rms_max": 0.02,
+    "per_user_pcc_min": 0.999
+  },
+  "quantization_gate": null,
+  "group_scope": "Requested 32768, 131072, and 262016 contexts; two causal bounds each; smoke excluded",
+  "groups": {
+    "K8_V8": {
+      "cases": 6,
+      "kernel_gate_passed": true,
+      "metrics": {
+        "quantization_only": {
+          "finite": true,
+          "relative_rms_min": 0.010048303677772178,
+          "relative_rms_median": 0.010696546941346308,
+          "relative_rms_max": 0.010731264214784772,
+          "pcc_min": 0.9999424564968916,
+          "max_abs": 0.00038834474980831146,
+          "worst_query_head_relative_rms": 0.01137963481795209,
+          "worst_query_head_max_abs": 0.00038834474980831146
+        },
+        "execution_on_quantized": {
+          "finite": true,
+          "relative_rms_min": 0.00811941489734952,
+          "relative_rms_median": 0.011960818013649292,
+          "relative_rms_max": 0.014835166166677538,
+          "pcc_min": 0.9998971343514935,
+          "max_abs": 0.0003187209367752075,
+          "worst_query_head_relative_rms": 0.017070600852159865,
+          "worst_query_head_max_abs": 0.0003187209367752075
+        },
+        "total": {
+          "finite": true,
+          "relative_rms_min": 0.01280507271757738,
+          "relative_rms_median": 0.01594076483363166,
+          "relative_rms_max": 0.018611839291411462,
+          "pcc_min": 0.9998351103724298,
+          "max_abs": 0.0004933718591928482,
+          "worst_query_head_relative_rms": 0.02115467285257267,
+          "worst_query_head_max_abs": 0.0004933718591928482
+        },
+        "actual_vs_bfp8_baseline": {
+          "finite": true,
+          "relative_rms_min": 0.0,
+          "relative_rms_median": 0.0,
+          "relative_rms_max": 0.0,
+          "pcc_min": 0.9999999999999921,
+          "max_abs": 0.0,
+          "worst_query_head_relative_rms": 0.0,
+          "worst_query_head_max_abs": 0.0
+        }
+      }
+    },
+    "K4_V4": {
+      "cases": 6,
+      "kernel_gate_passed": true,
+      "metrics": {
+        "quantization_only": {
+          "finite": true,
+          "relative_rms_min": 0.15576421081389666,
+          "relative_rms_median": 0.1637804090128056,
+          "relative_rms_max": 0.16516229522376424,
+          "pcc_min": 0.9864016437280784,
+          "max_abs": 0.005114919506013393,
+          "worst_query_head_relative_rms": 0.17810021234052775,
+          "worst_query_head_max_abs": 0.005114919506013393
+        },
+        "execution_on_quantized": {
+          "finite": true,
+          "relative_rms_min": 0.008934812295511827,
+          "relative_rms_median": 0.010805794231029802,
+          "relative_rms_max": 0.0150705248333879,
+          "pcc_min": 0.9998949715500027,
+          "max_abs": 0.0003683529794216156,
+          "worst_query_head_relative_rms": 0.017528456154501076,
+          "worst_query_head_max_abs": 0.0003683529794216156
+        },
+        "total": {
+          "finite": true,
+          "relative_rms_min": 0.15646995669077646,
+          "relative_rms_median": 0.16451031923245818,
+          "relative_rms_max": 0.1664127599285562,
+          "pcc_min": 0.9862693081340812,
+          "max_abs": 0.0051559507846832275,
+          "worst_query_head_relative_rms": 0.1795662149695069,
+          "worst_query_head_max_abs": 0.0051559507846832275
+        },
+        "actual_vs_bfp8_baseline": {
+          "finite": true,
+          "relative_rms_min": 0.15697397571747357,
+          "relative_rms_median": 0.16502545343149938,
+          "relative_rms_max": 0.16692340944250883,
+          "pcc_min": 0.9861124433857068,
+          "max_abs": 0.00537109375,
+          "worst_query_head_relative_rms": 0.18029642294549977,
+          "worst_query_head_max_abs": 0.00537109375
+        }
+      }
+    },
+    "K8_V4": {
+      "cases": 6,
+      "kernel_gate_passed": true,
+      "metrics": {
+        "quantization_only": {
+          "finite": true,
+          "relative_rms_min": 0.11073249575376796,
+          "relative_rms_median": 0.11120348943098113,
+          "relative_rms_max": 0.11158672635834972,
+          "pcc_min": 0.9937686813218032,
+          "max_abs": 0.003348482307046652,
+          "worst_query_head_relative_rms": 0.117431150586628,
+          "worst_query_head_max_abs": 0.003348482307046652
+        },
+        "execution_on_quantized": {
+          "finite": true,
+          "relative_rms_min": 0.008302586840538856,
+          "relative_rms_median": 0.011768686050548658,
+          "relative_rms_max": 0.015319482181002897,
+          "pcc_min": 0.9998881906051754,
+          "max_abs": 0.0003159642219543457,
+          "worst_query_head_relative_rms": 0.016478187499955763,
+          "worst_query_head_max_abs": 0.0003159642219543457
+        },
+        "total": {
+          "finite": true,
+          "relative_rms_min": 0.11115879693375595,
+          "relative_rms_median": 0.11185132483407398,
+          "relative_rms_max": 0.11287989833208961,
+          "pcc_min": 0.9936429301973368,
+          "max_abs": 0.0033320500515401363,
+          "worst_query_head_relative_rms": 0.12066194436857487,
+          "worst_query_head_max_abs": 0.0033320500515401363
+        },
+        "actual_vs_bfp8_baseline": {
+          "finite": true,
+          "relative_rms_min": 0.11091331617627084,
+          "relative_rms_median": 0.11196249091920442,
+          "relative_rms_max": 0.11293251845847262,
+          "pcc_min": 0.9936145896817061,
+          "max_abs": 0.00341796875,
+          "worst_query_head_relative_rms": 0.11935167395622569,
+          "worst_query_head_max_abs": 0.00341796875
+        }
+      }
+    }
+  },
+  "rows": [
+    {
+      "context": 1024,
+      "active_tokens": 1024,
+      "variant": "K8_V8",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 1.0,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.01060622254780127,
+        "pcc": 0.9999437998469834,
+        "max_abs": 0.002048051916062832,
+        "mean_error": -1.4191898041341725e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.011672279611962747,
+          "pcc": 0.9999317731259458,
+          "max_abs": 0.0018519368022680283
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.011615678759945281,
+          "pcc": 0.9999327205699402,
+          "max_abs": 0.002048051916062832
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.005725415770938461,
+        "pcc": 0.9999848378981379,
+        "max_abs": 0.0011754557490348816,
+        "mean_error": -7.841631789536526e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.0064599185515321865,
+          "pcc": 0.9999853271435636,
+          "max_abs": 0.0011754557490348816
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.0064599185515321865,
+          "pcc": 0.9999853271435636,
+          "max_abs": 0.0011754557490348816
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.012011464765404595,
+        "pcc": 0.9999289125371263,
+        "max_abs": 0.002163238823413849,
+        "mean_error": -2.203352983087825e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.013023705161233764,
+          "pcc": 0.9999160454302919,
+          "max_abs": 0.002163238823413849
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.013023705161233764,
+          "pcc": 0.9999160454302919,
+          "max_abs": 0.002163238823413849
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.0,
+        "pcc": 0.9999999999999989,
+        "max_abs": 0.0,
+        "mean_error": 0.0,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.0,
+          "max_abs": 0.0
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.0,
+          "max_abs": 0.0
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.0,
+        "pcc": 1.0000000000000002,
+        "max_abs": 0.0,
+        "mean_error": 0.0,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 0.9999999999999998,
+          "max_abs": 0.0
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 0.9999999999999998,
+          "max_abs": 0.0
+        }
+      }
+    },
+    {
+      "context": 1024,
+      "active_tokens": 1024,
+      "variant": "K4_V4",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 13.44505734992007,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.1614689448606165,
+        "pcc": 0.9868909944523512,
+        "max_abs": 0.029147040098905563,
+        "mean_error": -0.00010953035333235069,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.17815865177032356,
+          "pcc": 0.9840057035481128,
+          "max_abs": 0.027633843943476677
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.16415271357968775,
+          "pcc": 0.9864248612843279,
+          "max_abs": 0.029147040098905563
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.006123133867722534,
+        "pcc": 0.9999822065332987,
+        "max_abs": 0.0010668560862541199,
+        "mean_error": -5.0485455176385585e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.007529712227338189,
+          "pcc": 0.9999871260585917,
+          "max_abs": 0.0010278820991516113
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.0057858292329691354,
+          "pcc": 0.9999879147997927,
+          "max_abs": 0.0010668560862541199
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.161494832627409,
+        "pcc": 0.9868945300717447,
+        "max_abs": 0.029442816972732544,
+        "mean_error": -0.00011457889884998924,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.1792553346253916,
+          "pcc": 0.9838094676951498,
+          "max_abs": 0.027878090739250183
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.1647604708403929,
+          "pcc": 0.9863154730024234,
+          "max_abs": 0.029442816972732544
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.16318999673936158,
+        "pcc": 0.9866269993529024,
+        "max_abs": 0.02911376953125,
+        "mean_error": -9.254536901911099e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.18090569681327626,
+          "pcc": 0.9835108813157803,
+          "max_abs": 0.0284423828125
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.16505350298759372,
+          "pcc": 0.9862657851941974,
+          "max_abs": 0.02911376953125
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.16255883710020833,
+        "pcc": 0.9867117549545544,
+        "max_abs": 0.02897027600556612,
+        "mean_error": -9.533845529100897e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.17992877130155857,
+          "pcc": 0.9836854753994531,
+          "max_abs": 0.028421079739928246
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.1645716109118759,
+          "pcc": 0.9863578582935799,
+          "max_abs": 0.02897027600556612
+        }
+      }
+    },
+    {
+      "context": 1024,
+      "active_tokens": 1024,
+      "variant": "K8_V4",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 9.807806573599434,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.11789571715025537,
+        "pcc": 0.9930287194461445,
+        "max_abs": 0.0249553844332695,
+        "mean_error": -0.00012611590189711327,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.1279040816237711,
+          "pcc": 0.9917854607252116,
+          "max_abs": 0.02081798017024994
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.11403770260902253,
+          "pcc": 0.99348543550372,
+          "max_abs": 0.0249553844332695
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.005649435677409162,
+        "pcc": 0.999985253457564,
+        "max_abs": 0.0012800469994544983,
+        "mean_error": -4.246431065742702e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.006678605611713555,
+          "pcc": 0.9999853032023661,
+          "max_abs": 0.0012800469994544983
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.006678605611713555,
+          "pcc": 0.9999853032023661,
+          "max_abs": 0.0012800469994544983
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.11780612308469317,
+        "pcc": 0.993039540508358,
+        "max_abs": 0.023675337433815002,
+        "mean_error": -0.00013036233296285596,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.12777299280012505,
+          "pcc": 0.9917970363261687,
+          "max_abs": 0.020205624401569366
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.11382780071610393,
+          "pcc": 0.9935309590283528,
+          "max_abs": 0.023675337433815002
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.1186759499826376,
+        "pcc": 0.9929349249229462,
+        "max_abs": 0.02490234375,
+        "mean_error": -0.00010832880313197772,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.12928407138470327,
+          "pcc": 0.9916073169309646,
+          "max_abs": 0.0205078125
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.11348076954038878,
+          "pcc": 0.9935509382308203,
+          "max_abs": 0.02490234375
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.1186767941548309,
+        "pcc": 0.9929349833425084,
+        "max_abs": 0.025128893554210663,
+        "mean_error": -0.00011192400385577154,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.12964924602603528,
+          "pcc": 0.9915604160371126,
+          "max_abs": 0.021076440811157227
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.11342110913139564,
+          "pcc": 0.9935569123031035,
+          "max_abs": 0.025128893554210663
+        }
+      }
+    },
+    {
+      "context": 1024,
+      "active_tokens": 987,
+      "variant": "K8_V8",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 1.0,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.010517668508099175,
+        "pcc": 0.9999446828716865,
+        "max_abs": 0.0021207761019468307,
+        "mean_error": -1.279461533461775e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.01175420290568057,
+          "pcc": 0.9999306011274413,
+          "max_abs": 0.0018343739211559296
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.011410130437974831,
+          "pcc": 0.9999351514351493,
+          "max_abs": 0.0021207761019468307
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.005299349942161549,
+        "pcc": 0.9999861097069701,
+        "max_abs": 0.0011783987283706665,
+        "mean_error": -1.1475739332430143e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.005741076558996938,
+          "pcc": 0.9999846181432909,
+          "max_abs": 0.0010361969470977783
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.005262942703321344,
+          "pcc": 0.9999872334700741,
+          "max_abs": 0.0011783987283706665
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.011698609984868918,
+        "pcc": 0.9999317739222617,
+        "max_abs": 0.002233687788248062,
+        "mean_error": -2.4270354667047894e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.013077137728912312,
+          "pcc": 0.9999179210398551,
+          "max_abs": 0.002233687788248062
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.013077137728912312,
+          "pcc": 0.9999179210398551,
+          "max_abs": 0.002233687788248062
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.0,
+        "pcc": 0.9999999999999976,
+        "max_abs": 0.0,
+        "mean_error": 0.0,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.0000000000000002,
+          "max_abs": 0.0
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.0000000000000002,
+          "max_abs": 0.0
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.0,
+        "pcc": 0.9999999999999998,
+        "max_abs": 0.0,
+        "mean_error": 0.0,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.0,
+          "max_abs": 0.0
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.0,
+          "max_abs": 0.0
+        }
+      }
+    },
+    {
+      "context": 1024,
+      "active_tokens": 987,
+      "variant": "K4_V4",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 13.671811143125188,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.15980855143414271,
+        "pcc": 0.9871518424875128,
+        "max_abs": 0.030294056981801987,
+        "mean_error": -9.42125901322773e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.18153475075667128,
+          "pcc": 0.9833364889579348,
+          "max_abs": 0.030294056981801987
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.18153475075667128,
+          "pcc": 0.9833364889579348,
+          "max_abs": 0.030294056981801987
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.006257370584356329,
+        "pcc": 0.9999829148409075,
+        "max_abs": 0.0014243125915527344,
+        "mean_error": -8.134261255084615e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.007965495970708619,
+          "pcc": 0.9999844079352056,
+          "max_abs": 0.0014243125915527344
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.007965495970708619,
+          "pcc": 0.9999844079352056,
+          "max_abs": 0.0014243125915527344
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.15994118635020646,
+        "pcc": 0.9871431310396174,
+        "max_abs": 0.03037121146917343,
+        "mean_error": -0.00010234685138736192,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.18249068995427112,
+          "pcc": 0.983165021730716,
+          "max_abs": 0.03037121146917343
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.18249068995427112,
+          "pcc": 0.983165021730716,
+          "max_abs": 0.03037121146917343
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.16161187353637174,
+        "pcc": 0.9868759668183065,
+        "max_abs": 0.031005859375,
+        "mean_error": -7.807649672031403e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.18464413755844428,
+          "pcc": 0.9827636097683384,
+          "max_abs": 0.031005859375
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.18464413755844428,
+          "pcc": 0.9827636097683384,
+          "max_abs": 0.031005859375
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.160963231277198,
+        "pcc": 0.9869647150345611,
+        "max_abs": 0.031058285385370255,
+        "mean_error": -8.141797479765955e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.1835636575359627,
+          "pcc": 0.9829612897988405,
+          "max_abs": 0.031058285385370255
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.1835636575359627,
+          "pcc": 0.9829612897988405,
+          "max_abs": 0.031058285385370255
+        }
+      }
+    },
+    {
+      "context": 1024,
+      "active_tokens": 987,
+      "variant": "K8_V4",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 10.124700867499802,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.11847948202830746,
+        "pcc": 0.9929556126109822,
+        "max_abs": 0.026166073977947235,
+        "mean_error": -0.00013725315695486037,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.12936537872325118,
+          "pcc": 0.9915760643917073,
+          "max_abs": 0.02162027359008789
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.11428878181021732,
+          "pcc": 0.9934499003118128,
+          "max_abs": 0.026166073977947235
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.005375992419435634,
+        "pcc": 0.9999857161941822,
+        "max_abs": 0.0010716244578361511,
+        "mean_error": -8.854369127675454e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.005682093496646485,
+          "pcc": 0.9999857168030388,
+          "max_abs": 0.0010716244578361511
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.005682093496646485,
+          "pcc": 0.9999857168030388,
+          "max_abs": 0.0010716244578361511
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.11844492666234419,
+        "pcc": 0.9929601059422264,
+        "max_abs": 0.025473646819591522,
+        "mean_error": -0.00014610752608253583,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.1292051136342516,
+          "pcc": 0.9915839749681173,
+          "max_abs": 0.021427705883979797
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.11420207106192028,
+          "pcc": 0.9934634924246578,
+          "max_abs": 0.025473646819591522
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.11946906863438758,
+        "pcc": 0.9928361457460432,
+        "max_abs": 0.0263671875,
+        "mean_error": -0.00012183717141548793,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.13108201788697346,
+          "pcc": 0.9913483364167249,
+          "max_abs": 0.02197265625
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.1141281076632105,
+          "pcc": 0.9934651987142338,
+          "max_abs": 0.0263671875
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.11939306655763593,
+        "pcc": 0.9928455139497295,
+        "max_abs": 0.02640068531036377,
+        "mean_error": -0.0001244585416202426,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.1312420829986657,
+          "pcc": 0.991330278799599,
+          "max_abs": 0.021964699029922485
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.1138745931468678,
+          "pcc": 0.9934953206494728,
+          "max_abs": 0.02640068531036377
+        }
+      }
+    },
+    {
+      "context": 32768,
+      "active_tokens": 32768,
+      "variant": "K8_V8",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 1.0,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.010054052412455902,
+        "pcc": 0.9999493827096781,
+        "max_abs": 0.00038600433617830276,
+        "mean_error": -2.3498816830169744e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 1,
+          "relative_rms": 0.011038898153654605,
+          "pcc": 0.9999387673029361,
+          "max_abs": 0.00030342640820890665
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.010630286094355637,
+          "pcc": 0.9999440072736585,
+          "max_abs": 0.00038600433617830276
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.008621012194733298,
+        "pcc": 0.9999676435381027,
+        "max_abs": 0.00029618293046951294,
+        "mean_error": 3.1124334446038424e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 1,
+          "relative_rms": 0.010254176012478173,
+          "pcc": 0.9999749030182934,
+          "max_abs": 0.00029618293046951294
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 1,
+          "relative_rms": 0.010254176012478173,
+          "pcc": 0.9999749030182934,
+          "max_abs": 0.00029618293046951294
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.01312514875390121,
+        "pcc": 0.9999184290772106,
+        "max_abs": 0.0004933718591928482,
+        "mean_error": 7.625517615868679e-07,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 1,
+          "relative_rms": 0.015120287714592059,
+          "pcc": 0.9999121003808606,
+          "max_abs": 0.0004933718591928482
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 1,
+          "relative_rms": 0.015120287714592059,
+          "pcc": 0.9999121003808606,
+          "max_abs": 0.0004933718591928482
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.0,
+        "pcc": 1.0000000000000004,
+        "max_abs": 0.0,
+        "mean_error": 0.0,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 0.9999999999999989,
+          "max_abs": 0.0
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 0.9999999999999989,
+          "max_abs": 0.0
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.0,
+        "pcc": 1.0000000000000007,
+        "max_abs": 0.0,
+        "mean_error": 0.0,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 0.9999999999999997,
+          "max_abs": 0.0
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 0.9999999999999997,
+          "max_abs": 0.0
+        }
+      }
+    },
+    {
+      "context": 32768,
+      "active_tokens": 32768,
+      "variant": "K4_V4",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 11.931823237307503,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.15584798343882866,
+        "pcc": 0.9878661635921311,
+        "max_abs": 0.005046888254582882,
+        "mean_error": -2.7490266665116298e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.1620401964220389,
+          "pcc": 0.9868510857289291,
+          "max_abs": 0.004104119027033448
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.15725696943477216,
+          "pcc": 0.9876592348116652,
+          "max_abs": 0.005046888254582882
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.008934812295511827,
+        "pcc": 0.9999712004196087,
+        "max_abs": 0.0003683529794216156,
+        "mean_error": 1.7472615378248217e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.011008553114595528,
+          "pcc": 0.9999727514686062,
+          "max_abs": 0.0003683529794216156
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.011008553114595528,
+          "pcc": 0.9999727514686062,
+          "max_abs": 0.0003683529794216156
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.15660695489491608,
+        "pcc": 0.9878265210389545,
+        "max_abs": 0.005064084194600582,
+        "mean_error": -2.574300512729148e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.16192842601346347,
+          "pcc": 0.9869028526337876,
+          "max_abs": 0.004021334461867809
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.15829799616986862,
+          "pcc": 0.9875202949549736,
+          "max_abs": 0.005064084194600582
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.15704557051742413,
+        "pcc": 0.9877048564105654,
+        "max_abs": 0.00531005859375,
+        "mean_error": -2.6505556888878345e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.16358795866006295,
+          "pcc": 0.9866728525172735,
+          "max_abs": 0.00390625
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.15856684448134972,
+          "pcc": 0.9874253681928883,
+          "max_abs": 0.00531005859375
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.15650495393350072,
+        "pcc": 0.9877641987306284,
+        "max_abs": 0.0051632411777973175,
+        "mean_error": -2.5140384982099324e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.16329814590876304,
+          "pcc": 0.9866483296957502,
+          "max_abs": 0.003992752870544791
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.15778011449388418,
+          "pcc": 0.9875698572413887,
+          "max_abs": 0.0051632411777973175
+        }
+      }
+    },
+    {
+      "context": 32768,
+      "active_tokens": 32768,
+      "variant": "K8_V4",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 8.469145684974887,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.11073249575376796,
+        "pcc": 0.9938693038926382,
+        "max_abs": 0.003348482307046652,
+        "mean_error": -4.514131471703801e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.11557526634645912,
+          "pcc": 0.9933531026382226,
+          "max_abs": 0.0027191818226128817
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.10886083872569402,
+          "pcc": 0.9940673671338217,
+          "max_abs": 0.003348482307046652
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.00861058577867071,
+        "pcc": 0.9999662970655107,
+        "max_abs": 0.00030601397156715393,
+        "mean_error": 2.2853251901248464e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 1,
+          "relative_rms": 0.010580650514299048,
+          "pcc": 0.9999766718392251,
+          "max_abs": 0.0002874135971069336
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.008483041975042818,
+          "pcc": 0.9999713019437064,
+          "max_abs": 0.00030601397156715393
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.11115879693375595,
+        "pcc": 0.9938401665834398,
+        "max_abs": 0.0033320500515401363,
+        "mean_error": -4.285598952691316e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.11587758737120864,
+          "pcc": 0.9933365199900228,
+          "max_abs": 0.002754371613264084
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.10945542939471185,
+          "pcc": 0.9940621226342207,
+          "max_abs": 0.0033320500515401363
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.11091331617627084,
+        "pcc": 0.9938457800247955,
+        "max_abs": 0.00341796875,
+        "mean_error": -4.361854128850003e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.11647006264900263,
+          "pcc": 0.9931975246810354,
+          "max_abs": 0.0032958984375
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.1077086991128456,
+          "pcc": 0.9941909224761571,
+          "max_abs": 0.00341796875
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.11090539356602282,
+        "pcc": 0.9938494501219439,
+        "max_abs": 0.00339775113388896,
+        "mean_error": -4.279143303402103e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.11603948775890525,
+          "pcc": 0.9932554156605167,
+          "max_abs": 0.0033379201777279377
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.10798663335486879,
+          "pcc": 0.9941670696590484,
+          "max_abs": 0.00339775113388896
+        }
+      }
+    },
+    {
+      "context": 32768,
+      "active_tokens": 32731,
+      "variant": "K8_V8",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 1.0,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.010048303677772178,
+        "pcc": 0.9999494389236816,
+        "max_abs": 0.00038834474980831146,
+        "mean_error": -2.4568639673816506e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 1,
+          "relative_rms": 0.011009599390809447,
+          "pcc": 0.9999390598589262,
+          "max_abs": 0.0003044496988877654
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.010661971256050489,
+          "pcc": 0.9999436690230926,
+          "max_abs": 0.00038834474980831146
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.00811941489734952,
+        "pcc": 0.9999687934885491,
+        "max_abs": 0.0003187209367752075,
+        "mean_error": 2.666457750895764e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.010024114966282055,
+          "pcc": 0.9999698046300113,
+          "max_abs": 0.0003187209367752075
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.010024114966282055,
+          "pcc": 0.9999698046300113,
+          "max_abs": 0.0003187209367752075
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.01280507271757738,
+        "pcc": 0.9999195995368346,
+        "max_abs": 0.00042695365846157074,
+        "mean_error": 2.0959378351411337e-07,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 1,
+          "relative_rms": 0.014162197804534827,
+          "pcc": 0.999912389524612,
+          "max_abs": 0.00040486734360456467
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.014160027334823013,
+          "pcc": 0.9999156588090495,
+          "max_abs": 0.00042695365846157074
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.0,
+        "pcc": 0.9999999999999921,
+        "max_abs": 0.0,
+        "mean_error": 0.0,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.000000000000001,
+          "max_abs": 0.0
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.000000000000001,
+          "max_abs": 0.0
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.0,
+        "pcc": 0.9999999999999996,
+        "max_abs": 0.0,
+        "mean_error": 0.0,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.0000000000000002,
+          "max_abs": 0.0
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.0000000000000002,
+          "max_abs": 0.0
+        }
+      }
+    },
+    {
+      "context": 32768,
+      "active_tokens": 32731,
+      "variant": "K4_V4",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 12.219372754985756,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.15576421081389666,
+        "pcc": 0.9878750959074675,
+        "max_abs": 0.005114919506013393,
+        "mean_error": -2.7363906442682644e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.16166167761872535,
+          "pcc": 0.9869091357799367,
+          "max_abs": 0.004057105630636215
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.15726578011709716,
+          "pcc": 0.9876345941691486,
+          "max_abs": 0.005114919506013393
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.008935269196491786,
+        "pcc": 0.9999692251597778,
+        "max_abs": 0.0003387453034520149,
+        "mean_error": 1.2705448024045534e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.011847392098519063,
+          "pcc": 0.9999703215478624,
+          "max_abs": 0.0003387453034520149
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.011847392098519063,
+          "pcc": 0.9999703215478624,
+          "max_abs": 0.0003387453034520149
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.15646995669077646,
+        "pcc": 0.9878347332471058,
+        "max_abs": 0.0051559507846832275,
+        "mean_error": -2.609336164027809e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.16175770513943727,
+          "pcc": 0.9869167866578983,
+          "max_abs": 0.003977539017796516
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.1578148048391566,
+          "pcc": 0.9875536656947167,
+          "max_abs": 0.0051559507846832275
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.15697397571747357,
+        "pcc": 0.9877241530697323,
+        "max_abs": 0.00537109375,
+        "mean_error": -2.6302955423792202e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.1631228196380911,
+          "pcc": 0.986746989779704,
+          "max_abs": 0.00384521484375
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.15820828490471991,
+          "pcc": 0.9874702214562957,
+          "max_abs": 0.00537109375
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.1563889408972837,
+        "pcc": 0.9877779361316399,
+        "max_abs": 0.005233963951468468,
+        "mean_error": -2.4907042475300994e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.16292457176748035,
+          "pcc": 0.9867063904778615,
+          "max_abs": 0.003948676399886608
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.15777198414718796,
+          "pcc": 0.9875476048450208,
+          "max_abs": 0.005233963951468468
+        }
+      }
+    },
+    {
+      "context": 32768,
+      "active_tokens": 32731,
+      "variant": "K8_V4",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 8.693615650573292,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.11082200020137423,
+        "pcc": 0.9938581784589794,
+        "max_abs": 0.0033129770308732986,
+        "mean_error": -4.469151148593179e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.11619554064079077,
+          "pcc": 0.993280170754349,
+          "max_abs": 0.0027983326581306756
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.10881412682990108,
+          "pcc": 0.9940720440329468,
+          "max_abs": 0.0033129770308732986
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.008302586840538856,
+        "pcc": 0.9999670327117259,
+        "max_abs": 0.0003159642219543457,
+        "mean_error": 2.1690763579348036e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.009273036712924622,
+          "pcc": 0.9999702270898063,
+          "max_abs": 0.0002600867301225662
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.008651265951350367,
+          "pcc": 0.9999715034211257,
+          "max_abs": 0.0003159642219543457
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.11132238058425979,
+        "pcc": 0.9938135358712963,
+        "max_abs": 0.003300533164292574,
+        "mean_error": -4.252243512799699e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.11654340115275715,
+          "pcc": 0.9932527973706592,
+          "max_abs": 0.0028339303098618984
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.1095667200019365,
+          "pcc": 0.9940427187456579,
+          "max_abs": 0.003300533164292574
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.11122354092437975,
+        "pcc": 0.9938119315718228,
+        "max_abs": 0.0033721923828125,
+        "mean_error": -4.27320289115111e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.11644765164691545,
+          "pcc": 0.9932026991625567,
+          "max_abs": 0.00323486328125
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.10817503734952662,
+          "pcc": 0.9941371896571192,
+          "max_abs": 0.0033721923828125
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.1109661156948126,
+        "pcc": 0.9938413699811283,
+        "max_abs": 0.0033606879878789186,
+        "mean_error": -4.223464751855014e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.11624397942634622,
+          "pcc": 0.9932727090742146,
+          "max_abs": 0.0026601850986480713
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.10790495708457203,
+          "pcc": 0.9941752796553069,
+          "max_abs": 0.0033606879878789186
+        }
+      }
+    },
+    {
+      "context": 131072,
+      "active_tokens": 131072,
+      "variant": "K8_V8",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 1.0,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.01069789766908772,
+        "pcc": 0.9999431904246012,
+        "max_abs": 0.0001704576425254345,
+        "mean_error": -1.4998983637326546e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.011372288579382873,
+          "pcc": 0.9999356538227206,
+          "max_abs": 0.00014814827591180801
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.010856750767591222,
+          "pcc": 0.999940546860732,
+          "max_abs": 0.0001704576425254345
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.011909702504330436,
+        "pcc": 0.9999393805676812,
+        "max_abs": 0.00018492969684302807,
+        "mean_error": 2.973695856667291e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.013636320743782734,
+          "pcc": 0.9999361098262507,
+          "max_abs": 0.00016156700439751148
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.011041103878895312,
+          "pcc": 0.9999399653572002,
+          "max_abs": 0.00018492969684302807
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.015947160435448453,
+        "pcc": 0.9998794470677955,
+        "max_abs": 0.0002441541291773319,
+        "mean_error": 1.4737974929346365e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.01802070530967553,
+          "pcc": 0.9998619080991514,
+          "max_abs": 0.00020559655968099833
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.014748313027647423,
+          "pcc": 0.9998995129254612,
+          "max_abs": 0.0002441541291773319
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.0,
+        "pcc": 1.0000000000000004,
+        "max_abs": 0.0,
+        "mean_error": 0.0,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 0.9999999999999992,
+          "max_abs": 0.0
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 0.9999999999999992,
+          "max_abs": 0.0
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.0,
+        "pcc": 1.0,
+        "max_abs": 0.0,
+        "mean_error": 0.0,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.0,
+          "max_abs": 0.0
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.0,
+          "max_abs": 0.0
+        }
+      }
+    },
+    {
+      "context": 131072,
+      "active_tokens": 131072,
+      "variant": "K4_V4",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 10.318726750166373,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.16381856654755442,
+        "pcc": 0.9866978450191226,
+        "max_abs": 0.003071760991588235,
+        "mean_error": -4.931993919280823e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.17802266054590885,
+          "pcc": 0.9846735963405941,
+          "max_abs": 0.003071760991588235
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.17802266054590885,
+          "pcc": 0.9846735963405941,
+          "max_abs": 0.003071760991588235
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.010837049774357298,
+        "pcc": 0.9999432984740372,
+        "max_abs": 0.00017535686492919922,
+        "mean_error": 1.692363582606049e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.011768221387441975,
+          "pcc": 0.9999366317279196,
+          "max_abs": 0.0001498023048043251
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.011309599237844633,
+          "pcc": 0.9999423311825026,
+          "max_abs": 0.00017535686492919922
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.1645543909744568,
+        "pcc": 0.9866089928138021,
+        "max_abs": 0.003005220089107752,
+        "mean_error": -4.762757561020218e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.17953680057816784,
+          "pcc": 0.984400077767412,
+          "max_abs": 0.003005220089107752
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.17953680057816784,
+          "pcc": 0.984400077767412,
+          "max_abs": 0.003005220089107752
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.16507919608091842,
+        "pcc": 0.9864637413231384,
+        "max_abs": 0.003032684326171875,
+        "mean_error": -4.9101373103136815e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.18013919224954197,
+          "pcc": 0.9842833826097809,
+          "max_abs": 0.003032684326171875
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.18013919224954197,
+          "pcc": 0.9842833826097809,
+          "max_abs": 0.003032684326171875
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.16453116625732453,
+        "pcc": 0.9865946536038499,
+        "max_abs": 0.0030629773973487318,
+        "mean_error": -4.782004082907557e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.17835353219186165,
+          "pcc": 0.9846110205173199,
+          "max_abs": 0.0030629773973487318
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.17835353219186165,
+          "pcc": 0.9846110205173199,
+          "max_abs": 0.0030629773973487318
+        }
+      }
+    },
+    {
+      "context": 131072,
+      "active_tokens": 131072,
+      "variant": "K8_V4",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 7.022207448657605,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.11128871577236353,
+        "pcc": 0.9938827704972975,
+        "max_abs": 0.0019457166781648993,
+        "mean_error": -5.4885832180199635e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.1167804382358549,
+          "pcc": 0.9932726923617374,
+          "max_abs": 0.0015983734047040343
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.10780301545872441,
+          "pcc": 0.994278375114999,
+          "max_abs": 0.0019457166781648993
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.011803660384601103,
+        "pcc": 0.9999402240570797,
+        "max_abs": 0.00019744504243135452,
+        "mean_error": 4.26264653204574e-09,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 1,
+          "relative_rms": 0.014064067533205342,
+          "pcc": 0.9999490261501224,
+          "max_abs": 0.0001766849309206009
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.011305528407660581,
+          "pcc": 0.9999487007374995,
+          "max_abs": 0.00019744504243135452
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.11198426879474399,
+        "pcc": 0.9938457718768128,
+        "max_abs": 0.0020289033418521285,
+        "mean_error": -5.4881569533667594e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.11790861985877867,
+          "pcc": 0.9932517918395755,
+          "max_abs": 0.0015139628667384386
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.1091485685637546,
+          "pcc": 0.9941610720265541,
+          "max_abs": 0.0020289033418521285
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.11212877687022299,
+        "pcc": 0.9937988625265598,
+        "max_abs": 0.00206756591796875,
+        "mean_error": -5.635536702660223e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.11870667281020825,
+          "pcc": 0.993048593850279,
+          "max_abs": 0.001468658447265625
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.10861092759256608,
+          "pcc": 0.9941978592152433,
+          "max_abs": 0.00206756591796875
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.11142851949550352,
+        "pcc": 0.993870502112526,
+        "max_abs": 0.0019711381173692644,
+        "mean_error": -5.338593381646698e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.11829550033621239,
+          "pcc": 0.9930987295383117,
+          "max_abs": 0.001532324473373592
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.1078891595583757,
+          "pcc": 0.9942824839028988,
+          "max_abs": 0.0019711381173692644
+        }
+      }
+    },
+    {
+      "context": 131072,
+      "active_tokens": 131035,
+      "variant": "K8_V8",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 1.0,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.010695196213604896,
+        "pcc": 0.9999432212296466,
+        "max_abs": 0.00017058523371815681,
+        "mean_error": -1.5045198968148081e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.01137963481795209,
+          "pcc": 0.999935565990708,
+          "max_abs": 0.00014961650595068932
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.010862061705876802,
+          "pcc": 0.9999404755814715,
+          "max_abs": 0.00017058523371815681
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.012011933522968147,
+        "pcc": 0.9999406372218859,
+        "max_abs": 0.00021990202367305756,
+        "mean_error": 3.190472983286933e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 1,
+          "relative_rms": 0.013733835599676296,
+          "pcc": 0.9999434008834175,
+          "max_abs": 0.0001584058627486229
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.011911893656972783,
+          "pcc": 0.9999468950867599,
+          "max_abs": 0.00021990202367305756
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.01593436923181487,
+        "pcc": 0.9998816665167943,
+        "max_abs": 0.0002508372999727726,
+        "mean_error": 1.685953086472125e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.01767896176410283,
+          "pcc": 0.9998624614958632,
+          "max_abs": 0.00019977171905338764
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.014717188140353697,
+          "pcc": 0.999900954670896,
+          "max_abs": 0.0002508372999727726
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.0,
+        "pcc": 1.0000000000000027,
+        "max_abs": 0.0,
+        "mean_error": 0.0,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 0.9999999999999998,
+          "max_abs": 0.0
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 0.9999999999999998,
+          "max_abs": 0.0
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.0,
+        "pcc": 1.0000000000000002,
+        "max_abs": 0.0,
+        "mean_error": 0.0,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.0000000000000004,
+          "max_abs": 0.0
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.0000000000000004,
+          "max_abs": 0.0
+        }
+      }
+    },
+    {
+      "context": 131072,
+      "active_tokens": 131035,
+      "variant": "K4_V4",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 10.321478377825155,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.1637422514780568,
+        "pcc": 0.986713728669273,
+        "max_abs": 0.003071831481065601,
+        "mean_error": -4.9189517578263064e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.17810021234052775,
+          "pcc": 0.9846640118992337,
+          "max_abs": 0.003071831481065601
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.17810021234052775,
+          "pcc": 0.9846640118992337,
+          "max_abs": 0.003071831481065601
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.010774538687702305,
+        "pcc": 0.9999440840827807,
+        "max_abs": 0.00019483407959342003,
+        "mean_error": 1.6882509630278264e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.011802315593482186,
+          "pcc": 0.9999346945625869,
+          "max_abs": 0.00015276391059160233
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.011562032657506018,
+          "pcc": 0.9999407403458819,
+          "max_abs": 0.00019483407959342003
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.1644662474904596,
+        "pcc": 0.9866283414660558,
+        "max_abs": 0.0030098636052571237,
+        "mean_error": -4.750126661523524e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.1795662149695069,
+          "pcc": 0.9844099972261384,
+          "max_abs": 0.0030098636052571237
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.1795662149695069,
+          "pcc": 0.9844099972261384,
+          "max_abs": 0.0030098636052571237
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.1649717107820803,
+        "pcc": 0.9864777485336946,
+        "max_abs": 0.003032684326171875,
+        "mean_error": -4.918721970170736e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.18029642294549977,
+          "pcc": 0.9842852659016306,
+          "max_abs": 0.003032684326171875
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.18029642294549977,
+          "pcc": 0.9842852659016306,
+          "max_abs": 0.003032684326171875
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.1644549729943524,
+        "pcc": 0.9866107472175958,
+        "max_abs": 0.0030623559723608196,
+        "mean_error": -4.768499768144826e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.1784227173897007,
+          "pcc": 0.9846027767791906,
+          "max_abs": 0.0030623559723608196
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.1784227173897007,
+          "pcc": 0.9846027767791906,
+          "max_abs": 0.0030623559723608196
+        }
+      }
+    },
+    {
+      "context": 131072,
+      "active_tokens": 131035,
+      "variant": "K8_V4",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 7.011158035069557,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.11111826308959873,
+        "pcc": 0.9939026310436749,
+        "max_abs": 0.0019502221839502454,
+        "mean_error": -5.497026109294959e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.11672710934028548,
+          "pcc": 0.9932806353611038,
+          "max_abs": 0.0015915438998490572
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.10747399803100155,
+          "pcc": 0.9943153748890535,
+          "max_abs": 0.0019502221839502454
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.011733711716496212,
+        "pcc": 0.999943306855832,
+        "max_abs": 0.00019599031656980515,
+        "mean_error": -4.2322704511358705e-07,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 1,
+          "relative_rms": 0.013947031215931835,
+          "pcc": 0.9999481059458004,
+          "max_abs": 0.00017205392941832542
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.011729076918042269,
+          "pcc": 0.9999430496490181,
+          "max_abs": 0.00019599031656980515
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.11171838087340395,
+        "pcc": 0.9938833846806965,
+        "max_abs": 0.0020301687764003873,
+        "mean_error": -5.5393488138063184e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.11767583313907365,
+          "pcc": 0.9932739644359639,
+          "max_abs": 0.001533229136839509
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.1085860814382321,
+          "pcc": 0.9942272470497256,
+          "max_abs": 0.0020301687764003873
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.11179620496818585,
+        "pcc": 0.9938383911998157,
+        "max_abs": 0.0020751953125,
+        "mean_error": -5.707944122453531e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.11830222186540786,
+          "pcc": 0.993106109427682,
+          "max_abs": 0.001468658447265625
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.10819060537492596,
+          "pcc": 0.9942438512883889,
+          "max_abs": 0.0020751953125
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.11125897457281117,
+        "pcc": 0.993890320436666,
+        "max_abs": 0.0019758061971515417,
+        "mean_error": -5.3465741196134786e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.11825160593862549,
+          "pcc": 0.9931056305487571,
+          "max_abs": 0.0015260449144989252
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.10759246780764002,
+          "pcc": 0.9943160878516931,
+          "max_abs": 0.0019758061971515417
+        }
+      }
+    },
+    {
+      "context": 262016,
+      "active_tokens": 262016,
+      "variant": "K8_V8",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 1.0,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.010727563687286551,
+        "pcc": 0.9999424966775963,
+        "max_abs": 0.00013720954302698374,
+        "mean_error": 1.583242950076169e-07,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.011342065630717912,
+          "pcc": 0.9999355934374377,
+          "max_abs": 0.00012144073843955994
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.009838363247039246,
+          "pcc": 0.9999521642701321,
+          "max_abs": 0.00013720954302698374
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.014799697522525065,
+        "pcc": 0.99989802037526,
+        "max_abs": 0.00020397407934069633,
+        "mean_error": 6.150342931240023e-08,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.017070600852159865,
+          "pcc": 0.9998991551179377,
+          "max_abs": 0.00018707569688558578
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.015072651309804414,
+          "pcc": 0.9998874850245193,
+          "max_abs": 0.00020397407934069633
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.018611839291411462,
+        "pcc": 0.9998354541759352,
+        "max_abs": 0.00023104902356863022,
+        "mean_error": 2.1982772432001715e-07,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.02115467285257267,
+          "pcc": 0.9998358927933598,
+          "max_abs": 0.00023104902356863022
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.02115467285257267,
+          "pcc": 0.9998358927933598,
+          "max_abs": 0.00023104902356863022
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.0,
+        "pcc": 0.9999999999999984,
+        "max_abs": 0.0,
+        "mean_error": 0.0,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 0.9999999999999998,
+          "max_abs": 0.0
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 0.9999999999999998,
+          "max_abs": 0.0
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.0,
+        "pcc": 1.0000000000000004,
+        "max_abs": 0.0,
+        "mean_error": 0.0,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.0000000000000002,
+          "max_abs": 0.0
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.0000000000000002,
+          "max_abs": 0.0
+        }
+      }
+    },
+    {
+      "context": 262016,
+      "active_tokens": 262016,
+      "variant": "K4_V4",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 8.93873213603028,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.1651420426837995,
+        "pcc": 0.986404893536725,
+        "max_abs": 0.0021156659349799156,
+        "mean_error": 1.0587787391713732e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.17573773200265763,
+          "pcc": 0.984796776106568,
+          "max_abs": 0.0017374016460962594
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.16384715445435447,
+          "pcc": 0.9865181348730919,
+          "max_abs": 0.0021156659349799156
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.015067647061189194,
+        "pcc": 0.9998952225454615,
+        "max_abs": 0.00018581131007522345,
+        "mean_error": 2.456226068462778e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.01746395361927948,
+          "pcc": 0.9998876697074499,
+          "max_abs": 0.00018581131007522345
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.01746395361927948,
+          "pcc": 0.9998876697074499,
+          "max_abs": 0.00018581131007522345
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.16636624598477068,
+        "pcc": 0.9862779038231317,
+        "max_abs": 0.002214448992162943,
+        "mean_error": 1.304401346017651e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.1768800929801501,
+          "pcc": 0.9847541792870748,
+          "max_abs": 0.0017783803050406277
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.1649295710536936,
+          "pcc": 0.9863283171941217,
+          "max_abs": 0.002214448992162943
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.16692340944250883,
+        "pcc": 0.9861124433857068,
+        "max_abs": 0.00225830078125,
+        "mean_error": 1.2824185735856494e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.17683340169571526,
+          "pcc": 0.9846245609164643,
+          "max_abs": 0.0017871856689453125
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.16586280342377746,
+          "pcc": 0.986160520415532,
+          "max_abs": 0.00225830078125
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.1655829674122044,
+        "pcc": 0.9863285429244264,
+        "max_abs": 0.002122557256370783,
+        "mean_error": 1.0429463096706115e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.17631447227104918,
+          "pcc": 0.9847264993135652,
+          "max_abs": 0.0017721111653372645
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.1646822235201781,
+          "pcc": 0.9863793331255295,
+          "max_abs": 0.002122557256370783
+        }
+      }
+    },
+    {
+      "context": 262016,
+      "active_tokens": 262016,
+      "variant": "K8_V4",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 6.0634667106240325,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.11158672635834972,
+        "pcc": 0.9937686813218032,
+        "max_abs": 0.0012135307770222425,
+        "mean_error": 1.0228574056192485e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.11734745104513539,
+          "pcc": 0.9931449087490148,
+          "max_abs": 0.0010656286031007767
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.1157465749193406,
+          "pcc": 0.9932926540143447,
+          "max_abs": 0.0012135307770222425
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.015319482181002897,
+        "pcc": 0.9998881906051754,
+        "max_abs": 0.00020096031948924065,
+        "mean_error": 4.514710738590111e-07,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.016478187499955763,
+          "pcc": 0.9998821224877318,
+          "max_abs": 0.0001691589131951332
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.01508350553529044,
+          "pcc": 0.9998861041171483,
+          "max_abs": 0.00020096031948924065
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.11285226796695778,
+        "pcc": 0.9936459017975092,
+        "max_abs": 0.001222444698214531,
+        "mean_error": 1.0680045130051496e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.12066194436857487,
+          "pcc": 0.9928636962011026,
+          "max_abs": 0.00109467888250947
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.11633716211763095,
+          "pcc": 0.9932433701467017,
+          "max_abs": 0.001222444698214531
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.11283981241112075,
+        "pcc": 0.9936248793564448,
+        "max_abs": 0.00121307373046875,
+        "mean_error": 1.0460217405731479e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.11935167395622569,
+          "pcc": 0.9929356483805589,
+          "max_abs": 0.0010223388671875
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.11485576814170155,
+          "pcc": 0.9933951492035165,
+          "max_abs": 0.00121307373046875
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.11200035496726107,
+        "pcc": 0.9937212925148914,
+        "max_abs": 0.0011957735987380147,
+        "mean_error": 1.0070249761184868e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.11760546039541263,
+          "pcc": 0.9931303864307938,
+          "max_abs": 0.00104446429759264
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.11537029577939387,
+          "pcc": 0.9933433191363166,
+          "max_abs": 0.0011957735987380147
+        }
+      }
+    },
+    {
+      "context": 262016,
+      "active_tokens": 261979,
+      "variant": "K8_V8",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 1.0,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.010731264214784772,
+        "pcc": 0.9999424564968916,
+        "max_abs": 0.00013719964772462845,
+        "mean_error": 1.4973407876558062e-07,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.011339731585211052,
+          "pcc": 0.9999356215266318,
+          "max_abs": 0.00012152921408414841
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 2,
+          "relative_rms": 0.009820717858243622,
+          "pcc": 0.9999523335822582,
+          "max_abs": 0.00013719964772462845
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.014835166166677538,
+        "pcc": 0.9998971343514935,
+        "max_abs": 0.00020699528977274895,
+        "mean_error": 7.71463610031257e-08,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.016891459632355218,
+          "pcc": 0.99990346818227,
+          "max_abs": 0.00020103808492422104
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.015277893452615302,
+          "pcc": 0.9998842543805689,
+          "max_abs": 0.00020699528977274895
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.018609114924288156,
+        "pcc": 0.9998351103724298,
+        "max_abs": 0.0002455068752169609,
+        "mean_error": 2.268804397687063e-07,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.020966344223506253,
+          "pcc": 0.9998411998051782,
+          "max_abs": 0.0002455068752169609
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 5,
+          "relative_rms": 0.020966344223506253,
+          "pcc": 0.9998411998051782,
+          "max_abs": 0.0002455068752169609
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.0,
+        "pcc": 0.9999999999999984,
+        "max_abs": 0.0,
+        "mean_error": 0.0,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.0,
+          "max_abs": 0.0
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 1.0,
+          "max_abs": 0.0
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.0,
+        "pcc": 0.9999999999999998,
+        "max_abs": 0.0,
+        "mean_error": 0.0,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 0.9999999999999998,
+          "max_abs": 0.0
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.0,
+          "pcc": 0.9999999999999998,
+          "max_abs": 0.0
+        }
+      }
+    },
+    {
+      "context": 262016,
+      "active_tokens": 261979,
+      "variant": "K4_V4",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 8.942540287682268,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.16516229522376424,
+        "pcc": 0.9864016437280784,
+        "max_abs": 0.0021182307973504066,
+        "mean_error": 1.0430678657987377e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.17589231401661862,
+          "pcc": 0.9847732151392432,
+          "max_abs": 0.0017298465536441654
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.16405942288343445,
+          "pcc": 0.9864825929404186,
+          "max_abs": 0.0021182307973504066
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.0150705248333879,
+        "pcc": 0.9998949715500027,
+        "max_abs": 0.00018203817307949066,
+        "mean_error": 2.583687587431882e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.017528456154501076,
+          "pcc": 0.9998892139261227,
+          "max_abs": 0.00018203817307949066
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.017528456154501076,
+          "pcc": 0.9998892139261227,
+          "max_abs": 0.00018203817307949066
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.1664127599285562,
+        "pcc": 0.9862693081340812,
+        "max_abs": 0.0021886969916522503,
+        "mean_error": 1.3014366245419259e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.17695834026762383,
+          "pcc": 0.9847386542928338,
+          "max_abs": 0.0017671967798378319
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.16529836782747168,
+          "pcc": 0.9862714526753307,
+          "max_abs": 0.0021886969916522503
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.1668627583636423,
+        "pcc": 0.9861233590650975,
+        "max_abs": 0.002227783203125,
+        "mean_error": 1.2787485805650553e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.17662950809876987,
+          "pcc": 0.9846513370719859,
+          "max_abs": 0.00177001953125
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.16598637774345643,
+          "pcc": 0.986143862601467,
+          "max_abs": 0.002227783203125
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.16560935677732966,
+        "pcc": 0.986324300338085,
+        "max_abs": 0.0021256343461573124,
+        "mean_error": 1.0280944579221796e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.17647143795703402,
+          "pcc": 0.984702944459371,
+          "max_abs": 0.0017646414635237306
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 4,
+          "relative_rms": 0.16490668492090468,
+          "pcc": 0.986341501535962,
+          "max_abs": 0.0021256343461573124
+        }
+      }
+    },
+    {
+      "context": 262016,
+      "active_tokens": 261979,
+      "variant": "K8_V4",
+      "kernel_gate_passed": true,
+      "total_rms_ratio_to_bfp8": 6.065839175659105,
+      "quantization_only": {
+        "finite": true,
+        "relative_rms": 0.11156876138969465,
+        "pcc": 0.9937706629690523,
+        "max_abs": 0.0012073292164132,
+        "mean_error": 1.006914075378044e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.117431150586628,
+          "pcc": 0.9931352797066944,
+          "max_abs": 0.0010566359851509333
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.11581328731767447,
+          "pcc": 0.9932857440303964,
+          "max_abs": 0.0012073292164132
+        }
+      },
+      "execution_on_quantized": {
+        "finite": true,
+        "relative_rms": 0.015206297109645779,
+        "pcc": 0.9998900566268889,
+        "max_abs": 0.0001962939277291298,
+        "mean_error": 1.838346553502864e-07,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.016348595801282163,
+          "pcc": 0.9998872411336395,
+          "max_abs": 0.00016810279339551926
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 1,
+          "relative_rms": 0.01486299238294132,
+          "pcc": 0.9999063526318387,
+          "max_abs": 0.0001962939277291298
+        }
+      },
+      "total": {
+        "finite": true,
+        "relative_rms": 0.11287989833208961,
+        "pcc": 0.9936429301973368,
+        "max_abs": 0.0012110938550904393,
+        "mean_error": 1.0252975409130727e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.12052039223312484,
+          "pcc": 0.9928926565425955,
+          "max_abs": 0.001066603697836399
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.1168054686885127,
+          "pcc": 0.9931877509430858,
+          "max_abs": 0.0012110938550904393
+        }
+      },
+      "actual_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.11293251845847262,
+        "pcc": 0.9936145896817061,
+        "max_abs": 0.0012054443359375,
+        "mean_error": 1.002609496936202e-05,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 1,
+          "relative_rms": 0.11888763384773926,
+          "pcc": 0.9930180191406788,
+          "max_abs": 0.00110626220703125
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.11534098471648001,
+          "pcc": 0.9933399603111198,
+          "max_abs": 0.0012054443359375
+        }
+      },
+      "quantized_reference_vs_bfp8_baseline": {
+        "finite": true,
+        "relative_rms": 0.11199137277616668,
+        "pcc": 0.993722285273211,
+        "max_abs": 0.0011898725060746074,
+        "mean_error": 9.91940667501486e-06,
+        "worst_query_head_relative_rms": {
+          "user": 0,
+          "head": 0,
+          "relative_rms": 0.11768310440803383,
+          "pcc": 0.9931216857881646,
+          "max_abs": 0.0010354227852076292
+        },
+        "worst_query_head_max_abs": {
+          "user": 0,
+          "head": 3,
+          "relative_rms": 0.11544198836810292,
+          "pcc": 0.9933360626156273,
+          "max_abs": 0.0011898725060746074
+        }
+      }
+    }
+  ],
+  "smoke_output_bit_identical_with_fallback": true
+}

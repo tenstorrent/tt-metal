@@ -110,6 +110,19 @@ CPU simulator experiment and is not a precision change in these hardware runs.
 - KV remains interleaved. This is not yet a bank-sharded KV implementation.
   No new placement speedup, full-model gain or online-eval pass is claimed before
   hardware receipts establish it.
+- A bounded two-layer profile was queued at 05:42:41 UTC after placement.
+  It uses actual weights with synthetic populated caches and exactly three
+  decode calls per capture, with no prefill. Five geometries, native/single-step
+  recurrence, separate processes, a shared hardware lock and explicit export
+  limits replace the previous unbounded capture. **276 CPU tests and 40 subtests
+  passed**. Per-RISC intervals include waits; even a complete capture will not
+  establish active compute cycles or a full-model traced P0 pass.
+- The [BFP4 KV simulator experiment](../galaxy-evidence/bfp4-kv-simulator-v1/README.md)
+  completed all 24 cases. Execution passed against quantized operands, but
+  total long-context synthetic output RMS was 15.65-16.64% for K4/V4 versus
+  1.28-1.86% for K8/V8. Keep BFP8. Real-activation/logit and model-eval validation
+  remain necessary to decide BFP4 model suitability; this is not a task-score
+  loss estimate or proof that BFP4 can never work.
 
 Launch/source hashes, CPU results and the completed fresh 128K receipt are in
 [the current evidence snapshot](../galaxy-evidence/placement-long-launch-v1).

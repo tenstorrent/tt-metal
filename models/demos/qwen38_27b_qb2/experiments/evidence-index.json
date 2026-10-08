@@ -1,11 +1,11 @@
 {
-  "generated_at": "2026-10-08T05:25:14.806431+00:00",
+  "generated_at": "2026-10-08T05:47:44.403518+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 8340,
-      "sha256": "ba2fb0a3f0ed95f52c99c60deec3d1dc57a88815012e24a4909c9bf236b8ae4e"
+      "bytes": 12185,
+      "sha256": "a7f4448e9e8baa30f4091aa87ea1c83a17500546c139eb78c1ca1f17ed1409d8"
     },
     {
       "path": "experiments/TT-LAB-REVIEW.md",
@@ -567,6 +567,145 @@
       }
     },
     {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/README.md",
+      "bytes": 12397,
+      "sha256": "b75d191277f3cdfe8929bce96c15e3f2ac2cc2bdee105a84e8b1ae88f78da7c0"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/publication.json",
+      "bytes": 994,
+      "sha256": "5cc92355c6bb523253ad5b01d025d69504e90edc858e9320b6331c920526df8d"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/collection.json",
+      "bytes": 5766,
+      "sha256": "b24222f44301d5d51f4ebef61f9dd4b61c0979d9dce76ba7b0a9da0773d47550"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/long-launch-v1.json",
+      "bytes": 2405,
+      "sha256": "4ae6f595de3a85e20c86a940e4ea4d70a076a2f1e4e917dad1ef30a8fd7733c4"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/long-launch-v2.json",
+      "bytes": 3684,
+      "sha256": "c35da0491e806a4b7ec4ffbabb82626494c7c03b1fe60238367b695ff90d4de1"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/long-v1.json",
+      "bytes": 4287,
+      "sha256": "eb7ea6dca63a9836a4560aa84ba93985300dd557eff804ec7a032d154e545bf5",
+      "state": "executing",
+      "cleanup_completed": false,
+      "scope": "Synthetic BF16 Q/K/V; CPU ttsim eager execution on one virtual Blackhole; no silicon timing claim",
+      "updated_at": "2026-10-08T05:19:29Z",
+      "model_accuracy_qualified": false
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/long-v1.log.gz",
+      "bytes": 1340,
+      "sha256": "235ce4cdd94db89f3cfb2b677a2a88d2bcbdd96f2197e32c08c663bfa8bd8c10"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/long-v2.json",
+      "bytes": 340794,
+      "sha256": "d3f7241be9fce36e46bbc2f87a6ad72455a299094d3d3d7dd37ea225dcce2a8d",
+      "state": "completed",
+      "cleanup_completed": true,
+      "scope": "Synthetic BF16 Q/K/V; CPU ttsim eager execution on one virtual Blackhole; no silicon timing claim",
+      "updated_at": "2026-10-08T05:28:55Z",
+      "model_accuracy_qualified": false
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/long-v2.log.gz",
+      "bytes": 2626,
+      "sha256": "dd5d680b28a275ea16ce6f33a2f238b3589336477d0b202a4a0b3b7490d4ef3f"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/native-source-evidence/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_max_min.h.gz",
+      "bytes": 1931,
+      "sha256": "3971d49d22fcdd11b615f6ae8adb05229ccd6fe83c727f9dd9f23c8d2b577166"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/native-source-evidence/tt_metal/jit_build/build.cpp.gz",
+      "bytes": 16671,
+      "sha256": "0b6b1a49684e9620163d9a42069138713dffbdffcececea83270e05a15e13e4e"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/native-source-evidence/tt_metal/llrt/rtoptions.cpp.gz",
+      "bytes": 26905,
+      "sha256": "1f0aabc62eb737afdae9bfdd699644e4783b2f088dbfdf0c0e59aec4d06ecb45"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/native-source-evidence/tt_metal/tt-llk/tests/run_ttsim_regression.sh.gz",
+      "bytes": 6551,
+      "sha256": "828df263a2c961f705d664f23ede869f93b56906c541a577aa775ddfafdaac59"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/native-source-evidence/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp.gz",
+      "bytes": 18732,
+      "sha256": "fa19ea43aa9538a2398524b63fedc93ff922086f478162818aa469bcf8f94501"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/native-source-evidence/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp.gz",
+      "bytes": 9363,
+      "sha256": "fb15e30c441f91c9a239a7471f0d49c54a444fb08ac8c71fa7c7a201109c7fb6"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/probe-v1.py.gz",
+      "bytes": 4592,
+      "sha256": "8f326197c9fe75fca8d3adca318149b374067e8f7b168793c9de1bc6b3093514"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/probe-v2.py.gz",
+      "bytes": 4931,
+      "sha256": "74c41430924b688fd29f87563d6a159548c77a222394c0d0df3fcc088c38dcf6"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/smoke-launch-v1.json",
+      "bytes": 2354,
+      "sha256": "ddaed1d77fe974401ccc3273727c07309128a63056b80669e460a234187ba6dc",
+      "scope": "CPU simulator only; one CPU, 8 GiB, 1h; independent cache; no native source/install/model policy changes"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/smoke-v1.json",
+      "bytes": 87101,
+      "sha256": "ad37b978962dbf25824a4432612d5baa7a3e5a317640e02fa14e7b4557baa025",
+      "state": "completed",
+      "cleanup_completed": true,
+      "scope": "Synthetic BF16 Q/K/V; CPU ttsim eager execution on one virtual Blackhole; no silicon timing claim",
+      "updated_at": "2026-10-08T05:18:16Z",
+      "model_accuracy_qualified": false
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/smoke-v1.log.gz",
+      "bytes": 1838,
+      "sha256": "49fb0036d2371ff09161e218deb58be36efbd6128094a57cb6c09eee5055d661"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/receipts/summary.json",
+      "bytes": 89121,
+      "sha256": "415970c6f0753d5d32d74638768e74d81f858caa32c7e80c0b07bf9f848c495d",
+      "state": "completed",
+      "cleanup_completed": true,
+      "model_accuracy_qualified": false
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/summarize.py",
+      "bytes": 4438,
+      "sha256": "bf7b69fa352c266d6595221ffe21fbf69ed292525dce22aa8dc71cca9f7f8c26"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/verification.json",
+      "bytes": 553,
+      "sha256": "6431cac84991d4bad2c584918f45c094ae9b735c72e73122ae43811cbf80f588"
+    },
+    {
+      "path": "galaxy-evidence/bfp4-kv-simulator-v1/verify_receipts.py",
+      "bytes": 4850,
+      "sha256": "2dabcb4d5bcb9cd951d8efa41793c1ed999fd19037309daa98dcc32fdb6b10df"
+    },
+    {
       "path": "galaxy-evidence/bfp4-simulator-v1/README.md",
       "bytes": 6518,
       "sha256": "45e08466240ada1c13d313462b4bbd3ccb4cf23371596141addfedcd05d3860b"
@@ -608,10 +747,10 @@
       "bytes": 86516,
       "sha256": "013aee584250747a65426ad39538e8df3b660dfe1df7e917eec0c1a95e9545b3",
       "state": "completed",
+      "cleanup_completed": true,
       "scope": "Single virtual Blackhole; real weight submatrices with synthetic BF16 inputs; no full-model accuracy or timing claim",
       "updated_at": "2026-10-08T04:55:23Z",
-      "model_accuracy_qualified": false,
-      "cleanup_completed": true
+      "model_accuracy_qualified": false
     },
     {
       "path": "galaxy-evidence/bfp4-simulator-v1/real-weights-v1.log.gz",
@@ -650,10 +789,51 @@
       "sha256": "95c05cc9d612ec0e2383b5a26f44621808da1cb537a87468ee787116cae67ef9"
     },
     {
+      "path": "galaxy-evidence/bounded-profile-launch-v1/bounded-layer-profile-launch-v1.json",
+      "bytes": 3184,
+      "sha256": "9d58eb5192345b14a42e8de9fa2b3b780b2a1eb7573ccb16a07338289442b4f1",
+      "scope": "Real two-layer weights; synthetic caches; warm eager attribution, not model qualification",
+      "created_at": "2026-10-08T05:42:41.081003+00:00"
+    },
+    {
+      "path": "galaxy-evidence/bounded-profile-launch-v1/bounded-layer-profile-unit-v1.xml.gz",
+      "bytes": 5579,
+      "sha256": "61f1e9b281733a71c97a2e0843daabd5e65d217d9f82bc4215ed319660354251",
+      "junit": {
+        "tests": 316,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/bounded-profile-launch-v1/bounded-layer-profile-v1/queue.json",
+      "bytes": 14532,
+      "sha256": "b9ffaef7b257a3c1fb4fb907be5544a0b6003f9b782dc2b558fe2147bc936f67",
+      "state": "waiting_for_sweep",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T05:44:28Z"
+    },
+    {
+      "path": "galaxy-evidence/bounded-profile-launch-v1/bounded-layer-profile-v1/unit.xml.gz",
+      "bytes": 5585,
+      "sha256": "d1ea368cc96796ab2dc654bdb045ffa121a613ae550b21a51662a82149f821eb",
+      "junit": {
+        "tests": 316,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/bounded-profile-launch-v1/collection.json",
+      "bytes": 885,
+      "sha256": "a5b287523d99d1525a32090b01b223521c35616e34b6ff70a92135263cf9a220"
+    },
+    {
       "path": "galaxy-evidence/capacity-pairs-launch-v1.json",
       "bytes": 2693,
-      "sha256": "8ebb9660ebd714864d10e6f2ba0e30bb88386b43938658a86733585ac04dff65",
-      "qualification_scope": "Fresh process per geometry and recurrence; precision unchanged"
+      "sha256": "8ebb9660ebd714864d10e6f2ba0e30bb88386b43938658a86733585ac04dff65"
     },
     {
       "path": "galaxy-evidence/capacity-pairs-source-v1-manifest.json",
@@ -678,12 +858,8 @@
       "sha256": "2e630a9959a6d827654e393267acee27931592b58473d68aa63d7b77233da59d",
       "state": "completed_with_oom",
       "cleanup_completed": true,
-      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
-      "created_at": "2026-10-07T22:54:28.786362+00:00",
       "updated_at": "2026-10-07T23:18:07.332893+00:00",
-      "cell_status_counts": {
-        "completed": 1
-      }
+      "created_at": "2026-10-07T22:54:28.786362+00:00"
     },
     {
       "path": "galaxy-evidence/capacity-pairs-validation-v1/single-step.json",
@@ -691,12 +867,8 @@
       "sha256": "b4b7eed3a7a90331647d4eeea3955354dbacb40c5138d17416b42e812bfd194f",
       "state": "completed_with_oom",
       "cleanup_completed": true,
-      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
-      "created_at": "2026-10-07T22:54:30.094016+00:00",
       "updated_at": "2026-10-08T00:59:30.747265+00:00",
-      "cell_status_counts": {
-        "completed": 1
-      }
+      "created_at": "2026-10-07T22:54:30.094016+00:00"
     },
     {
       "path": "galaxy-evidence/capacity-pairs-validation-v1/unit.xml.gz",
@@ -837,14 +1009,8 @@
       "bytes": 58525,
       "sha256": "d74a950576b0fb9149aaec58c23ce585f8be5e9c56e76f813e1d9d9380819a42",
       "state": "failed",
-      "created_at": "2026-10-07T09:15:21.352350+00:00",
       "updated_at": "2026-10-07T09:23:50.030921+00:00",
-      "cell_status_counts": {
-        "completed": 9,
-        "failed": 1,
-        "not_run": 17,
-        "capacity_guard": 3
-      }
+      "created_at": "2026-10-07T09:15:21.352350+00:00"
     },
     {
       "path": "galaxy-evidence/galaxy-serving-v9/http-sweep/sweep.pdf",
@@ -905,16 +1071,8 @@
       "sha256": "8e365c6372b5d07e117c2d97e59e2b238ccfaa4cc31cbeab2fe83c4eb9f2e27e",
       "state": "allocation_failed",
       "cleanup_completed": true,
-      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
-      "created_at": "2026-10-07T22:54:30.094016+00:00",
       "updated_at": "2026-10-08T00:43:34.418841+00:00",
-      "cell_status_counts": {
-        "completed": 12,
-        "capacity_guard": 5,
-        "implementation_guard": 5,
-        "oom": 1,
-        "not_run": 12
-      },
+      "created_at": "2026-10-07T22:54:30.094016+00:00",
       "error_type": "RuntimeError"
     },
     {
@@ -939,15 +1097,8 @@
       "sha256": "a02f85d2397624b067fb1cc5f3fe4eeea3d6e8ecbda5bc0c740873ea5d72f16f",
       "state": "completed_with_oom",
       "cleanup_completed": true,
-      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
-      "created_at": "2026-10-07T22:54:30.094016+00:00",
       "updated_at": "2026-10-08T00:59:25.836507+00:00",
-      "cell_status_counts": {
-        "completed": 24,
-        "capacity_guard": 5,
-        "implementation_guard": 5,
-        "oom": 1
-      }
+      "created_at": "2026-10-07T22:54:30.094016+00:00"
     },
     {
       "path": "galaxy-evidence/gdn-candidate-sweep-v4/index.html",
@@ -965,15 +1116,8 @@
       "sha256": "e0f97aebf9c34b9fca1f5aa3696b2af3177ca4bbbd10f67a84c5698ab72c7c9e",
       "state": "completed_with_oom",
       "cleanup_completed": true,
-      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
-      "created_at": "2026-10-07T22:54:30.094016+00:00",
       "updated_at": "2026-10-08T00:59:30.747265+00:00",
-      "cell_status_counts": {
-        "completed": 24,
-        "capacity_guard": 5,
-        "implementation_guard": 5,
-        "oom": 1
-      }
+      "created_at": "2026-10-07T22:54:30.094016+00:00"
     },
     {
       "path": "galaxy-evidence/gdn-candidate-sweep-v4/sweep.pdf",
@@ -1005,10 +1149,7 @@
       "bytes": 21136,
       "sha256": "72fa632a69998990206f67368683e0f0dbbf2d8434d226519b24a81c7c97ef10",
       "state": "completed",
-      "scope": "One TP4 replica, 64 layers; measured decode output throughput, not full-Galaxy or online-eval qualification",
-      "cell_status_counts": {
-        "unspecified": 35
-      }
+      "scope": "One TP4 replica, 64 layers; measured decode output throughput, not full-Galaxy or online-eval qualification"
     },
     {
       "path": "galaxy-evidence/gdn-matched-comparison-v4/comparison.pdf",
@@ -1205,16 +1346,8 @@
       "sha256": "06dd9355167eb5cd30806d3927873676decdf7842b939f2620afa750b9fe8693",
       "state": "allocation_failed",
       "cleanup_completed": true,
-      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
-      "created_at": "2026-10-07T22:54:28.786362+00:00",
       "updated_at": "2026-10-07T23:00:31.968085+00:00",
-      "cell_status_counts": {
-        "completed": 12,
-        "capacity_guard": 5,
-        "implementation_guard": 5,
-        "oom": 1,
-        "not_run": 12
-      },
+      "created_at": "2026-10-07T22:54:28.786362+00:00",
       "error_type": "RuntimeError"
     },
     {
@@ -1239,15 +1372,8 @@
       "sha256": "b5ff4157964f290f5f2a841a0eacb56b9317f900e5c6d9bfdcfa02759da34dd3",
       "state": "completed_with_oom",
       "cleanup_completed": true,
-      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
-      "created_at": "2026-10-07T22:54:28.786362+00:00",
       "updated_at": "2026-10-07T23:18:02.509163+00:00",
-      "cell_status_counts": {
-        "completed": 24,
-        "capacity_guard": 5,
-        "implementation_guard": 5,
-        "oom": 1
-      }
+      "created_at": "2026-10-07T22:54:28.786362+00:00"
     },
     {
       "path": "galaxy-evidence/gdn-native-sweep-v4/index.html",
@@ -1265,15 +1391,8 @@
       "sha256": "28bca2bcb7a2cfc4b63c2724610ca393b7bdddd3a1f1bfcf9112b6e2d26a1fd0",
       "state": "completed_with_oom",
       "cleanup_completed": true,
-      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
-      "created_at": "2026-10-07T22:54:28.786362+00:00",
       "updated_at": "2026-10-07T23:18:07.332893+00:00",
-      "cell_status_counts": {
-        "completed": 24,
-        "capacity_guard": 5,
-        "implementation_guard": 5,
-        "oom": 1
-      }
+      "created_at": "2026-10-07T22:54:28.786362+00:00"
     },
     {
       "path": "galaxy-evidence/gdn-native-sweep-v4/sweep.pdf",
@@ -1405,16 +1524,8 @@
       "bytes": 73523,
       "sha256": "d5c41ae873c63069754d8bd196c9111e32070ac008574736b5168171293af257",
       "state": "failed",
-      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
-      "created_at": "2026-10-07T17:54:27.014209+00:00",
       "updated_at": "2026-10-07T22:38:54.172987+00:00",
-      "cell_status_counts": {
-        "completed": 12,
-        "capacity_guard": 5,
-        "implementation_guard": 5,
-        "failed": 1,
-        "not_run": 12
-      },
+      "created_at": "2026-10-07T17:54:27.014209+00:00",
       "error_type": "RuntimeError"
     },
     {
@@ -1437,16 +1548,8 @@
       "bytes": 73413,
       "sha256": "5ef7be4a63bc7886e92ee6b1d5956ce255c66df587ae0b91f5aee3c964533f33",
       "state": "failed",
-      "qualification_scope": "FP32 kernel and one-replica repeatability; GPQA and eight-replica qualification pending",
-      "created_at": "2026-10-07T17:54:27.014209+00:00",
       "updated_at": "2026-10-07T19:21:34.945397+00:00",
-      "cell_status_counts": {
-        "completed": 12,
-        "capacity_guard": 5,
-        "implementation_guard": 5,
-        "failed": 1,
-        "not_run": 12
-      },
+      "created_at": "2026-10-07T17:54:27.014209+00:00",
       "error_type": "RuntimeError"
     },
     {
@@ -1487,11 +1590,8 @@
       "bytes": 7487,
       "sha256": "59c1a756452c3f18609ba31a3776a00a9f6f244377a731f34f928582008a0f7e",
       "state": "failed",
-      "created_at": "2026-10-07T21:50:59.207910+00:00",
       "updated_at": "2026-10-07T21:56:58.832482+00:00",
-      "cell_status_counts": {
-        "failed": 1
-      },
+      "created_at": "2026-10-07T21:50:59.207910+00:00",
       "error_type": "RuntimeError"
     },
     {
@@ -1674,10 +1774,7 @@
       "sha256": "ba839d97ac4efbc1d1f5396456500eb3a729413adce09003b4fa202c3398f851",
       "state": "completed",
       "passed": true,
-      "scope": "Reduced two-layer diagnostic, not full-model throughput or accuracy qualification",
-      "cell_status_counts": {
-        "unspecified": 6
-      }
+      "scope": "Reduced two-layer diagnostic, not full-model throughput or accuracy qualification"
     },
     {
       "path": "galaxy-evidence/layer-profile-v3/queue-recovery.sh",
@@ -1721,14 +1818,8 @@
       "sha256": "af92caa3cea0c66889964458bc7b2e9ceefa58d1f5bc78d18cd476bbab44ab80",
       "state": "allocation_failed",
       "cleanup_completed": true,
-      "qualification_scope": "Fixed-precision capacity and repeatability experiment; changed prefill chunking is not reference-eval qualified",
-      "created_at": "2026-10-08T00:59:48.396482+00:00",
       "updated_at": "2026-10-08T01:29:49.403195+00:00",
-      "cell_status_counts": {
-        "completed": 2,
-        "oom": 1,
-        "not_run": 1
-      },
+      "created_at": "2026-10-08T00:59:48.396482+00:00",
       "error_type": "RuntimeError"
     },
     {
@@ -1778,13 +1869,8 @@
       "sha256": "befb0a8611e86f1d4558c3debfd341104ab2aa37768c9678d66b74d15b75f33b",
       "state": "completed_with_oom",
       "cleanup_completed": true,
-      "qualification_scope": "Fixed-precision capacity and repeatability experiment; changed prefill chunking is not reference-eval qualified",
-      "created_at": "2026-10-08T00:59:48.396482+00:00",
       "updated_at": "2026-10-08T02:15:34.922119+00:00",
-      "cell_status_counts": {
-        "completed": 3,
-        "oom": 1
-      }
+      "created_at": "2026-10-08T00:59:48.396482+00:00"
     },
     {
       "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/attempt-02/sweep.pdf",
@@ -1817,13 +1903,8 @@
       "sha256": "63fe670672e1c4102ca9d568d23666ecf5e5c74af2d2a93653a22613bdabb8ee",
       "state": "completed_with_oom",
       "cleanup_completed": true,
-      "qualification_scope": "Fixed-precision capacity and repeatability experiment; changed prefill chunking is not reference-eval qualified",
-      "created_at": "2026-10-08T00:59:48.396482+00:00",
       "updated_at": "2026-10-08T02:15:39.557700+00:00",
-      "cell_status_counts": {
-        "completed": 3,
-        "oom": 1
-      }
+      "created_at": "2026-10-08T00:59:48.396482+00:00"
     },
     {
       "path": "galaxy-evidence/long-context-capacity-v1/results/capacity/sweep.pdf",
@@ -1907,12 +1988,8 @@
       "bytes": 123417,
       "sha256": "d81d65cdaadadaf23e9b2f538e2ebb348f756c486f282c4e6f1c4c373bcb39e9",
       "state": "completed",
-      "created_at": "2026-10-07T03:08:38.326156+00:00",
       "updated_at": "2026-10-07T05:39:30.365653+00:00",
-      "cell_status_counts": {
-        "completed": 27,
-        "capacity_guard": 3
-      }
+      "created_at": "2026-10-07T03:08:38.326156+00:00"
     },
     {
       "path": "galaxy-evidence/perf-sweep-tp4-v1/sweep.pdf",
@@ -1933,7 +2010,8 @@
       "path": "galaxy-evidence/placement-long-launch-v1/attention-placement-long-launch-v1.json",
       "bytes": 2797,
       "sha256": "4b0a72c0d8029c82a7e7e229a47091824b29894d85e7e65b7c62c120083c407f",
-      "scope": "78 synthetic TP4 attention cases; serialized behind existing hardware lock; no serving promotion"
+      "scope": "78 synthetic TP4 attention cases; serialized behind existing hardware lock; no serving promotion",
+      "created_at": "2026-10-08T05:16:12Z"
     },
     {
       "path": "galaxy-evidence/placement-long-launch-v1/attention-placement-long-v1/queue.json",
@@ -1969,8 +2047,9 @@
       "bytes": 14198,
       "sha256": "5bd8e483e4fd49a9f3adf3cb97f40538102cd7ffa0fc794f7e5f1aa6a48768d3",
       "state": "completed",
+      "cleanup_completed": true,
       "updated_at": "2026-10-08T05:10:46.938726+00:00",
-      "cleanup_completed": true
+      "created_at": "2026-10-08T04:28:08.891092+00:00"
     },
     {
       "path": "galaxy-evidence/placement-long-launch-v1/collection.json",
@@ -2058,15 +2137,13 @@
       "path": "galaxy-evidence/storage-recovery-20261007/checkpoint-local-copy.json",
       "bytes": 5597,
       "sha256": "1321e412b046f46bfe7f3babc23bce10b211118083c7643ce4fa940bac63e6f9",
-      "passed": true,
-      "started_utc": "2026-10-07T08:13:05Z"
+      "passed": true
     },
     {
       "path": "galaxy-evidence/storage-recovery-20261007/checkpoint-recovered.json",
       "bytes": 5513,
       "sha256": "2a270bf80e722a7be872a03b9a6c9cf3cb9b70ba23f151ebdc5f4f05c4410232",
-      "passed": true,
-      "started_utc": "2026-10-07T07:51:08Z"
+      "passed": true
     },
     {
       "path": "galaxy-evidence/storage-recovery-20261007/jit-quarantine.json",

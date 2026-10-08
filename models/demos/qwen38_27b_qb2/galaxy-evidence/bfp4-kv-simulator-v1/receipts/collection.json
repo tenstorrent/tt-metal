@@ -1,0 +1,69 @@
+{
+  "collected_at": "2026-10-08T05:30:37Z",
+  "services": {
+    "qwen38-bfp4-kv-simulator-smoke-v1-20261007.service": {
+      "MainPID": "0",
+      "ControlPID": "0",
+      "Result": "success",
+      "ExecMainStartTimestamp": "n/a",
+      "ExecMainExitTimestamp": "n/a",
+      "ExecMainStatus": "0",
+      "ControlGroup": "",
+      "CPUUsageNSec": "[not set]",
+      "LoadState": "not-found",
+      "ActiveState": "inactive",
+      "SubState": "dead"
+    },
+    "qwen38-bfp4-kv-simulator-long-v1-20261007.service": {
+      "MainPID": "0",
+      "ControlPID": "0",
+      "Result": "exit-code",
+      "ExecMainStartTimestamp": "Thu 2026-10-08 05:19:26 UTC",
+      "ExecMainExitTimestamp": "Thu 2026-10-08 05:19:32 UTC",
+      "ExecMainStatus": "1",
+      "ControlGroup": "",
+      "CPUUsageNSec": "8905685000",
+      "LoadState": "loaded",
+      "ActiveState": "failed",
+      "SubState": "failed"
+    },
+    "qwen38-bfp4-kv-simulator-long-v2-20261007.service": {
+      "MainPID": "0",
+      "ControlPID": "0",
+      "Result": "success",
+      "ExecMainStartTimestamp": "n/a",
+      "ExecMainExitTimestamp": "n/a",
+      "ExecMainStatus": "0",
+      "ControlGroup": "",
+      "CPUUsageNSec": "[not set]",
+      "LoadState": "not-found",
+      "ActiveState": "inactive",
+      "SubState": "dead"
+    }
+  },
+  "artifact_directory": "/home/ttuser/qwen38-artifacts-20261007/bfp4-kv-simulator-v1",
+  "file_sha256": {
+    "long-launch-v1.json": "4ae6f595de3a85e20c86a940e4ea4d70a076a2f1e4e917dad1ef30a8fd7733c4",
+    "long-launch-v2.json": "c35da0491e806a4b7ec4ffbabb82626494c7c03b1fe60238367b695ff90d4de1",
+    "long-v1.json": "eb7ea6dca63a9836a4560aa84ba93985300dd557eff804ec7a032d154e545bf5",
+    "long-v1.log": "641bd7bfa33fddc2a2b19db5144b77572da66aba2660a4d624ae839cc185164d",
+    "long-v2.json": "d3f7241be9fce36e46bbc2f87a6ad72455a299094d3d3d7dd37ea225dcce2a8d",
+    "long-v2.log": "264af9b07ab7c87ab2d15520a7f92afbd22079da3dd10ceeaa1b7d501bd396a3",
+    "probe-v1.py": "4d4e1e8c933d449874b887ef968814da7f943cda6e3935df0d46b5f1622a9b3c",
+    "probe-v2.py": "241176996e994a39b9ef0134f084843d2f207e855f7e6c5c2fe16e96854fe53f",
+    "smoke-launch-v1.json": "ddaed1d77fe974401ccc3273727c07309128a63056b80669e460a234187ba6dc",
+    "smoke-v1.json": "ad37b978962dbf25824a4432612d5baa7a3e5a317640e02fa14e7b4557baa025",
+    "smoke-v1.log": "30f7dab0ab31e4cdc7ec38bb0b0bd23aeff60b79ae79f6435e5357ce20daf215",
+    "native-source-evidence/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_max_min.h": "49338c46351395b5a64a8e8f1bb99b14d0c73d0e77683b4146af11fb7a6ba7ff",
+    "native-source-evidence/tt_metal/jit_build/build.cpp": "f92427503d725f8b6609340eae55e4723e3c6132e53fad1dddca9ab7a54c4b2f",
+    "native-source-evidence/tt_metal/llrt/rtoptions.cpp": "42851b6352a2a321f01f43d4756a30393ad334474d633c72a3627e915cbd2d59",
+    "native-source-evidence/tt_metal/tt-llk/tests/run_ttsim_regression.sh": "3af63f002ab421480cb8846be3fa557080ceea398fa7a043773d24a989c3d282",
+    "native-source-evidence/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "6ae905e3619ffc6cb940fc88985d64c798aed732eaadc67da1b593c45d50a2cd",
+    "native-source-evidence/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp": "c865353d07a55967ca6959e3b5efda744312009e8b998d7425edf84d4e18f23e"
+  },
+  "service_journals": {
+    "qwen38-bfp4-kv-simulator-smoke-v1-20261007.service": "2026-10-08T05:18:05+0000 bh-glx-EXP-d02u07 systemd[4047612]: Started /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python /home/ttuser/qwen38-artifacts-20261007/bfp4-kv-simulator-v1/probe-v1.py --output /home/ttuser/qwen38-artifacts-20261007/bfp4-kv-simulator-v1/smoke-v1.json --contexts 1024 --simulator-sha256 d01be2a094f9f0f6a00e771defeae2311cb82f051b8af89c2df509e78b8432b7 --native-revision a08819ddbe23077f8037d3802303939064868ff6.\n2026-10-08T05:18:17+0000 bh-glx-EXP-d02u07 systemd[4047612]: qwen38-bfp4-kv-simulator-smoke-v1-20261007.service: Consumed 25.721s CPU time.\n",
+    "qwen38-bfp4-kv-simulator-long-v1-20261007.service": "2026-10-08T05:19:26+0000 bh-glx-EXP-d02u07 systemd[4047612]: Started /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python /home/ttuser/qwen38-artifacts-20261007/bfp4-kv-simulator-v1/probe-v1.py --output /home/ttuser/qwen38-artifacts-20261007/bfp4-kv-simulator-v1/long-v1.json --contexts 32768 131072 262016 --simulator-sha256 d01be2a094f9f0f6a00e771defeae2311cb82f051b8af89c2df509e78b8432b7 --native-revision a08819ddbe23077f8037d3802303939064868ff6.\n2026-10-08T05:19:32+0000 bh-glx-EXP-d02u07 systemd[4047612]: qwen38-bfp4-kv-simulator-long-v1-20261007.service: Main process exited, code=exited, status=1/FAILURE\n2026-10-08T05:19:32+0000 bh-glx-EXP-d02u07 systemd[4047612]: qwen38-bfp4-kv-simulator-long-v1-20261007.service: Failed with result 'exit-code'.\n2026-10-08T05:19:32+0000 bh-glx-EXP-d02u07 systemd[4047612]: qwen38-bfp4-kv-simulator-long-v1-20261007.service: Consumed 8.905s CPU time.\n",
+    "qwen38-bfp4-kv-simulator-long-v2-20261007.service": "2026-10-08T05:22:04+0000 bh-glx-EXP-d02u07 systemd[4047612]: Started /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python /home/ttuser/qwen38-artifacts-20261007/bfp4-kv-simulator-v1/probe-v2.py --output /home/ttuser/qwen38-artifacts-20261007/bfp4-kv-simulator-v1/long-v2.json --contexts 1024 32768 131072 262016 --simulator-sha256 d01be2a094f9f0f6a00e771defeae2311cb82f051b8af89c2df509e78b8432b7 --native-revision a08819ddbe23077f8037d3802303939064868ff6 --allow-plain-sfpu-fallback.\n2026-10-08T05:28:56+0000 bh-glx-EXP-d02u07 systemd[4047612]: qwen38-bfp4-kv-simulator-long-v2-20261007.service: Consumed 8min 18.454s CPU time.\n"
+  }
+}

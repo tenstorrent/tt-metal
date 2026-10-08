@@ -233,6 +233,47 @@ tool, not a replacement for hardware, long-horizon state checks, or model evals.
   weights/state. The 2,680 target there needs lower traffic per accepted token;
   it cannot be credited solely to better placement.
 
+## Bounded profiling and completed KV simulator screen, Oct 8 UTC
+
+- **05:28:56:** the parallel CPU KV simulator run closed cleanly. All 24 cases
+  passed the existing execution gate against quantized operands. Across the
+  18 long-context cases, total attention-output RMS was 1.281-1.861% for K8/V8,
+  15.647-16.641% for K4/V4 and 11.116-11.288% for K8/V4. These synthetic results
+  keep BFP8 as the current policy; real activations, logits and model evals
+  are still required for a BFP4 suitability conclusion.
+- Preserved the first long-run unsupported-SFPLOADMACRO failure. The successful
+  run used the native explicit-instruction compiler fallback with checks intact;
+  six short controls were bit-identical, but production instruction parity at
+  long context is not proven. Published all original receipts/source snapshots,
+  a formatted probe and a verifier: 17 artifact hashes, six smoke hashes and
+  all 24 numerical gate results verified. See
+  [the simulator report](../galaxy-evidence/bfp4-kv-simulator-v1/README.md).
+- **05:40:46:** the bounded layer-profile harness passed 276 CPU tests plus
+  40 subtests in 3.24 seconds. It forbids prefill, uses actual layers 0/3 with
+  seeded populated state/KV, and permits only two warm calls plus one marked
+  decode. Restored inputs must produce identical finite logits on all calls.
+  Captures are independent for 256K/B8, 128K/B16, 32K/B16, 8K/B32 and 8K/B1,
+  each with native and single-step recurrence and unchanged BFP8 KV/FP32 state.
+- **05:42:41:** launched persistent
+  `qwen38-bounded-layer-profile-v1-20261008.service`, waiting for the placement
+  diagnostic's authoritative terminal state and clean receipt before taking
+  the shared device lock. CPU revalidation passed in 2.92 seconds. The unit
+  has a 12-hour maximum, 64-GiB memory and eight-CPU limits; each capture checks
+  a 1-GiB file/4-GiB total export budget and 16-GiB free-space floor. This
+  avoids repeating the previous 67.5-GB export failure. No existing job was
+  stopped, and installed runtime/checkpoints remain untouched.
+- The collector requires passing JUnit, exactly three matching outputs, clean
+  device close, both decoder-layer windows and complete four-rank timings.
+  Missing reader/writer/compute intervals reject the report. These intervals
+  include waits and overlap; do not sum them or call them active compute time.
+  This is warm eager attribution on synthetic caches, not a traced full-model
+  P0 pass. Launch and CPU evidence are in
+  [bounded-profile-launch-v1](../galaxy-evidence/bounded-profile-launch-v1).
+- **05:44:42:** authoritative systemd polling confirmed the capacity-pair,
+  placement and bounded-profile controllers all live. Capacity held the
+  hardware lock; the other controllers were waiting. No new performance win
+  is credited to a queued or running diagnostic.
+
 ## Remaining gates and next experiments
 
 1. Finish the fresh-process capacity pairs; keep OOM, accuracy, and timing outcomes

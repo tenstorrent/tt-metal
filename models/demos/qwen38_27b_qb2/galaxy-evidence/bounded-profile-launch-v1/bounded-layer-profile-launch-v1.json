@@ -1,0 +1,78 @@
+{
+  "created_at": "2026-10-08T05:42:41.081003+00:00",
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-bounded-layer-profile-v1-20261008",
+    "--property=RuntimeMaxSec=12h",
+    "--property=TimeoutStopSec=180",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=64G",
+    "--property=CPUQuota=800%",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-v1.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-v1.log",
+    "--working-directory=/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-source-v1",
+    "--setenv=PATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin:/usr/bin:/bin",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-source-v1:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tools",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "--setenv=OMP_NUM_THREADS=8",
+    "--setenv=TT_METAL_INSPECTOR_RPC=0",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "models.demos.qwen38_27b_qb2.demo.run_bounded_layer_profile",
+    "--task",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "--source",
+    "/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-source-v1",
+    "--weights",
+    "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "--results",
+    "/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-v1",
+    "--after-unit",
+    "qwen38-attention-placement-long-v1-20261008.service",
+    "--after-results",
+    "/home/ttuser/qwen38-artifacts-20261007/attention-placement-long-v1"
+  ],
+  "source_lineage": "ea7a0c753a91a69f216c55cdcd4e4605c5f3c47c runtime plus bounded-profile patch",
+  "source_sha256": {
+    "models/demos/qwen38_27b_qb2/tests/layer_profile_report.py": "81a6e13bbfa49e4f746787000ab5413eb5f2f3dba915457b6af7c2a680703774",
+    "models/demos/qwen38_27b_qb2/tests/bounded_profile.py": "29a76a19ff4ea898a5055db0cb537a68f43fdc788a63c5e4b0f9825fed4d941a",
+    "models/demos/qwen38_27b_qb2/tests/test_bounded_layer_profile.py": "1d727edf5d596dd81794c379746a68e983460e8623cf95a27cc38a660de688ed",
+    "models/demos/qwen38_27b_qb2/tests/unit/test_bounded_profile.py": "d9df818676cc160181e19fe83bf4a95d140ace248e5cd172e2db7fe8dcbea020",
+    "models/demos/qwen38_27b_qb2/demo/run_bounded_layer_profile.py": "2031aae0426a883b307d889b188c5b21e8b54437b1b2d88302da575375030b9b"
+  },
+  "cpu_tests": 276,
+  "cpu_subtests": 40,
+  "cases": [
+    [
+      262016,
+      8
+    ],
+    [
+      131072,
+      16
+    ],
+    [
+      32768,
+      16
+    ],
+    [
+      8192,
+      32
+    ],
+    [
+      8192,
+      1
+    ]
+  ],
+  "variants": [
+    "native",
+    "single_step"
+  ],
+  "prefill_calls_per_capture": 0,
+  "decode_calls_per_capture": 3,
+  "scope": "Real two-layer weights; synthetic caches; warm eager attribution, not model qualification",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "per_file_limit_bytes": 1073741824,
+  "per_capture_limit_bytes": 4294967296
+}

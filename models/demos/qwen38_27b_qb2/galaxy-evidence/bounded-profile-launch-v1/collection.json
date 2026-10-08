@@ -1,0 +1,29 @@
+{
+  "collected_at": "2026-10-08T05:44:42.493542+00:00",
+  "services": {
+    "qwen38-capacity-pairs-v1-20261007.service": {
+      "MainPID": "2502739",
+      "Result": "success",
+      "Id": "qwen38-capacity-pairs-v1-20261007.service",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "SubState": "running"
+    },
+    "qwen38-attention-placement-long-v1-20261008.service": {
+      "MainPID": "2559056",
+      "Result": "success",
+      "Id": "qwen38-attention-placement-long-v1-20261008.service",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "SubState": "running"
+    },
+    "qwen38-bounded-layer-profile-v1-20261008.service": {
+      "MainPID": "2589215",
+      "Result": "success",
+      "Id": "qwen38-bounded-layer-profile-v1-20261008.service",
+      "LoadState": "loaded",
+      "ActiveState": "active",
+      "SubState": "running"
+    }
+  }
+}

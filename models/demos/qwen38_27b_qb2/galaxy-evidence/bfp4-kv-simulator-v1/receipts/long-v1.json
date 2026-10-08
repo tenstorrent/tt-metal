@@ -1,0 +1,82 @@
+{
+  "state": "executing",
+  "model_accuracy_qualified": false,
+  "promoted_to_model": false,
+  "precision_changed_in_model": false,
+  "physical_devices_accessed": false,
+  "scope": "Synthetic BF16 Q/K/V; CPU ttsim eager execution on one virtual Blackhole; no silicon timing claim",
+  "simulator": "/home/ttuser/qwen38-artifacts-20261007/bfp4-simulator-v1/libttsim_bh.so",
+  "simulator_sha256": "d01be2a094f9f0f6a00e771defeae2311cb82f051b8af89c2df509e78b8432b7",
+  "native_revision": "a08819ddbe23077f8037d3802303939064868ff6",
+  "probe_sha256": "4d4e1e8c933d449874b887ef968814da7f943cda6e3935df0d46b5f1622a9b3c",
+  "source_sha256": {
+    "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp": "c865353d07a55967ca6959e3b5efda744312009e8b998d7425edf84d4e18f23e",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/reader_decode_all.cpp": "2a70c7a0b32f8972efc7d15cbfb735e493838121862ef9faf8fe1ba97845e591",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/writer_decode_all.cpp": "ef8e24c145c036526ae36b4deed0bd4d76ee624b8d707cb9d5f1050961164f60",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_device_operation.cpp": "55dc96adec638e93f6783d08a927da97d7d0c85e44770fa1d4c4aee33564e467",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp": "f770ccf8ffad855aac3ac5063b43cd4cfab8fd732d3adb512dbee5051d0eda69",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode.cpp": "6aa630bdf0c2db2731c9fa3ea501b10c9cffe99002f20fde96d83be9faeac31f",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode_nanobind.cpp": "0e5c5bbeb5d067d625ca52327204e2af546157bec99922351f958f6f828578e5"
+  },
+  "native_library_sha256": {
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/_ttnncpp.so": "03f29893322e1086e5f802b5a148fc1a7d5e5a109b01a7002617c8b8cd11fcdc",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/_ttnn.so": "0dbe9afd7dd243451c53f7b80b5228b3ece0d471d130a35c73f56e74c5300665",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt-umd.so": "9fcd363f9f0c83e0ba548530d3548a427794042c53adaea423a09e26a2590cc9",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so": "86a4cdeb457f927a798e9f21fe96134fa477b3a60b33e56e12dc4e6a3673e04a"
+  },
+  "fixed_configuration": {
+    "batch": 1,
+    "live_query_heads": 6,
+    "device_query_heads": 32,
+    "kv_heads": 1,
+    "head_dim": 256,
+    "page_size": 32,
+    "chunk": 256,
+    "max_cores_per_head_batch": 16,
+    "math_fidelity": "HiFi4",
+    "fp32_dest_acc_en": true,
+    "math_approx_mode": false,
+    "packer_l1_acc": true,
+    "exp_approx_mode": false,
+    "query_dtype": "bfloat16"
+  },
+  "quantization_gate": null,
+  "kernel_gate": {
+    "reference": "CPU FP32 using roundtripped device-quantized K/V",
+    "per_user_relative_rms_max": 0.02,
+    "per_user_pcc_min": 0.999
+  },
+  "cases": [
+    {
+      "context": 32768,
+      "aligned_capacity": 33280,
+      "seed": 20293775,
+      "query_sha256": "b8e6c7b2cd736ffc532764f0106fbaf7db48050dcb71192ffc4da5f13cddc3e0",
+      "key_sha256": "60b4561c184fe304a7d293cdc09cffc8226efd3f1e006b8890d701d7df56c6be",
+      "original_value_sha256": "8c8c2bc033daae3e57be89411e61e0ab8bf7c81f8c12add40eec9b62c790c5a2",
+      "page_table_sha256": "fb871653e3f9935676523781f280195dffadf6a853fcea4b5b9e64e456311054",
+      "causal_queries": [
+        {
+          "active_tokens": 32768,
+          "position": 32767,
+          "tail_sentinel": 32,
+          "value_with_sentinel_sha256": "539bb7984ffc2dd268ba5303989de931d77a731731f5a097a11841b5e4ad2f5a",
+          "variants": [],
+          "reference_original_sha256": "539767ccdac9dc919acf6ec127e4e7db03868bfedd19d2cd0f033e53c6670e41"
+        }
+      ]
+    }
+  ],
+  "cleanup_completed": false,
+  "updated_at": "2026-10-08T05:19:29Z",
+  "torch_version": "2.11.0+cpu",
+  "ttnn_module": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/__init__.py",
+  "visible_virtual_devices": 1,
+  "worker_grid": [
+    11,
+    10
+  ],
+  "active_context": 32768,
+  "active_tokens": 32768,
+  "active_variant": "K8_V8"
+}

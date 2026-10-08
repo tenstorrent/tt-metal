@@ -1,0 +1,2319 @@
+{
+  "state": "completed",
+  "model_accuracy_qualified": false,
+  "promoted_to_model": false,
+  "precision_changed_in_model": false,
+  "physical_devices_accessed": false,
+  "scope": "Synthetic BF16 Q/K/V; CPU ttsim eager execution on one virtual Blackhole; no silicon timing claim",
+  "simulator": "/home/ttuser/qwen38-artifacts-20261007/bfp4-simulator-v1/libttsim_bh.so",
+  "simulator_sha256": "d01be2a094f9f0f6a00e771defeae2311cb82f051b8af89c2df509e78b8432b7",
+  "native_revision": "a08819ddbe23077f8037d3802303939064868ff6",
+  "probe_sha256": "4d4e1e8c933d449874b887ef968814da7f943cda6e3935df0d46b5f1622a9b3c",
+  "source_sha256": {
+    "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp": "c865353d07a55967ca6959e3b5efda744312009e8b998d7425edf84d4e18f23e",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/reader_decode_all.cpp": "2a70c7a0b32f8972efc7d15cbfb735e493838121862ef9faf8fe1ba97845e591",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/writer_decode_all.cpp": "ef8e24c145c036526ae36b4deed0bd4d76ee624b8d707cb9d5f1050961164f60",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_device_operation.cpp": "55dc96adec638e93f6783d08a927da97d7d0c85e44770fa1d4c4aee33564e467",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp": "f770ccf8ffad855aac3ac5063b43cd4cfab8fd732d3adb512dbee5051d0eda69",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode.cpp": "6aa630bdf0c2db2731c9fa3ea501b10c9cffe99002f20fde96d83be9faeac31f",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode_nanobind.cpp": "0e5c5bbeb5d067d625ca52327204e2af546157bec99922351f958f6f828578e5"
+  },
+  "native_library_sha256": {
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/_ttnncpp.so": "03f29893322e1086e5f802b5a148fc1a7d5e5a109b01a7002617c8b8cd11fcdc",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/_ttnn.so": "0dbe9afd7dd243451c53f7b80b5228b3ece0d471d130a35c73f56e74c5300665",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt-umd.so": "9fcd363f9f0c83e0ba548530d3548a427794042c53adaea423a09e26a2590cc9",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so": "86a4cdeb457f927a798e9f21fe96134fa477b3a60b33e56e12dc4e6a3673e04a"
+  },
+  "fixed_configuration": {
+    "batch": 1,
+    "live_query_heads": 6,
+    "device_query_heads": 32,
+    "kv_heads": 1,
+    "head_dim": 256,
+    "page_size": 32,
+    "chunk": 256,
+    "max_cores_per_head_batch": 16,
+    "math_fidelity": "HiFi4",
+    "fp32_dest_acc_en": true,
+    "math_approx_mode": false,
+    "packer_l1_acc": true,
+    "exp_approx_mode": false,
+    "query_dtype": "bfloat16"
+  },
+  "quantization_gate": null,
+  "kernel_gate": {
+    "reference": "CPU FP32 using roundtripped device-quantized K/V",
+    "per_user_relative_rms_max": 0.02,
+    "per_user_pcc_min": 0.999
+  },
+  "cases": [
+    {
+      "context": 1024,
+      "aligned_capacity": 1536,
+      "seed": 20262031,
+      "query_sha256": "670c56b9038fd878654c980af4b6780f1f29dd90a7a3d827bc54512e9fabcc5c",
+      "key_sha256": "36a1c12904e82405f80c7bcdb8df3dda189e14fd83e9000e9995186609cb53fc",
+      "original_value_sha256": "bbb04075f2d8b18fb0af72441cd4a9350f285aba92242c81ee452428e32e922a",
+      "page_table_sha256": "01edab182422d073504da132b51ed6d02d2a60c36ff9992fc976f095a5118000",
+      "causal_queries": [
+        {
+          "active_tokens": 1024,
+          "position": 1023,
+          "tail_sentinel": 32,
+          "value_with_sentinel_sha256": "c1dd1a6c221179790d3616b1d3c8a9d08dd42b25d7bc759a092afc8dad585ba7",
+          "variants": [
+            {
+              "name": "K8_V8",
+              "key_dtype": "bfloat8_b",
+              "value_dtype": "bfloat8_b",
+              "roundtrip_key_sha256": "01ce20fbbb2af7486b7df085495d6f084ed510150ed21de80a5a81ebee1df410",
+              "roundtrip_value_sha256": "3999c261b9361805897d09f894ab5b43522846e079ede7d9999cc49e4c4e155a",
+              "reference_quantized_sha256": "9c3cef7909c934906c2bfff0e22274a84af798332ad8bc49e0d94db32d41d3a3",
+              "output_sha256": "4407c7bf7cec06af61b04bfd986995fcd026d1d4a14df709fb7a86f0bb842fe7",
+              "quantization_only": {
+                "finite": true,
+                "relative_rms": 0.01060622254780127,
+                "pcc": 0.9999437998469834,
+                "max_abs": 0.002048051916062832,
+                "mean_error": -1.4191898041341725e-05,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.01060622254780127,
+                    "pcc": 0.9999437998469834
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.011615678759945281,
+                    "pcc": 0.9999327205699402,
+                    "max_abs": 0.002048051916062832
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.010475644190949289,
+                    "pcc": 0.999945182774526,
+                    "max_abs": 0.0017735660076141357
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.011672279611962747,
+                    "pcc": 0.9999317731259458,
+                    "max_abs": 0.0018519368022680283
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.00961173526341486,
+                    "pcc": 0.9999539287820056,
+                    "max_abs": 0.001224776729941368
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.009687001704105183,
+                    "pcc": 0.9999536776537499,
+                    "max_abs": 0.0014306232333183289
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.010581961537658233,
+                    "pcc": 0.9999442755668346,
+                    "max_abs": 0.001653190702199936
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.011672279611962747,
+                  "pcc": 0.9999317731259458,
+                  "max_abs": 0.0018519368022680283
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 0,
+                  "relative_rms": 0.011615678759945281,
+                  "pcc": 0.9999327205699402,
+                  "max_abs": 0.002048051916062832
+                }
+              },
+              "execution_on_quantized": {
+                "finite": true,
+                "relative_rms": 0.005725415770938461,
+                "pcc": 0.9999848378981379,
+                "max_abs": 0.0011754557490348816,
+                "mean_error": -7.841631789536526e-06,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.005725415770938461,
+                    "pcc": 0.9999848378981379
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.005405626294357303,
+                    "pcc": 0.9999856533194577,
+                    "max_abs": 0.000775553286075592
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.00496124517111607,
+                    "pcc": 0.9999879586580835,
+                    "max_abs": 0.0007960796356201172
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.0053295942333421754,
+                    "pcc": 0.999985888119942,
+                    "max_abs": 0.0008248724043369293
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.006360533599578351,
+                    "pcc": 0.9999889964742239,
+                    "max_abs": 0.0010553523898124695
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.0064599185515321865,
+                    "pcc": 0.9999853271435636,
+                    "max_abs": 0.0011754557490348816
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.005617927961554704,
+                    "pcc": 0.9999844893435124,
+                    "max_abs": 0.0010110288858413696
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 4,
+                  "relative_rms": 0.0064599185515321865,
+                  "pcc": 0.9999853271435636,
+                  "max_abs": 0.0011754557490348816
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 4,
+                  "relative_rms": 0.0064599185515321865,
+                  "pcc": 0.9999853271435636,
+                  "max_abs": 0.0011754557490348816
+                }
+              },
+              "total": {
+                "finite": true,
+                "relative_rms": 0.012011464765404595,
+                "pcc": 0.9999289125371263,
+                "max_abs": 0.002163238823413849,
+                "mean_error": -2.203352983087825e-05,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.012011464765404595,
+                    "pcc": 0.9999289125371263
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.013023705161233764,
+                    "pcc": 0.9999160454302919,
+                    "max_abs": 0.002163238823413849
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.011335048062722,
+                    "pcc": 0.9999363573024992,
+                    "max_abs": 0.0018652081489562988
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.012165622818491272,
+                    "pcc": 0.9999263171697712,
+                    "max_abs": 0.0017997976392507553
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.011700183079424189,
+                    "pcc": 0.999942972929307,
+                    "max_abs": 0.0017078742384910583
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.011312129639489608,
+                    "pcc": 0.9999404923173099,
+                    "max_abs": 0.0018799751996994019
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.01261281172676545,
+                    "pcc": 0.9999204085989042,
+                    "max_abs": 0.0019734613597393036
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 0,
+                  "relative_rms": 0.013023705161233764,
+                  "pcc": 0.9999160454302919,
+                  "max_abs": 0.002163238823413849
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 0,
+                  "relative_rms": 0.013023705161233764,
+                  "pcc": 0.9999160454302919,
+                  "max_abs": 0.002163238823413849
+                }
+              },
+              "kernel_gate_passed": true,
+              "actual_vs_bfp8_baseline": {
+                "finite": true,
+                "relative_rms": 0.0,
+                "pcc": 0.9999999999999989,
+                "max_abs": 0.0,
+                "mean_error": 0.0,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.0,
+                    "pcc": 0.9999999999999989
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0000000000000002,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.0,
+                    "pcc": 0.9999999999999991,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0000000000000002,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0000000000000013,
+                    "max_abs": 0.0
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 0,
+                  "relative_rms": 0.0,
+                  "pcc": 1.0,
+                  "max_abs": 0.0
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 0,
+                  "relative_rms": 0.0,
+                  "pcc": 1.0,
+                  "max_abs": 0.0
+                }
+              },
+              "quantized_reference_vs_bfp8_baseline": {
+                "finite": true,
+                "relative_rms": 0.0,
+                "pcc": 1.0000000000000002,
+                "max_abs": 0.0,
+                "mean_error": 0.0,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0000000000000002
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.0,
+                    "pcc": 0.9999999999999998,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0000000000000002,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0000000000000002,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.0,
+                    "pcc": 0.9999999999999999,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0000000000000002,
+                    "max_abs": 0.0
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 0,
+                  "relative_rms": 0.0,
+                  "pcc": 0.9999999999999998,
+                  "max_abs": 0.0
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 0,
+                  "relative_rms": 0.0,
+                  "pcc": 0.9999999999999998,
+                  "max_abs": 0.0
+                }
+              },
+              "total_rms_ratio_to_bfp8": 1.0
+            },
+            {
+              "name": "K4_V4",
+              "key_dtype": "bfloat4_b",
+              "value_dtype": "bfloat4_b",
+              "roundtrip_key_sha256": "615246f076bff596576f4db3cbf2ab8f09c3b0ece707e5ccf0d66aa3aa79763d",
+              "roundtrip_value_sha256": "2f4ab416e8ced284886075631f022d6ed9df331fd33202d0c435577f53b526fc",
+              "reference_quantized_sha256": "969e144a66da65391839f8601d90e0eeb704b532f8f990a6c8090bbcaaf7bf90",
+              "output_sha256": "1caeeb35dd9049ce59d935197197eadd1b2927e19c0dd69bc5e2dcc036e29df0",
+              "quantization_only": {
+                "finite": true,
+                "relative_rms": 0.1614689448606165,
+                "pcc": 0.9868909944523512,
+                "max_abs": 0.029147040098905563,
+                "mean_error": -0.00010953035333235069,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.1614689448606165,
+                    "pcc": 0.9868909944523512
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.14550301951725633,
+                    "pcc": 0.9895325834943525,
+                    "max_abs": 0.018282312899827957
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.15438792506963908,
+                    "pcc": 0.9880859487500907,
+                    "max_abs": 0.023364515975117683
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.17815865177032356,
+                    "pcc": 0.9840057035481128,
+                    "max_abs": 0.027633843943476677
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.16729474890151547,
+                    "pcc": 0.9861541489536606,
+                    "max_abs": 0.02242162637412548
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.15787316809049412,
+                    "pcc": 0.9874910670317073,
+                    "max_abs": 0.026598885655403137
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.16415271357968775,
+                    "pcc": 0.9864248612843279,
+                    "max_abs": 0.029147040098905563
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.17815865177032356,
+                  "pcc": 0.9840057035481128,
+                  "max_abs": 0.027633843943476677
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 5,
+                  "relative_rms": 0.16415271357968775,
+                  "pcc": 0.9864248612843279,
+                  "max_abs": 0.029147040098905563
+                }
+              },
+              "execution_on_quantized": {
+                "finite": true,
+                "relative_rms": 0.006123133867722534,
+                "pcc": 0.9999822065332987,
+                "max_abs": 0.0010668560862541199,
+                "mean_error": -5.0485455176385585e-06,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.006123133867722534,
+                    "pcc": 0.9999822065332987
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.007529712227338189,
+                    "pcc": 0.9999871260585917,
+                    "max_abs": 0.0010278820991516113
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.0056495926221542285,
+                    "pcc": 0.9999843046007595,
+                    "max_abs": 0.0008543571457266808
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.006702025028925845,
+                    "pcc": 0.9999837860886572,
+                    "max_abs": 0.001013249158859253
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.005021766691787092,
+                    "pcc": 0.9999877535998873,
+                    "max_abs": 0.0008154474198818207
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.0057858292329691354,
+                    "pcc": 0.9999879147997927,
+                    "max_abs": 0.0010668560862541199
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.005928290335545217,
+                    "pcc": 0.9999881318303278,
+                    "max_abs": 0.0010185912251472473
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 0,
+                  "relative_rms": 0.007529712227338189,
+                  "pcc": 0.9999871260585917,
+                  "max_abs": 0.0010278820991516113
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 4,
+                  "relative_rms": 0.0057858292329691354,
+                  "pcc": 0.9999879147997927,
+                  "max_abs": 0.0010668560862541199
+                }
+              },
+              "total": {
+                "finite": true,
+                "relative_rms": 0.161494832627409,
+                "pcc": 0.9868945300717447,
+                "max_abs": 0.029442816972732544,
+                "mean_error": -0.00011457889884998924,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.161494832627409,
+                    "pcc": 0.9868945300717447
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.14601324263844337,
+                    "pcc": 0.9894836457478218,
+                    "max_abs": 0.018634740263223648
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.15456599478909105,
+                    "pcc": 0.9880621340587272,
+                    "max_abs": 0.02366657927632332
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.1792553346253916,
+                    "pcc": 0.9838094676951498,
+                    "max_abs": 0.027878090739250183
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.16588664783181561,
+                    "pcc": 0.9863691210253858,
+                    "max_abs": 0.022307485342025757
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.15701749015478342,
+                    "pcc": 0.9876061540519331,
+                    "max_abs": 0.026605024933815002
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.1647604708403929,
+                    "pcc": 0.9863154730024234,
+                    "max_abs": 0.029442816972732544
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.1792553346253916,
+                  "pcc": 0.9838094676951498,
+                  "max_abs": 0.027878090739250183
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 5,
+                  "relative_rms": 0.1647604708403929,
+                  "pcc": 0.9863154730024234,
+                  "max_abs": 0.029442816972732544
+                }
+              },
+              "kernel_gate_passed": true,
+              "actual_vs_bfp8_baseline": {
+                "finite": true,
+                "relative_rms": 0.16318999673936158,
+                "pcc": 0.9866269993529024,
+                "max_abs": 0.02911376953125,
+                "mean_error": -9.254536901911099e-05,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.16318999673936158,
+                    "pcc": 0.9866269993529024
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.14786607319312112,
+                    "pcc": 0.9892028208550523,
+                    "max_abs": 0.018798828125
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.1566064089815991,
+                    "pcc": 0.9877555616250587,
+                    "max_abs": 0.0240478515625
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.18090569681327626,
+                    "pcc": 0.9835108813157803,
+                    "max_abs": 0.0284423828125
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.16741619895272836,
+                    "pcc": 0.9862258137937826,
+                    "max_abs": 0.0224609375
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.15976403216186272,
+                    "pcc": 0.9871882599316462,
+                    "max_abs": 0.02783203125
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.16505350298759372,
+                    "pcc": 0.9862657851941974,
+                    "max_abs": 0.02911376953125
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.18090569681327626,
+                  "pcc": 0.9835108813157803,
+                  "max_abs": 0.0284423828125
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 5,
+                  "relative_rms": 0.16505350298759372,
+                  "pcc": 0.9862657851941974,
+                  "max_abs": 0.02911376953125
+                }
+              },
+              "quantized_reference_vs_bfp8_baseline": {
+                "finite": true,
+                "relative_rms": 0.16255883710020833,
+                "pcc": 0.9867117549545544,
+                "max_abs": 0.02897027600556612,
+                "mean_error": -9.533845529100897e-05,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.16255883710020833,
+                    "pcc": 0.9867117549545544
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.14631386610374122,
+                    "pcc": 0.9894043602519829,
+                    "max_abs": 0.01830659992992878
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.15563147591836085,
+                    "pcc": 0.9878952318205624,
+                    "max_abs": 0.023282691836357117
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.17992877130155857,
+                    "pcc": 0.9836854753994531,
+                    "max_abs": 0.028421079739928246
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.16745662182613708,
+                    "pcc": 0.9861394786998824,
+                    "max_abs": 0.02217777818441391
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.1597576225171782,
+                    "pcc": 0.9871851332118194,
+                    "max_abs": 0.0267723947763443
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.1645716109118759,
+                    "pcc": 0.9863578582935799,
+                    "max_abs": 0.02897027600556612
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.17992877130155857,
+                  "pcc": 0.9836854753994531,
+                  "max_abs": 0.028421079739928246
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 5,
+                  "relative_rms": 0.1645716109118759,
+                  "pcc": 0.9863578582935799,
+                  "max_abs": 0.02897027600556612
+                }
+              },
+              "total_rms_ratio_to_bfp8": 13.44505734992007
+            },
+            {
+              "name": "K8_V4",
+              "key_dtype": "bfloat8_b",
+              "value_dtype": "bfloat4_b",
+              "roundtrip_key_sha256": "01ce20fbbb2af7486b7df085495d6f084ed510150ed21de80a5a81ebee1df410",
+              "roundtrip_value_sha256": "2f4ab416e8ced284886075631f022d6ed9df331fd33202d0c435577f53b526fc",
+              "reference_quantized_sha256": "be10b1bb91a1bb440629acaf03853e0b87402ec4a724fafd2c618253116ced7a",
+              "output_sha256": "f1d0fd0d4f180619755fcd65ac795de628720283f97b28f335138ce3f735ea8c",
+              "quantization_only": {
+                "finite": true,
+                "relative_rms": 0.11789571715025537,
+                "pcc": 0.9930287194461445,
+                "max_abs": 0.0249553844332695,
+                "mean_error": -0.00012611590189711327,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.11789571715025537,
+                    "pcc": 0.9930287194461445
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.12207850613224941,
+                    "pcc": 0.9926675423822753,
+                    "max_abs": 0.017938667442649603
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.106790004257443,
+                    "pcc": 0.9942992185947842,
+                    "max_abs": 0.01482771709561348
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.1279040816237711,
+                    "pcc": 0.9917854607252116,
+                    "max_abs": 0.02081798017024994
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.12089528377923563,
+                    "pcc": 0.9926782264509936,
+                    "max_abs": 0.015353254973888397
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.11403770260902253,
+                    "pcc": 0.99348543550372,
+                    "max_abs": 0.0249553844332695
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.1168916114289832,
+                    "pcc": 0.9931664523115838,
+                    "max_abs": 0.01883501000702381
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.1279040816237711,
+                  "pcc": 0.9917854607252116,
+                  "max_abs": 0.02081798017024994
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 4,
+                  "relative_rms": 0.11403770260902253,
+                  "pcc": 0.99348543550372,
+                  "max_abs": 0.0249553844332695
+                }
+              },
+              "execution_on_quantized": {
+                "finite": true,
+                "relative_rms": 0.005649435677409162,
+                "pcc": 0.999985253457564,
+                "max_abs": 0.0012800469994544983,
+                "mean_error": -4.246431065742702e-06,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.005649435677409162,
+                    "pcc": 0.999985253457564
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.005280659593467089,
+                    "pcc": 0.9999868042542637,
+                    "max_abs": 0.00095367431640625
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.004807437265827297,
+                    "pcc": 0.9999884851822045,
+                    "max_abs": 0.0008699968457221985
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.005163330834307563,
+                    "pcc": 0.999987064837689,
+                    "max_abs": 0.0007912255823612213
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.005995904485373327,
+                    "pcc": 0.9999897248267419,
+                    "max_abs": 0.0009638667106628418
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.006678605611713555,
+                    "pcc": 0.9999853032023661,
+                    "max_abs": 0.0012800469994544983
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.005616195701601391,
+                    "pcc": 0.9999846125896312,
+                    "max_abs": 0.0008650273084640503
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 4,
+                  "relative_rms": 0.006678605611713555,
+                  "pcc": 0.9999853032023661,
+                  "max_abs": 0.0012800469994544983
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 4,
+                  "relative_rms": 0.006678605611713555,
+                  "pcc": 0.9999853032023661,
+                  "max_abs": 0.0012800469994544983
+                }
+              },
+              "total": {
+                "finite": true,
+                "relative_rms": 0.11780612308469317,
+                "pcc": 0.993039540508358,
+                "max_abs": 0.023675337433815002,
+                "mean_error": -0.00013036233296285596,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.11780612308469317,
+                    "pcc": 0.993039540508358
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.1222384038737419,
+                    "pcc": 0.9926476476238525,
+                    "max_abs": 0.018144225236028433
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.10681979832134371,
+                    "pcc": 0.9942942017526725,
+                    "max_abs": 0.014744933694601059
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.12777299280012505,
+                    "pcc": 0.9917970363261687,
+                    "max_abs": 0.020205624401569366
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.119992222519711,
+                    "pcc": 0.9927797055684435,
+                    "max_abs": 0.014447525143623352
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.11382780071610393,
+                    "pcc": 0.9935309590283528,
+                    "max_abs": 0.023675337433815002
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.11734231291491828,
+                    "pcc": 0.9931074881061119,
+                    "max_abs": 0.01955481246113777
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.12777299280012505,
+                  "pcc": 0.9917970363261687,
+                  "max_abs": 0.020205624401569366
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 4,
+                  "relative_rms": 0.11382780071610393,
+                  "pcc": 0.9935309590283528,
+                  "max_abs": 0.023675337433815002
+                }
+              },
+              "kernel_gate_passed": true,
+              "actual_vs_bfp8_baseline": {
+                "finite": true,
+                "relative_rms": 0.1186759499826376,
+                "pcc": 0.9929349249229462,
+                "max_abs": 0.02490234375,
+                "mean_error": -0.00010832880313197772,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.1186759499826376,
+                    "pcc": 0.9929349249229462
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.12258335860593611,
+                    "pcc": 0.992593572526518,
+                    "max_abs": 0.0179595947265625
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.1090558721469404,
+                    "pcc": 0.9940576767972173,
+                    "max_abs": 0.0146484375
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.12928407138470327,
+                    "pcc": 0.9916073169309646,
+                    "max_abs": 0.0205078125
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.12102849962154436,
+                    "pcc": 0.9926661858815243,
+                    "max_abs": 0.0146484375
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.11348076954038878,
+                    "pcc": 0.9935509382308203,
+                    "max_abs": 0.02490234375
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.11791477676486273,
+                    "pcc": 0.9930388501814817,
+                    "max_abs": 0.01953125
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.12928407138470327,
+                  "pcc": 0.9916073169309646,
+                  "max_abs": 0.0205078125
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 4,
+                  "relative_rms": 0.11348076954038878,
+                  "pcc": 0.9935509382308203,
+                  "max_abs": 0.02490234375
+                }
+              },
+              "quantized_reference_vs_bfp8_baseline": {
+                "finite": true,
+                "relative_rms": 0.1186767941548309,
+                "pcc": 0.9929349833425084,
+                "max_abs": 0.025128893554210663,
+                "mean_error": -0.00011192400385577154,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.1186767941548309,
+                    "pcc": 0.9929349833425084
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.12221346452056897,
+                    "pcc": 0.9926438061160774,
+                    "max_abs": 0.017894592136144638
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.10900753369892073,
+                    "pcc": 0.9940606296955744,
+                    "max_abs": 0.014845211058855057
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.12964924602603528,
+                    "pcc": 0.9915604160371126,
+                    "max_abs": 0.021076440811157227
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.12149281313516988,
+                    "pcc": 0.9926082787945285,
+                    "max_abs": 0.015370354056358337
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.11342110913139564,
+                    "pcc": 0.9935569123031035,
+                    "max_abs": 0.025128893554210663
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.11762914788160089,
+                    "pcc": 0.9930739685090831,
+                    "max_abs": 0.019579177722334862
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.12964924602603528,
+                  "pcc": 0.9915604160371126,
+                  "max_abs": 0.021076440811157227
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 4,
+                  "relative_rms": 0.11342110913139564,
+                  "pcc": 0.9935569123031035,
+                  "max_abs": 0.025128893554210663
+                }
+              },
+              "total_rms_ratio_to_bfp8": 9.807806573599434
+            }
+          ],
+          "reference_original_sha256": "34014fb8adfcf8a6e21301ad0a7110a13cb65f2e89e617ba1b5b30bd763adc8d"
+        },
+        {
+          "active_tokens": 987,
+          "position": 986,
+          "tail_sentinel": 32,
+          "value_with_sentinel_sha256": "ba7233d5f43f4aa137241cd9ade41d9cf09da6ed13599eb08c1efa3db5d221fa",
+          "variants": [
+            {
+              "name": "K8_V8",
+              "key_dtype": "bfloat8_b",
+              "value_dtype": "bfloat8_b",
+              "roundtrip_key_sha256": "01ce20fbbb2af7486b7df085495d6f084ed510150ed21de80a5a81ebee1df410",
+              "roundtrip_value_sha256": "9e58a105dd8ede265524563c98504090c9bbba1084f8d326fd793772a3d2801a",
+              "reference_quantized_sha256": "364067a96199e93c5c8d91065cac3dc9262be191d662732731cf5b279a7b8c88",
+              "output_sha256": "e885030f533503fe8e2c4e9638958859eee0664dfcf6d7c4c36d29a94e0e4d7c",
+              "quantization_only": {
+                "finite": true,
+                "relative_rms": 0.010517668508099175,
+                "pcc": 0.9999446828716865,
+                "max_abs": 0.0021207761019468307,
+                "mean_error": -1.279461533461775e-05,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.010517668508099175,
+                    "pcc": 0.9999446828716865
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.011410130437974831,
+                    "pcc": 0.9999351514351493,
+                    "max_abs": 0.0021207761019468307
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.01059246298763529,
+                    "pcc": 0.9999440692995639,
+                    "max_abs": 0.0017213299870491028
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.01175420290568057,
+                    "pcc": 0.9999306011274413,
+                    "max_abs": 0.0018343739211559296
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.0092277054497563,
+                    "pcc": 0.9999577325814636,
+                    "max_abs": 0.0013150069862604141
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.00941769438186802,
+                    "pcc": 0.9999559889244342,
+                    "max_abs": 0.001424768939614296
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.010667727202827305,
+                    "pcc": 0.9999435145021274,
+                    "max_abs": 0.001588079147040844
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.01175420290568057,
+                  "pcc": 0.9999306011274413,
+                  "max_abs": 0.0018343739211559296
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 0,
+                  "relative_rms": 0.011410130437974831,
+                  "pcc": 0.9999351514351493,
+                  "max_abs": 0.0021207761019468307
+                }
+              },
+              "execution_on_quantized": {
+                "finite": true,
+                "relative_rms": 0.005299349942161549,
+                "pcc": 0.9999861097069701,
+                "max_abs": 0.0011783987283706665,
+                "mean_error": -1.1475739332430143e-05,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.005299349942161549,
+                    "pcc": 0.9999861097069701
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.005610231550431285,
+                    "pcc": 0.9999864725085749,
+                    "max_abs": 0.0010434091091156006
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.0049604988938371005,
+                    "pcc": 0.9999882992271818,
+                    "max_abs": 0.0008035153150558472
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.005479096106653186,
+                    "pcc": 0.9999858175866947,
+                    "max_abs": 0.0009001642465591431
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.004627288940584591,
+                    "pcc": 0.9999893074160744,
+                    "max_abs": 0.0006663985550403595
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.005262942703321344,
+                    "pcc": 0.9999872334700741,
+                    "max_abs": 0.0011783987283706665
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.005741076558996938,
+                    "pcc": 0.9999846181432909,
+                    "max_abs": 0.0010361969470977783
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 5,
+                  "relative_rms": 0.005741076558996938,
+                  "pcc": 0.9999846181432909,
+                  "max_abs": 0.0010361969470977783
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 4,
+                  "relative_rms": 0.005262942703321344,
+                  "pcc": 0.9999872334700741,
+                  "max_abs": 0.0011783987283706665
+                }
+              },
+              "total": {
+                "finite": true,
+                "relative_rms": 0.011698609984868918,
+                "pcc": 0.9999317739222617,
+                "max_abs": 0.002233687788248062,
+                "mean_error": -2.4270354667047894e-05,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.011698609984868918,
+                    "pcc": 0.9999317739222617
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.013077137728912312,
+                    "pcc": 0.9999179210398551,
+                    "max_abs": 0.002233687788248062
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.010937339230263405,
+                    "pcc": 0.9999405868630127,
+                    "max_abs": 0.0018331976607441902
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.012319337257265596,
+                    "pcc": 0.9999253525705999,
+                    "max_abs": 0.0017168857157230377
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.010248413792345564,
+                    "pcc": 0.9999479893631372,
+                    "max_abs": 0.0016111750155687332
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.010407740766154746,
+                    "pcc": 0.9999471300922945,
+                    "max_abs": 0.001660965383052826
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.01303168700379653,
+                    "pcc": 0.999915202855188,
+                    "max_abs": 0.002072365954518318
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 0,
+                  "relative_rms": 0.013077137728912312,
+                  "pcc": 0.9999179210398551,
+                  "max_abs": 0.002233687788248062
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 0,
+                  "relative_rms": 0.013077137728912312,
+                  "pcc": 0.9999179210398551,
+                  "max_abs": 0.002233687788248062
+                }
+              },
+              "kernel_gate_passed": true,
+              "actual_vs_bfp8_baseline": {
+                "finite": true,
+                "relative_rms": 0.0,
+                "pcc": 0.9999999999999976,
+                "max_abs": 0.0,
+                "mean_error": 0.0,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.0,
+                    "pcc": 0.9999999999999976
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0000000000000002,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0000000000000002,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0000000000000002,
+                    "max_abs": 0.0
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 0,
+                  "relative_rms": 0.0,
+                  "pcc": 1.0000000000000002,
+                  "max_abs": 0.0
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 0,
+                  "relative_rms": 0.0,
+                  "pcc": 1.0000000000000002,
+                  "max_abs": 0.0
+                }
+              },
+              "quantized_reference_vs_bfp8_baseline": {
+                "finite": true,
+                "relative_rms": 0.0,
+                "pcc": 0.9999999999999998,
+                "max_abs": 0.0,
+                "mean_error": 0.0,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.0,
+                    "pcc": 0.9999999999999998
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0000000000000002,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.0,
+                    "pcc": 0.9999999999999994,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0000000000000002,
+                    "max_abs": 0.0
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.0,
+                    "pcc": 1.0,
+                    "max_abs": 0.0
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 0,
+                  "relative_rms": 0.0,
+                  "pcc": 1.0,
+                  "max_abs": 0.0
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 0,
+                  "relative_rms": 0.0,
+                  "pcc": 1.0,
+                  "max_abs": 0.0
+                }
+              },
+              "total_rms_ratio_to_bfp8": 1.0
+            },
+            {
+              "name": "K4_V4",
+              "key_dtype": "bfloat4_b",
+              "value_dtype": "bfloat4_b",
+              "roundtrip_key_sha256": "615246f076bff596576f4db3cbf2ab8f09c3b0ece707e5ccf0d66aa3aa79763d",
+              "roundtrip_value_sha256": "4bee5a14586502b3b5c73df684c6c027f593e1215fb1128b4bd4f903ad8bf7c9",
+              "reference_quantized_sha256": "ab8a3026f9bb4b4fb7bd89901738690d242750f0eae73972cfea374630502069",
+              "output_sha256": "d9053af39bc8c3eaadfb510d8a7ac1fdd1ef0f95736a1db1428fe44c49f95af8",
+              "quantization_only": {
+                "finite": true,
+                "relative_rms": 0.15980855143414271,
+                "pcc": 0.9871518424875128,
+                "max_abs": 0.030294056981801987,
+                "mean_error": -9.42125901322773e-05,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.15980855143414271,
+                    "pcc": 0.9871518424875128
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.14322426853901837,
+                    "pcc": 0.9898814677023572,
+                    "max_abs": 0.01816924661397934
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.14683245806582268,
+                    "pcc": 0.9891769436831621,
+                    "max_abs": 0.021648775786161423
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.18153475075667128,
+                    "pcc": 0.9833364889579348,
+                    "max_abs": 0.030294056981801987
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.16990701925993038,
+                    "pcc": 0.9856560698564653,
+                    "max_abs": 0.0232195439748466
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.15259880834799017,
+                    "pcc": 0.9883876220368567,
+                    "max_abs": 0.02666177600622177
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.16423005092652215,
+                    "pcc": 0.9864190408421413,
+                    "max_abs": 0.027993362105917186
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.18153475075667128,
+                  "pcc": 0.9833364889579348,
+                  "max_abs": 0.030294056981801987
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.18153475075667128,
+                  "pcc": 0.9833364889579348,
+                  "max_abs": 0.030294056981801987
+                }
+              },
+              "execution_on_quantized": {
+                "finite": true,
+                "relative_rms": 0.006257370584356329,
+                "pcc": 0.9999829148409075,
+                "max_abs": 0.0014243125915527344,
+                "mean_error": -8.134261255084615e-06,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.006257370584356329,
+                    "pcc": 0.9999829148409075
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.00606234265673764,
+                    "pcc": 0.9999868792152293,
+                    "max_abs": 0.0009171590209007263
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.005436395424626369,
+                    "pcc": 0.9999853580180176,
+                    "max_abs": 0.0010031014680862427
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.007965495970708619,
+                    "pcc": 0.9999844079352056,
+                    "max_abs": 0.0014243125915527344
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.0073420334804640795,
+                    "pcc": 0.9999873153613005,
+                    "max_abs": 0.0012716501951217651
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.005419039747465166,
+                    "pcc": 0.9999856011646745,
+                    "max_abs": 0.0011063218116760254
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.005244606966316281,
+                    "pcc": 0.9999874850437145,
+                    "max_abs": 0.0009583607316017151
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.007965495970708619,
+                  "pcc": 0.9999844079352056,
+                  "max_abs": 0.0014243125915527344
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.007965495970708619,
+                  "pcc": 0.9999844079352056,
+                  "max_abs": 0.0014243125915527344
+                }
+              },
+              "total": {
+                "finite": true,
+                "relative_rms": 0.15994118635020646,
+                "pcc": 0.9871431310396174,
+                "max_abs": 0.03037121146917343,
+                "mean_error": -0.00010234685138736192,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.15994118635020646,
+                    "pcc": 0.9871431310396174
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.14387103862174855,
+                    "pcc": 0.9897987957187256,
+                    "max_abs": 0.018661275506019592
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.14726827629626443,
+                    "pcc": 0.9891121380316419,
+                    "max_abs": 0.021808534860610962
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.18249068995427112,
+                    "pcc": 0.983165021730716,
+                    "max_abs": 0.03037121146917343
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.16895690635579477,
+                    "pcc": 0.9859214193118714,
+                    "max_abs": 0.02317260904237628
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.1519620534137443,
+                    "pcc": 0.9884761883866506,
+                    "max_abs": 0.026938490569591522
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.16465085851099737,
+                    "pcc": 0.9863463689065951,
+                    "max_abs": 0.028017338074278086
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.18249068995427112,
+                  "pcc": 0.983165021730716,
+                  "max_abs": 0.03037121146917343
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.18249068995427112,
+                  "pcc": 0.983165021730716,
+                  "max_abs": 0.03037121146917343
+                }
+              },
+              "kernel_gate_passed": true,
+              "actual_vs_bfp8_baseline": {
+                "finite": true,
+                "relative_rms": 0.16161187353637174,
+                "pcc": 0.9868759668183065,
+                "max_abs": 0.031005859375,
+                "mean_error": -7.807649672031403e-05,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.16161187353637174,
+                    "pcc": 0.9868759668183065
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.14524214292401125,
+                    "pcc": 0.9896069829101093,
+                    "max_abs": 0.018798828125
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.14957848609706548,
+                    "pcc": 0.9887716528428029,
+                    "max_abs": 0.02197265625
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.18464413755844428,
+                    "pcc": 0.9827636097683384,
+                    "max_abs": 0.031005859375
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.1706045806254003,
+                    "pcc": 0.9856700933993847,
+                    "max_abs": 0.0233154296875
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.15406707481878207,
+                    "pcc": 0.9881738994384497,
+                    "max_abs": 0.02783203125
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.1649716542318207,
+                    "pcc": 0.9862920447219243,
+                    "max_abs": 0.02752685546875
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.18464413755844428,
+                  "pcc": 0.9827636097683384,
+                  "max_abs": 0.031005859375
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.18464413755844428,
+                  "pcc": 0.9827636097683384,
+                  "max_abs": 0.031005859375
+                }
+              },
+              "quantized_reference_vs_bfp8_baseline": {
+                "finite": true,
+                "relative_rms": 0.160963231277198,
+                "pcc": 0.9869647150345611,
+                "max_abs": 0.031058285385370255,
+                "mean_error": -8.141797479765955e-05,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.160963231277198,
+                    "pcc": 0.9869647150345611
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.14401145365112478,
+                    "pcc": 0.9897583113003342,
+                    "max_abs": 0.018174365162849426
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.14837737109999613,
+                    "pcc": 0.9889463698277601,
+                    "max_abs": 0.021277286112308502
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.1835636575359627,
+                    "pcc": 0.9829612897988405,
+                    "max_abs": 0.031058285385370255
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.1701288018678672,
+                    "pcc": 0.9856345224195081,
+                    "max_abs": 0.023135948227718472
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.15415506530430995,
+                    "pcc": 0.9881464180241192,
+                    "max_abs": 0.026896387338638306
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.1648594880983819,
+                    "pcc": 0.9863163263467343,
+                    "max_abs": 0.028214197605848312
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.1835636575359627,
+                  "pcc": 0.9829612897988405,
+                  "max_abs": 0.031058285385370255
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.1835636575359627,
+                  "pcc": 0.9829612897988405,
+                  "max_abs": 0.031058285385370255
+                }
+              },
+              "total_rms_ratio_to_bfp8": 13.671811143125188
+            },
+            {
+              "name": "K8_V4",
+              "key_dtype": "bfloat8_b",
+              "value_dtype": "bfloat4_b",
+              "roundtrip_key_sha256": "01ce20fbbb2af7486b7df085495d6f084ed510150ed21de80a5a81ebee1df410",
+              "roundtrip_value_sha256": "4bee5a14586502b3b5c73df684c6c027f593e1215fb1128b4bd4f903ad8bf7c9",
+              "reference_quantized_sha256": "5d39046e6448d4dbc07514f6683374cf061b434f22a94ad2ce05a6449e9cf46b",
+              "output_sha256": "c54e5bf3105d396e5f8d18a8c67308e34494d04e274cc5df39333032db26426c",
+              "quantization_only": {
+                "finite": true,
+                "relative_rms": 0.11847948202830746,
+                "pcc": 0.9929556126109822,
+                "max_abs": 0.026166073977947235,
+                "mean_error": -0.00013725315695486037,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.11847948202830746,
+                    "pcc": 0.9929556126109822
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.12101983648671995,
+                    "pcc": 0.99279351835321,
+                    "max_abs": 0.0203653130447492
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.10840219740494868,
+                    "pcc": 0.9941128414084895,
+                    "max_abs": 0.01634017378091812
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.12936537872325118,
+                    "pcc": 0.9915760643917073,
+                    "max_abs": 0.02162027359008789
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.12172895883270086,
+                    "pcc": 0.9925626198329417,
+                    "max_abs": 0.016064206138253212
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.11428878181021732,
+                    "pcc": 0.9934499003118128,
+                    "max_abs": 0.026166073977947235
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.11737655946090825,
+                    "pcc": 0.9931066406954655,
+                    "max_abs": 0.02032073587179184
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.12936537872325118,
+                  "pcc": 0.9915760643917073,
+                  "max_abs": 0.02162027359008789
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 4,
+                  "relative_rms": 0.11428878181021732,
+                  "pcc": 0.9934499003118128,
+                  "max_abs": 0.026166073977947235
+                }
+              },
+              "execution_on_quantized": {
+                "finite": true,
+                "relative_rms": 0.005375992419435634,
+                "pcc": 0.9999857161941822,
+                "max_abs": 0.0010716244578361511,
+                "mean_error": -8.854369127675454e-06,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.005375992419435634,
+                    "pcc": 0.9999857161941822
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.005240834819604156,
+                    "pcc": 0.9999880572552029,
+                    "max_abs": 0.0007793903350830078
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.005298981496247285,
+                    "pcc": 0.999986780303538,
+                    "max_abs": 0.0010369867086410522
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.005682093496646485,
+                    "pcc": 0.9999857168030388,
+                    "max_abs": 0.0010716244578361511
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.004981375198949569,
+                    "pcc": 0.9999885688994343,
+                    "max_abs": 0.000821627676486969
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.005354271758695043,
+                    "pcc": 0.9999867131613748,
+                    "max_abs": 0.0009380131959915161
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.00563819028135204,
+                    "pcc": 0.9999854902015408,
+                    "max_abs": 0.0009266994893550873
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.005682093496646485,
+                  "pcc": 0.9999857168030388,
+                  "max_abs": 0.0010716244578361511
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.005682093496646485,
+                  "pcc": 0.9999857168030388,
+                  "max_abs": 0.0010716244578361511
+                }
+              },
+              "total": {
+                "finite": true,
+                "relative_rms": 0.11844492666234419,
+                "pcc": 0.9929601059422264,
+                "max_abs": 0.025473646819591522,
+                "mean_error": -0.00014610752608253583,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.11844492666234419,
+                    "pcc": 0.9929601059422264
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.12114244308482222,
+                    "pcc": 0.992773282295757,
+                    "max_abs": 0.020434879115782678
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.10868422154724469,
+                    "pcc": 0.9940825596536437,
+                    "max_abs": 0.01633978635072708
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.1292051136342516,
+                    "pcc": 0.9915839749681173,
+                    "max_abs": 0.021427705883979797
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.12091931872950355,
+                    "pcc": 0.9926620095780992,
+                    "max_abs": 0.016168814152479172
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.11420207106192028,
+                    "pcc": 0.9934634924246578,
+                    "max_abs": 0.025473646819591522
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.11777973832558486,
+                    "pcc": 0.9930498769123347,
+                    "max_abs": 0.020524337887763977
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.1292051136342516,
+                  "pcc": 0.9915839749681173,
+                  "max_abs": 0.021427705883979797
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 4,
+                  "relative_rms": 0.11420207106192028,
+                  "pcc": 0.9934634924246578,
+                  "max_abs": 0.025473646819591522
+                }
+              },
+              "kernel_gate_passed": true,
+              "actual_vs_bfp8_baseline": {
+                "finite": true,
+                "relative_rms": 0.11946906863438758,
+                "pcc": 0.9928361457460432,
+                "max_abs": 0.0263671875,
+                "mean_error": -0.00012183717141548793,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.11946906863438758,
+                    "pcc": 0.9928361457460432
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.12095539490295563,
+                    "pcc": 0.9927937723587371,
+                    "max_abs": 0.02024078369140625
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.11091150400203806,
+                    "pcc": 0.9938410966211224,
+                    "max_abs": 0.015869140625
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.13108201788697346,
+                    "pcc": 0.9913483364167249,
+                    "max_abs": 0.02197265625
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.12237537114315021,
+                    "pcc": 0.9924827007197334,
+                    "max_abs": 0.0167236328125
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.1141281076632105,
+                    "pcc": 0.9934651987142338,
+                    "max_abs": 0.0263671875
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.11874069422836454,
+                    "pcc": 0.9929386572103206,
+                    "max_abs": 0.021484375
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.13108201788697346,
+                  "pcc": 0.9913483364167249,
+                  "max_abs": 0.02197265625
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 4,
+                  "relative_rms": 0.1141281076632105,
+                  "pcc": 0.9934651987142338,
+                  "max_abs": 0.0263671875
+                }
+              },
+              "quantized_reference_vs_bfp8_baseline": {
+                "finite": true,
+                "relative_rms": 0.11939306655763593,
+                "pcc": 0.9928455139497295,
+                "max_abs": 0.02640068531036377,
+                "mean_error": -0.0001244585416202426,
+                "per_user": [
+                  {
+                    "user": 0,
+                    "relative_rms": 0.11939306655763593,
+                    "pcc": 0.9928455139497295
+                  }
+                ],
+                "per_query_head": [
+                  {
+                    "user": 0,
+                    "head": 0,
+                    "relative_rms": 0.12119039821090957,
+                    "pcc": 0.9927657025295338,
+                    "max_abs": 0.020315783098340034
+                  },
+                  {
+                    "user": 0,
+                    "head": 1,
+                    "relative_rms": 0.11070956008313064,
+                    "pcc": 0.9938623168138734,
+                    "max_abs": 0.0159612949937582
+                  },
+                  {
+                    "user": 0,
+                    "head": 2,
+                    "relative_rms": 0.1312420829986657,
+                    "pcc": 0.991330278799599,
+                    "max_abs": 0.021964699029922485
+                  },
+                  {
+                    "user": 0,
+                    "head": 3,
+                    "relative_rms": 0.1223950020304848,
+                    "pcc": 0.9924814033713345,
+                    "max_abs": 0.017061514779925346
+                  },
+                  {
+                    "user": 0,
+                    "head": 4,
+                    "relative_rms": 0.1138745931468678,
+                    "pcc": 0.9934953206494728,
+                    "max_abs": 0.02640068531036377
+                  },
+                  {
+                    "user": 0,
+                    "head": 5,
+                    "relative_rms": 0.1183996427553334,
+                    "pcc": 0.9929804307184761,
+                    "max_abs": 0.021125975996255875
+                  }
+                ],
+                "worst_query_head_relative_rms": {
+                  "user": 0,
+                  "head": 2,
+                  "relative_rms": 0.1312420829986657,
+                  "pcc": 0.991330278799599,
+                  "max_abs": 0.021964699029922485
+                },
+                "worst_query_head_max_abs": {
+                  "user": 0,
+                  "head": 4,
+                  "relative_rms": 0.1138745931468678,
+                  "pcc": 0.9934953206494728,
+                  "max_abs": 0.02640068531036377
+                }
+              },
+              "total_rms_ratio_to_bfp8": 10.124700867499802
+            }
+          ],
+          "reference_original_sha256": "210fafdcdc46ac5ad128cca815d0e49ade2897a73a8ed8c483bd36f79f9850db"
+        }
+      ]
+    }
+  ],
+  "cleanup_completed": true,
+  "updated_at": "2026-10-08T05:18:16Z",
+  "torch_version": "2.11.0+cpu",
+  "ttnn_module": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/ttnn/ttnn/__init__.py",
+  "visible_virtual_devices": 1,
+  "worker_grid": [
+    11,
+    10
+  ],
+  "active_context": 1024,
+  "active_tokens": 987,
+  "active_variant": "K8_V4",
+  "elapsed_wall_seconds_not_silicon_performance": 9.116265143733472
+}

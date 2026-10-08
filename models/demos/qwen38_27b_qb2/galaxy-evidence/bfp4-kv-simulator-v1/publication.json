@@ -1,0 +1,20 @@
+{
+  "executed_probe": "receipts/probe-v2.py.gz",
+  "executed_probe_sha256": "241176996e994a39b9ef0134f084843d2f207e855f7e6c5c2fe16e96854fe53f",
+  "published_probe": "../../demo/probe_bfp4_kv_simulator.py",
+  "published_probe_sha256": "160f612722935206e88c3c10855d57d1994ec85f5f983baddf730dfb878797dc",
+  "changes": "Black formatting, isort import ordering, and autoflake removal of unused top-level math and reference-local torch imports (including the empty placeholder); AST otherwise unchanged.",
+  "published_source_numerically_rerun": false,
+  "formatting_config_revision": "ea7a0c753a91a69f216c55cdcd4e4605c5f3c47c",
+  "hooks": {
+    "black": "23.10.1",
+    "autoflake": "v2.3.1",
+    "isort": "5.13.2",
+    "line_length": 120,
+    "isort_profile": "black"
+  },
+  "repository_config_sha256": {
+    ".pre-commit-config.yaml": "feda83c8ffdd5cd3dfa4cbb0f9c0862939bd2c6d36ae56a5684658459005eaa0",
+    "pyproject.toml": "210de461d34a85f61f857792568ac363fcd6a2479f9c75ef600814296c993247"
+  }
+}
