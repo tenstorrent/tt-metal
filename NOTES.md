@@ -26,3 +26,14 @@ A/B of the NA compute-config knobs DIFFVAE_NA_APPROX_EXP=1 and DIFFVAE_NA_FIDELI
 - 2026-10-08 01:58 UTC: driver started (setsid), job A = broker job 889.
 - Next: `ssh g15blx01 cat /var/tmp/fasth3/t246/drv/driver.marker`; read drv/driver.log (MD5 lines, cmp lines),
   outA/run.log (DECODE seed lines per arm), outA/cmp_*.json, outB/ if run.
+
+## t246 result (blx01 broker job 889, t48 @34a571c5f47, one process per arm, seeds 0,1)
+| arm | warm s (s0, s1) | mean | vs def | PCC vs ref | PSNR vs ref (s0/s1) | md5 s0 |
+|---|---|---|---|---|---|---|
+| def | 3.510, 3.515 | 3.513 | - | 0.999956/0.999957 | 55.51/55.07 | ef3940530a17 |
+| approx (DIFFVAE_NA_APPROX_EXP=1) | 3.381, 3.376 | 3.378 | -0.135 s | 0.999951/0.999952 | 55.04/54.59 (-0.47/-0.48 dB) | 13802b012e19 |
+| lofi (DIFFVAE_NA_FIDELITY=lofi) | 3.568, 3.628 | 3.598 | +0.085 s | 0.999874/0.999871 | 49.21/48.65 | 64e9dd4de0a6 |
+All arms md5-distinct (knobs apply in fresh processes). Lofi fails quality and is slower: rejected.
+Approx passes the rule (PCC>=0.9999, within 0.5 dB, borderline) and is 135 ms faster: to land default-on with =0 off switch.
+Outputs: g15blx01:/var/tmp/fasth3/t246/outA. Job B (combo) not run since lofi failed.
+The earlier #244 'both knobs inert' result was wrong: one process reused the cached program (compute_program_hash omits compute_kernel_config).
