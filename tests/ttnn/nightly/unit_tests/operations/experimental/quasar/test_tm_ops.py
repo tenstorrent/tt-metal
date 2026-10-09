@@ -8,7 +8,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 from tests.ttnn.utils_for_testing import assert_reshape as _assert_reshape
 
 _LAYOUTS = [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]
@@ -444,3 +444,65 @@ def test_quasar_fold_tile_zero_stride_fatal(device, expect_error):
         assert not _qsr_is_tile_native_fold_supported(t, sh, sw), f"predicate must reject stride ({sh},{sw})"
         with expect_error(RuntimeError, r"stride_[hw] .* must be > 0"):
             _qsr_prim_fold(t, sh, sw)
+
+
+@pytest.mark.parametrize(
+    "layout, shape, shard_shape, grid, orientation",
+    [
+        # [1,1,64,90] bf16 RM: 2x3 shards of (32,32) on a 6x2 grid -> 3 padding-only columns.
+        (
+            ttnn.ROW_MAJOR_LAYOUT,
+            [1, 1, 64, 90],
+            (32, 32),
+            (6, 2),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        # Same data on a column-major grid with spare rows.
+        (
+            ttnn.ROW_MAJOR_LAYOUT,
+            [1, 1, 64, 90],
+            (32, 32),
+            (2, 6),
+            ttnn.ShardOrientation.COL_MAJOR,
+        ),
+        # Tile layout, 2x3 tile-shards on an oversized grid.
+        (
+            ttnn.TILE_LAYOUT,
+            [1, 1, 64, 96],
+            (32, 32),
+            (6, 2),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        # Exactly provisioned grid: no spare cores, the normal path must be unchanged.
+        (
+            ttnn.ROW_MAJOR_LAYOUT,
+            [1, 1, 64, 96],
+            (32, 32),
+            (3, 2),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    ],
+    ids=["rm_spare_columns", "rm_col_major_spare_rows", "tile_spare_columns", "rm_exact_grid"],
+)
+def test_quasar_s2i_block_sharded_oversized_grid(device, layout, shape, shard_shape, grid, orientation):
+    compute_grid = device.compute_with_storage_grid_size()
+    if grid[0] > compute_grid.x or grid[1] > compute_grid.y:
+        pytest.skip(f"Device grid {compute_grid.x}x{compute_grid.y} too small for {grid}")
+
+    torch.manual_seed(0)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid[0] - 1, grid[1] - 1))})
+    shard_spec = ttnn.ShardSpec(core_grid, shard_shape, orientation)
+    in_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=layout, memory_config=in_mem_config)
+
+    hole = ttnn.from_torch(torch_input, device=device, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    torch_guard = torch.full(shape, -1.0, dtype=torch.bfloat16)
+    guard = ttnn.from_torch(torch_guard, device=device, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(hole)
+
+    output = ttnn.experimental.quasar.sharded_to_interleaved(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+
+    assert_equal(torch_input, ttnn.to_torch(output))
+    assert_equal(torch_guard, ttnn.to_torch(guard))
