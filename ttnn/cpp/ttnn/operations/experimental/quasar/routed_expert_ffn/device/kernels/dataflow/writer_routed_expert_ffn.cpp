@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// routed_expert_ffn writer: writes y to the DRAM-interleaved output, explicit sync. Runs as W threads draining T
+// routed_expert_ffn writer: writes y to the DRAM-interleaved output. With implicit_sync (Quasar, chosen by the host)
+// each write is tagged with a DFB transaction id and the DM0 ISR acks the credits once it is sent; otherwise the kernel
+// does the explicit wait_front/barrier/pop_front sequence. Runs as W threads draining T
 // compute threads through dfb::out, which has max(T, W) tile counters: counter c is filled by Tensix c % T and drained
 // by writer c % W. Tensix t emits its rows t, t + T, ... one tile at a time, so its p-th tile is y[t + (p / Kt) * T, p
 // % Kt].
@@ -24,6 +26,7 @@ void kernel_main() {
     const uint32_t T = get_arg(args::compute_threads);
     const uint32_t W = get_num_threads();
     const uint32_t w = get_my_thread_id();
+    [[maybe_unused]] constexpr bool implicit_sync = get_arg(args::implicit_sync) != 0;
 
     Noc noc;
     DataflowBuffer dfb_out(dfb::out);
@@ -33,6 +36,12 @@ void kernel_main() {
 
     auto write_tile = [&](uint32_t tensix, uint32_t p) {
         const uint32_t row = tensix + (p / Kt) * T;
+#ifdef ARCH_QUASAR
+        if constexpr (implicit_sync) {
+            noc.async_write<NocOptions::TXN_ID>(dfb_out, y, {}, {.page_id = row * Kt + p % Kt});
+            return;
+        }
+#endif
         dfb_out.wait_front(1);
         noc.async_write(dfb_out, y, out_tile_bytes, {}, {.page_id = row * Kt + p % Kt});
         noc.async_write_barrier();

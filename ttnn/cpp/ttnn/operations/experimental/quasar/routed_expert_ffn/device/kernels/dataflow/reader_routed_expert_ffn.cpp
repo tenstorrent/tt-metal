@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// routed_expert_ffn reader: runs as T threads, one per compute thread, explicit sync. dfb::x and dfb::w have one tile
-// counter per thread, so reader thread t feeds only Tensix t, in the exact order it consumes tiles. For each tile row m
+// routed_expert_ffn reader: runs as T threads, one per compute thread. dfb::x and dfb::w have one tile counter per
+// thread, so reader thread t feeds only Tensix t, in the exact order it consumes tiles. With implicit_sync (Quasar,
+// chosen by the host) each read is tagged with a DFB transaction id and the DM0 ISR posts the credits once the reads
+// land; otherwise the kernel does the explicit reserve_back/barrier/push_back sequence. For each tile row m
 // that Tensix t owns (t, t + T, ...):
 //   x[m, 0..Kt)                                  -> dfb::x (held by compute for all of phase 1)
 //   for h: w_gate[0..Kt, h], then w_up[0..Kt, h] -> dfb::w
@@ -22,6 +24,7 @@ void kernel_main() {
     const uint32_t Mt = get_arg(args::Mt);
     const uint32_t Kt = get_arg(args::Kt);
     const uint32_t Ht = get_arg(args::Ht);
+    [[maybe_unused]] constexpr bool implicit_sync = get_arg(args::implicit_sync) != 0;
 
     Noc noc;
     DataflowBuffer dfb_x(dfb::x);
@@ -33,6 +36,12 @@ void kernel_main() {
     const auto w_down = TensorAccessor(tensor::w_down);
 
     auto push_tile = [&](DataflowBuffer& dfb, const auto& src, uint32_t page) {
+#ifdef ARCH_QUASAR
+        if constexpr (implicit_sync) {
+            noc.async_read<NocOptions::TXN_ID>(src, dfb, {.page_id = page}, {});
+            return;
+        }
+#endif
         dfb.reserve_back(1);
         noc.async_read(src, dfb, dfb.get_entry_size(), {.page_id = page}, {});
         noc.async_read_barrier();
@@ -58,6 +67,8 @@ void kernel_main() {
         }
     }
 
+    // With implicit sync, posts any partial transaction-id batch of both DFBs before either destructor waits for
+    // compute: compute needs the tail tiles of both to finish.
     dfb_x.finish();
     dfb_w.finish();
 }

@@ -29,6 +29,10 @@ def _to_device(t, device):
         (64, 64, 64),  # 2 tile rows: 2 Tensix
         (128, 64, 64),  # 4 tile rows: all 4 Tensix
         (256, 64, 64),  # 8 tile rows: 4 Tensix, 2 rows each
+        (512, 256, 128),  # 16 tile rows: 4 rows per Tensix
+        (128, 1024, 512),
+        (512, 2048, 1024),
+        (128, 7168, 2048),  # DeepSeek V3 expert: emb 7168, moe_intermediate 2048
     ],
 )
 def test_routed_expert_ffn(device, m, k, h):

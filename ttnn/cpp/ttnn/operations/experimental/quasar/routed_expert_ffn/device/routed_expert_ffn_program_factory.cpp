@@ -89,7 +89,9 @@ ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::creat
         };
     };
 
-    // The kernels use explicit reserve_back/push_back sync, so DFB implicit sync is off (Quasar only).
+    // DFB implicit sync (Quasar only): the reader and writer issue transaction-id tagged NoC reads/writes and the
+    // DM0 ISR posts/acks the tile-counter credits. Partial last batches are posted by finish().
+    const bool implicit_sync = is_quasar;
     m2::KernelSpec reader{
         .unique_id = READER,
         .source = std::filesystem::path{std::string(kKernelDir) + "dataflow/reader_routed_expert_ffn.cpp"},
@@ -100,8 +102,9 @@ ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::creat
              m2::TensorBinding{.tensor_parameter_name = W_GATE, .accessor_name = "w_gate"},
              m2::TensorBinding{.tensor_parameter_name = W_UP, .accessor_name = "w_up"},
              m2::TensorBinding{.tensor_parameter_name = W_DOWN, .accessor_name = "w_down"}},
+        .compile_time_args = {{"implicit_sync", implicit_sync ? 1u : 0u}},
         .runtime_arg_schema = {.runtime_arg_names = {"Mt", "Kt", "Ht"}},
-        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/!implicit_sync),
     };
 
     m2::KernelSpec writer{
@@ -110,8 +113,9 @@ ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::creat
         .num_threads = writer_threads,
         .dfb_bindings = {m2::ConsumerOf(OUT_DFB, "out")},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = Y, .accessor_name = "y"}},
+        .compile_time_args = {{"implicit_sync", implicit_sync ? 1u : 0u}},
         .runtime_arg_schema = {.runtime_arg_names = {"Mt", "Kt", "compute_threads"}},
-        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/!implicit_sync),
     };
 
     // gate, up and act are compute-only scratch, so compute is both their producer and their consumer.
