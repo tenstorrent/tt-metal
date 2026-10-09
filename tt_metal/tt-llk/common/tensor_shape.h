@@ -74,6 +74,19 @@ struct __attribute__((packed)) TensorShape
 
 static_assert(sizeof(TensorShape) == 4, "TensorShape must be 4 bytes");
 
+/**
+ * @brief Get the register-file stride between tiny faces, in hardware tile indices.
+ *
+ * Faces shorter than MAX_FPU_ROWS occupy sparse MAX_FPU_ROWS-row slots.
+ * @param tensor_shape: Shape with a valid face row dimension (1, 2, 4, 8, or 16).
+ * @return Hardware tile index increment for one face; 1 for dense faces.
+ * @note Use only when one hardware tile represents one face, rather than a full four-face tile.
+ */
+constexpr std::uint32_t tiny_face_stride(const TensorShape& tensor_shape)
+{
+    return tensor_shape.face_r_dim < MAX_FPU_ROWS ? MAX_FPU_ROWS / tensor_shape.face_r_dim : 1;
+}
+
 constexpr TensorShape DEFAULT_TENSOR_SHAPE = {MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
 
 /// Build a TensorShape from explicit face dimensions and face-grid counts.

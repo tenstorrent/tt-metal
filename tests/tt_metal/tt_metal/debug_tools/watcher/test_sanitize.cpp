@@ -516,17 +516,9 @@ void RunTestOnCore(
     }
     workload.add_program(device_range, std::move(program));
 
-    // Run the kernel; its illegal NoC transaction trips watcher test mode. Whether that reaches the
-    // host as an exception here is a race with the watcher poll (fires on the slow Quasar sim via
-    // #48842's fast-dispatch rethrow; usually not on fast HW), so this catch is best-effort. The
-    // watcher-log check below always runs (regardless of this catch) and is the real verification.
-    try {
-        fixture->RunProgram(mesh_device, workload);
-    } catch (std::runtime_error& e) {
-        const std::string error = std::string(e.what());
-        log_info(tt::LogTest, "Caught exception (one is expected in this test)");
-        EXPECT_TRUE(error.find("Aborting wait due to watcher error") != std::string::npos) << error;
-    }
+    // Run the kernel; its illegal NoC transaction trips watcher test mode. The watcher-log check below
+    // is the real verification.
+    fixture->RunProgramExpectingWatcherError(mesh_device, workload);
 
     // We should be able to find the expected watcher error in the log as well.
     std::string expected;
@@ -816,6 +808,10 @@ void RunTestEth(
     MeshWatcherFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     watcher_features_t feature) {
+    // TODO: Enable this once runtime support for ETH cores is done
+    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar has no active Ethernet cores runtime support";
+    }
     auto* device = mesh_device->get_devices()[0];
     if (fixture->IsSlowDispatch()) {
         GTEST_SKIP();
@@ -1133,6 +1129,39 @@ TEST_F(MeshWatcherFixture, QuasarTestWatcherSanitizeMultiDMRace) {
                 false,
                 false /*is_idle_eth_core*/,
                 true /*multi_dm_race*/);
+        },
+        this->devices_[0]);
+}
+
+// A sanitize record that stays partially written across polls must be reported as corruption, not ignored.
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizePartialRecord) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().watcher_noc_sanitize_disabled()) {
+        GTEST_SKIP();
+    }
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture*, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord virtual_core = mesh_device->virtual_core_from_logical_core({0, 0}, CoreType::WORKER);
+            const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+            auto programmable_core_type = mesh_device->get_programmable_core_type(virtual_core);
+            auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
+            auto san = dev_msgs_factory.create<dev_msgs::debug_sanitize_addr_msg_t>();
+            uint64_t san_addr =
+                hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::WATCHER) +
+                dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::sanitize);
+            auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+            tt_cxy_pair target(mesh_device->get_device_ids()[0], virtual_core);
+
+            // Return code still OK but one field published: what a torn Quasar record looks like.
+            cluster.read_core(san.data(), san.size(), target, san_addr);
+            san.view().len() = 4;
+            cluster.write_core(san.data(), san.size(), target, san_addr);
+
+            std::string exception;
+            do {
+                exception = MetalContext::instance().watcher_server()->exception_message();
+            } while (exception.empty());
+            log_info(LogTest, "Reported error: {}", exception);
+            EXPECT_NE(exception.find("partially written record noc0"), std::string::npos);
         },
         this->devices_[0]);
 }

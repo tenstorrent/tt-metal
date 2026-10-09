@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -12,16 +11,16 @@
 #include <optional>
 #include <set>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
-#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <fmt/base.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric {
 class PhysicalGroupingDescriptor;
@@ -155,6 +154,12 @@ struct TopologyMappingConfig {
     // has exactly one rank binding (all ASICs on the same host map to fabric nodes with the same rank).
     // Used even when some ASICs have UNSET rank. Default empty.
     std::map<std::string, std::set<tt::tt_metal::AsicID>> hostname_to_asics;
+
+    // Optional: when non-empty, every mesh may only be seated on these ASICs. A restriction, not a
+    // footprint: a mesh smaller than the set still fits. TopologyMapper sets it in local mode (one mesh,
+    // one host rank, rank bindings disabled) when the PSD spans several hosts, so the mesh lands on the
+    // calling host's chips instead of an arbitrary host. Default empty (no restriction).
+    std::set<tt::tt_metal::AsicID> placement_asic_allowlist;
 };
 
 /**

@@ -9,7 +9,7 @@
 
 #include "dev_mem_map.h"
 #include "hostdev/dev_msgs.h"
-#include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "noc/noc_parameters.h"
 #include "eth_l1_address_map.h"
 

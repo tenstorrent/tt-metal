@@ -9,6 +9,7 @@
 #include "nlp_concat_heads_program_factory.hpp"
 #include "nlp_concat_heads_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {

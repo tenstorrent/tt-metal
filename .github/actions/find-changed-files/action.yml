@@ -8,6 +8,8 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.clang-tidy-config-changed }}
   tt-metalium-changed:
     value: ${{ steps.find-changed-files.outputs.tt-metalium-changed }}
+  tt-metalium-api-headers-changed:
+    value: ${{ steps.find-changed-files.outputs.tt-metalium-api-headers-changed }}
   tt-nn-changed:
     value: ${{ steps.find-changed-files.outputs.tt-nn-changed }}
   tt-metalium-tests-changed:
