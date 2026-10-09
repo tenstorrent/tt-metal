@@ -33,6 +33,7 @@ TERMS = {
     "msync": "mcast receivers ack only after computing on a block: the sender's ack collection adds to every compute step",
     "mcrate": "multicast data moves at its own rate, falling with the receiver count (measured: one-to-all microbenchmark)",
     "corecc": "a core's DRAM read rate when other cores read DRAM concurrently (measured: 4-core interleaved reads)",
+    "dramw": "DRAM writes get their own (fitted) chip efficiency: bursty block-end writes sharing DRAM with other cores' reads (isolated 64-core writes reach 0.47)",
     "shardhop": "sharded in0: each K block's mcast sender is the core holding that slice, so every step pays a sender handoff",
 }
 EXPERIMENTAL = {
@@ -98,6 +99,7 @@ CONSTANTS = {
     "wburst_KB": (20.0, "KB per writer per barrier at which its share of DRAM write bandwidth halves", "wburst"),
     "mc_out": (500.0, "cycles per MultiCore output tile: acquire, pack, write + barrier", "mcout"),
     "blk_fixed": (1000.0, "cycles per output block: CB handshakes, compute reconfig, output block setup", "blkfix"),
+    "dram_w_eff": (0.6, "achievable fraction of spec DRAM bandwidth for writes", "dramw"),
     "lat_shard": (
         500.0,
         "cycles per K step: handing the in0 mcast to the core that holds the next K slice",
@@ -334,7 +336,8 @@ def predict(g, p, parts=False):
     if on("write"):
         wbytes = tiles * g["tb_o"]
         cw = 1 + sbh * sbw * g["tb_o"] / (p["wburst_KB"] * 1e3) if on("wburst") else 1.0
-        rate_w = np.minimum(noc, dram / (np.maximum(g["cores"], 1) * cw))
+        dram_w = s["dram_GBs"] * 1e9 * p["dram_w_eff"] / clk if on("dramw") else dram
+        rate_w = np.minimum(noc, dram_w / (np.maximum(g["cores"], 1) * cw))
         write = np.select(
             [g["dst_o"] == 0, g["dst_o"] == 1],
             [nsb * p["lat_write"] + wbytes / rate_w, nsb * p["lat_l1"] + wbytes / noc],
