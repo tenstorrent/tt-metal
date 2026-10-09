@@ -429,7 +429,7 @@ void kernel_main() {
 
         tile_regs_commit();
         tile_regs_wait();
-        pack_block(mean_dst, dfb_ex_partial_id, 2);
+        PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(mean_dst, dfb_ex_partial_id, 2)));
         tile_regs_release();
         dfb_ex_partial.push_back(2);
         // End Statistics Aggregation
