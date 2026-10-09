@@ -63,12 +63,8 @@ static constexpr uint32_t QUASAR_TENSIX_ENGINES_PER_NODE = 4;
 // Data structure built up from ProgramSpec to enable fast lookups
 struct CollectedSpecData {
     // Name -> spec lookups.
-    // dfb_by_name covers BOTH local and cross-node DFBs.
-    // For cross-node DFBs, the pointee is the inner dfb_spec.
-    // To check if a DFB is cross-node, check the cross_node_dfb_by_name map.
     std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
     std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
-    std::unordered_map<DFBSpecName, const CrossNodeDataflowBufferSpec*> cross_node_dfb_by_name;
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
     std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*> scratchpad_by_name;
     std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
@@ -101,7 +97,6 @@ struct CollectedSpecData {
     std::unordered_map<ScratchpadSpecName, std::vector<const KernelSpec*>> scratchpad_binders;
 
     // DFB endpoint info (derived from kernel bindings).
-    // Populated for both local and cross-node DFBs.
     //
     // Multiple PRODUCER KernelSpecs (and multiple CONSUMER KernelSpecs) may bind the same DFB,
     // provided they have non-overlapping node coverage and matching binding-site parameters
@@ -328,21 +323,10 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         TT_FATAL(inserted, "Duplicate KernelSpec name '{}'", kernel.unique_id);
     }
 
-    // Collect DataflowBufferSpecs (local DFBs)
+    // Collect DataflowBufferSpecs
     for (const auto& dfb : spec.dataflow_buffers) {
         auto [it, inserted] = collected.dfb_by_name.try_emplace(dfb.unique_id, &dfb);
         TT_FATAL(inserted, "Duplicate DataflowBufferSpec name '{}'", dfb.unique_id);
-    }
-
-    // Collect CrossNodeDataflowBufferSpecs (cross-node DFBs).
-    // Cross-node DFBs share the DFB name space with local DFBs, since kernel bindings
-    // refer to either kind by the same DFBSpecName.
-    for (const auto& cross_node_dfb : spec.cross_node_dataflow_buffers) {
-        const DFBSpecName& name = cross_node_dfb.dfb_spec.unique_id;
-        auto [it1, inserted1] = collected.dfb_by_name.try_emplace(name, &cross_node_dfb.dfb_spec);
-        TT_FATAL(inserted1, "Duplicate DataflowBufferSpec name '{}' (across local and cross-node DFBs)", name);
-        auto [it2, inserted2] = collected.cross_node_dfb_by_name.try_emplace(name, &cross_node_dfb);
-        TT_FATAL(inserted2, "Duplicate CrossNodeDataflowBufferSpec name '{}'", name);
     }
 
     // Build DFB endpoint info from kernel bindings
@@ -448,19 +432,12 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         TT_FATAL(!endpoint_info.consumers.empty(), "DFB '{}' has no consumer", dfb_name);
     }
 
-    // Referential integrity: every declared DFB (local or cross-node) must be bound by some kernel
+    // Referential integrity: every declared DFB must be bound by some kernel
     for (const auto& dfb : spec.dataflow_buffers) {
         TT_FATAL(
             collected.dfb_endpoints.contains(dfb.unique_id),
             "DFB '{}' is defined but not bound by any kernel",
             dfb.unique_id);
-    }
-    for (const auto& cross_node_dfb : spec.cross_node_dataflow_buffers) {
-        const DFBSpecName& name = cross_node_dfb.dfb_spec.unique_id;
-        TT_FATAL(
-            collected.dfb_endpoints.contains(name),
-            "CrossNodeDataflowBufferSpec '{}' is defined but not bound by any kernel",
-            name);
     }
 
     // Collect SemaphoreSpecs
@@ -645,8 +622,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
     // (the DFB resolves its L1 address from that parameter's TensorArgument at runtime) even when no
     // kernel binds the parameter directly. Count that as a use so the completeness check below doesn't
     // reject a borrowed-only parameter. Existence of the referent is validated separately in the
-    // borrowed-DFB checks. Only local DFBs are walked here: borrowed memory is a local-L1 feature,
-    // so spec.dataflow_buffers is the relevant set (cross-node DFBs are runtime-unsupported).
+    // borrowed-DFB checks.
     for (const auto& dfb : spec.dataflow_buffers) {
         if (dfb.borrowed_from.has_value()) {
             collected.tensor_parameter_users[*dfb.borrowed_from];  // register as used (no kernel user)
@@ -734,13 +710,6 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 pipe_name);
             collected.prefetcher_pipe_users[pipe_name].relays.push_back(&dfb);
         }
-    }
-    for (const auto& cross_node_dfb : spec.cross_node_dataflow_buffers) {
-        TT_FATAL(
-            cross_node_dfb.dfb_spec.advanced_options.prefetcher_pipe_relays.empty(),
-            "CrossNodeDataflowBufferSpec '{}' sets prefetcher_pipe_relays; only a local DFB can relay a "
-            "PrefetcherPipe",
-            cross_node_dfb.dfb_spec.unique_id);
     }
 
     // Referential integrity: every declared PrefetcherPipeParameter must be used by a kernel binding
@@ -2047,19 +2016,6 @@ void ValidateProgramSpec(
                 dfb.unique_id);
         }
     }
-
-    // Cross-node DFBs are not yet supported.
-    //
-    // TODO: When cross-node DFB is supported, add a validation checks. Enforce that
-    //       each (producer_node, consumer_node) entry in producer_consumer_map has
-    //       p_node != c_node.
-
-    TT_FATAL(
-        spec.cross_node_dataflow_buffers.empty(),
-        "CrossNodeDataflowBufferSpec is part of the Metal 2.0 API surface but is not yet supported "
-        "by the runtime. (ProgramSpec '{}' has {} cross-node DFB(s).)",
-        spec.name,
-        spec.cross_node_dataflow_buffers.size());
 
     // Scratchpad placement census (multi-binding rule).
     //
