@@ -32,7 +32,15 @@
 #if defined(SWIGLU_OAI) && defined(SITU_GLU)
 #error "SWIGLU_OAI and SITU_GLU are mutually exclusive activation variants"
 #endif
-#if defined(SWIGLU_OAI) || defined(SITU_GLU)
+// Plain SiLU takes the same fused fold + binary-SFPU path (silu(g) * u in DEST) unless
+// MOE_SILU_FUSED is 0, which restores the three bf16 slice-CB round trips.
+#ifndef MOE_SILU_FUSED
+#define MOE_SILU_FUSED 1
+#endif
+#if !defined(SWIGLU_OAI) && !defined(SITU_GLU) && MOE_SILU_FUSED
+#define SILU_GLU_FUSED 1
+#endif
+#if defined(SWIGLU_OAI) || defined(SITU_GLU) || defined(SILU_GLU_FUSED)
 #define FUSED_BINARY_ACT 1
 #endif
 #ifdef SWIGLU_OAI
@@ -74,6 +82,10 @@ constexpr bool kFp32DestAccEn = FP32_DEST_ACC_EN != 0;
 // situ_glu_tile takes its fp32-dest mode from DST_ACCUM_MODE and wraps itself in MATH().
 #define BINARY_ACT_INIT() situ_glu_tile_init()
 #define BINARY_ACT_TILE(g, u, o) situ_glu_tile(g, u, o)
+#elif defined(SILU_GLU_FUSED)
+// Op-local, in moe_fused_swiglu_compute_helpers.hpp; uses the fast sigmoid (MOE_SILU_FAST).
+#define BINARY_ACT_INIT() moe_silu_glu_tile_init()
+#define BINARY_ACT_TILE(g, u, o) moe_silu_glu_tile(g, u, o)
 #endif
 #endif
 

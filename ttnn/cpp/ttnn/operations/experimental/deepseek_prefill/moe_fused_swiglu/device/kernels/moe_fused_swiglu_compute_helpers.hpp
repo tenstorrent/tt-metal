@@ -42,6 +42,97 @@ ALWI uint32_t clk() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_R
 #define MOE_PROF_TMACS(n) ((void)0)
 #endif
 
+// Op-local fast SiLU. The stock calculate_silu always runs exp_21f plus a Newton-refined reciprocal,
+// whatever APPROX says, and changing it globally would move every op that defaults to approx mode.
+// Here the sigmoid's reciprocal is the raw SFPARECIP estimate (~7 bits); the result is rounded to
+// bf16 anyway, so the Newton step buys almost nothing for this op's PCC.
+//   MOE_SILU_FAST == 1: exp_21f(-x), raw reciprocal.
+//   MOE_SILU_FAST == 2: Schraudolph exp (exponent-field linear 2^f, bias-tuned), raw reciprocal.
+#ifndef MOE_SILU_FAST
+#define MOE_SILU_FAST 2
+#endif
+#if defined(TRISC_PACK) || defined(TRISC_MATH)
+namespace ckernel::sfpu {
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat moe_silu_fast_value(sfpi::vFloat x) {
+    sfpi::vFloat e;
+#if MOE_SILU_FAST == 1
+    e = _sfpu_exp_21f_bf16_<true>(-x);
+#else
+    // 2^(t) with t = -x/ln2: build the float whose bits are (t + 127) * 2^23. The mantissa is the
+    // linear 1 + frac, off by up to 6%; the -0.0579 bias recentres that to about +-3%.
+    constexpr float ONE_LN2 = 1.4426950216293334961f;
+    sfpi::vFloat t = x * -ONE_LN2 + (127.f - 0.0579f);
+    t = sfpi::clamp(t, 0.0f, 255.0f);
+    e = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(t));
+#endif
+    return x * sfpi::approx_recip(e + 1.0f);
+}
+
+template <bool is_fp32_dest_acc_en, int ITERATIONS>
+inline void calculate_moe_silu_fast() {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat result = moe_silu_fast_value<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+// silu(gate) * up with both operands already in DEST: the plain-SiLU twin of situ_glu / swiglu_oai,
+// so the fused fold_binary_act_blocked path serves SiLU too and the bf16 slice CBs drop out.
+template <bool is_fp32_dest_acc_en, int ITERATIONS>
+inline void calculate_moe_silu_glu(const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx) {
+    constexpr uint dst_tile_size = 32;  // 32 rows per tile in SFPU addressing
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat gate = sfpi::dst_reg[gate_tile_idx * dst_tile_size];
+        sfpi::vFloat up = sfpi::dst_reg[up_tile_idx * dst_tile_size];
+        sfpi::vFloat result = moe_silu_fast_value<is_fp32_dest_acc_en>(gate) * up;
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[out_tile_idx * dst_tile_size] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+inline void moe_silu_glu_init() {}
+}  // namespace ckernel::sfpu
+#endif
+
+namespace ckernel {
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void moe_silu_fast_tile_pack(uint32_t idst) {
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_moe_silu_fast,
+        (is_fp32_dest_acc_en, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC));
+}
+
+ALWI void moe_silu_glu_tile(uint32_t gate, uint32_t up, uint32_t out) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_moe_silu_glu,
+        (DST_ACCUM_MODE, 8 /* ITERATIONS */),
+        gate,
+        up,
+        out,
+        VectorMode::RC)));
+}
+
+ALWI void moe_silu_glu_tile_init() {
+    MATH((llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(sfpu::moe_silu_glu_init)));
+}
+}  // namespace ckernel
+
 namespace moe_fused_swiglu::compute {
 
 struct MatmulShape {
@@ -230,7 +321,7 @@ ALWI void add_silu_elementwise(
         p_stall::STALL_TDMA | p_stall::STALL_CFG, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO));
     PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
     for (uint32_t tile = 0; tile < tiles; ++tile) {
-        silu_tile_pack(tile);
+        moe_silu_fast_tile_pack(tile);
     }
     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
     for (uint32_t tile = 0; tile < tiles; ++tile) {
