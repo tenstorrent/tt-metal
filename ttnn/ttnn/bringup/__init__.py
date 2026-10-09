@@ -13,7 +13,11 @@ fork-call capture see it like any other op. Nothing here imports at ``import ttn
 # as ttnn.bringup.rms_norm; its Python implementation stays importable as ttnn.bringup.rms_norm_ttnn.rms_norm_ttnn for
 # A/B comparison. mhc_pre / mhc_post (mhc_pre_ttnn/, mhc_post_ttnn/) likewise:
 # C++ bindings, their Python implementations importable as ttnn.bringup.mhc_pre_ttnn.mhc_pre / .mhc_post_ttnn.mhc_post.
-PYTHON_OPS = {}
+PYTHON_OPS = {
+    # fabric reduce-scatter (Python ProgramDescriptor op, mstaletovic/mimo-v2-dp); its planning code is the Python
+    # fabric_all_gather in fabric_all_gather_ttnn/fabric_all_gather_py.py (ttnn.bringup.fabric_all_gather is the C++ op)
+    "fabric_reduce_scatter": ("fabric_reduce_scatter_ttnn", "fabric_reduce_scatter"),
+}
 
 
 def _stable_arg_reprs():

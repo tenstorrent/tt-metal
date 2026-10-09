@@ -7,7 +7,7 @@ One target.chunk chunk at position GLM_PROF_START (default: the last chunk of ta
 longest) is run once to compile, then twice under the bring-up profiler: op mode (a sync and a device-profiler read
 after every outermost ttnn op: exact per-op device time per chip, per layer and step) and timeline mode (no syncs:
 device kernel time vs idle gaps vs host dispatch). Rows go to generated/glm53_flash_d_p_lb/profile_ops.json; the
-roofline analysis is tests/roofline.py.
+roofline analysis is tests/roofline.py. GLM_PROF_LAYERS=lo-hi profiles only those layers.
 
     TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 \\
     TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 PYTHONPATH=$PWD \\
@@ -41,6 +41,9 @@ def test_profile_ops(mesh_device):
     start = int(os.environ.get("GLM_PROF_START", seq - chunk))
     toks = prompt_tokens(S, start + chunk).to(torch.long)[start : start + chunk]
     layers = S.layers()
+    if os.environ.get("GLM_PROF_LAYERS"):  # e.g. "2-4": one layer of each block type (the full model takes > 1 h)
+        lo, hi = (int(v) for v in os.environ["GLM_PROF_LAYERS"].split("-"))
+        layers = [i for i in layers if lo <= i <= hi]
     model = S.hooks().device_model(mesh_device, S, layers, lm_head=False)
 
     def run():
