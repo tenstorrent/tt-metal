@@ -228,6 +228,26 @@ uint32_t derive_data_valid_granularity(const PageGeometry& geometry, uint32_t pa
         geometry.input_page_size, geometry.output_chunk_size, geometry.num_output_chunks, packet_size, total_slices);
 }
 
+// Segmented prefix geometry for the kernels, in input pages (the writer scales by split_factor).
+// {0, 0} = contiguous prefix, which keeps the kernels on their unmapped fast path.
+struct SegmentArgs {
+    uint32_t stride_pages;
+    uint32_t active_pages;
+};
+SegmentArgs derive_segment_args(const PageGeometry& geometry, uint32_t gathered_segments) {
+    if (gathered_segments <= 1) {
+        return {0, 0};
+    }
+    const uint32_t max_input_pages = geometry.output_chunks_per_stripe / geometry.split_factor;
+    TT_FATAL(
+        max_input_pages % gathered_segments == 0 && geometry.num_input_pages % gathered_segments == 0,
+        "high_bw_all_gather segmented prefix needs whole pages per segment: {} max / {} active pages over {} segments",
+        max_input_pages,
+        geometry.num_input_pages,
+        gathered_segments);
+    return {max_input_pages / gathered_segments, geometry.num_input_pages / gathered_segments};
+}
+
 bool can_use_output_bank_owned_schedule(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
@@ -527,8 +547,11 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         scheduling_geometry.num_input_pages = page_geometry.output_chunks_per_stripe;
     }
     const auto can_use_bank_owned = [&](uint32_t workers_per_direction) {
-        return can_use_output_bank_owned_schedule(
-            input_tensor, output_tensor, scheduling_geometry, num_links, workers_per_direction, num_dram_banks);
+        // The bank-owned schedule assumes logical page p sits in DRAM bank p % num_banks; a segmented
+        // prefix remaps pages in-kernel, so it always takes the even split.
+        return operation_attributes.gathered_segments == 1 &&
+               can_use_output_bank_owned_schedule(
+                   input_tensor, output_tensor, scheduling_geometry, num_links, workers_per_direction, num_dram_banks);
     };
     uint32_t workers_per_dir = 1;
     if (input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0) {
@@ -990,6 +1013,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     const uint32_t batch_metadata_address =
         batch_index_from_metadata ? tensor_args.input_batch_index_tensor->buffer()->address() : 0u;
     // Slot recomposition stays runtime so layers and cache depths share one cached program.
+    // Segment geometry is common (every worker maps the same way) and its active length changes with the
+    // hash-excluded gathered_dim_size, so override_runtime_arguments refreshes them. Reader slots 6/7 are input
+    // pages (local reads), 8/9 output chunks (relay iterator); writer slots 2/3 are output chunks.
+    const auto segment_args = derive_segment_args(page_geometry, operation_attributes.gathered_segments);
     tt::tt_metal::SetCommonRuntimeArgs(
         program,
         reader_kernel_id,
@@ -998,8 +1025,18 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
          prefix_metadata_address,
          batch_metadata_address,
          operation_attributes.batch_slot_num_layers,
-         operation_attributes.batch_slot_layer_idx});
-    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, data_valid_granularity});
+         operation_attributes.batch_slot_layer_idx,
+         segment_args.stride_pages,
+         segment_args.active_pages,
+         segment_args.stride_pages * page_geometry.split_factor,
+         segment_args.active_pages * page_geometry.split_factor});
+    tt::tt_metal::SetCommonRuntimeArgs(
+        program,
+        writer_kernel_id,
+        {output_addr,
+         data_valid_granularity,
+         segment_args.stride_pages * page_geometry.split_factor,
+         segment_args.active_pages * page_geometry.split_factor});
 
     // Mux runtime args: one fabric connection per active direction per link, to that direction's neighbor. The
     // direction's workers all feed this one connection.
@@ -1274,6 +1311,23 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
         reader_common.at(5) = operation_attributes.batch_slot_layer_idx;
         auto& writer_common = GetCommonRuntimeArgs(program, shared_vars.writer_kernel_id);
         writer_common.at(0) = output_addr;
+        if (operation_attributes.gathered_segments > 1) {
+            if (!updated_page_geometry.has_value()) {
+                updated_page_geometry = derive_page_geometry(
+                    tensor_args.input_tensor,
+                    output_tensor,
+                    operation_attributes,
+                    has_batch_metadata,
+                    has_prefix_metadata);
+            }
+            const auto seg = derive_segment_args(*updated_page_geometry, operation_attributes.gathered_segments);
+            reader_common.at(6) = seg.stride_pages;
+            reader_common.at(7) = seg.active_pages;
+            reader_common.at(8) = seg.stride_pages * updated_page_geometry->split_factor;
+            reader_common.at(9) = seg.active_pages * updated_page_geometry->split_factor;
+            writer_common.at(2) = seg.stride_pages * updated_page_geometry->split_factor;
+            writer_common.at(3) = seg.active_pages * updated_page_geometry->split_factor;
+        }
 
         // Common addresses and metadata above must refresh even when the schedule is unchanged.
         // Metadata-driven extents are derived on device; their host schedule stays at maximum capacity.

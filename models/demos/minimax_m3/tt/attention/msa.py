@@ -24,6 +24,8 @@ uniform across SP devices (no per-device offset needed). Causality is encoded en
 selection; sparse_sdpa_msa applies no token mask.
 """
 
+import os
+
 from loguru import logger
 
 import ttnn
@@ -39,7 +41,9 @@ def _ensure_dram(t):
     return t
 
 
-def high_bw_sp_gather(t, mesh_config, ccl_manager, out_buf, *, input_batch_index=None, gathered_dim_size=None):
+def high_bw_sp_gather(
+    t, mesh_config, ccl_manager, out_buf, *, input_batch_index=None, gathered_dim_size=None, gathered_segments=1
+):
     """SP all-gather of ``t`` on dim 2 with ``ttnn.experimental.high_bw_all_gather`` into the persistent
     ``out_buf`` (CCLManager.get_high_bw_gather_buffer); the returned tensor aliases it, do not deallocate.
     ``input_batch_index`` selects one slot of a multi-slot [B, 1, rows, D] cache; ``gathered_dim_size``
@@ -52,6 +56,7 @@ def high_bw_sp_gather(t, mesh_config, ccl_manager, out_buf, *, input_batch_index
         num_links=ccl_manager.num_links,
         input_batch_index=input_batch_index,
         gathered_dim_size=gathered_dim_size,
+        gathered_segments=gathered_segments,
     )
 
 
@@ -316,6 +321,7 @@ def msa_cache_read_extent(cached_len, chunk_local, sp, block_size, tp=1):
     return kv_len, n_rows
 
 
+_POISON_SRC = {}  # EXPERIMENT (uncommitted): constant sources for M3_EXP_POISON_IK
 _FABRIC_2D_CONFIGS = (
     ttnn.FabricConfig.FABRIC_2D,
     ttnn.FabricConfig.FABRIC_2D_TORUS_X,
@@ -386,6 +392,14 @@ def _gather_tp_sharded_index_k(
         )
 
     row = ccl_manager.get_high_bw_gather_buffer("msa_cache_index_k_tp_row", (1, 1, rows * tp, hd), index_k_cache.dtype)
+    if os.environ.get("M3_EXP_POISON_IK", "") == "1":
+        # EXPERIMENT (uncommitted): overwrite both gather buffers with a constant before every gather, so any
+        # consumer read of rows outside the gathered prefixes shows up as a PCC change.
+        for buf in (row, full):
+            key = (tuple(buf.shape), buf.dtype)
+            if key not in _POISON_SRC:
+                _POISON_SRC[key] = ttnn.full_like(buf, 4.0)
+            ttnn.copy(_POISON_SRC[key], buf)
     row = ttnn.experimental.high_bw_all_gather(
         index_k_cache,
         dim=2,
@@ -395,6 +409,12 @@ def _gather_tp_sharded_index_k(
         input_batch_index=slot,
         gathered_dim_size=n_rows * tp,
     )
+    if os.environ.get("M3_INDEX_K_1D_SEGMENTED", "1") == "1":
+        # Each TP stripe's written prefix only: tp segments of n_rows at stride rows, so the SP leg is
+        # prefix-bounded like the TP leg (EXPERIMENT, uncommitted; M3_INDEX_K_1D_SEGMENTED=0 = old route).
+        return high_bw_sp_gather(
+            row, mesh_config, ccl_manager, full, gathered_dim_size=n_rows * tp * sp, gathered_segments=tp
+        )
     return high_bw_sp_gather(row, mesh_config, ccl_manager, full, gathered_dim_size=((tp - 1) * rows + n_rows) * sp)
 
 
