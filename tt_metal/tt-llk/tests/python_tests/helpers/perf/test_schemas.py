@@ -696,6 +696,28 @@ PERF_TEST_SCHEMAS = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {"perf_sfpu_reduce_sdpa": "perf_sfpu_reduce_sdpa"},
     },
+    "perf_sdpa_weighted_reduce": {
+        "version": 2,
+        "columns": [
+            "block_pack",
+            "block_unpack",
+            "chunks_per_section",
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_sdpa_weighted_reduce": "perf_sdpa_weighted_reduce"},
+    },
     "perf_sfpu_ternary": {
         "version": 3,
         "columns": [
