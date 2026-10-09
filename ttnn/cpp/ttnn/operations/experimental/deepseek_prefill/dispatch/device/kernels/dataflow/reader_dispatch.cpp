@@ -224,9 +224,24 @@ void kernel_main() {
         const uint32_t my_end = (my_start + per < token_end_idx) ? my_start + per : token_end_idx;
 
         const uint32_t hist_l1 = get_write_ptr(cb_hist);
-        volatile tt_l1_ptr uint32_t* hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hist_l1);
+        constexpr uint32_t hist_bytes = (n_routed_experts * 4 + l1_alignment - 1) / l1_alignment * l1_alignment;
+        // Only experts the table maps anywhere are counted, so the histogram is compact over those (slot m):
+        // cb_hist page 1 holds mapped[m] (their expert ids) and slot[e] (e's slot, or 0xFFFF). An earlier core's
+        // histogram is then n_mapped words read and added in order (summing all n_routed_experts entries with volatile
+        // loads cost ~2.6 us per earlier core: core 63 of 64 finished ~165 us after core 0 at 128 tokens)
+        tt_l1_ptr uint16_t* mapped = reinterpret_cast<tt_l1_ptr uint16_t*>(hist_l1 + hist_bytes);
+        tt_l1_ptr uint16_t* slot = mapped + n_routed_experts;
+        uint32_t n_mapped = 0;
         for (uint32_t e = 0; e < n_routed_experts; ++e) {
-            hist[e] = 0;
+            slot[e] = 0xFFFF;
+            if (expert_dispatch_table[e] != -1) {
+                slot[e] = static_cast<uint16_t>(n_mapped);
+                mapped[n_mapped++] = static_cast<uint16_t>(e);
+            }
+        }
+        volatile tt_l1_ptr uint32_t* hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hist_l1);
+        for (uint32_t m = 0; m < n_mapped; ++m) {
+            hist[m] = 0;
         }
         // DRAM-interleaved index pages p, p + banks, ... sit back to back in one bank: read a pass of the input-row
         // scratch as one contiguous run per bank
@@ -251,8 +266,9 @@ void kernel_main() {
                 tt_l1_ptr uint16_t* idx =
                     reinterpret_cast<tt_l1_ptr uint16_t*>(input_base + (t % banks * per_bank + t / banks) * pg);
                 for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
-                    if (expert_dispatch_table[idx[k]] != -1) {
-                        hist[idx[k]]++;
+                    const uint32_t m = slot[idx[k]];
+                    if (m != 0xFFFF) {
+                        hist[m]++;
                     }
                 }
             }
@@ -269,17 +285,7 @@ void kernel_main() {
         noc_semaphore_set(sem, 0);
         // read the earlier cores' histograms in batches into the (idle) input-row scratch, one barrier per batch
         // (one at a time, the last of 64 cores waited on 63 serial NoC round trips)
-        constexpr uint32_t hist_bytes = (n_routed_experts * 4 + l1_alignment - 1) / l1_alignment * l1_alignment;
-        // only experts the table maps anywhere are ever counted: add just those (cb_hist page 1 holds their ids).
-        // Summing all n_routed_experts entries with volatile loads cost ~2.6 us per earlier core (core 63 of 64
-        // finished ~165 us after core 0 at 128 tokens)
-        tt_l1_ptr uint16_t* mapped = reinterpret_cast<tt_l1_ptr uint16_t*>(hist_l1 + hist_bytes);
-        uint32_t n_mapped = 0;
-        for (uint32_t e = 0; e < n_routed_experts; ++e) {
-            if (expert_dispatch_table[e] != -1) {
-                mapped[n_mapped++] = static_cast<uint16_t>(e);
-            }
-        }
+        const uint32_t hist_read = n_mapped ? (n_mapped * 4 + l1_alignment - 1) / l1_alignment * l1_alignment : l1_alignment;
         constexpr uint32_t hist_batch = (read_batch_size * aligned_input_page_size) / hist_bytes;
         static_assert(hist_batch >= 1, "input scratch must hold one histogram");
         for (uint32_t j0 = 0; j0 < dispatch_core_idx; j0 += hist_batch) {
@@ -287,7 +293,7 @@ void kernel_main() {
             for (uint32_t i = 0; i < n; ++i) {
                 const uint32_t j = j0 + i;
                 const uint32_t x = get_arg_val<uint32_t>(rt_args + 2 * j), y = get_arg_val<uint32_t>(rt_args + 2 * j + 1);
-                noc_async_read(get_noc_addr(x, y, hist_l1), input_base + i * hist_bytes, n_routed_experts * 4);
+                noc_async_read(get_noc_addr(x, y, hist_l1), input_base + i * hist_bytes, hist_read);
             }
             noc_async_read_barrier();
             invalidate_l1_cache();
@@ -295,8 +301,7 @@ void kernel_main() {
                 // plain loads: the staged histograms were read after the barrier + cache invalidate above
                 const tt_l1_ptr uint32_t* h = reinterpret_cast<const tt_l1_ptr uint32_t*>(input_base + i * hist_bytes);
                 for (uint32_t m = 0; m < n_mapped; ++m) {
-                    const uint32_t e = mapped[m];
-                    offsets[e] += h[e];
+                    offsets[mapped[m]] += h[m];
                 }
             }
         }
