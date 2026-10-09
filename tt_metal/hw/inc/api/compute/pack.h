@@ -117,8 +117,8 @@ ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ou
  * synchronized in the kernels. To ensure this synchronization, tile packing is implemented as a separate
  * API call.
  *
- * NOTE: On Blackhole and Quasar the block is one packer program run where the layout allows; Wormhole still packs
- * per tile. Tracked under the Compute API Split effort (tt-metal#35739) and tt-metal#47480.
+ * NOTE: On Blackhole the block is one packer program run where the layout allows, which needs the default pack
+ * program installed (the tilize and untilize uninits restore it); Quasar packs the block in its LLK, Wormhole per tile.
  *
  * Return value: None
  *
@@ -143,9 +143,7 @@ ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t n
 
 // clang-format off
 /**
- * Like `pack_block` (same arguments, same effect on the CB write pointer); on Blackhole a block of full 32x32 tiles in a
- * plain format, one tile per CB page, is one packer program run, and any other block runs the per-tile program once per
- * tile with the L1 address programmed once. On Blackhole and Quasar it is `pack_block`; Wormhole packs per tile.
+ * Same arguments, effect and preconditions as `pack_block` on every architecture.
  *
  * Return value: None
  *

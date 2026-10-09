@@ -178,9 +178,8 @@ inline bool llk_pack_block_is_closable(const std::uint32_t output_id) {
     return get_local_cb_interface(output_id).fifo_page_size < 0x1000;
 }
 
-// Same arguments and CB contract as llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>; a contiguous block
-// of two or more tiles is one _llk_pack_block_ run, any other block (block-float, padded pages, tiny tiles) one
-// _llk_pack_block_closed_ run, a single tile one _llk_pack_.
+// Same arguments, CB contract and default pack program as llk_matmul_pack with PackMode::Default; blocks that one run
+// cannot write back to back (block-float, padded pages, tiny tiles) close every tile instead.
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     std::uint8_t output_id = get_output_id(output);

@@ -632,7 +632,8 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
 
     program_packer_destination(address);
 
-    // MOP word bits 19:10: a non-zero outer loop length overrides the programmed one for this run only; bits 9:0 (inner loop) stay programmed.
+    // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only, bits 9:0 left zero keep
+    // the programmed inner count (tt-isa-documentation TensixCoprocessor/MOPExpander.md, Blackhole template 1).
     const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
     TT_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10);
 
