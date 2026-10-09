@@ -1,9 +1,69 @@
 {
- "v5_tb": {"title": "v5 + shallow-K tie-break", "model": "model.py", "constants": "fitted.json", "pick": "tiebreak 5%",
-           "mechanisms": ["kernel pipeline per K step", "shared DRAM / interleaved-L1 bandwidth", "burst congestion (all reads)", "per-receiver mcast ack", "spill/reload inside compute"]},
- "v5_argmin": {"title": "v5, plain argmin", "model": "model.py", "constants": "fitted.json", "pick": "argmin", "mechanisms": ["as v5_tb"]},
- "v6": {"title": "v6: link load + measured constants", "model": "model_x.py", "env": {"MX": "noc,rl,burstl1", "FIX": "dram_eff=0.77,launch_us=0.5,rl_init=340,u2d=100"},
-        "constants": "fitted_v6_wh.json (WH, all training data)", "pick": "argmin",
-        "mechanisms": ["v5 pipeline", "NoC max-link load per K step (nocload.py, harvest-aware WH placement)", "DRAM efficiency pinned to measured 0.77",
-                       "launch pinned to profiled 0.5 us", "spill re-init + fp32 unpack-to-dest cost from the K-step profile", "burst congestion on interleaved-L1 reads only"]}
+ "v5_tb": {
+  "title": "v5 + shallow-K tie-break",
+  "model": "model.py",
+  "constants": "fitted.json",
+  "pick": "tiebreak 5%",
+  "mechanisms": [
+   "kernel pipeline per K step",
+   "shared DRAM / interleaved-L1 bandwidth",
+   "burst congestion (all reads)",
+   "per-receiver mcast ack",
+   "spill/reload inside compute"
+  ]
+ },
+ "v5_argmin": {
+  "title": "v5, plain argmin",
+  "model": "model.py",
+  "constants": "fitted.json",
+  "pick": "argmin",
+  "mechanisms": [
+   "as v5_tb"
+  ]
+ },
+ "v6": {
+  "title": "v6: link load + measured constants",
+  "model": "model_x.py",
+  "env": {
+   "MX": "noc,rl,burstl1",
+   "FIX": "dram_eff=0.77,launch_us=0.5,rl_init=340,u2d=100"
+  },
+  "constants": "fitted_v6_wh.json (WH, all training data)",
+  "pick": "argmin",
+  "mechanisms": [
+   "v5 pipeline",
+   "NoC max-link load per K step (nocload.py, harvest-aware WH placement)",
+   "DRAM efficiency pinned to measured 0.77",
+   "launch pinned to profiled 0.5 us",
+   "spill re-init + fp32 unpack-to-dest cost from the K-step profile",
+   "burst congestion on interleaved-L1 reads only"
+  ]
+ },
+ "v7": {
+  "title": "v7: saturation, bank camping, per-page issue",
+  "model": "model7.py",
+  "constants": "fitted_v7_wh.json / fitted_v7_bh.json at 0e8ab14 (frozen as frozen_v7_*.json)",
+  "pick": "argmin",
+  "mechanisms": [
+   "v6 pipeline and link load",
+   "read latency hidden once shared bandwidth saturates (sat)",
+   "DRAM bank camping per K step (bank, bankload.py)",
+   "per-page read issue cost on the reader core (issue)",
+   "2D fused-batch row cores",
+   "Reuse batch-scale blocks; MultiCore tile bytes + DRAM limit",
+   "consolidated: no flags, ablatable terms, per-arch pinned constants"
+  ]
+ },
+ "v8": {
+  "title": "v8: partial-K zero fill",
+  "model": "model7.py",
+  "constants": "fitted_v7_wh.json / fitted_v7_bh.json at 0554d53 (frozen as frozen_v8_*.json)",
+  "pick": "argmin",
+  "mechanisms": [
+   "v7",
+   "in0 reader zero-fills the last K tile of every row when K % 32 != 0 (pad, 4.4 cycles/element on WH)",
+   "BH harvested layout from bh-30 (columns 7 and 10)",
+   "nocload fused-batch rows"
+  ]
+ }
 }

@@ -1,5 +1,6 @@
 """Out-of-sample BH: score frozen model7 BH constants on the designed BH problems not used in training.
-usage: bh_eval.py [CONST_JSON]"""
+usage: bh_eval.py [CONST_JSON [OUT_TIMED_CSV]]  (OUT_TIMED_CSV: legacy / heuristic / model rows per problem, the timed-set
+format build_versions.py reads)"""
 import os, sys, json
 
 for v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
@@ -17,6 +18,9 @@ raw = d.problem_id.str.split(":", n=1).str[1]
 d = d[~raw.isin(train)].reset_index(drop=True)
 d = M.annotate(d)
 p = json.load(open(sys.argv[1] if len(sys.argv) > 1 else "fitted_v7_bh.json"))
+for name, (_, _, term) in M.CONSTANTS.items():  # frozen constants define the version
+    if term and name not in p:
+        M.OFF.add(term)
 pred = M.predict(M.geometry(d), p)
 r = evaluate(d, pred, "v7 frozen, unseen BH")
 acc = rank_quality(d, pred)
@@ -34,3 +38,16 @@ for name, x, rg in (("model", v, r.regret), ("rules", rv, r.rules_regret.dropna(
     )
 print(f"  best available vs legacy gm {gm((r.best / r.legacy).dropna()):.3f}")
 r.to_csv(f"{W}/miss/bh_unseen_v7.csv", index=False)
+
+if len(sys.argv) > 2:
+    x = d.assign(pred=pred)
+    rows = []
+    for pid, g in x.groupby("problem_id", sort=False):
+        c = g[g.origin.isin(data.CAND)]
+        leg, rul = g[g.origin == "legacy"], c[c.origin == "heuristic"]
+        if not len(leg) or not len(rul):
+            continue
+        rows += [leg.iloc[[0]], rul.iloc[[0]], c.loc[[c.pred.idxmin()]].assign(origin="model")]
+    t = pd.concat(rows).assign(case=lambda z: z.problem_id, status="ok")
+    t.drop(columns=["pred"]).to_csv(sys.argv[2], index=False)
+    print("wrote", sys.argv[2], t.case.nunique(), "problems")

@@ -107,7 +107,8 @@ def device_block(path, set_id, label, when, note=""):
         dram = sum(s for mm, s in sizes if mm == "dram")
         gx, gy = [int(v) for v in str(x.grid).replace("-", "x").split("x")[:2]]
         flops = 2.0 * x.batch * x.M * x.K * x.N
-        peak = gx * gy * 1e9 * 2 * 32**3 / CYC[x.fidelity] / 1e12
+        clk = 1.35e9 if "black" in str(x.get("arch", "")) else 1e9
+        peak = gx * gy * clk * 2 * 32**3 / CYC[x.fidelity] / 1e12
         tf = lambda o: flops / ok.loc[c, o] / 1e3
         roof.append(
             [
@@ -122,8 +123,11 @@ def device_block(path, set_id, label, when, note=""):
                 bool(x.a_mem != "dram" or x.b_mem != "dram"),
             ]
         )
+    bh = "black" in str(info.arch.iloc[0]) if "arch" in info and len(info) else False
     return dict(
         id=set_id,
+        arch="bh" if bh else "wh",
+        dram_TBs=0.512 if bh else 0.288,
         label=label,
         when=when,
         note=note,
@@ -167,12 +171,14 @@ def sweep_regret(sweep_csv, picks_csv):
 
 # ---------- versions ----------
 V = json.load(open("versions.json"))
-commit = {"v5_tb": "3888c8c", "v5_argmin": "3888c8c", "v6": "779a8de"}
+commit = {"v5_tb": "3888c8c", "v5_argmin": "3888c8c", "v6": "779a8de", "v7": "0e8ab14", "v8": "0554d53"}
 rules = rules_cv()
 CVPRED = {
     "v5_tb": tiebreak(np.load("pred_cv.npy")),
     "v5_argmin": np.load("pred_cv.npy"),
     "v6": np.load("pred_cv_x_noc_rl_burstl1+dram_eff=0.77_launch_us=0.5_rl_init=340_u2d=100.npy"),
+    "v7": np.load("pred_cv_m7_pad.npy"),  # current code with the v8 term (pad) switched off
+    "v8": np.load("pred_cv_v8.npy"),
 }
 DEV = {
     "v5_tb": [
@@ -237,11 +243,74 @@ if os.path.exists(f"{W}/device/suite719_v6_timed.csv"):
     DEV["v6"].append(b)
 
 
+def add(vid, path, set_id, label, note, usage=None, done=None):
+    if os.path.exists(path) and (done is None or os.path.exists(done)):  # done: the run's completion flag
+        b = device_block(path, set_id, label, "2026-10-09", note)
+        if usage and os.path.exists(usage):
+            b["usage"] = json.load(open(usage))
+        DEV.setdefault(vid, []).append(b)
+
+
+add(
+    "v7",
+    f"{W}/fresh/fresh3_timed.csv",
+    "fresh92001",
+    "Fresh random set, draw 3 (seeds 92001-7)",
+    "Out-of-sample: generated and picked after v7 was frozen.",
+    done=f"{W}/fresh/chain_v7.done",
+)
+add(
+    "v7",
+    f"{W}/miss/bh_unseen_v7_timed.csv",
+    "bh-unseen",
+    "BH designed problems never used in training (1021)",
+    "From bh-30's full sweeps: constants fitted on the 153 bh_0200 problems, scored on the other designed BH problems.",
+)
+add(
+    "v7",
+    f"{W}/fresh/freshbh_timed.csv",
+    "freshbh93001",
+    "BH fresh random set (seeds 93001-7), bh-30",
+    "Out-of-sample on BH: picked on bh-30 with the frozen v7 BH constants.",
+    done=f"{W}/fresh/freshbh.done",
+)
+add(
+    "v7",
+    f"{W}/device/suite719_v7_timed.csv",
+    "suite719",
+    "Real-case suite (719)",
+    "Not in training; the rules were tuned on this suite. Changed picks re-timed with legacy and rules in one session.",
+    f"{W}/usage/usage_v7_wh.json",
+)
+add(
+    "v7",
+    f"{W}/fresh/fresh2_v7_timed.csv",
+    "draw2-informed",
+    "Draw 2 (seeds 91001-7), not out-of-sample for v7",
+    "v7's terms were found from draw 2's misses, so this set informed v7; it is not counted in the bounds.",
+)
+add(
+    "v8",
+    f"{W}/fresh/fresh4_timed.csv",
+    "fresh94001",
+    "Fresh random set, draw 4 (seeds 94001-7)",
+    "Out-of-sample: generated and picked after v8 was frozen.",
+    done=f"{W}/fresh/chain_v8.done",
+)
+add(
+    "v8",
+    f"{W}/miss/bh_unseen_v8_timed.csv",
+    "bh-unseen",
+    "BH designed problems never used in training (1021)",
+    "From bh-30's full sweeps: constants fitted on the 153 bh_0200 problems, scored on the other designed BH problems.",
+)
+
+
 def bounds(blocks):
     """pooled regression rates over the fresh draws with one-sided 95% Clopper-Pearson upper bounds"""
     from scipy.stats import beta
 
-    fr = [b for b in blocks if b["id"].startswith("fresh")]
+    fr = [b for b in blocks if b["id"].startswith("fresh") and not b["id"].startswith("freshbh")]
     if not fr:
         return None
     n = sum(b["n"] for b in fr)
@@ -261,7 +330,7 @@ for vid, meta in V.items():
         doc["coverage"] = f"data/coverage_{vid}.json"
     json.dump(doc, open(f"{OUT}/{vid}.json", "w"), separators=(",", ":"))
     index.append(dict(id=vid, title=meta["title"], file=f"data/{vid}.json"))
-json.dump(dict(versions=index, latest="v6"), open(f"{OUT}/index.json", "w"), indent=1)
+json.dump(dict(versions=index, latest="v8"), open(f"{OUT}/index.json", "w"), indent=1)
 
 # ---------- CV-only experiments ----------
 EXP = [
