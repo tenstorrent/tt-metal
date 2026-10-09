@@ -39,6 +39,7 @@ D = dict(
 <tr><td><code>zone_reserve</code> +1 nop</td><td class="n">35 (37 with settle)</td><td class="n">0</td></tr>
 <tr><td><code>zone_reserve</code> +4 nops</td><td class="n">–</td><td class="n">0</td></tr>
 <tr><td>all code +4 B per function, with the WH-04 settle</td><td class="n">25 (max 6.2%)</td><td class="n">10 (max 6.3%; 9 L1_TO_L1)</td></tr></table></div>
+<p><b>Versim, same config with early reserve:</b> 5,888 cycles with 0 and with +1 nop in <code>zone_reserve</code> (KERNEL 33,419 both). The whole run is shifted by one simulator cycle, and every tile after that is identical: the packers start at cycle 63,660 / 63,661 with the same refusals in tile 1 (0/8/16) and the same 36-cycle tiles after it. The helper now runs before the barrier, so its size can no longer move anything inside the window.</p>
 <p><b>But it breaks the layout pads (WH-08).</b> <code>perf/layout.py</code> finds the measured window by the clock read that follows a call to <code>zone_reserve</code> ({code("tt_metal/tt-llk/tests/python_tests/helpers/perf/layout.py", 94, "layout.py Kernel._sites")}). Without that call it finds no window and pads nothing, so some math_matmul MATH_ISOLATE configs ran up to 78% slower. A first change to the window search (8aee8479f3a) restores part of the pads, not all. The layout model needs a proper way to find the window before this fix can go in.</p>
 <p>Other options:</p>
 <ul><li>Give the helpers padded, fixed-size slots, and check the perf values in CI whenever the helpers change.</li>
