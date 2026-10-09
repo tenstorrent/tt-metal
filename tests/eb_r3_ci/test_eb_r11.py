@@ -522,6 +522,12 @@ def _qb2_mc(device, cfg):
         return ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(crs, [32, 128], ttnn.ShardOrientation.ROW_MAJOR)
         )
+    if cfg.startswith("qwen32_glx"):
+        # llama3_70b_galaxy qwen_model_config.py DECODE_RESIDUAL_MEMCFG: width shards of 32x128 on cores (1,0)-(2,4) (10 cores)
+        crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 4))})
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(crs, [32, 128], ttnn.ShardOrientation.ROW_MAJOR)
+        )
     if cfg == "llama_qb2":
         # llama31_8b_qb2/tt/decoder.py _width_memcfg(1024, 8): 32x128 on the first 8 cores, row-wise
         grid = device.compute_with_storage_grid_size()
@@ -564,3 +570,21 @@ def test_qb2_add(device, cfg):
         ttnn.deallocate(ttnn.add(a, b, **kw))
     ttnn.deallocate(a)
     ttnn.deallocate(b)
+
+
+QWEN32_GLX = {"qwen32_glx": ttnn.bfloat16, "qwen32_glx_pf": ttnn.bfloat8_b}
+
+
+@pytest.mark.parametrize("cfg", list(QWEN32_GLX))
+def test_qwen32_glx_add(device, cfg):
+    # llama3_70b_galaxy/tt/llama_decoder.py:181, 213, 232 (Qwen3-32B on a Blackhole Galaxy, one chip): bfp8_b ff_out or attn_out
+    # plus the bf16 residual into bf16 (dtype=res_dtype), or into bfp8_b on the prefetcher path (QWEN_BH_PREFETCHER=1, :206)
+    mc = _qb2_mc(device, cfg)
+    torch.manual_seed(1)
+    a = ttnn.from_torch(torch.rand(1, 1, 32, 1280) - 0.5, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc)
+    b = ttnn.from_torch(torch.rand(1, 1, 32, 1280) - 0.5, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc)
+    for _ in range(8):
+        ttnn.deallocate(ttnn.add(a, b, memory_config=mc, dtype=QWEN32_GLX[cfg]))
+    ttnn.deallocate(a)
+    ttnn.deallocate(b)
+

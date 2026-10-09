@@ -453,3 +453,34 @@ def test_qb2(device, cfg):
         ttnn.deallocate(tb)
     for *_, d in diffs:
         d.report(f"({ncalls} calls, every pattern against {nb} b values, {time.time() - t0:.1f} s)")
+
+
+@pytest.mark.parametrize("cfg", ["qwen32_glx", "qwen32_glx_pf"])
+def test_qwen32_glx(device, cfg):
+    """Qwen3-32B's Galaxy decode residual add on one chip: a bfp8_b holding every bfp8_b datum against 64 bf16 b values, into
+    bf16 or bfp8_b."""
+    from test_eb_r11 import _qb2_mc
+
+    t0 = time.time()
+    mc = _qb2_mc(device, cfg)
+    shape = (1, 1, 32, 1280)
+    per = int(np.prod(shape))
+    table = bfp_table("bfp8")
+    B = b16_small(64)
+    i = np.tile(np.arange(table.size), B.size)
+    j = np.repeat(np.arange(B.size), table.size)
+    a_all, b_all = table[i], B[(i + j) % B.size]
+    total = a_all.size
+    ncalls = -(-total // per)
+    out_dt = "bf16" if cfg == "qwen32_glx" else "bfp8"
+    diffs = make_diffs(f"glx_{cfg}", None)
+    for c in range(ncalls):
+        idx = (np.arange(per) + c * per) % total
+        ta = ttnn.from_torch(torch.tensor(a_all[idx], dtype=torch.float32).reshape(shape), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+        tb = ttnn.from_torch(bf16_from_bits(b_all[idx]).reshape(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+        run_chunk(device, diffs, lambda: out_bits(_op("add", ta, tb, out_dt, mc)), a_all[idx], f32_of_bf16(b_all[idx]), min(per, total - c * per))
+        ttnn.deallocate(ta)
+        ttnn.deallocate(tb)
+    for *_, d in diffs:
+        d.report(f"({ncalls} calls, every bfp8_b datum against {B.size} b values, {time.time() - t0:.1f} s)")
+
