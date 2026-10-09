@@ -209,6 +209,9 @@ def _run_demo(
     layer_ids = list(range(int(a), int(b or a) + 1))
     greedy = sampling_params["temperature"] == 0
     assert greedy, "DSV4.1 decode samples greedily on the device; only temperature 0 is implemented"
+    demo_sample = os.environ.get(
+        "DSV41_DEMO_SAMPLE", ""
+    )  # "T:top_k:top_p": sampled decode steps (needs DSV41_INTRACE_SAMPLE=1)
 
     profiler = BenchmarkProfiler()
     profiler.start("run")
@@ -311,6 +314,9 @@ def _run_demo(
         for i in range(repeat_batches)
     ]
     device_sampling_params = SamplingParams(temperature=0, top_k=1, top_p=1.0)
+    if demo_sample:
+        t_, k_, p_ = demo_sample.split(":")
+        device_sampling_params = SamplingParams(temperature=float(t_), top_k=int(k_), top_p=float(p_))
     num_tokens_generated_decode = []
 
     for batch_idx, prompts_batch in enumerate(repeat_batch_prompts):

@@ -128,14 +128,27 @@ class Generator:
         **kwargs,
     ):
         """One decode step. tokens [B] (the token at position start_pos [B]) -> (next tokens [B], None). Greedy only (``sampling_params`` temperature 0)."""
+        samp = None
         if sampling_params is not None:
             t = sampling_params.temperature
             t = t[0] if isinstance(t, (list, tuple)) else t
-            assert (
-                t == 0
-            ), "DSV4.1 decode samples greedily on the device (temperature 0); top-k / top-p sampling is not implemented"
+            if t != 0 or getattr(self.m, "samp", None) is not None:
+                assert (
+                    getattr(self.m, "samp", None) is not None
+                ), "DSV4.1 decode samples greedily on the device (temperature 0) unless built with DSV41_INTRACE_SAMPLE=1 (in-trace temperature / top-k / top-p)"
+                from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import sampling_rows
+
+                if getattr(self, "_samp_gen", None) is None:
+                    self._samp_gen = torch.Generator().manual_seed(1234)
+                samp = sampling_rows(
+                    sampling_params.temperature,
+                    sampling_params.top_k,
+                    sampling_params.top_p,
+                    self._samp_gen,
+                    tokens.numel(),
+                )
         out = self.m.decode_forward(
-            tokens.reshape(-1), start_pos, enable_trace=enable_trace, reload_inputs=reload_inputs
+            tokens.reshape(-1), start_pos, enable_trace=enable_trace, reload_inputs=reload_inputs, samp=samp
         )
         return out, None
 
