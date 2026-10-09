@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -27,11 +28,13 @@ namespace {
 // Regression coverage for issue #41031, fixed in PR #42819.
 //
 // get_optimal_dram_bank_to_logical_worker_assignment returns one Tensix worker core per
-// DRAM bank. This test asserts the two invariants the API guarantees:
+// DRAM bank. This test asserts the three invariants the API guarantees:
 //   * Cardinality: the returned vector size equals the DRAM grid size (one core per bank).
 //   * Validity: every returned (x, y) is inside compute_with_storage_grid_size(). That
 //     grid is the logical Tensix worker grid (it already excludes harvested rows and
 //     dispatch columns), so an in-grid logical core is by construction a valid worker.
+//   * Distinctness: no two banks share a worker. Two endpoints of one DRAM column on NOC
+//     rows 0-2 would both land on the first Tensix row.
 //
 // Parameterised over the dispatch axes supported on the current arch. Slow- vs
 // fast-dispatch coverage is provided by CI invoking this binary twice (with/without
@@ -92,6 +95,9 @@ TEST_P(OptimalDramWorkers, ReturnsOneValidWorkerPerDramBank) {
                                        << i << ": optimal worker core (" << c.x << ", " << c.y
                                        << ") y is outside compute grid (" << grid.x << ", " << grid.y << ")";
             }
+            EXPECT_EQ(std::set<CoreCoord>(cores.begin(), cores.end()).size(), cores.size())
+                << "Device " << chip_id << ", NOC " << static_cast<int>(noc)
+                << ": two DRAM banks were given the same optimal worker core";
         }
     }
 

@@ -75,6 +75,27 @@ dram_views:
     }
   ]
 
+# Replaces dram_views when a DRAM channel is harvested and NOC translation is on. Entry k is DRAM view k,
+# placed on the k-th unharvested channel in translated order: by translated x, then translated y. Firmware
+# translation keeps the column with no harvested channel at the lower translated x and moves the harvested
+# channel's rows to the bottom of the other column, so view k reaches the same translated cores whichever
+# channel is harvested. Subchannel s of a channel sits s translated rows below its subchannel 0.
+# Every view uses subchannel 2 on NOC0 and 1 on NOC1. Subchannel 0 would put two views of one column on
+# the same nearest worker row (rows 0 and 2 both map to worker row 2), and CMFW reads DRAM telemetry from
+# subchannel 0 or 2, never 1, so NOC1 traffic never shares an endpoint with it (SYS-1419).
+# Reset the board after any run that booted DRISC firmware with dram_views: that firmware leaves its
+# non-endpoint NIUs forwarding to DRISC L1 instead of GDDR until reset, and some are endpoints here.
+harvested_dram_views:
+  [
+    { eth_endpoint: [2, 1], worker_endpoint: [2, 1], address_offset: 0 },
+    { eth_endpoint: [2, 1], worker_endpoint: [2, 1], address_offset: 0 },
+    { eth_endpoint: [2, 1], worker_endpoint: [2, 1], address_offset: 0 },
+    { eth_endpoint: [2, 1], worker_endpoint: [2, 1], address_offset: 0 },
+    { eth_endpoint: [2, 1], worker_endpoint: [2, 1], address_offset: 0 },
+    { eth_endpoint: [2, 1], worker_endpoint: [2, 1], address_offset: 0 },
+    { eth_endpoint: [2, 1], worker_endpoint: [2, 1], address_offset: 0 },
+  ]
+
 dram_view_size:
   4278190080
 
