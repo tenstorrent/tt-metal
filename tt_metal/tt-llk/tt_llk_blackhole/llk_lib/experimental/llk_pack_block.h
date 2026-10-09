@@ -194,15 +194,10 @@ inline void _llk_pack_block_contiguous_(const std::uint32_t tile_index, const st
 {
     set_dst_write_addr(tile_index);
 
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001); // Z = 0
-
     program_packer_destination(address);
 
-    // Patch outer loop count to num_tiles before running the MOP.
-    volatile std::uint32_t* mop_cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_MOP_CFG_BASE);
-    ckernel::mop_sync();
-    mop_cfg[0] = num_tiles;
-    TTI_MOP(1, 0, 0);
+    // MOP word bits 19:10: a non-zero outer loop count overrides the programmed one for this run only.
+    TT_MOP(1, num_tiles >> 6, (num_tiles & 0x3F) << 10);
 
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset Z/W
 }
