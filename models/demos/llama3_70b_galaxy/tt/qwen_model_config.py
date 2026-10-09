@@ -923,11 +923,12 @@ class TtQwenModelArgs(TtModelArgs):
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
                     )
                 else:  # Wormhole, seq_len > 8192: S=40960 isolated op 1.67 -> 1.24 ms, bit-identical output
+                    # Subblock 2x2 (area 4) so the matmul can accumulate in fp32 dest (llama_attention.py WO).
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=16,
                         K_block_size=8,
                         N_block_size=4,
-                        subblock_h=4,
+                        subblock_h=2,
                         subblock_w=2,
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 10),
                     )
@@ -1030,12 +1031,13 @@ class TtQwenModelArgs(TtModelArgs):
             # Wormhole, batch 1, seq_len > 8192: FF2 as a bf8 4-link ring all-gather + minimal_matmul (bf16 out)
             # instead of the fused AG+MM, whose gather buffer takes the output dtype (bf16) and runs on 3 links.
             # Isolated at S=40960 (mm_sweep.py --suite ff2bf8): typecast + fused 8.34 ms -> AG 2.13 + MM = 5.19 ms.
+            # Subblock 1x4 (area 4) so the matmul can accumulate in fp32 dest (llama_mlp.py ff2_bf8_gather).
             self.model_config["PREFILL_FF2_UNFUSED_MINIMAL_MATMUL_CONFIG"] = ttnn.MinimalMatmulConfig(
                 M_block_size=8,
                 K_block_size=5,
                 N_block_size=8,
                 subblock_h=1,
-                subblock_w=8,
+                subblock_w=4,
                 compute_with_storage_grid_size=ttnn.CoreCoord(7, 10),
             )
 

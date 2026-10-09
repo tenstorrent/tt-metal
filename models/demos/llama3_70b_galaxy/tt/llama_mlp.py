@@ -504,7 +504,9 @@ class TtLlamaMLP(LightweightModule):
                 weight_tensor=self.w2_interleaved,
                 dtype=self.prefill_output_dtype,
                 config=self.model_config["PREFILL_FF2_UNFUSED_MINIMAL_MATMUL_CONFIG"],
-                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                # fp32 dest accumulation over K = 3200: S=40960 isolated op 3.50 -> 3.61 ms, error vs an fp32
+                # reference of the same bf8 inputs 9.7e-3 -> 1.7e-3 relative L2 (bf16 output rounding is 1.65e-3).
+                compute_kernel_config=self.args.compute_kernel_config_hifi2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(w2_in_gathered)
