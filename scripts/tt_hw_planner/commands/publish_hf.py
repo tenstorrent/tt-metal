@@ -234,12 +234,12 @@ def _write_tt_model_yaml(
         "",
         "card:",
         f"  description: >",
-        f"    {slug}, brought up and optimized on Tenstorrent {hardware} with tt_hw_planner",
+        f"    {slug}, brought up and optimized on {_hardware_phrase(state, hardware)} with tt_hw_planner",
         f"    (kernel/lever autotuning against a PCC-gated end-to-end pipeline).",
         f"  performance: >",
         f"    {perf}.",
         f"  limitations: >",
-        f"    Community bring-up via tt_hw_planner; only {hardware} was validated.",
+        f"    Community bring-up via tt_hw_planner; validated on {_hardware_phrase(state, hardware)}.",
         f"  architecture: autoport ({slug})",
         f"  status: Experimental community bring-up",
         "  license:",
@@ -283,7 +283,129 @@ def _fmt(v, nd=2) -> str:
     return "—" if v is None else f"{float(v):.{nd}f}"
 
 
-def _build_card(state: dict, slug: str, base_weights: str | None, commit: str | None) -> str:
+def _device_count(state: dict) -> int:
+    try:
+        return int((state.get("env") or {}).get("device_count") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _arch_name(state: dict) -> str:
+    a = str((state.get("env") or {}).get("arch") or "").strip().lower()
+    if "blackhole" in a:
+        return "Blackhole"
+    if "wormhole" in a:
+        return "Wormhole"
+    return a or "Tenstorrent"
+
+
+def _hardware_phrase(state: dict, hardware: str | None) -> str:
+    """The hardware the run ACTUALLY used, in plain words. One chip reads as one chip — never the
+    whole box — because the packaging ``hardware`` tag (e.g. ``p300x2``) names the box, not the number
+    of chips the model opened. ``device_count`` comes from the run's own manifest env."""
+    arch = _arch_name(state)
+    dc = _device_count(state)
+    if dc == 1:
+        return f"a single Tenstorrent {arch} chip"
+    if dc > 1:
+        return f"{dc} Tenstorrent {arch} chips" + (f" ({hardware})" if hardware else "")
+    return f"Tenstorrent {hardware}" if hardware else f"Tenstorrent {arch}"
+
+
+def _fetch_upstream_card(base_weights: str, token: str | None) -> str | None:
+    """The upstream model's README body (front-matter + leading H1 stripped), or None if unavailable.
+    Lets a published card MIRROR the upstream HF model card the port is based on."""
+    try:
+        from huggingface_hub import hf_hub_download
+
+        p = hf_hub_download(repo_id=base_weights, filename="README.md", repo_type="model", token=token)
+        txt = open(p, encoding="utf-8", errors="replace").read()
+    except Exception:
+        return None
+    if txt.startswith("---"):
+        parts = txt.split("\n---\n", 1)
+        if len(parts) == 2:
+            txt = parts[1]
+    import re as _re
+
+    txt = _re.sub(r"\A\s*#\s[^\n]*\n", "", txt, count=1)  # drop leading H1; we add a TT title
+    return txt.strip() or None
+
+
+def _tt_validated_block(state: dict, hw_phrase: str, commit: str | None) -> str:
+    """The ONE section whose every number is measured on Tenstorrent in this run."""
+    cfg = state.get("config") or {}
+    thr = state.get("throughput") or {}
+    sv = state.get("serving") or {}
+    m = state.get("metric") or {}
+    pt = sv.get("per_token") or {}
+    ft = sv.get("first_token") or {}
+    batch = state.get("batch")
+    rows = [f"| Hardware | {hw_phrase} |"]
+    if batch is not None:
+        rows.append(f"| Concurrency (batch) | {batch} |")
+    if thr.get("current") is not None:
+        rows.append(f"| Decode throughput | {_fmt(thr['current'])} tok/s/user |")
+    if ft.get("ms") is not None:
+        rows.append(f"| TTFT | {_fmt(ft['ms'], 1)} ms |")
+    if pt.get("ms") is not None:
+        rows.append(f"| TPOT / ITL | {_fmt(pt['ms'], 1)} ms |")
+    if m.get("name") and m.get("current") is not None:
+        rows.append(f"| {m['name']} | {_fmt(m.get('current'), 1)} {m.get('unit', '')} |")
+    if cfg.get("pcc_test"):
+        rows.append(f"| Accuracy gate | `{str(cfg['pcc_test']).split('::')[-1]}` (PCC) |")
+    if commit:
+        rows.append(f"| tt-metal commit | `{commit}` |")
+    table = "\n".join(["| Measured on Tenstorrent | Value |", "| --- | --- |", *rows])
+    return (
+        "## Validated on Tenstorrent\n\n"
+        f"Brought up and measured on {hw_phrase} with `tt_hw_planner` (PCC-gated end-to-end pipeline). "
+        "Every figure in this section is measured on Tenstorrent hardware; the sections below are the "
+        "upstream base-model card (measured by the base-model authors on GPU), reproduced for reference.\n\n"
+        + table + "\n"
+    )
+
+
+def _compose_mirrored_card(
+    state: dict, slug: str, base_weights: str | None, commit: str | None, token: str | None
+) -> str | None:
+    """A card that MIRRORS the upstream HF model card, with a TT-validated header whose numbers all
+    come from this run and hardware named as the chips actually used. None -> caller falls back."""
+    if not base_weights:
+        return None
+    body = _fetch_upstream_card(base_weights, token)
+    if not body:
+        return None
+    _, hw_tag, _ = _serve_target(None, state.get("env"))
+    hw = _hardware_phrase(state, hw_tag)
+    arch_tag = str((state.get("env") or {}).get("arch") or "").strip().lower()
+    fm = ["---", f"base_model: {base_weights}", "base_model_relation: finetune",
+          "library_name: tt-metal", "pipeline_tag: text-generation",
+          "tags:", "  - tenstorrent", "  - tt-metal", "  - ttnn"]
+    if arch_tag:
+        fm.append(f"  - {arch_tag}")
+    fm.append("---")
+    intro = (
+        f"A Tenstorrent deployment of [`{base_weights}`](https://huggingface.co/{base_weights}) — the same "
+        f"weights, brought up on {hw} with `tt_hw_planner`. This card mirrors the upstream model card: the "
+        "**Validated on Tenstorrent** section holds figures measured on Tenstorrent hardware, and the rest "
+        "is the upstream base-model card reproduced for reference (its benchmarks were measured by the "
+        "base-model authors on GPU, not re-run here)."
+    )
+    return (
+        "\n".join(fm)
+        + f"\n\n# {base_weights} — on Tenstorrent\n\n{intro}\n\n"
+        + _tt_validated_block(state, hw, commit)
+        + "\n## Base model (upstream) — reference\n\n"
+        + body
+        + "\n"
+    )
+
+
+def _build_card(state: dict, slug: str, base_weights: str | None, commit: str | None, token: str | None = None) -> str:
+    mirrored = _compose_mirrored_card(state, slug, base_weights, commit, token)
+    if mirrored is not None:
+        return mirrored
     cfg = state.get("config") or {}
     thr = state.get("throughput") or {}
     sv = state.get("serving") or {}
@@ -1478,6 +1600,46 @@ def _verify_published_package(args, slug: str, servable: bool) -> None:
 
 
 
+def _maybe_autocommit(args, demo_dir) -> None:
+    """When publish-hf finishes cleanly, commit the model's demo dir and push it (default on; disable
+    with --no-commit-push). Reuses the stage auto-commit: scoped to the model, hook-free, refuses the
+    tt_hw_planner tool branch, best-effort."""
+    if getattr(args, "dry_run", False):
+        return
+    try:
+        from .autocommit import commit_and_push_stage
+
+        commit_and_push_stage(args, str(demo_dir), "publish-hf")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [publish-hf] auto-commit skipped: {exc}")
+
+
+def _maybe_mirror_container_card(args, slug, state, base_weights, commit) -> None:
+    """After a container publish, re-publish the README MIRRORING the upstream HF model card the port
+    is based on — a TT-validated header (numbers measured in this run) + correct hardware + the upstream
+    body for reference. Default on; --no-mirror-upstream to keep tt-model's card. Best-effort."""
+    if getattr(args, "dry_run", False) or not getattr(args, "mirror_upstream", True) or not base_weights:
+        return
+    try:
+        tok = _hf_token(args)
+        card = _compose_mirrored_card(state, slug, base_weights, commit, tok)
+        if not card:
+            print("  [publish-hf] upstream mirror: upstream card unavailable; kept tt-model card")
+            return
+        from huggingface_hub import HfApi
+
+        HfApi(token=tok).upload_file(
+            path_or_fileobj=card.encode(),
+            path_in_repo="README.md",
+            repo_id=args.repo,
+            repo_type="model",
+            commit_message="Card: mirror upstream model card + TT-validated results",
+        )
+        print("  [publish-hf] card re-published mirroring the upstream model card (TT-validated).")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [publish-hf] upstream mirror skipped: {exc}")
+
+
 def cmd_publish_hf(args) -> int:
     repo_root = _repo_root()
     slug = None
@@ -1564,9 +1726,13 @@ def cmd_publish_hf(args) -> int:
     base_weights = getattr(args, "weights", None)
 
     if getattr(args, "container", False):
-        return _run_container(args, state, slug, demo_dir, commit)
+        rc = _run_container(args, state, slug, demo_dir, commit)
+        if rc == 0:
+            _maybe_mirror_container_card(args, slug, state, base_weights, commit)
+            _maybe_autocommit(args, demo_dir)
+        return rc
 
-    card = _build_card(state, slug, base_weights, commit)
+    card = _build_card(state, slug, base_weights, commit, _hf_token(args))
 
     stage = Path(tempfile.mkdtemp(prefix="tt_publish_"))
     (stage / "README.md").write_text(card)
@@ -1637,4 +1803,5 @@ def cmd_publish_hf(args) -> int:
 
     url = f"https://huggingface.co/{args.repo}"
     print(f"  [publish-hf] published: {url}")
+    _maybe_autocommit(args, demo_dir)
     return 0

@@ -11737,6 +11737,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     pph.add_argument("--tt-model-bin", dest="tt_model_bin", help="path to the tt-model executable")
     pph.add_argument("--public", action="store_true", help="push the bundle public (shared by link)")
     pph.add_argument("--publish", action="store_true", help="push public AND list in the catalog")
+    pph.add_argument(
+        "--no-commit-push", dest="commit_push", action="store_false", default=True,
+        help="Do NOT auto-commit+push the model to its repo after a clean publish (default: do).",
+    )
+    pph.add_argument(
+        "--commit-remote", default=None,
+        help="Git remote for the post-publish auto-commit (default: branch upstream, else 'apande', else 'origin').",
+    )
+    pph.add_argument(
+        "--no-mirror-upstream", dest="mirror_upstream", action="store_false", default=True,
+        help="Do NOT mirror the upstream HF model card (default: publish a card matching the upstream model's structure, with a TT-validated header).",
+    )
     pph.set_defaults(func=cmd_publish_hf)
 
     prd = sub.add_parser(
