@@ -552,13 +552,6 @@ class SamplingOp:
             format_descriptors=[winner_cb_format],
         )
         final_core_crs = ttnn.CoreRangeSet([ttnn.CoreRange(final_core_coord, final_core_coord)])
-        softmax_in_cb_descriptor = ttnn.CBDescriptor(
-            total_size=bf16_tile_size,
-            core_ranges=final_core_crs,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=softmax_in_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
-            ],
-        )
         softmax_out_cb_descriptor = ttnn.CBDescriptor(
             total_size=bf16_tile_size,
             core_ranges=final_core_crs,
@@ -568,11 +561,16 @@ class SamplingOp:
                 )
             ],
         )
+        # max_cb holds the probabilities and the cumsum for the two-tile rescale, in the L1 of softmax_in_cb, whose
+        # tile is consumed before the probabilities are packed.
         max_cb_descriptor = ttnn.CBDescriptor(
-            total_size=bf16_tile_size,
+            total_size=2 * bf16_tile_size,
             core_ranges=final_core_crs,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=max_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
+                ttnn.CBFormatDescriptor(buffer_index=max_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size),
+                ttnn.CBFormatDescriptor(
+                    buffer_index=softmax_in_cb, data_format=ttnn.bfloat16, page_size=bf16_tile_size
+                ),
             ],
         )
         sum_cb_descriptor = ttnn.CBDescriptor(
@@ -678,7 +676,6 @@ class SamplingOp:
             kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
                 winner_cb_descriptor,
-                softmax_in_cb_descriptor,
                 softmax_out_cb_descriptor,
                 max_cb_descriptor,
                 sum_cb_descriptor,
@@ -1179,26 +1176,28 @@ class SamplingOp:
 
                 if is_final_mesh_device:
                     final_core_crs = ttnn.CoreRangeSet([ttnn.CoreRange(final_core_coord, final_core_coord)])
-                    for cb_idx, cb_data_format in [
-                        (softmax_in_cb, ttnn.bfloat16),
-                        (softmax_out_cb, ttnn.bfloat16),
-                        (max_cb, ttnn.bfloat16),
-                        (sum_cb, ttnn.bfloat16),
-                        (scaler_cb, ttnn.bfloat16),
-                        (softmax_exp_cb, ttnn.bfloat16),
-                        (probs_out_cb, ttnn.bfloat16),
-                        (softmax_sub_cb, ttnn.bfloat16),
-                        (rand_cb, ttnn.bfloat16),
-                        (mask_cb, ttnn.bfloat16),
+                    # max_cb holds the probabilities and the cumsum for the two-tile rescale, in the L1 of
+                    # softmax_in_cb, whose tile is consumed before the probabilities are packed.
+                    for cb_idxs in [
+                        (softmax_out_cb,),
+                        (max_cb, softmax_in_cb),
+                        (sum_cb,),
+                        (scaler_cb,),
+                        (softmax_exp_cb,),
+                        (probs_out_cb,),
+                        (softmax_sub_cb,),
+                        (rand_cb,),
+                        (mask_cb,),
                     ]:
                         cbs.append(
                             ttnn.CBDescriptor(
-                                total_size=bf16_tile_size,
+                                total_size=len(cb_idxs) * bf16_tile_size,
                                 core_ranges=final_core_crs,
                                 format_descriptors=[
                                     ttnn.CBFormatDescriptor(
-                                        buffer_index=cb_idx, data_format=cb_data_format, page_size=bf16_tile_size
+                                        buffer_index=cb_idx, data_format=ttnn.bfloat16, page_size=bf16_tile_size
                                     )
+                                    for cb_idx in cb_idxs
                                 ],
                             )
                         )
