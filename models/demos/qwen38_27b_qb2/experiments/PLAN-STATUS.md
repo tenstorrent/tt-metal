@@ -1,5 +1,13 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 09:46 UTC update: BFP8 G0 is live, with three of eight replicas loaded;
+full GPQA remains queued behind G0. The native v5 image's failed config-digest
+lookup is repaired: the imported manifest-ID image passed strict pinned OCI
+metadata checks, with eleven local/native regression tests. Runtime imports and
+TTIS startup handoff are restored in a persistent queue after all current
+hardware jobs. They have not run and do not qualify container inference.
+[Image recovery](../galaxy-evidence/image-recovery-v2/README.md).
+
 Oct 9 09:32 UTC update: both decoder precision controls completed cleanly.
 BFP4/HiFi2 matched BFP4/LoFi metrics; BFP8/HiFi2 lowered mean relative logit
 RMS error from 38.65% to 9.16% across the eight public teacher-forced positions.

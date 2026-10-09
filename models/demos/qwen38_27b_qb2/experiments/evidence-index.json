@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T09:36:47.124726+00:00",
+  "generated_at": "2026-10-09T09:47:11.662118+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -64,8 +64,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 95562,
-      "sha256": "853af9d186881f4c52c7b8535caeb6e60bd08b9fbc60c14257d1f4ae50a04c33"
+      "bytes": 97545,
+      "sha256": "83151348b4e48cb6664d9d8d1ab4c911e5417aabdb8e9dc7682f4a0eee70313a"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -74,8 +74,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 30376,
-      "sha256": "2d156ae9fa95299bcf5c240e40a53ef8f037fd5dd2bcc0416d6ad6a8c2f49b51"
+      "bytes": 30903,
+      "sha256": "c34a9b90348fc092c70fde22bca8067e6d98dcca862127912f893bed05d05c03"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -2822,6 +2822,71 @@
       "path": "galaxy-evidence/image-build-v6/state.json",
       "bytes": 552,
       "sha256": "906ff0ba1b36dddb34b39f35bc3112192a9270ed29fcf0a7915d95416d16bab8"
+    },
+    {
+      "path": "galaxy-evidence/image-recovery-v2/README.md",
+      "bytes": 3149,
+      "sha256": "a767548832073a82e87fa218477153ec1ef210247ea8ad05121d62b4e7655308"
+    },
+    {
+      "path": "galaxy-evidence/image-recovery-v2/identity/identity.json",
+      "bytes": 1292,
+      "sha256": "02fb165103ada7b1415e17120e36f2fb6db13d5f914434d1d251bfecadf03033"
+    },
+    {
+      "path": "galaxy-evidence/image-recovery-v2/identity/launch.json",
+      "bytes": 1434,
+      "sha256": "3a68a05fcd7fd2090f47bfe731c0e3aabfd0fc6762ffb30ca20bd56575c13095"
+    },
+    {
+      "path": "galaxy-evidence/image-recovery-v2/identity/unit.log.gz",
+      "bytes": 52,
+      "sha256": "98040948d9a1a8344f9e5ad198ce66bc2bf3af84115e2b918824ef1770989b1b"
+    },
+    {
+      "path": "galaxy-evidence/image-recovery-v2/identity/unit.xml.gz",
+      "bytes": 409,
+      "sha256": "64a0da057473f153e38a03e35cc947d7e72feb30fb592247971728fc6f1c1b66"
+    },
+    {
+      "path": "galaxy-evidence/image-recovery-v2/identity/verification.log.gz",
+      "bytes": 604,
+      "sha256": "8d0a3d4a9b4a3a273a32edd11dc074a2b5f578230fe8ec31f1b2c9d597981af0"
+    },
+    {
+      "path": "galaxy-evidence/image-recovery-v2/startup/controller.py.gz",
+      "bytes": 2721,
+      "sha256": "ac88fd25a1a5339922e4346b02dd4b8ad72e089fd19f67d1a232464f8ca48334"
+    },
+    {
+      "path": "galaxy-evidence/image-recovery-v2/startup/launch.json",
+      "bytes": 826,
+      "sha256": "85cad3fe7db61b6f514680eee7aec43dfd0cad7dafad80d2e6eb5f74b7192c61"
+    },
+    {
+      "path": "galaxy-evidence/image-recovery-v2/startup/probe_qwen38_startup.py.gz",
+      "bytes": 2043,
+      "sha256": "5185894e6cb48bfbe15f3a64e0ca21b56b6a6bd42640699403ae965fe21a37c3"
+    },
+    {
+      "path": "galaxy-evidence/image-recovery-v2/startup/service-at-launch.txt",
+      "bytes": 81,
+      "sha256": "37965626e8a95bc973b7ea8a35808e06be5c96cae0f0a9c85802e78192e0d994"
+    },
+    {
+      "path": "galaxy-evidence/image-recovery-v2/startup/source-manifest.json",
+      "bytes": 286,
+      "sha256": "cc79757255b57ad0552c92d038ca22c7afc4b510f609dc28711fb9b1d73d20ba"
+    },
+    {
+      "path": "galaxy-evidence/image-recovery-v2/startup/status-at-launch.json",
+      "bytes": 705,
+      "sha256": "950fc80ff52b2f46cee9c6848f2d976b345496ef7ab2eece396c1ed38903bfb5"
+    },
+    {
+      "path": "galaxy-evidence/image-recovery-v2/startup/verify_local_oci_image.py.gz",
+      "bytes": 1753,
+      "sha256": "fda5a180a2c4f62488ac09e9bb1bd0ded1d4686d9103d434d85d626ca957a81f"
     },
     {
       "path": "galaxy-evidence/image-startup-probe-v1/README.md",

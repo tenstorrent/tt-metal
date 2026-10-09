@@ -1261,3 +1261,32 @@ No session connection is needed for that queue to continue.
   G0 loading time. No running job was restarted or changed.
 
 [Restored state test](../galaxy-evidence/chunked-prefill-hardware-v2/README.md).
+
+## Oct 9, 09:39-09:46 UTC: repair imported-image check while GPQA G0 loads
+
+- Revalidated the original BFP8 hardware controller and exact invocation as live;
+  two replicas were loaded initially, three at the last check. No hardware job
+  was interrupted. The previous goal turn made progress by completing numerical
+  comparisons, adding the guarded qualification runner and launching durable
+  full GPQA plus completion/state follow-ups.
+- Added a TTIS operator validator for Docker's config-ID and manifest-ID image
+  stores. It preserves both immutable pins and checks OCI metadata content,
+  linkage, platform, ordered root filesystem and runtime configuration. Eleven
+  tests passed locally and natively, including modern/legacy identities and
+  rejection of changed configs, layers, platforms or corrupt metadata.
+- Live check on the already imported native v5 image passed all 46 layers and
+  runtime metadata. Only metadata was read; the archived payload is not rehashed
+  by this checker. It does not open hardware, run containers or confer accuracy.
+  Pushed TTIS code/docs at `52390d1b0d4015fbde230fbcfb7e357b3b84e24c`.
+- Restored container source/import, entrypoint-help and TTIS startup-handoff
+  probes in fresh v2 directories, behind the exact queued chunked-state job.
+  The sequence repeats immutable identity validation under the coordination
+  lock. It uses networkless containers without devices, read-only roots and
+  bounded task-owned tmpfs. The new service is live and waiting; no startup
+  pass is claimed. Old failed import/startup receipts remain unchanged.
+- Routine local searches encountered absent AGENTS/.agents/deploy paths and a
+  shell unmatched release-document glob; scoped repository search located
+  scripts/release/QWEN38_GALAXY.md. A context-only patch failed before edits;
+  the corrected anchored patch added the validated import instructions.
+
+[Image identity result and queued recovery](../galaxy-evidence/image-recovery-v2/README.md).

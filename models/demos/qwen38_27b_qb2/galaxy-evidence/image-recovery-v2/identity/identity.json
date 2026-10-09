@@ -1,0 +1,24 @@
+{
+  "state": "local_image_identity_verified_unqualified",
+  "image_id": "sha256:0b11f045bf089088a62b6e3c1aeb9b64cc72b74a632935f25203609b1e023579",
+  "manifest_digest": "sha256:0b11f045bf089088a62b6e3c1aeb9b64cc72b74a632935f25203609b1e023579",
+  "config_digest": "sha256:23f5f92af192e23cde494bcdac1f2efddc5c3b301345af3997ca3f79036c6af1",
+  "layers": 46,
+  "architecture": "amd64",
+  "os": "linux",
+  "labels": {
+    "com.tenstorrent.metal.revision": "a08819ddbe23077f8037d3802303939064868ff6",
+    "com.tenstorrent.qualification": "experimental",
+    "com.tenstorrent.qwen.model-source-revision": "0abdc3403f039c46becef335ad02db99237593f8",
+    "com.tenstorrent.vllm-plugin.revision": "b7e4292e4193cba20abe9c7c68ce489201b2e36b",
+    "org.opencontainers.image.description": "TT-Metalium development environment with full toolchain",
+    "org.opencontainers.image.documentation": "https://docs.tenstorrent.com/",
+    "org.opencontainers.image.licenses": "Apache-2.0",
+    "org.opencontainers.image.revision": "e0e05bad5361d7c170068b3ad7b4df27de192250",
+    "org.opencontainers.image.source": "https://github.com/tenstorrent/tt-inference-server",
+    "org.opencontainers.image.version": "22.04"
+  },
+  "hardware_opened": false,
+  "accuracy_qualified": false,
+  "archive_layers_rehashed": false
+}

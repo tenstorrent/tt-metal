@@ -1,0 +1,5 @@
+{
+  "probe_qwen38_startup.py": "d69d4e685646fd5ae45ac4c5b1c118dcd891bf1170081551c41c292781617c0c",
+  "controller.py": "cae4249f47bab6e18d14e38ec8a148b49734a89e0ebc2a4a7fd171923676e676",
+  "verify_local_oci_image.py": "90f6dc94af826bdae33c1e16ebfbca15dd2da3bd613ff239444e832c9b57e393"
+}

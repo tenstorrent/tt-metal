@@ -1,0 +1,34 @@
+{
+  "created_at": 1791539012.15777,
+  "source_sha256": {
+    "scripts/release/verify_local_oci_image.py": "90f6dc94af826bdae33c1e16ebfbca15dd2da3bd613ff239444e832c9b57e393",
+    "tests/test_local_oci_image.py": "3a4a3e0debbe5e8fb3ba50c448f1e7bd8def46a834d5df2931e1889e7a3bc64f"
+  },
+  "commands": [
+    [
+      "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+      "-m",
+      "pytest",
+      "/home/ttuser/qwen38-artifacts-20261007/image-identity-v2/source/tests/test_local_oci_image.py",
+      "-c",
+      "/home/ttuser/qwen38-artifacts-20261007/image-identity-v2/pytest.ini",
+      "--confcutdir=/home/ttuser/qwen38-artifacts-20261007/image-identity-v2/source",
+      "-q",
+      "--junitxml=/home/ttuser/qwen38-artifacts-20261007/image-identity-v2/unit.xml"
+    ],
+    [
+      "/usr/bin/python3",
+      "/home/ttuser/qwen38-artifacts-20261007/image-identity-v2/source/scripts/release/verify_local_oci_image.py",
+      "--archive",
+      "/home/ttuser/qwen38-artifacts-20261007/release-image-v1/image.oci.tar",
+      "--manifest-digest",
+      "sha256:0b11f045bf089088a62b6e3c1aeb9b64cc72b74a632935f25203609b1e023579",
+      "--config-digest",
+      "sha256:23f5f92af192e23cde494bcdac1f2efddc5c3b301345af3997ca3f79036c6af1",
+      "--output",
+      "/home/ttuser/qwen38-artifacts-20261007/image-identity-v2/identity.json"
+    ]
+  ],
+  "hardware_opened": false,
+  "containers_started": false
+}
