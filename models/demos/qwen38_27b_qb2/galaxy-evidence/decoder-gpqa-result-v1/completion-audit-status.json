@@ -1,0 +1,46 @@
+{
+  "state": "completed",
+  "predecessor_unit": "qwen38-accuracy-decoder-v1-20261009.service",
+  "predecessor_invocation": "ecb6408f79414ed0974c6352f006bce5",
+  "hardware_opened": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "started_at": 1791538210.9150586,
+  "updated_at": 1791545208.9925213,
+  "last_service": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "command": [
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "/home/ttuser/qwen38-artifacts-20261007/decoder-gpqa-audit-v2/source/models/demos/qwen38_27b_qb2/tests/gpqa_response_audit.py",
+    "--receipts",
+    "/home/ttuser/qwen38-artifacts-20261007/accuracy-decoder-v1/native-control/evaluation/gpqa/gpqa-responses.jsonl",
+    "--private-responses",
+    "/home/ttuser/qwen38-artifacts-20261007/accuracy-decoder-v1/native-control/evaluation/gpqa/private-responses",
+    "--summary",
+    "/home/ttuser/qwen38-artifacts-20261007/accuracy-decoder-v1/native-control/evaluation/gpqa/summary.json",
+    "--count",
+    "198",
+    "--max-output-tokens",
+    "65536",
+    "--max-model-len",
+    "262144",
+    "--output",
+    "/home/ttuser/qwen38-artifacts-20261007/decoder-gpqa-audit-v2/results/audit.json"
+  ],
+  "qualification": {
+    "required_correct": 177,
+    "selected_count": 198,
+    "harness_correct": 171,
+    "harness_passed": false,
+    "completed_response_correct": 171,
+    "completed_response_passed": false,
+    "incomplete_credited_by_harness": 0,
+    "proves_container_or_release_qualification": false
+  },
+  "finished_at": 1791545208.9925165
+}

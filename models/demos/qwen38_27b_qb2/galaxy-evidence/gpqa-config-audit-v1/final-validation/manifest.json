@@ -1,0 +1,25 @@
+{
+  "source_sha256": {
+    "models/demos/qwen38_27b_qb2/tests/benchmark.py": "43ccbe992922407255387573f5bdf3ccf5d562a751e20a85fe3c5da454824d55",
+    "models/demos/qwen38_27b_qb2/tests/gpqa_documents.py": "bf49f832f4f204d847e8a1bbbfb56fc94ebdc7c41bec65e08b8cfa15d6f17828",
+    "models/demos/qwen38_27b_qb2/tests/test_benchmark.py": "2b87e1962b4ef086cd59fbb4a88fef7705396dd187465f737cd74bd6a068ffbe",
+    "models/demos/qwen38_27b_qb2/tests/unit/test_gpqa_documents.py": "1470a53ae174162ddb4da03db4ebe9bea75c2f49514fd5aeb8f8dee913215bc3",
+    "models/demos/qwen38_27b_qb2/tests/report.py": "17883f723f30915fc1c028cb17f402c525812f689af72fa162d1f8535a9ef751",
+    "models/perf/benchmarking_utils.py": "7dd59148b8027c8d2111855113bc4adeff763e67424d7f11c02356f5beefb7e7",
+    "conftest.py": "53668f80d1963f2329e91a3b322cffeb781eebba3268812963a93aaee83242ce"
+  },
+  "test_command": [
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "pytest",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/gpqa-doc-fix-cpu-v4/pytest.ini",
+    "--confcutdir=/home/ttuser/qwen38-artifacts-20261007/gpqa-doc-fix-cpu-v4/source",
+    "/home/ttuser/qwen38-artifacts-20261007/gpqa-doc-fix-cpu-v4/source/models/demos/qwen38_27b_qb2/tests/test_benchmark.py",
+    "/home/ttuser/qwen38-artifacts-20261007/gpqa-doc-fix-cpu-v4/source/models/demos/qwen38_27b_qb2/tests/unit/test_gpqa_documents.py",
+    "-q",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gpqa-doc-fix-cpu-v4/unit.xml"
+  ],
+  "hardware_used": false,
+  "original_job_modified": false
+}

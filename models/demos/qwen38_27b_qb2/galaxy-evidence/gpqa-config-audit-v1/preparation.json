@@ -1,0 +1,184 @@
+{
+  "scope": "CPU-only preparation and regression; no model execution or rescoring",
+  "selected_count": 198,
+  "fixed_choice_processing": "preserve_scientific_notation_v1",
+  "legacy_input_sha256": "73f40d9f36c2cf2070120e34c425f0a10aafaa7edd8c1f6878b002e7bf756114",
+  "fixed_input_sha256": "1fea5e48b7d2faa1ee1257ee9de7f63a30d44b5150906311e447a9190365cf1c",
+  "legacy_matches_running_input_hash": true,
+  "all_fixed_choices_preserve_raw_answer_text": true,
+  "all_choice_permutations_unchanged": true,
+  "labels_corrected_after_legacy_collision": [
+    171
+  ],
+  "changed_prompt_ids": [
+    8,
+    24,
+    27,
+    32,
+    55,
+    64,
+    76,
+    77,
+    81,
+    97,
+    118,
+    156,
+    171,
+    177,
+    185
+  ],
+  "changed_prompt_count": 15,
+  "bracket_affected_questions": 12,
+  "bracket_affected_choices": 38,
+  "affected_question_metadata": [
+    {
+      "id": 8,
+      "affected_choices": 2,
+      "raw_distinct_choices": 4,
+      "processed_distinct_choices": 4,
+      "corrected_distinct_choices": 4,
+      "correct_by_run": {
+        "decoder8": 1,
+        "head8": 0,
+        "native4": 0
+      }
+    },
+    {
+      "id": 24,
+      "affected_choices": 2,
+      "raw_distinct_choices": 4,
+      "processed_distinct_choices": 4,
+      "corrected_distinct_choices": 4,
+      "correct_by_run": {
+        "decoder8": 0,
+        "head8": 1,
+        "native4": 1
+      }
+    },
+    {
+      "id": 27,
+      "affected_choices": 1,
+      "raw_distinct_choices": 4,
+      "processed_distinct_choices": 4,
+      "corrected_distinct_choices": 4,
+      "correct_by_run": {
+        "decoder8": 1,
+        "head8": 1,
+        "native4": 1
+      }
+    },
+    {
+      "id": 32,
+      "affected_choices": 2,
+      "raw_distinct_choices": 4,
+      "processed_distinct_choices": 4,
+      "corrected_distinct_choices": 4,
+      "correct_by_run": {
+        "decoder8": 0,
+        "head8": 0,
+        "native4": 0
+      }
+    },
+    {
+      "id": 64,
+      "affected_choices": 4,
+      "raw_distinct_choices": 4,
+      "processed_distinct_choices": 4,
+      "corrected_distinct_choices": 4,
+      "correct_by_run": {
+        "decoder8": 1,
+        "head8": 0,
+        "native4": 1
+      }
+    },
+    {
+      "id": 76,
+      "affected_choices": 4,
+      "raw_distinct_choices": 4,
+      "processed_distinct_choices": 4,
+      "corrected_distinct_choices": 4,
+      "correct_by_run": {
+        "decoder8": 0,
+        "head8": 0,
+        "native4": 0
+      }
+    },
+    {
+      "id": 81,
+      "affected_choices": 4,
+      "raw_distinct_choices": 4,
+      "processed_distinct_choices": 4,
+      "corrected_distinct_choices": 4,
+      "correct_by_run": {
+        "decoder8": 0,
+        "head8": 1,
+        "native4": 0
+      }
+    },
+    {
+      "id": 97,
+      "affected_choices": 3,
+      "raw_distinct_choices": 4,
+      "processed_distinct_choices": 4,
+      "corrected_distinct_choices": 4,
+      "correct_by_run": {
+        "decoder8": 0,
+        "head8": 0,
+        "native4": 1
+      }
+    },
+    {
+      "id": 118,
+      "affected_choices": 4,
+      "raw_distinct_choices": 4,
+      "processed_distinct_choices": 4,
+      "corrected_distinct_choices": 4,
+      "correct_by_run": {
+        "decoder8": 1,
+        "head8": 1,
+        "native4": 0
+      }
+    },
+    {
+      "id": 171,
+      "affected_choices": 4,
+      "raw_distinct_choices": 4,
+      "processed_distinct_choices": 1,
+      "corrected_distinct_choices": 4,
+      "correct_by_run": {
+        "decoder8": 0,
+        "head8": 0,
+        "native4": 0
+      }
+    },
+    {
+      "id": 177,
+      "affected_choices": 4,
+      "raw_distinct_choices": 4,
+      "processed_distinct_choices": 4,
+      "corrected_distinct_choices": 4,
+      "correct_by_run": {
+        "decoder8": 1,
+        "head8": 1,
+        "native4": 1
+      }
+    },
+    {
+      "id": 185,
+      "affected_choices": 4,
+      "raw_distinct_choices": 4,
+      "processed_distinct_choices": 4,
+      "corrected_distinct_choices": 4,
+      "correct_by_run": {
+        "decoder8": 0,
+        "head8": 0,
+        "native4": 1
+      }
+    }
+  ],
+  "synthetic_reproducer": {
+    "Vector [1, 2]": "Vector ",
+    "Vector [2, 3]": "Vector ",
+    "The concentration is [H+] = 0.1 M": "The concentration is = 0.1 M"
+  }
+}

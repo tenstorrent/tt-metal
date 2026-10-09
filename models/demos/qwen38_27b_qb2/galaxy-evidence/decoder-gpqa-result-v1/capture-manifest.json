@@ -1,0 +1,42 @@
+{
+  "summary.json": {
+    "sha256": "eadc845dbebcf51aa5c5fc28bd1ec52f9b6ced66845d926fb98d60cffd37285a",
+    "bytes": 2069
+  },
+  "protocol.json": {
+    "sha256": "00b3962168e1ad0653cccc45462522e9cd48c99df3d4244095f16b7c298cffb2",
+    "bytes": 1414
+  },
+  "responses.jsonl.gz": {
+    "sha256": "b0267bc8ee6aaad1dc6207eafa18ba048309c5e88dee11e58de933191d2cce3f",
+    "bytes": 24628
+  },
+  "completion-audit.json.gz": {
+    "sha256": "3b4c1340e2fc51c9aa37637434effbef7d1ea2400146939dbe4b9ec81725b21f",
+    "bytes": 15044
+  },
+  "completion-audit-status.json": {
+    "sha256": "6d87307ffa76905ad096000201f70f3f6ffa1701239d98853e99d94d5c872039",
+    "bytes": 1681
+  },
+  "deployment.json": {
+    "sha256": "f740b2f3a121903ec548c034414c7384ee80ec0b731461b53769c4641c4c0d44",
+    "bytes": 20227
+  },
+  "accuracy-queue.json.gz": {
+    "sha256": "64fa0a57cfaad3b9e34a59c663bb755f17f4a749fc0db563b2c160f7562a5050",
+    "bytes": 8895
+  },
+  "evaluator.log.gz": {
+    "sha256": "3d5e5e09d5afe9dece1ee37593ba799dcdc405d3f3e97f1c29de245c7dea3bfd",
+    "bytes": 1345
+  },
+  "server.log.gz": {
+    "sha256": "19277a1e48f062d27c10f053243ea167f65b97f25a4b784a17fb35d267ec69c0",
+    "bytes": 108882
+  },
+  "comparison-and-timing.json": {
+    "sha256": "db4242427bde6ab641f179f24a1701d0dfb596f9cb79e4c69b578238905baeb4",
+    "bytes": 73309
+  }
+}

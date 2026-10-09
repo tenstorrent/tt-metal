@@ -1,0 +1,471 @@
+{
+  "checked_at": "2026-10-09T11:17:20.252252+00:00",
+  "model_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "harness_revision_expected": "321e3bb68cb750a58c76606ab57832533302be73",
+  "mutates_original_run": false,
+  "harness_installed": {
+    "version": "0.4.10.dev0",
+    "source": {
+      "url": "https://github.com/tstescoTT/lm-evaluation-harness.git",
+      "vcs_info": {
+        "vcs": "git",
+        "commit_id": "321e3bb68cb750a58c76606ab57832533302be73",
+        "requested_revision": "321e3bb68cb750a58c76606ab57832533302be73"
+      }
+    }
+  },
+  "harness_files": {
+    "tasks/r1_evals/gpqa_reasoning_diamond.yaml": {
+      "sha256": "bccc4fc4f3ad6ff401351581a6e99e3ddee97cbdbb5cdf3e493ed4d54f3de805",
+      "bytes": 957
+    },
+    "tasks/r1_evals/utils.py": {
+      "sha256": "2c22b055843dd6c39378201923780db921f1c8334c4a736acc61d5a32cf1610b",
+      "bytes": 19790
+    },
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/eval_env/lib/python3.10/site-packages/lm_eval/tasks/gpqa/zeroshot/utils.py": {
+      "sha256": "16e11b1325e2a925d28bf115907a4b8779ae049faf89bd5cc2009746ab792be8",
+      "bytes": 993
+    },
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/eval_env/lib/python3.10/site-packages/lm_eval/filters/extraction.py": {
+      "sha256": "a9854f7837f87830cf7d916d639f828169acd049dee0aa92e7e7ef29486eab42",
+      "bytes": 14507
+    }
+  },
+  "harness_prompt_template": "\"What is the correct answer to this question:{{Question}}\\nChoices:\\n(A) {{choice1}}\\n(B) {{choice2}}\\n(C) {{choice3}}\\n(D) {{choice4}}\\nPlease reason step by step, and your final answer must be only (A,B,C or D) within \\\\boxed\\nAnswer:\"",
+  "harness_generation_defaults_not_used_by_client": {
+    "do_sample": false,
+    "max_gen_toks": 32768,
+    "temperature": 0.6,
+    "top_k": 40,
+    "top_p": 0.95
+  },
+  "client_effective_generation": {
+    "temperature": 1.0,
+    "top_k": 20,
+    "top_p": 0.95,
+    "seed": 42,
+    "max_tokens": 65536,
+    "chat_template_kwargs": {
+      "enable_thinking": true
+    }
+  },
+  "upstream_artifact_checks": {
+    "config.json": {
+      "exists": true,
+      "bytes": 4312,
+      "local_sha256": "191e0af232104ed8b65258cf3fb2b842e288008baca7633c11b82a1ac7203aab",
+      "upstream_url": "https://huggingface.co/Qwen/Qwen3.8-27B/resolve/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/config.json",
+      "upstream_sha256": "191e0af232104ed8b65258cf3fb2b842e288008baca7633c11b82a1ac7203aab",
+      "exact_match": true
+    },
+    "generation_config.json": {
+      "exists": true,
+      "bytes": 202,
+      "local_sha256": "e70c136c1b78ddc1fb0905bac8e733a4dc448d4f852a5dd75143fffc70be550e",
+      "upstream_url": "https://huggingface.co/Qwen/Qwen3.8-27B/resolve/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/generation_config.json",
+      "upstream_sha256": "e70c136c1b78ddc1fb0905bac8e733a4dc448d4f852a5dd75143fffc70be550e",
+      "exact_match": true
+    },
+    "tokenizer_config.json": {
+      "exists": true,
+      "bytes": 17928,
+      "local_sha256": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27",
+      "upstream_url": "https://huggingface.co/Qwen/Qwen3.8-27B/resolve/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/tokenizer_config.json",
+      "upstream_sha256": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27",
+      "exact_match": true
+    },
+    "chat_template.jinja": {
+      "exists": true,
+      "bytes": 8952,
+      "local_sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+      "upstream_url": "https://huggingface.co/Qwen/Qwen3.8-27B/resolve/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja",
+      "upstream_sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+      "exact_match": true
+    },
+    "tokenizer.json": {
+      "exists": true,
+      "bytes": 12809320,
+      "local_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+      "upstream_url": "https://huggingface.co/Qwen/Qwen3.8-27B/resolve/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/tokenizer.json",
+      "upstream_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+      "exact_match": true
+    },
+    "vocab.json": {
+      "exists": true,
+      "bytes": 6722759,
+      "local_sha256": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003",
+      "upstream_url": "https://huggingface.co/Qwen/Qwen3.8-27B/resolve/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/vocab.json",
+      "upstream_sha256": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003",
+      "exact_match": true
+    },
+    "merges.txt": {
+      "exists": true,
+      "bytes": 3353259,
+      "local_sha256": "a9d356d7bdf1ef4949e3e748e95b8e10ad9d4e2e838eddc38a0a7b6b94d1db8d",
+      "upstream_url": "https://huggingface.co/Qwen/Qwen3.8-27B/resolve/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/merges.txt",
+      "upstream_sha256": "a9d356d7bdf1ef4949e3e748e95b8e10ad9d4e2e838eddc38a0a7b6b94d1db8d",
+      "exact_match": true
+    },
+    "model.safetensors.index.json": {
+      "exists": true,
+      "bytes": 112216,
+      "local_sha256": "77042094076611b69791a610065f28b7013b8c621795fa86ddccc8bac7d1b9df",
+      "upstream_url": "https://huggingface.co/Qwen/Qwen3.8-27B/resolve/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/model.safetensors.index.json",
+      "upstream_sha256": "77042094076611b69791a610065f28b7013b8c621795fa86ddccc8bac7d1b9df",
+      "exact_match": true
+    }
+  },
+  "input_hash": "73f40d9f36c2cf2070120e34c425f0a10aafaa7edd8c1f6878b002e7bf756114",
+  "question_count": 198,
+  "choice_answer_consistency": {
+    "gold_matches_correct_answer": 198,
+    "distinct_choices": 195
+  },
+  "saved_response_audit": {
+    "completed": 196,
+    "rescored_correct": 170,
+    "combined_rescored_correct": 170,
+    "receipt_score_disagreements": 0,
+    "raw_hash_disagreements": 0,
+    "clear_boxed_answer": 195,
+    "boxed_correct": 170,
+    "boxed_score_disagreements": 0,
+    "empty_final": 1,
+    "final_contains_think_tag": 0,
+    "finish_stop": 196
+  },
+  "incorrect_response_metadata": [
+    {
+      "id": 106,
+      "finish_reason": "stop",
+      "completion_tokens": 859,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 113,
+      "finish_reason": "stop",
+      "completion_tokens": 970,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 17,
+      "finish_reason": "stop",
+      "completion_tokens": 1937,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 129,
+      "finish_reason": "stop",
+      "completion_tokens": 3728,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 167,
+      "finish_reason": "stop",
+      "completion_tokens": 4322,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 75,
+      "finish_reason": "stop",
+      "completion_tokens": 7706,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 85,
+      "finish_reason": "stop",
+      "completion_tokens": 7316,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 171,
+      "finish_reason": "stop",
+      "completion_tokens": 6079,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 13,
+      "finish_reason": "stop",
+      "completion_tokens": 7642,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 157,
+      "finish_reason": "stop",
+      "completion_tokens": 7173,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 24,
+      "finish_reason": "stop",
+      "completion_tokens": 11099,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 32,
+      "finish_reason": "stop",
+      "completion_tokens": 11232,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 94,
+      "finish_reason": "stop",
+      "completion_tokens": 10354,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 160,
+      "finish_reason": "stop",
+      "completion_tokens": 10938,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 97,
+      "finish_reason": "stop",
+      "completion_tokens": 11732,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 90,
+      "finish_reason": "stop",
+      "completion_tokens": 14072,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 190,
+      "finish_reason": "stop",
+      "completion_tokens": 9792,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 81,
+      "finish_reason": "stop",
+      "completion_tokens": 13721,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 88,
+      "finish_reason": "stop",
+      "completion_tokens": 16857,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 76,
+      "finish_reason": "stop",
+      "completion_tokens": 16590,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 185,
+      "finish_reason": "stop",
+      "completion_tokens": 13456,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 36,
+      "finish_reason": "stop",
+      "completion_tokens": 17057,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 164,
+      "finish_reason": "stop",
+      "completion_tokens": 15849,
+      "empty_final": true,
+      "clear_boxed_answer": false,
+      "combined_score": 0
+    },
+    {
+      "id": 48,
+      "finish_reason": "stop",
+      "completion_tokens": 20932,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 145,
+      "finish_reason": "stop",
+      "completion_tokens": 29902,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    },
+    {
+      "id": 147,
+      "finish_reason": "stop",
+      "completion_tokens": 29759,
+      "empty_final": false,
+      "clear_boxed_answer": true,
+      "combined_score": 0
+    }
+  ],
+  "progress": {
+    "completed_samples": 196,
+    "selected_samples": 198,
+    "correct": 170,
+    "truncated_samples": 0,
+    "state": "running",
+    "updated_at": "2026-10-09T10:55:59.393508+00:00"
+  },
+  "protocol": {
+    "model": "Qwen/Qwen3.8-27B",
+    "server_capacity": 16,
+    "data_parallel_size": 8,
+    "total_server_capacity": 128,
+    "checkpoint_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+    "dataset_revision": "633f5ee89ab8ad4522a9f850766b73f62147ffdd",
+    "dataset_source": {
+      "transport": "validated_local_csv",
+      "path": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/gpqa-data/gpqa_diamond.csv",
+      "git_blob": "7589e3e467d69a1dceb126a60c4108d6d4f1d166",
+      "sha256": "41d1213cd7a4998605a26c2798500652572007161b3a92817ba46b35befcd305"
+    },
+    "harness_revision": "321e3bb68cb750a58c76606ab57832533302be73",
+    "selection": "first 198 Diamond rows, choice shuffle seed 42",
+    "scope": "198/198 Diamond questions; 65536-token output budget",
+    "gpqa": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "seed": 42,
+      "thinking": true,
+      "max_output_tokens": 65536,
+      "concurrency": 128,
+      "accuracy_threshold": 0.892,
+      "selected_samples": 198,
+      "full_dataset": true
+    },
+    "performance": {
+      "shapes": [
+        [
+          128,
+          128,
+          128
+        ],
+        [
+          1024,
+          128,
+          128
+        ]
+      ],
+      "warmup": "one burst per shape",
+      "repeats": 2,
+      "temperature": 0,
+      "ignore_eos": true
+    },
+    "input_sha256": "73f40d9f36c2cf2070120e34c425f0a10aafaa7edd8c1f6878b002e7bf756114",
+    "run_start": "2026-10-09T10:24:12.815177+00:00"
+  },
+  "input_hash_matches_run": true,
+  "duplicate_choice_diagnostics": [
+    {
+      "id": 89,
+      "duplicate_correct_choice_count": 1,
+      "completed": true,
+      "scored_correct": 1,
+      "equivalent_correct_choice_selected": true
+    },
+    {
+      "id": 126,
+      "duplicate_correct_choice_count": 1,
+      "completed": true,
+      "scored_correct": 1,
+      "equivalent_correct_choice_selected": true
+    },
+    {
+      "id": 171,
+      "duplicate_correct_choice_count": 4,
+      "completed": true,
+      "scored_correct": 0,
+      "equivalent_correct_choice_selected": true
+    }
+  ],
+  "doc_processing_source": "def process_docs(dataset: datasets.Dataset) -> datasets.Dataset:\n    def _process_doc(doc):\n        choices = [\n            preprocess(doc[\"Incorrect Answer 1\"]),\n            preprocess(doc[\"Incorrect Answer 2\"]),\n            preprocess(doc[\"Incorrect Answer 3\"]),\n            preprocess(doc[\"Correct Answer\"]),\n        ]\n\n        random.shuffle(choices)\n        correct_answer_index = choices.index(preprocess(doc[\"Correct Answer\"]))\n\n        out_doc = {\n            \"choice1\": choices[0],\n            \"choice2\": choices[1],\n            \"choice3\": choices[2],\n            \"choice4\": choices[3],\n            \"answer\": f\"({chr(65 + correct_answer_index)})\",\n        }\n        return out_doc\n\n    return dataset.map(_process_doc)\n",
+  "preprocess_source": "def preprocess(text):\n    if text is None:\n        return \" \"\n    text = text.strip()\n    text = text.replace(\" [title]\", \". \")\n    text = re.sub(\"\\\\[.*?\\\\]\", \"\", text)\n    text = text.replace(\"  \", \" \")\n    return text\n",
+  "tokenizer_probe": {
+    "versions": {
+      "transformers": "5.12.1",
+      "vllm": "0.26.0+empty",
+      "tokenizers": "0.22.2"
+    },
+    "tokenizer_class": "Qwen2Tokenizer",
+    "effective_chat_template_sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+    "default_equals_explicit_xhigh": true,
+    "synthetic_rendered_prompt": "<|im_start|>system\nReasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.<|im_end|>\n<|im_start|>user\nReply with the word cedar.<|im_end|>\n<|im_start|>assistant\n<think>\n",
+    "synthetic_token_count": 58,
+    "sampling_defaults": {
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "frequency_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "ignore_eos": false,
+      "stop_token_ids": [],
+      "skip_special_tokens": true
+    },
+    "generation_config": {
+      "bos_token_id": 248044,
+      "eos_token_id": [
+        248046,
+        248044
+      ],
+      "pad_token_id": 248044,
+      "temperature": 1.0,
+      "top_k": 20,
+      "top_p": 0.95,
+      "max_length": null,
+      "max_new_tokens": null
+    },
+    "endpoint_tokenization": {
+      "count": 58,
+      "exact_local_token_id_match": true,
+      "max_model_len": 262144
+    }
+  },
+  "audit_corrections": "Version 1 compared normalized choices to unnormalized answer text. An initial tokenization probe compared a BatchEncoding mapping instead of its token IDs. This version applies the harness normalization and requests return_dict=False."
+}

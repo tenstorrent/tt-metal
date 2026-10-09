@@ -15,6 +15,8 @@ from pathlib import Path
 
 import httpx
 
+from models.demos.qwen38_27b_qb2.tests.gpqa_documents import CHOICE_PROCESSING, process_gpqa_docs
+
 MODEL = "Qwen/Qwen3.8-27B"
 MODEL_REVISION = "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
 DATASET_REVISION = "633f5ee89ab8ad4522a9f850766b73f62147ffdd"
@@ -59,6 +61,10 @@ def load_gpqa(count=GPQA_COUNT, csv_path=None):
     random.seed(42)
     path = TaskManager().task_index["r1_gpqa_diamond"]["yaml_path"]
     config = load_yaml_config(path)
+    # The pinned harness removes all square-bracketed answer text, including
+    # scientific notation. Preserve the dataset's choices and record this
+    # protocol change; old receipts retain their original prompt hashes.
+    config["process_docs"] = process_gpqa_docs
     if csv_path is None:
         config["dataset_kwargs"] = {"revision": DATASET_REVISION}
     else:
@@ -363,6 +369,7 @@ async def main(args):
             {"transport": "validated_local_csv", **local_dataset} if local_dataset else {"transport": "hub"}
         ),
         "harness_revision": HARNESS_REVISION,
+        "choice_processing": CHOICE_PROCESSING,
         "selection": f"first {gpqa['count']} Diamond rows, choice shuffle seed 42",
         "scope": (
             "fixed-length performance only"

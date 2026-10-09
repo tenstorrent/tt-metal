@@ -1451,3 +1451,38 @@ No session connection is needed for that queue to continue.
   corrected the inventory destination, and verified every tracked hash and
   gzip payload before a separate correction commit. No host source, running
   service, benchmark receipt or score was affected.
+
+## Oct 9, 11:09-11:32 UTC: benchmark configuration audit finds corrupt GPQA choices
+
+- Read-only comparison against the official pinned model card and checkpoint
+  confirms eight config/tokenizer/index artifacts byte-for-byte, xhigh thinking,
+  temperature 1/top-p .95/top-k 20, and exact live tokenization for a synthetic
+  prompt. Installed harness revision matches its pin. Model-card GPQA protocol
+  equivalence remains unproven; no sampling or gate changes were made.
+- Found a concrete harness defect: its GPQA preprocessor removes every
+  square-bracketed span. This corrupts 38 answer choices in 12 questions; seven
+  were incorrect in the BFP8 run. Row 171 loses all four distinctions and the
+  first-string-match label no longer tracks the original correct entry.
+- Added a benchmark-only preserving preprocessor with tagged labels and an
+  explicit protocol version. All 28 CPU regression tests pass. Actual dataset
+  preparation verifies all 198 answer texts and unchanged shuffle positions;
+  row 171's label is corrected. Fifteen prompts change (12 bracketed, three
+  internal-whitespace-only), with a new recorded input hash. No fresh inference
+  or post-hoc score modification was performed.
+- Audit development issues: first isolated test staging lacked models.perf
+  (27 pass, one import failure). Second staging passed 28 tests but its data
+  diagnostic wrongly required the collision-derived label to be preserved.
+  Final staging verifies permutation preservation and permits only proven
+  collision label correction. Earlier scratch normalization and BatchEncoding
+  comparison errors were corrected, not attributed to serving.
+- The untouched original run finished 11:26:26 UTC at 171/198 (86.36%), no
+  truncations, 59m51s, below 177. Mean client TSU 12.93 and aggregate output
+  340.45 tok/s. Persistent completion audit and capture completed; copied
+  final receipts, comparisons and logs locally without private question text.
+- The original score remains recorded under the defective protocol. A fresh
+  full corrected run is required and has not been launched by this audit.
+  Existing persistent follow-up jobs were not modified. Evidence and detailed
+  findings: galaxy-evidence/gpqa-config-audit-v1/ and decoder-gpqa-result-v1/.
+- Pre-commit required the repository expect_error fixture in the new negative
+  tests. Adopted it and repeated all 28 CPU tests and dataset preparation; final
+  receipts are under gpqa-config-audit-v1/final-validation/.

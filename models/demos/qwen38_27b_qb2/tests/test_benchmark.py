@@ -324,6 +324,7 @@ def test_galaxy_protocol_keeps_per_replica_and_total_capacity_distinct(monkeypat
     assert protocol["server_capacity"] == 16
     assert protocol["data_parallel_size"] == 8
     assert protocol["total_server_capacity"] == protocol["gpqa"]["concurrency"] == 128
+    assert protocol["choice_processing"] == "preserve_scientific_notation_v1"
     assert protocol["performance"]["shapes"] == [[128, 128, 128]]
     args.gpqa_concurrency = 129
     assert benchmark.run(args) == 1

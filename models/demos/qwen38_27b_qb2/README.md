@@ -11,17 +11,26 @@ The bring-up and queue descriptions below are historical snapshots; consult the
 logbook and current service state before treating a deployment as live or a
 candidate as qualified.
 
+**Oct 9, 11:26 UTC evaluation audit:** the BFP8/HiFi2 run finished at
+**171/198 (86.36%)**, with no output-budget truncations, in 59m51s. Investigation
+found that the pinned GPQA harness deletes bracketed scientific notation from
+38 answer choices across 12 questions. One question's four distinct choices
+collapse into one displayed string, also changing the derived gold label.
+The evaluator now preserves original answer text and labels the corrected
+protocol `preserve_scientific_notation_v1`; 28 CPU tests and preparation of all
+198 questions pass. A fresh corrected full-model evaluation is still required.
+Earlier scores remain preserved measurements of the defective prompt protocol.
+See the [configuration and scoring audit](galaxy-evidence/gpqa-config-audit-v1/README.md)
+and [completed BFP8 result](galaxy-evidence/decoder-gpqa-result-v1/summary.json).
+
 **Oct 9, 2026 UTC release status:** not qualified. Optimized full GPQA scored
 142/198 at 32K output and 163/198 at 64K, below the unchanged 177/198 gate.
-The first Tau3 pilot failed before inference because a sparse checkout omitted
-shared user-simulator guidelines. Five physical Galaxy HTTP cells completed,
-then a read error stopped the first queue. The corrected native-recurrence
-control finished at **170/198 (85.86%)**, including one incorrect output-budget
-cutoff. The bounded Tau3 pilot completed 3/12 successes with five timeout-affected
-trials; a BFP8/HiFi2 LM-head control is queued
-after current hardware work, with a new G0 and full GPQA.
+The native-recurrence control finished at **170/198 (85.86%)**, including one
+incorrect output-budget cutoff; the head-only BFP8 control scored 166/198.
+These GPQA runs used the defective prompt preparation identified above.
+The bounded Tau3 pilot completed 3/12 successes with five timeout-affected trials.
 See the [current qualification report](galaxy-evidence/qualification-overnight-v2/README.md).
-The experimental image is built and preserved on host disk. Registry publication,
+The experimental BFP8 image is built and preserved on host disk. Registry publication,
 container hardware/evaluation and tested SJC3 Helm deployment remain unfinished.
 
 ## Experimental Galaxy bring-up
