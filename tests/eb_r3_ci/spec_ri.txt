@@ -1,0 +1,5 @@
+# ci16ri (#58725): binary_ng's no-broadcast kernel without the binary re-init after a post activation, against the head's
+# re-init (EB_R3_MAIN_REINIT) and against main's program; every bf16 pattern through the QB2 and gemma4_d_p post adds and
+# through test_post_act's and test_block_post's adds with an activation.
+EB_R3_MAIN_REINIT=1|default;EB_R3_MAIN_REINIT=1,EB_R3_NO_BLOCK=1|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "test_qb2 and (dp_post or gemma_post)"
+EB_R3_MAIN_REINIT=1|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "(test_post_act and nob) or test_block_post"
