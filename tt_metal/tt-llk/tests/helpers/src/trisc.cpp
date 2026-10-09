@@ -112,7 +112,7 @@ int main(void)
 
         ckernel::tensix_sync();
 #if defined(LLK_DBG_BARRIER) // a thread that finishes first waits halted, so no code outside run_kernel runs in another zone
-        llk_barrier::detail::park();
+        llk_barrier::detail::park<llk_barrier::PARK_PLAIN>();
 #endif
     }
 

@@ -1427,10 +1427,8 @@ class TestConfig:
             for root in sorted(llk_roots):
                 OPTIONS_COMPILE += f"{shlex.quote(f'-fmacro-prefix-map={root}/=')} "
         if self._wormhole_perf_barrier():
-            # BRISC restarts the TRISCs at every rendezvous from 512 B aligned points and INIT runs out of line,
-            # so a code change outside the measured code cannot move it (see barrier.h); with INIT out of line GCC
-            # would save callee saved registers inside the measured loops, so they are saved on entry instead
-            OPTIONS_COMPILE += "-DLLK_DBG_BARRIER -fno-shrink-wrap-separate "
+            # BRISC restarts the TRISCs at every rendezvous (see barrier.h); per thread INIT placement: PERF_OOL_THREADS
+            OPTIONS_COMPILE += "-DLLK_DBG_BARRIER "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -1763,6 +1761,14 @@ class TestConfig:
             )
         if TestConfig.ENABLE_PERF_COUNTERS:
             optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
+        if (
+            self._wormhole_perf_barrier()
+            and (name, os.path.basename(str(self.test_source_path or self.test_name)))
+            in TestConfig.PERF_OOL_THREADS
+        ):
+            # INIT out of line (perf.h), so INIT cannot change the loop code; GCC would otherwise save callee saved
+            # registers inside the measured loops, so they are saved on entry instead
+            optional_kernel_flags += " -DLLK_PERF_OOL -fno-shrink-wrap-separate"
 
         coverage_args = (
             [
@@ -1876,6 +1882,23 @@ class TestConfig:
         ]
         logger.trace(" ".join(shlex.quote(part) for part in link_command))
         run_shell_command(link_command, TestConfig.TESTS_WORKING_DIR, text)
+
+    # Threads that run INIT out of line (LLK_PERF_OOL): math and the unpackers whose loop code GCC ties to INIT's code.
+    # The others keep INIT inline, so their loop code is the one built without the barrier.
+    _OOL_INLINE_EXCEPTIONS = frozenset(
+        {
+            ("unpack", "math_transpose_perf.cpp"),
+            ("unpack", "fast_tilize_test.cpp"),
+            ("unpack", "unpack_tilize_perf.cpp"),
+        }
+    )
+
+    class _OolThreads:
+        def __contains__(self, key):
+            name, source = key
+            return name == "math" or (name, source) in TestConfig._OOL_INLINE_EXCEPTIONS
+
+    PERF_OOL_THREADS: ClassVar = _OolThreads()
 
     # Threads whose measured loop takes layout pads (perf/layout.py), per run type.
     LAYOUT_THREADS: ClassVar[dict] = {
