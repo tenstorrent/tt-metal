@@ -195,3 +195,7 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
 - Pre-existing, found on the way: KDA at HiFi2 (attention fidelity) gives a ~3.4% low attention output on every row
   (L0 component test rel L2 0.0345, norm ratio 0.960..0.979, fails 0.02); HiFi4 0.0071, 0.990..0.998 (passes).
   GLM_KDA_FIDELITY overrides the KDA fidelity alone (default: GLM_ATTN_FIDELITY).
+- KDA at HiFi4 (GLM_KDA_FIDELITY default HiFi4; the rest of attention stays HiFi2): warm 56k prefill 8.47 -> 8.62 s.
+  s4096 KV PCC min/mean kv_latent 0.96868 / 0.98509 (HiFi2 0.96713 / 0.98405; unified 0.96928 / 0.98530),
+  index_key 0.98867 / 0.99546 (0.98798 / 0.99491), kda_recurrent 0.97493 / 0.99403 (0.97242 / 0.99320); final hidden
+  0.9465 (0.9445), L44 0.9508 (0.9492).
