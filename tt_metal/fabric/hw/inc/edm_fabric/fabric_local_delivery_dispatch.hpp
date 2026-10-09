@@ -48,26 +48,16 @@ static constexpr size_t LOCAL_DELIVERY_LAST_MCAST_DESTINATION = 1;
 // Packet-header DPRINT helpers (CT-arg-free).
 // -----------------------------------------------------------------------------
 
-FORCE_INLINE void print_pkt_hdr_routing_fields_outlined(
-    volatile tt::tt_fabric::PacketHeader* const packet_start) {
+FORCE_INLINE void print_pkt_hdr_routing_fields_outlined(volatile tt::tt_fabric::PacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     switch (packet_start->chip_send_type) {
         case tt::tt_fabric::CHIP_UNICAST: {
-            DPRINT << "C_UNI: dist:"
-                   << (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK)
-                   << "\n";
             DEVICE_PRINT(
                 "C_UNI: dist:{}\n",
                 (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK));
             break;
         }
         case tt::tt_fabric::CHIP_MULTICAST: {
-            DPRINT << "C_MCST: dist:"
-                   << (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK)
-                   << ", rng:"
-                   << (uint32_t)((packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::RANGE_MASK) >>
-                                 tt::tt_fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH)
-                   << "\n";
             DEVICE_PRINT(
                 "C_MCST: dist:{}, rng:{}\n",
                 (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK),
@@ -82,7 +72,6 @@ FORCE_INLINE void print_pkt_hdr_routing_fields_outlined(
 FORCE_INLINE void print_pkt_hdr_routing_fields_outlined(
     volatile tt::tt_fabric::LowLatencyPacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
-    DPRINT << "ROUTE:" << packet_start->routing_fields.value << "\n";
     DEVICE_PRINT("ROUTE:{}\n", packet_start->routing_fields.value);
 #endif
 }
@@ -92,12 +81,9 @@ FORCE_INLINE void print_pkt_header_noc_fields_outlined(volatile T* const packet_
 #ifdef DEBUG_PRINT_ENABLED
     switch (packet_start->noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
-            DPRINT << "N_WR addr:" << (uint64_t)packet_start->command_fields.unicast_write.noc_address << "\n";
             DEVICE_PRINT("N_WR addr:{}\n", (uint64_t)packet_start->command_fields.unicast_write.noc_address);
         } break;
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
-            DPRINT << "N_WR addr:" << (uint64_t)packet_start->command_fields.unicast_seminc.noc_address
-                   << ", val:" << (uint32_t)packet_start->command_fields.unicast_seminc.val << "\n";
             DEVICE_PRINT(
                 "N_WR addr:{}, val:{}\n",
                 (uint64_t)packet_start->command_fields.unicast_seminc.noc_address,
@@ -113,11 +99,7 @@ FORCE_INLINE void print_pkt_header_noc_fields_outlined(volatile T* const packet_
 
 FORCE_INLINE void print_pkt_header_outlined(volatile tt::tt_fabric::PacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
-    auto const& header = *packet_start;
-    DPRINT << "PKT: nsnd_t:" << (uint32_t)packet_start->noc_send_type
-           << ", csnd_t:" << (uint32_t)packet_start->chip_send_type
-           << ", src_chip:" << (uint32_t)packet_start->src_ch_id
-           << ", payload_size_bytes:" << (uint32_t)packet_start->payload_size_bytes << "\n";
+    const auto& header = *packet_start;
     DEVICE_PRINT(
         "PKT: nsnd_t:{} csnd_t:{} src_chip:{} payload_size_bytes:{}\n",
         (uint32_t)packet_start->noc_send_type,
@@ -131,10 +113,7 @@ FORCE_INLINE void print_pkt_header_outlined(volatile tt::tt_fabric::PacketHeader
 
 FORCE_INLINE void print_pkt_header_outlined(volatile tt::tt_fabric::LowLatencyPacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
-    auto const& header = *packet_start;
-    DPRINT << "PKT: nsnd_t:" << (uint32_t)packet_start->noc_send_type
-           << ", src_chip:" << (uint32_t)packet_start->src_ch_id
-           << ", payload_size_bytes:" << (uint32_t)packet_start->payload_size_bytes << "\n";
+    const auto& header = *packet_start;
     DEVICE_PRINT(
         "PKT: nsnd_t:{} src_chip:{} payload_size_bytes:{}\n",
         (uint32_t)packet_start->noc_send_type,
@@ -194,19 +173,25 @@ FORCE_INLINE void flush_write_to_noc_pipeline_outlined(
         auto end_trid = start_trid + Config::num_transaction_ids;
         for (int i = start_trid; i < end_trid; i++) {
             if constexpr (Config::local_chip_noc_equals_downstream_noc) {
-                while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(Config::local_chip_noc, i));
+                while (flag_disable[0] == 1 /* host reclaim exits */ &&
+                       !ncrisc_noc_nonposted_write_with_transaction_id_flushed(Config::local_chip_noc, i));
             } else {
-                while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(Config::downstream_noc, i));
-                while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(Config::local_chip_noc, i));
+                while (flag_disable[0] == 1 /* host reclaim exits */ &&
+                       !ncrisc_noc_nonposted_write_with_transaction_id_flushed(Config::downstream_noc, i));
+                while (flag_disable[0] == 1 /* host reclaim exits */ &&
+                       !ncrisc_noc_nonposted_write_with_transaction_id_flushed(Config::local_chip_noc, i));
             }
         }
     } else {
         for (size_t i = 0; i < Config::num_transaction_ids; i++) {
             if constexpr (Config::local_chip_noc_equals_downstream_noc) {
-                while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(Config::local_chip_noc, i));
+                while (flag_disable[0] == 1 /* host reclaim exits */ &&
+                       !ncrisc_noc_nonposted_write_with_transaction_id_flushed(Config::local_chip_noc, i));
             } else {
-                while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(Config::downstream_noc, i));
-                while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(Config::local_chip_noc, i));
+                while (flag_disable[0] == 1 /* host reclaim exits */ &&
+                       !ncrisc_noc_nonposted_write_with_transaction_id_flushed(Config::downstream_noc, i));
+                while (flag_disable[0] == 1 /* host reclaim exits */ &&
+                       !ncrisc_noc_nonposted_write_with_transaction_id_flushed(Config::local_chip_noc, i));
             }
         }
     }
@@ -267,10 +252,7 @@ FORCE_INLINE
                 flush_write_to_noc_pipeline_outlined<Config>(rx_channel_id, rx_ch_trid_starts);
             }
             noc_semaphore_inc<true>(
-                dest_address,
-                increment,
-                Config::local_chip_noc,
-                Config::forward_and_local_write_noc_vc);
+                dest_address, increment, Config::local_chip_noc, Config::forward_and_local_write_noc_vc);
 
         } break;
 
@@ -278,11 +260,7 @@ FORCE_INLINE
             const auto dest_address = header.command_fields.unicast_inline_write.noc_address;
             const auto value = header.command_fields.unicast_inline_write.value;
             noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
-                dest_address,
-                value,
-                0xF,
-                Config::local_chip_noc,
-                Config::forward_and_local_write_noc_vc);
+                dest_address, value, 0xF, Config::local_chip_noc, Config::forward_and_local_write_noc_vc);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
@@ -302,10 +280,7 @@ FORCE_INLINE
                 flush_write_to_noc_pipeline_outlined<Config>(rx_channel_id, rx_ch_trid_starts);
             }
             noc_semaphore_inc<true>(
-                semaphore_dest_address,
-                increment,
-                Config::local_chip_noc,
-                Config::forward_and_local_write_noc_vc);
+                semaphore_dest_address, increment, Config::local_chip_noc, Config::forward_and_local_write_noc_vc);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
@@ -423,6 +398,6 @@ FORCE_INLINE
 // (e.g. the CRAQ-Fabric generated kernel). Models the same `set_noc_send_type_used`
 // API as upstream's `tt::tt_fabric::FabricDatapathUsageL1Ptr`.
 struct NoOpUsageRecorder {
-    FORCE_INLINE void set_noc_send_type_used(uint8_t /*rx_channel_id*/,
-                                             tt::tt_fabric::NocSendType /*noc_send_type*/) const {}
+    FORCE_INLINE void set_noc_send_type_used(
+        uint8_t /*rx_channel_id*/, tt::tt_fabric::NocSendType /*noc_send_type*/) const {}
 };
