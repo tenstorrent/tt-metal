@@ -103,7 +103,9 @@ ALWI void reduce_uninit(std::uint32_t icb = 0) {
     // unpacker OUT_DATA_FORMAT and ALU src formats to MxFp4_2x_B in reduce_init, diverging from the
     // op-agnostic unpack_dst_format[] table. That override persists (non-reduce inits never restore
     // OUT_DATA_FORMAT, and reconfig_data_format is skipped for a same-format operand), so restore it
-    // here before the next op. No-op unless icb is an MxFp4 operand.
+    // here before the next op. The scaler's unpacker is restored from what reduce_init recorded,
+    // whatever icb is; the data operand's unpacker and the ALU formats are restored only when icb is
+    // the MxFp4 data operand (so the default icb = 0 restores them only if DFB 0 is that operand).
     UNPACK((llk_unpack_AB_reduce_uninit(icb)));
     MATH((llk_math_reduce_uninit(icb)));
 #elif defined(ARCH_BLACKHOLE)

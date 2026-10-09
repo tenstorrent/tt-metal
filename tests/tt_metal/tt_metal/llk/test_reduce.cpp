@@ -876,13 +876,12 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWTinyTiles) {
     }
 }
 
-// Quasar-only: MxFp4 column-reduce (SUM) via GAPOOL. Meant to mirror the LLK
-// test_reduce_quasar_mxfp4_2x_gapool python test at the metal layer, but the 2x-packed src-register
-// format also needs an MxFp4 scaler, which this test's reader does not produce (see below). Only the
+// Quasar-only: MxFp4 column-reduce (SUM) via GAPOOL with the reader's Float16_b scaler, so it runs the
+// plain MxFp4 -> Float16_b path; the 2x-packed path also needs an MxFp4 scaler. Only the
 // column (H) reduce is valid for MxFp4_2x: it issues GAPOOLs, the only op_mmul-family op (with
 // MVMUL/MVMULDI) that reads the 2x-packed SrcA correctly. Row/Scalar reduce commit per-face
 // results via ELWADDDI (not op_mmul), which reads MxFp4_2x SrcA as zero.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4) {
     ReduceConfig test_config = {
         .shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
         .reduce_dim = ReduceDim::H,
