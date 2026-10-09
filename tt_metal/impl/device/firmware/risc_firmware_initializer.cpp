@@ -27,6 +27,7 @@
 #include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/topology.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
+#include "impl/buffers/dram_sender_topology.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/llrt.hpp"
@@ -667,6 +668,25 @@ void RiscFirmwareInitializer::generate_worker_logical_to_virtual_map(
     worker_logical_row_to_virtual_row.resize(tt::round_up(tensix_grid_size.y, 4), 0);
 }
 
+std::vector<uint32_t> RiscFirmwareInitializer::generate_tensor_prefetcher_signal_table(tt::ChipId device_id) const {
+    // Sized like the firmware array, one entry per bank of the bank tables above.
+    const size_t num_dram_banks = dram_bank_offset_map_.at(device_id).size();
+    std::vector<uint32_t> table(num_dram_banks, 0);
+    if (cluster_.arch() != ARCH::BLACKHOLE || !hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        return table;
+    }
+    const auto& soc_desc = cluster_.get_soc_desc(device_id);
+    for (uint32_t bank_id = 0; bank_id < num_dram_banks; ++bank_id) {
+        // The bank's free subchannel: its NIUs are in stream mode on both NoCs, so a signal reaches its L1 from
+        // either. Blackhole virtualizes DRAM coords identically on both NoCs, so one coord serves both.
+        const CoreCoord signal_core = pick_unused_dram_logical_core(soc_desc, bank_id, device_id);
+        const CoreCoord xy =
+            cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, signal_core, CoreType::DRAM);
+        table[bank_id] = ((xy.y << hal_.get_noc_addr_node_id_bits()) | xy.x) << hal_.get_noc_coord_reg_offset();
+    }
+    return table;
+}
+
 void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     tt::ChipId device_id,
     const HalProgrammableCoreType& core_type,
@@ -706,9 +726,14 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     const uint64_t mem_bank_to_noc_addr = hal_.get_dev_noc_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
     const uint32_t mem_bank_to_noc_size = hal_.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
 
+    // Quasar FW never loads the Tensor prefetcher signal table (WH/BH brisc/ncrisc only).
+    const std::vector<uint32_t> tensor_prefetcher_signal_table =
+        cluster_.arch() == ARCH::QUASAR ? std::vector<uint32_t>{} : generate_tensor_prefetcher_signal_table(device_id);
+    const uint32_t tensor_prefetcher_sz_in_bytes = tensor_prefetcher_signal_table.size() * sizeof(uint32_t);
+
     TT_ASSERT(
-        (dram_to_noc_sz_in_bytes + l1_to_noc_sz_in_bytes + dram_offset_sz_in_bytes + l1_offset_sz_in_bytes) <=
-            mem_bank_to_noc_size,
+        (dram_to_noc_sz_in_bytes + l1_to_noc_sz_in_bytes + dram_offset_sz_in_bytes + l1_offset_sz_in_bytes +
+         tensor_prefetcher_sz_in_bytes) <= mem_bank_to_noc_size,
         "Size of bank_to_noc table is greater than available space");
 
     if (end_core.has_value()) {
@@ -737,6 +762,16 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
             start_core,
             end_core.value(),
             l1_offset_addr);
+
+        if (tensor_prefetcher_sz_in_bytes > 0) {
+            cluster_.noc_multicast_write(
+                tensor_prefetcher_signal_table.data(),
+                tensor_prefetcher_sz_in_bytes,
+                device_id,
+                start_core,
+                end_core.value(),
+                l1_offset_addr + l1_offset_sz_in_bytes);
+        }
     } else {
         cluster_.write_core(
             dram_noc_data, dram_to_noc_sz_in_bytes, tt_cxy_pair(device_id, virtual_core), mem_bank_to_noc_addr);
@@ -757,6 +792,14 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
             l1_offset_sz_in_bytes,
             tt_cxy_pair(device_id, virtual_core),
             l1_offset_addr);
+
+        if (tensor_prefetcher_sz_in_bytes > 0) {
+            cluster_.write_core(
+                tensor_prefetcher_signal_table.data(),
+                tensor_prefetcher_sz_in_bytes,
+                tt_cxy_pair(device_id, virtual_core),
+                l1_offset_addr + l1_offset_sz_in_bytes);
+        }
     }
 }
 
