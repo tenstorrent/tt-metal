@@ -83,6 +83,8 @@ class TtTransformerBlock(LightweightModule):
             )
         else:
             attn_norm_output_memcfg = self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
+        # Qwen3 uses the HF config's rms_norm_eps (1e-06); Llama keeps the RMSNorm default (1e-05).
+        norm_eps_kwargs = {"eps": args.norm_eps} if getattr(args, "is_qwen", False) else {}
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -92,6 +94,7 @@ class TtTransformerBlock(LightweightModule):
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key="attention_norm",
+                **norm_eps_kwargs,
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
@@ -111,6 +114,7 @@ class TtTransformerBlock(LightweightModule):
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key="ffn_norm",
+                **norm_eps_kwargs,
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],

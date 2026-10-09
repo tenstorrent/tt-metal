@@ -352,6 +352,8 @@ class TtLlamaAttention(LightweightModule):
                 inplace=False,
             )
 
+            # Qwen3 uses the HF config's rms_norm_eps (1e-06) for q_norm/k_norm; others keep the RMSNorm default.
+            qk_norm_eps_kwargs = {"eps": configuration.norm_eps} if self.is_qwen else {}
             # Create Q norm
             self.q_norm = RMSNorm(
                 device=self.mesh_device,
@@ -360,6 +362,7 @@ class TtLlamaAttention(LightweightModule):
                 state_dict_prefix=None,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=q_norm_str,
+                **qk_norm_eps_kwargs,
                 sharded_program_config=self.norm_program_cfg,
                 sharded_output_config=self.reshape_output_q_mem_cfg,
             )
@@ -372,6 +375,7 @@ class TtLlamaAttention(LightweightModule):
                 state_dict_prefix=None,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=k_norm_str,
+                **qk_norm_eps_kwargs,
                 sharded_program_config=self.norm_program_cfg,
                 sharded_output_config=self.reshape_output_k_mem_cfg,
             )
