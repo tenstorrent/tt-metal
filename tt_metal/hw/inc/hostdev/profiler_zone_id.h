@@ -57,9 +57,10 @@
 // Declares `site` as this site's type; site::id() returns the site's id in two instructions with no memory
 // access. The variadic argument is the site's metadata, a constant value of any metadata struct (e.g.
 // ::tt::debug_event::ZoneColorMeta{"name", 0xFF0000}); hostdev/debug_event_meta.h marshals it into the site's
-// record. Usable at namespace or block scope. `ctr` is a parameter because __COUNTER__ increments on every
-// appearance and the label needs one value. The asm is not volatile: beyond its result it has no effect the
-// compiler must order, so repeated uses of one site in a function may share a materialization.
+// record; the handle's label is TT_ZONE_LABEL(ctr) plus a hash of that value, so template instantiations that give
+// the site different values get different ids. Usable at namespace or block scope. `ctr` is a parameter because
+// __COUNTER__ increments on every appearance and the label needs one value. The asm is not volatile: beyond its result
+// it has no effect the compiler must order, so repeated uses of one site in a function may share a materialization.
 #define TT_DEBUG_SITE_AT(site, ctr, ...)                                                                     \
     struct site {                                                                                            \
         static inline __attribute__((always_inline)) uint32_t id() {                                         \

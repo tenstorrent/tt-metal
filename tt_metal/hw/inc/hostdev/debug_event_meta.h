@@ -11,7 +11,14 @@
 //   const char*        set from a string literal
 //   integer or enum    of 1, 2, 4 or 8 bytes (bool included)
 //   a nested struct    itself a simple aggregate
-// and every value must be a compile-time constant. check_type<T>() enforces this with readable errors.
+// and every value must be a compile-time constant. Its FIRST field is the site's name, a const char* that every
+// site sets to a non-empty string. The type must be named at namespace scope (not in an anonymous namespace, not
+// local to a function, not unnamed), because the host matches it by the name the compiler spells. check_site_type<T>()
+// enforces all of this with readable errors.
+//
+// One site, one record per distinct metadata value: the site's label carries a hash of the value, so copies of a site
+// with the same value (inlined, or template instantiations) share a handle and an id, and instantiations whose values
+// differ (e.g. a colour taken from a template parameter) each get their own.
 //
 // Marshalling: emit_site() walks the struct's fields (C++17 aggregate decomposition) inside a constant expression
 // and returns assembler text, which the site's asm((...)) statement emits. Unmarshalling: the host walks the same
@@ -37,7 +44,7 @@
 namespace tt::debug_event {
 
 // ---- Metadata types ----------------------------------------------------------------------------------------------
-// By convention the first const char* field is the site's display name.
+// The first field of every metadata type is the site's name.
 
 struct ZoneMeta {
     const char* name;
@@ -90,13 +97,20 @@ constexpr size_t count_braced_fields() {
     }
 }
 
+// True when the field walker can decompose T: no array members and 1..kMaxFields fields.
+template <class T>
+constexpr bool shape_ok() {
+    constexpr size_t n = count_fields<T>();
+    return n == count_braced_fields<T>() && n >= 1 && n <= kMaxFields;
+}
+
 // Calls f on each direct field of T. Does nothing for a T that check_type rejects, so a bad type reports its rule
 // and not a cascade of structured-binding errors.
 template <class T, class F>
 constexpr void for_each_field(T& t, F&& f) {
     using U = std::remove_cv_t<T>;
     constexpr size_t n = count_fields<U>();
-    if constexpr (n != count_braced_fields<U>() || n < 1 || n > kMaxFields) {
+    if constexpr (!shape_ok<U>()) {
         return;
     } else if constexpr (n == 1) {
         auto& [a] = t;
@@ -208,6 +222,63 @@ constexpr const char* pretty_function() {
     return __PRETTY_FUNCTION__;  // GCC "... [with T = X]", clang "... [T = X]"
 }
 
+// Where the type's name starts inside __PRETTY_FUNCTION__; it runs to the first ']' or ';'.
+template <class T>
+constexpr const char* type_name_begin() {
+    const char* p = pretty_function<T>();
+    while (*p != 0 && !(p[0] == 'T' && p[1] == ' ' && p[2] == '=' && p[3] == ' ')) {
+        p++;
+    }
+    return *p != 0 ? p + 4 : p;
+}
+
+constexpr bool type_name_end(char c) { return c == 0 || c == ']' || c == ';'; }
+
+// False for names the device and host compilers spell differently: GCC "{anonymous}::X" vs clang
+// "(anonymous namespace)::X", function-local "f()::X", GCC "<unnamed struct>" vs clang "(unnamed struct at ...)".
+template <class T>
+constexpr bool has_portable_name() {
+    auto starts = [](const char* p, const char* word) {
+        while (*word != 0 && *p == *word) {
+            p++, word++;
+        }
+        return *word == 0;
+    };
+    for (const char* p = type_name_begin<T>(); !type_name_end(*p); p++) {
+        if (*p == '(' || *p == '{' || starts(p, "<unnamed") || starts(p, "<anonymous")) {
+            return false;
+        }
+    }
+    return true;
+}
+
+template <class T>
+constexpr bool first_field_is_name() {
+    T probe{};
+    bool first = true, is_name = false;
+    for_each_field(probe, [&](auto& v) {
+        if (first) {
+            is_name = std::is_same_v<field_t<decltype(v)>, const char*>;
+        }
+        first = false;
+    });
+    return is_name;
+}
+
+// Everything a site's metadata type must satisfy, beyond check_type's per-struct rules.
+template <class T>
+constexpr bool check_site_type() {
+    static_assert(check_type<T>());
+    static_assert(
+        has_portable_name<T>(),
+        "a debug event metadata type must be named at namespace scope: not in an anonymous namespace, not local to a "
+        "function, not an unnamed struct (the host matches it by name, and compilers spell those differently)");
+    static_assert(
+        !shape_ok<T>() || first_field_is_name<T>(),
+        "the first field of a debug event metadata type must be the site's name, a const char*");
+    return true;
+}
+
 template <class T, class Sink>
 constexpr void write_codes(Sink& out) {
     T probe{};
@@ -226,12 +297,8 @@ constexpr void write_codes(Sink& out) {
 // Writes "<type name>:<field codes>" into any sink with put(char).
 template <class T, class Sink>
 constexpr void write_signature(Sink& out) {
-    static_assert(check_type<T>());
-    const char* p = pretty_function<T>();
-    while (*p != 0 && !(p[0] == 'T' && p[1] == ' ' && p[2] == '=' && p[3] == ' ')) {
-        p++;
-    }
-    for (p += 4; *p != 0 && *p != ']' && *p != ';'; p++) {
+    static_assert(check_site_type<T>());
+    for (const char* p = type_name_begin<T>(); !type_name_end(*p); p++) {
         out.put(*p);
     }
     out.put(':');
@@ -270,9 +337,63 @@ struct AsmText {
         }
         put('"');
     }
+    constexpr void put_hex(uint64_t v) {
+        for (int i = 60; i >= 0; i -= 4) {
+            put("0123456789abcdef"[(v >> i) & 0xF]);
+        }
+    }
     constexpr const char* data() const { return buf; }
     constexpr size_t size() const { return n; }
 };
+
+// FNV-1a over a site's metadata value: its signature, then every leaf field.
+struct Fnv1a {
+    uint64_t h = 0xcbf29ce484222325ull;
+    constexpr void put(char c) {
+        h ^= static_cast<uint8_t>(c);
+        h *= 0x100000001b3ull;
+    }
+};
+
+template <class T>
+constexpr uint64_t meta_hash(const T& meta) {
+    Fnv1a f;
+    write_signature<T>(f);
+    for_each_leaf(meta, [&](const auto& v) {
+        using F = field_t<decltype(v)>;
+        if constexpr (std::is_same_v<F, const char*>) {
+            for (const char* s = v != nullptr ? v : ""; *s != 0; s++) {
+                f.put(*s);
+            }
+            f.put(0);
+        } else {
+            const uint64_t bits = field_bits(v);
+            for (int i = 0; i < 64; i += 8) {
+                f.put(static_cast<char>(bits >> i));
+            }
+        }
+    });
+    return f.h;
+}
+
+// Never defined: a site whose name is null or empty calls it during constant evaluation, and the compiler's error
+// ("call to non-constexpr function") quotes this name.
+void debug_event_site_name_must_be_a_non_empty_string_literal();
+
+template <class T>
+constexpr const char* site_name(const T& meta) {
+    const char* name = nullptr;
+    bool first = true;
+    for_each_field(meta, [&](const auto& v) {
+        if constexpr (std::is_same_v<field_t<decltype(v)>, const char*>) {
+            if (first) {
+                name = v;
+            }
+        }
+        first = false;
+    });
+    return name;
+}
 
 // A .long pointing at a fresh copy of S in .tt_zone_str (the section is "MS", so the linker keeps one copy). A null
 // pointer is stored as "".
@@ -287,19 +408,30 @@ struct SignatureText {
     constexpr void put(char c) { a->put(c == '"' || c == '\\' ? '_' : c); }
 };
 
-// The whole site: handle, record and the lui/addi that loads the id into %0. Guarded by .ifndef so an inlined
-// site expanded many times still has one handle and one record.
+// The whole site: handle, record and the lui/addi that loads the id into %0. The handle's label is the site's
+// label plus a hash of the metadata value, and guarded by .ifndef: copies of the site with the same value share
+// one handle and one record, copies with different values (template instantiations) each get their own.
 template <class T>
-constexpr AsmText emit_site(const T& meta, const char* label, const char* file, uint32_t line) {
+constexpr AsmText emit_site(const T& meta, const char* site_label, const char* file, uint32_t line) {
+    const char* name = site_name(meta);
+    if (name == nullptr || *name == 0) {
+        debug_event_site_name_must_be_a_non_empty_string_literal();
+    }
+    const uint64_t hash = meta_hash(meta);
     AsmText a;
+    auto label = [&] {
+        a.put(site_label);
+        a.put('_');
+        a.put_hex(hash);
+    };
     a.put(".ifndef ");
-    a.put(label);
+    label();
     a.put("\n.pushsection .tt_zone_ids,\"\",@progbits\n");
-    a.put(label);
+    label();
     a.put(":\t.byte 0\n.popsection\n");
 
     a.put(".pushsection .tt_zone_meta,\"\",@progbits\n.balign 4\n.long ");
-    a.put(label);
+    label();
     a.put("\n.pushsection .tt_zone_str,\"MS\",@progbits,1\n8880:\t.asciz \"");
     SignatureText sig{&a};
     write_signature<T>(sig);
@@ -324,9 +456,9 @@ constexpr AsmText emit_site(const T& meta, const char* label, const char* file, 
         }
     });
     a.put(".balign 4\n.popsection\n.endif\n\tlui %0, %%hi(");
-    a.put(label);
+    label();
     a.put(")\n\taddi %0, %0, %%lo(");
-    a.put(label);
+    label();
     a.put(")");
     return a;
 }
