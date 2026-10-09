@@ -350,7 +350,45 @@ void blocked_matmul_and_pack(
     uint32_t subblock_h,
     uint32_t inner_dim,
     uint32_t matmul_stride,
-    bool skip_pack_configure = false) {
+    bool skip_pack_configure = false,
+    bool pv_l1_acc = false) {
+#if defined(SDPA_RECIPE_ACCURATE) && defined(ARCH_WORMHOLE)
+    // Wormhole ACCURATE PV (FP32 P, HiFi4, FP32 DEST): one K tile per DEST pass, the passes added by the packer's FP32
+    // L1 accumulation (exact). Summing several K tiles in DEST at HiFi4 occasionally (about one output element in a
+    // million) comes out off by an exact power of two, e.g. -8.48 for -0.48 from a 32 x 128 P block, with the MOP
+    // matmul as well; each K tile on its own and the four summed in L1 are exact. pv_l1_acc: the packer's L1
+    // accumulation on entry (restored on exit).
+    if constexpr (!transpose) {
+        for (uint32_t inner = 0; inner < inner_dim; ++inner) {
+            tile_regs_acquire();
+            matmul_block_no_mop(
+                in0_cb,
+                in1_cb,
+                in0_index_start + inner,
+                in1_index_start + inner * in1_stride,
+                0,
+                false,
+                subblock_w,
+                subblock_h,
+                matmul_stride);
+            tile_regs_commit();
+            tile_regs_wait();
+            if (inner == 0 && !skip_pack_configure) {
+                configure_row_pack_width(out_cb, subblock_w);
+            }
+            if (inner == 1 && !pv_l1_acc) {
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            }
+            pack_contiguous_rows_nocfg(
+                out_cb, row_subblock_idx * subblock_h, subblock_h, out_num_cols, out_col_offset, subblock_w);
+            tile_regs_release();
+        }
+        if (inner_dim > 1 && !pv_l1_acc) {
+            PACK((llk_pack_reconfig_l1_acc(0)));
+        }
+        return;
+    }
+#endif
     tile_regs_acquire();
     uint32_t dst_index = 0;
     uint32_t in0_index = in0_index_start;
@@ -1933,7 +1971,12 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                                 first_h,
                                 matmul_inner,
                                 KT_stride,
-                                /*skip_pack_configure=*/true);
+                                /*skip_pack_configure=*/true,
+#ifdef SDPA_RECIPE_FP32
+                                kt_sub > 0 || inplace_numerator);
+#else
+                                false);
+#endif
 #ifndef SDPA_RECIPE_FP32
                             UNPACK({
                                 if (!is_first_iter && kt_sub == 0 && v_subblock == 0) {
@@ -2180,7 +2223,12 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                         cur_h,
                         active_Sk,
                         KT_stride,
-                        /*skip_pack_configure=*/true);
+                        /*skip_pack_configure=*/true,
+#ifdef SDPA_RECIPE_FP32
+                        inplace_numerator);
+#else
+                        false);
+#endif
                     v_index_offset += qktv_subblock_w;
                 }
                 sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
