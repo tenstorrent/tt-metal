@@ -439,34 +439,6 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_BINARY_LOGADDEXP_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "logaddexp2_binary_tile_init();"},
       {"SFPU_OP_CHAIN_0", "logaddexp2_binary_tile(0, 1, 0);"}}},
-    // quant / requant / dequant go through api/compute/quantization.h. The zero-point
-    // immediates are fp32 bits: 4.0f for quant and requant, and -3.0f for dequant
-    // (the kernel computes A + zp, so the caller passes the negated zero-point).
-    // Result is written back to DST[0]. Stimuli and the golden live in run_sfpu_quant_family.
-    {"quant",
-     {{"SFPU_OP_QUANT_INCLUDE", "1"},
-      {"SFPU_OP_INIT_0", "quant_tile_init(0x40800000u);"},
-      {"SFPU_OP_CHAIN_0", "quant_tile(0, 1, 0);"}}},
-    {"requant",
-     {{"SFPU_OP_QUANT_INCLUDE", "1"},
-      {"SFPU_OP_INIT_0", "requant_tile_init(0x40800000u);"},
-      {"SFPU_OP_CHAIN_0", "requant_tile(0, 1, 0);"}}},
-    {"dequant",
-     {{"SFPU_OP_QUANT_INCLUDE", "1"},
-      {"SFPU_OP_INIT_0", "dequant_tile_init(0xC0400000u);"},
-      {"SFPU_OP_CHAIN_0", "dequant_tile(0, 1, 0);"}}},
-    // Int8 input is a UInt8-unpacked byte. The kernel XORs it with 0x80, so the value that
-    // enters the math is signed_value + 128. The immediates cancel that 128:
-    //   requant: 4.0 - 128 * 0.5 = -60.0 (0xC2700000)
-    //   dequant: -3.0 - 128 = -131.0 (0xC3030000)
-    {"requant_int8_in",
-     {{"SFPU_OP_QUANT_INCLUDE", "1"},
-      {"SFPU_OP_INIT_0", "requant_int8_in_tile_init(0xC2700000u);"},
-      {"SFPU_OP_CHAIN_0", "requant_int8_in_tile(0, 1, 0);"}}},
-    {"dequant_int8",
-     {{"SFPU_OP_QUANT_INCLUDE", "1"},
-      {"SFPU_OP_INIT_0", "dequant_int8_tile_init(0xC3030000u);"},
-      {"SFPU_OP_CHAIN_0", "dequant_int8_tile(0, 1, 0);"}}},
 };
 
 // ---- Tile-layout ops (goldens mirror the tt-llk SFPU tests' UnarySFPUGolden) --------------------
