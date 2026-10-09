@@ -23,7 +23,7 @@ import torch
 
 import ttnn
 from models.demos.glm53_flash_d_p.reference.weights import PREFIX
-from models.demos.glm53_flash_d_p.tt.common import hifi4_config, replicate
+from models.demos.glm53_flash_d_p.tt.common import hifi4_config, mm_config, replicate
 
 TILE = 32
 
@@ -66,7 +66,9 @@ class TtRouter:
         s = x.shape[-2]
         assert s <= self.max_rows and s % TILE == 0, f"router rows {s} (max {self.max_rows}, tile aligned)"
         xf = x if x.dtype == ttnn.float32 else ttnn.typecast(x, ttnn.float32, memory_config=mc)
-        logits = ttnn.linear(xf, self.w, dtype=ttnn.float32, compute_kernel_config=self.cfg, memory_config=mc)
+        logits = ttnn.linear(
+            xf, self.w, dtype=ttnn.float32, compute_kernel_config=mm_config(self.cfg), memory_config=mc
+        )
         if xf is not x:
             ttnn.deallocate(xf)
         scores = ttnn.sigmoid(logits, memory_config=mc)
