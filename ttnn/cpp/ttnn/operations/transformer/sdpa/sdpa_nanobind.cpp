@@ -470,10 +470,9 @@ void bind_sdpa(nb::module_& mod) {
             block_cyclic_chunk_local (int, optional): per-shard chunk length (chunk_size_global / sp). Required
                 iff block_cyclic_sp_axis is set; cross-checked against q (must equal q_isl or tp*q_isl).
             enable_kv_block_cache (bool): per-core L1 cache for the gathered K/V blocks: a block selected again by
-                a later query on the same core is read from L1 instead of DRAM; byte-identical to the streamed
-                path. The slot count is as many as fit in the L1 below the lowest live L1 buffer after the op's
-                own CBs (at most 64), resolved per call and part of the program-cache key, so a trace replays the
-                program it captured; fewer than two fitting runs the streamed kernels. Default False.
+                a later query on the same core is read from L1 instead of DRAM; output is byte-identical either
+                way. The slot count is sized per call from the free L1 (an estimate, not a reservation) and baked
+                into the program, so a trace replays the count it captured unchecked. Default False.
 
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, dtype = q.
