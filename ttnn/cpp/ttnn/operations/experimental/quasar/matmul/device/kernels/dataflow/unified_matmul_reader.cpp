@@ -50,19 +50,13 @@ template <
 TT_KERNEL void reader(
     uint32_t first_C_slice,
     uint32_t num_C_slices,
-    uint32_t A_mcast_receiver,  // 1 when this core receives its A slices from its row's sender
-    uint32_t A_mcast_sender_x,  // NoC coordinates of that sender
+    uint32_t A_mcast_receiver,  // 1 when this core's A slices come from the first core of its row
+    uint32_t A_mcast_sender_x,  // NoC coordinates of that core, which multicasts along the row to A_mcast_end_x
     uint32_t A_mcast_sender_y,
-    uint32_t A_mcast_start_x,  // NoC rectangle of the row the A sender multicasts to
-    uint32_t A_mcast_start_y,
     uint32_t A_mcast_end_x,
-    uint32_t A_mcast_end_y,
-    uint32_t B_mcast_receiver,  // the same for B and this core's column
+    uint32_t B_mcast_receiver,  // the same for B and the first core of this core's column, down to B_mcast_end_y
     uint32_t B_mcast_sender_x,
     uint32_t B_mcast_sender_y,
-    uint32_t B_mcast_start_x,
-    uint32_t B_mcast_start_y,
-    uint32_t B_mcast_end_x,
     uint32_t B_mcast_end_y) {
     // first_C_slice: this core's first C slice in the row-major walk over C (across N, then down M);
     // num_C_slices: how many consecutive ones it produces, per batch.
@@ -194,14 +188,19 @@ TT_KERNEL void reader(
                             A_slice_tiles * A_tile_bytes,
                             A_mcast_num_dests,
                             {},
-                            {.noc_x_start = A_mcast_start_x,
-                             .noc_y_start = A_mcast_start_y,
+                            {.noc_x_start = A_mcast_sender_x,
+                             .noc_y_start = A_mcast_sender_y,
                              .noc_x_end = A_mcast_end_x,
-                             .noc_y_end = A_mcast_end_y,
+                             .noc_y_end = A_mcast_sender_y,
                              .addr = A_slice.get_write_ptr()},
                             /*linked=*/true);
                         A_data_ready.set_multicast(
-                            noc, A_mcast_start_x, A_mcast_start_y, A_mcast_end_x, A_mcast_end_y, A_mcast_num_dests);
+                            noc,
+                            A_mcast_sender_x,
+                            A_mcast_sender_y,
+                            A_mcast_end_x,
+                            A_mcast_sender_y,
+                            A_mcast_num_dests);
                     }
                 }
                 if constexpr (B_mcast_num_dests > 0) {
@@ -216,14 +215,19 @@ TT_KERNEL void reader(
                             B_slice_tiles * B_tile_bytes,
                             B_mcast_num_dests,
                             {},
-                            {.noc_x_start = B_mcast_start_x,
-                             .noc_y_start = B_mcast_start_y,
-                             .noc_x_end = B_mcast_end_x,
+                            {.noc_x_start = B_mcast_sender_x,
+                             .noc_y_start = B_mcast_sender_y,
+                             .noc_x_end = B_mcast_sender_x,
                              .noc_y_end = B_mcast_end_y,
                              .addr = B_slice.get_write_ptr()},
                             /*linked=*/true);
                         B_data_ready.set_multicast(
-                            noc, B_mcast_start_x, B_mcast_start_y, B_mcast_end_x, B_mcast_end_y, B_mcast_num_dests);
+                            noc,
+                            B_mcast_sender_x,
+                            B_mcast_sender_y,
+                            B_mcast_sender_x,
+                            B_mcast_end_y,
+                            B_mcast_num_dests);
                     }
                 }
 

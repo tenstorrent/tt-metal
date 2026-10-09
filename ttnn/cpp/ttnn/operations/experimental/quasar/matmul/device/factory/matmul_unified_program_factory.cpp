@@ -722,16 +722,10 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                   "A_mcast_receiver",
                   "A_mcast_sender_x",
                   "A_mcast_sender_y",
-                  "A_mcast_start_x",
-                  "A_mcast_start_y",
                   "A_mcast_end_x",
-                  "A_mcast_end_y",
                   "B_mcast_receiver",
                   "B_mcast_sender_x",
                   "B_mcast_sender_y",
-                  "B_mcast_start_x",
-                  "B_mcast_start_y",
-                  "B_mcast_end_x",
                   "B_mcast_end_y"}},
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
@@ -850,7 +844,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     const uint32_t cores_with_extra_C_slice = plan.C_slices_per_batch % num_active_cores;
     uint32_t next_C_slice = 0;  // position in the walk of the next unassigned C slice
     // Multicast follows a core's row (A) and column (B) of the core rectangle, each led by its first core. The reader
-    // is on NOC_0 (Quasar has one NoC), which takes a multicast rectangle from its lowest to its highest coordinates.
+    // is on NOC_0 (Quasar has one NoC), which takes a multicast rectangle from its lowest coordinates, the first
+    // core's, to its highest.
     const CoreRange core_grid = config.cores.bounding_box();
     for (uint32_t core = 0; core < num_active_cores; ++core) {
         const uint32_t num_C_slices = C_slices_per_core_floor + (core < cores_with_extra_C_slice ? 1 : 0);
@@ -859,6 +854,10 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         const CoreCoord A_row_end = device.worker_core_from_logical_core({core_grid.end_coord.x, logical.y});
         const CoreCoord B_sender = device.worker_core_from_logical_core({logical.x, core_grid.start_coord.y});
         const CoreCoord B_column_end = device.worker_core_from_logical_core({logical.x, core_grid.end_coord.y});
+        TT_FATAL(
+            (plan.A_mcast_num_dests == 0 || A_sender.x <= A_row_end.x) &&
+                (plan.B_mcast_num_dests == 0 || B_sender.y <= B_column_end.y),
+            "Multicast needs a row's / column's first core at its lowest NoC coordinate");
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             logical,
@@ -867,17 +866,11 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
              {"A_mcast_receiver", plan.A_mcast_num_dests > 0 && logical.x != core_grid.start_coord.x ? 1u : 0u},
              {"A_mcast_sender_x", static_cast<uint32_t>(A_sender.x)},
              {"A_mcast_sender_y", static_cast<uint32_t>(A_sender.y)},
-             {"A_mcast_start_x", static_cast<uint32_t>(std::min(A_sender.x, A_row_end.x))},
-             {"A_mcast_start_y", static_cast<uint32_t>(std::min(A_sender.y, A_row_end.y))},
-             {"A_mcast_end_x", static_cast<uint32_t>(std::max(A_sender.x, A_row_end.x))},
-             {"A_mcast_end_y", static_cast<uint32_t>(std::max(A_sender.y, A_row_end.y))},
+             {"A_mcast_end_x", static_cast<uint32_t>(A_row_end.x)},
              {"B_mcast_receiver", plan.B_mcast_num_dests > 0 && logical.y != core_grid.start_coord.y ? 1u : 0u},
              {"B_mcast_sender_x", static_cast<uint32_t>(B_sender.x)},
              {"B_mcast_sender_y", static_cast<uint32_t>(B_sender.y)},
-             {"B_mcast_start_x", static_cast<uint32_t>(std::min(B_sender.x, B_column_end.x))},
-             {"B_mcast_start_y", static_cast<uint32_t>(std::min(B_sender.y, B_column_end.y))},
-             {"B_mcast_end_x", static_cast<uint32_t>(std::max(B_sender.x, B_column_end.x))},
-             {"B_mcast_end_y", static_cast<uint32_t>(std::max(B_sender.y, B_column_end.y))}});
+             {"B_mcast_end_y", static_cast<uint32_t>(B_column_end.y)}});
         AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             logical,
