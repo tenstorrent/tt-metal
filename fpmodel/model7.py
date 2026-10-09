@@ -31,6 +31,7 @@ TERMS = {
     "issue": "each page read costs the reader core a fixed issue time (per-core floor on a K block's read)",
     "pad": "K not a multiple of 32: the in0 reader zero-fills each row tile of the last K block (barrier + RISC-V loop)",
     "msync": "mcast receivers ack only after computing on a block: the sender's ack collection adds to every compute step",
+    "mcrate": "multicast data moves at its own rate, falling with the receiver count (measured: one-to-all microbenchmark)",
 }
 EXPERIMENTAL = {
     "linkmc": "multicast traffic has its own link efficiency (link_eff then describes read traffic)",
@@ -70,6 +71,8 @@ CONSTANTS = {
     "lat_write": (65.0, "cycles: one subblock of output page writes + barrier", "write"),
     "sfpu_tile": (2000.0, "cycles per output tile of SFPU activation", "epilogue"),
     "issue": (100.0, "cycles per page read issued by one reader core", "issue"),
+    "mc_eff0": (0.59, "multicast rate as a fraction of the link rate, extrapolated to zero receivers", "mcrate"),
+    "mc_eff_rx": (0.0026, "drop in that fraction per receiver", "mcrate"),
     "lat_shard": (
         500.0,
         "cycles per K step: handing the in0 mcast to the core that holds the next K slice",
@@ -85,6 +88,18 @@ PINNED = {
     "launch_us": ({"wh": 0.5}, "profiler: kernel start to end minus the K loops, instrumented matmul kernels"),
     "rl_init": ({"wh": 340.0}, "profiler: spill path per subblock-step, instrumented compute kernel"),
     "u2d": ({"wh": 100.0}, "profiler: fp32 unpack-to-dest handshake per tile"),
+    "lat_dram": (
+        {"wh": 352.0},
+        "data-movement microbenchmark: one core, N interleaved DRAM pages, one barrier (intercept)",
+    ),
+    "lat_l1": (
+        {"wh": 282.0},
+        "data-movement microbenchmark: one core, N interleaved L1 pages, one barrier (intercept)",
+    ),
+    "issue": ({"wh": 38.0}, "data-movement microbenchmark: per-page cost of small interleaved DRAM reads"),
+    "noc_eff": ({"wh": 0.96}, "data-movement microbenchmark: one core's interleaved read rate, 30.7 of 32 B/cycle"),
+    "mc_eff0": ({"wh": 0.59}, "one-to-all multicast microbenchmark: 17.1 B/cycle to 24 receivers, 13.9 to 63"),
+    "mc_eff_rx": ({"wh": 0.0026}, "one-to-all multicast microbenchmark: slope of the rate with receivers"),
 }
 
 
@@ -101,8 +116,26 @@ def pin(fit_module, arch):
 
 
 PARAMS = {k: v[0] for k, v in CONSTANTS.items() if v[2] is None or on(v[2])}
-LO = {"dram_eff": 0.2, "noc_eff": 0.1, "l1_frac": 0.05, "link_eff": 0.05, "bank_frac": 0.02, "link_eff_mc": 0.05}
-HI = {"dram_eff": 1.0, "noc_eff": 1.0, "l1_frac": 3.0, "link_eff": 1.0, "bank_frac": 1.0, "link_eff_mc": 1.0}
+LO = {
+    "mc_eff0": 0.05,
+    "mc_eff_rx": 1e-5,
+    "dram_eff": 0.2,
+    "noc_eff": 0.1,
+    "l1_frac": 0.05,
+    "link_eff": 0.05,
+    "bank_frac": 0.02,
+    "link_eff_mc": 0.05,
+}
+HI = {
+    "mc_eff0": 1.0,
+    "mc_eff_rx": 0.01,
+    "dram_eff": 1.0,
+    "noc_eff": 1.0,
+    "l1_frac": 3.0,
+    "link_eff": 1.0,
+    "bank_frac": 1.0,
+    "link_eff_mc": 1.0,
+}
 
 
 def geometry(d):
@@ -218,9 +251,12 @@ def predict(g, p, parts=False):
         return np.select([src == 0, src == 1], [np.maximum(dr, floor), np.maximum(l1, floor)], 0.0)
 
     def mcast(nbytes, rx):
+        rate = noc
+        if on("mcrate"):  # measured: 17.1 B/cycle to 24 receivers, 13.9 to 63 (WH)
+            rate = s["noc_Bpc"] * np.maximum(p["mc_eff0"] - p["mc_eff_rx"] * rx, 0.05)
         if not on("mcast"):
-            return np.where(rx > 0, nbytes / noc, 0.0)
-        return np.where(rx > 0, p["lat_mcast"] + rx * p["ack_rx"] + nbytes / noc, 0.0)
+            return np.where(rx > 0, nbytes / rate, 0.0)
+        return np.where(rx > 0, p["lat_mcast"] + rx * p["ack_rx"] + nbytes / rate, 0.0)
 
     step0 = fetch(b0, g["src_a"], g["rd0"], ea, cg0, g["tb_a"]) + mcast(b0, g["rx0"])  # in0 path (sender)
     step1 = fetch(b1, g["src_b"], g["rd1"], eb, cg1, g["tb_b"]) + mcast(b1, g["rx1"])  # in1 path (sender)

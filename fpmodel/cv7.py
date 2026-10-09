@@ -17,6 +17,12 @@ fit.HI.update(M.HI)
 from data import load, SETS, CAND, evaluate, rank_quality, gm
 
 tag = (os.environ.get("ABLATE", "") or "full") + ("+" + os.environ["EXTRA"] if os.environ.get("EXTRA") else "")
+for kv in filter(
+    None, os.environ.get("PIN", "").split(",")
+):  # PIN=name=value,...: hold extra WH constants at these values
+    k, v = kv.split("=")
+    M.PINNED[k] = ({**M.PINNED.get(k, ({}, ""))[0], "wh": float(v)}, "env PIN")
+    tag += f"+{k}={v}"
 d = M.annotate(load(list(SETS)))
 rows = {a: np.flatnonzero((d.arch_ == a).to_numpy()) for a in ("wh", "bh")}
 pred = np.full(len(d), np.nan)
