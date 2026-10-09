@@ -223,7 +223,8 @@ inline void calculate_typecast_fp32_to_int32() {
         // LaneEnabled = true
         TTI_SFPENCC(0, 0, 0, 0);
         // s = result - s, the second half of the sign fold
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(
+            0, p_sfpu::LREG1, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
     }
 }

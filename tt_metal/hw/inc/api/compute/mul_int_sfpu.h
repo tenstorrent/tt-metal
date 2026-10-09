@@ -76,7 +76,14 @@ ALWI void mul_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     } else {
 #ifdef ARCH_BLACKHOLE
         MATH((SFPU_BINARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, mul_int32, (APPROX, 32 /* ITERATIONS */), idst0, idst1, odst, VectorMode::None)));
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            mul_int32,
+            (APPROX, 32 /* ITERATIONS */),
+            idst0,
+            idst1,
+            odst,
+            VectorMode::None)));
 #else
         MATH(
             (SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, mul_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
