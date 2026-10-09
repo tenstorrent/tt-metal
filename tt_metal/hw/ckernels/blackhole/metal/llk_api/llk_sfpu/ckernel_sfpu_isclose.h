@@ -31,23 +31,21 @@ inline void calculate_sfpu_isclose(
     uint32_t rtol_bits,
     uint32_t atol_bits) {
     constexpr uint32_t dst_tile_size_sfpi = 32;
-    // IEEE-754 abs(+inf). abs_bits == inf_bits -> +-Inf; abs_bits > inf_bits -> NaN
-    // (NaN has exp == 0xFF and a non-zero mantissa, irrespective of sign or
-    // quiet/signaling bit). One comparison classifies both special cases.
-    constexpr int32_t inf_bits = 0x7F800000;
 
     const sfpi::vFloat atol = Converter::as_float(atol_bits);
     const sfpi::vFloat rtol = Converter::as_float(rtol_bits);
+    // FLT_MAX and +inf bits. SFPGT and SFPLE test an abs pattern against them without overwriting either
+    // register, where an integer compare needs a fresh copy of the constant for each test.
+    sfpi::vConstIntPrgm1 = 0x7F7FFFFF;
+    sfpi::vConstIntPrgm2 = 0x7F800000;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        // Integer views of a, b and their abs bit patterns. Two constraints: the abs
-        // bits must stay vInt (a vFloat against inf_bits binds to the float overload,
-        // converting it to 2139095040.0f), and the mask cannot be replaced by
-        // bit-casting sfpi::abs() because SFPABS float mode leaves -NaN sign-set.
+        // Integer views of a, b and their abs bit patterns. The mask cannot be replaced
+        // by bit-casting sfpi::abs() because SFPABS float mode leaves -NaN sign-set.
         // vConstIntPrgm0 holds 0x7FFFFFFF, programmed in isclose_init.
         sfpi::vInt a_bits = sfpi::as<sfpi::vInt>(a);
         sfpi::vInt b_bits = sfpi::as<sfpi::vInt>(b);
@@ -72,20 +70,25 @@ inline void calculate_sfpu_isclose(
         v_endif;
 
         // Single fix-up branch covering every "special" lane (Inf or NaN).
-        // Detected by `abs_bits >= inf_bits` which holds iff exp == 0xFF.
+        // Detected by an abs pattern above FLT_MAX, which holds iff exp == 0xFF
+        // (the float compares order the sign-cleared patterns as unsigned integers).
         // Inside, we discard the tolerance result and rebuild from scratch:
-        //   * matching-sign Inf  -> 1     (a_abs_bits == inf AND a_bits == b_bits)
-        //   * both NaN, EQUAL_NAN -> 1    (a_abs_bits >  inf AND b_abs_bits >  inf)
+        //   * matching-sign Inf  -> 1     (a_bits == b_bits AND a_abs <= inf)
+        //   * both NaN, EQUAL_NAN -> 1    (a_abs > inf AND b_abs > inf)
         //   * everything else (mismatched Inf, one-sided NaN, EQUAL_NAN=false
         //     NaN) stays at 0.
         // Folding both old fix-ups into one v_if removes two predicate-stack
         // push/pop pairs from the hot loop.
-        v_if(a_abs_bits >= inf_bits || b_abs_bits >= inf_bits) {
+        const sfpi::vFloat a_abs_pattern = sfpi::as<sfpi::vFloat>(a_abs_bits);
+        const sfpi::vFloat b_abs_pattern = sfpi::as<sfpi::vFloat>(b_abs_bits);
+        const sfpi::vFloat flt_max = sfpi::vConstFloatPrgm1;
+        const sfpi::vFloat inf = sfpi::vConstFloatPrgm2;
+        v_if(a_abs_pattern > flt_max || b_abs_pattern > flt_max) {
             result = 0.0f;
-            v_if(a_abs_bits == inf_bits && a_bits == b_bits) { result = 1.0f; }
+            v_if(a_abs_pattern <= inf && a_bits == b_bits) { result = 1.0f; }
             v_endif;
             if constexpr (EQUAL_NAN) {
-                v_if(a_abs_bits > inf_bits && b_abs_bits > inf_bits) { result = 1.0f; }
+                v_if(a_abs_pattern > inf && b_abs_pattern > inf) { result = 1.0f; }
                 v_endif;
             }
         }
