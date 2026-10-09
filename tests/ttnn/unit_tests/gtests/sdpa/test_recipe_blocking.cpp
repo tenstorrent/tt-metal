@@ -114,16 +114,28 @@ TEST(SDPARecipeBlocking, MoreHeadsThanCoresSplitsJobsOverTheGrid) {
             choice->jobs_per_core,
             (p.batch * p.q_heads * ((512 + choice->q_chunk_size - 1) / choice->q_chunk_size) + 109) / 110);
     }
+    // Without forwarding chains every Q chunk reads its head's K/V again: bge_m3 B8 16 heads D64 with a mask is fastest
+    // at Q256/K512 (measured 0.455 ms, Q128/K512 0.488 ms), which the per-core roofline alone ranked below Q128.
+    auto bge = problem(RecipeOp::Dense, {Recipe::D}, 16, 512, 512, 2);
+    bge.batch = 8;
+    bge.mask_page_bytes = 2048;
+    const auto choice = choose_recipe_blocking(bge);
+    ASSERT_TRUE(choice.has_value());
+    EXPECT_EQ(choice->q_chunk_size, 256u);
+    EXPECT_EQ(choice->k_chunk_size, 512u);
 }
 
 TEST(SDPARecipeBlocking, ExplicitChunksAreHonored) {
-    auto p = problem(RecipeOp::Dense, {Recipe::B}, 10, 8192, 8192);
+    auto p = problem(RecipeOp::Dense, {Recipe::B}, 10, 8192, 8064);
     p.fixed_q_tiles = 7;
     p.fixed_k_tiles = 12;
     auto choice = choose_recipe_blocking(p);
     ASSERT_TRUE(choice.has_value());
     EXPECT_EQ(choice->q_chunk_size, 224u);
     EXPECT_EQ(choice->k_chunk_size, 384u);
+    // Unless the program would not fit the kernel config buffer (an odd STANDARD Q chunk with a K tail).
+    p.k_rows = 8192;
+    EXPECT_FALSE(choose_recipe_blocking(p).has_value());
     p.fixed_q_tiles = 0;
     choice = choose_recipe_blocking(p);
     ASSERT_TRUE(choice.has_value());
@@ -228,6 +240,58 @@ TEST(SDPARecipeBlocking, ExpRingChoicesUseAtMostThreePasses) {
             const uint32_t chunks = (s.local + choice->q_chunk_size - 1) / choice->q_chunk_size;
             EXPECT_EQ(chunks % columns, 0u);
             EXPECT_LE(choice->jobs_per_core, 3u);
+        }
+    }
+}
+
+TEST(SDPARecipeBlocking, ProgramsFitTheKernelConfigBuffer) {
+    // Measured (one P150b): an odd fused STANDARD Q chunk of 7+ tiles with BFP8 K/V overflows the 70656 B kernel
+    // config buffer in a joint program (Q224/K256 71344 B, Q288/K256 71072 B) or with an attention sink (Q224 71120 B),
+    // and comes within 0.6 KB of it with a K tail (Q224/K512 70048 B); the plain dense program fits (68608 B).
+    const auto bfp8 = RecipeSelection{Recipe::B, KVStorage::BFP8};
+    auto joint = problem(RecipeOp::Joint, bfp8, 1, 20512, 20512);  // test_sdpa_joint S20481 + 118 joint rows
+    joint.joint_q_rows = joint.joint_k_rows = 128;
+    joint.k_rows_unaligned = true;
+    EXPECT_FALSE(recipe_program_fits(joint, 7, 8));
+    EXPECT_FALSE(recipe_program_fits(joint, 9, 8));
+    EXPECT_TRUE(recipe_program_fits(joint, 8, 8));
+    auto dense = problem(RecipeOp::Dense, bfp8, 1, 20512, 16384);
+    EXPECT_TRUE(recipe_program_fits(dense, 7, 16));
+    dense.k_rows_unaligned = true;
+    EXPECT_FALSE(recipe_program_fits(dense, 7, 16));
+    dense.k_rows_unaligned = false;
+    dense.k_rows = 16384 + 32;
+    EXPECT_FALSE(recipe_program_fits(dense, 7, 16));
+    dense.k_rows = 16384;
+    dense.attention_sink = true;
+    EXPECT_FALSE(recipe_program_fits(dense, 7, 16));
+    // Odd chunks that STANDARD pads to even (attn_mask, key ranges) and the other recipes are unaffected.
+    dense.mask_page_bytes = 2048;
+    EXPECT_TRUE(recipe_program_fits(dense, 7, 16));
+    for (const auto& selection : kSelections) {
+        if (selection.recipe != Recipe::B) {
+            auto p = joint;
+            p.policy = resolve_precision_policy(selection);
+            EXPECT_TRUE(recipe_program_fits(p, 7, 8));
+        }
+    }
+    // The chooser never emits such a geometry (op-chosen joint blocking picked Q224/K256 here before the rule).
+    for (uint32_t heads : {1u, 3u}) {
+        for (uint32_t batch : {1u, 2u}) {
+            for (auto* p : {&joint, &dense}) {
+                auto q = *p;
+                q.q_heads = heads;
+                q.batch = batch;
+                q.mask_page_bytes = 0;
+                q.attention_sink = false;
+                q.k_rows_unaligned = true;
+                const auto choice = choose_recipe_blocking(q);
+                ASSERT_TRUE(choice.has_value());
+                EXPECT_TRUE(recipe_program_fits(q, tiles(choice->q_chunk_size), tiles(choice->k_chunk_size)));
+                for (const auto& candidate : recipe_blocking_candidates(q)) {
+                    EXPECT_TRUE(recipe_program_fits(q, tiles(candidate.q_chunk_size), tiles(candidate.k_chunk_size)));
+                }
+            }
         }
     }
 }
