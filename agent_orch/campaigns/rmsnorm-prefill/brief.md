@@ -19,8 +19,5 @@ hidden 3584 / 4096 / 6144 / 7168 (896-1792 columns per chip). 3 warmup + 10 meas
 per case is the mean per-chip DEVICE KERNEL DURATION of the measured calls, in µs, from the Tracy ops CSV.
 Accuracy: PCC >= 0.99999 and max abs error <= 0.05 against torch on every shape.
 
-## Known ideas and constraints
-A 58-attempt campaign on this op reached 1.57x (branch opgen_hackathon/nstamatovic_dream_rsi_v1_results, see its
-export/FINAL.md): x*gamma under the all-gather wait, gamma reads on the idle writer RISC, DST-accumulated sum(x^2),
-posted output writes, and a two-wave row split overlapping one wave's I/O with the other's all-gather.
-Reduced math fidelity is not allowed (see rules).
+## Constraints
+Reduced math fidelity and approximate math modes are not allowed (see the campaign rules).

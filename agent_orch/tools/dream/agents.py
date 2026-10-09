@@ -163,6 +163,15 @@ Never push, never edit files outside WORKTREE, never kill processes you did not 
 Your final message must be only the JSON line printed by `dream commit`."""
     if rules:
         p += "\n\nCampaign rules (an attempt that breaks one is marked invalid):\n" + "\n".join(f"- {r}" for r in rules)
+    if c.isolated:
+        p += (
+            "\n\nIsolation: use only this campaign's own material: your worktree, the refs under "
+            f"refs/dream/{c.name}/, HISTORY and the brief. Do not read other checkouts or repositories on this machine "
+            f"(e.g. {c.main_repo}, except its python_env), other campaigns under {c.dream_home}, other git branches or "
+            "remotes, and do not fetch, clone or search the web for earlier optimizations of this code. Every "
+            "transcript is audited; attempts that reach outside are flagged"
+            + (" and invalidated." if c.cfg["isolation"].get("on_violation") == "invalidate" else ".")
+        )
     return p
 
 

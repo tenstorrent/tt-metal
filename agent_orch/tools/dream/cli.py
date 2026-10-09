@@ -77,9 +77,15 @@ def register(name: str, entry: dict) -> None:
 class Target:
     """Where a campaign runs: the machine, the repo path there and its DREAM_HOME."""
 
-    def __init__(self, name: str, machine: str, repo: str, home: str):
+    def __init__(self, name: str, machine: str, repo: str, home: str, isolated: bool = True):
         self.name, self.machine, self.repo, self.home = name, machine, repo, home
+        self.isolated = isolated
         self.m = parse_machine(machine)
+
+    @property
+    def campaign_repo(self) -> str:
+        """Where the campaign's refs live on the machine: its own repo when isolated, else the user's repo."""
+        return f"{self.home}/{self.name}/repo.git" if self.isolated else self.repo
 
     @property
     def remote(self) -> bool:
@@ -95,12 +101,13 @@ class Target:
             cmd += ["-p", str(self.m["port"])]
         return cmd + [(self.m["user"] + "@" if self.m["user"] else "") + self.m["host"]]
 
-    def url(self) -> str:
+    def url(self, path: str | None = None) -> str:
+        path = path or self.repo
         if not self.remote:
-            return self.repo
+            return path
         u = (self.m["user"] + "@") if self.m["user"] else ""
         port = f":{self.m['port']}" if self.m["port"] else ""
-        return f"ssh://{u}{self.m['host']}{port}{self.repo}"
+        return f"ssh://{u}{self.m['host']}{port}{path}"
 
     def shell(self, script: str, capture: bool = False, check: bool = True) -> subprocess.CompletedProcess:
         """Run a bash script on the machine."""
@@ -136,6 +143,7 @@ def target_from_spec(spec: dict, local_repo: Path) -> Target:
         spec.get("machine") or "local",
         spec.get("repo") or str(local_repo),
         spec.get("dream_home") or default_home(),
+        bool((spec.get("isolation") or {}).get("enabled", True)),
     )
 
 
@@ -148,7 +156,7 @@ def target(name: str) -> Target:
         spec = load_spec(p)
         spec["name"] = name
         return target_from_spec(spec, git_main_repo(Path.cwd()))
-    return Target(name, e["machine"], e["repo"], e["home"])
+    return Target(name, e["machine"], e["repo"], e["home"], e.get("isolated", False))
 
 
 # ================================================================ init / policies
@@ -176,7 +184,8 @@ eval:
   timeout_s: 900
 
 budget: {{max_attempts: 40, max_hours: 6, max_usd: 200}}   # hard limits
-search: {{policy: fresh, W: 4, R: 4, max_rounds: 4}}        # `dream policies` lists the policy choices
+search: {{policy: fresh, W: 4, R: 4, max_rounds: 4, round_root: origin}}   # `dream policies` lists the policies;
+                           # round_root: origin (each round from the campaign root) | best (from the best so far)
 """
 
 BRIEF_TEMPLATE = """# {name}
@@ -320,13 +329,29 @@ def cmd_check(a):
             "home": t.home,
             "spec": str(spec_dir / "dream.yaml"),
             "local_repo": str(repo),
+            "isolated": t.isolated,
         },
     )
     q = shlex.quote
-    t.shell(
-        f"cd {q(t.repo)} && mkdir -p {q(t.home + '/' + t.name)} && "
-        f"( [ -d {q(t.ctl)} ] || git worktree add -q --detach {q(t.ctl)} refs/dream/{t.name}/root )"
-    )
+    n, cr = t.name, t.campaign_repo
+    if t.isolated:
+        # the campaign's own repo: only base/root and the campaign's refs, no remotes; objects are shared with the
+        # user's repo through alternates, so this is instant and uses no extra disk
+        say(f"isolated campaign repo {cr} on {t.machine}")
+        t.shell(
+            f"cd {q(t.repo)} && mkdir -p {q(t.home + '/' + n)} && "
+            f"if [ ! -d {q(cr)} ]; then git init -q --bare {q(cr)} && "
+            f'echo "$(git rev-parse --path-format=absolute --git-common-dir)/objects" > {q(cr)}/objects/info/alternates'
+            f" && git -C {q(cr)} config dream.mainRepo {q(t.repo)}; fi && "
+            f"git -C {q(cr)} fetch -q {q(t.repo)} refs/dream/{n}/base:refs/dream/{n}/base "
+            f"refs/dream/{n}/root:refs/dream/{n}/root && "
+            f"( [ -d {q(t.ctl)} ] || git -C {q(cr)} worktree add -q --detach {q(t.ctl)} refs/dream/{n}/root )"
+        )
+    else:
+        t.shell(
+            f"cd {q(t.repo)} && mkdir -p {q(t.home + '/' + n)} && "
+            f"( [ -d {q(t.ctl)} ] || git worktree add -q --detach {q(t.ctl)} refs/dream/{n}/root )"
+        )
     say(f"setting up on {t.machine} (ledger, eval checkout)")
     t.dream("_setup", t.name)
     say(
@@ -448,13 +473,14 @@ def cmd_stop(a):
 def cmd_fetch(a):
     t = target(a.name)
     repo = Path(registry().get(t.name, {}).get("local_repo") or git_main_repo(Path.cwd()))
-    if not t.remote:
-        say("campaign runs on this machine: refs are already in the repo")
+    if not t.remote and not t.isolated:
+        say("campaign runs in this repo: refs are already here")
         return
+    src = t.url(t.campaign_repo)
     specs = [f"+refs/dream/{t.name}/*:refs/dream/{t.name}/*"]
-    subprocess.run(["git", "fetch", "-q", t.url(), *specs], cwd=repo, check=True)
+    subprocess.run(["git", "fetch", "-q", src, *specs], cwd=repo, check=True)
     r = subprocess.run(
-        ["git", "fetch", "-q", t.url(), f"+refs/heads/dream/{t.name}/best:refs/heads/dream/{t.name}/best"],
+        ["git", "fetch", "-q", src, f"+refs/heads/dream/{t.name}/best:refs/heads/dream/{t.name}/best"],
         cwd=repo,
         capture_output=True,
         text=True,
@@ -508,11 +534,16 @@ def cmd_delete(a):
             die(f"{t.name} is running; `dream stop {t.name}` first")
     q = shlex.quote
     h = f"{t.home}/{t.name}"
+    unlink = (
+        ""
+        if t.isolated  # its worktrees belong to the campaign repo, which goes with the directory
+        else f"for w in {q(h)}/wt/* {q(h)}/eval {q(h)}/ledger {q(h)}/ctl; do "
+        f'[ -e "$w" ] && git worktree remove --force "$w"; done; '
+    )
     t.shell(
-        f"cd {q(t.repo)} && for w in {q(h)}/wt/* {q(h)}/eval {q(h)}/ledger {q(h)}/ctl; do "
-        f'[ -e "$w" ] && git worktree remove --force "$w"; done; git worktree prune; '
+        f"cd {q(t.repo)} && {unlink}rm -rf {q(h)}; git worktree prune; "
         f"git for-each-ref --format='%(refname)' refs/dream/{q(t.name)}/ | xargs -r -n1 git update-ref -d; "
-        f"git update-ref -d refs/heads/dream/{q(t.name)}/best 2>/dev/null; rm -rf {q(h)}",
+        f"git update-ref -d refs/heads/dream/{q(t.name)}/best 2>/dev/null",
         check=False,
     )
     local = registry().get(t.name, {}).get("local_repo")

@@ -3,8 +3,13 @@
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -z "${DREAM_PY:-}" ]]; then
-  main="$(git -C "$here" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-  for cand in "${main%/.git}/python_env/bin/python" python3; do
+  # an isolated campaign repo records the user's checkout (which holds python_env) in dream.mainRepo
+  main="$(git -C "$here" config --get dream.mainRepo 2>/dev/null || true)"
+  if [[ -z "$main" ]]; then
+    main="$(git -C "$here" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    main="${main%/.git}"
+  fi
+  for cand in "$main/python_env/bin/python" python3; do
     if command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import yaml" 2>/dev/null; then DREAM_PY="$cand"; break; fi
   done
 fi

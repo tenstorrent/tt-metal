@@ -48,7 +48,17 @@ DEFAULTS: dict = {
     },
     "resource": {"reset_command": "tt-smi -r"},
     "budget": {"max_attempts": 60, "max_hours": 8.0, "max_usd": 300.0},
-    "search": {"policy": "fresh", "W": 4, "R": 4, "beta": 0.6, "max_rounds": 6, "max_steps": 30},
+    # round_root: origin = every round starts from the campaign root, earlier rounds are history only (as in the
+    # Dream-RSI paper); best = every round starts from the best attempt so far (improvements compound)
+    "search": {
+        "policy": "fresh",
+        "W": 4,
+        "R": 4,
+        "beta": 0.6,
+        "max_rounds": 6,
+        "max_steps": 30,
+        "round_root": "origin",
+    },
     "dreaming": {
         "enabled": True,
         "revisions": 5,
@@ -59,6 +69,9 @@ DEFAULTS: dict = {
     },
     "models": {"worker": "opus", "policy_dev": "opus", "summary": "sonnet"},
     "worker": {"timeout_min": 120},
+    # Workers see only this campaign: its own repo on the machine ($DREAM_HOME/<c>/repo.git, no remotes or other
+    # refs), an explicit rule, and an audit of every transcript. on_violation: flag (report it) | invalidate.
+    "isolation": {"enabled": True, "on_violation": "flag"},
 }
 
 REQUIRED = ["name", "editable", "eval.command"]
@@ -91,6 +104,8 @@ def validate_spec(spec: dict) -> list[str]:
     name = spec.get("name") or ""
     if name and not all(ch.isalnum() or ch in "-_." for ch in name):
         errs.append(f"name '{name}' may only contain letters, digits, '-', '_' and '.'")
+    if (spec.get("isolation") or {}).get("on_violation", "flag") not in ("flag", "invalidate"):
+        errs.append("isolation.on_violation must be 'flag' or 'invalidate'")
     if spec["eval"]["direction"] not in ("minimize", "maximize"):
         errs.append("eval.direction must be 'minimize' or 'maximize'")
     for g in spec["eval"]["gates"]:
@@ -99,6 +114,8 @@ def validate_spec(spec: dict) -> list[str]:
         except ValueError as e:
             errs.append(str(e))
     s = spec["search"]
+    if s.get("round_root", "origin") not in ("origin", "best"):
+        errs.append("search.round_root must be 'origin' or 'best'")
     if int(s["W"]) < 1 or int(s["R"]) < 1:
         errs.append("search.W and search.R must be >= 1")
     for k in ("max_attempts", "max_hours", "max_usd"):
@@ -194,7 +211,15 @@ class Campaign:
 
     @property
     def main_repo(self) -> Path:
-        return Path(self.cfg.get("repo") or git_main_repo(self.repo))
+        """The user's checkout on the machine (holds python_env); an isolated campaign repo records it in its config."""
+        if self.cfg.get("repo"):
+            return Path(self.cfg["repo"])
+        recorded = self.git("config", "--get", "dream.mainRepo", check=False)
+        return Path(recorded) if recorded else git_main_repo(self.repo)
+
+    @property
+    def isolated(self) -> bool:
+        return bool((self.cfg.get("isolation") or {}).get("enabled"))
 
     @property
     def python_env(self) -> Path:

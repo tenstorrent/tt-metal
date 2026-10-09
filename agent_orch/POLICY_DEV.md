@@ -29,7 +29,9 @@ commits the ledger and decides `ACTIVE` after you finish: it re-runs the replay 
 
 1. It shows the policy only the round root.
 2. The policy returns a batch of start points from the legal set: `root` (open
-   a branch) or a branch head.
+   a branch; always legal, as in the paper) or a branch head. W caps the batch,
+   not the number of branches; a policy that wants at most W branches per round
+   must limit itself (e.g. `view.W - len(view.branches)` roots).
 3. The simulator **reveals the recorded child** of each item. For `root`, that's
    the earliest recorded branch not opened yet. For a head, it's that branch's
    next recorded attempt. If nothing is recorded, nothing is revealed.

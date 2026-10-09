@@ -46,9 +46,14 @@ def collect(c: Campaign) -> dict:
             if d.get("type") == "decision":
                 for it in d.get("batch", []):
                     step_of[it["node"]] = d["step"]
+        flags = {}
+        for d in rr.decisions:
+            if d.get("type") == "audit":
+                flags.setdefault(d["node"], []).extend(d.get("flags", []))
         nodes = []
         for n in rr.nodes:
             x = {
+                "flags": flags.get(n.node_id, []),
                 "id": n.node_id,
                 "b": n.branch,
                 "a": n.attempt,
@@ -201,6 +206,7 @@ def collect(c: Campaign) -> dict:
         "policies": policies,
         "dreaming": dreaming,
         "costs": {"total": round(sum(by_kind.values()), 2), "by_kind": by_kind},
+        "isolation": c.cfg.get("isolation"),
         "refs": {
             "prefix": c.ref_prefix,
             "best_branch": c.ref_best().removeprefix("refs/heads/"),

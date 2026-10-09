@@ -22,6 +22,23 @@ if "NODE_ID=" in prompt:
     if node == "r01-b02-a02":
         result("gave up", 0.3)
         sys.exit(0)
+    # isolation: worktrees must not see the user's repo refs; r01-b03.. is never used, so r02-b01-a01 peeks outside
+    seen = subprocess.run(["git", "for-each-ref", "--format=%(refname)"], capture_output=True, text=True).stdout.split()
+    assert all(r.startswith(f"refs/dream/{camp}/") for r in seen), f"worktree sees foreign refs: {seen}"
+    if node == "r02-b01-a01":
+        main = subprocess.run(
+            ["git", "config", "--get", "dream.mainRepo"], capture_output=True, text=True
+        ).stdout.strip()
+        cmd = f"git -C {main} log --oneline --all"
+        print(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": cmd}}]},
+                }
+            ),
+            flush=True,
+        )
     nd = Path(f"agent_orch/campaigns/{camp}/attempts/{node}")
     cur = float(Path("src/speed.txt").read_text())
     h = int(hashlib.sha1(node.encode()).hexdigest(), 16) % 1000 / 1000

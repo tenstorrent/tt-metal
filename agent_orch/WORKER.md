@@ -63,6 +63,13 @@ free-form category words, e.g. `["compute", "cb-sizing"]`).
 
 ## 2. Read the complete history first
 
+Your tree contains only your own line of descent: `PARENT` and its ancestors back
+to the round root. Each round normally starts again from the campaign's original
+code, so the code of earlier rounds' best attempts is **not** in your worktree,
+only in the history. To build on one of them, read its diff
+(`git diff $R~1 $R` along its lineage) and port what you need; say so in
+`proposal.md`.
+
 Read `BRIEF`, then `HISTORY`. Then read **every** node's `proposal.md`,
 `eval/summary.md` and `reflection.md` (and `eval/error.txt` for failures). All
 of them, not a sample and not just your own branch. Trust the measured result
@@ -122,6 +129,13 @@ you'd tell from the eval.
   `proposal.md`, then stop and report instead of doing it.
 - Follow every rule in `SPEC: rules` (also listed in your prompt). Code matching
   `SPEC: forbidden_patterns` is marked invalid after you commit.
+- **Isolation.** Use only this campaign's own material: your worktree, the refs
+  under `refs/dream/<c>/`, `HISTORY` and the brief. Don't read other checkouts or
+  repositories on the machine, other campaigns under `$DREAM_HOME`, other git
+  branches or remotes, and don't fetch, clone or search the web for earlier
+  optimizations of this code. The campaign measures what the search finds on its
+  own. Every transcript is audited, and attempts that reach outside are flagged
+  (or invalidated, if the campaign says so).
 - Keep the change to one coherent mechanism. Two ideas means two attempts.
 - Don't claim it compiles, is correct, or is faster until the eval says so.
 

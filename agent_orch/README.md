@@ -89,19 +89,26 @@ Required: `name`, `editable`, `eval.command`. Everything else has a default
 | `eval.baseline_runs`, `min_noise_pct`, `drift_check` | 3, 1.0, true | Drift: the root is re-measured each round; a shift beyond noise blocks the campaign |
 | `build.command`, `skip_if_only`, `check_file` | `./build_metal.sh --release --enable-ccache`, `*/kernels/*`, `ttnn/ttnn/_ttnn.so` | Rebuild only when a changed file isn't JIT-compiled |
 | `budget.max_attempts`, `max_hours`, `max_usd` | 60, 8, 300 | **Hard limits.** No new attempt starts past one; running workers are cut at the time limit |
-| `search.policy`, `W`, `R`, `max_rounds` | `fresh`, 4, 4, 6 | Starting policy (`dream policies`), parallel workers, depth, rounds |
+| `search.policy`, `W`, `R`, `max_rounds` | `fresh`, 4, 4, 6 | Starting policy (`dream policies`), parallel workers per step, depth, rounds |
+| `search.round_root` | `origin` | `origin`: every round starts from the campaign root (as in the paper); `best`: from the best attempt so far |
 | `dreaming.enabled`, `revisions`, `cost_per_attempt`, `parallel_bonus` | true, 5, 0.005, 0.01 | Policy improvement between rounds |
 | `models.worker`, `policy_dev`, `summary` | `opus`, `opus`, `sonnet` | |
+| `isolation.enabled`, `on_violation` | `true`, `flag` | Workers see only this campaign (below); `invalidate` also scores audited attempts 0 |
 
 ## 3. What a campaign does
 
 `dream start` launches the driver (`tools/dream/driver.py`) on the machine. It
 is a deterministic loop, not an agent:
 
-1. **Round t** starts from the best node so far (round 1 from the campaign root).
+1. **Round t** starts a new tree. With `round_root: origin` (the default, as in
+   the Dream-RSI paper) its root is the campaign root, so rounds are independent
+   searches that differ only in the policy, and earlier rounds reach workers as
+   history (they may port ideas from them). With `round_root: best` it starts from
+   the best attempt so far, so improvements compound across rounds.
    The root is re-measured; drift beyond the noise band blocks the campaign.
-2. **Each step**, the active policy picks up to W start points (open a branch,
-   or refine a branch's newest attempt) and may close branches. One worker
+2. **Each step**, the active policy picks up to W start points (open a new
+   branch from the round root, which is always allowed, or refine a branch's newest
+   attempt) and may close branches. One worker
    (a headless Claude Code session following `WORKER.md`) runs per start point,
    in parallel; evaluations queue on a machine-wide device lock. The driver
    verifies every commit, regenerates `history.md` and the report, commits the
@@ -136,6 +143,28 @@ from the machine. Read a node with `git show refs/dream/<name>/n/<node>:<path>`.
 `ctl/` (the tools, pinned at the campaign root), `eval/` (the one build + test
 checkout), `wt/` (worker worktrees), `ledger/`, `reports/` (full test output per
 attempt), `logs/` (driver, builds, every session transcript), `report/index.html`.
+
+### Isolation
+
+A campaign should measure what its search finds on its own, not what an agent
+can dig up from earlier work on the same machine. With `isolation.enabled` (the
+default):
+
+- **Its own repo.** The campaign lives in `$DREAM_HOME/<name>/repo.git` on the
+  machine: the start commit and its history plus `refs/dream/<name>/*`, with no
+  remotes, branches, tags or other campaigns (objects are shared with your repo
+  through git alternates, so it costs no disk). Worker worktrees, the eval
+  checkout and the ledger all come from it, so `git log --all` in a worktree
+  shows nothing else. `dream fetch` copies the results into your repo.
+- **A rule.** Every worker is told to use only the campaign's own material.
+- **An audit.** After each attempt the driver scans the worker's transcript for
+  reads of your checkout (other than `python_env`) or other campaigns, git
+  fetch/clone/remote, curl/wget/gh and web tools. Hits are flagged with ⚑ in the
+  report and `history.md`; with `on_violation: invalidate` the attempt scores 0.
+
+Workers still run with full permissions on a shared machine, so this blocks the
+easy paths and makes the rest visible; it is not a sandbox. Keep briefs free of
+pointers to earlier results unless you want the campaign to start from them.
 
 ## 5. The report
 

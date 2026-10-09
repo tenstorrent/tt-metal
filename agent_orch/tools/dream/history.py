@@ -44,6 +44,9 @@ def collect(c: Campaign) -> tuple[dict | None, list[dict]]:
                 }
             )
         lost = [d["node"] for d in rr.decisions if d.get("type") == "lost"]
+        audited = {d["node"] for d in rr.decisions if d.get("type") == "audit"}
+        for x in nodes:
+            x["flagged"] = x["obs"].node_id in audited
         rounds.append({"rr": rr, "nodes": nodes, "closed": rr.closed(), "lost": lost})
     return baseline, rounds
 
@@ -116,7 +119,8 @@ def write_md(c: Campaign, path: Path) -> None:
                 n = x["obs"]
                 d = f"{n.delta_vs_parent:+.4f}" if n.delta_vs_parent is not None else "-"
                 L.append(
-                    f"| `{n.node_id}` | {n.parent} | {_cell(n.mechanism)} | {', '.join(n.tags)} | "
+                    f"| `{n.node_id}` | {n.parent} | {_cell(n.mechanism)}{' ⚑ isolation' if x['flagged'] else ''} | "
+                    f"{', '.join(n.tags)} | "
                     f"{n.score:.4f} | {d} | {n.fail_class} | {_cell(x['next'])} |"
                 )
             L.append("")

@@ -24,7 +24,7 @@ eval: {command: python3 agent_orch/campaigns/toy/eval.py, direction: minimize, u
 build: {command: "", check_file: null}
 resource: {reset_command: "true"}
 budget: {max_attempts: 9, max_hours: 1, max_usd: 100}
-search: {policy: fresh, W: 2, R: 2, max_rounds: 3}
+search: {policy: fresh, W: 2, R: 2, max_rounds: 3, round_root: ${ROUND_ROOT:-origin}}
 YAML
 echo "# toy brief" > agent_orch/campaigns/toy/brief.md
 git add -A; git commit -qm "toy repo"
@@ -47,7 +47,7 @@ done
 "$D" status toy
 "$D" report toy --out "$S/report.html" >/dev/null
 python3 - "$S" <<'PY'
-import json, subprocess, sys
+import json, os, subprocess, sys
 from pathlib import Path
 S = Path(sys.argv[1]); H = S / "home/toy"
 st = json.loads((H / "status.json").read_text())
@@ -62,7 +62,23 @@ assert "r01-b02-a02" in lost, "lost worker recorded"
 inv = [n for n in nodes if not n["valid"]]
 assert any(n["id"] == "r01-b01-a02" and n["fail"] == "accuracy_fail" for n in inv), inv
 assert data["insights"]["worked"], "round summary insights"
-assert len(data["rounds"]) >= 2 and data["rounds"][1]["root"].endswith("/n/" + data["rounds"][1]["root"].split("/")[-1])
+assert len(data["rounds"]) >= 2
+mode = os.environ.get("ROUND_ROOT", "origin")
+r2 = data["rounds"][1]["root"]
+if mode == "origin":
+    assert r2 == "refs/dream/toy/root", f"origin mode: round 2 must start from the campaign root, got {r2}"
+else:
+    r1_best = max((n for n in data["rounds"][0]["nodes"] if n["valid"]), key=lambda n: n["score"])["id"]
+    assert r2 == f"refs/dream/toy/n/{r1_best}", f"best mode: round 2 must start from {r1_best}, got {r2}"
+print("round 2 root:", r2)
+# isolation: the campaign ran in its own repo; nodes reach the user's repo only through `dream fetch`
+before = subprocess.run(["git", "-C", str(S / "toy"), "for-each-ref", "refs/dream/toy/n/"], capture_output=True,
+                        text=True).stdout
+assert before == "", "nodes leaked into the user's repo before fetch"
+flagged = [n["id"] for n in nodes if n.get("flags")]
+assert flagged == ["r02-b01-a01"], f"audit flags: {flagged}"
+assert "isolation" in (H / "history.md").read_text()
+subprocess.run([str(S / "toy/agent_orch/bin/dream"), "fetch", "toy"], cwd=S / "toy", check=True)
 refs = subprocess.run(["git", "-C", str(S / "toy"), "for-each-ref", "--format=%(refname)", "refs/dream/toy/"],
                       capture_output=True, text=True).stdout.split()
 assert "refs/dream/toy/ledger" in refs and any("/n/" in r for r in refs), refs

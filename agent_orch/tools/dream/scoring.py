@@ -33,6 +33,7 @@ FAIL_CLASSES = {
     "forbidden_edit",
     "infra",
     "lost",
+    "isolation",
 }
 _OPS = {
     ">=": lambda a, b: a >= b,

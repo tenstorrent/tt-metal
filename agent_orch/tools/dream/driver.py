@@ -146,7 +146,38 @@ def run_items(c: Campaign, rnd: int, items: list[dict], clock: Clock) -> None:
         v = verify_node(c, it["node"], record=True)
         if not v["ok"]:
             print(f"[driver] {it['node']}: {v['issues']}", flush=True)
+    audit_items(c, rnd, items)
     handle_lost(c, rnd, items)
+
+
+def audit_items(c: Campaign, rnd: int, items: list[dict]) -> None:
+    """Isolation tripwire: flag (or invalidate) attempts whose worker reached outside the campaign."""
+    from .audit import audit_transcript
+    from .gitops import append_jsonl
+
+    if not c.isolated:
+        return
+    path = c.ledger / "rounds" / f"r{rnd:02d}" / "decisions.jsonl"
+    for it in items:
+        node = it["node"]
+        if not c.ref_exists(c.ref_node(node)):
+            continue
+        flags = audit_transcript(c, c.logs / f"worker_{node}.jsonl")
+        if not flags:
+            continue
+        print(f"[driver] {node}: isolation flags {flags[:3]}", flush=True)
+        append_jsonl(path, {"type": "audit", "node": node, "flags": flags, "time": now()})
+        if c.cfg["isolation"].get("on_violation") == "invalidate":
+            append_jsonl(
+                path,
+                {
+                    "type": "override",
+                    "node": node,
+                    "fail_class": "isolation",
+                    "why": "isolation violation: " + "; ".join(flags[:3]),
+                    "time": now(),
+                },
+            )
 
 
 LOST_RETRIES = 1  # a node whose worker never commits is retried this many times
@@ -269,7 +300,10 @@ def dream(c: Campaign, rnd: int, clock: Clock) -> None:
 
 def start_round(c: Campaign, rnd: int, clock: Clock) -> None:
     best = global_best(c)
-    root_ref = c.ref_node(best.node_id) if best and rnd > 1 else c.ref_root()
+    if c.cfg["search"].get("round_root", "origin") == "best" and best and rnd > 1:
+        root_ref = c.ref_node(best.node_id)  # compound: build on the best attempt so far
+    else:
+        root_ref = c.ref_root()  # as in the paper: a fresh tree from the campaign root; earlier rounds are history
     extra = {}
     if c.cfg["eval"].get("drift_check") and load_baseline(c):
         write_status(c, "running", f"round {rnd}: re-measuring the campaign root for drift", round=rnd)

@@ -229,7 +229,8 @@ function showTip(evt, html, box) {
 }
 const hide = () => { tip.hidden = true; };
 const esc = t => String(t).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
-const nodeTip = n => `<b>${esc(n.id)}</b> · ${n.valid ? "score <b>" + fmt(n.score) + "</b>" : "<b>invalid</b> (" + esc(n.fail) + ")"}<br>${esc(n.mech || "")}`;
+const nodeTip = n => `<b>${esc(n.id)}</b> · ${n.valid ? "score <b>" + fmt(n.score) + "</b>" : "<b>invalid</b> (" + esc(n.fail) + ")"}<br>${esc(n.mech || "")}`
+  + ((n.flags && n.flags.length) ? `<br>⚑ isolation: ${esc(n.flags.slice(0, 3).join("; "))}` : "");
 const rootNode = r => (r.root || "").includes("/n/") ? r.root.split("/").pop() : null;
 const lineageRoots = new Set((D.rounds || []).map(rootNode).filter(Boolean));
 
@@ -245,7 +246,7 @@ function drawGrid() {
   const stops = []; for (let k = 0; k <= 10; k++) { const v = lo + (hi - lo) * k / 10; stops.push(rgb(ramp(v)) + " " + (k * 10) + "%"); }
   rp.style.background = "linear-gradient(90deg," + stops.join(",") + ")";
   sw.appendChild(document.createTextNode("faster than baseline"));
-  lg.insertAdjacentHTML("beforeend", '<span><i style="background:transparent;outline:2px solid var(--accent);outline-offset:-2px"></i>start of next round</span><span><i style="background:repeating-linear-gradient(45deg,var(--bad) 0 2px,transparent 2px 6px);border:1px solid var(--bad)"></i>invalid</span><span><i style="background:var(--band);border:1px dashed var(--muted)"></i>not run</span>');
+  lg.insertAdjacentHTML("beforeend", '<span><i style="background:transparent;outline:2px solid var(--accent);outline-offset:-2px"></i>start of next round</span><span><i style="background:repeating-linear-gradient(45deg,var(--bad) 0 2px,transparent 2px 6px);border:1px solid var(--bad)"></i>invalid</span><span><i style="background:var(--band);border:1px dashed var(--muted)"></i>not run</span><span><i style="background:linear-gradient(225deg,var(--bad) 0 35%,var(--band) 35%)"></i>isolation flag</span>');
   const maxW = Math.max(...rounds.map(r => Math.max(r.W || 1, ...r.nodes.map(n => n.b), ...(r.lost || []).map(x => +x.split("-")[1].slice(1)))));
   const maxR = Math.max(...rounds.map(r => Math.max(r.R || 1, ...r.nodes.map(n => n.a))));
   const cw = 46, ch = 30, gap = 4, padL = 34, rg = 26, top = 40, perRow = Math.max(1, Math.floor(900 / (maxR * (cw + gap) + rg)));
@@ -277,6 +278,7 @@ function drawGrid() {
         if (n.valid) { const c = ramp(n.score); s("rect", {x, y, width: cw, height: ch, rx: 3, fill: rgb(c)}, g); s("text", {x: x + cw / 2, y: y + ch / 2 + 4, "text-anchor": "middle", "font-size": 10.5, fill: lum(c) > .55 ? "#171a21" : "#ffffff", "font-family": "var(--f-mono)"}, g, fmt(n.score, 2)); }
         else { s("rect", {x, y, width: cw, height: ch, rx: 3, fill: "url(#hatch)", stroke: bad}, g); s("text", {x: x + cw / 2, y: y + ch / 2 + 4, "text-anchor": "middle", "font-size": 11, fill: fg}, g, "✕"); }
         if (lineageRoots.has(id)) s("rect", {x: x - 2, y: y - 2, width: cw + 4, height: ch + 4, rx: 5, fill: "none", stroke: acc, "stroke-width": 2.5}, g);
+        if (n.flags && n.flags.length) s("path", {d: `M${x + cw - 12},${y} L${x + cw},${y} L${x + cw},${y + 12} Z`, fill: bad}, g);
         s("title", {}, g, id + ": " + (n.valid ? fmt(n.score) : "invalid, " + n.fail));
         g.addEventListener("mousemove", e => showTip(e, nodeTip(n), box)); g.addEventListener("mouseleave", hide);
         g.addEventListener("focus", () => { const q = g.getBoundingClientRect(); showTip({clientX: q.right, clientY: q.top}, nodeTip(n), box); }); g.addEventListener("blur", hide);

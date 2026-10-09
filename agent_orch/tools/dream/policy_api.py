@@ -78,7 +78,9 @@ class RoundView:
         return delta is not None and abs(delta) <= ref * self.noise_pct / 100.0
 
     def can_open_root(self) -> bool:
-        return len(self.branches) < self.W
+        """The root is always eligible (Dream-RSI: A(T) = {r} ∪ leaves). W bounds a batch, not the branch count;
+        a policy that wants at most W branches per round limits itself (e.g. W - len(view.branches))."""
+        return True
 
     def legal_heads(self) -> list[str]:
         return [
@@ -128,11 +130,9 @@ def validate(view: RoundView, batch: Batch) -> list[str]:
         errs.append(f"batch has {len(batch.items)} items > W={view.W}")
     heads = set(view.legal_heads())
     closing = set(batch.closed)
-    n_roots = 0
     seen = set()
     for it in batch.items:
         if it.parent == ROOT:
-            n_roots += 1
             continue
         if it.parent in seen:
             errs.append(f"duplicate parent {it.parent}")
@@ -141,8 +141,6 @@ def validate(view: RoundView, batch: Batch) -> list[str]:
             errs.append(f"{it.parent} is not a legal head")
         elif any(view.head(b).node_id == it.parent for b in closing):
             errs.append(f"{it.parent} is on a branch closed in the same batch")
-    if len(view.branches) + n_roots > view.W:
-        errs.append(f"opening {n_roots} branches would exceed W={view.W}")
     for b in batch.closed:
         if b not in view.branches:
             errs.append(f"cannot close unknown branch {b}")
