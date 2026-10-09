@@ -497,8 +497,13 @@ ALWI void signbit_tile_init() {
  */
 // clang-format on
 ALWI void signbit_tile(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit, (APPROX, 32 /* ITERATIONS */), idst, VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
+#endif
 }
 
 /**
@@ -523,8 +528,13 @@ ALWI void signbit_tile_int32_init() {
  */
 // clang-format on
 ALWI void signbit_tile_int32(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit_int32, (APPROX, 32 /* ITERATIONS */), idst, VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit_int32, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
+#endif
 }
 
 #endif  // !ARCH_QUASAR
@@ -1107,6 +1117,16 @@ ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
  */
 // clang-format on
 ALWI void unary_max_int32_tile(uint32_t idst, uint32_t param0) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_unary_max_min_int32,
+        (true /* IS_MAX */, false /* IS_UINT */, APPROX, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None,
+        param0));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -1115,6 +1135,7 @@ ALWI void unary_max_int32_tile(uint32_t idst, uint32_t param0) {
         idst,
         VectorMode::RC,
         param0));
+#endif
 }
 
 /**
@@ -1141,6 +1162,16 @@ ALWI void unary_max_int32_tile_init() {
  */
 // clang-format on
 ALWI void unary_max_uint32_tile(uint32_t idst, uint32_t param0) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_unary_max_min_int32,
+        (true /* IS_MAX */, true /* IS_UINT */, APPROX, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None,
+        param0));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -1149,6 +1180,7 @@ ALWI void unary_max_uint32_tile(uint32_t idst, uint32_t param0) {
         idst,
         VectorMode::RC,
         param0));
+#endif
 }
 
 /**
@@ -1175,6 +1207,16 @@ ALWI void unary_max_uint32_tile_init() {
  */
 // clang-format on
 ALWI void unary_max_tile(uint32_t idst, uint32_t param0) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_unary_max_min,
+        (true /* IS_MAX */, APPROX, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None,
+        param0));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -1183,6 +1225,7 @@ ALWI void unary_max_tile(uint32_t idst, uint32_t param0) {
         idst,
         VectorMode::RC,
         param0));
+#endif
 }
 
 /**
@@ -1241,6 +1284,16 @@ ALWI void alt_complex_rotate90_tile_init() { MATH(SFPU_UNARY_INIT(alt_complex_ro
  */
 // clang-format on
 ALWI void unary_min_int32_tile(uint32_t idst, uint32_t param0) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_unary_max_min_int32,
+        (false /* IS_MAX */, false /* IS_UINT */, APPROX, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None,
+        param0));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -1249,6 +1302,7 @@ ALWI void unary_min_int32_tile(uint32_t idst, uint32_t param0) {
         idst,
         VectorMode::RC,
         param0));
+#endif
 }
 
 /**
@@ -1276,6 +1330,16 @@ ALWI void unary_min_int32_tile_init() {
  */
 // clang-format on
 ALWI void unary_min_uint32_tile(uint32_t idst, uint32_t param0) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_unary_max_min_int32,
+        (false /* IS_MAX */, true /* IS_UINT */, APPROX, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None,
+        param0));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -1284,6 +1348,7 @@ ALWI void unary_min_uint32_tile(uint32_t idst, uint32_t param0) {
         idst,
         VectorMode::RC,
         param0));
+#endif
 }
 
 /**
@@ -1311,6 +1376,16 @@ ALWI void unary_min_uint32_tile_init() {
  */
 // clang-format on
 ALWI void unary_min_tile(uint32_t idst, uint32_t param0) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_unary_max_min,
+        (false /* IS_MAX */, APPROX, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None,
+        param0));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -1319,6 +1394,7 @@ ALWI void unary_min_tile(uint32_t idst, uint32_t param0) {
         idst,
         VectorMode::RC,
         param0));
+#endif
 }
 
 /**
