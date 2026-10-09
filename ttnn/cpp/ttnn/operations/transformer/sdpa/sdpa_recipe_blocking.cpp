@@ -832,51 +832,21 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
         }
         return apply_choice(config, choice, problem, "ring-distributed");
     }
-    if (chunks_are_hints && !joint_q) {
-        // Routed dense calls choose their blocking on the whole compute grid: the caller's chunks and grid were tuned
-        // for the legacy kernels, and the chooser beats them (tt_transformers causal S8192 on its 8x8 grid: 7.77 vs
-        // 14.49 ms, Qwen3-VL vision 2.03 vs 3.50). One exception: keys that fit one K chunk (no key range) keep a
-        // caller's Q chunk larger than the chosen one, at one K chunk. The chooser's per-core model does not see the
-        // K/V each extra Q chunk reads again from DRAM, which decides these short-K calls (bge_m3 B8 S512: Q256/K512
-        // 0.454 ms, chosen Q128/K512 0.490).
-        const uint32_t hint_q_tiles = problem.fixed_q_tiles;
+    const char* op_name = joint_q ? "joint" : "dense";
+    if (chunks_are_hints) {
+        // Routed dense and joint calls choose their blocking on the whole compute grid: the caller's chunks and grid
+        // were tuned for the legacy kernels, and the chooser beats them (tt_transformers causal S8192 on its 8x8 grid:
+        // 7.77 vs 14.49 ms, Qwen3-VL vision 2.03 vs 3.50; Flux-style joint 1.52 vs 1.58, qwen_image joint equal).
         config.compute_with_storage_grid_size = device->compute_with_storage_grid_size();
         problem.grid = config.compute_with_storage_grid_size;
         problem.fixed_q_tiles = 0;
         problem.fixed_k_tiles = 0;
         config.q_chunk_size = 0;
         config.k_chunk_size = 0;
-        const auto choice = choose_recipe_blocking(problem);
-        const uint32_t whole_k_tiles = div_up(problem.k_rows, kTile);
-        if (choice && !problem.key_range && whole_k_tiles <= kRecipeSearchMaxKTiles &&
-            hint_q_tiles * kTile > choice->q_chunk_size && hint_q_tiles <= kRecipeSearchMaxQTiles) {
-            auto one_chunk = problem;
-            one_chunk.fixed_q_tiles = hint_q_tiles;
-            one_chunk.fixed_k_tiles = whole_k_tiles;
-            if (const auto hinted = choose_recipe_blocking(one_chunk)) {
-                return apply_choice(config, hinted, one_chunk, "dense");
-            }
-        }
-        return apply_choice(config, choice, problem, "dense");
+        return apply_choice(config, choose_recipe_blocking(problem), problem, op_name);
     }
-    // Explicit chunks, or a routed joint call's: kept when supported and they fit (a routed joint call's otherwise
-    // chosen). Routed joint calls keep the caller's chunks: the chooser gains nothing measurable there (qwen_image
-    // 3.47 ms either way, Flux-style 1.55).
-    auto choice = invalid_fixed(config) ? std::nullopt : choose_recipe_blocking(problem);
-    if (!choice && chunks_are_hints && (problem.fixed_q_tiles != 0 || problem.fixed_k_tiles != 0)) {
-        log_debug(
-            tt::LogOp,
-            "SDPA recipe: Q{}/K{} from the caller's program config is not a supported recipe blocking or does not fit "
-            "L1; choosing the blocking",
-            config.q_chunk_size,
-            config.k_chunk_size);
-        config.q_chunk_size = 0;
-        config.k_chunk_size = 0;
-        problem.fixed_q_tiles = 0;
-        problem.fixed_k_tiles = 0;
-        choice = choose_recipe_blocking(problem);
-    }
-    return apply_choice(config, choice, problem, joint_q ? "joint" : "dense");
+    const auto choice = invalid_fixed(config) ? std::nullopt : choose_recipe_blocking(problem);
+    return apply_choice(config, choice, problem, op_name);
 }
 
 SDPAProgramConfig resolve_ring_recipe_blocking(

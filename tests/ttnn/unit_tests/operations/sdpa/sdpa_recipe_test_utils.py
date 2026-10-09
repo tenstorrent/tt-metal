@@ -580,10 +580,8 @@ def fp32_dest_config(device):
 
 def check_routing(device, case):
     """Precision routing: a call without `precision` that would reach a legacy loop runs a recipe (FP32 dest ->
-    ACCURATE; non-ring joint -> STANDARD, or ACCURATE with FP32 dest), bitwise the explicit recipe: dense and chunked
-    calls at op-chosen blocking (the caller's chunk sizes were tuned for the legacy kernels), except that keys fitting
-    one K chunk keep a larger caller Q chunk at one K chunk; joint calls at the caller's chunks. The output meets the
-    recipe's FP64 bound."""
+    ACCURATE; non-ring joint -> STANDARD, or ACCURATE with FP32 dest), bitwise the explicit recipe at op-chosen
+    blocking (the caller's chunk sizes were tuned for the legacy kernels). The output meets the recipe's FP64 bound."""
     chosen = lambda: program_config(device, 0, 0)
     fp32 = fp32_dest_config(device)
     accurate, standard = ttnn.SDPAPrecision.ACCURATE, ttnn.SDPAPrecision.STANDARD
@@ -603,20 +601,15 @@ def check_routing(device, case):
         explicit = run(chosen(), precision=recipe)
         tolerance = 1.5 * l2_pct(stored(expected.bfloat16(), dtype), expected)  # BFP8 output, as legacy
     elif case == "dense_mask_short_k":
-        # Keys that fit one K chunk: the caller's Q384 (larger than the chooser's) runs at one K chunk, K512.
+        # Keys that fit one K chunk: op-chosen like any routed call (the caller's larger Q384 is not kept).
         q, k, v = randn(1, 2, 500, 64, seed=83), randn(1, 2, 500, 64, seed=84), randn(1, 2, 500, 64, seed=85)
         mask = key_mask(500, 500, window=200)[None, None]
         tensors = [to_device(device, x) for x in (q, k, v)]
-        run = lambda k_chunk, **extra: ttnn.transformer.scaled_dot_product_attention(
-            *tensors,
-            is_causal=False,
-            scale=0.125,
-            attn_mask=to_device(device, mask),
-            program_config=program_config(device, 384, k_chunk),
-            **extra,
+        run = lambda config, **extra: ttnn.transformer.scaled_dot_product_attention(
+            *tensors, is_causal=False, scale=0.125, attn_mask=to_device(device, mask), program_config=config, **extra
         )
-        routed, recipe = run(256, compute_kernel_config=fp32), accurate
-        explicit, expected, tolerance = run(512, precision=recipe), reference(q, k, v, mask, 0.125), 0.0
+        routed, recipe = run(program_config(device, 384, 256), compute_kernel_config=fp32), accurate
+        explicit, expected, tolerance = run(chosen(), precision=recipe), reference(q, k, v, mask, 0.125), 0.0
     elif case == "chunked_tensor_start":
         chunked = ChunkedCase(device, "accurate", sq=256, blocks_per_seq=4, block=128)
         start = int_tensor(device, [256])
@@ -645,7 +638,7 @@ def check_routing(device, case):
         hint = program_config(device, 128, 256)
         extra = dict(compute_kernel_config=fp32) if recipe == accurate else {}
         routed = run(program_config=hint, **extra)
-        explicit, tolerance = run(program_config=hint, precision=recipe), 0.0
+        explicit, tolerance = run(program_config=chosen(), precision=recipe), 0.0
         expected = reference(torch.cat([q, jq], 2), torch.cat([k, jk], 2), torch.cat([v, jv], 2))
     routed = routed if isinstance(routed, torch.Tensor) else ttnn.to_torch(routed)
     explicit = explicit if isinstance(explicit, torch.Tensor) else ttnn.to_torch(explicit)
