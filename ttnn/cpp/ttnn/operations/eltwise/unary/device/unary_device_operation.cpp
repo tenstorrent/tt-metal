@@ -363,7 +363,15 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         distribution_key(input_tensor.tensor_spec(), &input_tensor),
         distribution_key(output_spec, tensor_args.output_tensor.has_value() ? &*tensor_args.output_tensor : nullptr),
         src_shard_vol,
-        dst_shard_vol);
+        dst_shard_vol,
+        // The DRAM-sharded flow sets defines, CBs and semaphores and depends on the shape.
+        get_dram_shard_plan(
+            attributes.op_chain,
+            input_tensor.tensor_spec(),
+            output_spec,
+            attributes.worker_grid.num_cores(),
+            input_tensor.device()->num_dram_channels())
+            .flow);
 }
 
 bool UnaryDeviceOperation::skip_launch(

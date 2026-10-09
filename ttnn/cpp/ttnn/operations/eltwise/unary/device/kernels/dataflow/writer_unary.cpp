@@ -6,6 +6,9 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#if SHARD_ROTATE
+#include "dram_sharded.hpp"
+#endif
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -58,12 +61,42 @@ void kernel_main() {
     noc.async_write_barrier();
 #else
     const uint32_t page_bytes = get_local_cb_interface(cb_id_dst).fifo_page_size;
+#if SHARD_ROTATE
+    // DRAM-sharded: the reader's page order, WRITE_BURST pages per flush.
+    auto order = dram_shard::RotatedPages::from_args();
+    dram_shard::CbGroups groups{.depth = get_local_cb_interface(cb_id_dst).fifo_num_pages};
+#if WORK_QUEUE
+    auto queue = dram_shard::QueueWriter::from_args(dst_args.next_common_runtime_args_offset());
+#endif
+    auto write_chunk = [&](uint32_t first, uint32_t count) {
+        order.seek(first);
+        for (uint32_t done = 0; done < count;) {
+            const uint32_t n = groups.next(std::min(count - done, uint32_t{WRITE_BURST}));
+#if WORK_QUEUE
+            queue.serve_until([&] { return dfb_dst.pages_available_at_front(n); });
+#endif
+            dfb_dst.wait_front(n);
+            for (uint32_t k = 0; k < n; ++k) {
+                noc.async_write(dfb_dst, dst, page_bytes, {.offset_bytes = k * page_bytes}, {.page_id = order.next()});
+            }
+            noc.async_writes_flushed();
+            dfb_dst.pop_front(n);
+            done += n;
+        }
+    };
+#if WORK_QUEUE
+    queue.for_each_chunk(write_chunk);
+#else
+    write_chunk(start_id, num_pages);
+#endif
+#else
     for (uint32_t i = start_id; i < end_id; ++i) {
         dfb_dst.wait_front(onepage);
         noc.async_write(dfb_dst, dst, page_bytes, {}, {.page_id = i});
         noc.async_writes_flushed();
         dfb_dst.pop_front(onepage);
     }
+#endif  // SHARD_ROTATE
     noc.async_write_barrier();
 #endif
 #endif

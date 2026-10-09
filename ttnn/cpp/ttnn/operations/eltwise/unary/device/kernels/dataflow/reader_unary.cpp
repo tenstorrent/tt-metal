@@ -6,6 +6,9 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#if SHARD_ROTATE
+#include "dram_sharded.hpp"
+#endif
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -55,12 +58,40 @@ void kernel_main() {
     }
 #else
     const uint32_t page_bytes = get_local_cb_interface(cb_id_src).fifo_page_size;
+#if SHARD_ROTATE
+    // DRAM-sharded: rotated page order, READ_BURST pages per barrier. Bursts ramp 1, 1, 2, 4, ... so compute starts
+    // without waiting for a full burst.
+    auto order = dram_shard::RotatedPages::from_args();
+    dram_shard::CbGroups groups{.depth = get_local_cb_interface(cb_id_src).fifo_num_pages};
+    uint32_t burst = 1, next_burst = 1;
+    auto read_chunk = [&](uint32_t first, uint32_t count) {
+        order.seek(first);
+        for (uint32_t done = 0; done < count;) {
+            const uint32_t n = groups.next(std::min(count - done, burst));
+            dfb_src.reserve_back(n);
+            for (uint32_t k = 0; k < n; ++k) {
+                noc.async_read(src, dfb_src, page_bytes, {.page_id = order.next()}, {.offset_bytes = k * page_bytes});
+            }
+            noc.async_read_barrier();
+            dfb_src.push_back(n);
+            done += n;
+            burst = next_burst;
+            next_burst = std::min(2 * next_burst, uint32_t{READ_BURST});
+        }
+    };
+#if WORK_QUEUE
+    dram_shard::QueueReader::from_args().for_each_chunk(read_chunk);
+#else
+    read_chunk(start_id, num_pages);
+#endif
+#else
     for (uint32_t i = start_id; i < end_id; ++i) {
         dfb_src.reserve_back(onepage);
         noc.async_read(src, dfb_src, page_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
         dfb_src.push_back(onepage);
     }
+#endif  // SHARD_ROTATE
 #endif
 #endif
 }

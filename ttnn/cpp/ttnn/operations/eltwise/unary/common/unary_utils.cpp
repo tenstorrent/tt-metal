@@ -3,9 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
+#include "ttnn/operations/eltwise/unary/device/kernels/dram_sharded_common.hpp"
 
+#include <algorithm>
 #include <mutex>
 #include <tt-metalium/mesh_device.hpp>
 
@@ -57,6 +60,109 @@ bool is_native_L1_sharding(
         return false;
     }
     return true;
+}
+
+namespace {
+
+// Compute-bound ops (exp, erf, log based): on small tensors, deeper reads only delay their first tiles.
+bool is_heavy_op(const EltwiseUnaryWithParam& op) {
+    switch (op.type()) {
+        case UnaryOpType::ELU:
+        case UnaryOpType::CELU:
+        case UnaryOpType::SELU:
+        case UnaryOpType::MISH:
+        case UnaryOpType::GELU_TANH:
+        case UnaryOpType::LOGIT:
+        case UnaryOpType::LOGSIGMOID:
+        case UnaryOpType::XIELU: return true;
+        case UnaryOpType::GELU: return op.get_param_if<float>(0).value_or(0.0f) != 1.0f;  // 1: fast LUT
+        default: return false;
+    }
+}
+
+}  // namespace
+
+DramShardPlan get_dram_shard_plan(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    const tt::tt_metal::TensorSpec& input_spec,
+    const tt::tt_metal::TensorSpec& output_spec,
+    uint32_t num_cores,
+    uint32_t num_dram_banks) {
+    // With few cores per bank, the plain order already saturates DRAM and bursts only add waiting. Blackhole p100a
+    // has ~16 cores per bank, Wormhole n300 ~5; any threshold from ~6 to 15 separates them.
+    constexpr uint32_t kMinCoresPerDramBank = 8;
+    // Below this the queue has too little to balance.
+    constexpr uint64_t kMinPagesPerCoreForQueue = 512;
+    // Chunk = 1/150 of a core's share: smaller loads the scheduler, larger leaves a tail.
+    constexpr uint64_t kChunksPerCore = 150;
+    constexpr uint32_t kReadBurst = 8;
+    constexpr uint32_t kWriteBurst = 2;
+
+    using tt::tt_metal::BufferType;
+    using tt::tt_metal::TensorMemoryLayout;
+    auto is_dram_sharded = [](const tt::tt_metal::TensorSpec& s) {
+        const auto& mc = s.memory_config();
+        return s.layout() == tt::tt_metal::Layout::TILE && mc.buffer_type() == BufferType::DRAM &&
+               mc.memory_layout() != TensorMemoryLayout::INTERLEAVED && mc.shard_spec().has_value();
+    };
+    if (op_chain.empty() || num_cores == 0 || num_cores < kMinCoresPerDramBank * num_dram_banks ||
+        !is_dram_sharded(input_spec) || !is_dram_sharded(output_spec) ||
+        input_spec.memory_config().memory_layout() != output_spec.memory_config().memory_layout()) {
+        return {};
+    }
+
+    // Page order.
+    const auto& shard = input_spec.memory_config().shard_spec()->shape;
+    const auto& tile = input_spec.tile();
+    if (shard != output_spec.memory_config().shard_spec()->shape || shard[0] % tile.get_height() != 0 ||
+        shard[1] % tile.get_width() != 0) {
+        return {};
+    }
+    const uint32_t shard_height = shard[0] / tile.get_height();
+    const uint32_t shard_width = shard[1] / tile.get_width();
+    const uint32_t row_pages = input_spec.padded_shape()[-1] / tile.get_width();
+    const uint64_t total_pages = input_spec.padded_shape().volume() / tile.get_tile_hw();
+    if (shard_height == 0 || shard_width == 0 || total_pages == 0 || row_pages % shard_width != 0) {
+        return {};
+    }
+    DramShardPlan plan{.shard_width = shard_width, .row_pages = row_pages};
+    const bool height_shards = shard_width == row_pages;
+    if (height_shards) {
+        // Whole rows; the last shard may be short.
+        const uint32_t shard_pages = shard_height * shard_width;
+        plan.shard_stride = shard_pages;
+        plan.num_shards = static_cast<uint32_t>((total_pages + shard_pages - 1) / shard_pages);
+        plan.last_shard_pages = static_cast<uint32_t>(total_pages - (uint64_t{plan.num_shards} - 1) * shard_pages);
+    } else if (uint64_t{shard_height} * row_pages == total_pages) {
+        // Width shards: a column band of every row.
+        plan.shard_stride = shard_width;
+        plan.num_shards = row_pages / shard_width;
+        plan.last_shard_pages = shard_height * shard_width;
+    } else {
+        return {};  // block shards
+    }
+
+    // Flow.
+    const uint64_t pages_per_core = total_pages / num_cores;
+    const std::string_view kernel = utils::get_compute_kernel_path(op_chain[0].type(), input_spec.data_type());
+    const bool queue_kernel =  // compute kernels that use dram_shard::for_each_chunk
+        kernel == "eltwise_sfpu.cpp" || kernel == "eltwise_identity_kernel.cpp" || kernel == "hardswish_kernel.cpp";
+    const bool bf16 = input_spec.data_type() == DataType::BFLOAT16 && output_spec.data_type() == DataType::BFLOAT16;
+    if (pages_per_core < kMinPagesPerCoreForQueue && std::any_of(op_chain.begin(), op_chain.end(), is_heavy_op)) {
+        // One page in flight: rotation only helps height shards; width shards already cross banks every row.
+        plan.flow = height_shards ? DramShardFlow::StaticOnePage : DramShardFlow::None;
+        return plan;
+    }
+    plan.read_burst = kReadBurst;
+    plan.write_burst = kWriteBurst;
+    if (pages_per_core >= kMinPagesPerCoreForQueue && queue_kernel && bf16 && num_cores <= dram_shard::kMaxWorkers) {
+        plan.flow = DramShardFlow::WorkQueue;
+        plan.chunk_pages =
+            static_cast<uint32_t>(std::clamp<uint64_t>((pages_per_core + kChunksPerCore / 2) / kChunksPerCore, 8, 256));
+    } else {
+        plan.flow = DramShardFlow::StaticBurst;
+    }
+    return plan;
 }
 
 std::optional<UnaryShardSpecs> get_shard_specs(
@@ -214,9 +320,7 @@ tt::tt_metal::ShardSpec generate_output_shard_spec(
         compute_grid_size,
         padded_out_shape,
         memory_layout,
-        {.is_tile = is_tile,
-         .orientation_hint = tt::tt_metal::ShardOrientation::ROW_MAJOR,
-         .caller_tag = "Unary"});
+        {.is_tile = is_tile, .orientation_hint = tt::tt_metal::ShardOrientation::ROW_MAJOR, .caller_tag = "Unary"});
     // Shrink only when we produced an RM synth; typecast means the OUTPUT element size drives the page.
     if (!is_tile) {
         spec = *ttnn::operations::data_movement::common::shrink_shard_for_rm_page_alignment(
