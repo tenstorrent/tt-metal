@@ -4,8 +4,7 @@
 
 // Perf test of the reduce with a tilized operand A (tilizeA_B_reduce_init, unpack_tilizeA_B_block and the column reduce:
 // the pool2d configuration). Operand A is a row-major block of TILE_CNT tiles of in0_tile_r_dim rows (2 faces wide),
-// unpacked by NUM_BLOCKS calls of the tilizeA_B block unpack per loop against one-row scaler faces; the pack is the
-// default pack with the reduce masks.
+// unpacked by NUM_BLOCKS calls of the tilizeA_B block unpack per loop against one-row scaler faces; the pack is the default pack with the reduce masks.
 
 #include <algorithm>
 #include <cstdint>
@@ -53,12 +52,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT    = params.TILE_CNT; // the tiles of one block row
-    const std::uint32_t num_faces   = params.num_faces;
-    const std::uint32_t face_r_dim  = params.in0_tile_r_dim / ((num_faces == 4) ? 2 : 1);
-    const int NUM_BLOCKS            = params.NUM_BLOCKS;
+    const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT       = params.TILE_CNT; // the tiles of one block row
+    const std::uint32_t num_faces      = params.num_faces;
+    const std::uint32_t in0_tile_r_dim = params.in0_tile_r_dim;
+    const int NUM_BLOCKS               = params.NUM_BLOCKS;
 #endif
+    const std::uint32_t face_r_dim      = in0_tile_r_dim / ((num_faces == 4) ? 2 : 1);
     const std::uint32_t num_blocks      = static_cast<std::uint32_t>(NUM_BLOCKS);
     const std::uint32_t tiles_per_block = TILE_CNT / num_blocks;
     {
