@@ -54,6 +54,12 @@ void kernel_main() {
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_NG_POST_REINIT)
     binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
 #endif
+#ifdef BINARY_NG_POST_KEEPS_INIT_UP_TO
+    const bool keep_init = num_tiles <= BINARY_NG_POST_KEEPS_INIT_UP_TO;
+    if (keep_init) {
+        binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+    }
+#endif
 
     // Inline helper to process n tiles
     auto process_tiles = [&](uint32_t n) {
@@ -66,7 +72,12 @@ void kernel_main() {
         cb_out.reserve_back(n);
 
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_NG_POST_REINIT
-        binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+#ifdef BINARY_NG_POST_KEEPS_INIT_UP_TO
+        if (!keep_init)
+#endif
+        {
+            binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+        }
 #endif
         tile_regs_acquire();
 #if BINARY_NG_BLOCK

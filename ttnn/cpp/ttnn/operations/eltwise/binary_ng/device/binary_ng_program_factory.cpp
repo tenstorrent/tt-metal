@@ -1417,6 +1417,13 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         num_tiles_per_cycle > 1 && compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
         compute_kernel_defines["BINARY_NG_POST_KEEPS_INIT"] = "1";
     }
+    // Interleaved ops keep it on cores with at most one DEST section of tiles, where the re-init is not hidden behind
+    // their reader and writer; the tile count is a runtime argument, as the program is shared across tensor volumes.
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && has_post_activations &&
+        !has_operand_activations && num_tiles_per_cycle == 1 &&
+        compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
+        compute_kernel_defines["BINARY_NG_POST_KEEPS_INIT_UP_TO"] = "8";
+    }
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);
