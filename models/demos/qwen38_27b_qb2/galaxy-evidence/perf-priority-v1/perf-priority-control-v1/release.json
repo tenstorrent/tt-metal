@@ -1,0 +1,76 @@
+{
+  "state": "completed",
+  "cleanup_completed": true,
+  "reason": "performance_priority",
+  "hardware_health_proven": false,
+  "device_reset_required": true,
+  "physical_devices_accessed": false,
+  "invocation": "73778f407fd14344862be169fe5bef93",
+  "units": {
+    "qwen38-gdn-epilogue-hardware-v1-20261009.service": {
+      "before": {
+        "MainPID": "2700187",
+        "Result": "success",
+        "LoadState": "loaded",
+        "ActiveState": "active",
+        "InvocationID": "16c50a2f3e4e428fbefe4c87c662cacb"
+      },
+      "after": {
+        "MainPID": "0",
+        "Result": "exit-code",
+        "LoadState": "loaded",
+        "ActiveState": "failed",
+        "InvocationID": "16c50a2f3e4e428fbefe4c87c662cacb"
+      }
+    },
+    "qwen38-bfp8-gdn-v2-20261009.service": {
+      "before": {
+        "MainPID": "2628723",
+        "Result": "success",
+        "LoadState": "loaded",
+        "ActiveState": "active",
+        "InvocationID": "c3f1a7cad8e64f04bf68976b09a505fc"
+      },
+      "after": {
+        "MainPID": "0",
+        "Result": "exit-code",
+        "LoadState": "loaded",
+        "ActiveState": "failed",
+        "InvocationID": "c3f1a7cad8e64f04bf68976b09a505fc"
+      }
+    },
+    "qwen38-image-hardware-v3-20261009.service": {
+      "before": {
+        "MainPID": "2628711",
+        "Result": "success",
+        "LoadState": "loaded",
+        "ActiveState": "active",
+        "InvocationID": "93f5759d1e4049508202587de2adf31b"
+      },
+      "after": {
+        "MainPID": "0",
+        "Result": "exit-code",
+        "LoadState": "loaded",
+        "ActiveState": "failed",
+        "InvocationID": "93f5759d1e4049508202587de2adf31b"
+      }
+    }
+  },
+  "created_at": 1791584375.707461,
+  "owned_container_removed": true,
+  "perf": {
+    "MainPID": "2913530",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "4a07251dcbda49239e3b017f7fe8ef47"
+  },
+  "container_follower": {
+    "MainPID": "2913533",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "d8abae607661465980454d2a58a81ca4"
+  },
+  "finished_at": 1791584437.066515
+}

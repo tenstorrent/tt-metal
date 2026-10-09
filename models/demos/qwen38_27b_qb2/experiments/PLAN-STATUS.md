@@ -1,5 +1,29 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+22:23 UTC update: user requested faster performance progress. A persistent
+reorder stopped only the owned earlier jobs, retained caches, and moved
+32K/B32/B16 profiles and epilogue timing before full-model sweeps/GPQA, with
+container qualification following afterward. Preflight: 457 tests and 40 subtests
+passed, one skipped. Native 32K/B32 profile completed; shared-QK profile started.
+The new direct-input preparation prototype remains separate and unqualified:
+its simulator aborted on unsupported SETDVALID before any completed comparison.
+[Current queue](../galaxy-evidence/perf-priority-v1/README.md),
+[prototype evidence](../galaxy-evidence/gdn-flat-prepare-simulator-v1/README.md).
+
+The completed B32 profile pair measures a 39.3% reduction in the GDN layer's
+summed kernel duration (four-rank median), with attention approximately
+unchanged. This is a two-layer diagnostic, not a full-model speedup claim.
+All four profiles have finished and epilogue hardware testing has begun.
+[Matched stage results](../galaxy-evidence/bfp8-priority-profiles-v1/README.md).
+
+22:26 UTC: physical epilogue passed all eight cases with bit-identical outputs.
+DRAM B32/B16 latency is 85.25/64.72 us versus 151.93/92.24 native. Preserve native
+fallbacks for B1 and L1/B8, which regress. Full-model sweeps started afterward.
+Stage-based combined projections are 14.8 TSU at B16 and 10.5 at B32 for 32K;
+they are unverified model/scaling estimates, and do not meet 20 TSU.
+[Projection and assumptions](../galaxy-evidence/bfp8-priority-profiles-v2/README.md),
+[physical epilogue](../galaxy-evidence/gdn-epilogue-hardware-result-v1/README.md).
+
 22:07 UTC update: added a persistent physical TP4 epilogue follower after
 image-hardware-v3 and bfp8-gdn-v2. It covers B1/B8/B16/B32 in DRAM and L1,
 native output equality, changing-input trace replay and native/fused/native

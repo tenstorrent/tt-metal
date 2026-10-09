@@ -1636,3 +1636,44 @@ No session connection is needed for that queue to continue.
   Stored launch, source manifest, preflight and three-service status snapshots.
 - Initial staging/collection helper SSH attempts hit sandbox network denial;
   retried with escalation. Pre-commit checks passed before freezing source.
+
+## Oct 9, 22:10-22:24 UTC: prioritize measurements and direct-input prototype
+
+- Confirmed current BFP8 full-model baseline from sweep receipts: at32K,
+  B16=11.749 and B32=7.354 output tok/s/user (188/235 aggregate per TP4).
+  No newer optimized BFP8 result was available;20TSU remains unachieved.
+- Implemented a standalone direct tiled-input preparation kernel, reusing
+  existing FP32 Q/K normalization and retaining external native exp. It bypasses
+  adapter layout/cast/packing work without changing precision or model defaults.
+- Simulator v1 exited on unsupported SETDVALID while executing the first case,
+  before any completed comparison. Preserved failed process/probe/log/source
+  evidence. The probe's stale running state is not treated as live or passing.
+  No new preparation implementation was inserted into hardware qualification.
+- After the user requested faster progress, prepared and CPU-tested an explicit
+  performance-first order (457 tests,40 subtests passed, one skipped). A separate
+  persistent reorder verified exact owned invocations/container label, stopped
+  the waiting followers and container, verified removal and lock availability,
+  and marked the device for a locked reset. Existing receipts remain canceled.
+- Launched perf-priority-v1: B32 profiles before B16, then the previously
+  simulator-tested epilogue, matched full-model sweeps and optimized full GPQA.
+  Requeued container/API/OpenBench as image-hardware-v4 afterward, retaining its
+  image/source/checkpoint pins and existing v3 cache. No NFS/firmware mutation.
+- First native32K/B32 profile completed and passed strict test/cleanup/all-rank
+  timing collection. Wrapper warned about CSV location, but the collector found
+  the single CSV under the configured Tracy output path. Shared-QK B32 started.
+  Per-RISC waits and firmware sums are diagnostic, not traced-model latency.
+- The completed B32 pair uses identical input hashes and BFP8 precision. Median
+  across four ranks: recurrence kernel sum 1161.0 -> 375.6 us (67.6% lower),
+  GDN layer 1999.4 -> 1214.5 us (39.3% lower), attention layer 2012.9 -> 2018.3 us
+  (0.3% higher). Full traced-model uplift remains pending. Saved raw per-op
+  CSVs, all-rank summaries, passed hardware receipts and an explicit comparison.
+- All four profiles subsequently completed; physical epilogue testing started.
+- Epilogue completed at 22:26 UTC: all eight placement/batch cases passed with
+  bit-identical native outputs and clean closure. DRAM B32: 151.93 -> 85.25 us;
+  B16: 92.24 -> 64.72 us. B1 loses in both placements and B8 loses in L1, so the
+  eventual integration must retain native fallbacks for losing cases.
+- B16/B32 combined projections at 32K: 14.8/10.5 TSU, or ideal eight-replica
+  aggregate 1900/2692 output TPS. These subtract stage differences from measured
+  native full-model TPOT; they are not optimized full-model results. B32 serving
+  bucket and aggregate qualification remain outstanding. Saved formulas,
+  assumptions, all four profiles and physical epilogue receipts.

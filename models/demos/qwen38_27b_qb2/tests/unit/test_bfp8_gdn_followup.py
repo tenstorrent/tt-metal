@@ -74,3 +74,42 @@ def test_control_drift_or_changed_tokens_does_not_qualify_speedup():
     assert not control_stable({"cells": [dict(same_output_hash_as_native=True, decode_uplift_percent=-3.1)]})
     assert not control_stable({"cells": [dict(same_output_hash_as_native=False, decode_uplift_percent=0)]})
     assert not control_stable({"cells": []})
+
+
+def release_receipt():
+    return dict(
+        state="completed",
+        cleanup_completed=True,
+        owned_container_removed=True,
+        device_reset_required=True,
+        hardware_health_proven=False,
+        reason="performance_priority",
+    )
+
+
+def test_explicit_priority_release_is_not_an_eval_pass(expect_error):
+    data = release_receipt()
+    assert predecessor_ready(terminal(), data, "expected", clean_release=True)
+    with expect_error(ValueError, "lacks successful qualification"):
+        predecessor_ready(terminal(), data, "expected")
+    assert not predecessor_ready(
+        dict(terminal(), MainPID="1", ActiveState="active"), data, "expected", clean_release=True
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "state",
+        "cleanup_completed",
+        "owned_container_removed",
+        "device_reset_required",
+        "hardware_health_proven",
+        "reason",
+    ],
+)
+def test_priority_release_requires_complete_audit(field, expect_error):
+    data = release_receipt()
+    data.pop(field)
+    with expect_error(ValueError, "lacks audited performance-priority release"):
+        predecessor_ready(terminal(), data, "expected", clean_release=True)

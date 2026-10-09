@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T22:08:47.535490+00:00",
+  "generated_at": "2026-10-09T22:31:50.610833+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -53,6 +53,11 @@
       "sha256": "afa9fd0d7db43c419af331398407710f6204c825b10c8a21e9db18e8ca388935"
     },
     {
+      "path": "demo/probe_gdn_flat_prepare.py",
+      "bytes": 7728,
+      "sha256": "28384cd1af24ae32dd75b8b5b5e7cfaed28694fe66d9f2eb6013908f2c000539"
+    },
+    {
       "path": "demo/probe_hf_head.py",
       "bytes": 7284,
       "sha256": "61403cd817689a506504f7f7752a8fb228aa6e8d8971a2f5c2d1742ad582abb8"
@@ -74,8 +79,8 @@
     },
     {
       "path": "demo/run_bfp8_gdn_followup.py",
-      "bytes": 13126,
-      "sha256": "ef51f5d77a5b89f3dd6650e834f2f4bc641314c36ca3e5f72cf7c6d65cd66c64"
+      "bytes": 14817,
+      "sha256": "404f5fcb9901104194cd0e6b8a2d3dbc043e360dd359c3e973649ead8caa0774"
     },
     {
       "path": "demo/run_chunked_prefill_followup.py",
@@ -124,8 +129,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 121131,
-      "sha256": "77e935a5025776f86bb07cf500333a3da9750050a5e1c3f385875eb70d90df9e"
+      "bytes": 124174,
+      "sha256": "11f90e569e402505e8d00b934470bb5f673b95d1a791112522000ca4950e577b"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -134,8 +139,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 36369,
-      "sha256": "badc41faea4fee8e41e20458547fd9cc47677b7f10122c480e93ef203cf488af"
+      "bytes": 38000,
+      "sha256": "3d93b2fb775f683853a574a117aa4be1af4c9c03998dd82b95ef44da7c44d4a5"
     },
     {
       "path": "experiments/RELEASE-PROCESS.md",
@@ -1064,6 +1069,356 @@
       "path": "galaxy-evidence/bfp8-gdn-followup-v1/units.txt",
       "bytes": 370,
       "sha256": "7b263e365845588614584ab9980cc4c42fc035e0da5eaf0fab06f2d1722eb514"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/README.md",
+      "bytes": 973,
+      "sha256": "0aeedfd4ff601409d9ce4e64dd4807cf64534bdf020a8ecd1b8dbbb5f5936d10"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/capture.json",
+      "bytes": 140,
+      "sha256": "4129cd79c4539d29761030352b0274f35757a94a05f80f2ed3840277e7b3323f"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/comparison.json",
+      "bytes": 19482,
+      "sha256": "15ca1f199bb52606185c75c5629a63aff377f28e9244020e2a5b5ccc1ae0d75b"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-native/analysis/device_totals.csv.gz",
+      "bytes": 236,
+      "sha256": "858b501c8c5ac715ff6a8ee80898eb6cd0900b779b2642298b58e07653093915"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-native/analysis/exclusive_stages.csv.gz",
+      "bytes": 1978,
+      "sha256": "7596f17bfc181b5d698c695534186e088c9f1edc45792c3d6125b1b62c791635"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-native/analysis/inclusive_stages.csv.gz",
+      "bytes": 2300,
+      "sha256": "1e8dc44d00577d116d7359bc2fa28a41b1a46e39b5338379cf5de767970b28a7"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-native/analysis/operations.csv.gz",
+      "bytes": 6582,
+      "sha256": "536e29cd74eee96d680e4c21ed904936fe744211b674053bdafc3e39a9a527c9"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-native/analysis/profile-summary.json",
+      "bytes": 174860,
+      "sha256": "561bfbdb07a86a2942e7982a64a8bf12de6476b30a25a1b6bec9ed6ec51c55ee"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-native/analysis/report.md",
+      "bytes": 2953,
+      "sha256": "a312b6efd433ff8748faa07bdfc25f7d41fb4dd7bd793fc4f445b76198b73922"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-native/hardware.xml",
+      "bytes": 546,
+      "sha256": "97f0d131e47b031163cda094832fb2de16a201666a784d7f14c3c0334fd89179"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-native/profile.json",
+      "bytes": 18841,
+      "sha256": "b74a72abf75d40455d83d60c00f76baff966d8f3dfc876bbfccaad53f588775a"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-native/run.log.gz",
+      "bytes": 12272,
+      "sha256": "a5ef1ab672889c7bb3c131f5118b14f11fb0e9218fdfa2122bce5f4b936e2369"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-native/tracy/reports/2026_10_09_22_22_47/ops_perf_results_2026_10_09_22_22_47.csv.gz",
+      "bytes": 283392,
+      "sha256": "bab318b63395eac7a903e0c722a77ae5d4d30bbf326995c952acc5a876771352"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/device_totals.csv.gz",
+      "bytes": 234,
+      "sha256": "2e87307eb76f21f01cb596c39cd1f8da7e3620944cde402853311d186bc4183c"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/exclusive_stages.csv.gz",
+      "bytes": 1974,
+      "sha256": "ecd28b4279f1095f99b2be76696e264ee2b1275fcc0ae534e156f805bf70dfb2"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/inclusive_stages.csv.gz",
+      "bytes": 2301,
+      "sha256": "72b1f326a1e920355ddac34a839e348301439a332e07a5073b75be503ca143bc"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/operations.csv.gz",
+      "bytes": 6629,
+      "sha256": "bd503aa63c503cfaeed168aaeab4b251a402218655f9223403faba3dcc2999c1"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/profile-summary.json",
+      "bytes": 177492,
+      "sha256": "a56b261405abe1bb8f6415790d79652cdbd00e7134b9d4a2abeb7fc0240d5f38"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/report.md",
+      "bytes": 2975,
+      "sha256": "6e7bef2f50040d6a5bf6ace5846df2dfffebf84deade972afebaa54cc5178b95"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-shared-qk/hardware.xml",
+      "bytes": 546,
+      "sha256": "fdacc24d3366a7a3482c1406c422a822c3b3fb1a20fc4951a08e5c3f632f14a1"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-shared-qk/profile.json",
+      "bytes": 18892,
+      "sha256": "01b306b864c1fddbf998e61c8179e29f997a771992cda6beae4f2090f90dd527"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-shared-qk/run.log.gz",
+      "bytes": 3955,
+      "sha256": "4870995a9111d1d4b44af2fe4574a332b06ec749c043e03a0b174d943a5e663b"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/perf-priority-v1/profile-s32768-b32-shared-qk/tracy/reports/2026_10_09_22_23_45/ops_perf_results_2026_10_09_22_23_45.csv.gz",
+      "bytes": 245576,
+      "sha256": "6ea06dc6782c42bf56a5f51ed130962e1d714a05fccdd223cd6149acf38426b0"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/queue-snapshot.json",
+      "bytes": 3239,
+      "sha256": "581166893d4f5d778e2f5cf6ac6fdd0b0c70480aeafd3734de606152c78da797"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v1/unit.txt",
+      "bytes": 96,
+      "sha256": "c9e0def443b9c8a70c0d4469bc96943b2f52461f38bcdb0e47013e8718f2f2b5"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/README.md",
+      "bytes": 1390,
+      "sha256": "daff8b9dd73808446c545d5cdbdf46282749b0bc60347348b582a96a44c34098"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/capture.json",
+      "bytes": 154,
+      "sha256": "3ed04d362b0a18831eb7a1319301d1ab5cf0c56e1127e2f9b61775c85fc615d6"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/analysis/device_totals.csv.gz",
+      "bytes": 232,
+      "sha256": "898959516991611cab8534b99630697c1aa5cf90009f5c8f1735a0305f6582c4"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/analysis/exclusive_stages.csv.gz",
+      "bytes": 1963,
+      "sha256": "ece455e220b00fe6710d9a735c1cb8b178fbdf800817bcc3babb94efe431714a"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/analysis/inclusive_stages.csv.gz",
+      "bytes": 2268,
+      "sha256": "63fc04cc23e8e217699a6b270478c03949eacf924da48504b072fd5d7ce035a5"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/analysis/operations.csv.gz",
+      "bytes": 6595,
+      "sha256": "334fb39884ded323e94a5476689e16d1e5cdbe57e6d2d35c3ca1aa1245508e09"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/analysis/profile-summary.json",
+      "bytes": 177294,
+      "sha256": "3faa2aa615400ecee6bcdce480ed294698e0befc52054301796f795e2f25a7d2"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/analysis/report.md",
+      "bytes": 2936,
+      "sha256": "33a51dc3916a243afe9e9b73d4667ad2e7212efa756db8f8d490e6273cec5b55"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/hardware.xml",
+      "bytes": 546,
+      "sha256": "5e9125b0816b15397ce44b51a4103ed45d52f5d26090c00afababfe31fb66fd8"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/profile.json",
+      "bytes": 18841,
+      "sha256": "b470a370e53170e6757f7c6bf3cd073f94af67165da2379e6433df36ef44521b"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/run.log.gz",
+      "bytes": 3960,
+      "sha256": "e3b1c3f5535747089f7d3da209516826b73addbda7fb9d5f9e14c4d93c9ee1de"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/tracy/reports/2026_10_09_22_24_40/ops_perf_results_2026_10_09_22_24_40.csv.gz",
+      "bytes": 251769,
+      "sha256": "b7769e6a6a19eaa977880d844ed4bd3d25f631cd362fd6becc89171a040c562f"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/analysis/device_totals.csv.gz",
+      "bytes": 234,
+      "sha256": "1ba2c7f9fee106c498c379f27d0775e81d4aa463f05c4ebdc59411436cf61d57"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/analysis/exclusive_stages.csv.gz",
+      "bytes": 1978,
+      "sha256": "feae715b4779e8368f0bbd9f122b003a2a3a14531b354a452a4bc1d434d58961"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/analysis/inclusive_stages.csv.gz",
+      "bytes": 2266,
+      "sha256": "e8f7beb524320dd434435cf653dff8d6000394a97170f55afe22b05d3cc398c3"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/analysis/operations.csv.gz",
+      "bytes": 6673,
+      "sha256": "49fcf3c3a9ba0b52ad7ba360886057a6259bdf4668d4b20ea17daf90c291972e"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/analysis/profile-summary.json",
+      "bytes": 180012,
+      "sha256": "b3b4e83fca7811b7e2a2efa35ea043b0bdd4e4af7dd7ff876dca8b75685f2b17"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/analysis/report.md",
+      "bytes": 3002,
+      "sha256": "5ba074c5f2a16b6501dfe13835c38a56a95aa9808800973399c664b3239c4754"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/hardware.xml",
+      "bytes": 546,
+      "sha256": "959e64b7dadff402c83ec4c61a1b7c1bf38519e045ebabae756226cac8ccfc1d"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/profile.json",
+      "bytes": 18892,
+      "sha256": "dff892c13b570ed55a03715475a2ce98d667b6e9c43dd0940fcfbae7ba304a8a"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/run.log.gz",
+      "bytes": 3962,
+      "sha256": "3f71e536ce83b8f900af79fdab3e26a70735e0b4c0d7a138759d1721298a8645"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/tracy/reports/2026_10_09_22_25_35/ops_perf_results_2026_10_09_22_25_35.csv.gz",
+      "bytes": 248443,
+      "sha256": "29cd89b32ac5a3ffb2c39d7d84730fef7c1d5dae5ec0bf6c0ac7623fe4175e6f"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/analysis/device_totals.csv.gz",
+      "bytes": 236,
+      "sha256": "858b501c8c5ac715ff6a8ee80898eb6cd0900b779b2642298b58e07653093915"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/analysis/exclusive_stages.csv.gz",
+      "bytes": 1978,
+      "sha256": "7596f17bfc181b5d698c695534186e088c9f1edc45792c3d6125b1b62c791635"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/analysis/inclusive_stages.csv.gz",
+      "bytes": 2300,
+      "sha256": "1e8dc44d00577d116d7359bc2fa28a41b1a46e39b5338379cf5de767970b28a7"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/analysis/operations.csv.gz",
+      "bytes": 6582,
+      "sha256": "536e29cd74eee96d680e4c21ed904936fe744211b674053bdafc3e39a9a527c9"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/analysis/profile-summary.json",
+      "bytes": 174860,
+      "sha256": "561bfbdb07a86a2942e7982a64a8bf12de6476b30a25a1b6bec9ed6ec51c55ee"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/analysis/report.md",
+      "bytes": 2953,
+      "sha256": "a312b6efd433ff8748faa07bdfc25f7d41fb4dd7bd793fc4f445b76198b73922"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/hardware.xml",
+      "bytes": 546,
+      "sha256": "97f0d131e47b031163cda094832fb2de16a201666a784d7f14c3c0334fd89179"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/profile.json",
+      "bytes": 18841,
+      "sha256": "b74a72abf75d40455d83d60c00f76baff966d8f3dfc876bbfccaad53f588775a"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/run.log.gz",
+      "bytes": 12272,
+      "sha256": "a5ef1ab672889c7bb3c131f5118b14f11fb0e9218fdfa2122bce5f4b936e2369"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/tracy/reports/2026_10_09_22_22_47/ops_perf_results_2026_10_09_22_22_47.csv.gz",
+      "bytes": 283392,
+      "sha256": "bab318b63395eac7a903e0c722a77ae5d4d30bbf326995c952acc5a876771352"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/device_totals.csv.gz",
+      "bytes": 234,
+      "sha256": "2e87307eb76f21f01cb596c39cd1f8da7e3620944cde402853311d186bc4183c"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/exclusive_stages.csv.gz",
+      "bytes": 1974,
+      "sha256": "ecd28b4279f1095f99b2be76696e264ee2b1275fcc0ae534e156f805bf70dfb2"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/inclusive_stages.csv.gz",
+      "bytes": 2301,
+      "sha256": "72b1f326a1e920355ddac34a839e348301439a332e07a5073b75be503ca143bc"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/operations.csv.gz",
+      "bytes": 6629,
+      "sha256": "bd503aa63c503cfaeed168aaeab4b251a402218655f9223403faba3dcc2999c1"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/profile-summary.json",
+      "bytes": 177492,
+      "sha256": "a56b261405abe1bb8f6415790d79652cdbd00e7134b9d4a2abeb7fc0240d5f38"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/report.md",
+      "bytes": 2975,
+      "sha256": "6e7bef2f50040d6a5bf6ace5846df2dfffebf84deade972afebaa54cc5178b95"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/hardware.xml",
+      "bytes": 546,
+      "sha256": "fdacc24d3366a7a3482c1406c422a822c3b3fb1a20fc4951a08e5c3f632f14a1"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/profile.json",
+      "bytes": 18892,
+      "sha256": "01b306b864c1fddbf998e61c8179e29f997a771992cda6beae4f2090f90dd527"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/run.log.gz",
+      "bytes": 3955,
+      "sha256": "4870995a9111d1d4b44af2fe4574a332b06ec749c043e03a0b174d943a5e663b"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/tracy/reports/2026_10_09_22_23_45/ops_perf_results_2026_10_09_22_23_45.csv.gz",
+      "bytes": 245576,
+      "sha256": "6ea06dc6782c42bf56a5f51ed130962e1d714a05fccdd223cd6149acf38426b0"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/projection.json",
+      "bytes": 4403,
+      "sha256": "7d9680b9b2dc4e4cb90966db7764ac8acf239a014a61aea1ed21fd85dac75b79"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/queue-snapshot.json",
+      "bytes": 5697,
+      "sha256": "f224d068e9686bfdeca528efcb07c1ec2fddc322de769e83556f0f52a09b70f5"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-priority-profiles-v2/unit.txt",
+      "bytes": 96,
+      "sha256": "c9e0def443b9c8a70c0d4469bc96943b2f52461f38bcdb0e47013e8718f2f2b5"
     },
     {
       "path": "galaxy-evidence/bounded-profile-launch-v1/bounded-layer-profile-launch-v1.json",
@@ -2029,6 +2384,36 @@
       "sha256": "66c33ba17fa8c54318721d13d53f938f5832fbf874a114eb94046f36f579f61e"
     },
     {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-result-v1/README.md",
+      "bytes": 1232,
+      "sha256": "72075fa3de69b7e9754b5528a8cb8ea290048de6342f7bc7e34b6684eb0f458c"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-result-v1/capture.json",
+      "bytes": 154,
+      "sha256": "4c1b7123ba9338fe0e6b179af3c3d6025b19a40b2fcb3bfeb6679966dda0ccaf"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-result-v1/perf-priority-v1/epilogue/epilogue.json",
+      "bytes": 124148,
+      "sha256": "f09597d9d8de4ef198c431851e6517ceeb2c0202406089f20c8489aeb61a97d4"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-result-v1/perf-priority-v1/epilogue/hardware.xml",
+      "bytes": 528,
+      "sha256": "abd7fbdf3401d78b95be7981e6225299bf5114f2ed4f5f60ecb21b3669d58d86"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-result-v1/perf-priority-v1/epilogue/run.log.gz",
+      "bytes": 5029,
+      "sha256": "c2d86724862cd731a8be7834cbbdbdd932610de5ccd3279103bf31782b905ffb"
+    },
+    {
+      "path": "galaxy-evidence/gdn-epilogue-hardware-result-v1/queue-snapshot.json",
+      "bytes": 5697,
+      "sha256": "f224d068e9686bfdeca528efcb07c1ec2fddc322de769e83556f0f52a09b70f5"
+    },
+    {
       "path": "galaxy-evidence/gdn-epilogue-hardware-v1/README.md",
       "bytes": 4068,
       "sha256": "057796594966190f5fbec7a9a0931aac9098279c3446d591a84e9efca831892d"
@@ -2312,6 +2697,91 @@
       "path": "galaxy-evidence/gdn-epilogue-simulator-v1/units.txt",
       "bytes": 421,
       "sha256": "b3569f4b20f9a52d5cce17909d13cb98d62f91adcd1858973b5f223117afa74e"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/README.md",
+      "bytes": 2047,
+      "sha256": "d4b73334fd725e9b89b937a81e11e3bd8ca3c6a4744f9c3739221546170985f5"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/capture.json",
+      "bytes": 124,
+      "sha256": "22bfe38fa1a1e7b3f4b27e91a50c35c2a76f1443f6acb44931766f1e04617711"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/gdn-flat-prepare-sim-source-v1/models/demos/qwen38_27b_qb2/demo/probe_gdn_flat_prepare.py.gz",
+      "bytes": 2559,
+      "sha256": "daa81fdf7726567a3ac78abcd7e92003796bca983b54ce1d14a13e12a064cb6d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/gdn-flat-prepare-sim-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/compute_math.hpp.gz",
+      "bytes": 1221,
+      "sha256": "a2f11eb65a667ef44b1a63f31360248b6f3548d7ea37162244958fec0ebb100f"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/gdn-flat-prepare-sim-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/flat_prepare.py.gz",
+      "bytes": 1770,
+      "sha256": "9ba65b0b8dca041f8c628bb7e6160bcd87e340c940e1439db8678ae1b39e5f8a"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/gdn-flat-prepare-sim-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/flat_prepare_reader.cpp.gz",
+      "bytes": 1298,
+      "sha256": "d566b6ae1fed1df5995b8a1d1c3815ecae16863e5008c0ebb0ba5ad43fec2e20"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/gdn-flat-prepare-sim-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/op.py.gz",
+      "bytes": 2594,
+      "sha256": "fc916450fdd8c39d92bd5988da53543f8e8688547c1b6db2c996269878970016"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/gdn-flat-prepare-sim-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/prepare_compute.cpp.gz",
+      "bytes": 375,
+      "sha256": "6acfcc48bff681199bd4558d5b9c5bff6b7b4eca020dee6a8fc20a8aa368783d"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/gdn-flat-prepare-sim-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/prepare_reader.cpp.gz",
+      "bytes": 621,
+      "sha256": "0bc09e6d453de3ea0cb85f1adf30e3d7cdc123e5ab2d19b0a3d49447eba1f2c2"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/gdn-flat-prepare-sim-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/prepare_writer.cpp.gz",
+      "bytes": 635,
+      "sha256": "fa8d8f2c3b2dd7abd2ebd9fb8a087acb8f7741c548d3ac11575a9506fb08c24b"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/gdn-flat-prepare-sim-source-v1/models/demos/qwen38_27b_qb2/tt/gdn_step/shared_qk.py.gz",
+      "bytes": 1489,
+      "sha256": "6a18eb60eaf6af650ccec3926ce38cb4388d8d9a657fd48eb7b2bcefd99ff803"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/gdn-flat-prepare-sim-v1/launch.json",
+      "bytes": 2193,
+      "sha256": "2c2be19729b6bb8f9761faca8780ac0948e490d630c9864c6ba979365c83d012"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/gdn-flat-prepare-sim-v1/preflight.log.gz",
+      "bytes": 372,
+      "sha256": "7bcb7df6eb8e56ceb30ecfbaa4efa941918ce1f40f950f61f84f15ba5b475309"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/gdn-flat-prepare-sim-v1/probe.json",
+      "bytes": 382,
+      "sha256": "e85d23713adcd06d9ad7dbce3aef37bb6eb8f485740eb0a276d75c4069d41bcb"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/gdn-flat-prepare-sim-v1/run.log.gz",
+      "bytes": 2533,
+      "sha256": "b5a46fe7066b870c1e19046b6e1e93867ebd03f9deed2a918aa1a4a7f9dfa477"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/gdn-flat-prepare-sim-v1/source-manifest.json",
+      "bytes": 401,
+      "sha256": "b8f878e23df1fbfc4bfb0c94b50ece287f2e3a47c6c2ca97f1cbf28e9e894caf"
+    },
+    {
+      "path": "galaxy-evidence/gdn-flat-prepare-simulator-v1/simulator-unit.txt",
+      "bytes": 92,
+      "sha256": "ea0db5098c663e25392630f289e0eeea73b470d718a15566d487588268c126cb"
     },
     {
       "path": "galaxy-evidence/gdn-matched-comparison-v4/README.md",
@@ -4807,6 +5277,76 @@
       "sha256": "6d945418a29f5054a2a8a190bd8e70811d2227d11eb71097bd184829ad1bcbd6"
     },
     {
+      "path": "galaxy-evidence/perf-priority-v1/README.md",
+      "bytes": 3273,
+      "sha256": "351cb1d8e689dbdb26554ad1f0cef92f30f81e256f27e72ca2e395f9735a3365"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-v1/capture.json",
+      "bytes": 140,
+      "sha256": "67f798aa7a24d8a94fd824eaf92456b7674fb089554ce4e7c4765bb171df2ef9"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-v1/image-hardware-control-v4/controller.py.gz",
+      "bytes": 4481,
+      "sha256": "81f45cc5154a2df24b9ec730d74a4298331e6b5ad06ddb4680c7abc5ef1cff03"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-v1/image-hardware-control-v4/launch.json",
+      "bytes": 2405,
+      "sha256": "b5a10a6783bc8bf63567c1085cd17c0dfdc920e950e7e372c318ff6290b6f525"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-v1/image-hardware-v4/status.json",
+      "bytes": 590,
+      "sha256": "2cb011c221448d30b74ddfa8f66ca9dfe4c676dc5ed0927b91111d54dc9e8119"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-v1/perf-priority-control-v1/perf-launch.json",
+      "bytes": 2042,
+      "sha256": "43b4cf31fddd7eee9a2a699aa2e695e7ab591d35fda372e7a0362321e53e7f5e"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-v1/perf-priority-control-v1/preflight.log",
+      "bytes": 1100,
+      "sha256": "5e75fcab65627635a60053a4e481987262a0557608a7e7880a992ccc3c065d8f"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-v1/perf-priority-control-v1/release.json",
+      "bytes": 2156,
+      "sha256": "80f5db998c511d1350ab4e340a57dfb70660c6d721a5cded20420281788c91a4"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-v1/perf-priority-control-v1/reorder-launch.json",
+      "bytes": 718,
+      "sha256": "420082520ada062bf76ae7457b3344ccc99c5e8656a870e91d8b69632008dbb0"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-v1/perf-priority-control-v1/reorder.py.gz",
+      "bytes": 2292,
+      "sha256": "97522b4fd51aacf62fd289bfc1df3c95a6bd5d022c139af401c943d00afb3f65"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-v1/perf-priority-control-v1/source-manifest.json",
+      "bytes": 21927,
+      "sha256": "8fb9b3357f4e749cf7cc1b348f869ee421454d6b2a8b5aaccd41e19d7eccd07f"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-v1/perf-priority-control-v1/unit.xml",
+      "bytes": 149082,
+      "sha256": "fa60f2c1cee18ef92fa76d0a91c41a0067f513c741c4a692b59b47df23ba15f4"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-v1/perf-priority-v1/queue.json",
+      "bytes": 1509,
+      "sha256": "d274804a1ce0dc92f90de2af90d348da9dd997bff0c6f3f8a21f44fa58ee2dbc"
+    },
+    {
+      "path": "galaxy-evidence/perf-priority-v1/units.txt",
+      "bytes": 488,
+      "sha256": "a5083d35253d8570ee252f8c1353475f1eb86e7f479facf1bd5d855c8a8f39e8"
+    },
+    {
       "path": "galaxy-evidence/perf-sweep-tp4-v1/hardware.xml",
       "bytes": 542,
       "sha256": "66c89a4400d254e4743dabc5620863535cb7fd7bb8a529686eeffbac55abaee6",
@@ -6629,8 +7169,8 @@
     },
     {
       "path": "tests/unit/test_bfp8_gdn_followup.py",
-      "bytes": 2835,
-      "sha256": "693ae16e3eec30a7c3857f2bda401fc1e9df10e431f8fb8bd8fd1ea76d37a092"
+      "bytes": 4036,
+      "sha256": "303ad73807a04fee046a9af5185fe2dac88ac826fecfa10d303b4e6155e2a7d1"
     },
     {
       "path": "tests/unit/test_bounded_profile.py",
@@ -6716,6 +7256,16 @@
       "path": "tt/gdn_epilogue/writer.cpp",
       "bytes": 799,
       "sha256": "90b30db5229ceb88bf5052f6a84e5c46dd71d33656d49b1afc1ec0b06a28ff3d"
+    },
+    {
+      "path": "tt/gdn_step/flat_prepare.py",
+      "bytes": 4477,
+      "sha256": "9ddd3761acf05a8991171976504a5ffd83c07607fa3b7a3abd5185e722d0dae7"
+    },
+    {
+      "path": "tt/gdn_step/flat_prepare_reader.cpp",
+      "bytes": 4831,
+      "sha256": "30bbf6ec30c2f7b85ac4f0ab4b3c9c51c5ec6b1aaf0bf3d07ebce6eeb4dfbc95"
     }
   ]
 }

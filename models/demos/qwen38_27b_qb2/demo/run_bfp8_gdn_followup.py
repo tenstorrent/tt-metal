@@ -23,7 +23,7 @@ POLICIES = {
 }
 
 
-def predecessor_ready(properties, receipt, invocation):
+def predecessor_ready(properties, receipt, invocation, *, clean_release=False):
     if properties.get("InvocationID") not in ("", invocation):
         raise ValueError("Predecessor invocation changed")
     if properties.get("MainPID") != "0" or properties.get("ActiveState") not in ("inactive", "failed"):
@@ -32,6 +32,18 @@ def predecessor_ready(properties, receipt, invocation):
         return False
     if properties.get("LoadState") == "loaded" and properties.get("Result") != "success":
         raise ValueError("Predecessor exited unsuccessfully; inspect before using hardware")
+    if clean_release:
+        if (
+            not receipt
+            or receipt.get("state") != "completed"
+            or receipt.get("cleanup_completed") is not True
+            or receipt.get("owned_container_removed") is not True
+            or receipt.get("device_reset_required") is not True
+            or receipt.get("hardware_health_proven") is not False
+            or receipt.get("reason") != "performance_priority"
+        ):
+            raise ValueError("Predecessor lacks audited performance-priority release")
+        return True
     if (
         not receipt
         or receipt.get("state") != "completed"
@@ -83,6 +95,9 @@ def run(args):
         resumes_after_reboot=False,
         promoted_to_serving=False,
         started_at=time.time(),
+        profiles_first=args.profiles_first,
+        epilogue_first=args.epilogue_first,
+        release_audit=args.after_clean_release,
     )
     manifest = json.loads(args.manifest.read_text())
 
@@ -145,6 +160,38 @@ def run(args):
             f"--junitxml={directory}/hardware.xml",
         ]
 
+    def profiles():
+        for batch in (32, 16):
+            for label, recurrence in (("native", "native"), ("shared-qk", "single_step_shared_qk")):
+                name = f"profile-s32768-b{batch}-{label}"
+                directory = args.output / name
+                profile_env = dict(
+                    env,
+                    QWEN_PRECISION_CONFIG=str(model / "config" / POLICIES[label]),
+                    QWEN_BOUNDED_LAYER_PROFILE="1",
+                    QWEN_PROFILE_CONTEXT="32768",
+                    QWEN_PROFILE_BATCH=str(batch),
+                    QWEN_PROFILE_RECURRENCE=recurrence,
+                    QWEN_PROFILE_RECEIPT=str(directory / "profile.json"),
+                    TT_METAL_PROFILER_DIR=str(directory / "tracy"),
+                    TRACY_NO_WEB_SERVER="1",
+                    TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES="1",
+                )
+                stage(name, test_command("test_bounded_layer_profile.py", directory, 1200, True), profile_env, 1200)
+                collect(directory, 32768, batch, recurrence)
+
+    def epilogue_diagnostic():
+        directory = args.output / "epilogue"
+        stage_env = dict(env, QWEN_GDN_EPILOGUE="1", QWEN_GDN_EPILOGUE_RECEIPT=str(directory / "epilogue.json"))
+        stage("epilogue", test_command("test_gdn_epilogue.py", directory, 5400), stage_env, 5400)
+        report = json.loads((directory / "epilogue.json").read_text())
+        if (
+            report.get("state") != "completed"
+            or report.get("passed") is not True
+            or report.get("cleanup_completed") is not True
+        ):
+            raise ValueError("Epilogue diagnostic failed or did not release hardware")
+
     try:
         verify_source()
         validate_policies(model)
@@ -182,14 +229,18 @@ def run(args):
             receipt = json.loads(args.after_receipt.read_text()) if args.after_receipt.exists() else None
             status["predecessor"] = properties
             save(status_path, status)
-            if predecessor_ready(properties, receipt, args.after_invocation):
+            if predecessor_ready(properties, receipt, args.after_invocation, clean_release=args.after_clean_release):
                 break
             time.sleep(20)
+        if args.profiles_first:
+            profiles()
+        if args.epilogue_first:
+            epilogue_diagnostic()
         # Each safe runner obtains the same global flock; the controller never
         # holds it while waiting on a child that also needs the lock.
         for name, policy in (("native-before", "native"), ("shared-qk", "shared-qk"), ("native-after", "native")):
             directory = args.output / name
-            plan = make_plan(1, batches=(16, 32), input_lengths=(32768, 16384))
+            plan = make_plan(1, batches=(32, 16), input_lengths=(32768, 16384))
             plan.update(
                 recurrence_variant=policy, qualification_scope="Matched BFP8 throughput; separate full GPQA follows"
             )
@@ -218,25 +269,8 @@ def run(args):
                 recurrence_policies=("native", "single_step_shared_qk"),
             )
             render(comparison, args.output / ("comparison-" + label))
-        # Changed greedy tokens are recorded, not treated as reference accuracy.
-        for batch in (16, 32):
-            for label, recurrence in (("native", "native"), ("shared-qk", "single_step_shared_qk")):
-                name = f"profile-s32768-b{batch}-{label}"
-                directory = args.output / name
-                profile_env = dict(
-                    env,
-                    QWEN_PRECISION_CONFIG=str(model / "config" / POLICIES[label]),
-                    QWEN_BOUNDED_LAYER_PROFILE="1",
-                    QWEN_PROFILE_CONTEXT="32768",
-                    QWEN_PROFILE_BATCH=str(batch),
-                    QWEN_PROFILE_RECURRENCE=recurrence,
-                    QWEN_PROFILE_RECEIPT=str(directory / "profile.json"),
-                    TT_METAL_PROFILER_DIR=str(directory / "tracy"),
-                    TRACY_NO_WEB_SERVER="1",
-                    TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES="1",
-                )
-                stage(name, test_command("test_bounded_layer_profile.py", directory, 1200, True), profile_env, 1200)
-                collect(directory, 32768, batch, recurrence)
+        if not args.profiles_first:
+            profiles()
         if args.qualify:
             # Reuse the accuracy-only runner's exact-source G0 and complete GPQA.
             # Its historical "native-control" label is generic here; the policy
@@ -290,4 +324,7 @@ if __name__ == "__main__":
     parser.add_argument("--after-invocation", required=True)
     parser.add_argument("--wait-timeout", type=int, default=64800)
     parser.add_argument("--qualify", action="store_true")
+    parser.add_argument("--after-clean-release", action="store_true")
+    parser.add_argument("--profiles-first", action="store_true")
+    parser.add_argument("--epilogue-first", action="store_true")
     run(parser.parse_args())

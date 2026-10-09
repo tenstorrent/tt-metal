@@ -1,0 +1,18 @@
+{
+  "state": "waiting",
+  "hardware_opened": false,
+  "image": "sha256:79f7b4469a6ec2bcce5204399b37b2aeced8be7f260dd98f7007ad41f8813055",
+  "predecessor_unit": "qwen38-perf-priority-v1-20261009.service",
+  "predecessor_invocation": "4a07251dcbda49239e3b017f7fe8ef47",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "started_at": 1791584437.1470826,
+  "updated_at": 1791584497.226644,
+  "predecessor": {
+    "MainPID": "2913530",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "4a07251dcbda49239e3b017f7fe8ef47"
+  }
+}

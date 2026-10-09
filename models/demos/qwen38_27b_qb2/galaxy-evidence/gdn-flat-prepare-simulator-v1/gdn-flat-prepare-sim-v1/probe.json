@@ -1,0 +1,16 @@
+{
+  "state": "running",
+  "passed": false,
+  "cleanup_completed": false,
+  "cases": [],
+  "physical_devices_accessed": false,
+  "hardware_timing_claim": false,
+  "promoted_to_model": false,
+  "scope": "Direct tiled-input packing plus existing FP32 normalization; native exp stays external",
+  "updated_at": "2026-10-09T22:14:27Z",
+  "active_case": [
+    1,
+    32,
+    "dram"
+  ]
+}

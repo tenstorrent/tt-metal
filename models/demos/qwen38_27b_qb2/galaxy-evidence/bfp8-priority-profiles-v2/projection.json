@@ -1,0 +1,88 @@
+{
+  "scope": "Projections anchored to completed native full-model sweep and eager stage/standalone trace differences; not optimized full-model or Galaxy throughput measurements",
+  "assumptions": [
+    "48 equivalent GDN layers; measured per-layer difference transfers to full-model trace",
+    "Attention latency unchanged within the measured diagnostic variation",
+    "DRAM epilogue difference adds without overlap with the recurrence replacement",
+    "Eight independent TP4 replicas equally loaded for Galaxy aggregate extrapolation",
+    "B32 serving buckets and aggregate scaling require separate qualification"
+  ],
+  "rows": [
+    {
+      "batch_per_tp4": 16,
+      "input_tokens": 32768,
+      "baseline_measured_tsu": 11.749089392026692,
+      "baseline_measured_tpot_ms": 85.112979111269,
+      "stage_kernel_ms": [
+        {
+          "L0_decode_forward": 1.2487085,
+          "L0__delta_recurrence": 0.5848635,
+          "L3_decode_forward": 1.241445
+        },
+        {
+          "L0_decode_forward": 0.906619,
+          "L0__delta_recurrence": 0.2438875,
+          "L3_decode_forward": 1.2418035
+        }
+      ],
+      "estimated_gdn_saving_ms": 16.420296,
+      "estimated_epilogue_saving_ms": 1.3209446892142296,
+      "shared_qk": {
+        "projected_step_ms": 68.69268311126899,
+        "projected_tsu": 14.557591212155616,
+        "ideal_eight_replica_output_tps": 1863.3716751559189,
+        "measured_full_model": false
+      },
+      "shared_qk_plus_epilogue": {
+        "projected_step_ms": 67.37173842205476,
+        "projected_tsu": 14.843019097049762,
+        "ideal_eight_replica_output_tps": 1899.9064444223695,
+        "measured_full_model": false
+      }
+    },
+    {
+      "batch_per_tp4": 32,
+      "input_tokens": 32768,
+      "baseline_measured_tsu": 7.353731782628705,
+      "baseline_measured_tpot_ms": 135.98537852063657,
+      "stage_kernel_ms": [
+        {
+          "L0_decode_forward": 1.9994205,
+          "L0__delta_recurrence": 1.1609825,
+          "L3_decode_forward": 2.012929
+        },
+        {
+          "L0_decode_forward": 1.214472,
+          "L0__delta_recurrence": 0.3756275,
+          "L3_decode_forward": 2.0183425
+        }
+      ],
+      "estimated_gdn_saving_ms": 37.677528,
+      "estimated_epilogue_saving_ms": 3.200676552951336,
+      "shared_qk": {
+        "projected_step_ms": 98.30785052063658,
+        "projected_tsu": 10.172127604296282,
+        "ideal_eight_replica_output_tps": 2604.064666699848,
+        "measured_full_model": false
+      },
+      "shared_qk_plus_epilogue": {
+        "projected_step_ms": 95.10717396768524,
+        "projected_tsu": 10.514453939507991,
+        "ideal_eight_replica_output_tps": 2691.7002085140457,
+        "measured_full_model": false
+      }
+    }
+  ],
+  "sources": {
+    "bfp8-gdn-followup-v1/gpqa-first-v2/bfp8-budget32k/sweep.json": "5cf9ea7c301a63fc893a30379bf7acb1be5e86b40f612166859448491180771e",
+    "gdn-epilogue-hardware-result-v1/perf-priority-v1/epilogue/epilogue.json": "f09597d9d8de4ef198c431851e6517ceeb2c0202406089f20c8489aeb61a97d4",
+    "bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/profile.json": "b470a370e53170e6757f7c6bf3cd073f94af67165da2379e6433df36ef44521b",
+    "bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-native/analysis/profile-summary.json": "3faa2aa615400ecee6bcdce480ed294698e0befc52054301796f795e2f25a7d2",
+    "bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/profile.json": "dff892c13b570ed55a03715475a2ce98d667b6e9c43dd0940fcfbae7ba304a8a",
+    "bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b16-shared-qk/analysis/profile-summary.json": "b3b4e83fca7811b7e2a2efa35ea043b0bdd4e4af7dd7ff876dca8b75685f2b17",
+    "bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/profile.json": "b74a72abf75d40455d83d60c00f76baff966d8f3dfc876bbfccaad53f588775a",
+    "bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-native/analysis/profile-summary.json": "561bfbdb07a86a2942e7982a64a8bf12de6476b30a25a1b6bec9ed6ec51c55ee",
+    "bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/profile.json": "01b306b864c1fddbf998e61c8179e29f997a771992cda6beae4f2090f90dd527",
+    "bfp8-priority-profiles-v2/perf-priority-v1/profile-s32768-b32-shared-qk/analysis/profile-summary.json": "a56b261405abe1bb8f6415790d79652cdbd00e7134b9d4a2abeb7fc0240d5f38"
+  }
+}

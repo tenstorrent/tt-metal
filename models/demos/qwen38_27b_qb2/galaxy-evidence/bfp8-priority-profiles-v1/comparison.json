@@ -1,0 +1,595 @@
+{
+  "scope": "Warm eager real-weight two-layer diagnostic with synthetic caches; kernel-duration sums, not traced full-model TPOT or accuracy",
+  "batch": 32,
+  "input_tokens": 32768,
+  "matching_operands": true,
+  "matching_precision_except_recurrence": true,
+  "rows": [
+    {
+      "stage": "L0__delta_recurrence",
+      "native_kernel_us": 1160.9825,
+      "shared_qk_kernel_us": 375.6275,
+      "latency_reduction_percent": 67.64572248074367,
+      "ranks": [
+        [
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 0,
+            "stage": "P0_S32768_B32_L0__delta_recurrence",
+            "device_op_rows": 63.0,
+            "firmware_ns": 1251527.0,
+            "kernel_ns": 1159506.0,
+            "reader_ns": 1157296.0,
+            "writer_ns": 917787.0,
+            "not_applicable_compute_ns_rows": 43.0,
+            "compute_ns": 492441.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 4,
+            "stage": "P0_S32768_B32_L0__delta_recurrence",
+            "device_op_rows": 63.0,
+            "firmware_ns": 1255427.0,
+            "kernel_ns": 1162459.0,
+            "reader_ns": 1160167.0,
+            "writer_ns": 919670.0,
+            "not_applicable_compute_ns_rows": 43.0,
+            "compute_ns": 493786.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 8,
+            "stage": "P0_S32768_B32_L0__delta_recurrence",
+            "device_op_rows": 63.0,
+            "firmware_ns": 1250010.0,
+            "kernel_ns": 1158399.0,
+            "reader_ns": 1156299.0,
+            "writer_ns": 919844.0,
+            "not_applicable_compute_ns_rows": 43.0,
+            "compute_ns": 496045.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 12,
+            "stage": "P0_S32768_B32_L0__delta_recurrence",
+            "device_op_rows": 63.0,
+            "firmware_ns": 1259732.0,
+            "kernel_ns": 1167641.0,
+            "reader_ns": 1165098.0,
+            "writer_ns": 920499.0,
+            "not_applicable_compute_ns_rows": 43.0,
+            "compute_ns": 491128.0
+          }
+        ],
+        [
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 0,
+            "stage": "P0_S32768_B32_L0__delta_recurrence",
+            "device_op_rows": 32.0,
+            "firmware_ns": 403861.0,
+            "kernel_ns": 375470.0,
+            "reader_ns": 374862.0,
+            "writer_ns": 293209.0,
+            "not_applicable_compute_ns_rows": 10.0,
+            "compute_ns": 270705.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 4,
+            "stage": "P0_S32768_B32_L0__delta_recurrence",
+            "device_op_rows": 32.0,
+            "firmware_ns": 403057.0,
+            "kernel_ns": 374733.0,
+            "reader_ns": 374086.0,
+            "writer_ns": 293103.0,
+            "not_applicable_compute_ns_rows": 10.0,
+            "compute_ns": 270920.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 8,
+            "stage": "P0_S32768_B32_L0__delta_recurrence",
+            "device_op_rows": 32.0,
+            "firmware_ns": 404244.0,
+            "kernel_ns": 375785.0,
+            "reader_ns": 375216.0,
+            "writer_ns": 293541.0,
+            "not_applicable_compute_ns_rows": 10.0,
+            "compute_ns": 270745.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 12,
+            "stage": "P0_S32768_B32_L0__delta_recurrence",
+            "device_op_rows": 32.0,
+            "firmware_ns": 403956.0,
+            "kernel_ns": 376072.0,
+            "reader_ns": 375423.0,
+            "writer_ns": 293473.0,
+            "not_applicable_compute_ns_rows": 10.0,
+            "compute_ns": 271002.0
+          }
+        ]
+      ]
+    },
+    {
+      "stage": "L0_decode_forward",
+      "native_kernel_us": 1999.4205,
+      "shared_qk_kernel_us": 1214.472,
+      "latency_reduction_percent": 39.258800237368774,
+      "ranks": [
+        [
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 0,
+            "stage": "P0_S32768_B32_L0_decode_forward",
+            "device_op_rows": 119.0,
+            "firmware_ns": 2121737.0,
+            "kernel_ns": 1989247.0,
+            "reader_ns": 1966520.0,
+            "writer_ns": 1617809.0,
+            "not_applicable_compute_ns_rows": 71.0,
+            "compute_ns": 1045204.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 4,
+            "stage": "P0_S32768_B32_L0_decode_forward",
+            "device_op_rows": 119.0,
+            "firmware_ns": 2123467.0,
+            "kernel_ns": 1990066.0,
+            "reader_ns": 1975924.0,
+            "writer_ns": 1616817.0,
+            "not_applicable_compute_ns_rows": 71.0,
+            "compute_ns": 1045771.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 8,
+            "stage": "P0_S32768_B32_L0_decode_forward",
+            "device_op_rows": 119.0,
+            "firmware_ns": 2144309.0,
+            "kernel_ns": 2012181.0,
+            "reader_ns": 1961694.0,
+            "writer_ns": 1645325.0,
+            "not_applicable_compute_ns_rows": 71.0,
+            "compute_ns": 1046439.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 12,
+            "stage": "P0_S32768_B32_L0_decode_forward",
+            "device_op_rows": 119.0,
+            "firmware_ns": 2140559.0,
+            "kernel_ns": 2008775.0,
+            "reader_ns": 1979266.0,
+            "writer_ns": 1632839.0,
+            "not_applicable_compute_ns_rows": 71.0,
+            "compute_ns": 1041398.0
+          }
+        ],
+        [
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 0,
+            "stage": "P0_S32768_B32_L0_decode_forward",
+            "device_op_rows": 88.0,
+            "firmware_ns": 1274662.0,
+            "kernel_ns": 1205804.0,
+            "reader_ns": 1184310.0,
+            "writer_ns": 994215.0,
+            "not_applicable_compute_ns_rows": 38.0,
+            "compute_ns": 824302.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 4,
+            "stage": "P0_S32768_B32_L0_decode_forward",
+            "device_op_rows": 88.0,
+            "firmware_ns": 1269115.0,
+            "kernel_ns": 1200306.0,
+            "reader_ns": 1187753.0,
+            "writer_ns": 989482.0,
+            "not_applicable_compute_ns_rows": 38.0,
+            "compute_ns": 820762.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 8,
+            "stage": "P0_S32768_B32_L0_decode_forward",
+            "device_op_rows": 88.0,
+            "firmware_ns": 1297276.0,
+            "kernel_ns": 1228318.0,
+            "reader_ns": 1180178.0,
+            "writer_ns": 1016207.0,
+            "not_applicable_compute_ns_rows": 38.0,
+            "compute_ns": 820561.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 12,
+            "stage": "P0_S32768_B32_L0_decode_forward",
+            "device_op_rows": 88.0,
+            "firmware_ns": 1290585.0,
+            "kernel_ns": 1223140.0,
+            "reader_ns": 1195143.0,
+            "writer_ns": 1009343.0,
+            "not_applicable_compute_ns_rows": 38.0,
+            "compute_ns": 826392.0
+          }
+        ]
+      ]
+    },
+    {
+      "stage": "L0_packed_decode_conv",
+      "native_kernel_us": 149.7245,
+      "shared_qk_kernel_us": 149.707,
+      "latency_reduction_percent": 0.011688133872556072,
+      "ranks": [
+        [
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 0,
+            "stage": "P0_S32768_B32_L0_packed_decode_conv",
+            "device_op_rows": 13.0,
+            "firmware_ns": 160703.0,
+            "kernel_ns": 150329.0,
+            "reader_ns": 150199.0,
+            "writer_ns": 119458.0,
+            "not_applicable_compute_ns_rows": 6.0,
+            "compute_ns": 115073.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 4,
+            "stage": "P0_S32768_B32_L0_packed_decode_conv",
+            "device_op_rows": 13.0,
+            "firmware_ns": 160000.0,
+            "kernel_ns": 149593.0,
+            "reader_ns": 149487.0,
+            "writer_ns": 118987.0,
+            "not_applicable_compute_ns_rows": 6.0,
+            "compute_ns": 114672.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 8,
+            "stage": "P0_S32768_B32_L0_packed_decode_conv",
+            "device_op_rows": 13.0,
+            "firmware_ns": 160268.0,
+            "kernel_ns": 149856.0,
+            "reader_ns": 149739.0,
+            "writer_ns": 119132.0,
+            "not_applicable_compute_ns_rows": 6.0,
+            "compute_ns": 114672.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 12,
+            "stage": "P0_S32768_B32_L0_packed_decode_conv",
+            "device_op_rows": 13.0,
+            "firmware_ns": 159583.0,
+            "kernel_ns": 149358.0,
+            "reader_ns": 149224.0,
+            "writer_ns": 118384.0,
+            "not_applicable_compute_ns_rows": 6.0,
+            "compute_ns": 114270.0
+          }
+        ],
+        [
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 0,
+            "stage": "P0_S32768_B32_L0_packed_decode_conv",
+            "device_op_rows": 13.0,
+            "firmware_ns": 160587.0,
+            "kernel_ns": 150144.0,
+            "reader_ns": 150016.0,
+            "writer_ns": 119302.0,
+            "not_applicable_compute_ns_rows": 6.0,
+            "compute_ns": 115033.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 4,
+            "stage": "P0_S32768_B32_L0_packed_decode_conv",
+            "device_op_rows": 13.0,
+            "firmware_ns": 160096.0,
+            "kernel_ns": 149654.0,
+            "reader_ns": 149521.0,
+            "writer_ns": 119056.0,
+            "not_applicable_compute_ns_rows": 6.0,
+            "compute_ns": 114652.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 8,
+            "stage": "P0_S32768_B32_L0_packed_decode_conv",
+            "device_op_rows": 13.0,
+            "firmware_ns": 160144.0,
+            "kernel_ns": 149760.0,
+            "reader_ns": 149632.0,
+            "writer_ns": 119340.0,
+            "not_applicable_compute_ns_rows": 6.0,
+            "compute_ns": 114717.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 12,
+            "stage": "P0_S32768_B32_L0_packed_decode_conv",
+            "device_op_rows": 13.0,
+            "firmware_ns": 159741.0,
+            "kernel_ns": 149531.0,
+            "reader_ns": 149403.0,
+            "writer_ns": 118539.0,
+            "not_applicable_compute_ns_rows": 6.0,
+            "compute_ns": 114589.0
+          }
+        ]
+      ]
+    },
+    {
+      "stage": "L3_decode_forward",
+      "native_kernel_us": 2012.929,
+      "shared_qk_kernel_us": 2018.3425,
+      "latency_reduction_percent": -0.2689364602527,
+      "ranks": [
+        [
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 0,
+            "stage": "P0_S32768_B32_L3_decode_forward",
+            "device_op_rows": 51.0,
+            "firmware_ns": 3516245.0,
+            "kernel_ns": 2015630.0,
+            "reader_ns": 1984544.0,
+            "writer_ns": 1920756.0,
+            "compute_ns": 1804573.0,
+            "not_applicable_compute_ns_rows": 32.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 4,
+            "stage": "P0_S32768_B32_L3_decode_forward",
+            "device_op_rows": 51.0,
+            "firmware_ns": 3519208.0,
+            "kernel_ns": 2013057.0,
+            "reader_ns": 1996147.0,
+            "writer_ns": 1917826.0,
+            "compute_ns": 1807024.0,
+            "not_applicable_compute_ns_rows": 32.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 8,
+            "stage": "P0_S32768_B32_L3_decode_forward",
+            "device_op_rows": 51.0,
+            "firmware_ns": 3526385.0,
+            "kernel_ns": 2012801.0,
+            "reader_ns": 1986861.0,
+            "writer_ns": 1916172.0,
+            "compute_ns": 1807673.0,
+            "not_applicable_compute_ns_rows": 32.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 12,
+            "stage": "P0_S32768_B32_L3_decode_forward",
+            "device_op_rows": 51.0,
+            "firmware_ns": 3454464.0,
+            "kernel_ns": 2008930.0,
+            "reader_ns": 1932211.0,
+            "writer_ns": 1915130.0,
+            "compute_ns": 1741184.0,
+            "not_applicable_compute_ns_rows": 32.0
+          }
+        ],
+        [
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 0,
+            "stage": "P0_S32768_B32_L3_decode_forward",
+            "device_op_rows": 51.0,
+            "firmware_ns": 3529754.0,
+            "kernel_ns": 2028897.0,
+            "reader_ns": 1982339.0,
+            "writer_ns": 1934908.0,
+            "compute_ns": 1803020.0,
+            "not_applicable_compute_ns_rows": 32.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 4,
+            "stage": "P0_S32768_B32_L3_decode_forward",
+            "device_op_rows": 51.0,
+            "firmware_ns": 3523120.0,
+            "kernel_ns": 2012191.0,
+            "reader_ns": 1999241.0,
+            "writer_ns": 1918032.0,
+            "compute_ns": 1809687.0,
+            "not_applicable_compute_ns_rows": 32.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 8,
+            "stage": "P0_S32768_B32_L3_decode_forward",
+            "device_op_rows": 51.0,
+            "firmware_ns": 3532385.0,
+            "kernel_ns": 2017388.0,
+            "reader_ns": 1984028.0,
+            "writer_ns": 1924593.0,
+            "compute_ns": 1804520.0,
+            "not_applicable_compute_ns_rows": 32.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 12,
+            "stage": "P0_S32768_B32_L3_decode_forward",
+            "device_op_rows": 51.0,
+            "firmware_ns": 3468276.0,
+            "kernel_ns": 2019297.0,
+            "reader_ns": 1931741.0,
+            "writer_ns": 1927833.0,
+            "compute_ns": 1740228.0,
+            "not_applicable_compute_ns_rows": 32.0
+          }
+        ]
+      ]
+    },
+    {
+      "stage": "L3_paged_decode",
+      "native_kernel_us": 1505.0965,
+      "shared_qk_kernel_us": 1504.9045,
+      "latency_reduction_percent": 0.012756657131285376,
+      "ranks": [
+        [
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 0,
+            "stage": "P0_S32768_B32_L3_paged_decode",
+            "device_op_rows": 3.0,
+            "firmware_ns": 2918380.0,
+            "kernel_ns": 1504408.0,
+            "reader_ns": 1504002.0,
+            "writer_ns": 1484639.0,
+            "compute_ns": 1498137.0,
+            "not_applicable_compute_ns_rows": 1.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 4,
+            "stage": "P0_S32768_B32_L3_paged_decode",
+            "device_op_rows": 3.0,
+            "firmware_ns": 2924799.0,
+            "kernel_ns": 1505785.0,
+            "reader_ns": 1505366.0,
+            "writer_ns": 1484853.0,
+            "compute_ns": 1499709.0,
+            "not_applicable_compute_ns_rows": 1.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 8,
+            "stage": "P0_S32768_B32_L3_paged_decode",
+            "device_op_rows": 3.0,
+            "firmware_ns": 2934103.0,
+            "kernel_ns": 1506894.0,
+            "reader_ns": 1506481.0,
+            "writer_ns": 1486201.0,
+            "compute_ns": 1501101.0,
+            "not_applicable_compute_ns_rows": 1.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 12,
+            "stage": "P0_S32768_B32_L3_paged_decode",
+            "device_op_rows": 3.0,
+            "firmware_ns": 2804189.0,
+            "kernel_ns": 1443744.0,
+            "reader_ns": 1443322.0,
+            "writer_ns": 1422939.0,
+            "compute_ns": 1437891.0,
+            "not_applicable_compute_ns_rows": 1.0
+          }
+        ],
+        [
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 0,
+            "stage": "P0_S32768_B32_L3_paged_decode",
+            "device_op_rows": 3.0,
+            "firmware_ns": 2919708.0,
+            "kernel_ns": 1504145.0,
+            "reader_ns": 1503773.0,
+            "writer_ns": 1483471.0,
+            "compute_ns": 1498205.0,
+            "not_applicable_compute_ns_rows": 1.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 4,
+            "stage": "P0_S32768_B32_L3_paged_decode",
+            "device_op_rows": 3.0,
+            "firmware_ns": 2934746.0,
+            "kernel_ns": 1508983.0,
+            "reader_ns": 1508588.0,
+            "writer_ns": 1488240.0,
+            "compute_ns": 1503068.0,
+            "not_applicable_compute_ns_rows": 1.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 8,
+            "stage": "P0_S32768_B32_L3_paged_decode",
+            "device_op_rows": 3.0,
+            "firmware_ns": 2935699.0,
+            "kernel_ns": 1505664.0,
+            "reader_ns": 1505278.0,
+            "writer_ns": 1484907.0,
+            "compute_ns": 1499762.0,
+            "not_applicable_compute_ns_rows": 1.0
+          },
+          {
+            "input_tokens": 32768,
+            "batch": 32,
+            "device": 12,
+            "stage": "P0_S32768_B32_L3_paged_decode",
+            "device_op_rows": 3.0,
+            "firmware_ns": 2808614.0,
+            "kernel_ns": 1443783.0,
+            "reader_ns": 1443382.0,
+            "writer_ns": 1424012.0,
+            "compute_ns": 1437985.0,
+            "not_applicable_compute_ns_rows": 1.0
+          }
+        ]
+      ]
+    }
+  ],
+  "sources": {
+    "perf-priority-v1/profile-s32768-b32-native/profile.json": "b74a72abf75d40455d83d60c00f76baff966d8f3dfc876bbfccaad53f588775a",
+    "perf-priority-v1/profile-s32768-b32-native/analysis/profile-summary.json": "561bfbdb07a86a2942e7982a64a8bf12de6476b30a25a1b6bec9ed6ec51c55ee",
+    "perf-priority-v1/profile-s32768-b32-shared-qk/profile.json": "01b306b864c1fddbf998e61c8179e29f997a771992cda6beae4f2090f90dd527",
+    "perf-priority-v1/profile-s32768-b32-shared-qk/analysis/profile-summary.json": "a56b261405abe1bb8f6415790d79652cdbd00e7134b9d4a2abeb7fc0240d5f38"
+  }
+}
