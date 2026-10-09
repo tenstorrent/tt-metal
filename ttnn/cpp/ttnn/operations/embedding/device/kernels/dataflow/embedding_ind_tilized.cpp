@@ -129,7 +129,9 @@ void kernel_main() {
             }
         }
     }
-    // dfb_in1 is reserved once as an index scratch buffer (no downstream consumer); commit the
-    // reservation so the buffer is left balanced.
+    // dfb_in1 is reserved once as an index scratch buffer (no downstream consumer). This kernel holds both
+    // ends of it, so commit the reservation and pop it to leave the buffer empty.
     dfb_in1.push_back(1);
+    dfb_in1.wait_front(1);
+    dfb_in1.pop_front(1);
 }

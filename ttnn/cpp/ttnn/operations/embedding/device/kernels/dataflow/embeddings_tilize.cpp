@@ -131,9 +131,12 @@ void kernel_main() {
             curr_row++;
         }
     }
-    // dfb_in1 is reserved once as an index scratch buffer (no downstream consumer); commit the
-    // reservation so the buffer is left balanced. The Quasar scratchpad needs no such balancing.
+    // dfb_in1 is reserved once as an index scratch buffer (no downstream consumer). This kernel holds both
+    // ends of it, so commit the reservation and pop it to leave the buffer empty. The Quasar scratchpad needs
+    // no such balancing.
 #ifndef ARCH_QUASAR
     dfb_in1.push_back(1);
+    dfb_in1.wait_front(1);
+    dfb_in1.pop_front(1);
 #endif
 }
