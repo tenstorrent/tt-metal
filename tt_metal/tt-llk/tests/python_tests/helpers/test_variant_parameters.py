@@ -863,6 +863,16 @@ class PERF_STAGE(TemplateParameter):
 
 
 @dataclass
+class ROW_TILES(TemplateParameter):
+    """A row length compiled into the kernel; 0 keeps the runtime TILE_CNT."""
+
+    row_tiles: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t ROW_TILES = {self.row_tiles};"
+
+
+@dataclass
 class PACK_BLOCK_CONTIGUOUS(TemplateParameter):
     """True packs a block with one _llk_pack_block_contiguous_ call, False with one standard _llk_pack_ per tile."""
 

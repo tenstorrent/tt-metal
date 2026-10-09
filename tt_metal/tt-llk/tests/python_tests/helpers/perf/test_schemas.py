@@ -638,7 +638,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_matmul_pack_untilize": "perf_matmul_pack_untilize"},
     },
     "perf_mul_reduce_scalar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -655,6 +655,7 @@ PERF_TEST_SCHEMAS = {
             "num_faces_c_dim_B",
             "num_faces_r_dim_A",
             "num_faces_r_dim_B",
+            "row_tiles",
             "tile_cnt",
             "unpack_to_dest",
         ],

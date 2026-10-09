@@ -16,6 +16,7 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    ROW_TILES,
     TILE_COUNT,
 )
 
@@ -23,12 +24,12 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
 
-# (fidelity, tiles per row)
+# (fidelity, tiles per row, row length compiled in: 0 for the runtime count)
 VARIANTS = [
-    (fidelity, num_tiles)
+    (fidelity, num_tiles, 0)
     for num_tiles in (1, 2, 4, 8)
     for fidelity in (MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4)
-]
+] + [(MathFidelity.LoFi, num_tiles, num_tiles) for num_tiles in (1, 2, 3, 7)]  # the DeepSeek RMSNorm's rows
 
 
 @pytest.mark.perf
@@ -36,7 +37,7 @@ VARIANTS = [
 def test_perf_mul_reduce_scalar(perf_report, variant):
     if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
         (variant,) = variant
-    fidelity, num_tiles = variant
+    fidelity, num_tiles, row_tiles = variant
     configuration = PerfConfig(
         "sources/mul_reduce_scalar_perf.cpp",
         InputOutputFormat(BF16, BF16),
@@ -46,7 +47,7 @@ def test_perf_mul_reduce_scalar(perf_report, variant):
             PerfRunType.MATH_ISOLATE,
             PerfRunType.PACK_ISOLATE,
         ],
-        templates=[MATH_FIDELITY(fidelity)],
+        templates=[MATH_FIDELITY(fidelity), ROW_TILES(row_tiles)],
         runtimes=[
             TILE_COUNT(num_tiles),
             NUM_FACES_R_DIM(2, 2),

@@ -3,6 +3,7 @@
 
 // Perf kernel of the Blackhole mul_reduce_scalar row: per iteration the multiply phase of TILE_CNT tiles, the reduce
 // tail and one masked pack. Data valids per row: four SrcA and four SrcB per tile, then one of each for the reduce.
+// ROW_TILES > 0 compiles the row length in, so the math thread runs the API's form for a compile-time count.
 
 #include <cstdint>
 
@@ -115,8 +116,21 @@ inline void _calculate_fill_x_(const float value)
 
 static constexpr float REDUCE_SCALER = 1.0f;
 
-inline void row_math(const std::uint32_t tile_cnt, const ckernel::TensorShape& tensor_shape)
+// mul_reduce_scalar_tile's later tiles for a compile-time count, as the API runs them on Blackhole.
+template <std::uint32_t row_tiles>
+inline void reduce_later_tiles(const ckernel::TensorShape& tensor_shape)
 {
+#pragma GCC unroll 8
+    for (std::uint32_t i = 1; i < row_tiles; ++i)
+    {
+        _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i);
+        _llk_math_mul_reduce_column_<MATH_FIDELITY, false>(DST_INDEX, tensor_shape);
+    }
+}
+
+inline void row_math(const std::uint32_t runtime_tile_cnt, const ckernel::TensorShape& tensor_shape)
+{
+    const std::uint32_t tile_cnt = ROW_TILES > 0 ? ROW_TILES : runtime_tile_cnt;
     _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(tensor_shape, 0);
     for (std::uint32_t i = 0; i < tile_cnt; ++i)
     {
@@ -134,10 +148,17 @@ inline void row_math(const std::uint32_t tile_cnt, const ckernel::TensorShape& t
     _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(DST_INDEX);
     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_x_<false, 2>, DST_INDEX, VectorMode::RC_custom, 0.0f);
     _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
-    for (std::uint32_t i = 1; i < tile_cnt; ++i)
+    if constexpr (ROW_TILES > 0)
     {
-        _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i);
-        _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
+        reduce_later_tiles<ROW_TILES>(tensor_shape);
+    }
+    else
+    {
+        for (std::uint32_t i = 1; i < tile_cnt; ++i)
+        {
+            _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i);
+            _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
+        }
     }
     _llk_math_mul_reduce_scalar_<MATH_FIDELITY>();
     _llk_math_mul_reduce_scalar_clear_dvalid_();

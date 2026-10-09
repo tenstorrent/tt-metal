@@ -161,6 +161,7 @@ DB_SCHEMA = [
     Column("ring_depth", "int64", True, "configuration"),
     Column("rmsnorm_num_faces", "int64", True, "configuration"),
     Column("rmsnorm_num_tiles", "int64", True, "configuration"),
+    Column("row_tiles", "int64", True, "configuration"),
     Column("scale_bits", "int64", True, "configuration"),
     Column("scale_fp32", "int64", True, "configuration"),
     Column("scores_include_bias", "bool", True, "configuration"),
