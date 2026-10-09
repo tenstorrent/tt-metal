@@ -2,19 +2,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""MatmulUnifiedProgramConfig: one placement-first matmul factory (Quasar-native matmul, stages A to C).
+"""MatmulUnifiedProgramConfig: one placement-first matmul factory (Quasar-native matmul).
 
 Every test drives the same kernels through a different (cores, C_slice_M_tiles, C_slice_N_tiles) placement and
 memory layout. Correctness is checked with allclose against an fp32 golden of the bf16-rounded inputs
 (the device runs HiFi4 here), plus exact checks with structured inputs (identity / ones / zeros), which catch
 indexing and edge-clipping errors that a statistical check would not.
 
-Compute threads (stage B): on Quasar the compute kernel runs on all four NEOs of a cluster by default
+Compute threads: on Quasar the compute kernel runs on all four NEOs of a cluster by default
 (num_compute_threads auto = 4), and each C slice's subblocks are assigned round-robin to the threads.
 Wormhole / Blackhole have one compute engine per core, so there every test runs with one thread and the
 tests that set num_compute_threads > 1 are skipped.
 
-DM threads and buffering (stage C): on Quasar four reader threads take each C slice's K chunks round-robin (padded
+DM threads and buffering: on Quasar four reader threads take each C slice's K chunks round-robin (padded
 to a multiple of four with credit-only K chunks) and two writer threads take the compute threads' shares of C;
 Wormhole / Blackhole have one reader and one writer. Cores with several C slices keep two in flight.
 
@@ -26,10 +26,8 @@ Run on the Quasar simulator (one config per process; a sim-side hang ignores pyt
         TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_FORCE_JIT_COMPILE=1 \\
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py -k <case>
 
-    A craq-sim built from the quasar branch of 2026-09-24 or later runs every case here, including K spill
-    (partials through C_partials); the libttsim.so of 2026-08-26 hangs on every K-spill case, for this
-    factory and for the legacy Metal 2.0 reuse factory alike. The emulator is the place to confirm timing
-    on Quasar.
+    Needs a craq-sim built from the quasar branch of 2026-09-24 or later. The emulator is the place to confirm
+    timing on Quasar.
 """
 
 import pytest
@@ -675,7 +673,7 @@ def test_ragged_batched_spill_all_at_once(device):
 
 
 # ----------------------------------------------------------------------------------------------------
-# Compute threads (stage B): a C slice's subblocks are assigned round-robin to the NEOs of a cluster
+# Compute threads: a C slice's subblocks are assigned round-robin to the NEOs of a cluster
 # ----------------------------------------------------------------------------------------------------
 
 # Subblocks are numbered across N then down M. With T threads, round r is subblocks r*T .. r*T + T - 1, one
@@ -788,7 +786,7 @@ def test_compute_threads_rejections(device, expect_error):
 
 
 # ----------------------------------------------------------------------------------------------------
-# DM threads and buffering (stage C): on Quasar four reader threads take each C slice's K chunks round-robin, padded
+# DM threads and buffering: on Quasar four reader threads take each C slice's K chunks round-robin, padded
 # with credit-only K chunks to a multiple of four, and two writer threads take the compute threads' shares
 # ----------------------------------------------------------------------------------------------------
 
