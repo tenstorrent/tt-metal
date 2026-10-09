@@ -35,13 +35,15 @@ constexpr auto indices_accessor_args =
     TensorAccessorArgs<dispatch_table_accessor_args.next_compile_time_args_offset()>();
 constexpr bool use_dispatch_table_skip =
     get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset()) != 0;
+// output tiles per 32-token row of the whole tensor (emb_dim_out_tiles = this core's column group)
+constexpr uint32_t row_tiles = get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset() + 1);
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
 
 void kernel_main() {
     // Runtime arg layout: weight_addr, output_addr,
     //   (if dispatch_table_skip: dispatch_table_addr, indices_addr),
-    //   token_start_idx, num_chunks.
+    //   token_start_idx, num_chunks, col_tile_start.
     uint32_t weight_addr = get_arg_val<uint32_t>(0);
     uint32_t output_addr = get_arg_val<uint32_t>(1);
     uint32_t dispatch_table_addr;
@@ -59,6 +61,7 @@ void kernel_main() {
         token_start_idx = get_arg_val<uint32_t>(2);
         num_chunks = get_arg_val<uint32_t>(3);
     }
+    const uint32_t col_tile_start = get_arg_val<uint32_t>(use_dispatch_table_skip ? 6 : 4);
 
     constexpr uint32_t weight_tile_size = get_tile_size(cb_weights);
     constexpr uint32_t output_tile_size = get_tile_size(cb_output);
@@ -141,32 +144,34 @@ void kernel_main() {
                 }
             }
 
+            // one batch per token: read only the weights the compute uses (local slots; the compute skips the
+            // rest without looking at them), one barrier per token
+            cb_reserve_back(cb_weights, num_experts);
+            const uint32_t base = get_write_ptr(cb_weights);
             for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
-                cb_reserve_back(cb_weights, 1);
-                uint32_t cb_write_addr = get_write_ptr(cb_weights);
-
+                const uint32_t cb_write_addr = base + expert_idx * weight_tile_size;
+                const uint32_t weight_page_idx = global_token_idx * num_experts + expert_idx;
                 if constexpr (use_dispatch_table_skip) {
-                    bool is_last = (expert_idx == num_experts - 1);
+                    const bool is_last = (expert_idx == num_experts - 1);
+                    tt_l1_ptr int32_t* dispatch_table = reinterpret_cast<tt_l1_ptr int32_t*>(dispatch_table_write_addr);
+                    tt_l1_ptr uint16_t* token_indices = reinterpret_cast<tt_l1_ptr uint16_t*>(
+                        indices_write_addr + token_idx * indices_aligned_page_size);
                     if (!has_local && is_last) {
                         // No local experts for this token — zero the weight tile so compute's
                         // must_zero_init multiply produces zeros regardless of combine_output.
-                        volatile tt_l1_ptr uint32_t* ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_write_addr);
+                        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_write_addr);
                         for (uint32_t w = 0; w < weight_tile_size / sizeof(uint32_t); w++) {
                             ptr[w] = 0;
                         }
-                    } else {
-                        uint32_t weight_page_idx = global_token_idx * num_experts + expert_idx;
+                    } else if (dispatch_table[token_indices[expert_idx]] != -1) {
                         noc_async_read_page(weight_page_idx, weight_addrg, cb_write_addr);
-                        noc_async_read_barrier();
                     }
                 } else {
-                    uint32_t weight_page_idx = global_token_idx * num_experts + expert_idx;
                     noc_async_read_page(weight_page_idx, weight_addrg, cb_write_addr);
-                    noc_async_read_barrier();
                 }
-                cb_push_back(cb_weights, 1);
             }
+            noc_async_read_barrier();
+            cb_push_back(cb_weights, num_experts);
         }
 
         // Phase 2: Write output tiles after compute finishes this chunk.
@@ -178,7 +183,7 @@ void kernel_main() {
         uint32_t cb_read_addr = get_read_ptr(cb_output);
 
         uint32_t tile_row = token_start_idx / TOKENS_PER_CHUNK;
-        uint32_t start_tile_idx = tile_row * emb_dim_out_tiles;
+        uint32_t start_tile_idx = tile_row * row_tiles + col_tile_start;
 
         for (uint32_t tile_idx = 0; tile_idx < emb_dim_out_tiles; ++tile_idx) {
             noc_async_write_page(start_tile_idx + tile_idx, output_addrg, cb_read_addr);
