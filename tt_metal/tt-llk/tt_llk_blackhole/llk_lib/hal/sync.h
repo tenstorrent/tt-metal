@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "cfg.h"
 #include "ckernel.h"
@@ -23,23 +24,14 @@ enum class Access : std::uint8_t
 /**
  * @brief Select one of the four Blackhole Tensix mutexes.
  *
- * The M0/M2/M3/M4 names are physical indices. The semantic aliases preserve
- * both the ISA labels and the roles already used by LLK code.
+ * The M0/M2/M3/M4 names are physical indices.
  */
 enum class Mutex : std::uint8_t
 {
     M0 = 0,
     M2 = 2,
     M3 = 3,
-    M4 = 4,
-
-    Math      = M0,
-    Unpacker0 = M2,
-    Unpacker1 = M3,
-    Packer0   = M4,
-
-    RegisterRmw = M0,
-    Sfpu        = M4
+    M4 = 4
 };
 
 /** @brief Select one of the eight physical Tensix semaphores by index. */
@@ -52,16 +44,7 @@ enum class Semaphore : std::uint8_t
     S4 = 4,
     S5 = 5,
     S6 = 6,
-    S7 = 7,
-
-    FpuSfpu           = S0,
-    MathPack          = S1,
-    UnpackToDest      = S2,
-    UnpackOperandSync = S3,
-    PackDone          = S4,
-    UnpackSync        = S5,
-    UnpackMathDone    = S6,
-    MathDone          = S7
+    S7 = 7
 };
 
 /** @brief Select one or more Tensix semaphores atomically. */
@@ -76,16 +59,7 @@ enum class SemaphoreMask : std::uint8_t
     S5   = 1u << 5,
     S6   = 1u << 6,
     S7   = 1u << 7,
-    All  = 0xffu,
-
-    FpuSfpu           = S0,
-    MathPack          = S1,
-    UnpackToDest      = S2,
-    UnpackOperandSync = S3,
-    PackDone          = S4,
-    UnpackSync        = S5,
-    UnpackMathDone    = S6,
-    MathDone          = S7
+    All  = 0xffu
 };
 
 /** @brief Select instruction classes blocked by a wait gate. */
@@ -208,44 +182,11 @@ namespace detail
 inline constexpr std::uint32_t STREAM_TARGET_LOW_BITS = 10;
 inline constexpr std::uint32_t STREAM_TARGET_LOW_MASK = (1u << STREAM_TARGET_LOW_BITS) - 1u;
 
-constexpr std::uint32_t value(const Mutex mutex)
+template <typename Enum>
+constexpr std::uint32_t value(const Enum selector)
 {
-    return static_cast<std::uint8_t>(mutex);
-}
-
-constexpr std::uint32_t value(const Semaphore semaphore)
-{
-    return static_cast<std::uint8_t>(semaphore);
-}
-
-constexpr std::uint32_t value(const SemaphoreMask mask)
-{
-    return static_cast<std::uint8_t>(mask);
-}
-
-constexpr std::uint32_t value(const StallTarget targets)
-{
-    return static_cast<std::uint16_t>(targets);
-}
-
-constexpr std::uint32_t value(const StallCondition conditions)
-{
-    return static_cast<std::uint16_t>(conditions);
-}
-
-constexpr std::uint32_t value(const SemaphoreCondition conditions)
-{
-    return static_cast<std::uint8_t>(conditions);
-}
-
-constexpr std::uint32_t value(const StreamSlot slot)
-{
-    return static_cast<std::uint8_t>(slot);
-}
-
-constexpr std::uint32_t value(const StreamTarget target)
-{
-    return static_cast<std::uint8_t>(target);
+    static_assert(std::is_enum_v<Enum>, "Sync selectors must be enum values");
+    return static_cast<std::uint32_t>(selector);
 }
 
 constexpr bool is_valid(const Access access)
