@@ -23,7 +23,7 @@ each of the 100 positions both predict the next token. The 128-token prompt is t
 At batch 32, 32 users decode together, each with the same prompt and answer; the batch-32 columns show the worst user
 (all 32 users measured the same). Measured on 2026-10-09 with `tests/test_accuracy.py`.
 
-| Measure | 235-token prompt, batch 1 | 235-token prompt, batch 32 | 128-token prompt, batch 1 | 128-token prompt, batch 32 | Bar |
+| Measure | 235-token prompt (AIME24), batch 1 | 235-token prompt (AIME24), batch 32 | 128-token prompt (AIME24), batch 1 | 128-token prompt (AIME24), batch 32 | Bar |
 |---|---:|---:|---:|---:|---:|
 | top-1: Laguna's top token is the reference's | 0.98 | 0.99 | 0.96 | 0.95 | >= 0.90 |
 | top-5: the reference's token is in Laguna's top 5 | 1.00 | 1.00 | 1.00 | 1.00 | >= 0.98 |
