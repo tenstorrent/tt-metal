@@ -207,7 +207,7 @@ Tensor full_impl(
     // row-major layouts, the other dtypes, sharded memory configs, a bfloat16 NaN fill value (the device fill stores
     // that as inf, the host path as NaN), bfloat8_b fill values other than +0.0 (the device fill rounds them through
     // bfloat16 first, the host path does not; zero is exact on both), and tensors smaller than k_min_device_fill_bytes
-    // unless they are a bfloat8_b zero fill.
+    // unless they are a non-empty bfloat8_b zero fill.
     const float float_value = static_cast<float>(fill_value);
     const bool output_on_device =
         !optional_output_tensor.has_value() || optional_output_tensor->storage_type() == StorageType::DEVICE;
@@ -220,7 +220,7 @@ Tensor full_impl(
             optional_output_tensor.has_value()
                 ? optional_output_tensor->tensor_spec()
                 : tt::tt_metal::TensorSpec(shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));
-        if (dtype_value == DataType::BFLOAT8_B ||
+        if ((dtype_value == DataType::BFLOAT8_B && output_spec.logical_shape().volume() > 0) ||
             output_spec.compute_packed_buffer_size_bytes() >= k_min_device_fill_bytes) {
             Tensor output = optional_output_tensor.has_value() ? *optional_output_tensor
                                                                : create_device_tensor(output_spec, device_to_use);
