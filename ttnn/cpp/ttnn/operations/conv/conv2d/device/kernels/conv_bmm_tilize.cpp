@@ -243,8 +243,8 @@ void kernel_main() {
     constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(36);
     constexpr bool split_reader_cb_shared = get_compile_time_arg_val(37) == 1;
 #if defined(ARCH_BLACKHOLE) && !defined(SFPU_OP_INIT_ACTIVATION)
-    // one math MOP per row of a sub block of 8 tiles or more at in0_block_w above 1; not with a fused activation, whose
-    // SFPU init runs once
+    // not with a fused activation: its SFPU init runs once, before the matmul re-inits that rewrite the math thread's
+    // ADDR_MOD_3, 6 and 7
     constexpr bool row_mop =
         out_subblock_h * out_subblock_w >= 8 && in0_block_w > 1 &&
         (DST_ACCUM_MODE || (unpack_src_format[out_cb_id] != (uint8_t)DataFormat::Float32 &&

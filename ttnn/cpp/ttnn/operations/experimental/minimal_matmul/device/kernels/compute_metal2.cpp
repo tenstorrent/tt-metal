@@ -544,7 +544,7 @@ void kernel_main() {
     constexpr auto subblock_h = get_arg(args::subblock_h);
     constexpr auto subblock_w = get_arg(args::subblock_w);
 #if defined(ARCH_BLACKHOLE) && !defined(SFPU_OP_INIT_ACTIVATION)
-    // one math MOP per sub block row; not with a fused activation, whose SFPU init runs once before the matmul inits
+    // not with a fused activation: its SFPU init runs once, before the matmul inits that rewrite ADDR_MOD_3, 6 and 7
     constexpr bool row_mop = subblock_h * subblock_w >= 8 && K_block_tiles > 1;
 #else
     constexpr bool row_mop = false;

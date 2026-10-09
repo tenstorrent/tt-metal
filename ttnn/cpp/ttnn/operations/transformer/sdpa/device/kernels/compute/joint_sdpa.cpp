@@ -34,7 +34,6 @@ void kernel_main() {
     constexpr uint32_t mask_chunk_1 = get_compile_time_arg_val(17);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(18);
 #ifdef ARCH_BLACKHOLE
-    // one math MOP per sub block row where the sub block holds 8 tiles or more and a block more than one k step
     constexpr bool qk_row_mop = qk_subblock_h * qk_subblock_w >= 8 && qk_in0_block_w > 1;
     constexpr bool out_row_mop = out_subblock_h * out_subblock_w >= 8 && out_in0_block_w > 1;
 #else

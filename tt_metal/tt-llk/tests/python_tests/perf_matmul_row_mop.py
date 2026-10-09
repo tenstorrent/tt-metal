@@ -27,8 +27,7 @@ from helpers.test_variant_parameters import (
 )
 from perf_matmul import matmul_combos
 
-# The blocks the bmm kernel runs on the row MOP: eight tiles or more, more than one k step, and not a Float32 output packed
-# from a 16-bit DEST; perf_matmul has the same rows on the tile MOP.
+# Blocks every caller of the row MOP takes; perf_matmul has the same rows on the tile MOP.
 ROW_MOP_MIN_TILES = 8
 
 

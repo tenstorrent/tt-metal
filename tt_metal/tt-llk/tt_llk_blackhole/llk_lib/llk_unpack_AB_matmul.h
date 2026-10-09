@@ -65,9 +65,8 @@ inline void _llk_unpack_AB_matmul_set_in1_column_stride_(const std::uint32_t til
 /**
  * @brief Whether a format holds 8 bits per datum or less (block float, fp8 and 8-bit integer formats).
  *
- * The unpacker moves such a tile in half the time of a 16-bit one, so the GPR address advance of the streamed operand
- * (RDCFG, ADDDMAREG, STALLWAIT, WRCFG) would set the rate; these formats get the CFGSHIFTMASK advance instead. 16-bit and
- * 32-bit formats keep the GPR advance.
+ * The unpacker moves such a tile in half the time of a 16-bit one, faster than the GPR address advance (RDCFG,
+ * ADDDMAREG, STALLWAIT, WRCFG) can follow, so these formats take the CFGSHIFTMASK advance.
  *
  * @param unpack_src_format: Unpacker input (L1) data format.
  */
@@ -119,10 +118,6 @@ inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
  * @brief Record the replay body for one streamed tile of a matmul row: the UNPACR group, the base address advance of that
  *        unpacker and the NOP that covers the config write.
  *
- * A narrow operand (8 bits per datum or less) advances with one CFGSHIFTMASK that adds SCRATCH_SEC0_val to CFG_REG; the
- * other formats read CFG_REG into a GPR, add STRIDE_GPR and write it back, as before this change. Under kernel broadcast
- * the advance is replaced by NOPs so the same tile is re-read.
- *
  * @tparam SRC: SrcA or SrcB, the source register (and unpacker) of the streamed operand.
  * @tparam CFG_REG: Base address register of the streamed operand's unpacker in the config context this copy serves.
  * @tparam STRIDE_GPR: GPR holding the streamed tile stride for the GPR advance.
@@ -158,8 +153,8 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face, con
     }
     else if (narrow)
     {
-        // SCRATCH_SEC0_val = STRIDE_GPR, then CFG_REG += SCRATCH_SEC0_val (0b011 = add, 32-bit mask, scratch_sel 0): the stride is
-        // read from the GPR every tile as before, without the RDCFG and ADDDMAREG round trip
+        // CFG_REG += SCRATCH_SEC0_val (0b011 = add, 32-bit mask, scratch_sel 0); the stride is copied from the GPR
+        // every tile, so it follows a data format reconfig
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // THCON writes the stride GPR, and on Blackhole a WRCFG can pass that write
         TTI_WRCFG(STRIDE_GPR, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
         TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0, CFG_REG);
@@ -181,7 +176,7 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face, con
  * Builds a replay buffer that unpacks the streamed (non-reused) operand and advances its L1 base
  * address by one tile each step. Which operand is reused versus streamed is chosen by comparing
  * ct_dim and rt_dim (reuse_a = ct_dim >= rt_dim); operand A maps to SrcB and operand B to SrcA.
- * The address advance is suppressed under kernel broadcast.
+ * The address bump is suppressed under kernel broadcast.
  *
  * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
@@ -262,12 +257,8 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  *
  * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
- * @tparam ttsync: Program each row's base addresses through two GPRs and WRCFG under Auto TTSync instead of the context
- *                 poll and the memory-mapped writes; faster for streams of one or two tiles. The first such init of a
- *                 kernel turns Auto TTSync on; the kernel must define MATMUL_UNPACK_TTSYNC (see
- *                 @ref _llk_unpack_AB_matmul_ttsync_restore_), and @ref _llk_unpack_AB_matmul_ takes the same value.
- *                 Every init waits for the thread to drain; an unpack config write after the init needs a new init,
- *                 and while the form is on no RISC store may target a GPR that a MOP or replay uses.
+ * @tparam ttsync: Write each row's base addresses through two GPRs and WRCFG under Auto TTSync instead of polling for a
+ *                 free context; the kernel must define MATMUL_UNPACK_TTSYNC and pass the same value to the execute.
  * @param transpose: Nonzero to enable within-face (16x16) transpose for SrcA.
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
@@ -278,10 +269,11 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  * @param unpB_num_faces: Number of faces for operand B, valid values = <1, 2, 4>.
  * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
  * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
- * @param stream_narrow: Whether the streamed operand holds 8 bits per datum or less, from
- *                       @ref _llk_unpack_AB_matmul_stream_narrow_; such an operand is streamed at its data rate (the replay
- *                       advances its address with one CFGSHIFTMASK), every other one as before.
+ * @param stream_narrow: The value of @ref _llk_unpack_AB_matmul_stream_narrow_; true advances the streamed operand's
+ *                       address with one CFGSHIFTMASK.
  * @note Call @ref _llk_unpack_AB_matmul_uninit_ to restore the modified datum-count state.
+ * @note With ttsync, run a new init after any unpack config write, and while the form is on let no RISC store target a
+ *       GPR that a MOP or replay uses.
  * @ref _llk_unpack_AB_matmul_ is the matching execute call.
  * @ref _llk_math_matmul_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */

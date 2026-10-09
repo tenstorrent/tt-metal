@@ -229,8 +229,8 @@ void kernel_main() {
     constexpr uint32_t out_dfb_id = dfb::out;
     constexpr uint32_t mm_partials_dfb_id = dfb::intermed0;
 #ifdef ARCH_BLACKHOLE
-    // one math MOP per row of the sub block above LoFi, and at LoFi for rows of 6 tiles or more or 8 tiles with two or
-    // more k steps, except where a 16-bit DEST is packed to Float32; only the math thread reads row_mop
+    // MATH_FIDELITY exists on the math thread only, the one thread that reads row_mop; a Float32 pack from a 16-bit
+    // DEST needs the DEST read cycles the tile MOP leaves free
 #if defined(UCK_CHLKC_MATH)
     constexpr bool row_mop_fidelity = MATH_FIDELITY != ckernel::MathFidelity::LoFi;
 #else
@@ -245,8 +245,7 @@ void kernel_main() {
 #else
     constexpr bool reload_every_block = num_blocks_inner_dim > 1;
 #endif
-    // each row's base addresses through GPRs under Auto TTSync where a row streams one or two tiles, unless the partials
-    // are reloaded every block (each matmul init after the reload then drains the unpack thread)
+    // not when the partials are reloaded every block: the matmul init after each reload drains the unpack thread
     constexpr bool unpack_ttsync = out_subblock_w <= 2 && out_subblock_h <= 2 && !reload_every_block;
 #else
     constexpr bool row_mop = false;

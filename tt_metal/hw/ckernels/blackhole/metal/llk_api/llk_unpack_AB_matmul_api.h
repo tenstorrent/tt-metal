@@ -15,10 +15,8 @@
 // Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/2_0/). Matmul unpack is
 // FORMAT-FREE at the op level (src/dst formats are programmed at compute_kernel_hw_startup<SrcOrder::Reverse>),
 // so the cores take only the already-resolved geometry (face_r_dim / num_faces / partial_face per src) +
-// runtime addresses + per-tile sizes; the init core also takes stream_narrow, which the callers derive from the
-// operands' L1 formats and DST_ACCUM_MODE with _llk_unpack_AB_matmul_stream_narrow_ (with a 16-bit DEST an 8-bit
-// streamed operand is streamed at its data rate; false keeps the replay body every format can use). The role swap (in0
-// -> SrcB, in1 -> SrcA) is applied by the callers.
+// runtime addresses + per-tile sizes. The role swap (in0 -> SrcB, in1 -> SrcA) is applied by the callers.
+// The init core's stream_narrow is _llk_unpack_AB_matmul_stream_narrow_ of the operands' L1 formats and DST_ACCUM_MODE.
 template <bool ttsync = false>
 inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t transpose,

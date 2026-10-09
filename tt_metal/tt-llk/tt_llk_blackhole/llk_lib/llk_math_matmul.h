@@ -480,12 +480,8 @@ inline void matmul_set_row_tile_end_dest(const std::uint32_t dest_tile_stride)
 /**
  * @brief Build the matmul MOP for a whole reuse row of full 32x32 tiles, the opt-in form of @ref matmul_configure_mop.
  *
- * MVMUL 1 to 15 of a tile are the replay and MVMUL 16 is the MOP's second loop instruction, which the MOP replaces at the
- * end of a tile (ADDR_MOD_3: sources to zero, DEST to the next tile of the row, fidelity phase to zero, streamed bank
- * cleared) and at the end of the row (ADDR_MOD_6: every counter to zero, both banks cleared). Between fidelity phases
- * MVMUL 16 uses ADDR_MOD_7, which returns DEST to the tile base held in the carriage return register. The tiles of the
- * row are the outer loop, so the math thread issues one DEST offset and one MOP per row instead of a DEST offset, a MOP
- * and, at high fidelity, a SETRWC per tile. Other tile geometries take @ref matmul_configure_mop.
+ * MVMUL 16 of a tile is the loop instruction: ADDR_MOD_7 between fidelity phases (DEST back to the tile base),
+ * ADDR_MOD_3 at the end of a tile (DEST to the next tile of the row) and ADDR_MOD_6 at the end of the row.
  *
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param ct_dim: Number of column tiles in the output block.

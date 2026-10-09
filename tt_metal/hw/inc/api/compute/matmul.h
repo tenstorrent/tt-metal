@@ -195,15 +195,11 @@ ALWI void matmul_tiles(
  * reconfig_data_format is inappropriate when the data formats did not change. No current kernel hits this;
  * tracked in #46769.
  *
- * The template parameter row_mop (Blackhole; other architectures ignore it) makes the math thread run one MOP per
- * reuse row of full 32x32 tiles when MM_THROTTLE is 0; matmul_block must be called with the same value. That MOP also
- * uses the math thread's ADDR_MOD_3, 6 and 7, so a math-thread SFPU init between the two needs a new matmul_block_init,
- * and a math-thread SFPU op after the matmul needs its own init again.
+ * Template parameter row_mop (ignored outside Blackhole): one math MOP per reuse row, the same value in matmul_block.
+ * It sets the math ADDR_MOD_3, 6 and 7: redo this init after a math-thread SFPU init, and that init after the matmul.
  *
- * The template parameter unpack_ttsync (Blackhole; other architectures ignore it) makes the unpack thread write each row's
- * base addresses through two GPRs and WRCFG under Auto TTSync instead of polling for a free config context; it is faster
- * for blocks of at most two tiles in each direction. The kernel must define MATMUL_UNPACK_TTSYNC before its includes, and
- * matmul_block must be called with the same value.
+ * Template parameter unpack_ttsync (ignored outside Blackhole): row base addresses under Auto TTSync instead of polling
+ * for a free context, the same value in matmul_block; the kernel must define MATMUL_UNPACK_TTSYNC.
  *
  * Return value: None
  *
@@ -255,9 +251,8 @@ ALWI void matmul_block_init(
  * output C is rt_dim x ct_dim tiles. So a block is just ct_dim * rt_dim output tiles produced in one
  * call (with kt_dim tiles along the shared inner dimension). The output must fit in DST, so the block
  * size is limited by DST size and sync mode (see matmul_block_init for the valid ct_dim/rt_dim ranges).
- * A call may use smaller ct_dim and rt_dim than matmul_block_init, but ct_dim >= rt_dim must hold for it exactly
- * when it held for the init (the init fixes which operand is held); a block of the other direction needs a new init.
- * The template parameters row_mop and unpack_ttsync must be the values matmul_block_init was called with.
+ * A call may use smaller ct_dim and rt_dim than matmul_block_init but not flip ct_dim >= rt_dim, which fixes the held
+ * operand; row_mop and unpack_ttsync must be the values matmul_block_init was called with.
  *
  * Return value: None
  *
