@@ -32,7 +32,7 @@ class KimiK27Adapter(MLAPrefillAdapter):
     mla_trace_defaults = ()
     # The drafter golden is keyed to prefill_trace_default's prompt, so the two move together.
     dflash_model_default = "/mnt/models/blaze/closed_do_not_share/Kimi-K2.7-Code-DFlash"
-    dflash_golden_default = "/mnt/models/deepseek-prefill-cache/golden/dflash_27_context_kv_55k"
+    dflash_golden_default = "/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/dflash_27_context_kv_55k"
 
     # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL.
     # Routing consumes 512 B; leave 256 B for MLA high-bandwidth-gather semaphores.

@@ -421,14 +421,12 @@ def test_gdn_tp_batched_prefill_chunked(mesh_device, B, reset_seeds, ensure_gc, 
     # ---- reference: single-shot batched prefill over the full T (ground truth) ----
     gref = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
     gref.reset_state()
-    gref._stable_state = True
     gref.forward_prefill_batched(shard_to_device(mesh_device, x.unsqueeze(0), dim=-1), chunk_size=C)
     out_ref = ttnn.to_torch(gref.forward_decode(replicate_to_device(mesh_device, xd)), mesh_composer=comp)
 
     # ---- test: two CARRIED chunks ----
     g = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
     g.reset_state()
-    g._stable_state = True
     g.reset_state_inplace()  # zero state + clear the batched conv carry at sequence start
     g.forward_prefill_batched(shard_to_device(mesh_device, x[:, :C].unsqueeze(0), dim=-1), chunk_size=C, carry=True)
     g.forward_prefill_batched(shard_to_device(mesh_device, x[:, C:].unsqueeze(0), dim=-1), chunk_size=C, carry=True)
@@ -672,7 +670,6 @@ def test_gdn_chunk_vs_recurrent_attribution(mesh_device, reset_seeds, ensure_gc,
     # ---- warm: one prefill establishes the state (populating BOTH conv_carry for the chunk path
     # and conv_states for the decode path), then each path continues from that exact snapshot ----
     gdn.reset_state()
-    gdn._stable_state = True  # carry the state in place, as the model does during serving
     ttnn.deallocate(gdn.forward_prefill(shard_to_device(mesh_device, warm_x, dim=-1), chunk_size=W, capture_state=True))
     snap = _snapshot_layer_state(gdn, mesh_device)
 
@@ -904,7 +901,7 @@ def test_gdn_tp_prefill_fused_vs_phased_bit_exact(mesh_device, T, reset_seeds, e
 def test_gdn_tp_prefill_trace_replay(mesh_device, weights, reset_seeds, ensure_gc, request):
     """Chunk-outer prefill through ONE captured trace equals the eager chunks, bit for bit.
 
-    Three 2048-token chunks with the persistent carry (_stable_state), first eagerly, then as the
+    Three 2048-token chunks with the persistent carry, first eagerly, then as the
     model's chunked prefill runs them: state zeroed in place, one forward_prefill captured, the trace
     replayed three times with each chunk ttnn.copy'd into the persistent input buffer and the baked
     output read back. Catches anything on the prefill path that allocates or writes from the host
@@ -924,7 +921,6 @@ def test_gdn_tp_prefill_trace_replay(mesh_device, weights, reset_seeds, ensure_g
     tw = load_gdn_weights_tp(mesh, sd, args)
     gdn = TPGatedDeltaNet(mesh, args, tw, tt_ccl)
     logger.info(f"conv impl={gdn._conv_impl} kda={gdn._gdn_kda_conv} layer={li}")
-    gdn._stable_state = True
     gdn.reset_state()  # persistent state and the prefill constants, before any capture
     x = torch.randn(1, 1, T * n_chunks, args.dim, dtype=torch.bfloat16)
     chunks = [x[:, :, c * T : (c + 1) * T, :] for c in range(n_chunks)]

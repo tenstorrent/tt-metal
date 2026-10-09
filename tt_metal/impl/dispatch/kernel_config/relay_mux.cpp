@@ -16,6 +16,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <algorithm>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/host_api.hpp>
 
 namespace tt::tt_metal {
 
