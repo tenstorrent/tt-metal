@@ -885,6 +885,11 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0)));
     UNPACK(TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
     UNPACK(TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
+    // The trailing chunk's top32_rm init changes the face geometry; restore it as phase 1 does.
+    UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(
+        FACE_R_DIM * FACE_C_DIM | (FACE_R_DIM * FACE_C_DIM << 16))));
+    UNPACK((cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(
+        canonical_unpA_y_stride(unpack_dst_format[get_operand_id(in_scores_cb)]))));
 
     tile_regs_release();
 

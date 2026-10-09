@@ -167,6 +167,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_stage2_row_elements"),
         get_named_compile_time_arg_val("sampling_stage2_num_input_tiles"),
         get_named_compile_time_arg_val("sampling_mask_cb"),
+        0,  // MaskAliasesScaler: the mask and scaler CBs are distinct
         get_named_compile_time_arg_val("sampling_enable_metadata"),
         get_named_compile_time_arg_val("sampling_metadata_address"),
         get_named_compile_time_arg_val("sampling_inv_temp_bf16")>;
