@@ -8,6 +8,8 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
+#include "tt_metal/fabric/axis_route_topology.hpp"
+
 namespace tt::tt_fabric {
 
 ZPortRole z_port_role(const ControlPlane& control_plane, FabricNodeId node) {
@@ -116,11 +118,29 @@ EdgeCapability classify_fabric_edge(
     return EdgeCapability::INTRAMESH_EXPRESS;
 }
 
-bool is_y_axis_direction(RoutingDirection direction) {
-    return direction == RoutingDirection::N || direction == RoutingDirection::S || direction == RoutingDirection::Z;
+ExpressAxis express_axis_of(const ControlPlane& control_plane, MeshId mesh_id) {
+    if (!control_plane.express_routing_enabled(mesh_id)) {
+        return ExpressAxis::NONE;
+    }
+    const auto* express_rings = control_plane.ring_for_direction(mesh_id, RoutingDirection::Z);
+    TT_FATAL(express_rings != nullptr, "Mesh {} reports express routing but has no express rings", *mesh_id);
+    if (express_rings->axis_dim == 0) {
+        return ExpressAxis::Y;
+    }
+    return ExpressAxis::X;
 }
 
-bool is_x_axis_direction(RoutingDirection direction) {
+bool is_y_axis_direction(RoutingDirection direction, ExpressAxis express_axis) {
+    if (direction == RoutingDirection::Z) {
+        return express_axis != ExpressAxis::X;
+    }
+    return direction == RoutingDirection::N || direction == RoutingDirection::S;
+}
+
+bool is_x_axis_direction(RoutingDirection direction, ExpressAxis express_axis) {
+    if (direction == RoutingDirection::Z) {
+        return express_axis == ExpressAxis::X;
+    }
     return direction == RoutingDirection::E || direction == RoutingDirection::W;
 }
 
