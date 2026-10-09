@@ -856,9 +856,6 @@ class DeepseekV41ForCausalLM:
         """
         sp = kwargs.get("sampling_params")
         if args or sp is None or self.m.sink.taps is None:
-            logger.info(
-                f"DSV4.1 fresh-row step: plain (args {len(args)}, sampling params {sp is not None}, taps {self.m.sink.taps is not None})"
-            )
             return None
         W = int(tokens.shape[0])
         remap = kwargs.get("slot_remap")  # (applied by ``_spec_verify`` / the plain step; only looked through here)
@@ -876,9 +873,6 @@ class DeepseekV41ForCausalLM:
                 or int(self.book.n[p]) != pos
                 or self.m.tap_n.get(p) != pos
             ):
-                logger.info(
-                    f"DSV4.1 fresh-row step: plain (row {i} user {p} pos {pos}: live {p in self.slots.live}, ok {bool(self.spec_ok[p])}, has {bool(self.spec_has[p])}, history {int(self.book.n[p])}, taps {self.m.tap_n.get(p)})"
-                )
                 return None
             rows.append(i)
         if not rows:
@@ -1192,12 +1186,16 @@ class DeepseekV41ForCausalLM:
     #    The round's new drafts are kept per physical slot and handed out by ``propose_draft_tokens`` (permission of contract section 4a: the result is computed in the verify call).
     #  * A row with ``num_valid_drafts == 0`` (a request's first step after the prefill) runs the same round with the accept count FORCED to 0 (``SpecDecoder.set_force``): one token is
     #    committed, exactly what the plugin credits. Partial counts 0 < nv < K cannot be expressed on the device and are refused (the proposal always offers all K or none).
-    #  * Drafter state: seeded by ``SpecRunner.seed`` (replay of the last 128 tokens through the verify trace with forced accepts) right after EVERY prefill, for all rows. A prefill therefore
-    #    re-prefills all live rows from their token history (the hand-off state is what the seeding needs) and releases the spec trace first (a prefill replay must not run over a captured trace).
+    #  * Drafter state: the PREFILL leaves the taps the drafter needs (stream means at layers 37-39 of the last 128 prompt positions, written inside the traced prefill chunk, tt/prefill_taps.py).
+    #    A new request's drafter is seeded from them at its first verify round / first ``propose_draft_tokens`` (``_spec_seed_taps``: eager, ~20-40 ms for all rows), and the first decode step of a
+    #    wave of new requests (the plugin's narrow draftless step) runs the forced single-token verify round (``_fresh_rows_via_spec``) so that no row reaches the drafter without taps. Only a
+    #    row whose context is no longer what its prefill left (a draftless ordinary step, a mismatch, a re-prefill of a live row in the non-interleaved path) falls back to
+    #    ``SpecRunner.seed``'s replay of the last 128 tokens through the verify trace (seconds), which also needs the hand-off state of the row.
     #  * Rejection needs no rollback: a speculative round writes K/V rows of the block into pages / window rings of the user (rejected rows are overwritten by the next round: the ring has
     #    288 rows) and commits the compressor state only for the accepted count ``m`` on the device.
     def _spec_seed(self, toks_B, lens_B, active_B, first):
-        """After a prefill: seed the drafter of EVERY active row (new requests and re-prefilled live ones) and keep its first proposal. Idle rows replay one dummy token."""
+        """After a (whole-batch) prefill: seed the drafter of EVERY active row (new requests and re-prefilled live ones: ``SpecRunner.seed``, from the prefill taps) and keep its first proposal.
+        Idle rows get one dummy token."""
         B, K = self.B, self.spec.k
         tokens, lens, firstB = toks_B.clone(), lens_B.clone(), first.clone().long()
         idle = ~active_B
@@ -1261,7 +1259,7 @@ class DeepseekV41ForCausalLM:
         """Interleaved prefill + speculative decode: seed the drafter at the FIRST verify round of a request. ``need`` {model user: token fed now}: the rows that need seeding; they are seeded
         from their prefill's taps (``_spec_seed_taps``) when those are valid. Otherwise (a reseed after a draftless step / a mismatch: no taps for the current context) ``items`` [(model user,
         position of the fed token, the token fed now)] of every row of the step: the prompt / history of each (``TokenBook``) is replayed through the captured verify trace (last 128 tokens,
-        forced accepts: idempotent for the users that already decode, which keeps their state; idle rows replay one dummy token), and the proposals of the replay are kept.
+        forced accepts: idempotent for the users that already decode, which keeps their state; idle rows replay one dummy token), and the proposals of the replay are kept (a few seconds).
         """
         if need and self._spec_seed_taps(need, draft):
             return
@@ -1429,7 +1427,7 @@ class DeepseekV41ForCausalLM:
 
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
         """Hand out the drafts of the last round / seeding. A row is offered drafts only if it is inside the speculative range (ISL <= DSV41_VLLM_SPEC_ISL_MAX) and the token its drafts continue is the
-        token the plugin committed. A row whose drafter state is not current (its prefill just finished, a draftless ordinary decode step, a mismatch) is SEEDED here (replay of its last 128 tokens through
+        token the plugin committed. A row whose drafter state is not current (its prefill just finished, a draftless ordinary decode step, a mismatch) is SEEDED here (from its prefill's taps, else a replay of its last 128 tokens through
         the captured verify trace), so its first decode step is a real verify, not a forced single-token round."""
         from vllm_tt_plugin.spec_decode import DraftOutput
 

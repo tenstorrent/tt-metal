@@ -11,8 +11,10 @@
 The model must be built with ``DSV41_RING_ROWS = 288`` (>= 255 + k for the tail-replay seeding; 160 with DSV41_SPEC_FULL_REPLAY=1): a rejected speculative write must not overwrite a window row the next round still needs.
 
 Flow after the model's real PREFILL (traced, paged hand-off incl. index keys):
-  ``seed(prompt_tokens, lens, first)``  replays the last 128 prompt tokens of every user through the verify step (even start position, accept count forced) which
-                                       seeds the drafter's rings and the first 5 drafts (the compressor state / pool / keys of the hand-off are used as they are);
+  ``seed(prompt_tokens, lens, first)``  seeds the drafter's rings and the first 5 drafts from the TAPS of the prefill (tt/prefill_taps.py: the stream means at the input of layers 37-39 of the
+                                       last 128 prompt positions, written inside the traced prefill chunk; ``seed_from_prefill``: eager, a few tens of ms for any number of users). Without taps for a user (a
+                                       context that is not what the prefill left: the model was built without spec / the user decoded since) it replays the last 128 prompt tokens through the verify step
+                                       (even start position, accept count forced), which gives the same state (the compressor state / pool / keys of the hand-off are used as they are);
   ``run(first, lens, max_new, ...)``   the speculative loop: one traced round per iteration (verify n rows per user, accept, state commit, draft), host = Engram rows.
 """
 
@@ -515,11 +517,7 @@ class SpecRunner:
         """True when the prefill's drafter taps (tt/prefill_taps.py) hold the last 128 positions of every user of ``users`` (default: every user with a prompt longer than the dummy
         length 1 of an idle row) at the prompt length ``lens``."""
         sink = getattr(self.m, "sink", None)
-        if (
-            getattr(sink, "taps", None) is None
-            or self.phys is not None
-            or os.environ.get("DSV41_SEED_FROM_PREFILL") == "0"
-        ):
+        if getattr(sink, "taps", None) is None or self.phys is not None:
             return False
         lens = torch.as_tensor(lens).long()
         users = [b for b in range(self.B) if int(lens[b]) > 1] if users is None else list(users)
@@ -731,9 +729,8 @@ class SpecRunner:
 
     def _seed_replay(self, tokens, lens, first):
         B, n = self.B, self.n
-        # replay length: the last SEED_TAIL tokens (default 128 = the full attention window of the drafter). A shorter tail cuts the seeding time (one verify round per 4 replayed tokens, ~115 ms each at B=32,
-        # whatever the number of rows to seed) at the price of drafter state for the older positions; acceptance recovers as the request decodes (the drafts are proposals, the verify keeps the output exact).
-        tail = int(os.environ.get("DSV41_SPEC_SEED_TAIL", "128"))
+        # replay length: the last 128 tokens = the full attention window of the drafter (one verify round per 4 replayed tokens, ~115 ms each at B=32, whatever the number of rows to seed)
+        tail = 128
         p0 = torch.clamp((lens - tail) // 2 * 2, min=0)
         if (
             os.environ.get("DSV41_SPEC_FULL_REPLAY") == "1"
