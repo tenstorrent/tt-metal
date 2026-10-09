@@ -2336,7 +2336,7 @@ def legacy_flow(
         - TT_METAL_HOME: TT-Metal installation directory
         - PYTHONPATH: Python module search path
         - LD_LIBRARY_PATH: Library search path
-        - TT_MESH_GRAPH_DESC_PATH: Pa######################################th to mesh graph descriptor
+        - TT_MESH_GRAPH_DESC_PATH: Path to mesh graph descriptor
         - TT_RUN_ORIGINAL_CWD: Directory where tt-run was launched (for subprocess path resolution)
         - TT_RUN_RANK: Global MPI world rank (used by tt-triage to identify the rank)
         - HOME: Passed through (required by OpenMPI for process management)
