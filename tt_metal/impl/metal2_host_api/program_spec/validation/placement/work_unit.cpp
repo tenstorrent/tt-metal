@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 
 #include "core_descriptor.hpp"
 #include "impl/metal2_host_api/helpers.hpp"

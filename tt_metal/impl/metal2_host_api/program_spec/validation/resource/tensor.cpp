@@ -6,6 +6,7 @@
 #include <unordered_set>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/resource/resource.hpp"

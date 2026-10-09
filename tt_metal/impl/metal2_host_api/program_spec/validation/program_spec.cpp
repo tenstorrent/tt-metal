@@ -11,6 +11,7 @@
  */
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 
 #include "impl/metal2_host_api/program_spec/validation/validate_spec.hpp"
 

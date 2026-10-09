@@ -30,6 +30,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/llk_metadata.hpp"

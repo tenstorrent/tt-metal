@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 
 namespace tt::tt_metal::experimental {
 
