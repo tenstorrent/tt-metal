@@ -182,7 +182,7 @@ class TtGlmBlock:
 
             self.q_a = build_q_a(mesh, loader, cfg, layer)
             self.indexer = build_indexer(mesh, loader, cfg, layer, max_seq, chunks, ring=split and DSA_LOCAL)
-            self.attn = build_mla(mesh, loader, cfg, layer, max_seq)
+            self.attn = build_mla(mesh, loader, cfg, layer, max_seq, tp=split and DSA_LOCAL)
             self.stateful += [self.indexer, self.attn]
             if split and DSA_LOCAL:
                 # attn_norm, q_a, the indexer's pooled keys and the MLA latent all on the chip's own S/n rows; the pooled
