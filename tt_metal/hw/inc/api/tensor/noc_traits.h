@@ -43,8 +43,14 @@ struct PushIssue {
         Issue&& issue) {
         const uint64_t src_noc_addr = Traits::src_noc_addr_or_pushed(src, noc, args);
         if (src_noc_addr != tt_addrgen::kAddrPushed) {
-            // The address was not pushed into the command buffer. EXPLAIN WHY THIS CAN HAPPEN OR REFER TO COMMENT WHERE
-            // ITS EXPLAINED. In this case we can issue the transaction as defined in noc.h. The same applies to
+            // The address was not pushed into the command buffer. This can happen for multiple reasons:
+            //  - Sequence miss, i.e. requested address is not the next one the AddrGen produces
+            //  - No free side of AddrGen available
+            //  - HW AddrGen is used but not the side that can push directly into the cmd buffer. Due to
+            //    static cmd buffer assignment, AddrGen N pushes to cmd buffer N
+            //  - offset_bytes != 0
+            //  - Caller set MayPush false
+            // In this case we can issue the transaction as defined by top level NoC API (noc.h). The same applies to
             // issue_write.
             issue(src_noc_addr);
             return;
