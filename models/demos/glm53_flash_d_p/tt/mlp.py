@@ -76,6 +76,8 @@ class TtDenseMLP:
         else:
             r = ttnn.all_reduce(o, cluster_axis=None, memory_config=mc)
         ttnn.deallocate(o)
+        if r.dtype == ttnn.bfloat16:
+            return r
         out = ttnn.typecast(r, ttnn.bfloat16, memory_config=mc)
         ttnn.deallocate(r)
         return out

@@ -26,7 +26,7 @@ import torch
 
 import ttnn
 from models.demos.glm53_flash_d_p.reference.weights import PREFIX
-from models.demos.glm53_flash_d_p.tt.common import attn_fidelity, hifi4_config, replicate
+from models.demos.glm53_flash_d_p.tt.common import attn_fidelity, env_fidelity, hifi4_config, replicate
 
 KP = 4
 TOPK_POOLS = 512
@@ -34,8 +34,11 @@ OUT_W = 2176  # 2048 pool tokens + 128 (3 tail + sentinel pad): sparse_sdpa want
 TAIL_W = OUT_W - KP * TOPK_POOLS
 DENSE_END = KP * TOPK_POOLS - 1  # positions below this select every token 0..q
 MC = ttnn.DRAM_MEMORY_CONFIG
-# "heads": per-head ttnn.linear + fp32 addcmul; "op": ttnn.experimental.indexer_score_dsa (bf16 head sum)
-SCORE_MODE = os.environ.get("GLM_INDEXER_SCORE", "heads")
+# "heads": per-head ttnn.linear + fp32 addcmul; "op": ttnn.experimental.indexer_score_dsa (bf16 head sum);
+# "bringup": ttnn.bringup.indexer_score_dsa (the indexer_score fork) with fp32 DEST, k chunk 32 (per-column gate
+# multiply, fidelity honoured): one fused op, no [S/n, kv] fp32 per-head intermediates in DRAM
+SCORE_MODE = os.environ.get("GLM_INDEXER_SCORE", "bringup")
+SCORE_Q_CHUNK = int(os.environ.get("GLM_INDEXER_Q_CHUNK", "64"))
 
 
 class TtIndexer:
@@ -45,10 +48,14 @@ class TtIndexer:
         assert cfg.index_kpool == KP and cfg.index_topk == KP * TOPK_POOLS
         self.ndev = mesh.get_num_devices()
         self.score_mode = SCORE_MODE
-        self.mm = hifi4_config(fidelity=attn_fidelity())
-        self.score_cfg = hifi4_config(
-            fp32_acc=False, fidelity=attn_fidelity()
-        )  # the score op honours only math_fidelity
+        # projections (k, gate, q, head weights): GLM_INDEXER_FIDELITY, default the attention fidelity. HiFi4 passes the
+        # component test's pooled-key gate (rel L2 0.0025, row-norm ratio >= 0.9976; HiFi2 0.0050 / 0.9911) but on the
+        # full model KV PCC is unchanged and 56k top1 is lower (0.8696 vs 0.8767), so it is opt-in
+        self.mm = hifi4_config(
+            fidelity=env_fidelity("GLM_INDEXER_FIDELITY") if os.environ.get("GLM_INDEXER_FIDELITY") else attn_fidelity()
+        )
+        # the experimental score op honours only math_fidelity; the fork also takes fp32 DEST
+        self.score_cfg = hifi4_config(fp32_acc=self.score_mode == "bringup", fidelity=attn_fidelity())
         up = lambda t: replicate(
             mesh, t.float().T.reshape(1, 1, t.shape[1], t.shape[0]).to(torch.bfloat16)
         )  # noqa: E731
@@ -204,9 +211,17 @@ class TtIndexer:
         """indexer_score_dsa over the whole cache, unmasked below kv -> [1, 1, S/4, kv] bf16 TILE. The op packs each
         head's relu(q.k) to bf16 and sums the 32 heads in a bf16 DEST."""
         sq = qh.shape[-2]
-        sc = ttnn.experimental.indexer_score_dsa(
-            qh, self.cache, wts, chunk_start_idx=kv, compute_kernel_config=self.score_cfg
-        )
+        if self.score_mode == "bringup":
+            pc = ttnn.bringup.IndexerScoreProgramConfig(
+                q_chunk_size=min(SCORE_Q_CHUNK, sq), k_chunk_size=32, head_group_size=0
+            )
+            sc = ttnn.bringup.indexer_score_dsa(
+                qh, self.cache, wts, chunk_start_idx=kv, program_config=pc, compute_kernel_config=self.score_cfg
+            )
+        else:
+            sc = ttnn.experimental.indexer_score_dsa(
+                qh, self.cache, wts, chunk_start_idx=kv, compute_kernel_config=self.score_cfg
+            )
         v = ttnn.slice(sc, (0, 0, 0, 0), (1, 1, sq, kv), memory_config=MC)
         ttnn.deallocate(sc)
         out = ttnn.to_layout(v, ttnn.TILE_LAYOUT, memory_config=MC)
