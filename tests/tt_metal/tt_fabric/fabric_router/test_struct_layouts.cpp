@@ -16,8 +16,8 @@
 #include <llrt/hal.hpp>
 #include <umd/device/types/arch.hpp>
 
-#include "tt_metal/fabric/manifest/fabric_struct_layouts.hpp"
-#include "tt_metal/fabric/manifest/struct_layout.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
 
 namespace tt::tt_fabric::layout_test {
 

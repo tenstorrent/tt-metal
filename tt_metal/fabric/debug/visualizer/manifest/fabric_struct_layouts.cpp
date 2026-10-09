@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "tt_metal/fabric/manifest/fabric_struct_layouts.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
 
 #include <type_traits>
 
