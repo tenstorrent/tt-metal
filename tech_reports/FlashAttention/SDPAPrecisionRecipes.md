@@ -179,8 +179,9 @@ The DEST mode is read from `compute_kernel_config` as before (`fp32_dest_acc_en`
   closest match to an FP32-DEST request; FP32 DEST was often a shared linear config rather than an SDPA choice.
 - Routed dense, chunked, MLA and joint calls choose their blocking on the whole compute grid
   ([Blocking](#blocking)): `program_config` chunk sizes and grids were tuned for the legacy kernels, and the chooser
-  beats them or ties (table below). Ring, exp ring and ring-distributed calls keep the caller's chunks and grid when
-  the recipe supports them.
+  beats them or ties (table below). Routed ring-distributed calls choose their chunks on the caller's grid (8/1 heads,
+  D128, BFP8, 131072 rows: the caller's Q64/K64 143 ms, the choice 43 ms). Ring and exp ring calls keep the caller's
+  chunks and grid when the recipe supports them.
   `sub_core_grids`, which prefill ignored, is dropped. Routed dense and joint calls also ignore
   `max_cores_per_head_batch` (a decode setting, default 16, that legacy prefill ignored): a head's K/V chain may span
   the grid, which single-head calls need (one head, D512, S16384: 57 ms on 16 cores, 7 ms on the grid). Zero chunk

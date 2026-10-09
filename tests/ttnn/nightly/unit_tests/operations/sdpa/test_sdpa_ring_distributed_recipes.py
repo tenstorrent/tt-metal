@@ -139,6 +139,28 @@ def test_ring_distributed_sdpa_recipe_program_cache(device, variant):
         assert l2_pct(actual, expected) < L2_PCT_BOUND[variant]
 
 
+@pytest.mark.parametrize("fp32_dest", [False, True], ids=["standard", "accurate"])
+def test_ring_distributed_sdpa_routing(device, fp32_dest):
+    """Without `precision` the op runs STANDARD (ACCURATE with FP32 dest) at op-chosen chunks on the caller's grid:
+    bitwise the explicit recipe with chunks left to the op, whatever chunks the caller tuned for the legacy loop."""
+    q, k, v = randn(1, 8, 4096, 128, seed=56), randn(1, 1, 4096, 128, seed=57), randn(1, 1, 4096, 128, seed=58)
+    tq, tk, tv = (to_device(device, x) for x in (q, k, v))
+    precision = ttnn.SDPAPrecision.ACCURATE if fp32_dest else ttnn.SDPAPrecision.STANDARD
+    variant = "accurate" if fp32_dest else "standard"
+    actual = torch.zeros(1, 8, 4096, 128)
+    for ring_id in range(4):
+        run = lambda program_config, **kwargs: ttnn.to_torch(
+            ttnn.transformer.ring_distributed_scaled_dot_product_attention(
+                tq, tk, tv, ring_size=4, ring_id=ring_id, program_config=program_config, **kwargs
+            )
+        )
+        extra = dict(compute_kernel_config=fp32_dest_config(device)) if fp32_dest else {}
+        routed = run(config(device, 64, 64), **extra)
+        assert torch.equal(routed, run(config(device, 0, 0), precision=precision))
+        actual[:, :, slabs(4, ring_id, 4096)] = routed.float()
+    assert l2_pct(actual, causal_reference(q, k, v)) < L2_PCT_BOUND[variant]
+
+
 def test_ring_distributed_sdpa_recipe_rejects_partial_chunks(device, expect_error):
     """Slabs must hold whole Q chunks (the legacy rule), here 512-row slabs and Q chunks of 384 rows."""
     q, k = randn(1, 1, 4096, 128, seed=54), randn(1, 1, 4096, 128, seed=55)

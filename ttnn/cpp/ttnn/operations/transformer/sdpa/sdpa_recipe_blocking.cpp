@@ -865,6 +865,14 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     if (key_range && key_range->q_slab_rows) {
         // Ring-distributed SDPA: two Q slabs, each of whole Q chunks.
         problem.q_rows = 2 * key_range->q_slab_rows;
+        if (chunks_are_hints) {
+            // Routed calls choose their chunks on the caller's grid (one P150, 8/1 heads D128 BFP8, 131072 rows,
+            // STANDARD: the caller's Q64/K64 143 ms, the choice 43 ms; Q256/K512 43 ms).
+            problem.fixed_q_tiles = 0;
+            problem.fixed_k_tiles = 0;
+            config.q_chunk_size = 0;
+            config.k_chunk_size = 0;
+        }
         std::optional<RecipeBlocking> choice;
         if (!invalid_fixed(config)) {
             for (const auto& candidate : recipe_blocking_candidates(problem)) {
