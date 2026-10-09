@@ -176,7 +176,6 @@ inline _llk_math_matmul_execution_geometry_t _llk_math_matmul_execution_geometry
  *
  * Non-2x matmul derives its four per-slot steps from geometry. The 2x path retains its fixed layout.
  *
- * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity.
  * @tparam ENABLE_2X_FORMAT: When true, programs addr_mods for the MXFP4_2x non-DI MOP variant.
  * The variant uses 8 MVMULs for A0/A1 and B0/B1. SrcA uses MxFp4_2x_A/B for the 2x sub-element expansion.
  * @param fidelity: Resolved source-format phase schedule.
@@ -184,7 +183,7 @@ inline _llk_math_matmul_execution_geometry_t _llk_math_matmul_execution_geometry
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  * @param geometry: Replay and address-modifier geometry from @ref _llk_math_matmul_execution_geometry_.
  */
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
+template <bool ENABLE_2X_FORMAT = false>
 inline void _llk_math_matmul_addrmod_(
     const MathFidelitySchedule fidelity, const std::uint8_t ct_dim, const std::uint8_t rt_dim, const _llk_math_matmul_execution_geometry_t& geometry)
 {
@@ -311,22 +310,20 @@ inline void _llk_math_matmul_addrmod_(
 /**
  * @brief Programs the full-tile geometry addr-mod layout used by no-MOP matmul.
  */
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
+template <bool ENABLE_2X_FORMAT = false>
 inline void _llk_math_matmul_addrmod_(const MathFidelitySchedule fidelity, const std::uint8_t ct_dim, const std::uint8_t rt_dim)
 {
     const _llk_math_matmul_execution_geometry_t geometry = _llk_math_matmul_execution_geometry_(ct_dim, rt_dim, DEFAULT_TENSOR_SHAPE, DEFAULT_TENSOR_SHAPE);
-    _llk_math_matmul_addrmod_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(fidelity, ct_dim, rt_dim, geometry);
+    _llk_math_matmul_addrmod_<ENABLE_2X_FORMAT>(fidelity, ct_dim, rt_dim, geometry);
 }
 
 /**
  * @brief Initializes addrmod for matrix multiply operation using the direct-indexing instruction variant.
  *
- * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity.
  * @param fidelity: Resolved source-format phase schedule.
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  */
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_matmul_di_addrmod_(const MathFidelitySchedule fidelity, std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
     const std::uint16_t num_tile_incr = (ct_dim >= rt_dim) ? 64 : ct_dim * 64;
@@ -491,7 +488,6 @@ inline void _llk_math_matmul_load_replay_(const bool use_half_face_replay = fals
  * with the tile completion. Standard matmul selects a geometry-dependent window from the K-outer image.
  * MXFP4_2x replays its full image.
  *
- * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity.
  * @tparam ENABLE_2X_FORMAT: When true, emits the non-DI MXFP4_2x variant.
  * The variant uses a 7-MVMUL replay for A0/A1 and B0/B1. SrcA uses MxFp4_2x_A/B for the 2x sub-element expansion.
  * @param fidelity: Resolved source-format phase schedule.
@@ -499,7 +495,7 @@ inline void _llk_math_matmul_load_replay_(const bool use_half_face_replay = fals
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  * @param geometry: Replay window and destination strides from @ref _llk_math_matmul_execution_geometry_.
  */
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
+template <bool ENABLE_2X_FORMAT = false>
 inline void _llk_math_matmul_mop_config_(
     const MathFidelitySchedule fidelity, const std::uint8_t ct_dim, const std::uint8_t rt_dim, const _llk_math_matmul_execution_geometry_t& geometry)
 {
@@ -539,13 +535,12 @@ inline void _llk_math_matmul_di_emit_face_()
  * For DstSync::SyncHalf: ct_dim * rt_dim <= 8 tiles in a 16-bit format, ct_dim * rt_dim <= 4 tiles in a 32-bit format.
  * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in a 16-bit format, ct_dim * rt_dim <= 8 tiles in a 32-bit format.
  *
- * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity.
  * @tparam ENABLE_2X_FORMAT: Select the 2x-format face traversal.
  * @param fidelity: Resolved source-format phase schedule.
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  */
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT>
+template <bool ENABLE_2X_FORMAT>
 inline void _llk_math_matmul_di_mop_config_(const MathFidelitySchedule fidelity, std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
     // in0 - loaded to SrcB
@@ -623,8 +618,7 @@ inline void _llk_math_matmul_di_mop_config_(const MathFidelitySchedule fidelity,
  * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in a 16-bit format, ct_dim * rt_dim <= 8 tiles in a 32-bit format.
  * Standard MOP matmul supports the validated tiny-tile pairs. Direct-indexing and 2x remain full-tile only.
  *
- * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
- * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam ENABLE_DIRECT_INDEXING: Enable direct indexing matrix multiplication
  * @tparam ENABLE_2X_FORMAT: Enable matrix multiplication with MXFP_2X mode (double the performance)
  * @param src_a_format: Effective SrcA register format (input 1).
@@ -635,6 +629,8 @@ inline void _llk_math_matmul_di_mop_config_(const MathFidelitySchedule fidelity,
  * @param src_a_shape: Input 1/SrcA tile shape.
  * @note On the unpack thread, pair with @ref _llk_unpack_matmul_init_ (T0); on the pack thread, pair with @ref _llk_pack_init_ (T2).
  * @note @ref _llk_math_matmul_tile_ or @ref _llk_math_matmul_block_ runs the configured matmul with matching template args.
+ * @note Pass the source register formats: init asserts that the fidelity adds precision for them and skips phases they cannot use.
+ *       Run init again whenever either format changes.
  */
 
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_DIRECT_INDEXING = false, bool ENABLE_2X_FORMAT = false>
@@ -658,15 +654,15 @@ inline void _llk_math_matmul_init_(
 
     if constexpr (ENABLE_DIRECT_INDEXING)
     {
-        _llk_math_matmul_di_addrmod_<MATH_FIDELITY_TYPE>(fidelity, ct_dim, rt_dim);
-        _llk_math_matmul_di_mop_config_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(fidelity, ct_dim, rt_dim);
+        _llk_math_matmul_di_addrmod_(fidelity, ct_dim, rt_dim);
+        _llk_math_matmul_di_mop_config_<ENABLE_2X_FORMAT>(fidelity, ct_dim, rt_dim);
         _set_tile_shape_idx_gpr_(NUM_FACES * MAX_FACE_R_DIM);
     }
     else
     {
         const _llk_math_matmul_execution_geometry_t geometry = _llk_math_matmul_execution_geometry_(ct_dim, rt_dim, src_b_shape, src_a_shape);
-        _llk_math_matmul_addrmod_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(fidelity, ct_dim, rt_dim, geometry);
-        _llk_math_matmul_mop_config_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(fidelity, ct_dim, rt_dim, geometry);
+        _llk_math_matmul_addrmod_<ENABLE_2X_FORMAT>(fidelity, ct_dim, rt_dim, geometry);
+        _llk_math_matmul_mop_config_<ENABLE_2X_FORMAT>(fidelity, ct_dim, rt_dim, geometry);
         _set_tile_shape_idx_gpr_(geometry.dst_rows_per_tile);
     }
 

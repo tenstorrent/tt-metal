@@ -20,6 +20,7 @@ def fidelity_source_formats(
     _, src_a, _, src_b, _, _ = config.sentinel._infer_node_formats(
         config, compute_unit, output_format, operation
     )
+    src_a, src_b = compute_unit.unpacker.physical_order(src_a, src_b)
     return src_a.cpp_enum_value, src_b.cpp_enum_value
 
 

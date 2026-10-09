@@ -109,8 +109,7 @@ inline void eltwise_di_binary_func(
  * @brief Sets up mop config for elementwise binary operations.
  *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
- * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
- * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @param fidelity: Resolved source-format phase schedule.
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
@@ -163,8 +162,7 @@ inline void _llk_math_eltwise_binary_mop_config_(const MathFidelitySchedule fide
  * @brief Sets up mop config for elementwise binary operations using the direct-indexing instruction variant.
  *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
- * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
- * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param fidelity: Resolved source-format phase schedule.
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
  * @param acc_to_dest: When true, accumulate the result into the destination register instead of overwriting
@@ -239,8 +237,7 @@ inline void _llk_math_eltwise_di_binary_mop_config_(const MathFidelitySchedule f
 /**
  * @brief Sets up addrmods for elementwise binary operations.
  *
- * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
- * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param fidelity: Resolved source-format phase schedule.
  */
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE>
@@ -272,10 +269,8 @@ inline void _llk_math_eltwise_binary_addrmod_(const MathFidelitySchedule fidelit
 /**
  * @brief Sets up addrmods for elementwise binary operations using the direct-indexing instruction variant.
  *
- * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity.
  * @param fidelity: Resolved source-format phase schedule.
  */
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_di_binary_addrmod_(const MathFidelitySchedule fidelity)
 {
     // Nonfinal DI replay instructions use slot 0 and still apply its addrmods.
@@ -299,8 +294,7 @@ inline void _llk_math_eltwise_di_binary_addrmod_(const MathFidelitySchedule fide
  * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register.
  *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
- * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
- * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity, used by ELWMUL only, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam ENABLE_DIRECT_INDEXING: Enable the direct-indexing instruction variant
  * @param src_a_format: SrcA register format. With DEST_TO_SRCA the operand is copied from dest, so pass @ref dest_src_format.
@@ -311,6 +305,8 @@ inline void _llk_math_eltwise_di_binary_addrmod_(const MathFidelitySchedule fide
  *       @ref _llk_unpack_unary_operand_init_ (the dummy-dvalid path that lets MOVD2A/B fill the reused source register). On the pack thread, pair with
  *       @ref _llk_pack_init_ (T2).
  * @note @ref _llk_math_eltwise_binary_ runs the configured op with matching template args.
+ * @note Pass the source register formats: for ELWMUL, init asserts that the fidelity adds precision for them and skips phases they
+ *       cannot use. Run init again whenever either format changes.
  * @note Use full-height faces for destination reuse and for four-face tiles.
  */
 template <
@@ -334,7 +330,7 @@ inline void _llk_math_eltwise_binary_init_(
 
     if constexpr (ENABLE_DIRECT_INDEXING)
     {
-        _llk_math_eltwise_di_binary_addrmod_<MATH_FIDELITY_TYPE>(fidelity);
+        _llk_math_eltwise_di_binary_addrmod_(fidelity);
         _llk_math_eltwise_di_binary_mop_config_<ELTWISE_BINARY_TYPE, MATH_FIDELITY_TYPE>(fidelity, tensor_shape, acc_to_dest);
     }
     else

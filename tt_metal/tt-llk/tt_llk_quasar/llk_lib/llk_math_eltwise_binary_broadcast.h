@@ -20,8 +20,7 @@ using namespace ckernel::math;
  *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam BROADCAST_TYPE: Sets the broadcast type (must not be NONE for this op), values = <COL/ROW/SCALAR>
- * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
- * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param fidelity: Resolved source-format phase schedule.
  * @param tensor_shape: Face grid and face row/column dimensions for the operand tile
  * @param acc_to_dest: When true, accumulate into dest even at LoFi. HiFi partial products still accumulate; without this flag the first phase overwrites.
@@ -105,8 +104,7 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const MathFidelitySch
  * @brief Sets up addrmods for elementwise binary broadcast operations.
  *
  * @tparam BROADCAST_TYPE: Sets the broadcast type (must not be NONE for this op), values = <COL/ROW/SCALAR>
- * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
- * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param fidelity: Resolved source-format phase schedule.
  */
 template <BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
@@ -174,8 +172,7 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_(const MathFidelitySchedu
  *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam BROADCAST_TYPE: Sets the broadcast type (must not be NONE for this op), values = <COL/ROW/SCALAR>
- * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
- * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity, used by ELWMUL only, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param src_a_format: Effective SrcA register format.
  * @param src_b_format: Effective SrcB register format.
  * @param tensor_shape: Face grid and face row/column dimensions for the operand tile
@@ -183,6 +180,8 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_(const MathFidelitySchedu
  * @note On the unpack thread, pair with @ref _llk_unpack_binary_broadcast_operands_init_ (T0) with matching BROADCAST_TYPE; on the pack thread, pair with
  *       @ref _llk_pack_init_ (T2).
  * @note @ref _llk_math_eltwise_binary_broadcast_ runs the configured op with matching template args.
+ * @note Pass the source register formats: for ELWMUL, init asserts that the fidelity adds precision for them and skips phases they
+ *       cannot use. Run init again whenever either format changes.
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_binary_broadcast_init_(
