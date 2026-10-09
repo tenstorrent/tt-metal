@@ -31,6 +31,17 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void div_int32_floor_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_div_int32_floor,
+        (APPROX, 32 /* ITERATIONS */),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::None)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -40,8 +51,20 @@ ALWI void div_int32_floor_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst1,
         odst,
         VectorMode::RC)));
+#endif
 }
 ALWI void div_int32_trunc_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_div_int32_trunc,
+        (APPROX, 32 /* ITERATIONS */),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::None)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -51,6 +74,7 @@ ALWI void div_int32_trunc_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst1,
         odst,
         VectorMode::RC)));
+#endif
 }
 
 /**
