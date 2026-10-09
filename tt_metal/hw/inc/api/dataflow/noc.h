@@ -41,9 +41,8 @@ inline constexpr bool noc_zero_l1_endpoint_v = false;
 template <typename T>
 inline constexpr bool is_scratchpad_v = false;
 
-// True when T can push its generated address straight into the command buffer that will issue the noc transaction.
-// Quasar DM with the address-generator path (the same condition as TT_TA_ADDRGEN_ACTIVE,
-// internal/tensor/generated_noc_addr.h): the transfer calls below are forced inline, so the sequencer's hit path ends
+// NOC_TRANSFER_INLINE: on a Quasar DM with the address-generator path (the same condition as TT_TA_ADDRGEN_ACTIVE,
+// internal/tensor/generated_noc_addr.h), the transfer calls below are forced inline, so the sequencer's hit path ends
 // up in the kernel's transfer loop. Left to the compiler, the inline budget ran out somewhere along Noc call -> traits
 // -> sequencer, and the call that remained cost 20-45 cycles per transfer. Elsewhere the compiler decides, as before.
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM) && defined(NOC_ATT_ENABLED) && !defined(TT_TA_ADDRGEN_DISABLE)
@@ -52,6 +51,7 @@ inline constexpr bool is_scratchpad_v = false;
 #define NOC_TRANSFER_INLINE
 #endif
 
+// True when T can push its generated address straight into the command buffer that will issue the noc transaction.
 template <typename T, typename = void>
 inline constexpr bool noc_addrgen_push_v = false;
 template <typename T>

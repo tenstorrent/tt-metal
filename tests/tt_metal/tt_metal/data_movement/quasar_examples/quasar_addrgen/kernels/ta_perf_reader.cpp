@@ -6,10 +6,11 @@
 // page-id order, round-robin per page, and times four sections with rdcycle (this DM hart's own cycle counter):
 //   0 ids     - generate the page ids only (the pattern's own cost, subtracted from the others on the host)
 //   1 addr    - tensor_accessor::generated_noc_addr() per page, no NoC transfer
-//   2 read    - Noc::async_read() of each page into a scratchpad, with a barrier after every read (the usual ttnn
-//   shape) 3 batched - the same reads, one barrier at the end
+//   2 read    - Noc::async_read() of each page into a scratchpad, with a barrier after every read (the usual op
+//               kernel shape)
+//   3 batched - the same reads, one barrier at the end
 // Built with and without TT_TA_ADDRGEN_DISABLE, the same kernel measures the address-generator path against the
-// software path. Page ids follow access patterns taken from ttnn kernels:
+// software path. Page ids follow access patterns taken from op kernels:
 //   SEQ         - 0, 1, 2, ...                               (unary readers, most writers)
 //   BLOCKED     - runs of `run` pages along a row, jumping a row of `width` pages between them, block by block
 //                 (matmul in0 / in1 blocked readers)
