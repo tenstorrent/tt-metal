@@ -941,8 +941,8 @@
   team: models
   sp_config: sc1
 
-# Gemma4 prefill perf gate: traced 256k prefill at chunks 2k/4k/8k, each failing if the wall
-# time to reach 1k/10k/100k/256k context exceeds its threshold in test_model_perf_glx.py.
+# Gemma4 prefill perf gate: traced 256k prefill at chunks 2k/4k/8k, each failing if the wall or device
+# time to reach 1k/10k/100k/256k context is outside its baseline range in test_model_perf_glx.py.
 - name: "(Gemma4-31B-it) D_P prefill perf gate 256k@2k/4k/8k"
   fabric_profile: 1d
   cmd: |
