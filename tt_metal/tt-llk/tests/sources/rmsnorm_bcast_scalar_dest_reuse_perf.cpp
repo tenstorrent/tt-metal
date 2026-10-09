@@ -20,6 +20,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
 constexpr bool FULL_SEQUENCE               = (PERF_RUN_TYPE == PerfRunType::L1_TO_L1) || (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION);
+constexpr std::uint32_t SRCA_VALIDS_PER_TILE = RMSNORM_WHOLE_TILE ? 1 : RMSNORM_NUM_FACES;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -45,7 +46,7 @@ inline void seed_unpack(RUNTIME_PARAMETERS params)
 inline void op_unpack_init()
 {
     _llk_unpack_A_rmsnorm_init_<RMSNORM_NUM_TILES, BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-        RMSNORM_UNPACK_FULL_TRANSPOSE, RMSNORM_UNPACK_FULL_TRANSPOSE, FACE_R_DIM, RMSNORM_NUM_FACES);
+        RMSNORM_UNPACK_FULL_TRANSPOSE, RMSNORM_UNPACK_FULL_TRANSPOSE, FACE_R_DIM, RMSNORM_NUM_FACES, 0, 0, RMSNORM_WHOLE_TILE);
 }
 
 inline void op_unpack(RUNTIME_PARAMETERS params)
@@ -84,7 +85,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 _perf_unpack_set_valid(ckernel::SrcB);
-                for (std::uint32_t i = 0; i < RMSNORM_NUM_TILES * RMSNORM_NUM_FACES; ++i)
+                for (std::uint32_t i = 0; i < RMSNORM_NUM_TILES * SRCA_VALIDS_PER_TILE; ++i)
                 {
                     _perf_unpack_set_valid(ckernel::SrcA);
                 }
@@ -135,7 +136,7 @@ inline void seed_math(RUNTIME_PARAMETERS params)
 
 inline void op_math_init()
 {
-    _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<ELTWISE_BINARY_OP, RMSNORM_NUM_TILES, MATH_FIDELITY>(RMSNORM_NUM_FACES, 0 /* acc_to_dest */);
+    _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<ELTWISE_BINARY_OP, RMSNORM_NUM_TILES, MATH_FIDELITY>(RMSNORM_NUM_FACES, 0 /* acc_to_dest */, RMSNORM_WHOLE_TILE);
 }
 
 inline void op_math()
@@ -170,7 +171,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t i = 0; i < RMSNORM_NUM_TILES * RMSNORM_NUM_FACES; ++i)
+                for (std::uint32_t i = 0; i < RMSNORM_NUM_TILES * SRCA_VALIDS_PER_TILE; ++i)
                 {
                     _perf_math_clear_valid(ckernel::SrcA);
                 }
