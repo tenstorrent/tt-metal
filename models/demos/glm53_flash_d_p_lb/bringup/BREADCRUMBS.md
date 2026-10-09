@@ -317,3 +317,15 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
   gather_full) - the op rejects their 1D one. Layers 2-4 A/B vs ttnn.all_gather: bit-identical (0 differing elements).
 - ttnn.all_gather / reduce_scatter / all_reduce ignore num_links (all_gather) or pick it when unset: they use every
   link on the axis (2 per axis on the LoudBox); the op report's per-link numbers now use the real axis links.
+
+## MoE routing and flat_routed_expert utilization, final chunk, all 42 MoE layers (2026-10-09)
+
+tests/test_moe_routing.py (full prefill for real context; route-plan counts per chip at the last chunk; flat op fenced by
+profiler signposts; generated/glm53_flash_d_p_lb/moe_routing.json):
+- active experts per chip 31..36 of 36 (median 36; 244 of 12096 expert slots empty: the op skips them, weights
+  included); routed rows per chip 2165..9496 (mean 5120); tile padding +11.4% rows.
+- flat op per chip 1.30..2.38 ms; slowest chip varies by layer; slowest-per-layer sum 84.1 ms vs median chip 69.7 ms
+  (balancing worth ~14 ms per chunk). Time-weighted DRAM 67.5% of peak, math 28% of LoFi peak.
+- Fit: ms = 0.90 + 0.138 us x padded rows (rms 0.04 ms; corr with rows 0.969, with active experts 0.14). 0.9 ms ~ reading
+  all ~510 MB of bfp4 weights at peak DRAM (1.0 ms); the per-row part ~364 TFLOP/s (60% of LoFi). Weight streaming and
+  compute look additive, not overlapped: overlapping them would be worth ~0.6 ms per layer (~25 ms per chunk).
