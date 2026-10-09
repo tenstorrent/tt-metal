@@ -12,9 +12,8 @@
 //   Each outer iteration packs one tile via tile replay, then advances L1
 //   address via address-update replay in end_ops. No per-tile RISC-V overhead.
 //
-// L1 step (a 16-bit input through a 16-bit DEST): end_ops advance L1_Dest_addr by one output tile (SCRATCH_SEC2) with a
-//   bare CFGSHIFTMASK; two-tile chunks of a 16-bit output keep the replay, whose WRCFG becomes that CFGSHIFTMASK, since
-//   the bare chunks before them in a row do not step OUTPUT_ADDR.
+// L1 step (16-bit input and DEST): end_ops advance L1_Dest_addr one output tile (SCRATCH_SEC2) by a bare CFGSHIFTMASK;
+// two-tile chunks of a 16-bit output use the replay with that CFGSHIFTMASK, since bare chunks do not step OUTPUT_ADDR.
 
 #pragma once
 
@@ -245,7 +244,7 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     _llk_pack_fast_tilize_mop_config_(unit_dim);
 }
 
-// Two-tile chunks of a 16-bit output stay paced: their faster back-to-back L1 writes would only slow the unpacker.
+// Two-tile chunks of a 16-bit output are paced: back-to-back L1 writes there only slow the unpacker.
 template <bool output_16b>
 inline void _llk_pack_fast_tilize_l1_step_mop_config_(const std::uint32_t unit_dim)
 {

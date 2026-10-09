@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Functional test of the reduce with a tilized operand A (the pool2d configuration of tilizeA_B_reduce_init and
-// unpack_tilizeA_B_block): operand A is a row-major block of TILE_CNT tiles with face_r_dim rows per face, unpacked by
-// NUM_BLOCKS calls of the tilizeA_B block unpack against a one-row scaler operand B, reduced over its rows (REDUCE_COL)
-// and packed with the reduce masks, one row per face (the reduce leaves its result in row 0 of each face).
+// Functional test of the pool's reduce with a tilized operand A: TILE_CNT row-major tiles unpacked by NUM_BLOCKS calls of
+// the tilizeA_B block unpack against a one-row scaler, reduced over rows (REDUCE_COL), one result row per face packed.
 
 #include <algorithm>
 #include <cstdint>

@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Perf test of the reduce with a tilized operand A (tilizeA_B_reduce_init, unpack_tilizeA_B_block and the column reduce:
-// the pool2d configuration). Operand A is a row-major block of TILE_CNT tiles of in0_tile_r_dim rows (2 faces wide),
-// unpacked by NUM_BLOCKS calls of the tilizeA_B block unpack per loop against one-row scaler faces; the pack is the default pack with the reduce masks.
+// Perf test of the pool's reduce with a tilized operand A: TILE_CNT row-major tiles unpacked by NUM_BLOCKS calls of the
+// tilizeA_B block unpack against one-row scaler faces, the column reduce, and the default pack with the reduce masks.
 
 #include <algorithm>
 #include <cstdint>
@@ -18,7 +17,6 @@
 #include "profiler.h"
 #include "tensor_shape.h"
 
-// Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
