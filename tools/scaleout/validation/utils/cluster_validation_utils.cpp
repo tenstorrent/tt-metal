@@ -214,7 +214,8 @@ void configure_local_kernels(
         auto curr_chip = ctx.devices[curr_chip_id];
 
         for (const auto& [neighbor_asic_id, eth_connections] : asic_connections) {
-            if (ctx.physical_system_descriptor.get_host_name_for_asic(neighbor_asic_id) != host_name) {
+            if (ctx.physical_system_descriptor.get_mpi_rank_for_asic(neighbor_asic_id) !=
+                ctx.physical_system_descriptor.get_local_mpi_rank()) {
                 continue;
             }
             auto neighbor_chip_id = ctx.asic_id_to_chip_id[*neighbor_asic_id];
@@ -1520,13 +1521,14 @@ void reset_local_ethernet_links(
 
     // Collect all links to reset
     for (const auto& [asic_id, asic_connections] : asic_topology) {
-        if (physical_system_descriptor.get_host_name_for_asic(asic_id) != physical_system_descriptor.my_host_name()) {
+        if (physical_system_descriptor.get_mpi_rank_for_asic(asic_id) !=
+            physical_system_descriptor.get_local_mpi_rank()) {
             continue;
         }
         auto src_chip_id = asic_id_to_chip_id[*asic_id];
         for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
-            if (physical_system_descriptor.get_host_name_for_asic(dst_asic_id) !=
-                physical_system_descriptor.my_host_name()) {
+            if (physical_system_descriptor.get_mpi_rank_for_asic(dst_asic_id) !=
+                physical_system_descriptor.get_local_mpi_rank()) {
                 continue;
             }
             auto dst_chip_id = asic_id_to_chip_id[*dst_asic_id];
@@ -1577,15 +1579,15 @@ void get_cross_node_ethernet_links_to_reset(
     std::unordered_map<uint32_t, std::vector<EthChannelIdentifier>> ordered_exit_nodes;
     std::unordered_map<uint64_t, std::unordered_set<uint64_t>> paired_asic_ids;
 
-    for (const auto& host : physical_system_descriptor.get_all_hostnames()) {
-        ordered_exit_nodes[physical_system_descriptor.get_rank_for_hostname(host)] =
-            std::vector<EthChannelIdentifier>();
+    for (const auto& [asic_id, descriptor] : physical_system_descriptor.get_asic_descriptors()) {
+        (void)descriptor;
+        ordered_exit_nodes.emplace(
+            physical_system_descriptor.get_mpi_rank_for_asic(asic_id), std::vector<EthChannelIdentifier>{});
     }
 
     if (*distributed_context.rank() == CONTROLLER_RANK) {
         for (const auto& [asic_id, asic_connections] : asic_topology) {
-            auto src_host_rank = physical_system_descriptor.get_rank_for_hostname(
-                physical_system_descriptor.get_host_name_for_asic(asic_id));
+            auto src_host_rank = physical_system_descriptor.get_mpi_rank_for_asic(asic_id);
             for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
                 // These links are being retrained for the second time if the current dst_asic was paired with the
                 // current src_asic in a previous iteration.
@@ -1594,8 +1596,7 @@ void get_cross_node_ethernet_links_to_reset(
                     continue;
                 }
                 paired_asic_ids[*asic_id].insert(*dst_asic_id);
-                auto dst_host_rank = physical_system_descriptor.get_rank_for_hostname(
-                    physical_system_descriptor.get_host_name_for_asic(dst_asic_id));
+                auto dst_host_rank = physical_system_descriptor.get_mpi_rank_for_asic(dst_asic_id);
                 if (src_host_rank == dst_host_rank) {
                     continue;
                 }

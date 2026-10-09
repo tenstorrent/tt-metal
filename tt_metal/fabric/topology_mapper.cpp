@@ -359,26 +359,17 @@ TopologyMapper::TopologyMapper(
         info->mesh_coord = mesh_graph_.chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id);
 
         info->hostname = physical_system_descriptor_.get_host_name_for_asic(info->asic_id);
-#if defined(TT_METAL_USE_EMULE)
-        // Several emulated ranks share one hostname, which collapses them to a single owner. This
-        // loop has already skipped every ASIC outside the local cluster, so the current rank is the
-        // owner by construction.
-        info->mpi_rank = static_cast<int>(*distributed_context_.get().rank());
-#else
-        // Get hostname and MPI rank from physical system descriptor
-        info->mpi_rank = (!info->hostname.empty())
-                             ? static_cast<int>(physical_system_descriptor_.get_rank_for_hostname(info->hostname))
-                             : -1;
-#endif
+        info->mpi_rank = static_cast<int>(physical_system_descriptor_.get_mpi_rank_for_asic(info->asic_id));
 
         // Assign mesh host rank: if local_mesh_binding.host_rank is set (not UNSET),
         // use it for all fabric nodes on the current physical host to ensure get_local_host_rank() works correctly.
         // The coordinate ranges will be rebuilt using the mesh graph's original assignments.
-        const auto& my_host = physical_system_descriptor_.my_host_name();
+        const auto my_host = physical_system_descriptor_.my_host_name();
+        const auto my_rank = static_cast<uint32_t>(*distributed_context_.get().rank());
         auto mesh_graph_host_rank = mesh_graph_.get_host_rank_for_chip(fabric_node_id.mesh_id, fabric_node_id.chip_id);
         TT_FATAL(mesh_graph_host_rank.has_value(), "Fabric node id {} not found in mesh graph", fabric_node_id);
 
-        if (!info->hostname.empty() && info->hostname == my_host &&
+        if (info->mpi_rank == static_cast<int>(my_rank) && info->hostname == my_host &&
             local_mesh_binding_.host_rank != MESH_HOST_RANK_UNSET) {
             // For local host: use the environment variable's host rank for all nodes
             // This ensures get_local_host_rank() returns a consistent value
@@ -442,10 +433,8 @@ void TopologyMapper::initialize_chip_topology_mapping_map() {
     const auto& asic_descriptors = physical_system_descriptor_.get_asic_descriptors();
 
     // Get local cluster for physical_chip_id lookup
-    const auto& my_host = physical_system_descriptor_.my_host_name();
-#if defined(TT_METAL_USE_EMULE)
-    const auto my_rank = static_cast<int>(*distributed_context_.get().rank());
-#endif
+    const auto my_host = physical_system_descriptor_.my_host_name();
+    const auto my_rank = physical_system_descriptor_.get_local_mpi_rank();
 
     // Create MappedChipInfo entry for each ASIC
     for (const auto& [asic_id, asic_descriptor] : asic_descriptors) {
@@ -464,9 +453,7 @@ void TopologyMapper::initialize_chip_topology_mapping_map() {
             info.asic_id = *live_asic;
         }
         info.hostname = asic_descriptor.host_name;
-        info.mpi_rank = (!info.hostname.empty())
-                            ? static_cast<int>(physical_system_descriptor_.get_rank_for_hostname(info.hostname))
-                            : -1;
+        info.mpi_rank = static_cast<int>(asic_descriptor.mpi_rank);
         info.tray_id = asic_descriptor.tray_id;
         info.asic_location = asic_descriptor.asic_location;
 
@@ -475,7 +462,7 @@ void TopologyMapper::initialize_chip_topology_mapping_map() {
         // file order and never equals a UMD unique id, which left physical_chip_id unset (0) for
         // every local chip and tripped the chip-id/asic-id cross-check in verify_topology_mapping.
         // On the discovered path the two are the same value, so this changes nothing there.
-        if (asic_descriptor.host_name == my_host) {
+        if (asic_descriptor.host_name == my_host && static_cast<uint32_t>(info.mpi_rank) == my_rank) {
             // Look up physical_chip_id from cluster
             for (const auto& [physical_chip_id, unique_id] : this->cluster_.get().get_unique_chip_ids()) {
                 if (unique_id == *info.asic_id) {
@@ -601,8 +588,8 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         // ids found"). Keep the seating on this host's chips. A restriction, not a footprint, so a mesh
         // smaller than the host still fits; single-host PSDs are left alone.
         if (generate_mapping_locally_ && physical_system_descriptor_.get_all_hostnames().size() > 1) {
-            for (const auto& local_asic :
-                 physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name())) {
+            for (const auto& local_asic : physical_system_descriptor_.get_asics_for_mpi_rank(
+                     physical_system_descriptor_.get_local_mpi_rank())) {
                 config.placement_asic_allowlist.insert(
                     physical_system_descriptor_.get_asic_descriptors().at(local_asic).physical_node_id);
             }
@@ -704,10 +691,7 @@ TopologyMapper::build_physical_node_id_to_mesh_rank_mapping() {
     if (generate_mapping_locally_ || world_size <= 1) {
         auto host_rank = local_mesh_binding_.host_rank;
         auto mpi_rank = static_cast<int>(*host_rank);
-
-        // Get asics on current host
-        auto asics =
-            physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name());
+        auto asics = physical_system_descriptor_.get_asics_for_mpi_rank(physical_system_descriptor_.get_local_mpi_rank());
         for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {
             for (const auto& asic : asics) {
                 mapping[mesh_id][physical_system_descriptor_.get_physical_node_id(asic)] = host_rank;
@@ -715,13 +699,6 @@ TopologyMapper::build_physical_node_id_to_mesh_rank_mapping() {
             }
         }
         return mapping;
-    }
-
-    // Step 1: Build MPI rank -> hostname mapping (rank from PSD is the MPI rank)
-    std::map<int, HostName> mpi_rank_to_host;
-    for (const auto& host : physical_system_descriptor_.get_all_hostnames()) {
-        auto mpi_rank = physical_system_descriptor_.get_rank_for_hostname(host);
-        mpi_rank_to_host[static_cast<int>(mpi_rank)] = host;
     }
 
     // Step 2: Gather mesh_id and host_rank from all ranks to know which mesh_ids each MPI rank participates in
@@ -739,7 +716,7 @@ TopologyMapper::build_physical_node_id_to_mesh_rank_mapping() {
 
     const std::uint64_t sentinel = std::numeric_limits<std::uint64_t>::max();
     std::vector<std::uint64_t> send_values(max_count, sentinel);
-    auto my_mpi_rank = static_cast<int>(*global_context.rank());
+    auto my_mpi_rank = static_cast<int>(physical_system_descriptor_.get_local_mpi_rank());
     for (std::uint32_t i = 0; i < local_count; ++i) {
         // Encode MPI rank along with mesh_id and host_rank so we can map correctly
         send_values[i] = encode_mpi_rank_mesh_id_and_rank(
@@ -772,21 +749,17 @@ TopologyMapper::build_physical_node_id_to_mesh_rank_mapping() {
         mesh_host_rank_to_mpi_rank_[std::make_pair(mesh_id, host_rank)] = gathered_mpi_rank;
     }
 
-    // Step 4: For each MPI rank in the gathered data, assign mesh host rank to ASICs
+    // Step 4: For each MPI rank in the gathered data, assign mesh host rank to its ASICs.
+    // The rank is on each chip in the descriptor, so ranks that share a host stay distinct.
     for (const auto& [gathered_mpi_rank, mesh_bindings] : mpi_rank_to_mesh_bindings) {
-        // Get the hostname for this MPI rank
-        auto host_it = mpi_rank_to_host.find(gathered_mpi_rank);
-        if (host_it == mpi_rank_to_host.end()) {
-            TT_FATAL(false, "MPI rank {} not found in mpi_rank_to_host mapping", gathered_mpi_rank);
-        }
-
-        const auto& host_name = host_it->second;
-        auto asics = physical_system_descriptor_.get_asics_connected_to_host(host_name);
-
-        // For each mesh_id this MPI rank participates in, use the host_rank from gathered data
+        TT_FATAL(gathered_mpi_rank >= 0, "Gathered MPI rank {} is negative", gathered_mpi_rank);
+        auto asics =
+            physical_system_descriptor_.get_asics_for_mpi_rank(static_cast<std::uint32_t>(gathered_mpi_rank));
+        TT_FATAL(
+            !asics.empty(),
+            "MPI rank {} has no ASICs in the physical system descriptor",
+            gathered_mpi_rank);
         for (const auto& [mesh_id, host_rank] : mesh_bindings) {
-            // Use the host_rank directly from the gathered data (which comes from local_mesh_binding_.host_rank)
-            // This is the mesh host rank set via TT_MESH_HOST_RANK environment variable
             for (const auto& asic : asics) {
                 mapping[mesh_id][physical_system_descriptor_.get_physical_node_id(asic)] = host_rank;
             }
@@ -850,29 +823,13 @@ void TopologyMapper::broadcast_chip_info_to_hosts(const std::vector<std::size_t>
     std::vector<const MappedChipInfo*> entries_to_broadcast;
     entries_to_broadcast.reserve(chip_topology_mapping_.size());
     std::unordered_set<std::size_t> host_rank_set(host_ranks.begin(), host_ranks.end());
-#if !defined(TT_METAL_USE_EMULE)
-    const auto& host_to_rank_map = physical_system_descriptor_.get_host_to_rank_map();
-#endif
     for (const auto& info : chip_topology_mapping_) {
-        // If host_ranks is empty, include all entries
-        // Otherwise, only include entries whose host's rank is in the list
+        // If host_ranks is empty, include all entries.
+        // Otherwise, only include entries whose MPI rank is in the list.
         if (host_ranks.empty()) {
             entries_to_broadcast.push_back(&info);
-        } else {
-#if defined(TT_METAL_USE_EMULE)
-            // Filter on the owner recorded above rather than on hostname, for the same reason.
-            if (info.mpi_rank >= 0 && host_rank_set.contains(static_cast<std::size_t>(info.mpi_rank))) {
-                entries_to_broadcast.push_back(&info);
-            }
-#else
-            // Get the rank for this ASIC's hostname
-            if (!info.hostname.empty() && host_to_rank_map.contains(info.hostname)) {
-                auto host_rank = host_to_rank_map.at(info.hostname);
-                if (host_rank_set.contains(host_rank)) {
-                    entries_to_broadcast.push_back(&info);
-                }
-            }
-#endif
+        } else if (info.mpi_rank >= 0 && host_rank_set.contains(static_cast<std::size_t>(info.mpi_rank))) {
+            entries_to_broadcast.push_back(&info);
         }
     }
     std::uint32_t count = static_cast<std::uint32_t>(entries_to_broadcast.size());
@@ -1147,9 +1104,9 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
 
     // Fill in physical_chip_id for ASICs that belong to this host
     // (The controller may have set it to 0 for ASICs on other hosts)
-    const auto& my_host = physical_system_descriptor_.my_host_name();
+    const auto my_host = physical_system_descriptor_.my_host_name();
     for (auto& info : chip_topology_mapping_) {
-        if (info.physical_chip_id == 0 && !info.hostname.empty() && info.hostname == my_host) {
+        if (info.physical_chip_id == 0 && info.mpi_rank == static_cast<int>(my_rank) && info.hostname == my_host) {
             // This ASIC belongs to this host, look up its physical chip ID
             for (const auto& [physical_chip_id, unique_id] : cluster_.get().get_unique_chip_ids()) {
                 if (unique_id == *info.asic_id) {
@@ -1181,10 +1138,11 @@ void TopologyMapper::rebuild_lookup_maps() {
 
 std::map<FabricNodeId, ChipId> TopologyMapper::get_local_logical_mesh_chip_id_to_physical_chip_id_mapping() const {
     std::map<FabricNodeId, ChipId> mapping;
-    const auto& my_host = physical_system_descriptor_.my_host_name();
+    const auto my_host = physical_system_descriptor_.my_host_name();
+    const auto my_rank = physical_system_descriptor_.get_local_mpi_rank();
     // Use chip_topology_mapping_ for centralized access
     for (const auto& info : chip_topology_mapping_) {
-        if (info.is_mapped && !info.hostname.empty() && info.hostname == my_host) {
+        if (info.is_mapped && info.mpi_rank == my_rank && info.hostname == my_host) {
             mapping[info.fabric_node_id] = info.physical_chip_id;
         }
     }
@@ -1241,13 +1199,13 @@ std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_coord(
 
 std::optional<MeshHostRankId> TopologyMapper::get_local_host_rank(MeshId mesh_id) const {
     // Get the current hostname
-    const auto& current_hostname = physical_system_descriptor_.my_host_name();
+    const auto my_rank = static_cast<int>(*distributed_context_.get().rank());
 
-    // Collect all host ranks for fabric nodes on the current host for this mesh
+    // Collect mesh host ranks for fabric nodes owned by this MPI rank.
     std::unordered_set<MeshHostRankId> host_ranks;
     for (const auto& [fabric_node_id, info_ptr] : fabric_node_id_to_mapping_) {
         if (fabric_node_id.mesh_id == mesh_id && info_ptr != nullptr && info_ptr->is_mapped &&
-            info_ptr->hostname == current_hostname) {
+            info_ptr->mpi_rank == my_rank) {
             host_ranks.insert(info_ptr->mesh_host_rank);
         }
     }
@@ -1269,10 +1227,10 @@ std::optional<MeshHostRankId> TopologyMapper::get_local_host_rank(MeshId mesh_id
             ranks_str += std::to_string(rank.get());
         }
         TT_THROW(
-            "TopologyMapper: Inconsistent host ranks found for mesh {} on host {}. "
-            "All fabric nodes on the same host must have the same mesh host rank. Found ranks: [{}]",
+            "TopologyMapper: Inconsistent host ranks found for mesh {} on MPI rank {}. "
+            "All fabric nodes on the same MPI rank must have the same mesh host rank. Found ranks: [{}]",
             mesh_id.get(),
-            current_hostname,
+            my_rank,
             ranks_str);
     }
 
@@ -1582,16 +1540,14 @@ int TopologyMapper::get_mpi_rank_for_mesh_host_rank(MeshId mesh_id, MeshHostRank
     if (fabric_node_it != fabric_node_id_to_mapping_.end() && fabric_node_it->second != nullptr &&
         fabric_node_it->second->is_mapped) {
         // Fabric node exists in mapping, use it
-        HostName hostname = fabric_node_it->second->hostname;
-        return static_cast<int>(physical_system_descriptor_.get_rank_for_hostname(hostname));
+        return fabric_node_it->second->mpi_rank;
     }
 
     // Fabric node not found in mapping (current rank doesn't participate in this mesh)
     // Try to find any fabric node for this mesh to get the hostname
     for (const auto& [fnode_id, info_ptr] : fabric_node_id_to_mapping_) {
         if (fnode_id.mesh_id == mesh_id && info_ptr != nullptr && info_ptr->is_mapped) {
-            HostName hostname = info_ptr->hostname;
-            return static_cast<int>(physical_system_descriptor_.get_rank_for_hostname(hostname));
+            return info_ptr->mpi_rank;
         }
     }
 
@@ -1903,7 +1859,7 @@ void TopologyMapper::verify_topology_mapping(const Cluster& cluster) const {
     log_debug(tt::LogFabric, "TopologyMapper: Verifying topology mapping against PSD and cluster API");
 
     const auto& cluster_unique_chip_ids = cluster.get_unique_chip_ids();
-    const auto& my_hostname = physical_system_descriptor_.my_host_name();
+    const auto my_rank = physical_system_descriptor_.get_local_mpi_rank();
 
     // Every check below compares a UMD fact against the cluster, so all of them read the live
     // descriptor. On the factory path the descriptor being solved on has no UMD ids to check.
@@ -1921,20 +1877,14 @@ void TopologyMapper::verify_topology_mapping(const Cluster& cluster) const {
         local_asic_ids.insert(tt::tt_metal::AsicID{unique_id});
     }
 
-    // Get all ASICs connected to this host from PSD
-    const auto& local_asics_from_psd = live.get_asics_connected_to_host(my_hostname);
-    std::unordered_set<tt::tt_metal::AsicID> local_asics_from_psd_set(
-        local_asics_from_psd.begin(), local_asics_from_psd.end());
-
     // Verify each mapped entry
     for (const auto& info : chip_topology_mapping_) {
         if (!info.is_mapped) {
             continue;  // Skip unmapped entries
         }
 
-        // Determine if this is a local chip (on this host)
-        bool is_local_chip = (info.hostname == my_hostname) || (local_asic_ids.contains(info.asic_id)) ||
-                             (local_asics_from_psd_set.contains(info.asic_id));
+        // Local means this MPI rank, not every chip that shares the machine name.
+        bool is_local_chip = static_cast<uint32_t>(info.mpi_rank) == my_rank || local_asic_ids.contains(info.asic_id);
 
         // Check 1: For local chips, verify ASIC ID exists in cluster.get_unique_chip_ids()
         if (is_local_chip && !local_asic_ids.contains(info.asic_id)) {

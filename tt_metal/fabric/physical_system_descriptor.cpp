@@ -99,13 +99,18 @@ void PhysicalSystemDescriptor::clear() {
     pcie_id_to_asic_location_.clear();
     local_hostname_.clear();
     local_rank_ = 0;
-    all_hostnames_unique_ = true;
+    all_hostnames_unique_ = false;
     ethernet_firmware_version_ = tt::umd::SemVer(0, 0, 0);
 }
 
 void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
+    // Ranks that share a machine file their chips under one host name. Replacing the bucket would
+    // keep only the last rank's topology, so fold each rank's ASICs into the existing host graph.
     for (auto& [host_name, asic_graph] : other.system_graph_.asic_connectivity_graph) {
-        system_graph_.asic_connectivity_graph[host_name] = std::move(asic_graph);
+        auto& dest = system_graph_.asic_connectivity_graph[host_name];
+        for (auto& [asic_id, edges] : asic_graph) {
+            dest[asic_id] = std::move(edges);
+        }
     }
     for (auto& [host_name, host_connectivity] : other.system_graph_.host_connectivity_graph) {
         system_graph_.host_connectivity_graph[host_name] = std::move(host_connectivity);
@@ -120,7 +125,11 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
         host_to_rank_[host_name] = rank;
     }
     for (auto& [host_name, exit_connections] : other.exit_node_connection_table_) {
-        exit_node_connection_table_[host_name] = std::move(exit_connections);
+        auto& dest = exit_node_connection_table_[host_name];
+        dest.insert(
+            dest.end(),
+            std::make_move_iterator(exit_connections.begin()),
+            std::make_move_iterator(exit_connections.end()));
     }
     for (auto& [host_name, tray_map] : other.get_pcie_devices_per_tray()) {
         pcie_devices_per_tray_[host_name] = std::move(tray_map);
@@ -131,7 +140,7 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
 
     // Preserve discovery identity and firmware version from source. Required for clear()+merge()
     // re-discovery flow: caller clears destination PSD, then merges a newly discovered PSD.
-    // Without this, my_host_name() would fall back incorrectly and ethernet_firmware_version_
+    // Without this, the recorded cluster id would be lost and ethernet_firmware_version_
     // would remain at cleared default (0.0.0).
     if (!other.local_hostname_.empty()) {
         local_hostname_ = std::move(other.local_hostname_);
@@ -353,6 +362,16 @@ std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(const 
     return asics;
 }
 
+std::vector<AsicID> PhysicalSystemDescriptor::get_asics_for_mpi_rank(uint32_t mpi_rank) const {
+    std::vector<AsicID> asics;
+    for (const auto& [asic_id, descriptor] : asic_descriptors_) {
+        if (descriptor.mpi_rank == mpi_rank) {
+            asics.push_back(asic_id);
+        }
+    }
+    return asics;
+}
+
 bool PhysicalSystemDescriptor::is_cross_host_eth_link(AsicID asic_id, uint8_t chan_id) const {
     for (const auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
         if (this->get_host_name_for_asic(asic_id) != host) {
@@ -371,7 +390,7 @@ bool PhysicalSystemDescriptor::is_cross_host_eth_link(AsicID asic_id, uint8_t ch
             chan_id,
             asic_id);
         auto connected_asic = connection_it->first;
-        return this->get_host_name_for_asic(connected_asic) != host;
+        return this->get_mpi_rank_for_asic(connected_asic) != this->get_mpi_rank_for_asic(asic_id);
     }
     TT_THROW("Asic {} not found in any host's asic connectivity graph", asic_id);
     return false;
@@ -382,8 +401,12 @@ std::vector<std::string> PhysicalSystemDescriptor::get_host_neighbors(const std:
         system_graph_.host_connectivity_graph.contains(hostname), "No Host connectivity found for host {}", hostname);
     std::vector<std::string> neighbors;
     neighbors.reserve(system_graph_.host_connectivity_graph.at(hostname).size());
+    std::unordered_set<std::string> seen;
     for (const auto& edge : system_graph_.host_connectivity_graph.at(hostname)) {
-        neighbors.push_back(edge.first);
+        // Several ranks on the destination machine each add an edge under the same host name.
+        if (seen.insert(edge.first).second) {
+            neighbors.push_back(edge.first);
+        }
     }
     return neighbors;
 }
@@ -392,12 +415,13 @@ std::vector<ExitNodeConnection> PhysicalSystemDescriptor::get_connecting_exit_no
     const std::string& src_host, const std::string& dst_host) const {
     TT_FATAL(
         system_graph_.host_connectivity_graph.contains(src_host), "No Host connectivity found for host {}", src_host);
+    std::vector<ExitNodeConnection> connections;
     for (const auto& edge : system_graph_.host_connectivity_graph.at(src_host)) {
         if (edge.first == dst_host) {
-            return edge.second;
+            connections.insert(connections.end(), edge.second.begin(), edge.second.end());
         }
     }
-    return {};
+    return connections;
 }
 
 std::pair<AsicID, uint8_t> PhysicalSystemDescriptor::get_connected_asic_and_channel(
@@ -453,15 +477,8 @@ std::vector<std::string> PhysicalSystemDescriptor::get_all_hostnames() const {
 
 std::string PhysicalSystemDescriptor::my_host_name() const {
     if (!local_hostname_.empty()) {
-        // Discovery has set local_hostname_ and local_rank_. When multiple MPI ranks share the same
-        // discovery hostname (mock descriptor basename or colliding OS hostname), suffix with rank,
-        // using the same marker discovery used for the PSD host keys.
-        if (!all_hostnames_unique_) {
-            return local_hostname_ + std::string(kHostRankSuffixMarker) + std::to_string(local_rank_);
-        }
         return local_hostname_;
     }
-    // Fallback for file-based PSD (no discovery) - assume hostnames are unique
     return get_host_name();
 }
 
@@ -471,9 +488,10 @@ uint32_t PhysicalSystemDescriptor::get_rank_for_hostname(const std::string& host
 }
 
 std::string PhysicalSystemDescriptor::get_hostname_for_rank(uint32_t rank) const {
-    for (const auto& [host, host_rank] : host_to_rank_) {
-        if (host_rank == rank) {
-            return host;
+    for (const auto& [asic_id, descriptor] : asic_descriptors_) {
+        (void)asic_id;
+        if (descriptor.mpi_rank == rank && !descriptor.host_name.empty()) {
+            return descriptor.host_name;
         }
     }
     TT_THROW("Hostname for rank {} not found", rank);
@@ -484,7 +502,13 @@ std::string PhysicalSystemDescriptor::get_host_name_for_asic(AsicID asic_id) con
     return asic_descriptors_.at(asic_id).host_name;
 }
 
+uint32_t PhysicalSystemDescriptor::get_mpi_rank_for_asic(AsicID asic_id) const {
+    TT_FATAL(asic_descriptors_.contains(asic_id), "No ASIC descriptor found for asic_id {}", asic_id);
+    return asic_descriptors_.at(asic_id).mpi_rank;
+}
+
 void PhysicalSystemDescriptor::add_asic_descriptor(AsicID asic_id, ASICDescriptor descriptor) {
+    TT_FATAL(!descriptor.host_name.empty(), "ASIC {} is missing its host name", asic_id);
     if (is_unset(descriptor.physical_node_id)) {
         descriptor.physical_node_id =
             experimental::make_physical_node_id(descriptor.host_name, descriptor.tray_id, descriptor.asic_location);

@@ -390,6 +390,8 @@ void validate_host_filter(
         desc->set_board_type(board_type_for(host_id, tray_id));
         desc->set_unique_id(unique_id);
         desc->set_host_name(hostname_of(host_id));
+        // Same index as host_to_rank. Live discovery overwrites it with the MPI rank at align time.
+        desc->set_mpi_rank(static_cast<uint32_t>(host_id));
     }
 
     if (!fsd.has_eth_connections()) {

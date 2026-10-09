@@ -59,7 +59,8 @@ PhysicalSystemDescriptor make_descriptor(
                 id,
                 static_cast<ChipId>(asic.label),
                 asic.host,
-                experimental::make_physical_node_id(asic.host, TrayID{asic.tray}, ASICLocation{asic.loc})});
+                experimental::make_physical_node_id(asic.host, TrayID{asic.tray}, ASICLocation{asic.loc}),
+                /*mpi_rank=*/0});
         graph[asic.host][id];  // an ASIC with no cables still exists
     }
 

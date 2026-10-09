@@ -1731,23 +1731,26 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                     // If so, iterate over all cross host connections between the neighbors
                     // Assign this edge to all links on the local chip part of this intramesh connection
                     for (const auto& neighbor_host : neighbor_hosts) {
-                        auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
-                        auto neighbor_mesh_id =
-                            this->global_logical_bindings_
-                                .at(tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})
-                                .first;
-                        auto neighbor_mesh_host_rank =
-                            this->global_logical_bindings_
-                                .at(tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})
-                                .second;
-                        if (neighbor_mesh_id == mesh_id && neighbor_mesh_host_rank == connected_host_rank_id) {
-                            const auto& neighbor_exit_nodes =
-                                physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
-                            for (const auto& exit_node : neighbor_exit_nodes) {
-                                if (*exit_node.src_exit_node == *asic_id) {
-                                    this->assign_direction_to_fabric_eth_chan(
-                                        fabric_node_id, exit_node.eth_conn.src_chan, edge.port_direction);
-                                }
+                        const auto& neighbor_exit_nodes =
+                            physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
+                        for (const auto& exit_node : neighbor_exit_nodes) {
+                            if (*exit_node.src_exit_node != *asic_id) {
+                                continue;
+                            }
+                            // The other end's MPI rank, not the shared host name. Several ranks on one
+                            // machine all use that name.
+                            auto neighbor_host_rank =
+                                physical_system_descriptor_->get_mpi_rank_for_asic(exit_node.dst_exit_node);
+                            const auto neighbor_rank = tt::tt_metal::distributed::multihost::Rank{
+                                static_cast<int>(neighbor_host_rank)};
+                            if (!this->global_logical_bindings_.contains(neighbor_rank)) {
+                                continue;
+                            }
+                            auto neighbor_mesh_id = this->global_logical_bindings_.at(neighbor_rank).first;
+                            auto neighbor_mesh_host_rank = this->global_logical_bindings_.at(neighbor_rank).second;
+                            if (neighbor_mesh_id == mesh_id && neighbor_mesh_host_rank == connected_host_rank_id) {
+                                this->assign_direction_to_fabric_eth_chan(
+                                    fabric_node_id, exit_node.eth_conn.src_chan, edge.port_direction);
                             }
                         }
                     }
@@ -3638,9 +3641,19 @@ std::vector<PortDescriptor> ControlPlane::gather_intermesh_cables_for_exit_nodes
     const std::string& my_host,
     const std::string& neighbor_host,
     bool strict_binding,
-    const std::unordered_set<FabricNodeId>& requested_exit_nodes) {
+    const std::unordered_set<FabricNodeId>& requested_exit_nodes,
+    uint32_t neighbor_mpi_rank) {
     const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
-    auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
+    const auto my_rank = physical_system_descriptor_->get_local_mpi_rank();
+    auto exit_nodes_for_rank = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
+    std::erase_if(exit_nodes_for_rank, [&](const auto& exit_node) {
+        return physical_system_descriptor_->get_mpi_rank_for_asic(exit_node.src_exit_node) != my_rank ||
+               physical_system_descriptor_->get_mpi_rank_for_asic(exit_node.dst_exit_node) != neighbor_mpi_rank;
+    });
+    if (exit_nodes_for_rank.empty()) {
+        return {};
+    }
+    const auto neighbor_host_rank = neighbor_mpi_rank;
     const auto& neighbor_binding = this->global_logical_bindings_.at(
         tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)});
     const auto neighbor_mesh_id = neighbor_binding.first;
@@ -3648,7 +3661,7 @@ std::vector<PortDescriptor> ControlPlane::gather_intermesh_cables_for_exit_nodes
     // Copy + stably sort the exit-node cables by a logical key (src chip, then src/dst channel) so the
     // gathered record order is independent of get_connecting_exit_nodes()'s discovery order (which comes
     // from a hostname-keyed unordered_map and therefore varies by physical host).
-    auto exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
+    auto exit_nodes = exit_nodes_for_rank;
     std::sort(exit_nodes.begin(), exit_nodes.end(), [this](const auto& a, const auto& b) {
         auto ca = this->get_fabric_node_id_from_asic_id(*a.src_exit_node).chip_id;
         auto cb = this->get_fabric_node_id_from_asic_id(*b.src_exit_node).chip_id;
@@ -3717,6 +3730,7 @@ PortDescriptorTable ControlPlane::generate_port_descriptor_table() {
     const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
     const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
     const auto& my_host = physical_system_descriptor_->my_host_name();
+    const auto my_rank = physical_system_descriptor_->get_local_mpi_rank();
     const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
 
     TT_FATAL(
@@ -3729,44 +3743,57 @@ PortDescriptorTable ControlPlane::generate_port_descriptor_table() {
     PortDescriptorTable port_descriptors;
     port_descriptors[my_mesh_id] = {};
 
-    // Iterate neighbors in a stable (neighbor mesh_id, hostname) order rather than get_host_neighbors()'s
-    // hostname-keyed unordered_map order, so the gathered record order is host-independent.
+    // Neighbors are MPI ranks. Several ranks share a machine name, so a hostname is not one neighbor.
     const auto neighbor_hosts = physical_system_descriptor_->get_host_neighbors(my_host);
-    std::vector<std::pair<MeshId, std::string>> sorted_neighbors;
-    sorted_neighbors.reserve(neighbor_hosts.size());
+    std::map<uint32_t, std::string> neighbor_rank_to_host;
     for (const auto& neighbor_host : neighbor_hosts) {
-        auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
-        auto neighbor_rank = tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)};
-        // Skip if neighbor host is not in our global logical bindings.
+        for (const auto& cable : physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host)) {
+            if (physical_system_descriptor_->get_mpi_rank_for_asic(cable.src_exit_node) != my_rank) {
+                continue;
+            }
+            neighbor_rank_to_host.emplace(
+                physical_system_descriptor_->get_mpi_rank_for_asic(cable.dst_exit_node), neighbor_host);
+        }
+    }
+    std::vector<std::tuple<MeshId, std::string, uint32_t>> sorted_neighbors;
+    sorted_neighbors.reserve(neighbor_rank_to_host.size());
+    for (const auto& [dst_rank, neighbor_host] : neighbor_rank_to_host) {
+        auto neighbor_rank = tt::tt_metal::distributed::multihost::Rank{static_cast<int>(dst_rank)};
         if (!this->global_logical_bindings_.contains(neighbor_rank)) {
             continue;
         }
-        sorted_neighbors.emplace_back(this->global_logical_bindings_.at(neighbor_rank).first, neighbor_host);
+        sorted_neighbors.emplace_back(
+            this->global_logical_bindings_.at(neighbor_rank).first, neighbor_host, dst_rank);
     }
     std::sort(sorted_neighbors.begin(), sorted_neighbors.end(), [](const auto& a, const auto& b) {
-        if (*a.first != *b.first) {
-            return *a.first < *b.first;
+        if (*std::get<0>(a) != *std::get<0>(b)) {
+            return *std::get<0>(a) < *std::get<0>(b);
         }
-        return a.second < b.second;
+        if (std::get<1>(a) != std::get<1>(b)) {
+            return std::get<1>(a) < std::get<1>(b);
+        }
+        return std::get<2>(a) < std::get<2>(b);
     });
 
-    for (const auto& [neighbor_mesh_id, neighbor_host] : sorted_neighbors) {
+    for (const auto& [neighbor_mesh_id, neighbor_host, neighbor_mpi_rank] : sorted_neighbors) {
         bool connection_requested = check_connection_requested(
             my_mesh_id, neighbor_mesh_id, requested_intermesh_connections, requested_intermesh_ports);
         if (!connection_requested) {
             continue;
         }
-        const auto& exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
+        const auto exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
         std::vector<uint64_t> src_exit_node_chips;
-        src_exit_node_chips.reserve(exit_nodes.size());
-        std::transform(
-            exit_nodes.begin(), exit_nodes.end(), std::back_inserter(src_exit_node_chips), [](const auto& exit_node) {
-                return *exit_node.src_exit_node;
-            });
+        for (const auto& exit_node : exit_nodes) {
+            if (physical_system_descriptor_->get_mpi_rank_for_asic(exit_node.src_exit_node) != my_rank ||
+                physical_system_descriptor_->get_mpi_rank_for_asic(exit_node.dst_exit_node) != neighbor_mpi_rank) {
+                continue;
+            }
+            src_exit_node_chips.push_back(*exit_node.src_exit_node);
+        }
         std::unordered_set<FabricNodeId> requested_exit_nodes = this->get_requested_exit_nodes(
             my_mesh_id, neighbor_mesh_id, requested_intermesh_ports, src_exit_node_chips);
-        auto neighbor_ports =
-            this->gather_intermesh_cables_for_exit_nodes(my_host, neighbor_host, strict_binding, requested_exit_nodes);
+        auto neighbor_ports = this->gather_intermesh_cables_for_exit_nodes(
+            my_host, neighbor_host, strict_binding, requested_exit_nodes, neighbor_mpi_rank);
         // A host may connect to multiple neighbor hosts on the same logical mesh (e.g. pod
         // boundary spanning several machines). Append per-neighbor discoveries instead of
         // overwriting the previous neighbor's ports.
@@ -3967,6 +3994,8 @@ std::unordered_set<FabricNodeId> ControlPlane::get_requested_exit_nodes(
 
 void ControlPlane::forward_descriptors_to_controller(
     PortDescriptorTable& port_descriptors, uint32_t my_rank, const std::string& my_host) {
+    // Peers are MPI ranks. The host name is no longer which rank to exchange with.
+    (void)my_host;
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t CONTROLLER_RANK = 0;
     const auto& distributed_context = this->distributed_context_.get();
@@ -3985,11 +4014,14 @@ void ControlPlane::forward_descriptors_to_controller(
             Rank{CONTROLLER_RANK},
             Tag{0});
     } else {
-        for (const auto& hostname : physical_system_descriptor->get_all_hostnames()) {
-            if (hostname == my_host) {
-                continue;
+        std::set<uint32_t> peer_ranks;
+        for (const auto& [asic_id, descriptor] : physical_system_descriptor->get_asic_descriptors()) {
+            (void)asic_id;
+            if (descriptor.mpi_rank != my_rank) {
+                peer_ranks.insert(descriptor.mpi_rank);
             }
-            auto peer_rank = physical_system_descriptor->get_rank_for_hostname(hostname);
+        }
+        for (const auto peer_rank : peer_ranks) {
             distributed_context.recv(
                 ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
@@ -4037,16 +4069,18 @@ void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedInterm
     using namespace tt::tt_metal::distributed::multihost;
     const auto& distributed_context = this->distributed_context_.get();
     constexpr uint32_t CONTROLLER_RANK = 0;
-    const auto& my_host = physical_system_descriptor_->my_host_name();
-    auto my_rank = physical_system_descriptor_->get_rank_for_hostname(my_host);
+    auto my_rank = physical_system_descriptor_->get_local_mpi_rank();
     std::size_t serialized_table_size = 0;
     std::vector<uint8_t> serialized_connections;
     if (my_rank == CONTROLLER_RANK) {
-        for (const auto& hostname : physical_system_descriptor_->get_all_hostnames()) {
-            if (hostname == my_host) {
-                continue;
+        std::set<uint32_t> peer_ranks;
+        for (const auto& [asic_id, descriptor] : physical_system_descriptor_->get_asic_descriptors()) {
+            (void)asic_id;
+            if (descriptor.mpi_rank != my_rank) {
+                peer_ranks.insert(descriptor.mpi_rank);
             }
-            auto peer_rank = physical_system_descriptor_->get_rank_for_hostname(hostname);
+        }
+        for (const auto peer_rank : peer_ranks) {
             serialized_connections = serialize_intermesh_connections_to_bytes(intermesh_connections);
             serialized_table_size = serialized_connections.size();
             distributed_context.send(
@@ -4420,7 +4454,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
 AnnotatedIntermeshConnections ControlPlane::convert_port_descriptors_to_intermesh_connections(
     PortDescriptorTable& port_descriptors) {
     const auto& my_host = physical_system_descriptor_->my_host_name();
-    auto my_rank = physical_system_descriptor_->get_rank_for_hostname(my_host);
+    auto my_rank = physical_system_descriptor_->get_local_mpi_rank();
 
     this->forward_descriptors_to_controller(port_descriptors, my_rank, my_host);
 

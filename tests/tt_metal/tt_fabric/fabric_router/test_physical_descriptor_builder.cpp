@@ -376,11 +376,10 @@ TEST(PhysicalDescriptorBuilder, DescriptorsCarryPositionAddressesNotFileOrderLab
     EXPECT_EQ(actual, two_host_expected_node_ids());
 }
 
-// The builder rejects duplicate hostnames and enumerates ASICs through a set keyed by
-// (host, tray, loc), so hostnames are unique on this path and no rank suffix can appear.
+// Host names are the machine name and are not assumed unique across ranks.
 TEST(PhysicalDescriptorBuilder, FsdPathReportsUniqueHostnames) {
     ::tt::tt_metal::PhysicalSystemDescriptor psd(build_physical_descriptor(make_two_host_fsd()));
-    EXPECT_TRUE(psd.get_all_hostnames_unique());
+    EXPECT_FALSE(psd.get_all_hostnames_unique());
 }
 
 // The load-bearing one. An FSD-built descriptor set labelled 1..N and a live-style one labelled with

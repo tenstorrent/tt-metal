@@ -209,7 +209,8 @@ TEST(FsdHostFilter, LiveHostsThatCanonicalizeAlikeAreRejected) {
                 id,
                 static_cast<ChipId>(label),
                 host,
-                experimental::make_physical_node_id(host, tray, ASICLocation{0})});
+                experimental::make_physical_node_id(host, tray, ASICLocation{0}),
+                /*mpi_rank=*/static_cast<uint32_t>(label - 1)});
         graph[host][id];
         ++label;
     }

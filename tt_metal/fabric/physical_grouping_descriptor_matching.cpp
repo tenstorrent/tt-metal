@@ -858,10 +858,18 @@ using tt::tt_metal::TrayID;
 
 std::vector<std::set<tt::tt_metal::experimental::PhysicalNodeId>> collect_psd_host_groups(
     const AdjacencyGraph<tt::tt_metal::experimental::PhysicalNodeId>& physical_graph,
-    [[maybe_unused]] const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
     std::map<std::string, std::set<tt::tt_metal::experimental::PhysicalNodeId>> host_to_asics;
-    for (const tt::tt_metal::experimental::PhysicalNodeId& asic_id : physical_graph.get_nodes()) {
-        host_to_asics[std::string(tt::tt_metal::experimental::cluster_id_view(asic_id))].insert(asic_id);
+    for (const tt::tt_metal::experimental::PhysicalNodeId& node_id : physical_graph.get_nodes()) {
+        const auto asic_id = physical_system_descriptor.find_asic_id(node_id);
+        if (!asic_id.has_value()) {
+            continue;
+        }
+        const std::string& hostname = physical_system_descriptor.get_host_name_for_asic(*asic_id);
+        if (hostname.empty()) {
+            continue;
+        }
+        host_to_asics[hostname].insert(node_id);
     }
     std::vector<std::set<tt::tt_metal::experimental::PhysicalNodeId>> global_groups;
     global_groups.reserve(host_to_asics.size());
@@ -1330,6 +1338,97 @@ std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_
 
 }  // namespace
 
+namespace {
+
+// Embed `pattern` into `image`, pinning each node to the node with the same tray and ASIC location.
+// The pin leaves one candidate mapping, so the solve only accepts it when the pattern's links are
+// edges of the image. A pattern node whose slot is missing from the image does not pin.
+template <typename PatternNode, typename ImageNode>
+bool embeds_on_same_slots(
+    const AdjacencyGraph<PatternNode>& pattern,
+    const AdjacencyGraph<ImageNode>& image,
+    const std::map<PatternNode, tt::tt_metal::ASICPosition>& pattern_slots,
+    const std::map<ImageNode, tt::tt_metal::ASICPosition>& image_slots) {
+    MappingConstraints<PatternNode, ImageNode> constraints;
+    if (!constraints.template add_required_trait_constraint<tt::tt_metal::ASICPosition>(pattern_slots, image_slots)) {
+        return false;
+    }
+    return solve_topology_mapping(
+               pattern,
+               image,
+               constraints,
+               ConnectionValidationMode::STRICT,
+               /*quiet_mode=*/true,
+               TopologyMappingSolverEngine::Sat)
+        .success;
+}
+
+// True when some hostname seats with this grouping. Either the host is a slice of the grouping, or the
+// grouping is a piece of the host. One host is enough.
+bool a_psd_host_fits_on_grouping(
+    const GroupingInfo& variant, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+    std::map<GroupingChipId, tt::tt_metal::ASICPosition> grouping_slots;
+    AdjacencyGraph<GroupingChipId>::AdjacencyMap grouping_edges;
+    for (GroupingChipId node_id : variant.adjacency_graph.get_nodes()) {
+        if (node_id >= variant.items.size()) {
+            continue;
+        }
+        const GroupingItemInfo& item = variant.items[node_id];
+        if (*item.tray_id == 0) {
+            continue;
+        }
+        grouping_slots.emplace(node_id, tt::tt_metal::ASICPosition{item.tray_id, item.asic_location});
+        grouping_edges[node_id];
+    }
+    if (grouping_slots.empty()) {
+        return false;
+    }
+    for (const auto& [node_id, unused_slot] : grouping_slots) {
+        (void)unused_slot;
+        for (GroupingChipId neighbor : variant.adjacency_graph.get_neighbors(node_id)) {
+            if (grouping_slots.contains(neighbor)) {
+                grouping_edges[node_id].push_back(neighbor);
+            }
+        }
+    }
+    const AdjacencyGraph<GroupingChipId> grouping_graph(std::move(grouping_edges));
+
+    std::map<std::string, std::vector<tt::tt_metal::AsicID>> asics_by_host;
+    const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
+    for (const auto& [asic_id, descriptor] : asic_descriptors) {
+        if (descriptor.host_name.empty() || *descriptor.tray_id == 0) {
+            continue;
+        }
+        asics_by_host[descriptor.host_name].push_back(asic_id);
+    }
+    for (const auto& [_, asics] : asics_by_host) {
+        if (asics.empty()) {
+            continue;
+        }
+        const std::set<tt::tt_metal::AsicID> host_asics(asics.begin(), asics.end());
+        std::map<tt::tt_metal::AsicID, tt::tt_metal::ASICPosition> host_slots;
+        AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap host_edges;
+        for (const tt::tt_metal::AsicID asic_id : asics) {
+            const auto& descriptor = asic_descriptors.at(asic_id);
+            host_slots.emplace(asic_id, tt::tt_metal::ASICPosition{descriptor.tray_id, descriptor.asic_location});
+            auto& neighbors = host_edges[asic_id];
+            for (const tt::tt_metal::AsicID neighbor : physical_system_descriptor.get_asic_neighbors(asic_id)) {
+                if (host_asics.contains(neighbor)) {
+                    neighbors.push_back(neighbor);
+                }
+            }
+        }
+        const AdjacencyGraph<tt::tt_metal::AsicID> host_graph(std::move(host_edges));
+        if (embeds_on_same_slots(host_graph, grouping_graph, host_slots, grouping_slots) ||
+            embeds_on_same_slots(grouping_graph, host_graph, grouping_slots, host_slots)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
     [[maybe_unused]] const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
@@ -1361,10 +1460,8 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             tt::tt_metal::experimental::tt_fabric::build_flat_adjacency_map_from_psd(*physical_system_descriptor));
     }
 
-    // Each HOSTS grouping flattened every way it can sit, kept only if it actually places on the PSD. Validity
-    // by placement (its chips exist and embed) rather than slot-containment keeps a declared host valid even in
-    // Phase 2, where the machine subdivides it into finer ranks -- its chips still physically exist, so it still
-    // places, and its seam/rounds geometry stays available.
+    // Each HOSTS grouping flattened every way its slots exist on the PSD. Keep a variant when at least
+    // one discovered host seats on it, in either direction.
     std::vector<GroupingInfo> flattened_declared_hosts;
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         const auto hosts_it = type_map.find("HOSTS");
@@ -1377,7 +1474,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             }
             for (auto& variant : build_flattened_adjacency_mesh(declared_host, physical_system_descriptor)) {
                 if (physical_system_descriptor != nullptr &&
-                    enumerate_distinct_placements_for_grouping(variant, *physical_system_descriptor).empty()) {
+                    !a_psd_host_fits_on_grouping(variant, *physical_system_descriptor)) {
                     continue;
                 }
                 flattened_declared_hosts.push_back(std::move(variant));

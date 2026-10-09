@@ -1661,6 +1661,8 @@ ENV_BLOCKLIST = frozenset(
         "TT_RUN_SUBCONTEXT_SIZES",
         "TT_METAL_MOCK_CLUSTER_DESC_PATH",  # Mock cluster path for testing
         "TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH",  # FSD path - set from --factory-system-descriptor, not parent env
+        # Cluster id is the phase-1 PSD hostname, written into rank-binding env_overrides.
+        "TT_METAL_CLUSTER_ID",
         # Should only come from rank binding env_overrides
         "TT_VISIBLE_DEVICES",  # Per-rank device visibility - must be set via rank bindings
     }
@@ -1781,7 +1783,8 @@ def get_rank_environment(
     # Apply environment variables with expansion and proper precedence
     # Global environment variables first
     env.update({k: os.path.expandvars(v) for k, v in config.global_env.items()})
-    # Rank-specific overrides last (higher precedence)
+    # Rank-specific overrides last (higher precedence). TT_METAL_CLUSTER_ID arrives here from the
+    # phase-1 rank binding; a value exported in the parent environment is on ENV_BLOCKLIST.
     env.update({k: os.path.expandvars(v) for k, v in binding.env_overrides.items()})
 
     if extra_env:
@@ -2333,7 +2336,7 @@ def legacy_flow(
         - TT_METAL_HOME: TT-Metal installation directory
         - PYTHONPATH: Python module search path
         - LD_LIBRARY_PATH: Library search path
-        - TT_MESH_GRAPH_DESC_PATH: Path to mesh graph descriptor
+        - TT_MESH_GRAPH_DESC_PATH: Pa######################################th to mesh graph descriptor
         - TT_RUN_ORIGINAL_CWD: Directory where tt-run was launched (for subprocess path resolution)
         - TT_RUN_RANK: Global MPI world rank (used by tt-triage to identify the rank)
         - HOME: Passed through (required by OpenMPI for process management)

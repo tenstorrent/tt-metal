@@ -40,13 +40,6 @@ namespace discovery_impl {
 class DiscoverySetter;
 }
 
-// The marker discovery appends (with the MPI rank) to a host key when several ranks report the same
-// discovery hostname. One definition for every producer and consumer: discovery builds the key,
-// my_host_name() reconstructs it, and the mapping export strips exactly this marker. Deliberately
-// distinctive — a plain "_<digits>" tail can belong to a genuine cluster id (e.g. "rack_1"), which
-// must never be treated as a rank suffix.
-inline constexpr std::string_view kHostRankSuffixMarker = "__rank";
-
 // Live Ethernet Link Metrics
 struct EthernetMetrics {
     uint32_t retrain_count = 0;
@@ -64,8 +57,12 @@ struct ASICDescriptor {
     BoardType board_type = BoardType::UNKNOWN;
     AsicID unique_id;
     ChipId umd_unique_id;
+    // Machine name, with no rank suffix. Ranks that share a machine have the same host_name.
     std::string host_name;
     experimental::PhysicalNodeId physical_node_id;
+    // MPI rank that discovered this chip. This, not the hostname, separates ranks on one machine.
+    // No default: a caller has to pass the rank. 0 is a real rank.
+    uint32_t mpi_rank;
 };
 
 // Specify an ethernet connection between two ASICs
@@ -152,7 +149,7 @@ using HostTopology = std::unordered_map<std::string, std::vector<HostConnectionE
 // Graph representing connectivity of ASICs (detailed representation) and
 // Compute Nodes/Hosts (low resolution representation).
 struct PhysicalConnectivityGraph {
-    // Track the ASIC Topology per host.
+    // ASIC topology per hostname. Ranks that share a machine share this name.
     std::unordered_map<std::string, AsicTopology> asic_connectivity_graph;
     // Track the Host Topology across the distributed system.
     HostTopology host_connectivity_graph;
@@ -192,7 +189,7 @@ public:
 
     // Discovery setter interface - allows discovery functions to set internal state
     // without requiring friend declarations with MPI types in public header
-    void set_discovery_data(const std::string& local_hostname, uint32_t local_rank, bool all_hostnames_unique);
+    void set_discovery_data(const std::string& local_hostname, uint32_t local_rank, bool all_hostnames_unique = false);
 
     // ASIC Topology Query APIs
     std::vector<AsicID> get_asic_neighbors(AsicID asic_id) const;
@@ -205,6 +202,8 @@ public:
     ASICLocation get_asic_location(AsicID asic_id) const;
     ChipId get_umd_unique_id(AsicID asic_id) const;
     std::vector<AsicID> get_asics_connected_to_host(const std::string& hostname) const;
+    // Chips whose recorded MPI rank is mpi_rank. Several ranks may share one hostname.
+    std::vector<AsicID> get_asics_for_mpi_rank(uint32_t mpi_rank) const;
     std::pair<AsicID, uint8_t> get_connected_asic_and_channel(AsicID asic_id, uint8_t chan_id) const;
     AsicID get_asic_id(const std::string& hostname, TrayID tray_id, ASICLocation asic_location) const;
     // The descriptor's own label for an address, and the reverse. find_* is empty when this
@@ -220,6 +219,7 @@ public:
         const std::string& src_host, const std::string& dst_host) const;
     const HostTopology& get_host_topology() const;
     std::string get_host_name_for_asic(AsicID asic_id) const;
+    uint32_t get_mpi_rank_for_asic(AsicID asic_id) const;
     experimental::PhysicalNodeId get_physical_node_id(AsicID asic_id) const;
     UID get_u_id(const std::string& hostname);
     RackID get_rack_id(const std::string& hostname);
@@ -227,6 +227,8 @@ public:
     HallID get_hall_id(const std::string& hostname);
     std::vector<std::string> get_all_hostnames() const;
     std::string my_host_name() const;
+    // MPI rank of the process that built this descriptor.
+    uint32_t get_local_mpi_rank() const { return local_rank_; }
     uint32_t get_rank_for_hostname(const std::string& host_name) const;
     std::string get_hostname_for_rank(uint32_t rank) const;
     bool is_cross_host_eth_link(AsicID asic_id, uint8_t chan_id) const;
@@ -284,7 +286,7 @@ private:
     std::unordered_map<std::string, std::string> host_to_mobo_name_;
     std::unordered_map<std::string, uint32_t> host_to_rank_;
     ExitNodeConnectionTable exit_node_connection_table_;
-    bool all_hostnames_unique_ = true;
+    bool all_hostnames_unique_ = false;
     tt::umd::SemVer ethernet_firmware_version_;
     std::optional<tt::umd::FirmwareBundleVersion> firmware_bundle_version_;
     std::unordered_map<std::string, std::unordered_map<uint32_t, std::unordered_set<uint32_t>>> pcie_devices_per_tray_;
@@ -292,7 +294,7 @@ private:
 
     bool is_bh_galaxy_rev_c_ = false;
 
-    // Local hostname and rank set by discovery (for my_host_name())
+    // Cluster id and MPI rank recorded at discovery. The cluster id is the UMD one.
     std::string local_hostname_;
     uint32_t local_rank_ = 0;
 };
