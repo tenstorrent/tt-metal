@@ -924,8 +924,15 @@ class OptimizedDecoder(LightweightModule):
         read spread over few rows of work at a short M (128 tokens: 3072x2816 bf8 83 -> 42 us, 2304x3072
         67 -> 34 us)."""
         T = x.shape[-2]
-        if T > self._SMALL_PREFILL_MM_MAX or T % TILE:
+        if T % TILE:
             return ttnn.linear(x, w, compute_kernel_config=ck, **kw)
+        if T > self._SMALL_PREFILL_MM_MAX:
+            # fp32-accumulating linears keep the default: their 4-tile subblocks lost to it (512 tokens 136 -> 154 ms)
+            fp32 = getattr(ck, "fp32_dest_acc_en", False)
+            pc = self._prefill_2d_pc(x, w, kw.get("dtype"), ck) if self._PREFILL_2D_AUTO and not fp32 else None
+            if pc is None:
+                return ttnn.linear(x, w, compute_kernel_config=ck, **kw)
+            return ttnn.linear(x, w, program_config=pc, compute_kernel_config=ck, **kw)
         kt, nt = w.padded_shape[-2] // TILE, w.padded_shape[-1] // TILE
         gs = self.device.compute_with_storage_grid_size()
         pcn = -(-nt // (gs.x * gs.y))
@@ -945,6 +952,49 @@ class OptimizedDecoder(LightweightModule):
             mcast_in0=True,
         )
         return ttnn.linear(x, w, program_config=pc, compute_kernel_config=ck, **kw)
+
+    _PREFILL_2D_AUTO = os.environ.get("TT_LAGUNA_PREFILL_2D_AUTO", "1") == "1"
+    _L1_CB_BUDGET = 1400 * 1024
+
+    def _prefill_2d_pc(self, x, w, out_dtype=None, ck=None):
+        """2D multicast program for a prefill linear over the full grid: per-core M/N blocks, the widest K block
+        whose double-buffered CBs fit L1, and the largest output subblock (<= 8 tiles) dividing both. One-chip
+        bf8, vs the default config: 3072x2816 at 512/1K/2K/8K rows 167/139/217/712 -> 57/76/126/453 us,
+        2304x3072 133/114/189 -> 50/68/126 us, 3072x1024 145/101/149/466 -> 30/57/87/286 us. None: no fit."""
+        T = x.shape[-2]
+        kt, nt, mt = w.padded_shape[-2] // TILE, w.padded_shape[-1] // TILE, T // TILE
+        gs = self.device.compute_with_storage_grid_size()
+        gx, gy = min(gs.x, nt), min(gs.y, mt)
+        pm, pn = -(-mt // gy), -(-nt // gx)
+
+        def tile_bytes(dt):
+            return {ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576, ttnn.float32: 4096}.get(dt, 2048)
+
+        out_b = pm * pn * tile_bytes(out_dtype or x.dtype)
+        bw = None
+        for d in (8, 6, 4, 3, 2, 1):
+            if kt % d == 0 and out_b + 2 * pm * d * tile_bytes(x.dtype) + 2 * d * pn * tile_bytes(w.dtype) <= self._L1_CB_BUDGET:
+                bw = d
+                break
+        if bw is None:
+            return None
+        regs = 4 if getattr(ck, "fp32_dest_acc_en", False) else 8  # DST tiles per subblock
+        sh, sw = 1, 1
+        for h in range(1, 9):
+            for v in range(1, 9):
+                if h * v <= regs and pm % h == 0 and pn % v == 0 and (h * v, v) > (sh * sw, sw):
+                    sh, sw = h, v
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+            in0_block_w=bw,
+            out_subblock_h=sh,
+            out_subblock_w=sw,
+            per_core_M=pm,
+            per_core_N=pn,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=True,
+        )
 
     def _dram_mm(self, x, w_il, w_ds, k, n, ck, fused_activation=None):
         """Width-shard x in L1, run DRAM-sharded matmul, return L1-width-sharded output.
