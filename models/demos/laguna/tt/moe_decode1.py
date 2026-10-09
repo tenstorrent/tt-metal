@@ -70,7 +70,9 @@ def gate_up_swiglu(x, w_gate_up, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG):
     num_cores = nt * slot_groups
     assert num_cores <= grid_size.x * grid_size.y, (num_cores, grid_size)
     grid = ttnn.num_cores_to_corerangeset(num_cores, grid_size, True)
-    chunk = int(os.environ.get("TT_LAGUNA_MOE1_CHUNK", "32"))
+    # weight tiles per read: 16 lets the compute start sooner than 32 (b1 decode 14.92 -> 14.78 ms/token; 8/12/24/48/96
+    # measured 14.89/14.83/14.79/14.96/15.17)
+    chunk = int(os.environ.get("TT_LAGUNA_MOE1_CHUNK", "16"))
     assert kt % chunk == 0, kt
     x_page, w_page, sp_page = _tile_bytes(x.dtype), _tile_bytes(w_gate_up.dtype), max(E * 2, 64)
     cbs = [
