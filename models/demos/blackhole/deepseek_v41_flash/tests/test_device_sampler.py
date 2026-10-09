@@ -139,6 +139,24 @@ def test_device_sampler(mesh_device):
         print("SAMPLER_PROF " + " ".join(f"{n}={1e3 * d:.2f}ms" for n, d in smp.prof), flush=True)
         smp.prof = None
 
+    if os.environ.get("SAMP_STAGES"):
+        res = []
+        for st in ["greedy_part", "scale_exp", "search_k", "search_p", "prefix", None]:
+            smp.stop = st
+            smp.forward(logits, prm)
+            ttnn.synchronize_device(md)
+            tr = ttnn.begin_trace_capture(md, cq_id=0)
+            smp.forward(logits, prm)
+            ttnn.end_trace_capture(md, tr, cq_id=0)
+            ttnn.execute_trace(md, tr, cq_id=0, blocking=True)
+            t0 = time.perf_counter()
+            for _ in range(30):
+                ttnn.execute_trace(md, tr, cq_id=0, blocking=False)
+            ttnn.synchronize_device(md)
+            res.append((st or "all", (time.perf_counter() - t0) / 30 * 1e3))
+        smp.stop = None
+        print("SAMPLER_STAGES (cumulative trace ms) " + " ".join(f"{n}={v:.3f}" for n, v in res), flush=True)
+
     # cost: trace replays
     def timeit(fn_trace, n=50):
         ttnn.execute_trace(md, fn_trace, cq_id=0, blocking=True)
