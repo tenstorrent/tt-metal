@@ -14,7 +14,6 @@
 #include <optional>
 #include <unordered_set>
 #include "metal_env_impl.hpp"
-#include "metal_env_accessor.hpp"
 #include "metal_context.hpp"
 #include "device/device_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -55,18 +54,6 @@ void MetalEnvImpl::prefork_check_all() {
 MetalEnvImpl::MetalEnvImpl(MetalEnvDescriptor descriptor) : descriptor_(std::move(descriptor)) {
     initialize_base_objects();
     verify_fw_capabilities();
-
-    // Apply fabric config from descriptor
-    const auto& fc = descriptor_.fabric;
-    fabric_config_ = fc.fabric_config;
-    fabric_reliability_mode_ = fc.reliability_mode;
-    fabric_tensix_config_ = fc.fabric_tensix_config;
-    fabric_udm_mode_ = fc.fabric_udm_mode;
-    fabric_manager_ = fc.fabric_manager;
-    fabric_router_config_ = fc.router_config;
-    if (fc.num_routing_planes.has_value()) {
-        num_fabric_active_routing_planes_ = fc.num_routing_planes.value();
-    }
 
     // Pick up any custom mesh graph descriptor from env/rtoptions
     if (rtoptions_->is_custom_fabric_mesh_graph_desc_path_specified()) {
@@ -256,10 +243,93 @@ tt_fabric::FabricManagerMode MetalEnvImpl::get_fabric_manager() const { return f
 
 uint8_t MetalEnvImpl::get_num_fabric_active_routing_planes() const { return num_fabric_active_routing_planes_; }
 
-// The fabric config is normally set once, from the FabricConfigDescriptor supplied at MetalEnv construction time.
-// However, for the legacy backward-compatibility path, the DeviceManager may call set_fabric_config a second time
-// to enable minimal fabric (FABRIC_1D) for dispatch when the user has not explicitly configured fabric.
-// See DeviceManager::initialize for that path.
+void MetalEnvImpl::configure_fabric(const FabricConfigDescriptor& fabric) {
+    // The control plane is the first object built from the fabric configuration, so its existence marks the
+    // configuration as committed.
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
+    TT_FATAL(
+        !control_plane_,
+        "configure_fabric() is not allowed after the fabric topology has been materialized by get_system_mesh() or a "
+        "create_* call. Configure fabric before those calls.");
+
+    if (fabric.fabric_config == tt_fabric::FabricConfig::DISABLED) {
+        if (fabric.num_routing_planes.has_value()) {
+            log_warning(
+                tt::LogMetal,
+                "Got num_routing_planes while disabling fabric, ignoring it and disabling all active routing planes");
+        }
+        num_fabric_active_routing_planes_ = 0;
+    } else {
+        if (fabric.num_routing_planes.has_value()) {
+            TT_FATAL(
+                fabric.num_routing_planes.value() > 0,
+                "num_routing_planes must be greater than 0, got {}",
+                fabric.num_routing_planes.value());
+        }
+        // Unset means every available plane, matching set_fabric_config. Leaving this at 0 makes device open fatal
+        // in Cluster::configure_ethernet_cores_for_fabric_routers.
+        num_fabric_active_routing_planes_ = fabric.num_routing_planes.value_or(std::numeric_limits<uint8_t>::max());
+    }
+
+    fabric_desc_ = fabric;
+    fabric_config_ = fabric.fabric_config;
+    fabric_reliability_mode_ = fabric.reliability_mode;
+    fabric_tensix_config_ = fabric.fabric_tensix_config;
+    fabric_udm_mode_ = fabric.fabric_udm_mode;
+    fabric_manager_ = fabric.fabric_manager;
+    fabric_router_config_ = fabric.router_config;
+}
+
+namespace {
+
+// DISABLED and FABRIC_1D both map to a mesh fabric type, so turning fabric on for dispatch must not move devices.
+void check_dispatch_fabric_preserves_system_mesh(
+    const distributed::SystemMesh& kept, const distributed::SystemMesh& rebuilt) {
+    TT_FATAL(
+        kept.shape() == rebuilt.shape() && kept.local_shape() == rebuilt.local_shape(),
+        "Enabling fabric for dispatch changed the system mesh shape from {} (local {}) to {} (local {})",
+        kept.shape(),
+        kept.local_shape(),
+        rebuilt.shape(),
+        rebuilt.local_shape());
+    const auto kept_devices = kept.get_mapped_devices(std::nullopt);
+    const auto rebuilt_devices = rebuilt.get_mapped_devices(std::nullopt);
+    TT_FATAL(
+        kept_devices.device_ids == rebuilt_devices.device_ids &&
+            kept_devices.fabric_node_ids == rebuilt_devices.fabric_node_ids,
+        "Enabling fabric for dispatch changed the system mesh device mapping");
+}
+
+}  // namespace
+
+void MetalEnvImpl::enable_fabric_for_dispatch() {
+    TT_FATAL(
+        this->fabric_config_ == tt_fabric::FabricConfig::DISABLED,
+        "enable_fabric_for_dispatch() requires fabric to be disabled; fabric is {}",
+        enchantum::to_string(this->fabric_config_));
+
+    this->fabric_config_ = tt_fabric::FabricConfig::FABRIC_1D;
+    this->fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+    this->num_fabric_active_routing_planes_ = 1;
+
+    {
+        std::lock_guard<std::mutex> lock(control_plane_mutex_);
+        if (control_plane_) {
+            this->initialize_control_plane_impl();
+            if (system_mesh_) {
+                // SystemMesh copies what it needs from the control plane, so the published one stays valid across
+                // the rebuild. The temporary mesh is only a check that the copy would have been the same.
+                auto rebuilt = std::unique_ptr<distributed::SystemMesh>(new distributed::SystemMesh(*control_plane_));
+                check_dispatch_fabric_preserves_system_mesh(*system_mesh_, *rebuilt);
+            }
+        }
+    }
+    this->initialize_fabric_config();
+}
+
+// configure_fabric() is the public way to set fabric, and it refuses changes once the topology is materialized.
+// This entry point ignores that freeze: the legacy SetFabricConfig path reconfigures fabric while no devices are
+// open, and doing so rebuilds the control plane and drops the system mesh.
 bool MetalEnvImpl::set_fabric_config(
     tt_fabric::FabricConfig fabric_config,
     tt_fabric::FabricReliabilityMode reliability_mode,
@@ -654,6 +724,12 @@ MetalEnv::~MetalEnv() {
 }
 
 const MetalEnvDescriptor& MetalEnv::get_descriptor() const { return impl_->get_descriptor(); }
+
+void MetalEnv::configure_fabric(const FabricConfigDescriptor& fabric) { impl_->configure_fabric(fabric); }
+
+const FabricConfigDescriptor& MetalEnv::get_fabric_config_descriptor() const {
+    return impl_->get_fabric_config_descriptor();
+}
 
 tt::ARCH MetalEnv::get_arch() const { return impl_->get_cluster().arch(); }
 std::string MetalEnv::get_arch_name() const { return tt::get_string_lowercase(get_arch()); }

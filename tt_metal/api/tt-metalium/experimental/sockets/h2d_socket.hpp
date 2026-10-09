@@ -4,12 +4,17 @@
 
 #pragma once
 
+#include <cstdint>
+#include <functional>
+#include <string>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <memory>
 #include <optional>
-#include <utility>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <vector>
 
 namespace tt::umd {
 class IoWindow;
