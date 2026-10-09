@@ -1,5 +1,17 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 16:43 UTC update: original BFP8 GPQA finished **171/198 (86.36%)**,
+zero cutoffs, 59m51s, under the old defective bracket-stripping preprocessing.
+The repaired full run is now generating after a startup topology failure and
+locked reset. Pinned OpenBench (one full epoch) and native BFP8 sweeps follow
+in the bounded eight-hour queue. The chunked-state hardware test passed, while
+plugin scheduler/sampling remain unqualified. Matched B16 precision sweeps
+completed: BFP8 output rates 202.29/188.03 tok/s per TP4 at 16K/32K.
+[Queue and evidence](../galaxy-evidence/gpqa-first-v2/README.md),
+[release-process prerequisites](RELEASE-PROCESS.md).
+
+Earlier snapshots below are historical.
+
 Oct 9 11:00 UTC update: the original BFP8 GPQA remains unchanged at 170 correct
 out of 196 completed, zero truncations and two requests still generating. A
 read-only persistent final-result capture now follows the existing independent

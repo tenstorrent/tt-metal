@@ -1,0 +1,21 @@
+{
+  "harness_revision": "d03922ccbbd9004e802c556ef9c2a40ed870659c",
+  "dataset_revision": "c63e9ba02dc3da4c698e2a8485551b35041c3900",
+  "dataset_records": 198,
+  "dataset_matches_original": true,
+  "samples_sha256": "7b517be942a699360e43c4f02706c1f14046559b146fe218a37e93fae5d63f2f",
+  "original_csv_sha256": "41d1213cd7a4998605a26c2798500652572007161b3a92817ba46b35befcd305",
+  "upstream_temperature": 0.5,
+  "upstream_epochs": 10,
+  "epochs": 1,
+  "max_tokens": 65536,
+  "max_connections": 128,
+  "max_samples": 128,
+  "differences": [
+    "One epoch instead of ten to fit the eight-hour queue",
+    "Explicit 65536-token output bound",
+    "Local endpoint; OpenRouter private overrides are unknown"
+  ],
+  "prompt_and_scorer": "Unmodified pinned OpenBench",
+  "score_selection": "Single predeclared run; no retries or best-of selection"
+}

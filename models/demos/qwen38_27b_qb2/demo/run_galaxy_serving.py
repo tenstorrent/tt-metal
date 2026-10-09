@@ -70,6 +70,12 @@ def main(args):
     signal.signal(signal.SIGTERM, terminate)
     signal.signal(signal.SIGINT, terminate)
     try:
+        followup = None
+        if getattr(args, "followup_command", None) is not None:
+            from models.demos.qwen38_27b_qb2.demo.overnight_plan import load_followup
+
+            followup = load_followup(args.followup_command)
+            report["followup_spec_sha256"] = hashlib.sha256(args.followup_command.read_bytes()).hexdigest()
         qualification_bytes = args.qualification.read_bytes()
         qualification = json.loads(qualification_bytes)
         groups = qualified_groups(qualification)
@@ -217,6 +223,29 @@ def main(args):
         report["gpqa"] = json.loads(summary_path.read_text())["gpqa_result"]
         if report["gpqa"]["completed_samples"] != 198 or not report["gpqa"]["full_dataset"]:
             raise RuntimeError("GPQA result does not cover all 198 questions")
+        if followup is not None:
+            report.update(state="followup_evaluation", followup_command=followup)
+            write_receipt(receipt, report)
+            with (output / "followup.log").open("w") as log:
+                evaluator = subprocess.Popen(
+                    followup["command"],
+                    env=environment,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+                deadline = time.monotonic() + followup["timeout_seconds"]
+                while evaluator.poll() is None:
+                    if server.poll() is not None:
+                        raise RuntimeError("Serving process exited during follow-up evaluation")
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Follow-up evaluation exceeded its bound")
+                    time.sleep(5)
+            report["followup_exit_code"] = evaluator.returncode
+            evaluator = None
+            # A different public protocol is reported independently of our
+            # reference gate. Never choose the better score or merge answers.
+            write_receipt(receipt, report)
         if args.tau_source is not None:
             report["state"] = "tau_pilot"
             command = [
@@ -304,7 +333,9 @@ def main(args):
         raise RuntimeError(f"Serving process exited with code {server.returncode}")
     except BaseException as error:
         report.update(
-            state="stopped" if isinstance(error, InterruptedError) else "failed", error_type=type(error).__name__
+            state="stopped" if isinstance(error, InterruptedError) else "failed",
+            error_type=type(error).__name__,
+            error_detail=str(error)[:2000],
         )
         raise
     finally:
@@ -330,6 +361,7 @@ if __name__ == "__main__":
     parser.add_argument("--evaluation-timeout", type=int, default=14400)
     parser.add_argument("--gpqa-max-tokens", type=int, default=32768)
     parser.add_argument("--retain-raw-responses", action="store_true")
+    parser.add_argument("--followup-command", type=Path, help="Bounded argv JSON for a separate evaluator after GPQA")
     parser.add_argument(
         "--sweep-before-exit",
         action="store_true",

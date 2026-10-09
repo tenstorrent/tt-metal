@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T11:34:16.404689+00:00",
+  "generated_at": "2026-10-09T16:44:36.968178+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -33,6 +33,11 @@
       "sha256": "a1424ac3943fd32d3ef61d44c8f71b098419d516cb7c4a1bc6898a985fb7c4a2"
     },
     {
+      "path": "demo/overnight_plan.py",
+      "bytes": 1713,
+      "sha256": "b6724bfc1e17876a58bc6f3c89cc36365dc78d26085e20267943b68c31ef61d3"
+    },
+    {
       "path": "demo/probe_chunked_prefill.py",
       "bytes": 8176,
       "sha256": "6648ddacae732a5994f014d111ac7ecf76816d3eb45128e78964a6d578ab56fe"
@@ -58,6 +63,16 @@
       "sha256": "2cb79a2ea958b716aae6f86ba9a0005e109189f22f650350e8ea97578f82baae"
     },
     {
+      "path": "demo/run_eight_hour_experiments.py",
+      "bytes": 6747,
+      "sha256": "6ba3f5ab5a3cffc225095bf222578b160c3158be90f165ccb197d1a46898afd0"
+    },
+    {
+      "path": "demo/run_galaxy_serving.py",
+      "bytes": 17115,
+      "sha256": "d5ea1af215fa7a0d56166516fc103abf0debe07753def52e0da9b8747faa9028"
+    },
+    {
       "path": "demo/run_gpqa_audit_followup.py",
       "bytes": 5201,
       "sha256": "c5ee5ad3db72877e0a6c6de7aaa62db67ed286efaa97f6e86a9653641896ab66"
@@ -66,6 +81,11 @@
       "path": "demo/run_hf_layer_followup.py",
       "bytes": 7799,
       "sha256": "b6e429c6333f59be0804092f7dfb05ae8ce7a4307c9950ded85223e160ec4658"
+    },
+    {
+      "path": "demo/run_openbench_gpqa.py",
+      "bytes": 5035,
+      "sha256": "2e9cb596d1185cb628990ddaff83090b500b95fb8ec7af9d5888d230ad0f0448"
     },
     {
       "path": "demo/run_overnight_qualification.py",
@@ -79,18 +99,23 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 110658,
-      "sha256": "d865e8357f4540cad861d10703a5d568a07d7d68273f841298d88a8cdda4d101"
+      "bytes": 112232,
+      "sha256": "b128f1c5d002e8c673e3a504aa9e8687553499eb7705f4863aca3ce7b7cb288a"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
-      "bytes": 6172,
-      "sha256": "9aefe97f2bbc5b75765bb64e49559b9c47298d795683bc8492cefb9029121c56"
+      "bytes": 6221,
+      "sha256": "dee51c6a0602b65a36af605254f0b51a2269adee8ec81605a9883c35fee5af85"
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 33786,
-      "sha256": "e52a04edaca5fd07df9ed4d09b3d5a5e16edb8ae2dce6448292fbeddb7cf8289"
+      "bytes": 34478,
+      "sha256": "02611e032819d59f3e31bc719386f2e7a384f1969bf732f2ee298a9daa5d4791"
+    },
+    {
+      "path": "experiments/RELEASE-PROCESS.md",
+      "bytes": 2955,
+      "sha256": "9f8e7ec9b3c3b6766d181c07d51402f3281fd98839e69f5639f7e501af645454"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -2520,6 +2545,111 @@
       "path": "galaxy-evidence/gpqa-config-audit-v1/unit.xml.gz",
       "bytes": 980,
       "sha256": "a7865dd1c8225a77746f7cddc028c0d4113a499d202706bc910e60344b269f15"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/README.md",
+      "bytes": 5037,
+      "sha256": "4b0a3c07d8d43ee04faec96229887e4155859b61277d3703db8cc5b040e0f103"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/collection.json",
+      "bytes": 3087,
+      "sha256": "64e5e364a74741fc1247329c4f87b296cf0273dd53df7a88a18271e88d12372e"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/completed-precision-queue.json",
+      "bytes": 11676,
+      "sha256": "ef4fb3c8ff381134488b4a5d58e1c40b8133547be2b351565db747923962bca8"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/completed-state-progress.json",
+      "bytes": 11391,
+      "sha256": "a98d4bef088133f8ccc6b7c34234966ec28003184881df587bb24dc7bb119368"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/completed-state-queue.json.gz",
+      "bytes": 7843,
+      "sha256": "60b364ad6f624dfec9c2c7944d34c650337d764a08055448ff51bf9f63372203"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/frozen/demo__overnight_plan.py.gz",
+      "bytes": 828,
+      "sha256": "8b85ad82f77f00c6e17738ea3ee1ae7ef95b03a982fdce80b49194557f3a45b6"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/frozen/demo__run_eight_hour_experiments.py.gz",
+      "bytes": 2536,
+      "sha256": "f4f65113afdccd9b47447c74ed4ea09977d7182f86a2c759cd86248fbd29bb01"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/frozen/demo__run_galaxy_serving.py.gz",
+      "bytes": 4929,
+      "sha256": "bb39f417e54a89faa92269dde0b54036277f7a78b5a9917a1d3d96441b214068"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/frozen/demo__run_openbench_gpqa.py.gz",
+      "bytes": 2035,
+      "sha256": "ee233d499da22dd8233811e0adbf2c8d1c05c8f1b973249032be297bda0cde1a"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/frozen/tests__unit__test_overnight_plan.py.gz",
+      "bytes": 718,
+      "sha256": "0aed4a1e29193e4ecf69d85de05a9d191562daa01859c1478a4109208759e4fe"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/launch.json",
+      "bytes": 3453,
+      "sha256": "1df121ef55d48a96ced74cbfde5e8ec1d38bd8f7a4b00fababf7db4a14cbce1f"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/manifest.json",
+      "bytes": 22454,
+      "sha256": "80e13ad3c88864c2ca8e97f2f3fe1ce380733a467b17848bcea82043f8326f3f"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/openbench-protocol.json",
+      "bytes": 842,
+      "sha256": "d1ca0893737a06dff1bc136ac8d8ad303f35345925e88ef26f5a65c29ccbadca"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/openbench-transport-probe.json",
+      "bytes": 1187,
+      "sha256": "b5ecf53830edd7efe78bd8c62e276cf488295592d258f837b604b517b5a60a3c"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/previous-failure-deployment.json",
+      "bytes": 18472,
+      "sha256": "54174ea8f941a4839b28e0bdbbce630d36cace8848731d024d256eb6c9e76049"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/previous-failure-queue.json",
+      "bytes": 3431,
+      "sha256": "4f41a9445dbc892f2402a0aa8b1f89139668509e6553db90d71bdf3c9fdcdb61"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/previous-failure-server.log.gz",
+      "bytes": 10878,
+      "sha256": "430438b6de20b78f3f57b8e1e973b421918830e10f52c07587781e50576782c1"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/queue-snapshot.json",
+      "bytes": 1292,
+      "sha256": "b3bd6caea2a7f69474670273584286ff537ee1c8a155d714bbb9b41790f0b376"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/service-snapshot.txt",
+      "bytes": 145,
+      "sha256": "b0b9e05cba8b3b73497d131a6bb294a724123c6bdeaf8968e4e516427a9f09e1"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/unit.log.gz",
+      "bytes": 315,
+      "sha256": "4c3f2a29e5ff95955e808cf895393a764596a3abee6043d6e0696cf0f88ac045"
+    },
+    {
+      "path": "galaxy-evidence/gpqa-first-v2/unit.xml.gz",
+      "bytes": 1429,
+      "sha256": "3e352e77b59125023652c86227b4e4d412e5f8a9448a4eb53c1f0499286dc97e"
     },
     {
       "path": "galaxy-evidence/gpqa-full-dp8-prepared-v1/inputs.jsonl",
@@ -5862,6 +5992,11 @@
       "sha256": "bf49f832f4f204d847e8a1bbbfb56fc94ebdc7c41bec65e08b8cfa15d6f17828"
     },
     {
+      "path": "tests/openbench_transport_probe.py",
+      "bytes": 4769,
+      "sha256": "e18a49b0ca91d055d3ce40a967b8ccd4d821b29090c75640bf79e3606a919172"
+    },
+    {
       "path": "tests/reference_comparison.py",
       "bytes": 2934,
       "sha256": "bdf7923c362c6fb3c607b74da3d22eb022c149067e8b546a6a8da25870470589"
@@ -5925,6 +6060,11 @@
       "path": "tests/unit/test_hf_reference_report.py",
       "bytes": 1611,
       "sha256": "a9e2bb596b8ade859ba7457bfd9e230dac8f1f666dd6f886379559427d3d647f"
+    },
+    {
+      "path": "tests/unit/test_overnight_plan.py",
+      "bytes": 1350,
+      "sha256": "ad3d8aa1e09f79c3706f5785461655974354ea2ec98c7076dc12031c7420a90e"
     },
     {
       "path": "tests/unit/test_reference_comparison.py",

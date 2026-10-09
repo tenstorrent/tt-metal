@@ -6,15 +6,16 @@ Optimize total committed output throughput. Current measured 32K/B32 point is
 path), with identical generated tokens in the full-model comparison. Its 2989.6
 output tok/s Galaxy projection is not a physical measurement.
 
-Release priority remains accuracy: the matched native full GPQA is 170/198,
-below 177/198. The higher-precision head control is loading before new scheduling
-hardware work. The shared-Q/K policy has not passed full reference qualification.
+Release priority remains accuracy: original BFP8 GPQA finished 171/198,
+below 177/198, using defective bracket-stripping preprocessing. The corrected
+full run is now active, followed by pinned OpenBench and BFP8 perf sweeps.
+The shared-Q/K policy has not passed full reference qualification.
 
 The completed physical HTTP sweep exposes a separate serving bottleneck: long
 full-prefill steps repeatedly interrupt decode. At 32K/C128, median client
 stream speed is 2.705 tok/s/user and whole-burst output is 172.26 tok/s including
 prefill. A plugin continuation-slot prerequisite is fixed with a failing-before
-reproduction. Full-model state/position testing is queued; actual scheduler and
+reproduction. Full-model state/position testing passed; actual scheduler and
 device-sampling qualification must follow before enabling shorter chunks. This
 is scheduling between separate programs, not the mixed-row compute/memory
 overlap described later. Any throughput/TTFT tradeoff must be measured.

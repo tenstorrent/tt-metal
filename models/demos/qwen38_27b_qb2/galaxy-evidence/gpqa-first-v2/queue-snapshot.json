@@ -1,0 +1,38 @@
+{
+  "state": "running",
+  "started_at": 1791563198.0028732,
+  "budget_seconds": 28800,
+  "stages": [
+    {
+      "name": "qualification",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2/models/demos/qwen38_27b_qb2/demo/run_galaxy_serving.sh",
+        "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-v2/qualification/evaluation",
+        "/home/ttuser/qwen38-artifacts-20261007/accuracy-decoder-v1/native-g0/receipts/full-model.json",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2",
+        "--exit-after-eval",
+        "--port",
+        "8078",
+        "--gpqa-max-tokens",
+        "65536",
+        "--retain-raw-responses",
+        "--readiness-timeout",
+        "3600",
+        "--evaluation-timeout",
+        "7200",
+        "--followup-command",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-control-v2/followup.json"
+      ],
+      "timeout_seconds": 18480,
+      "state": "running",
+      "started_at": 1791563198.008989
+    }
+  ],
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "updated_at": "2026-10-09T16:26:38Z",
+  "active_stage": "qualification"
+}

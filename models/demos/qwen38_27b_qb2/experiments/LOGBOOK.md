@@ -1486,3 +1486,25 @@ No session connection is needed for that queue to continue.
 - Pre-commit required the repository expect_error fixture in the new negative
   tests. Adopted it and repeated all 28 CPU tests and dataset preparation; final
   receipts are under gpqa-config-audit-v1/final-validation/.
+
+## Oct 9, 16:14-16:43 UTC: GPQA-first bounded queue and release-process review
+
+- Queued corrected full GPQA first, unmodified pinned OpenBench GPQA second
+  (explicit one-epoch/64K-output bounds), then native BFP8 batch/context and
+  prefill-token-budget sweeps. Eight-hour persistent unit, process-group cleanup,
+  shared device lock, frozen sources, separate scores; no best-of selection.
+- 47 CPU checks pass. OpenBench mirror exactly matches the original 198 records;
+  synthetic HTTP probe confirms request parameters and final-answer-only scoring.
+- v1 failed before inference with a DP5 fabric topology mapping error. Preserved
+  failure, verified owned-worker shutdown and launched v2 with locked Galaxy reset.
+  v2 entered corrected GPQA at 16:37:22 UTC; 48 results observed by 16:43 UTC.
+  Failure recovery is demonstrated; the initiating hardware/software cause is not.
+- Collected completed overnight precision rates and chunked-state success. BFP8
+  costs 8.52%/7.93% decode TPS versus BFP4/HiFi2 at 16K/32K, B16. These are
+  measured native TP4 results, not eight-replica HTTP measurements.
+- Read the provided Models CI release-process PDF and recorded candidate pins,
+  dev-only catalogue policy, Shield On-dispatch/nightly/release prerequisites,
+  stable/main fix propagation and automated production promotion. Existing
+  branches/image do not yet qualify a coordinated release. No release mutation.
+- Evidence: galaxy-evidence/gpqa-first-v2/. Frozen published source ASTs match
+  the live copy; formatting changes were not applied to running snapshots.

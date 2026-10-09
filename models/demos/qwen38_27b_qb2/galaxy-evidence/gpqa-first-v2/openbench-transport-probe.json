@@ -1,0 +1,47 @@
+{
+  "passed": true,
+  "synthetic_only": true,
+  "hardware_opened": false,
+  "model": "Qwen/Qwen3.8-27B",
+  "max_tokens": 65536,
+  "temperature": 0.5,
+  "answer_scored_from_final": true,
+  "reasoning_did_not_override_final": true,
+  "results": {
+    "total_samples": 1,
+    "completed_samples": 1,
+    "scores": [
+      {
+        "name": "mcq_scorer",
+        "scorer": "mcq_scorer",
+        "reducer": null,
+        "scored_samples": 1,
+        "unscored_samples": 0,
+        "params": {},
+        "metrics": {
+          "accuracy": {
+            "name": "accuracy",
+            "value": 1.0,
+            "params": {},
+            "metadata": null
+          },
+          "stderr": {
+            "name": "stderr",
+            "value": 0.0,
+            "params": {},
+            "metadata": null
+          },
+          "std": {
+            "name": "std",
+            "value": 0.0,
+            "params": {},
+            "metadata": null
+          }
+        },
+        "metadata": null
+      }
+    ],
+    "metadata": null
+  },
+  "log_location": "/home/ttuser/qwen38-artifacts-20261007/openbench-overnight-v1/transport-proof/logs/2026-10-09T16-16-02+00-00_task_KPpqq7cziiaerUSMtBSvDT.eval"
+}
