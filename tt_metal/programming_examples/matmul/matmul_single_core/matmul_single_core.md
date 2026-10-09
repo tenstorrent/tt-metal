@@ -127,7 +127,7 @@ We will now set runtime arguments for the reader and writer kernels to run the m
 ``` cpp
 tt_metal::SetRuntimeArgs(program, reader_id, core, {src0_addr, src1_addr, Mt, Kt, Nt});
 
-tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, Mt, Kt, Nt});
+tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, Mt, Nt});
 ```
 
 Launch program, enqueue & read in output buffer result into the host vector.
