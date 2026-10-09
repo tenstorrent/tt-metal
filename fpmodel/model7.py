@@ -40,6 +40,7 @@ EXPERIMENTAL = {
     "msync0": "in0 mcast only: receivers ack after computing on the block, so the ack collection adds to each compute step",
     "wlink": "output writes from every writer core to the DRAM banks load the NoC links; the most-loaded link bounds the write",
     "wov2d": "2D: most cores only receive in1, so their writer overlaps the next block's pipeline (only the excess is exposed)",
+    "wburst": "DRAM writes congest with the bytes each writer has in flight per barrier (one subblock), like L1 read bursts",
     "reusesync": "Reuse cores never synchronise, so only part of their per-step link load coincides (fitted fraction)",
     "shardhop": "sharded in0: each K block's mcast sender is the core holding that slice, so every step pays a sender handoff",
 }
@@ -87,6 +88,7 @@ CONSTANTS = {
         "fraction of the lockstep link load that Reuse's unsynchronised cores actually put on a link at once",
         "reusesync",
     ),
+    "wburst_KB": (20.0, "KB per writer per barrier at which its share of DRAM write bandwidth halves", "wburst"),
     "lat_shard": (
         500.0,
         "cycles per K step: handing the in0 mcast to the core that holds the next K slice",
@@ -312,7 +314,8 @@ def predict(g, p, parts=False):
     write = 0.0
     if on("write"):
         wbytes = tiles * g["tb_o"]
-        rate_w = np.minimum(noc, dram / np.maximum(g["cores"], 1))
+        cw = 1 + sbh * sbw * g["tb_o"] / (p["wburst_KB"] * 1e3) if on("wburst") else 1.0
+        rate_w = np.minimum(noc, dram / (np.maximum(g["cores"], 1) * cw))
         write = np.select(
             [g["dst_o"] == 0, g["dst_o"] == 1],
             [nsb * p["lat_write"] + wbytes / rate_w, nsb * p["lat_l1"] + wbytes / noc],
