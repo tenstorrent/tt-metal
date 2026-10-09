@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Perf twin of top32_rm_test.cpp: the top32_rm chunk walk (64-element chunks of one row-major row and its index row, each
-// copied into Dest, sorted and merged into the running top 32), the sequence of the DeepSeek sampling kernel, repeated
-// LOOP_FACTOR times inside TILE_LOOP and reported per 64-element chunk. L1_TO_L1 only. Blackhole-only.
+// Perf twin of top32_rm_test.cpp (Blackhole only): the DeepSeek sampling kernel's chunk walk, reported per 64-element chunk.
 
 #include <cstdint>
 

@@ -4,9 +4,8 @@
 
 #pragma once
 
-// Fused [bf16 value | u16 index] keys for kernels whose bf16 values travel as raw u16 words in a 32-bit DEST section
-// (the unpacker, the datacopy and the packer keep the u16 index format): the comparator-stable network's order from
-// the plain network, with the comparator path's handling of zeros, denormals and NaNs reproduced where it happens.
+// Fused [bf16 | u16 index] keys for bf16 values carried as raw u16 words in a 32-bit DEST: the plain network on them
+// gives the comparator-stable order, with that path's handling of zeros, denormals and NaNs reproduced.
 
 #include <cstdint>
 #include "api/compute/topk.h"

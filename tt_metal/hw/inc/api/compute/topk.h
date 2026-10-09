@@ -68,7 +68,7 @@ constexpr TopkTieOrder topk_tie_order_from_global_direction(bool descending) {
  * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool         | true, false                                           | False    |
  * | rank_stamped    | Sort [bf16 value | rank tag] keys with the unstable network (u32 indices)  | bool         | true, false                                           | False    |
  * | tie_order       | Stable tie-break polarity: the GLOBAL sort order; needed with stable_sort  | TopkTieOrder | Ascending, Descending                                 | False    |
- * | tile0_sorted    | First tiles already sorted in direction idir: phases 0 to 4 run on the second tile only (Blackhole; tie order kept for the stable modes only) | bool         | true, false                                           | False    |
+ * | tile0_sorted    | First data tile is sorted in idir; Blackhole skips it in phases 0 to 4     | bool         | true, false                                           | False    |
  */
 // clang-format on
 template <

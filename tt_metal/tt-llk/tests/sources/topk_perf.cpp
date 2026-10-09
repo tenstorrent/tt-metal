@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Perf twin of topk_test.cpp: the generic bitonic TopK pipeline (transposed unpack, datacopies, local sort, merge and rebuild per
-// 2-tile slab, pack), reported per value tile of the row; TOPK_PERF_PHASE selects the SFPU calls a tile-pair step issues.
+// Perf twin of topk_test.cpp, reported per value tile of a row; TOPK_PERF_PHASE selects the SFPU calls a tile-pair step issues.
 
 #include <algorithm>
 #include <cstdint>
@@ -39,7 +38,6 @@ constexpr bool DROP_COPY   = TOPK_PERF_DROP_COPY && (PERF_RUN_TYPE == PerfRunTyp
 
 static_assert(PERF_RUN_TYPE != PerfRunType::L1_CONGESTION, "topk_perf has no L1_CONGESTION branch");
 
-// Tile-pair steps per tile row: the sum over the iterations of NUM_VALUE_TILES / 2^(i+1).
 inline std::uint32_t steps_per_row(std::uint32_t num_value_tiles)
 {
     std::uint32_t steps = 0;

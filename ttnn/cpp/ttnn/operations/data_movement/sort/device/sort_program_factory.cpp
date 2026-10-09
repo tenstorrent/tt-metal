@@ -115,8 +115,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
     // it to the compute kernel (via RM_INPUT / RM_VALUE_OUTPUT), so this is
     // 2 × W_value_bytes.  For non-UINT16 dtypes it equals W_value_bytes.
     const uint32_t W_sort_value_bytes = input_shape[3] * tt::datum_size(sort_value_cb_data_format);
-    // On Blackhole a stable bf16 sort in tile layout with uint16 indices keeps each row's fused [value | index] keys in
-    // the 32-bit DEST and a 32-bit buffer from its first local sort to its last merge.
+    // This stable path sorts fused [bf16 | u16 index] keys, which need a 32-bit DEST and a 32-bit key buffer.
     const bool stable_fused_keys = attributes.stable && !is_row_major &&
                                    input_tensor_cb_data_format == tt::DataFormat::Float16_b &&
                                    index_tensor_cb_data_format == tt::DataFormat::UInt16 &&

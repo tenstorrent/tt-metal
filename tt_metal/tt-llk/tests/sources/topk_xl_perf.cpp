@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Perf twin of topk_xl_test.cpp: the two topk_large_indices chunk pipelines of one row (copy, index stamp, local sort,
-// merge and rebuild per chunk, then the index split), repeated LOOP_FACTOR times inside TILE_LOOP and reported per input
-// tile. TOPK_XL_FUSED_E2E selects the fused end-to-end path (runtime chunk-id stamp, fused merge and rebuild, one global
-// split); otherwise the unfused row-major op path. L1_TO_L1 only: the topk_xl copy has no unpack mock. Blackhole-only.
+// Perf twin of topk_xl_test.cpp (Blackhole only), reported per input tile; TOPK_XL_FUSED_E2E picks the fused end-to-end
+// path over the unfused row-major one. L1_TO_L1 only, since the topk_xl copy has no unpack mock.
 
 #include <cstdint>
 
@@ -25,7 +23,7 @@ static_assert(PERF_RUN_TYPE == PerfRunType::L1_TO_L1, "topk_xl_perf runs L1_TO_L
 constexpr std::uint32_t ELEMENTS_PER_TILE = ckernel::TILE_R_DIM * ckernel::TILE_C_DIM;
 constexpr std::uint32_t TILES_PER_SEQ     = (TOPK_XL_K + ELEMENTS_PER_TILE - 1) / ELEMENTS_PER_TILE;
 constexpr std::uint32_t SLOT0             = 0;
-// Second merge operand: one tile per sequence tile when fused, the value and index regions when unfused.
+// The second merge operand follows slot 0's sequence when fused, its value and index regions when unfused.
 constexpr std::uint32_t SLOT1 = TOPK_XL_FUSED_E2E ? TILES_PER_SEQ : (2 * TILES_PER_SEQ);
 
 static_assert(TOPK_XL_NUM_CHUNKS >= 2, "the perf rows merge at least two chunks");

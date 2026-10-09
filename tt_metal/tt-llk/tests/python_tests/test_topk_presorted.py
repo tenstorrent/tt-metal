@@ -230,7 +230,6 @@ def test_topk_presorted(
     full_values, full_indices = _run(full, formats)
     skip_values, skip_indices = _run(skip, formats)
 
-    # The two builds against each other, bit for bit.
     assert torch.equal(
         full_values.view(torch.int16), skip_values.view(torch.int16)
     ), "the values of the two sorts differ"
@@ -254,7 +253,6 @@ def test_topk_presorted(
                 torch.sort(skip_indices[row]).values,
             ), f"row {row}: the two sorts hold different index sets"
 
-    # The full sort against its golden.
     for row in range(num_rows):
         expected_values, expected_indices = _golden_second_sort(
             row_values[row], descending, sort_mode == "rank_stamped"

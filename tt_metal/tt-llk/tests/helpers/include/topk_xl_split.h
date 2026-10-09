@@ -2,21 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Split topk_xl chunk pipeline, fused K = 512 or 2048: every SFPU instruction of a chunk on PACK, the copy and the face
-// transposes on MATH, two chunks in flight. Chunk c runs its stage j at step 9c + 2j, so consecutive steps belong to
-// different chunks and MATH transposes one chunk while PACK sorts the other. Each stage is an FPU part (MATH) followed
-// by an SFPU part (PACK):
-//
-//   stage    MATH                              PACK
-//   0        copy into the chunk's sequence    stamp, sort up to the first transpose
-//   1..6     transpose the chunk's sequence    sort pass after that transpose (6: last pass, then merge into sequence 0)
-//   7, 8     transpose sequence 0              rebuild build pass, rebuild column pass
-//
-// A sequence is one tile at K = 512 and two at K = 2048. Chunk 0 is sorted in place in sequence 0 and stops after
-// stage 6; chunk c > 0 goes to sequence 1 (odd c) or 2 (even c).
-// Tokens: MATH posts F2S after each stage's FPU part, PACK takes one before each SFPU part and posts S2F after it.
-// MATH starts a stage once every SFPU part at least two steps back is done, which covers the previous stage of the
-// same chunk, the survivor rebuild before a merge and the merge that frees a tile before its next copy.
+// The fused K = 512 or 2048 topk_xl chunk split across threads: copy and face transposes on MATH, SFPU work on PACK.
+// Chunk c runs stage j at step 9c + 2j, so MATH transposes one chunk while PACK sorts the other.
 
 #pragma once
 
@@ -69,7 +56,7 @@ inline void take_pack_token()
     ckernel::t6_semaphore_get(S2F);
 }
 
-// Before PACK issues any SFPU instruction: seeds the tokens, then hands PACK a MATH_PACK token as the start signal.
+// Runs before PACK issues any SFPU instruction; start_pack's MATH_PACK post is then PACK's start signal.
 inline void init_tokens()
 {
     ckernel::t6_semaphore_init(F2S, 0, 15);
@@ -86,9 +73,8 @@ inline void release_src()
     TTI_SETRWC(ckernel::p_setrwc::CLR_AB, 0, 0, 0, 0, ckernel::p_setrwc::SET_ABD);
 }
 
-// One Dst section. copy_chunk(chunk, tile) issues the chunk's copy. The SrcA/SrcB releases keep the single-thread
-// order (after the copy, halfway through the chunk, before the next copy), and every release and copy runs with the
-// transpose CFG block closed, as it does there.
+// One Dst section. The SrcA/SrcB releases keep the single-thread order (after the copy, halfway through the chunk, before
+// the next copy), and every release and copy runs with the transpose CFG block closed, as in the single-thread kernel.
 template <std::uint32_t K, typename CopyChunk>
 inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk)
 {
@@ -106,6 +92,8 @@ inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk)
                 continue;
             }
             const std::uint32_t step = c1 * STEPS_PER_CHUNK + r;
+            // Wait for every SFPU part at least two steps back: that covers this chunk's previous stage, the survivor
+            // rebuild before a merge and the merge that frees a tile before its next copy.
             const std::uint32_t need = posted - (prev_step_busy ? 1 : 0);
             for (; taken < need; taken++)
             {

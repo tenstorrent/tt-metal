@@ -173,7 +173,7 @@ inline void topk_mop_config()
 #if TOPK_XL_UNFUSED_MACRO
     if constexpr (!fused)
     {
-        topk_xl_unfused_macro::configure_sequences(); // a fused phase before it reprograms the Sequence registers
+        topk_xl_unfused_macro::configure_sequences(); // fused phases reprogram the Sequence registers
     }
 #endif
     // Unfused: the SFPLOADMACRO body is 16 instructions (the two SFPSWAPs and
@@ -323,9 +323,8 @@ inline void topk_rebuild_build2048_mop_config()
 // Merge and rebuild program their own two InstructionTemplates at entry
 // (2 backdoor writes — self-contained, no cross-call template contract, and
 // no collision with the FUSED macro users' templates). The Sequence words and
-// Misc are direction- and caller-invariant and are programmed with the unfused
-// merge MOP (`topk_mop_config<false>`, from `_topk_xl_init_<K, false>` and the
-// reinit-after-copy paths), since a fused phase reprograms the Sequence registers.
+// Misc are direction- and caller-invariant and are programmed by
+// `topk_mop_config<false>`, since fused phases reprogram the Sequence registers.
 //
 // Index loads/stores stay in software: only 4 macro slots exist, the 2-bit
 // Store delay field cannot reach past the swap-macros' store cycles in a
@@ -546,9 +545,8 @@ inline void record_ce_full(const bool dir)
 
 #if TOPK_XL_FUSED_MACRO
 
-// Fused step groups by SFPLOADMACRO: macro i loads LREG4+i, runs SFPSWAP(LREG i, LREG4+i) i instructions later (two
-// cycles apart) and stores LREG4+i back to its own row once the swap has written it; LREG0..3 are loaded and stored
-// by the thread in the slots the scheduled stores leave free.
+// Macro i loads LREG4+i, swaps it with LREG i i instructions later and stores it back once the swap has written it;
+// the thread loads and stores LREG0..3 in the slots the scheduled stores leave free.
 namespace topk_xl_fused_macro
 {
 
@@ -582,8 +580,8 @@ inline void configure()
     TTI_SFPNOP;
 }
 
-// load16_rows_x2 + bitonic_sort_len_k + store16_rows_x2 in 15 instructions; an ascending group loads the second strip
-// into LREG0..3, so every operand pair is the one the thread-issued swap compares.
+// load16_rows_x2, bitonic_sort_len_k and store16_rows_x2 in 15 instructions. The macro swaps have a fixed operand
+// order, so an ascending group loads the second strip into LREG0..3 instead.
 template <int group_2_offset, int inc_dst_addr, bool ascending>
 inline void step_group()
 {
@@ -738,9 +736,7 @@ inline void _topk_xl_init_()
     // Program the MOP Expander so the merge's inner loop can fire with a
     // single MOP issue per column — works the same way for every K, only
     // the per-column `n_iters` differs. The unfused form also programs the
-    // Sequence words and Misc of the unfused macro bodies; the two
-    // InstructionTemplates are installed by `_topk_xl_merge_` /
-    // `_topk_xl_rebuild_` at each entry.
+    // Sequence words and Misc of the unfused macro bodies.
     topk_mop_config<fused>();
 }
 
@@ -1190,8 +1186,7 @@ inline void bitonic_sort_len_16_alt(bool ascending)
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
 
-// Steps 4 and 3, transpose, steps 4 and 3 again: sort length-32 after its step 5. Each step swaps the two register
-// halves alike, and the transpose acts on each half alone.
+// Sort length-32 after its step 5: steps 4 and 3, transpose, steps 4 and 3 again.
 inline void bitonic_sort_len_32_steps_4_3(bool ascending)
 {
     if (ascending)
@@ -1283,10 +1278,8 @@ inline void bitonic_sort_len_32(bool ascending)
 namespace topk_xl_fused_macro
 {
 
-// The loads of a stride-16 sort_len_32 group with its step 5 under them: macro i loads LREG4+i and swaps it with
-// LREG i (the step groups' words) on the two cycles after its delay of i, ordered so the four swaps run at the 4th, 6th,
-// 8th and 10th instruction; their scheduled store-backs are overwritten by the group's stores. An ascending group
-// loads the second strip into LREG0..3.
+// Loads of a stride-16 sort_len_32 group, ordered so step 5's macro swaps run at the 4th, 6th, 8th and 10th
+// instruction, each after its LREG i load; len32_stores overwrites their scheduled store-backs.
 template <int group_2_offset, bool ascending>
 inline void len32_loads()
 {
@@ -1330,7 +1323,6 @@ inline NOINLINE void bitonic_sort_len_32_tail(bool ascending)
     bitonic_sort_len_32_steps_4_3(ascending);
 }
 
-// Records the loads and stores of a stride-16 sort_len_32 group in direction dir (slots 0 and 10) and runs the group.
 inline NOINLINE void record_len32_group(const bool dir)
 {
     if (dir)
@@ -1408,7 +1400,6 @@ inline void bitonic_sort_len_k(bool ascending)
     }
 }
 
-// One fused step group: load16_rows_x2, bitonic_sort_len_k and store16_rows_x2.
 template <int group_2_offset, int inc_dst_addr>
 inline void fused_step_group(const bool ascending)
 {
@@ -1698,7 +1689,7 @@ inline void canonical_big_block_with_replay_body(bool dir)
 
         // ── Sub-block C: `row_scale_factor` × (load<16> + sort_32 + store<16, 32>) ──
 #if TOPK_XL_FUSED_MACRO
-        // K = 1024 records too often per group for the macro loads to pay.
+        // At K = 1024 each recording serves two groups only, too few for the macro loads to pay off.
         if constexpr (row_scale_factor >= 4)
         {
             topk_xl_fused_macro::record_len32_group(dir);
@@ -2063,7 +2054,7 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
     // sorted but the columns out of order with respect to each other.
     static_assert(early_exit_K64 || K != 2048, "K = 2048 has no generic full sort: call _topk_xl_local_sort_, which routes it to the K=2048 fast path");
 #if TOPK_XL_FUSED_MACRO
-    // K = 512 sorts two step groups only, fewer than the macro programming costs.
+    // K = 512 runs two step groups only, too few to repay the macro programming.
     if constexpr (K >= 1024)
     {
         topk_xl_fused_macro::configure();
@@ -2379,7 +2370,7 @@ inline void _topk_xl_merge_(const std::uint32_t dst_index)
     {
 #if TOPK_XL_FUSED_MACRO
         // The macros also store the minimum half, which is dead after the merge (see `store4_rows_top_only`).
-        // K = 512 merges four columns, fewer than the macro programming costs.
+        // K = 512 runs four groups only, too few to repay the macro programming.
         if constexpr (K >= 1024)
         {
             topk_xl_fused_macro::configure();
@@ -3740,13 +3731,8 @@ inline void _topk_xl_separate_indices_()
     }
 }
 
-// =============================================================================
-//  Split K = 512 and K = 2048 fused chunks: SFPU segments on PACK, face transposes on MATH
-// =============================================================================
-//
-// Segment s of a chunk is the SFPU work between two transposes of _topk_xl_local_sort_<K>, _topk_xl_merge_<K, true>
-// and _topk_xl_rebuild_<K, true>, in the same instruction order. The SrcA/SrcB releases (CLR_AB) and the transposes are
-// left to MATH; every segment sets its own Dst offset.
+// Split K = 512 and K = 2048 fused chunks: each SFPU segment on PACK is the work between two face transposes of the
+// local sort, merge or rebuild, in the same instruction order; MATH runs the transposes and the SrcA/SrcB releases.
 
 // PACK, once per row: ADDR_MOD_3 takes the stamp's +4 so ADDR_MOD_6 keeps the sort's +32; ADDR_MOD_4 is the K = 2048
 // stamp's face skip. K = 2048's segments share one fused macro configuration, programmed here; none reprograms it.
@@ -3834,8 +3820,7 @@ inline void _topk_xl_split_stamp_(const std::uint32_t tile_offset, const std::ui
     }
 }
 
-// Local sort up to its first transpose: the per-column length-32 builds and the length-64 cross-column pass, its two
-// step groups on the load macros when `macros` (the fused rows, programmed once per row).
+// Local sort up to its first transpose; `macros` needs the row's _topk_xl_split_sfpu_init_ to have programmed them.
 template <bool macros = false>
 inline void _topk_xl_split_sort_head_512_(const std::uint32_t tile_offset, const bool ascending)
 {
@@ -3890,7 +3875,7 @@ inline void _topk_xl_split_sort_head_512_(const std::uint32_t tile_offset, const
     TTI_SFPCONFIG(0x0000, 0xF, 1);
 }
 
-// Local sort up to its first transpose: per column the length-32 to 128 builds, then the length-256 pass.
+// Local sort up to its first transpose.
 inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, const bool ascending)
 {
     _topk_xl_split_begin_(tile_offset);
@@ -4028,8 +4013,7 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
-// Per-column stride-16 pass (K = 2048: the stride-64 and stride-32 passes before it); a non-zero lane_mask flips the
-// swap direction of those lanes around it.
+// The per-column passes between two transposes; a non-zero lane_mask flips the swap direction of those lanes.
 template <std::uint32_t K, std::uint32_t lane_mask>
 inline void _topk_xl_split_columns_(const std::uint32_t tile_offset, const bool dir)
 {
@@ -4114,11 +4098,9 @@ inline void _topk_xl_split_rebuild_build_(const std::uint32_t tile_offset, const
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
-// The Classic K = 512 chunk: the fused stamp and local sort above, then the row-major index split into a value tile and
-// an index tile, the unfused merge and the unfused rebuild. Its segments interleave with the other chunk's, so the
-// unfused ones first set the state the single-thread code has there (index tracking, ADDR_MODs, Sequence words, MOP).
+// The Classic K = 512 chunk's segments interleave with the other chunk's, so each unfused one first sets the state the
+// single-thread code has there (index tracking, ADDR_MODs, Sequence words, MOP).
 
-// _topk_xl_separate_indices_row_major_reinit_, _topk_xl_separate_indices_row_major_<512> and the chunk base advance.
 inline void _topk_xl_split_separate_512_(const std::uint32_t tile_offset)
 {
     _topk_xl_separate_indices_row_major_reinit_();
@@ -4127,7 +4109,6 @@ inline void _topk_xl_split_separate_512_(const std::uint32_t tile_offset)
     _topk_xl_separate_indices_row_major_advance_chunk_base_<512>();
 }
 
-// The SFPU config reset of the LLK init, then _topk_xl_init_<512, false>.
 inline void _topk_xl_split_unfused_init_512_()
 {
     _init_sfpu_config_reg();
@@ -4244,7 +4225,7 @@ inline void _topk_xl_split_transpose_unfused_512_(const std::uint32_t tile_offse
 template <std::uint32_t K>
 inline void _topk_xl_split_transpose_(const std::uint32_t tile_offset)
 {
-    // MATH: a SrcA/SrcB release just before must have landed before the banks are tested.
+    // A SrcA/SrcB release just before must land before the transpose tests the banks.
     TTI_STALLWAIT(p_stall::STALL_CFG | p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
     set_dst_write_addr_offset(tile_offset);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);

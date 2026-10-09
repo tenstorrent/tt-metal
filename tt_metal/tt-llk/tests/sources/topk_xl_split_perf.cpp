@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// topk_xl_perf.cpp's fused K = 512 and K = 2048 rows with the chunk split across threads: the SFPU work on PACK, the copy and
-// the face transposes on MATH, two chunks in flight (helpers/include/topk_xl_split.h). Same unpack stream, same
-// Dst result. L1_TO_L1 only, Blackhole-only.
+// topk_xl_perf.cpp's fused K = 512 and 2048 rows with each chunk split across MATH and PACK (helpers/include/topk_xl_split.h),
+// on the same unpack stream and with the same Dst result. Blackhole only.
 
 #include <cstdint>
 
@@ -176,7 +175,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             topk_xl_split::split_indices<TOPK_XL_K>(0);
             _llk_packer_wait_for_math_done_();
             _llk_pack_mop_config_<PackMode::Default, false>(FACE_R_DIM, TILE_C_DIM, 4, 1);
-            // The value region of sequence 0, then its index region after it.
+            // The value region of sequence 0, then its index region.
             for (std::uint32_t t = 0; t < 2 * TILES_PER_SEQ; t++)
             {
                 _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(t, L1_ADDRESS(params.buffer_Res[t]));

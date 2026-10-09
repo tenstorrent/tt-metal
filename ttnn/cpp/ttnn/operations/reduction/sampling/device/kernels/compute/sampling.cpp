@@ -25,7 +25,7 @@
 #define DEBUG_PRINT 0
 using namespace ckernel;
 
-// 1: Blackhole runs the top-k stage on fused [bf16 | u16 index] keys in a 32-bit DEST section.
+// 1, the Blackhole default: the stable top-k stage runs on fused [bf16 | u16 index] keys in a 32-bit DEST section.
 #ifndef SAMPLING_TOPK_FUSED_32B_DEST
 #ifdef ARCH_BLACKHOLE
 #define SAMPLING_TOPK_FUSED_32B_DEST 1
@@ -466,7 +466,7 @@ void top_k_fused_32b_dest() {
                 VectorMode::RC_custom)));
             ckernel::topk_local_sort</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
                 0, /*idir=*/0, logk - 1);
-            // A NaN leaves as the infinity of its sign, as main's pack of the local sort out of a 16-bit DEST makes it.
+            // A NaN leaves as the infinity of its sign, as top_k's pack out of a 16-bit DEST makes it.
             MATH((_llk_math_eltwise_unary_sfpu_params_(
                 topk_fused_raw16::defuse_raw16<largest, true>, 0, VectorMode::RC_custom, 2)));
             tile_regs_commit<true>();

@@ -4,25 +4,8 @@
 
 #pragma once
 
-// A row of two or more K = 512 or K = 2048 chunks on Blackhole, split across threads: every SFPU instruction of a
-// chunk on PACK, the copy and the face transposes on MATH, two chunks in flight (ckernel_sfpu_topk_xl.h, "Split K = 512
-// and K = 2048 fused chunks"). Chunk c runs its stage j at step 9c + 2j, so consecutive steps belong to different
-// chunks:
-//
-//   stage    MATH                          PACK
-//   0        copy into the chunk's tile    stamp, sort up to the first transpose
-//   1..6     transpose the chunk's tile    sort pass after that transpose (6: last pass, then the merge)
-//   7, 8     transpose the survivor        rebuild build pass, rebuild column pass
-//
-// Fused body (K = 512 rows and K = 2048 rows of up to 32 chunks, or one segment of 32 of a longer K = 2048 row): a
-// chunk is one sequence of fused keys, one tile at K = 512 and two at K = 2048; chunk 0 is sorted in place in sequence
-// 0, chunk c > 0 goes to sequence 1 (odd c) or 2 (even c).
-// Classic body (K = 512 rows of any width): stage 6 also splits the chunk's indices into the next tile, and the merge
-// and rebuild are the unfused ones; the survivor's values and indices sit in tiles 0 and 1, chunk c > 0 in tiles 2 and
-// 3 (odd c) or 4 and 5 (even c). MATH posts F2S after each stage's FPU part; PACK takes one before each SFPU part and
-// posts S2F after it. MATH starts a stage once every SFPU part at least two steps back is done. After the row PACK runs
-// the epilogue (the fused body's index split, the -inf marking) and posts one more S2F, after which MATH transposes the
-// index tiles and commits the section.
+// A row of two or more K = 512 or 2048 chunks on Blackhole: copies and face transposes on MATH, SFPU work on PACK.
+// Chunk c runs stage j at step 9c + 2j, so MATH transposes one chunk while PACK sorts the other.
 
 #include <cstdint>
 
@@ -72,8 +55,7 @@ inline void take_pack_token() {
     ckernel::t6_semaphore_get(S2F);
 }
 
-// Once per kernel, before PACK issues any SFPU instruction: seeds the tokens, then hands PACK a MATH_PACK token as
-// the start signal.
+// Once per kernel, before PACK issues any SFPU instruction; the MATH_PACK post is PACK's start signal.
 inline void start() {
     ckernel::t6_semaphore_init(F2S, 0, 15);
     ckernel::t6_semaphore_init(S2F, 0, 15);
@@ -82,9 +64,8 @@ inline void start() {
 
 inline void release_src() { TTI_SETRWC(ckernel::p_setrwc::CLR_AB, 0, 0, 0, 0, ckernel::p_setrwc::SET_ABD); }
 
-// copy_chunk(chunk, tile) issues the chunk's copy. The SrcA/SrcB releases keep the single-thread order (after the copy,
-// halfway through the chunk, before the next copy), and every release and copy runs with the transpose CFG block
-// closed, as it does there.
+// The SrcA/SrcB releases keep the single-thread order (after the copy, halfway through the chunk, before the next
+// copy), and every release and copy runs with the transpose CFG block closed, as in the single-thread kernel.
 template <std::uint32_t K, bool classic, typename CopyChunk>
 inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk) {
     static_assert(supported_split<K, classic>, "the split takes fused K = 512 and 2048 rows and Classic K = 512 rows");
@@ -99,6 +80,8 @@ inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk) {
                 continue;
             }
             const std::uint32_t step = c1 * STEPS_PER_CHUNK + r;
+            // Wait for every SFPU part at least two steps back: that covers this chunk's previous stage, the survivor
+            // rebuild before a merge and the merge that frees a tile before its next copy.
             const std::uint32_t need = posted - (prev_step_busy ? 1 : 0);
             for (; taken < need; taken++) {
                 take_pack_token();

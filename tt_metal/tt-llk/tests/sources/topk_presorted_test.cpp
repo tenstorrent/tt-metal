@@ -117,7 +117,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_wait_for_dest_available_<dest_sync>();
 
-    // The slab into DEST tiles 0 to 3.
     copy_tile_to_dest(0, math_format[0], true);
     copy_tile_to_dest(1, math_format[0], false);
     copy_tile_to_dest(2, math_format[1], false);
@@ -188,7 +187,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>();
     _llk_packer_wait_for_math_done_();
 
-    // DEST tiles 0 and 1 (values) to result tiles 0 and 1, DEST tiles 2 and 3 (indices) to result tiles 2 and 3.
+    // Stage 0 packs the value tiles 0 and 1, stage 1 the index tiles 2 and 3, each to the result tile of the same number.
     for (int stage = 0; stage < NUM_STAGES; stage++)
     {
         if (stage == 0)

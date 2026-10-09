@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Functional twin of topk_xl_split_perf.cpp: topk_xl_test.cpp's fused end-to-end rows at K = 512 and 2048, with the chunk
-// split across threads (helpers/include/topk_xl_split.h). Same TOPK_XL parameters, stimuli and packed result as
-// topk_xl_test.cpp, so the two outputs compare bit for bit. Blackhole-only.
+// topk_xl_test.cpp's fused K = 512 and 2048 rows with each chunk split across MATH and PACK (helpers/include/topk_xl_split.h);
+// it takes the same TOPK_XL parameters and must pack the same result bit for bit. Blackhole only.
 
 #include <cstdint>
 

@@ -297,10 +297,8 @@ FORCE_INLINE void materialize_index_rank_order(uint32_t dst, uint32_t indices_cb
 }
 
 #ifdef ARCH_BLACKHOLE
-// A row of two or more chunks, its SFPU work on PACK and its copies and transposes on MATH
-// (topk_large_indices_split.hpp): the fused body's at K = 512 and 2048, or the Classic body's at K = 512. Ends with
-// the -inf indices marked and the index tiles transposed, as mark_neginf_indices and materialize_index_rank_order
-// leave them.
+// A row of two or more chunks split across MATH and PACK (topk_large_indices_split.hpp); it ends with the -inf indices
+// marked and the index tiles transposed, as mark_neginf_indices and materialize_index_rank_order leave a row.
 template <uint32_t K, bool classic>
 FORCE_INLINE void reduce_split_row(
     CircularBuffer& input, uint32_t indices_cb, uint32_t num_chunks, uint32_t tail_elements) {
@@ -525,7 +523,7 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
 
-                // The pack thread's SFPU work reprogrammed its ADDR_MODs and MOP.
+                // The pack thread's SFPU work reprograms its ADDR_MODs and MOP.
                 pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);
                 indices.reserve_back(1);
                 pack_untilize_dest<tiles_per_sequence, tiles_per_sequence>(

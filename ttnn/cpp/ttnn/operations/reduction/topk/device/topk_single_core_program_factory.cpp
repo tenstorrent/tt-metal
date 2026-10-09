@@ -101,8 +101,8 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     // (see the stamp block in kernels/compute/topk.cpp). The value-side intermediates switch to raw
     // Float32 transport so the tag bits (and exact bf16 bits) survive the pack/unpack round trips,
     // exactly like the fused-key engine's packed CBs.
-    // On Blackhole a uint16 index output with K <= 128 takes the rank-stamped engine too, its 32-bit index intermediates
-    // narrowed to uint16 at the final pack (the comparator otherwise); at K 128 its CBs take 52 KB more.
+    // On Blackhole a uint16 index output with K <= 128 also takes this engine, its 32-bit index intermediates narrowed
+    // to uint16 at the final pack; at K 128 its CBs take 52 KB more.
     const bool rank_stamped_stable =
         args.stable && !is_fp32_input &&
         (!uint16_output || (tensor_args.input.device()->arch() == tt::ARCH::BLACKHOLE && Ktiles <= 4));

@@ -605,8 +605,8 @@ inline void bitonic_topk_store16(std::uint32_t dist0, std::uint32_t dist1)
 
 // Stable compare-exchange for one register pair. Values are the primary key; on exact value
 // ties the paired index registers (LREG4+n tracks LREGn) are compare-exchanged so ties resolve
-// by index. Two SFPLE in sign-magnitude order hold together exactly where the words are bitwise
-// equal. INDEX_MIN_TO_VD selects the index-swap operand order to match the sort direction.
+// by index. Two SFPLE in sign-magnitude order both hold only where the words are bitwise equal,
+// the tie predicate. INDEX_MIN_TO_VD selects the index-swap operand order to match the sort direction.
 template <std::uint32_t VC, std::uint32_t VD, std::uint32_t MODE, bool INDEX_MIN_TO_VD>
 TT_ALWAYS_INLINE void topk_cmp_swap_stable_directional()
 {
@@ -905,8 +905,7 @@ inline void topk_set_macro_sequence()
     TTI_SFPCONFIG(0, 4 + MACRO, 0);
 }
 
-// Programs macros 0 to 2 and instruction templates 0 and 1, and for the first-swap groups macro 3 and template 2; each
-// call that runs step groups does it at entry.
+// Each call that runs step groups programs the macros at entry; FIRST_SWAPS adds macro 3 and template 2.
 template <bool FUSED, bool FIRST_SWAPS = true>
 inline void _topk_step_macros_init_()
 {
@@ -1200,7 +1199,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
         // transposes/SFPCONFIG writes preserve CC state.
         TOPK_SFPENCC_ALL_LANES_ON();
     }
-    // Not under TILE0_SORTED: its half passes measured slower with them (the thread idles between the groups).
+    // Not under TILE0_SORTED: on its half passes the thread would idle between the first-swap groups.
     constexpr bool first_swaps = TOPK_STEP_LOADMACRO && !STABLE_SORT && !TILE0_SORTED;
     if constexpr (TOPK_STEP_LOADMACRO && !STABLE_SORT)
     {
@@ -1664,7 +1663,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
             std::uint32_t datums_compared = 0;
             constexpr std::uint32_t group_words = FUSED ? 4 : 8;
 
-            // At most 16 group words per quadrant (a group per 8 datums), the counter walk's increments cost more than they save.
+            // With 16 group words or fewer per quadrant (a group per 8 datums), the counter walk's increments cost more than they save.
             if (((dist & 7) == 0) && (total_datums_to_compare * group_words > 128))
             {
                 // Blocks start on a face row: a block's group words are fixed and the dest counter walks its groups, 4 rows on

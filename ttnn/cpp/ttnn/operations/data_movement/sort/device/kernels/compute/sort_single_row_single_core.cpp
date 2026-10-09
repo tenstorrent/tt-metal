@@ -20,15 +20,13 @@
 #ifdef SORT_STABLE_FUSED_32B_DEST
 #include "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_fused_raw16.hpp"
 
-// The stable path's row in fused [bf16 value | u16 index] keys, in the 32-bit DEST and a 32-bit buffer from its first
-// local sort to its last merge: the plain network gives the comparator's order. The fuse makes every zero and denormal
-// +0, and a NaN becomes the infinity of its sign after the first local sort, where this kernel's comparator path does
-// both.
+// Fused [bf16 | u16 index] keys are unique, so the plain network gives the comparator-stable order. Zeros and
+// denormals fuse as +0 and NaNs leave the first local sort as signed infinities, as on the comparator path.
 FORCE_INLINE void enter_fused_section() { ckernel::topk_tile_init</*fused=*/true>(); }
 
 FORCE_INLINE void leave_fused_section() { ckernel::topk_tile_init(); }
 
-// transpose_and_pack for u16 tiles in the 32-bit DEST: the datums move to the packer's half before the pack.
+// In a 32-bit DEST a u16 transpose lands the datums in the low half, which the packer does not read.
 FORCE_INLINE void transpose_and_pack_u16(DataflowBuffer& transposed_dfb, DataflowBuffer& dest_dfb, const uint32_t Wt) {
     constexpr uint32_t one_tile = 1;
     reconfig_data_format_srca(transposed_dfb.get_id());
@@ -49,7 +47,7 @@ FORCE_INLINE void transpose_and_pack_u16(DataflowBuffer& transposed_dfb, Dataflo
     transposed_dfb.pop_front(Wt);
 }
 
-// The row's tile pairs transposed, fused and sorted in alternating directions into the key buffer.
+// sort_Wt_tiles_row_to_bitonic_sequence on fused keys.
 template <bool largest>
 void sort_row_pairs_to_keys(
     DataflowBuffer& input_dfb,
@@ -95,8 +93,7 @@ void sort_row_pairs_to_keys(
     keys_dfb.push_back(Wt);
 }
 
-// One pass of a merge stage on the keys in place: the plain merge network at distance 2^(sub - 1) tiles, or for sub 1
-// the local sort of each tile pair.
+// One sub-stage of the comparator path's merge loop, on the keys in place.
 void merge_pass_keys(
     DataflowBuffer& synchronization_dfb,
     const uint32_t Wt,
@@ -149,7 +146,6 @@ void merge_pass_keys(
     }
 }
 
-// The row's keys split back into the transposed value and index buffers.
 template <bool largest>
 void split_keys(
     DataflowBuffer& keys_dfb,
