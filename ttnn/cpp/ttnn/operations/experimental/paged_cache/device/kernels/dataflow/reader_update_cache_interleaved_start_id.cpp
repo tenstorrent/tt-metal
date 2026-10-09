@@ -51,7 +51,10 @@ void kernel_main() {
     dfb_input.reserve_back(Wt);
     dfb_input.push_back(Wt);
 
-    const uint32_t cache_tile_bytes = dfb_cache.get_tile_size();
+    // get_entry_size(): this DFB's live per-program entry size. get_tile_size() reads a global descriptor
+    // array that intervening ops clobber on Quasar DM kernels (stale -> wrong size -> DRAM over/under-run on
+    // a later invocation; cf. fill_cache). Byte-identical to get_tile_size() on WH/BH.
+    const uint32_t cache_tile_bytes = dfb_cache.get_entry_size();
 
     constexpr uint32_t TILE_HEIGHT = 32;
 

@@ -371,6 +371,9 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
         }
     }
 
+    // The tile copies above are NoC reads; with PNHt == 1 the last ones are not covered by the loop's
+    // barriers. This DFB uses explicit sync on Quasar, so they must land before the push.
+    noc.async_read_barrier();
     dfb_mask.push_back(total_read_tiles);
 }
 

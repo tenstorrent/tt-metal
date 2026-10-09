@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/api/ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "pool_op.hpp"
 
 namespace ttnn::operations::pool::quasar {

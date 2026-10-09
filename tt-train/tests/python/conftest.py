@@ -4,14 +4,24 @@
 
 """Pytest configuration for TTML Python tests."""
 
+import contextlib
+import gc
+import math
 import os
 import pathlib
-from typing import Optional
+import sys
+from typing import Iterator, Optional, Sequence
 
 import pytest
 
 import ttnn
 import ttml
+
+# pytest.ini selects --import-mode=importlib, which leaves this directory off sys.path;
+# helper modules next to the tests (bf16_ulp) need it there.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 
 
 def pytest_configure(config):
@@ -36,6 +46,157 @@ def pytest_collection_modifyitems(config, items):
 
 
 # ---------------------------------------------------------------------------
+# Host capability checks
+# ---------------------------------------------------------------------------
+#
+# A system that is too small for the mesh a test wants should skip it. A system
+# that has the devices but still fails to open the mesh must fail.
+
+
+def _num_available_devices() -> Optional[int]:
+    """Chips in the global system mesh (all hosts), or ``None`` if it can't be queried."""
+    try:
+        return math.prod(ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _host_supports_mesh(shape: Sequence[int]) -> bool:
+    """Checks whether the system has enough chips for ``shape``."""
+    available = _num_available_devices()
+    return available is None or available >= math.prod(shape)
+
+
+def _skip_if_host_too_small(shape: Sequence[int], what: str) -> None:
+    """Skip when the system is too small for ``shape``, otherwise return normally."""
+
+    if _host_supports_mesh(shape):
+        return
+    pytest.skip(
+        f"{what} needs a {tuple(shape)} mesh with ({math.prod(shape)} devices); the system has {_num_available_devices()}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Mesh graph descriptors
+# ---------------------------------------------------------------------------
+#
+# A bundled descriptor is only filled in when TT_MESH_GRAPH_DESC_PATH is unset, so a
+# user-provided value always wins.
+
+_MGD_ENV = "TT_MESH_GRAPH_DESC_PATH"
+_TTML_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_MGD_DIR = os.path.join(_TTML_ROOT, "configs", "mgd")
+_BUNDLED_MGD = {
+    ("blackhole", (1, 2)): "bh_1_2_line_line.textproto",
+    ("blackhole", (2, 2)): "bh_2_2_line_line.textproto",
+    # The galaxy fabric is a torus in X; a LINE/LINE descriptor faults with SIGBUS.
+    ("blackhole", (8, 4)): "bh_galaxy_8_4_torus_x.textproto",
+}
+
+
+def _detect_arch() -> Optional[str]:
+    try:
+        name = ttnn.get_arch_name().lower()
+    except Exception:  # noqa: BLE001
+        return None
+    if "blackhole" in name:
+        return "blackhole"
+    return None
+
+
+def _bundled_mgd(arch: Optional[str], shape: Sequence[int]) -> Optional[str]:
+    """The bundled descriptor for ``arch`` and ``shape``, or ``None`` if there isn't one."""
+    name = _BUNDLED_MGD.get((arch, tuple(shape)))
+    path = name and os.path.join(_MGD_DIR, name)
+    return path if path and os.path.isfile(path) else None
+
+
+def _restore_mgd_path(previous: Optional[str]) -> None:
+    if previous is None:
+        os.environ.pop(_MGD_ENV, None)
+    else:
+        os.environ[_MGD_ENV] = previous
+
+
+# ---------------------------------------------------------------------------
+# Fresh device mesh
+# ---------------------------------------------------------------------------
+
+
+def _release_metal_env() -> None:
+    """Close the device mesh and release ownership of the process-global ``MetalEnv``."""
+    # Device tensors caught in reference cycles (e.g. a test frame held by a caught exception's
+    # traceback) must be freed while the MetalEnv is alive. This may be due to a use-after-free
+    # bug in ReleaseOwnership() https://github.com/tenstorrent/tt-metal/issues/57798.
+    gc.collect()
+    ttml.close_device_mesh()
+    ttml.core.distributed.release_metal_env()
+
+
+def _release_metal_env_quietly() -> None:
+    try:
+        _release_metal_env()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@contextlib.contextmanager
+def _fresh_device_mesh(
+    shape: Sequence[int],
+    axis_names: Optional[Sequence[str]] = None,
+    *,
+    what: str,
+    require_mgd: bool = False,
+) -> Iterator["ttml.Mesh"]:
+    """Open a ``shape`` mesh on a new ``MetalEnv``, which is released on exit along with the MGD path.
+
+    Skips when the host has too few devices for ``shape``, or, with ``require_mgd``, when
+    the host arch is known but there is neither a bundled descriptor for it nor a
+    user-provided one. Any other failure to open the mesh will raise an exception.
+
+    A failure inside the ``with`` body (or while opening) releases the ``MetalEnv`` quietly
+    and re-raises, so a cleanup error can't replace the original failure as the reported
+    error. On a normal exit, a failure to release is raised rather than ignored, because the
+    failure usually means live device references blocked ``ReleaseOwnership``, and the
+    stale ``MetalEnv`` left behind would break later modules.
+    """
+    _skip_if_host_too_small(shape, what)
+    previous_mgd = os.environ.get(_MGD_ENV)
+    arch = _detect_arch()
+    mgd = _bundled_mgd(arch, shape)
+    if require_mgd and not previous_mgd and mgd is None and arch is not None:
+        pytest.skip(
+            f"{what} needs a mesh graph descriptor for arch={arch!r} shape={tuple(shape)}; "
+            f"add one under tt-train/configs/mgd/ or export {_MGD_ENV}"
+        )
+    if mgd and not previous_mgd:
+        os.environ[_MGD_ENV] = mgd
+    try:
+        try:
+            # A MetalEnv reads TT_MESH_GRAPH_DESC_PATH only when it is created, and the
+            # host-size check above has already created one.
+            _release_metal_env()
+            ttml.open_device_mesh(ttml.Mesh(tuple(shape), tuple(axis_names)) if axis_names else tuple(shape))
+            yield ttml.mesh()
+        except BaseException:
+            _release_metal_env_quietly()
+            raise
+        _release_metal_env()
+    finally:
+        _restore_mgd_path(previous_mgd)
+
+
+@pytest.fixture(scope="session")
+def fresh_device_mesh():
+    """``with fresh_device_mesh(shape, axis_names, what=...) as mesh:`` -- see ``_fresh_device_mesh``.
+
+    Session-scoped so fixtures of any scope can request it.
+    """
+    return _fresh_device_mesh
+
+
+# ---------------------------------------------------------------------------
 # Shared [1, 2] tensor-parallel mesh
 # ---------------------------------------------------------------------------
 #
@@ -55,85 +216,18 @@ def pytest_collection_modifyitems(config, items):
 
 TP_MESH_SHAPE = (1, 2)
 
-_TTML_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_MGD_FOR_ARCH_AND_SHAPE = {
-    ("blackhole", TP_MESH_SHAPE): os.path.join(_TTML_ROOT, "configs", "mgd", "bh_galaxy_1_2_line_line.textproto"),
-    ("wormhole_b0", TP_MESH_SHAPE): os.path.join(_TTML_ROOT, "configs", "mgd", "n300_1_2_line_line.textproto"),
-}
-
-
-def _detect_arch() -> Optional[str]:
-    try:
-        name = ttnn.get_arch_name().lower()
-    except Exception:  # noqa: BLE001
-        return None
-    if "blackhole" in name:
-        return "blackhole"
-    if "wormhole_b0" in name:
-        return "wormhole_b0"
-    return None
-
-
-def _ensure_mgd_path(shape) -> Optional[str]:
-    """Point TT_MESH_GRAPH_DESC_PATH at a bundled descriptor unless the caller set one."""
-    previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
-    if previous:
-        return previous
-    arch = _detect_arch()
-    if arch is None:
-        return previous
-    candidate = _MGD_FOR_ARCH_AND_SHAPE.get((arch, shape))
-    if candidate and os.path.isfile(candidate):
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
-    return previous
-
-
-def _restore_mgd_path(previous: Optional[str]) -> None:
-    if previous is None:
-        os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    else:
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
-
-
-def _close_device_mesh_quietly() -> None:
-    try:
-        ttml.close_device_mesh()
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _open_mesh_or_skip(shape, axis_names: tuple, purpose: str):
-    """Open a ``shape`` mesh with ``axis_names`` for a module-scoped fixture, or ``pytest.skip`` the requesting module.
-
-    Points ``TT_MESH_GRAPH_DESC_PATH`` at a bundled descriptor first (unless the caller set one), closes whatever mesh
-    an earlier module left open, and undoes both if the open fails. Returns the previous descriptor path, which the
-    fixture hands back to ``_close_mesh`` at teardown."""
-    previous_mgd = _ensure_mgd_path(shape)
-    _close_device_mesh_quietly()
-    try:
-        ttml.open_device_mesh(ttml.Mesh(shape, axis_names))
-    except Exception as e:  # noqa: BLE001
-        _close_mesh(previous_mgd)
-        pytest.skip(f"needs a [{shape[0]}, {shape[1]}] {purpose} mesh: {e}")
-    return previous_mgd
-
-
-def _close_mesh(previous_mgd) -> None:
-    _close_device_mesh_quietly()
-    _restore_mgd_path(previous_mgd)
-
 
 @pytest.fixture(scope="module")
 def tp_mesh():
     """A ``[1, 2]`` mesh with axes ``("dp", "tp")``, per requesting module.
 
-    Skips the requesting tests if two devices on the ``"tp"`` axis are unavailable.
-    The parallelism context is initialised here too, since the qwen3 model paths
-    resolve their TP size through it.
+    Skips the requesting tests on a host with too few devices for the shape. A host
+    that has the devices but fails to open the mesh is a real failure and therefore,
+    not skipped. The parallelism context is initialised here too, since the qwen3
+    model paths resolve their TP size through it.
     """
     dp_expected, tp_expected = TP_MESH_SHAPE
-    previous_mgd = _open_mesh_or_skip(TP_MESH_SHAPE, ("dp", "tp"), "'tp'")
-    try:
+    with _fresh_device_mesh(TP_MESH_SHAPE, ("dp", "tp"), what="tp") as mesh:
         ctx = ttml.autograd.AutoContext.get_instance()
         if ctx.is_parallelism_context_initialized():
             # ParallelismContext is a one-shot singleton with no reset hook, so an
@@ -150,13 +244,7 @@ def tp_mesh():
                 )
         else:
             ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
-    except Exception as e:  # noqa: BLE001
-        _close_mesh(previous_mgd)
-        pytest.skip(f"needs a [{dp_expected}, {tp_expected}] 'tp' mesh: {e}")
-
-    yield ttml.mesh()
-
-    _close_mesh(previous_mgd)
+        yield mesh
 
 
 # ---------------------------------------------------------------------------
@@ -167,15 +255,15 @@ FSDP_MESH_SHAPE = (1, 2)  # same shape as TP_MESH_SHAPE, so _MGD_FOR_ARCH_AND_SH
 
 
 @pytest.fixture(scope="module")
-def fsdp_mesh():
-    """A ``[1, 2]`` mesh with axes ``("dp", "fsdp")``, per requesting module.
+def fsdp_mesh(fresh_device_mesh):
+    """Open a ``[1, 2]`` mesh with axes ``("dp", "fsdp")``, per requesting module.
 
     ``"fsdp"`` is the axis ``ttml.fsdp.fully_shard`` shards across by default. FSDP does not consult the
     ParallelismContext, so none is installed here and this fixture is usable in a session before or after
     ``tp_mesh`` modules. Module-scoped for the same reason as ``tp_mesh``; skips if the mesh cannot be opened.
+
+    The mesh is closed at teardown so later test modules can lazily reopen
+    a fresh single-device handle if they need to.
     """
-    previous_mgd = _open_mesh_or_skip(FSDP_MESH_SHAPE, ("dp", "fsdp"), "'fsdp'")
-
-    yield ttml.mesh()
-
-    _close_mesh(previous_mgd)
+    with fresh_device_mesh((FSDP_MESH_SHAPE), ("dp", "fsdp"), what="fsdp") as mesh:
+        yield mesh

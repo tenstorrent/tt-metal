@@ -769,22 +769,26 @@ auto coalesceFabricEvents(
                     fabric_event_markers.fabric_write_markers.push_back(markers[i]);
                 }
 
+                TT_FATAL(
+                    i + 1 >= markers.size() || !std::holds_alternative<EMD::FabricRoutingMetadataUnavailable2D>(
+                                                   EMD(markers[i + 1].data).getContents()),
+                    "[profiler noc tracing] Fabric event profiling does not support 2D fabric packets.");
+
                 if (i + 2 >= markers.size() ||
-                    (!std::holds_alternative<EMD::FabricRoutingFields1D>(EMD(markers[i + 1].data).getContents()) &&
-                     !std::holds_alternative<EMD::FabricRoutingFields2D>(EMD(markers[i + 1].data).getContents())) ||
+                    !std::holds_alternative<EMD::FabricRoutingFields1D>(EMD(markers[i + 1].data).getContents()) ||
                     !std::holds_alternative<EMD::LocalNocEvent>(EMD(markers[i + 2].data).getContents()) ||
                     std::get<EMD::LocalNocEvent>(EMD(markers[i + 2].data).getContents()).noc_xfer_type !=
                         EMD::NocEventType::WRITE_) {
                     log_warning(
                         tt::LogMetal,
                         "[profiler noc tracing] Failed to coalesce fabric noc trace events in op '{}': "
-                        "missing routing fields event and/or local write.",
+                        "missing routing metadata event and/or local write.",
                         markers[i].op_name);
                     i += 1;
                     continue;
                 }
 
-                fabric_event_markers.fabric_routing_fields_marker = markers[i + 1];
+                fabric_event_markers.fabric_routing_metadata_marker = markers[i + 1];
                 fabric_event_markers.local_noc_write_marker = markers[i + 2];
 
                 // if local noc write is to a fabric mux (i.e. worker core), add marker for fabric mux
@@ -885,7 +889,8 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     if (marker.marker_name != "SYNC-ZONE-SENDER" && marker.marker_name != "SYNC-ZONE-RECEIVER" &&
                         marker.marker_name != "PROFILER-NOC-QUICK-SEND" && !marker.marker_name.ends_with("-FW") &&
                         (!marker.marker_name.ends_with("-KERNEL") || marker.risc == tracy::RiscType::BRISC ||
-                         marker.risc == tracy::RiscType::NCRISC)) {
+                         marker.risc == tracy::RiscType::NCRISC ||
+                         (marker.risc >= tracy::RiscType::QUASAR_DM0 && marker.risc <= tracy::RiscType::QUASAR_DM7))) {
                         zones_by_op[program_execution_uid].push_back(marker);
                     }
                 } else if (isMarkerATimestampedDatapoint(marker)) {
@@ -1014,7 +1019,7 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                 auto fabric_event_markers = std::get<FabricEventMarkers>(marker_it);
 
                 auto first_fabric_write_marker = fabric_event_markers.fabric_write_markers[0];
-                auto fabric_routing_fields_marker = fabric_event_markers.fabric_routing_fields_marker;
+                auto fabric_routing_metadata_marker = fabric_event_markers.fabric_routing_metadata_marker;
                 auto local_noc_write_marker = fabric_event_markers.local_noc_write_marker;
 
                 EMD::FabricPacketType routing_fields_type;
@@ -1048,33 +1053,26 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     {"timestamp", local_noc_write_marker.timestamp},
                 };
 
-                // extract routing metadata from routing fields event
+                // Extract routing metadata when the packet format supports it.
                 switch (routing_fields_type) {
                     case EMD::FabricPacketType::REGULAR: {
-                        auto fabric_routing_fields_event =
-                            std::get<EMD::FabricRoutingFields1D>(EMD(fabric_routing_fields_marker.data).getContents());
+                        auto fabric_routing_fields_event = std::get<EMD::FabricRoutingFields1D>(
+                            EMD(fabric_routing_metadata_marker.data).getContents());
                         auto [start_distance, range] =
                             get_routing_start_distance_and_range(fabric_routing_fields_event.routing_fields_value);
                         fabric_event_json["fabric_send"] = {{"start_distance", start_distance}, {"range", range}};
                         break;
                     }
                     case EMD::FabricPacketType::LOW_LATENCY: {
-                        auto fabric_routing_fields_event =
-                            std::get<EMD::FabricRoutingFields1D>(EMD(fabric_routing_fields_marker.data).getContents());
+                        auto fabric_routing_fields_event = std::get<EMD::FabricRoutingFields1D>(
+                            EMD(fabric_routing_metadata_marker.data).getContents());
                         auto [start_distance, range] = get_low_latency_routing_start_distance_and_range(
                             fabric_routing_fields_event.routing_fields_value);
                         fabric_event_json["fabric_send"] = {{"start_distance", start_distance}, {"range", range}};
                         break;
                     }
                     case KernelProfilerNocEventMetadata::FabricPacketType::LOW_LATENCY_MESH: {
-                        auto fabric_routing_fields_event =
-                            std::get<EMD::FabricRoutingFields2D>(EMD(fabric_routing_fields_marker.data).getContents());
-                        fabric_event_json["fabric_send"] = {
-                            {"ns_hops", fabric_routing_fields_event.ns_hops},
-                            {"e_hops", fabric_routing_fields_event.e_hops},
-                            {"w_hops", fabric_routing_fields_event.w_hops},
-                            {"is_mcast", fabric_routing_fields_event.is_mcast}};
-                        break;
+                        TT_THROW("[profiler noc tracing] Fabric event profiling does not support 2D fabric packets.");
                     }
                     case KernelProfilerNocEventMetadata::FabricPacketType::DYNAMIC_MESH: {
                         log_error(
@@ -2349,34 +2347,46 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                     start_marker_stack.pop();
                     start_marker_stack.push(curr_zone_start_marker_it);
                 }
-
-                // If this is a performance counter, extract fields from data and store in marker meta_data
-                if (marker.marker_id == PERF_COUNTER_PROFILER_ID) {
-                    const PerfCounter perf_counter(marker.data, marker.data_high);
-                    const uint32_t counter_type_raw = perf_counter.counter_type;
-                    // Skip markers with out-of-range counter_type (stale/dropped data).
-                    if (!enchantum::contains<PerfCounterType>(counter_type_raw)) {
-                        log_warning(
-                            tt::LogMetal,
-                            "PerfCounter marker at device {} core {},{} risc {} run {} has "
-                            "out-of-range counter_type={} (raw data 0x{:x}); skipping enrichment.",
-                            marker.chip_id,
-                            marker.core_x,
-                            marker.core_y,
-                            enchantum::to_string(marker.risc),
-                            marker.runtime_host_id,
-                            counter_type_raw,
-                            marker.data);
-                    } else {
-                        marker.meta_data["counter type"] =
-                            enchantum::to_string(static_cast<PerfCounterType>(counter_type_raw));
-                        marker.meta_data["ref cnt"] = perf_counter.ref_cnt;
-                        marker.meta_data["value"] = perf_counter.counter_value;
-
-                        const auto& marker_ret = updateDeviceMarker(marker, device_marker_it);
-                        device_marker_it = marker_ret.first;
-                        next_device_marker_it = marker_ret.second;
+            }
+            // Perf counter records need no zone: Quasar DM0 files them after the TRISCs closed their last zone.
+            if (marker.marker_id == PERF_COUNTER_PROFILER_ID) {
+                const PerfCounter perf_counter(marker.data, marker.data_high);
+                uint32_t counter_type_raw = perf_counter.counter_type;
+                // Quasar l1_client records carry BASE + selection in place of the enum value.
+                std::optional<uint32_t> l1_client_sel;
+                if (counter_type_raw >= llk::perf::QUASAR_L1_CLIENT_EVENT_BASE) {
+                    l1_client_sel = counter_type_raw - llk::perf::QUASAR_L1_CLIENT_EVENT_BASE;
+                    // Selections past the 37x8 mux are stale data; leave counter_type_raw out of range so it is skipped.
+                    if (*l1_client_sel < llk::perf::QUASAR_L1_CLIENT_NUM_SELECTIONS) {
+                        counter_type_raw = static_cast<uint32_t>(PerfCounterType::QUASAR_L1_CLIENT_EVENT);
                     }
+                }
+                // Skip markers with out-of-range counter_type (stale/dropped data).
+                if (!enchantum::contains<PerfCounterType>(counter_type_raw)) {
+                    log_warning(
+                        tt::LogMetal,
+                        "PerfCounter marker at device {} core {},{} risc {} run {} has "
+                        "out-of-range counter_type={} (raw data 0x{:x}); skipping enrichment.",
+                        marker.chip_id,
+                        marker.core_x,
+                        marker.core_y,
+                        enchantum::to_string(marker.risc),
+                        marker.runtime_host_id,
+                        counter_type_raw,
+                        marker.data);
+                } else {
+                    marker.meta_data["counter type"] =
+                        enchantum::to_string(static_cast<PerfCounterType>(counter_type_raw));
+                    marker.meta_data["ref cnt"] = perf_counter.ref_cnt;
+                    marker.meta_data["value"] = perf_counter.counter_value;
+                    if (l1_client_sel) {
+                        marker.meta_data["counter sel"] = *l1_client_sel;
+                    }
+                    marker.meta_data["neo"] = perf_counter.neo;
+
+                    const auto& marker_ret = updateDeviceMarker(marker, device_marker_it);
+                    device_marker_it = marker_ret.first;
+                    next_device_marker_it = marker_ret.second;
                 }
             }
         }

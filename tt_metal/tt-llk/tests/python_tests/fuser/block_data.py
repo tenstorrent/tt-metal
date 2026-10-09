@@ -29,3 +29,4 @@ class BlockData:
     tile_id_out: Optional[Index] = None
     dest_src0: Optional[Index] = None
     dest_src1: Optional[Index] = None
+    dest_src2: Optional[Index] = None

@@ -493,6 +493,7 @@
 - name: Qwen3.6-27B e2e tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B MESH_DEVICE=P150x4
+    export QWEN36_SPEC=0  # e2e measures plain decode; MTP spec decode is covered by unit tests until batch>1 lands
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
     # Reference accuracy: top-1/top-5 vs the committed HF .refpt (the other legs are TT-vs-TT).
@@ -527,6 +528,42 @@
       tier: 1
       release_ready: false
   owner_id: U08FBKRKTB8 # Kohei Yamaguchi
+  team: models
+  budget_type: e2e
+
+- name: Qwen3-TTS e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/e2e/test_e2e.py
+  model: qwen3-tts-1.7b
+  model_family: Qwen3-TTS
+  skus:
+    wh_n150:
+      timeout: 6
+      tier: 2
+    bh_p150:
+      timeout: 5
+      tier: 2
+  owner_id: U09LNK7BT1Q # Andrija Cicovic
+  team: models
+  budget_type: e2e
+
+- name: Qwen3-TTS 0.6B e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-0.6B-Base TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-0.6B-Base
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/e2e/test_e2e.py
+  model: qwen3-tts-0.6b
+  model_family: Qwen3-TTS
+  skus:
+    wh_n150:
+      timeout: 5
+      tier: 2
+    bh_p150:
+      timeout: 4
+      tier: 2
+  owner_id: U09LNK7BT1Q # Andrija Cicovic
   team: models
   budget_type: e2e
 
@@ -1262,6 +1299,9 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    # #58835: since #52893 the read-only pinned upload of ttnn.load_tensor mmaps makes the per-call
+    # weight swaps 2.7x slower on QB2 (34 s -> 94 s per 12 cached loads); keep the copy path like the Wan2.2 legs.
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
     pytest --timeout 1200 models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py
     pytest --timeout 720 models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py
   model: qwenimage

@@ -30,6 +30,9 @@
  * Call compute_kernel_hw_startup() before using.
  *
  * IMPORTANT: The scaler CB must contain the scaling factor tile BEFORE calling reduce().
+ * reduce() waits the scaler tile but never pops it, so one pushed tile can serve any number of
+ * reduce() calls that pass the same scaler CB. The caller owns that page and must pop it once,
+ * after its last such call, to leave the CB balanced.
  *
  * Basic Usage:
  *   #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
