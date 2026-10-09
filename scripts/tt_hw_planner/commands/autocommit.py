@@ -73,6 +73,14 @@ def _pick_remote(repo: Path, branch: str) -> Optional[str]:
     return remotes[0] if remotes else None
 
 
+#: Branches that hold the tt_hw_planner TOOL code, never model artifacts. Auto-commit
+#: refuses to run here so a stage launched from a tool checkout can't push a model's
+#: files onto the tool branch.
+def _is_tool_branch(branch: str) -> bool:
+    b = (branch or "").strip()
+    return b == "feature/tt-hw-planner" or b.endswith("/feature/tt-hw-planner") or "tt-hw-planner" in b
+
+
 def commit_and_push_stage(args, model_id: str, stage: str) -> None:
     """Public entry: no-op unless enabled; never raises."""
     if not _enabled(args):
@@ -94,6 +102,14 @@ def _commit_and_push(args, model_id: str, stage: str) -> None:
         print(f"  [auto-commit] {stage}: {demo_dir} is not inside a git repo; skipping")
         return
 
+    branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo).stdout.strip()
+    if _is_tool_branch(branch):
+        print(
+            f"  [auto-commit] {stage}: current branch {branch!r} is the tt_hw_planner tool branch — "
+            "refusing to commit model artifacts here (model work belongs on a model branch)"
+        )
+        return
+
     rel = os.path.relpath(demo_dir, repo)
     add = _run(["git", "add", "--", rel], repo)
     if add.returncode != 0:
@@ -105,7 +121,6 @@ def _commit_and_push(args, model_id: str, stage: str) -> None:
         print(f"  [auto-commit] {stage}: no changes under {rel}; nothing to commit")
         return
 
-    branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo).stdout.strip()
     if branch == "HEAD":
         print(f"  [auto-commit] {stage}: detached HEAD; committing but will not push")
     msg = f"{model_id}: {stage} stage complete [tt_hw_planner auto-commit]"
