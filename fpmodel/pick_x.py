@@ -13,8 +13,8 @@ fit.predict = M.predict
 fit.PARAMS = M.PARAMS
 fit.NAMES = list(M.PARAMS)
 fit.geometry = M.geometry
-fit.HI.update(eta_max=0.95, link_eff=1.0)
-fit.LO.update(eta_max=0.3, link_eff=0.05)
+fit.HI.update(eta_max=0.95, link_eff=1.0, bank_frac=1.0)
+fit.LO.update(eta_max=0.3, link_eff=0.05, bank_frac=0.02)
 for kv in filter(None, os.environ.get("FIX", "").split(",")):
     k, v = kv.split("=")
     fit.LO[k] = float(v) * 0.999
@@ -25,6 +25,10 @@ d = load(list(SETS))
 d = d[d.arch_ == arch].reset_index(drop=True)
 if "noc" in M.MX:
     d["link_bytes"] = nocload.link_bytes(M.geometry(d), d)
+if "bank" in M.MX:
+    import bankload
+
+    d["bank_a"], d["bank_b"], _ = bankload.banks_touched(M.geometry(d), d)
 p = (
     json.load(open(os.environ["CONST"])) if os.environ.get("CONST") else fit.fit(d, np.arange(len(d)))
 )  # CONST: frozen constants file
@@ -34,6 +38,10 @@ e = e[e.origin.isin(CAND) & (e.status == "ok")].reset_index(drop=True)
 e["arch_"] = arch
 if "noc" in M.MX:
     e["link_bytes"] = nocload.link_bytes(M.geometry(e), e)
+if "bank" in M.MX:
+    import bankload
+
+    e["bank_a"], e["bank_b"], _ = bankload.banks_touched(M.geometry(e), e)
 e["pred"] = M.predict(M.geometry(e), p)
 r = e.loc[e.groupby("case").pred.idxmin(), ["case", "config", "family", "origin", "pred"]]
 r["pred_us"] = (r.pred / 1e3).round(2)

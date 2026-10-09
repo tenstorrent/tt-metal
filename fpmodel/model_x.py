@@ -54,6 +54,8 @@ if "dram" in MX:  # DRAM efficiency limited by bytes in flight across readers (o
     PARAMS.update(eta_max=0.85, inflight_KB=500.0)
 if "noc" in MX:  # most-loaded NoC link per K step (nocload.py), at link_eff of the link rate
     PARAMS.update(link_eff=0.7)
+if "bank" in MX:  # DRAM bandwidth one interleaved bank can serve, as a fraction of the chip's (bankload.py)
+    PARAMS.update(bank_frac=0.12)
 if "launch" in MX:  # per-core dispatch cost
     PARAMS.update(launch_core_ns=20.0)
 
@@ -116,6 +118,8 @@ def geometry(d):
     g["arch"] = d.arch_.to_numpy()
     if "link_bytes" in d:
         g["link"] = d.link_bytes.to_numpy(float)
+    if "bank_a" in d:
+        g["bk_a"], g["bk_b"] = d.bank_a.to_numpy(float), d.bank_b.to_numpy(float)
     return g
 
 
@@ -138,22 +142,39 @@ def predict(g, p, parts=False):
 
     tot = g["rd0"] * b0 * (g["src_a"] < 2) + g["rd1"] * b1 * (g["src_b"] < 2)  # chip bytes in flight per K step
 
-    def fetch(nbytes, src, readers):
+    ea = eb = 1.0
+    if "bank" in MX:  # a K step whose pages sit in a few banks gets only those banks' share of the DRAM bandwidth
+        ea = np.minimum(1.0, g["bk_a"] * p["bank_frac"])
+        eb = np.minimum(1.0, g["bk_b"] * p["bank_frac"])
+
+    def fetch(nbytes, src, readers, eff=1.0):
         """one K block read by one core, all pages in flight then a barrier; DRAM / interleaved L1 shared by `readers` cores"""
         cb = tot if "congtot" in MX else nbytes
         cg = 1 + cb / (p["burst_KB"] * 1e3)
         if "burstl1" in MX:
             cg = np.where(src == 1, cg, 1.0)  # congestion only on interleaved-L1 reads
         r = np.maximum(readers, 1) * (1 if "congchip" in MX else cg)
+        if "sat" in MX:  # latency hides under the other readers' transfers once the shared bandwidth saturates
+            return np.select(
+                [src == 0, src == 1],
+                [
+                    np.maximum(p["lat_dram"] + nbytes / noc, nbytes * r / (dram * eff)),
+                    np.maximum(p["lat_l1"] + nbytes / noc, nbytes * r / l1bw),
+                ],
+                0.0,
+            )
         return np.select(
             [src == 0, src == 1],
-            [p["lat_dram"] + nbytes / np.minimum(noc, dram / r), p["lat_l1"] + nbytes / np.minimum(noc, l1bw / r)],
+            [
+                p["lat_dram"] + nbytes / np.minimum(noc, dram * eff / r),
+                p["lat_l1"] + nbytes / np.minimum(noc, l1bw / r),
+            ],
             0.0,
         )
 
     mcast = lambda nbytes, rx, lat: np.where(rx > 0, lat + rx * p["ack_rx"] + nbytes / noc, 0.0)
-    step0 = fetch(b0, g["src_a"], g["rd0"]) + mcast(b0, g["rx0"], p["lat_mcast0"])  # in0 path per K block (sender)
-    step1 = fetch(b1, g["src_b"], g["rd1"]) + mcast(b1, g["rx1"], p["lat_mcast1"])  # in1 path per K block (sender)
+    step0 = fetch(b0, g["src_a"], g["rd0"], ea) + mcast(b0, g["rx0"], p["lat_mcast0"])  # in0 path per K block (sender)
+    step1 = fetch(b1, g["src_b"], g["rd1"], eb) + mcast(b1, g["rx1"], p["lat_mcast1"])  # in1 path per K block (sender)
     cong0, cong1 = (
         (1 + tot / (p["burst_KB"] * 1e3),) * 2
         if "congtot" in MX
@@ -165,6 +186,13 @@ def predict(g, p, parts=False):
         / dram,  # all readers at once
         (g["rd0"] * b0 * cong0 * (g["src_a"] == 1) + g["rd1"] * b1 * cong1 * (g["src_b"] == 1)) / l1bw,
     )
+    if "bank" in MX:
+        chip = np.maximum(
+            chip,
+            np.maximum(
+                g["rd0"] * b0 * (g["src_a"] == 0) / (dram * ea), g["rd1"] * b1 * (g["src_b"] == 0) / (dram * eb)
+            ),
+        )
     read = np.maximum(np.maximum(step0, step1), chip)
     if "noc" in MX:
         read = np.maximum(read, g["link"] / (s["noc_Bpc"] * p["link_eff"]))

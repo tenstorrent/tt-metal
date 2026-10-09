@@ -12,8 +12,8 @@ fit.predict = M.predict
 fit.PARAMS = M.PARAMS
 fit.NAMES = list(M.PARAMS)
 fit.geometry = M.geometry
-fit.HI.update(eta_max=0.95, link_eff=1.0)
-fit.LO.update(eta_max=0.3, link_eff=0.05)
+fit.HI.update(eta_max=0.95, link_eff=1.0, bank_frac=1.0)
+fit.LO.update(eta_max=0.3, link_eff=0.05, bank_frac=0.02)
 for kv in filter(None, os.environ.get("FIX", "").split(",")):  # pin a constant: FIX=name=value
     k, v = kv.split("=")
     fit.LO[k] = float(v) * 0.999
@@ -26,6 +26,10 @@ if "noc" in M.MX:
     import nocload
 
     d["link_bytes"] = nocload.link_bytes(M.geometry(d), d)
+if "bank" in M.MX:
+    import bankload
+
+    d["bank_a"], d["bank_b"], _ = bankload.banks_touched(M.geometry(d), d)
 rows = {a: np.flatnonzero((d.arch_ == a).to_numpy()) for a in ("wh", "bh")}
 pred = np.full(len(d), np.nan)
 allp = {}
