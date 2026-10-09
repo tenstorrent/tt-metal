@@ -12,7 +12,7 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
     exit 1
 fi
 
-WT_DIR="${TT_METAL_HOME}/tt-train/tests/python/grpo_remote_rollout/weight_transfer"
+WT_DIR="${TT_METAL_HOME}/tt-train/tests/python/remote_rollout/weight_transfer"
 HOST_FILE="${WT_DIR}/configurations/4-4/hosts.txt"
 RANK_BINDINGS_FILE="${WT_DIR}/configurations/4-4/rank_bindings.yaml"
 TEST_FILE="${WT_DIR}/test_weight_transfer.py"
@@ -38,7 +38,7 @@ done
 cd "${WT_DIR}"
 
 # --rootdir pins pytest's rootdir so the parent conftest.py is picked up.
-TESTS_DIR="${TT_METAL_HOME}/tt-train/tests/python/grpo_remote_rollout"
+TESTS_DIR="${TT_METAL_HOME}/tt-train/tests/python/remote_rollout"
 CMD="python3 -m pytest -s -p no:cacheprovider --rootdir=${TESTS_DIR} ${TEST_FILE}"
 
 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \

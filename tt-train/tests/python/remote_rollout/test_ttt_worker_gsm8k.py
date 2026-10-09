@@ -10,7 +10,7 @@ two submeshes decoded differently for the same input. Single process, no MPI/bri
 Targets Blackhole (runs on any >=2-chip BH host, e.g. a subset of a BH loudbox).
 
 Run (needs >= 2 chips + HF_TOKEN):
-    cd tt-train/tests/python/grpo_remote_rollout
+    cd tt-train/tests/python/remote_rollout
     python3 -m pytest -s test_ttt_worker_gsm8k.py
 """
 
@@ -38,7 +38,7 @@ GSM8K_QUESTION = (
 def test_16_greedy_completions_are_identical():
     import ttnn
 
-    from _completer_utils import _TRACE_REGION_SIZE, build_completer
+    from _ttt_sampler_utils import _TRACE_REGION_SIZE, build_sampler
 
     if len(ttnn.get_device_ids()) < MESH_SHAPE[0] * MESH_SHAPE[1]:
         pytest.skip(f"needs >= {MESH_SHAPE[0] * MESH_SHAPE[1]} chips")
@@ -49,9 +49,9 @@ def test_16_greedy_completions_are_identical():
         mesh_shape=ttnn.MeshShape(*MESH_SHAPE),
         trace_region_size=_TRACE_REGION_SIZE,
     )
-    completer = None
+    sampler = None
     try:
-        completer = build_completer(mesh_device, dummy_weights=False, max_batch_size=PER_SUBMESH_BATCH)
+        sampler = build_sampler(mesh_device, dummy_weights=False, max_batch_size=PER_SUBMESH_BATCH)
 
         tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         # return_dict=False keeps the transformers 5.x return type as a flat
@@ -63,7 +63,7 @@ def test_16_greedy_completions_are_identical():
             return_dict=False,
         )
 
-        completions = completer.generate_tokens(
+        completions = sampler.generate_tokens(
             [prompt_ids] * NUM_COMPLETIONS,
             max_new_tokens=MAX_NEW_TOKENS,
         )
@@ -80,6 +80,6 @@ def test_16_greedy_completions_are_identical():
                 f"(lens {len(completions[i])} vs {len(completions[0])}) -> submeshes diverged"
             )
     finally:
-        completer = None
+        sampler = None
         gc.collect()
         ttnn.close_mesh_device(mesh_device)

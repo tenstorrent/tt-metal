@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from _completer_utils import as_update_input, generate_one, open_completer, to_torch_2d
+from _ttt_sampler_utils import as_update_input, generate_one, open_sampler, to_torch_2d
 
 PROMPT = "Explain a tensor in a paragraph."
 MAX_NEW_TOKENS = 32
@@ -22,8 +22,8 @@ OVERWRITE_VALUE = 0.0
 
 
 @pytest.fixture(scope="module")
-def completer():
-    with open_completer(dummy_weights=False) as c:
+def sampler():
+    with open_sampler(dummy_weights=False) as c:
         yield c
 
 
@@ -38,28 +38,28 @@ def _snapshot_lm_head_hf(lm_head):
     return permuted.transpose(0, 1).contiguous().to(torch.bfloat16)  # (vocab_size, dim)
 
 
-def test_lm_head_update_round_trip(completer):
+def test_lm_head_update_round_trip(sampler):
     """Snapshot -> overwrite -> restore must reproduce the original tokens."""
-    model = completer.models[0]
+    model = sampler.models[0]
     lm_head = model.lm_head
     V = lm_head.vocab_size
     H = lm_head.args.dim
-    prompt_ids = completer.tokenizer.encode(PROMPT, add_special_tokens=True)
+    prompt_ids = sampler.tokenizer.encode(PROMPT, add_special_tokens=True)
 
-    tokens_A = generate_one(completer, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
+    tokens_A = generate_one(sampler, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
     snap_hf = _snapshot_lm_head_hf(lm_head)
 
     overwrite_hf = torch.full((V, H), float(OVERWRITE_VALUE), dtype=torch.bfloat16)
     lm_head.update(weight=as_update_input(overwrite_hf, model.mesh_device))
 
-    tokens_broken = generate_one(completer, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
+    tokens_broken = generate_one(sampler, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
     assert tokens_broken != tokens_A, (
         f"overwriting LMHead with constant {OVERWRITE_VALUE} did not change generation; "
         "the overwrite step was a no-op, so the rest of the test is meaningless"
     )
 
     lm_head.update(weight=as_update_input(snap_hf, model.mesh_device))
-    tokens_B = generate_one(completer, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
+    tokens_B = generate_one(sampler, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
     assert tokens_B == tokens_A, (
         "LMHead.update did not reproduce __init__-equivalent state: " f"tokens_A={tokens_A}, tokens_B={tokens_B}"
     )
