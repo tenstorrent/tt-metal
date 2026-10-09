@@ -148,6 +148,9 @@ void ZoneMetaRegistry::ingest_elf(const std::string& elf_path, ll_api::ElfFile& 
             size_t pos = off + sizeof(RecordHeader);
             bool ok = true;
             for (const char* c = colon + 1; *c != 0; c++) {
+                if (*c == '{' || *c == '}') {
+                    continue;  // a nested struct's bounds; its fields are laid out in place
+                }
                 const size_t bytes = tt::debug_event::detail::code_bytes(*c);
                 pos = align_up(pos, bytes < 4 ? bytes : 4);
                 if (bytes == 0 || pos + bytes > meta.size()) {

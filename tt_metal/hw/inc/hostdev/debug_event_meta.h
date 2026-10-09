@@ -6,10 +6,12 @@
 // of it, which the compiler marshals into the site's ELF record and the host unmarshals at load. The device
 // never sees it: it only has the site's id (hostdev/profiler_zone_id.h).
 //
-// A metadata type must be an aggregate with at most kMaxFields public fields, each one of
+// A metadata type must be a simple aggregate: a struct with public data members only -- no base classes,
+// constructors, C arrays, const or reference members -- and 1..kMaxFields of them, each one of
 //   const char*        set from a string literal
 //   integer or enum    of 1, 2, 4 or 8 bytes (bool included)
-// and every value must be a compile-time constant.
+//   a nested struct    itself a simple aggregate
+// and every value must be a compile-time constant. check_type<T>() enforces this with readable errors.
 //
 // Marshalling: emit_site() walks the struct's fields (C++17 aggregate decomposition) inside a constant expression
 // and returns assembler text, which the site's asm((...)) statement emits. Unmarshalling: the host walks the same
@@ -20,8 +22,10 @@
 //   [4]  u32 signature   VMA in .tt_zone_str of "<type name>:<field codes>", e.g. "tt::debug_event::ZoneColorMeta:sw"
 //   [8]  u32 file        VMA in .tt_zone_str
 //   [12] u32 line
-//   [16] the fields in declaration order, each aligned to min(its size, 4); then padding to 4
-// Field codes: 's' const char* (u32 VMA in .tt_zone_str), 'b' 1 byte, 'h' 2, 'w' 4, 'q' 8.
+//   [16] the leaf fields in declaration order, nested structs flattened in place, each aligned to min(its size,
+//        4); then padding to 4
+// Field codes: 's' const char* (u32 VMA in .tt_zone_str), 'b' 1 byte, 'h' 2, 'w' 4, 'q' 8; a nested struct is its
+// own codes in braces, so {const char* name; Style{u32, u8} style; u16 flags;} is "s{wb}h". Braces carry no bytes.
 #pragma once
 
 #include <stddef.h>
@@ -70,13 +74,31 @@ constexpr size_t count_fields() {
     }
 }
 
+// The same count with every initializer in its own braces, T{{x}, {x}}. Brace elision lets the bare form above fill
+// a C array member one element per initializer, so the two counts differ exactly when T has an array member.
+template <class T, class = void, class... A>
+struct braced_ok : std::false_type {};
+template <class T, class... A>
+struct braced_ok<T, std::void_t<decltype(T{{std::declval<A>()}...})>, A...> : std::true_type {};
+
+template <class T, class... A>
+constexpr size_t count_braced_fields() {
+    if constexpr (sizeof...(A) <= kMaxFields && braced_ok<T, void, A..., any_field>::value) {
+        return count_braced_fields<T, A..., any_field>();
+    } else {
+        return sizeof...(A);
+    }
+}
+
+// Calls f on each direct field of T. Does nothing for a T that check_type rejects, so a bad type reports its rule
+// and not a cascade of structured-binding errors.
 template <class T, class F>
 constexpr void for_each_field(T& t, F&& f) {
     using U = std::remove_cv_t<T>;
-    static_assert(std::is_aggregate_v<U>, "a debug event metadata type must be an aggregate");
     constexpr size_t n = count_fields<U>();
-    static_assert(n >= 1 && n <= kMaxFields, "a debug event metadata type needs 1..kMaxFields fields");
-    if constexpr (n == 1) {
+    if constexpr (n != count_braced_fields<U>() || n < 1 || n > kMaxFields) {
+        return;
+    } else if constexpr (n == 1) {
         auto& [a] = t;
         f(a);
     } else if constexpr (n == 2) {
@@ -105,6 +127,52 @@ constexpr void for_each_field(T& t, F&& f) {
 
 template <class>
 inline constexpr bool always_false = false;
+
+template <class F>
+inline constexpr bool is_leaf_v = std::is_same_v<F, const char*> || std::is_integral_v<F> || std::is_enum_v<F>;
+
+template <class V>
+using field_t = std::remove_cv_t<std::remove_reference_t<V>>;
+
+// Rejects anything the walker would mishandle, with a message that names the rule; true when T is usable.
+template <class T>
+constexpr bool check_type() {
+    static_assert(
+        std::is_class_v<T> && std::is_aggregate_v<T>,
+        "a debug event metadata type must be a simple aggregate: a struct with public data members only");
+    constexpr size_t n = count_fields<T>();
+    static_assert(n == count_braced_fields<T>(), "a debug event metadata type cannot have C array members");
+    static_assert(n >= 1 && n <= kMaxFields, "a debug event metadata type needs 1..kMaxFields fields");
+    if constexpr (n == count_braced_fields<T>() && n >= 1 && n <= kMaxFields) {
+        T probe{};
+        for_each_field(probe, [](auto& v) {
+            using V = std::remove_reference_t<decltype(v)>;
+            using F = field_t<V>;
+            static_assert(!std::is_const_v<V>, "a debug event metadata type cannot have const members");
+            static_assert(
+                is_leaf_v<F> || std::is_class_v<F>,
+                "a metadata field must be a string literal (const char*), an integer, an enum, a bool or a nested "
+                "struct");
+            if constexpr (std::is_class_v<F>) {
+                static_assert(check_type<F>());
+            }
+        });
+    }
+    return true;
+}
+
+// Calls leaf(v) on every non-struct field of t in declaration order, descending into nested structs.
+template <class T, class Leaf>
+constexpr void for_each_leaf(T& t, Leaf&& leaf) {
+    for_each_field(t, [&](auto& v) {
+        using F = field_t<decltype(v)>;
+        if constexpr (std::is_class_v<F>) {
+            for_each_leaf(v, leaf);
+        } else if constexpr (is_leaf_v<F>) {
+            leaf(v);
+        }
+    });
+}
 
 template <class F>
 constexpr char field_code() {
@@ -140,9 +208,25 @@ constexpr const char* pretty_function() {
     return __PRETTY_FUNCTION__;  // GCC "... [with T = X]", clang "... [T = X]"
 }
 
+template <class T, class Sink>
+constexpr void write_codes(Sink& out) {
+    T probe{};
+    for_each_field(probe, [&](auto& v) {
+        using F = field_t<decltype(v)>;
+        if constexpr (std::is_class_v<F>) {
+            out.put('{');
+            write_codes<F>(out);
+            out.put('}');
+        } else if constexpr (is_leaf_v<F>) {
+            out.put(field_code<F>());
+        }
+    });
+}
+
 // Writes "<type name>:<field codes>" into any sink with put(char).
 template <class T, class Sink>
 constexpr void write_signature(Sink& out) {
+    static_assert(check_type<T>());
     const char* p = pretty_function<T>();
     while (*p != 0 && !(p[0] == 'T' && p[1] == ' ' && p[2] == '=' && p[3] == ' ')) {
         p++;
@@ -151,8 +235,7 @@ constexpr void write_signature(Sink& out) {
         out.put(*p);
     }
     out.put(':');
-    T probe{};
-    for_each_field(probe, [&](const auto& v) { out.put(field_code<std::decay_t<decltype(v)>>()); });
+    write_codes<T>(out);
 }
 
 // Assembler text, built in a constant expression and handed to asm((...)).
@@ -191,10 +274,11 @@ struct AsmText {
     constexpr size_t size() const { return n; }
 };
 
-// A .long pointing at a fresh copy of S in .tt_zone_str (the section is "MS", so the linker keeps one copy).
+// A .long pointing at a fresh copy of S in .tt_zone_str (the section is "MS", so the linker keeps one copy). A null
+// pointer is stored as "".
 constexpr void put_string_ref(AsmText& a, const char* s) {
     a.put(".pushsection .tt_zone_str,\"MS\",@progbits,1\n8880:\t.asciz ");
-    a.put_quoted(s);
+    a.put_quoted(s != nullptr ? s : "");
     a.put("\n.popsection\n.long 8880b\n");
 }
 
@@ -225,8 +309,8 @@ constexpr AsmText emit_site(const T& meta, const char* label, const char* file, 
     a.put_u(line);
     a.put("\n");
 
-    for_each_field(meta, [&](const auto& v) {
-        using F = std::decay_t<decltype(v)>;
+    for_each_leaf(meta, [&](const auto& v) {
+        using F = field_t<decltype(v)>;
         constexpr char code = field_code<F>();
         if constexpr (code == 's') {
             put_string_ref(a, v);
@@ -270,7 +354,7 @@ struct FieldValue {
 // A site's metadata as the host holds it before anyone asks for a type.
 struct SiteMeta {
     std::string_view signature;  // "<type name>:<field codes>"
-    std::vector<FieldValue> fields;
+    std::vector<FieldValue> fields;  // one per leaf field, nested structs flattened
 
     std::string_view type_name() const { return signature.substr(0, signature.rfind(':')); }
 
@@ -299,9 +383,9 @@ std::optional<T> SiteMeta::as() const {
     }
     T t{};
     size_t i = 0;
-    detail::for_each_field(t, [&](auto& f) {
-        using F = std::decay_t<decltype(f)>;
-        const FieldValue& v = fields[i++];
+    detail::for_each_leaf(t, [&](auto& f) {
+        using F = detail::field_t<decltype(f)>;
+        const FieldValue& v = fields[i++];  // the signature matched, so there is one value per leaf
         if constexpr (std::is_same_v<F, const char*>) {
             f = v.s;
         } else if constexpr (std::is_same_v<F, bool>) {
