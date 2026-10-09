@@ -10,6 +10,17 @@ OMPI_PREFIX="${INSTALL_DIR}/openmpi-${OMPI_VERSION}-ulfm"
 
 echo "Building OpenMPI ${OMPI_VERSION} (from git) with ULFM to ${OMPI_PREFIX}..."
 
+# Passed in by Dockerfile.tools, which builds UCX into this prefix before calling us.
+# Required, not defaulted: guessing it is how you end up with an MPI that configured
+# without UCX and silently runs over TCP.
+UCX_PREFIX="${UCX_PREFIX:?UCX_PREFIX must be set (path UCX was installed to)}"
+
+if [ ! -e "${UCX_PREFIX}/include/ucp/api/ucp.h" ]; then
+    echo "[ERROR] no UCX at ${UCX_PREFIX} (missing include/ucp/api/ucp.h)." >&2
+    echo "[ERROR] Check UCX_PREFIX matches where install-ucx.sh installed." >&2
+    exit 1
+fi
+
 WORKDIR="/tmp/ompi-src"
 rm -rf "${WORKDIR}"
 mkdir -p "${WORKDIR}"
@@ -49,6 +60,8 @@ CFLAGS="-std=gnu17" ./configure \
     --enable-mpirun-prefix-by-default \
     --disable-mca-dso \
     --disable-dlopen \
+    --with-ucx="${UCX_PREFIX}" \
+    --enable-mca-no-build=pml-ucx \
     --enable-static \
     --with-slurm=/opt/slurm \
     --without-munge \
@@ -81,6 +94,34 @@ if ldd "${OMPI_PREFIX}/lib/libmpi.so" 2>/dev/null | grep -q munge; then
     exit 1
 fi
 echo "==> Verified: libmpi.so has no munge runtime dependency"
+
+# Guard: UCX must be built in for one-sided (osc) and left out of point-to-point (pml).
+# Both directions matter. Excluding pml-ucx is deliberate -- UCX is wanted for MPI RMA
+# only -- but osc/ucx has historically required the UCX PML to be selectable, so the
+# exclusion can silently take osc/ucx with it and drop RMA to a TCP fallback: exactly
+# the failure this whole change exists to remove. Components are static here
+# (--disable-mca-dso --disable-dlopen), so what ompi_info reports is what got compiled in.
+if ! OMPI_INFO_OUT="$(LD_LIBRARY_PATH="${OMPI_PREFIX}/lib:${LD_LIBRARY_PATH:-}" \
+        "${OMPI_PREFIX}/bin/ompi_info" --parsable 2>&1)"; then
+    echo "[ERROR] ompi_info failed to run; cannot verify UCX components:" >&2
+    echo "${OMPI_INFO_OUT}" >&2
+    exit 1
+fi
+
+if ! grep -q '^mca:osc:ucx:' <<<"${OMPI_INFO_OUT}"; then
+    echo "[ERROR] osc/ucx was NOT built -- MPI RMA would fall back off UCX." >&2
+    echo "[ERROR] If pml-ucx exclusion caused this, build it and set OMPI_MCA_pml=ob1 at runtime." >&2
+    grep -E '^mca:(osc|pml):' <<<"${OMPI_INFO_OUT}" >&2 || true
+    exit 1
+fi
+echo "==> Verified: osc/ucx present"
+
+if grep -q '^mca:pml:ucx:' <<<"${OMPI_INFO_OUT}"; then
+    echo "[ERROR] pml/ucx was built despite --enable-mca-no-build=pml-ucx." >&2
+    echo "[ERROR] UCX is intended for one-sided only; point-to-point stays on ob1." >&2
+    exit 1
+fi
+echo "==> Verified: pml/ucx absent (UCX is osc-only by design)"
 
 echo "OpenMPI ${OMPI_VERSION} installed to ${OMPI_PREFIX}"
 if [ -x "${OMPI_PREFIX}/bin/mpicc" ]; then
