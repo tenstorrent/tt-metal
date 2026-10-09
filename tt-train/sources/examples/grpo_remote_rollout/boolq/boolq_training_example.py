@@ -236,12 +236,7 @@ def _ttt_main() -> None:
         # worker applies one dict per submesh in update_weights().
         bridge = HostWeightBridge.init_receiver(mesh=parent_mesh, peer_rank=TTML_RANK, submeshes=worker.submeshes)
 
-        server = MPIRolloutServer(
-            peer_rank=TTML_RANK,
-            bridge=bridge,
-            generate_fn=worker.generate_tokens,
-            on_weights_received=lambda weights: worker.update_weights(weights, version=worker.weight_version + 1),
-        )
+        server = MPIRolloutServer(peer_rank=TTML_RANK, bridge=bridge, sampler=worker)
         server.serve_forever()
     finally:
         worker = None
