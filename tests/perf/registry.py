@@ -2,7 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Loads tests/perf/suites.yaml. Entries are data only: what to run and the policy to judge it by."""
+"""Loads suites.yaml into Suite objects.
+
+A Suite says which binary to run and how, which golden to compare against, and the pass/fail policy. Adding a
+perf test means adding an entry to suites.yaml, not code.
+"""
 
 from __future__ import annotations
 

@@ -2,7 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Runs a suite's binary and returns the contract output files it wrote."""
+"""Runs a suite's benchmark binary and returns the JSON files it wrote.
+
+Google Benchmark suites run once with --benchmark_repetitions. Contract suites, such as a gtest, run one process
+per repetition and write to $TT_PERF_OUTPUT. Also builds the exact-name filter used to re-run only the cases
+that came out of tolerance.
+"""
 
 from __future__ import annotations
 
