@@ -282,7 +282,7 @@ void py_module_types(nb::module_& mod) {
         .def(
             "__init__",
             [](m2::ComputeHardwareConfig* self,
-               MathFidelity fpu_math_fidelity,
+               tt::tt_metal::MathFidelity fpu_math_fidelity,
                tt::tt_metal::Precision sfpu_precision_mode,
                bool enable_32_bit_dest,
                bool double_buffer_dest,
@@ -298,7 +298,7 @@ void py_module_types(nb::module_& mod) {
                     .config_1xx = std::move(config_1xx),
                     .config_2xx = std::move(config_2xx)};
             },
-            nb::arg("fpu_math_fidelity") = MathFidelity::HiFi4,
+            nb::arg("fpu_math_fidelity") = tt::tt_metal::MathFidelity::HiFi4,
             nb::arg("sfpu_precision_mode") = tt::tt_metal::Precision::Precise,
             nb::arg("enable_32_bit_dest") = false,
             nb::arg("double_buffer_dest") = true,
