@@ -33,14 +33,16 @@
  * @brief Configure the unpack thread for a face-granular compressed matmul.
  *
  * @tparam transpose: Haloize the SrcA read, values = <true/false>
+ * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>
  * @param operand0: CB of the activation, whose face_r_dim this reads. Its data goes to SrcB.
  * @param operand1: CB of the compressed weights, read only by
  *                  @ref llk_unpack_AB_face_compressed_mm_uninit.
  * @note Call this before @ref llk_unpack_AB_face_compressed_mm, and
- *       @ref llk_unpack_AB_face_compressed_mm_uninit after the last one.
+ *       @ref llk_unpack_AB_face_compressed_mm_uninit after the last one. Call it again after any other op
+ *       that writes SrcB.
  * @note On the math thread, pair with @ref llk_math_face_compressed_mm_init.
  */
-template <bool transpose = false>
+template <bool transpose = false, bool clear_src = true>
 inline void llk_unpack_AB_face_compressed_mm_init(
     const std::uint32_t operand0, [[maybe_unused]] const std::uint32_t operand1) {
     SAN_HOOK(unsupported());
@@ -48,14 +50,13 @@ inline void llk_unpack_AB_face_compressed_mm_init(
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
-    _llk_unpack_AB_face_compressed_mm_init_<transpose>(operandB_face_r_dim);
+    _llk_unpack_AB_face_compressed_mm_init_<transpose, clear_src>(operandB_face_r_dim);
 }
 
 /**
  * @brief Unpack the activation block into SrcB and the compressed weight faces into SrcA.
  *
  * @tparam ct_dim: Output width in tiles, 1 to 16.
- * @tparam clear_src: Clear SrcB before the first unpack, values = <true/false>
  * @tparam finalize: For ct_dim == 1, leave both sources zeroed and valid so the math thread can merge its
  *                   split-accumulation partials, values = <true/false>
  * @param operand0: CB of the activation; its read pointer becomes the SrcB base address.
@@ -66,7 +67,7 @@ inline void llk_unpack_AB_face_compressed_mm_init(
  * @note Call @ref llk_unpack_AB_face_compressed_mm_init first.
  * @note On the math thread, pair with @ref llk_math_face_compressed_mm.
  */
-template <std::uint32_t ct_dim = 1, bool clear_src = true, bool finalize = true>
+template <std::uint32_t ct_dim = 1, bool finalize = true>
 inline void llk_unpack_AB_face_compressed_mm(
     const std::uint32_t operand0,
     [[maybe_unused]] const std::uint32_t operand1,
@@ -78,7 +79,7 @@ inline void llk_unpack_AB_face_compressed_mm(
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t base_address_B = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
 
-    _llk_unpack_AB_face_compressed_mm_<ct_dim, clear_src, finalize>(base_address_B, base_address_meta, kt_dim);
+    _llk_unpack_AB_face_compressed_mm_<ct_dim, finalize>(base_address_B, base_address_meta, kt_dim);
 }
 
 /**

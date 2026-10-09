@@ -184,13 +184,15 @@ inline void _llk_unpack_AB_face_compressed_mm_mop_config_()
  * @brief Configure the unpack thread for a face-granular compressed matmul.
  *
  * @tparam transpose: Haloize the SrcA read, values = <true/false>
+ * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>. Only unpB_face_r_dim rows of each
+ *                    SrcB face are unpacked, so zeroing the rest saves FPU power.
  * @param unpB_face_r_dim: Activation rows per face, 1 or 8. Sets unpacker 1's X end.
  * @note Call this before @ref _llk_unpack_AB_face_compressed_mm_, and
  *       @ref _llk_unpack_AB_face_compressed_mm_uninit_ after the last one, to put back the tile descriptor
- *       num_faces this forces to a single face.
+ *       num_faces this forces to a single face. Call it again after any other op that writes SrcB.
  * @note On the math thread, pair with @ref _llk_math_face_compressed_mm_init_.
  */
-template <bool transpose = false>
+template <bool transpose = false, bool clear_src = true>
 inline void _llk_unpack_AB_face_compressed_mm_init_(const std::uint32_t unpB_face_r_dim)
 {
     LLK_ASSERT(unpB_face_r_dim == 1 || unpB_face_r_dim == 8, "face_compressed_mm (unpack): unsupported activation face_r_dim (expected 1 or 8)");
@@ -221,6 +223,14 @@ inline void _llk_unpack_AB_face_compressed_mm_init_(const std::uint32_t unpB_fac
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xFF0000>(1);
 
     _llk_unpack_AB_face_compressed_mm_mop_config_();
+
+    if constexpr (clear_src)
+    {
+        // A both-bank SrcB clear drops the SrcA writes unpacker 0 makes while it runs, so it runs alone.
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
+        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK1);
+    }
 
     constexpr std::uint32_t unpA_x_end = FACE_R_DIM * FACE_C_DIM - 1;
     const std::uint32_t unpB_x_end     = 4 * unpB_face_r_dim * FACE_C_DIM - 1;
@@ -265,7 +275,6 @@ inline void _llk_unpack_AB_face_compressed_mm_uninit_(const std::uint32_t unpA_n
  * double-buffered unpacker contexts with the next chunk's weight base addresses as it goes.
  *
  * @tparam ct_dim: Output width in tiles, 1 to 16.
- * @tparam clear_src: Clear SrcB before the first unpack, values = <true/false>
  * @tparam finalize: For ct_dim == 1, leave both sources zeroed and valid so the math thread can merge its
  *                   split-accumulation partials, values = <true/false>
  * @param base_address_b: SrcB base address, which is the activation CB's read pointer.
@@ -275,7 +284,7 @@ inline void _llk_unpack_AB_face_compressed_mm_uninit_(const std::uint32_t unpA_n
  * @note Call @ref _llk_unpack_AB_face_compressed_mm_init_ first.
  * @note On the math thread, pair with @ref _llk_math_face_compressed_mm_.
  */
-template <std::uint32_t ct_dim = 1, bool clear_src = true, bool finalize = true>
+template <std::uint32_t ct_dim = 1, bool finalize = true>
 inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_b, const std::uint32_t base_address_meta, const std::uint32_t kt_dim)
 {
     static_assert(ct_dim >= 1 && ct_dim <= 16, "face_compressed_mm (unpack): ct_dim must be in [1, 16]");
@@ -349,10 +358,6 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     wait_for_next_context(1);
     reset_config_context();
 
-    if constexpr (clear_src)
-    {
-        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
-    }
     cfg[THCON_SEC0_REG3_Base_address_ADDR32]       = pre_meta_ptr[1] & meta_addr_base_mask;
     cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[2] & meta_addr_base_mask;
     t6_mutex_acquire(mutex::THREAD2_ADC);
@@ -442,10 +447,11 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     reset_config_context();
 
     // Put the counters back the way init left them, ready for the next call: zero the Y counters the
-    // per-face SET_Y writes moved and the shared ZW pair, but not X, so init's CH1 X ends survive.
+    // per-face SET_Y writes and the activation loads moved and the shared ZW pair, but not X, so init's CH1 X ends survive.
     t6_mutex_acquire(mutex::THREAD2_ADC);
     TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_MATH, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
     TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_PACK, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
+    TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
     TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
     t6_mutex_release(mutex::THREAD2_ADC);
 }

@@ -39,6 +39,9 @@
 #include "llk_math_common_api.h"
 #endif
 #ifdef TRISC_UNPACK
+#if defined(ARCH_BLACKHOLE)
+#include "experimental/llk_unpack_AB_sdpa_weighted_reduce.h"
+#endif
 #include "llk_unpack_AB_api.h"
 #endif
 #ifdef TRISC_PACK
@@ -142,6 +145,30 @@ inline void weighted_reduce_unpack_impl(
 }
 #endif
 
+#ifdef TRISC_UNPACK
+// weighted_reduce_unpack_impl for num_chunks consecutive qk tiles from qk_tile_index, in one context transaction.
+inline void weighted_reduce_unpack_block_impl(
+    const std::uint32_t weights_cb,
+    const std::uint32_t qk_cb,
+    const std::uint32_t qk_tile_index,
+    const std::uint32_t num_chunks) {
+    const std::uint32_t qk_id = get_operand_id(qk_cb);
+    const std::uint32_t weights_id = get_operand_id(weights_cb);
+    const std::uint32_t address_a =
+        get_local_cb_interface(qk_id).fifo_rd_ptr - 1 + qk_tile_index * get_local_cb_interface(qk_id).fifo_page_size;
+    const std::uint32_t address_b = get_local_cb_interface(weights_id).fifo_rd_ptr - 1;
+    _llk_unpack_AB_sdpa_weighted_reduce_block_(address_a, address_b, get_operand_num_faces(qk_id), num_chunks);
+}
+#endif
+
+#ifdef TRISC_MATH
+inline void weighted_reduce_math_block_impl(const std::uint32_t num_chunks, const std::uint32_t first_slot) {
+    for (std::uint32_t i = 0; i < num_chunks; i++) {
+        weighted_reduce_math_impl(first_slot + i);
+    }
+}
+#endif
+
 // Unpack qk + weights and run the two MVMULs. Call between tile_regs_acquire and
 // tile_regs_commit.
 inline void weighted_reduce(
@@ -151,6 +178,19 @@ inline void weighted_reduce(
     const std::uint32_t dst_slot = 0) {
     UNPACK((weighted_reduce_unpack_impl(weights_cb, qk_cb, qk_tile_index)));
     MATH((weighted_reduce_math_impl(dst_slot)));
+}
+
+// weighted_reduce for num_chunks consecutive qk tiles from qk_tile_index into DEST slots first_slot onwards, with one
+// unpack context transaction for all of them. The qk tiles must be consecutive pages of qk_cb. Call between
+// tile_regs_acquire and tile_regs_commit.
+inline void weighted_reduce_block(
+    const std::uint32_t weights_cb,
+    const std::uint32_t qk_cb,
+    const std::uint32_t qk_tile_index,
+    const std::uint32_t num_chunks,
+    const std::uint32_t first_slot = 0) {
+    UNPACK((weighted_reduce_unpack_block_impl(weights_cb, qk_cb, qk_tile_index, num_chunks)));
+    MATH((weighted_reduce_math_block_impl(num_chunks, first_slot)));
 }
 
 #ifdef TRISC_PACK
@@ -209,6 +249,72 @@ inline void weighted_reduce_pack_impl(
 inline void weighted_reduce_pack(
     const std::uint32_t partial_cb, const std::uint32_t chunk, const std::uint32_t dst_slot = 0) {
     PACK((weighted_reduce_pack_impl(partial_cb, chunk, dst_slot)));
+}
+
+#ifdef TRISC_PACK
+// weighted_reduce_pack_impl for num_chunks consecutive chunks from DEST slot first_slot: per run of up to 8 rows in one
+// partial tile, one DEST base and one L1 destination, then two PACRs per chunk, the DEST read stepping one face each.
+inline void weighted_reduce_pack_block_impl(
+    const std::uint32_t partial_cb,
+    const std::uint32_t first_chunk,
+    const std::uint32_t num_chunks,
+    const std::uint32_t first_slot) {
+    constexpr std::uint32_t row_1x32_size_words = 4;
+    constexpr std::uint32_t max_run_rows = 8;
+    const std::uint8_t out_id = get_output_id(partial_cb);
+    const std::uint32_t end = first_chunk + num_chunks;
+    for (std::uint32_t chunk = first_chunk; chunk < end;) {
+        const std::uint32_t tile = chunk / TILE_R_DIM;
+        const std::uint32_t row = chunk % TILE_R_DIM;
+        std::uint32_t rows = end - chunk;
+        rows = rows < TILE_R_DIM - row ? rows : TILE_R_DIM - row;
+        rows = rows < max_run_rows ? rows : max_run_rows;
+        set_dst_write_addr(first_slot + chunk - first_chunk);
+        program_packer_destination(
+            get_output_tile_address<true, ckernel::PackMode::Default>(out_id, tile) + row * row_1x32_size_words);
+        for (std::uint32_t i = 0; i < 2 * rows - 1; i++) {
+            TTI_PACR(
+                p_pacr::CFG_CTXT_0,
+                p_pacr::NO_ROW_PAD_ZERO,
+                p_pacr::DST_ACCESS_NORMAL_MODE,
+                ADDR_MOD_3,
+                p_pacr::ADDR_CNT_CTXT_0,
+                p_pacr::P_ZERO_OUTPUT_DISABLED,
+                p_pacr::SINGLE_INTF_ACTIVE,
+                0,
+                0,
+                0,
+                0,
+                0);
+        }
+        TTI_PACR(
+            p_pacr::CFG_CTXT_0,
+            p_pacr::NO_ROW_PAD_ZERO,
+            p_pacr::DST_ACCESS_NORMAL_MODE,
+            ADDR_MOD_1,
+            p_pacr::ADDR_CNT_CTXT_0,
+            p_pacr::P_ZERO_OUTPUT_DISABLED,
+            p_pacr::SINGLE_INTF_ACTIVE,
+            0,
+            0,
+            0,
+            0,
+            1);
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+        chunk += rows;
+    }
+}
+#endif
+
+// weighted_reduce_pack for num_chunks consecutive chunks, first_chunk onwards, from DEST slots first_slot onwards: the
+// same rows, with one destination write per run of rows instead of one per row. Call between tile_regs_wait and
+// tile_regs_release.
+inline void weighted_reduce_pack_block(
+    const std::uint32_t partial_cb,
+    const std::uint32_t first_chunk,
+    const std::uint32_t num_chunks,
+    const std::uint32_t first_slot = 0) {
+    PACK((weighted_reduce_pack_block_impl(partial_cb, first_chunk, num_chunks, first_slot)));
 }
 
 // Restore dataformats, and cfgs to what is needed for sdpa_custom_mm_block
