@@ -4,13 +4,14 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
-#include <string_view>
 #include <filesystem>
 #include <memory>
 #include <map>
 #include <optional>
+#include <utility>
 #include <vector>
 #include <unordered_set>
 #include <unordered_map>
