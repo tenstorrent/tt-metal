@@ -30,9 +30,19 @@ extern "C" __attribute__((noinline, used)) void stall_variants()
 
 extern "C" __attribute__((noinline, used)) void semaphore_wait_variants()
 {
-    sync::wait::semaphore<sync::StallTarget::Sync | sync::StallTarget::Math, sync::SemaphoreMask::MathPack, sync::SemaphoreCondition::WhileZero>();
-    sync::wait::semaphore<sync::StallTarget::Pack, sync::SemaphoreMask::S0 | sync::SemaphoreMask::S7, sync::SemaphoreCondition::WhileMaximum>();
-    sync::wait::semaphore<sync::StallTarget::Unpack, sync::SemaphoreMask::All, sync::SemaphoreCondition::WhileZero | sync::SemaphoreCondition::WhileMaximum>();
+    sync::wait::semaphore<sync::StallTarget::Sync | sync::StallTarget::Math, sync::SemaphoreCondition::WhileZero, sync::Semaphore::S1>();
+    sync::wait::semaphore<sync::StallTarget::Pack, sync::SemaphoreCondition::WhileMaximum, sync::Semaphore::S0, sync::Semaphore::S7>();
+    sync::wait::semaphore<
+        sync::StallTarget::Unpack,
+        sync::SemaphoreCondition::WhileZero | sync::SemaphoreCondition::WhileMaximum,
+        sync::Semaphore::S0,
+        sync::Semaphore::S1,
+        sync::Semaphore::S2,
+        sync::Semaphore::S3,
+        sync::Semaphore::S4,
+        sync::Semaphore::S5,
+        sync::Semaphore::S6,
+        sync::Semaphore::S7>();
 }
 
 // CHECK-LABEL: <semaphore_wait_variants>:
@@ -41,28 +51,15 @@ extern "C" __attribute__((noinline, used)) void semaphore_wait_variants()
 // CHECK-NEXT: ttsemwait 8,255,3
 // CHECK-NEXT: ret
 
-extern "C" __attribute__((noinline, used)) void stream_wait_variants()
-{
-    sync::wait::stream<sync::StallTarget::Unpack, sync::StreamSlot::S0, sync::StreamTarget::Phase, 0>();
-    sync::wait::stream<sync::StallTarget::All, sync::StreamSlot::S3, sync::StreamTarget::MessagesReceived, 1023>();
-}
-
-// CHECK-LABEL: <stream_wait_variants>:
-// CHECK-NEXT: ttstreamwait 8,0,0,0
-// CHECK-NEXT: ttstreamwait 511,1023,1,3
-// CHECK-NEXT: ret
-
 extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
 {
     TTI_INSN((sync::wait::stall_operation<sync::StallTarget::Pack, sync::StallCondition::PackerIdle>()));
-    TTI_INSN((sync::wait::semaphore_operation<sync::StallTarget::Mover, sync::SemaphoreMask::UnpackToDest, sync::SemaphoreCondition::WhileZero>()));
-    TTI_INSN((sync::wait::stream_operation<sync::StallTarget::Math, sync::StreamSlot::S1, sync::StreamTarget::Phase, 513>()));
+    TTI_INSN((sync::wait::semaphore_operation<sync::StallTarget::Mover, sync::SemaphoreCondition::WhileZero, sync::Semaphore::S2>()));
 }
 
 // CHECK-LABEL: <issue_encoded_operations>:
 // CHECK-NEXT: ttstallwait 4,8
 // CHECK-NEXT: ttsemwait 16,4,1
-// CHECK-NEXT: ttstreamwait 64,513,0,1
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void stall_runtime(const sync::StallTarget targets, const sync::StallCondition conditions)
@@ -71,9 +68,32 @@ extern "C" __attribute__((noinline, used)) void stall_runtime(const sync::StallT
 }
 
 // CHECK-LABEL: <stall_runtime>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0xa2000
-// CHECK-NEXT: add a1,a1,[[R0]]
 // CHECK-NEXT: slli a0,a0,0xf
+// CHECK-NEXT: add a0,a0,a1
+// CHECK-NEXT: lui [[R0:a[0-7]]],0xa2000
+// CHECK-NEXT: lui [[R1:a[0-7]]],0x0
+// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
+// CHECK-NEXT: R_RISCV_RELAX
+// CHECK-NEXT: add a0,a0,[[R0]]
+// CHECK-NEXT: mv [[R1]],[[R1]]
+// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
+// CHECK-NEXT: R_RISCV_RELAX
+// CHECK-NEXT: sw a0,0([[R1]])
+// CHECK-NEXT: ret
+
+extern "C" __attribute__((noinline, used)) void semaphore_runtime(
+    const sync::StallTarget targets, const sync::Semaphore semaphore, const sync::SemaphoreCondition conditions)
+{
+    sync::wait::semaphore(targets, semaphore, conditions);
+}
+
+// CHECK-LABEL: <semaphore_runtime>:
+// CHECK-NEXT: lui [[R0:a[0-7]]],0xa6000
+// CHECK-NEXT: add a2,a2,[[R0]]
+// CHECK-NEXT: slli a0,a0,0xf
+// CHECK-NEXT: li [[R0]],4
+// CHECK-NEXT: sll a1,[[R0]],a1
+// CHECK-NEXT: add a0,a0,a2
 // CHECK-NEXT: lui [[R0]],0x0
 // CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
 // CHECK-NEXT: R_RISCV_RELAX
@@ -84,88 +104,30 @@ extern "C" __attribute__((noinline, used)) void stall_runtime(const sync::StallT
 // CHECK-NEXT: sw a0,0([[R0]])
 // CHECK-NEXT: ret
 
-extern "C" __attribute__((noinline, used)) void semaphore_runtime(
-    const sync::StallTarget targets, const sync::SemaphoreMask mask, const sync::SemaphoreCondition conditions)
-{
-    sync::wait::semaphore(targets, mask, conditions);
-}
-
-// CHECK-LABEL: <semaphore_runtime>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0xa6000
-// CHECK-NEXT: add a2,a2,[[R0]]
-// CHECK-NEXT: slli a0,a0,0xf
-// CHECK-NEXT: sh2add a1,a1,a2
-// CHECK-NEXT: lui [[R0]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: mv [[R0]],[[R0]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: add a1,a1,a0
-// CHECK-NEXT: sw a1,0([[R0]])
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void stream_runtime(
-    const sync::StallTarget targets, const sync::StreamSlot slot, const sync::StreamTarget target, const std::uint32_t target_low)
-{
-    sync::wait::stream(targets, slot, target, target_low);
-}
-
-// CHECK-LABEL: <stream_runtime>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0xa7000
-// CHECK-NEXT: slli a3,a3,0x4
-// CHECK-NEXT: add a3,a3,[[R0]]
-// CHECK-NEXT: slli a0,a0,0xf
-// CHECK-NEXT: sh3add a2,a2,a3
-// CHECK-NEXT: lui [[R0]],0x0
-// CHECK-NEXT: R_RISCV_HI20 __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: add a2,a2,a1
-// CHECK-NEXT: add a2,a2,a0
-// CHECK-NEXT: mv [[R0]],[[R0]]
-// CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
-// CHECK-NEXT: R_RISCV_RELAX
-// CHECK-NEXT: sw a2,0([[R0]])
-// CHECK-NEXT: ret
-
 extern "C" __attribute__((noinline, used)) std::uint32_t encode_stall_runtime(const sync::StallTarget targets, const sync::StallCondition conditions)
 {
     return sync::wait::stall_operation(targets, conditions);
 }
 
 // CHECK-LABEL: <encode_stall_runtime>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0xa2000
-// CHECK-NEXT: add a1,a1,[[R0]]
 // CHECK-NEXT: slli a0,a0,0xf
 // CHECK-NEXT: add a0,a0,a1
+// CHECK-NEXT: lui [[R0:a[0-7]]],0xa2000
+// CHECK-NEXT: add a0,a0,[[R0]]
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) std::uint32_t encode_semaphore_runtime(
-    const sync::StallTarget targets, const sync::SemaphoreMask mask, const sync::SemaphoreCondition conditions)
+    const sync::StallTarget targets, const sync::Semaphore semaphore, const sync::SemaphoreCondition conditions)
 {
-    return sync::wait::semaphore_operation(targets, mask, conditions);
+    return sync::wait::semaphore_operation(targets, semaphore, conditions);
 }
 
 // CHECK-LABEL: <encode_semaphore_runtime>:
 // CHECK-NEXT: lui [[R0:a[0-7]]],0xa6000
 // CHECK-NEXT: add a2,a2,[[R0]]
 // CHECK-NEXT: slli a0,a0,0xf
-// CHECK-NEXT: sh2add a1,a1,a2
-// CHECK-NEXT: add a0,a1,a0
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) std::uint32_t encode_stream_runtime(
-    const sync::StallTarget targets, const sync::StreamSlot slot, const sync::StreamTarget target, const std::uint32_t target_low)
-{
-    return sync::wait::stream_operation(targets, slot, target, target_low);
-}
-
-// CHECK-LABEL: <encode_stream_runtime>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0xa7000
-// CHECK-NEXT: slli a3,a3,0x4
-// CHECK-NEXT: add a3,a3,[[R0]]
-// CHECK-NEXT: sh3add a2,a2,a3
-// CHECK-NEXT: slli a0,a0,0xf
-// CHECK-NEXT: add a2,a2,a1
-// CHECK-NEXT: add a0,a2,a0
+// CHECK-NEXT: li [[R0]],4
+// CHECK-NEXT: add a0,a0,a2
+// CHECK-NEXT: sll [[R0]],[[R0]],a1
+// CHECK-NEXT: add a0,a0,[[R0]]
 // CHECK-NEXT: ret
