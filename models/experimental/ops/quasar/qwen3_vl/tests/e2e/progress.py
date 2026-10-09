@@ -25,6 +25,18 @@ def _describe(x):
     return "(" + ", ".join(parts) + ")"
 
 
+_CONFIG_KWARGS = ("program_config", "compute_kernel_config", "memory_config", "dtype")
+_COMPUTE_FIELDS = ("math_fidelity", "math_approx_mode", "fp32_dest_acc_en", "packer_l1_acc", "dst_full_sync_en")
+
+
+def _config(v):
+    """One-line description of a config; compute kernel configs have no useful repr, so list their fields."""
+    if hasattr(v, "math_fidelity"):
+        fields = ",".join(f"{f}={getattr(v, f)}" for f in _COMPUTE_FIELDS if hasattr(v, f))
+        return f"{type(v).__name__}({fields})"
+    return " ".join(repr(v).split())
+
+
 class ProgressLog:
     def __init__(self, path):
         self.path = path
@@ -37,6 +49,8 @@ class ProgressLog:
 
     def _line(self, operation, args, kwargs):
         named = [f"{k}={_describe(v)}" for k, v in kwargs.items() if hasattr(v, "shape")]
+        # Configs decide which kernels run; log them so a failing call can be replayed exactly.
+        named += [f"{k}={_config(v)}" for k, v in kwargs.items() if k in _CONFIG_KWARGS and v is not None]
         return f"{_name(operation)} stage={self.stage} " + " ".join([_describe(a) for a in args] + named)
 
     def pre(self, operation, args, kwargs):

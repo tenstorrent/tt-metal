@@ -21,8 +21,9 @@ if [[ -z "${NNG_SOCKET_ADDR:-}" ]]; then
   exit 1
 fi
 export NNG_SOCKET_LOCAL_PORT="${NNG_SOCKET_LOCAL_PORT:-5555}"
-if pgrep -u "${USER}" -f "pytest .*test_qwen3_vl_e2e" >/dev/null; then
-  printf 'another qwen3_vl e2e pytest of yours is running; refusing to share the NNG port\n' >&2
+# Only emulator runs share the NNG port; craq-sim and ttsim runs can go on alongside.
+if pgrep -u "${USER}" -f "pytest .*test_qwen3_vl_e2e.*/emu_2x3/" >/dev/null; then
+  printf 'another qwen3_vl e2e emulator run of yours is in progress; refusing to share the NNG port\n' >&2
   exit 1
 fi
 export MESH_DEVICE=N150

@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-"""Compare the decode_ops.pt of two runs op by op and print where they first diverge.
+"""Compare the captured op outputs of two runs op by op and print where they first diverge.
 
-usage: diff_decode_ops.py RUN_A RUN_B   (run folders saved with --qwen-dump-decode-ops)
+usage: diff_ops.py RUN_A RUN_B   (run folders saved with --qwen-capture-ops; older runs saved decode_ops.pt)
 """
 import sys
 from pathlib import Path
@@ -11,8 +11,12 @@ from pathlib import Path
 import torch
 
 
+def _ops_file(run):
+    return run / "ops.pt" if (run / "ops.pt").exists() else run / "decode_ops.pt"
+
+
 def main():
-    a, b = (torch.load(Path(p) / "decode_ops.pt", weights_only=False) for p in sys.argv[1:3])
+    a, b = (torch.load(_ops_file(Path(p)), weights_only=False) for p in sys.argv[1:3])
     print(f"ops: {len(a)} vs {len(b)}")
     for (i, na, _, ta), (_, nb, _, tb) in zip(a, b):
         if na != nb:

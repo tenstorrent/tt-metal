@@ -18,6 +18,8 @@ $E2E/run_craq.sh --grid 8x4            # craq-sim, full grid
 $E2E/run_emu.sh                        # emulator (needs NNG_SOCKET_ADDR from your IRD reservation)
 ```
 
+The emulator backs only 64 MiB of DRAM per channel although its descriptor says 1 GiB; larger allocations silently overwrite earlier ones, and the e2e (~1.3 GiB of weights) does not fit (QUASAR_GAPS S7, #55417).
+
 Script defaults: `--size tiny --vision-layers 2 --text-layers 2 --decode-steps 1 --deepstack-at 0 --debug default` (`--debug fast` on craq-sim, where the watcher slows each op 150-300x).
 
 | Flag | Meaning |
@@ -49,9 +51,12 @@ Each run writes `generated/qwen3_vl_quasar/<target>/<UTC time>/`:
 | `verdict.txt` | `PASS`, `FAIL` or `DIAGNOSTIC` |
 | `progress.log` | one `PRE`/`POST` line per ttnn op with shapes, memory configs and model stage. After a hang, the last `PRE` without a `POST` is the op that never finished. |
 | `run.log`, `command.txt`, `env.txt`, `git.txt` | full output, exact command, environment, commit and branch commits |
+| `ops.pt` | with `-- --qwen-capture-ops STAGE_PREFIX` (e.g. `vision.block0`, `text.decode`): every top-level op output of those stages. `repros/diff_ops.py RUN_A RUN_B` prints where two runs first diverge |
 | `prefill_snapshot.pt` | KV cache, decode position, rope delta, page table and prefill stage tensors at the end of prefill. `-- --qwen-resume-prefill <run folder>` skips vision and prefill and decodes from it (same size, layers, grid and config only; the run notes it in `pcc.md`) |
 
 Thresholds per stage and preset live in `thresholds.json`.
+
+`progress.log` also records each op's program, compute and memory configs, so a failing call can be replayed in a repro. `-- --qwen-vision-only` stops after the vision tower (vision stages only), for short runs on slow targets.
 
 ## Grids
 

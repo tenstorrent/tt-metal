@@ -219,9 +219,16 @@ def test_progress_log_unfinished(tmp_path):
     log.stage = "text.layer0"
     log.pre(_Op(), (torch.zeros(2, 3),), {})
     log.post(_Op(), (torch.zeros(2, 3),), {}, None)
-    log.pre(_Op(), (torch.zeros(4),), {"bias": torch.zeros(7), "dtype": 1})
-    assert log.last_unfinished().startswith("ttnn.fake")
-    assert "bias=(shape=[7]" in log.last_unfinished() and "dtype=1" not in log.last_unfinished()
+
+    class Cfg:
+        def __repr__(self):
+            return "Cfg(a=1,\n b=2)"
+
+    log.pre(_Op(), (torch.zeros(4),), {"bias": torch.zeros(7), "num_heads": 1, "program_config": Cfg()})
+    line = log.last_unfinished()
+    assert line.startswith("ttnn.fake")
+    assert "bias=(shape=[7]" in line and "num_heads" not in line
+    assert "program_config=Cfg(a=1, b=2)" in line  # configs are logged, on one line
     text = (tmp_path / "progress.log").read_text()
     assert "PRE ttnn.fake stage=text.layer0" in text and "POST ttnn.fake" in text
 

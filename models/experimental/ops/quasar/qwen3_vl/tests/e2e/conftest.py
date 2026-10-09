@@ -46,10 +46,17 @@ def pytest_addoption(parser):
         help="Debug: report model device tensors (KV cache excluded) whose contents change between model build and decode.",
     )
     g.addoption(
-        "--qwen-dump-decode-ops",
+        "--qwen-capture-ops",
+        default=None,
+        metavar="STAGE_PREFIX",
+        help="Debug: save every top-level op output of stages starting with this prefix (e.g. text.decode, "
+        "vision.block0) to ops.pt; compare two runs with repros/diff_ops.py.",
+    )
+    g.addoption(
+        "--qwen-vision-only",
         action="store_true",
         default=False,
-        help="Debug: save every top-level op output of the decode steps to decode_ops.pt.",
+        help="Debug: stop after the vision tower and compare vision stages only.",
     )
     g.addoption(
         "--qwen-resume-prefill",

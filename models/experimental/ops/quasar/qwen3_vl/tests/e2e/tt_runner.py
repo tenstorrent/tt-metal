@@ -73,9 +73,11 @@ def run_tt(
     clear_program_cache_before_decode=False,
     probes=(),
     check_integrity=False,
+    vision_only=False,
 ):
     """Run vision, prefill and teacher-forced decode. After prefill, save a snapshot to `snapshot_out` (if given);
-    with `resume` (a loaded snapshot) skip vision and prefill and decode from its KV cache instead."""
+    with `resume` (a loaded snapshot) skip vision and prefill and decode from its KV cache instead.
+    With `vision_only`, run the vision tower and stop."""
     text_cls, vision_cls = model_args_classes(force=cfg.quasar_config)
     hf_cfg = hf_model.config
     n_patches, n_img, L = goldens.num_patches, goldens.num_patches // 4, goldens.prefill_len
@@ -86,6 +88,14 @@ def run_tt(
     visual = None
     if resume is None:
         visual = _build_vision(vision_cls, preset, hf_model, mesh_device, recorder, monkeypatch, n_patches, n_img)
+    if vision_only:
+        if check_integrity:  # debug: block 0 attention weights as they sit on device right before the forward
+            found = PR.device_tensors(visual.tt_model)
+            weights = {n: recorder.to_host(t) for n, t in found.items() if "blocks[0].attention" in n}
+            torch.save(weights, cfg.run_dir / "block0_attention_weights.pt")
+            print(f"[integrity] saved {sorted(weights)}", flush=True)
+        visual.forward_single_user(inputs["pixel_values"], grid_thw=inputs["image_grid_thw"][0])
+        return
 
     # --- text ---
     args = text_cls(mesh_device, instruct=True, max_batch_size=1, max_seq_len=preset.max_seq_len)
