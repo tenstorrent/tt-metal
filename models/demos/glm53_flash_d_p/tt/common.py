@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Shared device helpers for GLM-5.3-Flash: compute config, replicated upload / readback (harness boundary only)."""
 
+import os
+
 import torch
 
 import ttnn
@@ -87,15 +89,53 @@ def local_rows(t: ttnn.Tensor, dim: int = -2) -> ttnn.Tensor:
     return b
 
 
+# row gathers on MiMo's fabric_all_gather (GLM_FABRIC_GATHER=1, default): bit-identical to ttnn.all_gather and faster
+# at every model shape (tests/test_all_gather_bench.py: 640 x 4096 axis 1 281 -> 208 us, 640 x 1536 132 -> 88,
+# 2560 x 4096 axis 0 340 -> 289); a fresh output per call, the op's own cached semaphores. Rows that are not a whole
+# number of tiles keep ttnn.all_gather. A module attribute so tests/test_ab_layers.py can flip it.
+FABRIC_GATHER = os.environ.get("GLM_FABRIC_GATHER", "1") == "1"
+GATHER_LINKS = int(os.environ.get("GLM_MOE_LINKS", "2"))
+
+
+_TOPO2D: dict = {}
+
+
+def _ensure_2d_topology(t: ttnn.Tensor) -> None:
+    """fabric_all_gather validates a 2D declared distribution; split-layout tensors made by mesh_partition / the
+    collectives carry a 1D one. Re-declare rows (dim 2) split over both mesh axes - what the bytes are (as MiMo's
+    moe_ag.gather_full and deepseek_v3_d_p's chunked prefill do)."""
+    if t.tensor_topology().distribution_shape().dims() >= 2:
+        return
+    mesh = t.device()
+    key = tuple(mesh.shape)
+    if key not in _TOPO2D:
+        dist = ttnn.MeshShape(*key)
+        coords = [ttnn.MeshCoordinate([c[i] for i in range(c.dims())]) for c in ttnn.MeshCoordinateRange(dist)]
+        _TOPO2D[key] = ttnn.TensorTopology(dist, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], coords)
+    t.update_tensor_topology(_TOPO2D[key])
+
+
+def gather_axis(t: ttnn.Tensor, axis: int) -> ttnn.Tensor:
+    """all_gather of the rows (dim -2) over mesh axis ``axis``."""
+    shape = list(t.shape)
+    if not FABRIC_GATHER or t.layout != ttnn.TILE_LAYOUT or len(shape) != 4 or shape[-2] % ttnn.TILE_SIZE:
+        return ttnn.all_gather(t, dim=-2, cluster_axis=axis, memory_config=MC)
+    _ensure_2d_topology(t)
+    shape[-2] *= tuple(t.device().shape)[axis]
+    out = ttnn.empty(shape, dtype=t.dtype, layout=ttnn.TILE_LAYOUT, device=t.device(), memory_config=MC)
+    ttnn.bringup.fabric_all_gather(t, dim=2, output_tensor=out, cluster_axis=axis, num_links=GATHER_LINKS)
+    return out
+
+
 def gather_half(t: ttnn.Tensor) -> ttnn.Tensor:
     """Split quarter -> mesh row r's half [r S/2, (r + 1) S/2) on both of its chips (all_gather on axis 1)."""
-    return ttnn.all_gather(t, dim=-2, cluster_axis=1, memory_config=MC)
+    return gather_axis(t, 1)
 
 
 def gather_rows(t: ttnn.Tensor) -> ttnn.Tensor:
     """Split quarter -> all S rows on every chip (all_gather on axis 1, then axis 0)."""
     h = gather_half(t)
-    out = ttnn.all_gather(h, dim=-2, cluster_axis=0, memory_config=MC)
+    out = gather_axis(h, 0)
     ttnn.deallocate(h)
     return out
 
