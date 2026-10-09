@@ -21,7 +21,7 @@ from model import *
 NAMES = list(PARAMS)
 LO = {"dram_eff": 0.2, "noc_eff": 0.1, "l1_frac": 0.05}
 HI = {"dram_eff": 1.0, "noc_eff": 1.0, "l1_frac": 3.0}
-ABS_W = 0.2
+ABS_W = 0.5  # absolute log error weight (relative error 1): keeps predicted times calibrated, not just ordered
 
 
 def residuals(x, g, logt, pid_codes, w):

@@ -16,6 +16,7 @@ fit.LO.update(M.LO)
 fit.HI.update(M.HI)
 from data import load, SETS, CAND, evaluate, rank_quality, gm
 
+
 tag = (os.environ.get("ABLATE", "") or "full") + ("+" + os.environ["EXTRA"] if os.environ.get("EXTRA") else "")
 for kv in filter(
     None, os.environ.get("PIN", "").split(",")
@@ -23,6 +24,9 @@ for kv in filter(
     k, v = kv.split("=")
     M.PINNED[k] = ({**M.PINNED.get(k, ({}, ""))[0], "wh": float(v)}, "env PIN")
     tag += f"+{k}={v}"
+if os.environ.get("ABSW"):  # weight of the absolute log error in the fit (relative error has weight 1)
+    fit.ABS_W = float(os.environ["ABSW"])
+    tag += f"+absw={fit.ABS_W}"
 d = M.annotate(load(list(SETS)))
 rows = {a: np.flatnonzero((d.arch_ == a).to_numpy()) for a in ("wh", "bh")}
 pred = np.full(len(d), np.nan)
@@ -38,8 +42,9 @@ for a, rr in rows.items():
         pred[rr[test]] = M.predict(M.geometry(d.iloc[rr[test]]), p)
     allp[a] = fit.fit(d, rr)
 np.save(f"pred_cv_m7_{tag.replace(',', '_')}.npy", pred)
-if tag == "full":
-    for a in allp:
+for a in allp:
+    json.dump(allp[a], open(f"abl/fitted_{tag.replace(',', '_')}_{a}.json", "w"), indent=1)
+    if tag == "full":
         json.dump(allp[a], open(f"fitted_v7_{a}.json", "w"), indent=1)
 
 r = evaluate(d, pred, "", quiet=True)

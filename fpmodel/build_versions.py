@@ -255,9 +255,64 @@ if os.path.exists(f"{W}/device/suite719_v6_timed.csv"):
     DEV["v6"].append(b)
 
 
+FROZEN = {v: f"{W}/fresh/frozen_{v}_" for v in ("v7", "v9", "v10", "v11")}
+FROZEN["v8"] = f"{W}/fresh/frozen_v8_"
+
+
+def accuracy(path, vid, arch):
+    """predicted vs measured device time on every timed config of a set, with the version's frozen constants (current
+    model7 code, terms without constants in the file switched off)"""
+    import importlib, model7
+
+    cf = FROZEN.get(vid, "") + arch + ".json"
+    if not os.path.exists(cf):
+        return None
+    importlib.reload(model7)
+    p = json.load(open(cf))
+    for name, (_, _, term) in model7.CONSTANTS.items():
+        if term and name not in p:
+            model7.OFF.add(term)
+    t = pd.read_csv(path, low_memory=False)
+    t = (
+        t[(t.status == "ok") & (t.device_ns > 0)]
+        .drop_duplicates(["case", "origin"], keep="last")
+        .reset_index(drop=True)
+    )
+    t = t[t.family.isin(["2d", "1d_in0", "1d_in1", "reuse", "multicore"])].reset_index(drop=True)
+    t["arch_"] = arch
+    t = model7.annotate(t)
+    pred = model7.predict(model7.geometry(t), p)
+    meas = t.device_ns.to_numpy(float)
+    e = np.log(pred / meas)
+    acc, n = 0, 0
+    for _, g in t.assign(pred=pred).groupby("case"):
+        a, q = g.device_ns.to_numpy(), g.pred.to_numpy()
+        for i in range(len(a)):
+            for j in range(i + 1, len(a)):
+                if abs(np.log(a[i] / a[j])) > np.log(1.05):
+                    n += 1
+                    acc += (a[i] < a[j]) == (q[i] < q[j])
+    rng = np.random.default_rng(0)
+    idx = rng.choice(len(t), min(len(t), 900), replace=False)
+    return dict(
+        n=int(len(t)),
+        median_abs_err=r3(np.median(np.abs(np.expm1(e)))),
+        within10=r3(np.mean(np.abs(e) < np.log(1.10))),
+        within25=r3(np.mean(np.abs(e) < np.log(1.25))),
+        bias=r3(np.expm1(np.median(e))),
+        pair_acc=r3(acc / n) if n else None,
+        pairs=int(n),
+        points=[[round(float(meas[i]) / 1e3, 2), round(float(pred[i]) / 1e3, 2)] for i in idx],
+    )
+
+
 def add(vid, path, set_id, label, note, usage=None, done=None):
     if os.path.exists(path) and (done is None or os.path.exists(done)):  # done: the run's completion flag
         b = device_block(path, set_id, label, "2026-10-09", note)
+        try:
+            b["accuracy"] = accuracy(path, vid, b["arch"])
+        except Exception as ex:  # the page still builds; the block just has no accuracy panel
+            print("accuracy failed", vid, set_id, ex)
         if usage and os.path.exists(usage):
             b["usage"] = json.load(open(usage))
         DEV.setdefault(vid, []).append(b)
