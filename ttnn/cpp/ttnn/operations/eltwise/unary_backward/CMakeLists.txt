@@ -18,12 +18,6 @@ file(
     device/kernels/*.hpp
 )
 
-file(
-    GLOB_RECURSE kernels
-    gelu_bw/device/kernels/*.cpp
-    gelu_bw/device/kernels/*.hpp
-)
-
 target_sources(
     ttnn_op_eltwise_unary_backward
     PUBLIC
@@ -34,7 +28,7 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${unary_backward_kernels} ${kernels}
+        FILES ${unary_backward_kernels}
     PRIVATE
         ${TTNN_OP_ELTWISE_UNARY_BACKWARD_SRCS}
 )

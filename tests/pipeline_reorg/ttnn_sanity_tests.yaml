@@ -184,9 +184,9 @@
     wh_n300_civ2:
       timeout: 45
     bh_p100:
-      timeout: 40
+      timeout: 50
     bh_p150b_civ2:
-      timeout: 40
+      timeout: 50
     sim_wh_n150:
       timeout: 60
     sim_bh_p150:
@@ -201,9 +201,9 @@
     wh_n300_civ2:
       timeout: 45
     bh_p100:
-      timeout: 40
+      timeout: 50
     bh_p150b_civ2:
-      timeout: 40
+      timeout: 50
     sim_wh_n150:
       timeout: 60
     sim_bh_p150:

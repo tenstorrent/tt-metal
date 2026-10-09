@@ -166,42 +166,20 @@ def pack_global_query_device(
     return result
 
 
-def pack_sliding_rope_device(
-    cos_cache: ttnn.Tensor,
-    sin_cache: ttnn.Tensor,
-    *,
-    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Prepare adjacent-pair RoPE lanes once for all sliding layers."""
-    order = sliding_kv_indices(int(cos_cache.shape[-1]))
-    return (
-        _gather_columns(cos_cache, order, memory_config),
-        _gather_columns(sin_cache, order, memory_config),
-    )
-
-
-def pack_global_rope_device(
-    cos_cache: ttnn.Tensor,
-    sin_cache: ttnn.Tensor,
-    *,
-    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-    """Prepare packed-Q and active-K RoPE lanes once for all global layers."""
-    rotary, _, _ = global_kv_indices()
-    rotary_neox = torch.sort(rotary).values
-    return (
-        _gather_columns(cos_cache, rotary, memory_config),
-        _gather_columns(sin_cache, rotary, memory_config),
-        _gather_columns(cos_cache, rotary_neox, memory_config),
-        _gather_columns(sin_cache, rotary_neox, memory_config),
-    )
+def packed_rope_columns(layer_type: str, head_dim: int) -> tuple[torch.Tensor, ...]:
+    """Column orders of the packed RoPE lanes for a layer type: adjacent-pair order for sliding layers;
+    the packed-Q (rotary) and active-K (NeoX-sorted rotary) orders for global layers."""
+    if layer_type == "full_attention":
+        rotary, _, _ = global_kv_indices()
+        return (rotary, torch.sort(rotary).values)
+    return (sliding_kv_indices(head_dim),)
 
 
 def pack_global_kv_device(
     value: ttnn.Tensor,
     k_norm_rotary_weight: ttnn.Tensor,
-    cos_cache: ttnn.Tensor,
-    sin_cache: ttnn.Tensor,
+    cos_cache: ttnn.Tensor | None = None,
+    sin_cache: ttnn.Tensor | None = None,
     *,
     canonical_k: ttnn.Tensor | None = None,
     packed_rope_mats: tuple[ttnn.Tensor, ...] | None = None,
@@ -212,7 +190,8 @@ def pack_global_kv_device(
 
     When no legacy canonical K cache is needed, only the active 128 K channels
     receive gamma and RoPE. canonical_k is accepted during the transition for
-    paths that still maintain the separate paged cache.
+    paths that still maintain the separate paged cache. cos_cache and sin_cache
+    are read only when packed_rope_mats is None.
     """
     rotary, _, value_order = global_kv_indices()
     if canonical_k is not None:

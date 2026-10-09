@@ -20,6 +20,8 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tile.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
 
 namespace tt::tt_metal {
 namespace {
