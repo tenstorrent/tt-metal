@@ -374,15 +374,26 @@ void validate_optional_output(
     const auto& out = optional_output_tensor.value();
 
     if (memory_config.has_value()) {
+        const auto& out_mc = out.memory_config();
         TT_FATAL(
-            memory_config->buffer_type() == out.memory_config().buffer_type() &&
-                memory_config->memory_layout() == out.memory_config().memory_layout(),
+            memory_config->buffer_type() == out_mc.buffer_type(),
             "repeat: memory_config must match optional_output_tensor memory config");
-        // An omitted shard_spec is derived from the prealloc; an explicit one has to agree with it.
-        if (memory_config->shard_spec().has_value()) {
+        if (memory_config->nd_shard_spec().has_value() && !memory_config->shard_spec().has_value()) {
+            // A config built from an NdShardSpec is ND_SHARDED, but a tensor allocated from it is normalized to
+            // HEIGHT/WIDTH/BLOCK_SHARDED when the spec fits a 2D shard. Compare the ND spec, not the layout.
             TT_FATAL(
-                memory_config->shard_spec() == out.memory_config().shard_spec(),
-                "repeat: memory_config shard_spec must match optional_output_tensor");
+                memory_config->nd_shard_spec() == out_mc.nd_shard_spec(),
+                "repeat: memory_config nd_shard_spec must match optional_output_tensor");
+        } else {
+            TT_FATAL(
+                memory_config->memory_layout() == out_mc.memory_layout(),
+                "repeat: memory_config must match optional_output_tensor memory config");
+            // An omitted shard_spec is derived from the prealloc; an explicit one has to agree with it.
+            if (memory_config->shard_spec().has_value()) {
+                TT_FATAL(
+                    memory_config->shard_spec() == out_mc.shard_spec(),
+                    "repeat: memory_config shard_spec must match optional_output_tensor");
+            }
         }
     }
 
