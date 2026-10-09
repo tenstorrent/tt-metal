@@ -12,6 +12,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 
 using namespace tt::tt_metal;
 using namespace tt::constants;

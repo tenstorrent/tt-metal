@@ -274,14 +274,18 @@ void begin_worker_completion_tracking(uint32_t sub_device_index) {
     const uint32_t sub_device_mask = 1U << sub_device_index;
     ASSERT((tracked_sub_device_mask & sub_device_mask) == 0);
     ASSERT(workers_per_sub_device[sub_device_index] != 0);
+    ASSERT(workers_per_sub_device[sub_device_index] <= overlay::fds_signalling::num_worker_lanes);
 
-    uint32_t workers_with_stale_completion = overlay::fds_signalling::dispatch_read_group_status(
-        overlay::fds_signalling::go_group_for_sub_device(sub_device_index));
+    const uint32_t group_id = overlay::fds_signalling::go_group_for_sub_device(sub_device_index);
+    uint32_t workers_with_stale_completion = overlay::fds_signalling::dispatch_read_group_status(group_id);
     while (workers_with_stale_completion != 0) {
         const uint32_t worker_lane = __builtin_ctz(workers_with_stale_completion);
         overlay::fds_signalling::dispatch_clear_worker_status(worker_lane);
         workers_with_stale_completion &= ~(1U << worker_lane);
     }
+    // Where group status is sticky, clearing the input lanes leaves the stale dones counted. No done for this group
+    // can arrive before its go is queued, so clearing every lane drops nothing.
+    overlay::fds_signalling::dispatch_clear_group_status(group_id);
 
     collected_worker_completion_count[sub_device_index] = 0;
     tracked_sub_device_mask |= sub_device_mask;
@@ -305,6 +309,8 @@ void init_fds_signalling() {
     for (uint32_t group_id = overlay::fds_signalling::idle_group_id + 1; group_id <= max_num_worker_sems; ++group_id) {
         overlay::fds_signalling::dispatch_config_group(
             group_id, overlay::fds_signalling::all_worker_lanes_mask, overlay::fds_signalling::dispatch_done_threshold);
+        // Where group status is sticky, start without the dones a previous run left in it.
+        overlay::fds_signalling::dispatch_clear_group_status(group_id);
     }
     // A previous run that left the pacing count at 0 with auto dispatch enabled releases queued entries only every
     // 2^32 cycles, so draining its queue at init would take up to one more than the number of queued entries,
