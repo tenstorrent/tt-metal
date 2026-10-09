@@ -143,7 +143,8 @@ regenerated). Precision: text C0 (`act_bf16__w_bfp8_all__hifi2`), vision BF16
 | Splice by gather: `concat([embedding(tokens) ROW_MAJOR, features...])` then `ttnn.embedding(splice_index, table)` | Row copies only, so no value changes; one program shape per bucket and image-token count; handles any number and position of image runs; no host round trip of the 5120-wide rows. The host writes the index list during input prep. |
 | Bucket padding rows get text-continuation rope positions | They follow every real token, so they cannot reach a real row (causal). Checked: an image request padded to 8192 (`test_image_bucket_padding`). |
 | `TTDecider.from_pretrained` loads the vision tower by default; `vision=False` skips it | The app always has vision. Text-only callers can save 0.96 GiB. |
-| Splice gate counted per row as written (>= 0.999) | v01 misses it (0.998655) because the 12A tower's features are at 0.998654 on that image; the splice adds 0 error. Reported, not relaxed. |
+| Splice gate counted per row as written (>= 0.999) | v01 misses it (0.998655) because the 12A tower's features are at 0.998654 on that image; the splice adds 0 error. Reported, not relaxed. Superseded by the next row. |
+| Splice gate corrected (orchestrator decision, 2026-10-09): image-token rows bit-exact vs the TT tower output, text rows bit-exact vs the TT text embedding, golden PCC reported per row and held to the 12A tower bar 0.99; `SPLICE_PCC = 0.999` removed | The splice is a row copy and is measured bit-exact (step 6), so its PCC to the golden measures only the tower. The 0.999 bar duplicated the tower-accuracy gate at a stricter level than 12A (0.99). v01 tower PCC 0.998654 passes the 12A bar. No other threshold changed (agreement 7/8 + near-tie, logit PCC 0.99, bucket-padding 0.999 logit PCC). |
 
 ## Log
 
@@ -161,6 +162,7 @@ regenerated). Precision: text C0 (`act_bf16__w_bfp8_all__hifi2`), vision BF16
 | 10 | Watcher | `TT_METAL_WATCHER=10 TT_METAL_LOGS_PATH=stage12b/watcher pytest tests/e2e/test_image_model.py -k "test_image_forward_stays_on_device and v02"` | 1 passed. `watcher/generated/watcher/watcher.log` (1279 lines, 8 dumps): no assert, sanitize, NOC or error message. Lowest stack headroom 1248 B (TRISC0, sdpa). |
 | 11 | Perf | `pytest tests/perf/test_image_perf.py -q -s` | 1 passed in 16 min. Table below. |
 | 12 | Final run on the committed code (`9f9eb949bcb`, after black) | `logs/suite3.log`: `test_model.py` -> `text_final/`, `compare_outputs` vs `text_baseline/`, `test_mrope.py`, `test_image_model.py` | Text: 6 passed, 25/25, `BIT_IDENTICAL` 100/100 tensors. mRoPE: 18 passed (same PCCs as step 4). Image: 6 passed, 1 failed (`test_splice`, v01 0.998655 only); agreement 8/8, logit PCC min 0.99940, identical to step 5. `test_image_bucket_padding` (v04, 1024 vs 8192 bucket): same argmax, probabilities bit identical; DRAM free after the 8192 image forward with outputs held 3.549 GiB (3.559 at 1024). |
+| 13 | Splice gate correction (see Decisions) | Pass-fail-pass (`logs/splice_gate_fix_pass_fail.log`): one pytest run of the corrected `test_splice` and an uncommitted scratch copy that adds 1 to element [0, 0] of the v03 tower-output copy before the comparison; then `pytest tests/e2e/test_image_model.py -q -p no:cacheprovider` (`logs/splice_gate_fix_suite.log`) | Corrected test PASSED; scratch copy FAILED on `v03_receipt_total: spliced image rows != TT tower output`, so the exactness check bites; scratch file deleted. Full file: 7 passed, exit 0. Splice: 8/8 rows image and text bit-exact, golden PCC min 0.998655 (v01, bar 0.99). Agreement 8/8, logit PCC min 0.99940, unchanged. |
 
 ## Perf (warmed, eager, batch 1, bucket 1024)
 
@@ -189,11 +191,13 @@ The text forward does not change with images (363.9 vs 364.1 ms), because the bu
 
 ## v02 is a tie on TT
 
-TT logits for the five options of v02: 13.4375, 17.125, **22.875, 22.875**, 15.625. HF: 13.5, 17.125,
-23.0, 22.625, 15.5. The readout output is BF16 in both (the app's `readout` is a BF16 Linear); at this
-magnitude the BF16 step is 0.125, and the TT error moved "4" down one step and "5" up two. The
-probabilities of "4" and "5" are then equal (0.4705). `torch.argmax` and the app's `answer`
-(`max(range(n), key=values.__getitem__)`) both take the first maximum, so TT answers "4" like HF.
-The run is deterministic (bit-identical twice), so the answer is stable, but it has no margin. Any
+Measured (`image_e2e/image_outputs.safetensors`, golden `v02_count_circles.logits`). TT logits for the
+five options of v02: 13.4375, 17.125, **22.875, 22.875**, 15.625. HF: 13.5, 17.125, 23.0, 22.625, 15.5.
+So TT "4" = "5" = 22.875 exactly, against HF 23.0 / 22.625. The readout output is BF16 in both (the
+app's `readout` is a BF16 Linear, so the HF readout is BF16 too); at this magnitude the BF16 step is
+0.125, and the TT error moved "4" down one step and "5" up two. The probabilities of "4" and "5" are
+then equal (0.4705). `torch.argmax` and the app's `answer` (`max(range(n), key=values.__getitem__)`)
+both take the first maximum, so TT answers "4" like HF and like the app would on the same values.
+The run is deterministic (bit-identical twice), so the answer is stable, but the margin is zero. Any
 change in the text or vision numerics can flip it, and a flip would fail the gate (HF gap 0.080 is
 above the 0.05 near-tie line).

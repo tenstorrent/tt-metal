@@ -35,14 +35,21 @@ image tokens; `tests/e2e/test_image_model.py`; measured):
 
 - Decisions: 8/8 agree (gate >= 7/8). Logit PCC min 0.99940 (gate 0.99).
 - **v02 is an exact tie on TT.** HF logits for "4" and "5" are 23.0 and 22.625. TT gives 22.875
-  for both (BF16 readout output, step 0.125 at this magnitude), so the two probabilities are equal
-  (0.4705). The app's `answer` takes the first maximum (`max(range(n), key=values.__getitem__)`),
-  so TT answers "4" as HF does. The agreement on this row has no margin. If it flipped it would be
+  for both. The readout output is BF16 on both sides (the HF readout is BF16 too), and the BF16
+  step at this magnitude is 0.125. So the two TT probabilities are equal (0.4705). The app's
+  `answer` takes the first maximum (`max(range(n), key=values.__getitem__)`), and so does
+  `torch.argmax`, so TT answers "4" as HF does. The margin is zero. If the row flipped it would be
   a non-near-tie miss (HF gap 0.080 > 0.05) and the gate would fail.
-- Spliced `inputs_embeds` vs golden: 7/8 rows >= 0.999. v01 is 0.998655 (bar 0.999, **not met**).
-  The splice itself adds no error: on every row the image rows equal the TT tower output bit for
-  bit and the text rows equal the text-only embedding bit for bit. The v01 gap is the 12A tower's
-  feature PCC on that image (0.998654, see the 12A table below; a one-color image).
+- Splice gate (measured, all 8 rows): the image-token rows of the spliced `inputs_embeds` equal the
+  TT vision-tower output bit for bit, and the text rows equal the TT text embedding bit for bit.
+  The spliced-embedding PCC vs the HF golden is reported per row and held to the 12A tower bar
+  (0.99): min 0.998655 (v01), which is the tower's own feature PCC on that one-color image
+  (0.998654, see the 12A table below).
+- Gate correction (orchestrator decision, 2026-10-09): the first 12B gate asked for spliced PCC
+  >= 0.999 vs the golden. The splice is a row copy and is measured bit-exact, so that PCC only
+  measures the tower, and 0.999 was a second, stricter tower bar than the 12A gate (0.99). v01
+  failed it at 0.998655 while passing 12A. The test now checks the splice by exact equality
+  (TT vs TT) and the golden PCC against the 12A bar.
 - Layer trace (last-token residual PCC after each of the 64 layers): v02 min 0.99936, last 0.99984;
   v07 min 0.99972, last 0.99993.
 - Text-only requests are unchanged: the 25-row stage-6 e2e test passes 25/25 and all 100 output
