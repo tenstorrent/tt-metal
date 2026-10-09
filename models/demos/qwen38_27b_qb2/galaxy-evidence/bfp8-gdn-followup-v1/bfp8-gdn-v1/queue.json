@@ -1,0 +1,20 @@
+{
+  "state": "waiting",
+  "steps": [],
+  "predecessor_unit": "qwen38-image-hardware-v2-20261009.service",
+  "predecessor_invocation": "d369052ee99040c1810ae8d56a76dd51",
+  "hardware_started": false,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "promoted_to_serving": false,
+  "started_at": 1791575221.1031992,
+  "updated_at": "2026-10-09T19:48:01Z",
+  "predecessor": {
+    "MainPID": "2335933",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "d369052ee99040c1810ae8d56a76dd51"
+  }
+}

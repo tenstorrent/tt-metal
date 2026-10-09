@@ -1,0 +1,33 @@
+{"passed": true, "tasks": 50, "hardware_opened": false, "model_calls": 0, "revision": "864350a8971a8f8ee9e7b8472e2edc380a806b0c"}
+2026-10-09 19:27:58.044 | WARNING  | tau2.utils.utils:<module>:14 - No .env file found
+2026-10-09 19:27:58.044 | INFO     | tau2.utils.utils:<module>:22 - Using data directory from environment: /home/ttuser/qwen38-artifacts-20261007/tau-verified-v1/source/data
+2026-10-09 19:28:01.317 | INFO     | tau2.utils.llm_utils:<module>:65 - LiteLLM: Cache is disabled
+2026-10-09 19:28:01.318 | WARNING  | tau2.utils.llm_utils:<module>:72 - Sonnet thinking is disabled
+2026-10-09 19:28:01.380 | DEBUG    | tau2.registry:<module>:206 - Registering default components...
+2026-10-09 19:28:01.380 | DEBUG    | tau2.registry:<module>:247 - Default components registered successfully. Registry info: {
+  "domains": [
+    "mock",
+    "airline",
+    "retail",
+    "telecom",
+    "telecom-workflow"
+  ],
+  "agents": [
+    "llm_agent",
+    "llm_agent_gt",
+    "llm_agent_solo"
+  ],
+  "users": [
+    "user_simulator",
+    "dummy_user"
+  ],
+  "task_sets": [
+    "mock",
+    "airline",
+    "retail",
+    "telecom_full",
+    "telecom_small",
+    "telecom",
+    "telecom-workflow"
+  ]
+}

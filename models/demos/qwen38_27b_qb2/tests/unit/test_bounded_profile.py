@@ -88,6 +88,15 @@ def test_bounded_capture_is_distinct_from_original_six_case_profile(tmp_path, ex
     assert str(CASES[0][0]) in (tmp_path / "analysis/report.md").read_text()
 
 
+def test_shared_qk_profile_keeps_all_timing_and_cleanup_gates(tmp_path):
+    receipt, _, write = fixture(tmp_path)
+    receipt["recurrence"] = "single_step_shared_qk"
+    write()
+    report = collect(tmp_path, *CASES[0], "single_step_shared_qk")
+    assert report["measurements_complete"] and not report["p0_gate_passed"]
+    assert len(report["device_totals"]) == 4
+
+
 @pytest.mark.parametrize(
     "failure",
     [

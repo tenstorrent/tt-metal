@@ -1,15 +1,18 @@
 # Remaining optimization opportunities, Oct 9 2026
 
 Priority: 32K ISL, then 16K, with active 128K/256K checks and explicit tradeoffs.
-Optimize total committed output throughput. Current measured 32K/B32 point is
+Optimize total committed output throughput. Historical optimized BFP4 32K/B32 point is
 373.70 output tok/s per TP4 after shared Q/K (+6.64% over the previous single-step
 path), with identical generated tokens in the full-model comparison. Its 2989.6
 output tok/s Galaxy projection is not a physical measurement.
 
-Release priority remains accuracy: original BFP8 GPQA finished 171/198,
-below 177/198, using defective bracket-stripping preprocessing. The corrected
-full run is now active, followed by pinned OpenBench and BFP8 perf sweeps.
-The shared-Q/K policy has not passed full reference qualification.
+Corrected native BFP8 GPQA finished **176/198 (88.89%), zero truncations** and
+was accepted by the user. The original 177/198 gate remains missed in its raw
+receipt. Current native BFP8 32K B16/B32 is 11.749/7.354 TSU; reaching 20 TSU
+requires 50-ms steps versus 85.11/135.99 ms measured. A persistent matched
+BFP8 native/shared-QK/native queue now follows container qualification, then
+profiles B16/B32 and runs fresh G0/full GPQA. No optimized BFP8 speed or accuracy
+result is claimed yet. [Launch and bounds](../galaxy-evidence/bfp8-gdn-followup-v1/README.md).
 
 The completed physical HTTP sweep exposes a separate serving bottleneck: long
 full-prefill steps repeatedly interrupt decode. At 32K/C128, median client

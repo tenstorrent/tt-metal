@@ -1,0 +1,11 @@
+
+[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new[0m
+LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'.
+
+{"passed": true, "synthetic_only": true, "hardware_opened": false, "external_model_calls": 0, "agent_and_simulator_routes_separate": true, "simulator_credential_not_sent_to_agent": true, "model_tool_parser_used": true, "sampling_parameters_preserved": true, "sdk_timeout_seconds": 900, "short_timeout_failed_without_retries": true, "requests": 3}
+2026-10-09 19:34:19.124 | WARNING  | tau2.utils.utils:<module>:14 - No .env file found
+2026-10-09 19:34:19.124 | INFO     | tau2.utils.utils:<module>:22 - Using data directory from environment: /home/ttuser/qwen38-artifacts-20261007/tau-verified-v1/source/data
+2026-10-09 19:34:20.811 | INFO     | tau2.utils.llm_utils:<module>:65 - LiteLLM: Cache is disabled
+2026-10-09 19:34:20.812 | WARNING  | tau2.utils.llm_utils:<module>:72 - Sonnet thinking is disabled
+2026-10-09 19:34:21.403 | ERROR    | tau2.utils.llm_utils:get_response_cost:98 - This model isn't mapped yet. model=Qwen/Qwen3.8-27B, custom_llm_provider=openai. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.
+2026-10-09 19:34:21.448 | ERROR    | tau2.utils.llm_utils:generate:217 - litellm.Timeout: APITimeoutError - Request timed out. Error_str: Request timed out.

@@ -1,0 +1,14 @@
+MainPID=2479417
+Id=qwen38-bfp8-gdn-v1-20261009.service
+ActiveState=active
+InvocationID=ebc4580116294d7f803953362980a502
+
+MainPID=1982991
+Id=qwen38-gpqa-first-v2-20261009.service
+ActiveState=active
+InvocationID=a6b386c9e3734c849202bb266bf4ff23
+
+MainPID=2335933
+Id=qwen38-image-hardware-v2-20261009.service
+ActiveState=active
+InvocationID=d369052ee99040c1810ae8d56a76dd51

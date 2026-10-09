@@ -1,0 +1,18 @@
+{
+  "state": "waiting",
+  "hardware_opened": false,
+  "image": "sha256:79f7b4469a6ec2bcce5204399b37b2aeced8be7f260dd98f7007ad41f8813055",
+  "predecessor_unit": "qwen38-gpqa-first-v2-20261009.service",
+  "predecessor_invocation": "a6b386c9e3734c849202bb266bf4ff23",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "started_at": 1791572884.2558296,
+  "updated_at": 1791575256.771302,
+  "predecessor": {
+    "MainPID": "1982991",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "a6b386c9e3734c849202bb266bf4ff23"
+  }
+}

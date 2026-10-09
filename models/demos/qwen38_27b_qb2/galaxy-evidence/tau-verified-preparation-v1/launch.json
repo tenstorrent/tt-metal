@@ -1,0 +1,15 @@
+[
+  "systemd-run",
+  "--user",
+  "--unit=qwen38-tau-verified-setup-v1-20261009",
+  "--property=RuntimeMaxSec=35m",
+  "--property=TimeoutStopSec=30",
+  "--property=KillMode=control-group",
+  "--property=MemoryMax=4G",
+  "--property=CPUQuota=200%",
+  "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/tau-verified-v1/setup.log",
+  "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/tau-verified-v1/setup.log",
+  "--setenv=PYTHONUNBUFFERED=1",
+  "/usr/bin/python3",
+  "/home/ttuser/qwen38-artifacts-20261007/tau-verified-v1/setup.py"
+]

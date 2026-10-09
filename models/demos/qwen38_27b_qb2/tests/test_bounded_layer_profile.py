@@ -12,7 +12,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.qwen38_27b_qb2.tests.bounded_profile import CASES, SCOPE, VARIANTS, check_artifact_budget
+from models.demos.qwen38_27b_qb2.tests.bounded_profile import CASES, SCOPE, SUPPORTED_VARIANTS, check_artifact_budget
 from models.demos.qwen38_27b_qb2.tests.test_long_context_attention import save
 from models.demos.qwen38_27b_qb2.tt import decoder as decoder_module
 from models.demos.qwen38_27b_qb2.tt.generator import build_generator, configure_fabric
@@ -31,7 +31,7 @@ def test_bounded_layer_profile():
     length = int(os.environ["QWEN_PROFILE_CONTEXT"])
     batch = int(os.environ["QWEN_PROFILE_BATCH"])
     recurrence = os.environ["QWEN_PROFILE_RECURRENCE"]
-    assert (length, batch) in CASES and recurrence in VARIANTS
+    assert (length, batch) in CASES and recurrence in SUPPORTED_VARIANTS
     check_artifact_budget(path.parent)
     report = dict(
         state="opening",

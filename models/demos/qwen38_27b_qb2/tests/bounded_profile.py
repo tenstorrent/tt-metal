@@ -15,6 +15,7 @@ from models.demos.qwen38_27b_qb2.tests.layer_profile_report import DURATIONS, an
 # 32K ISL first, 16K second; 128K/256K remain active secondary tuning targets.
 CASES = ((32768, 16), (32768, 32), (16384, 16), (16384, 32), (131072, 16), (262016, 8))
 VARIANTS = ("native", "single_step")
+SUPPORTED_VARIANTS = (*VARIANTS, "single_step_shared_qk")
 SCOPE = (
     "Warm eager two-layer diagnostic with real weights and synthetic populated caches; "
     "not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass"
@@ -40,7 +41,7 @@ def check_artifact_budget(root, *, maximum_total=4 * 1024**3, maximum_file=1024*
 
 def collect(root, length, batch, variant):
     """Tracy status alone is insufficient; require test, cleanup and all ranks."""
-    if (length, batch) not in CASES or variant not in VARIANTS:
+    if (length, batch) not in CASES or variant not in SUPPORTED_VARIANTS:
         raise ValueError("Unplanned bounded profile case")
     root = Path(root)
     receipt_path = root / "profile.json"

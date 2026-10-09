@@ -1,0 +1,10 @@
+{
+  "state": "completed",
+  "hardware_opened": false,
+  "model_calls": 0,
+  "revision": "864350a8971a8f8ee9e7b8472e2edc380a806b0c",
+  "started_at": 1791573877.5046341,
+  "updated_at": 1791573887.0620968,
+  "finished_at": 1791573887.0620337,
+  "dependency_lock_sha256": "98efd9f8afad75bf4c9e9d3131416bd3bd58604634bd1d485fc3070b5bfc19fd"
+}

@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "synthetic_only": true,
+  "hardware_opened": false,
+  "external_model_calls": 0,
+  "agent_and_simulator_routes_separate": true,
+  "simulator_credential_not_sent_to_agent": true,
+  "model_tool_parser_used": true,
+  "sampling_parameters_preserved": true,
+  "sdk_timeout_seconds": 900,
+  "short_timeout_failed_without_retries": true,
+  "requests": 3
+}

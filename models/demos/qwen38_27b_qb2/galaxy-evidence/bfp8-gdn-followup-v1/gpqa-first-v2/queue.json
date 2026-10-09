@@ -1,0 +1,116 @@
+{
+  "state": "running",
+  "started_at": 1791563198.0028732,
+  "budget_seconds": 28800,
+  "stages": [
+    {
+      "name": "qualification",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2/models/demos/qwen38_27b_qb2/demo/run_galaxy_serving.sh",
+        "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-v2/qualification/evaluation",
+        "/home/ttuser/qwen38-artifacts-20261007/accuracy-decoder-v1/native-g0/receipts/full-model.json",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2",
+        "--exit-after-eval",
+        "--port",
+        "8078",
+        "--gpqa-max-tokens",
+        "65536",
+        "--retain-raw-responses",
+        "--readiness-timeout",
+        "3600",
+        "--evaluation-timeout",
+        "7200",
+        "--followup-command",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-control-v2/followup.json"
+      ],
+      "timeout_seconds": 18480,
+      "state": "completed",
+      "started_at": 1791563198.008989,
+      "finished_at": 1791569039.071607
+    },
+    {
+      "name": "bfp8-budget32k",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=4320",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gpqa-first-v2/bfp8-budget32k/hardware.xml"
+      ],
+      "timeout_seconds": 4500,
+      "state": "completed",
+      "started_at": 1791569039.073603,
+      "finished_at": 1791572042.7907314
+    },
+    {
+      "name": "bfp8-long-context",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=3420",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gpqa-first-v2/bfp8-long-context/hardware.xml"
+      ],
+      "timeout_seconds": 3600,
+      "state": "completed",
+      "started_at": 1791572042.7930202,
+      "finished_at": 1791575196.7265353
+    },
+    {
+      "name": "bfp8-budget16k",
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/gpqa-first-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=3420",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/gpqa-first-v2/bfp8-budget16k/hardware.xml"
+      ],
+      "timeout_seconds": 3600,
+      "state": "running",
+      "started_at": 1791575196.728357
+    }
+  ],
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "updated_at": "2026-10-09T19:46:36Z",
+  "active_stage": "bfp8-budget16k",
+  "gpqa": {
+    "measurement_start": "2026-10-09T16:39:37.705736+00:00",
+    "measurement_end": "2026-10-09T17:30:26.614079+00:00",
+    "measured_s": 3048.9083245997317,
+    "requests": 198,
+    "mean_ttft_ms": 11997.391426190263,
+    "mean_decode_tokens_per_s": 13.006354590408401,
+    "aggregate_output_tokens_per_s": 419.4757151866489,
+    "accuracy": 0.8888888888888888,
+    "correct": 176,
+    "completed_samples": 198,
+    "dataset_samples": 198,
+    "full_dataset": true,
+    "concurrency": 128,
+    "max_output_tokens": 65536,
+    "accuracy_threshold": 0.892,
+    "truncated_samples": 0,
+    "truncated_correct": 0,
+    "passed": false
+  },
+  "openbench_exit_code": 1
+}

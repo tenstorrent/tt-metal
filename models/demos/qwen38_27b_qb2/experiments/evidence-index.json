@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T19:12:35.615061+00:00",
+  "generated_at": "2026-10-09T19:50:35.107108+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -33,6 +33,11 @@
       "sha256": "a1424ac3943fd32d3ef61d44c8f71b098419d516cb7c4a1bc6898a985fb7c4a2"
     },
     {
+      "path": "config/precision_single_step_shared_qk_bfp8_all.json",
+      "bytes": 1078,
+      "sha256": "f8d5a50462f171ee976d836c234a06c3bb3c08d86bec423e957be31c59be4c48"
+    },
+    {
       "path": "demo/overnight_plan.py",
       "bytes": 1713,
       "sha256": "b6724bfc1e17876a58bc6f3c89cc36365dc78d26085e20267943b68c31ef61d3"
@@ -56,6 +61,11 @@
       "path": "demo/run_accuracy_followup.py",
       "bytes": 7339,
       "sha256": "393b400046f65fb1cc63f868ee4a02d5f305b81982627604342581c7312987ca"
+    },
+    {
+      "path": "demo/run_bfp8_gdn_followup.py",
+      "bytes": 13126,
+      "sha256": "ef51f5d77a5b89f3dd6650e834f2f4bc641314c36ca3e5f72cf7c6d65cd66c64"
     },
     {
       "path": "demo/run_chunked_prefill_followup.py",
@@ -99,18 +109,18 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 115699,
-      "sha256": "f4ebcc068b390d898cd9630cfe34ddbfff75d553bdd7361ed2e14451deae2b79"
+      "bytes": 117407,
+      "sha256": "2401f080cb2613a00302990a936c238e55d369bc42b4923632cf2db192bfd8a2"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
-      "bytes": 6221,
-      "sha256": "dee51c6a0602b65a36af605254f0b51a2269adee8ec81605a9883c35fee5af85"
+      "bytes": 6502,
+      "sha256": "cda6e70ac7749bf4b907fc66a058fcce01b01d120595f191181ec6d2497ec853"
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 34478,
-      "sha256": "02611e032819d59f3e31bc719386f2e7a384f1969bf732f2ee298a9daa5d4791"
+      "bytes": 35224,
+      "sha256": "0ce7fd51ef9c24ecdfc194642a5499f9c4f73b123f7f22966345235d20fcc6be"
     },
     {
       "path": "experiments/RELEASE-PROCESS.md",
@@ -963,6 +973,82 @@
       "path": "galaxy-evidence/bfp4-simulator-v1/summary.json",
       "bytes": 6001,
       "sha256": "95c05cc9d612ec0e2383b5a26f44621808da1cb537a87468ee787116cae67ef9"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-gdn-followup-v1/README.md",
+      "bytes": 4045,
+      "sha256": "a3d4344fc1a55a27d4d213c1d1fc4acc2e1328922f7b9d07c3302f394cddc969"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-gdn-followup-v1/bfp8-gdn-control-v1/launch.json",
+      "survives_disconnect": true,
+      "resumes_after_reboot": false,
+      "bytes": 3290,
+      "sha256": "a96e6410de77c7d26e13b48f8dee75500a79a688da6bb6186c89884c4e54c4e4"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-gdn-followup-v1/bfp8-gdn-control-v1/manifest.json",
+      "bytes": 23292,
+      "sha256": "c147d38fa6419559a488bfb6f918cb8446afb456e9a8b54de7e13300555c52ca"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-gdn-followup-v1/bfp8-gdn-control-v1/preflight.log",
+      "bytes": 1108,
+      "sha256": "d473f79afa5b643ccfcbff8a62cbc8a18b88163d4a098e0fd7b59000f3b03b1d"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-gdn-followup-v1/bfp8-gdn-control-v1/unit.xml",
+      "junit": {
+        "tests": 497,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 1
+      },
+      "bytes": 148661,
+      "sha256": "aa7f56cff93123d5026d62d84c3908613da09cb1663f26978d16d0cf34314414"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-gdn-followup-v1/bfp8-gdn-v1/queue.json",
+      "state": "waiting",
+      "survives_disconnect": true,
+      "resumes_after_reboot": false,
+      "bytes": 600,
+      "sha256": "b7f00b583cd3d403632a6899bf09ad578141355c71f6633e844ceccd687fc2c6"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-gdn-followup-v1/gpqa-first-v2/bfp8-budget32k/sweep.json",
+      "state": "completed",
+      "cleanup_completed": true,
+      "bytes": 70205,
+      "sha256": "5cf9ea7c301a63fc893a30379bf7acb1be5e86b40f612166859448491180771e"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-gdn-followup-v1/gpqa-first-v2/bfp8-long-context/sweep.json",
+      "state": "completed",
+      "cleanup_completed": true,
+      "bytes": 27282,
+      "sha256": "9383e20e08a4cd563352dfe0aeecc73e0f2948c0561e2faccccffbdd09903d07"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-gdn-followup-v1/gpqa-first-v2/queue.json",
+      "state": "running",
+      "survives_disconnect": true,
+      "resumes_after_reboot": false,
+      "bytes": 4361,
+      "sha256": "6f74f4a16a0b42d77c1a0f9c1c1cce9db0bf2bfacc71014dbb3906f46d3d3301"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-gdn-followup-v1/image-hardware-v2/status.json",
+      "state": "waiting",
+      "survives_disconnect": true,
+      "resumes_after_reboot": false,
+      "bytes": 587,
+      "sha256": "6db750c2fc7d15a81d0a7141c140cb45a4eaaca738cff6540bbe2eb0f2c85848"
+    },
+    {
+      "path": "galaxy-evidence/bfp8-gdn-followup-v1/units.txt",
+      "bytes": 370,
+      "sha256": "7b263e365845588614584ab9980cc4c42fc035e0da5eaf0fab06f2d1722eb514"
     },
     {
       "path": "galaxy-evidence/bounded-profile-launch-v1/bounded-layer-profile-launch-v1.json",
@@ -6011,6 +6097,65 @@
       "sha256": "2f9c2fe353193aedac759307f7b5cc06136af36e667599eecb616c8c8b273983"
     },
     {
+      "path": "galaxy-evidence/tau-verified-preparation-v1/README.md",
+      "bytes": 2446,
+      "sha256": "2600cc7a6dd5bd01ec1635ea89912531b32147ae624428c958def2ca53a2e19a"
+    },
+    {
+      "path": "galaxy-evidence/tau-verified-preparation-v1/launch.json",
+      "bytes": 577,
+      "sha256": "e90d87b78d6c58f1809ebfacc75fb9b76b65a3bb2f169b5c2a2d130ee3d9dae7"
+    },
+    {
+      "path": "galaxy-evidence/tau-verified-preparation-v1/preflight-v1/preflight.json",
+      "passed": true,
+      "bytes": 142,
+      "sha256": "e8cba130c5619488bd266e1ac8e8bb4e5bf5fabc39d6e10405b39fdcb676b900"
+    },
+    {
+      "path": "galaxy-evidence/tau-verified-preparation-v1/preflight.log",
+      "bytes": 1193,
+      "sha256": "62165301e0e4d82af986708a63e7ef71e000c41b3c16b02d5344489478ef4b83"
+    },
+    {
+      "path": "galaxy-evidence/tau-verified-preparation-v1/requirements-frozen.txt",
+      "bytes": 2370,
+      "sha256": "98efd9f8afad75bf4c9e9d3131416bd3bd58604634bd1d485fc3070b5bfc19fd"
+    },
+    {
+      "path": "galaxy-evidence/tau-verified-preparation-v1/runner-sha256.txt",
+      "bytes": 65,
+      "sha256": "b8030addd5f406e07499435091163d2ceafab21b294b8f05528ce3eef5664a2f"
+    },
+    {
+      "path": "galaxy-evidence/tau-verified-preparation-v1/status.json",
+      "state": "completed",
+      "bytes": 338,
+      "sha256": "facf356fa606753acd410cc17f77f221900960c49e1b96954675859c61af6db5"
+    },
+    {
+      "path": "galaxy-evidence/tau-verified-preparation-v1/transport-v1.json",
+      "passed": true,
+      "bytes": 371,
+      "sha256": "c6bacc4ce2cc71aff48cfc9f663c3509622047be2d3e635370297c7e29af5524"
+    },
+    {
+      "path": "galaxy-evidence/tau-verified-preparation-v1/transport-v1.log",
+      "bytes": 1387,
+      "sha256": "fd2cc2388e6147770a5ee41610838b07e1b3a47325ba231bb342fb16978be28e"
+    },
+    {
+      "path": "galaxy-evidence/tau-verified-preparation-v1/transport-v2.json",
+      "passed": true,
+      "bytes": 371,
+      "sha256": "c6bacc4ce2cc71aff48cfc9f663c3509622047be2d3e635370297c7e29af5524"
+    },
+    {
+      "path": "galaxy-evidence/tau-verified-preparation-v1/transport-v2.log",
+      "bytes": 1387,
+      "sha256": "76ab965923821b0a6dbdb0f68cf3f4f796fd74dfc2d12e71543b3fa7bb438b4b"
+    },
+    {
       "path": "galaxy-evidence/unit.xml",
       "bytes": 22699,
       "sha256": "37caa2373700d20ea0748fd3bd103ba3851f1904834ce6796a91498775e6feb7",
@@ -6020,6 +6165,11 @@
         "errors": 0,
         "skipped": 0
       }
+    },
+    {
+      "path": "tests/bounded_profile.py",
+      "bytes": 4837,
+      "sha256": "5bc2d682b89a99d1482d9a87440108700e0685cd8d9bf265a609e8e739347787"
     },
     {
       "path": "tests/chunked_prefill_scenario.py",
@@ -6052,6 +6202,21 @@
       "sha256": "533e262ad5d6ab9f5b5991278cc1c5aab20ccf24b3d7066214e468f9b9347dcd"
     },
     {
+      "path": "tests/tau_verified_benchmark.py",
+      "bytes": 11791,
+      "sha256": "421b8f19bb09b59e532411c069a9eb274c0a6dd443123451eced737ae180ae71"
+    },
+    {
+      "path": "tests/tau_verified_transport_probe.py",
+      "bytes": 6121,
+      "sha256": "5a236fec2693585b96611f58e1c9a842e1f9c59ffbaa332f7d7d606fe528ba3e"
+    },
+    {
+      "path": "tests/test_bounded_layer_profile.py",
+      "bytes": 8923,
+      "sha256": "2d1fa74f13c6e56936045fd7b2c5c7d21be2c592a782d8d85815ca207cc26dc3"
+    },
+    {
       "path": "tests/test_chunked_prefill_hardware.py",
       "bytes": 906,
       "sha256": "b4cc3078549745d6a52f5b51eef134bc09a4c996910740e4834375ddeb25f81b"
@@ -6065,6 +6230,16 @@
       "path": "tests/unit/test_accuracy_followup.py",
       "bytes": 5278,
       "sha256": "47f7d808c00468c3e6b5a5d1f2eda0f39aae5d0bab0aab35383834418749ba38"
+    },
+    {
+      "path": "tests/unit/test_bfp8_gdn_followup.py",
+      "bytes": 2835,
+      "sha256": "693ae16e3eec30a7c3857f2bda401fc1e9df10e431f8fb8bd8fd1ea76d37a092"
+    },
+    {
+      "path": "tests/unit/test_bounded_profile.py",
+      "bytes": 7074,
+      "sha256": "4ca35e6ac9ac7911eeabd111bd7eeb446dcca15d2ba5776b029e5f5b5aeed223"
     },
     {
       "path": "tests/unit/test_chunked_prefill_followup.py",
@@ -6115,6 +6290,11 @@
       "path": "tests/unit/test_reference_comparison.py",
       "bytes": 2812,
       "sha256": "0f733732377edabdaa2adb987e4d086c5de6485084d88f009cad69dd1b68d9f5"
+    },
+    {
+      "path": "tests/unit/test_tau_verified_benchmark.py",
+      "bytes": 2036,
+      "sha256": "95b8f9c884a25490e49944cdc6e6c5972de97e54f9af6803d8308863ef3d4467"
     }
   ]
 }

@@ -1559,3 +1559,27 @@ No session connection is needed for that queue to continue.
 - Publication follow-up: restored copied status/JUnit metadata omitted by a
   hash-only evidence-index refresh. Raw receipts, scores and running jobs were
   unchanged. Revalidated all hashes and preserved every original metadata field.
+
+## Oct 09, 19:49 UTC: BFP8 optimized recurrence queue and independent Tau preparation
+
+- User reiterated 20 TSU at B16/B32 and requested persistent queued runs.
+  Current native BFP8 32K B16/B32 is 85.11/135.99 ms; remaining graph/GDN
+  optimization is required. Old BFP4 component profiles are not a complete
+  current BFP8 critical-path attribution.
+- Added a fixed-precision shared-QK BFP8 policy and immutable follower. It waits
+  for the exact live container/API/OpenBench invocation and successful cleanup,
+  then measures native/candidate/native at 32K/16K B16/B32, profiles four 32K
+  layer cases, and runs fresh eight-replica G0/full corrected GPQA. Same lock,
+  bounded waits/stages, no automatic promotion, survives session disconnect.
+- Host CPU preflight: 456 passed, one skipped, 40 subtests. The actual repo
+  fixture caught no errors after repairing the Tau tests' missing message args.
+  Live follower PID2479417, invocation ebc4580116294d7f803953362980a502.
+- Original queue remains live, now at bfp8-budget16k. Its native long-context
+  sweep completed cleanly: 128K B4/B8 17.623/13.644 TSU, near256K B4 14.454 TSU.
+- Prepared official pinned AWS Tau-Verified airline, all50 tasks, using independent
+  OpenRouter GPT5.1 simulator and GPT4o-mini judge. CPU task/tool preflight and
+  actual LiteLLM synthetic transport passed, including timeout/no-retry behavior.
+  No OpenRouter credential is configured and no scored Tau evaluation is queued.
+- First staging/capture SSH attempts were sandbox-rejected before remote action;
+  authorized retries succeeded. No weights/native install/firmware/NFS changed.
+  Evidence: galaxy-evidence/bfp8-gdn-followup-v1/ and tau-verified-preparation-v1/.

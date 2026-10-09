@@ -1,5 +1,17 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Latest update: corrected native BFP8 GPQA completed **176/198 (88.89%)**, no
+truncations, and the user accepted it. The strict original 177 gate remains
+unchanged in its receipt. BFP8 native 32K B16/B32 measures 11.749/7.354 TSU;
+the 20-TSU target is not reached. Matched BFP8 shared-QK comparisons, bounded
+profiles and fresh G0/full GPQA are now persistent behind container/OpenBench
+qualification. CPU preflight passed 456 tests and 40 subtests, one skipped.
+The current queue also completed the near256K/B4 point at 14.454 TSU.
+[New queue](../galaxy-evidence/bfp8-gdn-followup-v1/README.md),
+[independent Tau preparation](../galaxy-evidence/tau-verified-preparation-v1/README.md).
+
+Earlier running statements below are historical snapshots.
+
 Oct 9 16:43 UTC update: original BFP8 GPQA finished **171/198 (86.36%)**,
 zero cutoffs, 59m51s, under the old defective bracket-stripping preprocessing.
 The repaired full run is now generating after a startup topology failure and
