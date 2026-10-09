@@ -9,6 +9,13 @@ cells completed before a read error stopped the queue. A corrected persistent
 native-recurrence control is running. Release image/Helm qualification remains
 open. [Receipts and launch](../galaxy-evidence/qualification-overnight-v2/README.md).
 
+Oct 9 04:12 UTC update: native-control G0 passed all eight physical replicas;
+full 64K-output GPQA is now running. Experimental TTIS image/Helm source is
+pushed at `e0e05bad5` on `anatarajan/qwen38-galaxy-release-20261009`, with
+21 local checks passing. An isolated, bounded image build is running on the
+idle second host; no built image, container qualification or Helm deployment
+is claimed yet.
+
 The delivery diagnostic passes correctness but reaches only **245-249 GB/s/chip**
 including receiver work, versus 499-508 for read-only. It does not justify
 attention integration as a speedup yet. Full 64-layer profiling exceeded the

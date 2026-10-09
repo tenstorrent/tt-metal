@@ -664,3 +664,46 @@ notes: [shared-qk-and-bandwidth-v1](../galaxy-evidence/shared-qk-and-bandwidth-v
   The image build and Galaxy profile remain packaging work. No cluster changes.
 
 [Audit evidence and reproduction](../galaxy-evidence/gpqa-response-audit-v1/README.md).
+
+## Oct 9, 04:12-04:34 UTC: native G0 pass and image preparation
+
+- Native recurrence G0 completed 04:12:55 UTC, one hardware test passing after
+  43m18s including eight sequential model loads and warmup. All replica tokens
+  matched. Concurrent/isolated TPOT ratios stayed within 0.0064% of one; the
+  gate remains 3%. This short-prompt B1/replica test is not a long-context score.
+- The same persistent evaluation controller started the standard eight-worker
+  vLLM launch and full 64K-output GPQA around 04:22 UTC. At 04:29:52 it had
+  completed 92/198, 87 correct and no length cutoffs. This is only a running
+  snapshot; short/easier answers can finish first. No accuracy promotion.
+- Prepared TTIS ModelSpec and Helm overlay with exact G0 physical chip groups,
+  16 slots per replica, BFP8 KV, FP32 recurrence, 256K context, pinned checkpoint,
+  and standard tool/reasoning parsers. Preserve the host launch's absent 5s
+  Metal watchdog. Ensure EXTRA_MODELS_DIR exists before plugin discovery.
+  Fixed the initial ModelSpec constructor to pass the engine string expected
+  by its validator. The image import check uses the actual Qwen38ForCausalLM
+  class; the plugin adds the TT architecture-name prefix.
+- Strict source verification rejected three new standalone diagnostic files
+  present at current HEAD but absent from the frozen qualification source.
+  A new sparse, detached worktree at 0abdc3403f039c46becef335ad02db99237593f8
+  matches every qualified model source hash. Kept verification strict. Initial
+  --no-checkout worktree required index population; the sandboxed index write
+  was retried through the approved escalation path. No prior worktree changed.
+- TTIS preparation/Helm checks: 21 passed, Ruff passed, diff check passed.
+  Published e0e05bad5361d7c170068b3ad7b4df27de192250 on the separate
+  anatarajan/qwen38-galaxy-release-20261009 branch. Includes launch instructions,
+  exact native/model/plugin/checkpoint pins and image verification. No claim
+  that the image or final SJC3 deployment is qualified.
+- Build host .34 has 33GiB root-disk free and more than 500GiB RAM available.
+  Preserve existing images. New BuildKit cache uses a bounded, container-local
+  executable tmpfs, avoiding root-disk exhaustion and /dev/shm's noexec flag.
+  Outputs alone go to a new /dev/shm directory and need durable export.
+- Build attempt v1 failed before compilation: unprivileged user namespaces
+  disabled by host policy. No sysctl changed. v2 used a container-local mount
+  capability without accelerator access and started BuildKit successfully, but
+  the client inherited the rootless socket. After inspecting the healthy
+  daemon and correct socket, explicitly stopped only that owned build service.
+  v3 corrects BUILDKIT_HOST and starts actual image extraction/build. Its user
+  service has a four-hour bound; container limits are 192GiB and 24 CPUs.
+  Client disconnect does not cancel it. All failed-attempt logs remain intact.
+
+[Native control and packaging receipts](../galaxy-evidence/qualification-overnight-v2/README.md).

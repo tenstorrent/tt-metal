@@ -77,7 +77,17 @@ The native control is fresh, not a rerun of already completed candidate GPQA.
 CPU preflight passed **376 tests plus 40 subtests**. Upstream Tau3 source and
 full metadata preflight passed. The service was observed live with PID 917206,
 hardware reset completed, and native model layers loading at 03:30 UTC.
-This snapshot is not a claim that the later evaluations passed.
+
+The [native G0 receipt](native-g0/full-model.json) and
+[hardware JUnit](native-g0/hardware.xml) now confirm a pass at 04:12:55 UTC,
+after 43m18s of test execution including loading and warmup. All eight TP4
+replicas produced matching tokens; concurrent/isolated TPOT ratios range from
+0.99998 to 1.000064, within the unchanged 3% regression gate. This was a
+63-token prompt with 128 output tokens and one user per replica, not a
+long-context serving-throughput qualification. The JUnit copy adds only its
+missing final newline. Full GPQA began through the standard eight-worker vLLM
+endpoint at approximately 04:22 UTC and is still running at this snapshot.
+This does not claim that GPQA or the later agentic/performance stages passed.
 
 The queue owns `/tmp/tt-device.lock` through safe runners, has a twelve-hour
 hard limit, a 256-GiB host-memory limit and scoped process-group shutdown.
@@ -104,3 +114,37 @@ service and `queue.json`, not this point-in-time snapshot, for current progress.
 The full profiler repair and new GDN epilogue/attention integration are not in
 this queue: they need additional development. Passing diagnostic kernels does
 not qualify those missing optimizations or the release.
+
+## Release packaging in parallel
+
+TTIS branch `anatarajan/qwen38-galaxy-release-20261009`, commit
+`e0e05bad5361d7c170068b3ad7b4df27de192250`, contains the experimental image
+recipe, source/precision verifier, preparation CLI and standard TTIS ModelSpec
+with a Galaxy Helm overlay. Twenty-one local wrapper/chart checks passed.
+Both inference and init images must be digest-pinned before Helm renders.
+No SJC3 cluster mutation or container hardware qualification has occurred.
+
+The image's Qwen subtree is pinned to
+`0abdc3403f039c46becef335ad02db99237593f8`: its complete runtime-source hash
+set equals this G0 receipt. The latest model branch adds three independent
+bandwidth-delivery probe files absent from the frozen serving snapshot, so
+using its whole subtree correctly failed the strict source check. No check
+was loosened. Compiled Metal remains `a08819ddbe23077f8037d3802303939064868ff6`
+and the vLLM plugin remains `b7e4292e4193cba20abe9c7c68ce489201b2e36b`.
+
+Image-only build work uses idle host `10.228.203.34`, a dedicated new directory,
+and bounded container RAM. Attempt v1 stopped before compilation because the
+host disables unprivileged user namespaces. Attempt v2 proved the isolated
+mount-capable builder worked, but the client selected the rootless socket; it
+was explicitly stopped and preserved. Attempt v3 sets the correct socket and
+is running as `qwen38-release-build-v3-20261009.service` with a four-hour limit,
+24 CPUs and 192 GiB of container memory. No accelerators, host namespaces,
+Docker socket or checkpoint are mounted into the builder. Only the new source
+context and image-output directory are bound. Host kernel settings and existing
+images are unchanged. Build caches use a container-local tmpfs; OCI output is
+under `/dev/shm/qwen38-release-image-20261009-v3`, so it survives SSH disconnect
+but must be exported to durable storage before reboot.
+
+The build is not yet an available image or release. Follow its actual service,
+`/home/ttuser/qwen38-release-build-20261009-v3/state.json` and `run.log`.
+[Build and Helm instructions](https://github.com/tenstorrent/tt-inference-server/blob/e0e05bad5361d7c170068b3ad7b4df27de192250/scripts/release/QWEN38_GALAXY.md).

@@ -1,11 +1,11 @@
 {
-  "generated_at": "2026-10-09T04:00:22.178646+00:00",
+  "generated_at": "2026-10-09T04:36:26.611907+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 54604,
-      "sha256": "25995e18fc4832b3cbb98443fec87e1f42a598a6855ff29c85d93b9bf1f50e8d"
+      "bytes": 57662,
+      "sha256": "d20fb0e0fc16c5944fcd664f948ed048020659a8b02e7cd59c404b9976640780"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -14,8 +14,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 20991,
-      "sha256": "423dce4051737f34989cc530ae26ee7f373d32a9710620d1d6b204e1bc6b9ad2"
+      "bytes": 21390,
+      "sha256": "f5284c1441279c0c0c78873618e89a71b1e4e0a053b6fb2506aa09c12ae4468f"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -3126,13 +3126,23 @@
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v2/README.md",
-      "bytes": 6267,
-      "sha256": "d7465c572edd3cf6a6ef520e785e48442535e900c59b4268f9d7ba181686acc9"
+      "bytes": 9143,
+      "sha256": "a5acf2da954cf69e2134975f201c26de589bb1207ab2160e4654b1a35c436445"
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v2/launch.json",
       "bytes": 3691,
       "sha256": "6f59301827328be4a708a3179cf2bdb8980aa461ac5c86d114c5cd514e455ae1"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v2/native-g0/full-model.json",
+      "bytes": 260983,
+      "sha256": "697e4e614652d5f6e6d7ce1b883aae0691e9a756ba6fbbd623848b4a41a637b7"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v2/native-g0/hardware.xml",
+      "bytes": 549,
+      "sha256": "40f66d22bb6e86945a18150f88ff804872df429b615ac17e6abde0af17567b43"
     },
     {
       "path": "galaxy-evidence/qualification-overnight-v2/queue-snapshot.json",
