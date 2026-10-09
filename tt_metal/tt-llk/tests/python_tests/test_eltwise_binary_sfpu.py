@@ -204,6 +204,7 @@ _REGISTRY_DOMAIN_OPS = frozenset(
         MathOperation.SfpuElwmul,
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuElwdiv,
+        MathOperation.SfpuDivNoNan,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
         MathOperation.SfpuLogaddexp,

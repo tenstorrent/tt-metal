@@ -316,8 +316,8 @@ inline void calculate_sfpu_binary_div(
 
 template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
 inline void sfpu_binary_init() {
-    if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW) {
-        // Initialisation for use of sfpu_reciprocal_iter<2> in DIV or POW.
+    if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::DIV_NO_NAN || BINOP == BinaryOp::POW) {
+        // Initialisation for use of sfpu_reciprocal_iter<2> in DIV, DIV_NO_NAN or POW.
         sfpu_reciprocal_init<false>();
     } else if constexpr (BINOP == BinaryOp::XLOGY) {
         _init_log_<APPROXIMATION_MODE>();
