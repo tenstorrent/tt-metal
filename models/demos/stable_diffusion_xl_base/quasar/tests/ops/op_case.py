@@ -72,6 +72,10 @@ def grid_mode():
     return os.environ.get("SDXL_QSR_GRID", "fit")
 
 
+def spatial_div():
+    return int(os.environ.get("SDXL_QSR_CONV_SPATIAL_DIV", "1"))
+
+
 def device_grid(device):
     g = device.compute_with_storage_grid_size()
     return g.x, g.y
@@ -107,21 +111,26 @@ def fit_sharded(mem, shape, layout_str, device):
     h = int(math.prod(shape[:-1]))
     w = int(shape[-1])
     layout = mem["layout"]
+
+    # a tiled tensor's shard must be tile sized (padded): the [.., 4]-wide conv_out result shards as [.., 32]
+    def shard_dims(hh, ww):
+        return [_align(hh, 32), _align(ww, 32)] if tile else [hh, ww]
+
     if layout == "BLOCK_SHARDED":
         nx = _fit_axis(w, min(nx_cap, dx), tile)
         ny = _fit_axis(h, min(ny_cap, dy), tile) if tile else min(ny_cap, dy)
-        shard = [_align(math.ceil(h / ny), 32) if tile else math.ceil(h / ny), w // nx]
+        shard = shard_dims(math.ceil(h / ny), math.ceil(w / nx))
         grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(nx - 1, ny - 1))})
     elif layout == "HEIGHT_SHARDED":
         ncores = min(nx_cap * ny_cap, dx * dy)
         if tile:
             ncores = max(1, min(ncores, h // 32))
         grid = ttnn.num_cores_to_corerangeset(ncores, ttnn.CoreCoord(dx, dy), row_wise=True)
-        shard = [_align(math.ceil(h / ncores), 32) if tile else math.ceil(h / ncores), w]
+        shard = shard_dims(math.ceil(h / ncores), w)
     else:  # WIDTH_SHARDED
         ncores = _fit_axis(w, min(nx_cap * ny_cap, dx * dy), tile)
         grid = ttnn.num_cores_to_corerangeset(ncores, ttnn.CoreCoord(dx, dy), row_wise=True)
-        shard = [h, w // ncores]
+        shard = shard_dims(h, math.ceil(w / ncores))
     return ttnn.MemoryConfig(
         MEM_LAYOUT[layout], BUFFER[mem["buffer"]], ttnn.ShardSpec(grid, shard, ORIENT[mem["shard"]["orientation"]])
     )
@@ -138,10 +147,13 @@ def build_mem(mem, shape, layout_str, device):
     grid = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(*r[:2]), ttnn.CoreCoord(*r[2:])) for r in mem["shard"]["grid"]}
     )
+    shard = list(mem["shard"]["shape"])
+    if layout_str == "TILE":  # the tracer records conv / matmul output shards unpadded
+        shard = [_align(shard[0], 32), _align(shard[1], 32)]
     return ttnn.MemoryConfig(
         MEM_LAYOUT[mem["layout"]],
         BUFFER[mem["buffer"]],
-        ttnn.ShardSpec(grid, list(mem["shard"]["shape"]), ORIENT[mem["shard"]["orientation"]]),
+        ttnn.ShardSpec(grid, shard, ORIENT[mem["shard"]["orientation"]]),
     )
 
 
@@ -489,6 +501,11 @@ def call_op(op, tensors, params, specs, device):
     )
 
     if op == "conv2d":
+        # SDXL_QSR_CONV_SPATIAL_DIV=n shrinks the image by n in H and W (channels, kernel, configs unchanged)
+        # so a 30+ GFLOP conv becomes simulator-sized while exercising the same per-channel blocking.
+        sd = spatial_div()
+        if sd > 1:
+            p = dict(p, input_height=p["input_height"] // sd, input_width=p["input_width"] // sd)
         out = qsr.conv2d(
             input_tensor=tensors["input"],
             weight_tensor=tensors["weight"],
@@ -635,7 +652,27 @@ def call_op(op, tensors, params, specs, device):
 # ----------------------------------------------------------------------------- driver
 
 
+def shrink_conv_case(case):
+    """Apply SDXL_QSR_CONV_SPATIAL_DIV to a conv2d case: input rows N*H*W -> N*(H/n)*(W/n), params updated."""
+    sd = spatial_div()
+    if case["op"] != "conv2d" or sd == 1:
+        return case
+    p = case["params"]
+    H, W = p["input_height"] // sd, p["input_width"] // sd
+    case = dict(case, params=dict(p, input_height=H, input_width=W), inputs=dict(case["inputs"]))
+    spec = dict(case["inputs"]["input"])
+    shape = list(spec["shape"])
+    if len(shape) == 4 and shape[0] == 1 and shape[1] == 1:
+        shape[2] = p["batch_size"] * H * W
+    else:  # [B, H, W, C] (upsampler convs)
+        shape[1], shape[2] = H, W
+    spec["shape"] = shape
+    case["inputs"]["input"] = spec
+    return case
+
+
 def run_case(device, case):
+    case = shrink_conv_case(case)
     op = case["op"]
     params = case["params"]
     gen = torch.Generator().manual_seed(case.get("seed", 0))
