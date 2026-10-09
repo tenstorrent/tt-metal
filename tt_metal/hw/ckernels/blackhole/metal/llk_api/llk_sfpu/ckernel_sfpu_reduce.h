@@ -872,8 +872,8 @@ inline void set_manual_col_swap_direction() {
     set_sfpswap_direction<pool_type == PoolType::MAX>();
 }
 
-// LOADMACRO sequences 2 and 3 of the fused row MAX/MIN: SFPSWAP, srcC LREG0 / LREG1, dest the loaded register (0x80;
-// 0x06 / 0x07: template 2 / 3). Written per row call, so the init the column calls share does not hold them.
+// Fused row MAX/MIN sequences 2 and 3, written per call: template 2 / 3 (SFPSWAP, srcC LREG0 / LREG1) on the loaded
+// register at delay 0 (0x86 / 0x87), and the SFPNOP a scheduled SFPSWAP needs on the MAD sub-unit (0x02 in bits 8-15).
 inline void init_row_max_min_load_macros() {
     TTI_SFPSWAP(0, p_sfpu::LREG0, 0xE /* instruction template 2 */, 1);
     TTI_SFPCONFIG(0x0286, 6, 1);
@@ -1325,7 +1325,8 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     // is safe under one shared init because the row paths use the same convention and write no replay slot.
     set_sfpswap_direction<pool_type == PoolType::MIN>();
 
-    // LOADMACRO sequences 0 and 1 (SFPCONFIG writes a sequence that fits 16 bits as its immediate)
+    // Templates 0 and 1 (SFPSWAP, srcC LREG4 / LREG5) serve the fused row path and the column window. Sequences 0 and 1
+    // serve the fused row path only; the column window reads sequences 2 and 3, which it writes on each call.
     TTI_SFPSWAP(0, p_sfpu::LREG4, (0xC | p_sfpu::LREG0), 1);
     TTI_SFPCONFIG(0x0084, 4, 1);
     TTI_SFPSWAP(0, p_sfpu::LREG5, (0xD | p_sfpu::LREG4), 1);
