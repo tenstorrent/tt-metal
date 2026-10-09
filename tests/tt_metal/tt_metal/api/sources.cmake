@@ -33,6 +33,7 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_experiment_1.cpp
     dataflow_buffer/test_experiment_2.cpp
     dataflow_buffer/test_experiment_3.cpp
+    dataflow_buffer/test_experiment_4.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
     test_kernel_thread_sync.cpp
     test_banked.cpp
