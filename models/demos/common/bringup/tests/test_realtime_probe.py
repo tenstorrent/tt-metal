@@ -79,12 +79,13 @@ def test_realtime_probe(mesh_device):
         flush=True,
     )
     for name, i0, i1 in calls:
-        mine = [r for r in recs if i0 < r[1] <= i1 or i0 <= r[1] < i1]
+        mine = [r for r in recs if i0 <= r[1] < i1]  # a call's launches take the ids read before it
         per_chip = {}
         for chip, rid, st, en, f, cores in mine:
-            lo, hi = per_chip.get(chip, (st, en))
+            lo, hi, _ = per_chip.get(chip, (st, en, f))
             per_chip[chip] = (min(lo, st), max(hi, en), f)
-        us = {c: (hi - lo) / (f / 1e6) for c, (lo, hi, f) in per_chip.items()} if per_chip else {}
+        # frequency is in GHz (1.35 on Blackhole): ticks / (f * 1e3) = us
+        us = {c: (hi - lo) / (f * 1e3) for c, (lo, hi, f) in per_chip.items()} if per_chip else {}
         print(
             f"[rt] {name:24s} ids ({i0}, {i1}] programs {len(mine)}: per chip us "
             f"{ {c: round(v, 1) for c, v in sorted(us.items())} }",
