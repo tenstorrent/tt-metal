@@ -70,6 +70,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     SDPA_CUSTOM_MM_REUSE_DEST,
+    SDPA_REUSE_DEST_LAYOUT,
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
@@ -98,7 +99,7 @@ FACE0_TOP_ROWS = 8
 DEFINED_LANES = FACE0_TOP_ROWS * FACE_DIM  # 128
 
 
-def _run(math_fidelity, formats, dest_acc):
+def _run(math_fidelity, formats, dest_acc, dst_first=False):
     torch.manual_seed(0)
 
     torch_format = format_dict[formats.output_format]
@@ -159,6 +160,7 @@ def _run(math_fidelity, formats, dest_acc):
         templates=[
             MATH_FIDELITY(math_fidelity),
             SDPA_CUSTOM_MM_REUSE_DEST(kt_dim=KT_DIM, nt_dim=NT_DIM),
+            SDPA_REUSE_DEST_LAYOUT(dst_first=dst_first),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -189,10 +191,12 @@ def _run(math_fidelity, formats, dest_acc):
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
     formats=FORMATS,
     dest_acc=[DestAccumulation.No],
+    # Both DEST placements: P below O, and O at tile 0 with P above it (the SDPA chunk's placement).
+    dst_first=[False, True],
 )
-def test_sdpa_custom_mm_reuse_dest_srcb(math_fidelity, formats, dest_acc):
+def test_sdpa_custom_mm_reuse_dest_srcb(math_fidelity, formats, dest_acc, dst_first):
     """P @ V with SrcB reused from DEST; defined output lanes must match P@V golden."""
-    golden, device = _run(math_fidelity, formats, dest_acc)
+    golden, device = _run(math_fidelity, formats, dest_acc, dst_first)
 
     assert passed_test(golden, device, formats.output_format), (
         "sdpa_custom_mm_reuse_dest_srcb did not reproduce the tiled P@V golden on the "

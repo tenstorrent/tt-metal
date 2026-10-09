@@ -122,27 +122,33 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
     static_assert(input_granularity >= 1, "input_granularity must be >= 1");
     constexpr std::uint32_t SFPU_FPU = ckernel::semaphore::UNPACK_MATH_DONE;
     std::uint32_t dest_buffer_base   = get_dest_buffer_base();
+    // MOVD2B reads DEST row (row field + DEST target + RWC) modulo the 1024 rows, so with the target on the accumulator
+    // the per-k-tile source row rides in the moves wherever the source sits.
+    const std::uint32_t src_offset = src_index - dst_index;
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + dest_buffer_base);
     for (std::uint32_t i = 0; i < kt_dim; i++)
     {
-        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, src_index + i * 8 * 2 + dest_buffer_base);
         math::reset_counters(p_setrwc::SET_ABD_F);
         if (i % input_granularity == 0)
         {
             t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU);
         }
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, 0);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 4, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, 4);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, 8);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 12, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, 12);
+        const std::uint32_t row = (src_offset + i * 8 * 2) & 0x3ff;
+        TT_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, row + 0);
+        TT_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 4, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, row + 4);
+        TT_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, row + 8);
+        TT_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 12, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, row + 12);
         if (i % input_granularity == input_granularity - 1 || i == kt_dim - 1)
         {
             t6_semaphore_get<p_stall::MATH>(SFPU_FPU);
         }
-        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + dest_buffer_base);
         if (signal_output && i == kt_dim - 1)
         {
             LLK_ASSERT(nt_dim % output_granularity == 0, "nt_dim must be divisible by output_granularity for FPU->SFPU output signal counts to balance");
+            LLK_ASSERT(
+                nt_dim / output_granularity <= semaphore::SEMAPHORE_MAX_VALUE,
+                "nt_dim / output_granularity FPU->SFPU posts per call must fit the 4-bit Tensix semaphore (at most 15)");
             for (std::uint32_t j = 0; j < nt_dim / output_granularity; j++)
             {
                 for (std::uint32_t g = 0; g < output_granularity; g++)

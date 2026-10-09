@@ -142,6 +142,10 @@ inline void _llk_math_sdpa_custom_mm_(
 {
     static_assert(signal_granularity >= 1, "signal_granularity must be >= 1");
     LLK_ASSERT(ct_dim % signal_granularity == 0, "ct_dim must be divisible by signal_granularity for FPU->SFPU signal counts to balance");
+    // A consumer that drains after the matmul sees every post of a call before its first get; a sixteenth post is lost.
+    LLK_ASSERT(
+        ct_dim / signal_granularity <= semaphore::SEMAPHORE_MAX_VALUE,
+        "ct_dim / signal_granularity FPU->SFPU posts per call must fit the 4-bit Tensix semaphore (at most 15)");
     // dst offset initialized by _llk_math_sdpa_custom_mm_mask_dest_
     _llk_math_sdpa_custom_mm_mask_dest_(dst_index, ct_dim, mask_chunk);
 
