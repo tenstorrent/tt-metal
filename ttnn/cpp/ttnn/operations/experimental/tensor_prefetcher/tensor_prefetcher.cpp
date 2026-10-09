@@ -4,6 +4,8 @@
 
 #include "tensor_prefetcher.hpp"
 
+#include "device/signal_tensor_prefetcher_device_operation.hpp"
+
 #include "ttnn/prefetcher_pipe.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -116,6 +118,24 @@ void wait_for_cq_on_tensor_prefetcher(
     // queue current. Resolving nullopt to the thread's current queue is what makes the two
     // forms agree; defaulting to 0 would silently fence queue 0 for the keyword form.
     tt::tt_metal::experimental::WaitForCqOnTensorPrefetcher(mesh_device->mesh_command_queue(cq_id), device_subset);
+}
+
+uint32_t get_tensor_prefetcher_signal_address(tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t signal_id) {
+    return tt::tt_metal::experimental::GetTensorPrefetcherSignalAddress(*mesh_device, signal_id);
+}
+
+void queue_tensor_prefetcher_wait_for_signal(
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t signal_id, bool capture_into_trace) {
+    // Same queue rule as queue_tensor_prefetcher_request: a cq_id keyword has already been made the
+    // thread's current queue, so the only choice left is whether to offer it for capture.
+    auto* trace_cq = capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr;
+    tt::tt_metal::experimental::QueueTensorPrefetcherWaitForSignal(*mesh_device, signal_id, trace_cq);
+}
+
+void signal_tensor_prefetcher(
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t signal_id, const tt::tt_metal::CoreCoord& core) {
+    ttnn::prim::signal_tensor_prefetcher(
+        mesh_device, tt::tt_metal::experimental::GetTensorPrefetcherSignalAddress(*mesh_device, signal_id), core);
 }
 
 void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {
