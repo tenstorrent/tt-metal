@@ -1012,6 +1012,16 @@ class OptimizedDecoder(LightweightModule):
             # Callers use ``logits`` only as the bf16 [1,1,T,E] template of the dense routing matrix, which
             # the want_dense paths never build -- skip that typecast there.
             logits = None if want_dense else ttnn.typecast(logits32, ttnn.bfloat16)
+            if want_dense and logits32.shape[-2] == 1 and getattr(self, "_router32", False):
+                # one token: the exact top-K kernel on one core (see the 32-row branch below)
+                from .router32 import route32
+
+                if logits32.is_sharded():
+                    logits32 = ttnn.sharded_to_interleaved(logits32, ttnn.L1_MEMORY_CONFIG)
+                scores = ttnn.sigmoid(logits32)
+                sel = ttnn.add(scores, self.w["e_bias_f32"])
+                dense = route32(sel, scores, K, cfg.routed_scaling, cfg.norm_topk_prob)
+                return logits, None, (dense if self._router_fp32_out else ttnn.typecast(dense, ttnn.bfloat16))
             if want_dense and self._route_rank and logits32.shape[-2] == 1:
                 # decode (one token): exact fp32 top-K with no top-k op (ttnn.topk is single-core below
                 # 8192 wide, ~45 us here). rank_e = #experts with a strictly larger selection score, from one

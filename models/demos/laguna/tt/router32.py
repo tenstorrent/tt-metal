@@ -11,12 +11,14 @@ _KDIR = Path(__file__).resolve().parent / "kernels"
 
 
 def route32(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_config=ttnn.L1_MEMORY_CONFIG):
-    """sel, scores: [1, 1, 32, E] fp32 TILE interleaved. Returns the dense fp32 routing matrix [1, 1, 32, E]."""
+    """sel, scores: [1, 1, T, E] fp32 TILE interleaved, T <= 32. Returns the dense fp32 routing matrix [1, 1, T, E]
+    (one core per token row)."""
     device = sel.device()
-    E = sel.shape[-1]
-    out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, 32, E]), ttnn.float32, ttnn.TILE_LAYOUT, device, memory_config)
+    T, E = sel.shape[-2], sel.shape[-1]
+    assert T <= 32, sel.shape
+    out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, T, E]), ttnn.float32, ttnn.TILE_LAYOUT, device, memory_config)
     grid_size = device.compute_with_storage_grid_size()
-    grid = ttnn.num_cores_to_corerangeset(32, grid_size, True)
+    grid = ttnn.num_cores_to_corerangeset(T, grid_size, True)
     buf = ttnn.CBDescriptor(
         total_size=4 * E * 4,
         core_ranges=grid,
