@@ -361,9 +361,6 @@ class DraftAttention(_PagedMixin, DSV41Attention):
         self.pt = mk(torch.arange(U).repeat(BLOCK).reshape(T_d, 1))  # draft rows i*U+u -> page u
         self._mk_pt = mk
         self.pt_v = mk(torch.arange(U).repeat_interleave(n).reshape(U * n, 1))  # verify rows u*n+j -> page u
-        self.pt_seed = mk(
-            torch.arange(U).reshape(U, 1)
-        )  # one row per user (seeding from the prefill taps: ``DSparkDrafter.seed_from_taps``)
         self.cache = self._up(torch.zeros(U, 1, L_D, HEAD_DIM))
         # row-masked block-slot indices: call i writes the rows of block index i (rows i*U .. i*U+U-1) at slot RING + i
         blk = []
@@ -595,20 +592,14 @@ class DSparkDrafter:
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        self.ucfg_seed = ttnn.create_sharded_memory_config(
-            shape=(32, HEAD_DIM),
-            core_grid=ttnn.num_cores_to_corerangeset(U, ttnn.CoreCoord(8, 8), row_wise=True),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
 
-    def seed_from_taps(self, hidden, pos, slots):
+    def seed_from_taps(self, hidden, pos, perm, keep):
         """Seed the rings of this drafter (U users per mesh row) from the prefill taps (tt/prefill_taps.py) instead of a replay of the prompt tail through the verify trace.
-        ``hidden`` [1,1,M,15360] bf16 tile, M = TAP_ROWS * U, slot-major rows (``slot * U + u``): the concat of the stream means at the input of layers 37 / 38 / 39 of the position held by
-        (user u, stash slot); ``pos`` int32 [M] row-major: that position (RoPE row); ``slots`` int32 [TAP_ROWS, U] row-major: ring slot (position % 160) per row, -1 = do not write (user not
-        being seeded / slot holds no position). The same maths as ``write_main`` over all rows at once, then one ring write per stash slot (``paged_update_cache`` RMWs whole tiles: one row
-        per user per call)."""
+        ``hidden`` [1,1,M,15360] bf16 tile, M = TAP_ROWS * U, user-major rows (``u * 128 + slot``): the concat of the stream means at the input of layers 37 / 38 / 39 of the position held by
+        (user u, stash slot); ``pos`` int32 [M] row-major: that position (RoPE row); ``perm`` bf16 [U,1,L_D,128]: 1 at [u, ring slot (position % 160), stash slot] of every row to write, 0 elsewhere;
+        ``keep`` bf16 [U,1,L_D,512]: 0 on the ring slots written, 1 elsewhere. The same maths as ``write_main`` over all rows at once (main_proj, norm, wkv, kv_norm, RoPE), then the rows are
+        moved to their ring slots with ONE selection matmul per stage (exact: every output row has at most one non-zero term) and merged into the cache in place.
+        """
         M, U = int(hidden.shape[2]), self.U
         mp = ttnn.matmul(
             hidden,
@@ -623,37 +614,26 @@ class DSparkDrafter:
         )
         ttnn.deallocate(mp)
         ttnn.deallocate(main_x)
-        st, _ = self.state._gather(pos, M)
-        steps = M // U
-        idx = [ttnn.reshape(ttnn.slice(slots, [j, 0], [j + 1, U]), [U]) for j in range(steps)]
-        per = max(1, 32 // U)  # slots per RoPE call (<= 32 rows: the tuned projection configs of the attention)
+        st = self.state
+        idx = ttnn.typecast(ttnn.reshape(pos, [M, 1]), ttnn.uint32)
+        tab = lambda name: ttnn.to_layout(
+            ttnn.reshape(ttnn.embedding(idx, st.t[name], layout=ttnn.ROW_MAJOR_LAYOUT), [1, 1, M, HEAD_DIM]),
+            ttnn.TILE_LAYOUT,
+        )
+        C, S = tab("C"), tab("S")
         for s, a in enumerate(self.attn):
             kv = ttnn.rms_norm(
                 ttnn.slice(kvc, [0, 0, 0, s * HEAD_DIM], [1, 1, M, (s + 1) * HEAD_DIM]), weight=a.kv_norm, epsilon=1e-20
             )
-            rm = ttnn.reshape(ttnn.to_layout(kv, ttnn.ROW_MAJOR_LAYOUT), [1, M, 1, HEAD_DIM])
-            ttnn.deallocate(kv)
-            rows = ttnn.to_layout(
-                ttnn.pad(rm, [(0, 0), (0, 0), (0, 31), (0, 0)], 0.0), ttnn.TILE_LAYOUT
-            )  # [1,M,32,512], row 0 valid
-            ttnn.deallocate(rm)
-            for j0 in range(0, steps, per):
-                j1, (r0, r1) = min(steps, j0 + per), (j0 * U, min(steps, j0 + per) * U)
-                grp = a._rope_heads(
-                    ttnn.slice(rows, [0, r0, 0, 0], [1, r1, 32, HEAD_DIM]),
-                    ttnn.slice(st["Ch"], [0, r0, 0, 0], [1, r1, 1, HEAD_DIM]),
-                    ttnn.slice(st["Sh"], [0, r0, 0, 0], [1, r1, 1, HEAD_DIM]),
-                )
-                for j in range(j0, j1):
-                    kj = ttnn.to_memory_config(
-                        ttnn.slice(grp, [0, (j - j0) * U, 0, 0], [1, (j - j0 + 1) * U, 32, HEAD_DIM]), self.ucfg_seed
-                    )
-                    ttnn.experimental.paged_update_cache(a.cache, kj, update_idxs_tensor=idx[j], page_table=a.pt_seed)
-                    ttnn.deallocate(kj)
-                ttnn.deallocate(grp)
-            ttnn.deallocate(rows)
-        for t in idx + [kvc]:
-            ttnn.deallocate(t)
+            kv = ttnn.addcmul(
+                ttnn.multiply(kv, C), a._lin(kv, a.Pf, "SWO"), S
+            )  # RoPE of the rows (same maths as ``_rope_heads``)
+            new = ttnn.matmul(
+                perm, ttnn.reshape(kv, [U, 1, M // U, HEAD_DIM]), compute_kernel_config=self.ckc, dtype=ttnn.bfloat16
+            )
+            ttnn.copy(ttnn.add(ttnn.multiply(a.cache, keep), new), a.cache)
+            ttnn.deallocate(new)
+        ttnn.deallocate(kvc)
 
     def view_n(self, n):
         """The same drafter (weights, rings, MoE buffers) for ANOTHER verify block size n (rows U*n): used by the adaptive-length spec runners that share one drafter."""
