@@ -249,3 +249,16 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
 - Warm 56k prefill 7.42 -> 7.03 s (8007 tok/s); last-chunk top1 vs text 0.652 (0.646 before).
 - Not done: GLM non-flash's full pattern (striped caches + ring_indexer_score_dsa + sparse_sdpa on a striped latent)
   would also drop the replicated caches (latent ~57 MB per DSA layer per chip at 56k); no further time saving expected.
+
+## Ring indexer with a striped pooled-key cache (2026-10-09), GLM_INDEXER_RING=1 default (split + GLM_DSA_LOCAL)
+
+- GLM non-flash's pattern: the index-key cache striped over the mesh, ring_indexer_score_dsa gathering the other
+  stripes while it scores. Flash's keys are pools of 4 tokens, so the op got key_stride R (indexer_score fork,
+  CHANGELOG): key j visible to token p iff R j + R-1 <= p, block-cyclic key stripe chunk_local / R, validation and
+  gather extent in key units, R staircase mask tiles + the -inf tile (tests/unit/test_key_stride*.py: single device
+  exact -inf placement, rel 0.0019; 2x4 full-mesh ring PCC 0.9999985; R=1 regressions unchanged).
+- GLM: each chip fill_caches the pools of its own rows into its local stripe (chunk c at local rows c S/32; local
+  rows 2560, a multiple of the 2048/5120/8192 stripes) - no gather, no replicated copy (0.65 MB vs 3.6 MB per chip
+  per layer); the ring score (full-mesh snake, Topology.Ring) applies the pool-causal mask, top-k on [0, kv).
+  load_state / state_torch stripe / un-stripe at the harness boundary. Serving slots (bind_cache) need RING=0.
+- Warm 56k prefill 7.09 s (replicated + gather 7.03 s); last-chunk top1 0.6519, identical to the replicated path.
