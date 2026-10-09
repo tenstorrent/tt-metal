@@ -31,6 +31,8 @@ from pathlib import Path
 import torch
 from loguru import logger
 
+import ttnn
+
 WEIGHT_CACHE_MARKER = ".weights_complete"
 HOST_WEIGHTS_SIDECAR = ".host_weights.pt"
 # Bump when the set/naming/layout of cached weights, or this marker schema, changes such that an
@@ -444,4 +446,6 @@ def build_cached_state_dict(cache_path, host=None, args=None, build_variant=None
         f"Warm ttnn weight cache: built state_dict for {len(manifest)} weights "
         f"({len(host)} real host weights, no full HF load)."
     )
+    # The placeholders hold no weight data, so as_tensor must not rebuild a cache file from them.
+    ttnn.set_as_tensor_cache_repair(False)
     return CachedStateDict(manifest, host)

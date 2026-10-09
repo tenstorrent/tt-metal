@@ -834,6 +834,20 @@ def verify_shards_match_topology(tensor: ttnn.Tensor, *, compare_replica_content
     ttnn._ttnn.tensor.verify_shards_match_topology(tensor, compare_replica_contents)
 
 
+_as_tensor_cache_repair = True
+
+
+def set_as_tensor_cache_repair(enabled: bool) -> None:
+    """Sets whether ``ttnn.as_tensor`` regenerates a cache file that exists but fails to load.
+
+    On by default: the file is rewritten from the tensor passed to ``as_tensor``. Turn it off when
+    that tensor is a dataless placeholder (a warm-cache build), so a failed load raises instead of
+    overwriting a good cache file with the placeholder's contents.
+    """
+    global _as_tensor_cache_repair
+    _as_tensor_cache_repair = enabled
+
+
 def _golden_function_as_tensor(tensor, dtype=None, *, preprocess=None, **kwargs):
     # as_tensor applies the caller's preprocess callback to the Torch input before conversion.
     if preprocess is not None:
@@ -957,6 +971,8 @@ def as_tensor(
         tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(cache_file_name, device=device)
         logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
     except RuntimeError as e:
+        if not _as_tensor_cache_repair:
+            raise RuntimeError(f"Failed to load cache file {cache_file_name}: {e}. Delete it to regenerate.") from e
         logger.warning(f"Failed to load cache for {cache_file_name}: {e}")
         tensor = from_torch_and_dump(torch_tensor, dtype, layout, cache_file_name, mesh_mapper)
 
