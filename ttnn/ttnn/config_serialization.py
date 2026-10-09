@@ -1,7 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Plain-data serializers for memory and compute configs."""
+"""Plain-data serializers for memory, compute, and program configs.
+
+These helpers live in the ttnn library so the operation tracer can record
+configs at module scope without importing models.
+"""
 
 from __future__ import annotations
 

@@ -1,8 +1,13 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC and ULP comparisons used by the operation decorator."""
+"""PCC and ULP comparisons for the operation decorator.
+
+These helpers live in the ttnn library so decorators can compare golden outputs
+at module scope without importing models. Torch stays inside the functions so
+importing ttnn does not require it.
+"""
 
 from __future__ import annotations
 

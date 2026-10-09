@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Library modules under ttnn/ttnn must not import models."""
+"""Library modules under ttnn/ttnn must not import models or tt_py_test_utils_common."""
 
 import ast
 import importlib.util
@@ -13,21 +13,22 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _LIBRARY = _REPO_ROOT / "ttnn" / "ttnn"
+_FORBIDDEN_ROOTS = ("models", "tt_py_test_utils_common")
 
 
-def _imports_models(path: Path) -> list[int]:
+def _is_forbidden(name: str) -> bool:
+    return name.split(".")[0] in _FORBIDDEN_ROOTS
+
+
+def _forbidden_import_lines(path: Path) -> list[int]:
     tree = ast.parse(path.read_text())
     lines = []
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.ImportFrom)
-            and node.module
-            and (node.module == "models" or node.module.startswith("models."))
-        ):
+        if isinstance(node, ast.ImportFrom) and node.module and _is_forbidden(node.module):
             lines.append(node.lineno)
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name == "models" or alias.name.startswith("models."):
+                if _is_forbidden(alias.name):
                     lines.append(node.lineno)
     return lines
 
@@ -40,8 +41,10 @@ def _load_library_module(filename: str):
     return module
 
 
-def test_ttnn_library_python_does_not_import_models():
-    offenders = {str(path.relative_to(_REPO_ROOT)): _imports_models(path) for path in sorted(_LIBRARY.rglob("*.py"))}
+def test_ttnn_library_python_does_not_import_models_or_test_utils():
+    offenders = {
+        str(path.relative_to(_REPO_ROOT)): _forbidden_import_lines(path) for path in sorted(_LIBRARY.rglob("*.py"))
+    }
     offenders = {path: lines for path, lines in offenders.items() if lines}
     assert offenders == {}
 
@@ -69,18 +72,18 @@ def test_comparison_and_config_imports_are_at_module_level():
     for tree in (decorators, tracer):
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                assert _imports_models_in_node(node) == []
+                assert _forbidden_imports_in_node(node) == []
 
 
-def _imports_models_in_node(node) -> list[int]:
+def _forbidden_imports_in_node(node) -> list[int]:
     lines = []
     for child in ast.walk(node):
-        if (
-            isinstance(child, ast.ImportFrom)
-            and child.module
-            and (child.module == "models" or child.module.startswith("models."))
-        ):
+        if isinstance(child, ast.ImportFrom) and child.module and _is_forbidden(child.module):
             lines.append(child.lineno)
+        elif isinstance(child, ast.Import):
+            for alias in child.names:
+                if _is_forbidden(alias.name):
+                    lines.append(child.lineno)
     return lines
 
 
