@@ -278,6 +278,7 @@ class MultichipDecoder(OptimizedDecoder):
         self._moe1_kernels = _parse_binary_env("TT_LAGUNA_MOE1_KERNELS", True)  # batch-1 decode MoE generic_ops
         self._router32 = _parse_binary_env("TT_LAGUNA_ROUTER32", True)  # exact top-K router kernel, <= 32-row tiles
         self._swiglu32 = _parse_binary_env("TT_LAGUNA_SWIGLU32", True)  # fused routed SwiGLU, 32-row decode
+        self._esum32 = _parse_binary_env("TT_LAGUNA_ESUM32", True)  # active-expert sum, no down zero fill
         self._fused_kv_update = _parse_binary_env("TT_LAGUNA_FUSED_KV_UPDATE", True)  # K+V cache in one op
         self._sharded_residual = _parse_binary_env("TT_LAGUNA_SHARDED_RESIDUAL", True)  # decode residual in L1 shards
         self._glu_out_sharded = _parse_binary_env("TT_LAGUNA_GLU_OUT_SHARDED", True)  # decode MLP out stays sharded
@@ -1178,6 +1179,8 @@ class MultichipDecoder(OptimizedDecoder):
                 glu = ttnn.mul(gate_o, up_o, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
                 glu = ttnn.mul(glu, wv)
             dn_pc = _sparse_pc(H, T, I)
+            # active-expert sum kernel: inactive experts' down outputs are never read, so skip their zero fill
+            fused_sum = fused_glu and getattr(self, "_esum32", False)
             weighted = ttnn.sparse_matmul(
                 glu,
                 self.w["exp_down"],
@@ -1187,8 +1190,11 @@ class MultichipDecoder(OptimizedDecoder):
                 compute_kernel_config=self._ck_moe,
                 memory_config=moe_mem,
                 output_tile=otile,
+                **({"zero_init_output": False} if fused_sum else {}),
             )  # [1, LE, T, H], already routing-weighted
-            if self._use_fused_reduce:  # gated (TT_LAGUNA_FUSED_REDUCE=1); PCC-validate before enabling
+            if fused_sum:
+                routed_local = moe_decode1.expert_sum32(weighted, sparsity)
+            elif self._use_fused_reduce:  # gated (TT_LAGUNA_FUSED_REDUCE=1); PCC-validate before enabling
                 (reduced,) = ttnn.experimental.deepseek_moe_fast_reduce_nc(
                     weighted, dim=1, split_size=H, output_memory_config=moe_mem, compute_kernel_config=self._ck_moe
                 )

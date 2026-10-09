@@ -219,3 +219,56 @@ def swiglu32(gu, wv, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG):
     program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
     ttnn.generic_op([gu, wv, sparsity, out], program)
     return out
+
+
+def expert_sum32(x, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG):
+    """Sum over the active experts of the down output x [1, E, 32, H] (inactive experts' tiles are never read, so the
+    down sparse_matmul need not zero-fill them). Returns [1, 1, 32, H] bf16."""
+    device = x.device()
+    E = x.shape[1]
+    nt = x.padded_shape[-1] // TILE
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, x.shape[2], nt * TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory_config
+    )
+    grid_size = device.compute_with_storage_grid_size()
+    assert nt <= grid_size.x * grid_size.y, (nt, grid_size)
+    grid = ttnn.num_cores_to_corerangeset(nt, grid_size, True)
+    page, sp_page = 2048, max(E * 2, 64)
+    cbs = [
+        _cb(grid, 0, ttnn.bfloat16, page, 2),
+        _cb(grid, 1, ttnn.uint32, 64, 1),
+        _cb(grid, 2, ttnn.bfloat16, sp_page, 1),
+        _cb(grid, 3, ttnn.bfloat16, sp_page, 1),
+        _cb(grid, 4, ttnn.bfloat16, page, 1),
+        _cb(grid, 16, ttnn.bfloat16, page, 1),
+    ]
+    reader = ttnn.KernelDescriptor(
+        kernel_source=str(_KDIR / "esum32_reader.cpp"),
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=grid,
+        compile_time_args=[nt, E, page, sp_page, grid_size.x] + _accessor_args(x, sparsity),
+        common_runtime_args=[x.buffer_address(), sparsity.buffer_address()],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    writer = ttnn.KernelDescriptor(
+        kernel_source=str(_KDIR / "esum32_writer.cpp"),
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=grid,
+        compile_time_args=[page, grid_size.x, E, sp_page] + _accessor_args(out, sparsity),
+        common_runtime_args=[out.buffer_address(), sparsity.buffer_address()],
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    cfg = ttnn.ComputeConfigDescriptor()
+    cfg.math_fidelity = ttnn.MathFidelity.HiFi4
+    cfg.fp32_dest_acc_en = True
+    cfg.math_approx_mode = False
+    compute = ttnn.KernelDescriptor(
+        kernel_source=str(_KDIR / "esum32_compute.cpp"),
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=grid,
+        compile_time_args=[],
+        config=cfg,
+    )
+    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+    ttnn.generic_op([x, sparsity, out], program)
+    return out
