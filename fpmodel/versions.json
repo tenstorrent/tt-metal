@@ -107,5 +107,17 @@
    "v11",
    "fit weighs the absolute log error at 0.5 (was 0.2) next to the within-problem error: predicted times stay calibrated, ranking unchanged"
   ]
+ },
+ "v13": {
+  "title": "v13: sharded handoff + MultiCore candidate",
+  "model": "model7.py",
+  "constants": "fitted_v7_wh.json / fitted_v7_bh.json at 4d3c6ac (frozen as frozen_v13_*.json)",
+  "pick": "argmin over enumerated + rules' pick + one MultiCore candidate",
+  "mechanisms": [
+   "v12",
+   "sharded in0: the mcast sender rotates to the core holding each K slice, a handoff per step (shardhop, 279 cycles on WH)",
+   "training adds the full sweep of 110 sharded-input problems",
+   "pick offers the non-reusing MultiCore factory, which the enumerator never proposes"
+  ]
  }
 }

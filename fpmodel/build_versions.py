@@ -40,7 +40,8 @@ def tail(vl):
 # ---------- cross-validation ----------
 BASE_SETS = ["wh_designed", "wh_target", "bh_designed"]  # the training sets up to v10
 D = load(BASE_SETS)
-D_ALL = load(list(SETS))  # v11 on: plus the swept fresh / miss sets
+# the training data grew over versions: pick the set list whose row count matches a version's CV predictions
+DS = [D] + [load(BASE_SETS + extra) for extra in (["wh_fresh1", "wh_miss2"], ["wh_fresh1", "wh_miss2", "wh_sharded"])]
 
 
 def tiebreak(pred, m=0.05):
@@ -53,7 +54,7 @@ def tiebreak(pred, m=0.05):
 
 
 def cv_block(pred):
-    r = evaluate(D if len(pred) == len(D) else D_ALL, pred, "", quiet=True)
+    r = evaluate(next(x for x in DS if len(x) == len(pred)), pred, "", quiet=True)
     out = {}
     for s, g in r.groupby("set", sort=False):
         out[s] = dict(
@@ -183,6 +184,7 @@ commit = {
     "v10": "a9fbdc9",
     "v11": "2cf9cbc",
     "v12": "dbc5f7a",
+    "v13": "4d3c6ac",
 }
 rules = rules_cv()
 CVPRED = {
@@ -195,6 +197,7 @@ CVPRED = {
     "v10": np.load("pred_cv_v10.npy"),
     "v11": np.load("pred_cv_v11.npy"),
     "v12": np.load("pred_cv_v12.npy"),
+    "v13": np.load("pred_cv_v13.npy"),
 }
 DEV = {
     "v5_tb": [
@@ -259,7 +262,7 @@ if os.path.exists(f"{W}/device/suite719_v6_timed.csv"):
     DEV["v6"].append(b)
 
 
-FROZEN = {v: f"{W}/fresh/frozen_{v}_" for v in ("v7", "v9", "v10", "v11", "v12")}
+FROZEN = {v: f"{W}/fresh/frozen_{v}_" for v in ("v7", "v9", "v10", "v11", "v12", "v13")}
 FROZEN["v8"] = f"{W}/fresh/frozen_v8_"
 
 
@@ -471,6 +474,24 @@ RUNS = [
         None,
         "miss/v12d4.done",
     ),
+    (
+        "v13",
+        "fresh/fresh6_timed.csv",
+        "fresh98001",
+        "Fresh random set, draw 6 (seeds 98001-7)",
+        "Out-of-sample: generated and picked after v13 was frozen (MultiCore candidate included).",
+        None,
+        "fresh/chain_v13.done",
+    ),
+    (
+        "v13",
+        "miss/bh_unseen_v13_timed.csv",
+        "bh-unseen",
+        "BH designed problems never used in training (1021)",
+        BHU,
+        None,
+        None,
+    ),
 ]
 for vid, path, sid, label, note, usage, done in RUNS:
     add(vid, f"{W}/{path}", sid, label, note, f"{W}/{usage}" if usage else None, f"{W}/{done}" if done else None)
@@ -509,6 +530,7 @@ for vid, meta in V.items():
         "v10": "abl/v10.json",
         "v11": "abl/v11.json",
         "v12": "abl/v12.json",
+        "v13": "abl/v13.json",
     }.get(vid)
     if sheet and os.path.exists(sheet):  # written by cv7.py: per-arch value, fold spread, pinned, at bound
         import model7
@@ -529,7 +551,7 @@ for vid, meta in V.items():
         doc["coverage"] = f"data/coverage_{vid}.json"
     json.dump(doc, open(f"{OUT}/{vid}.json", "w"), separators=(",", ":"))
     index.append(dict(id=vid, title=meta["title"], file=f"data/{vid}.json"))
-json.dump(dict(versions=index, latest="v12"), open(f"{OUT}/index.json", "w"), indent=1)
+json.dump(dict(versions=index, latest="v13"), open(f"{OUT}/index.json", "w"), indent=1)
 
 # ---------- CV-only experiments ----------
 EXP = [
