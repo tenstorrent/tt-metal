@@ -323,8 +323,12 @@ _REPRESENTATIVE = {
 }
 
 
-def _cases(shapes):
-    return [pytest.param(c, id=_id(c), marks=() if _id(c) in _REPRESENTATIVE else pytest.mark.slow) for c in shapes]
+# Wormhole selects two or more workers per bank on few of its served shapes, so more of those run by default.
+_WH_REPRESENTATIVE = {"3584x9728-bfp8", "5120x3584-bfp8", "3072x8192-bfp4"}
+
+
+def _cases(shapes, representative=_REPRESENTATIVE):
+    return [pytest.param(c, id=_id(c), marks=() if _id(c) in representative else pytest.mark.slow) for c in shapes]
 
 
 DEST = pytest.mark.parametrize("fp32", [True, False], ids=["fp32_dest", "bf16_dest"])
@@ -342,7 +346,9 @@ def test_served_shapes_blackhole(device, case, fp32):
 
 
 @pytest.mark.skipif(not is_wormhole_b0(), reason="Wormhole shapes (12 DRAM banks)")
-@pytest.mark.parametrize("case", _cases(WH_SHAPES))
+# A served shape with cores_per_bank 1 keeps the single-reader program, which the multi-core arm would only
+# compare with itself (and with in0_block_w 2, which an odd activation shard width does not allow there).
+@pytest.mark.parametrize("case", _cases([c for c in WH_SHAPES if c[-1] >= 2], _REPRESENTATIVE | _WH_REPRESENTATIVE))
 @DEST
 def test_served_shapes_wormhole(device, case, fp32):
     k, n, wd, xd, od, x_layout, x_sw, pcn, fid, _, stock_bw, cores_per_bank = case
@@ -369,7 +375,6 @@ def _bank_case(device, k, n, wd="bfp8"):
     "k, n, cores_per_bank",
     [
         # columns split unevenly: 16 or 24 columns per bank over 3, 5, 6, 7 cores
-        (4096, 4096, 1),
         (4096, 4096, 3),
         (4096, 4096, 5),
         (4096, 6144, 7),
