@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fixed 4x1K batches in CP-major, request-major, local-row order.
+"""Fixed batches in CP-major, request-major, local-row order.
 
-Unlike request-major ragged packing, every CP rank already owns its 128 rows
+The default shape is 2x4K; the earlier 4x1K shape is available explicitly.
+
+Unlike request-major ragged packing, every CP rank already owns its 512 rows
 from every request. Attention needs only local slices and concatenation.
-The durable cache geometry is 1K per request, never the combined 4K size.
+The durable cache geometry is 4K per request, never the combined 8K size.
 """
 
 from dataclasses import dataclass
@@ -25,14 +27,14 @@ class ChunkedRequest:
 
 @dataclass(frozen=True)
 class ChunkedBatchPlan:
-    batch_size: int = 4
-    chunk_size: int = 1024
+    batch_size: int = 2
+    chunk_size: int = 4096
     cp: int = 8
     tp: int = 4
 
     def __post_init__(self):
-        if (self.batch_size, self.chunk_size, self.cp, self.tp) != (4, 1024, 8, 4):
-            raise ValueError("Fixed chunked batching currently supports only 4x1024 on CP8/TP4")
+        if (self.batch_size, self.chunk_size) not in ((2, 4096), (4, 1024)) or (self.cp, self.tp) != (8, 4):
+            raise ValueError("Fixed chunked batching supports 2x4096 or 4x1024 on CP8/TP4")
 
     @property
     def local_rows(self):
@@ -53,9 +55,9 @@ class ChunkedBatchPlan:
             if not isinstance(req.slot_id, int) or not 0 <= req.slot_id < num_slots:
                 raise ValueError("Request slot is outside the allocated cache")
             if not isinstance(req.actual_start, int) or req.actual_start < 0 or req.actual_start % self.chunk_size:
-                raise ValueError("Request starts must be nonnegative multiples of 1024")
+                raise ValueError(f"Request starts must be nonnegative multiples of {self.chunk_size}")
             if not 0 < len(req.token_ids) <= self.chunk_size or req.actual_end > max_seq_len:
-                raise ValueError("Each request must contain 1..1024 tokens within the context capacity")
+                raise ValueError(f"Each request must contain 1..{self.chunk_size} tokens within the context capacity")
             if any(not isinstance(token, int) or not 0 <= token < vocab_size for token in req.token_ids):
                 raise ValueError("Token IDs must be integers within the model vocabulary")
 

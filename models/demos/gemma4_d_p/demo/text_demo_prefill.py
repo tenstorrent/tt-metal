@@ -444,8 +444,9 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
 
     Each layer is compiled and captured once. GEMMA4_LAYER_PERF_CHUNKS selects
     request chunk indices; GEMMA4_LAYER_PERF_REPEATS defaults to one. The final
-    replay supplies the signposted operation table. GEMMA4_LAYER_BATCH_MODE=chunked4
-    measures four 1K requests with the sz4096 parameter (total useful tokens).
+    replay supplies the signposted operation table. GEMMA4_LAYER_BATCH_MODE=chunked2
+    measures two 4K requests with sz8192 (total useful tokens); chunked4 retains
+    the earlier four 1K requests with sz4096.
     Ring caches are initialized with random values before measurement.
     Inputs are token embeddings, so this is an isolated-layer benchmark.
     """
@@ -457,12 +458,13 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
 
     mesh_config = _mesh_config(mesh_device)
     mode = os.environ.get("GEMMA4_LAYER_BATCH_MODE", "canonical")
-    if mode not in ("canonical", "chunked4"):
-        raise ValueError("GEMMA4_LAYER_BATCH_MODE must be canonical or chunked4")
-    batched = mode == "chunked4"
-    if batched and (chunk_size != 4096 or mesh_config.mesh_shape != (8, 4)):
-        pytest.skip("Fixed batching profiles require sz4096 (total useful tokens) on CP8/TP4")
-    plan = ChunkedBatchPlan() if batched else None
+    if mode not in ("canonical", "chunked2", "chunked4"):
+        raise ValueError("GEMMA4_LAYER_BATCH_MODE must be canonical, chunked2 or chunked4")
+    batched = mode != "canonical"
+    shape = {"chunked2": (2, 4096), "chunked4": (4, 1024)}.get(mode)
+    plan = ChunkedBatchPlan(batch_size=shape[0], chunk_size=shape[1]) if batched else None
+    if batched and (chunk_size != plan.packed_size or mesh_config.mesh_shape != (8, 4)):
+        pytest.skip(f"Fixed batching profiles require sz{plan.packed_size} (total useful tokens) on CP8/TP4")
     request_chunk_size = plan.chunk_size if batched else chunk_size
     batch_size = plan.batch_size if batched else 1
     repeats = int(os.environ.get("GEMMA4_LAYER_PERF_REPEATS", "1"))
@@ -717,7 +719,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     assert torch.isfinite(hidden).all(), f"{layer_types[-1]} layer produced non-finite output"
     assert float(hidden.std()) > 0.001, f"{layer_types[-1]} layer output is degenerate"
     write_manifest(
-        request.node.callspec.id + ("-chunked4" if batched else ""),
+        request.node.callspec.id + (f"-{mode}" if batched else ""),
         results,
         context_len=context_len,
         chunk_size=chunk_size,

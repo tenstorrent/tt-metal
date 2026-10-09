@@ -45,10 +45,17 @@ def style_table(table, rows, total_row=None, header_scale=2):
 
 def append_layer_pages(pdf, finish, data, root):
     cells = data["cells"]
+    batch_mode = next(c["mode"] for c in cells if c["mode"] != "canonical")
+    batch = select(cells, "global", batch_mode, "first")
+    lanes = batch["batch_size"]
+    chunk = batch["end"] - batch["start"]
+    total = batch["useful_tokens"]
+    canonical_label = f"Canonical 1×{total//1024}K"
+    batch_label = f"Batch {lanes}×{chunk//1024}K"
     fig, axes = plt.subplots(1, 2, figsize=(12, 8.5))
     fig.subplots_adjust(left=0.09, right=0.95, top=0.77, bottom=0.39, wspace=0.28)
-    fig.suptitle("Where does batching add time?", x=0.06, y=0.96, ha="left", fontsize=23, fontweight="bold")
-    fig.text(0.06, 0.905, "Isolated layer profiles. Both paths process 4,096 tokens; lower bars are better.")
+    fig.suptitle("Where does batching change time?", x=0.06, y=0.96, ha="left", fontsize=23, fontweight="bold")
+    fig.text(0.06, 0.905, f"Isolated layer profiles. Both paths process {total:,} tokens; lower bars are better.")
     for axis, layer, title in zip(
         axes,
         ("global", "local"),
@@ -56,8 +63,8 @@ def append_layer_pages(pdf, finish, data, root):
     ):
         highest = 0
         for mode, offset, color, label in (
-            ("canonical", -0.18, BLUE, "Canonical 1×4K"),
-            ("chunked4", 0.18, ORANGE, "Batch 4×1K"),
+            ("canonical", -0.18, BLUE, canonical_label),
+            (batch_mode, 0.18, ORANGE, batch_label),
         ):
             values = [select(cells, layer, mode, pos)["kernel_ms"] for pos in ("first", "last")]
             highest = max(highest, *values)
@@ -75,48 +82,51 @@ def append_layer_pages(pdf, finish, data, root):
     )
     notes = []
     for layer, label in (("global", "Global"), ("local", "Sliding")):
-        a, b = [select(cells, layer, m, "last") for m in ("canonical", "chunked4")]
+        a, b = [select(cells, layer, m, "last") for m in ("canonical", batch_mode)]
         extra = b["kernel_ms"] - a["kernel_ms"]
         attention_extra = (b["grouped"]["Attention (SDPA)"]["us"] - a["grouped"]["Attention (SDPA)"]["us"]) / 1000
         notes.append(
-            f"{label}, last: batching adds {extra:.3f} ms per layer. The four attention calls total "
+            f"{label}, last: batching {'adds' if extra >= 0 else 'saves'} {abs(extra):.3f} ms per layer. The {lanes} attention calls total "
             f"{b['grouped']['Attention (SDPA)']['us']/1000:.3f} ms versus "
             f"{a['grouped']['Attention (SDPA)']['us']/1000:.3f} ms for canonical's one call, "
-            f"explaining {100*attention_extra/extra:.1f}% of the increase."
+            f"Attention changes by {attention_extra:+.3f} ms."
         )
-    control = next(c for c in cells if c["mode"] == "chunked4" and c["layer"] == "global" and c["start"] == 258048)
-    last = select(cells, "global", "chunked4", "last")
+    canonical_last = select(cells, "global", "canonical", "last")
+    control = next(
+        c for c in cells if c["mode"] == batch_mode and c["layer"] == "global" and c["start"] == canonical_last["start"]
+    )
+    last = select(cells, "global", batch_mode, "last")
     notes += [
-        f"Prefix control: batched global time is {control['kernel_ms']:.3f} ms at a 252K prefix and {last['kernel_ms']:.3f} ms at 255K. The extra 3K prefix does not explain the slowdown.",
-        "Token ranges (K = 1024): first = canonical [0, 4K), batch 4 × [0, 1K). Last = canonical [252K, 256K), batch 4 × [255K, 256K).",
+        f"Prefix control: batched global time is {control['kernel_ms']:.3f} ms at {control['start']//1024}K and {last['kernel_ms']:.3f} ms at {last['start']//1024}K. This isolates the effect of the different final-chunk starts.",
+        f"Token ranges (K = 1024): first = canonical [0, {total//1024}K), batch {lanes} × [0, {chunk//1024}K). Last = canonical [{canonical_last['start']//1024}K, 256K), batch {lanes} × [{last['start']//1024}K, 256K).",
         "These are profiled kernel sums, not full-model latency. The layer test uses random KV histories and token embeddings; the full-model charts use actual model histories. Each panel has its own vertical scale.",
     ]
     paragraphs(fig, notes, 0.31)
     finish(fig, "layer_overview", pdf)
 
     for layer, title in (("global", "Global layer"), ("local", "Sliding-window layer")):
-        selected = {(m, p): select(cells, layer, m, p) for m in ("canonical", "chunked4") for p in ("first", "last")}
+        selected = {(m, p): select(cells, layer, m, p) for m in ("canonical", batch_mode) for p in ("first", "last")}
         labels = list(dict.fromkeys(op["label"] for c in selected.values() for op in c["operations"]))
         rows = []
         for label in labels:
             a = selected["canonical", "first"]["grouped"].get(label, {"calls": 0})["calls"]
-            b = selected["chunked4", "first"]["grouped"].get(label, {"calls": 0})["calls"]
+            b = selected[batch_mode, "first"]["grouped"].get(label, {"calls": 0})["calls"]
             values = []
             for position in ("first", "last"):
                 ca, cb = [
-                    selected[m, position]["grouped"].get(label, {"us": 0})["us"] for m in ("canonical", "chunked4")
+                    selected[m, position]["grouped"].get(label, {"us": 0})["us"] for m in ("canonical", batch_mode)
                 ]
                 values.extend((f"{ca:,.1f}", f"{cb:,.1f}", f"{cb-ca:+,.1f}"))
             rows.append([label, str(a), str(b), *values])
         totals = []
         for p in ("first", "last"):
-            a, b = [selected[m, p]["kernel_ms"] * 1000 for m in ("canonical", "chunked4")]
+            a, b = [selected[m, p]["kernel_ms"] * 1000 for m in ("canonical", batch_mode)]
             totals.extend((f"{a:,.1f}", f"{b:,.1f}", f"{b-a:+,.1f}"))
         rows.append(
             [
                 "TOTAL",
                 str(len(selected["canonical", "first"]["operations"])),
-                str(len(selected["chunked4", "first"]["operations"])),
+                str(len(selected[batch_mode, "first"]["operations"])),
                 *totals,
             ]
         )
@@ -125,7 +135,7 @@ def append_layer_pages(pdf, finish, data, root):
         fig.text(
             0.05,
             0.91,
-            "All times are microseconds, summed over the calls in one layer. C = canonical 1×4K; B = batch 4×1K.",
+            f"All times are microseconds, summed over the calls in one layer. C = {canonical_label}; B = {batch_label}.",
         )
         axis = fig.add_axes([0.045, 0.24, 0.91, 0.60])
         axis.axis("off")
@@ -155,7 +165,7 @@ def append_layer_pages(pdf, finish, data, root):
         paragraphs(
             fig,
             [
-                "The five projection/MLP matmuls have the same packed row count in both paths. Attention, cache writes and local slicing operate per request in the batch. Counts include all four requests.",
+                f"The five projection/MLP matmuls have the same packed row count in both paths. Attention, cache writes and local slicing operate per request in the batch. Counts include all {lanes} requests.",
                 "Slices/concatenation copy rows locally; norm redistribution changes local memory layout. The SDPA operation includes its internal ring KV exchange. The separate TP all-gather/reduce-scatter operations communicate between tensor-parallel devices.",
                 "Timing source: tt-perf-report main (version 1.4.1), with the final warmed replay selected by signposts. Ordinary ops use the slowest device; collectives use the device average. Full per-call tables follow.",
             ],
@@ -167,7 +177,7 @@ def append_layer_pages(pdf, finish, data, root):
     # Preserve the tool's per-call metrics instead of offering only grouped charts.
     for layer in ("global", "local"):
         for position in ("first", "last"):
-            for mode in ("canonical", "chunked4"):
+            for mode in ("canonical", batch_mode):
                 cell = select(cells, layer, mode, position)
                 with (root / cell["perf_report_csv"]).open(newline="") as handle:
                     source = [r for r in csv.DictReader(handle) if r.get("Device Time")]
@@ -209,7 +219,7 @@ def append_layer_pages(pdf, finish, data, root):
                         )
                     fig = plt.figure(figsize=(14, 10))
                     suffix = f" — {page_start//64+1}" if len(source) > 64 else ""
-                    title = f"{'Global' if layer == 'global' else 'Sliding'}, {position}: {'canonical 1×4K' if mode=='canonical' else 'batch 4×1K'}{suffix}"
+                    title = f"{'Global' if layer == 'global' else 'Sliding'}, {position}: {canonical_label if mode=='canonical' else batch_label}{suffix}"
                     fig.suptitle(title, x=0.04, y=0.97, ha="left", fontsize=23, fontweight="bold")
                     fig.text(
                         0.04,

@@ -64,92 +64,88 @@ Global layers use tied QK projection; sliding layers use QKV. Weight caches are 
 
 Each model call prefills one user's chunk and returns post-norm hidden states. `max_batch_size` controls the number of durable user cache slots; `user_id` selects a slot. The constructor returns the ring caches, also exposed through `model.tt_kv_cache`. Physical capacity is at least two chunks so single-chunk prompts use the same ring SDPA path. External allocations accept `prefill_chunk_size`; `Gemma4KvCaches.max_seq_len` reports physical capacity for migration offsets. Callers can supply external caches and receive per-layer migration acknowledgements through callbacks, segmented traces, or a D2H socket service. Traced callers stage ring metadata and absolute RoPE positions before replay. This prefill model does not expose a logits projection API.
 
-## Fixed 4×1K chunked batching
+## Fixed 2×4K chunked batching
 
-`tt/runners/chunked_batch_runtime.py::ChunkedBatchRuntime` runs exactly four
-requests per batch on CP8/TP4. Create its model with `prefill_chunk_size=1024`
-and at least four KV slots. Each rank holds 128 consecutive token rows from
-each request, in lane order. Embedding, projections, norms, RoPE and MLP operate
-on the combined 4K rows. Attention locally slices each lane, writes its own
-cache slot, executes the existing 1K ring-attention operation, and concatenates
-the local outputs. There are no additional CP all-gathers or per-request 8K
-padding. The four attention calls execute sequentially within the trace.
+`tt/runners/chunked_batch_runtime.py::ChunkedBatchRuntime` defaults to exactly two
+requests per batch on CP8/TP4. Create its model with `prefill_chunk_size=4096`
+and at least two KV slots. Each rank holds 512 consecutive token rows from each
+request, in lane order. Embedding, projections, norms, RoPE and MLP operate on
+the combined 8K rows. Attention locally slices each lane, writes its cache slot,
+executes the existing 4K ring-attention operation, and concatenates the local
+outputs. The two attention calls execute sequentially within the trace.
 
 ```python
 from models.demos.gemma4_d_p.tt.chunked_batch import ChunkedRequest
 from models.demos.gemma4_d_p.tt.runners.chunked_batch_runtime import ChunkedBatchRuntime
 
-# model was created with 1K chunks and four or more cache slots.
-runtime = ChunkedBatchRuntime(model, num_slots=4)
+# model was created with 4K chunks and two or more cache slots.
+runtime = ChunkedBatchRuntime(model, num_slots=2)
 runtime.capture()  # Warm up and capture before populating request histories.
-requests = tuple(ChunkedRequest(i, i, 0, tuple(prompts[i][:1024])) for i in range(4))
+requests = tuple(ChunkedRequest(i, i, 0, tuple(prompts[i][:4096])) for i in range(2))
 runtime.prefill_batch(requests)
 outputs = runtime.to_torch()  # Independent host copies, keyed by request_id.
 runtime.close()
 ```
 
-Each lane supplies 1–1024 valid tokens. Short final chunks are zero-padded to
-1K; only valid output rows are returned. KV writes stop at the last 32-token
-page containing valid tokens, preserving subsequent cache pages. All four
-lanes are active: fewer requests must be queued until a full batch is available.
-Starting at zero replaces a slot's request; continuations require the same
-request identity and the preceding full chunk's end. Lane order and prefix
-positions can change without recapture. Absolute RoPE positions follow the
-same CP-major ordering as tokens.
+Each lane supplies 1–4096 valid tokens. Short final chunks are zero-padded to 4K;
+only valid output rows are returned. KV writes stop at the last 32-token page
+containing valid tokens, preserving subsequent cache pages. Both lanes are
+active: requests wait until a full batch is available. Starting at zero
+replaces a slot's request; continuations require the same request identity and
+the preceding full chunk's end. Lane order and prefix positions can change
+without recapture. Absolute RoPE positions follow the tokens' CP-major order.
 
-This cache uses **1K chunk geometry**. Existing histories placed with 8K chunks
-cannot be reused. Migration tables must use `chunk_size=1024`. The runtime can
-emit `(layer_index, request_id)` callbacks after a completed batch via
-`layer_completion_sink`; it does not use the batch-one socket protocol.
-Complete any migration reads before overwriting or reusing a slot.
+This cache uses **4K chunk geometry**. Histories placed with 8K or 1K chunks
+cannot be reused. Migration tables must use `chunk_size=4096`. The runtime can
+emit `(layer_index, request_id)` callbacks after a completed batch through
+`layer_completion_sink`. Complete migration reads before overwriting a slot.
+The earlier 4×1K shape remains available by passing
+`plan=ChunkedBatchPlan(batch_size=4, chunk_size=1024)` to a runtime with 1K model
+geometry and at least four slots.
 
-With the usual model/cache environment, run numerical validation and the two
-performance modes in separate processes:
+With the usual model/cache environment, run the checks and performance modes
+in separate processes:
 
 ```bash
 pytest models/demos/gemma4_d_p/tests/test_chunked_batch.py -sv --timeout=7200
 GEMMA4_BATCH_PERF_MODE=canonical pytest models/demos/gemma4_d_p/tests/test_chunked_batch_perf.py -sv --timeout=7200
-GEMMA4_BATCH_PERF_MODE=chunked4 pytest models/demos/gemma4_d_p/tests/test_chunked_batch_perf.py -sv --timeout=7200
+GEMMA4_BATCH_PERF_MODE=chunked2 pytest models/demos/gemma4_d_p/tests/test_chunked_batch_perf.py -sv --timeout=7200
 ```
 
 The perf test defaults to 60 layers and 256K context, populates histories using
-real model calls, and measures five warmed replays at selected prefix positions.
-Both paths process 4,096 useful tokens per call: canonical handles one 4K
-chunk, while the fixed batch handles four 1K chunks. Compare call latency or
-useful tokens/s directly. `GEMMA4_BATCH_PERF_CONTEXT`
-controls capacity and
-`GEMMA4_BATCH_PERF_OUTPUT` selects the JSON output. Host staging is reported
-separately from trace execution; compilation, output downloads and KV migration
-are excluded. Two final-batch samples retain the fixed 4K execution shape with
-fewer useful tokens. Cache capacity is per request, so four long histories
-require more memory than the single-request canonical comparison.
-The earlier eight-request configuration exceeded DRAM capacity at 256K;
-four requests halve its KV-cache storage (28.2 to 14.1 GiB/device, excluding
-weights and other buffers). The six-layer numerical, isolation, migration and
-trace checks pass. A stricter 60-layer numerical comparison showed drift;
-full-model numerical equivalence is not established. The performance runs
-retain the existing math settings.
+real model calls, and measures five replays at selected prefix positions.
+Both paths process **8,192 useful tokens per call**: canonical handles one 8K
+chunk; the fixed batch handles two 4K chunks. Compare call latency or useful
+tokens/s directly. `GEMMA4_BATCH_PERF_CONTEXT` controls capacity and
+`GEMMA4_BATCH_PERF_OUTPUT` selects JSON output. Host staging is reported
+separately from trace execution. Two final-batch samples retain the fixed 8K
+execution shape with fewer useful tokens. Two full 256K request caches use
+7.06 GiB/device, versus 14.11 GiB/device for four slots; weights and working
+buffers are additional. Math settings are unchanged. The six-layer check
+covers outputs, KV writes, isolation, migration addressing and trace replay.
 
-Measured results and reproduction commands: [4×1K vs canonical 4K report](docs/perf/chunked_batch_4x1k_vs_4k_2026_10_08/report.html)
-and [PDF](docs/perf/chunked_batch_4x1k_vs_4k_2026_10_08/comparison.pdf).
+Measured results: [2×4K vs canonical 8K report](docs/perf/chunked_batch_2x4k_vs_8k_2026_10_09/report.html)
+and [PDF](docs/perf/chunked_batch_2x4k_vs_8k_2026_10_09/comparison.pdf).
+The previous [4×1K report](docs/perf/chunked_batch_4x1k_vs_4k_2026_10_08/report.html)
+is retained with its original measurements.
 
-The same PDF includes first/final global and sliding-layer operation comparisons
-and detailed per-call tables generated with `tt-perf-report` 1.4.1 (main commit
-`cb9407747a28`). The isolated-layer test accepts:
+The combined PDF includes first/final global and sliding-layer operation
+comparisons and detailed per-call tables generated with `tt-perf-report` 1.4.1
+(main commit `cb9407747a28`). The isolated-layer test accepts:
 
-- `GEMMA4_LAYER_BATCH_MODE=canonical|chunked4` (default `canonical`).
-- `GEMMA4_LAYER_PERF_CHUNKS=0,63` for canonical 4K; `0,252,255` for 4×1K.
+- `GEMMA4_LAYER_BATCH_MODE=canonical|chunked2|chunked4` (default `canonical`).
+- `GEMMA4_LAYER_PERF_CHUNKS=0,31` for canonical 8K; `0,62,63` for 2×4K.
 - `GEMMA4_LAYER_PERF_REPEATS=5` to warm four replays before the signposted replay.
 
-Use `test_prefill_layer_perf_chunk_n[blackhole-chunkall-both-sz4096-ctx_256k-8x4]`
-for both modes: `sz4096` is the total useful token count. A batch request advances
-by 1K. The final canonical chunk is `[252K,256K)`; final batch requests are each
-`[255K,256K)`. Batch chunk 252 supplies a matching-prefix control. Embedding and
-RoPE preparation are excluded from layer timing. These isolated tests use random
-KV histories; the full-model performance runs populate actual model histories.
-See the report's [reproduction script](docs/perf/chunked_batch_4x1k_vs_4k_2026_10_08/reproduce.sh)
-for Tracy capture and report generation commands.
-
+Use `test_prefill_layer_perf_chunk_n[blackhole-chunkall-both-sz8192-ctx_256k-8x4]`
+for both current modes: `sz8192` is the total useful token count. A batch request
+advances by 4K. The final canonical chunk is `[248K,256K)`; final batch requests
+are each `[252K,256K)`. Batch chunk 62 supplies a matching-prefix control at
+248K. Embedding and RoPE preparation are excluded from layer timing. These
+isolated tests use random KV histories; full-model runs populate actual model
+histories. The [reproduction script](docs/perf/chunked_batch_2x4k_vs_8k_2026_10_09/reproduce.sh)
+includes Tracy capture and PDF generation. It omits the device timeline from
+Tracy's GUI export while retaining the device CSV used for operation timings.
 
 ## Host verification
 

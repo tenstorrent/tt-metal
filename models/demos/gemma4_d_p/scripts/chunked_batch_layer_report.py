@@ -192,13 +192,14 @@ def main():
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--report-repo", required=True, type=Path, help="Checkout of tt-perf-report main")
+    parser.add_argument("--batch-mode", choices=("chunked2", "chunked4"), default="chunked2")
     args = parser.parse_args()
     sys.path.insert(0, str(args.report_repo / "src"))
     report_commit = subprocess.check_output(
         ["git", "-C", str(args.report_repo), "rev-parse", "HEAD"], text=True
     ).strip()
     args.output.mkdir(parents=True, exist_ok=True)
-    cells = [cell for mode in ("canonical", "chunked4") for cell in read_cells(args.input, mode, args.output)]
+    cells = [cell for mode in ("canonical", args.batch_mode) for cell in read_cells(args.input, mode, args.output)]
     method = (
         "test_prefill_layer_perf_chunk_n; global layer 5 and sliding-window layer 0; CP8/TP4; "
         "full model weights loaded, default math and activation placement. Isolated layers receive token embeddings "
@@ -227,13 +228,13 @@ def main():
     for layer in ("global", "local"):
         for position in ("first", "last"):
             selected = {}
-            for mode in ("canonical", "chunked4"):
+            for mode in ("canonical", args.batch_mode):
                 subset = [c for c in cells if c["mode"] == mode and c["layer"] == layer]
                 selected[mode] = (min if position == "first" else max)(subset, key=lambda c: c["start"])
             labels = list(dict.fromkeys(op["label"] for cell in selected.values() for op in cell["operations"]))
             for label in labels:
                 left = selected["canonical"]["grouped"].get(label, {"calls": 0, "us": 0})
-                right = selected["chunked4"]["grouped"].get(label, {"calls": 0, "us": 0})
+                right = selected[args.batch_mode]["grouped"].get(label, {"calls": 0, "us": 0})
                 aligned.append(
                     dict(
                         layer=layer,

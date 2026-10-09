@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""One fixed traced 4x1K batch with per-request slots, positions and final padding."""
+"""One fixed traced 2x4K batch with per-request slots, positions and final padding."""
 
 import torch
 
@@ -13,19 +13,23 @@ from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
 class ChunkedBatchRuntime:
     """Attach before populating caches; owns one trace and its stable input buffers.
 
-    Every call has four active requests, each contributing up to 1K tokens.
+    By default each call has two active requests, each contributing up to 4K tokens.
     Short chunks are final. Output tensors are valid until the next execution;
     ``to_torch`` returns independent host copies. Replaying the staged batch is
     idempotent and is exposed separately for steady-state timing.
     """
 
-    def __init__(self, model, *, num_slots):
+    def __init__(self, model, *, num_slots, plan=None):
         self.model = model
         self.mesh = model.mesh_config
         self.device = model.mesh_device
-        self.plan = ChunkedBatchPlan(cp=self.mesh.cp_degree, tp=self.mesh.tp_degree)
+        self.plan = plan or ChunkedBatchPlan(cp=self.mesh.cp_degree, tp=self.mesh.tp_degree)
+        if (self.plan.cp, self.plan.tp) != (self.mesh.cp_degree, self.mesh.tp_degree):
+            raise ValueError("Batch plan and model mesh must match")
         if model.prefill_chunk_size != self.plan.chunk_size or num_slots < self.plan.batch_size:
-            raise ValueError("Fixed 4x1K batching requires a 1K model and at least four KV slots")
+            raise ValueError(
+                f"Fixed batching requires {self.plan.chunk_size}-token cache geometry and at least {self.plan.batch_size} KV slots"
+            )
         for layer in model.layers:
             attention = layer.self_attn
             cache = attention.ring_kv_cache

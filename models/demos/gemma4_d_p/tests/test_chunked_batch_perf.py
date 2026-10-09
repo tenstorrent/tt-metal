@@ -1,13 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare fixed 4x1K batching and the canonical 1x4K path at equal prefix lengths.
+"""Compare fixed 2x4K batching and the canonical 1x8K path at equal prefix lengths.
 
-GEMMA4_BATCH_PERF_MODE=canonical or chunked4 (default), separate processes.
+GEMMA4_BATCH_PERF_MODE=canonical or chunked2 (default); chunked4 retains the earlier shape, separate processes.
 All histories are populated by real model calls; no random or synthesized KV.
 """
 
 import json
+import math
 import os
 import statistics
 import time
@@ -20,7 +21,7 @@ import ttnn
 from models.demos.gemma4_d_p.demo.text_demo_prefill import _get_prefill_tokens
 from models.demos.gemma4_d_p.tests.test_chunked_batch import build_model
 from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
-from models.demos.gemma4_d_p.tt.chunked_batch import ChunkedRequest
+from models.demos.gemma4_d_p.tt.chunked_batch import ChunkedBatchPlan, ChunkedRequest
 from models.demos.gemma4_d_p.tt.runners.chunked_batch_runtime import ChunkedBatchRuntime
 
 
@@ -70,19 +71,30 @@ class CanonicalRuntime:
 @pytest.mark.timeout(7200)
 @parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": 256_000_000})
 def test_chunked_batch_perf(mesh_device):
-    mode = os.environ.get("GEMMA4_BATCH_PERF_MODE", "chunked4")
-    assert mode in ("canonical", "chunked4")
-    lanes, chunk = (1, 4096) if mode == "canonical" else (4, 1024)
+    mode = os.environ.get("GEMMA4_BATCH_PERF_MODE", "chunked2")
+    assert mode in ("canonical", "chunked2", "chunked4")
+    lanes, chunk = (
+        (1, int(os.environ.get("GEMMA4_CANONICAL_CHUNK_SIZE", "8192")))
+        if mode == "canonical"
+        else {"chunked2": (2, 4096), "chunked4": (4, 1024)}[mode]
+    )
+    plan = ChunkedBatchPlan(batch_size=lanes, chunk_size=chunk) if mode != "canonical" else None
     context = int(os.environ.get("GEMMA4_BATCH_PERF_CONTEXT", "262144"))
     layers = int(os.environ.get("GEMMA4_BATCH_TEST_LAYERS", "60"))
     repeats = int(os.environ.get("GEMMA4_BATCH_PERF_REPEATS", "5"))
     selected = {n * 1024 for n in (0, 8, 32, 64, 128, 192, 248)}
-    selected.add(context - 8192)
+    selected.update((context - 8192, context - chunk))
     model, caches = build_model(mesh_device, chunk_size=chunk, num_slots=lanes, context_len=context, num_layers=layers)
+    # Cache dimensions are tile aligned; BFP8 tiles contain 1024 values plus 64 exponent bytes.
+    cache_tensors = [
+        tensor for cache in caches.layers for tensor in ((cache.kv,) if hasattr(cache, "kv") else (cache.k, cache.v))
+    ]
+    assert all(tensor.dtype == ttnn.bfloat8_b for tensor in cache_tensors)
+    cache_bytes = sum(math.prod(tensor.shape) // 1024 * 1088 for tensor in cache_tensors)
     source = _get_prefill_tokens(os.environ["HF_MODEL"], context, model.vocab_size)[0]
     prompts = [torch.roll(source, shifts=lane * 701).tolist() for lane in range(lanes)]
-    runtime = CanonicalRuntime(model) if mode == "canonical" else ChunkedBatchRuntime(model, num_slots=lanes)
-    if mode == "chunked4":
+    runtime = CanonicalRuntime(model) if mode == "canonical" else ChunkedBatchRuntime(model, num_slots=lanes, plan=plan)
+    if mode != "canonical":
         runtime.capture()
     records = []
 
@@ -123,10 +135,15 @@ def test_chunked_batch_perf(mesh_device):
     try:
         for start in range(0, context, chunk):
             run_batch([chunk] * lanes, starts=[start] * lanes)
-        if mode == "chunked4":
-            run_batch([512] * 4, starts=[0] * 4, request_base=100, label="half_full")
-            run_batch([1024, 512, 128, 32], starts=[0] * 4, request_base=200, label="uneven_final")
-        output = Path(os.environ.get("GEMMA4_BATCH_PERF_OUTPUT", f"/tmp/gemma4-chunked-batching/{mode}.json"))
+        if mode != "canonical":
+            run_batch([chunk // 2] * lanes, starts=[0] * lanes, request_base=100, label="half_full")
+            run_batch(
+                [4096, 512] if lanes == 2 else [1024, 512, 128, 32],
+                starts=[0] * lanes,
+                request_base=200,
+                label="uneven_final",
+            )
+        output = Path(os.environ.get("GEMMA4_BATCH_PERF_OUTPUT", f"/tmp/gemma4-chunked-batching-2x4k/{mode}.json"))
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(
             json.dumps(
@@ -136,6 +153,7 @@ def test_chunked_batch_perf(mesh_device):
                     batch_size=lanes,
                     chunk_size=chunk,
                     allocated_slots=lanes,
+                    kv_cache_bytes_per_device=cache_bytes,
                     context=context,
                     repeats=repeats,
                     history="real model calls",
