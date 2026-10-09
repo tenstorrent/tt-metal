@@ -8,6 +8,10 @@
 #include <tt-metalium/tile.hpp>
 
 #include <tt_stl/span.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/tensor/spec/layout/layout.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 
 namespace tt::tt_metal {
 

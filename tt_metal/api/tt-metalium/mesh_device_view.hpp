@@ -4,19 +4,16 @@
 
 #pragma once
 
+#include <cstddef>
 #include <memory>
-#include <tuple>
 #include <vector>
-#include <unordered_map>
-#include <optional>
-#include <functional>
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/maybe_remote.hpp>
-#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt::tt_metal::distributed {
 

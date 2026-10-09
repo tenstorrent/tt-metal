@@ -116,9 +116,25 @@ __attribute__((always_inline)) inline void down(std::uintptr_t l1_offset, SemSco
         ASSERT(false);  // the host census never bakes DM_LOCAL_CACHED for this platform
 #endif
     } else if (scope == SemScope::EXTERNAL) {
-#if defined(ARCH_QUASAR) && !defined(TT_EMULE_USE_L1_POOL) && !defined(NOC_API_V1)
+#if defined(ARCH_QUASAR) && !defined(TT_EMULE_USE_L1_POOL)
         noc_async_atomic_barrier();
         const std::uint64_t sem_noc = ::get_noc_addr(l1_offset);
+#if defined(NOC_API_V1)
+        // v1 has no NOC CAS. Only this node's DM cores take the lock, so a RISC-V atomic does; the fences order the
+        // NOC accesses made under it.
+        auto* lock_word = reinterpret_cast<std::uint32_t*>(external_lock_l1_offset<core_type>(l1_offset));
+        const auto try_lock = [&]() -> bool {
+            if (__atomic_exchange_n(lock_word, 1u, __ATOMIC_ACQUIRE) != 0) {
+                return false;
+            }
+            noc_io_fence();
+            return true;
+        };
+        const auto unlock = [&]() {
+            noc_io_fence();
+            __atomic_store_n(lock_word, 0u, __ATOMIC_RELEASE);
+        };
+#else
         const std::uint64_t lock_noc = ::get_noc_addr(external_lock_l1_offset<core_type>(l1_offset));
         const std::uint32_t ret_slot = cas_ret_slot();
         auto* ret_word = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
@@ -128,6 +144,9 @@ __attribute__((always_inline)) inline void down(std::uintptr_t l1_offset, SemSco
             noc_async_atomic_barrier();
             return *ret_word;
         };
+        const auto try_lock = [&]() -> bool { return lock_cas(0, 1) == 0; };
+        const auto unlock = [&]() { lock_cas(1, 0); };
+#endif
         for (;;) {
             {
                 SYNC_WAIT("SYNC-SEM-WAIT", l1_offset);
@@ -135,7 +154,7 @@ __attribute__((always_inline)) inline void down(std::uintptr_t l1_offset, SemSco
                     invalidate_l1_cache();
                 } while (*sem_addr < value);
             }
-            if (lock_cas(0, 1) != 0) {
+            if (!try_lock()) {
                 continue;
             }
             invalidate_l1_cache();
@@ -145,9 +164,11 @@ __attribute__((always_inline)) inline void down(std::uintptr_t l1_offset, SemSco
                 noc_semaphore_inc(sem_noc, static_cast<std::uint32_t>(0u - value));
                 noc_async_atomic_barrier();
             }
-            lock_cas(1, 0);
+            unlock();
             if (sufficient) {
+#if !defined(NOC_API_V1)
                 noc_restore_default_atomic_ret_addr(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+#endif
                 return;
             }
         }
