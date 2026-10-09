@@ -49,22 +49,6 @@ pytest models/demos/gpt_oss/tests/unit/test_modules.py -v     # Core components
 pytest models/demos/gpt_oss/tests/unit/test_model.py -v       # Full model accuracy
 ```
 
-### Blackhole 1×4 decode (QuietBox 2, gpt-oss-20b, batch 1)
-
-```bash
-# Decode perf: 128 random input tokens (TT_PERF_ISL_TOKENS: any power of 2 >= 128), all 24 layers, decode trace,
-# 128 timed decode tokens; prints TRACE_STAGE_MS[decode]=<ms/token>
-pytest models/demos/gpt_oss/tests/optimizer/test_optimizer_perf.py
-
-# Accuracy: teacher-forced top-1 / top-5 and logits PCC against HF fp32 reference logits, held against the scores
-# of the original decode path. Needs generated/optimizer_reference/gpt-oss-20b-logits.pt (tests/optimizer/gen_reference.py)
-# and generated/optimizer_accuracy_baseline_gpt-oss-20b.json (if missing, the first run pins the current tree)
-pytest models/demos/gpt_oss/tests/optimizer/test_optimizer_pcc.py
-
-# Both: perf N times (median) + accuracy once
-bash models/demos/gpt_oss/tests/optimizer/run_check.sh 5
-```
-
 ### Test Files Overview
 
 | File | Purpose | Tests |
