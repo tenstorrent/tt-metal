@@ -254,6 +254,14 @@ class SpecRunner:
         )
         self.dec.enable_sampling(model.mc, model.ccl)
         self.dec.draft_on = draft
+        # in-trace sampling of every verify row (DSV41_INTRACE_SAMPLE=1): one sampler over the T = U * n block rows of a mesh row; params uploaded per round (``sample_cfg``), allocated before any trace
+        self.dec.samp = self.samp = model._make_sampler(self.T)
+        self.sample_cfg = None  # None = greedy rows; else dict(temperature=[B], top_k=[B], top_p=[B], gens=[B generators] | one generator)
+        if self.samp is not None and os.environ.get("DSV41_DEMO_SAMPLE"):
+            t_, k_, p_ = os.environ["DSV41_DEMO_SAMPLE"].split(":")
+            self.sample_cfg = dict(
+                temperature=float(t_), top_k=int(k_), top_p=float(p_), gens=torch.Generator().manual_seed(1234)
+            )
         self.tid = None
         # sampled verify (adapter): the round split in two traces around a host sampling step (SpecDecoder.forward_verify / forward_tail); the persistent buffers are allocated here, before any trace
         cand_k = int(os.environ.get("DSV41_SPEC_CAND_K", "0")) if cand_k is None else int(cand_k)
@@ -309,9 +317,28 @@ class SpecRunner:
         self._ensure(base)
         self.dec.set_force(-1 if force is None else force)
         self._feed(X, base)
+        self._set_sample_params()
         ttnn.execute_trace(self.md, self.tid, cq_id=0, blocking=False)
         ttnn.synchronize_device(self.md)
         return self._readback()
+
+    def _set_sample_params(self):
+        """Per block row (user-major, ``n`` rows per user) sampling params of the in-trace sampler for the next replay: every row draws from its own request's distribution with its own uniform."""
+        if self.samp is None:
+            return
+        from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import sampling_rows
+
+        n, B = self.n, self.B
+        c = self.sample_cfg
+        if c is None:
+            self.samp.set_params(
+                torch.ones(B * n), torch.zeros(B * n), torch.ones(B * n), torch.zeros(B * n), torch.ones(B * n)
+            )
+            return
+        rep = lambda x: [v for v in (list(x) if isinstance(x, (list, tuple)) else [x] * B) for _ in range(n)]
+        g = c["gens"]
+        gens = [x for x in g for _ in range(n)] if isinstance(g, (list, tuple)) else g
+        self.samp.set_params(*sampling_rows(rep(c["temperature"]), rep(c["top_k"]), rep(c["top_p"]), gens, B * n))
 
     def free_other_traces(self):
         """Release the plain-decode trace and the prefill chunk trace + per-chunk buffers (they are re-captured by the next prefill / decode call)."""
