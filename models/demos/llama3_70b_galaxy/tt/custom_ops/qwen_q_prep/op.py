@@ -158,7 +158,7 @@ def _accessor(t) -> list[int]:
 
 
 def _build_program(
-    device, plan, pairs, col, q, cos, sin, trans_mat, gamma, eps, depth, src, src_layout
+    device, plan, pairs, col, q, cos, sin, trans_mat, gamma, eps, depth, src, src_layout, src_local=False
 ) -> ttnn.ProgramDescriptor:
     n_coords = [n for n, _ in pairs]
     r_coords = [r for _, r in pairs]
@@ -213,7 +213,13 @@ def _build_program(
         n_phys = device.worker_core_from_logical_core(ttnn.CoreCoord(*n_xy))
         r_phys = device.worker_core_from_logical_core(ttnn.CoreCoord(*r_xy))
         n_reader_rt.append(
-            (n_xy, [src.buffer_address(), gamma.buffer_address(), count, h0, j0, tl0] + walk + list(src_layout))
+            (
+                n_xy,
+                [src.buffer_address(), gamma.buffer_address(), count, h0, j0, tl0]
+                + walk
+                + list(src_layout)
+                + [int(src_local)],
+            )
         )
         n_compute_rt.append((n_xy, [count]))
         n_writer_rt.append((n_xy, [count, r_phys.x, r_phys.y, depth]))
@@ -309,6 +315,7 @@ def qwen_q_prep(
     all_rows: bool = False,
     src: ttnn.Tensor | None = None,
     src_col: int = 0,
+    src_local: bool = False,
 ) -> ttnn.Tensor:
     """typecast -> q_norm -> RoPE -> typecast on this column's two ring slices of q, in place.
 
@@ -318,6 +325,10 @@ def qwen_q_prep(
     src: read the input rows from this fused QKV buffer instead of q ([1, 1, S, W] bf8 TILE DRAM interleaved, the
     heads at columns src_col + 128 * h), as nlp_create_qkv_heads would copy them; q is then only written (its
     other rows are not touched). Without src, q is updated in place.
+
+    src_local=True (with src, not all_rows): src holds only this column's two ring slices in local order
+    ([1, 1, S / cols, W] = [slice c ; slice 2 * cols - 1 - c], the context-parallel prefill layout); the source row
+    is the local one, while cos/sin and the q rows written stay at the natural positions.
 
     Returns ``q``. See the module docstring for the tensor contract. Raises ValueError on any
     shape, dtype or layout mismatch; there is no fallback to the stock ops.
@@ -331,13 +342,16 @@ def qwen_q_prep(
     if grid is None:
         g = device.compute_with_storage_grid_size()
         grid = (int(g.x), int(g.y))
+    if src_local and (src is None or all_rows):
+        raise ValueError("src_local needs src and is not defined for all_rows")
     if src is None:
         src = q
         src_layout = (0, WT, (seq_len // 32) * WT)
     else:
         s = tuple(src.shape)
-        if len(s) != 4 or s[0] != 1 or s[1] != 1 or s[2] != seq_len or s[3] % 32:
-            raise ValueError(f"src must be [1, 1, {seq_len}, W], got {s}")
+        src_rows = seq_len // plan_cols if src_local else seq_len
+        if len(s) != 4 or s[0] != 1 or s[1] != 1 or s[2] != src_rows or s[3] % 32:
+            raise ValueError(f"src must be [1, 1, {src_rows}, W], got {s}")
         if src.dtype != ttnn.bfloat8_b or src.layout != ttnn.TILE_LAYOUT:
             raise ValueError(f"src must be bfloat8_b TILE, got {src.dtype} {src.layout}")
         smc = src.memory_config()
@@ -355,6 +369,7 @@ def qwen_q_prep(
         tuple(device.shape),
         grid,
         all_rows,
+        src_local,
         src_layout,
         src.buffer_address(),
         handoff_depth,
@@ -372,7 +387,7 @@ def qwen_q_prep(
         mesh_program = ttnn.MeshProgramDescriptor()
         for col in range(cols):
             program = _build_program(
-                device, plan, pairs, col, q, cos, sin, trans_mat, gamma, eps, handoff_depth, src, src_layout
+                device, plan, pairs, col, q, cos, sin, trans_mat, gamma, eps, handoff_depth, src, src_layout, src_local
             )
             mesh_range = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, col), ttnn.MeshCoordinate(mesh_rows - 1, col))
             mesh_program[mesh_range] = program
