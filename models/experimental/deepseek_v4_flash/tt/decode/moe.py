@@ -65,8 +65,8 @@ class SparseRouting(NamedTuple):
 class DeepSeekV4MLP(DeepSeekV4Module):
     """Dense SwiGLU MLP (matches ``DeepseekV4MLP`` / ``LlamaMLP``).
 
-    Used as the always-on *shared expert*: ``down(silu(gate(x)) * up(x))`` with no clamp
-    (the routed experts clamp; the shared expert does not).
+    Used as the always-on *shared expert*: ``down(silu(gate(x)) * up(x))``, with no clamp
+    unless ``clamp_swiglu`` is set (V4's routed experts clamp; its shared expert does not).
 
     ``use_prefetcher=True`` runs the three projections as :class:`LinearDecode`. Gate and up are
     full-width (hub mode) on q_a's 32-core ring and consume a ROW_MAJOR HEIGHT_SHARDED replica of
@@ -80,7 +80,13 @@ class DeepSeekV4MLP(DeepSeekV4Module):
     width-shards the token rows over one tile row, which caps it at the 32 rows a tile holds, so a
     wider input cannot use it. ``config`` is needed either way, to check the fixed weight layouts
     against the shapes this model wants.
+
+    Subclasses for other checkpoints override ``decode_layouts`` (the gate/up/down cuts) and
+    ``clamp_swiglu`` (whether the activation takes the routed experts' ``swiglu_limit`` clamp).
     """
+
+    decode_layouts = DECODE_LAYOUTS
+    clamp_swiglu = False
 
     def __init__(
         self,
@@ -109,6 +115,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         self.device = device
         self.use_prefetcher = use_prefetcher
         self.tp_size = tp_size
+        self.swiglu_limit = config.swiglu_limit if self.clamp_swiglu else None
         # After the transpose the weights are matmul-shaped: gate/up ``[D, I]``
         # (column-parallel: shard N) and down ``[I, D]`` (row-parallel: shard K).
         gate_up_mapper = ttnn.ShardTensorToMesh(device, dim=1) if tp_size > 1 else None
@@ -140,8 +147,8 @@ class DeepSeekV4MLP(DeepSeekV4Module):
 
         hidden, inter = config.hidden_size, config.moe_intermediate_size
         local_inter = inter // tp_size if tp_size > 1 else inter
-        gate_up_layout = dict(check_decode_layout("shared_gate_proj", hidden, inter))
-        down_layout = dict(check_decode_layout("shared_down_proj", inter, hidden))
+        gate_up_layout = dict(check_decode_layout("shared_gate_proj", hidden, inter, layouts=self.decode_layouts))
+        down_layout = dict(check_decode_layout("shared_down_proj", inter, hidden, layouts=self.decode_layouts))
         gate_up_prefetch = {"use_prefetcher": False}
         down_prefetch = {"use_prefetcher": False}
         if use_prefetcher:
@@ -197,7 +204,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
             cache.file(f"{prefix}.down_proj{tp_tag}"),
             dtype=weight_dtype,
             mesh_mapper=decode_down_mapper,
-            num_inputA_cores=max(1, local_inter // 64) if tp_size > 1 else 32,
+            num_inputA_cores=max(1, local_inter // 64),
             **down_prefetch,
             rectangle_b_grid=True,
             **down_layout,
@@ -243,7 +250,12 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         # ROW_MAJOR WIDTH_SHARDED results over the 32 cores holding 64 columns each,
         # which is how down_proj wants its activation sharded along K, so the product
         # feeds it where it already sits.
-        gated = ttnn.multiply(ttnn.silu(self.gate_proj(x)), self.up_proj(x))
+        gate, up = self.gate_proj(x), self.up_proj(x)
+        if self.swiglu_limit is not None:
+            # Not ``ttnn.clamped_silu_glu``: on these ROW_MAJOR WIDTH_SHARDED operands its result is wrong.
+            gate = ttnn.clamp(gate, max=self.swiglu_limit)
+            up = ttnn.clamp(up, min=-self.swiglu_limit, max=self.swiglu_limit)
+        gated = ttnn.multiply(ttnn.silu(gate), up)
         out = self.down_proj(gated)
         return out
 
@@ -277,21 +289,23 @@ def _make_router_gate(
     prefetch_buffers: Optional[dict] = None,
     weight_dtype: ttnn.DataType = ttnn.bfloat16,
     matmul_decode: Optional[bool] = None,
+    layouts: dict = DECODE_LAYOUTS,
 ):
     """The learned ``[D, E]`` router projection, as :class:`Linear` or :class:`LinearDecode`.
 
     ``matmul_decode`` (default: ``use_prefetcher``) picks :class:`LinearDecode`; without it
     (prefill) the gate keeps ``ttnn.linear``. A ``LinearDecode`` gate without the prefetcher
     copies its weight DRAM -> L1 per call. Decode runs
-    ``matmul_decode`` in hub mode: the gate is full-width on 8 cores (``n_blocks=8``, one output
-    tile per core), so it consumes the decode all-gather replica (ROW_MAJOR HEIGHT_SHARDED A)
-    where it sits instead of unreplicating it through DRAM and re-sharding it -- that round trip
-    was four extra device ops per step. The 8-receiver cut cannot join the shared 64-receiver ring
-    or q_a's 32-receiver one, so it streams through :data:`ROUTER_GATE_GCB`.
+    ``matmul_decode`` in hub mode: the gate is full-width on ``n_blocks`` cores (8 for V4, one
+    output tile per core), so it consumes the decode all-gather replica (ROW_MAJOR HEIGHT_SHARDED
+    A) where it sits instead of unreplicating it through DRAM and re-sharding it -- that round
+    trip was four extra device ops per step. The 8-receiver cut cannot join the shared 64-receiver
+    ring or q_a's 32-receiver one, so it streams through :data:`ROUTER_GATE_GCB`. ``layouts`` is
+    the table holding the ``router_gate`` cut.
     """
     if not (use_prefetcher if matmul_decode is None else matmul_decode):
         return Linear(weights["gate.weight"], device, cache.file("gate"))
-    layout = dict(check_decode_layout("router_gate", config.hidden_size, config.num_local_experts))
+    layout = dict(check_decode_layout("router_gate", config.hidden_size, config.num_local_experts, layouts=layouts))
     prefetch = {"use_prefetcher": False}
     if use_prefetcher:
         if prefetch_buffers is None:
@@ -314,8 +328,8 @@ def _make_router_gate(
         use_rm_hs=True,
     )
     assert gate.num_inputB_cores == layout["n_blocks"], (
-        "router gate must be full-width on 8 cores "
-        f"(n_blocks={layout['n_blocks']}), got {gate.num_inputB_cores} B cores"
+        f"router gate must be full-width on n_blocks={layout['n_blocks']} cores, "
+        f"got {gate.num_inputB_cores} B cores"
     )
     assert gate._can_matmul_decode_rm_hs(), (
         "the router gate must run hub-mode matmul_decode so it reads the decode all-gather replica in "
@@ -335,7 +349,11 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
 
     The reference's renormalize-and-scale tail likewise runs inside ``fused_experts``, on the k
     values per token it already reads, rather than here across a dense E-wide row.
+
+    ``decode_layouts`` is the table holding the gate's ``router_gate`` cut.
     """
+
+    decode_layouts = DECODE_LAYOUTS
 
     def __init__(
         self,
@@ -370,6 +388,7 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
             prefetch_buffers=prefetch_buffers,
             weight_dtype=weight_dtype,
             matmul_decode=matmul_decode,
+            layouts=self.decode_layouts,
         )
         bias = _materialize(
             weights["gate.e_score_correction_bias"], cache.file("gate.e_score_correction_bias"), ttnn.bfloat16
@@ -544,12 +563,11 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
 # ``moe.fused_num_cores`` / ``moe.fused_dram_banks`` in the system profile.
 _FUSED_TILE = 32
 # Compute-grid geometry from ``fused_experts_program_factory``: 6 selected experts run on
-# 12x8 (16 cores each); anything else stays on the original 8x8, including when the device
-# cannot host 12x8.
+# 12x8 (16 cores each); anything else stays on the serial ``num_cores / 8`` x 8 grid (8x8 at
+# the 64-core default), including when the device cannot host 12x8.
 _FUSED_PARALLEL_EXPERTS = 6
 _FUSED_GRID_Y = 8
 _FUSED_PARALLEL_GRID_X = _FUSED_PARALLEL_EXPERTS * 2
-_FUSED_SERIAL_GRID_X = 8
 
 
 def _fused_hidden(num_cores: int) -> int:
@@ -558,17 +576,18 @@ def _fused_hidden(num_cores: int) -> int:
     return num_cores * 2 * _FUSED_TILE
 
 
-def _fused_compute_core_range_set(top_k: int, device) -> ttnn.CoreRangeSet:
+def _fused_compute_core_range_set(top_k: int, device, num_cores: int) -> ttnn.CoreRangeSet:
     """Cores ``fused_experts`` occupies for ``top_k`` selected experts, as a ``CoreRangeSet``.
 
     The ``[(0,0) .. (11,7)]`` rectangle (12x8, one expert per 2x8 column pair) on the 6-expert
-    path, ``[(0,0) .. (7,7)]`` otherwise. The replica ``all_gather_for_matmul`` multicasts has to
-    cover every one of these: the op aliases ``cb_input`` over each core's shard and will not
-    broadcast a row that is already supposed to be local.
+    path, the ``num_cores``-core serial grid ``[(0,0) .. (num_cores/8 - 1, 7)]`` otherwise. The
+    replica ``all_gather_for_matmul`` multicasts has to cover every one of these: the op aliases
+    ``cb_input`` over each core's shard and will not broadcast a row that is already supposed to
+    be local.
     """
     grid = device.compute_with_storage_grid_size()
     parallel = top_k == _FUSED_PARALLEL_EXPERTS and grid.x >= _FUSED_PARALLEL_GRID_X and grid.y >= _FUSED_GRID_Y
-    gx = _FUSED_PARALLEL_GRID_X if parallel else _FUSED_SERIAL_GRID_X
+    gx = _FUSED_PARALLEL_GRID_X if parallel else num_cores // _FUSED_GRID_Y
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, _FUSED_GRID_Y - 1))})
 
 
@@ -773,7 +792,7 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         self.tp_size = tp_size
         self.num_experts = config.num_local_experts
         self.top_k = config.num_experts_per_tok
-        self._core_grid = _fused_compute_core_range_set(self.top_k, device)
+        self._core_grid = _fused_compute_core_range_set(self.top_k, device, num_cores)
         intermediate_full = config.moe_intermediate_size
         if intermediate_full % tp_size:
             raise ValueError(f"moe_intermediate_size {intermediate_full} is not divisible by tp_size {tp_size}")
@@ -960,7 +979,13 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
     """ttnn port of ``DeepseekV4SparseMoeBlock`` (standard ``moe`` layer).
 
     ``routed = experts(router(x)) ; return routed + shared_experts(x)``.
+
+    ``router_cls`` / ``shared_expert_cls`` are the learned router and shared expert this block
+    builds; subclasses for other checkpoints swap them.
     """
+
+    router_cls = DeepSeekV4TopKRouter
+    shared_expert_cls = DeepSeekV4MLP
 
     def __init__(
         self,
@@ -991,7 +1016,7 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         self.gate = (
             gate
             if gate is not None
-            else DeepSeekV4TopKRouter(
+            else self.router_cls(
                 config,
                 weights,
                 device,
@@ -1004,7 +1029,7 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         )
         self.is_hash = isinstance(self.gate, DeepSeekV4HashRouter)
         self.experts = experts
-        self.shared_experts = DeepSeekV4MLP(
+        self.shared_experts = self.shared_expert_cls(
             weights,
             "shared_experts",
             device,

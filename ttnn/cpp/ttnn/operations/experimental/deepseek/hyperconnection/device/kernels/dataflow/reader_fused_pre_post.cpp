@@ -34,6 +34,7 @@ void kernel_main() {
     const uint32_t d_tiles = get_arg_val<uint32_t>(6);
     const uint32_t start_token = get_arg_val<uint32_t>(7);
     const uint32_t num_tokens = get_arg_val<uint32_t>(8);
+    const uint32_t pre_mix_addr = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t cb_fused_w = get_compile_time_arg_val(0);
     constexpr uint32_t cb_pre_w = get_compile_time_arg_val(1);
@@ -45,16 +46,22 @@ void kernel_main() {
     constexpr uint32_t slice_cb_pages = get_compile_time_arg_val(7);
     constexpr bool fused_w_row_major = get_compile_time_arg_val(8) != 0;
     constexpr uint32_t fused_w_page_bytes = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_pre = get_compile_time_arg_val(10);
+    // Given pre_mix, token t's tile of it goes straight into cb_pre (the collapse matmul's in0);
+    // pre_w is still staged, for the pre the op returns.
+    constexpr bool use_pre_mix = get_compile_time_arg_val(11) != 0;
 
-    constexpr auto fused_w_args = TensorAccessorArgs<10>();
+    constexpr auto fused_w_args = TensorAccessorArgs<12>();
     constexpr auto pre_bias_args = TensorAccessorArgs<fused_w_args.next_compile_time_args_offset()>();
     constexpr auto post_bias_args = TensorAccessorArgs<pre_bias_args.next_compile_time_args_offset()>();
     constexpr auto hidden_args = TensorAccessorArgs<post_bias_args.next_compile_time_args_offset()>();
+    constexpr auto pre_mix_args = TensorAccessorArgs<hidden_args.next_compile_time_args_offset()>();
 
     const auto fused_w = TensorAccessor(fused_w_args, fused_w_addr);
     const auto pre_bias = TensorAccessor(pre_bias_args, pre_bias_addr);
     const auto post_bias = TensorAccessor(post_bias_args, post_bias_addr);
     const auto hidden = TensorAccessor(hidden_args, hidden_addr);
+    const auto pre_mix = TensorAccessor(pre_mix_args, pre_mix_addr);
 
     Noc noc;
     CircularBuffer cb_fw(cb_fused_w);
@@ -64,6 +71,7 @@ void kernel_main() {
     CircularBuffer cb_pb(cb_pre_bias);
     CircularBuffer cb_ppb(cb_post_bias);
     CircularBuffer cb_h(cb_hidden);
+    CircularBuffer cb_p(cb_pre);
 
     constexpr uint32_t one_tile = 1;
     const uint32_t tile_size_bytes = cb_fw.get_tile_size();
@@ -153,6 +161,11 @@ void kernel_main() {
         }
         cb_cw.push_back(one_tile);
 
+        // pre_mix is [B,S,1,H], so token `token` is its tile `token`.
+        if constexpr (use_pre_mix) {
+            cb_p.reserve_back(one_tile);
+            noc.async_read(pre_mix, cb_p, cb_p.get_tile_size(), {.page_id = token}, {.offset_bytes = 0});
+        }
         // H <= 32, so token `token` is tile row `token` of the flattened [T*H, D] hidden grid.
         cb_h.reserve_back(d_tiles);
         for (uint32_t n = 0; n < d_tiles; ++n) {
@@ -164,6 +177,9 @@ void kernel_main() {
                 {.offset_bytes = n * hidden_tile_size});
         }
         noc.async_read_barrier();
+        if constexpr (use_pre_mix) {
+            cb_p.push_back(one_tile);
+        }
         cb_h.push_back(d_tiles);
     }
 }

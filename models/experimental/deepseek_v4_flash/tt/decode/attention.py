@@ -788,7 +788,13 @@ class DeepSeekV4Attention(DeepSeekV4Module):
       buffer is shared by every layer on the device: left to build its own, each block costs
       288 KB per receiver core plus a slice of a DRISC state zone that only fits about six
       GCBs, neither of which scales past a handful of layers.
+
+    Subclasses for other checkpoints override ``decode_layouts`` (the q_a / q_b / kv / o_b
+    cuts) and ``q_head_norm`` (whether q_b's output gets a per-head unweighted RMSNorm).
     """
+
+    decode_layouts = DECODE_LAYOUTS
+    q_head_norm = True
 
     def __init__(
         self,
@@ -880,7 +886,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 else:
                     prefetch["global_cb"] = prefetch_buffers[name]
                     prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype)
-            layout = dict(DECODE_LAYOUTS[name])
+            layout = dict(self.decode_layouts[name])
             mapper = None
             cache_name = name
             shard_projection = name == "q_b_proj"
@@ -943,7 +949,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             if self.fuse_q_a_norm
             else DeepSeekV4RMSNorm(weights["q_a_norm.weight"], self.eps, device, cache.file("q_a_norm"), sharded=True)
         )
-        self.fuse_q_b_norm = self.q_b_proj.can_fuse_rms_norm()
+        self.fuse_q_b_norm = self.q_head_norm and self.q_b_proj.can_fuse_rms_norm()
         if self.fuse_q_b_norm:
             self.q_b_proj.enable_fused_rms_norm(self.eps, 1.0, group_size=self.head_dim)
         self.fuse_kv_norm = self.kv_proj.can_fuse_rms_norm()
@@ -1441,7 +1447,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         q = self.q_b_proj(q_b_input)  # [1, 1, B, H*Dh]
         if q_b_input is not q_a:
             ttnn.deallocate(q_b_input)
-        assert self.fuse_q_b_norm, "q_b_norm must be fused"
+        assert self.fuse_q_b_norm or not self.q_head_norm, "q_b_norm must be fused"
 
         q = _apply_rope(q, cos, sin, self.rot, self.rope_dim, head_dim=self.head_dim)
         # kv_proj runs here rather than beside q_a_proj: one GCB is one FIFO, so a

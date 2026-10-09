@@ -40,7 +40,9 @@ namespace ttnn::prim {
 //   post        = 2 * sigmoid(post_w * post_scale + post_bias)              [1,1,1,H]
 //   collapsed   = (sigmoid(pre_w * pre_scale + pre_bias) + eps) @ hidden     [1,1,1,D]
 //   comb_w_mat  = comb_w slice of fused_w, laid out as the [1,1,H,H] comb matrix
-std::array<Tensor, 3> fused_hyperconnection_pre_post(
+// With pre_mix, collapsed = pre_mix @ hidden instead, and the pre computed from pre_w is returned
+// as a fourth tensor [1,T,1,H].
+std::vector<Tensor> fused_hyperconnection_pre_post(
     const Tensor& fused_w,
     const Tensor& pre_bias,
     const Tensor& post_bias,
@@ -49,6 +51,7 @@ std::array<Tensor, 3> fused_hyperconnection_pre_post(
     float pre_scale,
     float post_scale,
     float eps,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& pre_mix = std::nullopt);
 
 }  // namespace ttnn::prim

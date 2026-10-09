@@ -36,8 +36,10 @@ namespace ttnn::prim {
 
 // Single-user decode implementation. The first eight cores consume width shards of
 // hidden_streams and produce collapsed, core 8 computes post, and core 9 computes comb
-// plus Sinkhorn. fused_w is broadcast from core 0 to all ten participating cores.
-std::array<Tensor, 3> fused_hyperconnection_single_user(
+// plus Sinkhorn. fused_w is broadcast from core 0 to all ten participating cores. With pre_mix,
+// the collapse cores weight the streams by it instead of the pre derived from fused_w, and core 8
+// also computes that pre and returns it as a fourth output.
+std::vector<Tensor> fused_hyperconnection_single_user(
     const Tensor& fused_w,
     const Tensor& pre_bias,
     const Tensor& post_bias,
@@ -49,6 +51,7 @@ std::array<Tensor, 3> fused_hyperconnection_single_user(
     float post_scale,
     float comb_scale,
     float eps,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& pre_mix = std::nullopt);
 
 }  // namespace ttnn::prim

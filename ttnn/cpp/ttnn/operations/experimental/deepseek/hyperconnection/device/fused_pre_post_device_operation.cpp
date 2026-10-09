@@ -4,6 +4,8 @@
 
 #include "fused_pre_post_device_operation.hpp"
 
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -98,6 +100,27 @@ void validate_tensors(const FusedPrePostParams& attributes, const FusedPrePostIn
         hidden_shape[2],
         hc);
     TT_FATAL(hc <= 32, "fused_hyperconnection_pre_post: only H<=32 (single comb tile) is supported, got H={}", hc);
+
+    if (tensor_args.pre_mix.has_value()) {
+        const auto& pre_mix = *tensor_args.pre_mix;
+        TT_FATAL(
+            pre_mix.storage_type() == StorageType::DEVICE, "fused_hyperconnection_pre_post: pre_mix must be on device");
+        TT_FATAL(pre_mix.dtype() == DataType::BFLOAT16, "fused_hyperconnection_pre_post: pre_mix must be BFLOAT16");
+        // Each token's tile is copied straight into the collapse matmul's in0 buffer.
+        TT_FATAL(
+            pre_mix.layout() == Layout::TILE &&
+                pre_mix.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
+                pre_mix.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH,
+            "fused_hyperconnection_pre_post: pre_mix must use 32x32 TILE layout");
+        TT_FATAL(
+            pre_mix.logical_shape() ==
+                ttnn::Shape({static_cast<uint32_t>(hidden_shape[0]), static_cast<uint32_t>(hidden_shape[1]), 1u, hc}),
+            "fused_hyperconnection_pre_post: pre_mix must be [B,S,1,H] = [{},{},1,{}], got {}",
+            hidden_shape[0],
+            hidden_shape[1],
+            hc,
+            pre_mix.logical_shape());
+    }
 }
 
 }  // namespace
@@ -130,27 +153,31 @@ FusedPrePostDeviceOperation::spec_return_value_t FusedPrePostDeviceOperation::co
     const ttnn::Shape post_shape({1, num_tokens, hc, 1});
     const ttnn::Shape collapsed_shape({1, num_tokens, 1, hidden_shape[-1]});
     const ttnn::Shape comb_shape({1, num_tokens, hc, hc});
-    return {
+    spec_return_value_t specs = {
         tt::tt_metal::TensorSpec(post_shape, output_layout),
         tt::tt_metal::TensorSpec(collapsed_shape, output_layout),
         tt::tt_metal::TensorSpec(comb_shape, output_layout)};
+    if (tensor_args.pre_mix.has_value()) {
+        specs.emplace_back(ttnn::Shape({1, num_tokens, 1, hc}), output_layout);
+    }
+    return specs;
 }
 
 FusedPrePostDeviceOperation::tensor_return_value_t FusedPrePostDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto specs = compute_output_specs(operation_attributes, tensor_args);
     auto* device = tensor_args.fused_w.device();
-    return {
-        create_device_tensor(specs[0], device),
-        create_device_tensor(specs[1], device),
-        create_device_tensor(specs[2], device)};
+    tensor_return_value_t outputs;
+    for (const auto& spec : compute_output_specs(operation_attributes, tensor_args)) {
+        outputs.push_back(create_device_tensor(spec, device));
+    }
+    return outputs;
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::hyperconnection
 
 namespace ttnn::prim {
 
-std::array<Tensor, 3> fused_hyperconnection_pre_post(
+std::vector<Tensor> fused_hyperconnection_pre_post(
     const Tensor& fused_w,
     const Tensor& pre_bias,
     const Tensor& post_bias,
@@ -159,7 +186,8 @@ std::array<Tensor, 3> fused_hyperconnection_pre_post(
     float pre_scale,
     float post_scale,
     float eps,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& pre_mix) {
     using OperationType = ttnn::operations::experimental::deepseek::hyperconnection::FusedPrePostDeviceOperation;
     const MemoryConfig output_mem_config = memory_config.value_or(fused_w.memory_config());
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -174,6 +202,7 @@ std::array<Tensor, 3> fused_hyperconnection_pre_post(
         .pre_bias = pre_bias,
         .post_bias = post_bias,
         .hidden_streams = hidden_streams,
+        .pre_mix = pre_mix,
     };
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

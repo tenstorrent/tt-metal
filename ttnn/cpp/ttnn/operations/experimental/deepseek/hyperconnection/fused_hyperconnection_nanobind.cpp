@@ -30,6 +30,11 @@ void bind_fused_hyperconnection(nb::module_& mod) {
             comb       = sinkhorn(softmax(comb_logit, dim=-1) + eps, sinkhorn_iters)
             collapsed  = sum_h pre[..,h] * hidden_streams[..,h,:]
 
+        If ``pre_mix`` is given, ``collapsed`` uses it in place of ``pre`` (DeepSeek V4.1, where
+        each sublayer collapses with the ``pre`` computed by the sublayer before it); ``post`` and
+        ``comb`` are unchanged, and ``pre`` itself is returned as a fourth output, in the layout
+        ``pre_mix`` takes, for the next sublayer to collapse with.
+
         Args:
             hidden_streams: Residual-stream stack, [B, S, H, D].
             fused_w: Packed pre/post/comb projection output, [1, 1, T, (2+H)*H] (T == B*S).
@@ -43,9 +48,12 @@ void bind_fused_hyperconnection(nb::module_& mod) {
             comb_scale: Learned scale for the comb projection.
             eps: Stability epsilon added to pre / comb (config.hc_eps).
             memory_config: Optional output memory config.
+            pre_mix: Optional collapse weights [B, S, 1, H], BFLOAT16 TILE (one tile per token).
+                ``None`` collapses with the ``pre`` computed from ``fused_w``.
 
         Returns:
-            Tuple of (post [B,S,H,1], comb [B,S,H,H], collapsed [B,S,1,D]).
+            List of [post [B,S,H,1], comb [B,S,H,H], collapsed [B,S,1,D]], plus
+            pre [B,S,1,H] (BFLOAT16 TILE, zero-padded) when ``pre_mix`` is given.
         )doc",
         &ttnn::experimental::deepseek::hyperconnection::fused_hyperconnection,
         nb::arg("hidden_streams"),
@@ -60,7 +68,8 @@ void bind_fused_hyperconnection(nb::module_& mod) {
         nb::arg("post_scale"),
         nb::arg("comb_scale"),
         nb::arg("eps"),
-        nb::arg("memory_config") = std::nullopt);
+        nb::arg("memory_config") = std::nullopt,
+        nb::arg("pre_mix") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::hyperconnection::detail
