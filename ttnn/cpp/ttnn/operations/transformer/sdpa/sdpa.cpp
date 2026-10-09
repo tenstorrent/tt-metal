@@ -39,6 +39,14 @@ std::optional<ttnn::Tensor> drop_if_empty(const std::optional<ttnn::Tensor>& t) 
     return t;
 }
 
+// max_cores_per_head_batch caps decode's per-head K/V split; prefill SDPA spreads every head over the whole grid.
+void reject_decode_settings(const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config) {
+    TT_FATAL(
+        !program_config || !program_config->max_cores_per_head_batch.has_value(),
+        "max_cores_per_head_batch is a decode setting; prefill SDPA uses the whole grid. Remove it from the "
+        "program_config.");
+}
+
 // Precision routing (tech_reports/FlashAttention/SDPAPrecisionRecipes.md, "Routing"). A call without `precision`
 // that would reach a legacy loop (sdpa_legacy_loops.hpp) runs a recipe instead: ACCURATE when its compute config asks
 // for FP32 DEST accumulation, STANDARD on the routes that have no streaming kernel (non-ring joint, exp ring
@@ -352,6 +360,7 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor,
     bool output_concat_heads,
     std::optional<SDPAPrecision> precision) {
+    reject_decode_settings(program_config);
     if (!precision) {
         // Zero chunk sizes (op-chosen blocking) need an explicit recipe, routed or not.
         operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
@@ -476,6 +485,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<uint32_t> sliding_window_size,
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<SDPAPrecision> precision) {
+    reject_decode_settings(program_config);
     if (!precision) {
         operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
     }
@@ -540,6 +550,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<uint32_t> sliding_window_size,
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<SDPAPrecision> precision) {
+    reject_decode_settings(program_config);
     if (!precision) {
         operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
     }
@@ -601,6 +612,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<SDPAPrecision> precision) {
+    reject_decode_settings(program_config);
     // Non-ring joint has no streaming kernel: without `precision` it always reaches the legacy loop, so it is
     // always routed (STANDARD, or ACCURATE with FP32 DEST).
     if (!precision) {
@@ -727,6 +739,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
     std::optional<SDPAPrecision> precision) {
+    reject_decode_settings(program_config);
     if (!precision) {
         operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
     }
@@ -929,6 +942,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx) {
+    reject_decode_settings(program_config);
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_kv,
@@ -994,6 +1008,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel,
     std::optional<SDPAPrecision> precision) {
+    reject_decode_settings(program_config);
     // The legacy exp ring kernel has only its streaming path; its factory rejects any other blocking (and FP32
     // DEST), so those calls run a recipe (STANDARD, or ACCURATE with FP32 DEST).
     if (!precision) {
@@ -1121,6 +1136,7 @@ ttnn::Tensor flash_mla_prefill(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<SDPAPrecision> precision) {
+    reject_decode_settings(program_config);
     if (!precision) {
         operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
     }
@@ -1183,6 +1199,7 @@ ttnn::Tensor chunked_flash_mla_prefill(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<SDPAPrecision> precision) {
+    reject_decode_settings(program_config);
     if (!precision) {
         operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
     }
@@ -1242,6 +1259,7 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& page_table,
     std::optional<int64_t> chunk_start_idx,
     std::optional<SDPAPrecision> precision) {
+    reject_decode_settings(program_config);
     // Without precision, the op runs STANDARD, or ACCURATE with FP32 DEST (this op always left the streaming
     // kernels for the legacy loop).
     const bool routed = !precision && routes_to_recipes(input_tensor_q);
