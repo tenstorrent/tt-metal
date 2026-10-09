@@ -351,6 +351,8 @@ class CMakeBuild(build_ext):
             # the same header tree in an installed wheel as it does in a source checkout.
             "ttnn/kernel_lib/**/*.{hpp,inl}",
             "ttnn/operations/normalization/kernel_util/**/*",
+            # Host/device shared header included by update_padded_kv_cache kernels.
+            "ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/packed_kv_layout.hpp",
         ]
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",
