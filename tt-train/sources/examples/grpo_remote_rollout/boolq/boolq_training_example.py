@@ -30,10 +30,13 @@ from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, get_model_config, load_config
 from ttml.trainers import GRPOTrainer, get_grpo_config
 from grpo_remote_rollout.utils.llama_grpo_completer import LlamaCompleterRemoteRollout, LlamaCompletionCtx
-from grpo_remote_rollout.utils.llama_ttt_presets import bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad
-from grpo_remote_rollout.utils.mpi_rollout import MPIRolloutClient, MPIRolloutServer
-from grpo_remote_rollout.utils.ttt_generation_worker import TttGenerationWorker
-from grpo_remote_rollout.utils.weight_bridge import HostWeightBridge, TTML_RANK, TTT_RANK
+from ttml.trainers.grpo_trainer.remote_rollout.llama_ttt_presets import (
+    bf16_attn_bfp8_mlp_optimizations,
+    llama_stop_and_pad,
+)
+from ttml.trainers.grpo_trainer.remote_rollout.mpi_rollout import MPIRolloutClient, MPIRolloutServer
+from ttml.trainers.grpo_trainer.remote_rollout.ttt_generation_worker import TttGenerationWorker
+from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import HostWeightBridge, TTML_RANK, TTT_RANK
 
 CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml"
 

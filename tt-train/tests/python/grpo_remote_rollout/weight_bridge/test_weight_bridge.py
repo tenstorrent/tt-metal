@@ -30,7 +30,7 @@ _MPI_RANK = int(os.environ["OMPI_COMM_WORLD_RANK"])
 import torch  # noqa: E402
 import ttnn  # noqa: E402
 
-from grpo_remote_rollout.utils.weight_bridge import (  # noqa: E402
+from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import (  # noqa: E402
     SENDER_RANK,
     RECEIVER_RANK,
     HostWeightBridge,
