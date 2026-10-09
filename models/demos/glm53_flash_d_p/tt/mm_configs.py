@@ -93,3 +93,40 @@ def minimal_config(device, M_block: int, K_block: int, N_block: int, sub_h: int,
         subblock_w=sub_w,
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
     )
+
+
+def bmm(device, B: int, M: int, K: int, N: int, l1_budget: int = L1_BUDGET):
+    """Batched matmul with one weight per batch ([B, M, K] x [B, K, N], MLA per-head absorb), or None (auto).
+    MatmulMultiCoreReuseProgramConfig is only correct when every core gets at most ONE output block: with more blocks
+    than cores the result is garbage (tests/test_mla_bmm_repro.py::test_mla_bmm_blocks: rel 5..25 vs fp32 for every
+    per_core_M with B * Mt / per_core_M > cores, 4.6e-3 at 64 blocks / 110 cores; it only looked right after a
+    same-shape auto run left the right data in L1). So: per_core_N = all N tiles, per_core_M the smallest divisor of
+    the per-batch M tiles with B * Mt / per_core_M <= cores, the widest in0 block that fits L1; else None.
+    o w_uv (64 x 640 x 512 x 256): per_core_M 20, 0.905 -> ~0.25 ms; q w_uk has no fitting config (auto)."""
+    if not ENABLED:
+        return None
+    key = ("bmm", B, M, K, N, l1_budget)
+    if key in _cache:
+        return _cache[key]
+    grid = device.compute_with_storage_grid_size()
+    cores = grid.x * grid.y
+    Mt, Kt, Nt = M // TILE, K // TILE, N // TILE
+    sw = _largest_div(Nt, 4)
+    pc = None
+    pms = [d for d in range(1, Mt + 1) if Mt % d == 0 and B * Mt // d <= cores]
+    if pms:
+        pm = pms[0]
+        sh = _largest_div(pm, max(1, 4 // sw))
+        for bw in (4, 2, 1):
+            if Kt % bw == 0 and 2 * pm * bw * 2048 + 2 * bw * Nt * 2048 + pm * Nt * (2048 + 4096) <= l1_budget:
+                pc = ttnn.MatmulMultiCoreReuseProgramConfig(
+                    compute_with_storage_grid_size=grid,
+                    in0_block_w=bw,
+                    out_subblock_h=sh,
+                    out_subblock_w=sw,
+                    per_core_M=pm,
+                    per_core_N=Nt,
+                )
+                break
+    _cache[key] = pc
+    return pc
