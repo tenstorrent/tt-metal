@@ -382,9 +382,8 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 /**
  * @brief Reduce a block of tiles on the math thread, the counterpart of @ref _llk_unpack_AB_reduce_block_.
  *
- * Tile i goes to the destination tile dst_index + i * dst_stride (a stride of 0 accumulates the block into one tile).
- * When @ref reduce_block_holds_scaler holds, the scaler stays in SrcA for a chunk of @ref REDUCE_BLOCK_MAX_TILES tiles:
- * each tile releases only SrcB and the chunk releases SrcA once. Every other case runs @ref _llk_math_reduce_ per tile.
+ * A stride of 0 accumulates the block into one tile. With @ref reduce_block_holds_scaler the scaler stays in SrcA for a
+ * chunk of @ref REDUCE_BLOCK_MAX_TILES tiles, so each tile releases only SrcB and the chunk releases SrcA once.
  *
  * @tparam type: Pooling op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
@@ -585,7 +584,10 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
-    // MAX ROW switches the Src zero flag per tile (its transposes run under preserve; the uninit restores the default).
+    // Establish the operand-driven DEFAULT zero-flag state before the reduce's GMPOOLs, mirroring
+    // _llk_math_matmul_init_ / _llk_math_eltwise_binary_init_. A preceding copy_init that left
+    // PRESERVE (keep denormals) would otherwise leak "keep" into the pool GMPOOL — harmless on HW
+    // when fp32 DEST accumulation is enabled (the flag is ignored), but a real invariant violation.
     math::_configure_default_zero_flag_state_();
 }
 

@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// reduce_test.cpp with the block calls: _llk_unpack_AB_reduce_block_ and _llk_math_reduce_block_ take a block of tiles per
-// call. Reduce to one accumulates blocks of INPUT_NUM_TILES_IN_BLOCK tiles into DEST tile 0; otherwise each DEST section of
-// NUM_TILES_IN_BLOCK tiles is one block, tile i into DEST tile i.
+// reduce_test.cpp with the block calls: reduce to one accumulates blocks of INPUT_NUM_TILES_IN_BLOCK tiles into DEST
+// tile 0, otherwise each DEST section of NUM_TILES_IN_BLOCK tiles is one block, tile i into DEST tile i.
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>

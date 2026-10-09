@@ -2,11 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The production shapes of a reduce over a block of tiles: REDUCE_ROW and REDUCE_SCALAR accumulate eight input tiles into
-// one output tile (a row of eight tiles), REDUCE_COL writes one output tile per input tile (a DEST section of columns).
-// The input tiles go through calls of REDUCE_BLOCK_CT_DIM tiles: 1 is the per tile call, more is one
-// _llk_unpack_AB_reduce_block_ and one _llk_math_reduce_block_ per call. TILE_CNT counts input tiles; the data tiles sit at
-// the page size of their format (TILE_SIZE_UNPACK_A), as in a circular buffer.
+// Block reduce at production shapes: ROW and SCALAR accumulate 8 input tiles per output, COL writes one per tile;
+// calls of REDUCE_BLOCK_CT_DIM tiles (1 is the per tile call), TILE_CNT input tiles at their CB page size.
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>

@@ -34,7 +34,7 @@ using namespace ckernel::unpacker;
  *
  * @note For tiny tiles (face_r_dim < 16), padding is applied to prevent incorrect outputs.
  * @note For REDUCE_SCALAR operations, SrcA is cleared before unpacking because SrcA is clobbered in the Math kernel.
- *       A MAX of full faces skips it: the next unpack rewrites those rows, and only MAX measured faster without it.
+ *       A MAX of full faces skips it: the next unpack rewrites those rows.
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_shape)
@@ -201,11 +201,8 @@ inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uin
  * @brief Unpack a block of consecutive data tiles against one scaler tile with one context acquire per chunk of
  *        @ref REDUCE_BLOCK_MAX_TILES tiles.
  *
- * Each tile runs the MOP of @ref _llk_unpack_AB_reduce_init_, so the source registers receive what the per tile call
- * gives them. The data address advances in the instruction stream: through the unpacker's Z counter when the tiles are
- * face-contiguous in L1, otherwise by adding the tile stride to the context's base address (CFGSHIFTMASK). When
- * @ref reduce_block_holds_scaler holds, the scaler tile is unpacked into SrcA once per chunk and only the data tiles
- * follow.
+ * Each tile runs the init's MOP, so the source registers get what the per tile call gives them; the data address
+ * advances in the instruction stream (Z counter or CFGSHIFTMASK), and a held scaler is unpacked once per chunk.
  *
  * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
  * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
