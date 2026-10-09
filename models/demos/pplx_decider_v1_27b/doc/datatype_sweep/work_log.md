@@ -22,7 +22,8 @@ logs) and `stage8/sweep.log` (driver log). Labels: **measured** (command + value
   on every `minimal_matmul` / `linear` call during one forward to record the weight dtype, the
   `compute_kernel_config.math_fidelity` and the output dtype per role. Asserts they equal the JSON.
 - `doc/datatype_sweep/candidates/*.json`: one policy per candidate. `sweep_report.py` builds
-  `sweep_results.{json,csv}` and the two Pareto charts from the artifacts.
+  `sweep_results.{json,csv}` from the artifacts. It draws no charts: the Pareto plots were dropped by
+  the person's amendment to the short sweep (see README "Not done").
 
 Driver: `artifacts/pplx_decider/stage8/run_sweep.sh` (queue 1) and `run_sweep_q2.sh` (queue 2). For each
 candidate it sets `PPLX_DECIDER_PRECISION_CONFIG=<candidate json>` and

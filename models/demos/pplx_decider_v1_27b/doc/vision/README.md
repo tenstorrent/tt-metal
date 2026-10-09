@@ -1,10 +1,130 @@
-# Vision tower on one p150a (stage 12A)
+# Vision on one p150a (stages 12A and 12B)
 
 The pplx-decider vision tower is HF `Qwen3_5VisionModel`: patch embed, learned position embedding,
 27 ViT blocks and a 2x2 patch merger. It turns one image into 5120-wide features, the rows that
 `Qwen3_5Model` places at the `<|image_pad|>` tokens of the text. Stage 12A runs the tower on one
-Blackhole p150a in BF16 and checks it against the HF BF16 golden. The text model is unchanged.
-Splicing the features into the text and the 3D mRoPE belong to stage 12B.
+Blackhole p150a in BF16 and checks it against the HF BF16 golden. Stage 12B splices the features
+into the text embeddings on device, adds the 3D mRoPE positions to the 16 full-attention layers
+and runs image decisions end to end through `TTDecider.predict(state, question, images=[...])`.
+
+## Image decisions end to end (stage 12B)
+
+```text
+host input prep (per request)                         device (no host calls)
+ open_image -> chat template -> processor            vision tower (12A, BF16) -> features [n/4, 5120]
+ get_rope_index -> 3D ids [3, S] -> cos/sin  ---+    embedding(tokens) ROW_MAJOR [bucket, 5120]
+ splice index (s or bucket + k), vision tables  |    concat [text ; features] -> embedding(splice_index)
+ upload: tokens, splice index, cos/sin, pixels -+--> 64 layers (16 full-attention use the request cos/sin)
+                                                     -> final norm -> readout -> mask -> /T -> softmax
+                                                     -> readback of the count probabilities
+```
+
+Results against the HF BF16 image-decision golden (8 rows, bucket 1024, 174-370 tokens, 64-256
+image tokens; `tests/e2e/test_image_model.py`; measured):
+
+| row | type | tokens | HF choice (prob, top-2 gap) | TT choice (prob) | logit PCC | final-hidden PCC | max prob diff |
+|---|---|---:|---|---|---:|---:|---:|
+| v01_dominant_color | choice | 174 | blue (0.9914, 0.989) | blue (0.9915) | 0.99996 | 0.99975 | 0.0001 |
+| v02_count_circles | choice | 357 | 4 (0.5100, 0.080) | 4 (0.4705, **tie**) | 0.99940 | 0.99964 | 0.0402 |
+| v03_receipt_total | choice | 315 | $17.50 (0.9942, 0.992) | $17.50 (0.9941) | 0.99999 | 0.99979 | 0.0001 |
+| v04_tallest_bar | choice | 370 | Thu (0.9886, 0.985) | Thu (0.9886) | 0.99997 | 0.99973 | 0.0001 |
+| v05_red_circle_yes | noul | 183 | true (0.9949, 0.990) | true (0.9949) | 1.00000 | 0.99973 | 0.0000 |
+| v06_red_circle_no | noul | 243 | false (0.9847, 0.969) | false (0.9847) | 1.00000 | 0.99978 | 0.0000 |
+| v07_brightness_dark | score | 271 | 0 (0.7825, 0.593) | 0 (0.7820) | 0.99990 | 0.99982 | 0.0005 |
+| v08_progress_fill | score | 364 | 4 (0.9315, 0.885) | 4 (0.9319) | 0.99998 | 0.99966 | 0.0004 |
+
+- Decisions: 8/8 agree (gate >= 7/8). Logit PCC min 0.99940 (gate 0.99).
+- **v02 is an exact tie on TT.** HF logits for "4" and "5" are 23.0 and 22.625. TT gives 22.875
+  for both (BF16 readout output, step 0.125 at this magnitude), so the two probabilities are equal
+  (0.4705). The app's `answer` takes the first maximum (`max(range(n), key=values.__getitem__)`),
+  so TT answers "4" as HF does. The agreement on this row has no margin. If it flipped it would be
+  a non-near-tie miss (HF gap 0.080 > 0.05) and the gate would fail.
+- Spliced `inputs_embeds` vs golden: 7/8 rows >= 0.999. v01 is 0.998655 (bar 0.999, **not met**).
+  The splice itself adds no error: on every row the image rows equal the TT tower output bit for
+  bit and the text rows equal the text-only embedding bit for bit. The v01 gap is the 12A tower's
+  feature PCC on that image (0.998654, see the 12A table below; a one-color image).
+- Layer trace (last-token residual PCC after each of the 64 layers): v02 min 0.99936, last 0.99984;
+  v07 min 0.99972, last 0.99993.
+- Text-only requests are unchanged: the 25-row stage-6 e2e test passes 25/25 and all 100 output
+  tensors (probs, logits, final hidden, 64-layer trace per row) are bit identical to a run of the
+  code before 12B.
+
+### 3D mRoPE (`tt/rope.py`)
+
+- `get_rope_index` is a host port of HF `Qwen3_5Model.get_rope_index` (text runs: `current +
+  arange` on all 3 streams; an image: T = current, H = current + row, W = current + col over the
+  merged grid, then `current += max(h, w) / 2`). It runs during input prep, like tokenization. It
+  equals the golden `position_ids` bit for bit on all 8 rows.
+- `PplxRequestRotary` builds the request's cos/sin from those ids: frequency j takes stream H
+  when `j % 3 == 1, j < 33`, W when `j % 3 == 2, j < 30`, else T (sections [11, 11, 10]); same pair
+  layout and 192 pass-through dims as `PplxRotary`. The BF16 tables equal HF
+  `Qwen3_5TextRotaryEmbedding` on the golden ids bit for bit (8/8 rows).
+- `start_pos` stays a cache / chunk index. The table is indexed by token index and holds that
+  token's rope angle, so `rotary(start, length)`, `decoder.py` and `attention.py` are unchanged.
+  After the v02 image, the last token (index 356) has rope position 140.
+- Layer 3 (full attention) fed the HF layer-2 output of v02 with the request tables: PCC 0.999997
+  vs the HF layer-3 output (bar 0.995). The layer's own update (output minus input) has PCC
+  0.99983. With the 1D text tables instead (control) it drops to 0.99936.
+- Padding rows of the bucket get text-continuation positions. They come after every real token,
+  so they cannot reach a real row (causal).
+
+### Splice (`PplxDeciderModel.splice`)
+
+HF: `inputs_embeds.masked_scatter(input_ids == image_token_id, image_features)`. TT: the host
+writes the splice index during input prep (`s` for a text or padding token, `bucket + k` for the
+k-th image token). On device, `ttnn.embedding(tokens)` in ROW_MAJOR gives the `[bucket, 5120]`
+text rows; the tower features are untilized and appended with `ttnn.concat` (dim 0); one
+`ttnn.embedding(splice_index, table)` gathers the spliced `[1, bucket, 5120]` TILE tensor. Both
+steps copy rows, so no value changes. The table is transient: (1024 + 256) x 5120 x 2 B = 12.5 MiB
+at the 1024 bucket, 85 MiB at 8192.
+
+### Run
+
+```bash
+pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_mrope.py -q -s          # mRoPE: CPU bit-exact checks + layer 3 on v02
+pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_image_model.py -q -s    # splice, 8-row gate, predict, padding, audit
+pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_model.py -q -s          # text regression (25 rows)
+pytest models/demos/pplx_decider_v1_27b/tests/perf/test_image_perf.py -q -s    # latency, ~16 min (idle gaps)
+python models/demos/pplx_decider_v1_27b/demo/demo.py --image photo.png
+```
+
+The image golden is `$PPLX_DECIDER_IMAGE_GOLDEN` (default `artifacts/pplx_decider/goldens/vision/e2e`);
+results go to `$PPLX_DECIDER_STAGE12B_DIR` (default `artifacts/pplx_decider/stage12b/image_e2e`).
+
+### API
+
+```python
+decider = TTDecider.from_pretrained(device)                      # text model + vision tower
+decider.predict(state, question, images=["photo.png"])           # same call as the app's Decider.predict
+
+model = PplxDeciderModel.from_snapshot(device, vision=True)
+tokens, last_index, images = model.prepare_images(processor_output)   # host input prep + uploads
+probs, logits, _ = model(tokens, last_index, count, images=images)    # vision -> splice -> layers -> head
+```
+
+`images` accepts what the app's `open_image` accepts: a path, a `data:image/...` URL or a PIL image.
+The processor is the app's: `size = {"shortest_edge": 65536, "longest_edge": 262144}`, chat template
+with `enable_thinking=False`. A request without images runs the text-only path unchanged.
+
+### Runtime integrity
+
+- Fallback audit (`count_host_calls`) around a warmed image forward (vision tower, splice, 64
+  layers, head) plus sync: 0 host calls for v02 (936 patches, padded) and v04 (1024 patches).
+- The same image request twice: probs, logits and final hidden bit identical.
+- Watcher (`TT_METAL_WATCHER=10`) on an image request (v02): clean, no assert or sanitize message.
+- The same image request (v04) padded to the 8192 bucket instead of 1024 gives bit-identical
+  probabilities. With the text model, the vision tower and that 8192 forward's outputs resident,
+  3.55 GiB of DRAM is free.
+
+### Perf
+
+Warmed image requests at the 1024 bucket take 387-410 ms (median of 5, each after 10 s idle),
+against 367 ms for a text-only request of the same bucket. The extra 20-44 ms is the vision tower
+(15.6-29.1 ms), the processor on host (3.6-10.9 ms) and input prep with uploads (3.4-6.2 ms); the
+splice is 0.45 ms and the 64-layer text forward is unchanged (364 ms). Per-row table:
+`work_log.md` (stage 12B, perf).
+
+## Vision tower (stage 12A)
 
 Status:
 
@@ -95,4 +215,5 @@ Goldens come from `reference/hf_vision_reference.py`: `$PPLX_DECIDER_VISION_GOLD
   images in one sequence. The app sends one image per request.
 - The forward is eager. At the 256 bucket, latency is probably dominated by host dispatch (inferred:
   about 300 ops). Trace capture per bucket is the obvious next step and is not done here.
-- Stage 12B owns the splice into the text embeddings and the 3D mRoPE positions.
+- Stage 12B: several images in one prompt are handled by the input prep and the splice (features
+  appended in prompt order), but only one image per prompt is tested. Video is rejected.

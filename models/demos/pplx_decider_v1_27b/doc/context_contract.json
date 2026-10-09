@@ -1,7 +1,7 @@
 {
   "model": "perplexity-ai/pplx-decider-v1-27b",
   "revision": "b01a5cbaca5391f73bd55103d4f27e8982cd5e60",
-  "stage": "6 full model (prefill-only classifier); stage-1 fields below kept as recorded",
+  "stage": "6 full model (prefill-only classifier), 12B images; stage-1 fields below kept as recorded",
   "hardware": "1x Blackhole p150a, 8 DRAM banks, 31.83 GiB DRAM (measured: ttnn.get_memory_view)",
   "hf_advertised_context": 262144,
   "hf_advertised_context_source": "config.json text_config.max_position_embeddings",
@@ -72,5 +72,27 @@
     "s8192_peak_note": "Measured at layer boundaries with ttnn.synchronize_device. The transient inside a layer (one 2048-token chunk of intermediates) is not observable with the allocator view; inferred to be a few hundred MiB from the stage-1 per-layer probe (+0.08 GiB after a full S=8192 layer pass). All 25 golden prompts incl. 7928 tokens and the 8192-bucket perf runs completed.",
     "supported_context": 8192,
     "limiting_reason": "app_contract (unchanged); 4.4 GiB stays free at the 8192 bucket"
+  },
+  "images": {
+    "stage": "12B",
+    "processor": "app processor: Qwen2VLImageProcessor size {shortest_edge 65536, longest_edge 262144} px (snapshot source/src/autojev/model.py:139), patch 16, merge 2; chat template enable_thinking=False",
+    "patches_per_image": {"min": 256, "max": 1024, "source": "pixel budget / (16 x 16) px; measured with the app processor on random images of 9 sizes (tt-ops runs/pplx-decider-v1-27b/how_vision.md sec 2) and on the 8 golden images (256-1024)"},
+    "tokens_per_image": {"min": 64, "max": 256, "rule": "patches / 4 <|image_pad|> tokens, plus <|vision_start|> / <|vision_end|> (ordinary text tokens)"},
+    "token_limit": "Image tokens count toward the 8192-token prompt limit (the app checks the expanded prompt length); the same buckets 128/1024/2048/4096/8192 and last-real-token readout apply. The golden image rows are 174-370 tokens (bucket 1024).",
+    "vision_buckets": [256, 512, 768, 1024],
+    "vision_bucket_rule": "patch rows padded to the next vision bucket; padded keys masked with cu_window_seqlens [0, n, S] (stage 12A)",
+    "images_per_prompt": "one image per prompt tested (8 golden rows); input prep and splice accept several images in prompt order (untested); video rejected",
+    "positions": "3D mRoPE ids from rope.get_rope_index (host port of HF get_rope_index), per-request cos/sin [1, 1, bucket, 256] BF16 x 2 (1 MiB at bucket 1024, 8 MiB at 8192). start_pos stays a cache / chunk index.",
+    "dram_measured": {
+      "source": "PplxDeciderModel.from_snapshot(vision=True) load report (ttnn.get_memory_view), artifacts/pplx_decider/stage12b/logs/image_e2e.log",
+      "text_c0_plus_vision_allocated_gib": 28.259,
+      "free_gib": 3.572,
+      "largest_free_per_bank_mib": 457,
+      "vision_weights_gib": 0.964
+    },
+    "per_request_transients_inferred": "splice table (bucket + image tokens) x 5120 x 2 B: 12.5 MiB at 1024 with 256 image tokens, 85 MiB at 8192; vision activations at the 1024 patch bucket a few MiB.",
+    "image_request_at_8192_bucket_measured": "tests/e2e/test_image_model.py::test_image_bucket_padding: v04 (370 tokens, 1024 patches) padded to 8192: probabilities bit identical to bucket 1024; DRAM free after the forward with outputs held 3.549 GiB (3.559 GiB at 1024); artifacts/pplx_decider/stage12b/image_e2e/image_bucket_padding.json",
+    "largest_tested_image_request_tokens": 370,
+    "largest_tested_image_request_bucket": 8192
   }
 }

@@ -1,5 +1,7 @@
 # Stage 12A work log: vision tower on device
 
+(Stage 12B, image decisions end to end, is the second part of this file.)
+
 Host: one Blackhole p150a. Branch `gtobarTT/pplx-decider-bringup`, base `a05268d90b9`.
 Artifacts: `/local/ttuser/gtobar/artifacts/pplx_decider/stage12a/` (`pcc_vision.jsonl`, `pcc_table.md`,
 `vision_perf.json`, `vision_dram_with_text.json`, `watcher/`, run logs). Labels: **measured** (command +
@@ -122,3 +124,76 @@ and the slice. `prepare_inputs` (host tables plus upload) is timed separately, m
 DRAM: vision weights take 0.964 GiB (allocator view before and after `from_snapshot`). That is
 505 M parameters after padding x 2 B plus biases and norms (inferred arithmetic, matches). With the
 text model (C0) and vision both resident, 3.572 GiB is free.
+
+# Stage 12B work log: image decisions end to end
+
+Host: one Blackhole p150a. Branch `gtobarTT/pplx-decider-bringup`, base `10c63f1535c`.
+Artifacts: `/local/ttuser/gtobar/artifacts/pplx_decider/stage12b/` (`text_baseline/`, `text_after/`,
+`text_bit_identity.txt`, `image_e2e/`, `pcc_12b.jsonl`, `pcc_stage1_rerun.jsonl`, `watcher/`, `logs/`).
+Golden: `goldens/vision/e2e/` (8 image rows, BF16, from `reference/hf_image_decision_golden.py`, not
+regenerated). Precision: text C0 (`act_bf16__w_bfp8_all__hifi2`), vision BF16
+(`vision_bf16__w_bf16__hifi4`), unchanged. Labels: **measured** (command + value), **inferred**.
+
+## Decisions
+
+| decision | why |
+|---|---|
+| 3D position ids and cos/sin on host, per request (`rope.get_rope_index`, `PplxRequestRotary`) | They depend only on the token types and image grids, like tokenization. A per-request table indexed by token index keeps `rotary(start, length)`, `decoder.py` and `attention.py` unchanged, and keeps `start_pos` a cache / chunk index. |
+| Text-only requests keep the setup-time `PplxRotary` table and `self.embedding(tokens)` | The brief requires bit-identical text outputs. The text forward issues the same ops as before. |
+| Splice by gather: `concat([embedding(tokens) ROW_MAJOR, features...])` then `ttnn.embedding(splice_index, table)` | Row copies only, so no value changes; one program shape per bucket and image-token count; handles any number and position of image runs; no host round trip of the 5120-wide rows. The host writes the index list during input prep. |
+| Bucket padding rows get text-continuation rope positions | They follow every real token, so they cannot reach a real row (causal). Checked: an image request padded to 8192 (`test_image_bucket_padding`). |
+| `TTDecider.from_pretrained` loads the vision tower by default; `vision=False` skips it | The app always has vision. Text-only callers can save 0.96 GiB. |
+| Splice gate counted per row as written (>= 0.999) | v01 misses it (0.998655) because the 12A tower's features are at 0.998654 on that image; the splice adds 0 error. Reported, not relaxed. |
+
+## Log
+
+| # | step | command / evidence | result |
+|---|---|---|---|
+| 1 | Commit the golden builders | `git commit` of `reference/{image_decision_prompts,hf_vision_reference,hf_image_decision_golden}.py` | `3427dbfa40d`. Pre-commit black/isort reformatted two of them (line wrapping, one import split in two); no logic change (`hf_vision_reference.py` AST-identical). |
+| 2 | Text baseline before any `tt/` change | `PPLX_DECIDER_STAGE6_DIR=stage12b/text_baseline pytest tests/e2e/test_model.py` (test now also dumps `e2e_outputs.safetensors`) | 6 passed, 25/25. Every per-row field of `e2e_decisions.json` and all 64-layer PCCs equal the stage-8 default-path run. |
+| 3 | mRoPE on CPU | `pytest tests/pcc/test_mrope.py -k "not full_attention"` | 17 passed. `get_rope_index` on the processor output == golden `position_ids` (`torch.equal`) on 8/8 rows. BF16 cos/sin == HF `Qwen3_5TextRotaryEmbedding(x_bf16, ids)` after the pair permutation, 8/8 rows. Text-only ids give exactly the `PplxRotary` angles. |
+| 4 | Layer 3 on an image row (device) | `pytest tests/pcc/test_mrope.py -k full_attention` (`pcc_12b.jsonl`) | Input: HF BF16 layers 0-2 over the golden spliced embeddings of v02 (357 tokens, bucket 1024); the HF layer-3 last token equals the stored golden trace bit for bit. TT layer 3 with the request tables: PCC 0.999997 (bar 0.995); update (out - in) PCC 0.99983. Control with the 1D tables: 0.999989 / update 0.99936. |
+| 5 | Image e2e, first run | `pytest tests/e2e/test_image_model.py` (`logs/image_e2e_run1.log`) | 8/8 agree; determinism, `TTDecider` image predict and the audit pass on the first build. Splice: v01 0.998655 < 0.999, the other 7 >= 0.999138. |
+| 6 | Splice attribution | `test_splice` reads the tower output back before the splice | On all 8 rows the spliced image rows equal the TT tower output bit for bit, and the text rows equal both the golden and the text-only embedding bit for bit. The PCC to the golden equals the 12A tower-feature PCC to 6 digits (v01 0.998654). |
+| 7 | Text regression after the change | `PPLX_DECIDER_STAGE6_DIR=stage12b/text_after pytest tests/e2e/test_model.py`; `python -m ...tests.e2e.compare_outputs text_baseline/e2e_outputs.safetensors text_after/e2e_outputs.safetensors` | 6 passed, 25/25. `BIT_IDENTICAL`: 100/100 tensors (probs, logits, final hidden, 64-layer last-token trace for 25 rows). |
+| 8 | Stage-1 full-attention layer tests | `PPLX_DECIDER_PCC_LOG=stage12b/pcc_stage1_rerun.jsonl pytest tests/pcc/test_attention.py tests/pcc/test_decoder_layer.py -k "L3 or L63"` | 20 passed. All 20 PCC values equal the last C0 values in `logs/pcc_results.jsonl` exactly. |
+| 9 | Demos | `demo.py --image goldens/vision/images/v01_dominant_color.png`; `demo.py --golden-row v02_count_circles`; `demo.py --compare-hf stage6/demo_hf_reference.json` | Image: `blue` 0.9886 (inference.py question: red/green/blue/other). Golden v02: `4`, same decision as HF, max prob diff 0.0402. Text: both demo answers as HF (max prob diff 0.0000 / 0.0002). Load 7.4 s with vision, 6.7 s without (warm page cache). |
+| 10 | Watcher | `TT_METAL_WATCHER=10 TT_METAL_LOGS_PATH=stage12b/watcher pytest tests/e2e/test_image_model.py -k "test_image_forward_stays_on_device and v02"` | 1 passed. `watcher/generated/watcher/watcher.log` (1279 lines, 8 dumps): no assert, sanitize, NOC or error message. Lowest stack headroom 1248 B (TRISC0, sdpa). |
+| 11 | Perf | `pytest tests/perf/test_image_perf.py -q -s` | 1 passed in 16 min. Table below. |
+| 12 | Final run on the committed code (`9f9eb949bcb`, after black) | `logs/suite3.log`: `test_model.py` -> `text_final/`, `compare_outputs` vs `text_baseline/`, `test_mrope.py`, `test_image_model.py` | Text: 6 passed, 25/25, `BIT_IDENTICAL` 100/100 tensors. mRoPE: 18 passed (same PCCs as step 4). Image: 6 passed, 1 failed (`test_splice`, v01 0.998655 only); agreement 8/8, logit PCC min 0.99940, identical to step 5. `test_image_bucket_padding` (v04, 1024 vs 8192 bucket): same argmax, probabilities bit identical; DRAM free after the 8192 image forward with outputs held 3.549 GiB (3.559 at 1024). |
+
+## Perf (warmed, eager, batch 1, bucket 1024)
+
+Command: `pytest tests/perf/test_image_perf.py -q -s` (`image_e2e/image_perf.json`, `logs/image_perf.log`).
+Method: 2 warm-ups, then the median of 5 passes, each after 10 s idle (stage-6 burst mode). `request` is
+`TTDecider.predict_probabilities(..., images=[png])` end to end without extra syncs. The phases come from
+separate passes with a `synchronize_device` after each phase: `processor` (open image, chat template,
+processor), `input_prep` (`prepare_images`: 3D ids, cos/sin, splice index, vision host tables and every
+upload), `vision_tower`, `splice`, `text_forward` (64 layers + head), `readback`.
+
+| row | tokens | patches | request ms | processor | input prep | vision tower | splice | text forward | readback |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| v01_dominant_color | 174 | 256 | 387.1 | 3.7 | 3.4 | 15.6 | 0.45 | 363.9 | 0.18 |
+| v02_count_circles | 357 | 936 | 410.1 | 10.9 | 5.8 | 29.0 | 0.45 | 363.9 | 0.15 |
+| v03_receipt_total | 315 | 748 | 399.1 | 5.4 | 4.8 | 23.5 | 0.45 | 363.9 | 0.15 |
+| v04_tallest_bar | 370 | 1024 | 404.9 | 5.6 | 6.2 | 28.7 | 0.40 | 363.9 | 0.15 |
+| v05_red_circle_yes | 183 | 320 | 390.8 | 3.6 | 3.5 | 19.4 | 0.47 | 363.9 | 0.14 |
+| v06_red_circle_no | 243 | 560 | 397.8 | 4.1 | 4.2 | 25.0 | 0.45 | 363.9 | 0.16 |
+| v07_brightness_dark | 271 | 576 | 396.9 | 4.9 | 4.5 | 23.4 | 0.45 | 364.0 | 0.15 |
+| v08_progress_fill | 364 | 880 | 405.0 | 5.8 | 5.6 | 29.1 | 0.45 | 364.0 | 0.14 |
+| text only, s01 (same bucket) | 178 | - | 366.6 | 2.1 (tokenize) | 0.2 (upload) | - | - | 364.1 | 0.11 |
+
+An image adds 20-44 ms (5-12 %) to a 1024-bucket request: the vision tower (15.6-29.1 ms, as in 12A),
+the processor (3.6-10.9 ms on host) and input prep with uploads (3.4-6.2 ms). The splice costs 0.45 ms.
+The text forward does not change with images (363.9 vs 364.1 ms), because the bucket fixes its shape.
+
+## v02 is a tie on TT
+
+TT logits for the five options of v02: 13.4375, 17.125, **22.875, 22.875**, 15.625. HF: 13.5, 17.125,
+23.0, 22.625, 15.5. The readout output is BF16 in both (the app's `readout` is a BF16 Linear); at this
+magnitude the BF16 step is 0.125, and the TT error moved "4" down one step and "5" up two. The
+probabilities of "4" and "5" are then equal (0.4705). `torch.argmax` and the app's `answer`
+(`max(range(n), key=values.__getitem__)`) both take the first maximum, so TT answers "4" like HF.
+The run is deterministic (bit-identical twice), so the answer is stable, but it has no margin. Any
+change in the text or vision numerics can flip it, and a flip would fail the gate (HF gap 0.080 is
+above the 0.05 near-tie line).

@@ -20,6 +20,22 @@ reads. A BFP4 MLP (C1/C2) agrees on 25/25 rows but fails the per-row logit-PCC b
 BFP4 with LoFi would be 17 % faster at the 2048 bucket and would free 8 GiB of DRAM. Details:
 [`doc/datatype_sweep/README.md`](doc/datatype_sweep/README.md).
 
+Stage 12B (image decisions end to end): `TTDecider.predict(state, question, images=[...])` takes
+the app's images. Input prep on host gives the 3D mRoPE position ids (a port of HF
+`get_rope_index`) and the per-request cos/sin. On device, the vision tower's features replace the
+`<|image_pad|>` embedding rows, and the 64 layers and the decision head run as for text. Measured on
+the 8-row HF BF16 image golden (bucket 1024):
+
+- 8/8 decisions agree (bar 7/8) and readout-logit PCC is >= 0.9994 (bar 0.99). On v02 the
+  agreement has no margin: TT's top two logits are equal in BF16 and the app's first-maximum rule
+  picks the HF answer.
+- Spliced embeddings: 7/8 rows have PCC >= 0.999. v01 has 0.998655, which is the 12A tower's
+  feature PCC on that image. The splice copies rows and adds no error.
+- Text-only requests are bit identical to before 12B (25/25, all output tensors equal).
+- No host calls inside an image request between the input upload and the probability readback.
+
+Details: [`doc/vision/README.md`](doc/vision/README.md).
+
 Stage 12A (vision tower, text model unchanged): the Qwen3.5 ViT runs on the same p150a in BF16. It
 covers the patch embed, the learned position embedding, 27 blocks and the 2x2 merger, and outputs
 5120-wide image features. Results on 8 golden images (256-1024 patches), measured against the HF
@@ -30,8 +46,7 @@ BF16 golden:
 - Padded keys are masked. An image of 936 patches in the 1024 bucket scores 0.999758.
 
 The tower takes 15.5-28.6 ms per image. Its weights take 0.964 GiB of DRAM, which leaves 3.57 GiB
-free next to the full text model. Splicing the features into the text and the 3D mRoPE are stage
-12B. Details: [`doc/vision/README.md`](doc/vision/README.md).
+free next to the full text model. Details: [`doc/vision/README.md`](doc/vision/README.md).
 
 Stage 1 (functional layers): every module and both decoder-layer kinds match the HF reference with
 real weights (PCC >= 0.995) at the prefill buckets 128, 1024, 2048, 4096 and 8192. The app pads a
@@ -52,17 +67,20 @@ Layers are 3-8 % faster at S >= 1024, and S=128 is about 12 % slower. Details ar
 
 | path | content |
 |---|---|
-| `tt/` | TTNN modules: `embedding.py`, `norm.py`, `rope.py`, `attention.py` (gated full attention), `gated_deltanet.py`, `mlp.py`, `decoder.py` (both layer kinds), `readout.py`, `head.py` (final norm -> readout -> mask -> / T -> softmax), `model.py` (the full model, weight cache, bucket padding); `weight_adapter.py` (HF -> TT weight transforms), `optimizations.py` (the one place for dtypes and op configs), `model_config.py`. |
+| `tt/` | TTNN modules: `embedding.py`, `norm.py`, `rope.py` (1D tables; 3D mRoPE `get_rope_index` port and per-request `PplxRequestRotary`), `attention.py` (gated full attention), `gated_deltanet.py`, `mlp.py`, `decoder.py` (both layer kinds), `readout.py`, `head.py` (final norm -> readout -> mask -> / T -> softmax), `model.py` (the full model, weight cache, bucket padding, image input prep and on-device splice); `weight_adapter.py` (HF -> TT weight transforms), `optimizations.py` (the one place for dtypes and op configs), `model_config.py`. |
 | `tt/vision/` | Vision tower (stage 12A): `config.py` (vision args, patch buckets), `weights.py` (`visual.*` -> TT weights, strict keys, head-dim / intermediate padding), `inputs.py` (host pos-embed and rotary tables, as HF), `patch_embed.py`, `layernorm.py`, `attention.py` (masked windowed SDPA), `mlp.py`, `block.py`, `merger.py`, `tower.py` (`PplxVisionTower`: `prepare_inputs` + device-only `forward`). |
-| `demo/` | `decider.py` (`TTDecider.predict(state, question)`, the app's `Decider.predict`), `demo.py` (the snapshot `inference.py` example). |
+| `demo/` | `decider.py` (`TTDecider.predict(state, question, images=...)`, the app's `Decider.predict`), `demo.py` (the snapshot `inference.py` text and `--image` examples, plus `--golden-row` for an image golden row). |
+| `reference/image_decision_prompts.py`, `reference/hf_vision_reference.py`, `reference/hf_image_decision_golden.py` | The 8-row image prompt set (synthetic PNGs), the HF vision tower golden and the layer-streamed HF BF16 image-decision golden. |
 | `reference/hf_reference.py` | Layer-streamed HF golden generator. Builds one HF module at a time from the snapshot; never loads the 54 GB model. |
 | `reference/decision_prompts.py`, `reference/hf_decision_golden.py`, `reference/hf_demo_reference.py` | The 25-row decision prompt set, its layer-streamed HF bf16 golden, and HF answers for the demo rows. |
-| `tests/e2e/` | Full-model decision-agreement gate vs the HF golden, layer-wise trace, bucket padding, determinism, fallback audit. |
+| `tests/e2e/` | Full-model decision-agreement gate vs the HF golden, layer-wise trace, bucket padding, determinism, fallback audit (`test_model.py`, text; `test_image_model.py`, images: splice, agreement, `TTDecider` image predict, determinism, audit); `compare_outputs.py` (bit-identity of two output dumps). |
+| `tests/pcc/test_mrope.py` | 3D mRoPE: `get_rope_index` and the cos/sin vs HF on the 8 image rows (CPU, bit exact), layer 3 on an image row (device). |
+| `tests/perf/test_image_perf.py` | Image-request latency per golden row with a phase breakdown, and a text-only request of the same bucket. |
 | `tests/perf/test_model_perf.py` | Full-model latency per bucket (burst and sustained), trace replay, profiler target. |
 | `tests/pcc/` | Real-weight PCC tests per module and per layer kind, the chunked-prefill contract test and the runtime fallback audit. |
 | `tests/perf/test_prefill_perf.py` | Warmed prefill latency per layer kind and module; device-profiler capture target. |
 | `tests/vision/` | Vision tower vs the HF BF16 golden: host tables and adapter (CPU), per-module and per-block PCC (teacher forced), tower end to end, key mask, GELU variant, fallback audit, determinism, latency, DRAM next to the text model. |
-| `doc/vision/` | Stage-12A README and work log (PCC table, perf, DRAM). |
+| `doc/vision/` | Stage-12A/12B README and work log (vision PCC table, image decisions, mRoPE, splice, perf, DRAM). |
 | `tests/probe/test_context_probe.py` | Context probe beyond the app limit (S=16384) with DRAM numbers. |
 | `doc/context_contract.json` | Context contract (HF-advertised, app limit, tested). |
 | `doc/functional_decoder/` | Stage-1 README, work log and `perf/` (tt-perf-report tables and CSVs). |
@@ -133,12 +151,33 @@ decider = TTDecider.from_pretrained(device)
 print(decider.predict("My Stripe integration keeps failing.", {"type": "noul", "instructions": "Is it urgent?"}))
 ```
 
+### Images
+
+`TTDecider.from_pretrained(device)` also loads the vision tower (BF16, 0.96 GiB of DRAM; pass
+`vision=False` for text only). `images` takes what the app's `open_image` takes: file paths,
+`data:image/...` URLs or PIL images. Each image costs 64 to 256 prompt tokens, which count toward
+the 8192-token limit.
+
+```bash
+python models/demos/pplx_decider_v1_27b/demo/demo.py --image photo.png           # inference.py --image: dominant color
+python models/demos/pplx_decider_v1_27b/demo/demo.py --golden-row v02_count_circles  # an image golden row, compared with HF
+```
+
+```python
+question = {"type": "choice", "instructions": "What is the dominant color?",
+            "criteria": {"red": "Red", "green": "Green", "blue": "Blue", "other": "Another color"}}
+print(decider.predict("Look at the supplied image.", question, images=["photo.png"]))
+```
+
 ## Run the end-to-end test and the full-model perf
 
 ```bash
 pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_model.py -q -s     # 25-row agreement gate + checks, ~2 min
 python models/demos/pplx_decider_v1_27b/tests/e2e/report_layer_trace.py   # doc/full_model/layer_trace.{md,png}
 pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -q -s -k "test_model_perf and not traced and not profile"
+pytest models/demos/pplx_decider_v1_27b/tests/e2e/test_image_model.py -q -s     # 8 image rows + splice, audit, ~1 min
+pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_mrope.py -q -s           # 3D mRoPE (CPU) + layer 3 on an image row
+pytest models/demos/pplx_decider_v1_27b/tests/perf/test_image_perf.py -q -s     # image request latency, ~17 min (idle gaps)
 ```
 
 ## Run the PCC tests
