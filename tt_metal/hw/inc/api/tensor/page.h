@@ -7,7 +7,6 @@
 #include <cstdint>
 
 #include "api/dataflow/buf_rw_note.h"
-#include "api/debug/assert.h"
 #include "internal/tensor/transfer_noc_addr.h"
 
 namespace tensor_accessor {
