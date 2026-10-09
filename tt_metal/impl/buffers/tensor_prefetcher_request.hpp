@@ -10,13 +10,14 @@
 // Every page starts with a TensorPrefetcherRequestHeader: a one-byte command id
 // (TensorPrefetcherBaseCmd) followed by a union of the per-command payloads,
 // modeled on the dispatch CQPrefetchCmd / CQDispatchCmd encoding in
-// tt_metal/impl/dispatch/kernels/cq_commands.hpp. The three commands are:
-//   * STOP      — no payload; the kernel exits its request loop. STOP == 0, so an
-//                 all-zero page is a valid stop sentinel.
-//   * PREFETCH  — the rest of the page holds the entry + layout tables described
-//                 below; the kernel streams those tensors into the target GCB.
-//   * WAIT_CQ   — no tables; the kernel spins until its per-CQ signal slot
-//                 [wait_cq.cq_index] reaches wait_cq.cq_wait_value (wrap-safe).
+// tt_metal/impl/dispatch/kernels/cq_commands.hpp. The commands are:
+//   * STOP        — no payload; the kernel exits its request loop. STOP == 0, so an
+//                   all-zero page is a valid stop sentinel.
+//   * PREFETCH    — the rest of the page holds the entry + layout tables described
+//                   below; the kernel streams those tensors into the target GCB.
+//   * WAIT_SIGNAL — no tables; the kernel spins until its signal slot
+//                   [wait_signal.slot_index] reaches wait_signal.wait_value (wrap-safe).
+//   * DRAIN       — the target words that follow the header; see TensorPrefetcherDrainCmd.
 //
 // Request pages are per-sender: the host serializes one page per DRAM sender core. The
 // entry and geometry bytes are identical across senders, but the header carries that
@@ -81,9 +82,17 @@ namespace tt::tt_metal {
 // tensor_prefetcher_manager.hpp).
 inline constexpr uint32_t kRequestPageBytes = 128;
 
-// Number of per-DRAM-core CQ signal slots (one uint32 counter per command queue).
-// WaitForCqOnTensorPrefetcher writes an incrementing value into slot[cq_id] via
-// the dispatcher; a WAIT_CQ request makes the kernel spin until it is reached.
+// Every DRAM sender core keeps one table of signal slots, each a uint32 counter that only grows, and a
+// WAIT_SIGNAL request names one slot and the count to wait for. The table holds kNumCqSignalSlots CQ
+// fence slots followed by the op signal slots:
+//   * CQ fence slot c: WaitForCqOnTensorPrefetcher has the dispatcher write an incrementing value
+//     into it, ordered after the work already on command queue c.
+//   * Op signal slot kNumCqSignalSlots + s: device kernels atomically increment it by one per signal
+//     on op signal s (QueueTensorPrefetcherWaitForSignal), and the host counts the waits it queued
+//     to know which count each new wait needs. Signals reach only each bank's free sender, which
+//     copies its count into the same slot of the bank's NOC1-endpoint sender each time it passes a
+//     wait on it.
+// The host zeroes the table before launching the kernels.
 constexpr uint32_t kNumCqSignalSlots = 2;
 
 // How a DRAIN request names a target: its target_state_addr, which is L1-aligned, with the low bit
@@ -187,10 +196,10 @@ static_assert(
 
 // One-byte command id at the front of every request page.
 enum TensorPrefetcherCmdId : uint8_t {
-    DRAM_PREFETCHER_CMD_STOP = 0,      // exit the request loop (no payload; all-zero page)
-    DRAM_PREFETCHER_CMD_PREFETCH = 1,  // entry + layout tables follow the header
-    DRAM_PREFETCHER_CMD_WAIT_CQ = 2,   // spin until cq slot[cq_index] >= cq_wait_value
-    DRAM_PREFETCHER_CMD_DRAIN = 3,     // wait for every receiver of the listed targets to ack
+    DRAM_PREFETCHER_CMD_STOP = 0,         // exit the request loop (no payload; all-zero page)
+    DRAM_PREFETCHER_CMD_PREFETCH = 1,     // entry + layout tables follow the header
+    DRAM_PREFETCHER_CMD_WAIT_SIGNAL = 2,  // spin until signal slot[slot_index] >= wait_value
+    DRAM_PREFETCHER_CMD_DRAIN = 3,        // wait for every receiver of the listed targets to ack
 };
 
 struct TensorPrefetcherBaseCmd {
@@ -224,11 +233,11 @@ struct TensorPrefetcherPrefetchCmd {
     uint32_t target_state_addr;
 } __attribute__((packed));
 
-// WAIT_CQ payload.
-struct TensorPrefetcherWaitCqCmd {
-    uint8_t cq_index;  // which per-core CQ signal slot to wait on (0/1)
+// WAIT_SIGNAL payload.
+struct TensorPrefetcherWaitSignalCmd {
+    uint8_t slot_index;  // which signal slot to wait on: a CQ fence slot, then the op signal slots
     uint16_t pad1;
-    uint32_t cq_wait_value;  // wait until slot >= this value (wrap-safe int32 compare)
+    uint32_t wait_value;  // wait until slot >= this value (wrap-safe int32 compare)
 } __attribute__((packed));
 
 // DRAIN payload. A request returns without waiting for its receivers, so an earlier target's
@@ -246,7 +255,7 @@ struct TensorPrefetcherRequestHeader {
     TensorPrefetcherBaseCmd base;
     union {
         TensorPrefetcherPrefetchCmd prefetch;
-        TensorPrefetcherWaitCqCmd wait_cq;
+        TensorPrefetcherWaitSignalCmd wait_signal;
         TensorPrefetcherDrainCmd drain;
     } __attribute__((packed));
 } __attribute__((packed));

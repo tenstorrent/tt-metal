@@ -154,7 +154,7 @@ public:
     // target's `address` is the full device destination. Must be called with the
     // MeshDevice api lock already held — unlike the other queue APIs this does NOT
     // re-lock, so the caller can keep the lock across the surrounding sequence (the
-    // Tensor prefetcher's WaitForCq needs the counter bump and the WAIT_CQ enqueue
+    // Tensor prefetcher's WaitForCq needs the counter bump and the WAIT_SIGNAL enqueue
     // to be atomic). Fast/slow dispatch perform the write; the dummy (inactive-rank)
     // queue is a no-op.
     virtual void enqueue_write_dram_core_counter(
