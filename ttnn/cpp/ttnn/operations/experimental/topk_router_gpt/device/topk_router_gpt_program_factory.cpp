@@ -56,8 +56,13 @@ ProgramDescriptor TopkRouterGptDeviceOperation::create_descriptor(
     auto all_cores = tt::tt_metal::CoreRangeSet(dram_bank2core_coords);
 
     constexpr uint32_t num_groups = 4;
-    constexpr uint32_t cores_per_group = 3;
-    constexpr uint32_t required_cores = num_groups * cores_per_group;
+    // Wormhole exposes 12 DRAM-aligned workers and uses two senders per
+    // expert group. Blackhole P150 exposes 8, so split each K dimension between
+    // one sender and one worker instead. The rest of the four-group routing
+    // and collection pipeline is identical.
+    const uint32_t cores_per_group = num_cores >= 12 ? 3 : 2;
+    const uint32_t num_senders = cores_per_group - 1;
+    const uint32_t required_cores = num_groups * cores_per_group;
     TT_FATAL(
         num_cores >= required_cores,
         "topk_router_gpt requires at least {} DRAM-aligned cores, got {}",
@@ -86,7 +91,7 @@ ProgramDescriptor TopkRouterGptDeviceOperation::create_descriptor(
         ------------------------------------------------------------------------------------
         | cb_weight          | CBIndex::c_0  | Float16_b  | true  | max_k    | All         |
         | cb_input           | CBIndex::c_1  | Float16_b  | true  | max_k    | All         |
-        | cb_partial_recv    | CBIndex::c_2  | Float16_b  | true  | 2        | All         |
+        | cb_partial_recv    | CBIndex::c_2  | Float16_b  | true  | senders  | All         |
         | cb_local_out       | CBIndex::c_3  | Float16_b  | true  | 1        | All         |
         | cb_bias            | CBIndex::c_4  | Float16_b  | true  | 1        | Workers     |
         | cb_index           | CBIndex::c_5  | Float16_b  | true  | 1        | Workers     |
@@ -122,7 +127,7 @@ ProgramDescriptor TopkRouterGptDeviceOperation::create_descriptor(
         });
 
     // Map ring positions to group roles
-    const uint32_t collector_ring_pos = 2;
+    const uint32_t collector_ring_pos = num_senders;
     const uint32_t collector_bank_id = ring_pos2bank_id[collector_ring_pos];
     const auto collector_logical = dram_bank2core_coords[collector_bank_id];
     const auto collector_physical = device->worker_core_from_logical_core(collector_logical);
@@ -132,7 +137,7 @@ ProgramDescriptor TopkRouterGptDeviceOperation::create_descriptor(
     for (uint32_t ring_pos = 0; ring_pos < required_cores; ring_pos++) {
         uint32_t bank_id = ring_pos2bank_id[ring_pos];
         uint32_t pos_in_group = ring_pos % cores_per_group;
-        if (pos_in_group < 2) {
+        if (pos_in_group < num_senders) {
             sender_cores.push_back(dram_bank2core_coords[bank_id]);
         } else {
             worker_cores_vec.push_back(dram_bank2core_coords[bank_id]);
@@ -150,7 +155,7 @@ ProgramDescriptor TopkRouterGptDeviceOperation::create_descriptor(
         {
             {"cb_weight", tt::CBIndex::c_0, tt::DataFormat::Float16_b, true, max_k_tiles},
             {"cb_input", tt::CBIndex::c_1, tt::DataFormat::Float16_b, true, max_k_tiles},
-            {"cb_partial_recv", tt::CBIndex::c_2, tt::DataFormat::Float16_b, true, 2},
+            {"cb_partial_recv", tt::CBIndex::c_2, tt::DataFormat::Float16_b, true, num_senders},
             {"cb_local_out", tt::CBIndex::c_3, tt::DataFormat::Float16_b, true, 1},
         },
         all_cores);
@@ -212,6 +217,7 @@ ProgramDescriptor TopkRouterGptDeviceOperation::create_descriptor(
         {"num_cores", num_cores},
         {"num_groups", num_groups},
         {"cores_per_group", cores_per_group},
+        {"num_senders", num_senders},
         {"collector_physical_x", static_cast<uint32_t>(collector_physical.x)},
         {"collector_physical_y", static_cast<uint32_t>(collector_physical.y)},
         {"topk_k", operation_attributes.k},
@@ -323,11 +329,11 @@ ProgramDescriptor TopkRouterGptDeviceOperation::create_descriptor(
             k_tile_offset += k_tiles_per_core_base + (j < k_tiles_remainder ? 1 : 0);
         }
 
-        bool is_sender = (pos_in_group < 2);
-        bool is_worker = (pos_in_group == 2);
+        bool is_sender = (pos_in_group < num_senders);
+        bool is_worker = (pos_in_group == num_senders);
         bool is_collector = (bank_id == collector_bank_id);
 
-        uint32_t worker_ring_pos = (group_id * cores_per_group) + 2;
+        uint32_t worker_ring_pos = (group_id * cores_per_group) + num_senders;
         uint32_t worker_bank_id_val = ring_pos2bank_id[worker_ring_pos];
         const auto worker_physical = device->worker_core_from_logical_core(dram_bank2core_coords[worker_bank_id_val]);
 

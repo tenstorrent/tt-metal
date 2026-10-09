@@ -18,7 +18,12 @@ Handles:
 import os
 
 import ttnn
-from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config, prefill_matmul_program_config
+from models.demos.gemma4_d_p.tt.matmul_config import (
+    is_short_m,
+    prefill_1d_matmul_program_config,
+    prefill_matmul_program_config,
+    to_l1_width_sharded,
+)
 
 from .weights import AttentionWeights
 
@@ -30,14 +35,22 @@ def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
     return ttnn.L1_MEMORY_CONFIG
 
 
+# Rows per device from which the projections are FPU-bound, so one fidelity pass saves time.
+_LOFI_PROJECTION_MIN_ROWS = 512
+
+
+def projection_math_fidelity(rows):
+    return ttnn.MathFidelity.LoFi if rows >= _LOFI_PROJECTION_MIN_ROWS else ttnn.MathFidelity.HiFi2
+
+
 def projection_matmul_configs(hidden_states, weight):
     """(program_config, compute_kernel_config) for an attention projection: explicit blocking with fp32
     accumulation, or (None, None) for ttnn's defaults.
 
     Uses the device's full core grid. With this blocking, accumulating in bf16 measurably costs
-    prefill KV accuracy; HiFi2 with fp32 accumulation improves on the default config. packer_l1_acc
-    accumulates the K-block partials in L1 instead of re-reading them, which saves ~2 ms per chunk at
-    8192 with no measurable accuracy change.
+    prefill KV accuracy, so it accumulates in fp32. LoFi pays from 512 rows per device; below that the
+    projections stream their weights and gain nothing from it. packer_l1_acc accumulates the K-block
+    partials in L1 instead of re-reading them.
     """
     device = hidden_states.device()
     grid = device.compute_with_storage_grid_size()
@@ -48,7 +61,7 @@ def projection_matmul_configs(hidden_states, weight):
         return None, None
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=projection_math_fidelity(hidden_states.shape[-2]),
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
@@ -56,17 +69,31 @@ def projection_matmul_configs(hidden_states, weight):
     return program_config, compute_kernel_config
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
-    """Project to QKV, or QK when kv_tied selects the narrow tied weight."""
-    w_tensor = weights.wqk if kv_tied else weights.wqkv
-    program_config, compute_kernel_config = projection_matmul_configs(hidden_states, w_tensor)
-    return ttnn.linear(
-        hidden_states,
-        w_tensor,
-        memory_config=memory_config,
+def apply_attn_projection(hidden_states, weight, memory_config=None):
+    """hidden_states @ weight for an attention projection, written interleaved (DRAM unless memory_config says
+    otherwise). A short-M activation is read width-sharded from L1."""
+    x = to_l1_width_sharded(hidden_states) if is_short_m(hidden_states) else hidden_states
+    program_config, compute_kernel_config = projection_matmul_configs(x, weight)
+    out = ttnn.linear(
+        x,
+        weight,
+        memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
     )
+    if x is not hidden_states:
+        x.deallocate(True)
+    return out
+
+
+def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
+    """Project to QKV, or QK when kv_tied selects the narrow tied weight."""
+    return apply_attn_projection(hidden_states, weights.wqk if kv_tied else weights.wqkv, memory_config=memory_config)
+
+
+def apply_output_projection(hidden_states, weights: AttentionWeights):
+    """Project the concatenated attention heads through o_proj."""
+    return apply_attn_projection(hidden_states, weights.o_proj)
 
 
 def split_qkv_heads_prefill(

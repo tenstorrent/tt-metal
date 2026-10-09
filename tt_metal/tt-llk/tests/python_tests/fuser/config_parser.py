@@ -5,6 +5,7 @@
 import os
 import re
 from pathlib import Path
+from textwrap import indent
 from typing import Annotated, Dict, List, Optional, Tuple
 
 import pytest
@@ -38,6 +39,7 @@ from .arch_common import _get_parser
 
 arch = get_chip_architecture()
 OperationSchema = _get_parser().OperationSchema
+YAML_SAFE_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 
 def _format_loc(loc):
@@ -90,6 +92,9 @@ def format_validation_error(error: ValidationError) -> str:
             error_msg = "required field"
         else:
             error_msg = msg.removeprefix("Value error, ")
+
+        if not loc_parts:
+            messages.append(error_msg)
 
         for i, part in enumerate(loc_parts):
             indent = "  " * i
@@ -145,6 +150,8 @@ class OperandDefinition(BaseModel):
     dims: Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
     format: DataFormat
     stimuli: Optional[StimuliDefinition] = None
+    atol: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    rtol: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     # Optional per-operand tile geometry (rows, cols). Defaults to a full 32x32 tile
     # (4 faces). Use (16, 32) for a 16x32 tiny tile (num_faces=2, one face-row).
     tile_dims: Optional[
@@ -311,16 +318,22 @@ class FuserConfigSchema(BaseModel):
                     op_def.stimuli.resolved() if op_def.stimuli is not None else None
                 ),
                 tile_dims=op_def.tile_dims,
+                atol=op_def.atol,
+                rtol=op_def.rtol,
             )
 
         pipeline = []
+        errors = []
         for i, op in enumerate(self.operations):
             try:
                 pipeline.append(
                     op.to_l1_operation(operands, dest_acc=self.dest_acc.value)
                 )
             except ValueError as e:
-                raise ValueError(f"Operation {i + 1}\n  {e}") from None
+                errors.append(f"Operation {i + 1}\n{indent(str(e), '  ')}")
+
+        if errors:
+            raise ValueError("\n\n".join(errors))
 
         num_stages = len(pipeline)
         for i, operation in enumerate(pipeline):
@@ -351,7 +364,7 @@ class FuserConfigSchema(BaseModel):
 
     @classmethod
     def validate_string(cls, yaml_content: str) -> "FuserConfigSchema":
-        config_dict = yaml.safe_load(yaml_content)
+        config_dict = yaml.load(yaml_content, Loader=YAML_SAFE_LOADER)
         try:
             return cls.model_validate(config_dict)
         except ValidationError as e:
@@ -375,7 +388,7 @@ class FuserConfigSchema(BaseModel):
     def load_definition(cls, test_name: str) -> dict:
         yaml_path = cls.resolve_definition_path(test_name)
         with open(yaml_path, "r") as f:
-            config_dict = yaml.safe_load(f)
+            config_dict = yaml.load(f, Loader=YAML_SAFE_LOADER)
 
         if not isinstance(config_dict, dict):
             raise ValueError(f"Invalid config in {yaml_path.name}")

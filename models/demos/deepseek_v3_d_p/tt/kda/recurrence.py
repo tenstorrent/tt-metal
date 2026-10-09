@@ -21,7 +21,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_PREP_OUTPUT_BF16_MASK,
     KDA_PREPARATION_MEMORY_CONFIG,
-    KDA_RECURRENT_STATE_DTYPE,
     KDARecurrenceProgramConfig,
 )
 
@@ -218,71 +217,47 @@ def _distributed_prefix(
     initial_state: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
-    selections: ChronologicalSelections,
     compute_config: ttnn.DeviceComputeKernelConfig,
+    actual_start: ttnn.Tensor,
+    local_rows: int,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Compose one affine transform per chip in chronological order.
 
-    Entry states are stored in chronological order; the selector maps the
-    local physical rank to its entry while the carry advances in that order.
-    Return local entry and the replicated final carry on each independent TP line.
+    The transforms are gathered as BF16; ``chain_affine_transforms`` derives the order from
+    ``actual_start`` and applies them with FP32 accumulation. Return the local entry state and
+    the replicated final carry on each independent TP line.
     """
     transform_a, transform_b = transform.a, transform.b
     batch_heads, key_dim = tuple(transform_a.shape)[0], tuple(transform_a.shape)[1]
     value_dim = transform_b.shape[-1]
     output_memory = KDA_OUTPUT_MEMORY_CONFIG
-    working_memory = KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG
 
-    # Precision boundary: FP32 composition is transported as BF16.
-    transport_a = ttnn.typecast(transform_a, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
-    transport_b = ttnn.typecast(transform_b, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
-    transport_a = ttnn.reshape(transport_a, (1, batch_heads, key_dim, key_dim))
-    transport_b = ttnn.reshape(transport_b, (1, batch_heads, key_dim, value_dim))
-    packed = ttnn.concat([transport_a, transport_b], dim=3, memory_config=output_memory)
+    # Precision boundary: FP32 composition is transported as BF16. Rounding is elementwise, so
+    # packing in FP32 (in L1) and narrowing once matches narrowing each half before packing.
+    packed = ttnn.concat(
+        [
+            ttnn.reshape(transform_a, (1, batch_heads, key_dim, key_dim)),
+            ttnn.reshape(transform_b, (1, batch_heads, key_dim, value_dim)),
+        ],
+        dim=3,
+        memory_config=KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
+    )
+    packed = ttnn.typecast(packed, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
     gathered = ttnn.all_gather(
         packed,
         dim=0,
         cluster_axis=sequence_parallel_axis,
         memory_config=output_memory,
     )
-
-    carry = ttnn.to_memory_config(initial_state, working_memory)
-    carry = ttnn.reshape(carry, (1, batch_heads, key_dim, value_dim))
-    entry_states: list[ttnn.Tensor] = []
-    # Apply chip transforms chronologically: O(sp_size) graph nodes, bounded by mesh size, not token count.
-    for step in range(gathered.shape[0]):
-        # Keep chronological slots until the final device-indexed entry selection.
-        entry_states.append(carry)
-        selected = selections.select_affine_transform(gathered, step, memory_config=working_memory)
-        transported_a = ttnn.slice(
-            selected,
-            (0, 0, 0, 0),
-            (1, batch_heads, key_dim, key_dim),
-            memory_config=working_memory,
-        )
-        transported_b = ttnn.slice(
-            selected,
-            (0, 0, 0, key_dim),
-            (1, batch_heads, key_dim, key_dim + value_dim),
-            memory_config=working_memory,
-        )
-        # Precision boundary: BF16 collective payload is restored for FP32 carry math.
-        a_for_carry = ttnn.typecast(transported_a, KDA_RECURRENT_STATE_DTYPE, memory_config=working_memory)
-        b_for_carry = ttnn.typecast(transported_b, KDA_RECURRENT_STATE_DTYPE, memory_config=working_memory)
-        carry = ttnn.matmul(
-            a_for_carry,
-            carry,
-            memory_config=working_memory,
-            dtype=KDA_RECURRENT_STATE_DTYPE,
-            compute_kernel_config=compute_config,
-        )
-        carry = ttnn.add(carry, b_for_carry, memory_config=working_memory)
-
-    chronological_entries = ttnn.concat(entry_states, dim=0, memory_config=working_memory)
-    local_entries = selections.select_local_entry_state(chronological_entries, memory_config=working_memory)
-    local_entry_state = ttnn.reshape(local_entries, (batch_heads, key_dim, value_dim))
-    final_state = ttnn.reshape(ttnn.to_memory_config(carry, output_memory), (batch_heads, key_dim, value_dim))
-    return local_entry_state, final_state
+    return ttnn.experimental.kda.chain_affine_transforms(
+        gathered,
+        initial_state,
+        actual_start=actual_start,
+        local_rows=local_rows,
+        memory_config=output_memory,
+        compute_kernel_config=compute_config,
+        sequence_parallel_axis=sequence_parallel_axis,
+    )
 
 
 def _last_group_state(
@@ -393,7 +368,6 @@ def _partition_prefix(
     groups_per_head: int,
     local_rows: int,
     sequence_parallel_axis: int,
-    selections: ChronologicalSelections,
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
@@ -413,8 +387,9 @@ def _partition_prefix(
         _AffineTransform(a, b),
         initial_state,
         sequence_parallel_axis=sequence_parallel_axis,
-        selections=selections,
         compute_config=compute_config.affine_prefix,
+        actual_start=actual_start,
+        local_rows=local_rows,
     )
 
 
@@ -454,7 +429,6 @@ def _scan_sp_grouped_chunks(
         actual_start=actual_start,
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
-        selections=selections,
         compute_config=compute_config,
     )
     # The chronological prefix ends where the split tail begins, supplying its seed.
