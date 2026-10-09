@@ -125,6 +125,7 @@ class TtV41Moe(LightweightModule):
         return_intermediates: bool = False,
         image_mask: ttnn.Tensor | None = None,
         actual_isl: int | None = None,
+        padding_config: ttnn.Tensor | None = None,
     ):
         """x ``[1, 1, S/sp, hidden/tp]`` bf16, the sequence a contiguous SP shard -> same shape. ``image_mask``
         ``[1, 1, S/sp, 1]`` (1 = image token, same sharding; None = text only) selects ``bias_vl`` per token.
@@ -132,7 +133,8 @@ class TtV41Moe(LightweightModule):
         in the gate and bounds the dispatch to the real ones (a chunk's pad rows are all token 0 and would otherwise
         all land on the same experts), the pad rows' output being whatever the combine leaves there (never read).
         None dispatches every row. The per-shard config is built on the host once per ``actual_isl`` (memoized in
-        the gate), so a length must run untraced before it is captured.
+        the gate), so a length must run untraced before it is captured; ``padding_config`` given, it is used instead
+        (the batched decode's per-rank row counts, which no sequence length expresses).
 
         With ``return_intermediates`` also returns ``TtMoe``'s intermediates (gate logits/scores/indices,
         shared and routed outputs) for op acceptance."""
@@ -149,6 +151,7 @@ class TtV41Moe(LightweightModule):
                 actual_isl=actual_isl,
                 padding_side="right",
                 actual_start=0,
+                padding_config=padding_config,
                 expert_x=ttnn.squeeze(fp8_qdq(x), dim=0),
             )
         finally:

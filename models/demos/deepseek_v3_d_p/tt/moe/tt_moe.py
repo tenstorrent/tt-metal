@@ -698,6 +698,7 @@ class TtMoe(LightweightModule):
         input_ids: Optional[torch.Tensor] = None,
         cache_user_id: int = 0,
         expert_x: Optional[ttnn.Tensor] = None,
+        padding_config: Optional[ttnn.Tensor] = None,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
         Forward pass through the full MoE pipeline.
@@ -783,8 +784,11 @@ class TtMoe(LightweightModule):
         #     has the padding-aware ops or it does not), while the values that change per chunk stay
         #     on-device. A caller that wanted padding awareness OFF under trace would pass
         #     actual_isl=None and get a capture with no padding-aware path at all.
-        padding_config = None
-        if actual_isl is not None and self.gate.fallback_mode == GateComputeMode.DEVICE_FP32:
+        # A caller-built config (the batched decode: every chip's first rows are real, which no sequence length
+        # expresses) is used as given, under the same guard.
+        if padding_config is not None:
+            assert actual_isl is not None, "a padding_config needs actual_isl set (the padding-aware guard)"
+        elif actual_isl is not None and self.gate.fallback_mode == GateComputeMode.DEVICE_FP32:
             if metadata is not None:
                 # Traced path: the per-chunk scalars live on-device in the metadata tensors, so build
                 # the config with the device op. The host builder's from_torch cannot run inside a
