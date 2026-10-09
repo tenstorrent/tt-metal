@@ -10,6 +10,7 @@
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -181,6 +182,30 @@ std::vector<ttnn::Tensor> DeepseekMoEReduceScatterDeviceOperation::create_output
         create_device_tensor(intermediate_tensor_spec, input_tensors.at(0).device()),  // intermediate
         create_device_tensor(output_tensor_spec, input_tensors.at(0).device()),        // output
     };
+}
+
+std::vector<tt::tt_metal::TensorTopology> DeepseekMoEReduceScatterDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Eight intermediates then the output (create_output_tensors). The inputs are the per-destination `dim` slices
+    // of each device's local reduction (deepseek_moe_fast_reduce_nc); ring position d sums slice d from every device
+    // and keeps it, so the output is a reduce_scatter result -- Shard{dim} along `cluster_axis` (or over the whole
+    // mesh), the other axes as input[0] had them -- which test_deepseek_moe_reduce_scatter composes with
+    // ConcatMeshToTensor(dim). The intermediates are device-local scratch and keep input[0]'s label. The hook runs
+    // before validation, so an empty input list (rejected right after) returns {}, as does a refused label
+    // (nullopt, already warned about).
+    if (tensor_args.input_tensors.empty()) {
+        return {};
+    }
+    const auto& first_input = tensor_args.input_tensors.front();
+    const auto output_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
+        first_input, operation_attributes.cluster_axis, static_cast<int32_t>(operation_attributes.dim));
+    if (!output_topology.has_value()) {
+        return {};
+    }
+    constexpr size_t num_intermediates = 8;
+    std::vector<tt::tt_metal::TensorTopology> topologies(num_intermediates, first_input.tensor_topology());
+    topologies.push_back(*output_topology);
+    return topologies;
 }
 
 ttsl::hash::hash_t DeepseekMoEReduceScatterDeviceOperation::compute_program_hash(

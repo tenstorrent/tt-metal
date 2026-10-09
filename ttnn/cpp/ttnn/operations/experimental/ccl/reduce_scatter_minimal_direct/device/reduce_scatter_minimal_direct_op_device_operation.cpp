@@ -7,6 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
@@ -197,6 +198,22 @@ ReduceScatterMinimalDirectDeviceOperation::create_output_tensors(
     Tensor staging = tensor_args.persistent_staging_tensor.has_value() ? tensor_args.persistent_staging_tensor.value()
                                                                        : create_device_tensor(specs.at(1), device);
     return {std::move(output), std::move(staging)};
+}
+
+std::vector<tt::tt_metal::TensorTopology> ReduceScatterMinimalDirectDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // [0] is the reduce_scatter result: `dim` sharded along `cluster_axis` (or over the whole mesh), the other axes
+    // as the input had them; a caller-supplied persistent output buffer IS that result and takes the same label. [1]
+    // is device-local staging for the incoming contributions with no distribution semantics of its own, so it keeps
+    // the input's label (the reduce_scatter_minimal_async intermediate convention). The helper expands a collapsed
+    // 1-D label to one placement per mesh axis first. No honest label (nullopt, already warned about): {} keeps the
+    // union default for both.
+    const auto output_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
+        tensor_args.input_tensor, args.cluster_axis, args.dim);
+    if (!output_topology.has_value()) {
+        return {};
+    }
+    return {*output_topology, tensor_args.input_tensor.tensor_topology()};
 }
 
 ReduceScatterMinimalDirectDeviceOperation::program_factory_t

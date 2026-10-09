@@ -454,12 +454,27 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     for i in range(num_iters):
         golden_idx = i if not enable_trace else 0
 
+        # Output TensorTopologies. The weight is ShardTensor2dMesh with dim 0 on the cluster axis and the input is
+        # replicated, so the matmul output takes the union-default label Shard(0) on the cluster axis, Replicate on
+        # the other (the composer below stacks the per-device results along dim 0). The reduce_scatter of that matmul
+        # along the cluster axis is Shard(dim) there, Replicate on the other axis -- the layout the RS composer below
+        # uses. Before the fused op had a compute_output_topologies the reduce_scatter output kept the union default
+        # of the fused op's operands (the weight's Shard(0) on the cluster axis).
+        expected_mm = ["PlacementReplicate()", "PlacementReplicate()"]
+        expected_mm[cluster_axis] = "PlacementShard(0)"
+        expected_rs = ["PlacementReplicate()", "PlacementReplicate()"]
+        expected_rs[cluster_axis] = f"PlacementShard({dim})"
+        assert [repr(p) for p in tt_mm_out_tensor_list[i].tensor_topology().placements()] == expected_mm
+        assert [repr(p) for p in tt_rs_out_tensor_list[i].tensor_topology().placements()] == expected_rs
+        assert tuple(int(d) for d in tt_rs_out_tensor_list[i].tensor_topology().distribution_shape()) == tuple(
+            mesh_device.shape
+        )
+
         # Check MM output (each device has different output since weights differ)
         # Setup concatenation dimension per axis
         concat_dims = [0, 0]
-        concat_dims[
-            1 - cluster_axis
-        ] = 1  # Dimensions have to be unique. Set to anything but the concatenation dimension.
+        # Dimensions have to be unique. Set to anything but the concatenation dimension.
+        concat_dims[1 - cluster_axis] = 1
         tt_mm_out_torch = ttnn.to_torch(
             tt_mm_out_tensor_list[i],
             mesh_composer=ttnn.create_mesh_composer(

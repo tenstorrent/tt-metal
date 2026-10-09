@@ -3,8 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_to_all_async_device_operation.hpp"
+
+#include <algorithm>
+
+#include <tt-metalium/mesh_device_view.hpp>
+
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -171,6 +177,63 @@ AllToAllAsyncDeviceOperation::tensor_return_value_t AllToAllAsyncDeviceOperation
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Return the pre-allocated output buffer
     return tensor_args.persistent_output_buffer;
+}
+
+std::vector<tt::tt_metal::TensorTopology> AllToAllAsyncDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    using tt::tt_metal::TensorTopology;
+    using tt::tt_metal::distributed::MeshCoordinate;
+    // all_to_all over the whole mesh is an all_gather of `in_dim` followed by each device keeping its own ring-index
+    // piece of `out_dim`, so the label is composed the same way: the all_gather label for in_dim (every placement
+    // Replicate; a gather that would interleave a 1-D-mapped tensor's shards is refused), then Shard{out_dim} in
+    // coordinate order through the reduce_scatter-shaped alias. Routing the INPUT label through the alias alone
+    // would accept the interleaving case, which no label describes (the all_to_all caveat on the 2026-10-01
+    // mesh_partition amendment). The caller's persistent output buffer IS the result.
+    //
+    // The ring index this op's program factory uses comes from MeshDeviceView::get_ring_devices(): the walk around
+    // the mesh BOUNDARY (top row left to right, right column down, bottom row right to left, left column up), not the
+    // coordinate (row-major) order a label's coordinates follow. The two agree only on a line (one axis of size > 1):
+    // on a 2x4, device (1, 0) holds piece 7 where {8}, [Shard{out_dim}] over row-major coordinates says piece 4. A
+    // label cannot carry the ring order (consumers iterate the storage order), so a mesh with two non-trivial axes
+    // keeps the union default ({}) until the factory indexes the ring by coordinate or the label can express the
+    // walk. No honest label from the helper (nullopt, already warned about): {} as well.
+    //
+    // On a line the label is spelled over the ring coordinates themselves (get_ring_coordinates(), the list the
+    // factory indexes; defined for a 2-D view only, as the factory requires) rather than over the input label's: the
+    // helper's whole-mesh rule keeps a collapsed label's coordinates without checking their order, and a label built
+    // from an explicit coordinate list (from_host_shards, combine_device_tensors) need not walk the line in order. A
+    // label that does not cover exactly the ring's devices keeps the union default.
+    auto* mesh_device = tensor_args.input_tensor.device();
+    const auto& mesh_shape = mesh_device->shape();
+    size_t non_trivial_axes = 0;
+    for (size_t axis = 0; axis < mesh_shape.dims(); ++axis) {
+        non_trivial_axes += mesh_shape[static_cast<int32_t>(axis)] > 1 ? 1 : 0;
+    }
+    if (mesh_shape.dims() != 2 || non_trivial_axes > 1) {
+        return {};
+    }
+    const auto gathered = ttnn::operations::ccl::common::all_gather_output_topology(
+        tensor_args.input_tensor, std::nullopt, static_cast<int32_t>(args.in_dim));
+    if (!gathered.has_value()) {
+        return {};
+    }
+    const auto output_topology = ttnn::operations::ccl::common::all_to_all_output_topology(
+        *gathered,
+        std::nullopt,
+        mesh_shape,
+        static_cast<uint32_t>(tensor_args.input_tensor.logical_shape().rank()),
+        static_cast<int32_t>(args.out_dim));
+    if (!output_topology.has_value()) {
+        return {};
+    }
+    std::vector<MeshCoordinate> ring_coords = mesh_device->get_view().get_ring_coordinates();
+    const auto& label_coords = output_topology->mesh_coords();
+    if (label_coords.size() != ring_coords.size() ||
+        !std::is_permutation(label_coords.begin(), label_coords.end(), ring_coords.begin())) {
+        return {};
+    }
+    return {
+        TensorTopology(output_topology->distribution_shape(), output_topology->placements(), std::move(ring_coords))};
 }
 
 ttsl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(

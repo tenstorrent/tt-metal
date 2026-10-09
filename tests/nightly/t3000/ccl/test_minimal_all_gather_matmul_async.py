@@ -61,7 +61,7 @@ def run_all_gather_impl(
         mem_config_weights = mem_config_ag
 
     # Skip unsupported cases
-    (is_known_failure, message) = is_unsupported_case(
+    is_known_failure, message = is_unsupported_case(
         ag_output_shape, dim, mem_config_ag, num_devices, ag_input_dtype, layout, tile
     )
     if is_known_failure:
@@ -329,6 +329,16 @@ def run_all_gather_impl(
     for i in range(num_iters):
         tt_mm_out_tensor = tt_matmul_out_tensor_list[i]
         torch_mm_out_tensor = torch_matmul_output_list[i if not enable_trace else 0]
+
+        # Output TensorTopologies: the whole-mesh all_gather of {N}, [Shard(dim)] is {N}, [Replicate]; the matmul of
+        # that by the {N}, [Shard(dim)] weight (and bias) takes the union-default label {N}, [Shard(dim)], which
+        # ConcatMeshToTensor(dim=3) composes below. Before the fused op had a compute_output_topologies both outputs
+        # kept the union default over the PRE-gather input, {N}, [Shard(dim)] -- wrong for the all_gather output.
+        assert [repr(p) for p in tt_all_gather_out_tensor_list[i].tensor_topology().placements()] == [
+            "PlacementReplicate()"
+        ]
+        assert [repr(p) for p in tt_mm_out_tensor.tensor_topology().placements()] == [f"PlacementShard({dim})"]
+        assert tuple(int(d) for d in tt_mm_out_tensor.tensor_topology().distribution_shape()) == (num_devices,)
 
         tt_mm_out = ttnn.from_device(tt_mm_out_tensor)
         tt_mm_out = ttnn.to_torch(tt_mm_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
