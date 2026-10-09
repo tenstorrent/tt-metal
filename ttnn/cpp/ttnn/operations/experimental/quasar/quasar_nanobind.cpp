@@ -31,6 +31,7 @@
 #include "ttnn/operations/experimental/quasar/sharded_to_interleaved/sharded_to_interleaved_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/interleaved_to_sharded/interleaved_to_sharded_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/transformer/transformer_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/routed_expert_ffn/routed_expert_ffn_nanobind.hpp"
 
 namespace ttnn::operations::experimental::quasar {
 
@@ -98,6 +99,9 @@ void bind_quasar(nb::module_& mod) {
 
     // transformer (nested ttnn.experimental.quasar.transformer submodule; sdpa_decode for now).
     transformer::bind_transformer(m_quasar);
+
+    // routed_expert_ffn (single-node Metal 2.0 routed expert FFN, no activation yet).
+    detail::bind_routed_expert_ffn(m_quasar);
 
     // NOTE: halo has no python binding (internal device backend). The binary_ng device op is exposed through the
     // binary front-end (binary::py_module -> add/subtract/multiply/...), not a direct binary_ng binding.

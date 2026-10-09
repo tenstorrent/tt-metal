@@ -40,6 +40,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     # transformer
     transformer/sdpa_decode/sdpa_decode.hpp
     transformer/sdpa/sdpa.hpp
+    routed_expert_ffn/routed_expert_ffn.hpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
@@ -230,6 +231,10 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     transformer/sdpa/device/sdpa_program_factory.cpp
     transformer/sdpa/device/joint_sdpa_device_operation.cpp
     transformer/sdpa/device/joint_sdpa_program_factory.cpp
+    # routed_expert_ffn (single-node Metal 2.0 routed expert FFN; device op + one program factory)
+    routed_expert_ffn/routed_expert_ffn.cpp
+    routed_expert_ffn/device/routed_expert_ffn_device_operation.cpp
+    routed_expert_ffn/device/routed_expert_ffn_program_factory.cpp
 )
 
 # Registered on the shared `ttnn` Python module target from
@@ -267,4 +272,5 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     transformer/transformer_nanobind.cpp
     transformer/sdpa_decode/sdpa_decode_nanobind.cpp
     transformer/sdpa/sdpa_nanobind.cpp
+    routed_expert_ffn/routed_expert_ffn_nanobind.cpp
 )
