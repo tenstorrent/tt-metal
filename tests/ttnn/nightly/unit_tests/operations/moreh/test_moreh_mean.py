@@ -294,3 +294,17 @@ def test_moreh_mean_backward_callback(input_shape_dim, device):
 def test_moreh_mean_backward_create_input_grad(input_shape_dim, keepdim, create_input_grad, device):
     torch.manual_seed(2024)
     run_moreh_mean_backward(input_shape_dim, device, keepdim=keepdim, create_input_grad=create_input_grad)
+
+
+@pytest.mark.parametrize(
+    "input_shape_dim",
+    [
+        [[5], [0]],
+        [[5], None],
+        [[TILE_HEIGHT * 3 - 15], [0]],
+    ],
+)
+@pytest.mark.parametrize("create_input_grad", [True, False])
+def test_moreh_mean_backward_rank_1(input_shape_dim, create_input_grad, device):
+    torch.manual_seed(2024)
+    run_moreh_mean_backward(input_shape_dim, device, keepdim=True, create_input_grad=create_input_grad)
