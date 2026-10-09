@@ -1627,7 +1627,7 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache]
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
   test_group: disagg_prefill
   skus:
     bh_sc4:
@@ -1683,7 +1683,7 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm53 sc4 7
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, mtp]
+  test_tags: [glm_5_3, runner, kv_cache, mtp, glm53_trace]
   test_group: disagg_prefill
   skus:
     bh_sc4:
@@ -1728,7 +1728,7 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache]
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
@@ -1781,12 +1781,13 @@
       export PREFILL_TORUS_XY_CERTIFIED=1
       timeout -k 2m 75m mpirun --bind-to none --pernode --tag-output bash -lc '
         test -f "$GLM53_HF_MODEL/config.json" || { echo "MTP multi-turn: GLM53_HF_MODEL=$GLM53_HF_MODEL has no config.json on this worker; every selected case is pretrained, so all would skip and leave the job green"; exit 1; }
+        export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py::test_mtp_multiturn_pcc -k "torus-xy-8x4 and pretrained and levels7" -vvv --tb=short
       '
     ) || exit $?
     echo "===== both sections passed ====="
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, mtp]
+  test_tags: [glm_5_3, runner, kv_cache, mtp, glm53_trace]
   test_group: disagg_prefill
   skus:
     bh_sc1:
