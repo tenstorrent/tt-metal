@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
@@ -12,30 +13,49 @@
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void mul_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    constexpr std::uint32_t dst_tile_size = 64;
 
-    constexpr uint dst_tile_size = 64;
-
-    uint offset_in0 = dst_index_in0 * dst_tile_size;
-    uint offset_in1 = dst_index_in1 * dst_tile_size;
-    uint offset_out = dst_index_out * dst_tile_size;
+    std::uint32_t offset_in0 = dst_index_in0 * dst_tile_size;
+    std::uint32_t offset_in1 = dst_index_in1 * dst_tile_size;
+    std::uint32_t offset_out = dst_index_out * dst_tile_size;
 
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++)
-    {
+    for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, offset_in0);
-        TTI_SFPSHFT((-23) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG1, 5); // lreg[1] = lreg[0] >> 23
+        TTI_SFPSHFT((-23) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG1, 5);  // lreg[1] = lreg[0] >> 23
         TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, offset_in1);
-        TTI_SFPSHFT((-23) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG3, 5); // lreg[3] = lreg[2] >> 23
-        TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG4, 0); // lreg[4] = lreg[0] * lreg[2] (low 23 bits)
-        TTI_SFPMUL24(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG5, 1); // lreg[5] = lreg[0] * lreg[2] (high 23 bits)
-        TTI_SFPMUL24(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG6, 0); // lreg[6] = lreg[1] * lreg[2] (low 23 bits)
-        TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG7, 0); // lreg[7] = lreg[0] * lreg[3] (low 23 bits)
-        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE); // lreg[5] += lreg[6]
-        TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE); // lreg[5] += lreg[7]
-        TTI_SFPSHFT(23, p_sfpu::LREG5, p_sfpu::LREG5, 5); // lreg[5] <<= 23
-        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE); // lreg[4] += lreg[5]
+        TTI_SFPSHFT((-23) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG3, 5);  // lreg[3] = lreg[2] >> 23
+        TTI_SFPMUL24(
+            p_sfpu::LREG0,
+            p_sfpu::LREG2,
+            p_sfpu::LCONST_0,
+            p_sfpu::LREG4,
+            0);  // lreg[4] = lreg[0] * lreg[2] (low 23 bits)
+        TTI_SFPMUL24(
+            p_sfpu::LREG2,
+            p_sfpu::LREG0,
+            p_sfpu::LCONST_0,
+            p_sfpu::LREG5,
+            1);  // lreg[5] = lreg[0] * lreg[2] (high 23 bits)
+        TTI_SFPMUL24(
+            p_sfpu::LREG1,
+            p_sfpu::LREG2,
+            p_sfpu::LCONST_0,
+            p_sfpu::LREG6,
+            0);  // lreg[6] = lreg[1] * lreg[2] (low 23 bits)
+        TTI_SFPMUL24(
+            p_sfpu::LREG0,
+            p_sfpu::LREG3,
+            p_sfpu::LCONST_0,
+            p_sfpu::LREG7,
+            0);  // lreg[7] = lreg[0] * lreg[3] (low 23 bits)
+        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);  // lreg[5] += lreg[6]
+        TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE);  // lreg[5] += lreg[7]
+        TTI_SFPSHFT(23, p_sfpu::LREG5, p_sfpu::LREG5, 5);                          // lreg[5] <<= 23
+        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE);  // lreg[4] += lreg[5]
         TT_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_6, offset_out);
     }
 #else
@@ -70,12 +90,12 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
     // hi = mul24_hi(a, b)
     // result = ((hi + cross0 + cross1) << 23) + lo
 
-    constexpr uint a0 = p_sfpu::LREG0;
-    constexpr uint b0 = p_sfpu::LREG0;
-    constexpr uint a1 = p_sfpu::LREG1;
-    constexpr uint b1 = p_sfpu::LREG2;
-    constexpr uint b2 = p_sfpu::LREG3;
-    constexpr uint c = p_sfpu::LREG4;
+    constexpr std::uint32_t a0 = p_sfpu::LREG0;
+    constexpr std::uint32_t b0 = p_sfpu::LREG0;
+    constexpr std::uint32_t a1 = p_sfpu::LREG1;
+    constexpr std::uint32_t b1 = p_sfpu::LREG2;
+    constexpr std::uint32_t b2 = p_sfpu::LREG3;
+    constexpr std::uint32_t c = p_sfpu::LREG4;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -109,9 +129,13 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
 
 template <bool APPROXIMATION_MODE>
 inline void mul_int32_init() {
+    // Program ADDR_MOD_6 (dest increment 2) here rather than relying on the SfpuType-selected
+    // LLK init: this kernel stores through ADDR_MOD_6.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+
 #ifndef DISABLE_SFPLOADMACRO
-    constexpr uint b1 = p_sfpu::LREG2;
-    constexpr uint c = p_sfpu::LREG4;
+    constexpr std::uint32_t b1 = p_sfpu::LREG2;
+    constexpr std::uint32_t c = p_sfpu::LREG4;
 
     // Load instruction templates i=0-3.  This is more efficient than using
     // SFPCONFIG, but requires DISABLE_BACKDOOR_LOAD=false (the default).
@@ -147,10 +171,10 @@ inline void mul_int32_init() {
 
     // Macro 0:
     {
-        constexpr uint simple_bits = 0;
-        constexpr uint mad_bits = 0x80 | 0x00 | (1 << 3) | (4 + 1);
-        constexpr uint round_bits = 0x80 | 0x00 | (0 << 3) | (4 + 0);
-        constexpr uint store_bits = 0;
+        constexpr std::uint32_t simple_bits = 0;
+        constexpr std::uint32_t mad_bits = 0x80 | 0x00 | (1 << 3) | (4 + 1);
+        constexpr std::uint32_t round_bits = 0x80 | 0x00 | (0 << 3) | (4 + 0);
+        constexpr std::uint32_t store_bits = 0;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -160,37 +184,37 @@ inline void mul_int32_init() {
     }
     // Macro 1:
     {
-        constexpr uint simple_bits = 0x80 | 0x00 | (4 << 3) | (4 + 3);
-        constexpr uint mad_bits = 0x80 | 0x00 | (1 << 3) | (4 + 1);
-        constexpr uint round_bits = 0x80 | 0x00 | (0 << 3) | (4 + 0);
-        constexpr uint store_bits = 0;
+        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (4 << 3) | (4 + 3);
+        constexpr std::uint32_t mad_bits = 0x80 | 0x00 | (1 << 3) | (4 + 1);
+        constexpr std::uint32_t round_bits = 0x80 | 0x00 | (0 << 3) | (4 + 0);
+        constexpr std::uint32_t store_bits = 0;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
 
         // Configure Sequence[1], via VD=4+1
-        TTI_SFPCONFIG(0, 4+1, 0);
+        TTI_SFPCONFIG(0, 4 + 1, 0);
     }
     // Macro 2:
     {
-        constexpr uint simple_bits = 0x80 | 0x40 | (4 << 3) | (4 + 3);
-        constexpr uint mad_bits = 0x80 | 0x00 | (1 << 3) | (4 + 1);
+        constexpr std::uint32_t simple_bits = 0x80 | 0x40 | (4 << 3) | (4 + 3);
+        constexpr std::uint32_t mad_bits = 0x80 | 0x00 | (1 << 3) | (4 + 1);
 
         // Configure Sequence[2], via VD=4+2
-        TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4+2, 1);
+        TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 2, 1);
     }
     // Macro 3:
     {
-        constexpr uint simple_bits = 0x80 | 0x00 | (0 << 3) | (4 + 2);
-        constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0;
-        constexpr uint store_bits = 0x00 | 0x40 | (2 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (0 << 3) | (4 + 2);
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0;
+        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (2 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
 
         // Configure Sequence[3], via VD=4+3
-        TTI_SFPCONFIG(0, 4+3, 0);
+        TTI_SFPCONFIG(0, 4 + 3, 0);
     }
     // Misc: {
     //   StoreMod0: MOD0_FMT_SRCB,

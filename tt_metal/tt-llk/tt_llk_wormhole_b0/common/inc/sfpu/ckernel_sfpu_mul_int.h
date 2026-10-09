@@ -165,6 +165,15 @@ inline void _mul_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
 template <bool APPROXIMATION_MODE>
 inline void _init_mul_int_()
 {
+    // Program ADDR_MOD_6 (dest increment 2) here rather than relying on the SfpuType-selected
+    // LLK init: this kernel stores through ADDR_MOD_2, which addr_mod_base maps to hardware slot 6.
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 2},
+    }
+        .set(ADDR_MOD_6);
+
     sfpi::vConstIntPrgm0 = 0xff; // LREG12
 #ifdef DISABLE_SFPLOADMACRO
     sfpi::vConstIntPrgm1 = -8; // LREG13
