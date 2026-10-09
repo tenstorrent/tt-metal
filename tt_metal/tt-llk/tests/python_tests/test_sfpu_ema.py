@@ -34,6 +34,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     EMA_ALPHA_BETA,
+    EMA_INTERLEAVED_INIT,
     TILE_COUNT,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
@@ -94,11 +95,20 @@ def _ema_golden_fp64(input_2d: torch.Tensor, alpha_f32: float, beta_f32: float):
     return out
 
 
-def _run_ema_on_device(alpha: float, beta: float, num_time_tiles: int, dest_acc):
+def _run_ema_on_device(
+    alpha: float,
+    beta: float,
+    num_time_tiles: int,
+    dest_acc,
+    binary_init_before_ema: bool = False,
+):
     """Run the EMA kernel over a [num_time_tiles*32, 32] input.
 
     Returns (untilized device result, untilized 2D input view). Row = time step,
     column = parallel channel, for both.
+
+    With ``binary_init_before_ema`` the kernel issues an eltwise binary init between
+    the datacopy and ``ema_tile`` in every DEST section, as a fused kernel would.
     """
     torch.manual_seed(0)
 
@@ -128,6 +138,7 @@ def _run_ema_on_device(alpha: float, beta: float, num_time_tiles: int, dest_acc)
         templates=[
             APPROX_MODE(ApproximationMode.No),
             EMA_ALPHA_BETA(alpha_bits=_f32_bits(alpha), beta_bits=_f32_bits(beta)),
+            EMA_INTERLEAVED_INIT(binary_init_before_ema=binary_init_before_ema),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt),
@@ -170,6 +181,22 @@ def test_sfpu_ema(dest_acc, num_time_tiles):
     assert passed_test(
         golden_tensor, res_tensor, DataFormat.Float16_b
     ), "EMA result does not match golden"
+
+
+# Another math init in the same DEST section must not change the EMA result.
+@parametrize(
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    num_time_tiles=[2],
+)
+def test_sfpu_ema_after_binary_init(dest_acc, num_time_tiles):
+    res_tensor, golden_input = _run_ema_on_device(
+        EMA_ALPHA, EMA_BETA, num_time_tiles, dest_acc, binary_init_before_ema=True
+    )
+    golden_tensor = _ema_golden(golden_input, EMA_ALPHA, EMA_BETA)
+
+    assert passed_test(
+        golden_tensor, res_tensor, DataFormat.Float16_b
+    ), "EMA result after an eltwise binary init does not match golden"
 
 
 @pytest.mark.nightly
