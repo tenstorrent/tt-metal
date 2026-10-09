@@ -300,14 +300,19 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     // 2**frac via the accurate exp helper (frac is small), then scale by 2**k.
     sfpi::vFloat y = _sfpu_exp_fp32_accurate_(frac * LN2);
     // setexp writes the 8-bit exponent field and wraps instead of saturating, so an
-    // overflowing magnitude silently becomes a finite value. Detect overflow from the
-    // biased exponent about to be written (>= 255 is the inf field) and clamp explicitly.
+    // out-of-range magnitude silently becomes a different finite (or NaN) value instead
+    // of saturating. Detect both directions from the biased exponent about to be written
+    // (>= 255 is the inf/NaN field, <= 0 is underflow) and clamp explicitly. The <= 0 case
+    // is reachable even though the `s < vConstFloatPrgm1` clamp above resets e to 0: if s
+    // rounds to exactly -127.0 it does not take that branch, and a residual negative e can
+    // still drive out_exp to -1 (mirrors the unary_power fix for issue #57446).
     // Checking out_exp (already needed by setexp) instead of keeping the float s live
     // across the exp helper avoids pushing this kernel past the SFPU register-allocator
     // budget (reload-insn ICE); out_exp >= 255 is equivalent to s >= 128.
     sfpi::vInt out_exp = sfpi::exexp(y, sfpi::ExponentMode::Biased) + k_int;
     y = sfpi::setexp(y, out_exp);
-    v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
+    v_if(out_exp <= 0) { y = 0.0f; }
+    v_elseif(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
     v_endif;
 
     // |pow| removes a -0 exponent: convert<vSMag16> would round trip that back to something the
