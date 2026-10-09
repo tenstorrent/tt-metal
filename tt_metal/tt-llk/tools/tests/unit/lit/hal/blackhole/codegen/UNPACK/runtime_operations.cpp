@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -c %s -o %t.o
+// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -DENABLE_LLK_ASSERT -c %s -o %t.o
 // RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s --enable-var-scope
 
 #include "hal/unpack.h"
