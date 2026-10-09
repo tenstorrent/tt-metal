@@ -59,14 +59,6 @@ public:
     [[nodiscard]] virtual size_t get_steps() const = 0;
     virtual void set_steps(size_t steps) = 0;
 
-    // Single-LR API on top of the param groups, for callers that drive one LR (LR schedulers, trainers): get_lr() is
-    // the first group's LR, and set_lr(lr) applies the same factor lr / initial_lr[0] to every group's initial LR, so
-    // the groups keep their ratios.
-    virtual void set_lr(float lr);
-    [[nodiscard]] virtual float get_lr() const;
-    // The first group's initial LR (see get_initial_group_lrs).
-    [[nodiscard]] float get_initial_lr();
-
     // Value of hyperparameter in every param group, indexed like the groups.
     [[nodiscard]] std::vector<float> get_group_options(const std::string& key) const;
     // Sets hyperparameter for every param group, one value per group.

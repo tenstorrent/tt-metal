@@ -39,30 +39,6 @@ std::invalid_argument unknown_option_error(
 }
 }  // namespace
 
-float OptimizerBase::get_lr() const {
-    return get_group_lrs().front();
-}
-
-void OptimizerBase::set_lr(float lr) {
-    const auto initial_lrs = get_initial_group_lrs();
-    const float first_initial_lr = initial_lrs.front();
-    const bool all_zero = std::ranges::all_of(initial_lrs, [](float value) { return value == 0.0F; });
-    if (first_initial_lr == 0.0F && !all_zero) {
-        throw std::invalid_argument(fmt::format(
-            "{}::set_lr cannot scale param groups whose first group has an initial lr of 0; set each group's lr "
-            "with set_group_lrs instead",
-            get_name()));
-    }
-    for (size_t group_idx = 0; group_idx < m_param_groups.size(); ++group_idx) {
-        // Ratio first, so a group sharing the first group's initial lr gets exactly `lr`.
-        set_param_group_option(group_idx, "lr", all_zero ? lr : lr * (initial_lrs[group_idx] / first_initial_lr));
-    }
-}
-
-float OptimizerBase::get_initial_lr() {
-    return get_initial_group_lrs().front();
-}
-
 std::string OptimizerBase::param_group_key(size_t group_idx, const std::string& key) {
     return fmt::format("param_groups.{}.{}", group_idx, key);
 }

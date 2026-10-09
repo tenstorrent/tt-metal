@@ -53,7 +53,7 @@ nb::list floats_to_py(const std::vector<float>& values) {
 }  // namespace
 
 class OptimizerBaseTrampoline : public ttml::optimizers::OptimizerBase {
-    NB_TRAMPOLINE(OptimizerBase, 10);
+    NB_TRAMPOLINE(OptimizerBase, 11);
 
 public:
     std::string get_name() const override {
@@ -77,11 +77,20 @@ public:
     void set_steps(size_t steps) override {
         NB_OVERRIDE_PURE(set_steps, steps);
     }
-    void set_lr(float lr) override {
-        NB_OVERRIDE_PURE(set_lr, lr);
+    std::vector<float> get_group_lrs() const override {
+        nb::detail::ticket nb_ticket(nb_trampoline, "get_group_lrs", /*pure=*/true);
+        return floats_from_py(nb::cast<nb::sequence>(nb_trampoline.base().attr(nb_ticket.key)()));
     }
-    float get_lr() const override {
-        NB_OVERRIDE_PURE(get_lr);
+    void set_group_lrs(const std::vector<float>& lrs) override {
+        nb::detail::ticket nb_ticket(nb_trampoline, "set_group_lrs", /*pure=*/true);
+        nb_trampoline.base().attr(nb_ticket.key)(floats_to_py(lrs));
+    }
+    std::vector<float> get_initial_group_lrs() override {
+        nb::detail::ticket nb_ticket(nb_trampoline, "get_initial_group_lrs", /*pure=*/false);
+        if (nb_ticket.key.is_valid()) {
+            return floats_from_py(nb::cast<nb::sequence>(nb_trampoline.base().attr(nb_ticket.key)()));
+        }
+        return OptimizerBase::get_initial_group_lrs();
     }
     void print_stats() const override {
         NB_OVERRIDE(print_stats);
@@ -221,8 +230,6 @@ void py_module(nb::module_& m) {
         py_optimizer_base.def("get_state_dict", &OptimizerBase::get_state_dict, "Get state dictionary");
         py_optimizer_base.def(
             "set_state_dict", &OptimizerBase::set_state_dict, nb::arg("dict"), "Set state dictionary");
-        py_optimizer_base.def("get_lr", &OptimizerBase::get_lr, "Get learning rate");
-        py_optimizer_base.def("set_lr", &OptimizerBase::set_lr, nb::arg("lr"), "Set learning rate");
         py_optimizer_base.def("print_stats", &OptimizerBase::print_stats, "Print statistics");
         py_optimizer_base.def(
             "get_group_lrs",
