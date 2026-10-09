@@ -20,6 +20,10 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "common/mesh_dispatch_fixture.hpp"
@@ -45,6 +49,7 @@ protected:
     const std::string kernel_path_remote = "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_remote.cpp";
     const std::string kernel_path_slot_probe = "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_slot_probe.cpp";
     const std::string kernel_path_compute = "tests/tt_metal/tt_metal/test_kernels/compute/test_compute_semaphore.cpp";
+    const std::string kernel_path_cluster = "tests/tt_metal/tt_metal/test_kernels/compute/test_cluster_semaphore.cpp";
     uint32_t report_addr{0};
     uint32_t num_dms_{0};
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
@@ -641,6 +646,15 @@ protected:
     // Pattern D: num_tiles distinct Float16_b tiles through the ring. Returns the report; `mismatched` is the
     // number of output tiles that differ from the input.
     std::vector<uint32_t> run_compute_datacopy(uint32_t num_tiles, uint32_t nosync, uint32_t& mismatched) {
+        const auto in = datacopy_input(num_tiles);
+        std::vector<uint32_t> out;
+        auto report = run_compute(
+            {.pattern = 3, .num_iters = num_tiles, .nosync = nosync, .max_value = kComputeDepth}, 4, in, &out);
+        mismatched = mismatched_tiles(in, out);
+        return report;
+    }
+
+    static std::vector<uint32_t> datacopy_input(uint32_t num_tiles) {
         // Tile t, datum k = bf16 0x4000 + (t << 7) + (k & 0x7F): exact through a datacopy, distinct per tile.
         std::vector<uint32_t> in(num_tiles * kTileWords);
         for (uint32_t t = 0; t < num_tiles; ++t) {
@@ -650,17 +664,141 @@ protected:
                 in[t * kTileWords + w] = (hi << 16) | lo;
             }
         }
-        std::vector<uint32_t> out;
-        auto report = run_compute(
-            {.pattern = 3, .num_iters = num_tiles, .nosync = nosync, .max_value = kComputeDepth}, 4, in, &out);
-        mismatched = 0;
-        for (uint32_t t = 0; t < num_tiles; ++t) {
-            const auto first = t * kTileWords;
+        return in;
+    }
+
+    // Number of output tiles that differ from the input.
+    static uint32_t mismatched_tiles(const std::vector<uint32_t>& in, const std::vector<uint32_t>& out) {
+        uint32_t mismatched = 0;
+        for (uint32_t first = 0; first < in.size(); first += kTileWords) {
             if (!std::equal(out.begin() + first, out.begin() + first + kTileWords, in.begin() + first)) {
                 ++mismatched;
             }
         }
-        return report;
+        return mismatched;
+    }
+
+    struct ClusterRun {
+        uint32_t num_neos = 2;
+        uint32_t num_iters = kComputeMaxTiles;
+        uint32_t active_neos = 2;
+        bool closed_ring = false;
+        bool nosync = false;
+        uint32_t max_tiles = kComputeMaxTiles;
+        uint32_t skew_spins = 2000;
+        bool omit_ready_wait = false;
+        bool omit_space_wait = false;
+        uint32_t consumer_skew = 0;
+        uint32_t depth = kComputeDepth;
+        uint32_t batch_tiles = 1;
+    };
+
+    struct ClusterResult {
+        std::vector<uint32_t> report;  // packed counts, then final outgoing semaphore counts
+        std::vector<uint32_t> output;
+    };
+
+    ClusterResult run_cluster(const ClusterRun& run) {
+        using namespace experimental;
+        TT_FATAL(
+            run.batch_tiles > 0 && run.depth % run.batch_tiles == 0 && run.num_iters % run.batch_tiles == 0,
+            "Cluster test batches must divide both depth and iteration count");
+        constexpr uint32_t tile_bytes = kTileWords * sizeof(uint32_t);
+        // Mirrors the kernel: PACK on NEO n reaches only tiles n, n + num_neos, ..., so slot s of NEO n's ring
+        // is ring_tile + s * num_neos + n, and output tile i (packed by the last NEO) is
+        // output_tile + i * num_neos + num_neos - 1.
+        const uint32_t n = run.num_neos;
+        const uint32_t input_tile = n;  // padding compensates for each NEO's DFB base offset
+        const uint32_t ring_tile = (input_tile + run.max_tiles + n - 1) / n * n;
+        const uint32_t output_tile = ring_tile + run.depth * n;
+        const uint32_t local_capacity = output_tile / n + run.max_tiles;
+        const uint32_t total_entries = local_capacity * n;
+
+        // A single-page L1 tensor reserves the full backing extent on the test core. The DFB supplies
+        // tile format/address metadata to the Metal 1.0 compute APIs; its FIFO credits never circulate.
+        const TensorSpec storage_spec(
+            Shape{1, total_entries * kTileWords},
+            TensorLayout(
+                DataType::UINT32,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));
+        auto storage = MeshTensor::allocate_on_device(*mesh_device_, storage_spec);
+        const uint32_t base = storage.address();
+        const auto in = datacopy_input(run.max_tiles);
+        std::vector<uint32_t> initial(total_entries * kTileWords, kNoReport);
+        std::copy(in.begin(), in.end(), initial.begin() + input_tile * kTileWords);
+        if (run.closed_ring) {
+            for (uint32_t slot = 0; slot < run.active_neos * run.depth; ++slot) {
+                const auto first = in.begin() + (slot % run.max_tiles) * kTileWords;
+                const uint32_t tile = ring_tile + (slot % run.depth) * n + slot / run.depth;
+                std::copy(first, first + kTileWords, initial.begin() + tile * kTileWords);
+            }
+        }
+        slow_dispatch::WriteToL1(*mesh_device_, core, base, initial);
+
+        const KernelSpecName compute{"compute"};
+        const DFBSpecName tiles{"tiles"};
+        const TensorParamName backing{"backing"};
+        KernelSpec ks{
+            .unique_id = compute,
+            .source = kernel_path_cluster,
+            .num_threads = run.num_neos,
+            .dfb_bindings = {StridedConsumerOf(tiles, "tiles_in"), ProducerOf(tiles, "tiles_out")},
+            .tensor_bindings = {{.tensor_parameter_name = backing, .accessor_name = "backing"}},
+            .compile_time_args =
+                {{"num_neos", run.num_neos},
+                 {"depth", run.depth},
+                 {"max_tiles", run.max_tiles},
+                 {"closed_ring", run.closed_ring},
+                 {"nosync", run.nosync},
+                 {"skew_spins", run.skew_spins},
+                 {"local_capacity", local_capacity},
+                 {"omit_ready_wait", run.omit_ready_wait},
+                 {"omit_space_wait", run.omit_space_wait},
+                 {"consumer_skew", run.consumer_skew},
+                 {"batch_tiles", run.batch_tiles}},
+            .runtime_arg_schema = {.runtime_arg_names = {"num_iters", "report_addr", "active_neos"}},
+            .hw_config = ComputeHardwareConfig{},
+        };
+        ProgramSpec spec{
+            .name = "cluster_semaphore",
+            .kernels = {ks},
+            .dataflow_buffers =
+                {{.unique_id = tiles,
+                  .entry_size = tile_bytes,
+                  .num_entries = total_entries,
+                  .data_format_metadata = tt::DataFormat::Float16_b,
+                  .borrowed_from = backing}},
+            .tensor_parameters = {{.unique_id = backing, .spec = storage_spec}},
+            .work_units = {{.name = "main", .kernels = {compute}, .target_nodes = core}},
+        };
+        Program program = MakeProgramFromSpec(*mesh_device_, spec);
+        ProgramRunArgs params;
+        params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+            .kernel = compute,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                core, {{"num_iters", run.num_iters}, {"report_addr", base}, {"active_neos", run.active_neos}}),
+        }};
+        params.tensor_args.emplace(backing, TensorArgument{storage});
+        SetProgramRunArgs(program, params);
+
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
+        RunProgram(mesh_device_, workload);
+
+        ClusterResult result;
+        slow_dispatch::ReadFromL1(*mesh_device_, core, base, 2 * run.num_neos * sizeof(uint32_t), result.report);
+        std::vector<uint32_t> l1;
+        slow_dispatch::ReadFromL1(*mesh_device_, core, base, total_entries * tile_bytes, l1);
+        // Gather into contiguous order: ring edge by edge, then slot; or output tile by tile.
+        const uint32_t result_tiles = run.closed_ring ? run.active_neos * run.depth : run.max_tiles;
+        for (uint32_t t = 0; t < result_tiles; ++t) {
+            const uint32_t tile =
+                run.closed_ring ? ring_tile + (t % run.depth) * n + t / run.depth : output_tile + t * n + n - 1;
+            result.output.insert(
+                result.output.end(), l1.begin() + tile * kTileWords, l1.begin() + (tile + 1) * kTileWords);
+        }
+        return result;
     }
 
     bool has_second_node() const {
@@ -1411,4 +1549,117 @@ TEST_F(SemScopeFixture, TestComputeAtomicBoundedProducerNoWaitControl) {
     EXPECT_EQ(r[2], kComputeDepth) << "expected hardware back-pressure at the programmed maximum";
     EXPECT_EQ(r[3], 0u) << "semaphore did not settle to 0";
 }
+
+// ---- ClusterSemaphore: public Metal compute APIs, Quasar PACK -> UNPACK across NEOs ----
+// Host setup and DFBs use Metal 2.0; the kernel uses ID-based startup/copy/pack until Quasar supports LLKOperand.
+// TODO: Move these tests to metal2_host_api/integration_tests when that suite supports Quasar execution
+// and the kernel can use Quasar LLKOperand APIs.
+
+// NEO 0 packs a four-slot ring and NEO 1 unpacks it. The DFB is used only for storage/metadata;
+// ClusterSemaphore must order both publication and slot reuse; delay PACK to exercise the ready wait.
+TEST_F(SemScopeFixture, TestClusterSemaphoreDatacopy) {
+    const auto result = run_cluster({});
+    EXPECT_EQ(result.report[0], kComputeMaxTiles);
+    EXPECT_EQ(result.report[1], kComputeMaxTiles);
+    EXPECT_EQ(result.report[2], 0u) << "semaphore did not settle to zero";
+    EXPECT_EQ(result.output, datacopy_input(kComputeMaxTiles));
+}
+
+// Without ClusterSemaphore, the deliberately late producer cannot protect the shared ring. This also
+// checks that no DFB credit synchronization has accidentally replaced the semaphore under test.
+TEST_F(SemScopeFixture, TestClusterSemaphoreDatacopyNoSyncControl) {
+    const auto result = run_cluster({.nosync = true});
+    EXPECT_EQ(result.report[0], kComputeMaxTiles);
+    EXPECT_EQ(result.report[1], kComputeMaxTiles);
+    EXPECT_GT(mismatched_tiles(datacopy_input(kComputeMaxTiles), result.output), 0u)
+        << "unsynchronized datacopy came out correct -- the positive test is not a detector";
+}
+
+// Four-NEO chain through three rings, without skew. Middle NEOs copy and pack back to back to catch
+// semaphore updates that run ahead of MOP/REPLAY completion. Keep all 64 distinct outputs so early
+// corruption cannot be hidden by later writes to the same output slots.
+TEST_F(SemScopeFixture, TestClusterSemaphoreChain) {
+    constexpr uint32_t num_neos = 4;
+    constexpr uint32_t num_iters = 64;
+    const auto result = run_cluster(
+        {.num_neos = num_neos,
+         .num_iters = num_iters,
+         .active_neos = num_neos,
+         .max_tiles = num_iters,
+         .skew_spins = 0});
+    ASSERT_EQ(result.output.size(), num_iters * kTileWords);
+    EXPECT_EQ(mismatched_tiles(datacopy_input(num_iters), result.output), 0u);
+    for (uint32_t neo = 0; neo < num_neos; ++neo) {
+        EXPECT_EQ(result.report[neo], num_iters);
+        if (neo + 1 < num_neos) {
+            EXPECT_EQ(result.report[num_neos + neo], 0u) << "unbalanced chain edge " << neo;
+        }
+    }
+}
+
+// Closed rings start full and return to depth four. Exercise one through four active NEOs while all
+// four NEOs participate in initialization and completion barriers.
+TEST_F(SemScopeFixture, TestClusterSemaphoreClosedRing) {
+    constexpr uint32_t num_neos = 4;
+    constexpr uint32_t num_iters = 64;
+    for (uint32_t active_neos = 1; active_neos <= num_neos; ++active_neos) {
+        SCOPED_TRACE(active_neos);
+        const auto result = run_cluster(
+            {.num_neos = num_neos,
+             .num_iters = num_iters,
+             .active_neos = active_neos,
+             .closed_ring = true,
+             .max_tiles = num_neos * kComputeDepth,
+             .skew_spins = 0});
+        const auto input = datacopy_input(num_neos * kComputeDepth);
+        for (uint32_t neo = 0; neo < active_neos; ++neo) {
+            const uint32_t origin = (neo + active_neos - (num_iters / kComputeDepth) % active_neos) % active_neos;
+            for (uint32_t slot = 0; slot < kComputeDepth; ++slot) {
+                const uint32_t source_tile = (origin * kComputeDepth + slot) % (num_neos * kComputeDepth);
+                EXPECT_TRUE(std::equal(
+                    input.begin() + source_tile * kTileWords,
+                    input.begin() + (source_tile + 1) * kTileWords,
+                    result.output.begin() + (neo * kComputeDepth + slot) * kTileWords))
+                    << "corrupt ring payload: edge " << neo << ", slot " << slot;
+            }
+            EXPECT_EQ(result.report[neo], num_iters);
+            EXPECT_EQ(result.report[num_neos + neo], kComputeDepth) << "unbalanced ring edge " << neo;
+        }
+    }
+}
+
+// Publication and reuse are separate obligations. Keep updates enabled in these controls:
+// the wrong payload must be detected even though every credit is eventually returned.
+TEST_F(SemScopeFixture, TestClusterSemaphorePublicationControl) {
+    const auto result = run_cluster({.omit_ready_wait = true});
+    EXPECT_GT(mismatched_tiles(datacopy_input(kComputeMaxTiles), result.output), 0u);
+    EXPECT_EQ(result.report[2], 0u);
+}
+
+TEST_F(SemScopeFixture, TestClusterSemaphoreSlotReuse) {
+    for (bool omit_space_wait : {false, true}) {
+        SCOPED_TRACE(omit_space_wait);
+        const auto result = run_cluster({.skew_spins = 0, .omit_space_wait = omit_space_wait, .consumer_skew = 2000});
+        const auto mismatches = mismatched_tiles(datacopy_input(kComputeMaxTiles), result.output);
+        if (omit_space_wait) {
+            EXPECT_GT(mismatches, 0u) << "missing capacity wait did not corrupt the ring";
+        } else {
+            EXPECT_EQ(mismatches, 0u);
+        }
+        EXPECT_EQ(result.report[2], 0u);
+    }
+}
+
+// Eight credits cross the register alias limit of seven. Two batches fit in the ring, so
+// the peer can make progress between split updates.
+TEST_F(SemScopeFixture, TestClusterSemaphoreBatchedCredits) {
+    constexpr uint32_t tiles = 64;
+    const auto result =
+        run_cluster({.num_iters = tiles, .max_tiles = tiles, .skew_spins = 0, .depth = 16, .batch_tiles = 8});
+    EXPECT_EQ(result.output, datacopy_input(tiles));
+    EXPECT_EQ(result.report[0], tiles);
+    EXPECT_EQ(result.report[1], tiles);
+    EXPECT_EQ(result.report[2], 0u);
+}
+
 }  // namespace tt::tt_metal
