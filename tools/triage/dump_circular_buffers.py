@@ -42,6 +42,7 @@ from dispatcher_data import DispatcherData, run as get_dispatcher_data
 from run_checks import run as get_run_checks
 from triage import ScriptConfig, hex_serializer, run_script, triage_field
 from ttexalens.context import Context
+from ttexalens.hardware.risc_debug import RiscLocation
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.tt_exalens_lib import read_from_device, read_word_from_device
 
@@ -135,8 +136,10 @@ def read_core(
     location: OnChipCoordinate, dispatcher_data: DispatcherData, dump_content: bool
 ) -> list[CircularBufferRow] | None:
     arch = WORMHOLE if location.device.is_wormhole() else BLACKHOLE if location.device.is_blackhole() else None
-    core = dispatcher_data.get_cached_core_data(location, "brisc")
-    if arch is None or core.go_message == "DONE" or core.mailboxes is None:
+    if arch is None:
+        return None
+    core = dispatcher_data.get_cached_core_data(RiscLocation(location, None, "brisc"))
+    if core.go_message == "DONE" or core.mailboxes is None:
         return None
     kernel_config = core.mailboxes.launch[core.launch_msg_rd_ptr].kernel_config
     if int(kernel_config.enables) == 0:

@@ -151,7 +151,7 @@ def run_model(
     engaged on the perf (non-PCC) path — a full-tensor PCC check would (correctly)
     mismatch on the skipped padded rows, and padded-row correctness is covered by the
     dedicated grouped_topk / routing_setup tests. HOST_ALL gates ignore padding entirely
-    (TtMoe falls back to padding_config=None for non-DEVICE_FP32 gates).
+    (TtMoe builds a padding_config only for DEVICE_FP32 and GPT_DEVICE gates).
 
     ``routed_activation`` selects the fused routed-expert kernel's activation and ``shared_activation``
     the shared expert's; each is mirrored onto the matching torch reference. They are separate knobs
@@ -182,7 +182,7 @@ def run_model(
         raise ValueError(f"unknown shared_activation {shared_activation!r}")
     assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
     if gate_fallback_mode in _HASH_GATE_MODES:
-        # TtMoe builds a padding config for DEVICE_FP32 only, and the hash gate's input_ids
+        # TtMoe builds a padding config for DEVICE_FP32 and GPT_DEVICE only, and the hash gate's input_ids
         # sharding assumes sequential SP placement.
         if padded_percent or is_balanced:
             raise ValueError(f"{gate_fallback_mode} needs padded_percent=0 and is_balanced=False")
@@ -1307,6 +1307,9 @@ def test_kimi_k3_moe(
         # fmt: off
         pytest.param( 640, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.GPT_DEVICE, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-5k-pcc"),
         pytest.param(3200, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.GPT_DEVICE, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-25k-pcc"),
+        # run_pcc_check=False: the device-perf wrapper in tests/perf/test_moe_perf.py selects this row
+        # so the timed region is the device forward alone, with no host reference pass inside it.
+        pytest.param( 640, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.GPT_DEVICE, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-5k-perf"),
         # fmt: on
     ],
 )
@@ -1326,6 +1329,16 @@ def test_kimi_k3_moe(
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-8x4",
+        ),
+        # SP=8 proxy on a LoudBox -- the stage shape PP=4 actually runs (SP=8 x TP=1), where the
+        # 8x4 row above is the single-rank shape. torus_y matches the PP=4 rank binding's fabric.
+        # An (8,1) row cannot run on a Galaxy at all, so this slot is LoudBox-only.
+        pytest.param(
+            (8, 1),
+            torus_y_device_params(fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="torus-y-8x1",
         ),
     ],
     indirect=["mesh_device", "device_params"],

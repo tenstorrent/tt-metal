@@ -15,6 +15,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -44,7 +45,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     tt::tt_metal::distributed::MeshDevice& device,
     const CoreRangeSet& input_all_storage_cores,
     const CoreRangeSet& output_all_storage_cores,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,

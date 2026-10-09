@@ -122,7 +122,8 @@ def _skip_on_simulator(request):
 class _SdpaCustomMMStimuli(StimuliConfig):
     """Writes the two pre-packed operand buffers exactly as the LLK expects.
 
-    buffer_A = in1 (SrcA, rhs): the [K, N] matrix as kt*ct standard [32,32] Float16_b tiles.
+    buffer_A = in1 (SrcA, rhs): [K, N] as standard [32,32] Float16_b tiles,
+               optionally with poisoned leading tiles and inter-row padding.
     buffer_B = in0 (SrcB, lhs): the [M, K] matrix packed face-by-face -- 2*kt faces of
                M x FACE_C_DIM, contiguous (identical layout to compressed_utils' packed_a).
     """
@@ -133,7 +134,7 @@ class _SdpaCustomMMStimuli(StimuliConfig):
                 1, dtype=torch.float32
             ),  # placeholder (raw bytes below)
             stimuli_A_format=DataFormat.Float16_b,
-            tile_count_A=kt * ct + (mask is not None),
+            tile_count_A=len(packed_in1) // 2048 + (mask is not None),
             buffer_B=torch.zeros(1, dtype=torch.float32),  # placeholder
             stimuli_B_format=DataFormat.Float16_b,
             tile_count_B=kt,
@@ -160,15 +161,17 @@ def _pack_in0(torch_a, kt):
     return out
 
 
-def _pack_in1(torch_b, kt, ct, read_transposed=False):
-    """in1 [K, N] -> kt*ct standard [32,32] Float16_b tiles (face-major).
+def _pack_in1(
+    torch_b, kt, ct, read_transposed=False, row_stride=None, input_tile_offset=0
+):
+    """Pack in1 [K, N] as face-major Float16_b tiles with optional poison padding.
 
     Tile ordering must match the order the unpack LLK walks SrcA from L1
-    (llk_unpack_AB_custom_mm.h ``_llk_unpack_AB_custom_mm_``):
+    (llk_unpack_AB_sdpa_custom_mm.h ``_llk_unpack_AB_sdpa_custom_mm_``):
       * read_transposed=False: contiguous read (block_increment == inner_increment ==
         tile_size), i.e. the walk reads tile linear-index ``k*ct + c`` -> pack K-MAJOR.
-      * read_transposed=True: block_increment = kt*tile_size, inner_increment =
-        -(((ct-1)*kt)-1)*tile_size, so the walk reads tile linear-index ``c*kt + k``
+      * read_transposed=True: block_increment = row_stride*tile_size, inner_increment =
+        -(((ct-1)*row_stride)-1)*tile_size, so the walk reads ``c*row_stride + k``
         -> pack C-MAJOR (outer c, inner k) so the transposed read reconstructs the exact
         same [K,N] matrix and the golden stays A@B. (The buffer, not the golden, absorbs
         the transpose; read_transposed is a SrcA L1 access-pattern axis, not a math change.)
@@ -186,11 +189,18 @@ def _pack_in1(torch_b, kt, ct, read_transposed=False):
             )
             tiles[(k, c)] = pack_bfp16(faces)
 
-    out = b""
+    # Finite nonzero poison makes using kt instead of the physical row stride, or
+    # dropping tile_index_a, numerically visible without relying on NaN propagation.
+    poison_tile = pack_bfp16(torch.full((32, 32), 16.0, dtype=torch.bfloat16))
+    out = poison_tile * input_tile_offset
     if read_transposed:
-        for c in range(ct):  # buffer linear index = c*kt + k
+        row_stride = row_stride or kt
+        assert row_stride >= kt
+        # Buffer linear index = input_tile_offset + c*row_stride + k.
+        for c in range(ct):
             for k in range(kt):
                 out += tiles[(k, c)]
+            out += poison_tile * (row_stride - kt)
     else:
         for k in range(kt):  # buffer linear index = k*ct + c
             for c in range(ct):
@@ -198,7 +208,16 @@ def _pack_in1(torch_b, kt, ct, read_transposed=False):
     return out
 
 
-def _run(M, K, N, signal_granularity, read_transposed, mm_transpose):
+def _run(
+    M,
+    K,
+    N,
+    signal_granularity,
+    read_transposed,
+    mm_transpose,
+    row_stride=None,
+    input_tile_offset=0,
+):
     kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM
     assert M in {1, 2, 4, 8}, "in0 row count M must be in {1,2,4,8}"
     assert kt >= 2 and kt % 2 == 0, "kt_dim must be an even number >= 2"
@@ -238,6 +257,8 @@ def _run(M, K, N, signal_granularity, read_transposed, mm_transpose):
                 signal_granularity=signal_granularity,
                 read_transposed=read_transposed,
                 mm_transpose=mm_transpose,
+                sdpa_row_stride=row_stride,
+                sdpa_input_tile_offset=input_tile_offset,
             ),
         ],
         runtimes=[
@@ -249,7 +270,7 @@ def _run(M, K, N, signal_granularity, read_transposed, mm_transpose):
         variant_stimuli=_SdpaCustomMMStimuli(
             kt,
             ct,
-            _pack_in1(torch_b, kt, ct, read_transposed=read_transposed),
+            _pack_in1(torch_b, kt, ct, read_transposed, row_stride, input_tile_offset),
             _pack_in0(torch_a, kt),
         ),
         dest_acc=DestAccumulation.No,
@@ -368,16 +389,57 @@ class SDPA_MASK_REENTRY(TemplateParameter):
 
 
 @parametrize(
+    shape=[(1, 64, 96), (8, 128, 128)],
+    stride_mode=["implicit", "zero", "tight", "padded"],
+    read_transposed=lambda stride_mode: (
+        [False, True] if stride_mode == "padded" else [True]
+    ),
+    input_tile_offset=lambda stride_mode: ([0, 1] if stride_mode == "padded" else [0]),
+)
+def test_sdpa_custom_mm_row_stride(
+    request, shape, stride_mode, read_transposed, input_tile_offset
+):
+    """Contract only K tiles while stepping over poisoned merged-K/V row padding.
+
+    Omitted, zero, and explicit kt strides retain tight packing. A stride argument
+    must not change contiguous reads. Leading poison also checks tile-index addressing.
+    """
+    _skip_on_simulator(request)
+    M, K, N = shape
+    kt = K // DEFAULT_TILE_R_DIM
+    row_stride = {"implicit": None, "zero": 0, "tight": kt, "padded": kt + 2}[
+        stride_mode
+    ]
+    _run(
+        M,
+        K,
+        N,
+        signal_granularity=1,
+        read_transposed=read_transposed,
+        mm_transpose=False,
+        row_stride=row_stride,
+        input_tile_offset=input_tile_offset,
+    )
+
+
+@parametrize(
     M=[1, 8],
     ct=[1, 3, 8],
     # The ct==1 fast path requires contiguous reads, as in the existing
     # test_sdpa_custom_mm_read_transposed contract above.
     read_transposed=lambda ct: [False, True] if ct > 1 else [False],
+    padded_stride=lambda read_transposed: (
+        [False, True] if read_transposed else [False]
+    ),
 )
-def test_sdpa_custom_mm_mask_extent_restore(request, M, ct, read_transposed):
+def test_sdpa_custom_mm_mask_extent_restore(
+    request, M, ct, read_transposed, padded_stride
+):
     """Mask every output face, then reuse the restored SrcB geometry on the next matmul."""
     _skip_on_simulator(request)
     kt, K, N = 2, 64, ct * 32
+    row_stride = kt + 2 if padded_stride else None
+    input_tile_offset = 1 if padded_stride else 0
     generator = torch.Generator().manual_seed(73)
     lhs = (torch.randint(-2, 3, (M, K), generator=generator).float() / 4).to(
         torch.bfloat16
@@ -394,7 +456,10 @@ def test_sdpa_custom_mm_mask_extent_restore(request, M, ct, read_transposed):
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
             SDPA_CUSTOM_MM_FLAGS(
-                signal_granularity=ct, read_transposed=read_transposed
+                signal_granularity=ct,
+                read_transposed=read_transposed,
+                sdpa_row_stride=row_stride,
+                sdpa_input_tile_offset=input_tile_offset,
             ),
             SDPA_MASK_REENTRY(),
         ],
@@ -405,7 +470,7 @@ def test_sdpa_custom_mm_mask_extent_restore(request, M, ct, read_transposed):
         variant_stimuli=_SdpaCustomMMStimuli(
             kt,
             ct,
-            _pack_in1(rhs, kt, ct, read_transposed),
+            _pack_in1(rhs, kt, ct, read_transposed, row_stride, input_tile_offset),
             _pack_in0(lhs, kt),
             mask=mask,
         ),
