@@ -177,7 +177,10 @@ class TtTransformerBlock(LightweightModule):
             # In the first layer we "make" the h tensor from the original x keeping it alive
             # Note this works because layer 0 has a bfloat16 input while other layers use bfloat8
             # since we want residual to be bfloat16
-            attn_in_sharded, _ = self.attention_norm(x, None, mode)
+            # Sequence-parallel: the norm output is all-gathered along the sequence; gather it in bf8 (the
+            # matmuls after it run on bf8 activations anyway), half the bytes of bf16 (1.69 -> 1.03 ms at 40960).
+            norm_out_dtype = ttnn.bfloat8_b if seq_parallel else None
+            attn_in_sharded, _ = self.attention_norm(x, None, mode, output_dtype=norm_out_dtype)
             h = x
             if seq_parallel:
                 # x is this mesh row's S/8 chunk; attention needs the full sequence on every row.
@@ -210,7 +213,7 @@ class TtTransformerBlock(LightweightModule):
         if mode == "prefill":
             h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=res_dtype)  # bf16 on BH no-prefetch
             x.deallocate(True)
-            ff_in_sharded, _ = self.ff_norm(h, None, mode)
+            ff_in_sharded, _ = self.ff_norm(h, None, mode, output_dtype=ttnn.bfloat8_b if seq_parallel else None)
             if seq_parallel:
                 ff_in_local = ff_in_sharded
                 ff_in_sharded = self.tt_ccl.ring_all_gather_seq(ff_in_local, ttnn.DRAM_MEMORY_CONFIG, "FF2")

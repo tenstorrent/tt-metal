@@ -80,8 +80,9 @@ class DistributedNorm(LightweightModule):
             packer_l1_acc=False,
         )
 
-    def forward(self, x, res, mode):
-        """Apply a norm, possibly gathering inputs if required."""
+    def forward(self, x, res, mode, output_dtype=None):
+        """Apply a norm, possibly gathering inputs if required. output_dtype (prefill only) overrides the
+        norm output dtype."""
         # On the BH no-prefetch path the residual stream is bf16 (kept high-precision to avoid bf8
         # accumulation error over 64 layers). The norm output only feeds matmuls and is not part of
         # the residual, so force it to bf8 to keep activation/CB footprint small (avoids L1 clashes
@@ -159,5 +160,5 @@ class DistributedNorm(LightweightModule):
                 mesh_device=self.args.mesh_device,
                 compute_kernel_config=self.ln_cfg,
                 tt_ccl=self.tt_ccl,
-                output_dtype=norm_output_dtype,
+                output_dtype=output_dtype if output_dtype is not None else norm_output_dtype,
             )
