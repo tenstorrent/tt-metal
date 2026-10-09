@@ -105,31 +105,27 @@ inline void fill_constant_tiles(
 
 // Issue zero writes for rows [first_row, TILE_HEIGHT) of each reserved tile; the
 // caller waits with write_zeros_l1_barrier() before publishing the buffer.
-// Tiles use four 16x16 faces; the padded rows of one face are one contiguous span.
-// Inputs are BF16 or FP32, so face rows are 32 or 64 bytes and every span start
-// meets the 16-byte alignment of the zero writes.
+// A tile stores its four 16x16 faces in order f0 f1 f2 f3, so for 0 < first_row its
+// padded rows are two contiguous ranges: the tail of the left face (f0 or f2) in the
+// face row that holds first_row, and everything from the same row of the right face
+// (f1 or f3) to the end of the tile; below a padded top face row, f2 and f3 are all
+// padding. Inputs are BF16 or FP32, so face rows are 32 or 64 bytes and both ranges
+// start at the 16-byte alignment of the zero writes.
 inline void zero_rows_from(const Noc& noc, DataflowBuffer& buffer, uint32_t tiles, uint32_t first_row) {
     constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
     constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
     constexpr uint32_t faces_per_tile_row = tt::constants::TILE_WIDTH / face_width;
+    static_assert(faces_per_tile_row == 2, "two padded ranges per tile assume 2x2 faces");
     const uint32_t entry_bytes = buffer.get_entry_size();
     const uint32_t face_bytes = entry_bytes / (faces_per_tile_row * faces_per_tile_row);
     const uint32_t row_bytes = face_bytes / face_height;
+    const uint32_t row_offset = first_row % face_height * row_bytes;
+    const uint32_t left = first_row / face_height * faces_per_tile_row * face_bytes + row_offset;
+    const uint32_t right = left + face_bytes;
     for (uint32_t tile = 0; tile < tiles; ++tile) {
-        for (uint32_t face_row = 0; face_row < faces_per_tile_row; ++face_row) {
-            const uint32_t face_first = face_row * face_height;
-            const uint32_t begin = first_row > face_first ? first_row - face_first : 0;
-            if (begin >= face_height) {
-                continue;
-            }
-            for (uint32_t face_col = 0; face_col < faces_per_tile_row; ++face_col) {
-                const uint32_t face = face_row * faces_per_tile_row + face_col;
-                noc.async_write_zeros(
-                    buffer,
-                    (face_height - begin) * row_bytes,
-                    {.offset_bytes = tile * entry_bytes + face * face_bytes + begin * row_bytes});
-            }
-        }
+        const uint32_t tile_base = tile * entry_bytes;
+        noc.async_write_zeros(buffer, face_bytes - row_offset, {.offset_bytes = tile_base + left});
+        noc.async_write_zeros(buffer, entry_bytes - right, {.offset_bytes = tile_base + right});
     }
 }
 
