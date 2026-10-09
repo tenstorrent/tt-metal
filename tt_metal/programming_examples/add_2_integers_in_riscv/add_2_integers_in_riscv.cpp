@@ -100,12 +100,12 @@ int main() {
         kernel_id,
         core,
         {
-            src0_dram_buffer->address(),
-            src1_dram_buffer->address(),
-            dst_dram_buffer->address(),
-            src0_l1_buffer->address(),
-            src1_l1_buffer->address(),
-            dst_l1_buffer->address(),
+            static_cast<uint32_t>(src0_dram_buffer->address()),
+            static_cast<uint32_t>(src1_dram_buffer->address()),
+            static_cast<uint32_t>(dst_dram_buffer->address()),
+            static_cast<uint32_t>(src0_l1_buffer->address()),
+            static_cast<uint32_t>(src1_l1_buffer->address()),
+            static_cast<uint32_t>(dst_l1_buffer->address()),
         });
 
     // Add the program to the workload and enqueue it for execution on the MeshDevice.
