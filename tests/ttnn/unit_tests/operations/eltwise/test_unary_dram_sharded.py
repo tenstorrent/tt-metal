@@ -9,6 +9,7 @@ import pytest
 import torch
 import ttnn
 
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_equal
 
 
@@ -49,7 +50,6 @@ OPS = {
     "tanh": ttnn.tanh,
     "hardswish": ttnn.hardswish,
     "sigmoid": ttnn.sigmoid,
-    "softcap": lambda t: ttnn.softcap(t, 10.0),
     "gelu_fast_lut": lambda t: ttnn.gelu(t, variant=ttnn.GeluVariant.FastLut),
     "gelu_accurate": lambda t: ttnn.gelu(t, variant=ttnn.GeluVariant.Accurate),
     "mish_fast": lambda t: ttnn.mish(t, fast_and_approximate_mode=True),
@@ -57,6 +57,8 @@ OPS = {
     "logit": lambda t: ttnn.logit(t, eps=1e-6),
     "log_sigmoid": ttnn.log_sigmoid,
 }
+if is_blackhole():  # softcap is Blackhole only
+    OPS["softcap"] = lambda t: ttnn.softcap(t, 10.0)
 
 
 def large_rows(device, width, step):
