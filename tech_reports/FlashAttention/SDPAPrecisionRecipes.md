@@ -143,7 +143,9 @@ removing them. The rule is: **the recipe owns the numerics.**
   so BALANCED/ACCURATE keep a BF16/BFP8/BFP4 mask narrow (same output, half the mask traffic).
 - **Packed inputs.** Every recipe takes BF16, BFP8 or BFP4 K/V. The unpacker expands them into the matmul source
   registers, so the stored values enter the recipe's arithmetic unchanged and the recipe's error
-  against FP64 on those values is the same as with BF16 K/V. A BFP8/BFP4 Q is widened to BF16 in DRAM before the
+  against FP64 on those values is the same as with BF16 K/V. On dense and joint SDPA, K and V may differ (Qwen-VL
+  vision passes K BF16, V BFP8): K's storage names the recipe's K/V storage, and V's circular buffer takes V's
+  format. A BFP8/BFP4 Q is widened to BF16 in DRAM before the
   kernel (exact), and the BF16 result is narrowed back to Q's dtype after it, matching the legacy output dtype.
   The narrowing adds that format's rounding (about 0.5% rel-L2 for BFP8).
 - **FAST and scale.** `prepare_sdpa_input` rounds Q to 7 and K to 5 significant bits for the LoFi matmul; the
@@ -160,7 +162,8 @@ removing them. The rule is: **the recipe owns the numerics.**
 ## Routing
 
 Without `precision`, a call that would reach one of the legacy loops (`sdpa_legacy_loops.hpp`) runs a recipe instead
-(Blackhole; `sdpa.cpp`, "Precision routing"). Everything else keeps the streaming kernels (`compute_streaming.hpp`).
+(Blackhole and Wormhole B0; `sdpa.cpp`, "Precision routing"). Everything else keeps the streaming kernels
+(`compute_streaming.hpp`).
 The DEST mode is read from `compute_kernel_config` as before (`fp32_dest_acc_en`, default off).
 
 | Entry point | BF16 DEST (default) | `fp32_dest_acc_en=True` |
@@ -169,7 +172,7 @@ The DEST mode is read from `compute_kernel_config` as before (`fp32_dest_acc_en`
 | `joint_scaled_dot_product_attention` | STANDARD | ACCURATE |
 | `ring_joint_scaled_dot_product_attention` | streaming kernel | ACCURATE; legacy loop only for combinations the legacy FP32 loop rejects too (sink, sliding window, KV-pad rotation, circular cache) or a V wider than Q |
 | `exp_ring_joint_scaled_dot_product_attention` | streaming kernel; STANDARD for a blocking the streaming kernel cannot build (QK subblock taller than two tiles, K chunk not a multiple of the subblock row, one Q subblock), which failed to compile before | ACCURATE (failed to compile before) |
-| `ring_distributed_scaled_dot_product_attention` | legacy loop (no recipe path yet) | legacy loop |
+| `ring_distributed_scaled_dot_product_attention` | STANDARD | ACCURATE |
 
 - A routed call is the named recipe, bit for bit, with the blocking below. `compute_kernel_config` and
   `exp_approx_mode` are ignored as for any recipe call. ACCURATE is the recipe that keeps FP32 scores and state, the
@@ -178,10 +181,14 @@ The DEST mode is read from `compute_kernel_config` as before (`fp32_dest_acc_en`
   ([Blocking](#blocking)): `program_config` chunk sizes and grids were tuned for the legacy kernels, and the chooser
   beats them or ties (table below). Ring, exp ring and ring-distributed calls keep the caller's chunks and grid when
   the recipe supports them.
-  `max_cores_per_head_batch` is kept; `sub_core_grids`, which prefill ignored, is dropped. Zero chunk sizes still
-  need an explicit `precision`.
+  `sub_core_grids`, which prefill ignored, is dropped. Routed dense and joint calls also ignore
+  `max_cores_per_head_batch` (a decode setting, default 16, that legacy prefill ignored): a head's K/V chain may span
+  the grid, which single-head calls need (one head, D512, S16384: 57 ms on 16 cores, 7 ms on the grid). Zero chunk
+  sizes still need an explicit `precision`.
+- A routed joint call with empty joint tensors (`[B, H, 0, D]`, FLUX.2 single-stream blocks) runs as dense SDPA and
+  returns an empty joint output with legacy's spec.
 - Routed ring calls return the recipe's scratch as the third output, not an LSE (no caller reads it).
-- Wormhole keeps the legacy loops until the recipes run there.
+- Exp ring routes on Blackhole only.
 
 Op time on a P150 (ms, median of five batches of five calls; the routed column is what the same call runs now, with
 the blocking above, the legacy column the same call before routing):
@@ -200,10 +207,17 @@ the blocking above, the legacy column the same call before routing):
 | qwen_image joint: 24 heads, D128, N4096 + L128, Q512/K256, HiFi2 + FP32 (ACCURATE) | 10.63 | 3.48 |
 | qwen_image joint, BF16 DEST (STANDARD) | 6.18 | 1.36 |
 | Flux-style joint: 24 heads, D128, N4096 + L512, Q256/K512, BF16 DEST (STANDARD) | 5.33 | 1.55 |
+| FLUX.2 single-stream joint: 6 heads, D128, N4608 + empty joint, Q128/K512, BF16 DEST (STANDARD) | 1.73 | 0.42 |
+| Gemma-4 global: causal, 4/1 heads, D512, S4096, Q128/K128, HiFi4 + FP32 | 3.50 | 1.40 |
+| SDXL VAE mid-block: 1 head, D512, S16384, Q64/K64, HiFi2 + FP32 | 8.26 | 7.18 |
+| Wan2.2 VAE (720p): 1 head, D384, S14400, Q32/K256, HiFi2 + FP32 | 6.01 | 4.55 |
+| Qwen2.5-VL vision full layers: 16 heads, D96, S16384, BFP8 Q, K BF16 / V BFP8, Q256/K256, HiFi4 + FP32 | 96.2 | 28.6 |
 
 The routed FP32-DEST calls are faster than the legacy FP32 loop, the small encoders included (nomic S512) or level
 with it (bge_m3 B8 S512: the same device time, 0.452 ms traced, bound by reading the head-broadcast mask once per
-head). Recipe calls are a cached device operation, about 0.02 ms of host time per call; while every call rebuilt
+head). Recipe calls are a cached device operation, about 0.02 ms of host time per call (the program hash
+counts the L1 the call's layout may use, its free L1 less its outputs capped at the layout's full size, so
+back-to-back calls holding L1 outputs share one program, inside a trace capture too, until L1 runs short); while every call rebuilt
 its program on the host these two rows ran 0.545 and 0.261 ms. For reference, the BF16-DEST streaming kernel
 (unchanged) runs the tt_transformers rows in 2.28 / 8.72 ms.
 
@@ -286,7 +300,8 @@ or a chunk size of 0 in `SDPAProgramConfig`. For exp ring it also chooses the SD
 It uses a roofline cost model fitted to Blackhole timings, plus pipeline fill/drain terms that dominate
 short-K cross attention. Causal, sliding-window and chunked calls cost the K chunks each Q chunk actually processes,
 dealt over the grid as the kernels deal them, plus fitted per-K-chunk streaming, per-edge-chunk and per-Q-chunk
-terms; sliding windows also consider 128-row K chunks. A chunked prefill whose start is a device tensor is costed at
+terms; sliding windows also consider 128-row K chunks. When nothing in the searched range (Q from 128 rows, K from
+256 to 512 rows) fits L1, as for head dims of 512 and more, the search extends down to one-tile chunks. A chunked prefill whose start is a device tensor is costed at
 the latest start its K/V length allows (one program serves every start). With more batch/heads than cores, every Q
 chunk reads its head's K/V from DRAM (no forwarding chain), which a fitted term adds (bge_m3 B8 S512: Q256/K512
 0.455 ms, where the roofline alone picked Q128 at 0.488). The chooser never picks a geometry whose program is known
