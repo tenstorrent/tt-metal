@@ -288,7 +288,7 @@ DRISC L1 total: 128 KB. The relevant slice for the prefetcher kernel:
 [UNRESERVED + kSenderStateZoneSize, END)          kernel_working_region (~92 KB)
 
   kernel_working_region:
-    +--- per-CQ signal slots
+    +--- signal slots   (per-CQ fence slots, then op signal slots; see "Ordering against device work")
     +--- H2D socket config + request FIFO
     +--- selector scratch (512 B, DRAM-aligned: the mask a request's group selector names)
     +--- stage ring     (the rest; split into rotating slots: two halves
@@ -306,6 +306,48 @@ and the receiver-contiguous path uses `stage_third = stage_budget / 3 ≈
 This is why the DRAM-core path can't pre-allocate a full block (let alone 3
 for triple-buffering): on production Llama shapes a single block is 100+ KB.
 The stage is sized to fit a *sub-band* of a block, not the whole block.
+
+### Ordering against device work
+
+The prefetcher reads DRAM when its DRISC reaches a request, which is not ordered against any command
+queue. Two kinds of `WAIT_SIGNAL` request order it after device work. Both name a slot in one per-core
+table of uint32 counters that only grow, and both spin until the slot reaches the count in the page.
+
+- **CQ fence** (`WaitForCqOnTensorPrefetcher`). The host bumps a per-CQ count and has the dispatcher
+  write it into slot `cq_id` behind the work already on that queue. It is a host call, so it cannot be
+  captured into a trace.
+- **Op signal** (`QueueTensorPrefetcherWaitForSignal` / `ttnn.experimental.queue_tensor_prefetcher_wait_for_signal`).
+  A device kernel raises op signal `s` with `experimental::tensor_prefetcher_signal(addr)`
+  (`api/dataflow/tensor_prefetcher_signal.h`), which atomically increments slot `kNumCqSignalSlots + s`
+  on each bank's free sender; `ttnn.experimental.signal_tensor_prefetcher` is an op that does only that.
+  `addr` comes from `GetTensorPrefetcherSignalAddress` and is the same on every device, so one program
+  signals a whole mesh.
+  - **Where the counter lives.** A bank's two senders are its free subchannel and its NOC1-endpoint
+    subchannel. The free one keeps both NIUs in stream mode, so a plain local address reaches its L1 on
+    either NoC. The NOC1-endpoint one keeps its NOC 1 NIU in NOC2AXI mode (`experimental/drisc_mode.h`),
+    which no signal survives: that NIU drops NoC atomics outright (`tt_nor_niu.sv`:
+    `mem_slv_req_at_en = axi_enable ? 0 : ...`), and its NoC-to-AXI write slave repeats a register write
+    every cycle until the overlay acks it (`tt_noc2axi_slv_wr.sv`, `REG_WR_ISSUE`), so a stream autoincrement
+    lands about three times. Signals therefore reach only the free sender. When the free sender passes a
+    WAIT on an op signal it NoC-writes its count into the same slot of the NOC1-endpoint sender over NOC 0,
+    and that sender, which gets the same WAIT, spins on its own slot. So the NOC1-endpoint sender passes a
+    wait only after the free sender has passed it too. The host hands the free sender its partner's
+    coords as a runtime arg.
+  - **Firmware table.** Which DRAM core is a bank's free sender differs per device under DRAM harvesting,
+    so the kernel never sees the coords. The host writes them, per device, into the firmware table
+    `tensor_prefetcher_signal_noc_xy` (one entry per bank: `pick_unused_dram_logical_core`) right after
+    the bank-to-NoC tables, and BRISC/NCRISC firmware load it at boot.
+  - **NoC.** The caller signals on its own NoC, or on either in dynamic NoC mode. Like the PrefetcherPipe
+    credit atomics, the increments skip the watcher's NoC check, which knows DRAM cores only as GDDR
+    endpoints and does not list a bank's free subchannel at all.
+  - Waits and signals pair up in order, per device. The host counts the waits it hands to the worker on
+    each signal and stamps the count into the page at that moment. A wait captured into a trace keeps
+    no count; `replay_trace` stamps a fresh one into each copy it re-queues, so every replay waits for
+    the signal raised in that run, not the one the capture saw. A signal that lands before its wait
+    still counts.
+
+The host zeroes the table before launching the kernels and restarts its counts with it, so an increment
+that lands before the kernel's first instruction is not lost.
 
 ### Fitting algorithm (per tensor)
 
@@ -497,12 +539,13 @@ contents.
   (they hand batch validity to compute through the BRISC mailbox), and the receivers and compute loop
   `nnz` times or, with `nnz` unset, take each expert's validity from the in0 sender. Without a
   sparsity block the dense program is unchanged.
-- **Contracts.** The mask must be written before the request is queued (fence the writing queue with
-  `wait_for_cq_on_tensor_prefetcher`) and must not change until the matmul has run; otherwise the
-  prefetcher and the matmul disagree on which experts arrive and the pipes deadlock. That fence
-  cannot be captured into a trace while the request is re-sent on every `execute_trace`, so a mask
-  written by an op inside the same trace (the MoE router) is not fenced on replay: today the mask must
-  be written, and fenced, before `execute_trace`. `nnz` keeps its
+- **Contracts.** The mask must be in place when the prefetcher reaches the request and must not change
+  until the matmul has run; otherwise the prefetcher and the matmul disagree on which experts arrive
+  and the pipes deadlock. A host write is fenced with `wait_for_cq_on_tensor_prefetcher`. A mask an op
+  writes on device -- the MoE router, inside the same trace -- is ordered with an op signal:
+  `prefetch_and_sparse_matmul(..., signal_id=s)` raises signal `s` on the matmul's queue and queues a
+  wait on it ahead of the request, and both are captured with the rest (see "Ordering against device
+  work"). `nnz` keeps its
   exact-count contract (#45943), and over pipes a wrong `nnz` also stalls the prefetcher, so prefer
   `nnz=None`. Mask mode only (no `indices`, no per-group `bias`), `is_input_b_sparse=True`, one mask
   page (no outer batch), interleaved activation and output, one output block per worker, and a ring
@@ -623,6 +666,10 @@ Whoever changes prefetcher or receiver code must preserve these:
 - Tensor prefetcher:
   `tt_metal/impl/buffers/tensor_prefetcher_manager.cpp`,
   `tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp`.
+- Op signals: `tt_metal/hw/inc/api/dataflow/tensor_prefetcher_signal.h`; the firmware table in
+  `tt_metal/hw/inc/internal/firmware_common.h` and its host side in
+  `RiscFirmwareInitializer::generate_tensor_prefetcher_signal_table`; the op in
+  `ttnn/cpp/ttnn/operations/experimental/tensor_prefetcher/device/`.
 - GCB / remote CB API:
   `tt_metal/hw/inc/api/remote_circular_buffer.h`,
   `tt_metal/impl/buffers/global_circular_buffer.cpp`.

@@ -133,6 +133,7 @@ def prefetch_and_sparse_matmul(
     *,
     prefetcher_pipes,
     program_config,
+    signal_id=None,
     **sparse_matmul_kwargs,
 ):
     """Queue a DRAM-core prefetch of the experts ``sparsity`` selects from ``weight`` into
@@ -148,16 +149,20 @@ def prefetch_and_sparse_matmul(
             experts, or ``[1, E, M, K]`` with ``is_input_a_sparse=True``.
         weight: The fused ``[1, E, K, N]`` expert weight, receiver-contiguous with an NdShardSpec
             shard of ``[E, K, N / ring_size]`` so every receiver slab holds all E experts.
-        sparsity: ``[1, 1, 1, E]`` ROW_MAJOR mask, one page. It must be written before this call
-            (fence the writing queue with ``ttnn.experimental.wait_for_cq_on_tensor_prefetcher``)
-            and must not change until the matmul has run, or the pipes deadlock. That fence cannot
-            be captured into a trace, so when this call is traced, a mask written by an op inside
-            the same trace is not fenced on replay: write and fence the mask before
-            ``execute_trace``.
+        sparsity: ``[1, 1, 1, E]`` ROW_MAJOR mask, one page. It must be in place when the
+            prefetcher reaches the request and must not change until the matmul has run, or the
+            pipes deadlock. Fence a host write with ``ttnn.experimental.wait_for_cq_on_tensor_prefetcher``
+            before this call; for a mask an op writes on device, pass ``signal_id``.
         prefetcher_pipes: Every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call,
             whose receivers are the matmul's workers.
         program_config: ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True``
             and one output block per worker.
+        signal_id: When set, the prefetcher reads ``sparsity`` only after every op already enqueued
+            on the matmul's queue has run: this call raises op signal ``signal_id`` on that queue
+            (``ttnn.experimental.signal_tensor_prefetcher``) and queues a wait on it ahead of the
+            request. Both are captured into a trace with the rest, so a mask written by an op inside
+            the same trace is read after that op on every replay. Every wait on the signal must pair
+            with one raise of it, so don't raise it elsewhere.
         **sparse_matmul_kwargs: Forwarded to ``ttnn.sparse_matmul`` (e.g. ``nnz``,
             ``is_input_a_sparse``, ``memory_config``, ``compute_kernel_config``, ``dtype``). Prefer
             leaving ``nnz`` unset: an ``nnz`` that differs from ``count_nonzero(sparsity)`` stalls the
@@ -178,6 +183,13 @@ def prefetch_and_sparse_matmul(
         cq_id = sparse_matmul_kwargs["queue_id"]
     elif "cq_id" in sparse_matmul_kwargs:
         cq_id = sparse_matmul_kwargs["cq_id"]
+    if signal_id is not None:
+        # The signal runs on the queue after the op that wrote the mask, and the wait holds the request
+        # until it has.
+        ttnn.experimental.signal_tensor_prefetcher(device, signal_id, cq_id=cq_id)
+        ttnn.experimental.queue_tensor_prefetcher_wait_for_signal(
+            device, signal_id, capture_into_trace=True, cq_id=cq_id
+        )
     ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         # Rotation-free: mcast_in0 consumes each expert's K-blocks in natural FIFO order.

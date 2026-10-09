@@ -149,14 +149,14 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     ascending group order, only the groups whose mask entry is non-zero, which is
                     what ttnn.sparse_matmul consumes for the same mask. ROW_MAJOR BFLOAT16 or UINT16
                     of shape [..., num_groups] (num_groups <= 256), DRAM interleaved or on one L1
-                    core. The mask must be written before this request is queued (fence the writing
-                    queue with wait_for_cq_on_tensor_prefetcher) and must not change until the
-                    consuming sparse_matmul has run, else the prefetcher and the matmul disagree on
-                    which experts arrive and deadlock. Reading it on device is what keeps a
-                    captured request correct when the mask changes between trace replays.
-                    wait_for_cq_on_tensor_prefetcher cannot be captured into a trace, so a mask
-                    written by an op inside the same trace is not fenced on replay: the mask must
-                    be written, and fenced, before execute_trace. A grouped weight without a
+                    core. The mask must be written before the prefetcher reaches this request and
+                    must not change until the consuming sparse_matmul has run, else the prefetcher
+                    and the matmul disagree on which experts arrive and deadlock. Order the
+                    prefetcher after a host-enqueued write with wait_for_cq_on_tensor_prefetcher,
+                    or after an op that writes the mask inside a trace with
+                    queue_tensor_prefetcher_wait_for_signal plus signal_tensor_prefetcher run after
+                    that op. Reading the mask on device is what keeps a captured request correct
+                    when the mask changes between trace replays. A grouped weight without a
                     selector streams every group.
                 global_cb (GlobalCircularBuffer): a DRAM-sender GCB (created via
                     ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher).
@@ -217,6 +217,79 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("cq_id") = nb::none(),
         nb::kw_only(),
         nb::arg("device_subset") = nb::none());
+
+    ttnn::bind_function<"get_tensor_prefetcher_signal_address", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Return the L1 address of a Tensor prefetcher op signal, for a device kernel to raise
+            with experimental::tensor_prefetcher_signal (api/dataflow/tensor_prefetcher_signal.h).
+            The address is the same on every device of the mesh and stays valid until the
+            prefetcher stops.
+
+            Args:
+                mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher is running.
+                signal_id (int): which op signal, in [0, 8). Defaults to 0.
+
+            Returns:
+                int: the signal's L1 address.
+        )doc",
+        &get_tensor_prefetcher_signal_address,
+        nb::arg("mesh_device"),
+        nb::arg("signal_id") = 0);
+
+    ttnn::bind_function<"queue_tensor_prefetcher_wait_for_signal", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Queue a wait on a Tensor prefetcher op signal. Every prefetch request queued after it
+            waits until each device has received the signal that pairs with it. Waits and signals
+            on one id pair up in order, counted per device from start_tensor_prefetcher: the n-th
+            wait proceeds once the n-th signal has arrived, and a signal that arrives first is
+            kept. Every device waits, so every device must signal; a signal with no matching wait
+            releases a later wait early.
+
+            Use it to order the prefetcher after device work that has no host-side fence, e.g. a
+            mask an op writes inside a trace: run that op, then signal_tensor_prefetcher, and
+            queue this wait ahead of the request that reads the mask.
+
+            Args:
+                mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher waits.
+                signal_id (int): which op signal, in [0, 8). Defaults to 0.
+                capture_into_trace (bool): same rule as queue_tensor_prefetcher_request. When True
+                    and the current command queue is mid trace-capture, the wait is captured and
+                    re-sent on every execute_trace, and each replay waits for one further signal.
+                    Defaults to False.
+
+            Returns:
+                None
+        )doc",
+        &queue_tensor_prefetcher_wait_for_signal,
+        nb::arg("mesh_device"),
+        nb::arg("signal_id") = 0,
+        nb::kw_only(),
+        nb::arg("capture_into_trace") = false);
+
+    ttnn::bind_function<"signal_tensor_prefetcher", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Raise a Tensor prefetcher op signal once on every device of the mesh. Runs on the
+            current command queue after the work already enqueued there, so whatever that work
+            wrote is in place before the prefetcher passes the wait this signal releases. Can be
+            captured into a trace, in which case every execute_trace raises it again.
+
+            Args:
+                mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher to signal.
+                signal_id (int): which op signal, in [0, 8). Defaults to 0.
+                core (ttnn.CoreCoord): the logical worker core that issues the signal. Defaults
+                    to (0, 0).
+
+            Returns:
+                None
+        )doc",
+        &signal_tensor_prefetcher,
+        nb::arg("mesh_device"),
+        nb::arg("signal_id") = 0,
+        nb::kw_only(),
+        nb::arg("core") = tt::tt_metal::CoreCoord{0, 0});
 
     ttnn::bind_function<"stop_tensor_prefetcher", "ttnn.experimental.">(
         mod,
