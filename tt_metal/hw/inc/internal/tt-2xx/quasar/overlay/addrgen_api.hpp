@@ -65,6 +65,14 @@ enum AddrGen : uint32_t { ADDRGEN_0 = CMDBUF_0, ADDRGEN_1 = CMDBUF_1 };
 /* Command buffer paired with an address generator */
 constexpr CmdBuf paired_cmdbuf(AddrGen addrgen) { return static_cast<CmdBuf>(static_cast<uint32_t>(addrgen)); }
 
+/* AIHWE-6506: the address generator drops the next command while the shared two-entry RoCC response queue
+ * is full, so every addrgen read result must be consumed before another addrgen instruction issues. A plain
+ * nop does not drain the queue; a dependent instruction stalls until the response is written back. */
+inline __attribute__((always_inline)) uint64_t addrgen_read_sync(uint64_t result) {
+    asm volatile("mv %0, %0" : "+r"(result));
+    return result;
+}
+
 enum bank_order_e { BANK_INNER = 0, BANK_MIDDLE, BANK_OUTER };
 
 /*
@@ -136,8 +144,8 @@ template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) void setup_src_banking_addrgen(const BankingConfig& cfg) {
     // MISC also holds the destination bank order: read-modify-write it.
     TT_ROCC_ADDRESS_GEN_MISC_reg_u misc;
-    misc.val =
-        __builtin_riscv_ttrocc_addrgen_rd_reg(ADDRGEN, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET / 8);
+    misc.val = addrgen_read_sync(
+        __builtin_riscv_ttrocc_addrgen_rd_reg(ADDRGEN, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET / 8));
     misc.f.bank_offset = cfg.endpoint_id_shift;
     misc.f.src_bank_order = cfg.bank_order;
     __builtin_riscv_ttrocc_addrgen_wr_reg(
@@ -164,8 +172,8 @@ template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) void setup_dest_banking_addrgen(const BankingConfig& cfg) {
     // MISC also holds the source bank order: read-modify-write it.
     TT_ROCC_ADDRESS_GEN_MISC_reg_u misc;
-    misc.val =
-        __builtin_riscv_ttrocc_addrgen_rd_reg(ADDRGEN, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET / 8);
+    misc.val = addrgen_read_sync(
+        __builtin_riscv_ttrocc_addrgen_rd_reg(ADDRGEN, TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET / 8));
     misc.f.bank_offset = cfg.endpoint_id_shift;
     misc.f.dst_bank_order = cfg.bank_order;
     __builtin_riscv_ttrocc_addrgen_wr_reg(
@@ -402,7 +410,7 @@ inline __attribute__((always_inline)) void setup_dest_2D_stride_addrgen(
  */
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t peek_src_addrgen() {
-    return __builtin_riscv_ttrocc_addrgen_peek_src(ADDRGEN);
+    return addrgen_read_sync(__builtin_riscv_ttrocc_addrgen_peek_src(ADDRGEN));
 }
 
 /*
@@ -411,13 +419,15 @@ inline __attribute__((always_inline)) uint64_t peek_src_addrgen() {
  * @brief Returns the current generated source address and generates the next one; with pop_amount,
  * skips (pop_amount - 1) further source addresses
  */
+/* __builtin_riscv_ttrocc_addrgen_pop_{src,dest} (sfpi 7.84.0) encode rs1 = x1 (ra) instead of a register
+ * holding 1, so the hardware pops by the return address. Use pop_x with an explicit amount of 1. */
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t pop_src_addrgen() {
-    return __builtin_riscv_ttrocc_addrgen_pop_src(ADDRGEN);
+    return addrgen_read_sync(__builtin_riscv_ttrocc_addrgen_pop_x_src(ADDRGEN, 1));
 }
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t pop_src_addrgen(uint64_t pop_amount) {
-    return __builtin_riscv_ttrocc_addrgen_pop_x_src(ADDRGEN, pop_amount);
+    return addrgen_read_sync(__builtin_riscv_ttrocc_addrgen_pop_x_src(ADDRGEN, pop_amount));
 }
 
 /*
@@ -427,7 +437,7 @@ inline __attribute__((always_inline)) uint64_t pop_src_addrgen(uint64_t pop_amou
  */
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t peek_dest_addrgen() {
-    return __builtin_riscv_ttrocc_addrgen_peek_dest(ADDRGEN);
+    return addrgen_read_sync(__builtin_riscv_ttrocc_addrgen_peek_dest(ADDRGEN));
 }
 
 /*
@@ -438,11 +448,11 @@ inline __attribute__((always_inline)) uint64_t peek_dest_addrgen() {
  */
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t pop_dest_addrgen() {
-    return __builtin_riscv_ttrocc_addrgen_pop_dest(ADDRGEN);
+    return addrgen_read_sync(__builtin_riscv_ttrocc_addrgen_pop_x_dest(ADDRGEN, 1));  // see pop_src_addrgen
 }
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t pop_dest_addrgen(uint64_t pop_amount) {
-    return __builtin_riscv_ttrocc_addrgen_pop_x_dest(ADDRGEN, pop_amount);
+    return addrgen_read_sync(__builtin_riscv_ttrocc_addrgen_pop_x_dest(ADDRGEN, pop_amount));
 }
 
 /*
@@ -455,7 +465,7 @@ inline __attribute__((always_inline)) uint64_t pop_dest_addrgen(uint64_t pop_amo
  */
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t pop_both_addrgen(uint64_t src_pop_amount, uint64_t dest_pop_amount) {
-    return __builtin_riscv_ttrocc_addrgen_pop_both(ADDRGEN, src_pop_amount, dest_pop_amount);
+    return addrgen_read_sync(__builtin_riscv_ttrocc_addrgen_pop_both(ADDRGEN, src_pop_amount, dest_pop_amount));
 }
 
 /*
