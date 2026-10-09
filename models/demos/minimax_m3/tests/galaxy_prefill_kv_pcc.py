@@ -105,6 +105,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE
+from models.demos.minimax_m3.tt.moe import shared_overlap
 from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env
 
 
@@ -456,7 +457,7 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
 
     def prefill_chunk(c):
         a = c * chunk
-        inp = runtime.make_chunk_input(padded[a : a + chunk])
+        inp = runtime.make_chunk_input(padded[a : a + chunk], a)
         runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=a, actual_end=min(a + chunk, n_tokens))
 
     def run_whole():  # cold, no mid-loop syncs — one barrier at the end
@@ -835,6 +836,7 @@ def main():
                 print(f"[prefill-pcc]   {_fmt_result(r)}", flush=True)
         print("[prefill-pcc] DONE", flush=True)
     finally:
+        shared_overlap.release_all()
         ttnn.close_mesh_device(mesh)
     ok = all(r["status"] == "ok" for r in results)
     return 0 if ok and (results or clean_exit) else 1

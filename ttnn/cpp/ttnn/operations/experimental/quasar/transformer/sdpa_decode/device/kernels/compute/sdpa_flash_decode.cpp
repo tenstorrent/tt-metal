@@ -107,7 +107,8 @@ void kernel_main() {
 #ifdef TILIZE_Q
     constexpr auto dfb_q_rm = dfb::q_rm;
 #endif
-    constexpr auto dfb_zero_in = dfb::zero_in;
+    // The zero tile is entry 1 of identity_scale_in (entry 0 is the reduce scaler); see matmul_blocks.
+    constexpr auto dfb_zero_in = dfb::identity_scale_in;
 #ifdef USE_CUR_POS_TENSOR
     // #44366: compute reads cur_pos from compute_cur_pos (writer reads writer_cur_pos)
     // — see reader_decode_all.cpp.
@@ -719,17 +720,24 @@ void kernel_main() {
                 // Use appropriate max buffer based on tree reduction
                 uint32_t max_dfb_for_sink = dfb_prev_max;
 
+                // max_block, sub_exp_block and mul_block_inplace pack via a bare pack_tile, so each is
+                // preceded by a pack_reconfig_out naming its output (Quasar packer re-point).
+
                 // m_new: max_block writes cur (m_new) into dfb_cur_max (max_1, its own DFB); split max
                 // means the two exp reads below take cur at its own front (no offset).
+                pack_reconfig_out(dfb_cur_max);
                 max_block<vector_mode>(dfb_attention_sink, max_dfb_for_sink, dfb_cur_max, Sq_chunk_t);
 
                 // exp(m - m_new)
+                pack_reconfig_out(dfb_exp_max_diff);
                 sub_exp_block<scale_fp32>(max_dfb_for_sink, dfb_cur_max, dfb_exp_max_diff, Sq_chunk_t);
 
                 // l -> l * exp(m - m_new)
+                pack_reconfig_out(dfb_prev_sum);
                 mul_block_inplace(dfb_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
 
                 // exp(sink - m_new)
+                pack_reconfig_out(dfb_exp_max_diff_2);
                 sub_exp_block<scale_fp32>(dfb_attention_sink, dfb_cur_max, dfb_exp_max_diff_2, Sq_chunk_t);
                 // Pop the front block (prev/max_dfb_for_sink); the trailing pop below drains cur.
                 DataflowBuffer(dfb_cur_max).pop_front(Sq_chunk_t);

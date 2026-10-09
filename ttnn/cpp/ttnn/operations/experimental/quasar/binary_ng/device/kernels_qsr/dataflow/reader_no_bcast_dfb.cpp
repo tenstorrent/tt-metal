@@ -4,12 +4,15 @@
 
 // Metal 2.0 / DataflowBuffer (DFB) reader for binary_ng's no-broadcast binary op, Quasar-native.
 //
-// Diverges from kernels_dfb/dataflow/reader_no_bcast_dfb.cpp in two ways, both licensed by
+// Diverges from kernels_dfb/dataflow/reader_no_bcast_dfb.cpp in three ways, all licensed by
 // matches_quasar_native_slice:
 //   - the nD stride cascade is gone: page = start_tile_id + k.
 //   - the tile loop is per-thread. Thread t of N takes the STRIDED share {t, t+N, t+2N, ...}, which
 //     is the slot assignment the DFB gives producer thread t.
-// Both operands are interleaved: the gate rejects sharded inputs, so no borrowed-shard branch exists.
+//   - a borrowed shard or slice is published once per tile counter, and a shard's tiles past the borrowed
+//     rings are copied into the tail rings.
+// Both operands are read over the NoC, or both are borrowed from this core's L1 (SRC_SHARDED): its
+// shards, or its slices of L1-interleaved tensors. The factory borrows all operands or none.
 //
 // "no_bcast" means no SUBTILE broadcast. The cascade this replaces also carried OUTER-dim broadcast,
 // indexing each operand through strides the factory zeroes for unit input dims, so the linear form here
@@ -19,13 +22,83 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/kernel_thread_globals.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+#if SRC_SHARDED
+    // Borrowed operands: each borrowed DFB is the resident L1 shard or slice, so this thread publishes its
+    // credits, once per tile counter. One reserve_back for the whole shard, as on WH and BH, cannot work: the
+    // active counter holds only its share, and push_back credits one counter and then rotates.
+    static_assert(SRC_SHARDED_B, "the native factory borrows both operands or neither");
+    const uint32_t dst_num_tiles = get_arg(args::dst_num_tiles);
+    constexpr uint32_t num_tcs = get_arg(args::num_tcs);
+    const uint32_t num_threads = get_num_threads();
+
+#if HAS_MAIN_RING
+    {
+        DataflowBuffer dfb_in0(dfb::in0);
+        DataflowBuffer dfb_in1(dfb::in1);
+        const uint32_t tile_step = num_tcs * num_threads;
+        // Counter c holds the tiles from thread_id + c*num_threads spaced tile_step apart. The factory sizes
+        // the borrowed part of the shard, which every core processes, to divide by that spacing, so each
+        // count is exactly the counter's capacity.
+        uint32_t first = get_my_thread_id();
+        for (uint32_t c = 0; c < num_tcs && first < dst_num_tiles; ++c, first += num_threads) {
+            const uint32_t n = (dst_num_tiles - first + tile_step - 1) / tile_step;
+            dfb_in0.reserve_back(n);
+            dfb_in0.push_back(n);
+            dfb_in1.reserve_back(n);
+            dfb_in1.push_back(n);
+        }
+    }
+#endif
+#if TAIL_TILES
+    // Copy the shard's TAIL_TILES tiles past the borrowed part (all of it without a borrowed ring) into the
+    // tail rings, one entry per compute thread, through the local NoC loopback. Entries past TAIL_TILES stay
+    // padding: the compute runs on them, the writer drops them.
+    {
+        Noc noc;
+        DataflowBuffer tail_in0(dfb::in0_tail);
+        DataflowBuffer tail_in1(dfb::in1_tail);
+        const LocalTensorAccessor<uint32_t> a_shard(tensor::in0);
+        const LocalTensorAccessor<uint32_t> b_shard(tensor::in1);
+        const uint32_t a_shard_base = a_shard.get_bank_base_address();
+        const uint32_t b_shard_base = b_shard.get_bank_base_address();
+        const uint32_t a_tile_bytes = tail_in0.get_entry_size();
+        const uint32_t b_tile_bytes = tail_in1.get_entry_size();
+        const uint32_t noc_x = my_x[noc.get_noc_id()];
+        const uint32_t noc_y = my_y[noc.get_noc_id()];
+        uint32_t slot = get_my_thread_id();
+        for (uint32_t c = 0; c < num_tcs; ++c, slot += num_threads) {
+            tail_in0.reserve_back(1);
+            tail_in1.reserve_back(1);
+            if (slot < TAIL_TILES) {
+                noc.async_read(
+                    UnicastEndpoint{},
+                    tail_in0,
+                    a_tile_bytes,
+                    {.noc_x = noc_x, .noc_y = noc_y, .addr = a_shard_base + (dst_num_tiles + slot) * a_tile_bytes},
+                    {.offset_bytes = 0});
+                noc.async_read(
+                    UnicastEndpoint{},
+                    tail_in1,
+                    b_tile_bytes,
+                    {.noc_x = noc_x, .noc_y = noc_y, .addr = b_shard_base + (dst_num_tiles + slot) * b_tile_bytes},
+                    {.offset_bytes = 0});
+                noc.async_read_barrier();
+            }
+            tail_in0.push_back(1);
+            tail_in1.push_back(1);
+        }
+    }
+#endif
+#else
     const uint32_t start_tile_id = get_arg(args::start_tile_id);
     const uint32_t dst_num_tiles = get_arg(args::dst_num_tiles);
 
@@ -131,4 +204,5 @@ void kernel_main() {
     // inside handle_final_credits, reached only via the NocOptions::TXN_ID overloads this kernel avoids.
     dfb_in0.finish();
     dfb_in1.finish();
+#endif
 }

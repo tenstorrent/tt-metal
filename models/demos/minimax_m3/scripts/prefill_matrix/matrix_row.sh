@@ -6,7 +6,9 @@
 #  3. launch matrix_runner.sh on rank 0's host with this row's KV capacity, wait for STAGES x "setup complete"
 #  4. run matrix_producer.py: idle-pipeline TTFT per cell, then (USERS>0) the LOADED aggregate-throughput pass
 # WORK holds this session's mutable state (last_runner_log, last_timing_dir): one WORK per session, never shared.
-# Optional: OUT (results JSONL), MAX_NEW (capacity = CACHED + MAX_NEW, default 51200), REQS (requests per user),
+# Optional: OUT (results JSONL), CHUNK (PREFILL_CHUNK_SIZE, default 5120; CACHED is rounded DOWN to a multiple),
+# LAYER_COUNTS (layers per stage, e.g. 1,1,1,5,5,5,5,5,4,4,4,4,4,4,4,4 -> PREFILL_PP_LAYER_COUNTS; default even split),
+# MAX_NEW (capacity = CACHED + MAX_NEW, default 51200), REQS (requests per user),
 # TARGET_CHUNKS (chunks per loaded stream when REQS is unset, default 240), SKIP_IDLE=1 (loaded pass only).
 # Results append to $OUT (JSONL, one line per idle iteration and one per loaded cell). See README.md.
 set -uo pipefail
@@ -26,7 +28,20 @@ RANKS_PER_HOST=4
   || { echo "STAGES=$STAGES needs exactly $((STAGES / RANKS_PER_HOST)) hosts (bindings are $RANKS_PER_HOST trays/host), got ${#HOST_ARR[@]}: $HOSTS"; exit 2; }
 for h in "${HOST_ARR[@]}"; do [ -n "$h" ] || { echo "empty host in HOSTS=$HOSTS"; exit 2; }; done
 HOSTLIST=$(printf "%s:$RANKS_PER_HOST," "${HOST_ARR[@]}"); HOSTLIST=${HOSTLIST%,}
-[ $((CACHED % MATRIX_CHUNK)) -eq 0 ] || { echo "CACHED=$CACHED is not a multiple of the chunk ($MATRIX_CHUNK)"; exit 2; }
+[ "$MATRIX_CHUNK" -ge 2048 ] && [ $((MATRIX_CHUNK % 32)) -eq 0 ] || { echo "CHUNK=$MATRIX_CHUNK must be a multiple of 32 and >= 2048"; exit 2; }
+[ $((MAX_NEW % MATRIX_CHUNK)) -eq 0 ] || { echo "MAX_NEW=$MAX_NEW is not a multiple of CHUNK=$MATRIX_CHUNK"; exit 2; }
+if [ $((CACHED % MATRIX_CHUNK)) -ne 0 ]; then   # the default cached values are 5120 multiples; snap for other chunks
+  C_ROUNDED=$(( CACHED / MATRIX_CHUNK * MATRIX_CHUNK )); echo "[row C=$CACHED] rounding cached $CACHED down to $C_ROUNDED (multiple of CHUNK=$MATRIX_CHUNK)"; CACHED=$C_ROUNDED
+fi
+if [ -n "$MATRIX_LAYER_COUNTS" ]; then
+  IFS=, read -r -a LC_ARR <<< "$MATRIX_LAYER_COUNTS"; lc_sum=0
+  for x in "${LC_ARR[@]}"; do
+    [[ $x =~ ^[1-9][0-9]*$ ]] || { echo "LAYER_COUNTS=$MATRIX_LAYER_COUNTS: '$x' is not a positive integer"; exit 2; }
+    lc_sum=$((lc_sum + x))
+  done
+  [ "${#LC_ARR[@]}" -eq "$STAGES" ] && [ "$lc_sum" -eq "$MATRIX_NUM_LAYERS" ] \
+    || { echo "LAYER_COUNTS=$MATRIX_LAYER_COUNTS must list $STAGES counts summing to $MATRIX_NUM_LAYERS (got ${#LC_ARR[@]} summing to $lc_sum)"; exit 2; }
+fi
 for n in ${NEW//,/ }; do [ "$n" -le "$MAX_NEW" ] || { echo "NEW=$n exceeds MAX_NEW=$MAX_NEW (the runner's capacity is CACHED + MAX_NEW)"; exit 2; }; done
 CAP=$((CACHED + MAX_NEW))
 log() { echo "[row C=$CACHED] $(date +%T) $*"; }
@@ -42,6 +57,9 @@ if [ "$RESET" = "1" ]; then
   done
   reset_failed=0; for p in "${pids[@]}"; do wait "$p" || reset_failed=1; done
   [ "$reset_failed" = 0 ] || { log "galaxy reset FAILED (see $WORK/reset_*.log)"; exit 2; }
+  # tt-smi returns as soon as the boards are re-initialised; ranks that open devices within ~15 s of that have failed
+  # with "Query mappings failed on device N: No such device" (2026-09-26), so let the driver settle first.
+  log "reset done; letting the device drivers settle 90 s"; sleep 90
 fi
 # 3. runner: its own session (setsid) so a Ctrl-C on the login shell never reaches the srun step; the runner is
 #    always torn down through the deterministic sentinel -> wait -> scoped-kill path (matrix_shutdown_runner).
@@ -49,6 +67,7 @@ LOG=$WORK/runner${STAGES}_c${CACHED}_$(date +%Y%m%d_%H%M%S).log; echo "$LOG" > "
 log "launching runner -> $LOG"
 LOG=$LOG setsid -f bash -c 'srun "$@" > "$LOG" 2>&1; echo "EXIT=$?" >> "$LOG"' _ \
     --jobid="$JOB" --overlap -N1 -n1 -w "$R0" env STAGES="$STAGES" CACHED="$CACHED" USERS="$USERS" MAX_NEW="$MAX_NEW" WORK="$WORK" HOSTS="$HOSTLIST" \
+    CHUNK="$MATRIX_CHUNK" LAYER_COUNTS="$MATRIX_LAYER_COUNTS" \
     TT_METAL_HOME="$TT_METAL_HOME" ${HF_MODEL:+"HF_MODEL=$HF_MODEL"} ${TT_CACHE_PATH:+"TT_CACHE_PATH=$TT_CACHE_PATH"} "$PKG_DIR/matrix_runner.sh"
 n=0
 for _ in $(seq 1 600); do
@@ -65,6 +84,6 @@ TIMING_DIR=$(grep -o 'timing_dir=[^ ]*' "$LOG" | head -1 | cut -d= -f2-)
 log "producer -> $PLOG (out $OUT)"
 matrix_srun "$JOB" "$R0" "cd $(matrix_q "$TT_METAL_HOME") && source python_env/bin/activate && env $(matrix_producer_env "$CAP") \
   python3 $(matrix_q "$PKG_DIR/matrix_producer.py") --cached $CACHED --new $(matrix_q "$NEW") --iters $ITERS --timing-dir $(matrix_q "$TIMING_DIR") \
-  --out $(matrix_q "$OUT") --last-rank $LAST --label ${STAGES}stage --users $USERS ${REQS:+--reqs $REQS} ${TARGET_CHUNKS:+--target-chunks $TARGET_CHUNKS} ${SKIP_IDLE:+--skip-idle}" > "$PLOG"; rc=$?; echo "EXIT=$rc" >> "$PLOG"
+  --out $(matrix_q "$OUT") --last-rank $LAST --label ${STAGES}stage_c${MATRIX_CHUNK}${MATRIX_LAYER_COUNTS:+_split} --users $USERS ${REQS:+--reqs $REQS} ${TARGET_CHUNKS:+--target-chunks $TARGET_CHUNKS} ${SKIP_IDLE:+--skip-idle}" > "$PLOG"; rc=$?; echo "EXIT=$rc" >> "$PLOG"
 log "producer exit=$rc"; grep -E '\[matrix\] (CELL|LOADED cached)' "$PLOG" | sed 's/.*\[matrix\]/[matrix]/'
 exit "$rc"

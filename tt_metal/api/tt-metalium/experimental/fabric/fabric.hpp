@@ -4,16 +4,19 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/device_types.hpp>
 // UMD: re-exports CoreType (used in append_fabric_connection/FabricHandle default params).
 #include <umd/device/types/core_coordinates.hpp>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <optional>
 #include <hostdevcommon/fabric_common.h>
@@ -76,6 +79,10 @@ enum class FabricApiType : uint8_t {
     Linear = 0,
     Mesh = 1,
 };
+
+// Checks intra-mesh adjacency in the originating mesh's context without allocating Ethernet directions.
+bool are_intra_mesh_neighbors(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, const FabricNodeId& node_a, const FabricNodeId& node_b);
 
 std::vector<eth_chan_directions> get_neighbor_eth_directions(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
@@ -368,6 +375,20 @@ private:
         const FabricNodeId& dst_fabric_node_id,
         uint32_t link_idx,
         tt::tt_metal::NOC forwarder_noc);
+    friend void add_fabric_mux_v2_to_program(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const FabricMuxV2Config& config,
+        const tt::tt_metal::CoreCoord& mux_logical_core,
+        const std::vector<uint32_t>& downstream_sender_rt_args,
+        tt::tt_metal::NOC forwarder_noc);
+    friend void add_fabric_mux_v2_to_program(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const FabricMuxV2Config& config,
+        const tt::tt_metal::CoreCoord& mux_logical_core,
+        const FabricNodeId& src_fabric_node_id,
+        const FabricNodeId& dst_fabric_node_id,
+        uint32_t link_idx,
+        tt::tt_metal::NOC forwarder_noc);
 
     std::unordered_map<std::string, uint32_t> get_fabric_mux_v2_named_compile_time_args() const;
     void validate_logical_channel_id(uint8_t logical_channel_id) const;
@@ -412,6 +433,25 @@ void add_fabric_mux_v2_to_program(
 
 void add_fabric_mux_v2_to_program(
     tt::tt_metal::Program& program,
+    const FabricMuxV2Config& config,
+    const tt::tt_metal::CoreCoord& mux_logical_core,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    uint32_t link_idx,
+    tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
+
+// Experimental and subject to change: these overloads carry no API-stability guarantee.
+// ProgramDescriptor variants of the two functions above, for ops built with ProgramDescriptor /
+// WorkloadDescriptor.
+void add_fabric_mux_v2_to_program(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const FabricMuxV2Config& config,
+    const tt::tt_metal::CoreCoord& mux_logical_core,
+    const std::vector<uint32_t>& downstream_sender_rt_args,
+    tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
+
+void add_fabric_mux_v2_to_program(
+    tt::tt_metal::ProgramDescriptor& desc,
     const FabricMuxV2Config& config,
     const tt::tt_metal::CoreCoord& mux_logical_core,
     const FabricNodeId& src_fabric_node_id,

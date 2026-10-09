@@ -22,6 +22,7 @@
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt_stl/fmt.hpp>
 #include "tt_metal.hpp"
 
 namespace tt::tt_metal {

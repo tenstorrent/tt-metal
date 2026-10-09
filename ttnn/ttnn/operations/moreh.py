@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
+
 import ttnn
 import ttnn._ttnn
 from ttnn.operations.golden_common import (
@@ -97,10 +99,51 @@ def _golden_full_like(input, fill_value, *_, dtype=None, **__):
 ttnn.attach_golden_function(ttnn.moreh_full_like, golden_function=_golden_full_like)
 
 
+def _moreh_reduced_dims_and_shape(shape, dim, keepdim):
+    """Return the reduced dims and the output shape of a moreh reduction.
+    moreh reduces dims from last to first and keeps a reduced tile dim (one of the last two) as size 1
+    even when keepdim is False, so its shape differs from Torch's rank-reduced result.
+    """
+
+    rank = len(shape)
+    dims = range(rank) if dim is None else ([dim] if isinstance(dim, int) else dim)
+    reduced_dims = sorted({reduced_dim % rank for reduced_dim in dims})
+    output_shape = list(shape)
+    for reduced_dim in reversed(reduced_dims):
+        if keepdim or reduced_dim >= len(output_shape) - 2:
+            output_shape[reduced_dim] = 1
+        else:
+            del output_shape[reduced_dim]
+    return tuple(reduced_dims), output_shape
+
+
+def _with_bfloat16_accumulation_tolerance(output, reduced_magnitude):
+    """Relax the single-value comparison of a bfloat16 moreh reduction to its accumulation error.
+    reduced_magnitude is the same reduction applied to the absolute input values.
+    """
+
+    import torch
+
+    if output.dtype != torch.bfloat16:
+        return output
+    # The device accumulates in bfloat16 across tiles and reduction stages while torch rounds once, so a
+    # single-value result (where PCC is undefined) can differ by a few ULPs of the accumulated magnitudes.
+    eps = torch.finfo(torch.bfloat16).eps
+    return ttnn.decorators.set_golden_comparison_config(
+        output,
+        method="allclose",
+        scope="degenerate",
+        rtol=2 * eps,
+        atol=2 * eps * float(torch.amax(reduced_magnitude)),
+    )
+
+
 def _golden_sum(input, dim=None, *_, keepdim=False, **__):
     import torch
 
-    return torch.sum(input, dim=dim, keepdim=keepdim)
+    dims, output_shape = _moreh_reduced_dims_and_shape(input.shape, dim, keepdim)
+    output = torch.sum(input, dim=dims, keepdim=True).reshape(output_shape)
+    return _with_bfloat16_accumulation_tolerance(output, torch.sum(input.float().abs(), dim=dims))
 
 
 ttnn.attach_golden_function(ttnn.moreh_sum, golden_function=_golden_sum)
@@ -109,7 +152,9 @@ ttnn.attach_golden_function(ttnn.moreh_sum, golden_function=_golden_sum)
 def _golden_mean(input, dim=None, *_, keepdim=False, **__):
     import torch
 
-    return torch.mean(input, dim=dim, keepdim=keepdim)
+    dims, output_shape = _moreh_reduced_dims_and_shape(input.shape, dim, keepdim)
+    output = torch.mean(input, dim=dims, keepdim=True).reshape(output_shape)
+    return _with_bfloat16_accumulation_tolerance(output, torch.mean(input.float().abs(), dim=dims))
 
 
 ttnn.attach_golden_function(ttnn.moreh_mean, golden_function=_golden_mean)
@@ -118,7 +163,10 @@ ttnn.attach_golden_function(ttnn.moreh_mean, golden_function=_golden_mean)
 def _golden_norm(input, p, dim=None, *_, keepdim=False, **__):
     import torch
 
-    return torch.linalg.vector_norm(input, ord=p, dim=dim, keepdim=keepdim)
+    dims, output_shape = _moreh_reduced_dims_and_shape(input.shape, dim, keepdim)
+    output = torch.linalg.vector_norm(input, ord=p, dim=dims, keepdim=True).reshape(output_shape)
+    # A norm already reduces absolute values, so its own magnitude is the accumulated magnitude.
+    return _with_bfloat16_accumulation_tolerance(output, output.float())
 
 
 ttnn.attach_golden_function(ttnn.moreh_norm, golden_function=_golden_norm)
@@ -294,31 +342,34 @@ ttnn.attach_golden_function(
 )
 
 
-def _golden_softmax(input_tensor, dim, *_, **__):
+# The softmax-family operations share one kernel family and default op to their own function, but an explicit op
+# argument selects any member of the family.
+def _moreh_softmax_family(input_tensor, dim, *_, op, **__):
+    """Evaluate the softmax-family function selected by a MorehSoftmaxOp."""
+
     import torch
 
-    return torch.softmax(input_tensor, dim=dim)
+    softmax_op = ttnn._ttnn.operations.moreh.MorehSoftmaxOp
+    functions = {
+        softmax_op.SOFTMAX: torch.softmax,
+        softmax_op.SOFTMIN: torch.nn.functional.softmin,
+        softmax_op.LOGSOFTMAX: torch.log_softmax,
+    }
+    return functions[op](input_tensor, dim=dim)
 
 
-ttnn.attach_golden_function(ttnn.moreh_softmax, golden_function=_golden_softmax)
-
-
-def _golden_softmin(input_tensor, dim, *_, **__):
-    import torch
-
-    return torch.softmin(input_tensor, dim=dim)
-
-
-ttnn.attach_golden_function(ttnn.moreh_softmin, golden_function=_golden_softmin)
-
-
-def _golden_logsoftmax(input_tensor, dim, *_, **__):
-    import torch
-
-    return torch.log_softmax(input_tensor, dim=dim)
-
-
-ttnn.attach_golden_function(ttnn.moreh_logsoftmax, golden_function=_golden_logsoftmax)
+ttnn.attach_golden_function(
+    ttnn.moreh_softmax,
+    golden_function=functools.partial(_moreh_softmax_family, op=ttnn._ttnn.operations.moreh.MorehSoftmaxOp.SOFTMAX),
+)
+ttnn.attach_golden_function(
+    ttnn.moreh_softmin,
+    golden_function=functools.partial(_moreh_softmax_family, op=ttnn._ttnn.operations.moreh.MorehSoftmaxOp.SOFTMIN),
+)
+ttnn.attach_golden_function(
+    ttnn.moreh_logsoftmax,
+    golden_function=functools.partial(_moreh_softmax_family, op=ttnn._ttnn.operations.moreh.MorehSoftmaxOp.LOGSOFTMAX),
+)
 
 
 def _golden_nll_loss(input_tensor, target_tensor, reduction, *_, weight_tensor=None, ignore_index=-100, **__):
@@ -415,9 +466,7 @@ def _golden_matmul_backward(output_grad, input_a, input_b, *_, are_required_outp
     input_a, input_b = golden_prepare_grad_inputs(input_a, input_b)
     forward = torch.matmul(input_a, input_b)
     grads = golden_compute_gradients(forward, (input_a, input_b), output_grad)
-    if are_required_outputs is not None:
-        return golden_select_optional_outputs(grads, are_required_outputs)
-    return grads
+    return golden_select_optional_outputs(grads, are_required_outputs)
 
 
 ttnn.attach_golden_function(
@@ -433,9 +482,7 @@ def _golden_bmm_backward(output_grad, input, mat2, *_, are_required_outputs=None
     input, mat2 = golden_prepare_grad_inputs(input, mat2)
     forward = torch.bmm(input, mat2)
     grads = golden_compute_gradients(forward, (input, mat2), output_grad)
-    if are_required_outputs is not None:
-        return golden_select_optional_outputs(grads, are_required_outputs)
-    return grads
+    return golden_select_optional_outputs(grads, are_required_outputs)
 
 
 ttnn.attach_golden_function(
@@ -603,42 +650,52 @@ ttnn.attach_golden_function(
 )
 
 
-def _golden_softmax_backward(output_tensor, output_grad_tensor, dim, *_, **__):
-    import torch
-
+def _softmax_derivative(output_tensor, output_grad_tensor, dim):
     # softmax backward: grad = output * (output_grad - sum(output_grad * output, dim, keepdim=True))
     return output_tensor * (output_grad_tensor - (output_grad_tensor * output_tensor).sum(dim=dim, keepdim=True))
 
 
-ttnn.attach_golden_function(
-    ttnn.moreh_softmax_backward,
-    golden_function=_golden_softmax_backward,
-    output_tensor_kwarg_names=("input_grad_tensor",),
-)
-
-
-def _golden_softmin_backward(output_tensor, output_grad_tensor, dim, *_, **__):
+def _softmin_derivative(output_tensor, output_grad_tensor, dim):
     # softmin(x) = softmax(-x), so its derivative has the opposite sign of softmax.
     return output_tensor * ((output_grad_tensor * output_tensor).sum(dim=dim, keepdim=True) - output_grad_tensor)
 
 
-ttnn.attach_golden_function(
-    ttnn.moreh_softmin_backward,
-    golden_function=_golden_softmin_backward,
-    output_tensor_kwarg_names=("input_grad_tensor",),
-)
-
-
-def _golden_logsoftmax_backward(output_tensor, output_grad_tensor, dim, *_, **__):
-    import torch
-
+def _logsoftmax_derivative(output_tensor, output_grad_tensor, dim):
     # logsoftmax backward: grad = output_grad - exp(output) * sum(output_grad, dim, keepdim=True)
     return output_grad_tensor - output_tensor.exp() * output_grad_tensor.sum(dim=dim, keepdim=True)
 
 
+def _moreh_softmax_family_backward(output_tensor, output_grad_tensor, dim, *_, op, **__):
+    """Evaluate the backward of the softmax-family function selected by a MorehSoftmaxBackwardOp."""
+
+    backward_op = ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp
+    derivatives = {
+        backward_op.SOFTMAX: _softmax_derivative,
+        backward_op.SOFTMIN: _softmin_derivative,
+        backward_op.LOGSOFTMAX: _logsoftmax_derivative,
+    }
+    return derivatives[op](output_tensor, output_grad_tensor, dim)
+
+
+ttnn.attach_golden_function(
+    ttnn.moreh_softmax_backward,
+    golden_function=functools.partial(
+        _moreh_softmax_family_backward, op=ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp.SOFTMAX
+    ),
+    output_tensor_kwarg_names=("input_grad_tensor",),
+)
+ttnn.attach_golden_function(
+    ttnn.moreh_softmin_backward,
+    golden_function=functools.partial(
+        _moreh_softmax_family_backward, op=ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp.SOFTMIN
+    ),
+    output_tensor_kwarg_names=("input_grad_tensor",),
+)
 ttnn.attach_golden_function(
     ttnn.moreh_logsoftmax_backward,
-    golden_function=_golden_logsoftmax_backward,
+    golden_function=functools.partial(
+        _moreh_softmax_family_backward, op=ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp.LOGSOFTMAX
+    ),
     output_tensor_kwarg_names=("input_grad_tensor",),
 )
 

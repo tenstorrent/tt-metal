@@ -91,7 +91,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
 
     auto core_range_set = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, row_major);
 
-    auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
+    auto cores = tt::tt_metal::grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(combine_output.dtype());
     tt::DataFormat weight_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
@@ -263,7 +263,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     compute_kernel_desc.core_ranges = core_range_set;
     compute_kernel_desc.compile_time_args = std::move(compute_compile_time_args);
     compute_kernel_desc.config = tt::tt_metal::ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4,
+        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
         .fp32_dest_acc_en = false,
         .dst_full_sync_en = false,
     };
