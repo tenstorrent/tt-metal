@@ -176,15 +176,6 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef TILIZE_IN
         tilize_all_blocks_to_dfb<block_size>(dfb_in_rm, dfb_in, Wt);
-        // Re-init binary ops after tilize hardware reconfiguration.
-        // TODO(#52395): replace this mid-kernel re-init with a targeted DST re-arm.
-#ifdef FUSE_PRE_ADD
-        compute_kernel_hw_startup(dfb_in_id, dfb_inb_id, dfb_x_id);
-#elif defined(RMSNORM)
-        compute_kernel_hw_startup(dfb_xmm_id, dfb_xmm_id, dfb_xmm2_id);
-#else
-        compute_kernel_hw_startup(dfb_x_id, dfb_scaler_id, dfb_ex_id);
-#endif
 #endif
 /*
  * X + Y
@@ -231,6 +222,10 @@ void kernel_main() {
                 dfb_x, dfb_scaler, dfb_ex, W, Wt, block_size, tile_width);
 
         // x - E[x]; the mean stays resident for the whole row.
+#ifdef ARCH_QUASAR
+        // Quasar: row_wise_mean left the packer on dfb_ex; reconfig alone does not retarget it (see above).
+        pack_init(dfb_xmm_id);
+#endif
         ckl::sub<
             ckl::input(
                 dfb_x_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
@@ -249,6 +244,9 @@ void kernel_main() {
 
         // Preserve dfb_xmm_id for the normalization pass; the variance path consumes only its square.
         // compute temp = xmm*xmm = (x-E[x])^2
+#if defined(ARCH_QUASAR) && (!defined(RMSNORM) || defined(FUSE_PRE_ADD))
+        pack_init(dfb_xmm2_id);  // Quasar: retarget the packer after producing dfb_xmm.
+#endif
         ckl::square<
             ckl::input(
                 dfb_xmm_id,
@@ -391,7 +389,7 @@ void kernel_main() {
                     ckl::ReservePolicy::PerBlockSize,
                     ckl::PushPolicy::PerBlockSize,
                     ckl::DataFormatReconfig::Disabled)>{});
-#endif
+#endif  // FUSE_BETA
         }
         dfb_ex2pe.pop_front(1);
         dfb_xmm.pop_front(total_buffer_size);
@@ -417,4 +415,20 @@ void kernel_main() {
         "width or dfb_scaler push/pop counts diverge (issue #48487)");
     constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tile_width);
     dfb_scaler.pop_front(num_scaler_tiles);
+
+    // The epsilon tile is waited once up front and reused for the whole kernel, so it is popped
+    // once here rather than per block.
+    dfb_eps.pop_front(1);
+
+    // Gamma and beta are each one row of Wt tiles pushed once by the reader and read by tile offset
+    // on every block of every NCHt row. Their chain inputs wait Upfront with PopPolicy::None, so the
+    // chain waits block.start() + block.size() tiles and never pops. Blocks clamp their end to Wt,
+    // so that sum never exceeds Wt and reaches Wt on the last block of a row. Pop Wt once here
+    // rather than per block.
+#ifdef FUSE_GAMMA
+    DataflowBuffer(dfb_gamma_id).pop_front(Wt);
+#endif
+#ifdef FUSE_BETA
+    DataflowBuffer(dfb_beta_id).pop_front(Wt);
+#endif
 }

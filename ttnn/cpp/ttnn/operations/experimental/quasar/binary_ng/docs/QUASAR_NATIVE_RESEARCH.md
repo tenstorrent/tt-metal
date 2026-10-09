@@ -2014,6 +2014,48 @@ holds that.
 
 ---
 
+### 5.0.15 F16: borrowed L1-interleaved slices
+
+**What a slice is.** An interleaved buffer puts page `i` in bank `i mod N`, at
+`address + (i / N) * aligned_page_size` (`Buffer::page_address`), and the L1 allocator gives each worker
+core exactly one bank, at offset 0. So bank k holds pages k, k+N, k+2N, ... back to back from
+`buffer->address()`, the address that `AttachBorrowedDFBBuffers` hands every borrowed DFB. The spec-time
+check sizes a borrowed DFB against the per-bank slice and leaves the layout to the caller, so the host
+API admits an interleaved L1 tensor as a borrow source as it is.
+
+**Why the bank order does not matter.** The allocator shuffles bank ids over the cores (seed 0, unless
+`l1_bank_remap` is set). A borrowed DFB always computes on its own core's memory, and a, b and c put page
+`i` in the same bank, so one core's three slices hold the same page indices, whatever its bank id. The
+placement must cover every core that holds a bank, and the gate checks that the worker grid is exactly
+that set. A sub-device grid fails the check and keeps the NoC path.
+
+**Pad slots.** Every bank reserves `ceil(P/N)` pages, so every core computes `S = ceil(P/N)` slots. On
+a bank with one real page fewer, the last slot is padding inside its own allocation, which no page
+reads. Only slot `S - 1` can be padding. This is F3's rule for uneven shards, where every core computes
+its full shard.
+
+**No tail rings, by decision.** A borrowed ring must divide by the compute count, and `S` follows from
+the tensor size: at `C = 4` only one page count in four divides (`P` in `[128m - 31, 128m]`), and
+`P <= 96` leaves `S <= 3`. The F3 tail rings would carry the rest, but here they compete with the NoC
+path at the tuned `4,4,2`, which has the same slope. Against the recorded craq-sim fits a tail adds about
+800 cycles of latency and no throughput (about 600 for a slice of 1-3 tiles); in F3 the same rings
+replaced fewer Neos and won 4x or 2x. So a slice that `C` does not divide keeps the NoC path (dchen: the
+tail rings are temporary until the DFB gives each tile counter its own capacity, tt-metal#57623). The
+tails would pay back in a batched or transport-bound regime. Derived from the fits on one basis, with the
+tail's N=1 cost of about 1070 cycles assumed at N=8 too, and both paths' fixed costs counted: on craq-sim
+after #56194 (borrowed `1,4,1` at N=8, `1114 + 11.69*T`, against the NoC path's `1817 + 26.44*T`), above
+about 25 tiles per cluster; on silicon, where the NoC path meets the cut at 48.0 (status, week of 09-29,
+slide 4), above about 530 tiles per cluster at N=1 and about 10 at N=8.
+
+**Measured** (status, week of 09-29): the borrowed slices fit `754 + 186.00*T` at `1,1,1` N=1,
+`847 + 46.50*T` at `1,4,1` and `4,4,2`, and `1021 + 46.75*T` at the default `1,1,1`, against F3's
+shards at `757`, `851` and `1016` with the same slopes. On craq-sim the placement does not enter; what
+the borrow changes is the thread budget and the batch. At the default tuning an L1-interleaved add goes
+from `773 + 185.00*T` to `1021 + 46.75*T`, 3.96x on throughput, because the NoC path does not batch by
+default and a borrowed ring at stride 1 does.
+
+---
+
 ### 5.0.7 Next action and open questions
 
 > **SCOPE OF EVERY MEASUREMENT IN §5.0.1-§5.0.6: `num_tiles_per_cycle = 1`.** The roofline constants,
