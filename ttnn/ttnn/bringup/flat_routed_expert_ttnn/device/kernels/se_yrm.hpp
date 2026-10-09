@@ -20,6 +20,14 @@ struct SeYRmWriter {
     static constexpr uint32_t tile_bytes = pcd * 2048;  // one row tile in the out CB
     static constexpr uint32_t rows = SE_Y_RM_ROWS;      // out CB capacity in row tiles (host: yrm_rows)
     static constexpr uint32_t trid0 = 8;
+    // The y writes' unicast VC: not the default write VC (1), which the weight forwarding, the h chain and the read
+    // requests share; a y write queued behind them there stalls this core's NIU, and through its L1 reads the down
+    // matmul's unpacker (~+20% expert time at large M, test_flat_balanced_sweep.py)
+#ifdef SE_YRM_VC
+    static constexpr uint8_t yvc = SE_YRM_VC;
+#else
+    static constexpr uint8_t yvc = 2;
+#endif
     static_assert(rows >= 1 && trid0 + rows <= 16);
     InterleavedAddrGen<true> yg;
     uint32_t col_off;
@@ -47,9 +55,14 @@ struct SeYRmWriter {
         const uint32_t n = left < 32 ? left : 32;
         const uint32_t row0 = dyn.off[ia] + row_base;
         const uint32_t trid = trid0 + issued % rows;
+#ifndef SE_YRM_NOWRITE  // (perf probe: no y writes)
         for (uint32_t i = 0; i < n; ++i) {
-            noc_async_write_one_packet_with_trid(src + i * seg, get_noc_addr(row0 + i, yg, col_off), seg, trid);
+            noc_async_write_one_packet_with_trid(
+                src + i * seg, get_noc_addr(row0 + i, yg, col_off), seg, trid, write_cmd_buf, noc_index, yvc);
         }
+#else
+        (void)src, (void)n, (void)row0, (void)trid;
+#endif
         ++issued;
         if (++ir == rows_v(dyn, ia, is)) {
             ir = 0;
