@@ -9,6 +9,7 @@
 #include <functional>
 #include <initializer_list>
 #include <optional>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -185,7 +186,7 @@ std::vector<tt::tt_metal::TensorTopology> preallocated_or_union_output_topologie
     const Tensor& primary_input,
     const std::vector<std::optional<tt::tt_metal::TensorSpec>>& output_specs,
     const std::vector<std::reference_wrapper<const std::optional<Tensor>>>& preallocated_outputs,
-    const char* op_name);
+    std::string_view op_name);
 
 // The framework's union default over `tensors` (every tensor in tensor_args), placed on `primary_input`'s mesh
 // coordinates: the label of an output that is per-device distinct whenever any input is.

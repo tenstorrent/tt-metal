@@ -518,7 +518,7 @@ std::vector<tt::tt_metal::TensorTopology> preallocated_or_union_output_topologie
     const Tensor& primary_input,
     const std::vector<std::optional<tt::tt_metal::TensorSpec>>& output_specs,
     const std::vector<std::reference_wrapper<const std::optional<Tensor>>>& preallocated_outputs,
-    const char* op_name) {
+    std::string_view op_name) {
     TT_FATAL(
         output_specs.size() == preallocated_outputs.size(),
         "Expected one preallocated-output slot per output spec, got {} slots for {} specs",

@@ -8,6 +8,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <variant>
 
@@ -59,7 +60,7 @@ inline std::optional<ttsl::SmallVector<bool>> sharded_per_mesh_axis(
 // coordinates than the caller's tensor, also falls back to the union. `operands` may contain nullptr entries
 // (absent optionals). The fallback is logged once per process per `op_name`.
 inline std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
-    const Tensor& caller_tensor, std::initializer_list<const Tensor*> operands, const char* op_name) {
+    const Tensor& caller_tensor, std::initializer_list<const Tensor*> operands, std::string_view op_name) {
     const auto& caller_topology = caller_tensor.tensor_topology();
     if (caller_tensor.device() == nullptr) {
         return caller_topology;  // not a mesh tensor: nothing to compare against
@@ -67,7 +68,7 @@ inline std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
     const auto& mesh_shape = caller_tensor.device()->shape();
     const auto caller_sharded = sharded_per_mesh_axis(caller_topology, mesh_shape);
 
-    const char* reason = nullptr;
+    std::string_view reason;
     for (const Tensor* operand : operands) {
         if (operand == nullptr || operand == &caller_tensor) {
             continue;
@@ -88,11 +89,11 @@ inline std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
                 break;
             }
         }
-        if (reason != nullptr) {
+        if (!reason.empty()) {
             break;
         }
     }
-    if (reason == nullptr) {
+    if (reason.empty()) {
         return caller_topology;
     }
 
@@ -101,7 +102,7 @@ inline std::optional<tt::tt_metal::TensorTopology> caller_owned_output_topology(
     bool first_time = false;
     {
         std::lock_guard<std::mutex> guard(warned_mutex);
-        first_time = warned.insert(op_name).second;
+        first_time = warned.insert(std::string(op_name)).second;
     }
     if (first_time) {
         log_warning(
