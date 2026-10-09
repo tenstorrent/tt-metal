@@ -17,8 +17,9 @@ namespace tt::tt_fabric {
 // The manager holds at most one logical connection per output direction. When any local Blackhole
 // mesh uses express routing, all local workers compile for the five-direction superset; a worker on
 // a non-express mesh simply leaves the Z slot unused. Parallel lanes to one neighbor are routing-plane
-// realizations, not additional logical connections.
-#if defined(FABRIC_EXPRESS_ENABLED) && defined(ARCH_BLACKHOLE)
+// realizations, not additional logical connections. FABRIC_EXPRESS_AXIS is defined whenever express
+// routing is on (see FabricExpressConfig);
+#if defined(FABRIC_EXPRESS_AXIS) && defined(ARCH_BLACKHOLE)
 #define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 5
 #else
 #define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 4
