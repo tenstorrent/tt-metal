@@ -75,5 +75,5 @@ class TtV41Block(LightweightModule):
             x,
             pre_mix,
             attention=lambda h: self.attn(self.attn_norm(h), state, length),
-            ffn=lambda h: self.ffn(self.ffn_norm(h), image_mask=image_mask),
+            ffn=lambda h: self.ffn(self.ffn_norm(h), image_mask=image_mask, actual_isl=length),
         )
