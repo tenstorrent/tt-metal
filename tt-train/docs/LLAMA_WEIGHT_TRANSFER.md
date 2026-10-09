@@ -247,10 +247,10 @@ meshes; the BoolQ GRPO example uses this path on every step):
 
 ```python
 # ttml rank
-client = MPIRolloutClient(peer_rank=TTT_RANK, device=ttml_mesh)
-client.send_weights(weights_ref_hf_dict(ttml_model))
+client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=HostWeightBridge.init_sender(mesh=ttml_mesh, peer_rank=TTT_RANK))
+client.send_weights(weights_ref_hf_dict(ttml_model), version=step)
 
-# ttt rank — inside MPIRolloutServer.serve_forever, on_weights_received:
+# ttt rank — inside MPIRolloutServer.serve_forever, via TTTRolloutSampler.update_weights(weights, version):
 ttt_model.update_weights(received_hf_dict, hf_rope=False)
 ```
 
