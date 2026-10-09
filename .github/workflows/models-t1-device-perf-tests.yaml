@@ -17,6 +17,7 @@ on:
           - deepseek-v3-tg
           - sdxl
           - resnet50
+          - rmsnorm-prefill-probe
       sku:
         description: "Select SKU to test"
         required: false
