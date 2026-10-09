@@ -221,8 +221,10 @@ inline void _calculate_welfords_all_quad_rows_(
 }
 
 /**
- * @brief Record the four row bodies into replay slot 0.
- * @note Re-run after any other SFPU op records its own replay on this thread.
+ * @brief Record the four row bodies into replay slot 0; leaves the running mean and M2 alone.
+ * @note Any math-thread op that records into the replay buffer overwrites them, FPU inits included
+ *       (eltwise binary, binary broadcast, reduce, matmul, transpose_dest) as well as SFPU ones.
+ *       Call this again after such an op, before the next update: it doubles as the re-init.
  */
 inline void welfords_init() {
     load_replay_buf<WELFORDS_REPLAY_SLOT, WELFORDS_REPLAY_LEN, false /* exec_while_loading */>([] {
@@ -374,9 +376,6 @@ constexpr std::uint32_t TWO_PASS_SFPSHFT2_SHIFT_ZERO_FILL = 4;    // column X ->
 constexpr std::uint32_t TWO_PASS_LANE_RECIPROCAL_FP16B = 0x3D00;  // 1/32
 constexpr std::uint32_t FP32_SIGN_BIT = 0x80000000U;
 
-/** @brief Wait out the previous result's latency before an SFPTRANSP, SFPSTORE or SFPSHFT2 reader. */
-inline void _two_pass_drain_() { TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */); }
-
 /** @brief Load fp32 bit pattern bits into LREG. */
 template <std::uint32_t LREG>
 inline void _two_pass_load_fp32_(const std::uint32_t bits) {
@@ -412,7 +411,6 @@ inline void _two_pass_accumulate_shifted_sum_block_() {
     TTI_SFPADD(TWO_PASS_ACC2_REG, p_sfpu::LCONST_1, p_sfpu::LREG1, TWO_PASS_ACC2_REG, 0 /* instr_mod1 */);
     TTI_SFPADD(TWO_PASS_ACC_REG, p_sfpu::LCONST_1, p_sfpu::LREG2, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
     TTI_SFPADD(TWO_PASS_ACC2_REG, p_sfpu::LCONST_1, p_sfpu::LREG3, TWO_PASS_ACC2_REG, 0 /* instr_mod1 */);
-    _two_pass_drain_();  // the next quad's SFPTRANSP reads LREG6
 }
 
 /** @brief Pass one for row K of the loaded quad if it lies in [first, last); DUAL sends odd rows to LREG6. */
@@ -437,7 +435,6 @@ inline void _two_pass_accumulate_shifted_sum_loaded_block_(const std::uint32_t f
     _two_pass_accumulate_shifted_sum_row_if_<DUAL, 1 /* K */>(first, last);
     _two_pass_accumulate_shifted_sum_row_if_<DUAL, 2 /* K */>(first, last);
     _two_pass_accumulate_shifted_sum_row_if_<DUAL, 3 /* K */>(first, last);
-    _two_pass_drain_();  // the next quad's SFPTRANSP reads the accumulator
 }
 
 /** @brief LREG5 += (INPUT_LREG - mean)^2, with LREG6 as the residual scratch. */
@@ -460,7 +457,6 @@ inline void _two_pass_accumulate_m2_block_() {
     TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, p_sfpu::LREG3, p_sfpu::LREG0, 0 /* instr_mod1 */);
     TTI_SFPMAD(TWO_PASS_ACC2_REG, TWO_PASS_ACC2_REG, TWO_PASS_ACC_REG, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
     TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG0, TWO_PASS_ACC_REG, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
-    _two_pass_drain_();  // the next quad's SFPTRANSP reads LREG5
 }
 
 /** @brief ACC_LREG += (INPUT_LREG - mean)^2 (clobbers INPUT_LREG). */
@@ -480,7 +476,6 @@ inline void _two_pass_accumulate_m2_dual_block_() {
     TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG1, TWO_PASS_ACC2_REG, TWO_PASS_ACC2_REG, 0 /* instr_mod1 */);
     TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG2, TWO_PASS_ACC_REG, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
     TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG3, TWO_PASS_ACC2_REG, TWO_PASS_ACC2_REG, 0 /* instr_mod1 */);
-    _two_pass_drain_();  // the next quad's SFPTRANSP reads LREG6
 }
 
 /** @brief Pass two for row K of the loaded quad if it lies in [first, last). */
@@ -521,7 +516,6 @@ inline void _two_pass_block_rows_(const std::uint32_t start_row, const std::uint
         _two_pass_accumulate_m2_row_if_<DUAL, 1 /* K */>(first, last);
         _two_pass_accumulate_m2_row_if_<DUAL, 2 /* K */>(first, last);
         _two_pass_accumulate_m2_row_if_<DUAL, 3 /* K */>(first, last);
-        _two_pass_drain_();  // the next quad's SFPTRANSP reads the accumulator
     } else {
         _two_pass_accumulate_shifted_sum_loaded_block_<DUAL>(first, last);
     }
@@ -686,7 +680,6 @@ template <bool dual_m2>
 inline void _two_pass_store_mean_m2_to_dst_() {
     if constexpr (dual_m2) {
         _two_pass_fold_dual_();
-        _two_pass_drain_();
     }
     TTI_SFPSTORE(TWO_PASS_MEAN_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg_addr */);
     TTI_SFPSTORE(TWO_PASS_ACC_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, WELFORDS_TILE_STRIDE);
@@ -718,12 +711,10 @@ inline void _two_pass_combine_block_to_dst_(
     TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, TWO_PASS_ACC_REG, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
     TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG2, p_sfpu::LREG0, TWO_PASS_MEAN_REG, 0 /* instr_mod1 */);
     TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG7, 0 /* instr_mod1 */);
-    _two_pass_drain_();
     TTI_SFPSTORE(TWO_PASS_MEAN_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg_addr */);
     TTI_SFPMUL(p_sfpu::LREG7, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG7, 0 /* instr_mod1 */);
     _two_pass_zero_<TWO_PASS_ACC2_REG>();
     TTI_SFPADD(TWO_PASS_ACC_REG, p_sfpu::LCONST_1, p_sfpu::LREG7, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
-    _two_pass_drain_();
     TTI_SFPSTORE(TWO_PASS_ACC_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, WELFORDS_TILE_STRIDE);
 }
 
@@ -777,11 +768,9 @@ inline void _two_pass_store_split_mean_var_to_dst_row_(const std::uint32_t recip
     }
     TTI_SFPMOV(TWO_PASS_ANCHOR_REG, p_sfpu::LREG0, 0 /* instr_mod1: plain copy */);
     TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, TWO_PASS_ANCHOR_REG, TWO_PASS_MEAN_REG, 0 /* instr_mod1 */);
-    _two_pass_drain_();
     TTI_SFPMOV(TWO_PASS_MEAN_REG, p_sfpu::LREG1, 0 /* instr_mod1: plain copy */);
     _two_pass_load_fp32_<p_sfpu::LREG6>(reciprocal_bits);
     TTI_SFPMUL(TWO_PASS_ACC_REG, p_sfpu::LREG6, p_sfpu::LCONST_0, TWO_PASS_MEAN_REG, 0 /* instr_mod1 */);
-    _two_pass_drain_();
 
     // Park the variance in the next tile while the two transposes form rows 0 and 16 of this one.
     TTI_SFPSTORE(TWO_PASS_MEAN_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, WELFORDS_TILE_STRIDE);
@@ -811,11 +800,9 @@ inline void _two_pass_store_mean_var_to_dst_raw_group_(
     LLK_ASSERT(group_id < WELFORDS_NUM_GROUPS, "two-pass: group_id past the last group slot of the tile");
     if constexpr (dual_m2) {
         _two_pass_fold_dual_();
-        _two_pass_drain_();
     }
     _two_pass_load_fp32_<p_sfpu::LREG6>(reciprocal_bits);
     TTI_SFPMUL(TWO_PASS_ACC_REG, p_sfpu::LREG6, p_sfpu::LCONST_0, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
-    _two_pass_drain_();
     const std::uint32_t group_offset = group_id << WELFORDS_GROUP_SHIFT;
     TT_SFPSTORE(TWO_PASS_MEAN_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, group_offset);
     TT_SFPSTORE(
@@ -831,11 +818,14 @@ inline void _two_pass_switch_group_(const std::uint32_t save_group_id, const std
     welfords_load_mean_m2_from_dst<true /* GROUPED */>(restore_group_id);
 }
 
-/** @brief Rotate LREG by one SFPU column. */
+/**
+ * @brief Rotate LREG by one SFPU column.
+ * @note No SFPNOP: SFPSHFT2 stalls the next instruction itself, and its input never comes straight
+ *       from a 2-cycle MAD, the one producer it does not wait for (TEN-4605).
+ */
 template <std::uint32_t LREG>
 inline void _two_pass_rotate_() {
     TTI_SFPSHFT2(0 /* imm12 */, LREG, LREG, TWO_PASS_SFPSHFT2_ROTATE);
-    _two_pass_drain_();  // SFPSHFT2 takes two cycles
 }
 
 /** @brief Rotate LREG by DISTANCE SFPU columns. */
@@ -847,12 +837,11 @@ inline void _two_pass_rotate_by_() {
     }
 }
 
-/** @brief Shift LREG by DISTANCE SFPU columns, zero-filling. */
+/** @brief Shift LREG by DISTANCE SFPU columns, zero-filling; see @ref _two_pass_rotate_ on the NOPs. */
 template <std::uint32_t LREG, std::uint32_t DISTANCE>
 inline void _two_pass_shift_zero_fill_by_() {
     if constexpr (DISTANCE > 0) {
         TTI_SFPSHFT2(0 /* imm12 */, LREG, LREG, TWO_PASS_SFPSHFT2_SHIFT_ZERO_FILL);
-        _two_pass_drain_();  // SFPSHFT2 takes two cycles
         _two_pass_shift_zero_fill_by_<LREG, DISTANCE - 1>();
     }
 }
@@ -863,7 +852,6 @@ inline void _two_pass_fold_stage_() {
     TTI_SFPMOV(SUM, SCRATCH, 0 /* instr_mod1: plain copy */);
     _two_pass_rotate_by_<SCRATCH, DISTANCE>();
     TTI_SFPADD(SUM, p_sfpu::LCONST_1, SCRATCH, SUM, 0 /* instr_mod1 */);
-    _two_pass_drain_();
 }
 
 /** @brief Afterwards every SFPU column of SUM holds its row's total. */
@@ -895,7 +883,6 @@ inline void _two_pass_horizontal_sum_pair_() {
     TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG4, 0 /* instr_mod1 */);
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG0, 0 /* instr_mod1 */);
     TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG4, 0 /* instr_mod1 */);
-    _two_pass_drain_();
 
     if constexpr (broadcast_result) {
         TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0 /* instr_mod1: plain copy */);
@@ -925,7 +912,6 @@ inline void _two_pass_horizontal_sum_mean_() {
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0 /* instr_mod1 */);
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /* instr_mod1 */);
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG0, 0 /* instr_mod1 */);
-    _two_pass_drain_();
 }
 
 /**
@@ -972,7 +958,6 @@ inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(
     TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, SCRATCH_ANCHOR + WELFORDS_LEFT_EVEN);
     TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, SCRATCH_ANCHOR + WELFORDS_LEFT_ODD);
     TTI_SFPMAD(p_sfpu::LCONST_neg1, p_sfpu::LREG0, TWO_PASS_MEAN_REG, p_sfpu::LREG0, 0 /* instr_mod1 */);
-    _two_pass_drain_();
     TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, SCRATCH + WELFORDS_LEFT_EVEN);
     TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, SCRATCH + WELFORDS_LEFT_ODD);
     // Unscaled, so the final 1/32 applies once to both variance terms.
@@ -986,12 +971,10 @@ inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(
     TTI_SFPLOAD(p_sfpu::LREG7, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, SCRATCH_ANCHOR + WELFORDS_LEFT_EVEN);
     TTI_SFPMAD(p_sfpu::LCONST_neg1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG1, 0 /* instr_mod1 */);
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG7, 0 /* instr_mod1 */);
-    _two_pass_drain_();
     const std::uint32_t group_offset = group_id << WELFORDS_GROUP_SHIFT;
     TT_SFPSTORE(p_sfpu::LREG7, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, group_offset + WELFORDS_LEFT_EVEN);
     TT_SFPSTORE(p_sfpu::LREG7, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, group_offset + WELFORDS_LEFT_ODD);
     TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* instr_mod1 */);
-    _two_pass_drain_();
     _two_pass_horizontal_sum_mean_();
 
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG4, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
@@ -999,7 +982,6 @@ inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(
         TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, TWO_PASS_LANE_RECIPROCAL_FP16B);
         TTI_SFPMUL(TWO_PASS_ACC_REG, p_sfpu::LREG6, p_sfpu::LCONST_0, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
     }
-    _two_pass_drain_();
     TT_SFPSTORE(
         TWO_PASS_ACC_REG,
         p_sfpu::sfpmem::DEFAULT,

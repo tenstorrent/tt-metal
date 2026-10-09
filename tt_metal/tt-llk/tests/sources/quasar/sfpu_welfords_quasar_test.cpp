@@ -36,14 +36,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_A             = params.buffer_A;
+#endif
 
     set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
 
-    const std::uint32_t tiles_per_block = welfords_tiles_per_block(params.TILE_CNT);
-    const std::uint32_t num_blocks      = params.TILE_CNT / tiles_per_block;
+    const std::uint32_t tiles_per_block = welfords_tiles_per_block(TILE_CNT);
+    const std::uint32_t num_blocks      = TILE_CNT / tiles_per_block;
 
     ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-        ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+        ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
     _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
     _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
@@ -89,6 +95,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT  = params.TILE_CNT;
+    const std::uint32_t DST_INDEX = params.DST_INDEX;
+#endif
 
     set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
 
@@ -99,9 +109,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     welfords_init();
     welfords_clear_previous_mean_and_m2();
 
-    const std::uint32_t tiles_per_block = welfords_tiles_per_block(params.TILE_CNT);
-    const std::uint32_t num_blocks      = params.TILE_CNT / tiles_per_block;
-    const std::uint32_t last_tile       = params.TILE_CNT - 1;
+    const std::uint32_t tiles_per_block = welfords_tiles_per_block(TILE_CNT);
+    const std::uint32_t num_blocks      = TILE_CNT / tiles_per_block;
+    const std::uint32_t last_tile       = TILE_CNT - 1;
 
     for (std::uint32_t block = 0; block < num_blocks; ++block)
     {
@@ -117,7 +127,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         is_fp32_dest_acc_en,
                         welfords_store_mean_m2_to_dst,
                         (WELFORDS_STATE_GROUPED),
-                        params.DST_INDEX + WELFORDS_STATE_DST,
+                        DST_INDEX + WELFORDS_STATE_DST,
                         VectorMode::RC_custom,
                         WELFORDS_STATE_GROUP_ID);
                     welfords_clear_previous_mean_and_m2();
@@ -126,7 +136,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         is_fp32_dest_acc_en,
                         welfords_load_mean_m2_from_dst,
                         (WELFORDS_STATE_GROUPED),
-                        params.DST_INDEX + WELFORDS_STATE_DST,
+                        DST_INDEX + WELFORDS_STATE_DST,
                         VectorMode::RC_custom,
                         WELFORDS_STATE_GROUP_ID);
                 }
@@ -142,7 +152,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         is_fp32_dest_acc_en,
                         calculate_welfords,
                         (true /* PARTIAL_TILE */, WELFORDS_RECIP_SIZE),
-                        params.DST_INDEX + i,
+                        DST_INDEX + i,
                         VectorMode::RC_custom,
                         start_idx,
                         WELFORDS_LUT,
@@ -156,7 +166,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 is_fp32_dest_acc_en,
                 calculate_welfords,
                 (false /* PARTIAL_TILE */, WELFORDS_RECIP_SIZE),
-                params.DST_INDEX + i,
+                DST_INDEX + i,
                 VectorMode::RC_custom,
                 start_idx,
                 WELFORDS_LUT,
@@ -176,7 +186,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     is_fp32_dest_acc_en,
                     welfords_store_mean_var_to_dst,
                     (WelfordsOutputLayout::Face, WELFORDS_FINAL_GROUPED, WELFORDS_RECIP_SIZE),
-                    params.DST_INDEX + WELFORDS_FINAL_DST,
+                    DST_INDEX + WELFORDS_FINAL_DST,
                     VectorMode::RC_custom,
                     scale_idx,
                     WELFORDS_LUT,
@@ -189,7 +199,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     is_fp32_dest_acc_en,
                     welfords_store_mean_var_to_dst,
                     (WelfordsOutputLayout::Row, false /* GROUPED */, WELFORDS_RECIP_SIZE),
-                    params.DST_INDEX + WELFORDS_FINAL_DST,
+                    DST_INDEX + WELFORDS_FINAL_DST,
                     VectorMode::RC_custom,
                     scale_idx,
                     WELFORDS_LUT,
@@ -220,20 +230,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_Res           = params.buffer_Res;
+    const std::uint32_t DST_INDEX       = params.DST_INDEX;
+#endif
 
     set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
 
-    const std::uint32_t tiles_per_block = welfords_tiles_per_block(params.TILE_CNT);
-    const std::uint32_t num_blocks      = params.TILE_CNT / tiles_per_block;
+    const std::uint32_t tiles_per_block = welfords_tiles_per_block(TILE_CNT);
+    const std::uint32_t num_blocks      = TILE_CNT / tiles_per_block;
 
     ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-        ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
+        ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, tiles_per_block);
     for (std::uint32_t block = 0; block < num_blocks; ++block)
     {
-        _llk_pack_(params.DST_INDEX, block * tiles_per_block /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+        _llk_pack_(DST_INDEX, block * tiles_per_block /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
         _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
 }
