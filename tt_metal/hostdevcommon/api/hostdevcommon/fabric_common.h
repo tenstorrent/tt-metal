@@ -189,6 +189,14 @@ struct RoutingFieldsConstants {
         static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;  // 32-bit pattern (all FORWARD_ONLY)
         static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;   // 32-bit pattern (all WRITE_ONLY)
     };
+
+    // What the router at the current hop does with a 1D packet.
+    enum class LowLatencyHopAction : uint32_t {
+        NOOP = LowLatency::NOOP,
+        WRITE_ONLY = LowLatency::WRITE_ONLY,
+        FORWARD_ONLY = LowLatency::FORWARD_ONLY,
+        WRITE_AND_FORWARD = LowLatency::WRITE_AND_FORWARD,
+    };
 };
 
 // ============================================================================
@@ -870,6 +878,15 @@ inline void encode_1d_sparse_multicast(HopMaskType hop_mask, uint32_t& buffer) {
         hop_index++;
         hop_mask >>= 1;
     }
+}
+
+//=============================================================================
+// 1D Routing Decoders
+//=============================================================================
+
+constexpr RoutingFieldsConstants::LowLatencyHopAction get_current_1d_hop_action(uint32_t route_word) {
+    return static_cast<RoutingFieldsConstants::LowLatencyHopAction>(
+        route_word & RoutingFieldsConstants::LowLatency::FIELD_MASK);
 }
 
 }  // namespace routing_encoding

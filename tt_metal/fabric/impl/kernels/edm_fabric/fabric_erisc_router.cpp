@@ -48,8 +48,7 @@
 
 using namespace tt::tt_fabric;
 
-// Type alias for the 1D low-latency hop fields.
-using LowLatencyFields = tt::tt_fabric::RoutingFieldsConstants::LowLatency;
+using LowLatencyHopAction = tt::tt_fabric::RoutingFieldsConstants::LowLatencyHopAction;
 
 /*
 
@@ -534,7 +533,7 @@ FORCE_INLINE bool can_forward_packet_completely(
         deliver_locally_only = cached_routing_fields.value == tt::tt_fabric::RoutingFields::LAST_MCAST_VAL;
     } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
         deliver_locally_only =
-            (cached_routing_fields.value & LowLatencyFields::FIELD_MASK) == LowLatencyFields::WRITE_ONLY;
+            routing_encoding::get_current_1d_hop_action(cached_routing_fields.value) == LowLatencyHopAction::WRITE_ONLY;
     }
     return deliver_locally_only || downstream_edm_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
 }
@@ -669,13 +668,13 @@ FORCE_INLINE void receiver_forward_packet(
             execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
         }
     } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
-        const uint32_t routing = cached_routing_fields.value & LowLatencyFields::FIELD_MASK;
+        const LowLatencyHopAction routing = routing_encoding::get_current_1d_hop_action(cached_routing_fields.value);
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
         switch (routing) {
-            case LowLatencyFields::WRITE_ONLY:
+            case LowLatencyHopAction::WRITE_ONLY:
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
-            case LowLatencyFields::FORWARD_ONLY:
+            case LowLatencyHopAction::FORWARD_ONLY:
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
 
@@ -683,7 +682,7 @@ FORCE_INLINE void receiver_forward_packet(
                 // (channel 0 is worker, channel 1 receives forwarded traffic from upstream)
                 channel_trimming_usage_recorder.set_sender_channel_forwarded_to(rx_channel_id, 1);
                 break;
-            case LowLatencyFields::WRITE_AND_FORWARD: {
+            case LowLatencyHopAction::WRITE_AND_FORWARD: {
                 // Resolve noc_send_type via the same packed 4B load the local-write path uses, then
                 // reuse it through the _impl entry point so the standard path does no extra L1 read
                 // versus the non-sparse build. The sparse case is unlikely, keeping the common path hot.
