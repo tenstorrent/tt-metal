@@ -294,6 +294,9 @@ class MultichipDecoder(OptimizedDecoder):
         self._ar_broadcast = _parse_binary_env("TT_LAGUNA_AR_BROADCAST", True)  # all_broadcast, no concat (see above)
         # batch-1 decode attention prologue as one op (attn_prologue1.py); TT_LAGUNA_AP1=0 restores the op chain
         self._ap1 = _parse_binary_env("TT_LAGUNA_AP1", True)
+        # batch-1 decode attention epilogue (gate slice + softplus gate + flatten into WO's input) as one op
+        # (attn_epilogue1.py); TT_LAGUNA_AE1=0 restores the op chain
+        self._ae1 = _parse_binary_env("TT_LAGUNA_AE1", True)
         self._ap1_scaler = None
         if self._ap1 and self.D >= 1:
             from .attn_prologue1 import reduce_scaler
@@ -1858,7 +1861,9 @@ class MultichipDecoder(OptimizedDecoder):
             if not self._slice_sharded:
                 qkv = ttnn.sharded_to_interleaved(qkv, ttnn.L1_MEMORY_CONFIG)
             qkv_w = self.meta["qkv_w"]
-            g = ttnn.slice(qkv, [0, 0, 0, qkv_w], [1, 1, B, qkv_w + cfg.num_heads], memory_config=split_mem)
+            ae1 = self._ae1 and B == 1 and self._reshape_to_shard and qkv.dtype == ttnn.bfloat16
+            if not ae1:  # attn_epilogue1 reads the gate logits from qkv itself
+                g = ttnn.slice(qkv, [0, 0, 0, qkv_w], [1, 1, B, qkv_w + cfg.num_heads], memory_config=split_mem)
         else:
             split_mem = None
             qkv = self._dram_mm(ln, self.w["wqkv"], self.w["wqkv_ds"], cfg.hidden, self.meta["qkv_w"], self._ck_qkv)
@@ -1981,6 +1986,15 @@ class MultichipDecoder(OptimizedDecoder):
         attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q, kv_cache["k"], kv_cache["v"], **sdpa_kwargs
         )
+        q_w = self.meta["q_w"]
+        if fold_g and ae1:
+            # batch 1: gate slice + softplus(g) * attn + flatten into WO's width-sharded input in one op
+            from .attn_epilogue1 import attn_epilogue1
+
+            wo_in = _width_sharded_l1(TILE, q_w, _decode_shard_cores(q_w, cfg.hidden))
+            attn = attn_epilogue1(attn, qkv, self.meta["qkv_w"], cfg.num_heads, wo_in)
+            o = self._dram_mm(attn, self.w["wo"], self.w["wo_ds"], q_w, cfg.hidden, self._ck_o)
+            return self._decode_tail(o, residual, B, next_norm_cores)
         # gate in the SDPA's native [1,B,nh,hd] head layout, then flatten ONCE (the generic _gate flattens,
         # re-splits into heads -- an ~11 us 4-core reshape -- and flattens again).
         if g is None:
@@ -1988,7 +2002,6 @@ class MultichipDecoder(OptimizedDecoder):
         # softplus is elementwise, so it commutes with the reshape and runs as the mul's rhs activation (one op)
         g = ttnn.reshape(g, (1, B, cfg.num_heads, 1))
         softplus = ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)  # ttnn.softplus defaults
-        q_w = self.meta["q_w"]
         if B == TILE and getattr(self, "_decode_heads_op", False):
             # fused head concat: [1, 32, heads, hd] one user per core -> [1, 1, 32, heads * hd] width-sharded on one
             # core per head, then a small reshard onto WO's input grid (replaces an ~20 us tile-relayout reshape)
