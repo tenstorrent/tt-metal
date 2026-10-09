@@ -144,11 +144,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    LLK_INIT_BEGIN
+    LLK_POST_LOOP_BEGIN
     {
         _llk_unpack_fast_tilize_uninit_<is_fp32_dest_acc_en>();
     }
-    LLK_INIT_END;
+    LLK_POST_LOOP_END;
 }
 
 #endif
@@ -270,7 +270,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>();
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
             formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
-        _llk_pack_fast_tilize_init_<DstSync::SyncHalf>(use_32bit_dest, formats.pack_dst, BLOCK_CT_DIM == 1 ? 1 : 2, num_faces);
+        std::uint32_t init_ct_dim = BLOCK_CT_DIM; // INIT's own copy: the loop does not share its unit_dim with INIT (perf.h)
+        LLK_PERF_OPAQUE(init_ct_dim);
+        _llk_pack_fast_tilize_init_<DstSync::SyncHalf>(use_32bit_dest, formats.pack_dst, init_ct_dim == 1 ? 1 : 2, num_faces);
         PROFILER_SYNC();
     }
     LLK_INIT_END;
@@ -338,11 +340,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    LLK_INIT_BEGIN
+    LLK_POST_LOOP_BEGIN
     {
         _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, num_faces);
     }
-    LLK_INIT_END;
+    LLK_POST_LOOP_END;
 }
 
 #endif

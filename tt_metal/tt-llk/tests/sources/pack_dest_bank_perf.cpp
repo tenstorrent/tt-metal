@@ -257,11 +257,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
-    LLK_INIT_BEGIN
+    LLK_POST_LOOP_BEGIN
     {
         _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }
-    LLK_INIT_END;
+    LLK_POST_LOOP_END;
 }
 
 #endif
