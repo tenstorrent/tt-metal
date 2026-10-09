@@ -27,8 +27,8 @@ struct StridedAllGatherMinimalMatmulAsyncParams {
     const StridedAllGatherAsync ag_op;
     const MMSignalAggregatorMode mm_signal_aggregator_mode = MMSignalAggregatorMode::Auto;
 
-    // Compile-time attributes select exactly the program-structure-affecting fields for the default
-    // program-cache reflection hash + canonical key
+    // The program-structure-affecting fields; StridedAllGatherMinimalMatmulAsync::compute_program_hash hashes the
+    // same list, so keep the two in sync
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dim",
         "num_links",

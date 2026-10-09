@@ -126,6 +126,31 @@ StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinima
     return outputs;
 }
 
+tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_program_hash(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // `semaphore` is not hashed: its addresses are re-applied by
+    // StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments. matmul_struct is hashed whole,
+    // so fused_ternary_scalar is part of the program structure.
+    const auto& ag_attributes = attributes.strided_all_gather_async_struct;
+    return tt::tt_metal::operation::hash_operation<StridedAllGatherMinimalMatmulAsync>(
+        ag_attributes.dim,
+        ag_attributes.num_links,
+        ag_attributes.ring_size,
+        ag_attributes.output_mem_config,
+        ag_attributes.topology,
+        ag_attributes.cluster_axis,
+        ag_attributes.num_workers_per_link,
+        ag_attributes.num_buffers_per_channel,
+        ag_attributes.mm_cores_y,
+        ag_attributes.mm_block_ht,
+        ag_attributes.mm_block_wt,
+        attributes.matmul_struct,
+        attributes.all_gather_core_grid_offset,
+        attributes.read_local_slice_from_input,
+        attributes.mm_signal_aggregator_mode,
+        tensor_args);
+}
+
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

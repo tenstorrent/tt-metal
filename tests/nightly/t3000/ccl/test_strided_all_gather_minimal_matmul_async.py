@@ -67,6 +67,9 @@ def run_strided_all_gather_minimal_matmul_impl(
     fuse_swiglu=False,
     residual_memory_config=None,
     gate_memory_config=None,
+    check_program_cache=False,
+    ternary_b_full=False,
+    alias_ternary_first_iter=False,
 ):
     torch.manual_seed(0)
 
@@ -123,6 +126,9 @@ def run_strided_all_gather_minimal_matmul_impl(
         assert (
             not use_non_fused
         ), "ternary (addcmul) is only wired into the fused strided_all_gather_minimal_matmul path"
+    if alias_ternary_first_iter:
+        assert use_ternary and ternary_b_full, "aliasing ternary_a with ternary_b needs a full [M, N] ternary_b"
+        assert not enable_trace, "aliasing is applied per iteration, which the trace path replays from iteration 0"
     if chunks > 1:
         assert not use_non_fused, "chunks > 1 is only wired into the fused strided_all_gather_minimal_matmul path"
         assert N % chunks == 0, f"N ({N}) must be divisible by chunks ({chunks})"
@@ -203,7 +209,6 @@ def run_strided_all_gather_minimal_matmul_impl(
         if use_ternary:
             # addcmul: out = ternary_a + scalar * matmul_out * ternary_b
             ternary_a_input = torch.randn((1, 1, M, N), dtype=torch_dtype)
-            ternary_b_input = torch.randn((1, 1, 1, N), dtype=torch_dtype)
             ternary_a_tensor_mesh = ttnn.from_torch(
                 ternary_a_input,
                 device=mesh_device,
@@ -214,16 +219,25 @@ def run_strided_all_gather_minimal_matmul_impl(
                     mesh_device, dims=[other_dim, dim if shard_weights else None], mesh_shape=tuple(mesh_device.shape)
                 ),
             )
-            ternary_b_tensor_mesh = ttnn.from_torch(
-                ternary_b_input,
-                device=mesh_device,
-                layout=layout,
-                dtype=ag_input_dtype,
-                memory_config=gate_memory_config if gate_memory_config is not None else mem_config_input,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    mesh_device, dims=[None, dim if shard_weights else None], mesh_shape=tuple(mesh_device.shape)
-                ),
-            )
+            if alias_ternary_first_iter and i == 0:
+                # Same buffer for both ternary inputs on the cache miss; later iterations hit the cached program
+                # with distinct buffers, so each address must be re-applied by role.
+                ternary_b_input = ternary_a_input
+                ternary_b_tensor_mesh = ternary_a_tensor_mesh
+            else:
+                ternary_b_input = torch.randn((1, 1, M if ternary_b_full else 1, N), dtype=torch_dtype)
+                ternary_b_tensor_mesh = ttnn.from_torch(
+                    ternary_b_input,
+                    device=mesh_device,
+                    layout=layout,
+                    dtype=ag_input_dtype,
+                    memory_config=gate_memory_config if gate_memory_config is not None else mem_config_input,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        mesh_device,
+                        dims=[other_dim if ternary_b_full else None, dim if shard_weights else None],
+                        mesh_shape=tuple(mesh_device.shape),
+                    ),
+                )
         else:
             ternary_a_tensor_mesh = None
             ternary_b_tensor_mesh = None
@@ -374,6 +388,9 @@ def run_strided_all_gather_minimal_matmul_impl(
 
         signpost("stop")
     else:
+        # Every iteration uses its own tensors and semaphores, so iterations after the first hit the program cache
+        # with new addresses and exercise override_runtime_arguments.
+        num_program_cache_entries_after_first_iter = None
         for i in range(num_iters):
             ttnn.synchronize_device(mesh_device)
             tt_all_gather_out_tensor, tt_matmul_out_tensor = run_op(i)
@@ -383,6 +400,16 @@ def run_strided_all_gather_minimal_matmul_impl(
             logger.info(f"Waiting for op")
             ttnn.synchronize_device(mesh_device)
             logger.info(f"Done op")
+
+            if check_program_cache:
+                num_entries = mesh_device.num_program_cache_entries()
+                if i == 0:
+                    num_program_cache_entries_after_first_iter = num_entries
+                else:
+                    assert num_entries == num_program_cache_entries_after_first_iter, (
+                        f"iteration {i} added program cache entries: {num_entries} != "
+                        f"{num_program_cache_entries_after_first_iter}"
+                    )
 
             logger.info(f"Done iteration {i}")
 
@@ -707,4 +734,116 @@ def test_strided_all_gather_minimal_matmul_async_swiglu(
         chunks=chunks,
         read_local_slice_from_input=read_local_slice_from_input,
         fuse_swiglu=True,
+    )
+
+
+# Cache-hit coverage: iterations 2..N reuse the cached program with new tensor and semaphore addresses, and each
+# iteration's outputs are checked against its own golden. The variants cover every address role the override
+# re-applies: the AG input read by the matmul (read_local), bias, ternary inputs, per-chunk outputs, and the
+# per-worker aggregator semaphores (Auto uses the aggregators at the default core grid offset, Off does not).
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "M, K, N, dim, other_dim, num_workers_per_link, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid, shard_weights",
+    [
+        (4096, 4096, 4096, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 2, 2, ttnn.CoreCoord(4, 4), False),
+    ],
+    ids=["fulltest"],
+)
+@pytest.mark.parametrize(
+    "read_local_slice_from_input, use_bias, use_ternary, ternary_b_full, alias_ternary_first_iter, chunks, mm_signal_aggregator_mode",
+    [
+        (True, False, False, False, False, 1, ttnn.MMSignalAggregatorMode.Auto),
+        (False, False, False, False, False, 1, ttnn.MMSignalAggregatorMode.Auto),
+        (True, True, False, False, False, 1, ttnn.MMSignalAggregatorMode.Auto),
+        (True, False, True, False, False, 1, ttnn.MMSignalAggregatorMode.Auto),
+        (True, False, False, False, False, 2, ttnn.MMSignalAggregatorMode.Auto),
+        (True, False, False, False, False, 1, ttnn.MMSignalAggregatorMode.Off),
+        (True, False, True, True, True, 1, ttnn.MMSignalAggregatorMode.Auto),
+    ],
+    ids=["read_local", "no_read_local", "bias", "ternary", "chunks2", "aggregator_off", "ternary_alias_miss"],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag, mem_config_mm",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+def test_strided_all_gather_minimal_matmul_async_program_cache(
+    mesh_device,
+    M,
+    K,
+    N,
+    dim,
+    other_dim,
+    num_links,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    mem_config_mm,
+    all_gather_topology,
+    num_workers_per_link,
+    mm_block_m,
+    mm_block_k,
+    mm_block_n,
+    subblock_h,
+    subblock_w,
+    mm_core_grid,
+    shard_weights,
+    read_local_slice_from_input,
+    use_bias,
+    use_ternary,
+    ternary_b_full,
+    alias_ternary_first_iter,
+    chunks,
+    mm_signal_aggregator_mode,
+):
+    run_strided_all_gather_minimal_matmul_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        M,
+        K,
+        N,
+        dim,
+        other_dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        mem_config_mm,
+        all_gather_topology=all_gather_topology,
+        enable_trace=False,
+        num_iters=3,
+        num_workers_per_link=num_workers_per_link,
+        mm_block_m=mm_block_m,
+        mm_block_k=mm_block_k,
+        mm_block_n=mm_block_n,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        mm_core_grid=mm_core_grid,
+        use_non_fused=False,
+        shard_weights=shard_weights,
+        use_bias=use_bias,
+        use_ternary=use_ternary,
+        ternary_b_full=ternary_b_full,
+        alias_ternary_first_iter=alias_ternary_first_iter,
+        chunks=chunks,
+        read_local_slice_from_input=read_local_slice_from_input,
+        mm_signal_aggregator_mode=mm_signal_aggregator_mode,
+        check_program_cache=True,
     )
