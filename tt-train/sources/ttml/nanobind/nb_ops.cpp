@@ -16,6 +16,7 @@
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
+#include "metal/ops/gated_rmsnorm/gated_rmsnorm.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
 #include "metal/ops/swiglu_packed_bw/swiglu_packed_bw.hpp"
@@ -27,6 +28,7 @@
 #include "ops/distributed/losses.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
+#include "ops/gated_rmsnorm_op.hpp"
 #include "ops/layernorm_op.hpp"
 #include "ops/linear_op.hpp"
 #include "ops/losses.hpp"
@@ -59,6 +61,7 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("distributed");
     m.def_submodule("dropout");
     m.def_submodule("embedding");
+    m.def_submodule("gated_rmsnorm");
     m.def_submodule("layernorm");
     m.def_submodule("linear");
     m.def_submodule("loss");
@@ -589,6 +592,19 @@ void py_module(nb::module_& m) {
     }
 
     {
+        auto py_gated_rmsnorm = static_cast<nb::module_>(m.attr("gated_rmsnorm"));
+        py_gated_rmsnorm.def(
+            "gated_rmsnorm",
+            &ttml::ops::gated_rmsnorm,
+            nb::arg("input"),
+            nb::arg("gate"),
+            nb::arg("gamma"),
+            nb::arg("epsilon") = 1e-6F,
+            "Grouped gated RMSNorm: input, gate [B,1,T,H*V], gamma [1,1,1,V] -> "
+            "rmsnorm over each V-wide head * gamma * silu(gate). Skips dL/dgamma when gamma is frozen.");
+    }
+
+    {
         auto py_unary = static_cast<nb::module_>(m.attr("unary"));
         py_unary.def("relu", &ttml::ops::relu, nb::arg("tensor"));
         py_unary.def(
@@ -684,6 +700,25 @@ void py_module(nb::module_& m) {
             nb::arg("preallocated_dL_dpacked") = nb::none(),
             "Backward of swiglu_packed_fw: (packed [gate|up], dL_dh [.., R, I]) -> "
             "dL/dpacked [.., R, 2*I] = [dgate|dup].");
+        py_metal.def(
+            "gated_rmsnorm_fw",
+            &ttml::metal::gated_rmsnorm_fw,
+            nb::arg("input"),
+            nb::arg("gate"),
+            nb::arg("gamma"),
+            nb::arg("epsilon") = 1e-6F,
+            "Grouped gated RMSNorm: input, gate [B,1,T,H*V], gamma [1,1,1,V] -> "
+            "rmsnorm over each V-wide head * gamma * silu(gate), [B,1,T,H*V].");
+        py_metal.def(
+            "gated_rmsnorm_bw",
+            &ttml::metal::gated_rmsnorm_bw,
+            nb::arg("input"),
+            nb::arg("gate"),
+            nb::arg("gamma"),
+            nb::arg("dL_dout"),
+            nb::arg("epsilon") = 1e-6F,
+            nb::arg("compute_dgamma") = true,
+            "Backward of gated_rmsnorm_fw -> (dL/dinput, dL/dgate, dL/dgamma [1,1,1,V] or None).");
     }
 }
 

@@ -62,6 +62,7 @@ set(SOURCES
     ops/cross_entropy_bw_op_test.cpp
     ops/rope_test.cpp
     ops/rmsnorm_op_test.cpp
+    ops/gated_rmsnorm_op_test.cpp
     ops/polynorm_op_test.cpp
     ops/unary_ops_test.cpp
     ops/embedding_op_test.cpp
