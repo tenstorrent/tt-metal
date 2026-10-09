@@ -32,8 +32,19 @@ enum class EdgeCapability : uint8_t {
 enum class ZPortRole : uint8_t {
     NONE,                // no Z port on this chip
     INTERMESH_BOUNDARY,  // crosses a mesh boundary; carries no intramesh routing direction
-    EXPRESS_CHORD,       // a same-mesh Y-axis express chord; an ordinary routing direction
+    EXPRESS_CHORD,       // a same-mesh express chord along the mesh's express axis; an ordinary routing direction
 };
+
+// Which mesh axis a mesh's express chords run along: Y is N/S (mesh dim 0), X is E/W (mesh dim 1).
+// A mesh carries chords on one axis only, so this is mesh-scoped. NONE means no express links.
+enum class ExpressAxis : uint8_t {
+    NONE,
+    Y,
+    X,
+};
+
+// Read the mesh's express axis from its validated express rings.
+ExpressAxis express_axis_of(const ControlPlane& control_plane, MeshId mesh_id);
 
 // Per-direction capabilities for one chip; nullopt means the direction is absent. Indexed in
 // RoutingDirection order (N,E,S,W,Z), not eth_chan_directions order (E,W,N,S,Z). C and NONE are not ports.
@@ -75,9 +86,10 @@ EdgeCapability classify_fabric_edge(
 EdgeCapability classify_fabric_edge(
     const ControlPlane& control_plane, FabricNodeId local, FabricNodeId remote, RoutingDirection direction);
 
-// Which axis a direction belongs to: N/S/Z are Y, E/W are X.
-bool is_y_axis_direction(RoutingDirection direction);
-bool is_x_axis_direction(RoutingDirection direction);
+// Which axis a direction belongs to: N/S are Y, E/W are X, and Z belongs to the axis its chords run
+// along. Without express links Z keeps the Y answer; the callers never ask about an intermesh Z.
+bool is_y_axis_direction(RoutingDirection direction, ExpressAxis express_axis);
+bool is_x_axis_direction(RoutingDirection direction, ExpressAxis express_axis);
 
 // Capability of the edge leaving `local` through `direction`, or nullopt when no neighbor exists
 // there, which means the corresponding producer slot is not wired.
