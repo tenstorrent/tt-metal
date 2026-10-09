@@ -1183,10 +1183,14 @@ class DeepseekV41ForCausalLM:
         for p, tok in need.items():
             n = int(self.book.n[p])
             if n <= 0 or self.m.tap_n.get(p) != n:
+                logger.info(
+                    f"DSV4.1 spec seeding: no valid prefill taps for user {p} (history {n}, taps hold {self.m.tap_n.get(p)}): replay"
+                )
                 return False
             lens[p], first[p] = n, int(tok)
         users = sorted(need)
         if not self.spec.taps_ready(lens, users):
+            logger.info("DSV4.1 spec seeding: the speculative runner has no prefill taps: replay")
             return False
         t0 = time.perf_counter()
         self.spec.seed_from_prefill(lens, first, users)
