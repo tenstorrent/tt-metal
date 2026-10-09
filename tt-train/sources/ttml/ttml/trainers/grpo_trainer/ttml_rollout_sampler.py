@@ -17,7 +17,7 @@ from ttml.models.llama import Llama
 from ttml.models.qwen3 import Qwen3
 from ttml.models.qwen3.kv_cache import KVCache as Qwen3KVCache
 
-from .grpo_trainer import RolloutBatch, RolloutSampler
+from .grpo_trainer import RolloutBatch, RolloutSampler, check_new_weight_version
 
 TILE_SIZE = 32
 
@@ -187,11 +187,9 @@ class TTMLRolloutSampler(RolloutSampler):
     def weight_version(self) -> int:
         return self._weight_version
 
-    def set_weight_version(self, version: int) -> None:
-        """Publish a new theta version. Subsequent :meth:`generate` calls stamp
-        their :class:`RolloutBatch` with this value.
-        """
-        self._weight_version = int(version)
+    def update_weights(self, weights: Any, version: int) -> None:
+        """The sampler shares the trainer's model, so there is nothing to install: only record ``version``."""
+        self._weight_version = check_new_weight_version(self._weight_version, version)
 
     # --------------------------------------------------------------
     # Per-model dispatch: KV cache + forward call signature
