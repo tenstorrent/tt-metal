@@ -3,3 +3,6 @@ weights/
 checkpoints/
 *.safetensors
 *.pth
+
+# Tiny upstream test checkpoint used by the golden tests
+!tests/fixtures/**/*.safetensors

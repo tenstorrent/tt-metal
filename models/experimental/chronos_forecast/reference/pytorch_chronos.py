@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PyTorch Chronos-1 helpers over the amazon-science submodule.
+"""PyTorch Chronos-1 helpers over the pinned chronos-forecasting package.
 
 Chronos-2 golden modules live in ``reference.chronos2`` (verbatim vendor). This
 file keeps the original Chronos tokenizer / pipeline re-exports for the demo.
@@ -9,10 +9,10 @@ file keeps the original Chronos tokenizer / pipeline re-exports for the demo.
 
 from __future__ import annotations
 
-from models.experimental.chronos_forecast.common.chronos_src import ensure_chronos_on_path
+from models.experimental.chronos_forecast.common.chronos_src import require_chronos
 from models.experimental.chronos_forecast.common.configs import ChronosModelConfig
 
-ensure_chronos_on_path()
+require_chronos()
 
 from chronos import (  # noqa: E402
     BaseChronosPipeline,

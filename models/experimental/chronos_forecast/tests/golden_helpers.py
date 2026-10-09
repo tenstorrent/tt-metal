@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import torch
 
-from models.experimental.chronos_forecast.common.chronos_src import CHRONOS_SUBMODULE_ROOT
+from models.experimental.chronos_forecast.common.chronos_src import DUMMY_MODEL_PATH
 from models.experimental.chronos_forecast.reference.chronos2.config import Chronos2CoreConfig
 
-DUMMY_MODEL_PATH = CHRONOS_SUBMODULE_ROOT / "test" / "dummy-chronos2-model"
+__all__ = ["DUMMY_MODEL_PATH", "SEED", "log_golden", "tiny_config"]
+
 SEED = 0
 
 

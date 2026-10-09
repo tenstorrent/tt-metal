@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PyTorch references: vendored Chronos-2 plus Chronos-1 submodule wrappers."""
+"""PyTorch references: vendored Chronos-2 plus Chronos-1 wrappers over the pinned package."""
 
 from models.experimental.chronos_forecast.reference.chronos2 import (
     Chronos2CoreConfig,

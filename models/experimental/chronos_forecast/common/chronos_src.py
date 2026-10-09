@@ -1,27 +1,30 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Locate the vendored amazon-science/chronos-forecasting submodule."""
+"""Pinned upstream amazon-science/chronos-forecasting package and test fixtures."""
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-CHRONOS_SUBMODULE_ROOT = Path(__file__).resolve().parents[1] / "third_party" / "chronos-forecasting"
-CHRONOS_SRC = CHRONOS_SUBMODULE_ROOT / "src"
+CHRONOS_VERSION = "2.3.2"
+DUMMY_MODEL_PATH = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "dummy-chronos2-model"
 
-_INIT_ERROR = (
-    "Chronos submodule not found at {path}. From the tt-metal repo root run:\n"
-    "  git submodule update --init models/experimental/chronos_forecast/third_party/chronos-forecasting"
+_INSTALL_HINT = (
+    "From the tt-metal repo root, with python_env active, run:\n"
+    "  uv pip install -r models/experimental/chronos_forecast/requirements.txt"
 )
 
 
-def ensure_chronos_on_path() -> Path:
-    """Put the submodule `src/` on sys.path so `import chronos` uses the pinned checkout."""
-    if not (CHRONOS_SRC / "chronos" / "__init__.py").is_file():
-        raise FileNotFoundError(_INIT_ERROR.format(path=CHRONOS_SUBMODULE_ROOT))
-    src = str(CHRONOS_SRC)
-    if src not in sys.path:
-        sys.path.insert(0, src)
-    return CHRONOS_SRC
+def require_chronos():
+    """Import the upstream `chronos` package, failing loudly if it is missing or not the pinned version."""
+    try:
+        import chronos
+    except ImportError as e:
+        raise ImportError(f"chronos-forecasting=={CHRONOS_VERSION} is not installed. {_INSTALL_HINT}") from e
+    if chronos.__version__ != CHRONOS_VERSION:
+        raise ImportError(
+            f"chronos-forecasting {chronos.__version__} is installed but the reference is pinned to "
+            f"{CHRONOS_VERSION}. {_INSTALL_HINT}"
+        )
+    return chronos

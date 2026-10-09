@@ -68,9 +68,9 @@ def test_instance_norm_arcsinh_and_inverse():
 
 
 def test_instance_norm_oracle_vs_amazon():
-    from models.experimental.chronos_forecast.common.chronos_src import ensure_chronos_on_path
+    from models.experimental.chronos_forecast.common.chronos_src import require_chronos
 
-    ensure_chronos_on_path()
+    require_chronos()
     from chronos.chronos_bolt import InstanceNorm as UpInstanceNorm
 
     torch.manual_seed(0)
@@ -101,10 +101,10 @@ def test_patch_matches_vendored_reference():
     torch.testing.assert_close(patch(x, patch_size=16, patch_stride=16), ref(x), equal_nan=True, atol=0, rtol=0)
 
 
-def test_patch_oracle_vs_amazon_submodule():
-    from models.experimental.chronos_forecast.common.chronos_src import ensure_chronos_on_path
+def test_patch_oracle_vs_amazon():
+    from models.experimental.chronos_forecast.common.chronos_src import require_chronos
 
-    ensure_chronos_on_path()
+    require_chronos()
     from chronos.chronos_bolt import Patch as UpPatch
 
     torch.manual_seed(0)
@@ -114,11 +114,10 @@ def test_patch_oracle_vs_amazon_submodule():
 
 
 def test_prepare_patched_context_matches_reference_model():
-    from models.experimental.chronos_forecast.common.chronos_src import CHRONOS_SUBMODULE_ROOT
+    from models.experimental.chronos_forecast.common.chronos_src import DUMMY_MODEL_PATH
     from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
 
-    dummy = CHRONOS_SUBMODULE_ROOT / "test" / "dummy-chronos2-model"
-    model = RefModel.from_pretrained(dummy).eval()
+    model = RefModel.from_pretrained(DUMMY_MODEL_PATH).eval()
     torch.manual_seed(0)
     context = torch.randn(2, 32)
     ref_patched, ref_mask, ref_ls = model._prepare_patched_context(context)
@@ -137,11 +136,10 @@ def test_prepare_patched_context_matches_reference_model():
 
 
 def test_prepare_patched_future_matches_reference_model():
-    from models.experimental.chronos_forecast.common.chronos_src import CHRONOS_SUBMODULE_ROOT
+    from models.experimental.chronos_forecast.common.chronos_src import DUMMY_MODEL_PATH
     from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
 
-    dummy = CHRONOS_SUBMODULE_ROOT / "test" / "dummy-chronos2-model"
-    model = RefModel.from_pretrained(dummy).eval()
+    model = RefModel.from_pretrained(DUMMY_MODEL_PATH).eval()
     torch.manual_seed(0)
     context = torch.randn(2, 32)
     _, _, loc_scale = model._prepare_patched_context(context)

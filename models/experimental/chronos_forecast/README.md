@@ -5,23 +5,39 @@
 ## Setup
 
 All commands are run from the tt-metal repo root, with the tt-metal build and
-Python environment active (`ttnn` comes from that build, not PyPI):
+Python environment active (`ttnn` comes from that build, not PyPI).
+
+**Install the requirements before running anything, or every test fails at
+import.** `requirements.txt` installs the upstream `chronos-forecasting==2.3.2`
+package, which the reference code imports and the golden tests compare against.
+Once installed, `import chronos` works from anywhere in the environment, with
+no path to set. The tiny dummy checkpoint the tests load is committed under
+`tests/fixtures/`, so nothing else needs downloading for the tests that use it.
 
 ```bash
 cd "$TT_METAL_HOME"   # or wherever your tt-metal checkout is
 source python_env/bin/activate
-git submodule update --init models/experimental/chronos_forecast/third_party/chronos-forecasting
-pip install -r models/experimental/chronos_forecast/requirements.txt
-pip install -U "huggingface_hub[cli]"
+uv pip install -r models/experimental/chronos_forecast/requirements.txt
+```
+
+Use `uv pip`, not bare `pip`: `python_env` is a uv environment with no `pip` of
+its own, so `pip` can resolve to a different environment and install there.
+If the package is missing or the wrong version, the tests stop with an error
+that prints the command above.
+
+The demo and the real-checkpoint accuracy tests also need the Chronos-2
+weights; tests that need them skip or error without them:
+
+```bash
+uv pip install -U "huggingface_hub[cli]"
 hf download amazon/chronos-2 --local-dir models/experimental/chronos_forecast/weights/chronos-2
 ```
 
-`weights/` is gitignored. The demo and the real-checkpoint accuracy tests need
-the download above; tests that need it skip or error without it. The TTNN
-tests and benchmarks need Blackhole hardware (the paper-shape numbers below
-were measured on p150a cards).
+`weights/` is gitignored. The TTNN tests and benchmarks need Blackhole hardware
+(the paper-shape numbers below were measured on p150a cards).
 
-Pinned Chronos-2 copy: commit `10afa9ebe016e514f9d7dc1aa873f66af57e116b`. See [reference/PROVENANCE.md](reference/PROVENANCE.md).
+Pinned Chronos-2 copy: commit `10afa9ebe016e514f9d7dc1aa873f66af57e116b`, checked
+against the `chronos-forecasting==2.3.2` release. See [reference/PROVENANCE.md](reference/PROVENANCE.md).
 
 
 
@@ -165,6 +181,8 @@ Blackhole Galaxy bring-up:
 
 ## Running the tests
 
+Install the requirements from [Setup](#setup) first; without them the tests
+fail at import.
 
 From the tt-metal repo root:
 

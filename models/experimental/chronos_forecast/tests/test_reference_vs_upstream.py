@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU golden tests: vendored Chronos-2 reference vs amazon-science submodule.
+"""CPU golden tests: vendored Chronos-2 reference vs the pinned chronos-forecasting package.
 
-No Tenstorrent device. Dummy weights stay in the submodule (root gitignore excludes *.bin).
+No Tenstorrent device. Dummy weights are the upstream test checkpoint under tests/fixtures/.
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ import pytest
 import torch
 
 from models.experimental.chronos_forecast.common.chronos_src import (
-    CHRONOS_SUBMODULE_ROOT,
-    ensure_chronos_on_path,
+    DUMMY_MODEL_PATH,
+    require_chronos,
 )
 from models.experimental.chronos_forecast.reference.chronos2 import model as ref_model_module
 from models.experimental.chronos_forecast.reference.chronos2.config import Chronos2CoreConfig as RefConfig
@@ -49,7 +49,7 @@ from models.experimental.chronos_forecast.reference.chronos2.model import Chrono
 from models.experimental.chronos_forecast.reference.chronos_bolt_ops import InstanceNorm as RefInstanceNorm
 from models.experimental.chronos_forecast.reference.chronos_bolt_ops import Patch as RefPatch
 
-ensure_chronos_on_path()
+require_chronos()
 
 from chronos.chronos2.config import Chronos2CoreConfig as UpConfig  # noqa: E402
 from chronos.chronos2.layers import MHA as UpMHA  # noqa: E402
@@ -69,7 +69,6 @@ from chronos.chronos_bolt import Patch as UpPatch  # noqa: E402
 SEED = 0
 B, S = 2, 8
 PATCH_SIZE = 16
-DUMMY_MODEL_PATH = CHRONOS_SUBMODULE_ROOT / "test" / "dummy-chronos2-model"
 REAL_WEIGHTS_PATH = Path(__file__).resolve().parents[1] / "weights" / "chronos-2"
 REF_MODEL_FILE = Path(ref_model_module.__file__).resolve()
 
@@ -219,7 +218,7 @@ def test_residual_block():
 
 
 def test_input_patch_embedding_weights():
-    """Lock the reference model's input_patch_embedding ResidualBlock to the submodule."""
+    """Lock the reference model's input_patch_embedding ResidualBlock to upstream."""
     assert (DUMMY_MODEL_PATH / "config.json").is_file()
     up = UpModel.from_pretrained(DUMMY_MODEL_PATH).eval()
     ref = RefModel.from_pretrained(DUMMY_MODEL_PATH).eval()
@@ -298,7 +297,7 @@ def test_model_forward():
 
 
 def test_model_forward_pretrained():
-    """Accuracy lock: vendored Chronos2Model vs submodule on amazon/chronos-2 weights."""
+    """Accuracy lock: vendored Chronos2Model vs upstream on amazon/chronos-2 weights."""
     if not (REAL_WEIGHTS_PATH / "model.safetensors").is_file():
         pytest.skip(
             f"Missing {REAL_WEIGHTS_PATH}. Download with: "

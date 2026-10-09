@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU smoke tests: submodule is present and the Amazon Chronos package imports."""
+"""CPU smoke tests: the pinned Amazon Chronos package imports and the dummy fixture is present."""
 
 import torch
 
-from models.experimental.chronos_forecast.common.chronos_src import CHRONOS_SRC, ensure_chronos_on_path
+from models.experimental.chronos_forecast.common.chronos_src import (
+    CHRONOS_VERSION,
+    DUMMY_MODEL_PATH,
+    require_chronos,
+)
 from models.experimental.chronos_forecast.common.configs import ChronosModelConfig
 from models.experimental.chronos_forecast.reference.pytorch_chronos import (
     ChronosConfig,
@@ -14,16 +18,15 @@ from models.experimental.chronos_forecast.reference.pytorch_chronos import (
 )
 
 
-def test_submodule_src_is_checked_out():
-    ensure_chronos_on_path()
-    assert (CHRONOS_SRC / "chronos" / "__init__.py").is_file()
+def test_dummy_checkpoint_fixture_is_present():
+    assert (DUMMY_MODEL_PATH / "config.json").is_file()
+    assert (DUMMY_MODEL_PATH / "model.safetensors").is_file()
 
 
-def test_chronos_package_imports_from_submodule():
-    ensure_chronos_on_path()
-    import chronos
+def test_chronos_package_is_pinned_version():
+    chronos = require_chronos()
 
-    assert chronos.__file__.startswith(str(CHRONOS_SRC))
+    assert chronos.__version__ == CHRONOS_VERSION
     assert hasattr(chronos, "ChronosPipeline")
     assert hasattr(chronos, "ChronosBoltPipeline")
     assert hasattr(chronos, "Chronos2Pipeline")

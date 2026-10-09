@@ -1,18 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared configs and submodule helpers for Chronos forecast."""
+"""Shared configs and upstream-package helpers for Chronos forecast."""
 
 from models.experimental.chronos_forecast.common.chronos_src import (
-    CHRONOS_SRC,
-    CHRONOS_SUBMODULE_ROOT,
-    ensure_chronos_on_path,
+    CHRONOS_VERSION,
+    DUMMY_MODEL_PATH,
+    require_chronos,
 )
 from models.experimental.chronos_forecast.common.configs import ChronosModelConfig
 
 __all__ = [
-    "CHRONOS_SRC",
-    "CHRONOS_SUBMODULE_ROOT",
+    "CHRONOS_VERSION",
     "ChronosModelConfig",
-    "ensure_chronos_on_path",
+    "DUMMY_MODEL_PATH",
+    "require_chronos",
 ]
