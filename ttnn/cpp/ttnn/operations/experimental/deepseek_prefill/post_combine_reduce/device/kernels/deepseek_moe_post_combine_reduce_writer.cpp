@@ -9,6 +9,7 @@ constexpr uint32_t cb_weights = tt::CBIndex::c_1;
 constexpr uint32_t cb_dispatch_table = tt::CBIndex::c_2;
 constexpr uint32_t cb_indices = tt::CBIndex::c_3;
 constexpr uint32_t cb_output = tt::CBIndex::c_16;
+constexpr uint32_t cb_local_mask = tt::CBIndex::c_4;  // per-chunk slot mask for the reader (see reader)
 
 // Fixed CT arg layout for both paths. The dispatch_table / indices metadata
 // and accessor args are always emitted by the program factory; when the
@@ -99,6 +100,26 @@ void kernel_main() {
             // Indices stay as uint16 in the CB — the compute kernel reads them
             // directly via read_tile_value_uint16.
             cb_push_back(cb_indices, TOKENS_PER_CHUNK);
+
+            // Slot mask for the reader, with the compute's skip rule: local slots are read; a token with no local
+            // expert gets zeros in its last slot (the accumulator-init multiply); every other slot is skipped.
+            cb_reserve_back(cb_local_mask, 1);
+            volatile tt_l1_ptr uint8_t* mask = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(get_write_ptr(cb_local_mask));
+            tt_l1_ptr int32_t* dt = reinterpret_cast<tt_l1_ptr int32_t*>(dispatch_table_write_addr);
+            for (uint32_t t = 0; t < TOKENS_PER_CHUNK; ++t) {
+                tt_l1_ptr uint16_t* ti =
+                    reinterpret_cast<tt_l1_ptr uint16_t*>(indices_write_addr + t * indices_aligned_page_size);
+                bool any = false;
+                for (uint32_t k = 0; k < num_experts; ++k) {
+                    const bool local = dt[ti[k]] != -1;
+                    mask[t * num_experts + k] = local ? 1 : 0;
+                    any = any || local;
+                }
+                if (!any) {
+                    mask[t * num_experts + num_experts - 1] = 2;
+                }
+            }
+            cb_push_back(cb_local_mask, 1);
         }
 
         // Phase 1: Stream one weight per expert per token for this chunk

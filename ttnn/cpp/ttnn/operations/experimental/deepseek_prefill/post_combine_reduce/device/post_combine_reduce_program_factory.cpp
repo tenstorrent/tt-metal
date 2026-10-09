@@ -6,6 +6,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -155,6 +156,17 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
             }}},
         });
 
+        // c_4: per-chunk (token, expert slot) byte mask, writer -> reader: the reader reads only local slots.
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = 2 * tt::round_up(TOKENS_PER_CHUNK * num_experts, 32u),
+            .core_ranges = core_range_set,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
+                .data_format = tt::DataFormat::UInt8,
+                .page_size = tt::round_up(TOKENS_PER_CHUNK * num_experts, 32u),
+            }}},
+        });
+
         // c_3: Indices scratch — loaded one chunk at a time (reused per chunk).
         indices_page_size_val = get_page_size(indices);
         indices_aligned_page_size = get_aligned_page_size(indices);
@@ -202,11 +214,11 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     auto* dispatch_table_buffer = use_dispatch_table_skip ? dispatch_table_opt->buffer() : nullptr;
 
     // Reader compile-time args: num_experts, emb_dim_cb_tiles, emb_dim_bytes, combine accessor.
-    // Reader does not need to know about expert-skip; that logic lives in compute + writer.
     std::vector<uint32_t> reader_compile_time_args = {
         num_experts,
         emb_dim_cb_tiles,
         emb_dim_bytes,
+        static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0),  // read only local slots (writer's mask)
     };
     tt::tt_metal::TensorAccessorArgs(combine_buffer).append_to(reader_compile_time_args);
 

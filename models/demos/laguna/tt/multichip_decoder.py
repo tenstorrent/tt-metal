@@ -926,7 +926,9 @@ class MultichipDecoder(OptimizedDecoder):
                     num_links=dc_links,
                     topology=ttnn.Topology.Linear,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    init_zeros=True,
+                    # post_combine_reduce reads only local slots (zeros for a token with none), so the [T, K, H]
+                    # combine output needs no zero fill (TT_LAGUNA_COMBINE_ZEROS=1 restores it)
+                    init_zeros=os.environ.get("TT_LAGUNA_COMBINE_ZEROS", "0") == "1",
                 ),
                 "max_dispatch_rows": max_dispatch_rows,
             }
