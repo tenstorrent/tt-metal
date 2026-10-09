@@ -1208,10 +1208,10 @@ void ReadMeshDeviceProfilerResults(
                 profiler.setLastFDReadAsDone();
             }
         }
+    }
 
-        for (uint8_t cq_id = 0; cq_id < mesh_device.num_hw_cqs(); ++cq_id) {
-            mesh_device.mesh_command_queue(cq_id).finish();
-        }
+    for (uint8_t cq_id = 0; cq_id < mesh_device.num_hw_cqs(); ++cq_id) {
+        mesh_device.mesh_command_queue(cq_id).finish();
     }
 
     // At this point the kernels are done executing
