@@ -23,7 +23,7 @@ MODEL_DIR = Path(__file__).resolve().parents[1]
 
 
 def prompt_tokens(tokenizer, length):
-    text = "\n".join(path.read_text(errors="ignore") for path in sorted((MODEL_DIR / "doc").rglob("*.md"))[:200])
+    text = (MODEL_DIR / "README.md").read_text()
     base = tokenizer.encode(text)
     reps = -(-length // len(base))
     return (base * reps)[:length]
