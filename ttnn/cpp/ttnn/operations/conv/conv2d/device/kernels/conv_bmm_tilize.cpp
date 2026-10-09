@@ -486,7 +486,7 @@ void kernel_main() {
                         }
 
                         uint32_t start_dst_index = 0;
-                        pack_block_mop(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+                        pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
 
                         tile_regs_release();
                         curr_out_dfb.push_back(out_subblock_num_tiles);
