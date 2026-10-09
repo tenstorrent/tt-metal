@@ -71,6 +71,18 @@ all-gather → ×16 ; matmul from `embed_tokens` output → reshape [B,35,256] �
   hang is about replay-vs-LTX coexistence, not in-trace CCLs; measure standalone
   first (`metal-galaxy-e2b-timing.sh`), LTX integration stays blocked on the bug
 
+## Survey other Gemma4 implementations (required)
+
+- 55 tok/s greedy is slow for a whole Galaxy
+- E2B is 2B params; device step ~11 ms is high
+- Multiple teams contribute Gemma4 code to tt-metal
+- Find single-Galaxy Gemma4 runs outside `models/demos/gemma4`
+- Start points: `models/tt_transformers`, demo/test yamls, perf dashboards
+- List their optimizations: sampling, CCL, layout, trace scope, batching
+- Known waste here: rows 1–3 duplicate compute (DP unused, batch 1)
+- Compare per-step device time, not tok/s alone
+- Adopt what applies; note what does not and why
+
 ## Environment gotchas (cost us time; don't rediscover)
 
 - Container `$HOME` is node-local; caches go under `/data/$USER/cache/`
