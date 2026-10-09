@@ -503,8 +503,7 @@ inline constexpr __attribute__((always_inline)) std::uint32_t stall_operation(co
 template <StallTarget Targets, StallCondition Conditions>
 inline __attribute__((always_inline)) void stall()
 {
-    (void)stall_operation<Targets, Conditions>();
-    TTI_STALLWAIT(hal::to_underlying(Targets), hal::to_underlying(Conditions));
+    TTI_INSN((stall_operation<Targets, Conditions>()));
 }
 
 /** @brief Install a runtime STALLWAIT through the Tensix instruction buffer. */
