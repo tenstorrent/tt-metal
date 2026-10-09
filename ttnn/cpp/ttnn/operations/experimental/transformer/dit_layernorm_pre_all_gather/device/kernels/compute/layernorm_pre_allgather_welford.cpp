@@ -28,7 +28,14 @@ void kernel_main() {
     constexpr uint32_t block_size = get_compile_time_arg_val(2);
 
     // True iff the factory flagged cb_inp (c_0) UnpackToDestFp32 (FP32 input + fp32_dest_acc_en).
-    constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
+    [[maybe_unused]] constexpr bool welford_unpack_fp32_active =
+        get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
+#ifdef ARCH_BLACKHOLE
+    // The Blackhole Welford record (replay slots 0 to 15) and the 32-bit transpose record (16 to 31) are disjoint.
+    constexpr bool welford_rerecord_per_tile = false;
+#else
+    constexpr bool welford_rerecord_per_tile = welford_unpack_fp32_active;
+#endif
 
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
@@ -71,11 +78,11 @@ void kernel_main() {
             cb_wait_front(cb_inp, block_size);
             uint32_t r;
             for (r = 0; r < block_size && wt + r < Wt - 1; r++) {
-                if constexpr (welford_unpack_fp32_active) {
+                if constexpr (welford_rerecord_per_tile) {
                     transpose_init(cb_inp);
                 }
                 transpose_tile(cb_inp, r, dst0);
-                if constexpr (welford_unpack_fp32_active) {
+                if constexpr (welford_rerecord_per_tile) {
                     welford_init<WelfordInitMode::PreserveStats>();
                 }
                 welford_update<W>(dst0, start_N, *p_reciprocals);
@@ -83,11 +90,11 @@ void kernel_main() {
             }
             if (wt + r == Wt - 1) {
                 // This block contains the last tile
-                if constexpr (welford_unpack_fp32_active) {
+                if constexpr (welford_rerecord_per_tile) {
                     transpose_init(cb_inp);
                 }
                 transpose_tile(cb_inp, r, dst0);
-                if constexpr (welford_unpack_fp32_active) {
+                if constexpr (welford_rerecord_per_tile) {
                     welford_init<WelfordInitMode::PreserveStats>();
                 }
                 welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
