@@ -102,9 +102,6 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
         TT_FATAL(
             attrs.output_per_token_state,
             "fused_recurrent_gated_delta_rule: initial_state_block_idx requires output_per_token_state");
-        TT_FATAL(
-            in.initial_state.has_value(),
-            "fused_recurrent_gated_delta_rule: initial_state_block_idx requires initial_state (the ring)");
         const Tensor& idx = *in.initial_state_block_idx;
         TT_FATAL(
             idx.storage_type() == StorageType::DEVICE && idx.buffer() != nullptr,
@@ -139,6 +136,10 @@ FusedRecurrentGatedDeltaRuleDeviceOperation::compute_output_specs(
     // o: [BH*T, 1, V]  (one row per (head, token); host folds to [B,T,HV,V]).
     ttnn::Shape o_shape({attrs.BH * attrs.T, 1, attrs.val_dim});
     if (in.initial_state_block_idx.has_value()) {
+        // create_output_tensors runs before validate_on_program_cache_miss, so check before dereferencing.
+        TT_FATAL(
+            in.initial_state.has_value(),
+            "fused_recurrent_gated_delta_rule: initial_state_block_idx requires initial_state (the ring)");
         return {tt::tt_metal::TensorSpec(o_shape, layout), in.initial_state->tensor_spec()};
     }
     // state: per-token [BH*T, K, V] for verify slots, else final [BH, K, V].

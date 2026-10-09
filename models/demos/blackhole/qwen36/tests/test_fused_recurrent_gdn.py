@@ -559,3 +559,28 @@ def test_fused_verify_ring_select(mesh_device, B, HV, T):
     oB2, ringB2 = run_window_b()
     assert torch.equal(oB, oB2), "ring mode output is not deterministic across identical runs"
     assert torch.equal(ringB, ringB2), "ring mode state is not deterministic across identical runs"
+
+
+@_needs_op
+@torch.no_grad()
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_fused_verify_ring_requires_initial_state(mesh_device, expect_error):
+    """Ring mode without a ring raises a TT_FATAL instead of dereferencing the missing initial_state."""
+    B, HV, T = 1, 8, 4
+    q, k, v, beta, g = make_gdn_inputs(T=T, H=HV, Dk=DK, Dv=DV, B=B, seed=7)
+    q_tt, k_tt, v_tt = (_to_dev(mesh_device, x) for x in (q, k, v))
+    beta_tt, g_tt = _to_dev(mesh_device, beta), _to_dev(mesh_device, g)
+    idx_tt = _to_dev_rm_u32(mesh_device, torch.arange(B * HV))
+    with expect_error(RuntimeError, "requires initial_state"):
+        fused_recurrent_gated_delta_rule_ttnn(
+            q_tt,
+            k_tt,
+            v_tt,
+            beta_tt,
+            g_tt,
+            scale=SCALE,
+            initial_state=None,
+            device=mesh_device,
+            output_per_token_state=True,
+            initial_state_block_idx=idx_tt,
+        )

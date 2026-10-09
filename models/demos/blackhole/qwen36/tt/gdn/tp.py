@@ -24,6 +24,13 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet i
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 
 
+def _replace(old, new):
+    """Free ``old`` unless ``new`` is a view of it; returns ``new``."""
+    if not tpc.aliases(new, old):
+        ttnn.deallocate(old)
+    return new
+
+
 def _softplus_add(a, bias):
     """g-gate: softplus(a + bias) fused into one op (softplus as a post-activation on the add)."""
     return ttnn.add(a, bias, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)])
@@ -1707,13 +1714,13 @@ class TPGatedDeltaNet:
         [B, T, Nv]. Consumes every input."""
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         _L1 = ttnn.L1_MEMORY_CONFIG
-        q_all = ttnn.reshape(q_all, (B, T, Nk, Dk))
-        k_all = ttnn.reshape(k_all, (B, T, Nk, Dk))
-        v_all = ttnn.reshape(v_all, (B, T, Nv, Dv))
+        q_all = _replace(q_all, ttnn.reshape(q_all, (B, T, Nk, Dk)))
+        k_all = _replace(k_all, ttnn.reshape(k_all, (B, T, Nk, Dk)))
+        v_all = _replace(v_all, ttnn.reshape(v_all, (B, T, Nv, Dv)))
         rf = Nv // Nk
         if rf != 1:
-            q_all = ttnn.repeat_interleave(q_all, rf, dim=2)
-            k_all = ttnn.repeat_interleave(k_all, rf, dim=2)
+            q_all = _replace(q_all, ttnn.repeat_interleave(q_all, rf, dim=2))
+            k_all = _replace(k_all, ttnn.repeat_interleave(k_all, rf, dim=2))
         a_new = self._rows_to_users(a_all, B, T, Nv)
         b_new = self._rows_to_users(b_all, B, T, Nv)
         beta_all = ttnn.sigmoid(b_new, memory_config=_L1)

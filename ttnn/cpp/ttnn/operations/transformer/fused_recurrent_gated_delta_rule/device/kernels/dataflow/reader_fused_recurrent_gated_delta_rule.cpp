@@ -9,6 +9,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/debug/assert.h"
 #include "api/tensor/noc_traits.h"
 
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_decay = 3, cb_beta = 4, cb_S = 5;
@@ -35,7 +36,7 @@ void kernel_main() {
     const uint32_t d_addr = get_arg_val<uint32_t>(5);
     const uint32_t b_addr = get_arg_val<uint32_t>(6);
     const uint32_t s0_addr = get_arg_val<uint32_t>(7);
-    // rt 8 = block-index buffer address (0 when absent), rt 9 = its aligned page size.
+    // rt 8 = block-index buffer address (0 when absent), rt 9 = its aligned page size, rt 10 = BH.
 
     const uint32_t tb = get_tile_size(cb_q);  // fp32; all tensors share it
     const auto q_acc = TensorAccessor(q_a, q_addr, tb);
@@ -64,12 +65,15 @@ void kernel_main() {
     if constexpr (use_blk_idx) {
         const uint32_t idx_addr = get_arg_val<uint32_t>(8);
         const uint32_t idx_page_bytes = get_arg_val<uint32_t>(9);
+        [[maybe_unused]] const uint32_t BH = get_arg_val<uint32_t>(10);
         CircularBuffer cb_idx(cb_blkidx);
         const CoreLocalMem<volatile uint32_t> idx(cb_idx.get_write_ptr());
         const auto idx_acc = TensorAccessor(idx_a, idx_addr, idx_page_bytes);
         noc.async_read(idx_acc, cb_idx, idx_page_bytes, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
         s0_block = idx[h];
+        // Watcher-checked caller contract: the block belongs to head h and lies inside the ring.
+        ASSERT(s0_block % BH == h && s0_block < T * BH);
     }
     read_into(s0_acc, cb_S, s0_block * kv, kv);
 

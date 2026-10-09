@@ -35,17 +35,6 @@ def _probe_kv_group_write():
 KV_GROUP_WRITE_OK = _probe_kv_group_write()
 
 
-def _aliases(a, b):
-    """Whether two handles name the same device buffer (a metadata re-view, not a copy).
-
-    Returns True when the address is unavailable, so the caller skips the extra free: that leaks a
-    copy at worst and never double-frees an alias."""
-    try:
-        return a.buffer_address() == b.buffer_address()
-    except Exception:  # pragma: no cover
-        return True
-
-
 def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     """Shard one full-attention layer's weights across the mesh."""
     if cache_dir is not None:
@@ -644,7 +633,7 @@ class TPAttention:
         _srcs = []
         for _t in (k_p, v_p):
             _v = ttnn.reshape(_t, _view, _view)
-            _srcs.append((_v, None if _aliases(_v, _t) else _t))
+            _srcs.append((_v, None if tpc.aliases(_v, _t) else _t))
         (k_p, k_orig), (v_p, v_orig) = _srcs
         for j in range(T):
             r0 = j * _tile

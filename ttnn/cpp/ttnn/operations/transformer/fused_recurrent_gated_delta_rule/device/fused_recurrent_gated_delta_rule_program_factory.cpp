@@ -169,7 +169,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     for (uint32_t h = 0; h < BH; h++) {
         const auto& core = head_cores[h];
         reader.emplace_runtime_args(
-            core, {h, T, q_buf, k_buf, v_buf, decay_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes});
+            core, {h, T, q_buf, k_buf, v_buf, decay_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes, BH});
         // BH is needed by the writer to place per-token state token-major (page t*BH + h).
         writer.emplace_runtime_args(core, {h, T, o_buf, st_buf, BH});
         compute.emplace_runtime_args(core, {T});
