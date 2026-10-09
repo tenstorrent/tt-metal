@@ -21,6 +21,13 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
 
+// Blackhole: a post activation (SFPU on DEST) keeps the binary init, so only operand activations rerun it per chunk.
+#if defined(ARCH_BLACKHOLE)
+#define BINARY_NG_POST_REINIT 0
+#else
+#define BINARY_NG_POST_REINIT HAS_ACTIVATIONS(POST)
+#endif
+
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
@@ -45,7 +52,7 @@ void kernel_main() {
     pack_block_contiguous_init(cb_out.get_cb_id());
 #endif
 
-#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_NG_POST_REINIT)
     binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
 #endif
 
@@ -59,7 +66,7 @@ void kernel_main() {
 
         cb_out.reserve_back(n);
 
-#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
+#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_NG_POST_REINIT
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
 #endif
         tile_regs_acquire();
