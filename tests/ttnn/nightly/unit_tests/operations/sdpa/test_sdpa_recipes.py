@@ -24,8 +24,10 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     check_chunked_trace,
     check_concat_heads,
     check_joint,
+    check_joint_empty,
     check_key_range,
     check_legacy_arguments,
+    check_mixed_kv,
     check_mla,
     check_op_selected_blocking,
     check_sink,
@@ -122,6 +124,27 @@ def test_sdpa_recipe_attn_mask(device, variant, mask_kind):
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_joint_sdpa_recipe(device, variant):
     check_joint(device, variant)
+
+
+@pytest.mark.parametrize("variant", VARIANTS)
+def test_joint_sdpa_recipe_empty_joint(device, variant):
+    check_joint_empty(device, variant)
+
+
+@pytest.mark.parametrize(
+    "k_dtype, v_dtype",
+    on_wormhole(
+        named(
+            [(ttnn.bfloat16, ttnn.bfloat8_b), (ttnn.bfloat8_b, ttnn.bfloat16), (ttnn.bfloat16, ttnn.bfloat4_b)],
+            ["kbf16_vbfp8", "kbfp8_vbf16", "kbf16_vbfp4"],
+            sets=True,
+        ),
+        {"kbf16_vbfp8"},
+    ),
+)
+@pytest.mark.parametrize("variant", ["standard", "balanced", "accurate"])
+def test_sdpa_recipe_mixed_kv_dtypes(device, variant, k_dtype, v_dtype):
+    check_mixed_kv(device, variant, k_dtype, v_dtype)
 
 
 @pytest.mark.parametrize("shape", on_wormhole(named(OP_SELECTED_SHAPES), {"self_attention"}))
