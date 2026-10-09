@@ -41,7 +41,14 @@ def tail(vl):
 BASE_SETS = ["wh_designed", "wh_target", "bh_designed"]  # the training sets up to v10
 D = load(BASE_SETS)
 # the training data grew over versions: pick the set list whose row count matches a version's CV predictions
-DS = [D] + [load(BASE_SETS + extra) for extra in (["wh_fresh1", "wh_miss2"], ["wh_fresh1", "wh_miss2", "wh_sharded"])]
+DS = [D] + [
+    load(BASE_SETS + extra)
+    for extra in (
+        ["wh_fresh1", "wh_miss2"],
+        ["wh_fresh1", "wh_miss2", "wh_sharded"],
+        ["wh_fresh1", "wh_miss2", "wh_sharded", "wh_draws"],
+    )
+]
 
 
 def tiebreak(pred, m=0.05):
@@ -186,6 +193,8 @@ commit = {
     "v12": "dbc5f7a",
     "v13": "4d3c6ac",
     "v14": "9b13f5f",
+    "v15": "ecf2d7b",
+    "v16": "6a60fb2",
 }
 rules = rules_cv()
 CVPRED = {
@@ -200,6 +209,8 @@ CVPRED = {
     "v12": np.load("pred_cv_v12.npy"),
     "v13": np.load("pred_cv_v13.npy"),
     "v14": np.load("pred_cv_v14.npy"),
+    "v15": np.load("pred_cv_v15.npy"),
+    "v16": np.load("pred_cv_v16.npy"),
 }
 DEV = {
     "v5_tb": [
@@ -264,7 +275,7 @@ if os.path.exists(f"{W}/device/suite719_v6_timed.csv"):
     DEV["v6"].append(b)
 
 
-FROZEN = {v: f"{W}/fresh/frozen_{v}_" for v in ("v7", "v9", "v10", "v11", "v12", "v13", "v14")}
+FROZEN = {v: f"{W}/fresh/frozen_{v}_" for v in ("v7", "v9", "v10", "v11", "v12", "v13", "v14", "v15")}
 FROZEN["v8"] = f"{W}/fresh/frozen_v8_"
 
 
@@ -512,6 +523,51 @@ RUNS = [
         None,
         None,
     ),
+    (
+        "v15",
+        "fresh/fresh7_timed.csv",
+        "fresh100001",
+        "Fresh random set, draw 7 (seeds 100001-7)",
+        "Out-of-sample: generated and picked after v15 was frozen.",
+        None,
+        "fresh/chain_v15.done",
+    ),
+    (
+        "v15",
+        "fresh/freshbh5_timed.csv",
+        "freshbh101001",
+        "BH fresh random set 5 (seeds 101001-7), bh-30",
+        "Out-of-sample on BH: picked on bh-30 with the frozen v15 BH constants.",
+        None,
+        "fresh/freshbh5.done",
+    ),
+    (
+        "v15",
+        "device/suite719_v15_timed.csv",
+        "suite719",
+        "Real-case suite (719)",
+        "Not in training; the rules were tuned on this suite. v15 picks timed with legacy and rules (new configs in one session).",
+        "usage/usage_v15_wh.json",
+        "miss/post_v15suite.done",
+    ),
+    (
+        "v15",
+        "miss/bh_unseen_v15_timed.csv",
+        "bh-unseen",
+        "BH designed problems never used in training (1021)",
+        BHU,
+        None,
+        None,
+    ),
+    (
+        "v16",
+        "miss/bh_unseen_v16_timed.csv",
+        "bh-unseen",
+        "BH designed problems never used in training (1021)",
+        BHU,
+        None,
+        None,
+    ),
 ]
 for vid, path, sid, label, note, usage, done in RUNS:
     add(vid, f"{W}/{path}", sid, label, note, f"{W}/{usage}" if usage else None, f"{W}/{done}" if done else None)
@@ -552,6 +608,8 @@ for vid, meta in V.items():
         "v12": "abl/v12.json",
         "v13": "abl/v13.json",
         "v14": "abl/v14.json",
+        "v15": "abl/v15.json",
+        "v16": "abl/v16.json",
     }.get(vid)
     if sheet and os.path.exists(sheet):  # written by cv7.py: per-arch value, fold spread, pinned, at bound
         import model7
@@ -572,7 +630,7 @@ for vid, meta in V.items():
         doc["coverage"] = f"data/coverage_{vid}.json"
     json.dump(doc, open(f"{OUT}/{vid}.json", "w"), separators=(",", ":"))
     index.append(dict(id=vid, title=meta["title"], file=f"data/{vid}.json"))
-json.dump(dict(versions=index, latest="v14"), open(f"{OUT}/index.json", "w"), indent=1)
+json.dump(dict(versions=index, latest="v15"), open(f"{OUT}/index.json", "w"), indent=1)
 
 # ---------- CV-only experiments ----------
 EXP = [

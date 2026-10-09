@@ -130,5 +130,27 @@
    "output dtype defaults to in0's when the op names none (as ttnn does): fixes write and spill bytes for bfp8/fp32 inputs",
    "validity rule: bfp8/bfp4 partials without fp32 or L1 accumulation keep <= 32 spill round trips (pcc failures: 1/128 below, 31/32 above 64)"
   ]
+ },
+ "v15": {
+  "title": "v15: draws in training, fitted multicast rate",
+  "model": "model7.py",
+  "constants": "fitted_v7_wh.json / fitted_v7_bh.json at ecf2d7b (frozen as frozen_v15_*.json)",
+  "pick": "as v14 (MultiCore candidate except transposed B; precision rule)",
+  "mechanisms": [
+   "v14",
+   "training adds the judged fresh draws 2-5 (legacy, rules and model picks per problem), which pins lat_write near the read latency and MultiCore costs",
+   "multicast rate fitted, not pinned: 1.0 - 0.0085 x receivers (the microbenchmark's 63-receiver point, 0.43, agrees; its 24-receiver point misled the pin)"
+  ]
+ },
+ "v16": {
+  "title": "v16: DRAM write efficiency (candidate)",
+  "model": "model7.py",
+  "constants": "fitted_v7_wh.json / fitted_v7_bh.json at 6a60fb2",
+  "pick": "as v15",
+  "mechanisms": [
+   "v15",
+   "DRAM writes get their own fitted chip efficiency (WH 0.26, BH 0.53): output-heavy small-K problems stop being predicted 30-40% too fast",
+   "better time prediction (draw 6 median error 9%), slightly worse selection on BH unseen: kept as a candidate"
+  ]
  }
 }
