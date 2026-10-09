@@ -21,6 +21,7 @@
 #include "tt_cluster.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt_stl/fmt.hpp>
 #include "tt_metal.hpp"
@@ -83,9 +84,11 @@ inline void dumpRoutingInfo(IDevice* device, const std::filesystem::path& output
 
     ContextId context_id = extract_context_id(device);
     const Cluster& cluster = tt::tt_metal::MetalContext::instance(context_id).get_cluster();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance(context_id).get_control_plane();
 
     topology_json["mesh_shapes"] = nlohmann::ordered_json::array();
-    for (const auto& [mesh_id, mesh_shape] : tt::tt_fabric::get_physical_mesh_shapes()) {
+    for (const auto mesh_id : control_plane.get_user_physical_mesh_ids()) {
+        const auto& mesh_shape = control_plane.get_physical_mesh_shape(mesh_id);
         topology_json["mesh_shapes"].push_back({
             {"mesh_id", mesh_id.get()},
             {"shape", std::vector(mesh_shape.cbegin(), mesh_shape.cend())},
@@ -96,7 +99,7 @@ inline void dumpRoutingInfo(IDevice* device, const std::filesystem::path& output
 
     topology_json["device_id_to_fabric_node_id"] = nlohmann::ordered_json::object();
     for (auto physical_chip_id : cluster.get_cluster_desc()->get_all_chips()) {
-        auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
         topology_json["device_id_to_fabric_node_id"][std::to_string(physical_chip_id)] = {
             fabric_node_id.mesh_id.get(), fabric_node_id.chip_id};
     }
@@ -106,12 +109,12 @@ inline void dumpRoutingInfo(IDevice* device, const std::filesystem::path& output
     if (tt::tt_metal::MetalContext::instance(context_id).get_fabric_config() != tt_fabric::FabricConfig::DISABLED) {
         topology_json["routing_planes"] = nlohmann::ordered_json::array();
         for (auto physical_chip_id : cluster.get_cluster_desc()->get_all_chips()) {
-            auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+            auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
             auto device_routing_planes = nlohmann::ordered_json::array();
 
             for (const auto& direction : tt::tt_fabric::FabricContext::routing_directions) {
                 auto eth_routing_planes_in_dir =
-                    tt::tt_fabric::get_active_fabric_eth_routing_planes_in_direction(fabric_node_id, direction);
+                    control_plane.get_active_fabric_eth_routing_planes_in_direction(fabric_node_id, direction);
 
                 while (device_routing_planes.size() < eth_routing_planes_in_dir.size()) {
                     device_routing_planes.push_back(
