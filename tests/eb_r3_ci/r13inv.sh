@@ -8,21 +8,27 @@ export EB_R3_LOG_CALLS=/tmp/eb_calls.txt TT_METAL_CACHE=/tmp/r13cache PYTHONPATH
 rm -f $EB_R3_LOG_CALLS; mkdir -p $TT_METAL_CACHE
 run() { echo "##### $(date -u +%T) $*"; echo "EB_RUN $*" >> $EB_R3_LOG_CALLS; timeout -s INT -k 60 ${EB_RUN_LIMIT:-3600} bash -c "$*" > /tmp/r13_last.txt 2>&1; rc=$?; echo "rc=$rc $(grep -E 'passed|failed|error' /tmp/r13_last.txt | tail -1 | cut -c1-200)"; [[ $rc != 0 ]] && grep -E "^E  |Error|error:|Exception" /tmp/r13_last.txt | grep -v "digest\|teardown" | sort | uniq -c | sort -rn | head -12 | cut -c1-300; }
 P="-p eb_census_plugin -p no:cacheprovider"
+# any cached snapshot of a hub model (the models pin revisions that the runner's cache may not hold)
+snap() { local d; for h in ${HF_HOME:-} /mnt/MLPerf/huggingface /mnt/models/huggingface; do d=$(ls -d $h/hub/models--$1/snapshots/* 2>/dev/null | head -1); [[ -n $d ]] && { echo $d; return; }; done; }
+diag() { echo "##### diag: $(env | grep -i -E '^hf_|huggingface' | tr '\n' ' ')"; ls /mnt 2>&1 | head; for h in /mnt/MLPerf/huggingface/hub /mnt/models/huggingface/hub; do echo "== $h"; ls $h 2>/dev/null | grep -i -E "gemma-4|llama-3.1-8b|qwen3.8|qwen3.6|qwen3-32b" ; done; }
 case $1 in
   qb2gemma)
+    diag
     uv pip install -q -r models/demos/gemma4/requirements.txt > /dev/null 2>&1
-    export HF_HOME=/mnt/MLPerf/huggingface MESH_DEVICE=P300x2 EXTRA_MODELS_DIR=$PWD/models/demos TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
-    unset HF_MODEL; export HF_MODEL=$(python -c 'from models.demos.gemma4_31b_qb2.tt.model import checkpoint_path; print(checkpoint_path())')
+    export MESH_DEVICE=P300x2 EXTRA_MODELS_DIR=$PWD/models/demos TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
+    unset HF_MODEL; export HF_MODEL=$(snap google--gemma-4-31B-it); echo "HF_MODEL=$HF_MODEL"
     run pytest $P --timeout 900 models/demos/gemma4_31b_qb2/tests/test_decoder.py -k "'1025-2 or 1-13'"
     run pytest $P --timeout 900 models/demos/gemma4_31b_qb2/tests/test_chunked_prefill.py
     ;;
   qb2llama)
-    export HF_HOME=/mnt/MLPerf/huggingface TT_LLAMA_TEXT_VER=llama31_8b_qb2 MESH_DEVICE=P300x2
-    export LLAMA_MODEL_PATH=$(python -c 'from models.demos.llama31_8b_qb2.tt.model import checkpoint_path; print(checkpoint_path())')
+    diag
+    export TT_LLAMA_TEXT_VER=llama31_8b_qb2 MESH_DEVICE=P300x2
+    export LLAMA_MODEL_PATH=$(snap meta-llama--Llama-3.1-8B-Instruct); echo "LLAMA_MODEL_PATH=$LLAMA_MODEL_PATH"
     run pytest $P --timeout 300 models/demos/llama31_8b_qb2/tests
     ;;
   qb2qwen38)
-    export HF_HOME=/mnt/MLPerf/huggingface MESH_DEVICE=P300x2
+    diag
+    export MESH_DEVICE=P300x2 MODEL_WEIGHTS_DIR=$(snap Qwen--Qwen3.8-27B); echo "MODEL_WEIGHTS_DIR=$MODEL_WEIGHTS_DIR"
     run pytest $P --timeout 600 models/demos/qwen38_27b_qb2/tests/unit models/demos/qwen38_27b_qb2/tests/test_decode_conv.py
     ;;
   qb2qwen36)
