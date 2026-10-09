@@ -1402,11 +1402,16 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const bool block_pack = block_kernel && !has_post_activations && c_num_tiles_per_shard.value_or(0) >= 16;
     const bool block_unpack_alone = block_kernel && std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) !=
                                                         OpConfig::FpuBinaryOp::MUL;
+    // CI (ci16sw): #58816's block pack for every block section; EB_R3_NO_SWITCH keeps the head's rule and main's pack.
+    const bool eb_no_switch = eb_r3_env("EB_R3_NO_SWITCH");
     if ((block_pack || block_unpack_alone) && !eb_r3_env("EB_R3_NO_BLOCK")) {
         compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
     }
-    if (block_pack && !eb_r3_env("EB_R3_NO_BLOCK")) {
+    if ((block_pack || (block_unpack_alone && !eb_no_switch)) && !eb_r3_env("EB_R3_NO_BLOCK")) {
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
+    }
+    if (eb_no_switch) {
+        compute_kernel_defines["EB_R3_NO_SWITCH"] = "1";
     }
     if (eb_r3_env("EB_R3_PER_TILE")) {
         compute_kernel_defines["EB_R3_PER_TILE"] = "1";
