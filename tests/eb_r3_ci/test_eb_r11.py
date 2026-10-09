@@ -572,7 +572,7 @@ def test_qb2_add(device, cfg):
     ttnn.deallocate(b)
 
 
-QWEN32_GLX = {"qwen32_glx": ttnn.bfloat16, "qwen32_glx_pf": ttnn.bfloat8_b}
+QWEN32_GLX = {"qwen32_glx": ttnn.bfloat16, "qwen32_glx_pf": ttnn.bfloat8_b, "qwen32_glx_bb": ttnn.bfloat8_b}
 
 
 @pytest.mark.parametrize("cfg", list(QWEN32_GLX))
@@ -582,7 +582,9 @@ def test_qwen32_glx_add(device, cfg):
     mc = _qb2_mc(device, cfg)
     torch.manual_seed(1)
     a = ttnn.from_torch(torch.rand(1, 1, 32, 1280) - 0.5, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc)
-    b = ttnn.from_torch(torch.rand(1, 1, 32, 1280) - 0.5, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc)
+    # qwen32_glx_bb: the prefetcher path's :181 and :232 (CI's ci-token-matching run), bfp8_b + bfp8_b into bfp8_b
+    b_dt = ttnn.bfloat8_b if cfg == "qwen32_glx_bb" else ttnn.bfloat16
+    b = ttnn.from_torch(torch.rand(1, 1, 32, 1280) - 0.5, dtype=b_dt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc)
     for _ in range(8):
         ttnn.deallocate(ttnn.add(a, b, memory_config=mc, dtype=QWEN32_GLX[cfg]))
     ttnn.deallocate(a)
