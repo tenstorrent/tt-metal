@@ -384,6 +384,7 @@ def run_distributed_dit_layernorm_batched_affine(
     embedding_dim,
     dtype,
     stats_dtype,
+    outer_dim=1,
 ):
     """
     Test distributed DIT layernorm with batched weight/bias (different affine per batch).
@@ -399,6 +400,7 @@ def run_distributed_dit_layernorm_batched_affine(
         embedding_dim: Hidden dimension
         dtype: Input data type
         stats_dtype: Stats data type
+        outer_dim: Size of dim[0]; the batched weight/bias broadcast over it
     """
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -409,7 +411,7 @@ def run_distributed_dit_layernorm_batched_affine(
 
     torch.manual_seed(1234)
 
-    inp_shape = (1, batch_size, seq_len, embedding_dim)
+    inp_shape = (outer_dim, batch_size, seq_len, embedding_dim)
     torch_input = torch.randn(inp_shape) * 4 - 1
 
     # Create batched weight and bias: shape [batch_size, 1, embedding_dim]
@@ -536,6 +538,21 @@ def test_distributed_dit_layernorm_batched_affine(
         embedding_dim,
         dtype,
         stats_dtype,
+    )
+
+
+@pytest.mark.parametrize("num_simulated_devices", [1, 2], ids=["tp1", "tp2"])
+def test_distributed_dit_layernorm_batched_affine_outer_dim(device, num_simulated_devices, reset_seeds):
+    """Batched [C, 1, W] weight/bias broadcast over dim[0] of an [N, C, H, W] input with N > 1."""
+    run_distributed_dit_layernorm_batched_affine(
+        device,
+        num_simulated_devices,
+        batch_size=3,
+        seq_len=512,
+        embedding_dim=2048,
+        dtype=ttnn.bfloat16,
+        stats_dtype=ttnn.bfloat16,
+        outer_dim=2,
     )
 
 
@@ -767,3 +784,18 @@ def test_dit_layernorm_pre_allgather_fp32_precision(device, offset):
         f"--- MEAN: {'PASSED' if mean_passed else 'FAILED'} ---\n{mean_msg}\n"
         f"--- VARIANCE: {'PASSED' if var_passed else 'FAILED'} ---\n{var_msg}"
     )
+
+
+def test_dit_layernorm_pre_allgather_rejects_bfloat8_b_stats(device, expect_error):
+    """The Welford stats are written through a scratch buffer that only supports bf16/fp32."""
+    shape = (1, 1, 32, 1024)
+    tt_inp = ttnn.from_torch(
+        torch.randn(shape),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    recip_tensor = create_recip_tensor_for_welford(device, shape[-1])
+    with expect_error(RuntimeError, "stats dtype must be BFLOAT16 or FLOAT32"):
+        ttnn.experimental.dit_layernorm_pre_allgather(tt_inp, recip_tensor, dtype=ttnn.bfloat8_b)
