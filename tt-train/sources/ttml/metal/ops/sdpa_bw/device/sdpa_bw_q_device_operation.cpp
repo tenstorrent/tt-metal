@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <ttnn/tensor/tensor_utils.hpp>
 
+#include "metal/common/tensor_validation.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::sdpa_bw::device {
@@ -49,17 +50,14 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
 
     // Validate data formats. The program factory sizes every input CB for BFLOAT16 tiles,
     // so any other dtype would overrun CB pages and silently corrupt gradients.
-    TT_FATAL(
-        grad_output.dtype() == tt::tt_metal::DataType::BFLOAT16 &&
-            tensor_args.attn_output.dtype() == tt::tt_metal::DataType::BFLOAT16 &&
-            query.dtype() == tt::tt_metal::DataType::BFLOAT16 &&
-            key.dtype() == tt::tt_metal::DataType::BFLOAT16 && value.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "All input tensors must be BFLOAT16. Got grad_output={}, attn_output={}, query={}, key={}, value={}",
-        grad_output.dtype(),
-        tensor_args.attn_output.dtype(),
-        query.dtype(),
-        key.dtype(),
-        value.dtype());
+    // Activations and the mask go through TensorAccessor and were never required to be interleaved; only the
+    // intermediates are.
+    const DeviceTensorRequirements any_memory_layout{.memory_layout = std::nullopt};
+    check_device_tensor(grad_output, "SDPABackwardQ", "grad_output", any_memory_layout);
+    check_device_tensor(tensor_args.attn_output, "SDPABackwardQ", "attn_output", any_memory_layout);
+    check_device_tensor(query, "SDPABackwardQ", "query", any_memory_layout);
+    check_device_tensor(key, "SDPABackwardQ", "key", any_memory_layout);
+    check_device_tensor(value, "SDPABackwardQ", "value", any_memory_layout);
 
     // Validate device placement
     TT_FATAL(
@@ -100,18 +98,7 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
     // intermediates — only sharded layouts are unsupported.
     const auto& intermediates = tensor_args.intermediates;
     TT_FATAL(intermediates.device() == query.device(), "intermediates must be on the same device as query");
-    TT_FATAL(
-        intermediates.layout() == tt::tt_metal::Layout::TILE,
-        "intermediates must have TILE layout, got {}",
-        intermediates.layout());
-    TT_FATAL(
-        intermediates.dtype() == tt::tt_metal::DataType::FLOAT32,
-        "intermediates must be FLOAT32, got {}",
-        intermediates.dtype());
-    TT_FATAL(
-        intermediates.buffer() != nullptr &&
-            intermediates.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        "intermediates must be interleaved");
+    check_device_tensor(intermediates, "SDPABackwardQ", "intermediates", {.dtypes = {tt::tt_metal::DataType::FLOAT32}});
     {
         constexpr uint32_t kIntermediateWidth = 32U;  // one logsumexp tile per query row
         const auto interm_shape = intermediates.logical_shape();
@@ -161,25 +148,10 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
         grad_output_shape,
         value_shape);
 
-    // Validate tensors have tile layout
-    TT_FATAL(
-        grad_output.layout() == tt::tt_metal::Layout::TILE &&
-            tensor_args.attn_output.layout() == tt::tt_metal::Layout::TILE &&
-            query.layout() == tt::tt_metal::Layout::TILE && key.layout() == tt::tt_metal::Layout::TILE &&
-            value.layout() == tt::tt_metal::Layout::TILE,
-        "All input tensors must have TILE layout");
-
     // Validate mask shape if provided - must be (1, 1, S, S)
     if (tensor_args.attn_mask.has_value()) {
         const auto& mask = tensor_args.attn_mask.value();
-        TT_FATAL(
-            mask.dtype() == tt::tt_metal::DataType::BFLOAT16,
-            "Attention mask must be BFLOAT16 (mask CB pages are sized for BFLOAT16 tiles), got {}",
-            mask.dtype());
-        TT_FATAL(
-            mask.layout() == tt::tt_metal::Layout::TILE,
-            "Attention mask must have TILE layout, got {}",
-            mask.layout());
+        check_device_tensor(mask, "SDPABackwardQ", "attn_mask", any_memory_layout);
         TT_FATAL(mask.device() == query.device(), "Attention mask must be on the same device as query");
         auto mask_shape = mask.logical_shape();
         auto [mB, mH, mS1, mS2] = mask_shape.to_array_4D();
