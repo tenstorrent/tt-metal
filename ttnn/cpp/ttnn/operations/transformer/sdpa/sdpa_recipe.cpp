@@ -679,21 +679,16 @@ static ProgramDescriptor recipe_program(
     TT_FATAL(!key_range.q_slab_rows || !options.attention_sink, "SDPA recipe Q slabs do not take an attention sink");
     if (program_config) {
         TT_FATAL(!program_config->sub_core_grids.has_value(), "SDPA recipes do not yet support sub_core_grids");
-        TT_FATAL(program_config->max_cores_per_head_batch > 0, "SDPA max_cores_per_head_batch must be positive");
     }
     const uint32_t jobs_per_head = (q_length + q_chunk - 1) / q_chunk;
     const uint32_t k_chunks = (k_length + k_chunk - 1) / k_chunk;
     const uint32_t batch_heads = qs[0] * qs[1];
     const uint32_t grid_cores = grid_size.x * grid_size.y;
-    // Up to one batch/head per core: a K/V-forwarding chain of up to max_cores_per_head_batch cores per head.
+    // Up to one batch/head per core: a K/V-forwarding chain per head spanning its share of the grid.
     // More batch/heads than cores: every Q chunk of every head is one job, split evenly over the grid without
     // chains (a core's jobs may span heads; the reader follows each job's head).
     const bool global_jobs = batch_heads > grid_cores;
-    const uint32_t chain = global_jobs ? 1u
-                                       : std::min<uint32_t>(
-                                             {jobs_per_head,
-                                              grid_cores / batch_heads,
-                                              program_config ? program_config->max_cores_per_head_batch : 16u});
+    const uint32_t chain = global_jobs ? 1u : std::min(jobs_per_head, grid_cores / batch_heads);
     const uint32_t total_jobs = batch_heads * jobs_per_head;
     // Key ranges have no chain: all heads' Q chunks are dealt over the whole grid (recipe_snake_count).
     const uint32_t cores = global_jobs || keyed ? std::min(grid_cores, total_jobs) : chain * batch_heads;
@@ -1279,8 +1274,7 @@ struct SDPARecipeOperation {
                     config->compute_with_storage_grid_size,
                     config->sub_core_grids.has_value(),
                     config->q_chunk_size,
-                    config->k_chunk_size,
-                    config->max_cores_per_head_batch));
+                    config->k_chunk_size));
         }
         for (const auto* tensor :
              {&inputs.joint_q,
