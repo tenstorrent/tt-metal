@@ -49,6 +49,13 @@ tt::umd::RiscType dram_core_reset_riscs(ARCH arch) {
     return arch == ARCH::QUASAR ? tt::umd::RiscType::ALL : tt::umd::RiscType::BRISC;
 }
 
+// At exit, reset only the CCE harts and leave the uncore running, matching the state chippy bring-up leaves.
+// A full reset would also reset the uncore, and then TL1 and the DMRISC remap stay unreachable to the host
+// until another process's CreateDevice releases the uncore again.
+tt::umd::RiscType dram_core_teardown_reset_riscs(ARCH arch) {
+    return arch == ARCH::QUASAR ? tt::umd::RiscType::ALL_DATA_MOVEMENT : tt::umd::RiscType::BRISC;
+}
+
 // Mock devices reuse the on-disk firmware sources of a real arch's package.
 // We only ship sources for Wormhole and Blackhole today; Quasar mock has
 // no `tt-2xx/trisc.cc` etc. installed at the expected path, so calling
@@ -425,13 +432,12 @@ void RiscFirmwareInitializer::assert_inactive_ethernet_cores(tt::ChipId device_i
     }
 }
 
-void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
+void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id, tt::umd::RiscType riscs) {
     bool has_dram_fw = hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM);
     if (has_dram_fw) {
         const auto& soc_d = cluster_.get_soc_desc(device_id);
         for (const auto& virtual_core : soc_d.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
-            cluster_.assert_risc_reset_at_core(
-                tt_cxy_pair(device_id, virtual_core), dram_core_reset_riscs(cluster_.arch()));
+            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), riscs);
         }
     }
 }
@@ -526,7 +532,7 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
     }
 
     assert_tensix_workers_impl(device_id);
-    assert_dram_cores(device_id);
+    assert_dram_cores(device_id, dram_core_reset_riscs(cluster_.arch()));
     assert_dispatch_cores(device_id);
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         assert_inactive_ethernet_cores(device_id);
@@ -540,7 +546,7 @@ void RiscFirmwareInitializer::assert_cores(tt::ChipId device_id) {
         assert_active_ethernet_cores_to_reset(device_id);
     }
     assert_inactive_ethernet_cores(device_id);
-    assert_dram_cores(device_id);
+    assert_dram_cores(device_id, dram_core_teardown_reset_riscs(cluster_.arch()));
     assert_dispatch_cores(device_id);
 }
 
