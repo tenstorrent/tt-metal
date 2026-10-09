@@ -13,13 +13,13 @@
 // DEST_AUTO_LIMIT); include it first. Only compute_streaming primitives are used.
 #include "compute_common.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_msa_common.hpp"  // ctrl record
-
-namespace ctrl = sparse_sdpa_msa::ctrl;
 #include "compute_streaming.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/dataflow/circular_buffer.h"  // CircularBuffer: COMPILE_FOR_TRISC-aware CB lifecycle
 #include <tt-metalium/constants.hpp>       // tt::constants::TILE_HEIGHT
+
+namespace ctrl = sparse_sdpa_msa::ctrl;
 
 // Make in-place packer writes to a held CB visible to the next unpacker read.
 ALWI void pack_to_unpack_sync() {
