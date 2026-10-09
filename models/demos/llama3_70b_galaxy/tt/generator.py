@@ -1658,7 +1658,7 @@ class Generator(WarmupForwardMixin):
             # plus_one updates the transient L1 positions. Preserve that state
             # in DRAM for async device sampling's next step (no host reload).
             positions = ttnn.to_memory_config(inputs[1], ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.copy(positions, backing[1], sub_core_grids=self.model_args.sub_core_grids)
+            PreparedTraceIO.copy_output(positions, backing[1], sub_core_grids=self.model_args.sub_core_grids)
         output = _trace_output_in_dram(output)
         if "output" in prepared:
             return PreparedTraceIO.copy_output(

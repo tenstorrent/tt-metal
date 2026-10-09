@@ -56,9 +56,10 @@ serialized on CQ0; sharing one generator between concurrent requests requires
 external ordering.
 
 Use `ttnn.empty_like(output)` for retained storage, and copy with
-`ttnn.copy(output, retained, sub_core_grids=model_args.sub_core_grids)` while the
-matching model mode is active. Warm that copy before capture. The worker grid
-keeps the copy within Galaxy's active sub-device; its wide-row staging is bounded
-so vocabulary-sized logits fit alongside the GCB. Warm any eager sampling path
+`PreparedTraceIO.copy_output(output, retained, sub_core_grids=model_args.sub_core_grids)`
+while the matching model mode is active. The helper uses a full-range `ttnn.slice`
+to preserve the stored bits. Warm that copy before capture. The worker grid keeps
+the copy within Galaxy's active sub-device; bounded staging lets vocabulary-sized
+logits fit alongside the GCB. Warm any eager sampling path
 used for comparison before capture too: omitting its optional output selects a
 different program-cache entry from traced sampling's explicit feedback output.

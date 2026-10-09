@@ -87,6 +87,16 @@ class PreparedTraceIO:
                 or output.device() != destination.device()
             ):
                 raise ValueError("Trace output spec changed after preparation")
-            kwargs = {} if sub_core_grids is None else {"sub_core_grids": sub_core_grids}
-            ttnn.copy(output, destination, **kwargs)
+            if sub_core_grids is None:
+                ttnn.copy(output, destination)
+            else:
+                # A full-range slice copies bytes without a compute conversion.
+                # Its worker grid and bounded staging fit beside Galaxy's GCB.
+                ttnn.slice(
+                    output,
+                    [0] * len(output.shape),
+                    list(output.shape),
+                    output_tensor=destination,
+                    sub_core_grids=sub_core_grids,
+                )
         return destination

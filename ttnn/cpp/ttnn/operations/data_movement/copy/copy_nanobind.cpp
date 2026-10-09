@@ -28,8 +28,7 @@ std::string get_binary_doc_string(
         R"doc(
         {0}
 
-        Both input tensors must be of equal shape. The optional keyword ``sub_core_grids``
-        restricts the copy to those worker cores (for example, an active sub-device).
+        Both input tensors must be of equal shape.
 
         .. csv-table::
             :header: "Argument", "Description", "Data type", "Valid range", "Required"
@@ -55,11 +54,9 @@ void bind_copy(nb::module_& mod) {
     ttnn::bind_function<"copy">(
         mod,
         doc.c_str(),
-        &ttnn::copy,
+        nb::overload_cast<const ttnn::Tensor&, const ttnn::Tensor&>(&ttnn::copy),
         nb::arg("input_a").noconvert(),
-        nb::arg("input_b").noconvert(),
-        nb::kw_only(),
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("input_b").noconvert());
 }
 
 void bind_assign(nb::module_& mod) {

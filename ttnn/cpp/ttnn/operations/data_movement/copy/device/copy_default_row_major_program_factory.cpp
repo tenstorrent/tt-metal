@@ -45,7 +45,7 @@ constexpr const char* KERNEL_PARALLEL_WRITER =
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::create_program_artifacts(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     const auto& input = tensor_args.input;
@@ -79,18 +79,14 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::c
 
     const std::uint32_t total_logical_rows = input.logical_volume() / input.logical_shape()[-1];
 
-    // Bound staging beside resident sub-device buffers: one input scratchpad
-    // and two output pages use at most 192 KiB with an explicit worker grid.
-    // This cap also applies to each entry in the parallel page path below.
-    const std::uint32_t MAX_SUBBLOCK_SIZE_BYTES = operation_attributes.sub_core_grids.has_value() ? 65536 : 65536 * 4;
+    // Chosen empirically to prevent large row OOM DFB error; also caps the per-unit DFB entry below.
+    constexpr std::uint32_t MAX_SUBBLOCK_SIZE_BYTES = 65536 * 4;
     // Wide, short tensors otherwise assign work by logical row and leave most cores idle (a [1, 3, W]
     // row-major state redistributed into 128-byte ND pages ran on three cores). When there are fewer
     // rows than cores and both endpoint page boundaries share an aligned unit, distribute those units
     // independently across the compute grid instead. Tall tensors keep the per-row path: one unit per
     // NoC transaction would cost them far more round trips than the row split.
-    const std::uint32_t num_compute_cores = operation_attributes.sub_core_grids.has_value()
-                                                ? operation_attributes.sub_core_grids->num_cores()
-                                                : compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
+    const std::uint32_t num_compute_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     const std::uint32_t common_page_elements = std::gcd(elements_per_input_page, elements_per_output_page);
     const std::uint32_t common_page_bytes = common_page_elements * bytes_per_element;
     const std::uint32_t required_alignment = std::max(input.buffer()->alignment(), output.buffer()->alignment());
@@ -102,9 +98,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::c
         const std::uint32_t units_per_row = tt::div_up(elements_per_tensor_row, common_page_elements);
         const std::uint32_t total_units = total_logical_rows * units_per_row;
         auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
-            operation_attributes.sub_core_grids.has_value()
-                ? tt::tt_metal::split_work_to_cores(operation_attributes.sub_core_grids.value(), total_units, true)
-                : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_units);
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_units);
         std::vector<CoreCoord> ordered_cores = corerange_to_cores(all_cores, num_cores, true);
 
         const m2::DFBSpecName UNIT{"unit"};
@@ -233,9 +227,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::c
     }
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-        operation_attributes.sub_core_grids.has_value()
-            ? tt::tt_metal::split_work_to_cores(operation_attributes.sub_core_grids.value(), total_logical_rows, true)
-            : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_logical_rows);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_logical_rows);
     std::vector<CoreCoord> ordered_cores = corerange_to_cores(all_cores, num_cores, true);
 
     std::uint32_t input_page_size = input.buffer()->page_size();

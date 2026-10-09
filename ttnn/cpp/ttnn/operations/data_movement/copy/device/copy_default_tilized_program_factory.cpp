@@ -47,7 +47,7 @@ constexpr const char* KERNEL_COMPUTE_ELTWISE_COPY =
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::create_program_artifacts(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     const auto& input = tensor_args.input;
@@ -73,9 +73,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
         total_tiles *= logical_shape[i];
     }
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        operation_attributes.sub_core_grids.has_value()
-            ? tt::tt_metal::split_work_to_cores(operation_attributes.sub_core_grids.value(), total_tiles, true)
-            : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_tiles);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_tiles);
     std::vector<CoreCoord> ordered_cores = corerange_to_cores(all_cores, num_cores, true);
 
     const auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
