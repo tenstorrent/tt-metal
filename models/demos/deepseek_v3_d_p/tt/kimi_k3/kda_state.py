@@ -26,8 +26,9 @@ for the same reason, in its own words: "preserving the addresses the trace baked
 
 The cost is one DRAM-to-DRAM copy of the carry per KDA layer per chunk. At 8x4 with tp=4 the
 recurrent carry is TP-sharded and SP-replicated at 1.50 MiB/chip and the convolution tail is
-54 KiB/chip, so an 18-KDA-layer slice moves ~28 MiB/chip/chunk and holds the same again — against a
-5120-token chunk whose MLA and MoE traffic is orders of magnitude larger.
+54 KiB/chip logically, before bank alignment. Commit still copies these carries and exports bound
+slabs. Request starts no longer allocate a retained zero pair or run a reset copy/export pass:
+the K3 readers supply local zeros at device absolute start zero.
 """
 
 from __future__ import annotations
@@ -39,6 +40,9 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates
 
 class KdaStateCache:
     """One address-stable carry per (user slot, KDA layer).
+
+    Device absolute start zero ignores these carries; commit replaces them in place. Bound slabs
+    belong to a new request only after its first completed commit/export. No host reset is needed.
 
     Keyed by GLOBAL layer index, matching the block's own `layer_idx`, so a pipeline rank holding a
     slice needs no second numbering — unlike the KV cache, whose slots are rank-local because the
@@ -55,11 +59,6 @@ class KdaStateCache:
         self._states: list[dict[int, KdaState]] = [
             {idx: layer.allocate_state(batch_size=1) for idx, layer in self._layers.items()} for _ in range(num_slots)
         ]
-        # Held for `reset`, so zeroing a slot is a copy rather than a reallocation. Reallocating
-        # would move the addresses a capture depends on.
-        self._zeros: dict[int, KdaState] = {
-            idx: layer.allocate_state(batch_size=1) for idx, layer in self._layers.items()
-        }
         # The engine-owned contract copy (`KdaStates`), bound by the runtime before the first forward.
         # While bound, every commit also lands in it, so a migration reader sees each layer's state
         # as of the last committed chunk. Tests that build the transformer directly never bind one.
@@ -122,20 +121,6 @@ class KdaStateCache:
         ttnn.deallocate(new_state.recurrent)
         ttnn.deallocate(new_state.convolution)
 
-    def reset(self, slot: int = 0) -> None:
-        """Zero a slot's carries, ending whatever stream was in flight.
-
-        A carry summarizes the whole prefix behind it, so a new request must not continue from the
-        previous one's. Call this outside a captured region — at `actual_start == 0` — since a trace
-        replays every chunk and would re-zero each time.
-        """
-        zeros = self._zeros
-        for layer_idx, state in self._states[slot].items():
-            ttnn.copy(zeros[layer_idx].recurrent, state.recurrent)
-            ttnn.copy(zeros[layer_idx].convolution, state.convolution)
-            if self._slabs is not None:
-                self._slabs.export_layer(zeros[layer_idx], slot, layer_idx)
-
     def import_layer(self, layer_idx: int, slot: int = 0) -> None:
         """Overwrite one carry from the contract copy (a migrated-in state). Outside any capture."""
         if self._slabs is None:
@@ -147,8 +132,4 @@ class KdaStateCache:
             for state in slot_states.values():
                 ttnn.deallocate(state.recurrent)
                 ttnn.deallocate(state.convolution)
-        for state in self._zeros.values():
-            ttnn.deallocate(state.recurrent)
-            ttnn.deallocate(state.convolution)
         self._states = []
-        self._zeros = {}

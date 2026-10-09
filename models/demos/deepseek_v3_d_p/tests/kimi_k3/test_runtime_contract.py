@@ -42,6 +42,52 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transfor
 _RUNTIME_SRC = Path(__file__).parents[2] / "tt" / "tt_prefill_runtime.py"
 
 
+def test_generic_program_configs_preserve_explicit_state():
+    from models.demos.deepseek_v3_d_p.tt.kda.config import (
+        KDAProgramConfig,
+        KDARecurrenceProgramConfig,
+        kimi_k3_program_config,
+    )
+
+    assert not KDAProgramConfig().zero_initial_state_on_start
+    positional = KDAProgramConfig(KDARecurrenceProgramConfig(), 256)
+    assert positional.qkv_channel_chunk_size == 256 and not positional.zero_initial_state_on_start
+    assert not kimi_k3_program_config(
+        active_seq_len_local=256, tp_ccl_topology=ttnn.Topology.Linear
+    ).zero_initial_state_on_start
+
+
+def test_multislot_trace_guard_remains(expect_error):
+    model = object.__new__(TtKimiK3Transformer)
+    model.kda_states = SimpleNamespace(num_slots=2)
+    with expect_error(NotImplementedError, "slot"):
+        model.set_trace_controller(object())
+
+
+@pytest.mark.parametrize("sp", [1, 2])
+def test_request_policy_rejects_only_direct_execution_before_loading_weights(monkeypatch, sp, expect_error):
+    from models.demos.deepseek_v3_d_p.reference.kda import KDAConfig
+    from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig
+
+    class Mesh:
+        shape = (sp, 8 // sp)
+
+    class ReachedWeightLoading(Exception):
+        pass
+
+    loader = Mock(side_effect=ReachedWeightLoading)
+    monkeypatch.setattr(ttnn, "MeshDevice", Mesh)
+    monkeypatch.setattr("models.demos.deepseek_v3_d_p.tt.kda.kda.load_kda_weights", loader)
+    config = KDAConfig(hidden_size=256, num_heads=8, head_k_dim=32, head_v_dim=32, conv_kernel_size=4, norm_eps=1e-5)
+    # The strategy label is direct; SP>1 still selects grouped execution and must be accepted.
+    with expect_error(ValueError if sp == 1 else ReachedWeightLoading, "requires grouped" if sp == 1 else ""):
+        ttKDA(Mesh(), config, program_config=KDAProgramConfig(zero_initial_state_on_start=True), active_seq_len=256)
+    if sp == 1:
+        loader.assert_not_called()
+    else:
+        loader.assert_called_once()
+
+
 def _call_sites(callee: str, expected: int = 1) -> list[ast.Call]:
     """The calls to `callee` in `TtPrefillRuntime`, read off the source."""
     tree = ast.parse(_RUNTIME_SRC.read_text(encoding="utf-8"))
@@ -158,6 +204,7 @@ def test_kda_construction_passes_global_and_local_geometry(monkeypatch, sp_axis,
     assert kwargs["active_seq_len"] == 2560
     # SP8 owns 320 rows (10 chunks); SP4 owns 640 rows (20 chunks).
     assert kwargs["program_config"].recurrence.summary_group_chunks == (10 if sp_axis == 0 else 20)
+    assert kwargs["program_config"].zero_initial_state_on_start
 
 
 @pytest.mark.parametrize(
@@ -265,7 +312,7 @@ def test_kda_rejects_invalid_host_bounds_before_device_work(monkeypatch, expect_
     gather.assert_not_called()
 
 
-def test_runtime_rejects_unaligned_end_before_reset_or_replay(monkeypatch, expect_error):
+def test_runtime_rejects_unaligned_end_before_dispatch(monkeypatch, expect_error):
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
@@ -276,5 +323,18 @@ def test_runtime_rejects_unaligned_end_before_reset_or_replay(monkeypatch, expec
     # Positional arguments exercise the same binding used by the runner.
     with expect_error(ValueError, "32-token aligned"):
         runtime.prefill_chunk(object(), object(), 0, 0, 33)
-    runtime.model.kda_states.reset.assert_not_called()
     parent_forward.assert_not_called()
+
+
+@pytest.mark.parametrize("start", [0, 128, None])
+def test_runtime_delegates_valid_bounds_without_touching_carries(monkeypatch, start):
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
+
+    runtime = object.__new__(TtKimiK3Runtime)
+    # No model/cache is installed: validation and delegation must need neither at request start.
+    parent_forward = create_autospec(TtPrefillRuntime.prefill_chunk)
+    monkeypatch.setattr(TtPrefillRuntime, "prefill_chunk", parent_forward)
+    args = (object(), object(), 0, start, None if start is None else start + 32)
+    assert runtime.prefill_chunk(*args) is parent_forward.return_value
+    parent_forward.assert_called_once_with(runtime, *args)

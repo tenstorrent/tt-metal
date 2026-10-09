@@ -52,6 +52,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 for zero-offset execution. Its
                 value must be nonnegative and 32-aligned. Keep its address stable
                 and update its contents before replay of a captured trace.
+            zero_initial_state_on_start (bool, optional): Ignore the external request carry
+                when device actual_start is zero. Defaults to False, preserving explicit-state semantics.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
                 sequence. Native mesh coordinates supply each device's rank.
             predecessor_carry (ttnn.Tensor): Three-row history from the
@@ -89,6 +91,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
 
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("sequence_parallel_axis") = 0);
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("zero_initial_state_on_start") = false);
 }
 }  // namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail

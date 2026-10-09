@@ -411,11 +411,6 @@ class TtKimiK3Transformer(LightweightModule):
         sealed = ttnn.slice(packed, [0, 1, 0, 0], [1, planes, tokens, width]) if planes > 1 else None
         return live, sealed
 
-    def reset_streams(self, slot: int = 0) -> None:
-        """Zero the KDA carries for a new request. Call outside any captured region."""
-        if self.kda_states is not None:
-            self.kda_states.reset(slot)
-
     def forward(
         self,
         token_ids,

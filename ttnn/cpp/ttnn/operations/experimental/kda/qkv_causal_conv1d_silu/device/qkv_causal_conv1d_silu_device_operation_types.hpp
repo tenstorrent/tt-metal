@@ -19,6 +19,7 @@ struct QkvCausalConv1dSiluParams {
     uint32_t v_width;
     uint32_t channel_chunk_size;
     uint32_t sequence_parallel_axis;
+    bool zero_initial_state_on_start;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };

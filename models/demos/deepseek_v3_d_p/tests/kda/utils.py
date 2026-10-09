@@ -460,6 +460,7 @@ def build_layer(
     *,
     active_seq_len: int,
     summary_group_chunks: int | None = None,
+    zero_initial_state_on_start: bool = False,
 ) -> ttKDA:
     if summary_group_chunks is None:
         # Explicit small-model configurations preserve the established geometry coverage.
@@ -473,7 +474,11 @@ def build_layer(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         program_config=KDAProgramConfig(
-            recurrence=KDARecurrenceProgramConfig(summary_group_chunks=summary_group_chunks),
+            recurrence=KDARecurrenceProgramConfig(
+                summary_group_chunks=summary_group_chunks,
+                local_scan_strategy="grouped" if zero_initial_state_on_start else "direct",
+            ),
+            zero_initial_state_on_start=zero_initial_state_on_start,
             gated_rms_output_dtype=ttnn.bfloat16,
             output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         ),

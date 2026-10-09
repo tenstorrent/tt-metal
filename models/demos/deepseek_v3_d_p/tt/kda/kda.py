@@ -82,6 +82,10 @@ class ttKDA:
     local rows. Construct another instance for a different physical length;
     weights may be shared. Runtime ``actual_start`` changes chronology within
     the constructed graph without changing grouping or reading device values.
+
+    ``zero_initial_state_on_start`` is a construction policy: when enabled, device absolute
+    start zero ignores external recurrent and convolution state. Generic callers default to
+    explicit-state semantics at every offset. Forward borrows state; its owner commits replacements.
     """
 
     def __init__(
@@ -117,6 +121,9 @@ class ttKDA:
         uses_grouped_scan = (
             self.sequence_parallel_size > 1 or program_config.recurrence.local_scan_strategy == "grouped"
         )
+        if program_config.zero_initial_state_on_start and not uses_grouped_scan:
+            raise ValueError("zero_initial_state_on_start requires grouped KDA execution")
+        self._zero_initial_state_on_start = program_config.zero_initial_state_on_start
         if uses_grouped_scan and config.head_k_dim != config.head_v_dim:
             raise ValueError("grouped KDA affine prefix currently requires K == V")
         self.tp_ccl_topology = program_config.tp_ccl_topology
@@ -184,6 +191,7 @@ class ttKDA:
             heads=self.config.num_heads,
             key_dim=self.config.head_k_dim,
             value_dim=self.config.head_v_dim,
+            zero_initial_state_on_start=self._zero_initial_state_on_start,
         )
         self.output_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -294,6 +302,7 @@ class ttKDA:
             actual_start=actual_start,
             sequence_parallel_axis=self.sequence_parallel_axis,
             predecessor_carry=predecessor,
+            zero_initial_state_on_start=self._zero_initial_state_on_start,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return q, k, v, new_state

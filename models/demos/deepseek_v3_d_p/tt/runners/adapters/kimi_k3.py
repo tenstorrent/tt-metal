@@ -106,6 +106,18 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # scales.
     moe_pcc_threshold = 0.965
 
+    def validate_migration_completion(self, num_layers: int) -> None:
+        """The current completion channel only acks MLA writes.
+
+        A completed final MLA layer fences the earlier KDA exports in the sequential model graph.
+        An earlier MLA ack cannot certify trailing KDA layers, including a KDA-only prefix.
+        """
+        if num_layers < 1 or num_layers - 1 not in self.model_config.mla_layer_ids():
+            raise RuntimeError(
+                "Kimi-K3 migration completion does not cover trailing KDA exports; "
+                "the executed prefix must end at an MLA layer"
+            )
+
     @property
     def config_builder(self) -> Callable:
         """Hand-built config: upstream ``modeling_kimi_linear.py`` raises ImportError without

@@ -31,6 +31,7 @@ std::pair<Tensor, Tensor> chain_affine_transforms(
     const DeviceComputeKernelConfig&,
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
-    uint32_t local_rows);
+    uint32_t local_rows,
+    bool zero_initial_state_on_start);
 
 }  // namespace ttnn::experimental::prim
