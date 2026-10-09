@@ -1664,6 +1664,32 @@ class LagunaForCausalLM:
             L: self.gen._rep(torch.zeros([1, 1, 1, L], dtype=torch.float32), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
             for L in self._prefill_bucket_lens()
         }
+        if self._PACKED_PREFILL:
+            # Packed prefill picks every packed user's last row with ONE [32, T] one-hot matmul, runs the LM head
+            # once on [32, H] and samples all rows with its own batch-32 sampler (not the decode trace's).
+            P = 32
+            st["sel32"] = {
+                T: self.gen._rep(torch.zeros([1, 1, P, T], dtype=torch.float32), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                for T in self._prefill_bucket_lens()
+            }
+            st["last_h32"] = self.gen._rep(
+                torch.zeros([1, 1, P, self.hidden], dtype=torch.float32), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+            st["tok32"] = self.gen._rep(torch.zeros([1, 1, 1, P], dtype=torch.int32), ttnn.uint32)
+            st["k32"] = self.gen._rep(torch.ones([P], dtype=torch.int32), ttnn.uint32)
+            st["p32"] = self.gen._rep(torch.ones([P], dtype=torch.float32), ttnn.bfloat16)
+            st["t32"] = self.gen._rep(torch.ones([P], dtype=torch.float32), ttnn.bfloat16)
+            st["seeds32"] = self.gen._rep(torch.zeros([P], dtype=torch.int32), ttnn.uint32)
+            sampler_cls = type(self.gen._sampler(1))
+            st["sampler32"] = sampler_cls(
+                vocab_size=self.vocab,
+                mesh_device=self.mesh_device,
+                max_batch_size=P,
+                max_top_k=32,
+                allow_force_argmax=True,
+                pad_to_power_of_2=True,
+            )
+            st["sampler32"].load_device_buffers()
         if block_size is not None and int(getattr(self, "D", 0)) in self._STREAMING_PREFILL_TOPOLOGIES:
             self._allocate_prefill_runtime_offsets(st, block_size)
         self._pf = st
@@ -1948,7 +1974,7 @@ class LagunaForCausalLM:
             return toks, None
         return torch.stack(last_logits, dim=0)  # [num_reqs, 1, vocab]
 
-    _PACKED_PREFILL = os.environ.get("TT_LAGUNA_PACKED_PREFILL", "0") == "1"
+    _PACKED_PREFILL = os.environ.get("TT_LAGUNA_PACKED_PREFILL", "1") == "1"
 
     def _packed_prefill_groups(self, ranges, plans):
         """Cold single-chunk requests with the same power-of-two bucket L <= PIPE_CHUNK, packed n at a time
@@ -1958,13 +1984,13 @@ class LagunaForCausalLM:
         if self._spec_mode == "1" or int(getattr(self, "D", 0)) != 4:
             return []
         buckets = set(self._prefill_bucket_lens())
-        pipe = int(self.model.layers[0].PIPE_CHUNK)
+        max_l = self._packed_max_len()
         by_len = {}
         for u, ((start, _end, _len), plan) in enumerate(zip(ranges, plans)):
             if start != 0 or len(plan) != 1 or int(plan[0].relative_start) != 0:
                 continue
             L = int(plan[0].bucket_len)
-            if L > pipe or L & (L - 1):
+            if L > max_l or L not in buckets:
                 continue
             by_len.setdefault(L, []).append(u)
         groups = []
@@ -1979,6 +2005,11 @@ class LagunaForCausalLM:
                 groups.append((users[i : i + n], L))
                 i += n
         return groups
+
+    def _packed_max_len(self):
+        """Longest bucket a packed segment may use: its attention runs single-shot (one SDPA over the segment),
+        which the decoder allows up to PREFILL_SDPA_CHUNK; 4096 keeps n >= 2 within the 8192-row MoE bucket."""
+        return min(4096, int(self.model.layers[0].PREFILL_SDPA_CHUNK))
 
     def _prefill_packed(self, tokens, ranges, plans, page_table, page_tables_per_layer, kv_cache, sampling_params, st):
         """Run the packable cold requests (see _packed_prefill_groups) through one packed forward per group.
@@ -2012,16 +2043,37 @@ class LagunaForCausalLM:
                 ids[j * L : j * L + length] = torch.as_tensor(tokens[u, start:end])
             x = self.model.embed_prefill(self.gen._tokens_to_device(ids))
             h = self.model.prefill_layers_packed(x, kv_cache, fill_pt, L, n)
+            pf = self._prefill_state()
+            onehot = torch.zeros([1, 1, 32, T], dtype=torch.float32)
             for j, u in enumerate(users):
-                shards = self._last_token_shards(h, j * L + int(ranges[u][2]), T)
-                if st is not None:
-                    self._refresh_prefill_sampling(st, sampling_params, u)
-                    st["sampler"].decode_forward(
-                        shards, k=st["k"], p=st["p"], temp=st["t"], seeds=st["seeds"], tt_out_tok=st["tok"]
-                    )
-                    out[u] = self.gen._read_token(st["tok"], 1)[0]
-                else:
-                    out[u] = self.model.logits_to_host(shards).reshape(1, self.vocab)
+                onehot[0, 0, j, j * L + int(ranges[u][2]) - 1] = 1.0
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(onehot, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device)),
+                pf["sel32"][T],
+            )
+            ttnn.matmul(pf["sel32"][T], ttnn.reshape(h, (1, 1, T, self.hidden)), optional_output_tensor=pf["last_h32"])
+            shards = self.model.lm_head_shards_decode(pf["last_h32"])
+            if st is not None:
+                k = torch.ones(32, dtype=torch.int32)
+                pp = torch.ones(32, dtype=torch.float32)
+                t = torch.ones(32, dtype=torch.float32)
+                sd = torch.zeros(32, dtype=torch.int32)
+                for j, u in enumerate(users):
+                    k[j], pp[j], t[j], sd[j] = self._sampling_row_params(sampling_params, u)
+                ttnn.copy_host_to_device_tensor(self.gen._host(k, ttnn.uint32), pf["k32"])
+                ttnn.copy_host_to_device_tensor(self.gen._host(pp, ttnn.bfloat16), pf["p32"])
+                ttnn.copy_host_to_device_tensor(self.gen._host(t, ttnn.bfloat16), pf["t32"])
+                ttnn.copy_host_to_device_tensor(self.gen._host(sd, ttnn.uint32), pf["seeds32"])
+                pf["sampler32"].decode_forward(
+                    shards, k=pf["k32"], p=pf["p32"], temp=pf["t32"], seeds=pf["seeds32"], tt_out_tok=pf["tok32"]
+                )
+                toks = self.gen._read_token(pf["tok32"], n)
+                for j, u in enumerate(users):
+                    out[u] = toks[j]
+            else:
+                logits = self.model.logits_to_host(shards).reshape(-1, self.vocab)
+                for j, u in enumerate(users):
+                    out[u] = logits[j : j + 1]
             self.gen.counters["packed_prefill_users"] = self.gen.counters.get("packed_prefill_users", 0) + n
         return out
 
@@ -3528,9 +3580,8 @@ class LagunaForCausalLM:
         # Packed cold prefill (TT_LAGUNA_PACKED_PREFILL): compile every (L, n) a serving step can pack before the
         # decode trace exists -- n dummy L-token prompts in one prefill_forward call take the packed path.
         if self._PACKED_PREFILL:
-            pipe = int(self.model.layers[0].PIPE_CHUNK)
             buckets = set(self._prefill_bucket_lens())
-            for L in sorted(b for b in buckets if b <= pipe and not b & (b - 1)):
+            for L in sorted(b for b in buckets if b <= self._packed_max_len()):
                 n = 2
                 while n <= int(self.max_batch_size) and n * L <= 8192 and n * L in buckets:
                     nb = (L + bs - 1) // bs
