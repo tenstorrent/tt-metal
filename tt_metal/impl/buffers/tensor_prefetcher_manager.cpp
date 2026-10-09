@@ -833,6 +833,10 @@ void TensorPrefetcherManager::build_and_launch_programs(
 
 void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& config) {
     auto lock = lock_api_function_();
+    TT_FATAL(
+        !kernels_abandoned_,
+        "Tensor prefetcher was force-stopped and left DRISC kernels running. Close the device before starting "
+        "another prefetcher.");
     TT_FATAL(!active_, "A Tensor prefetcher is already active on this mesh device. Call StopTensorPrefetcher first.");
     bool benchmark_enabled = false;
     std::optional<MpfePolicy> mpfe_policy = std::nullopt;
@@ -1697,9 +1701,10 @@ void TensorPrefetcherManager::stop(bool force) {
             host_worker_.join();
         }
         // No sentinel and no WaitProgramDone: the kernels are presumed wedged, and both of those
-        // would block forever. They keep running until the device is closed or reset, which is
-        // why this path is documented as last-resort. Host state is released so the close path
-        // sees an inactive prefetcher and does not try to stop it again (which would hang).
+        // would block forever. They keep running until the device is closed, which destroys this
+        // manager. Host state is released so the close path sees an inactive prefetcher and does
+        // not try to stop it again (which would hang). kernels_abandoned_ stays set so start()
+        // cannot launch a second program onto the L1 those kernels still use.
         sockets_.clear();
         programs_.clear();
         devices_.clear();
@@ -1708,11 +1713,12 @@ void TensorPrefetcherManager::stop(bool force) {
         trace_requests_.clear();
         num_senders_ = 0;
         active_ = false;
+        kernels_abandoned_ = true;
         abort_requested_.store(false);
         log_warning(
             tt::LogMetal,
             "Tensor prefetcher force-stopped: pending requests were dropped and the DRISC kernels "
-            "abandoned. The device must be closed or reset before starting another prefetcher.");
+            "abandoned. Close the device before starting another prefetcher.");
         return;
     }
     // Stop = a zero-filled page broadcast to every device in the mesh. The leading

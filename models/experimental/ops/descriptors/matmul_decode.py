@@ -68,6 +68,10 @@ def matmul_decode(
 ) -> "OpDescriptor":
     """Create a ``matmul_decode`` op descriptor.
 
+    ``all_gather=True`` selects ``AllGatherFullWidth``, which has
+    ``create_workload_descriptor`` and no ``create_descriptor`` binding. Reject it
+    here so the failure is this message rather than a missing Python method.
+
     Args:
         input_tensor_a: Activation, width(K)-sharded L1 (the ``LinearDecode`` input layout).
         input_tensor_b: Weight. Either L1 width-sharded (matches ``partial_width_sharded`` /
@@ -88,8 +92,9 @@ def matmul_decode(
         global_cb: ``ttnn.GlobalCircularBuffer`` supplying ``input_tensor_b`` from the tensor
             prefetcher (see ``LinearDecode``'s ``use_prefetcher`` path).
         global_cb_k_blocks: GCB pages per receiver slab (see ``ttnn.experimental.matmul_decode``).
-        all_gather: Fuse a fabric all-gather of the local N-shard. ``ring_size`` must match
-            the input mesh when this is set.
+        all_gather: Not supported here. The all-gather factory builds a workload descriptor,
+            and this interface only builds program descriptors. Use
+            ``ttnn.experimental.matmul_decode`` for fused all-gather.
         ring_gather: Gather in0 over a pipelined closed ring instead of the two-hub gather.
             Full- and partial-width L1-resident paths only. Defaults to False.
         rms_norm: Fuse distributed RMSNorm of the full output row. Full-width only.
@@ -103,6 +108,13 @@ def matmul_decode(
     Returns:
         OpDescriptor with the matmul_decode program descriptor and IO tensors.
     """
+    if all_gather:
+        raise ValueError(
+            "matmul_decode all_gather is not supported in the descriptor interface; "
+            "AllGatherFullWidth builds a WorkloadDescriptor and has no create_descriptor binding. "
+            "Use ttnn.experimental.matmul_decode for fused all-gather."
+        )
+
     device = input_tensor_a.device()
     M = input_tensor_a.shape[-2]
 

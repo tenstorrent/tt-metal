@@ -116,9 +116,21 @@ void kernel_main() {
     CircularBuffer recv_cb(recv_cb_id);
     CircularBuffer result_cb(result_cb_id);
 
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this re-init from the matmul's
-    // 32x32 in1 geometry to the 1x32 partials should become a targeted reconfig.
-    compute_kernel_hw_startup(partial_cb_id, recv_cb_id, result_cb_id);
+    // Matmul startup programmed SrcA from in1 (32x32, SrcOrder::Reverse) and SrcB from in0
+    // (1x32), and bound the packer to the matmul output. The reduction reads 1x32 partials
+    // (SrcA <- partial, SrcB <- recv) and packs the sum to result. compute_kernel_hw_startup
+    // is call-once; reconfig is the mid-kernel path that rewrites format and tile geometry.
+#ifndef ARCH_QUASAR
+    reconfig_full_operand_srca(partial_cb_id);
+    reconfig_full_operand_srcb(recv_cb_id);
+    pack_reconfig_data_format<true>(result_cb_id);
+#else
+    // Quasar programs operand geometry into the unpack MOP at op init. copy_init and
+    // add_reuse_dest_init below do that for the 1x32 partials. Rebind the packer here;
+    // tile-dimension pack reconfig is not available on Quasar.
+    pack_reconfig_data_format(result_cb_id);
+    pack_init(result_cb_id);
+#endif
 
     partial_cb.wait_front(block_num_tiles);
     result_cb.reserve_back(block_num_tiles);

@@ -172,8 +172,21 @@ void kernel_main() {
 
     reduce_cb.wait_front(reduce_num_tiles);
 
+    // Startup programmed SrcA from in1, which is 32x32, and SrcB from in0. The partials
+    // in reduce_cb use the output tile (1x32 or 8x32 when M is shorter than a full tile).
+    // Format-only reconfig leaves the 32x32 geometry programmed, so the add reads the
+    // wrong faces and the reduced row is garbage. reconfig_full_operand rewrites both
+    // the format and the tile geometry before add_init.
+#ifndef ARCH_QUASAR
+    reconfig_full_operand(reduce_cb_id, reduce_cb_id);
+    pack_reconfig_data_format(out_cb_id);
+#else
+    // Quasar programs operand geometry into the unpack MOP at op init. add_init below
+    // does that for the partials. Rebind the packer here.
     reconfig_data_format(reduce_cb_id, reduce_cb_id);
     pack_reconfig_data_format(out_cb_id);
+    pack_init(out_cb_id);
+#endif
     add_init(reduce_cb_id, reduce_cb_id, true /* acc_to_dest */);
 
     out_cb.reserve_back(block_num_tiles);

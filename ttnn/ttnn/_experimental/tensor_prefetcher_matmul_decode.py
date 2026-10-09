@@ -194,6 +194,8 @@ def make_matmul_decode_gcb(
         A ``ttnn.GlobalCircularBuffer`` to pass as ``global_cb`` to both the prefetch
         request and ``matmul_decode``.
     """
+    if k_blocks < 1:
+        raise ValueError(f"k_blocks must be >= 1, got {k_blocks}")
     if num_pages < 1:
         raise ValueError(f"num_pages must be >= 1, got {num_pages}")
     if k_blocks > 1 and num_pages < 2:

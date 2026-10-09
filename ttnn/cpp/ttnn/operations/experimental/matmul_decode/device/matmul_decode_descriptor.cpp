@@ -5,10 +5,9 @@
 #include "matmul_decode_descriptor.hpp"
 
 #include <memory>
-#include <mutex>
-#include <vector>
 #include <optional>
 
+#include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
 namespace ttnn::prim {
@@ -53,33 +52,24 @@ RealOp::tensor_args_t to_real_tensor_args(const MatmulDecodeInputs& t) {
     return RealOp::tensor_args_t{t.input_tensor_a, t.input_tensor_b, t.rms_norm_gamma};
 }
 
-// Each program factory's create_descriptor() embeds a raw
-// `const GlobalCircularBuffer*` (see CBDescriptor::global_circular_buffer in
-// program_descriptors.hpp) straight into the returned ProgramDescriptor, on the
-// assumption that whatever owns `operation_attributes_t` -- and therefore its
-// by-value `global_cb` -- outlives the descriptor's use. That holds for the normal
-// synchronous device-operation invoke path (operation_attributes_t lives on the
-// calling stack through Program build), but not here: `to_real_attributes(...)`
-// below builds a fresh by-value copy that is a temporary of the single
-// create_descriptor() call, so it would be destroyed before
-// models/experimental/ops/descriptors/matmul_decode.py's cached/deferred
-// ProgramDescriptor is actually dispatched (build()/launch() can run well after
-// this call returns, and fusion.py's build cache can dispatch it many times) --
-// leaving CBDescriptor::global_circular_buffer dangling and segfaulting on launch.
-//
-// Fix: keep one owning copy of operation_attributes_t alive for the process
-// lifetime per create_descriptor() call and hand create_descriptor a reference into
-// that copy instead of a bare temporary. GlobalCircularBuffers are long-lived,
-// model-scoped objects in practice (built once per weight layout, not per call), so
-// the leaked set stays small; this trades a bounded, permanent allocation for
-// correctness without changing the shared ProgramDescriptor/CBDescriptor ownership
-// model.
-const RealOp::operation_attributes_t& keep_attributes_alive(RealOp::operation_attributes_t&& attrs) {
-    static std::mutex mutex;
-    static std::vector<std::unique_ptr<RealOp::operation_attributes_t>> registry;
-    std::lock_guard<std::mutex> lock(mutex);
-    registry.push_back(std::make_unique<RealOp::operation_attributes_t>(std::move(attrs)));
-    return *registry.back();
+// create_descriptor() stores `const GlobalCircularBuffer*` into the ProgramDescriptor.
+// That pointer must stay valid until program build, which fusion can defer and repeat
+// after this call returns. Copy the GCB onto each CB that referenced the temporary
+// attributes. The copy shares the device buffer; the CB's shared_ptr drops it when
+// the last descriptor copy is destroyed.
+void retain_global_circular_buffer(
+    tt::tt_metal::ProgramDescriptor& descriptor, const RealOp::operation_attributes_t& attrs) {
+    if (!attrs.global_cb.has_value()) {
+        return;
+    }
+    const auto* original = std::addressof(*attrs.global_cb);
+    auto owned = std::make_shared<const tt::tt_metal::experimental::GlobalCircularBuffer>(*attrs.global_cb);
+    for (auto& cb : descriptor.cbs) {
+        if (cb.global_circular_buffer == original) {
+            cb.owned_global_circular_buffer = owned;
+            cb.global_circular_buffer = owned.get();
+        }
+    }
 }
 
 }  // namespace
@@ -109,27 +99,33 @@ tt::tt_metal::ProgramDescriptor matmul_decode_full_width_sharded_create_descript
     const MatmulDecodeInputs& tensor_args,
     Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    const auto& real_attrs = keep_attributes_alive(to_real_attributes(operation_attributes));
-    return RealOp::FullWidthSharded::create_descriptor(
+    auto real_attrs = to_real_attributes(operation_attributes);
+    auto descriptor = RealOp::FullWidthSharded::create_descriptor(
         real_attrs, to_real_tensor_args(tensor_args), tensor_return_value, mesh_dispatch_coordinate);
+    retain_global_circular_buffer(descriptor, real_attrs);
+    return descriptor;
 }
 
 tt::tt_metal::ProgramDescriptor matmul_decode_partial_width_sharded_create_descriptor(
     const MatmulDecodeParams& operation_attributes,
     const MatmulDecodeInputs& tensor_args,
     Tensor& tensor_return_value) {
-    const auto& real_attrs = keep_attributes_alive(to_real_attributes(operation_attributes));
-    return RealOp::PartialWidthSharded::create_descriptor(
+    auto real_attrs = to_real_attributes(operation_attributes);
+    auto descriptor = RealOp::PartialWidthSharded::create_descriptor(
         real_attrs, to_real_tensor_args(tensor_args), tensor_return_value);
+    retain_global_circular_buffer(descriptor, real_attrs);
+    return descriptor;
 }
 
 tt::tt_metal::ProgramDescriptor matmul_decode_batched_width_sharded_create_descriptor(
     const MatmulDecodeParams& operation_attributes,
     const MatmulDecodeInputs& tensor_args,
     Tensor& tensor_return_value) {
-    const auto& real_attrs = keep_attributes_alive(to_real_attributes(operation_attributes));
-    return RealOp::BatchedWidthSharded::create_descriptor(
+    auto real_attrs = to_real_attributes(operation_attributes);
+    auto descriptor = RealOp::BatchedWidthSharded::create_descriptor(
         real_attrs, to_real_tensor_args(tensor_args), tensor_return_value);
+    retain_global_circular_buffer(descriptor, real_attrs);
+    return descriptor;
 }
 
 }  // namespace ttnn::prim

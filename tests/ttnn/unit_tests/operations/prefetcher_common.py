@@ -164,8 +164,8 @@ def tensor_prefetcher_session(device):
     the kernel blocks on a full GCB and never reaches it, and the wait hangs and buries the
     error that caused it. The exception path therefore force-stops (abandoning the kernels)
     and skips the device sync, which would hang for the same reason. Forcing leaves DRISC
-    kernels running, so the device has to be closed or reset before another session opens --
-    fine here, because this path only runs while the caller is already unwinding.
+    kernels running, and start() rejects another prefetcher until the device is closed.
+    That is fine here, because this path only runs while the caller is already unwinding.
 
     ``BaseException`` rather than ``Exception``: pytest's own outcomes (``pytest.fail`` /
     ``pytest.skip``) and Ctrl-C do not derive from ``Exception``, and each of them leaves the

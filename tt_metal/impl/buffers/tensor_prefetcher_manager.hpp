@@ -133,8 +133,8 @@ public:
     // the wait never returns. That turns any failure between queueing a request and running its
     // matmul into a hang that buries the original error. A forced stop drops the pending queue,
     // unblocks the host worker, and skips the kernel wait, so the caller's exception propagates.
-    // It leaves DRISC kernels running on the device: only use it when the device is about to be
-    // closed or reset.
+    // It leaves DRISC kernels running on the device. start() then rejects another prefetcher
+    // until this manager is destroyed with the device.
     void stop(bool force = false);
 
     bool is_active() const { return active_; }
@@ -238,6 +238,9 @@ private:
     // Grabs the owning MeshDevice's api_mutex_ for the duration of an API call.
     std::function<std::lock_guard<std::mutex>()> lock_api_function_;
     bool active_ = false;
+    // Set by stop(force) and never cleared. The abandoned DRISC kernels keep using L1 until
+    // the device is closed, which destroys this manager. start() rejects while this is set.
+    bool kernels_abandoned_ = false;
     uint32_t stage_ring_base_ = 0;
     uint32_t stage_ring_size_ = 0;
     uint32_t ring_half_ = 0;

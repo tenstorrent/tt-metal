@@ -223,8 +223,8 @@ void WaitForCqOnTensorPrefetcher(
 //
 // `force` abandons the kernels instead of waiting for them, for error paths where requests were
 // queued that no matmul will consume -- the normal wait cannot complete in that case and hangs.
-// It leaves DRISC kernels running, so only use it when the device is about to be closed or
-// reset. See TensorPrefetcherManager::stop.
+// It leaves DRISC kernels running. StartTensorPrefetcher then fails until the device is closed,
+// which destroys the manager. See TensorPrefetcherManager::stop.
 void StopTensorPrefetcher(distributed::MeshDevice& mesh_device, bool force = false);
 
 }  // namespace experimental
