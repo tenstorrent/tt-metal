@@ -2,8 +2,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
-# Launches the 2-rank GRPO BoolQ training example via tt-run
-# (2 TTML chips + 2 TTT chips on one host).
+# Launches the BoolQ GRPO training example on two tt-run ranks with remote
+# rollouts (2 TTML chips + 2 TTT chips on one host). Both ranks run the same
+# script; the remote_sync config makes rank 1 serve rollouts.
 
 set -euo pipefail
 
@@ -12,11 +13,12 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
     exit 1
 fi
 
-EX_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo_remote_rollout/boolq"
+EX_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo/boolq"
 CONFIG_DIR="split_2_2"
 HOST_FILE=""
 RANK_BINDINGS_FILE=""
 SCRIPT="${EX_DIR}/boolq_training_example.py"
+CONFIG="tt-train/configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml"
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -26,6 +28,8 @@ while [[ "$#" -gt 0 ]]; do
             shift; RANK_BINDINGS_FILE="$1" ;;
         --script)
             shift; SCRIPT="$1" ;;
+        --config)
+            shift; CONFIG="$1" ;;
         *)
             echo "Unknown argument: $1" >&2
             exit 1
@@ -41,7 +45,7 @@ done
 # (tt-run resolves it against cwd, not the rank_bindings file's directory).
 cd "${EX_DIR}"
 
-CMD="python3 ${SCRIPT}"
+CMD="python3 ${SCRIPT} --config ${CONFIG}"
 
 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \
     --rank-binding "${RANK_BINDINGS_FILE}" \

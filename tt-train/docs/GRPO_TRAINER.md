@@ -722,36 +722,25 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 
 ## Examples
 
-Two BoolQ examples ship today. Both train the same policy on the
-same dataset (`google/boolq`, Yes/No correctness reward) with the
-same `GRPOTrainer`; they differ in where token generation runs.
+All GRPO examples live in
+[`tt-train/sources/examples/grpo/`](../sources/examples/grpo/), one
+subdirectory per task (see its [README](../sources/examples/grpo/README.md)).
+Where rollouts are generated is chosen by the config, so the same script runs
+in-process or with remote rollouts.
 
-### Single-process, ttml-only
+### BoolQ Training
 
-- [`tt-train/sources/examples/grpo/`](../sources/examples/grpo/)
-  — **Single-process, ttml-only.** Both the training forward/backward
-  and the rollout token generation run inside the same ttml process on
-  one device mesh. The configs set `rollout_source: "ttml"`, so the trainer
-  loads the ttml policy model and builds a `TTMLRolloutSampler` that generates
-  with that same model. Entry point:
-  [`boolq_training_example.py`](../sources/examples/grpo/boolq_training_example.py)
-  (optional `--config <yaml>`; the model family comes from the config's
-  model yaml).
-  Also ships an accuracy-eval sibling
-  ([`boolq_accuracy_example.py`](../sources/examples/grpo/boolq_accuracy_example.py))
-  and a plotting helper
-  ([`boolq_plot_example.py`](../sources/examples/grpo/boolq_plot_example.py)).
-
-Each task lives in its own subdirectory.
-
-#### BoolQ Training
-
-[`boolq/boolq_training_example.py`](boolq/boolq_training_example.py) — trains
+[`boolq/boolq_training_example.py`](../sources/examples/grpo/boolq/boolq_training_example.py) — trains
 Llama-3.2-1B-Instruct on BoolQ using `GRPOTrainer` with a custom reward
-function, CSV logging via the framework's built-in `GRPOMonitor`, and DDP on 2 devices.
+function and CSV logging via the framework's built-in `GRPOMonitor`. The
+model family comes from the config's model yaml.
+
+In-process (`rollout_source: "ttml"`, `rollout_mode: "in_process"`): the
+trainer generates with a `TTMLRolloutSampler` on its own model.
 
 ```bash
-python3 boolq/boolq_training_example.py
+python3 boolq/boolq_training_example.py \
+    --config tt-train/configs/training_configs/grpo_boolq_llama_1b_1dev.yaml
 ```
 
 To train Qwen3 32B sharded across all 32 galaxy cards with FSDP, pick the Qwen3
@@ -762,23 +751,37 @@ python3 boolq/boolq_training_example.py \
     --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_fsdp.yaml
 ```
 
-#### BoolQ Accuracy Evaluation
+Remote rollouts (`rollout_source: "ttt"`, `rollout_mode: "remote_sync"`): the
+same script on two tt-run ranks, with rank 1 generating through
+`tt-transformers` inside a captured ttnn trace (much faster than ttml decode).
+[`boolq/run_remote_rollout.sh`](../sources/examples/grpo/boolq/run_remote_rollout.sh)
+launches it with
+[`grpo_boolq_llama_1b_remote_rollout.yaml`](../configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml)
+and the rank bindings in `boolq/configurations/`; see
+[Rollout modes](#rollout-modes) and the examples README for adapting it to
+other hardware.
 
-[`boolq/boolq_accuracy_example.py`](boolq/boolq_accuracy_example.py) — evaluates a
+```bash
+./tt-train/sources/examples/grpo/boolq/run_remote_rollout.sh
+```
+
+### BoolQ Accuracy Evaluation
+
+[`boolq/boolq_accuracy_example.py`](../sources/examples/grpo/boolq/boolq_accuracy_example.py) — evaluates a
 model on the BoolQ validation set with greedy decoding (`temperature=0`)
-and writes per-question results to a CSV. Runs on 1 device (p150) with
-`PROMPTS_TO_VALIDATE=20` by default.
+through a `TTMLRolloutSampler`, and writes per-question results to a CSV.
+Runs on 1 device (p150) with `PROMPTS_TO_VALIDATE=20` by default.
 
 ```bash
 python3 boolq/boolq_accuracy_example.py
 ```
 
-To evaluate a fine-tuned checkpoint, change `MODEL_ID` to the directory
-containing `model.safetensors`.
+To evaluate a fine-tuned checkpoint, change `MODEL_ID` to the checkpoint
+directory containing `model.safetensors`.
 
-#### Reverse Text Training
+### Reverse Text Training
 
-[`reverse_text/reverse_text_training_example.py`](reverse_text/reverse_text_training_example.py) —
+[`reverse_text/reverse_text_training_example.py`](../sources/examples/grpo/reverse_text/reverse_text_training_example.py) —
 trains Qwen3-0.6B to reverse text character-by-character on a single p150,
 ported from the prime-rl / verifiers TRL example. Rewards the similarity ratio
 between the text in the `<reversed_text>` tags and the true reversal, and runs a
@@ -788,15 +791,15 @@ greedy eval on a held-out split every step.
 python3 reverse_text/reverse_text_training_example.py
 ```
 
-#### Plotting
+### Plotting
 
-[`boolq/boolq_plot_example.py`](boolq/boolq_plot_example.py) — plots any column of the `grpo_metrics.csv` written by the built-in `GRPOMonitor`.
+[`boolq/boolq_plot_example.py`](../sources/examples/grpo/boolq/boolq_plot_example.py) — plots any column of the `grpo_metrics.csv` written by the built-in `GRPOMonitor`.
 
 ```bash
 python3 boolq/boolq_plot_example.py <output_dir>/grpo_metrics.csv reward_mean
 ```
 
-[`reverse_text/reverse_text_plot_example.py`](reverse_text/reverse_text_plot_example.py) —
+[`reverse_text/reverse_text_plot_example.py`](../sources/examples/grpo/reverse_text/reverse_text_plot_example.py) —
 plots every reverse-text metric (reward, the three eval scores, completion
 length, and the step / generation times) as one grid. With no arguments it picks
 the newest run under `generated/tt-train/grpo_reverse_text_run/` and writes
@@ -805,20 +808,6 @@ the newest run under `generated/tt-train/grpo_reverse_text_run/` and writes
 ```bash
 python3 reverse_text/reverse_text_plot_example.py
 ```
-
-### Two-rank MPI, ttml + tt-transformers
-
-- [`tt-train/sources/examples/grpo_remote_rollout/boolq/`](../sources/examples/grpo_remote_rollout/boolq/)
-  — **Two-rank MPI, ttml + tt-transformers.** Rollout generation is
-  offloaded to a peer rank running `tt-transformers.Transformer`
-  inside a captured ttnn trace (much faster than ttml decode). Rank 0
-  runs the ttml policy and `GRPOTrainer`; rank 1 runs `TTTRolloutSampler`.
-  Its config sets `rollout_source: "ttt"` and `rollout_mode: "remote_sync"`;
-  the script is a plain `GRPOTrainer` script launched on both ranks by
-  [`runner.sh`](../sources/examples/grpo_remote_rollout/boolq/runner.sh).
-
-The single-process examples use `rollout_source: "ttml"` and
-`rollout_mode: "in_process"`.
 
 ---
 
