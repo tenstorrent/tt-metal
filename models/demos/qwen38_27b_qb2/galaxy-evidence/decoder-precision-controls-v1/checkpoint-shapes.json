@@ -1,0 +1,226 @@
+{
+  "recorded_at": "2026-10-09T08:41:15.704212+00:00",
+  "checkpoint": "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+  "config_sha256": "191e0af232104ed8b65258cf3fb2b842e288008baca7633c11b82a1ac7203aab",
+  "index_sha256": "77042094076611b69791a610065f28b7013b8c621795fa86ddccc8bac7d1b9df",
+  "text_config": {
+    "attention_bias": false,
+    "attention_dropout": 0,
+    "attn_output_gate": true,
+    "bos_token_id": 248044,
+    "dtype": "bfloat16",
+    "eos_token_id": 248044,
+    "full_attention_interval": 4,
+    "head_dim": 256,
+    "hidden_act": "silu",
+    "hidden_size": 5120,
+    "initializer_range": 0.02,
+    "intermediate_size": 17408,
+    "layer_types": [
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention",
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention",
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention",
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention",
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention",
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention",
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention",
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention",
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention",
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention",
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention",
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention",
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention",
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention",
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention",
+      "linear_attention",
+      "linear_attention",
+      "linear_attention",
+      "full_attention"
+    ],
+    "linear_conv_kernel_dim": 4,
+    "linear_key_head_dim": 128,
+    "linear_num_key_heads": 16,
+    "linear_num_value_heads": 48,
+    "linear_value_head_dim": 128,
+    "mamba_ssm_dtype": "float32",
+    "max_position_embeddings": 262144,
+    "model_type": "qwen3_5_text",
+    "mtp_num_hidden_layers": 1,
+    "mtp_use_dedicated_embeddings": false,
+    "num_attention_heads": 24,
+    "num_hidden_layers": 64,
+    "num_key_value_heads": 4,
+    "output_gate_type": "swish",
+    "pad_token_id": null,
+    "partial_rotary_factor": 0.25,
+    "rms_norm_eps": 0.000001,
+    "rope_parameters": {
+      "mrope_interleaved": true,
+      "mrope_section": [
+        11,
+        11,
+        10
+      ],
+      "partial_rotary_factor": 0.25,
+      "rope_theta": 10000000,
+      "rope_type": "default"
+    },
+    "tie_word_embeddings": false,
+    "use_cache": true,
+    "vocab_size": 248320
+  },
+  "header_sha256": {
+    "model-00001-of-00018.safetensors": "7bdeb03df566aa804dca2cb48e420908cb1864e5222858ad04918299883287e0",
+    "model-00003-of-00018.safetensors": "26785014f43e18cd545cebad85d003854b94eb64b90079852ba7efeb8041093c",
+    "model-00018-of-00018.safetensors": "2e6b71178b57a98de637fa669dedfaf35cbed1388914ffc93238bddd169eab54"
+  },
+  "selected_shapes": {
+    "lm_head.weight": [
+      248320,
+      5120
+    ],
+    "model.language_model.embed_tokens.weight": [
+      248320,
+      5120
+    ],
+    "model.language_model.layers.0.input_layernorm.weight": [
+      5120
+    ],
+    "model.language_model.layers.0.linear_attn.A_log": [
+      48
+    ],
+    "model.language_model.layers.0.linear_attn.conv1d.weight": [
+      10240,
+      1,
+      4
+    ],
+    "model.language_model.layers.0.linear_attn.dt_bias": [
+      48
+    ],
+    "model.language_model.layers.0.linear_attn.in_proj_a.weight": [
+      48,
+      5120
+    ],
+    "model.language_model.layers.0.linear_attn.in_proj_b.weight": [
+      48,
+      5120
+    ],
+    "model.language_model.layers.0.linear_attn.in_proj_qkv.weight": [
+      10240,
+      5120
+    ],
+    "model.language_model.layers.0.linear_attn.in_proj_z.weight": [
+      6144,
+      5120
+    ],
+    "model.language_model.layers.0.linear_attn.norm.weight": [
+      128
+    ],
+    "model.language_model.layers.0.linear_attn.out_proj.weight": [
+      5120,
+      6144
+    ],
+    "model.language_model.layers.0.mlp.down_proj.weight": [
+      5120,
+      17408
+    ],
+    "model.language_model.layers.0.mlp.gate_proj.weight": [
+      17408,
+      5120
+    ],
+    "model.language_model.layers.0.mlp.up_proj.weight": [
+      17408,
+      5120
+    ],
+    "model.language_model.layers.0.post_attention_layernorm.weight": [
+      5120
+    ],
+    "model.language_model.layers.3.input_layernorm.weight": [
+      5120
+    ],
+    "model.language_model.layers.3.mlp.down_proj.weight": [
+      5120,
+      17408
+    ],
+    "model.language_model.layers.3.mlp.gate_proj.weight": [
+      17408,
+      5120
+    ],
+    "model.language_model.layers.3.mlp.up_proj.weight": [
+      17408,
+      5120
+    ],
+    "model.language_model.layers.3.post_attention_layernorm.weight": [
+      5120
+    ],
+    "model.language_model.layers.3.self_attn.k_norm.weight": [
+      256
+    ],
+    "model.language_model.layers.3.self_attn.k_proj.weight": [
+      1024,
+      5120
+    ],
+    "model.language_model.layers.3.self_attn.o_proj.weight": [
+      5120,
+      6144
+    ],
+    "model.language_model.layers.3.self_attn.q_norm.weight": [
+      256
+    ],
+    "model.language_model.layers.3.self_attn.q_proj.weight": [
+      12288,
+      5120
+    ],
+    "model.language_model.layers.3.self_attn.v_proj.weight": [
+      1024,
+      5120
+    ]
+  },
+  "loaded_tensor_payloads": false,
+  "opened_hardware": false
+}

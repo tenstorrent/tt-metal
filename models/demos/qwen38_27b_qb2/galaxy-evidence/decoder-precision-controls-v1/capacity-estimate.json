@@ -1,0 +1,118 @@
+{
+  "created_at": "2026-10-09T08:40:34.870175+00:00",
+  "scope": "Static per-chip allocation estimate for TP4, 16 slots, unchanged 1050592-token KV pool; not allocator telemetry or admission proof",
+  "soc_bank_map_bytes": 34225520640,
+  "common": {
+    "head_bfp8_two_representations_bytes": 677519360,
+    "embedding_bf16_bytes": 635699200,
+    "rope_bf16_bytes": 67108864,
+    "kv_bfp8_pool_bytes": 9144352768,
+    "recurrent_fp32_base16_plus_bucket16_bytes": 1207959552,
+    "conv_bf16_base16_plus_bucket16_bytes": 23592960,
+    "trace_reservation_bytes": 200000000
+  },
+  "decoder_policies": {
+    "bfloat4_b": {
+      "roles": {
+        "attention": {
+          "interleaved_bytes": 740229120,
+          "dram_sharded_bytes": 802160640,
+          "total_bytes": 1542389760
+        },
+        "output": {
+          "interleaved_bytes": 283115520,
+          "dram_sharded_bytes": 283115520,
+          "total_bytes": 566231040
+        },
+        "gate_up": {
+          "interleaved_bytes": 1604321280,
+          "dram_sharded_bytes": 1698693120,
+          "total_bytes": 3303014400
+        },
+        "down": {
+          "interleaved_bytes": 802160640,
+          "dram_sharded_bytes": 802160640,
+          "total_bytes": 1604321280
+        }
+      },
+      "decoder_projection_bytes": 7015956480,
+      "known_resident_sum_bytes": 18972189184,
+      "remaining_vs_soc_bank_map_bytes": 15253331456
+    },
+    "bfloat8_b": {
+      "roles": {
+        "attention": {
+          "interleaved_bytes": 1398210560,
+          "dram_sharded_bytes": 1515192320,
+          "total_bytes": 2913402880
+        },
+        "output": {
+          "interleaved_bytes": 534773760,
+          "dram_sharded_bytes": 534773760,
+          "total_bytes": 1069547520
+        },
+        "gate_up": {
+          "interleaved_bytes": 3030384640,
+          "dram_sharded_bytes": 3208642560,
+          "total_bytes": 6239027200
+        },
+        "down": {
+          "interleaved_bytes": 1515192320,
+          "dram_sharded_bytes": 1515192320,
+          "total_bytes": 3030384640
+        }
+      },
+      "decoder_projection_bytes": 13252362240,
+      "known_resident_sum_bytes": 25208594944,
+      "remaining_vs_soc_bank_map_bytes": 9016925696
+    }
+  },
+  "matrix_geometries": {
+    "attention": [
+      [
+        48,
+        5120,
+        4160,
+        2
+      ],
+      [
+        16,
+        5120,
+        3584,
+        2
+      ]
+    ],
+    "output": [
+      [
+        64,
+        1536,
+        5120,
+        2
+      ]
+    ],
+    "gate_up": [
+      [
+        64,
+        5120,
+        8704,
+        3
+      ]
+    ],
+    "down": [
+      [
+        64,
+        4352,
+        5120,
+        2
+      ]
+    ]
+  },
+  "excluded": [
+    "small norms, masks and constants",
+    "CCL workspace",
+    "temporary matmul, prefill, sampling and state-packing buffers",
+    "allocator alignment, fragmentation and other runtime reservations"
+  ],
+  "measured_hardware": false,
+  "precision_promoted": false
+}

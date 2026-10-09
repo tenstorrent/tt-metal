@@ -1,0 +1,87 @@
+{
+  "recorded_at": "2026-10-09T08:50:14.810909+00:00",
+  "precision_loader_sha256": "280ea0b2d8cf3bb9221116b092fff3c5bfaac136db881b1a0503fe21e60cc0f6",
+  "hardware_executed": false,
+  "queued": false,
+  "default_changed": false,
+  "controls": [
+    {
+      "path": "config/precision_accurate_decode_hifi2.json",
+      "file_sha256": "6169c63bfac9a8bc19d1e6288c3c72460328401c3aae4145ca328d938b3573db",
+      "effective_policy_fingerprint": "011f237bfce2b0c8e441e6efb96278ac7bdf6e69d1b7e0e3bdfa98760e99dad1",
+      "validated_layers": 64,
+      "differences": {
+        "config_id": {
+          "head_control": "head_bfp8_hifi2_accurate_decode",
+          "candidate": "decoder_bfp4_hifi2_head_bfp8_hifi2_accurate_decode"
+        },
+        "compute_fidelities": {
+          "head_control": {
+            "attention": "LoFi",
+            "output": "LoFi",
+            "gate": "LoFi",
+            "up": "LoFi",
+            "down": "LoFi",
+            "head": "HiFi2"
+          },
+          "candidate": {
+            "attention": "HiFi2",
+            "output": "HiFi2",
+            "gate": "HiFi2",
+            "up": "HiFi2",
+            "down": "HiFi2",
+            "head": "HiFi2"
+          }
+        }
+      }
+    },
+    {
+      "path": "config/precision_accurate_decode_bfp8_all.json",
+      "file_sha256": "468eb9897af338088865ad8d96c813c3a707e2331780ef7d3fdb857e18f10063",
+      "effective_policy_fingerprint": "d12c863525c83159ff13d43170178987679e0c82a5e83799ad5cf3566ec836ea",
+      "validated_layers": 64,
+      "differences": {
+        "config_id": {
+          "head_control": "head_bfp8_hifi2_accurate_decode",
+          "candidate": "decoder_bfp8_hifi2_head_bfp8_hifi2_accurate_decode"
+        },
+        "weight_groups": {
+          "head_control": {
+            "attention": "bfloat4_b",
+            "output": "bfloat4_b",
+            "gate": "bfloat4_b",
+            "up": "bfloat4_b",
+            "down": "bfloat4_b",
+            "head": "bfloat8_b"
+          },
+          "candidate": {
+            "attention": "bfloat8_b",
+            "output": "bfloat8_b",
+            "gate": "bfloat8_b",
+            "up": "bfloat8_b",
+            "down": "bfloat8_b",
+            "head": "bfloat8_b"
+          }
+        },
+        "compute_fidelities": {
+          "head_control": {
+            "attention": "LoFi",
+            "output": "LoFi",
+            "gate": "LoFi",
+            "up": "LoFi",
+            "down": "LoFi",
+            "head": "HiFi2"
+          },
+          "candidate": {
+            "attention": "HiFi2",
+            "output": "HiFi2",
+            "gate": "HiFi2",
+            "up": "HiFi2",
+            "down": "HiFi2",
+            "head": "HiFi2"
+          }
+        }
+      }
+    }
+  ]
+}

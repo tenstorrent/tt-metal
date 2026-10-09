@@ -1,11 +1,21 @@
 {
-  "generated_at": "2026-10-09T08:32:46.910198+00:00",
+  "generated_at": "2026-10-09T08:50:48.977652+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
+    {
+      "path": "config/precision_accurate_decode_bfp8_all.json",
+      "bytes": 1008,
+      "sha256": "468eb9897af338088865ad8d96c813c3a707e2331780ef7d3fdb857e18f10063"
+    },
     {
       "path": "config/precision_accurate_decode_bfp8_head.json",
       "bytes": 984,
       "sha256": "e4f24f9d92b4bf109f51c2c796c858edd5d4866514a4aa2386048f512aefc2e1"
+    },
+    {
+      "path": "config/precision_accurate_decode_hifi2.json",
+      "bytes": 1008,
+      "sha256": "6169c63bfac9a8bc19d1e6288c3c72460328401c3aae4145ca328d938b3573db"
     },
     {
       "path": "demo/probe_chunked_prefill.py",
@@ -54,8 +64,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 82607,
-      "sha256": "033c84e3c9cbe4a69bc8e003d5efa8ab69492738569c671f7612435ad638e0eb"
+      "bytes": 85103,
+      "sha256": "6db9a805caa0f881f834d3f7cf847be6036e1f2104aef2181ef7136aa44f0272"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -64,8 +74,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 26892,
-      "sha256": "af57cbbf14ab54ecff9d50efddf1184351466cc3bf416bec09b34cf34d63db31"
+      "bytes": 27594,
+      "sha256": "5c9a40df48c719de255a9986ef8b6971f85f4dd4e0dfe5df59ddd650ef87ae41"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -1107,6 +1117,26 @@
       "scope": "CPU-only recurrent-state ownership regression; not hardware or GPQA qualification",
       "bytes": 5829,
       "sha256": "58d3e7565fc5375fe03073df8551ebf527b651125a0e51b7fede441701cffb96"
+    },
+    {
+      "path": "galaxy-evidence/decoder-precision-controls-v1/README.md",
+      "bytes": 3087,
+      "sha256": "28f977590ee3d94fecad51f2930ab8932b57842a7ec44f2c472e154aca70740b"
+    },
+    {
+      "path": "galaxy-evidence/decoder-precision-controls-v1/capacity-estimate.json",
+      "bytes": 2963,
+      "sha256": "4871c1b63212419038a0df9cfb5348ce3e084de884fb21eac9e9293666fb73fb"
+    },
+    {
+      "path": "galaxy-evidence/decoder-precision-controls-v1/checkpoint-shapes.json",
+      "bytes": 6015,
+      "sha256": "92237d8f91be88cfe59c55912129b251749a7f62c38b19b384cd4c700131c115"
+    },
+    {
+      "path": "galaxy-evidence/decoder-precision-controls-v1/policy-validation.json",
+      "bytes": 2717,
+      "sha256": "62d36e4d0faf09e747bf7f5362758dff08fcbe1625ec362abffd81db6f2176d4"
     },
     {
       "path": "galaxy-evidence/delivery-extended-v2/README.md",

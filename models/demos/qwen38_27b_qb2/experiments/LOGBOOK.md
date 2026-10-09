@@ -1074,3 +1074,38 @@ No session connection is needed for that queue to continue.
 
 [Completed image evidence](../galaxy-evidence/image-build-v6/README.md),
 [persistent startup probe](../galaxy-evidence/image-startup-probe-v1/README.md).
+
+## Oct 9, 08:40-08:50 UTC: decoder controls prepared; sampled evaluation verified
+
+- Confirmed the actual GPQA protocol and request implementation use temperature
+  1.0, top-p 0.95, top-k 20, seed 42, thinking enabled and 65,536 output tokens.
+  The separate performance workload's temperature zero is not GPQA's setting.
+  Source inspection confirms the adapter supports the requested device-sampling
+  parameters. The same seed across different numerical policies does not imply
+  identical trajectories or isolate the cause of a score difference.
+- Revalidated all six persistent controller invocations as live around 08:49.
+  Head GPQA has 196/198 complete, 166 correct and zero cutoffs. Server PID
+  1341860 still reports two generating requests and about 42 aggregate tok/s;
+  an unchanged completion count was not treated as a hang or restart authority.
+  Reference, layer, chunked-state and startup checks remain waiting.
+- Re-read the completed Tau3 summary from the host: 3/12 remains the official
+  pilot result. Existing simulator/tool findings do not justify changing it.
+- Reviewed native recurrence and HF source for decay, beta, Q/K normalization,
+  convolution history and gated norm semantics. This did not establish a new
+  causal kernel bug. The queued matched-input HF comparison is still required.
+- Prepared explicit BFP4/HiFi2 and BFP8/HiFi2 decoder configurations with the
+  existing BFP8/HiFi2 head. Validated the real policy loader and all 64 layer
+  mappings and saved exact differences/fingerprints. No serving default or
+  frozen remote controller changed; neither control has been queued or run.
+- Read checkpoint configuration and relevant safetensor headers without loading
+  weights. Recorded source hashes and calculated a static per-chip estimate
+  including both interleaved and DRAM-sharded projection representations. BFP8
+  raises these known resident allocations from 17.669 to 23.477 GiB/chip, leaving
+  8.398 GiB versus the SoC bank map before excluded allocations. Workspace,
+  temporary buffers and allocator overhead must still be measured; this does
+  not prove admission or predict a performance/accuracy improvement.
+- Initial live-status SSH was denied by the sandbox and succeeded on the
+  approved retry. One source search used nonexistent weights.py/linear.py names;
+  the allocation definitions are in decoder.py and model.py and were inspected.
+
+[Prepared controls and evidence](../galaxy-evidence/decoder-precision-controls-v1/README.md).

@@ -1,5 +1,15 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 08:50 UTC update: head GPQA has 166 correct out of 196 completed,
+zero cutoffs and two requests still generating. It cannot reach 177/198.
+All six persistent controllers were revalidated as live; reference diagnostics
+remain queued behind the full run. Two decoder controls are prepared and
+policy-validated: BFP4/HiFi2 and BFP8/HiFi2, retaining the current BFP8 head.
+Neither is queued, measured or promoted. A static allocation estimate indicates
+5.808 GiB/chip additional resident decoder weights for BFP8, excluding workspace
+and transient allocations; this is not proof of hardware admission.
+[Controls and capacity assumptions](../galaxy-evidence/decoder-precision-controls-v1/README.md).
+
 Oct 9 08:31 UTC update: the higher-precision head cannot close the GPQA gate.
 It has 166 correct out of 194 completed, zero cutoffs and four questions left,
 so the maximum possible final score is 170/198. The run remains active and the
