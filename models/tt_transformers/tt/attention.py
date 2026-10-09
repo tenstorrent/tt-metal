@@ -12,7 +12,7 @@ from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import copy_to_buffer, nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
+from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, qk_fused_core_ranges
 
 
 class Attention(LightweightModule):
@@ -614,11 +614,9 @@ class Attention(LightweightModule):
         k_batch = k_tensor.shape[1]
         assert q_batch == k_batch
 
-        row_size = 8  # We assume a row size of 8 cores
-        k_start_core = ttnn.CoreCoord(q_batch % row_size, q_batch // row_size)
-
-        q_core_grid = ttnn.CoreRangeSet({num_to_corerange(q_batch)})
-        k_core_grid = ttnn.CoreRangeSet({num_to_corerange(k_batch, start_core=k_start_core)})
+        q_range, k_range = qk_fused_core_ranges(q_batch)
+        q_core_grid = ttnn.CoreRangeSet({q_range})
+        k_core_grid = ttnn.CoreRangeSet({k_range})
 
         q_mem_config = ttnn.create_sharded_memory_config(
             shape=(nearest_32(n_q_heads), self.head_dim),
