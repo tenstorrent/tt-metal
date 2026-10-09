@@ -9,8 +9,10 @@
 
 namespace experimental {
 
-inline constexpr std::uint32_t kScratchCbFirstId = BLACKHOLE_NUM_CIRCULAR_BUFFERS;
-inline constexpr std::uint32_t kScratchCbChannels = BLACKHOLE_NUM_SCRATCH_SYNC_CHANNELS;
+// Scratch channels use the stream counters of the last CB IDs. The host does not reserve these IDs, so a program
+// that uses channel Ch must not also create CB kScratchCbFirstId + Ch.
+inline constexpr std::uint32_t kScratchCbChannels = 2;
+inline constexpr std::uint32_t kScratchCbFirstId = NUM_CIRCULAR_BUFFERS - kScratchCbChannels;
 
 namespace scratch_cb_detail {
 

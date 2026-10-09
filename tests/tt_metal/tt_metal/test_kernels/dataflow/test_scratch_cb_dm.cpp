@@ -8,7 +8,7 @@
 //   A  datacopy: in[i] -> ring A slot (i % capacity) -> compute -> ring B slot -> out[i]. The producer stamps
 //      word 0 of every transfer with a sequence tag, and the consumer checks every word of every transfer.
 //      `nosync`=1 drops reserve/wait (negative control: must corrupt). `real_cbs`=1 also passes one entry per
-//      transfer through real CB (i % 62), so every ID the CB API hands out is live alongside scratch.
+//      transfer through real CB (i % 62), so every ID below the scratch channels is live alongside scratch.
 //   B  bounded producer: the producer pushes num_iters pages in batches of `batch` against a slow UNPACK
 //      consumer and records the most pages ever in flight. `nosync`=1 drops reserve (negative control).
 //   C  ping-pong: the producer alone owns both channels at capacity 1. Round i sends ring B's tile from round

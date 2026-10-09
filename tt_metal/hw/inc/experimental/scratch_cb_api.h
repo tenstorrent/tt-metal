@@ -37,8 +37,8 @@
 // Template parameters
 //   Ch        Channel, 0 or 1. Each channel is an independent producer/consumer pair, so you can run
 //             two at once (e.g. channel 0 for DM -> UNPACK and channel 1 for PACK -> DM). Channel Ch
-//             uses the hardware counters of CB 62 + Ch; CB IDs 62 and 63 are never handed out by the
-//             host allocator, so they don't collide with real CBs.
+//             uses the hardware counters of CB 62 + Ch. The host does not reserve CB 62 or 63, so a
+//             program that uses channel Ch must not also create CB 62 + Ch.
 //   Capacity  How many pages the channel can hold at once (1..65535, default 1). With Capacity 1 the
 //             producer waits until the consumer has popped before writing again. A larger Capacity
 //             lets the producer run ahead, as a ring of Capacity slots. Use the same Capacity in every
