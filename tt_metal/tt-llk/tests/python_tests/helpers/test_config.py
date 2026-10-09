@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import fcntl
+import functools
 import glob
 import gzip
 import json
@@ -1876,24 +1877,33 @@ class TestConfig:
         logger.trace(" ".join(shlex.quote(part) for part in link_command))
         run_shell_command(link_command, TestConfig.TESTS_WORKING_DIR, text)
 
-    # Threads whose measured loop takes layout pads (perf/layout.py). The packer loops are left alone: their speed
-    # does not follow the modelled branch predictor and instruction cache.
+    # Threads whose measured loop takes layout pads (perf/layout.py), per run type.
     LAYOUT_THREADS: ClassVar[dict] = {
         PerfRunType.UNPACK_ISOLATE: ("unpack",),
         PerfRunType.MATH_ISOLATE: ("math",),
-        PerfRunType.L1_TO_L1: ("unpack", "math"),
-        PerfRunType.L1_CONGESTION: ("unpack", "math"),
+        PerfRunType.PACK_ISOLATE: ("pack",),
+        PerfRunType.L1_TO_L1: ("unpack", "math", "pack"),
+        PerfRunType.L1_CONGESTION: ("unpack", "math", "pack"),
     }
+
+    @staticmethod
+    @functools.lru_cache(maxsize=64)
+    def _code_key(assembly: Path) -> str:
+        """perf/layout.py code_key of a kept thread assembly"""
+        from .perf import layout
+
+        with gzip.open(assembly, "rt") as f:
+            return layout.code_key(f.read())
 
     def _layout_elf_dir(self, build: bool) -> Path:
         """ELF dir to run for the current runtime arguments. Wormhole perf builds run a copy of the variant whose
         measured loop threads take the pads perf/layout.py picks for these arguments; build makes it when missing.
         """
         variant_dir = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
-        threads = (
-            TestConfig.LAYOUT_THREADS.get(getattr(self, "current_run_type", None), ())
-            if self._wormhole_perf_barrier()
-            else ()
+        if not self._wormhole_perf_barrier():
+            return variant_dir / "elf"
+        threads = TestConfig.LAYOUT_THREADS.get(
+            getattr(self, "current_run_type", None), ()
         )
         if not threads:
             return variant_dir / "elf"
@@ -1903,7 +1913,7 @@ class TestConfig:
         key = sha256(runtime + self.current_run_type.name.encode()).hexdigest()[:16]
         choice = variant_dir / "layout" / f"{key}.json"
         try:
-            pads = json.loads(choice.read_text())
+            pads = {t: tuple(v) for t, v in json.loads(choice.read_text()).items()}
         except (
             OSError,
             ValueError,
@@ -1916,6 +1926,15 @@ class TestConfig:
                         t,
                         runtime,
                         variant_dir / "layout",
+                        relink=lambda p, z, out, t=t: self._build_kernel_part(
+                            t, variant_dir, Path(out), (p, z)
+                        ),
+                        log=os.environ.get("LLK_LAYOUT_LOG"),
+                        # variants whose thread compiles to the same code share the layout work
+                        shared=(
+                            TestConfig.ARTEFACTS_DIR / "layout_shared",
+                            TestConfig._code_key(variant_dir / "obj" / f"{t}.s.gz"),
+                        ),
                     )
                 except (
                     Exception
@@ -1946,10 +1965,16 @@ class TestConfig:
                                 self._build_kernel_part(
                                     name, variant_dir, elf_dir, (p, z)
                                 )
-                            else:
-                                shutil.copy2(
-                                    variant_dir / "elf" / f"{name}.elf", elf_dir
-                                )
+                            else:  # an unpadded thread is the variant's own ELF: a hard link saves its space
+                                try:
+                                    os.link(
+                                        variant_dir / "elf" / f"{name}.elf",
+                                        elf_dir / f"{name}.elf",
+                                    )
+                                except OSError:
+                                    shutil.copy2(
+                                        variant_dir / "elf" / f"{name}.elf", elf_dir
+                                    )
                         done.touch()
                     # a pad can push the code past its region: run it unpadded
                     except Exception as e:
