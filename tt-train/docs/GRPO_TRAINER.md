@@ -36,7 +36,7 @@ trainer = GRPOTrainer(
     transformer_config=transformer_config,
     device_config=device_config,
     model_source="...",                  # HF ID or local checkpoint dir; also saved with checkpoints
-    dataset=dataset,
+    dataset_func=lambda: dataset,        # called once, in the constructor
     config=GRPOConfig(
         rollout_source="ttml",           # in yaml: grpo_config.rollout_source
         epsilon=0.2,
@@ -230,7 +230,7 @@ GRPOTrainer(
     transformer_config,
     device_config,
     model_source,
-    dataset,
+    dataset_func,
     config,
     reward_func,
     optimizer_dict,
@@ -243,21 +243,22 @@ GRPOTrainer(
 | `transformer_config` | `TransformerConfig` | Model config (see [Transformer Config](#transformer-config)); `model_type` selects the model family. |
 | `device_config` | `DeviceConfig` | Device mesh the trainer opens (see [Device Config](#device-config)). |
 | `model_source` | `str` | HuggingFace model ID or local checkpoint directory the trainer loads the model from. Its HF config is also saved with checkpoints. |
-| `dataset` | `Dataset` | HuggingFace `datasets.Dataset` with at least a `"prompt"` column. All other columns are passed to the reward function. |
+| `dataset_func` | `Callable[[], Dataset]` | Zero-argument callable returning a HuggingFace `datasets.Dataset` with at least a `"prompt"` column. All other columns are passed to the reward function. Called once, in the constructor. |
 | `config` | `GRPOConfig` | Training configuration (see above); `rollout_source` selects the sampler. |
 | `reward_func` | `Callable` | Reward function. Receives decoded completions and any dataset columns (see [Reward Functions](#reward-functions)). |
 | `optimizer_dict` | `dict` | Optimizer config dict passed to the [ttml optimizer registry](TTML_ONBOARDING.md). Must include a `"type"` key. |
 | `callbacks` | `list[TrainerCallback] \| None` | Hooks into the training loop (see [Callbacks](#callbacks)). |
 
-The constructor opens the device, loads the model and builds the rollout
-sampler, so `trainer.rollout_sampler`, `trainer.model` and `trainer.tokenizer`
-are available before `train()` — e.g. to callbacks in `on_train_begin`.
+The constructor opens the device, loads the model, builds the rollout
+sampler, the optimizer and the LR scheduler, and tokenizes the dataset, so
+`trainer.rollout_sampler`, `trainer.model` and `trainer.tokenizer` are
+available before `train()` — e.g. to callbacks in `on_train_begin`.
 
 ### Methods
 
 | Method | Description |
 |--------|-------------|
-| `train()` | Run the full GRPO training loop. Handles generation, reward computation, policy gradient updates, and checkpointing. |
+| `train()` | Run the full GRPO training loop. Handles generation, reward computation, policy gradient updates, and checkpointing. Can be called only once per trainer. |
 
 ---
 
