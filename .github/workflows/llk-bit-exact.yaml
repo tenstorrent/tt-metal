@@ -47,14 +47,15 @@ jobs:
     secrets: inherit
     permissions:
       contents: read
-      pull-requests: read
+      # The report's collect job asks for it (to post); test runs leave
+      # post_comment off, so nothing is posted on the measured PR.
+      pull-requests: write
       packages: write
     with:
       pr_number: ${{ inputs.pr_number }}
       ops: ${{ inputs.ops }}
       arch: ${{ inputs.arch }}
       base: ${{ inputs.base }}
-      context: '{"hint": "test run from nstamatovic/llk-sfpu-test-ci"}'
 
   build-images:
     if: ${{ inputs.binary_perf }}
