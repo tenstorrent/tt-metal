@@ -262,64 +262,36 @@ FORCE_INLINE void compute_chunk_output(
     value_projection.pop_front(chunk_value_tiles);
 }
 
-// destination = state * decay (each key row scaled by its decay) + k_decay_transposed @ corrected: the decayed state
-// lands in DST and the matmul accumulates the update onto it, so neither term leaves DST before the sum.
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void decay_and_accumulate_update(
-    DataflowBuffer& state,
-    DataflowBuffer& decay,
-    DataflowBuffer& k_decay_transposed,
-    DataflowBuffer& corrected,
-    DataflowBuffer& destination) {
+FORCE_INLINE void multiply_by_decay(
+    DataflowBuffer& state, DataflowBuffer& decay, DataflowBuffer& output, uint32_t key_tiles, uint32_t value_tiles) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
-    // Each pass covers a block of pass_rows key rows by pass_columns value columns.
-    constexpr uint32_t pass_columns = kda::largest_divisor_at_most(Vt, dst_tiles);
-    constexpr uint32_t pass_rows = kda::largest_divisor_at_most(Kt, dst_tiles / pass_columns);
+    const uint32_t count = key_tiles * value_tiles;
     const uint32_t state_id = state.get_id();
     const uint32_t decay_id = decay.get_id();
-    const uint32_t k_id = k_decay_transposed.get_id();
-    const uint32_t corrected_id = corrected.get_id();
-    const uint32_t destination_id = destination.get_id();
+    const uint32_t output_id = output.get_id();
 
-    destination.reserve_back(Kt * Vt);
-    for (uint32_t first_row = 0; first_row < Kt; first_row += pass_rows) {
-        for (uint32_t first_column = 0; first_column < Vt; first_column += pass_columns) {
-            tile_regs_acquire();
-            reconfig_data_format(state_id, decay_id);
-            mul_bcast_cols_init(state_id, decay_id);
-            for (uint32_t row = 0; row < pass_rows; ++row) {
-                for (uint32_t column = 0; column < pass_columns; ++column) {
-                    const uint32_t index = (first_row + row) * Vt + first_column + column;
-                    mul_tiles_bcast_cols(state_id, decay_id, index, first_row + row, row * pass_columns + column);
-                }
-            }
-            reconfig_data_format<SrcOrder::Reverse>(k_id, corrected_id);
-            matmul_block_init(k_id, corrected_id, false, pass_columns, pass_rows, Ct);
-            for (uint32_t k = 0; k < Ct; ++k) {
-                matmul_block(
-                    k_id,
-                    corrected_id,
-                    first_row * Ct + k,
-                    k * Vt + first_column,
-                    0,
-                    false,
-                    pass_columns,
-                    pass_rows,
-                    Ct);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t row = 0; row < pass_rows; ++row) {
-                for (uint32_t column = 0; column < pass_columns; ++column) {
-                    pack_tile(
-                        row * pass_columns + column, destination_id, (first_row + row) * Vt + first_column + column);
-                }
-            }
-            tile_regs_release();
+    output.reserve_back(count);
+    reconfig_data_format(state_id, decay_id);
+    mul_bcast_cols_init(state_id, decay_id);
+    // Batch independent tiles to amortize destination-register lifecycle overhead.
+    for (uint32_t block_start = 0; block_start < count; block_start += dst_tiles) {
+        const uint32_t remaining = count - block_start;
+        const uint32_t block_tiles = remaining < dst_tiles ? remaining : dst_tiles;
+        tile_regs_acquire();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            const uint32_t index = block_start + tile;
+            const uint32_t key = index / value_tiles;
+            mul_tiles_bcast_cols(state_id, decay_id, index, key, tile);
         }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            pack_tile(tile, output_id, block_start + tile);
+        }
+        tile_regs_release();
     }
-    destination.push_back(Kt * Vt);
+    output.push_back(count);
 }
 
 template <ChunkInputPolicy InputPolicy, uint32_t Ct, uint32_t Kt, uint32_t Vt>
@@ -337,8 +309,19 @@ FORCE_INLINE void update_state(
         k_decay_transposed.wait_front(key_chunk_tiles);
         final_decay.wait_front(Kt);
     }
-    decay_and_accumulate_update<Ct, Kt, Vt>(
-        current_state, final_decay, k_decay_transposed, corrected_value, destination);
+    // The update and the decayed state are each packed to FP32 and then added. Accumulating the matmul onto the
+    // decayed state in DST instead changes the result enough that Kimi-K3's chunked prefill drifts from the
+    // reference over consecutive calls (L24 worst-layer PCC 0.981 -> 0.953 at 56k tokens).
+    DataflowBuffer state_update(dfb::state_update);
+    DataflowBuffer state_temporary(dfb::state_temporary);
+    matrix_multiply<Kt, Ct, Vt>(k_decay_transposed, corrected_value, state_update);
+    state_update.wait_front(key_value_tiles);
+    multiply_by_decay(current_state, final_decay, state_temporary, Kt, Vt);
+    state_temporary.wait_front(key_value_tiles);
+    elementwise<ElementwiseOperation::ADD, key_value_tiles, key_value_tiles>(
+        state_temporary, state_update, destination);
+    state_temporary.pop_front(key_value_tiles);
+    state_update.pop_front(key_value_tiles);
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
         k_decay_transposed.pop_front(key_chunk_tiles);
         final_decay.pop_front(Kt);
