@@ -55,12 +55,10 @@ def test_reuse_resets_phase_counters(monkeypatch):
     assert decoder._last_metrics["rest_tokens"] == 0
 
 
-def test_early_eos_counts_only_emitted_first_iteration(monkeypatch):
-    monkeypatch.delenv("GEMMA4_PLI_ALLOW_MIXED", raising=False)
+def test_early_eos_counts_only_emitted_first_iteration():
     decoder = object.__new__(spec_decode.SpeculativeDecoder)
     decoder.target_has_pli = False
     decoder._pli_dev_host = True
-    decoder._route = "host-loop"
     decoder._use_trace = False
     decoder._pv_a_prev = -1
     decoder._seed_mode = "reseed"
@@ -90,7 +88,6 @@ def test_zero_token_batched_call_has_no_steady_phase():
     decoder = object.__new__(spec_decode.SpeculativeDecoder)
     decoder.target_has_pli = False
     decoder._pli_dev_host = True
-    decoder._route = "host-loop"
     decoder._use_trace = False
     decoder._metrics_active = False
     decoder._last_metrics = None
@@ -106,13 +103,15 @@ def test_failed_request_clears_previous_timing(expect_error):
     decoder._metrics_active = True
     decoder._last_metrics = {"stale": 1}
     decoder._last_route = "stale"
+    decoder._use_trace = False
+    decoder.target_has_pli = False
 
-    def invalid_route(greedy):
-        raise ValueError("invalid route")
+    def invalid_request(route):
+        raise ValueError("invalid request")
 
-    decoder._effective_route = invalid_route
-    with expect_error(ValueError, "invalid route"):
+    decoder._metrics_begin = invalid_request
+    with expect_error(ValueError, "invalid request"):
         decoder.generate(1, 0, 1)
     assert decoder._last_metrics is None
-    assert decoder._last_route is None
+    assert decoder._last_route != "stale"
     assert not decoder._metrics_active

@@ -3274,26 +3274,22 @@ def test_fused_pli_current_seed_row(accepted, expected):
     assert decoder._fused_shift_seed_row(accepted, 3) == expected
 
 
-def test_fused_pli_route_uses_single_user_fused_body(monkeypatch):
+def test_fused_pli_route_uses_single_user_fused_body():
     from types import SimpleNamespace
 
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
 
-    monkeypatch.delenv("GEMMA4_DECODE_PLI_DEV", raising=False)
-    monkeypatch.setenv("GEMMA4_PLI", "device")
     decoder = SpeculativeDecoder.__new__(SpeculativeDecoder)
     decoder._use_trace = True
     decoder.target_has_pli = True
-    decoder._fused_pli_device = True
     decoder._pli_dev_host = True
-    decoder._route = "auto"
     decoder.target = SimpleNamespace(max_seq_len=1024)
     decoder.generate_batched = lambda *args, **kwargs: pytest.fail("single user reached the batched body")
     calls = []
     decoder.generate_fused = lambda *args, **kwargs: calls.append((args, kwargs)) or ([17, 23], [2])
 
     assert decoder.generate(5, 12, 2) == ([17, 23], [2])
-    assert calls == [((5, 12, 2), {"packed": None, "_nested": True})]
+    assert calls == [((5, 12, 2), {"_nested": True})]
 
 
 @pytest.mark.parametrize("reseed,packed", [(False, True), (False, False), (True, False)])
@@ -3376,7 +3372,7 @@ def test_fused_pli_requires_device_weights_before_capture(expect_error):
     indirect=True,
 )
 def test_fused_pli_single_device_four_replays(mesh_device, reset_seeds, monkeypatch):
-    """E2B TP=1 K=3: capture one packed fused trace and replay it repeatedly."""
+    """E2B TP=1 K=3: capture one fused trace and replay it repeatedly."""
     model_path = os.getenv("HF_MODEL")
     if not model_path:
         pytest.skip("set HF_MODEL to run fused PLI")
@@ -3391,7 +3387,7 @@ def test_fused_pli_single_device_four_replays(mesh_device, reset_seeds, monkeypa
     from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     monkeypatch.setenv("GEMMA4_SPEC_TRACE", "1")
-    monkeypatch.setenv("GEMMA4_SPEC_FUSED_PLI_DEV", "1")
+    monkeypatch.delenv("GEMMA4_PLI", raising=False)
     monkeypatch.setenv("GEMMA4_SPEC_DRAFT_LEN", "3")
     monkeypatch.setenv("GEMMA4_PV_SDPA_FP32", "0")
     max_seq_len, block_size = 1024, 64

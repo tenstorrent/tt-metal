@@ -10,81 +10,83 @@ import torch
 from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
 
 
-def _decoder(monkeypatch, *, pli, mechanism="device", route="auto", trace=True):
-    monkeypatch.setenv("GEMMA4_PLI", mechanism)
-    monkeypatch.delenv("GEMMA4_DECODE_PLI_DEV", raising=False)
+def _decoder(*, pli, device_pli=True, trace=True):
     decoder = object.__new__(SpeculativeDecoder)
-    decoder.target = SimpleNamespace(max_seq_len=4096)
+    decoder.target = SimpleNamespace(max_seq_len=4096, init_pli_device_weights=lambda: None)
     decoder.target_has_pli = pli
-    decoder._pli_dev_host = mechanism == "device"
-    decoder._route = route
+    decoder.draft_len = 3
+    decoder._pli_dev_host = device_pli
     decoder._use_trace = trace
     decoder.tt_kv_cache = None
     decoder._last_route = None
     return decoder
 
 
-@pytest.mark.parametrize(
-    "pli,mechanism,expected",
-    [
-        (True, "device", "fused-batch-dim"),
-        (True, "host", "host-loop"),
-        (False, "device", "fused-batch-dim"),
-    ],
-)
-def test_auto_dispatch(monkeypatch, pli, mechanism, expected):
-    decoder = _decoder(monkeypatch, pli=pli, mechanism=mechanism)
-    assert decoder._effective_route() == expected
-
-
-@pytest.mark.parametrize("route", ["fused-packed", "fused-batch-dim"])
-def test_explicit_fusion_without_trace_fails_before_seed(monkeypatch, route, expect_error):
-    decoder = _decoder(monkeypatch, pli=False, route=route, trace=False)
-    decoder.seed = lambda *args, **kwargs: pytest.fail("device work started")
-    with expect_error(ValueError, "requires GEMMA4_SPEC_TRACE"):
-        decoder.generate(1, 0, 1)
+def _reached_host_loop(*args, **kwargs):
+    raise RuntimeError("host loop reached")
 
 
 @pytest.mark.parametrize(
-    "pli,route,expected_packed",
+    "pli,device_pli,trace,temperature,fused",
     [
-        (True, "auto", None),
-        (False, "auto", None),
-        (True, "fused-packed", True),
-        (True, "fused-batch-dim", False),
-        (False, "fused-packed", True),
-        (False, "fused-batch-dim", False),
+        (True, True, True, 0.0, True),
+        (False, True, True, 0.0, True),
+        (False, False, True, 0.0, True),
+        (True, False, True, 0.0, False),
+        (True, True, False, 0.0, False),
+        (False, True, True, 0.7, False),
     ],
 )
-def test_single_user_fused_routes_use_single_user_body(monkeypatch, pli, route, expected_packed):
-    monkeypatch.delenv("GEMMA4_SPEC_FUSED_PACKED", raising=False)
-    decoder = _decoder(monkeypatch, pli=pli, route=route)
+def test_generate_dispatch(pli, device_pli, trace, temperature, fused, expect_error):
+    decoder = _decoder(pli=pli, device_pli=device_pli, trace=trace)
     decoder.generate_batched = lambda *args, **kwargs: pytest.fail("single user reached the batched body")
     calls = []
     decoder.generate_fused = lambda *args, **kwargs: calls.append((args, kwargs)) or ([7], [0])
-    assert decoder.generate(1, 0, 1) == ([7], [0])
-    assert calls == [((1, 0, 1), {"packed": expected_packed, "_nested": True})]
+    decoder.seed = _reached_host_loop
+    if fused:
+        assert decoder.generate(1, 0, 1, temperature=temperature) == ([7], [0])
+        assert calls == [((1, 0, 1), {"_nested": True})]
+    else:
+        with expect_error(RuntimeError, "host loop reached"):
+            decoder.generate(1, 0, 1, temperature=temperature)
+        assert calls == []
 
 
-def test_explicit_route_contradicting_fused_packed_env_raises(monkeypatch, expect_error):
-    monkeypatch.setenv("GEMMA4_SPEC_FUSED_PACKED", "0")
-    decoder = _decoder(monkeypatch, pli=True, route="fused-packed")
-    decoder.generate_fused = lambda *args, **kwargs: pytest.fail("generation started")
-    with expect_error(ValueError, "contradicts"):
-        decoder.generate(1, 0, 1)
+@pytest.mark.parametrize("trace", [True, False])
+def test_batched_dispatch_follows_trace(trace, expect_error):
+    decoder = _decoder(pli=False, trace=trace)
+    decoder._fused_reseed = False
+    seen = []
+
+    def traced(*args):
+        seen.append("fused")
+        return [[7]], [[0]]
+
+    def eager_seed(*args):
+        seen.append(decoder._use_trace)
+        raise RuntimeError("host loop reached")
+
+    decoder._generate_fused_traced_batched = traced
+    decoder._seed_batched = eager_seed
+    if trace:
+        assert decoder.generate_batched([1], [0], 1, 64) == ([[7]], [[0]])
+        assert seen == ["fused"]
+    else:
+        with expect_error(RuntimeError, "host loop reached"):
+            decoder.generate_batched([1], [0], 1, 64)
+        assert seen == [False]
 
 
-def test_mixed_pli_needs_diagnostic_override(monkeypatch, expect_error):
-    decoder = _decoder(monkeypatch, pli=True)
-    monkeypatch.setenv("GEMMA4_DECODE_PLI_DEV", "0")
-    with expect_error(ValueError, "different PLI"):
-        decoder._effective_route()
-    monkeypatch.setenv("GEMMA4_PLI_ALLOW_MIXED", "1")
-    assert decoder._effective_route() == "fused-batch-dim"
+def test_batched_traced_host_pli_rejected_before_device_work(expect_error):
+    decoder = _decoder(pli=True, device_pli=False)
+    decoder._fused_reseed = False
+    decoder._seed_batched = lambda *args: pytest.fail("device work started")
+    with expect_error(ValueError, "GEMMA4_PLI=device"):
+        decoder.generate_batched([1], [0], 1, 64)
 
 
-def test_batched_seed_uses_selected_device_pli(monkeypatch):
-    decoder = _decoder(monkeypatch, pli=True)
+def test_batched_seed_uses_selected_device_pli():
+    decoder = _decoder(pli=True)
     calls = []
 
     class Tensor:
@@ -103,8 +105,8 @@ def test_batched_seed_uses_selected_device_pli(monkeypatch):
     assert calls[0]["token_ids_host"] is None
 
 
-def test_batched_packed_verify_uses_selected_device_pli(monkeypatch):
-    decoder = _decoder(monkeypatch, pli=True)
+def test_batched_packed_verify_uses_selected_device_pli():
+    decoder = _decoder(pli=True)
     decoder.target.hf_config = SimpleNamespace(sliding_window=1024)
     calls = []
 
@@ -136,7 +138,7 @@ def test_batched_packed_verify_uses_selected_device_pli(monkeypatch):
 )
 def test_fused_route_label_names_the_body_that_runs(monkeypatch, trace, packed_env, expected):
     monkeypatch.setenv("GEMMA4_SPEC_FUSED_PACKED", packed_env)
-    decoder = _decoder(monkeypatch, pli=False, route="fused-batch-dim", trace=trace)
+    decoder = _decoder(pli=False, trace=trace)
     decoder._fused_reseed = False
     decoder._metrics_active = False
     decoder._last_metrics = None
