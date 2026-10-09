@@ -36,8 +36,8 @@ def test_decode_config_rejects_incompatible_shapes(monkeypatch, shape):
 @pytest.mark.parametrize(
     "value,draft,target",
     [
-        (None, False, True),
-        ("", False, True),
+        (None, False, False),
+        ("", False, False),
         ("0", False, False),
         ("off", False, False),
         ("draft", True, False),
@@ -69,13 +69,13 @@ class _FakeMesh:
 @pytest.mark.parametrize(
     "value,num_devices,target",
     [
-        (None, 1, True),
+        (None, 1, False),
         (None, 2, False),
+        ("target", 1, True),
         ("target", 2, True),
-        ("0", 1, False),
     ],
 )
-def test_target_default_is_single_device_only(monkeypatch, value, num_devices, target):
+def test_target_tuning_is_opt_in_on_every_mesh(monkeypatch, value, num_devices, target):
     if value is None:
         monkeypatch.delenv("GEMMA4_TUNE_MATMULS", raising=False)
     else:

@@ -3,10 +3,8 @@
 
 """Program configurations for single-tile-row decode linears.
 
-``GEMMA4_TUNE_MATMULS`` selects the scopes. Unset enables ``DEFAULT_SCOPES``
-(target only) on a single device and nothing on a multi-device mesh, where the
-target configs gave no decode gain; ``0`` disables every scope. Draft and CME
-tuning stay opt-in.
+``GEMMA4_TUNE_MATMULS`` selects the scopes. Tuning is opt-in: unset, empty or
+``0`` disables every scope, because reblocking can change generated tokens.
 """
 
 import os
@@ -14,8 +12,6 @@ import os
 from loguru import logger
 
 import ttnn
-
-DEFAULT_SCOPES = frozenset({"target"})
 
 
 def _largest_divisor(value, cap=8):
@@ -73,18 +69,15 @@ class DecodeMatmulTuner:
         raw = "" if raw is None else raw.strip().lower()
         if raw in ("1", "true", "yes", "on", "all"):
             enabled = True
-        elif raw in ("0", "false", "no", "off"):
+        elif not raw or raw in ("0", "false", "no", "off"):
             enabled = False
-        elif not raw:
-            multi_device = mesh_device is not None and mesh_device.get_num_devices() > 1
-            enabled = scope in DEFAULT_SCOPES and not multi_device
         else:
             enabled = scope in {item.strip() for item in raw.split(",")}
         return cls(mesh_device, enabled=enabled, label=scope)
 
     def __init__(self, mesh_device=None, enabled=False, label="mm"):
-        # Constructor default is off so a directly built tuner is inert; the
-        # environment default lives in ``from_env``/``DEFAULT_SCOPES`` instead.
+        # Constructor default is off so a directly built tuner is inert; scope
+        # selection from the environment lives in ``from_env``.
         self.enabled = bool(enabled)
         self.label = label
         self._cache = {}
