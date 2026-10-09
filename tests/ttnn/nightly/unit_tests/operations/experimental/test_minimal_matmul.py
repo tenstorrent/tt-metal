@@ -1148,3 +1148,39 @@ def test_create_perf_table(fidelity, dtype, fp32_acc):
             util_str = f"{math_util:.1f}"
 
         print(f"| ({M}, {K}, {N}) | {util_str} | {measured_ms_str} | {attrs_str} |")
+
+
+@pytest.mark.parametrize("subblock_h, subblock_w", [(4, 4), (2, 8)])
+def test_minimal_matmul_subblock_rejected_with_dst_full_sync(device, subblock_h, subblock_w):
+    # Regression for the DEST/dst_full_sync subblock-admission bug: the program factory pins
+    # double_buffer_dest=true, so the compute kernel only has the half-sync DEST register count
+    # (8 tiles for bf16). With dst_full_sync_en=True, get_dest_reg_count() reports the full-sync
+    # count (16), and before the fix validation admitted subblocks of 9..16 tiles that the kernel
+    # then computed silently wrong (measured PCC ~0.79-0.84). Validation must reject them instead.
+    M = K = N = 4096
+    M_block_size = K_block_size = N_block_size = 8
+    torch_input = torch.randn((M, K), dtype=torch.bfloat16)
+    weight_input = torch.randn((K, N), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,  # bf16 -> half-sync DEST limit is 8 tiles
+        packer_l1_acc=True,
+        dst_full_sync_en=True,  # makes get_dest_reg_count report 16; factory still runs half-sync
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,  # subblock_h * subblock_w == 16 > 8 (half-sync limit)
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+    with pytest.raises(RuntimeError, match="subblock_h \\* subblock_w must be <= max_dest_volume"):
+        ttnn.experimental.minimal_matmul(
+            tt_input, tt_weight, config=matmul_config, compute_kernel_config=compute_config
+        )
