@@ -12,6 +12,7 @@
 #include <set>
 #include <string_view>
 #include <unordered_set>
+#include <tt-metalium/experimental/op_profiler_support.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/operation.hpp"
@@ -71,7 +72,7 @@ static json get_kernels_json(distributed::MeshDevice& mesh_device, const Program
     // profiler JSON well within Tracy's 64 KiB message limit.
     std::set<std::pair<std::string_view, std::string>> seenCompute;
     std::set<std::string_view> seenDatamovement;
-    const auto kernelMeta = detail::collect_kernel_meta(program, mesh_device);
+    const auto kernelMeta = experimental::collect_kernel_meta(program, mesh_device);
     computeKernels.reserve(kernelMeta.size());
     datamovementKernels.reserve(kernelMeta.size());
     for (const auto& kernel : kernelMeta) {
