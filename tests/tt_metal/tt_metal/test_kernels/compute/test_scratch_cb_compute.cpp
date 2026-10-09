@@ -7,7 +7,7 @@
 //   A  datacopy: UNPACK waits on channel 0 and copies ring A slot (i % capacity) into DST, then PACK reserves
 //      channel 1, packs DST into ring B slot (i % capacity) and publishes it. Both channels are live at once.
 //      Data access uses the id-free 2.0 LLKOperand API. `nosync`=1 drops wait/reserve (negative control).
-//   B  bounded producer: UNPACK is a deliberately slow consumer of channel 0, one page at a time.
+//   B  bounded producer: UNPACK is a deliberately slow consumer of channel 0, `batch` pages at a time.
 //   C  ping-pong: the same copy as A at capacity 1; the DM side sends every result back as the next input.
 
 #include <cstdint>
@@ -43,6 +43,7 @@ void kernel_main() {
     constexpr std::uint32_t pattern = get_arg(args::pattern);
     constexpr std::uint32_t capacity = get_arg(args::capacity);
     constexpr std::uint32_t nosync = get_arg(args::nosync);
+    constexpr std::uint32_t batch = get_arg(args::batch);
     const std::uint32_t num_iters = get_arg(args::num_iters);
     const std::uint32_t tile_bytes = get_arg(args::tile_bytes);
     const std::uint32_t ring_a_addr = get_arg(args::ring_a_addr);
@@ -80,10 +81,10 @@ void kernel_main() {
     }
 
     if constexpr (pattern == PATTERN_B) {
-        for (std::uint32_t i = 0; i < num_iters; ++i) {
-            ::experimental::scratch_wait_front<0, capacity>(1);
+        for (std::uint32_t i = 0; i < num_iters; i += batch) {
+            ::experimental::scratch_wait_front<0, capacity>(batch);
             UNPACK((spin(kSlowConsumerSpins)));
-            ::experimental::scratch_pop_front<0, capacity>(1);
+            ::experimental::scratch_pop_front<0, capacity>(batch);
         }
     }
 }

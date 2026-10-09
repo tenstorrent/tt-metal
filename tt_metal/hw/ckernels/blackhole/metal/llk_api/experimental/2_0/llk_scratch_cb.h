@@ -15,9 +15,11 @@
 
 namespace experimental::scratch_cb_detail {
 
-// Tensix 4-byte word address of a stream register, masked to 18 bits (as in llk_io).
+// Tensix 4-byte word address of a stream register, masked to the 18-bit STOREREG RegAddr field (as in llk_io).
 inline std::uint32_t tensix_reg_addr(volatile std::uint32_t* ptr) {
-    return static_cast<std::uint32_t>((reinterpret_cast<std::uintptr_t>(ptr) >> 2) & 0x3ffff);
+    constexpr std::uint32_t kByteToWordShift = 2;
+    constexpr std::uint32_t kStoreRegAddrMask = (1u << 18) - 1;
+    return static_cast<std::uint32_t>((reinterpret_cast<std::uintptr_t>(ptr) >> kByteToWordShift) & kStoreRegAddrMask);
 }
 
 // Local copies of this thread's own counter: the STOREREG that publishes it lands only after the
@@ -52,7 +54,8 @@ inline void llk_scratch_pack_push_back(std::int32_t num_pages, std::uint32_t l1_
     SYNC_SIGNAL("SYNC-SCRATCH-CB-PUSH", l1_addr);
     pages_received[Ch] += num_pages;
     // Publish only after the packer has finished writing the page.
-    TT_SETDMAREG(0, pages_received[Ch], 0, LO_16(p_gpr_pack::NUM_MSGS_RECEIVED));
+    TT_SETDMAREG(
+        /*Payload_SigSelSize=*/0, pages_received[Ch], /*SetSignalsMode=*/0, LO_16(p_gpr_pack::NUM_MSGS_RECEIVED));
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);
     TT_STOREREG(p_gpr_pack::NUM_MSGS_RECEIVED, tensix_reg_addr(get_cb_tiles_received_ptr(cb_id<Ch>())));
 }
@@ -79,9 +82,10 @@ inline void llk_scratch_unpack_pop_front(std::int32_t num_pages, std::uint32_t l
     SYNC_SIGNAL("SYNC-SCRATCH-CB-POP", l1_addr);
     pages_acked[Ch] += num_pages;
     // Publish only after the unpacker has finished reading the page.
-    TT_SETDMAREG(0, pages_acked[Ch], 0, LO_16(4));
+    TT_SETDMAREG(
+        /*Payload_SigSelSize=*/0, pages_acked[Ch], /*SetSignalsMode=*/0, LO_16(p_gpr_unpack::OPERAND_BASE_ADDR));
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
-    TT_STOREREG(4, tensix_reg_addr(get_cb_tiles_acked_ptr(cb_id<Ch>())));
+    TT_STOREREG(p_gpr_unpack::OPERAND_BASE_ADDR, tensix_reg_addr(get_cb_tiles_acked_ptr(cb_id<Ch>())));
 }
 #endif  // TRISC_UNPACK
 
