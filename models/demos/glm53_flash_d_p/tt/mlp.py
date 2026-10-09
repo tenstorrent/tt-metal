@@ -68,7 +68,8 @@ class TtDenseMLP:
         ttnn.deallocate(uc)
         o = ttnn.linear(h, self.w_down, dtype=ttnn.float32, compute_kernel_config=self.cfg, memory_config=mc)
         ttnn.deallocate(h)
-        # 2x2: reduce over both mesh axes (all 4 TP ranks), in fp32: a bf16 all_reduce scales the sum by +0.19%.
+        # reduce over both mesh axes: split -> scatter_rows (bf16 fabric_reduce_scatter by default, see common.py); the
+        # replicated path keeps an fp32 all_reduce (a bf16 all_reduce scaled the sum by +0.19% on the 2x2 mesh).
         if split:
             from models.demos.glm53_flash_d_p.tt.common import scatter_rows
 
