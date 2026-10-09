@@ -770,6 +770,12 @@ void kernel_main() {
     // than per row. Pop it here to balance the buffer.
     dfb_beta.pop_front(block_wt);
 #endif
+#ifdef OUT_SELF_LOOP
+    // Without a write-back the output buffer has no reader: this kernel is its only producer and consumer.
+    // Pop what it pushed so the buffer is left balanced.
+    dfb_out.wait_front(num_tiles_per_block);
+    dfb_out.pop_front(num_tiles_per_block);
+#endif
 
 #endif  // IDLE_CORE
 }

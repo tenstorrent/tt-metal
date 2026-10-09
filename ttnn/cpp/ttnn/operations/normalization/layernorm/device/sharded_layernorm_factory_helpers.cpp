@@ -1193,6 +1193,10 @@ void add_compute_defines(m2::KernelSpec& kernel, const SpecConfig& c, bool is_al
     if (is_all_to_all_worker) {
         kernel.compiler_options.defines.emplace("IS_ALLGATHER_WORKER", "1");
     }
+    // Without a write-back, compute holds both ends of the output buffer (bind_self_loop) and must pop it.
+    if (!c.writes_back && !c.is_pre_all_gather) {
+        kernel.compiler_options.defines.emplace("OUT_SELF_LOOP", "1");
+    }
     for (const auto& [key, value] : c.activation_defines) {
         kernel.compiler_options.defines.emplace(key, value);
     }
