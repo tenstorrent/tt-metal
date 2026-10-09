@@ -110,6 +110,17 @@ constexpr MathFidelitySchedule math_fidelity_schedule(const DataFormat src_a_for
     return {math_fidelity_phases<fidelity>(), fidelity == MathFidelity::LoFi ? std::uint8_t {0} : std::uint8_t {1}};
 }
 
+/**
+ * @brief Return the source register format of an operand that is copied from dest instead of unpacked from L1.
+ * @tparam EN_32BIT_DEST: dest is in 32-bit mode.
+ * @param dest_format: dest format in 16-bit mode.
+ */
+template <bool EN_32BIT_DEST>
+constexpr DataFormat dest_src_format(const DataFormat dest_format)
+{
+    return EN_32BIT_DEST ? DataFormat::Tf32 : dest_format;
+}
+
 // Each mask lists allowed requests in LoFi, HiFi2, HiFi3, HiFi4 order.
 constexpr unsigned fidelity_mask(const DataFormat src_a, const DataFormat src_b)
 {

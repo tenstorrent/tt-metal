@@ -376,7 +376,7 @@ inline void _llk_math_reduce_row_mop_config_(const MathFidelitySchedule fidelity
  * <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam EN_32BIT_DEST: Use the active destination addressing mode when clearing the scratch row.
  * @param fidelity: Phase schedule for the original source operands.
- * @param final_fidelity: Phase schedule for the Dst-fed final pool.
+ * @param final_fidelity: Phase schedule for the final pool, whose SrcA is copied back from dest.
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <PoolType POOL_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE, bool EN_32BIT_DEST>
@@ -463,7 +463,7 @@ inline void _llk_math_reduce_scalar_mop_config_(const MathFidelitySchedule fidel
  * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity.
  * @param fidelity: Resolved source-format phase schedule.
- * @param final_fidelity: Phase schedule for the Dst-fed final pool (REDUCE_SCALAR only).
+ * @param final_fidelity: Phase schedule for the final pool, whose SrcA is copied back from dest (REDUCE_SCALAR only).
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc.
  */
 template <ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE>
@@ -546,9 +546,8 @@ inline void _llk_math_reduce_init_(const DataFormat src_a_format, const DataForm
         "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
 
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
-    const auto fidelity = math_fidelity_schedule<FIDELITY>(src_a_format, src_b_format);
-    // FP32 intermediate sums can populate SrcA's low mantissa after Dst-to-Src moves.
-    const auto final_fidelity = math_fidelity_schedule<FIDELITY>(EN_32BIT_DEST ? DataFormat::Tf32 : src_a_format, src_b_format);
+    const auto fidelity       = math_fidelity_schedule<FIDELITY>(src_a_format, src_b_format);
+    const auto final_fidelity = math_fidelity_schedule<FIDELITY>(dest_src_format<EN_32BIT_DEST>(src_a_format), src_b_format);
     _llk_math_reduce_addrmod_<REDUCE_DIMENSION, FIDELITY>(fidelity, final_fidelity, tensor_shape);
 
     if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)

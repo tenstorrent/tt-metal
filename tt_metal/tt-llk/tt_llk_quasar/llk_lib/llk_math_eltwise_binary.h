@@ -303,8 +303,8 @@ inline void _llk_math_eltwise_di_binary_addrmod_(const MathFidelitySchedule fide
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam ENABLE_DIRECT_INDEXING: Enable the direct-indexing instruction variant
- * @param src_a_format: Effective SrcA register format.
- * @param src_b_format: Effective SrcB register format.
+ * @param src_a_format: SrcA register format. With DEST_TO_SRCA the operand is copied from dest, so pass @ref dest_src_format.
+ * @param src_b_format: SrcB register format. With DEST_TO_SRCB the operand is copied from dest, so pass @ref dest_src_format.
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
  * @param acc_to_dest: When true, accumulate the result into the destination register instead of overwriting
  * @note On the unpack thread (T0): for reuse_dest == NONE pair with @ref _llk_unpack_binary_operands_init_; for DEST_TO_SRCA/DEST_TO_SRCB pair with
@@ -325,9 +325,7 @@ inline void _llk_math_eltwise_binary_init_(
     {
         validate_math_fidelity<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
     }
-    // A Dst-fed SrcA can carry FP32 low mantissa, so it keeps every phase.
-    const DataFormat schedule_src_a_format = reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? DataFormat::Tf32 : src_a_format;
-    const auto fidelity                    = math_fidelity_schedule<MATH_FIDELITY_TYPE>(schedule_src_a_format, src_b_format);
+    const auto fidelity = math_fidelity_schedule<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
     LLK_ASSERT(
         reuse_dest == EltwiseBinaryReuseDestType::NONE || tensor_shape.face_r_dim == MAX_FACE_R_DIM, "Eltwise binary destination reuse requires 16-row faces");
     LLK_ASSERT(tensor_shape.total_num_faces() != NUM_FACES || tensor_shape.face_r_dim == MAX_FACE_R_DIM, "Eltwise binary four-face tiles require 16-row faces");
