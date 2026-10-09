@@ -132,38 +132,41 @@ def write_chunk_to_global_ring_cache(
     num_layers=1,
     slot_idx=0,
     prefill_metadata=None,
+    input_rows=None,
 ):
-    """Append one packed global-attention chunk to its CP-local history."""
+    """Append one packed global-attention chunk to its CP-local history.
 
+    input_rows: (offset, rows) to write only that row window of every head of `chunk` (one request of a batched
+    step's stacked rows); the chunk must already be in the cache dtype.
+    """
+
+    _write_chunk_to_ring_cache(
+        cache, chunk, mesh_config, kv_actual_global, layer_idx, num_layers, slot_idx, prefill_metadata, input_rows
+    )
+
+
+def _write_chunk_to_ring_cache(
+    cache, chunk, mesh_config, kv_actual_global, layer_idx, num_layers, slot_idx, prefill_metadata, input_rows
+):
+    if input_rows is not None and chunk.dtype != cache.dtype:
+        raise ValueError("a windowed write needs the chunk in the cache dtype (cast the stacked tensor once)")
     original_chunk = chunk
-
     if chunk.dtype != cache.dtype:
         chunk = ttnn.typecast(chunk, cache.dtype)
-
     if prefill_metadata is not None:
-        slot_idx_t = prefill_metadata.slot_idx
-        kv_actual_global_t = prefill_metadata.kv_actual_global
-
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache=cache,
-            input=chunk,
-            slot_idx=slot_idx_t,
-            layer_idx=layer_idx,
-            num_layers=num_layers,
-            kv_actual_global=kv_actual_global_t,
-            cluster_axis=mesh_config.cp_axis,
-        )
-    else:
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache=cache,
-            input=chunk,
-            slot_idx=slot_idx,
-            layer_idx=layer_idx,
-            num_layers=num_layers,
-            kv_actual_global=kv_actual_global,
-            cluster_axis=mesh_config.cp_axis,
-        )
-
+        slot_idx, kv_actual_global = prefill_metadata.slot_idx, prefill_metadata.kv_actual_global
+    offset, rows = input_rows if input_rows is not None else (0, None)
+    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+        cache=cache,
+        input=chunk,
+        slot_idx=slot_idx,
+        layer_idx=layer_idx,
+        num_layers=num_layers,
+        kv_actual_global=kv_actual_global,
+        cluster_axis=mesh_config.cp_axis,
+        input_row_offset=offset,
+        input_rows=rows,
+    )
     if chunk is not original_chunk:
         chunk.deallocate(True)
 
@@ -346,41 +349,14 @@ def write_chunk_to_sliding_ring_cache(
     num_layers=1,
     slot_idx=0,
     prefill_metadata=None,
+    input_rows=None,
 ):
-    """Append one sliding-attention chunk (K and V) to its CP-local history."""
+    """Append one sliding-attention chunk (K and V) to its CP-local history (input_rows: as for the global cache)."""
 
     for cache, chunk in ((cache_k, tt_k), (cache_v, tt_v)):
-        original_chunk = chunk
-
-        if chunk.dtype != cache.dtype:
-            chunk = ttnn.typecast(chunk, cache.dtype)
-
-        if prefill_metadata is not None:
-            slot_idx_t = prefill_metadata.slot_idx
-            kv_actual_global_t = prefill_metadata.kv_actual_global
-
-            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                cache=cache,
-                input=chunk,
-                slot_idx=slot_idx_t,
-                layer_idx=layer_idx,
-                num_layers=num_layers,
-                kv_actual_global=kv_actual_global_t,
-                cluster_axis=mesh_config.cp_axis,
-            )
-        else:
-            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                cache=cache,
-                input=chunk,
-                slot_idx=slot_idx,
-                layer_idx=layer_idx,
-                num_layers=num_layers,
-                kv_actual_global=kv_actual_global,
-                cluster_axis=mesh_config.cp_axis,
-            )
-
-        if chunk is not original_chunk:
-            chunk.deallocate(True)
+        _write_chunk_to_ring_cache(
+            cache, chunk, mesh_config, kv_actual_global, layer_idx, num_layers, slot_idx, prefill_metadata, input_rows
+        )
 
 
 def sliding_ring_prefill_attention(

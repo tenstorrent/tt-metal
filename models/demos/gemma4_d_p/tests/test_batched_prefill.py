@@ -9,6 +9,7 @@ device metadata. One trace per layout (each request's chunk width, in lane order
 
     test_batched_kv_matches_unbatched  KV of every slot, batched vs each request alone (plus a repeat control and
                                        slot 0 against the GPU golden); G4B_DEEP=1 for prefixes up to 32k
+    test_kv_window_write               update_padded_kv_cache with an input row window vs slice-then-write
     test_same_request_lanes            several chunks of one request in one step vs the request alone
     test_partial_steps                 fewer requests than lanes: a smaller trace vs padding with a spare lane
     test_lane_widths                   per-request chunk widths in one step (e.g. 4k + 2k + 2k, a lone 8k)
@@ -405,6 +406,63 @@ def test_batched_kv_matches_unbatched(mesh_device, num_lanes, fidelity, reset_se
     runner.release()
     _write_report("kv", f"kv_B{num_lanes}_{fidelity}{'_deep' if deep else ''}.json", report)
     assert not failures, "batched KV fails the gates:\n" + "\n".join(failures)
+
+
+# ── Op check: windowed KV-cache write ───────────────────────────────────────────
+
+
+@torch.no_grad()
+@pytest.mark.timeout(1800)
+@parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+def test_kv_window_write(mesh_device, reset_seeds):
+    """update_padded_kv_cache with an input row window writes exactly what slice-then-write does: four lanes of a
+    stacked [1, heads, 4 x 256, 256] bfp8 input into four slots at different prefixes, two caches, bit-identical."""
+    from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
+        init_sliding_ring_kv_cache,
+        write_chunk_to_sliding_ring_cache,
+    )
+    from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
+
+    mesh_config = MeshConfig(mesh_device)
+    heads, width = 4, 256
+    lanes = [(0, 2048 * 3, 256), (1, 0, 256), (2, 2048, 512), (3, 4096, 256)]  # (slot, prefix, rows)
+    total = sum(r for _, _, r in lanes)
+    caches = [init_sliding_ring_kv_cache(mesh_config, heads, width, max_seq_len=16384, num_users=4) for _ in range(2)]
+    host = torch.randn(1, heads, total, width).to(torch.bfloat16)
+    stacked = ttnn.from_torch(
+        host,
+        device=mesh_device,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    metadata = [PrefillMetadata(mesh_config) for _ in lanes]
+    start = 0
+    for (slot, prefix, n), meta in zip(lanes, metadata):
+        meta.update(slot_idx=slot, kv_actual_global=prefix)
+        sliced = ttnn.slice(stacked, (0, 0, start, 0), (1, heads, start + n, width))
+        write_chunk_to_sliding_ring_cache(
+            caches[0].k, caches[0].v, sliced, sliced, mesh_config, kv_actual_global=0, prefill_metadata=meta
+        )
+        write_chunk_to_sliding_ring_cache(
+            caches[1].k,
+            caches[1].v,
+            stacked,
+            stacked,
+            mesh_config,
+            kv_actual_global=0,
+            prefill_metadata=meta,
+            input_rows=(start, n),
+        )
+        sliced.deallocate(True)
+        start += n
+    ttnn.synchronize_device(mesh_device)
+    for name in ("k", "v"):
+        a = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(getattr(caches[0], name).cpu())]
+        b = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(getattr(caches[1], name).cpu())]
+        assert all(torch.equal(x, y) for x, y in zip(a, b)), f"windowed write differs from slice + write ({name})"
+        nonzero = sum(int(x.abs().sum() > 0) for x in a)
+        logger.info(f"[batching] KV window write {name}: bit-identical on {len(a)} devices ({nonzero} with data)")
 
 
 # ── Several chunks of one request in a step ────────────────────────────────────

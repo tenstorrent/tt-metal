@@ -54,6 +54,10 @@ static void run_reader() {
     const uint32_t src_addr = get_common_arg_val<uint32_t>(8);
     const uint32_t num_pages = get_arg_val<uint32_t>(0);
     const uint32_t core_blocks_written = get_arg_val<uint32_t>(1);
+    // Input row window: page-rows per head in the whole input, and the window's first page-row. A plain call
+    // has stride == input_Ht and offset 0, so the mapping below is the identity.
+    const uint32_t input_row_stride_t = get_arg_val<uint32_t>(2);
+    const uint32_t input_row_offset_t = get_arg_val<uint32_t>(3);
 
     const uint32_t linear_coord = get_common_arg_val<uint32_t>(0);
     const uint32_t linear_factor = get_common_arg_val<uint32_t>(1);
@@ -133,9 +137,14 @@ static void run_reader() {
     const uint32_t src_page_bytes = get_local_cb_interface(cb_id_in0).fifo_page_size;
 
     const uint32_t num_blocks = HasRope ? num_pages : num_pages / Wt;
+    // Only a windowed call pays the per-row divide.
+    const bool windowed = input_row_offset_t != 0 || input_row_stride_t != input_Ht;
     for (uint32_t block = 0; block < num_blocks; ++block) {
         const uint32_t j = core_blocks_written + block;
-        const uint32_t source_row = base + j + (j + start_in_stripe >= chunk_local_t ? jump : 0);
+        const uint32_t window_row = base + j + (j + start_in_stripe >= chunk_local_t ? jump : 0);
+        const uint32_t source_row =
+            windowed ? (window_row / input_Ht) * input_row_stride_t + input_row_offset_t + window_row % input_Ht
+                     : window_row;
         if constexpr (HasScaled) {
             constexpr auto rope_args = TensorAccessorArgs<HasScaled ? src_args.next_compile_time_args_offset() : 0>();
             constexpr auto scale_args = TensorAccessorArgs<HasScaled ? rope_args.next_compile_time_args_offset() : 0>();

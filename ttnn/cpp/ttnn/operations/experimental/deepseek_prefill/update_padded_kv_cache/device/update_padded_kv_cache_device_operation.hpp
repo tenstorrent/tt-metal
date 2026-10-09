@@ -46,6 +46,12 @@ struct UpdatePaddedKvCacheDeviceOperation {
         // KV dedup: second axis to also shard the cache across. The input stays TP-replicated and each chip
         // persists only its own 1/tp window; the axes linearize to one block-cyclic axis of size sp*tp.
         std::optional<uint32_t> tp_axis;
+        // Input row window (tokens, multiples of 32): write rows [input_row_offset, input_row_offset +
+        // input_rows) of every head of `input`, as if that slice were the input. Lets a batched prefill
+        // step write each request's KV straight from the requests' stacked rows, without a slice.
+        // Structural (hashed); nullopt input_rows = every row from the offset on.
+        uint32_t input_row_offset = 0;
+        std::optional<uint32_t> input_rows;
     };
 
     struct tensor_args_t {
@@ -140,6 +146,8 @@ ttnn::Tensor update_padded_kv_cache(
     std::optional<uint32_t> valid_global = std::nullopt,
     std::optional<uint32_t> tp_axis = std::nullopt,
     const std::optional<ttnn::Tensor>& rope = std::nullopt,
-    const std::optional<ttnn::Tensor>& scales = std::nullopt);
+    const std::optional<ttnn::Tensor>& scales = std::nullopt,
+    uint32_t input_row_offset = 0,
+    std::optional<uint32_t> input_rows = std::nullopt);
 
 }  // namespace ttnn::prim

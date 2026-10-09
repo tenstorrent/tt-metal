@@ -323,8 +323,9 @@ class Gemma4Attention:
         Frees tt_q, tt_k and tt_v.
 
         Each request's CP-local rows come from lanes.rows when lanes is a PrefillLanes, else an equal split. The
-        stacked K/V are cast to the cache dtype once and freed before any SDPA runs (the SDPA reads K/V from the
-        cache), so the per-request calls see the L1 an unbatched call sees. The device metadata carries each
+        stacked K/V are cast to the cache dtype once; each request's cache write reads its own row window of them
+        (input_rows), and they are freed before any SDPA runs (the SDPA reads K/V from the cache), so the
+        per-request calls see the L1 an unbatched call sees. The device metadata carries each
         request's prefix, so the host kv_actual_global is 0.
         """
         rows = getattr(lanes, "rows", None) or (tt_q.shape[-2] // len(lanes),) * len(lanes)
@@ -347,36 +348,33 @@ class Gemma4Attention:
                 tt_k.deallocate(True)
             stacked_kv = _to_cache_dtype(packed_kv, self.ring_kv_cache.kv.dtype)
             for span, metadata in zip(spans, lanes):
-                kv_rows = _lane_rows(stacked_kv, *span)
                 write_chunk_to_global_ring_cache(
                     self.ring_kv_cache.kv,
-                    kv_rows,
+                    stacked_kv,
                     self.mesh_config,
                     kv_actual_global=0,
                     layer_idx=self.ring_layer_idx,
                     num_layers=self.ring_num_layers,
                     prefill_metadata=metadata,
+                    input_rows=span,
                 )
-                kv_rows.deallocate(True)
             stacked_kv.deallocate(True)
         else:
             stacked_k = _to_cache_dtype(tt_k, self.ring_kv_cache.k.dtype)
             stacked_v = _to_cache_dtype(tt_v, self.ring_kv_cache.v.dtype)
             for span, metadata in zip(spans, lanes):
-                k_rows, v_rows = _lane_rows(stacked_k, *span), _lane_rows(stacked_v, *span)
                 write_chunk_to_sliding_ring_cache(
                     self.ring_kv_cache.k,
                     self.ring_kv_cache.v,
-                    k_rows,
-                    v_rows,
+                    stacked_k,
+                    stacked_v,
                     self.mesh_config,
                     kv_actual_global=0,
                     layer_idx=self.ring_layer_idx,
                     num_layers=self.ring_num_layers,
                     prefill_metadata=metadata,
+                    input_rows=span,
                 )
-                k_rows.deallocate(True)
-                v_rows.deallocate(True)
             stacked_k.deallocate(True)
             stacked_v.deallocate(True)
 
