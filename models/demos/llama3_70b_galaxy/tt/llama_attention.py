@@ -116,6 +116,8 @@ class TtLlamaAttention(LightweightModule):
         self.compute_kernel_config_hifi2_fp16 = configuration.compute_kernel_config_hifi2_fp16
 
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
+        # Qwen Wormhole only (qwen_model_config.py); None elsewhere keeps HiFi4 for the ring SDPA.
+        self.compute_kernel_config_ring_sdpa_long = getattr(configuration, "compute_kernel_config_ring_sdpa_long", None)
 
         self.transformation_mats = transformation_mats
 
@@ -1350,13 +1352,21 @@ class TtLlamaAttention(LightweightModule):
         if ring_distributed_sdpa:
             # Qwen sets SDPA_RING_PROGCFG (qwen_model_config.py); other models use SDPA_PROGCFG as before.
             ring_sdpa_progcfg = self.model_config.get("SDPA_RING_PROGCFG", self.model_config["SDPA_PROGCFG"])
+            ring_sdpa_ckc = self.compute_kernel_config_hifi4
+            if (
+                self.is_qwen
+                and not self.is_blackhole
+                and seq_len > 8192
+                and self.compute_kernel_config_ring_sdpa_long is not None
+            ):
+                ring_sdpa_ckc = self.compute_kernel_config_ring_sdpa_long
             attn_output_1QSD = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
                 v_heads_1VSD_8b,
                 ring_size=4,  # Number of devices in the ring topology (4 devices per row in 8x4 mesh)
                 scale=self.scale,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
+                compute_kernel_config=ring_sdpa_ckc,
                 program_config=ring_sdpa_progcfg(seq_len, chunk_start_idx=0),
                 page_table=None,
                 chunk_start_idx=None,

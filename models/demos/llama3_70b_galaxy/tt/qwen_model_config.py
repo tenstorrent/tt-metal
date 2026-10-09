@@ -506,6 +506,15 @@ class TtQwenModelArgs(TtModelArgs):
                 fp32_dest_acc_en=True,
                 packer_l1_acc=False,
             )
+            # Ring SDPA of long prefill (llama_attention.forward_prefill, batch 1, seq_len > 8192, Wormhole only):
+            # HiFi2 instead of HiFi4 (Q/K/V are bf8), fp32 dest acc and packer_l1_acc kept. Measured at 40960 tokens
+            # (q320/k512, exp_approx on, 7x10): 24.24 -> 17.86 ms, output PCC 0.99995 vs HiFi4.
+            self.compute_kernel_config_ring_sdpa_long = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
 
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
             # core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(1, 0)
