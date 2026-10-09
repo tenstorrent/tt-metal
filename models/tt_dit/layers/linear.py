@@ -654,6 +654,7 @@ class RowParallelLinear(Module):
         M, N = x.padded_shape[-2], weight.padded_shape[-1]
         core_grid = get_matmul_core_grid(self.mesh_device)
         matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+        dtype = resolve_output_dtype(dtype, x)
         output = ttnn.experimental.minimal_matmul(
             input_tensor=[x, x_second] if x_second is not None else x,
             weight_tensor=weight,
@@ -722,6 +723,7 @@ class RowParallelLinear(Module):
         K = weight.padded_shape[-2] if x_second is not None else x.padded_shape[-1]
         M, N = x.padded_shape[-2], weight.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
+        dtype = resolve_output_dtype(dtype, x)
 
         needs_reshape = len(x.shape) <= 3
         if needs_reshape:

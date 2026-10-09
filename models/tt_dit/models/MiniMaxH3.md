@@ -441,6 +441,50 @@ one model's measurement is not evidence about LTX, Wan or Ideogram-4, which keep
 the video not at all (40-48 dB PSNR frame-to-frame, identical anchor and CLIP numbers), so this is
 conditioner fidelity rather than output quality.
 
+## 8-bit block matmuls (`FAST_H3_FP8`, opt-in)
+
+Off by default. `FAST_H3_FP8=1` runs the four matmuls of every transformer block (`to_qkv`, `to_out`, `ff1`, `ff2`,
+together about 41 % of a 5 s forward's FLOPs; the ring SDPA is the rest) with `bfloat8_b` operands: 16 consecutive
+values share one 8-bit exponent and each keeps a sign and 7 mantissa bits, so a tile is 1088 B instead of 2048 B.
+Everything else keeps its precision on purpose: the adaLN projections and the float32 time embedders (every block reads
+them, so a rounding there biases the whole trajectory), the per-request input projections and token refiner, the
+output heads, the norms and the residual stream.
+
+The weights are typecast on device after the checkpoint and any fused adapter delta have landed (the bf16 weight cache
+is unchanged); a `ColParallelLinear` input is cast before its TP all-gather, so the gather moves half the bytes, and
+`ff1` writes its SwiGLU output in `bfloat8_b` for `ff2` to read. `to_out`'s weight stays bf16 because its fused
+`residual + gate * out` epilogue needs the weight tile format to match the bf16 residual; `FAST_H3_FP8_OUT_WEIGHT=1`
+un-fuses that epilogue and quantizes it too.
+
+Fidelity is the second knob. The FPU consumes the weight (SrcA) 1+4 mantissa bits per pass and the activation (SrcB)
+1+6 bits, so `HiFi2` (two passes, the default) is exact for `bfloat8_b` operands, and `LoFi` (one pass, twice the
+matmul throughput) rounds the weight to 5 significant bits while the activation keeps 7.
+
+| knob | values | meaning |
+|---|---|---|
+| `FAST_H3_FP8` | `0` (default), `1` = `w8a8_lofi`, `w8`, `w8a8`, `w8_lofi`, `w8a8_lofi` | preset: `w8` = bfloat8_b weights only (HiFi2); `w8a8` = weights and activations (HiFi2); `w8_lofi` / `w8a8_lofi` = the same at LoFi, with `to_out`'s epilogue un-fused and its weight quantized (see below) |
+| `FAST_H3_FP8_LINEARS` | subset of `qkv,out,ff1,ff2` | restrict the preset to these linears (the others stay bf16) |
+| `FAST_H3_FP8_ACTIVATIONS` | `0` / `1` | override the preset's activation cast |
+| `FAST_H3_FP8_FIDELITY` | `LoFi`, `HiFi2`, `HiFi3`, `HiFi4` | override the preset's math fidelity |
+| `FAST_H3_FP8_FP32_ACC` | `0` / `1` | fp32 destination accumulation (on in every preset) |
+| `FAST_H3_FP8_SDPA` | `0` / `1` | also typecast Q, K and V to `bfloat8_b` before the ring SDPA (one dtype is required across its inputs; the SP ring then gathers half the bytes) |
+| `FAST_H3_FP8_OUT_WEIGHT` | `0` / `1` | quantize `to_out`'s weight by un-fusing its addcmul epilogue; defaults to `1` at LoFi (the fused epilogue would multiply the gated residual at LoFi, tripling `to_out`'s error, and the un-fused matmul is faster at the measured shape) and `0` at HiFi2 |
+| `FAST_H3_FP8_BLOCKS` | `lo-hi` (inclusive block indices) | quantize only these transformer blocks and keep the others bf16, e.g. `2-46` keeps the first two and last three blocks at full precision |
+
+The knobs are named `FAST_H3_*` rather than `MINIMAX_H3_*` to keep the opt-in speed tier apart from the model's
+configuration knobs.
+
+Measured on a 4x8 at the HyperFlow working point (`MiniMaxH3_fp8.md`, section 8): `FAST_H3_FP8=1` takes about
+6 % off the denoise time at 5 s and 10 % at 15 s, where the longer rows make the linears byte-bound; the first
+forward's predicted velocity moves by 4–8 % relative L2 (a different sample of the same scene after the 8
+forwards), and `FAST_H3_FP8_BLOCKS=2-46` trims about a quarter of that error for a tenth of the gain.
+
+Programmatic use: `MiniMaxH3Pipeline.create_pipeline(..., quant_config=MiniMaxH3QuantConfig.preset("w8a8"))`, or
+`apply_quant_config(transformer, config)` on a built transformer or a single block (`models/tt_dit/models/transformers/minimax_h3/quant_config.py`).
+
+Measured numbers (per-matmul error, per-forward error, 5 s clip timing and PSNR against the bf16 run) are in the PR that
+added the knob and in `models/tt_dit/models/MiniMaxH3_fp8.md`.
+
 ## Audio decode precision
 
 The audio VAE constructs in **accurate mode by default**: `MiniMaxH3AudioDecoder` /

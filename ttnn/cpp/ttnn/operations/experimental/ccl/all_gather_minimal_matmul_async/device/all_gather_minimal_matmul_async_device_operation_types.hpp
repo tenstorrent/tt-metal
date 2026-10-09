@@ -107,6 +107,10 @@ struct AllGatherMinimalMatmulAsyncParams {
 
     // Structural fields that affect program-cache key.
     static constexpr auto attribute_names = std::make_tuple(
+        "compute_kernel_config",
+        "output_dtype",
+        "fused_activation",
+        "fused_ternary_scalar",
         "num_links",
         "ring_size",
         "output_mem_config",
@@ -126,6 +130,10 @@ struct AllGatherMinimalMatmulAsyncParams {
 
     auto attribute_values() const {
         return std::forward_as_tuple(
+            this->compute_kernel_config,
+            this->output_dtype,
+            this->fused_activation,
+            this->fused_ternary_scalar,
             this->num_links,
             this->ring_size,
             this->output_mem_config,

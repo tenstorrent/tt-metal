@@ -127,7 +127,7 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
         return self._adapter
 
     def _prepare_transformer(self):
-        transformer = super()._prepare_transformer()
+        transformer = super()._load_transformer()
         contract = self.hyperflow
         if self._adapter is None:
             if contract is not None:
@@ -166,6 +166,7 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
                 module.reapply_after_load()
             if self._time_embedder_states is not None and not self.coresident:
                 transformer.time_embedder.load_torch_state_dict(self._time_embedder_states["time_embedder"])
+        self._quantize_transformer(transformer)
         return transformer
 
     def _fused_time_embedder_states(self) -> dict[str, dict[str, torch.Tensor]]:
