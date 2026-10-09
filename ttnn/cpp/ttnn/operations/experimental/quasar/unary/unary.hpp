@@ -31,4 +31,11 @@ Tensor cos(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
+// ttnn.experimental.quasar.reciprocal: element-wise 1 / x (SFPU), same signature as ttnn.reciprocal minus
+// sub_core_grids.
+Tensor reciprocal(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
 }  // namespace ttnn::operations::experimental::quasar
