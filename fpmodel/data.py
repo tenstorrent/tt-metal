@@ -20,6 +20,10 @@ SETS = {  # name -> (path, arch); read-only inputs
     "wh_miss2": (f"{WORK}/frozen/wh_miss_draw2.csv", "wh"),  # draw-2 problems where v6 was > 3% slower than legacy
     "wh_sharded": (f"{WORK}/frozen/wh_sharded_sweep.csv", "wh"),  # sharded-input problems of draws 2 and 3
     # fresh draws whose clean tests are done (legacy, rules and the then-current model's pick per problem)
+    "wh_kdepth": (
+        f"{WORK}/frozen/wh_kdepth_partial.csv",
+        "wh",
+    ),  # full sweeps of shapes near the suite's K-depth misses
     "wh_draws": ([f"{WORK}/frozen/wh_draw{k}_timed.csv" for k in (2, 3, 4, 5)], "wh"),
 }
 KEY = ["problem_id", "origin", "config"]

@@ -47,7 +47,11 @@ EXPERIMENTAL = {
     "mcovl": "the async multicast write overlaps the sender's next fetch; only the handshake is serial with it",
     "mcout": "MultiCore: a fixed cost per output tile (dest acquire, pack, one-tile write and its barrier)",
     "blkfix": "a fixed cost per output block: buffer handshakes, compute reconfiguration and output setup each block pays",
+    "kstep": "a fixed cost every K step pays outside the read/compute overlap (CB push/pop + semaphore handshakes, compute block re-init)",
     "burstdram": "DRAM reads also congest with the bytes each reader has in flight per barrier (super-linear per-step cost)",
+    "satlat": "saturated reads still expose part of the read latency every K step: after each barrier the reader's pipe is empty until its next requests land",
+    "satlatmc": "as satlat, but only where multicast keeps the cores in lockstep (their per-step gaps coincide, so the shared pipe idles)",
+    "packov": "math and pack of a subblock overlap only partly: a fitted fraction of the shorter stage adds to the longer",
 }
 OFF = set(filter(None, os.environ.get("ABLATE", "").split(",")))
 EXTRA = set(filter(None, os.environ.get("EXTRA", "").split(",")))  # experimental terms switched on
@@ -102,6 +106,18 @@ CONSTANTS = {
     "blk_fixed": (1000.0, "cycles per output block: CB handshakes, compute reconfig, output block setup", "blkfix"),
     "dram_w_eff": (0.6, "achievable fraction of spec DRAM bandwidth for writes", "dramw"),
     "burst_dram_KB": (500.0, "KB per reader per barrier at which its DRAM read rate halves", "burstdram"),
+    "kstep_fixed": (200.0, "cycles per K step outside the read/compute overlap", "kstep"),
+    "sat_lat": (0.5, "fraction of the read latency exposed per K step when shared bandwidth saturates", "satlat"),
+    "sat_lat_mc": (
+        0.5,
+        "fraction of the read latency exposed per K step when saturated, lockstepped (multicast) layouts",
+        "satlatmc",
+    ),
+    "pack_ov": (
+        0.5,
+        "fraction of the shorter of math and pack per subblock-step that does not overlap the longer",
+        "packov",
+    ),
     "lat_shard": (
         500.0,
         "cycles per K step: handing the in0 mcast to the core that holds the next K slice",
@@ -153,6 +169,9 @@ LO = {
     "link_eff": 0.05,
     "bank_frac": 0.02,
     "link_eff_mc": 0.05,
+    "sat_lat": 1e-3,
+    "sat_lat_mc": 1e-3,
+    "pack_ov": 1e-3,
 }
 HI = {
     "mc_eff0": 1.0,
@@ -163,6 +182,9 @@ HI = {
     "link_eff": 1.0,
     "bank_frac": 1.0,
     "link_eff_mc": 1.0,
+    "sat_lat": 2.0,
+    "sat_lat_mc": 2.0,
+    "pack_ov": 1.0,
 }
 
 
@@ -280,8 +302,11 @@ def predict(g, p, parts=False):
             noc_rd = np.where(r > 1, s["noc_Bpc"] * p["noc_eff_cc"], noc)
         if on("sat"):
             cgd = 1 + nbytes / (p["burst_dram_KB"] * 1e3) if on("burstdram") else 1.0
-            dr = np.maximum(p["lat_dram"] + nbytes * cgd / noc_rd, nbytes * r * cgd / (dram * eff))
-            l1 = np.maximum(p["lat_l1"] + nbytes / noc, nbytes * r * cg / l1bw)
+            xs = p["sat_lat"] if on("satlat") else 0.0
+            if on("satlatmc"):
+                xs = xs + np.where((g["rx0"] > 0) | (g["rx1"] > 0), p["sat_lat_mc"], 0.0)
+            dr = np.maximum(p["lat_dram"] + nbytes * cgd / noc_rd, xs * p["lat_dram"] + nbytes * r * cgd / (dram * eff))
+            l1 = np.maximum(p["lat_l1"] + nbytes / noc, xs * p["lat_l1"] + nbytes * r * cg / l1bw)
         else:
             dr = p["lat_dram"] + nbytes / np.minimum(noc, dram * eff / r)
             l1 = p["lat_l1"] + nbytes / np.minimum(noc, l1bw / (r * cg))
@@ -328,7 +353,8 @@ def predict(g, p, parts=False):
     reload = 0.0
     if on("spill"):  # compute-side work inside the K loop, so it pipelines against the reads
         reload = g["reloads"] * (nsb * p["rl_init"] + np.where(g["tb_p"] >= 4096, tiles * p["u2d"], 0.0))
-    comp = nsb * (np.maximum(math, pack) + fixed) + reload / np.maximum(nK, 1)
+    stage = np.maximum(math, pack) + (p["pack_ov"] * np.minimum(math, pack) if on("packov") else 0.0)
+    comp = nsb * (stage + fixed) + reload / np.maximum(nK, 1)
     epi = 0.0
     if on("epilogue"):
         epi = np.where(g["bias"], tiles * g["tb_o"] / p.get("pack_Bpc", 1e9), 0.0)
@@ -356,7 +382,8 @@ def predict(g, p, parts=False):
         comp = comp + sync
     if on("shardhop"):  # rotating in0 sender: a cross-core handoff on the critical path of every K step
         comp = comp + np.where((g["src_a"] == 2) & (g["rx0"] > 0), p["lat_shard"], 0.0)
-    piped = read + (nK - 1) * np.maximum(read, comp) + comp  # double-buffered K loop
+    ks = p["kstep_fixed"] if on("kstep") else 0.0
+    piped = read + (nK - 1) * (np.maximum(read, comp) + ks) + comp  # double-buffered K loop
     serial = nK * (read + comp)
     if on("wov2d"):  # 2D receivers: writing block b overlaps block b+1's reads and compute
         loop = np.where(g["dbuf"], piped, serial)
