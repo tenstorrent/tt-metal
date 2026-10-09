@@ -142,6 +142,7 @@ struct ComputeConfig {
     // Build and load only this TRISC. Unset builds all three. Kernels that set it must cover UNPACK,
     // MATH and PACK on the same cores and agree on fp32_dest_acc_en, dst_full_sync_en and
     // unpack_to_dest_mode. Not supported by light-metal capture, offline compile or Emule.
+    // MATH and PACK kernels read the UNPACK kernel's runtime arguments and must not have their own.
     std::optional<ComputeProcessor> processor;
 };
 

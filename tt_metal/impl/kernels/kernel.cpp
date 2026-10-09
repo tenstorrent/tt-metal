@@ -853,6 +853,12 @@ constexpr uint32_t max_runtime_args_tensix = 4096;
 void Kernel::validate_runtime_args_size(
     size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
+    const auto processor = this->compute_processor();
+    TT_FATAL(
+        !processor || *processor == ComputeProcessor::UNPACK,
+        "Compute kernel {} on TRISC{} reads the UNPACK kernel's runtime arguments, so it must not have its own",
+        this->name(),
+        enchantum::to_underlying(*processor));
     uint32_t expected_max_rt_args = 0;
 
     // The enforced ceiling is no longer the conservative public floor (kernel_types.hpp:max_runtime_args).

@@ -139,6 +139,20 @@ TEST_F(ComputeProcessorMockDevice, CPU_SelectedTriscsMustAgreeOnSharedSettings) 
         ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("must have the same fp32_dest_acc_en")));
 }
 
+TEST_F(ComputeProcessorMockDevice, CPU_MathAndPackMustShareOneUnpackKernel) {
+    auto program = CreateProgram();
+    const CoreRange cores({0, 0}, {1, 0});
+    for (auto core : {CoreCoord(0, 0), CoreCoord(1, 0)}) {
+        CreateKernel(program, kBlankComputeKernel, core, ComputeConfig{.processor = ComputeProcessor::UNPACK});
+    }
+    CreateKernel(program, kBlankComputeKernel, cores, ComputeConfig{.processor = ComputeProcessor::MATH});
+    CreateKernel(program, kBlankComputeKernel, cores, ComputeConfig{.processor = ComputeProcessor::PACK});
+
+    EXPECT_THAT(
+        [&] { program.impl().compile(mesh_device_->get_devices()[0]); },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("more than one UNPACK kernel")));
+}
+
 TEST_F(MeshDispatchFixture, TensixPassOnNormalKernelCreation) {
     for ([[maybe_unused]] const auto& mesh_device : this->devices_) {
         distributed::MeshWorkload workload;

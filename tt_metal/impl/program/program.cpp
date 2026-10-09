@@ -560,6 +560,36 @@ void validate_selected_compute_processors(detail::ProgramImpl& program, const Ha
     }
 }
 
+// Blaze-only experimental named args. Removal is tracked by issue #50953.
+// A MATH or PACK kernel that selects its processor reads the UNPACK kernel's runtime arguments (see
+// finalize_rt_args), so it builds with UNPACK's named runtime-argument schema.
+void share_named_runtime_args(detail::ProgramImpl& program, const Hal& hal) {
+    std::unordered_map<const Kernel*, const Kernel*> unpack_of;
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        for (const auto& kg : program.get_kernel_groups(index)) {
+            // kernel_ids are sorted by processor, so UNPACK comes before MATH and PACK.
+            std::shared_ptr<Kernel> unpack;
+            for (auto kernel_id : kg->kernel_ids) {
+                auto kernel = program.get_kernel(kernel_id);
+                const auto processor = kernel->compute_processor();
+                if (!processor) {
+                    continue;
+                }
+                if (*processor == ComputeProcessor::UNPACK) {
+                    unpack = kernel;
+                } else {
+                    TT_FATAL(
+                        unpack_of.emplace(kernel.get(), unpack.get()).first->second == unpack.get(),
+                        "Compute kernel {} shares cores with more than one UNPACK kernel, including on cores {}",
+                        kernel->name(),
+                        kg->core_ranges.str());
+                    kernel->set_named_runtime_arg_namespaces(unpack->named_runtime_arg_namespaces());
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
 
 KernelHandle detail::ProgramImpl::add_kernel(
@@ -3182,6 +3212,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     }
 
     validate_selected_compute_processors(*this, MetalContext::instance(device_context_id).hal());
+    share_named_runtime_args(*this, MetalContext::instance(device_context_id).hal());
 
     TT_FATAL(
         device->is_initialized(),
