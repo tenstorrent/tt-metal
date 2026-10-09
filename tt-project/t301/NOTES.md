@@ -28,3 +28,20 @@ verbatim, per-row deltas, check ~-0.4 s across Stage1+Stage2+Audio decode (VAE d
 mp4 md5 always differs between arms (PR export is x264 ultrafast crf 20); PCC/PSNR on decoded frames is the check.
 PR_BUILD_FAILED -> read setup.log. Cleanup after: t301/pr worktree (git -C /var/tmp/fasth3/t48 worktree remove),
 jit-main, jit-pr, out_* (keep small logs/stills copied here).
+
+## Attempt 3 (2026-10-09 02:02 UTC, blx03 still "No route to host")
+- Job 126 (main, attempt 1) did NOT finish: ran 20:25:51-20:35:46 UTC, broker status failed exit 120, runtime 595 s.
+  Log stops at 20:31:14 (still JIT-compiling warmup kernels: sdpa), then 4+ min silence, pytest timed out at ~572 s
+  (BrokenPipe in report). Broker had power-cycled right before it (job 137, 20:22) and failed fabric-check (151) and
+  rebooted (152, 20:41:53) right after. Counted as drop #1 for the main arm on blx01. Copy: t301/run_main_job126.log.
+- Drop log: 2026-10-08 ~20:31-20:42 UTC, blx01, job 126 (ours, main arm): hang then fabric-check fail, reboots
+  (20:41, 20:54, 21:10, 21:25), later bridge-reset of chips 16-31 failed and power cycle 22:45 UTC; hold ended 22:49 UTC.
+  drv301.sh died with the reboot (no marker, no process left).
+- Broker ready since 22:49 UTC (health-gate 206 + fabric-check 207 passed, ltx-host 209 completed). Queue was empty.
+- Resubmitted without the driver, one arm per job, -t 570; pytest --timeout lowered to 540 (stack before broker kill):
+  main = job 210 (log /var/log/tt-device-broker/2026-10-09_020225_210.log), started 02:02 UTC, JIT cache partly warm.
+  pr   = job 211 (log .../2026-10-09_020227_211.log), queued behind it, cold JIT (may need a rerun if compile eats 540 s).
+- Next: when 211 is finished: check both out_<arm>/run.log for T301_EXIT=0. If an arm failed by timeout during cold
+  compile, rerun just that arm (-t 570; cache now warm). Then run cmp301.py per gen by hand:
+  P=/var/tmp/fasth3/t48/python_env/bin/python; for g in 0 1 2: $P cmp301.py out_main/ltx_av_fast_1920x1088_$g.mp4
+  out_pr/... $D gen$g >> cmp.txt. Quote gen #2 tables, deltas, Stage1+Stage2+Audio decode check, md5s. Cleanup as above.

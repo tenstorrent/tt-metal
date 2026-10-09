@@ -4,7 +4,7 @@
 # Both: LTX-2.3 22B distilled 1.1, bf16 default, 1088x1920, 145 frames, seed 10, 4x8 ring nl2 fsdp0
 #   (main id 4x8sp1tp0nl2_ring_is_fsdp0 = ltx-rt id bh_4x8sp1tp0_ring),
 # TT_DIT_CACHE_DIR unset (loads from the local checkpoint, writes no DiT cache), RUN_VBENCH=0 RUN_CLIP=0.
-# Warm table = gen #2 (pure replay). Usage (broker -t 600): run301.sh main|pr
+# Warm table = gen #2 (pure replay). Usage (broker -t 570): run301.sh main|pr
 set -o pipefail
 A=${1:?main|pr}; F=/var/tmp/fasth3; D=$F/t301; OUT=$D/out_$A
 case $A in
@@ -33,7 +33,7 @@ done
 T0=$(date +%s)
 # pytest runs in its own process group; any exit or broker kill takes the whole group (no orphan holds the device).
 export T W
-setsid bash -c 'python -u -m pytest -c $W/pytest.ini --rootdir=$W -sv -p no:cacheprovider --timeout=570 "$T::test_pipeline_distilled" -k 4x8sp1tp0nl2_ring_is_fsdp0 2>&1 | tee -a run.log; exit ${PIPESTATUS[0]}' &
+setsid bash -c 'python -u -m pytest -c $W/pytest.ini --rootdir=$W -sv -p no:cacheprovider --timeout=540 "$T::test_pipeline_distilled" -k 4x8sp1tp0nl2_ring_is_fsdp0 2>&1 | tee -a run.log; exit ${PIPESTATUS[0]}' &
 PG=$!
 trap 'kill -TERM -- -$PG 2>/dev/null; sleep 5; kill -KILL -- -$PG 2>/dev/null' EXIT
 trap 'exit 143' TERM INT
