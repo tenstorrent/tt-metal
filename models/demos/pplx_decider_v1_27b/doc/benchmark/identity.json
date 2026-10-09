@@ -1,0 +1,45 @@
+{
+  "stage": "11 benchmark (adapted: decision benchmarks via TTDecider, no vLLM)",
+  "date": "2026-10-09",
+  "model": {
+    "repo": "perplexity-ai/pplx-decider-v1-27b",
+    "revision": "b01a5cbaca5391f73bd55103d4f27e8982cd5e60",
+    "base_model_on_card": "Qwen/Qwen3.8-27B",
+    "temperature": "from decision_config.json (2.2076), read by AppTokenizer and checked against the model"
+  },
+  "implementation": {
+    "path": "models/demos/pplx_decider_v1_27b",
+    "entry_point": "demo/decider.py TTDecider.from_pretrained(device, vision=True).predict(state, question[, images])",
+    "branch": "gtobarTT/pplx-decider-bringup",
+    "measured_at_commit": "b98508eac2cea97f804d7a28c46ccad2c3715743",
+    "model_code_changed_in_stage_11": false,
+    "tt_metal_upstream_base": "2c1e1ebdd638886821f35113a5fd0d6335d71608 (merge-base with origin/main, 2026-10-09)"
+  },
+  "precision": {
+    "config_id": "C0",
+    "source": "doc/datatype_sweep/selected_precision_config.json (PrecisionPolicy.default())",
+    "policy_name_logged_at_load": "act_bf16__w_bfp8_all__hifi2",
+    "summary": "BFP8_B weights for every projection and the readout, HiFi2 matmuls with fp32 accumulation, BF16 activations / embedding / norms, fp32 DeltaNet recurrent state, fp32 head (mask, / T, softmax); vision tower BF16"
+  },
+  "device": {
+    "board": "1x Blackhole p150a",
+    "dram": "31.83 GiB, 8 banks (ttnn.get_memory_view, doc/context_contract.json)",
+    "compute_grid_used": "13 x 10 = 130 Tensix",
+    "firmware_bundle": "19.8.0 (UMD log at device open)",
+    "kmd": "2.6.1 (UMD log at device open)",
+    "device_open": "ttnn.open_device(device_id=0, l1_small_size=24576) (runner); pytest use_module_device l1_small_size=24576, trace_region_size=256 MiB (bucket harness)"
+  },
+  "host": {
+    "python_env": "/local/ttuser/gtobar/tt-metal/python_env (Python 3.10, datasets 2.21.0)",
+    "HF_HOME": "/local/ttuser/gtobar/hf"
+  },
+  "datasets": {
+    "winogrande": "allenai/winogrande@01e74176c63542e6b0bcb004dcdea22d94fb67b5 winogrande_xl/validation",
+    "financial_phrasebank": "takala/financial_phrasebank@8d3fe0c36d5feec6b3cc5e455b0fcb4820fb9964 data/FinancialPhraseBank-v1.0.zip Sentences_50Agree.txt",
+    "belebele": "facebook/belebele@7899cdfa4e1e0d733fd77c848e2c273cb1d32be2 eng_Latn/test",
+    "seed": 20260920,
+    "subset_size": 200,
+    "manifest": "doc/benchmark/subsets_manifest.json (copy of /local/ttuser/gtobar/artifacts/pplx_decider/stage11/subsets/manifest.json: ids, ids sha256, subset file sha256, seq_len, buckets)"
+  },
+  "raw_outputs": "/local/ttuser/gtobar/artifacts/pplx_decider/stage11/{subsets,run,perf_buckets,logs}"
+}

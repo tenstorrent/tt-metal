@@ -1,0 +1,601 @@
+id,benchmark,seq_len,bucket,count,label,prediction,p_label,p_prediction,correct,latency_ms
+"winogrande_xl/validation/16","winogrande",105,128,2,"Leslie","Michael",0.042522,0.957478,0,182.8
+"winogrande_xl/validation/27","winogrande",104,128,2,"portions","portions",0.663623,0.663623,1,181.2
+"winogrande_xl/validation/28","winogrande",103,128,2,"Craig","Craig",0.984226,0.984226,1,178.7
+"winogrande_xl/validation/33","winogrande",111,128,2,"Leslie","Leslie",0.650868,0.650868,1,176.1
+"winogrande_xl/validation/43","winogrande",117,128,2,"dress","dress",0.923539,0.923539,1,172.3
+"winogrande_xl/validation/50","winogrande",110,128,2,"brush","brush",0.624715,0.624715,1,168.3
+"winogrande_xl/validation/70","winogrande",111,128,2,"shirt","shirt",0.963881,0.963881,1,164.8
+"winogrande_xl/validation/73","winogrande",108,128,2,"Joseph","Joel",0.443617,0.556383,0,161.8
+"winogrande_xl/validation/78","winogrande",107,128,2,"house","playground",0.233421,0.766579,0,159.2
+"winogrande_xl/validation/79","winogrande",107,128,2,"Aaron","Aaron",0.884775,0.884775,1,157.3
+"winogrande_xl/validation/95","winogrande",102,128,2,"stone","stone",0.938076,0.938076,1,156.0
+"winogrande_xl/validation/107","winogrande",114,128,2,"pie","pie",0.941285,0.941285,1,155.0
+"winogrande_xl/validation/108","winogrande",116,128,2,"surgery","surgery",0.990728,0.990728,1,154.3
+"winogrande_xl/validation/116","winogrande",111,128,2,"sofa","sofa",0.938076,0.938076,1,153.8
+"winogrande_xl/validation/126","winogrande",105,128,2,"Ian","Ian",0.813393,0.813393,1,153.3
+"winogrande_xl/validation/127","winogrande",117,128,2,"Joseph","Joseph",0.637894,0.637894,1,153.2
+"winogrande_xl/validation/130","winogrande",104,128,2,"William","William",0.927443,0.927443,1,153.1
+"winogrande_xl/validation/134","winogrande",108,128,2,"Michael","Michael",0.837818,0.837818,1,153.2
+"winogrande_xl/validation/137","winogrande",106,128,2,"Donald","Donald",0.988398,0.988398,1,153.1
+"winogrande_xl/validation/140","winogrande",107,128,2,"house","house",0.884775,0.884775,1,153.5
+"winogrande_xl/validation/151","winogrande",112,128,2,"eyelashes","eyelashes",0.919443,0.919443,1,153.9
+"winogrande_xl/validation/157","winogrande",109,128,2,"Patricia","Felicia",0.443617,0.556383,0,153.8
+"winogrande_xl/validation/158","winogrande",109,128,2,"Felicia","Felicia",0.813393,0.813393,1,154.4
+"winogrande_xl/validation/159","winogrande",104,128,2,"Elena","Elena",0.992998,0.992998,1,154.5
+"winogrande_xl/validation/161","winogrande",104,128,2,"William","William",0.542366,0.542366,1,154.6
+"winogrande_xl/validation/169","winogrande",105,128,2,"Ian","Ian",0.845365,0.845365,1,154.4
+"winogrande_xl/validation/170","winogrande",114,128,2,"Vase","Vase",0.970989,0.970989,1,154.5
+"winogrande_xl/validation/171","winogrande",114,128,2,"Urn","Urn",0.952621,0.952621,1,154.3
+"winogrande_xl/validation/173","winogrande",106,128,2,"Jessica","Jessica",0.845365,0.845365,1,154.5
+"winogrande_xl/validation/174","winogrande",114,128,2,"car","car",0.927443,0.927443,1,154.6
+"winogrande_xl/validation/198","winogrande",103,128,2,"Craig","Eric",0.265179,0.734821,0,154.3
+"winogrande_xl/validation/204","winogrande",107,128,2,"Laura","Laura",0.977985,0.977985,1,154.4
+"winogrande_xl/validation/213","winogrande",110,128,2,"Elena","Elena",0.514152,0.514152,1,154.4
+"winogrande_xl/validation/220","winogrande",114,128,2,"store","store",0.890423,0.890423,1,154.5
+"winogrande_xl/validation/224","winogrande",109,128,2,"Justin","Justin",0.934704,0.934704,1,154.6
+"winogrande_xl/validation/254","winogrande",109,128,2,"Craig","Craig",0.845365,0.845365,1,154.0
+"winogrande_xl/validation/259","winogrande",110,128,2,"diner","supermarket",0.254293,0.745707,0,153.8
+"winogrande_xl/validation/261","winogrande",108,128,2,"William","William",0.884775,0.884775,1,153.8
+"winogrande_xl/validation/294","winogrande",103,128,2,"bike","bike",0.947240,0.947240,1,153.9
+"winogrande_xl/validation/303","winogrande",105,128,2,"Christine","Christine",0.900993,0.900993,1,153.7
+"winogrande_xl/validation/310","winogrande",108,128,2,"mediation","mediation",0.766579,0.766579,1,154.0
+"winogrande_xl/validation/324","winogrande",109,128,2,"Maria","Maria",0.837818,0.837818,1,154.5
+"winogrande_xl/validation/346","winogrande",107,128,2,"e-mail","letter",0.471718,0.528282,0,154.7
+"winogrande_xl/validation/356","winogrande",107,128,2,"cake","cake",0.944337,0.944337,1,154.7
+"winogrande_xl/validation/367","winogrande",108,128,2,"Robert","Robert",0.927443,0.927443,1,155.0
+"winogrande_xl/validation/368","winogrande",107,128,2,"makeup","skin",0.402186,0.597814,0,155.3
+"winogrande_xl/validation/376","winogrande",105,128,2,"truck","truck",0.745707,0.745707,1,155.0
+"winogrande_xl/validation/378","winogrande",109,128,2,"Carrie","Carrie",0.967623,0.967623,1,155.3
+"winogrande_xl/validation/384","winogrande",118,128,2,"cake","cake",0.528282,0.528282,1,155.3
+"winogrande_xl/validation/387","winogrande",104,128,2,"container","container",0.734821,0.734821,1,155.5
+"winogrande_xl/validation/396","winogrande",105,128,2,"Neil","Neil",0.982852,0.982852,1,155.8
+"winogrande_xl/validation/397","winogrande",104,128,2,"gifts","gifts",0.938076,0.938076,1,154.5
+"winogrande_xl/validation/398","winogrande",106,128,2,"Megan","Megan",0.982368,0.982368,1,154.6
+"winogrande_xl/validation/405","winogrande",107,128,2,"Adam","Adam",0.970989,0.970989,1,154.5
+"winogrande_xl/validation/416","winogrande",118,128,2,"snacks","snacks",0.923539,0.923539,1,154.6
+"winogrande_xl/validation/418","winogrande",112,128,2,"Tanya","Tanya",0.961857,0.961857,1,154.8
+"winogrande_xl/validation/422","winogrande",108,128,2,"Kyle","Kyle",0.944337,0.944337,1,154.7
+"winogrande_xl/validation/423","winogrande",109,128,2,"Cynthia","Cynthia",0.821835,0.821835,1,154.4
+"winogrande_xl/validation/437","winogrande",106,128,2,"beaches","beaches",0.991942,0.991942,1,154.5
+"winogrande_xl/validation/444","winogrande",107,128,2,"Hunter","Hunter",0.837818,0.837818,1,154.5
+"winogrande_xl/validation/449","winogrande",114,128,2,"food wholesale","food wholesale",0.795591,0.795591,1,154.6
+"winogrande_xl/validation/450","winogrande",103,128,2,"Monica","Monica",0.919443,0.919443,1,155.1
+"winogrande_xl/validation/453","winogrande",109,128,2,"Watch","Watch",0.866293,0.866293,1,155.5
+"winogrande_xl/validation/461","winogrande",106,128,2,"pocket","pocket",0.859597,0.859597,1,155.3
+"winogrande_xl/validation/464","winogrande",106,128,2,"William","William",0.837818,0.837818,1,155.3
+"winogrande_xl/validation/467","winogrande",113,128,2,"Justin","Justin",0.980296,0.980296,1,155.4
+"winogrande_xl/validation/489","winogrande",107,128,2,"Betty","Betty",0.985891,0.985891,1,155.1
+"winogrande_xl/validation/491","winogrande",107,128,2,"remote control","remote control",0.972542,0.972542,1,155.1
+"winogrande_xl/validation/494","winogrande",107,128,2,"Aaron","Aaron",0.980296,0.980296,1,155.4
+"winogrande_xl/validation/505","winogrande",107,128,2,"Steven","Steven",0.712176,0.712176,1,155.8
+"winogrande_xl/validation/514","winogrande",104,128,2,"brush","brush",0.859597,0.859597,1,155.0
+"winogrande_xl/validation/515","winogrande",104,128,2,"stain","stain",0.910647,0.910647,1,155.1
+"winogrande_xl/validation/516","winogrande",109,128,2,"Tanya","Tanya",0.878875,0.878875,1,155.1
+"winogrande_xl/validation/526","winogrande",104,128,2,"notes","notes",0.878875,0.878875,1,155.3
+"winogrande_xl/validation/533","winogrande",115,128,2,"wood","wood",0.990728,0.990728,1,155.1
+"winogrande_xl/validation/548","winogrande",113,128,2,"Erin","Rebecca",0.375285,0.624715,0,155.3
+"winogrande_xl/validation/550","winogrande",105,128,2,"Michael","Michael",0.972542,0.972542,1,155.3
+"winogrande_xl/validation/554","winogrande",106,128,2,"Megan","Megan",0.967623,0.967623,1,155.8
+"winogrande_xl/validation/555","winogrande",105,128,2,"Erin","Erin",0.556383,0.556383,1,155.9
+"winogrande_xl/validation/563","winogrande",107,128,2,"Brett","Brett",0.952621,0.952621,1,155.9
+"winogrande_xl/validation/571","winogrande",106,128,2,"table","table",0.611349,0.611349,1,156.1
+"winogrande_xl/validation/573","winogrande",104,128,2,"accident","accident",0.837818,0.837818,1,156.7
+"winogrande_xl/validation/584","winogrande",104,128,2,"spoon","spoon",0.866293,0.866293,1,156.6
+"winogrande_xl/validation/586","winogrande",110,128,2,"truck","truck",0.852623,0.852623,1,156.3
+"winogrande_xl/validation/593","winogrande",110,128,2,"diner","diner",0.821835,0.821835,1,155.1
+"winogrande_xl/validation/597","winogrande",120,128,2,"omelet","omelet",0.900993,0.900993,1,155.6
+"winogrande_xl/validation/598","winogrande",111,128,2,"Brett","Leslie",0.233422,0.766578,0,155.4
+"winogrande_xl/validation/599","winogrande",109,128,2,"medicine","therapy",0.375285,0.624715,0,155.3
+"winogrande_xl/validation/602","winogrande",103,128,2,"water","hole",0.402186,0.597814,0,155.4
+"winogrande_xl/validation/607","winogrande",109,128,2,"sit-ups","sit-ups",0.979172,0.979172,1,155.5
+"winogrande_xl/validation/616","winogrande",112,128,2,"dry","dry",0.949999,0.949999,1,155.7
+"winogrande_xl/validation/618","winogrande",116,128,2,"Samantha","Erin",0.415873,0.584127,0,155.4
+"winogrande_xl/validation/619","winogrande",107,128,2,"Sarah","Sarah",0.972542,0.972542,1,155.2
+"winogrande_xl/validation/620","winogrande",108,128,2,"Samantha","Samantha",0.975410,0.975410,1,155.3
+"winogrande_xl/validation/621","winogrande",114,128,2,"summer","summer",0.976732,0.976732,1,155.0
+"winogrande_xl/validation/626","winogrande",104,128,2,"house","house",0.756294,0.756294,1,155.1
+"winogrande_xl/validation/632","winogrande",105,128,2,"Samantha","Samantha",0.957478,0.957478,1,155.4
+"winogrande_xl/validation/633","winogrande",106,128,2,"Jessica","Rebecca",0.323857,0.676143,0,155.8
+"winogrande_xl/validation/636","winogrande",107,128,2,"nose","tongue",0.485848,0.514152,0,156.0
+"winogrande_xl/validation/637","winogrande",110,128,2,"car","car",0.955112,0.955112,1,156.1
+"winogrande_xl/validation/659","winogrande",120,128,2,"interview","interview",0.961857,0.961857,1,156.2
+"winogrande_xl/validation/661","winogrande",114,128,2,"socks","socks",0.795591,0.795591,1,155.8
+"winogrande_xl/validation/672","winogrande",110,128,2,"salad","salad",0.972542,0.972542,1,155.6
+"winogrande_xl/validation/673","winogrande",106,128,2,"Natalie","Natalie",0.528282,0.528282,1,155.9
+"winogrande_xl/validation/677","winogrande",120,128,2,"Eric","Eric",0.949999,0.949999,1,156.3
+"winogrande_xl/validation/683","winogrande",116,128,2,"dress","dress",0.986658,0.986658,1,156.6
+"winogrande_xl/validation/692","winogrande",107,128,2,"Brian","Brian",0.982368,0.982368,1,157.1
+"winogrande_xl/validation/702","winogrande",107,128,2,"pen","pen",0.972542,0.972542,1,157.7
+"winogrande_xl/validation/707","winogrande",116,128,2,"Logan","Logan",0.941285,0.941285,1,157.0
+"winogrande_xl/validation/709","winogrande",110,128,2,"fever","fever",0.712176,0.712176,1,157.0
+"winogrande_xl/validation/710","winogrande",118,128,2,"pressure cook","pressure cook",0.611349,0.611349,1,157.0
+"winogrande_xl/validation/717","winogrande",114,128,2,"Samuel","Samuel",0.959725,0.959725,1,156.9
+"winogrande_xl/validation/718","winogrande",107,128,2,"Sunglasses","Sunglasses",0.637894,0.637894,1,157.1
+"winogrande_xl/validation/728","winogrande",106,128,2,"Nelson","Nelson",0.872717,0.872717,1,157.2
+"winogrande_xl/validation/731","winogrande",105,128,2,"Samuel","Samuel",0.688417,0.688417,1,157.2
+"winogrande_xl/validation/736","winogrande",106,128,2,"Kevin","Kevin",0.923539,0.923539,1,156.8
+"winogrande_xl/validation/739","winogrande",108,128,2,"lots","lots",0.859597,0.859597,1,157.0
+"winogrande_xl/validation/743","winogrande",117,128,2,"Nick","Nick",0.878875,0.878875,1,157.2
+"winogrande_xl/validation/749","winogrande",105,128,2,"Dennis","Ian",0.362106,0.637894,0,157.0
+"winogrande_xl/validation/752","winogrande",111,128,2,"light","light",0.821835,0.821835,1,156.9
+"winogrande_xl/validation/764","winogrande",108,128,2,"auditorium","auditorium",0.895827,0.895827,1,157.1
+"winogrande_xl/validation/769","winogrande",107,128,2,"Jessica","Jessica",0.988398,0.988398,1,157.1
+"winogrande_xl/validation/774","winogrande",107,128,2,"Rebecca","Mary",0.443617,0.556383,0,156.8
+"winogrande_xl/validation/786","winogrande",107,128,2,"computers","computers",0.500000,0.500000,1,156.9
+"winogrande_xl/validation/797","winogrande",106,128,2,"Kayla","Kayla",0.852623,0.852623,1,156.6
+"winogrande_xl/validation/805","winogrande",109,128,2,"chest","chest",0.745707,0.745707,1,156.9
+"winogrande_xl/validation/838","winogrande",107,128,2,"Dennis","Dennis",0.878875,0.878875,1,157.3
+"winogrande_xl/validation/839","winogrande",109,128,2,"pen","pen",0.776557,0.776557,1,157.4
+"winogrande_xl/validation/844","winogrande",112,128,2,"Tanya","Tanya",0.955112,0.955112,1,157.5
+"winogrande_xl/validation/847","winogrande",108,128,2,"north","north",0.994564,0.994564,1,157.2
+"winogrande_xl/validation/857","winogrande",108,128,2,"Katrina","Katrina",0.941285,0.941285,1,157.0
+"winogrande_xl/validation/865","winogrande",104,128,2,"Hunter","Hunter",0.786228,0.786228,1,156.7
+"winogrande_xl/validation/879","winogrande",108,128,2,"William","William",0.988398,0.988398,1,157.1
+"winogrande_xl/validation/881","winogrande",103,128,2,"rock","concrete",0.030649,0.969351,0,156.8
+"winogrande_xl/validation/883","winogrande",111,128,2,"low","low",0.969351,0.969351,1,156.1
+"winogrande_xl/validation/891","winogrande",104,128,2,"Samuel","Benjamin",0.500000,0.500000,0,156.0
+"winogrande_xl/validation/896","winogrande",112,128,2,"Christine","Christine",0.944337,0.944337,1,155.7
+"winogrande_xl/validation/897","winogrande",114,128,2,"kiosk","kiosk",0.988719,0.988719,1,156.0
+"winogrande_xl/validation/899","winogrande",109,128,2,"pool","pool",0.900993,0.900993,1,155.9
+"winogrande_xl/validation/903","winogrande",107,128,2,"Ian","Ryan",0.471718,0.528282,0,156.1
+"winogrande_xl/validation/907","winogrande",111,128,2,"shoes","shoes",0.745707,0.745707,1,156.3
+"winogrande_xl/validation/908","winogrande",111,128,2,"bowls","platters",0.500000,0.500000,0,156.5
+"winogrande_xl/validation/918","winogrande",103,128,2,"Aaron","Aaron",0.878875,0.878875,1,156.6
+"winogrande_xl/validation/924","winogrande",113,128,2,"Patricia","Patricia",0.994862,0.994862,1,156.6
+"winogrande_xl/validation/927","winogrande",107,128,2,"Derrick","Derrick",0.837818,0.837818,1,156.6
+"winogrande_xl/validation/930","winogrande",117,128,2,"page","page",0.637894,0.637894,1,156.5
+"winogrande_xl/validation/935","winogrande",103,128,2,"Michael","Brett",0.457634,0.542366,0,156.6
+"winogrande_xl/validation/956","winogrande",105,128,2,"table","table",0.941285,0.941285,1,156.7
+"winogrande_xl/validation/963","winogrande",103,128,2,"Aaron","Aaron",0.766579,0.766579,1,157.4
+"winogrande_xl/validation/964","winogrande",107,128,2,"Maria","Maria",0.972542,0.972542,1,157.6
+"winogrande_xl/validation/971","winogrande",114,128,2,"Samuel","Samuel",0.923539,0.923539,1,157.4
+"winogrande_xl/validation/978","winogrande",108,128,2,"pen","pen",0.878875,0.878875,1,157.4
+"winogrande_xl/validation/980","winogrande",109,128,2,"door","door",0.845365,0.845365,1,157.9
+"winogrande_xl/validation/986","winogrande",108,128,2,"Jessica","Jessica",0.866293,0.866293,1,158.1
+"winogrande_xl/validation/987","winogrande",108,128,2,"ice","ice",0.985082,0.985082,1,158.1
+"winogrande_xl/validation/995","winogrande",108,128,2,"Felicia","Felicia",0.852623,0.852623,1,158.1
+"winogrande_xl/validation/997","winogrande",105,128,2,"hair","hair",0.745707,0.745707,1,158.0
+"winogrande_xl/validation/1005","winogrande",109,128,2,"corsage","wrist",0.287824,0.712176,0,157.9
+"winogrande_xl/validation/1008","winogrande",108,128,2,"bars","bars",0.989914,0.989914,1,157.6
+"winogrande_xl/validation/1010","winogrande",107,128,2,"Katrina","Katrina",0.829976,0.829976,1,157.2
+"winogrande_xl/validation/1014","winogrande",105,128,2,"Rachel","Rachel",0.955112,0.955112,1,157.4
+"winogrande_xl/validation/1017","winogrande",105,128,2,"piercing","piercing",0.556383,0.556383,1,156.9
+"winogrande_xl/validation/1023","winogrande",105,128,2,"love","love",0.528282,0.528282,1,156.5
+"winogrande_xl/validation/1040","winogrande",115,128,2,"crossbow","crossbow",0.990984,0.990984,1,156.6
+"winogrande_xl/validation/1046","winogrande",108,128,2,"blue","blue",0.919443,0.919443,1,156.6
+"winogrande_xl/validation/1047","winogrande",108,128,2,"red","red",0.985082,0.985082,1,156.7
+"winogrande_xl/validation/1048","winogrande",110,128,2,"Samantha","Samantha",0.723642,0.723642,1,156.8
+"winogrande_xl/validation/1052","winogrande",102,128,2,"calcium","calcium",0.866293,0.866293,1,156.7
+"winogrande_xl/validation/1066","winogrande",106,128,2,"Logan","Logan",0.776557,0.776557,1,156.7
+"winogrande_xl/validation/1069","winogrande",113,128,2,"Nick","Nick",0.972542,0.972542,1,156.6
+"winogrande_xl/validation/1071","winogrande",110,128,2,"Emily","Rachel",0.213772,0.786228,0,156.9
+"winogrande_xl/validation/1074","winogrande",109,128,2,"underwear","toga",0.485848,0.514152,0,156.9
+"winogrande_xl/validation/1076","winogrande",106,128,2,"Rachel","Rachel",0.923539,0.923539,1,156.6
+"winogrande_xl/validation/1084","winogrande",107,128,2,"William","William",0.878875,0.878875,1,156.9
+"winogrande_xl/validation/1088","winogrande",117,128,2,"Lindsey","Lindsey",0.804645,0.804645,1,156.8
+"winogrande_xl/validation/1097","winogrande",104,128,2,"cervix","cervix",0.611349,0.611349,1,156.8
+"winogrande_xl/validation/1116","winogrande",106,128,2,"Benjamin","Benjamin",0.923539,0.923539,1,157.1
+"winogrande_xl/validation/1121","winogrande",116,128,2,"Patricia","Patricia",0.804645,0.804645,1,157.4
+"winogrande_xl/validation/1125","winogrande",109,128,2,"Adam","Adam",0.991712,0.991712,1,157.4
+"winogrande_xl/validation/1130","winogrande",111,128,2,"Joel","Joel",0.786228,0.786228,1,157.8
+"winogrande_xl/validation/1132","winogrande",104,128,2,"Cynthia","Jennifer",0.204409,0.795591,0,157.7
+"winogrande_xl/validation/1135","winogrande",103,128,2,"Megan","Megan",0.969351,0.969351,1,158.1
+"winogrande_xl/validation/1147","winogrande",104,128,2,"bricks","bricks",0.969351,0.969351,1,157.5
+"winogrande_xl/validation/1154","winogrande",111,128,2,"Natalie","Natalie",0.959725,0.959725,1,157.9
+"winogrande_xl/validation/1162","winogrande",105,128,2,"Christopher","Christopher",0.995279,0.995279,1,157.6
+"winogrande_xl/validation/1166","winogrande",117,128,2,"teacup","teacup",0.514152,0.514152,1,157.9
+"winogrande_xl/validation/1169","winogrande",107,128,2,"cracker","cracker",0.965802,0.965802,1,157.5
+"winogrande_xl/validation/1193","winogrande",109,128,2,"pants","pants",0.947240,0.947240,1,157.9
+"winogrande_xl/validation/1200","winogrande",105,128,2,"yams","yams",0.927443,0.927443,1,158.4
+"winogrande_xl/validation/1211","winogrande",106,128,2,"Cynthia","Cynthia",0.872717,0.872717,1,158.4
+"winogrande_xl/validation/1217","winogrande",103,128,2,"Jennifer","Jennifer",0.970989,0.970989,1,159.2
+"winogrande_xl/validation/1228","winogrande",105,128,2,"Brian","Brian",0.983323,0.983323,1,158.6
+"winogrande_xl/validation/1238","winogrande",109,128,2,"pillow","pillow",0.900993,0.900993,1,158.9
+"winogrande_xl/validation/1241","winogrande",109,128,2,"Michael","Michael",0.974015,0.974015,1,158.4
+"winogrande_xl/validation/1248","winogrande",111,128,2,"soap","soap",0.624715,0.624715,1,158.3
+"winogrande_xl/validation/1250","winogrande",102,128,2,"Brett","Brett",0.931162,0.931162,1,158.4
+"winogrande_xl/validation/1253","winogrande",104,128,2,"William","William",0.961857,0.961857,1,158.5
+"winogrande_xl/validation/1254","winogrande",104,128,2,"Randy","Randy",0.989914,0.989914,1,158.2
+"winogrande_xl/validation/1260","winogrande",114,128,2,"Amy","Amy",0.900993,0.900993,1,157.8
+"winogrande_xl/validation/1263","winogrande",112,128,2,"Joel","Joel",0.931162,0.931162,1,157.8
+"sentences_50agree/66","financial_phrasebank",205,1024,3,"positive","positive",0.653295,0.653295,1,388.7
+"sentences_50agree/109","financial_phrasebank",159,1024,3,"positive","positive",0.986172,0.986172,1,405.1
+"sentences_50agree/113","financial_phrasebank",181,1024,3,"positive","positive",0.990679,0.990679,1,433.7
+"sentences_50agree/134","financial_phrasebank",165,1024,3,"positive","positive",0.990362,0.990362,1,458.0
+"sentences_50agree/173","financial_phrasebank",174,1024,3,"positive","positive",0.983153,0.983153,1,469.2
+"sentences_50agree/175","financial_phrasebank",174,1024,3,"positive","positive",0.968557,0.968557,1,472.5
+"sentences_50agree/202","financial_phrasebank",158,1024,3,"positive","positive",0.989573,0.989573,1,474.1
+"sentences_50agree/280","financial_phrasebank",166,1024,3,"positive","positive",0.986331,0.986331,1,475.2
+"sentences_50agree/292","financial_phrasebank",167,1024,3,"positive","positive",0.986923,0.986923,1,475.3
+"sentences_50agree/295","financial_phrasebank",155,1024,3,"neutral","neutral",0.885104,0.885104,1,472.5
+"sentences_50agree/313","financial_phrasebank",165,1024,3,"positive","positive",0.923340,0.923340,1,472.6
+"sentences_50agree/317","financial_phrasebank",175,1024,3,"positive","positive",0.920310,0.920310,1,473.6
+"sentences_50agree/381","financial_phrasebank",172,1024,3,"positive","positive",0.952352,0.952352,1,475.7
+"sentences_50agree/431","financial_phrasebank",167,1024,3,"neutral","neutral",0.808847,0.808847,1,472.6
+"sentences_50agree/432","financial_phrasebank",160,1024,3,"neutral","neutral",0.628864,0.628864,1,473.8
+"sentences_50agree/466","financial_phrasebank",175,1024,3,"positive","positive",0.767780,0.767780,1,475.3
+"sentences_50agree/507","financial_phrasebank",195,1024,3,"neutral","neutral",0.585345,0.585345,1,475.2
+"sentences_50agree/511","financial_phrasebank",154,1024,3,"neutral","positive",0.270510,0.708327,0,474.9
+"sentences_50agree/521","financial_phrasebank",148,1024,3,"neutral","neutral",0.654124,0.654124,1,475.0
+"sentences_50agree/536","financial_phrasebank",167,1024,3,"neutral","positive",0.407445,0.572291,0,475.2
+"sentences_50agree/549","financial_phrasebank",211,1024,3,"positive","positive",0.985539,0.985539,1,475.4
+"sentences_50agree/562","financial_phrasebank",177,1024,3,"positive","positive",0.860067,0.860067,1,475.2
+"sentences_50agree/607","financial_phrasebank",167,1024,3,"positive","positive",0.859128,0.859128,1,475.2
+"sentences_50agree/630","financial_phrasebank",166,1024,3,"positive","positive",0.983709,0.983709,1,472.6
+"sentences_50agree/634","financial_phrasebank",160,1024,3,"positive","positive",0.693282,0.693282,1,474.9
+"sentences_50agree/639","financial_phrasebank",160,1024,3,"positive","positive",0.955003,0.955003,1,475.3
+"sentences_50agree/644","financial_phrasebank",207,1024,3,"positive","positive",0.899189,0.899189,1,474.9
+"sentences_50agree/678","financial_phrasebank",214,1024,3,"negative","negative",0.974613,0.974613,1,475.2
+"sentences_50agree/683","financial_phrasebank",157,1024,3,"negative","negative",0.955858,0.955858,1,475.2
+"sentences_50agree/684","financial_phrasebank",184,1024,3,"negative","negative",0.967560,0.967560,1,477.9
+"sentences_50agree/693","financial_phrasebank",146,1024,3,"negative","negative",0.848348,0.848348,1,477.2
+"sentences_50agree/695","financial_phrasebank",164,1024,3,"neutral","neutral",0.593606,0.593606,1,477.9
+"sentences_50agree/697","financial_phrasebank",226,1024,3,"negative","negative",0.969844,0.969844,1,478.5
+"sentences_50agree/794","financial_phrasebank",169,1024,3,"positive","positive",0.781198,0.781198,1,478.2
+"sentences_50agree/819","financial_phrasebank",166,1024,3,"positive","neutral",0.183922,0.801689,0,477.8
+"sentences_50agree/853","financial_phrasebank",162,1024,3,"positive","positive",0.508269,0.508269,1,477.9
+"sentences_50agree/882","financial_phrasebank",155,1024,3,"positive","positive",0.521530,0.521530,1,476.0
+"sentences_50agree/899","financial_phrasebank",171,1024,3,"positive","positive",0.873462,0.873462,1,473.6
+"sentences_50agree/1019","financial_phrasebank",164,1024,3,"neutral","positive",0.047104,0.947099,0,472.9
+"sentences_50agree/1036","financial_phrasebank",170,1024,3,"neutral","positive",0.476916,0.504700,0,472.4
+"sentences_50agree/1046","financial_phrasebank",176,1024,3,"neutral","neutral",0.932343,0.932343,1,472.7
+"sentences_50agree/1176","financial_phrasebank",172,1024,3,"neutral","positive",0.088733,0.904325,0,472.7
+"sentences_50agree/1213","financial_phrasebank",164,1024,3,"neutral","neutral",0.973500,0.973500,1,473.7
+"sentences_50agree/1241","financial_phrasebank",164,1024,3,"neutral","neutral",0.691735,0.691735,1,475.2
+"sentences_50agree/1296","financial_phrasebank",185,1024,3,"neutral","neutral",0.966728,0.966728,1,473.4
+"sentences_50agree/1385","financial_phrasebank",190,1024,3,"neutral","neutral",0.702933,0.702933,1,473.1
+"sentences_50agree/1425","financial_phrasebank",157,1024,3,"neutral","neutral",0.600684,0.600684,1,474.3
+"sentences_50agree/1470","financial_phrasebank",150,1024,3,"neutral","neutral",0.717668,0.717668,1,474.6
+"sentences_50agree/1475","financial_phrasebank",161,1024,3,"neutral","positive",0.132570,0.858924,0,475.3
+"sentences_50agree/1506","financial_phrasebank",157,1024,3,"neutral","positive",0.068459,0.926032,0,475.2
+"sentences_50agree/1515","financial_phrasebank",159,1024,3,"neutral","neutral",0.839409,0.839409,1,473.4
+"sentences_50agree/1536","financial_phrasebank",168,1024,3,"neutral","positive",0.295952,0.691975,0,472.9
+"sentences_50agree/1550","financial_phrasebank",169,1024,3,"neutral","neutral",0.667327,0.667327,1,474.7
+"sentences_50agree/1586","financial_phrasebank",173,1024,3,"neutral","neutral",0.900360,0.900360,1,475.4
+"sentences_50agree/1589","financial_phrasebank",159,1024,3,"neutral","neutral",0.961254,0.961254,1,477.7
+"sentences_50agree/1595","financial_phrasebank",146,1024,3,"neutral","neutral",0.907618,0.907618,1,477.9
+"sentences_50agree/1623","financial_phrasebank",164,1024,3,"neutral","neutral",0.744649,0.744649,1,477.9
+"sentences_50agree/1664","financial_phrasebank",156,1024,3,"neutral","neutral",0.506998,0.506998,1,475.0
+"sentences_50agree/1673","financial_phrasebank",153,1024,3,"neutral","neutral",0.928416,0.928416,1,474.8
+"sentences_50agree/1689","financial_phrasebank",169,1024,3,"neutral","neutral",0.688611,0.688611,1,475.1
+"sentences_50agree/1695","financial_phrasebank",172,1024,3,"neutral","neutral",0.793554,0.793554,1,475.4
+"sentences_50agree/1749","financial_phrasebank",158,1024,3,"positive","positive",0.941780,0.941780,1,475.1
+"sentences_50agree/1776","financial_phrasebank",159,1024,3,"positive","positive",0.986237,0.986237,1,475.5
+"sentences_50agree/1797","financial_phrasebank",163,1024,3,"positive","positive",0.921068,0.921068,1,475.5
+"sentences_50agree/1801","financial_phrasebank",182,1024,3,"neutral","neutral",0.931559,0.931559,1,475.2
+"sentences_50agree/1803","financial_phrasebank",163,1024,3,"neutral","neutral",0.967471,0.967471,1,475.4
+"sentences_50agree/1813","financial_phrasebank",160,1024,3,"positive","positive",0.790069,0.790069,1,475.7
+"sentences_50agree/1844","financial_phrasebank",173,1024,3,"neutral","neutral",0.632073,0.632073,1,475.3
+"sentences_50agree/1857","financial_phrasebank",171,1024,3,"neutral","positive",0.103462,0.889708,0,476.2
+"sentences_50agree/1870","financial_phrasebank",153,1024,3,"neutral","positive",0.333123,0.657202,0,478.2
+"sentences_50agree/1957","financial_phrasebank",148,1024,3,"neutral","positive",0.307086,0.678481,0,476.4
+"sentences_50agree/1967","financial_phrasebank",165,1024,3,"neutral","neutral",0.769660,0.769660,1,475.6
+"sentences_50agree/1976","financial_phrasebank",158,1024,3,"neutral","neutral",0.894656,0.894656,1,477.2
+"sentences_50agree/1979","financial_phrasebank",161,1024,3,"neutral","positive",0.358953,0.425414,0,475.3
+"sentences_50agree/2021","financial_phrasebank",168,1024,3,"neutral","neutral",0.949157,0.949157,1,475.2
+"sentences_50agree/2057","financial_phrasebank",150,1024,3,"neutral","positive",0.210713,0.774978,0,475.4
+"sentences_50agree/2062","financial_phrasebank",171,1024,3,"positive","positive",0.835539,0.835539,1,475.4
+"sentences_50agree/2067","financial_phrasebank",191,1024,3,"positive","positive",0.627798,0.627798,1,476.6
+"sentences_50agree/2106","financial_phrasebank",204,1024,3,"positive","positive",0.930109,0.930109,1,476.9
+"sentences_50agree/2133","financial_phrasebank",166,1024,3,"positive","positive",0.927114,0.927114,1,478.0
+"sentences_50agree/2194","financial_phrasebank",188,1024,3,"positive","positive",0.949561,0.949561,1,478.2
+"sentences_50agree/2201","financial_phrasebank",145,1024,3,"neutral","neutral",0.701247,0.701247,1,478.5
+"sentences_50agree/2219","financial_phrasebank",144,1024,3,"positive","positive",0.834682,0.834682,1,480.9
+"sentences_50agree/2221","financial_phrasebank",167,1024,3,"positive","positive",0.702933,0.702933,1,480.9
+"sentences_50agree/2254","financial_phrasebank",152,1024,3,"neutral","positive",0.357259,0.629354,0,477.3
+"sentences_50agree/2285","financial_phrasebank",163,1024,3,"positive","positive",0.973137,0.973137,1,475.4
+"sentences_50agree/2295","financial_phrasebank",160,1024,3,"positive","positive",0.902436,0.902436,1,473.9
+"sentences_50agree/2337","financial_phrasebank",156,1024,3,"neutral","neutral",0.817095,0.817095,1,472.4
+"sentences_50agree/2344","financial_phrasebank",163,1024,3,"positive","positive",0.875156,0.875156,1,475.6
+"sentences_50agree/2373","financial_phrasebank",159,1024,3,"neutral","neutral",0.929344,0.929344,1,475.2
+"sentences_50agree/2391","financial_phrasebank",164,1024,3,"neutral","neutral",0.828207,0.828207,1,475.3
+"sentences_50agree/2395","financial_phrasebank",152,1024,3,"neutral","neutral",0.976660,0.976660,1,477.1
+"sentences_50agree/2398","financial_phrasebank",167,1024,3,"neutral","neutral",0.756175,0.756175,1,477.1
+"sentences_50agree/2399","financial_phrasebank",141,1024,3,"neutral","neutral",0.969124,0.969124,1,475.5
+"sentences_50agree/2411","financial_phrasebank",191,1024,3,"neutral","neutral",0.588164,0.588164,1,475.4
+"sentences_50agree/2431","financial_phrasebank",164,1024,3,"neutral","neutral",0.971867,0.971867,1,475.5
+"sentences_50agree/2465","financial_phrasebank",181,1024,3,"neutral","neutral",0.904270,0.904270,1,476.6
+"sentences_50agree/2473","financial_phrasebank",183,1024,3,"neutral","positive",0.422881,0.561273,0,478.5
+"sentences_50agree/2476","financial_phrasebank",169,1024,3,"neutral","neutral",0.556445,0.556445,1,478.6
+"sentences_50agree/2483","financial_phrasebank",195,1024,3,"neutral","neutral",0.945577,0.945577,1,477.6
+"sentences_50agree/2485","financial_phrasebank",163,1024,3,"neutral","neutral",0.573825,0.573825,1,475.3
+"sentences_50agree/2504","financial_phrasebank",158,1024,3,"neutral","neutral",0.901016,0.901016,1,475.7
+"sentences_50agree/2528","financial_phrasebank",153,1024,3,"neutral","neutral",0.654640,0.654640,1,477.8
+"sentences_50agree/2530","financial_phrasebank",145,1024,3,"neutral","neutral",0.983405,0.983405,1,478.0
+"sentences_50agree/2531","financial_phrasebank",166,1024,3,"neutral","positive",0.476916,0.504700,0,476.0
+"sentences_50agree/2533","financial_phrasebank",171,1024,3,"negative","negative",0.912544,0.912544,1,475.2
+"sentences_50agree/2544","financial_phrasebank",149,1024,3,"neutral","neutral",0.536180,0.536180,1,476.5
+"sentences_50agree/2549","financial_phrasebank",152,1024,3,"neutral","neutral",0.443694,0.443694,1,478.2
+"sentences_50agree/2638","financial_phrasebank",153,1024,3,"neutral","neutral",0.929344,0.929344,1,478.5
+"sentences_50agree/2645","financial_phrasebank",161,1024,3,"neutral","neutral",0.904570,0.904570,1,478.1
+"sentences_50agree/2690","financial_phrasebank",157,1024,3,"neutral","neutral",0.963062,0.963062,1,475.2
+"sentences_50agree/2694","financial_phrasebank",162,1024,3,"neutral","positive",0.251027,0.736129,0,475.5
+"sentences_50agree/2708","financial_phrasebank",149,1024,3,"neutral","neutral",0.963402,0.963402,1,477.6
+"sentences_50agree/2733","financial_phrasebank",155,1024,3,"neutral","neutral",0.805432,0.805432,1,478.5
+"sentences_50agree/2768","financial_phrasebank",159,1024,3,"negative","negative",0.447136,0.447136,1,478.0
+"sentences_50agree/2811","financial_phrasebank",157,1024,3,"negative","negative",0.425695,0.425695,1,478.5
+"sentences_50agree/2839","financial_phrasebank",169,1024,3,"neutral","positive",0.304946,0.673752,0,476.8
+"sentences_50agree/2841","financial_phrasebank",179,1024,3,"neutral","neutral",0.848855,0.848855,1,475.4
+"sentences_50agree/2869","financial_phrasebank",169,1024,3,"neutral","neutral",0.933701,0.933701,1,475.3
+"sentences_50agree/2873","financial_phrasebank",168,1024,3,"neutral","positive",0.418058,0.524326,0,476.1
+"sentences_50agree/2915","financial_phrasebank",178,1024,3,"neutral","neutral",0.599019,0.599019,1,478.0
+"sentences_50agree/2924","financial_phrasebank",157,1024,3,"positive","positive",0.770288,0.770288,1,478.7
+"sentences_50agree/2946","financial_phrasebank",215,1024,3,"neutral","neutral",0.978165,0.978165,1,481.1
+"sentences_50agree/2956","financial_phrasebank",153,1024,3,"neutral","neutral",0.938919,0.938919,1,480.8
+"sentences_50agree/2959","financial_phrasebank",175,1024,3,"neutral","neutral",0.968942,0.968942,1,478.3
+"sentences_50agree/2973","financial_phrasebank",159,1024,3,"neutral","neutral",0.883083,0.883083,1,478.1
+"sentences_50agree/2999","financial_phrasebank",166,1024,3,"neutral","neutral",0.929011,0.929011,1,478.4
+"sentences_50agree/3011","financial_phrasebank",189,1024,3,"neutral","positive",0.402261,0.425695,0,478.4
+"sentences_50agree/3056","financial_phrasebank",174,1024,3,"neutral","neutral",0.783863,0.783863,1,476.5
+"sentences_50agree/3078","financial_phrasebank",171,1024,3,"neutral","neutral",0.919254,0.919254,1,476.9
+"sentences_50agree/3099","financial_phrasebank",142,1024,3,"neutral","neutral",0.870893,0.870893,1,478.0
+"sentences_50agree/3146","financial_phrasebank",172,1024,3,"neutral","positive",0.139184,0.852134,0,477.6
+"sentences_50agree/3191","financial_phrasebank",179,1024,3,"neutral","positive",0.168384,0.821968,0,478.2
+"sentences_50agree/3223","financial_phrasebank",173,1024,3,"neutral","neutral",0.641470,0.641470,1,478.2
+"sentences_50agree/3352","financial_phrasebank",165,1024,3,"neutral","neutral",0.961740,0.961740,1,478.0
+"sentences_50agree/3358","financial_phrasebank",157,1024,3,"neutral","neutral",0.978486,0.978486,1,477.2
+"sentences_50agree/3390","financial_phrasebank",151,1024,3,"neutral","neutral",0.792866,0.792866,1,475.3
+"sentences_50agree/3430","financial_phrasebank",157,1024,3,"neutral","neutral",0.877895,0.877895,1,475.7
+"sentences_50agree/3463","financial_phrasebank",156,1024,3,"neutral","positive",0.272913,0.714619,0,477.2
+"sentences_50agree/3517","financial_phrasebank",204,1024,3,"neutral","neutral",0.885400,0.885400,1,478.2
+"sentences_50agree/3526","financial_phrasebank",206,1024,3,"neutral","neutral",0.576111,0.576111,1,477.4
+"sentences_50agree/3534","financial_phrasebank",151,1024,3,"negative","positive",0.301891,0.378630,0,478.2
+"sentences_50agree/3565","financial_phrasebank",151,1024,3,"neutral","neutral",0.964966,0.964966,1,479.0
+"sentences_50agree/3584","financial_phrasebank",175,1024,3,"neutral","neutral",0.518218,0.518218,1,480.9
+"sentences_50agree/3589","financial_phrasebank",187,1024,3,"neutral","positive",0.239393,0.742909,0,478.8
+"sentences_50agree/3597","financial_phrasebank",156,1024,3,"neutral","positive",0.335892,0.528359,0,477.3
+"sentences_50agree/3599","financial_phrasebank",167,1024,3,"neutral","positive",0.434303,0.544700,0,475.3
+"sentences_50agree/3614","financial_phrasebank",158,1024,3,"positive","positive",0.746320,0.746320,1,475.3
+"sentences_50agree/3631","financial_phrasebank",151,1024,3,"neutral","neutral",0.535448,0.535448,1,475.1
+"sentences_50agree/3634","financial_phrasebank",163,1024,3,"neutral","neutral",0.725987,0.725987,1,476.7
+"sentences_50agree/3675","financial_phrasebank",186,1024,3,"neutral","neutral",0.740356,0.740356,1,478.0
+"sentences_50agree/3697","financial_phrasebank",144,1024,3,"neutral","neutral",0.982120,0.982120,1,478.1
+"sentences_50agree/3699","financial_phrasebank",161,1024,3,"neutral","negative",0.356033,0.500077,0,478.1
+"sentences_50agree/3708","financial_phrasebank",176,1024,3,"neutral","neutral",0.731559,0.731559,1,478.4
+"sentences_50agree/3720","financial_phrasebank",151,1024,3,"neutral","negative",0.155059,0.756921,0,477.9
+"sentences_50agree/3742","financial_phrasebank",189,1024,3,"positive","positive",0.835810,0.835810,1,478.1
+"sentences_50agree/3824","financial_phrasebank",164,1024,3,"neutral","neutral",0.976846,0.976846,1,478.3
+"sentences_50agree/3854","financial_phrasebank",149,1024,3,"neutral","neutral",0.961112,0.961112,1,478.0
+"sentences_50agree/3859","financial_phrasebank",168,1024,3,"neutral","neutral",0.602070,0.602070,1,478.1
+"sentences_50agree/3886","financial_phrasebank",158,1024,3,"neutral","neutral",0.950395,0.950395,1,478.0
+"sentences_50agree/3913","financial_phrasebank",145,1024,3,"neutral","neutral",0.960877,0.960877,1,477.9
+"sentences_50agree/3921","financial_phrasebank",152,1024,3,"neutral","neutral",0.890174,0.890174,1,477.9
+"sentences_50agree/3945","financial_phrasebank",161,1024,3,"neutral","neutral",0.871694,0.871694,1,477.9
+"sentences_50agree/3949","financial_phrasebank",168,1024,3,"neutral","positive",0.153072,0.836823,0,477.9
+"sentences_50agree/3982","financial_phrasebank",181,1024,3,"neutral","positive",0.331286,0.653579,0,477.9
+"sentences_50agree/3990","financial_phrasebank",169,1024,3,"negative","negative",0.961982,0.961982,1,477.8
+"sentences_50agree/4022","financial_phrasebank",175,1024,3,"negative","negative",0.946228,0.946228,1,478.0
+"sentences_50agree/4034","financial_phrasebank",168,1024,3,"negative","negative",0.953406,0.953406,1,478.1
+"sentences_50agree/4040","financial_phrasebank",181,1024,3,"negative","negative",0.514757,0.514757,1,476.3
+"sentences_50agree/4058","financial_phrasebank",176,1024,3,"negative","negative",0.944915,0.944915,1,475.3
+"sentences_50agree/4070","financial_phrasebank",183,1024,3,"negative","negative",0.967192,0.967192,1,476.5
+"sentences_50agree/4092","financial_phrasebank",172,1024,3,"positive","positive",0.909310,0.909310,1,477.9
+"sentences_50agree/4095","financial_phrasebank",165,1024,3,"positive","positive",0.991277,0.991277,1,475.5
+"sentences_50agree/4163","financial_phrasebank",156,1024,3,"negative","negative",0.564146,0.564146,1,473.4
+"sentences_50agree/4185","financial_phrasebank",185,1024,3,"negative","negative",0.900275,0.900275,1,473.4
+"sentences_50agree/4190","financial_phrasebank",190,1024,3,"negative","negative",0.672560,0.672560,1,475.2
+"sentences_50agree/4192","financial_phrasebank",183,1024,3,"negative","negative",0.819263,0.819263,1,475.5
+"sentences_50agree/4211","financial_phrasebank",159,1024,3,"neutral","neutral",0.964013,0.964013,1,475.6
+"sentences_50agree/4265","financial_phrasebank",163,1024,3,"neutral","neutral",0.959130,0.959130,1,475.3
+"sentences_50agree/4279","financial_phrasebank",159,1024,3,"neutral","neutral",0.982374,0.982374,1,475.2
+"sentences_50agree/4285","financial_phrasebank",159,1024,3,"neutral","neutral",0.543688,0.543688,1,475.6
+"sentences_50agree/4298","financial_phrasebank",162,1024,3,"neutral","neutral",0.925534,0.925534,1,475.2
+"sentences_50agree/4305","financial_phrasebank",162,1024,3,"neutral","neutral",0.472664,0.472664,1,475.4
+"sentences_50agree/4338","financial_phrasebank",158,1024,3,"neutral","neutral",0.918260,0.918260,1,475.2
+"sentences_50agree/4354","financial_phrasebank",161,1024,3,"negative","neutral",0.371198,0.392823,0,475.3
+"sentences_50agree/4391","financial_phrasebank",157,1024,3,"negative","neutral",0.174011,0.802676,0,478.1
+"sentences_50agree/4464","financial_phrasebank",177,1024,3,"positive","positive",0.898315,0.898315,1,478.1
+"sentences_50agree/4484","financial_phrasebank",163,1024,3,"neutral","neutral",0.663825,0.663825,1,477.9
+"sentences_50agree/4500","financial_phrasebank",178,1024,3,"positive","positive",0.829659,0.829659,1,475.3
+"sentences_50agree/4523","financial_phrasebank",158,1024,3,"neutral","positive",0.299113,0.557620,0,475.1
+"sentences_50agree/4529","financial_phrasebank",157,1024,3,"negative","negative",0.667426,0.667426,1,472.5
+"sentences_50agree/4541","financial_phrasebank",164,1024,3,"positive","positive",0.928154,0.928154,1,472.7
+"sentences_50agree/4588","financial_phrasebank",175,1024,3,"negative","negative",0.664662,0.664662,1,473.4
+"sentences_50agree/4619","financial_phrasebank",165,1024,3,"negative","negative",0.918424,0.918424,1,475.3
+"sentences_50agree/4651","financial_phrasebank",180,1024,3,"negative","negative",0.940524,0.940524,1,475.3
+"sentences_50agree/4666","financial_phrasebank",175,1024,3,"negative","negative",0.968079,0.968079,1,475.5
+"sentences_50agree/4677","financial_phrasebank",206,1024,3,"negative","negative",0.976033,0.976033,1,475.4
+"sentences_50agree/4773","financial_phrasebank",185,1024,3,"positive","positive",0.993043,0.993043,1,476.2
+"sentences_50agree/4803","financial_phrasebank",179,1024,3,"negative","negative",0.982166,0.982166,1,475.3
+"sentences_50agree/4845","financial_phrasebank",162,1024,3,"negative","negative",0.965220,0.965220,1,475.4
+"belebele/eng_Latn/test/8","belebele",265,1024,4,"During low tide","During low tide",0.878303,0.878303,1,475.8
+"belebele/eng_Latn/test/13","belebele",159,1024,4,"Polymorphic","Polymorphic",0.990578,0.990578,1,475.6
+"belebele/eng_Latn/test/14","belebele",158,1024,4,"Population","Population",0.970605,0.970605,1,475.7
+"belebele/eng_Latn/test/16","belebele",191,1024,4,"Private cars","Private cars",0.990701,0.990701,1,475.2
+"belebele/eng_Latn/test/21","belebele",293,1024,4,"A decrease in criticism from peers","A decrease in criticism from peers",0.978329,0.978329,1,475.1
+"belebele/eng_Latn/test/25","belebele",206,1024,4,"Knights","Knights",0.952414,0.952414,1,475.8
+"belebele/eng_Latn/test/35","belebele",252,1024,4,"Bloch and Purcell","Bloch and Purcell",0.987509,0.987509,1,478.7
+"belebele/eng_Latn/test/36","belebele",265,1024,4,"1974","1974",0.979864,0.979864,1,479.0
+"belebele/eng_Latn/test/39","belebele",231,1024,4,"Task automation","Task automation",0.991789,0.991789,1,479.0
+"belebele/eng_Latn/test/47","belebele",209,1024,4,"Researching travel","Researching travel",0.954199,0.954199,1,479.1
+"belebele/eng_Latn/test/54","belebele",221,1024,4,"Thirty Years’ War","Thirty Years’ War",0.978802,0.978802,1,479.4
+"belebele/eng_Latn/test/58","belebele",215,1024,4,"Changes were made to international law","Changes were made to international law",0.981103,0.981103,1,478.4
+"belebele/eng_Latn/test/63","belebele",175,1024,4,"A prescription pill bottle","A prescription pill bottle",0.967408,0.967408,1,478.4
+"belebele/eng_Latn/test/65","belebele",177,1024,4,"Don’t be concerned with sustaining your own injuries","Don’t be concerned with sustaining your own injuries",0.978857,0.978857,1,478.1
+"belebele/eng_Latn/test/67","belebele",213,1024,4,"Class","Class",0.984283,0.984283,1,478.8
+"belebele/eng_Latn/test/70","belebele",233,1024,4,"Traffic Flow","Traffic Flow",0.978771,0.978771,1,478.7
+"belebele/eng_Latn/test/75","belebele",209,1024,4,"They offered companionship","They offered companionship",0.776031,0.776031,1,478.9
+"belebele/eng_Latn/test/78","belebele",174,1024,4,"To eliminate one or more possible hypotheses","To eliminate one or more possible hypotheses",0.974373,0.974373,1,477.8
+"belebele/eng_Latn/test/79","belebele",170,1024,4,"The scientific method alone","The scientific method alone",0.855445,0.855445,1,475.5
+"belebele/eng_Latn/test/80","belebele",221,1024,4,"The majority of tornadoes last more than three hours","The majority of tornadoes last more than three hours",0.967640,0.967640,1,475.3
+"belebele/eng_Latn/test/84","belebele",274,1024,4,"He values peace and isolation","He values peace and isolation",0.986379,0.986379,1,475.9
+"belebele/eng_Latn/test/85","belebele",237,1024,4,"Crossties","Wagonways",0.015045,0.413028,0,477.8
+"belebele/eng_Latn/test/86","belebele",259,1024,4,"They were being worn down by the iron on the tracks","They were being worn down by the iron on the tracks",0.983113,0.983113,1,478.6
+"belebele/eng_Latn/test/87","belebele",170,1024,4,"Geography","Geography",0.990681,0.990681,1,478.4
+"belebele/eng_Latn/test/99","belebele",177,1024,4,"Their behavior","Their behavior",0.992363,0.992363,1,478.6
+"belebele/eng_Latn/test/102","belebele",221,1024,4,"Producing food to sell to others","Producing food to sell to others",0.977653,0.977653,1,475.8
+"belebele/eng_Latn/test/106","belebele",310,1024,4,"Remembering successful instances of entrepreneurial behavior","Remembering successful instances of entrepreneurial behavior",0.985416,0.985416,1,476.3
+"belebele/eng_Latn/test/110","belebele",271,1024,4,"Reading for an hour and half before falling back to sleep","Reading for an hour and half before falling back to sleep",0.922078,0.922078,1,478.3
+"belebele/eng_Latn/test/127","belebele",239,1024,4,"All regions in northeast Afghanistan","All regions in northeast Afghanistan",0.969711,0.969711,1,481.3
+"belebele/eng_Latn/test/129","belebele",179,1024,4,"Cooperating with others","Cooperating with others",0.982774,0.982774,1,480.5
+"belebele/eng_Latn/test/130","belebele",162,1024,4,"Selfishness","Selfishness",0.992479,0.992479,1,478.1
+"belebele/eng_Latn/test/147","belebele",215,1024,4,"Opinions about Germany","Opinions about Germany",0.934034,0.934034,1,475.6
+"belebele/eng_Latn/test/151","belebele",236,1024,4,"Strabo","Strabo",0.993082,0.993082,1,477.1
+"belebele/eng_Latn/test/155","belebele",261,1024,4,"Preventing Britain from receiving people and goods","Preventing Britain from receiving people and goods",0.972660,0.972660,1,478.3
+"belebele/eng_Latn/test/173","belebele",265,1024,4,"It was built to celebrate the victory of the Tibetan-Mongol forces","It was built to celebrate the victory of the Tibetan-Mongol forces",0.976971,0.976971,1,478.2
+"belebele/eng_Latn/test/183","belebele",182,1024,4,"Medium-sized cats","Medium-sized cats",0.983145,0.983145,1,478.0
+"belebele/eng_Latn/test/184","belebele",177,1024,4,"Rodents","Rodents",0.981248,0.981248,1,477.8
+"belebele/eng_Latn/test/188","belebele",208,1024,4,"The sound of their roar","The sound of their roar",0.991441,0.991441,1,478.5
+"belebele/eng_Latn/test/189","belebele",203,1024,4,"Observe dead cells","Observe dead cells",0.945285,0.945285,1,478.4
+"belebele/eng_Latn/test/192","belebele",171,1024,4,"Brains","Brains",0.993852,0.993852,1,476.3
+"belebele/eng_Latn/test/193","belebele",163,1024,4,"Sun","Sun",0.991291,0.991291,1,475.1
+"belebele/eng_Latn/test/198","belebele",147,1024,4,"Capillaries","Capillaries",0.986404,0.986404,1,475.3
+"belebele/eng_Latn/test/199","belebele",182,1024,4,"Hiding spaces","Hiding spaces",0.991250,0.991250,1,475.3
+"belebele/eng_Latn/test/202","belebele",193,1024,4,"The ability to fly","The ability to fly",0.988829,0.988829,1,475.7
+"belebele/eng_Latn/test/208","belebele",194,1024,4,"German occupation","German occupation",0.969659,0.969659,1,475.2
+"belebele/eng_Latn/test/218","belebele",225,1024,4,"Stimulated emission of radiation","Stimulated emission of radiation",0.881717,0.881717,1,475.4
+"belebele/eng_Latn/test/222","belebele",177,1024,4,"Energy is released ","Energy is released ",0.991252,0.991252,1,475.3
+"belebele/eng_Latn/test/224","belebele",192,1024,4,"Rockets","Rockets",0.987975,0.987975,1,475.7
+"belebele/eng_Latn/test/225","belebele",206,1024,4,"Repetition ","Repetition ",0.987703,0.987703,1,475.5
+"belebele/eng_Latn/test/230","belebele",203,1024,4,"Around 600 years ago","Around 600 years ago",0.611921,0.611921,1,478.0
+"belebele/eng_Latn/test/233","belebele",225,1024,4,"They differ in script","They differ in script",0.990036,0.990036,1,475.2
+"belebele/eng_Latn/test/244","belebele",220,1024,4,"The phases of Venus","The phases of Venus",0.980638,0.980638,1,475.6
+"belebele/eng_Latn/test/247","belebele",211,1024,4,"It’s the longest river","It’s the longest river",0.984883,0.984883,1,475.9
+"belebele/eng_Latn/test/252","belebele",208,1024,4,"Two hydrogen atoms and one oxygen atom","Two hydrogen atoms and one oxygen atom",0.992360,0.992360,1,477.1
+"belebele/eng_Latn/test/257","belebele",147,1024,4,"Urban greenery","Urban greenery",0.986935,0.986935,1,477.8
+"belebele/eng_Latn/test/258","belebele",147,1024,4,"A flower","A flower",0.988233,0.988233,1,474.9
+"belebele/eng_Latn/test/263","belebele",215,1024,4,"Operation Sealion","Operation Sealion",0.992765,0.992765,1,475.2
+"belebele/eng_Latn/test/266","belebele",207,1024,4,"The Vichy French","The Vichy French",0.986251,0.986251,1,475.2
+"belebele/eng_Latn/test/274","belebele",243,1024,4,"Visualizing deities ","Visualizing deities ",0.991783,0.991783,1,475.6
+"belebele/eng_Latn/test/275","belebele",248,1024,4,"By visualizing deities","By visualizing deities",0.992168,0.992168,1,477.4
+"belebele/eng_Latn/test/277","belebele",296,1024,4,"Lakkha Singh","Lakkha Singh",0.926465,0.926465,1,478.2
+"belebele/eng_Latn/test/281","belebele",183,1024,4,"The fire captain","The fire captain",0.989546,0.989546,1,477.8
+"belebele/eng_Latn/test/285","belebele",250,1024,4,"The car was very low","The car was very low",0.992652,0.992652,1,478.1
+"belebele/eng_Latn/test/286","belebele",195,1024,4,"40 miles south","40 miles south",0.956541,0.956541,1,478.5
+"belebele/eng_Latn/test/292","belebele",178,1024,4,"Residents of Bishkek","Residents of Bishkek",0.983951,0.983951,1,480.8
+"belebele/eng_Latn/test/298","belebele",204,1024,4,"Abattoirs","Abattoirs",0.978582,0.978582,1,478.2
+"belebele/eng_Latn/test/299","belebele",214,1024,4,"The installation of CCTV cameras ","The installation of CCTV cameras ",0.976694,0.976694,1,478.2
+"belebele/eng_Latn/test/301","belebele",221,1024,4,"Four","Three",0.043979,0.935766,0,478.2
+"belebele/eng_Latn/test/309","belebele",210,1024,4,"At the Argentine Theatre 31 miles away from Buenos Aires","At the Argentine Theatre 31 miles away from Buenos Aires",0.976085,0.976085,1,478.2
+"belebele/eng_Latn/test/310","belebele",193,1024,4,"Censorship laws had not been breached","Censorship laws had not been breached",0.976328,0.976328,1,477.9
+"belebele/eng_Latn/test/313","belebele",183,1024,4,"Too expensive","Too expensive",0.977657,0.977657,1,478.0
+"belebele/eng_Latn/test/316","belebele",200,1024,4,"He admitted to the attack","He admitted to the attack",0.974817,0.974817,1,478.1
+"belebele/eng_Latn/test/318","belebele",184,1024,4,"Bringing technology to developing nations","Bringing technology to developing nations",0.960376,0.960376,1,478.0
+"belebele/eng_Latn/test/329","belebele",220,1024,4,"The location of the collision","The location of the collision",0.963427,0.963427,1,478.0
+"belebele/eng_Latn/test/330","belebele",230,1024,4,"The exact scale of the crash","The exact scale of the crash",0.989942,0.989942,1,478.1
+"belebele/eng_Latn/test/336","belebele",278,1024,4,"Jack Layton","Jack Layton",0.989511,0.989511,1,478.5
+"belebele/eng_Latn/test/338","belebele",200,1024,4,"Crystals","Crystals",0.994158,0.994158,1,478.2
+"belebele/eng_Latn/test/346","belebele",200,1024,4,"Within two decades","Within two decades",0.985864,0.985864,1,475.3
+"belebele/eng_Latn/test/354","belebele",235,1024,4,"Extravehicular activity","Extravehicular activity",0.990299,0.990299,1,475.5
+"belebele/eng_Latn/test/355","belebele",226,1024,4,"Apollo-Soyuz","Apollo-Soyuz",0.990933,0.990933,1,475.2
+"belebele/eng_Latn/test/364","belebele",255,1024,4,"Daughter","Daughter",0.965356,0.965356,1,476.1
+"belebele/eng_Latn/test/365","belebele",256,1024,4,"In the trunk of car","In the trunk of car",0.980528,0.980528,1,478.6
+"belebele/eng_Latn/test/374","belebele",177,1024,4,"His interest in the war","His interest in the war",0.990015,0.990015,1,478.4
+"belebele/eng_Latn/test/376","belebele",190,1024,4,"Uranium fuel","Uranium fuel",0.856167,0.856167,1,478.3
+"belebele/eng_Latn/test/382","belebele",182,1024,4,"Heavy focus on pornography cases","Heavy focus on pornography cases",0.943694,0.943694,1,478.5
+"belebele/eng_Latn/test/387","belebele",248,1024,4,"Kissinger","Kissinger",0.962845,0.962845,1,475.9
+"belebele/eng_Latn/test/393","belebele",214,1024,4,"It occurred at an anniversary party in Buffalo","It occurred at an anniversary party in Buffalo",0.969048,0.969048,1,477.8
+"belebele/eng_Latn/test/398","belebele",200,1024,4,"In St. Peter’s Square","In St. Peter’s Square",0.980992,0.980992,1,481.0
+"belebele/eng_Latn/test/402","belebele",207,1024,4,"Uka","Uka",0.987825,0.987825,1,481.8
+"belebele/eng_Latn/test/419","belebele",217,1024,4,"The National Congress of Brazil","The National Congress of Brazil",0.983768,0.983768,1,481.3
+"belebele/eng_Latn/test/423","belebele",205,1024,4,"Northwest","Northwest",0.950228,0.950228,1,481.4
+"belebele/eng_Latn/test/428","belebele",221,1024,4,"The presence of dark clouds","The presence of dark clouds",0.935125,0.935125,1,478.8
+"belebele/eng_Latn/test/432","belebele",231,1024,4,"Encephalitis vaccines","Encephalitis vaccines",0.951929,0.951929,1,478.7
+"belebele/eng_Latn/test/439","belebele",229,1024,4,"Sanctions that prevent new aircraft purchases","A lack of budget allowing for new aircraft purchases",0.020357,0.957034,0,478.0
+"belebele/eng_Latn/test/441","belebele",262,1024,4,"That a guarantee to stop growing violence be declared","That a guarantee to stop growing violence be declared",0.972546,0.972546,1,478.3
+"belebele/eng_Latn/test/445","belebele",133,1024,4,"Nepal","Nepal",0.990252,0.990252,1,477.8
+"belebele/eng_Latn/test/448","belebele",191,1024,4,"Damage to the car’s suspension","Damage to the car’s suspension",0.990826,0.990826,1,478.3
+"belebele/eng_Latn/test/449","belebele",231,1024,4,"The court commissioner","The court commissioner",0.988696,0.988696,1,478.3
+"belebele/eng_Latn/test/451","belebele",171,1024,4,"A contradiction of the constitution","A contradiction of the constitution",0.943965,0.943965,1,478.3
+"belebele/eng_Latn/test/453","belebele",157,1024,4,"Political Agents","Political Agents",0.979611,0.979611,1,477.9
+"belebele/eng_Latn/test/454","belebele",179,1024,4,"They have complete control over certain areas","They have complete control over certain areas",0.660862,0.660862,1,475.2
+"belebele/eng_Latn/test/459","belebele",205,1024,4,"The cause of the 1967 war","The cause of the 1967 war",0.988215,0.988215,1,475.6
+"belebele/eng_Latn/test/463","belebele",234,1024,4,"The OHA","The OHA",0.991703,0.991703,1,475.6
+"belebele/eng_Latn/test/467","belebele",270,1024,4,"There are 34 of them","There are 34 of them",0.986753,0.986753,1,478.2
+"belebele/eng_Latn/test/478","belebele",194,1024,4,"TogiNet Radio","TogiNet Radio",0.972984,0.972984,1,479.9
+"belebele/eng_Latn/test/481","belebele",194,1024,4,"Boat","Boat",0.992954,0.992954,1,481.1
+"belebele/eng_Latn/test/485","belebele",157,1024,4,"Theaters","Theaters",0.988434,0.988434,1,480.2
+"belebele/eng_Latn/test/489","belebele",178,1024,4,"A player for the Utah Jazz tested positive","A player for the Utah Jazz tested positive",0.980311,0.980311,1,481.1
+"belebele/eng_Latn/test/490","belebele",236,1024,4,"Nicklas Backstrom","Nicklas Backstrom",0.979600,0.979600,1,481.3
+"belebele/eng_Latn/test/493","belebele",272,1024,4,"Virgin Group purchased the bank after it’s nationalization","Virgin Group purchased the bank after it’s nationalization",0.970717,0.970717,1,481.5
+"belebele/eng_Latn/test/497","belebele",217,1024,4,"As it was the program’s first trial, it was not evaluated","As it was the program’s first trial, it was not evaluated",0.980749,0.980749,1,480.1
+"belebele/eng_Latn/test/498","belebele",158,1024,4,"On a fossil","On a fossil",0.846934,0.846934,1,477.2
+"belebele/eng_Latn/test/502","belebele",183,1024,4,"The plane landed in Ürümqi","The plane landed in Ürümqi",0.927359,0.927359,1,476.7
+"belebele/eng_Latn/test/505","belebele",200,1024,4,"Bob Dylan","Bob Dylan",0.989188,0.989188,1,478.3
+"belebele/eng_Latn/test/507","belebele",289,1024,4,"Over 1,000","Over 1,000",0.919730,0.919730,1,478.9
+"belebele/eng_Latn/test/508","belebele",269,1024,4,"Thermal expansion","Thermal expansion",0.992901,0.992901,1,480.4
+"belebele/eng_Latn/test/511","belebele",200,1024,4,"Flood waters were 20 feet high","Flood waters were 20 feet high",0.988589,0.988589,1,481.2
+"belebele/eng_Latn/test/523","belebele",205,1024,4,"Increase rapidly in number under any condition","Increase rapidly in number under any condition",0.980266,0.980266,1,481.5
+"belebele/eng_Latn/test/533","belebele",183,1024,4,"An aircraft","An aircraft",0.993140,0.993140,1,481.1
+"belebele/eng_Latn/test/534","belebele",195,1024,4,"Simon","Simon",0.988841,0.988841,1,481.3
+"belebele/eng_Latn/test/535","belebele",160,1024,4,"Both male and female individuals","Both male and female individuals",0.986600,0.986600,1,481.3
+"belebele/eng_Latn/test/537","belebele",177,1024,4,"Earth","Earth",0.884134,0.884134,1,481.0
+"belebele/eng_Latn/test/538","belebele",181,1024,4,"Titan","Titan",0.971459,0.971459,1,480.9
+"belebele/eng_Latn/test/542","belebele",225,1024,4,"ZMapp was used as the trial’s baseline","ZMapp was used as the trial’s baseline",0.985139,0.985139,1,480.3
+"belebele/eng_Latn/test/544","belebele",195,1024,4,"Standard inkjet printers","Standard inkjet printers",0.947020,0.947020,1,478.0
+"belebele/eng_Latn/test/548","belebele",170,1024,4,"Melting ice","Melting ice",0.970371,0.970371,1,478.3
+"belebele/eng_Latn/test/558","belebele",230,1024,4,"South Africa and Australia","South Africa and Australia",0.949876,0.949876,1,478.3
+"belebele/eng_Latn/test/560","belebele",174,1024,4,"Keeping a gyroscope","Keeping a gyroscope",0.895806,0.895806,1,475.5
+"belebele/eng_Latn/test/566","belebele",149,1024,4,"Bolonia","Bolonia",0.992026,0.992026,1,475.3
+"belebele/eng_Latn/test/567","belebele",163,1024,4,"He had a match on Sunday","He had a match on Sunday",0.988195,0.988195,1,475.4
+"belebele/eng_Latn/test/573","belebele",252,1024,4,"After Queen Elizabeth II’s reign","After Queen Elizabeth II’s reign",0.983588,0.983588,1,476.0
+"belebele/eng_Latn/test/577","belebele",165,1024,4,"ASUS","ASUS",0.993990,0.993990,1,475.7
+"belebele/eng_Latn/test/583","belebele",202,1024,4,"Children","Children",0.991467,0.991467,1,475.7
+"belebele/eng_Latn/test/584","belebele",225,1024,4,"The case is not serious","The case is not serious",0.987339,0.987339,1,476.1
+"belebele/eng_Latn/test/600","belebele",181,1024,4,"Alleviate the overcrowding of carriages","Alleviate the overcrowding of carriages",0.985732,0.985732,1,478.3
+"belebele/eng_Latn/test/605","belebele",277,1024,4,"Decertification","Decertification",0.951067,0.951067,1,475.9
+"belebele/eng_Latn/test/614","belebele",201,1024,4,"Humpback chubs","Sediment spread",0.075541,0.814728,0,477.4
+"belebele/eng_Latn/test/619","belebele",181,1024,4,"7","7",0.983248,0.983248,1,478.3
+"belebele/eng_Latn/test/624","belebele",189,1024,4,"Female fighters","Female fighters",0.489610,0.489610,1,477.9
+"belebele/eng_Latn/test/625","belebele",188,1024,4,"At the hospital","At the hospital",0.967322,0.967322,1,478.3
+"belebele/eng_Latn/test/626","belebele",179,1024,4,"Another racer","Another racer",0.989665,0.989665,1,478.5
+"belebele/eng_Latn/test/627","belebele",235,1024,4,"If their aversion to flying is centered around a fear of the unknown","If their aversion to flying is centered around a fear of the unknown",0.991031,0.991031,1,478.5
+"belebele/eng_Latn/test/630","belebele",235,1024,4,"When things are being sent as checked luggage","When things are being sent as checked luggage",0.990814,0.990814,1,477.6
+"belebele/eng_Latn/test/631","belebele",187,1024,4,"The airline that offers the most points","The airline that offers the most points",0.725550,0.725550,1,477.0
+"belebele/eng_Latn/test/634","belebele",185,1024,4,"Consuming alcohol in moderation","Consuming alcohol in moderation",0.992434,0.992434,1,475.7
+"belebele/eng_Latn/test/638","belebele",230,1024,4,"Getting the Angkor Pass","Getting the Angkor Pass",0.994122,0.994122,1,475.5
+"belebele/eng_Latn/test/641","belebele",184,1024,4,"In a remote location","In a remote location",0.988243,0.988243,1,475.4
+"belebele/eng_Latn/test/647","belebele",189,1024,4,"They are languages constructed to improve difficult communication scenarios ","They are organic languages used to facilitate communication between people who may not otherwise understand each other",0.060812,0.585653,0,475.5
+"belebele/eng_Latn/test/649","belebele",160,1024,4,"Going through ice","Going through ice",0.968920,0.968920,1,477.3
+"belebele/eng_Latn/test/654","belebele",204,1024,4,"Taizicheng ski area events","Taizicheng ski area events",0.986927,0.986927,1,478.3
+"belebele/eng_Latn/test/662","belebele",226,1024,4,"Someone with a severe nut allergy","Someone with a severe nut allergy",0.979007,0.979007,1,478.6
+"belebele/eng_Latn/test/664","belebele",232,1024,4,"Ask people for money","Ask people for money",0.982206,0.982206,1,478.8
+"belebele/eng_Latn/test/665","belebele",227,1024,4,"Someone who enjoys following an itinerary ","Someone who enjoys following an itinerary ",0.932974,0.932974,1,478.4
+"belebele/eng_Latn/test/668","belebele",179,1024,4,"Peak physical condition","Peak physical condition",0.948366,0.948366,1,478.3
+"belebele/eng_Latn/test/669","belebele",183,1024,4,"Swimming ability","Swimming ability",0.990295,0.990295,1,475.5
+"belebele/eng_Latn/test/673","belebele",268,1024,4,"The Portuguese","The Portuguese",0.987641,0.987641,1,475.8
+"belebele/eng_Latn/test/686","belebele",252,1024,4,"The main cities are Rarotonga and Aitutaki","The main cities are Rarotonga and Aitutaki",0.989669,0.989669,1,477.9
+"belebele/eng_Latn/test/688","belebele",255,1024,4,"Puerto Jiménez","Puerto Jiménez",0.889501,0.889501,1,478.6
+"belebele/eng_Latn/test/690","belebele",214,1024,4,"A heavy backpack","Groomed tracks",0.104322,0.715284,0,478.9
+"belebele/eng_Latn/test/692","belebele",246,1024,4,"Travelers who adjusted quickly while living abroad","Travelers who adjusted quickly while living abroad",0.990533,0.990533,1,478.7
+"belebele/eng_Latn/test/698","belebele",271,1024,4,"Arawakan","Arawakan",0.991789,0.991789,1,479.4
+"belebele/eng_Latn/test/701","belebele",214,1024,4,"Wildlife","Wildlife",0.989657,0.989657,1,478.4
+"belebele/eng_Latn/test/708","belebele",285,1024,4,"Aside from the Falkland pound, the British pound is generally the most accepted currency","Aside from the Falkland pound, the British pound is generally the most accepted currency",0.985890,0.985890,1,478.5
+"belebele/eng_Latn/test/709","belebele",265,1024,4,"In the outlying islands","In the outlying islands",0.972111,0.972111,1,481.0
+"belebele/eng_Latn/test/710","belebele",191,1024,4,"The birth of an elephant","The birth of an elephant",0.978658,0.978658,1,479.9
+"belebele/eng_Latn/test/713","belebele",242,1024,4,"Discounts","Discounts",0.991226,0.991226,1,477.0
+"belebele/eng_Latn/test/717","belebele",219,1024,4,"Certain pronunciations of French words","Peculiar French words",0.207977,0.486278,0,475.6
+"belebele/eng_Latn/test/719","belebele",200,1024,4,"If you’re flying Lufthansa from Paris to the United States","If you’re flying Lufthansa from Paris to the United States",0.979248,0.979248,1,475.7
+"belebele/eng_Latn/test/726","belebele",175,1024,4,"Nouns","Nouns",0.986286,0.986286,1,477.1
+"belebele/eng_Latn/test/728","belebele",208,1024,4,"Waving","Waving",0.941797,0.941797,1,478.4
+"belebele/eng_Latn/test/736","belebele",248,1024,4,"Recently refurbished rooms with modern upgrades","Recently refurbished rooms with modern upgrades",0.974020,0.974020,1,478.1
+"belebele/eng_Latn/test/740","belebele",245,1024,4,"Jardín de la Unión","Jardín de la Unión",0.983248,0.983248,1,475.5
+"belebele/eng_Latn/test/747","belebele",159,1024,4,"During Indian summer","During Indian summer",0.992165,0.992165,1,475.3
+"belebele/eng_Latn/test/749","belebele",215,1024,4,"Make contact with sailors","Make contact with sailors",0.982852,0.982852,1,475.7
+"belebele/eng_Latn/test/763","belebele",203,1024,4,"VPNs can only reroute http traffic","VPNs can only reroute http traffic",0.974384,0.974384,1,475.5
+"belebele/eng_Latn/test/774","belebele",280,1024,4,"It’s the smallest of the South African National Parks","It’s the smallest of the South African National Parks",0.987456,0.987456,1,477.5
+"belebele/eng_Latn/test/775","belebele",247,1024,4,"Wet conditions","Wet conditions",0.984098,0.984098,1,479.3
+"belebele/eng_Latn/test/777","belebele",172,1024,4,"Grain","Grain",0.988402,0.988402,1,481.2
+"belebele/eng_Latn/test/783","belebele",218,1024,4,"If the sight line to the satellite might be hindered","If the sight line to the satellite might be hindered",0.977928,0.977928,1,479.1
+"belebele/eng_Latn/test/791","belebele",221,1024,4,"Getting in early","Getting in early",0.991800,0.991800,1,478.4
+"belebele/eng_Latn/test/792","belebele",217,1024,4,"Small-town bars","Small-town bars",0.986655,0.986655,1,478.7
+"belebele/eng_Latn/test/793","belebele",236,1024,4,"At a casino near Sante Fe","At a casino near Sante Fe",0.978853,0.978853,1,479.5
+"belebele/eng_Latn/test/795","belebele",251,1024,4,"A flat white","A flat white",0.953375,0.953375,1,481.3
+"belebele/eng_Latn/test/799","belebele",202,1024,4,"Not as many people","Not as many people",0.977325,0.977325,1,481.5
+"belebele/eng_Latn/test/815","belebele",248,1024,4,"Use binoculars","Use binoculars",0.989699,0.989699,1,481.4
+"belebele/eng_Latn/test/817","belebele",195,1024,4,"Finding a group of four","Finding a group of four",0.954992,0.954992,1,481.4
+"belebele/eng_Latn/test/820","belebele",232,1024,4,"The economy is entirely reliant on tourism","The economy is entirely reliant on tourism",0.989996,0.989996,1,479.8
+"belebele/eng_Latn/test/822","belebele",240,1024,4,"Expedited travel documents","Expedited travel documents",0.958389,0.958389,1,478.7
+"belebele/eng_Latn/test/833","belebele",244,1024,4,"They could be confused with someone else’s ","They could be confused with someone else’s ",0.849265,0.849265,1,478.6
+"belebele/eng_Latn/test/836","belebele",237,1024,4,"Pubs you don’t normally frequent","Pubs you don’t normally frequent",0.992387,0.992387,1,480.2
+"belebele/eng_Latn/test/837","belebele",164,1024,4,"In the churchyard","In the churchyard",0.989010,0.989010,1,481.1
+"belebele/eng_Latn/test/842","belebele",317,1024,4,"Half of its total area is covered in marsh","Half of its total area is covered in marsh",0.984232,0.984232,1,481.8
+"belebele/eng_Latn/test/860","belebele",249,1024,4,"A mattress or pad for camping","A mattress or pad for camping",0.987590,0.987590,1,482.1
+"belebele/eng_Latn/test/861","belebele",243,1024,4,"Keeping a copy stored in their laptop’s memory","Keeping a copy stored in their laptop’s memory",0.979900,0.979900,1,483.3
+"belebele/eng_Latn/test/864","belebele",234,1024,4,"35 mm film","35 mm film",0.964038,0.964038,1,481.7
+"belebele/eng_Latn/test/868","belebele",228,1024,4,"Local germs","Local germs",0.985996,0.985996,1,481.2
+"belebele/eng_Latn/test/884","belebele",217,1024,4,"First aid","First aid",0.871446,0.871446,1,481.2
+"belebele/eng_Latn/test/887","belebele",242,1024,4,"Try to get out of the current by aiming in another direction, then swim back to shore normally","Try to get out of the current by aiming in another direction, then swim back to shore normally",0.973786,0.973786,1,478.9
+"belebele/eng_Latn/test/897","belebele",255,1024,4,"The same country cannot host the events on a yearly basis","The same country cannot host the events on a yearly basis",0.716066,0.716066,1,478.7
+"belebele/eng_Latn/test/898","belebele",267,1024,4,"Removing trash from a campsite","Removing trash from a campsite",0.944966,0.944966,1,478.5
