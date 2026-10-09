@@ -1,0 +1,49 @@
+# Int32 unary SFPU kernels whose result outgrows the input: left shift by 3 and int_sum's partial
+# column / row reductions (VectorMode R / C, sums of 8 / 4 values). Inputs stay below 2**28 so no
+# result reaches the sign bit.
+# Int32 must be unpacked straight to Dest and needs a 32-bit Dest. The harness stores Int32 in L1
+# as sign-magnitude while these kernels compute in two's complement (tt-metal's Int32 encoding), so
+# only non-negative inputs with non-negative results are checked; negative values need a
+# two's-complement Int32 option in the fuser.
+#
+# Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
+# dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
+# the FPU datacopy path, and stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN).
+# Special points sit outside the random ranges, so each is drawn about as often as a unit of range.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Int32]
+    stimuli:
+      include:
+        - [2.0, 6.0]
+        - [8.0, 40.0]
+        - [1000000.0, 1000030.0]
+        - [123456000.0, 123456030.0]
+        - [268435400.0, 268435450.0]
+        - 0.0
+        - 1.0
+        - 7.0
+        - 999.0
+        - 1000.0
+        - 1001.0
+        - 65535.0
+        - 65536.0
+        - 268435455.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Int32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [LeftShift, SumIntCol, SumIntRow]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}

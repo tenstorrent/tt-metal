@@ -319,6 +319,18 @@ inline void DataflowBuffer::finish_impl() {
 #endif
 }
 
+inline DataflowBuffer::~DataflowBuffer() {
+    if (drain_owner_ != this) {
+        return;
+    }
+    finish_impl();
+#ifndef COMPILE_FOR_TRISC
+    if (has_outbound_writes_) {
+        write_barrier_impl(noc_index);
+    }
+#endif
+}
+
 inline uint32_t DataflowBuffer::get_write_ptr_impl() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
@@ -441,11 +453,11 @@ inline void DataflowBuffer::handle_final_credits(uint32_t transactions_issued, u
     while (static_cast<int16_t>(read_actual_slot0() - expected_slot0) < 0) {
         uint64_t tack, tiles;
         if constexpr (is_producer) {
-            tack  = CMDBUF_TR_ACK_TRID(OVERLAY_RD_CMD_BUF, tail_txn_id);
-            tiles = CMDBUF_READ_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, tail_txn_id);
+            tack  = __builtin_riscv_ttrocc_cmdbuf_tr_ack_trid(OVERLAY_RD_CMD_BUF, tail_txn_id);
+            tiles = __builtin_riscv_ttrocc_cmdbuf_read_tiles_to_process_tr_ack_tr_id(OVERLAY_RD_CMD_BUF, tail_txn_id);
         } else {
-            tack  = CMDBUF_WR_SENT_TRID(OVERLAY_WR_CMD_BUF, tail_txn_id);
-            tiles = CMDBUF_READ_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, tail_txn_id);
+            tack  = __builtin_riscv_ttrocc_cmdbuf_wr_sent_trid(OVERLAY_WR_CMD_BUF, tail_txn_id);
+            tiles = __builtin_riscv_ttrocc_cmdbuf_read_tiles_to_process_wr_sent_tr_id(OVERLAY_WR_CMD_BUF, tail_txn_id);
         }
         if (tack == 0 && tiles > 0) {
             break;
@@ -476,9 +488,9 @@ inline void DataflowBuffer::handle_final_credits(uint32_t transactions_issued, u
     while (static_cast<int16_t>(read_actual_slot0() - expected_slot0) < 0) {
         uint64_t tiles;
         if constexpr (is_producer) {
-            tiles = CMDBUF_READ_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, tail_txn_id);
+            tiles = __builtin_riscv_ttrocc_cmdbuf_read_tiles_to_process_tr_ack_tr_id(OVERLAY_RD_CMD_BUF, tail_txn_id);
         } else {
-            tiles = CMDBUF_READ_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, tail_txn_id);
+            tiles = __builtin_riscv_ttrocc_cmdbuf_read_tiles_to_process_wr_sent_tr_id(OVERLAY_WR_CMD_BUF, tail_txn_id);
         }
         if (tiles > 0 && tiles < global_threshold) {
             break;
@@ -564,17 +576,19 @@ inline void DataflowBuffer::lock_release_impl(ScopedLockRegion region, uint16_t 
     }
 }
 
+inline void DataflowBuffer::write_barrier_impl([[maybe_unused]] const Noc& noc) const {}
+
 // Consumer barrier: waits outbound write from DFB writes to arrive at their destination
 // Falls back to a full barrier when no txn_ids are assigned
-inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
+inline void DataflowBuffer::write_barrier_impl(uint8_t noc_id) const {
     if (local_dfb_interface_.num_txn_ids == 0) {
-        noc.async_write_barrier();
+        noc_async_write_barrier(noc_id);
         return;
     } else {
         for (uint8_t i = 0; i < local_dfb_interface_.num_txn_ids; i++) {
             // Uses internal API rather than user facing noc.async_write_barrier() since it ASSERTs that the txn_id comes
             // from the user tnx ID pool and the DFB txn ids are internal only.
-            noc_async_write_barrier_with_trid(local_dfb_interface_.txn_ids[i], noc.get_noc_id());
+            noc_async_write_barrier_with_trid(local_dfb_interface_.txn_ids[i], noc_id);
         }
     }
 }
@@ -656,6 +670,7 @@ inline void DataflowBuffer::commit_implicit_write() {
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr =
             local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
     }
+    drain_owner_->has_outbound_writes_ = true;
     ctiles_written_++;
     if (ctiles_written_ % local_dfb_interface_.num_entries_per_txn_id == 0) {
         ctxn_id_index_ = (ctxn_id_index_ + 1) % local_dfb_interface_.num_txn_ids;

@@ -488,6 +488,52 @@ TEST_F(TopologyMapperUtilsTest, SweepConsumer_SolutionSpansExpectedHosts) {
         << "each swept solution must span exactly " << expected_hosts << " distinct hosts; got " << hosts.size();
 }
 
+// Regression for the multi-host cluster-validation path: every MPI rank maps the per-cluster-type
+// single-host MGD against the PSD discovered across the whole job, with rank-binding constraints
+// disabled (TopologyMapper local mode). TopologyMapper then passes this host's chips as the placement
+// allowlist; without it every rank seats M0 on the same arbitrary host and the other ranks see no local
+// chips ("No local mesh ids found"). The allowlist is a restriction, so a 1x2 mesh also fits inside a
+// host that owns more chips than that.
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_RankBindingsDisabled_AllowlistRestrictsSeating) {
+    using namespace ::tt::tt_fabric;
+
+    // Two hosts: host0 owns 100-101, host1 owns 102-103-104-105, wired as one line 100..105.
+    auto psd = build_mock_psd({"host0", "host0", "host1", "host1", "host1", "host1"}, line_edges(6));
+    MeshGraphDescriptor mgd{std::string(R"(
+        mesh_descriptors {
+          name: "M0"
+          arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    for (const std::string local_host : {"host1", "host0"}) {
+        TopologyMappingConfig config;
+        config.disable_rank_bindings = true;
+        fill_hosts_from_psd(config, psd);
+
+        // What TopologyMapper::build_mapping sets in local mode on `local_host`: this host's ASICs as the
+        // allowlist, with no rank-bound ASIC or fabric-node maps.
+        config.placement_asic_allowlist = config.hostname_to_asics.at(local_host);
+
+        const auto mapping = map_multi_mesh_to_physical(psd, mgd, config);
+        ASSERT_TRUE(mapping.success) << local_host << ": " << mapping.error_message;
+        EXPECT_EQ(mapping.fabric_node_to_asic.size(), 2u);
+        verify_bidirectional_consistency(mapping);
+
+        const auto footprints = mapped_asic_footprints(mapping);
+        ASSERT_EQ(footprints.size(), 1u);
+        for (const uint64_t asic_id : footprints.front()) {
+            EXPECT_TRUE(config.placement_asic_allowlist.contains(tt::tt_metal::AsicID{asic_id}))
+                << "mesh seated off the local host " << local_host << " (ASIC " << asic_id << ")";
+        }
+    }
+}
+
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_SingleBHGalaxy_2x4Pipeline) {
     using namespace ::tt::tt_fabric;
     if (getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {

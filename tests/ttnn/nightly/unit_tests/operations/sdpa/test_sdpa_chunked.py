@@ -589,3 +589,130 @@ def test_chunked_sdpa_geometry_override_rejects_elems_per_block_mismatch(device,
                 num_kv_heads=1,
             ),
         )
+
+
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize(
+    "q_chunk_size,k_chunk_size,sliding_window,use_sink",
+    [
+        (256, 512, None, True),
+        (128, 128, 128, True),
+        (128, 128, 128, False),
+        (128, 128, None, True),
+        (128, 128, 100, True),
+    ],
+    ids=["full_q256k512_sink", "sliding128_sink", "sliding128_no_sink", "full_q128k128_sink", "sliding100_sink"],
+)
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+@pytest.mark.parametrize("flexible", [False, True], ids=["scalar_start", "tensor_start"])
+def test_chunked_sdpa_sink_and_sliding_window(
+    device, q_chunk_size, k_chunk_size, sliding_window, use_sink, fp32_dest_acc_en, flexible
+):
+    """Compare four paged chunks with absolute-position causal/window masks and a learned sink."""
+    torch.manual_seed(1234)
+    batch, query_heads, kv_heads, sequence, head_dim = 1, 16, 2, 4096, 64
+    chunk_size, page_size = 1024, 64
+    scale = head_dim**-0.5
+    query = fa_rand(batch, query_heads, sequence, head_dim)
+    key = fa_rand(batch, kv_heads, sequence, head_dim)
+    value = fa_rand(batch, kv_heads, sequence, head_dim)
+    repeated_key = key.repeat_interleave(query_heads // kv_heads, dim=1)
+    repeated_value = value.repeat_interleave(query_heads // kv_heads, dim=1)
+    # Exercise negligible and dominant sinks. TTNN scales the supplied sink with the QK scores.
+    sink = (torch.linspace(-4, 8, query_heads) / scale).reshape(1, query_heads, 1, 1).to(torch.bfloat16)
+    tt_sink = ttnn.from_torch(sink, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) if use_sink else None
+
+    blocks = sequence // page_size
+    permutation = torch.randperm(batch * blocks)
+    page_table = torch.argsort(permutation).reshape(batch, blocks).to(torch.int32)
+
+    def page_cache(tensor):
+        pages = tensor.reshape(batch, kv_heads, blocks, page_size, head_dim).transpose(1, 2)
+        pages = pages.reshape(batch * blocks, kv_heads, page_size, head_dim)[permutation]
+        return ttnn.from_torch(pages, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_key, tt_value = page_cache(key), page_cache(value)
+    tt_page_table = ttnn.from_torch(page_table, dtype=ttnn.int32, device=device)
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=False,
+    )
+
+    key_positions = torch.arange(sequence)[None, :]
+    for start in range(0, sequence, chunk_size):
+        query_chunk = query[:, :, start : start + chunk_size]
+        query_positions = torch.arange(start, start + chunk_size)[:, None]
+        visible = key_positions <= query_positions
+        if sliding_window is not None:
+            visible &= key_positions > query_positions - sliding_window
+        scores = query_chunk @ repeated_key.transpose(-2, -1) * scale
+        scores.masked_fill_(~visible, float("-inf"))
+        if use_sink:
+            sink_scores = (sink.float() * scale).expand(batch, query_heads, chunk_size, 1)
+            scores = torch.cat([scores, sink_scores], dim=-1)
+        probabilities = scores.softmax(dim=-1)[..., :sequence]
+        expected = probabilities @ repeated_value
+
+        tt_query = ttnn.from_torch(query_chunk, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        start_argument = (
+            {"chunk_start_idx_tensor": ttnn.from_torch(torch.tensor([start], dtype=torch.int32), device=device)}
+            if flexible
+            else {"chunk_start_idx": start}
+        )
+        actual = ttnn.transformer.chunked_scaled_dot_product_attention(
+            tt_query,
+            tt_key,
+            tt_value,
+            tt_page_table,
+            **start_argument,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            sliding_window_size=sliding_window,
+            attention_sink=tt_sink,
+        )
+        passed, pcc = comp_pcc(expected, ttnn.to_torch(actual), 0.999)
+        assert passed, f"chunk at absolute position {start} failed PCC: {pcc}"
+
+
+@pytest.mark.parametrize("is_causal", [False, True])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+def test_sdpa_window_between_tile_boundaries(device, is_causal, fp32_dest_acc_en):
+    """The fully-visible K tiles must fit every query row's window, including its moving left edge."""
+    torch.manual_seed(83)
+    sequence, heads, dim, window = 512, 4, 64, 100
+    query, key, value = [torch.randn(1, heads, sequence, dim).to(torch.bfloat16) for _ in range(3)]
+    q_pos = torch.arange(sequence)[:, None]
+    k_pos = torch.arange(sequence)[None, :]
+    visible = ((k_pos <= q_pos) & (k_pos > q_pos - window)) if is_causal else (k_pos - q_pos).abs() <= window // 2
+    scores = query.float() @ key.float().transpose(-2, -1) * dim**-0.5
+    expected = scores.masked_fill(~visible, float("-inf")).softmax(dim=-1) @ value.float()
+    operands = [
+        ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for x in (query, key, value)
+    ]
+    actual = ttnn.transformer.scaled_dot_product_attention(
+        *operands,
+        is_causal=is_causal,
+        sliding_window_size=window,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        ),
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=False,
+        ),
+    )
+    passed, pcc = comp_pcc(expected, ttnn.to_torch(actual), 0.999)
+    assert passed, pcc

@@ -44,9 +44,7 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
     std::uint32_t unpack_tile_w_dvalid_instrn;
     std::uint32_t reset_dest_tile_cnt_instrn = TT_OP_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 0 /*Value*/);
 
-    std::uint32_t dest_tile_idx_inc = (static_cast<std::uint32_t>(tensor_shape.face_r_dim) < (FACE_R_DIM >> 1))
-                                          ? (FACE_R_DIM >> (rows_log2(static_cast<std::uint32_t>(tensor_shape.face_r_dim)) + 1))
-                                          : 1;
+    const std::uint32_t dest_tile_idx_inc = tiny_face_stride(tensor_shape);
 
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
@@ -234,7 +232,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
 
     // Dummy dvalid NOP for the source register filled by MOVD2A/B
     const std::uint32_t nop_op =
-        TT_OP_UNPACR_NOP(DUMMY_UNP, 0 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, p_unpacr::UNP_NOP);
+        TT_OP_UNPACR_NOP(DUMMY_UNP, 0 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, p_unpacr::UNP_SET_DVALID);
 
     // Unpack one face from CB with auto-increment of src face index.
     // Dst_Face_Idx_Inc=0: always write to face 0 position (FPU reads from 0 after CLR_AB).

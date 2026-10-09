@@ -198,7 +198,13 @@ test_suite_wh_6u_llama_long_stress_tests() {
 
 test_suite_bh_ttnn_stress_tests() {
     echo "[upstream-tests] running BH upstream ttnn stress tests"
-    pytest tests/ttnn/stress_tests/
+    if [[ "$hw_topology" == "blackhole" ]]; then
+        # CCL stress tests require multiple devices; skip on single card (e.g. P150b)
+        echo "[upstream-tests] Single card topology detected, skipping CCL stress tests"
+        pytest tests/ttnn/stress_tests/ --ignore=tests/ttnn/stress_tests/test_ccl.py
+    else
+        pytest tests/ttnn/stress_tests/
+    fi
 }
 
 test_suite_bh_6u_metal_unit_tests() {

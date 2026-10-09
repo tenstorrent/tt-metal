@@ -62,6 +62,9 @@ public:
 
     static void mesh_socket_created(const distributed::MeshSocket* socket) noexcept;
 
+    static void global_semaphore_created(const distributed::MeshBuffer* buffer, const CoreRangeSet& cores) noexcept;
+    static void global_semaphore_reset(const distributed::MeshBuffer* buffer, uint32_t value) noexcept;
+
     static void mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
     static void mesh_workload_destroyed(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
     static void mesh_workload_add_program(

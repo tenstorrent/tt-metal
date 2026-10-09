@@ -18,7 +18,7 @@ YEAR=$(date +%Y)
 
 declare -a SRC_FILES=(
     "tt_metal/hw/inc/hostdev/dev_msgs.h"
-    "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
+    "tt_metal/hostdevcommon/api/hostdevcommon/fabric_telemetry_msgs.h"
     "tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h"
 )
 declare -a OUT_BASENAMES=(

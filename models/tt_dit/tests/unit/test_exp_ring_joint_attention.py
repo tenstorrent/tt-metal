@@ -43,6 +43,7 @@ def run_exp_ring_joint_sdpa(
     max_mse=None,
     num_workers_per_link=5,
     num_buffers_per_channel=32,
+    kv_capacity=None,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     # The op reserves the last column for the fabric MUX (sdpa_grid.x = x - 1) and needs one Q
@@ -76,7 +77,7 @@ def run_exp_ring_joint_sdpa(
     kv_shard_dims[up_axis] = 1  # UP shards on heads dim1
 
     # Create persistent output buffers
-    ag_output_shape = (b, nh, padded_seq_len, d)
+    ag_output_shape = (b, nh, kv_capacity or padded_seq_len, d)
 
     persistent_output_buffers = [
         [
@@ -373,22 +374,24 @@ def run_test_exp_ring_joint_sdpa(
     ids=["ring"],
 )
 @pytest.mark.parametrize(
-    "mesh_device, num_links, nh, base_seq_len, rp_axis, rp_factor, up_axis, up_factor, q_chunk_size, k_chunk_size, pad_to",
+    "mesh_device, num_links, nh, base_seq_len, rp_axis, rp_factor, up_axis, up_factor, q_chunk_size, k_chunk_size, pad_to, kv_capacity",
     [
-        ((4, 32), 2, 40, 75600, 1, 32, 0, 4, 224, 512, None),
+        ((4, 32), 2, 40, 75600, 1, 32, 0, 4, 224, 512, None, None),
         # Head-serial passes: nh/up_factor heads land on each device and the op walks
         # ceil(heads_per_device / grid_rows) of them per core row as serial passes. With 10 grid
         # rows, 40 heads -> 10 per device -> 1 pass; 80 heads -> 20 per device -> 2 passes.
-        ((4, 32), 2, 80, 75600, 1, 32, 0, 4, 224, 512, None),
+        ((4, 32), 2, 80, 75600, 1, 32, 0, 4, 224, 512, None, None),
         # Minimal spillover: 44 heads -> 11 per device -> row 0 runs 2 passes (heads 0 and 10),
         # rows 1-9 run 1 pass (heads 1-9) on the same P=2 build. Isolates the multi-pass row.
-        ((4, 32), 2, 44, 75600, 1, 32, 0, 4, 224, 512, None),
+        ((4, 32), 2, 44, 75600, 1, 32, 0, 4, 224, 512, None, None),
         # H3 15s: 108544 = 106 * 1024 -> 3392 local tiles -> q=320 (11 columns), k=384. Resident Q
         # does not fit L1 at P=2, so this is the one config that exercises the factory's streamed-Q
         # fallback (stream_q). 56 heads -> 14/device: rows 0-3 run 2 passes, rows 4-9 run 1.
-        ((4, 32), 2, 56, 108544, 1, 32, 0, 4, 320, 384, None),
-        ((4, 32), 2, 56, 109150, 1, 32, 0, 4, 352, 256, 118784),
-        ((4, 8), 2, 40, 18944, 1, 8, 0, 4, 224, 512, None),
+        ((4, 32), 2, 56, 108544, 1, 32, 0, 4, 320, 384, None, None),
+        ((4, 32), 2, 56, 109150, 1, 32, 0, 4, 352, 256, 118784, None),
+        ((4, 8), 2, 40, 18944, 1, 8, 0, 4, 224, 512, None, None),
+        # K/V gather buffer allocated at 2x the gathered length.
+        ((4, 8), 2, 40, 18944, 1, 8, 0, 4, 224, 512, None, 37888),
         # Whole-chunk skip: the pad tail on the LAST ring device covers an entire K chunk, so the
         # "KV chunk beyond logical_n" skip fires and one ring iteration processes fewer chunks than
         # the rest (here 1 instead of 2). Mirrors the fl2va 4x32 pipeline hang geometry
@@ -396,10 +399,20 @@ def run_test_exp_ring_joint_sdpa(
         # chunk) scaled to sp=8: padded 8,192 -> logical_nt 240, last shard chunks at tile 224
         # (processed) and 240 (skipped). pad_to overrides get_padded_vision_seq_len because its
         # 32*sp alignment cannot produce a >= one-chunk tail at sp=8.
-        ((4, 8), 2, 56, 7680, 1, 8, 0, 4, 96, 512, 8192),
-        ((1, 4), 2, 10, 8960, 1, 4, 0, 1, 224, 512, None),
+        ((4, 8), 2, 56, 7680, 1, 8, 0, 4, 96, 512, 8192, None),
+        ((1, 4), 2, 10, 8960, 1, 4, 0, 1, 224, 512, None, None),
     ],
-    ids=["4x32", "4x32_2pass", "4x32_1spill", "4x32_2pass_streamq", "4x32_padshard_15s", "4x8", "4x8_chunkskip", "1x4"],
+    ids=[
+        "4x32",
+        "4x32_2pass",
+        "4x32_1spill",
+        "4x32_2pass_streamq",
+        "4x32_padshard_15s",
+        "4x8",
+        "4x8_kv_capacity",
+        "4x8_chunkskip",
+        "1x4",
+    ],
     indirect=["mesh_device"],
 )
 @pytest.mark.skipif(
@@ -418,6 +431,7 @@ def test_exp_ring_joint_sdpa_dit_bh_glx_custom(
     q_chunk_size,
     k_chunk_size,
     pad_to,
+    kv_capacity,
     all_gather_topology,
     reset_seeds,
 ):
@@ -459,6 +473,7 @@ def test_exp_ring_joint_sdpa_dit_bh_glx_custom(
         skip_check,
         pcc_threshold,
         max_mse=max_mse,
+        kv_capacity=kv_capacity,
     )
 
 
@@ -472,6 +487,8 @@ LOGICAL_TENSOR_TRACE_REGION_SIZE = 32 * 1024 * 1024
 # extra pad row shifts thousands of softmax rows and lands well below the threshold.
 PCC_THRESHOLD = 0.995
 PCC_TOLERANCE = 0.005
+M4X8_LOGICAL_NS = [8191, 8192, 7936, 7650, 7200, 7168, 6200, 5800]
+M4X32_LOGICAL_NS = [109150, 107840, 111360, 100000, 118784]
 
 
 @pytest.mark.parametrize(
@@ -492,7 +509,7 @@ PCC_TOLERANCE = 0.005
 )
 @pytest.mark.parametrize(
     "mesh_device, num_links, b, nh, joint_seq_len, d, padded_seq_len, "
-    "rp_axis, rp_factor, up_axis, up_factor, q_chunk_size, k_chunk_size, logical_ns",
+    "rp_axis, rp_factor, up_axis, up_factor, q_chunk_size, k_chunk_size, logical_ns, kv_capacity",
     [
         # logical_n values chosen so each SKIPS A DIFFERENT NUMBER OF KV CHUNKS, which is what makes the
         # replay meaningful: the skipped count drives this op's credit caps, the injector's per-link gate
@@ -517,7 +534,9 @@ PCC_TOLERANCE = 0.005
         # the row count and backward/forward worker split of the op's own passing 4x8 config. Shallower
         # grids (4 rows / 2 workers per link) are not bit-reproducible on this op even on the host-scalar
         # path.
-        ((4, 8), 2, 1, 20, 1024, 64, 8192, 1, 8, 0, 4, 256, 256, [8191, 8192, 7936, 7650, 7200, 7168, 6200, 5800]),
+        ((4, 8), 2, 1, 20, 1024, 64, 8192, 1, 8, 0, 4, 256, 256, M4X8_LOGICAL_NS, None),
+        # K/V gather buffer allocated at 2x the gathered length.
+        ((4, 8), 2, 1, 20, 1024, 64, 8192, 1, 8, 0, 4, 256, 256, M4X8_LOGICAL_NS, 16384),
         # Quad geometry: the real H3 15s failing shape (SP=32, TP=4, rung 118784, local_padded_N =
         # 3712 = 116 tiles), like H3 with NO joint (L=0). q=352 -> 11 local Q chunks, the widest
         # this harness's 12x10 grid takes; nh=40 -> 10 heads/device -> 10 rows. k=256 gives 8 tiles/
@@ -530,9 +549,11 @@ PCC_TOLERANCE = 0.005
         #   100000 -> nt 3125, shards 27-31 fully pad (5 pad shards)
         #   118784 -> fully packed, zero skips: control for the shape independent of bucketing
         # Runs only under the quad runner (run_H3_unit_exp_sdpa_d23.sh); id must contain "4x32".
-        ((4, 32), 2, 1, 40, 0, 64, 118784, 1, 32, 0, 4, 352, 256, [109150, 107840, 111360, 100000, 118784]),
+        ((4, 32), 2, 1, 40, 0, 64, 118784, 1, 32, 0, 4, 352, 256, M4X32_LOGICAL_NS, None),
+        # K/V gather buffer at the ref2va ladder's top rung, as the traced pipeline allocates it.
+        ((4, 32), 2, 1, 40, 0, 64, 118784, 1, 32, 0, 4, 352, 256, M4X32_LOGICAL_NS, 322560),
     ],
-    ids=["m4x8", "m4x32"],
+    ids=["m4x8", "m4x8_kv_capacity", "m4x32", "m4x32_kv_capacity"],
     indirect=["mesh_device"],
 )
 def test_exp_ring_joint_sdpa_logical_n_tensor_trace_replay(
@@ -550,6 +571,7 @@ def test_exp_ring_joint_sdpa_logical_n_tensor_trace_replay(
     q_chunk_size,
     k_chunk_size,
     logical_ns,
+    kv_capacity,
     all_gather_topology,
     reset_seeds,
 ):
@@ -629,8 +651,8 @@ def test_exp_ring_joint_sdpa_logical_n_tensor_trace_replay(
     tt_joint_K = upload(joint_K, joint_shard_dims)
     tt_joint_V = upload(joint_V, joint_shard_dims)
     persistent_kv_bufs = [
-        upload(torch.zeros(b, nh, padded_seq_len, d), kv_buf_shard_dims),
-        upload(torch.zeros(b, nh, padded_seq_len, d), kv_buf_shard_dims),
+        upload(torch.zeros(b, nh, kv_capacity or padded_seq_len, d), kv_buf_shard_dims),
+        upload(torch.zeros(b, nh, kv_capacity or padded_seq_len, d), kv_buf_shard_dims),
     ]
 
     program_config = ttnn.SDPAProgramConfig(
