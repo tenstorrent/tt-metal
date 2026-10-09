@@ -59,7 +59,8 @@ distribution and tree reduction, and removes the stock path's precision losses:
 
 The generated kernel `.build/<fingerprint>/sdpa_flash_decode.cpp` comes from the stock
 `sdpa_flash_decode.cpp` with guarded substitutions. It runs at HiFi4, as the chunked fallback does. The
-model uses it beyond the stock decode bound. Evidence: `doc/long_context_perf/FINDINGS.md`.
+model uses it beyond the stock decode bound. Evidence: `tests/check_accurate_flash_decode.py` and
+`tests/check_accurate_prefill_attention.py` (relative L2 against an FP64 oracle).
 
 `accurate_attention(..., grid=(x, y), math_fidelity=...)` selects the worker grid and fidelity for single-offset
 calls. Per-request offsets keep the pinned 8x8 grid.

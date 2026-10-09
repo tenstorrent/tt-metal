@@ -5,7 +5,7 @@
 Fixtures use the per-chip TP4 geometry (8 Q heads, 2 KV heads, head_dim 128, BFP8 paged
 cache, page 32). The oracle reads back the stored BFP8 cache, as the stage-11 comparator.
 
-  stage11:  seed 570129, B32, capacity 8192 (doc/benchmark/runtime_repair/CONTROL_ATTRIBUTION.md)
+  stage11:  seed 570129, B32, capacity 8192 (the bring-up's stage-11 control case)
   long:     B1 at long positions, uniform-ish (q_scale 0.5) and peaked (q_scale 2.0) attention
 """
 

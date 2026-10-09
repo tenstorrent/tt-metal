@@ -4,8 +4,8 @@
 
 Layer indices are zero based. The owner-authorized accuracy repair keeps the
 optimized decoder's partitioning, residual, cache and collective contracts.
-Stage 8 starts from this policy; the precision experiment ledger lives under
-doc/full_model/precision. No policy is selected dynamically during inference.
+Stage 8 starts from this policy (the precision experiment ledger stays in the
+bring-up workspace). No policy is selected dynamically during inference.
 """
 
 from .optimized_decoder import MatmulGeometry, PrecisionPolicy
