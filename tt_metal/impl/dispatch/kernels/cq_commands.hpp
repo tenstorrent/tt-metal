@@ -57,10 +57,9 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_SEND_GO_SIGNAL = 14,
     CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL = 15,
     CQ_DISPATCH_SET_NUM_WORKER_SEMS = 16,
-    // 17 was CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA (dispatch-to-eth go-signal unicast), removed.
-    CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST = 18,  // unicast packed large write with uint32_t length
-    CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS = 19,
-    CQ_DISPATCH_CMD_RT_PROFILER_FLUSH = 20,  // dispatch_s: wait on the last program and signal its profiler record
+    CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST = 17,  // unicast packed large write with uint32_t length
+    CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS = 18,
+    CQ_DISPATCH_CMD_RT_PROFILER_FLUSH = 19,  // dispatch_s: wait on the last program and signal its profiler record
     CQ_DISPATCH_CMD_MAX_COUNT,               // for checking legal IDs
 };
 

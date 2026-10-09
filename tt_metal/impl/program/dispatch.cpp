@@ -1279,7 +1279,7 @@ BatchedTransfers assemble_runtime_args_commands(
 
         // Common RTAs
         // Set by the user based on the kernel ID. All cores running that kernel ID will get these RTAs
-        // Non-multicast cores (e.g. DRAM programmable cores): unicast to each core.
+        // Non-multicast cores: unicast to each core.
         if (!metal_ctx.hal().get_supports_receiving_multicasts(index)) {
             for (auto& kg : program.get_kernel_groups(index)) {
                 for (size_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
@@ -2311,7 +2311,7 @@ public:
             }
             if (core_type == HalProgrammableCoreType::IDLE_ETH) {
                 // Fast dispatch not supported on idle ethernet. Remaining launch-message targets are TENSIX
-                // (multicast) and any non-multicast programmable cores such as DRAM (unicast below).
+                // (multicast) and any non-multicast programmable cores (unicast below).
                 continue;
             }
             for (auto& kernel_group : program.get_kernel_groups(programmable_core_type_index)) {
