@@ -78,7 +78,7 @@ constexpr uint32_t compute_num_blocks(uint32_t total_width, uint32_t max_block_w
 }
 
 // =============================================================================
-// Fp8_e4m3 Row Split (tt-metal#59140)
+// Fp8_e4m3 Row Split
 // =============================================================================
 
 template <uint32_t block_ct_dim, uint32_t full_ct_dim, uint32_t output_dfb>

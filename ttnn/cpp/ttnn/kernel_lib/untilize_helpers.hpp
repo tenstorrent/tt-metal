@@ -52,7 +52,7 @@ enum class RemapMode : uint8_t {
 // Blackhole fast untilize chunk width; init, untilize and uninit must agree on it.
 enum class FastChunk : uint8_t {
     Auto,      // Default: up to eight tiles with a 16-bit DEST
-    FourTiles  // Up to four tiles (tt-metal#58736: callers measured slower with eight)
+    FourTiles  // Up to four tiles
 };
 
 }  // namespace untilize_config
@@ -80,10 +80,8 @@ template <
     untilize_config::FastChunk fast_chunk = untilize_config::FastChunk::Auto>
 ALWI void untilize_uninit();
 
-// An Fp8_e4m3 output cannot be packed in one-tile blocks of a wider row (tt-metal#59140): each row of such a block is
-// a 32-datum L1 stream, and an Fp8_e4m3 stream reaches L1 in 64-byte units, so 32 bytes of zeros land on the next
-// block. On Blackhole a row that the even split leaves in one-tile blocks is packed in blocks of up to max_block_ct_dim
-// tiles and one or two narrower blocks of two or more tiles instead.
+// An Fp8_e4m3 stream reaches L1 in 64-byte units, so a one-tile block of a wider row pads zeros onto the next block;
+// such a row is packed in blocks of up to max_block_ct_dim tiles and one or two narrower blocks of two or more tiles.
 template <uint32_t full_ct_dim, uint32_t max_block_ct_dim = (DEST_AUTO_LIMIT < 8 ? DEST_AUTO_LIMIT : 8)>
 struct Fp8UntilizeRowSplit {
     static constexpr uint32_t max_block = max_block_ct_dim;
@@ -101,9 +99,8 @@ struct Fp8UntilizeRowSplit {
 template <uint32_t block_ct_dim, uint32_t full_ct_dim, uint32_t output_dfb>
 constexpr bool untilize_fp8_row_split();
 
-// Untilizes one row of full_ct_dim tiles in the blocks of Fp8UntilizeRowSplit, reading the input a tile at a time.
-// The pack side must be initialized for Fp8UntilizeRowSplit<full_ct_dim>::first_block_ct_dim and full_ct_dim; the
-// call re-inits it for the narrower blocks and restores that init at the end of the row.
+// Expects the pack init of Fp8UntilizeRowSplit<full_ct_dim>::first_block_ct_dim and full_ct_dim, re-inits the pack
+// side for the narrower blocks and restores that init at the end of the row; reads the input a tile at a time.
 template <uint32_t full_ct_dim, bool wait_for_input = true, typename InputBuffer>
 ALWI void untilize_fp8_split_row(InputBuffer& in, uint32_t input_dfb, uint32_t output_dfb);
 

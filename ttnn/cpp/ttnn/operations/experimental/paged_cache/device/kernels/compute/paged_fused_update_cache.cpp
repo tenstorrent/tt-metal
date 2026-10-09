@@ -24,8 +24,7 @@ void kernel_main() {
     // kernel per input shard grid, and each binds only its own input buffer.
     compute_kernel_hw_startup(dfb::in, dfb::untilized_in);
 
-    // Eight-tile fast untilize chunks only for rows of two chunks or more: a one-chunk row measured slower
-    // (tt-metal#58736).
+    // Eight-tile fast untilize chunks only for rows of two chunks or more: a one-chunk row is faster in four.
     constexpr auto fast_chunk = Wt > 8 ? compute_kernel_lib::untilize_config::FastChunk::Auto
                                        : compute_kernel_lib::untilize_config::FastChunk::FourTiles;
 

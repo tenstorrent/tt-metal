@@ -68,9 +68,8 @@ def test_pack_untilize(
     )
 
 
-# One-tile rows, full three-tile and eight-tile rows, and rows split into several blocks (one-tile blocks included),
-# whose output rows are not contiguous in L1; the 68-tile row exceeds the packer's output offset window for 32-bit data.
-# block_ct_dim 0 takes the block size the other test derives.
+# Full rows and rows split into blocks whose output rows are not contiguous in L1; the 68-tile row exceeds the packer's
+# output offset window for 32-bit data. block_ct_dim 0 takes the block size the other test derives.
 @skip_for_wormhole
 @parametrize(
     formats=input_output_formats(

@@ -44,7 +44,7 @@ void kernel_main() {
 
     constexpr uint32_t full_ct_dim = hidden_size / 32;
     constexpr uint32_t num_blocks = full_ct_dim / block_ct_dim;
-    // An Fp8_e4m3 row with no divisor between 2 and 8 is split into blocks of different widths (tt-metal#59140).
+    // An Fp8_e4m3 row with no divisor from 2 to 8 takes blocks of different widths: one-tile blocks pad into the next.
     constexpr bool fp8_row_split =
         compute_kernel_lib::untilize_fp8_row_split<block_ct_dim, full_ct_dim, cb_untilize_id>();
     constexpr uint32_t init_block_ct_dim =

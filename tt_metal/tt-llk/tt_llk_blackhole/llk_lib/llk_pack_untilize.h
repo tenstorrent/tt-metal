@@ -347,7 +347,7 @@ inline void _llk_pack_untilize_init_(
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
     LLK_ASSERT(num_faces < 4 || face_r_dim == FACE_R_DIM, "four faces need full face rows");
-    // Each row of a one-tile block is its own 32-datum stream, and an Fp8_e4m3 stream pads to 64 datums (#59140).
+    // Each row of a one-tile block is its own 32-datum stream, and an Fp8_e4m3 stream pads to 64 datums.
     LLK_ASSERT(
         !(block_ct_dim == 1 && full_ct_dim > 1 && !narrow_row && static_cast<DataFormat>(pack_dst_format) == DataFormat::Fp8_e4m3),
         "an Fp8_e4m3 output needs blocks of two or more tiles when a row has several blocks");
@@ -367,8 +367,8 @@ inline void _llk_pack_untilize_init_(
     {
         output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * ((num_faces == 1) ? 1 : 2) * FACE_C_DIM);
     }
-    // A full-width block is one L1 stream per face pair; 32-bit reads still close every row to leave Dest
-    // cycles to an unpacker writing the other half.
+    // A full-width block is one L1 stream per face pair; 32-bit reads close every row to leave Dest cycles to
+    // an unpacker writing the other half.
     constexpr bool l1_rows_contiguous = (full_ct_dim == block_ct_dim);
     // An 8-bit output reaches L1 in 64-datum units: a flush pads a shorter stream with zeros up to the unit.
     // A stream starts on a 16-byte L1 boundary, so a narrow row of another byte size stays in one stream.

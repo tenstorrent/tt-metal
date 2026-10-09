@@ -196,9 +196,8 @@ def _bf16_patterns(width):
 
 
 def _bfp8_raw_tiles(width):
-    # Raw Bfp8_b tiles: 64 shared exponent bytes (one per 16-datum face row), then 1024 sign and mantissa bytes. Face
-    # row g of the input takes exponent g // 16 and the bytes (g % 16) * 16 to (g % 16) * 16 + 15, so the 4096 face rows
-    # of 64 tiles carry every exponent with every sign and mantissa byte.
+    # Raw Bfp8_b tiles (64 exponent bytes, then 1024 sign and mantissa bytes): face row g takes exponent g // 16 and
+    # bytes (g % 16) * 16 to (g % 16) * 16 + 15, so 64 tiles carry every exponent with every sign and mantissa byte.
     tile_rows = -(-64 // width)
     num_tiles = tile_rows * width
     face_row = torch.arange(num_tiles * 64) % 4096

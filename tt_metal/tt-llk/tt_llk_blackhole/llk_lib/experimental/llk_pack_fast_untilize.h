@@ -54,9 +54,8 @@
 // for bottom rows. These are BH remapped DEST-target offsets, not literal row
 // numbers from the layout table above.
 //
-// With a 16-bit DEST, block_ct_dim=8 selects chunks of up to 8 tiles: 3 or 4
-// PACRs per row (the last on two interfaces for an odd unit_dim) over 256-row
-// strips (fast_untilize_strip_rows).
+// With a 16-bit DEST, block_ct_dim=8 selects chunks of up to 8 tiles: 3 or 4 PACRs per row (the last on two
+// interfaces for an odd unit_dim) over 256-row strips (fast_untilize_strip_rows).
 //
 // DOMAIN: unit_dim=2/3/4, num_faces=4, private SyncHalf DEST buffering, and
 // Float16_b or Float32 output from supported fast-untilize math layouts. Callers should
