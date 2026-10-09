@@ -453,6 +453,24 @@ RUNS = [
         None,
         None,
     ),
+    (
+        "v12",
+        "fresh/freshbh3_timed.csv",
+        "freshbh97001",
+        "BH fresh random set 3 (seeds 97001-7), bh-30",
+        "Out-of-sample on BH: picked on bh-30 with the frozen v12 BH constants.",
+        None,
+        "fresh/freshbh3.done",
+    ),
+    (
+        "v12",
+        "fresh/fresh4_v12_timed.csv",
+        "fresh94001-v12",
+        "Draw 4 (seeds 94001-7) with v12's picks",
+        "Draw 4 was generated before v12 was frozen; v12's 78 changed picks re-timed with legacy and the rules in one session.",
+        None,
+        "miss/v12d4.done",
+    ),
 ]
 for vid, path, sid, label, note, usage, done in RUNS:
     add(vid, f"{W}/{path}", sid, label, note, f"{W}/{usage}" if usage else None, f"{W}/{done}" if done else None)
