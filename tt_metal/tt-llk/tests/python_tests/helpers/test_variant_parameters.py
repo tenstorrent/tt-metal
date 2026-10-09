@@ -872,6 +872,16 @@ class REDUCE_POOL_TYPE(TemplateParameter):
 
 
 @dataclass
+class SEMAPHORE_RING(TemplateParameter):
+    """Credits seeded in the compute semaphore ring of a perf kernel; 0 runs the pipeline without the semaphore."""
+
+    ring_depth: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint8_t RING_DEPTH = {self.ring_depth};"
+
+
+@dataclass
 class REDUCE_ORDER(TemplateParameter):
     """Order of the chained SFPU reduce passes in sfpu_reduce_multidim_test.cpp, all under one
     shared init_reduce (see ReduceOrder; the kernel names the values REDUCE_ORDER_*).
