@@ -447,7 +447,10 @@ class SpecRunner:
         Returns (X [B,n] the first block (first token + drafts), base [B])."""
         B, n = self.B, self.n
         lens = torch.as_tensor(lens).long()
-        p0 = torch.clamp((lens - 128) // 2 * 2, min=0)
+        # replay length: the last SEED_TAIL tokens (default 128 = the full attention window of the drafter). A shorter tail cuts the seeding time (one verify round per 4 replayed tokens, ~115 ms each at B=32,
+        # whatever the number of rows to seed) at the price of drafter state for the older positions; acceptance recovers as the request decodes (the drafts are proposals, the verify keeps the output exact).
+        tail = int(os.environ.get("DSV41_SPEC_SEED_TAIL", "128"))
+        p0 = torch.clamp((lens - tail) // 2 * 2, min=0)
         if (
             os.environ.get("DSV41_SPEC_FULL_REPLAY") == "1"
         ):  # replay the whole prompt (no reliance on the prefill state; ISL <= ~2k) instead of the last 128 tokens
