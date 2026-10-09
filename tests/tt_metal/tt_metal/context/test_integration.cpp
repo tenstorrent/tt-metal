@@ -297,6 +297,13 @@ void ExpectDeviceProfilerActiveOnSilicon(distributed::MeshDevice& silicon_mesh_d
         << "Test expects profiler host-device sync to be enabled.";
     EXPECT_TRUE(getDeviceProfilerState(silicon_mesh_device.impl().metal_env()))
         << "Device profiler must remain enabled on the real device";
+
+    // The silicon context is the one attached to the process-wide profiler, which serves the handle-less APIs.
+    const ProfilerStateManager* attached = nullptr;
+    ProfilerRegistry::instance().with_sole_attached([&](const ProfilerStateManager* psm) { attached = psm; });
+    EXPECT_EQ(attached, silicon_mesh_device.impl().metal_context().profiler_state_manager().get());
+    EXPECT_NO_THROW(experimental::GetLatestProgramsPerfData());
+    EXPECT_NO_THROW(experimental::GetAllProgramsPerfData());
 }
 
 // Even though profiling + sync were requested, the device profiler must never be started on a
@@ -314,6 +321,8 @@ void ExpectDeviceProfilerSkippedOnMock(distributed::MeshDevice& mock_mesh_device
             << "Device profiler was started on mock device " << device_id
             << " -- it must be skipped for mock/emulated clusters";
     }
+    EXPECT_FALSE(profiler_state_manager->attached_to_registry)
+        << "A mock context must not attach to the process-wide profiler";
 
 #if defined(TRACY_ENABLE)
     // The trace hooks must act on the mock mesh's own (empty) profiler state and never reach the silicon profiler's.
@@ -326,6 +335,16 @@ void ExpectDeviceProfilerSkippedOnMock(distributed::MeshDevice& mock_mesh_device
         TracyTTMetalEndMeshTrace(mock_mesh_device.impl(), unknown_device_ids, trace_id);
     });
 #endif
+}
+
+// Once the silicon env is destroyed, nothing is attached to the process-wide profiler and the handle-less getters
+// return nothing.
+void ExpectNoProfiledContext() {
+    const ProfilerStateManager* attached = nullptr;
+    ProfilerRegistry::instance().with_sole_attached([&](const ProfilerStateManager* psm) { attached = psm; });
+    EXPECT_EQ(attached, nullptr);
+    EXPECT_TRUE(experimental::GetLatestProgramsPerfData().empty());
+    EXPECT_TRUE(experimental::GetAllProgramsPerfData().empty());
 }
 
 // Shared body: open a real silicon mesh first, then two mock meshes on the same arch. When
@@ -647,6 +666,7 @@ TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDeviceWithProfilerSync
 #endif
     ScopedProfilerSyncEnv profiler_env;
     RunCoexistingSiliconAndMockDevice(/*expect_profiler=*/true);
+    ExpectNoProfiledContext();
 }
 
 // Same test as above but reverse the order to ensure no hangs due to unexpected internal objects created for the
@@ -663,6 +683,7 @@ TEST(MetalContextIntegrationTest, CoexistingMockAndSiliconDeviceWithProfilerSync
 #endif
     ScopedProfilerSyncEnv profiler_env;
     RunCoexistingMockAndSiliconDevice(/*expect_profiler=*/true);
+    ExpectNoProfiledContext();
 }
 
 TEST(MetalContextIntegrationTest, ForkMockAndRealDevice) {
