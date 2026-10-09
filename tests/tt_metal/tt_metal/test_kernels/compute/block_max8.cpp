@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "block_max8_test_config.h"
 #include "api/compute/common.h"
 #include "api/compute/experimental/block_max8.h"
 #include "api/compute/experimental/pack_rows_to_addr.h"
@@ -12,11 +11,14 @@
 /** Exercise the public unary API and compact row pack with eight occupied DST slots.
  * Other slots use ordinary tile packing after restoring pack state. Thirteen
  * acquisitions visit masking boundaries and repeatedly reuse both DST halves.
+ * The host supplies geometry as compile arguments and (DST index, valid count)
+ * pairs as runtime arguments, shared with the golden calculation.
  * Dirty ADDR_MOD_7 before each init to verify that fused-op state is reset.
  */
 void kernel_main() {
     constexpr uint32_t count = get_compile_time_arg_val(0);
-    using namespace block_max8_test;
+    constexpr uint32_t slots = get_compile_time_arg_val(1);
+    constexpr uint32_t result_rows = get_compile_time_arg_val(2);
     constexpr uint32_t input = tt::CBIndex::c_0;
     constexpr uint32_t output = tt::CBIndex::c_16;
     CircularBuffer in(input);
@@ -25,7 +27,8 @@ void kernel_main() {
     copy_init(input);
     for (uint32_t tile = 0; tile < count; tile += slots) {
         const uint32_t batch = tile / slots;
-        const uint32_t dst = dst_indices[batch % dst_index_count];
+        const uint32_t dst = get_arg_val<uint32_t>(2 * batch);
+        const uint32_t valid_scores = get_arg_val<uint32_t>(2 * batch + 1);
         in.wait_front(slots);
         out.reserve_back(slots);
         tile_regs_acquire();
@@ -34,7 +37,7 @@ void kernel_main() {
         }
         MATH((addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_7)));
         block_max8_init();
-        block_max8(dst, valid_counts[batch]);
+        block_max8(dst, valid_scores);
         tile_regs_commit();
         tile_regs_wait();
         pack_rows_to_addr_init(result_rows);
