@@ -159,7 +159,7 @@ def generate_unpack_unary_operand_combinations(
                                         dest_sync,
                                         transpose_en,
                                         unpacker_sel,
-                                        dimensions,
+                                        runtime(dimensions),
                                         runtime(tile_dims),
                                     )
                                 )

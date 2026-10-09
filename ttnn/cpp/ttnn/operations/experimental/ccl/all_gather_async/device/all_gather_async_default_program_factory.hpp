@@ -4,19 +4,34 @@
 
 #pragma once
 
+#include <functional>
+
+#include <algorithm>
+#include <array>
+
+#include <tt-metalium/runtime_args_data.hpp>
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
+
 #include "all_gather_async_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct AllGatherProgramArtifacts {
-    tt::tt_metal::KernelHandle reader_kernel_id{};
-    tt::tt_metal::KernelHandle writer_kernel_id{};
-    std::vector<tt::tt_metal::CoreCoord> all_cores;
-    uint32_t num_directions_per_link = 0;
-    uint32_t num_workers_per_direction = 0;
-    uint32_t num_mux_cores_per_direction_per_link = 0;
-    uint32_t num_cores_per_link = 0;
+    // Cache the binding objects, not their payload pointers: dispatch may relocate data().
+    std::reference_wrapper<tt::tt_metal::RuntimeArgsData> reader_common_args;
+    std::reference_wrapper<tt::tt_metal::RuntimeArgsData> writer_common_args;
+    using RuntimeArgs = std::array<uint32_t, ttnn::ccl::AllGatherCommonArgs::count>;
+    static RuntimeArgs collect_runtime_args(
+        const std::optional<GlobalSemaphore>& barrier,
+        const std::vector<GlobalSemaphore>& semaphores,
+        const Tensor& input,
+        const Tensor& output);
+
+    void override_runtime_arguments(const RuntimeArgs& args) const {
+        std::copy(args.begin(), args.end(), reader_common_args.get().data());
+        std::copy(args.begin(), args.end(), writer_common_args.get().data());
+    }
 };
 
 struct DefaultMeshWorkloadFactory {
@@ -74,21 +89,5 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     CoreCoord core_grid_offset,
     bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
-
-// Runtime argument override function
-void all_gather_async_minimal_default_helper_override_runtime_arguments(
-    tt::tt_metal::Program& program,
-    tt::tt_metal::KernelHandle reader_kernel_id,
-    tt::tt_metal::KernelHandle writer_kernel_id,
-    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
-    uint32_t num_links,
-    uint32_t num_directions_per_link,
-    uint32_t num_workers_per_direction,
-    uint32_t num_mux_cores_per_direction_per_link,
-    uint32_t num_cores_per_link,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const Tensor& input,
-    const Tensor& output);
 
 }  // namespace ttnn

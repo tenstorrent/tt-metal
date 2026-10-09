@@ -3404,7 +3404,7 @@ OperationParameterExtractors.register_extractor("ttnn::repeat", extract_func=_ex
 
 
 def _extract_group_norm_parameters(config: List) -> Optional[Dict]:
-    """Extract parameters for group_norm operation (all 16 arguments)"""
+    """Extract parameters for group_norm operation."""
     try:
         params = {}
         tensor_config = None
@@ -3413,7 +3413,6 @@ def _extract_group_norm_parameters(config: List) -> Optional[Dict]:
         input_mask_config = None
         weight_config = None
         bias_config = None
-        reciprocals_config = None
         output_memory_config = None
         inplace = False
         num_out_blocks = None
@@ -3451,36 +3450,32 @@ def _extract_group_norm_parameters(config: List) -> Optional[Dict]:
                 elif "arg5" in arg and isinstance(arg["arg5"], dict) and "Tensor" in arg["arg5"]:
                     bias_config = OperationParameterExtractors.extract_tensor_config(arg["arg5"])
 
-                # arg6: reciprocals tensor
-                elif "arg6" in arg and isinstance(arg["arg6"], dict) and "Tensor" in arg["arg6"]:
-                    reciprocals_config = OperationParameterExtractors.extract_tensor_config(arg["arg6"])
-
-                # arg7: output memory_config
-                elif "arg7" in arg:
-                    arg_value = arg["arg7"]
+                # arg6: output memory_config
+                elif "arg6" in arg:
+                    arg_value = arg["arg6"]
                     if isinstance(arg_value, dict) and "MemoryConfig" in arg_value:
                         output_memory_config = arg_value["MemoryConfig"]
 
-                # arg10: inplace
-                elif "arg10" in arg:
+                # arg9: inplace
+                elif "arg9" in arg:
                     try:
-                        inplace = bool(int(str(arg["arg10"])))
+                        inplace = bool(int(str(arg["arg9"])))
                     except (ValueError, TypeError):
                         inplace = False
 
-                # arg12: num_out_blocks
-                elif "arg12" in arg:
+                # arg11: num_out_blocks
+                elif "arg11" in arg:
                     try:
-                        val = str(arg["arg12"])
+                        val = str(arg["arg11"])
                         if val != "nullopt":
                             num_out_blocks = int(val)
                     except (ValueError, TypeError):
                         pass
 
-                # arg15: use_welford
-                elif "arg15" in arg:
+                # arg14: use_welford
+                elif "arg14" in arg:
                     try:
-                        use_welford = bool(int(str(arg["arg15"])))
+                        use_welford = bool(int(str(arg["arg14"])))
                     except (ValueError, TypeError):
                         use_welford = False
 
@@ -3515,12 +3510,6 @@ def _extract_group_norm_parameters(config: List) -> Optional[Dict]:
                 params["bias_dtype"] = bias_config.dtype
                 params["bias_layout"] = bias_config.layout
                 params["bias_memory_config"] = bias_config.memory_config
-
-            if reciprocals_config:
-                params["reciprocals_shape"] = reciprocals_config.shape
-                params["reciprocals_dtype"] = reciprocals_config.dtype
-                params["reciprocals_layout"] = reciprocals_config.layout
-                params["reciprocals_memory_config"] = reciprocals_config.memory_config
 
             if num_out_blocks is not None:
                 params["num_out_blocks"] = num_out_blocks

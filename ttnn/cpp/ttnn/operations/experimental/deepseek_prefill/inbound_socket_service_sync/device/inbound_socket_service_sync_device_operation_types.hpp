@@ -24,7 +24,7 @@ struct InboundSocketServiceSyncParams {
     uint32_t metadata_size_bytes = 0;  // 0 disables the metadata path
     tt::tt_metal::DeviceAddr metadata_l1_addr = 0;
     uint32_t overhang_size_bytes = 0;  // trailing bytes of every page split into a second output; 0 disables
-    CoreRange worker_cores{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}};
+    tt::tt_metal::CoreRange worker_cores{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}};
 
     // Per-mesh-coordinate state, indexed row-major as (row * mesh_num_cols + col).
     // The service core (and thus the consumed-counter address) may differ per

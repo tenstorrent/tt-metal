@@ -23,7 +23,10 @@
   model: llama3.1-8b
   skus:
     wh_n150:
-      timeout: 20
+      # The two profiled runs take 200 + 175 s on vm-121 / vm-71 but 567 + 286 s (10-02, vm-166) and
+      # 646 + 445 s (10-01, vm-109) on the slower N150 VMs; with setup and tracy post-processing those
+      # runs pass every test and then die at the 20-minute job limit.
+      timeout: 30
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p150:
@@ -76,25 +79,43 @@
   team: models
   budget_type: device_perf
 
+# The base and LoRA perf files used to share one leg that ran both and reported the worst
+# exit code. A hang in the first file left the second one running on a dead card until
+# the job timeout (#57706). Each file is its own leg now, so each starts on reset devices.
+# The old leg's timeout is split between the two (~36 min measured for base, ~4 min for LoRA
+# on wh_n150).
 - name: Stable Diffusion XL device-perf tests
   cmd: |
     export HF_HUB_OFFLINE=0
-    exit_code=0
-    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal || exit_code=$?
-    pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_perf.py -m models_device_performance_bare_metal || exit_code=$?
-    exit $exit_code
+    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
   model: sdxl
   skus:
     wh_n150:
-      timeout: 100
+      timeout: 80
     bh_p150:
-      timeout: 60
+      timeout: 45
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+  budget_type: device_perf
+
+- name: Stable Diffusion XL LoRA device-perf tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_perf.py -m models_device_performance_bare_metal
+  model: sdxl
+  skus:
+    wh_n150:
+      timeout: 20
+    bh_p150:
+      timeout: 15
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
   budget_type: device_perf
 
 - name: Stable Diffusion XL op device-perf tests
   cmd: |
+    # Host call-stack sampling off: Tracy teardown 30-110 s -> 5-6 s per test; device timings come from the CSV.
+    export TRACY_NO_SYS_TRACE=1
     pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -m models_device_performance_bare_metal
   model: sdxl
   skus:
@@ -156,13 +177,13 @@
     PROFILER_DIR="generated/profiler/deepseek_v3_fused_ops_device_perf"
     TRACY_TIMEOUT_PORT=5000
     TRACY_OP_SUPPORT_COUNT=10000
-    rc=0
+    # Stop at the first failed case: the Galaxy is not reset between cases, so a hang or an
+    # abort in one case leaves the next ones on devices in an unknown state (#57706).
     run_tracy_case() {
       local name="$1"
       local perf_env_var="$2"
       local test_target="$3"
       local k_expr="$4"
-      local case_rc=0
       echo "--- Case: $name | Target: $test_target | Expr: $k_expr"
       env "${perf_env_var}=1" python3 -m tracy -p -r \
         -o "$PROFILER_DIR" \
@@ -170,11 +191,7 @@
         --op-support-count "$TRACY_OP_SUPPORT_COUNT" \
         -t "$TRACY_TIMEOUT_PORT" \
         -a device_kernel_duration \
-        -m "pytest $test_target -k \"$k_expr\"" || case_rc=$?
-      if [ "$case_rc" -ne 0 ]; then
-        echo "--- Case FAILED (rc=$case_rc): $name"
-        rc=$case_rc
-      fi
+        -m "pytest $test_target -k \"$k_expr\"" || { rc=$?; echo "--- Case FAILED (rc=$rc): $name"; exit $rc; }
       sleep 10
     }
     run_tracy_case "embedding decode seq1 + prefill seq128" "DS_EMBEDDING_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_embedding.py::test_ds_embedding" "program_cache and not no_program_cache and real_weights and ((trace and decode and 1) or (eager and prefill and 128))"
@@ -189,7 +206,6 @@
     run_tracy_case "all_gather_preff1_3 decode seq1 + prefill seq128" "DS_ALL_GATHER_PREFF1_3_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_all_gather_preff1_3.py::test_ds_all_gather_preff1_3" "program_cache and not no_program_cache and ((trace and decode and 1) or (eager and prefill and 128))"
     run_tracy_case "moe decode seq1 + prefill seq128" "DS_MOE_FORWARD_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/test_ds_moe.py::test_ds_moe_forward" "test_ds_moe_forward and real_weights and program_cache and not no_program_cache and ((trace and decode and 1) or (eager and prefill and 128))"
     run_tracy_case "mla decode seq1 + prefill seq128" "DS_MLA_FORWARD_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_ds_mla.py::test_ds_mla_forward" "test_ds_mla_forward and real_weights and program_cache and not no_program_cache and ((trace and decode and 1) or (eager and prefill and 128))"
-    exit $rc
   model: deepseek-v3-tg
   model_family: DeepSeek
   skus:

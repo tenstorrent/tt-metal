@@ -490,7 +490,7 @@ jobs:
         timeout-minutes: 30
         run: |
           docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent \
-            ${{ needs.get-image-tags.outputs.bh-image-tag }} blackhole_ttnn_stress_tests
+            ${{ needs.get-image-tags.outputs.bh-image-tag }} blackhole --test-suite test_suite_bh_ttnn_stress_tests
   calculate-to-publish:
     if: ${{ !cancelled() }}
     needs:

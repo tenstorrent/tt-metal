@@ -231,6 +231,11 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_dfb_id = get_named_compile_time_arg_val("cb_bias");
     constexpr uint32_t bias_ntiles = get_named_compile_time_arg_val("bias_ntiles");
+#ifdef BIAS_PER_GROUP
+    constexpr bool bias_per_group = true;
+#else
+    constexpr bool bias_per_group = false;
+#endif
     constexpr uint32_t mm_out_dfb_id = mm_partials_dfb_id;
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
     constexpr bool row_broadcast_bias = static_cast<bool>(get_compile_time_arg_val(18));
@@ -303,13 +308,6 @@ void kernel_main() {
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
                     const bool last_out = block == (num_blocks_inner_dim - 1);
-// Configure packer once for pack out without Bias
-#if not defined FUSE_BIAS and defined PACK_RELU
-                    if (last_out) {
-                        // if last block we pack the final result with relu enabled
-                        pack_relu_config(ReluConfig::zero());
-                    }
-#endif
 
                     if constexpr (in0_transpose_tile) {
                         reconfig_data_format_srca(in1_dfb_id, in0_transpose_dfb_id);
@@ -329,6 +327,14 @@ void kernel_main() {
                             in0_block_w);
                         pack_reconfig_data_format(mm_partials_dfb_id);
                     }
+
+// Enable packer ReLU only after the in0 transpose pack above, so it governs
+// matmul output packs only (not the transpose stage that packs in0_dfb).
+#if not defined FUSE_BIAS and defined PACK_RELU
+                    if (last_out) {
+                        pack_relu_config(ReluConfig::zero());
+                    }
+#endif
 
                     in0_dfb.wait_front(in0_block_num_tiles);
                     in1_dfb.wait_front(in1_block_num_tiles);
@@ -507,7 +513,8 @@ void kernel_main() {
                 }
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the CB for reuse across bh/batch iterations.
-                if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
+                // With BIAS_PER_GROUP (sparse matmul, per-group bias) every batch gets its own tiles.
+                if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     bias_dfb.wait_front(bias_ntiles);
                 }
                 for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -573,7 +580,7 @@ void kernel_main() {
                         in1_index_subblock_offset += out_subblock_w;
                     }
                 }
-                if constexpr (num_blocks_w_dim > 1) {
+                if constexpr (bias_per_group || num_blocks_w_dim > 1) {
                     bias_dfb.pop_front(bias_ntiles);
                 }
 #endif  // FUSE_BIAS
@@ -623,7 +630,7 @@ void kernel_main() {
     // reusing it across all batch/bh/block iterations without popping. Pop it once here, after the
     // last use, so the CB is balanced. (For num_blocks_w_dim > 1 the per-block pop above already
     // balances each re-pushed bias block.)
-    if constexpr (num_blocks_w_dim == 1) {
+    if constexpr (!bias_per_group && num_blocks_w_dim == 1) {
         bias_dfb.pop_front(bias_ntiles);
     }
 #endif

@@ -7,11 +7,10 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <utility>
 #include <vector>
-#include <unordered_map>
 #include <string>
 #include <cstdint>
 
@@ -35,6 +34,8 @@ namespace tt::tt_metal::internal {
 // Query the kernel defines required by the current fabric configuration and API type.
 // Pure query — no PD mutation, no side effects. Safe to call before kernel compilation.
 // Returns defines like {("FABRIC_2D", "1"), ("API_TYPE_Linear", "1")}.
+// Exact 2D mesh shape is runtime routing metadata; configuration-wide header sizing and express
+// capacity are injected automatically when the kernel is created.
 std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
     tt::tt_fabric::FabricApiType api_type = tt::tt_fabric::FabricApiType::Linear);
 
