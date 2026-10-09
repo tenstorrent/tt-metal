@@ -170,7 +170,6 @@ inline void _llk_pack_dest_init_(const std::uint32_t face_r_dim = FACE_R_DIM, co
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0 pack dest init supports only PackMode::Default and PackMode::Untilize");
-    tensix_sync();
     reset_dest_offset_id();
     _llk_init_packer_dest_offset_registers_<Dst, pack_mode>(face_r_dim, narrow_tile);
     packer_addr_counter_init();
