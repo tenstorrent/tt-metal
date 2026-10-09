@@ -1305,17 +1305,19 @@ class MultichipDecoder(OptimizedDecoder):
         H, E = cfg.hidden, cfg.num_experts
         num_cores = _decode_shard_cores(H, E)
         x_sh = ttnn.to_memory_config(ln_flat, _width_sharded_l1(TILE, H, num_cores))
-        logits32 = ttnn.linear(
+        # sigmoid fused into the logits matmul (fp32 out): the scores directly
+        scores = ttnn.linear(
             x_sh,
             self.w["gate_w_ds"],
-            program_config=_dram_matmul_pc(TILE, H, E, num_cores),
+            program_config=_dram_matmul_pc(
+                TILE, H, E, num_cores, fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
+            ),
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             compute_kernel_config=self._ck_router_precise,
             dtype=ttnn.float32,
         )
         ttnn.deallocate(x_sh)
-        logits32 = ttnn.sharded_to_interleaved(logits32, ttnn.L1_MEMORY_CONFIG)
-        scores = ttnn.sigmoid(logits32)
+        scores = ttnn.sharded_to_interleaved(scores, ttnn.L1_MEMORY_CONFIG)
         sel = ttnn.add(scores, self.w["e_bias_f32"])
         sparsity = route1_local(
             sel, scores, cfg.top_k, cfg.routed_scaling, cfg.norm_topk_prob, self.w["ep_off"], self.local_experts
