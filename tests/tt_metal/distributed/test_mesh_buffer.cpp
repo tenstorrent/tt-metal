@@ -5,6 +5,7 @@
 #include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <tt-metalium/distributed.hpp>
@@ -277,6 +278,96 @@ TEST_F(MeshBufferTest2x4, GetDeviceBuffer) {
     EXPECT_ANY_THROW(replicated_buffer->get_device_buffer(MeshCoordinate{2, 4}));
 
     EXPECT_NO_THROW(replicated_buffer->get_device_buffer(MeshCoordinate{1, 3}));
+}
+
+TEST_F(MeshBufferTest2x4, GetDeviceBufferForEveryLocalDevice) {
+    // Device buffers other than the reference one are built on first use; each must still be a buffer on its own
+    // device at the lockstep address, and be built only once.
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const ShardedBufferConfig buffer_config{
+        .global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 32}};
+    auto mesh_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+    // A view over the same address takes the externally-owned path.
+    auto mesh_buffer_view =
+        MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get(), mesh_buffer->address());
+
+    for (const auto& buffer : {mesh_buffer, mesh_buffer_view}) {
+        std::optional<MeshCoordinate> first_local_coord;
+        for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+            if (!mesh_device_->is_local(coord)) {
+                continue;
+            }
+            if (!first_local_coord.has_value()) {
+                first_local_coord = coord;
+            }
+            Buffer* device_buffer = buffer->get_device_buffer(coord);
+            ASSERT_NE(device_buffer, nullptr);
+            EXPECT_EQ(device_buffer->device(), mesh_device_->get_device(coord));
+            EXPECT_EQ(device_buffer->address(), buffer->address());
+            EXPECT_EQ(device_buffer->size(), buffer->device_local_size());
+            EXPECT_EQ(device_buffer->page_size(), buffer->page_size());
+            EXPECT_EQ(device_buffer->buffer_type(), BufferType::DRAM);
+            EXPECT_EQ(buffer->get_device_buffer(coord), device_buffer);
+        }
+        ASSERT_TRUE(first_local_coord.has_value());
+        EXPECT_EQ(buffer->get_reference_buffer(), buffer->get_device_buffer(*first_local_coord));
+    }
+}
+
+TEST_F(MeshBufferTest2x4, GetDeviceBufferConcurrentFirstUse) {
+    // Threads racing on the first use of a device buffer must all get the same one.
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    // Not the first device, whose buffer is the reference one and is built at allocation.
+    const MeshCoordinate coord{1, 3};
+    constexpr int kNumThreads = 8;
+    // A fresh MeshBuffer per round, so that every round races on an entry that is not built yet.
+    constexpr int kNumRounds = 20;
+
+    for (int round = 0; round < kNumRounds; round++) {
+        auto mesh_buffer =
+            MeshBuffer::create(ReplicatedBufferConfig{.size = 16 << 10}, device_local_config, mesh_device_.get());
+        std::vector<Buffer*> device_buffers(kNumThreads, nullptr);
+        std::atomic<bool> start{false};
+        std::vector<std::thread> threads;
+        threads.reserve(kNumThreads);
+        for (int i = 0; i < kNumThreads; i++) {
+            threads.emplace_back([&, i]() {
+                while (!start.load()) {
+                    std::this_thread::yield();
+                }
+                device_buffers[i] = mesh_buffer->get_device_buffer(coord);
+            });
+        }
+        start = true;
+        for (auto& thread : threads) {
+            thread.join();
+        }
+
+        ASSERT_NE(device_buffers[0], nullptr);
+        for (auto* device_buffer : device_buffers) {
+            EXPECT_EQ(device_buffer, device_buffers[0]);
+        }
+        EXPECT_EQ(device_buffers[0]->address(), mesh_buffer->address());
+        EXPECT_EQ(mesh_buffer->get_device_buffer(coord), device_buffers[0]);
+    }
+}
+
+TEST_F(MeshBufferTest2x4, GetDeviceBufferAfterDeallocate) {
+    // A device buffer that was not used before deallocate() is not built afterwards: its address may already belong
+    // to another buffer.
+    if (getenv("TT_METAL_EMULE_MODE")) {
+        GTEST_SKIP() << "Emule builds every device buffer at allocation";
+    }
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    auto mesh_buffer =
+        MeshBuffer::create(ReplicatedBufferConfig{.size = 16 << 10}, device_local_config, mesh_device_.get());
+
+    mesh_buffer->deallocate();
+    EXPECT_FALSE(mesh_buffer->is_allocated());
+    EXPECT_ANY_THROW(mesh_buffer->get_device_buffer(MeshCoordinate{1, 3}));
 }
 
 TEST_F(MeshBufferTestSuite, MoveConstructor) {
