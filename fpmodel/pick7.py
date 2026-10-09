@@ -60,6 +60,7 @@ if os.environ.get("NO_MC") != "1":  # v13 on
     mc = multicore_candidates(e)
     e = pd.concat([e, mc], ignore_index=True)
 MAX_LOWP_SPILLS = 32
+MAX_DEST_ACC = 16384
 
 
 def precision_valid(e):
@@ -73,6 +74,10 @@ def precision_valid(e):
     )
     spills = np.ceil(np.ceil(e.K / 32) / e.in0_block_w.fillna(1)) - 1
     bad = lowp & (spills > MAX_LOWP_SPILLS) & (e.family != "multicore")
+    # a K block longer than 512 tiles accumulates > 16384 products per element in the bf16 destination register
+    # (no fp32 accumulation): 5 of 408 such configs failed pcc in the timed runs, against 1 in 500 under it
+    longacc = (e.fp32_acc.fillna(0) == 0) & (e.in0_block_w.fillna(0) * 32 > MAX_DEST_ACC) & (e.family != "multicore")
+    bad = bad | longacc
     has_ok = (~bad).groupby(e.case).transform("any")
     return e[~(bad & has_ok)]
 
