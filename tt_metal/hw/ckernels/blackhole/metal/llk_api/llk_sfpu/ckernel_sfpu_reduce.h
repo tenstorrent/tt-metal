@@ -965,7 +965,7 @@ inline void load_row_avg_reciprocal_into(std::uint32_t scratch_lreg, RowAvgRecip
     TT_SFPLOADI(scratch_lreg, sfpi::SFPLOADI_MOD0_LOWER, recip.low16);
 }
 
-template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool is_avg = false, bool load_macros = false>
+template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool is_avg = false, bool use_load_macros = false>
 inline void perform_reduce_row_sum_tile(
     std::uint32_t tile_row_offset,
     std::uint32_t result_store_mode,
@@ -977,7 +977,7 @@ inline void perform_reduce_row_sum_tile(
 #ifdef DISABLE_SFPLOADMACRO
     constexpr bool fused_vertical_add = false;
 #else
-    constexpr bool fused_vertical_add = load_macros && !clear_high_bits;
+    constexpr bool fused_vertical_add = use_load_macros && !clear_high_bits;
 #endif
 
     // Process tile in 2 face-pairs: (f0+f1) for tile rows 0-15, (f2+f3) for tile rows 16-31
