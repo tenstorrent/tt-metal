@@ -8,6 +8,7 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/factory/matmul_unified_program_factory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -38,10 +39,10 @@ const DFBSpecName B_SLICE_DFB{"B_slice"};
 const DFBSpecName C_SLICE_DFB{"C_slice"};
 const DFBSpecName C_PARTIALS_DFB{"C_partials"};
 
-const SemaphoreSpecName A_RECEIVERS_READY_SEM{"A_receivers_ready"};
-const SemaphoreSpecName A_DATA_READY_SEM{"A_data_ready"};
-const SemaphoreSpecName B_RECEIVERS_READY_SEM{"B_receivers_ready"};
-const SemaphoreSpecName B_DATA_READY_SEM{"B_data_ready"};
+// Multicast handshake semaphores. Each reader thread t has its own set, "<name>_<t>"; all
+// QUASAR_NUM_READER_THREADS sets are bound on every arch because the reader names them all.
+constexpr std::array<const char*, 4> MCAST_SEMAPHORES = {
+    "A_receivers_ready", "A_data_ready", "B_receivers_ready", "B_data_ready"};
 
 const TensorParamName A_TENSOR{"A"};
 const TensorParamName B_TENSOR{"B"};
@@ -335,11 +336,9 @@ UnifiedMatmulPlan plan_unified_matmul(
             (config.orientation == ShardOrientation::ROW_MAJOR || C_slices_across_N == 1 || C_slices_down_M == 1);
         plan.A_mcast_num_dests = cores_tile_C && !A_shard_borrowable ? C_slices_across_N - 1 : 0;
         plan.B_mcast_num_dests = cores_tile_C && !B_shard_borrowable ? C_slices_down_M - 1 : 0;
-        // Several reader threads each own part of the A and B DFBs, which a borrowed shard cannot be split into. A
-        // multicasting reader has one thread, so each operand has one handshake per core.
-        const bool multicasts = plan.A_mcast_num_dests > 0 || plan.B_mcast_num_dests > 0;
+        // Several reader threads each own part of the A and B DFBs, which a borrowed shard cannot be split into.
         plan.num_reader_threads =
-            is_quasar && !multicasts && !A_shard_borrowable && !B_shard_borrowable ? QUASAR_NUM_READER_THREADS : 1;
+            is_quasar && !A_shard_borrowable && !B_shard_borrowable ? QUASAR_NUM_READER_THREADS : 1;
         plan.C_buffer_depth = (uint64_t)plan.batch_size * plan.max_C_slices_per_core > 1 ? C_BUFFER_DEPTH : 1;
 
         // ---- Subblock: the C slice's tiles accumulated in DST at once ----
@@ -676,19 +675,23 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     }
 
     // ---- Reader ----
+    std::vector<std::string> mcast_semaphores;
+    for (uint32_t thread = 0; thread < QUASAR_NUM_READER_THREADS; ++thread) {
+        for (const char* name : MCAST_SEMAPHORES) {
+            mcast_semaphores.push_back(std::string(name) + "_" + std::to_string(thread));
+        }
+    }
+    Group<KernelSpec::SemaphoreBinding> reader_semaphore_bindings;
+    for (const std::string& name : mcast_semaphores) {
+        reader_semaphore_bindings.push_back({.semaphore_spec_name = SemaphoreSpecName{name}, .accessor_name = name});
+    }
     KernelSpec reader{
         .unique_id = READER_KERNEL,
         .source = std::filesystem::path(std::string(KERNEL_DIR) + "dataflow/unified_matmul_reader.cpp"),
         .num_threads = plan.num_reader_threads,
         .compiler_options = {},
         .dfb_bindings = {ProducerOf(A_SLICE_DFB, "A_slice"), ProducerOf(B_SLICE_DFB, "B_slice")},
-        .semaphore_bindings =
-            {
-                {.semaphore_spec_name = A_RECEIVERS_READY_SEM, .accessor_name = "A_receivers_ready"},
-                {.semaphore_spec_name = A_DATA_READY_SEM, .accessor_name = "A_data_ready"},
-                {.semaphore_spec_name = B_RECEIVERS_READY_SEM, .accessor_name = "B_receivers_ready"},
-                {.semaphore_spec_name = B_DATA_READY_SEM, .accessor_name = "B_data_ready"},
-            },
+        .semaphore_bindings = std::move(reader_semaphore_bindings),
         .tensor_bindings =
             {
                 TensorBinding{.tensor_parameter_name = A_TENSOR, .accessor_name = "A"},
@@ -879,17 +882,15 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, plan.cores[core], {{"num_C_slices", num_C_slices}});
     }
 
+    Group<SemaphoreSpec> semaphores;
+    for (const std::string& name : mcast_semaphores) {
+        semaphores.push_back({.unique_id = SemaphoreSpecName{name}, .target_nodes = active_cores});
+    }
     ProgramSpec spec{
         .name = "matmul_unified",
         .kernels = {reader, compute, writer},
         .dataflow_buffers = std::move(dataflow_buffers),
-        .semaphores =
-            {
-                SemaphoreSpec{.unique_id = A_RECEIVERS_READY_SEM, .target_nodes = active_cores},
-                SemaphoreSpec{.unique_id = A_DATA_READY_SEM, .target_nodes = active_cores},
-                SemaphoreSpec{.unique_id = B_RECEIVERS_READY_SEM, .target_nodes = active_cores},
-                SemaphoreSpec{.unique_id = B_DATA_READY_SEM, .target_nodes = active_cores},
-            },
+        .semaphores = std::move(semaphores),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
     };

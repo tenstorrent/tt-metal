@@ -92,11 +92,20 @@ TT_KERNEL void reader(
 
     // Multicast handshake per slice: a receiver clears its data_ready flag and, once its DFB has room, counts itself
     // into the sender's receivers_ready; the sender then multicasts the slice and its VALID flag along its row or
-    // column, skipping itself. No flush: the sender refills an entry only after every receiver has seen its flag.
-    Semaphore A_receivers_ready(sem::A_receivers_ready);
-    Semaphore A_data_ready(sem::A_data_ready);
-    Semaphore B_receivers_ready(sem::B_receivers_ready);
-    Semaphore B_data_ready(sem::B_data_ready);
+    // column, skipping itself. Each reader thread multicasts its own K chunks, so it has its own semaphores.
+    static_assert(num_reader_threads <= 4, "the factory binds four sets of multicast semaphores");
+    constexpr SemaphoreBindingToken A_receivers_ready_per_thread[] = {
+        sem::A_receivers_ready_0, sem::A_receivers_ready_1, sem::A_receivers_ready_2, sem::A_receivers_ready_3};
+    constexpr SemaphoreBindingToken A_data_ready_per_thread[] = {
+        sem::A_data_ready_0, sem::A_data_ready_1, sem::A_data_ready_2, sem::A_data_ready_3};
+    constexpr SemaphoreBindingToken B_receivers_ready_per_thread[] = {
+        sem::B_receivers_ready_0, sem::B_receivers_ready_1, sem::B_receivers_ready_2, sem::B_receivers_ready_3};
+    constexpr SemaphoreBindingToken B_data_ready_per_thread[] = {
+        sem::B_data_ready_0, sem::B_data_ready_1, sem::B_data_ready_2, sem::B_data_ready_3};
+    Semaphore A_receivers_ready(A_receivers_ready_per_thread[thread]);
+    Semaphore A_data_ready(A_data_ready_per_thread[thread]);
+    Semaphore B_receivers_ready(B_receivers_ready_per_thread[thread]);
+    Semaphore B_data_ready(B_data_ready_per_thread[thread]);
     A_data_ready.set(VALID);
     B_data_ready.set(VALID);
     const uint32_t A_rows_to_read = A_mcast_receiver ? 0 : C_slice_M_tiles;
@@ -119,6 +128,10 @@ TT_KERNEL void reader(
                     continue;
                 }
                 const uint32_t K_chunk_first_K_tile = K_chunk * K_chunk_tiles;
+                if constexpr (A_mcast_num_dests > 0 || B_mcast_num_dests > 0) {
+                    // This thread's last multicast may still be reading the entries refilled below.
+                    noc.async_writes_flushed();
+                }
 
                 if constexpr (!A_borrowed) {
                     // A slice: rows C_slice_first_M_tile.., columns K_chunk_first_K_tile.., entry (m_tile, k_tile).
