@@ -365,7 +365,7 @@ than K and tile aligned. The KV tensor must have one shared KV head.</p>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>input_tensor_q</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Queries [b x nqh x N/num_devices x dh].</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_q</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Queries [b x nqh x N/num_devices x dh] (N/S under split KV).</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>input_tensor_kv</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Shared KV tensor [b x nkv x N/num_devices x dh].</span></p></li>
 </ul>
 </dd>
@@ -409,12 +409,24 @@ value must be less than kv_cache_num_layers.</span></p></li>
 </dd>
 </dl>
 <p>Metadata path and cache fold: as ring_joint_scaled_dot_product_attention (see its docstring).</p>
+<p>Split KV (cluster_axis=None only): Q is sequence-sharded over the S devices of mesh axis 0
+only (heads may be split over axis 1) while KV is sequence-sharded over all R devices;
+R/S must equal the size of mesh axis 1. Q and the output then hold N/S rows per device.
+A Q slab of s tiles spans R/S KV regions of s*S/R tiles per global chunk of s*S tiles,
+laid out block-cyclically: global region g lives on row-major device g % R at local
+offset (g // R) * region. Attention covers the full causal prefix across all sources.
+Supported for dense causal chunked prefill only (no balancing, joint tokens, sliding
+window or circular cache) with fp32_dest_acc_en=False. The gathered KV buffer must hold
+at least R times the local KV extent, and logical_n must not exceed R times the local
+KV extent (not the gathered buffer size). Without
+kv_actual_isl or kv_actual_isl_tensor, logical_n must be a nonzero whole number of
+global chunks.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><span class="tt-api-param-name"><em>(ttnn.Tensor, ttnn.Tensor)</em></span><span class="tt-api-param-desc">  - Attention output [b x nqh x N/num_devices x head_dim_v].
-- Streaming statistics scratch [b x nqh x 2*N/num_devices x 1].</span></p>
+<p><span class="tt-api-param-name"><em>(ttnn.Tensor, ttnn.Tensor)</em></span><span class="tt-api-param-desc">  - Attention output [b x nqh x N/num_devices x head_dim_v] (N/S rows under split KV).
+- Streaming statistics scratch [b x nqh x 2*N/num_devices x 1] (2*N/S rows under split KV).</span></p>
 </dd>
 </dl>
 </dd>
