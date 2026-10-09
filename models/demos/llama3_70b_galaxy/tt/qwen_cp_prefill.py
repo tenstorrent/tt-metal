@@ -59,7 +59,7 @@ class CPLayout:
     """Index math of layout B for one padded length S."""
 
     def __init__(self, seq_len: int, rows: int = ROWS, cols: int = COLS):
-        assert seq_len % (2 * cols * rows * 32) == 0, seq_len
+        assert seq_len % (rows * cols * 32) == 0, seq_len
         self.S, self.rows, self.cols = seq_len, rows, cols
         self.sl = seq_len // (2 * cols)  # ring slice
         self.s4 = seq_len // cols  # tokens per column
@@ -302,4 +302,147 @@ def exit_natural(ctx: CPContext, tt_ccl, h):
     for t in blocks:
         ttnn.deallocate(t)
     ttnn.deallocate(a)
+    return out
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Layer pieces
+# ---------------------------------------------------------------------------------------------------------------
+def _mmc(m, k, n, sh, sw, gx=7, gy=10):
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=m,
+        K_block_size=k,
+        N_block_size=n,
+        subblock_h=sh,
+        subblock_w=sw,
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+    )
+
+
+# Best of the job139 variants at the B shapes (M = S/4 = 10240).
+QKV_CFG = _mmc(8, 8, 4, 2, 2)  # 1.420 ms (today's cfg 1.541)
+FF13_CFG = _mmc(8, 8, 10, 1, 5)  # 2.584 ms LoFi (today's cfg 2.928)
+FF13_FP32_CFG = _mmc(8, 8, 8, 1, 4)  # HiFi2 fp32 acc fallback, 3.725 ms
+FF2_CFG = _mmc(8, 10, 8, 1, 4)  # 3.667 ms
+
+
+def ff13_fp32_acc() -> bool:
+    """Design fallback: FF1/FF3 HiFi2 with fp32 dest accumulation (error to the bf8 floor, +1.1 ms per op)."""
+    return os.environ.get("QWEN_CP_FF13_FP32", "0") == "1"
+
+
+def _row_ag(tt_ccl, model_config, t, seq_len):
+    kw = dict(model_config["QWEN_PREFILL_RING_AG_PARAMS"](seq_len, "FF2") or {})
+    return _ag(tt_ccl, t, 2, 0, **kw)
+
+
+def _row_rs(tt_ccl, model_config, t, seq_len, key):
+    kw = dict(model_config["QWEN_PREFILL_RING_RS_PARAMS"](seq_len, key) or {})
+    return _rs(tt_ccl, t, 2, 0, **kw)
+
+
+def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_id=0, page_table=None, kv_cache=None):
+    """Design B attention (steps 2-12). x_local: attention-norm output [1, 1, S/32, 5120] bf8 (deallocated).
+    Returns the WO output reduce-scattered over the rows, [1, 1, S/32, 5120] bf8. Fills the KV cache as today."""
+    S = ctx.lay.S
+    H, D = attn.n_local_heads, attn.head_dim
+    mc = attn.model_config
+    xa = _row_ag(tt_ccl, mc, x_local, S)  # [1, 1, S/4, 5120]
+    ttnn.deallocate(x_local)
+    xqkv = ttnn.experimental.minimal_matmul(
+        input_tensor=xa,
+        weight_tensor=w["wqkv"],
+        config=QKV_CFG,
+        dtype=attn.ccl_dtype,
+        compute_kernel_config=attn.compute_kernel_config_hifi2,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )  # [1, 1, S/4, (H + 2) * D]
+    ttnn.deallocate(xa)
+
+    # Q on the owned slices (natural rows of the full Q buffer), K over the local rows, V a column slice.
+    from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_q_prep import qwen_q_prep
+
+    trans = attn.transformation_mats["prefill"]
+    q_8b = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, H, S, D]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, attn.mesh_device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    qwen_q_prep(
+        q_8b,
+        rot_mats[0],
+        rot_mats[1],
+        trans,
+        attn.q_norm.weight,
+        eps=attn.q_norm.eps,
+        src=xqkv,
+        src_col=0,
+        src_local=True,
+    )
+    rot_local = attn._qwen_local_q_setup(rot_mats, S)[3]
+    k_loc = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, S // COLS, D]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, attn.mesh_device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    qwen_q_prep(
+        k_loc,
+        rot_local[0],
+        rot_local[1],
+        trans,
+        attn.k_norm.weight,
+        eps=attn.k_norm.eps,
+        all_rows=True,
+        src=xqkv,
+        src_col=H * D,
+    )
+    v_loc = ttnn.slice(
+        xqkv, [0, 0, 0, (H + 1) * D], [1, 1, S // COLS, (H + 2) * D], memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    ttnn.deallocate(xqkv)
+
+    # K / V to the natural order (views of the persistent scratch buffers: never deallocated here).
+    ks, vs = ctx.scratch()
+    k_nat = kv_to_natural(ctx, tt_ccl, k_loc, ks)
+    v_nat = kv_to_natural(ctx, tt_ccl, v_loc, vs)
+    ttnn.deallocate(k_loc)
+    ttnn.deallocate(v_loc)
+
+    # KV cache fill, as today's forward_prefill (no prefix cache here).
+    keys, values = (kv_cache[0], kv_cache[1]) if kv_cache else (attn.layer_past[0], attn.layer_past[1])
+    if page_table:
+        ttnn.experimental.paged_fill_cache(keys, k_nat, page_table, batch_idx=0)
+        ttnn.experimental.paged_fill_cache(values, v_nat, page_table, batch_idx=0)
+    else:
+        k_fill = attn.prefill_prepare_tensor_for_kv_cache(k_nat, user_id)
+        v_fill = attn.prefill_prepare_tensor_for_kv_cache(v_nat, user_id)
+        ttnn.fill_cache(keys, k_fill, user_id % attn.batch_size_per_device_group)
+        ttnn.fill_cache(values, v_fill, user_id % attn.batch_size_per_device_group)
+
+    # Ring SDPA, today's call: Q owned slices, natural K / V -> [1, H, S/4, D] in the column's local order.
+    ring_cfg = mc.get("SDPA_RING_PROGCFG", mc["SDPA_PROGCFG"])
+    ckc = attn.compute_kernel_config_hifi4
+    if attn.compute_kernel_config_ring_sdpa_long is not None:
+        ckc = attn.compute_kernel_config_ring_sdpa_long
+    attn_out = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
+        q_8b,
+        k_nat,
+        v_nat,
+        ring_size=COLS,
+        scale=attn.scale,
+        compute_kernel_config=ckc,
+        program_config=ring_cfg(S, chunk_start_idx=0),
+        page_table=None,
+        chunk_start_idx=None,
+    )
+    ttnn.deallocate(q_8b)
+    cat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, S/4, H*D]
+    ttnn.deallocate(attn_out)
+    o = ttnn.experimental.minimal_matmul(
+        input_tensor=cat,
+        weight_tensor=w["wo"],
+        config=mc["WO_PREFILL_MINIMAL_PROGCFG"](S),
+        dtype=ttnn.bfloat8_b,
+        compute_kernel_config=attn.compute_kernel_config_hifi2,  # fp32 dest acc (keep 17)
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )  # [1, 1, S/4, 5120]
+    ttnn.deallocate(cat)
+    out = _row_rs(tt_ccl, mc, o, S, "WO")
+    ttnn.deallocate(o)
     return out
