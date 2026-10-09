@@ -57,3 +57,16 @@ bfp8 x + bf16 h 34.2 / 41.9 / 44.2 / 55.2 / 102.0 / 382.8 / 955.9; bf16 x + bfp8
 Accuracy (LoFi, layer 4 real input, rel L2 vs fp32 on the same bits): 0.0188 / 0.0130 / 0.0120 / 0.0101.
 Unit tests (correctness): 21/21. Determinism (test_flat_stress.py, 2x4 mesh, regimes switching every 10k calls):
 2,000,000 mesh calls (16M chip calls), 1,999,972 compared bit-exact, all markers 0, no hang (1 h 50 min).
+
+## Attribution of the remaining cost (after the 12 ideas)
+bfp8 x / h, M 2048, us per expert, 128-row vs 64-row sub-blocks: real 275.6 / 410.7; x never moves 273.1 / 413.8;
+no y writes 273.5 / 276.0; neither 273.0 / 272.7 -> the 64-row cost is entirely the row-major y writes (the down y out
+CB is sized from two bfp8 sub-blocks: ~2 row-major row tiles at 64 rows).
+13. (over budget) 8-row y out CB for the bf16 regimes: bit-identical, no gain (bf16 both 374.2 at 2048, 990.8 at 5120
+    vs 933.5). Reverted: for bf16 h the y out CB is not the limit.
+bf16 x + h, M 512 / 2048: real 100.8 / 375.5; no y writes 91.1 / 335.1; x never moves 93.6 / 406.6; neither 82.4 /
+294.4 (bfp8 core 70.0 / 273.0). Of bf16 both's ~100 us over bfp8 at 2048: ~21 us is intrinsic (bf16 h down unpack
+and h exchange, x and y not moving), ~80 us is NoC traffic interaction: twice the x multicast (NOC0) and h exchange
+(NOC1) bytes contending with the row-major y writes; the flows are coupled (removing x alone is slower).
+Next lever (not tried): the y writes' route / timing against the bf16 x and h streams (e.g. y on the x multicast's
+quiet windows, or the h exchange on NOC0), and h held row by row on the down cores (3 x 512 KB at 128-row sub-blocks).
