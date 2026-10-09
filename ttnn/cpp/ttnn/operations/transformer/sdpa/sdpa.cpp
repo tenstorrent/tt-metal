@@ -43,8 +43,8 @@ std::optional<ttnn::Tensor> drop_if_empty(const std::optional<ttnn::Tensor>& t) 
 // that would reach a legacy loop (sdpa_legacy_loops.hpp) runs a recipe instead: ACCURATE when its compute config asks
 // for FP32 DEST accumulation, STANDARD on the routes that have no streaming kernel (non-ring joint, exp ring
 // blockings its streaming kernel cannot build). BF16-dest dense, chunked and ring calls keep the streaming kernels
-// (compute_streaming.hpp). Routed dense, chunked, MLA and joint calls choose their blocking (the program_config chunk
-// sizes were tuned for the legacy kernels; resolve_dense_recipe_blocking); ring, exp ring and ring-distributed calls
+// (compute_streaming.hpp). Routed dense, chunked, MLA, joint and ring-distributed calls choose their chunks (the
+// program_config chunk sizes were tuned for the legacy kernels; resolve_dense_recipe_blocking); ring and exp ring calls
 // keep them when the recipe supports them.
 bool routes_to_recipes(const ttnn::Tensor& q) {
     return q.storage_type() == StorageType::DEVICE &&
