@@ -513,10 +513,10 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
 }
 
 /**
- * @brief Restore the packer Z stride after an untilize pack op.
+ * @brief Restore the packer Z strides after an untilize pack op.
  *
- * Stalls on the pack pipe and reprograms the Z stride to its default (single face) value, undoing the
- * strided-mode stride set in @ref _llk_pack_untilize_init_.
+ * Stalls on the pack pipe and reprograms the channel 0 Z stride to its default (single face) value and the
+ * channel 1 strides to zero, as set_packer_strides leaves them, undoing the strides set in @ref _llk_pack_untilize_init_.
  *
  * @param pack_src_format: Source (dest register) data format used to size the default Z stride.
  * @note Pairs with @ref _llk_pack_untilize_init_.
@@ -526,4 +526,5 @@ inline void _llk_pack_untilize_uninit_(const std::uint32_t pack_src_format)
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     const std::uint32_t z_stride = SCALE_DATUM_SIZE(pack_src_format, FACE_R_DIM * FACE_C_DIM);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
+    TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
 }
