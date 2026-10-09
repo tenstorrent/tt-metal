@@ -55,10 +55,12 @@
 /**
  * @brief Transposes a block of tiles from one circular buffer to another.
  */
+// Quasar: the helpers below take the kernel-scope DataflowBuffer objects by reference. A DataflowBuffer
+// constructed inside a helper drains in its destructor (spins until its tile counter is empty), which
+// deadlocks the compute threads whenever the ring still holds entries for later subblocks / blocks.
 template <uint32_t in0_block_num_tiles, uint32_t block_size = 4>
-FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in0_cb_id) {
-    DataflowBuffer in0_transpose_cb(in0_transpose_cb_id);
-    DataflowBuffer in0_cb(in0_cb_id);
+FORCE_INLINE void transpose_tile_block(
+    uint32_t in0_transpose_cb_id, uint32_t in0_cb_id, DataflowBuffer& in0_transpose_cb, DataflowBuffer& in0_cb) {
     constexpr uint32_t num_blocks = in0_block_num_tiles / block_size;
     constexpr uint32_t last_block_size = in0_block_num_tiles % block_size;
     // Lets do 2 passes: One loop until last and one last for the left overs
@@ -107,8 +109,8 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
-    uint32_t in0_block_w) {
-    DataflowBuffer mm_partials_cb(mm_partials_cb_id);
+    uint32_t in0_block_w,
+    DataflowBuffer& mm_partials_cb) {
     // Reconfigure input
     reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
     copy_init(mm_partials_cb_id);
@@ -130,9 +132,9 @@ inline void reblock_and_untilize(
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h,
     uint32_t interm_cb_id,
-    uint32_t out_cb_id) {
-    DataflowBuffer interm_cb(interm_cb_id);
-    DataflowBuffer out_cb(out_cb_id);
+    uint32_t out_cb_id,
+    DataflowBuffer& interm_cb,
+    DataflowBuffer& out_cb) {
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     interm_cb.wait_front(num_tiles_in_row_of_subblocks);
 
@@ -234,6 +236,7 @@ void kernel_main() {
     constexpr uint32_t in0_transpose_cb_id = dfb::cb_in0;
 
     DataflowBuffer in0_cb(in0_cb_id);
+    DataflowBuffer in0_transpose_cb(in0_transpose_cb_id);  // only used on the in0-transpose path
     DataflowBuffer in1_cb(in1_cb_id);
     DataflowBuffer mm_partials_cb(mm_partials_cb_id);
     DataflowBuffer untilize_mode_out_cb(untilize_mode_out_cb_id);
@@ -337,7 +340,8 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
                         pack_reconfig_l1_acc(0);
 #endif
-                        transpose_tile_block<in0_block_num_tiles>(in0_transpose_cb_id, in0_cb_id);
+                        transpose_tile_block<in0_block_num_tiles>(
+                            in0_transpose_cb_id, in0_cb_id, in0_transpose_cb, in0_cb);
                         reconfig_data_format_srca(in0_transpose_cb_id, in1_cb_id);
                         matmul_block_init(
                             in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
@@ -394,7 +398,8 @@ void kernel_main() {
                                     out_subblock_num_tiles,
                                     out_subblock_w,
                                     out_subblock_h,
-                                    in0_block_w);
+                                    in0_block_w,
+                                    mm_partials_cb);
                             }
 
 #ifndef SKIP_COMPUTE
@@ -625,7 +630,13 @@ void kernel_main() {
                     copy_init(mm_partials_cb_id);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
-                            in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_cb_id, out_cb_id);
+                            in1_num_subblocks,
+                            out_subblock_num_tiles,
+                            out_subblock_h,
+                            mm_partials_cb_id,
+                            out_cb_id,
+                            mm_partials_cb,
+                            untilize_mode_out_cb);
                     }
                     pack_untilize_uninit(mm_partials_cb_id);
                 }
