@@ -2,14 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// routed_expert_ffn writer: writes y to the DRAM-interleaved output, one thread, explicit sync. Each pop_front moves to
-// the next compute thread's tile counter, so pop j comes from thread j % T. Thread t emits its tile rows t, t + T, ...
-// one tile at a time, so for each round of T rows the writer takes column n of every thread's row in turn.
+// routed_expert_ffn writer: writes y to the DRAM-interleaved output, explicit sync. Runs as W threads draining T
+// compute threads through dfb::out, which has max(T, W) tile counters: counter c is filled by Tensix c % T and drained
+// by writer c % W. Tensix t emits its rows t, t + T, ... one tile at a time, so its p-th tile is y[t + (p / Kt) * T, p
+// % Kt].
+//   W <= T: writer w owns Tensix w, w + W, ... and its pops rotate over them; pop i is Tensix w + (i % (T/W)) * W,
+//           tile i / (T/W).
+//   W > T:  writer w owns one counter of Tensix w % T, which gets that Tensix's tiles w / T, w / T + W/T, ...
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "api/kernel_thread_globals.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -17,6 +22,8 @@ void kernel_main() {
     const uint32_t Mt = get_arg(args::Mt);
     const uint32_t Kt = get_arg(args::Kt);
     const uint32_t T = get_arg(args::compute_threads);
+    const uint32_t W = get_num_threads();
+    const uint32_t w = get_my_thread_id();
 
     Noc noc;
     DataflowBuffer dfb_out(dfb::out);
@@ -24,14 +31,24 @@ void kernel_main() {
 
     const auto y = TensorAccessor(tensor::y);
 
-    for (uint32_t round_start = 0; round_start < Mt; round_start += T) {
-        for (uint32_t n = 0; n < Kt; ++n) {
-            for (uint32_t t = 0; t < T; ++t) {
-                dfb_out.wait_front(1);
-                noc.async_write(dfb_out, y, out_tile_bytes, {}, {.page_id = (round_start + t) * Kt + n});
-                noc.async_write_barrier();
-                dfb_out.pop_front(1);
-            }
+    auto write_tile = [&](uint32_t tensix, uint32_t p) {
+        const uint32_t row = tensix + (p / Kt) * T;
+        dfb_out.wait_front(1);
+        noc.async_write(dfb_out, y, out_tile_bytes, {}, {.page_id = row * Kt + p % Kt});
+        noc.async_write_barrier();
+        dfb_out.pop_front(1);
+    };
+
+    const uint32_t tiles_per_tensix = (Mt / T) * Kt;
+    if (W <= T) {
+        const uint32_t tensix_per_writer = T / W;
+        for (uint32_t i = 0; i < tensix_per_writer * tiles_per_tensix; ++i) {
+            write_tile(w + (i % tensix_per_writer) * W, i / tensix_per_writer);
+        }
+    } else {
+        const uint32_t writers_per_tensix = W / T;
+        for (uint32_t p = w / T; p < tiles_per_tensix; p += writers_per_tensix) {
+            write_tile(w % T, p);
         }
     }
 

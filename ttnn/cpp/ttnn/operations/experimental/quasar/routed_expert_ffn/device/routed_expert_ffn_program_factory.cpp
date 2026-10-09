@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
+#include <algorithm>
 #include <filesystem>
 
 namespace ttnn::prim::qsr {
@@ -23,6 +24,9 @@ namespace {
 constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/experimental/quasar/routed_expert_ffn/device/kernels/";
 constexpr uint32_t kStreamEntries = 2;         // per tile counter: double buffering for streamed tiles
 constexpr uint32_t kQuasarComputeThreads = 4;  // every Tensix engine of a Neo cluster
+// Quasar keeps DM0 (ISR) and DM1 (remapper) for itself, leaving 6 DM cores (DM2..DM7): up to 4 readers + 2 writers.
+constexpr uint32_t kQuasarWriterThreads = 2;
+static_assert(kQuasarComputeThreads + kQuasarWriterThreads <= 6, "only DM2..DM7 can run user kernels");
 }  // namespace
 
 ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::create_program_artifacts(
@@ -62,9 +66,8 @@ ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::creat
     const uint32_t Ht = w_gate.padded_shape()[-1] / tile.get_width();
 
     // Compute threads split the tile rows of x: thread t owns rows t, t + T, t + 2T, ... Each row needs the whole
-    // gate * up row, so rows are the only split with no data exchange between Tensix engines. The reader and writer
-    // rotate over the threads one tile at a time, so every thread must own the same number of rows: T is the largest
-    // of 4, 2, 1 that divides Mt.
+    // gate * up row, so rows are the only split with no data exchange between Tensix engines. Every thread must own
+    // the same number of rows, so T is the largest of 4, 2, 1 that divides Mt.
     uint32_t compute_threads = 1;
     if (is_quasar) {
         compute_threads = kQuasarComputeThreads;
@@ -72,6 +75,10 @@ ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::creat
             compute_threads /= 2;
         }
     }
+    // One reader per compute thread. Compute holds whole blocks of x (Kt tiles) and reads them by index, which needs
+    // each compute thread to read from a single tile counter of dfb::x, so readers cannot outnumber compute threads.
+    const uint32_t reader_threads = compute_threads;
+    const uint32_t writer_threads = is_quasar ? kQuasarWriterThreads : 1u;
 
     auto make_dfb = [&](const m2::DFBSpecName& name, uint32_t num_entries) {
         return m2::DataflowBufferSpec{
@@ -86,19 +93,21 @@ ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::creat
     m2::KernelSpec reader{
         .unique_id = READER,
         .source = std::filesystem::path{std::string(kKernelDir) + "dataflow/reader_routed_expert_ffn.cpp"},
+        .num_threads = reader_threads,
         .dfb_bindings = {m2::ProducerOf(X_DFB, "x"), m2::ProducerOf(W_DFB, "w")},
         .tensor_bindings =
             {m2::TensorBinding{.tensor_parameter_name = X, .accessor_name = "x"},
              m2::TensorBinding{.tensor_parameter_name = W_GATE, .accessor_name = "w_gate"},
              m2::TensorBinding{.tensor_parameter_name = W_UP, .accessor_name = "w_up"},
              m2::TensorBinding{.tensor_parameter_name = W_DOWN, .accessor_name = "w_down"}},
-        .runtime_arg_schema = {.runtime_arg_names = {"Mt", "Kt", "Ht", "compute_threads"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"Mt", "Kt", "Ht"}},
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     m2::KernelSpec writer{
         .unique_id = WRITER,
         .source = std::filesystem::path{std::string(kKernelDir) + "dataflow/writer_routed_expert_ffn.cpp"},
+        .num_threads = writer_threads,
         .dfb_bindings = {m2::ConsumerOf(OUT_DFB, "out")},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = Y, .accessor_name = "y"}},
         .runtime_arg_schema = {.runtime_arg_names = {"Mt", "Kt", "compute_threads"}},
@@ -124,9 +133,10 @@ ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::creat
         .hw_config = m2::ComputeHardwareConfig{},
     };
 
-    // Every DFB is split into one tile counter per compute thread, so num_entries is per-thread entries times
-    // compute_threads. x holds one tile row of x (Kt tiles) per thread for all of phase 1; act holds one tile row of
-    // gate * up (Ht tiles) per thread for all of phase 2.
+    // A DFB is split into max(producers, consumers) tile counters, so num_entries is per-counter entries times that
+    // count: compute_threads for every DFB except out, which has max(compute_threads, writer_threads). x holds one tile
+    // row of x (Kt tiles) per thread for all of phase 1; act holds one tile row of gate * up (Ht tiles) per thread for
+    // all of phase 2.
     m2::ProgramSpec spec{
         .name = "routed_expert_ffn",
         .kernels = {reader, writer, compute},
@@ -136,7 +146,7 @@ ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::creat
              make_dfb(GATE_DFB, kStreamEntries * compute_threads),
              make_dfb(UP_DFB, kStreamEntries * compute_threads),
              make_dfb(ACT_DFB, Ht * compute_threads),
-             make_dfb(OUT_DFB, kStreamEntries * compute_threads)},
+             make_dfb(OUT_DFB, kStreamEntries * std::max(compute_threads, writer_threads))},
         .tensor_parameters =
             {m2::TensorParameter{.unique_id = X, .spec = x.tensor_spec()},
              m2::TensorParameter{.unique_id = W_GATE, .spec = w_gate.tensor_spec()},
@@ -150,8 +160,7 @@ ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::creat
     run_args.kernel_run_args = {
         m2::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(
-                node, {{"Mt", Mt}, {"Kt", Kt}, {"Ht", Ht}, {"compute_threads", compute_threads}})},
+            .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"Mt", Mt}, {"Kt", Kt}, {"Ht", Ht}})},
         m2::KernelRunArgs{
             .kernel = WRITER,
             .runtime_arg_values =
