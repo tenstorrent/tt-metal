@@ -100,8 +100,8 @@ struct KernelSpec {
     // Kernel threading: the number of SPMD threads this kernel has.
     //
     // The legality rules for num_threads are architecture and kernel-type dependent:
-    //  - Gen1 architectures (Wormhole, Blackhole) support single-threaded kernels only.
-    //  - Gen2 architectures (Quasar) support num_threads > 1.
+    //  - 1st-gen architectures (1xx; Wormhole, Blackhole) support single-threaded kernels only.
+    //  - 2nd-gen architectures (2xx; Quasar) support num_threads > 1.
     //    Different rules apply for compute vs data-movement kernels.
     uint32_t num_threads = 1;
 

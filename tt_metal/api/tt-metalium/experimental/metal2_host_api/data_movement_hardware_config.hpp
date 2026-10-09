@@ -27,7 +27,7 @@ struct DataMovementHardwareConfig {
     // NOTE: The target architecture is selected at program construction time.
     //       See MakeProgramFromSpec for more details.
 
-    // ---- TT-1.x.x specific (Wormhole, Blackhole) ----
+    // ---- 1st-gen (1xx) specific (Wormhole, Blackhole) ----
     //
     // The common case is handled by role-specific factory functions:
     //  - For a DM kernel that reads from DRAM: CreateReaderDataMovementConfig()
@@ -49,11 +49,11 @@ struct DataMovementHardwareConfig {
         // overhead and must be set identically on both DM kernels on a node.
         tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
     };
-    // NOTE: If this kernel is built for TT-1.x.x, config_1xx must not be empty.
+    // NOTE: If this kernel is built for a 1st-gen (1xx) architecture, config_1xx must not be empty.
     //       Processor and NOC have no default.
     std::optional<DataMovement1XXConfig> config_1xx = std::nullopt;
 
-    // ---- TT-2.x.x specific (Quasar and derivatives) ----
+    // ---- 2nd-gen (2xx) specific (Quasar and derivatives) ----
     struct DataMovement2XXConfig {
         // Opt-out of DFB implicit sync (on a per-DFB basis)
         //  - Implicit sync enables streamlined kernel-side syntax, but triggers ISR handling.
@@ -85,7 +85,7 @@ inline DataMovementHardwareConfig CreateReaderDataMovementConfig() noexcept {
             DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
 
-                // It is more efficient to read from DRAM via NOC_0 on all 1xx architectures.
+                // It is more efficient to read from DRAM via NOC_0 on all 1st-gen (1xx) architectures.
                 // This is a subtle consequence of the device topology:
                 //  - NOC_0 routes east, then south (rows first)
                 //  - NOC_1 routes north, then west (columns first)

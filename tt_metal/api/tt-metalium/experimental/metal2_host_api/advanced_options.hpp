@@ -226,7 +226,7 @@ struct DFBAdvancedOptions {
     // different types of producer kernels on different nodes.)
     //
     // "Multi-binding" refers to a DFB instance that has more than one producer
-    // and/or more than one consumer kernel instance. Gen1 hardware (Wormhole and
+    // and/or more than one consumer kernel instance. 1st-gen (1xx) hardware (Wormhole and
     // Blackhole) is technically capable of supporting multi-binding: a DFB lowers
     // to a plain circular buffer there, so the FIFO pointers are shared L1 state
     // that any number of producer/consumer RISCs can drive.
@@ -240,7 +240,7 @@ struct DFBAdvancedOptions {
     //
     // NOTE:
     // This feature is included for backwards compatibility with legacy APIs.
-    // It is NOT supported on Gen2 architectures: setting this flag on a Gen2
+    // It is NOT supported on 2nd-gen (2xx) architectures: setting this flag on a 2nd-gen
     // target is a hard error, whether or not any instance is actually multi-bound.
     bool allow_instance_multi_binding = false;
 
@@ -346,9 +346,9 @@ struct SemaphoreAdvancedOptions {
     // Non-zero initial value
     ////////////////////////////////////////////////////////////////////////////////
 
-    // NOTE: Setting a non-zero initial value is not supported on Gen2 architectures.
+    // NOTE: Setting a non-zero initial value is not supported on 2nd-gen (2xx) architectures.
     //       Once existing uses are refactored to avoid it, this feature will be removed
-    //       for Gen1 architectures as well. Do not add new uses of this feature.
+    //       for 1st-gen (1xx) architectures as well. Do not add new uses of this feature.
     [[deprecated("Non-zero semaphore initialization is deprecated and will be removed.")]]
     uint32_t initial_value = 0;
 

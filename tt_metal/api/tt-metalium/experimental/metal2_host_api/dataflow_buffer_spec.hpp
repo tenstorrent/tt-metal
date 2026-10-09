@@ -44,7 +44,7 @@
 //     - non-overlapping node coverage, AND
 //     - the same kernel kind (compute or data movement), AND
 //     - identical binding-site parameters (access_pattern, num_threads)
-//   (Exception: DFBAdvancedOptions::allow_instance_multi_binding, Gen1 only.)
+//   (Exception: DFBAdvancedOptions::allow_instance_multi_binding, 1st-gen (1xx) only.)
 //
 // INSTANCING: Like KernelSpec, a DataflowBufferSpec is a *per-node template*.
 //   One independent DFB instance is allocated per node where its endpoint
@@ -54,8 +54,8 @@
 // PLACEMENT: Derived — the DFB's effective node set is the union of its bound
 //   kernels' WorkUnitSpec target_nodes.
 //
-// HW RESOURCES: Gen1 architectures (Wormhole and Blackhole) support a fixed
-//   number of DFBs per node. On Gen2, the DFB-per-node-limit depends on the
+// HW RESOURCES: 1st-gen architectures (1xx; Wormhole and Blackhole) support a fixed
+//   number of DFBs per node. On 2nd-gen (2xx), the DFB-per-node-limit depends on the
 //   resident DFBs' endpoint configurations, as the DFB hardware resource footprint
 //   varies with endpoint configuration.
 //   The DFB's backing storage is allocated in SRAM ("L1"). The allocation

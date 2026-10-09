@@ -102,7 +102,7 @@ struct ComputeHardwareConfig {
     //  - You want to preserve the full precision
     //  - The data will be consumed by the SFPU (not the FPU)
     //
-    // On 2nd-gen architecture (2xx), there is NO performance penalty for unpacking directly to
+    // On 2nd-gen architectures (2xx), there is NO performance penalty for unpacking directly to
     // Dest, so UnpackMode=UnpackToDest is the preferred mode for any SFPU-consumed data.
     //
     // If no mode is specified for a (consumed-from) DFB, UnpackToSrc is assumed.
@@ -118,7 +118,7 @@ struct ComputeHardwareConfig {
     // NOTE: The target architecture is selected at program construction time.
     //       See MakeProgramFromSpec for more details.
 
-    // ---- TT-1.x.x specific (Wormhole, Blackhole) ----
+    // ---- 1st-gen (1xx) specific (Wormhole, Blackhole) ----
     struct Compute1XXConfig {
         // Pack-stage precision tweak for block-float formats.
         // Affects how exponents are reconciled when converting Dest contents to BFP in
@@ -128,7 +128,7 @@ struct ComputeHardwareConfig {
     };
     std::optional<Compute1XXConfig> config_1xx = std::nullopt;
 
-    // ---- TT-2.x.x specific (Quasar and derivatives) ----
+    // ---- 2nd-gen (2xx) specific (Quasar and derivatives) ----
     // Empty today.
     struct Compute2XXConfig {};
     std::optional<Compute2XXConfig> config_2xx = std::nullopt;
