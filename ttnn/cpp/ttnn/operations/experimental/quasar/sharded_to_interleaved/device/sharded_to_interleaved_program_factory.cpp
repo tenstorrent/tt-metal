@@ -4,6 +4,8 @@
 
 #include "ttnn/operations/experimental/quasar/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -87,6 +89,12 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
 
     const uint32_t height_shards = div_up(tensor_h, shard_h);
     const uint32_t width_shards = div_up(tensor_w, shard_w);
+    // A zero-volume input yields no shards; the used-core math below would underflow.
+    TT_FATAL(
+        height_shards > 0 && width_shards > 0,
+        "sharded_to_interleaved requires a non-empty input (height_shards={}, width_shards={})",
+        height_shards,
+        width_shards);
     const uint32_t num_active_cores = height_shards * width_shards;
 
     // A grid provisioned wider than the data leaves cores holding only padding; leave them out.
