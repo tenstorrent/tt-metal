@@ -39,3 +39,40 @@ def route32(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_config=tt
     program = ttnn.ProgramDescriptor(kernels=[reader], semaphores=[], cbs=[buf])
     ttnn.generic_op([sel, scores, out], program)
     return out
+
+
+def route_topk_rm(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    """Prefill: sel, scores [1, 1, T, E] fp32 TILE interleaved, T a multiple of 32. Returns (weights, indices): the
+    [1, T, K] bf16 routing weights and uint16 expert ids, row-major (token dispatch's input layout). See
+    kernels/route_topk_reader.cpp."""
+    device = sel.device()
+    T, E = sel.shape[-2], sel.shape[-1]
+    K = int(top_k)
+    assert T % 32 == 0 and E % 32 == 0 and K <= 32, (sel.shape, K)
+    idx = ttnn.allocate_tensor_on_device(ttnn.Shape([1, T, K]), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, device, memory_config)
+    wgt = ttnn.allocate_tensor_on_device(ttnn.Shape([1, T, K]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, memory_config)
+    grid_size = device.compute_with_storage_grid_size()
+    units = T // 32 * 4
+    cores = min(units, grid_size.x * grid_size.y)
+    grid = ttnn.num_cores_to_corerangeset(cores, grid_size, True)
+    stage = E // 32 * 2 * 8 * 64
+    buf = ttnn.CBDescriptor(
+        total_size=2 * stage + 8 * 128,
+        core_ranges=grid,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.float32, page_size=2 * stage + 8 * 128)],
+    )
+    args = []
+    for t in (sel, scores, idx, wgt):
+        args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+    scale_bits = struct.unpack("<I", struct.pack("<f", float(routed_scaling)))[0]
+    reader = ttnn.KernelDescriptor(
+        kernel_source=str(_KDIR / "route_topk_reader.cpp"),
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=grid,
+        compile_time_args=[E, K, grid_size.x, cores, int(bool(norm_topk_prob)), scale_bits, 4096, T // 32, K * 2, K * 2]
+        + args,
+        common_runtime_args=[sel.buffer_address(), scores.buffer_address(), idx.buffer_address(), wgt.buffer_address()],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    ttnn.generic_op([sel, scores, idx, wgt], ttnn.ProgramDescriptor(kernels=[reader], semaphores=[], cbs=[buf]))
+    return wgt, idx

@@ -291,6 +291,7 @@ class MultichipDecoder(OptimizedDecoder):
         # 32-token decode MoE generic_ops: gate/up + SwiGLU + routing weight, then down + expert sum
         self._cp32 = self._colpage and _parse_binary_env("TT_LAGUNA_CP32", True)
         self._router32 = _parse_binary_env("TT_LAGUNA_ROUTER32", True)  # exact top-K router kernel, <= 32-row tiles
+        self._route_topk_kernel = _parse_binary_env("TT_LAGUNA_ROUTE_TOPK_KERNEL", True)  # prefill dispatch router
         self._swiglu32 = _parse_binary_env("TT_LAGUNA_SWIGLU32", True)  # fused routed SwiGLU, 32-row decode
         self._esum32 = _parse_binary_env("TT_LAGUNA_ESUM32", True)  # active-expert sum, no down zero fill
         self._fused_kv_update = _parse_binary_env("TT_LAGUNA_FUSED_KV_UPDATE", True)  # K+V cache in one op
@@ -1001,6 +1002,17 @@ class MultichipDecoder(OptimizedDecoder):
         indices = []
         cfg = self.cfg
         rows = self._dispatch_slice_rows(seq_len)
+        if rows >= seq_len and self._route_topk_kernel and seq_len % TILE == 0:
+            # exact fp32 top-K on every core, written straight in dispatch's row-major [1, T, K] layout, instead
+            # of the coarse bf16 top-(K+1), the fp32 cut-off ops, a second top-K, the gather and the re-layouts
+            from .router32 import route_topk_rm
+
+            logits32 = ttnn.linear(
+                ln_flat, self.w["gate_w"], compute_kernel_config=self._ck_router_precise, dtype=ttnn.float32
+            )
+            scores = ttnn.sigmoid(logits32)
+            sel = ttnn.add(scores, self.w["e_bias_f32"])
+            return route_topk_rm(sel, scores, cfg.top_k, cfg.routed_scaling, cfg.norm_topk_prob)
         for start in range(0, seq_len, rows):
             end = min(start + rows, seq_len)
             chunk = ln_flat if rows >= seq_len else ttnn.slice(ln_flat, [0, 0, start, 0], [1, 1, end, cfg.hidden])
