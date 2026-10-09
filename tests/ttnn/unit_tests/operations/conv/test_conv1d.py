@@ -35,6 +35,7 @@ def run_conv(
     groups=1,
     auto_shard=False,
     shard_layout=None,
+    activation=None,
 ):
     # has_bias = False
     has_bias = False
@@ -54,6 +55,8 @@ def run_conv(
         padding=padding,
         groups=groups,
     )
+    if activation is not None:
+        torch_out_golden_tensor = getattr(torch.nn.functional, activation)(torch_out_golden_tensor)
 
     tt_weight_tensor = ttnn.from_torch(
         torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
@@ -77,6 +80,7 @@ def run_conv(
         weights_dtype=weights_dtype,
         shard_layout=shard_layout,
         deallocate_activation=deallocate_activation,
+        activation=None if activation is None else ttnn.UnaryWithParam(getattr(ttnn.UnaryOpType, activation.upper())),
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -1151,4 +1155,28 @@ def test_conv1d_depthwise_bf16_with_fp32_accum_unchanged(device):
         fp32_accum=True,
         packer_l1_acc=True,
         pcc=0.999,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("groups", [64, 1], ids=["depthwise", "dense"])
+@pytest.mark.parametrize("activation", ["relu", "silu"])
+def test_conv1d_fused_activation(device, groups, activation):
+    run_conv(
+        device,
+        ttnn.MathFidelity.HiFi4,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        1,
+        64,
+        64,
+        128,
+        3,
+        1,
+        1,
+        True,
+        None,
+        groups=groups,
+        activation=activation,
     )
