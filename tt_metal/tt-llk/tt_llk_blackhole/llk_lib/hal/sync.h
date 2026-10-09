@@ -216,6 +216,32 @@ constexpr std::uint32_t semaphore_mask()
     return SemaphoreSet {First, Others...}.mask();
 }
 
+// These duplicate ckernel::semaphore_read, semaphore_post, and semaphore_get.
+// TODO(njokovic) issue #58443: Remove ckernel:: implementations when HAL is applied to all kernels.
+
+/** @brief Read a semaphore value from the shared PC-buffer MMIO window. */
+inline __attribute__((always_inline)) std::uint8_t semaphore_read_mmio(const std::uint8_t index)
+{
+    LLK_ASSERT(index < ckernel::semaphore::NUM_SEMAPHORES, "Semaphore index out of bounds.");
+    return ckernel::pc_buf_base[ckernel::PC_BUF_SEMAPHORE_BASE + index];
+}
+
+/** @brief Release one token with an atomic MMIO increment, capped at 15. */
+inline __attribute__((always_inline)) void semaphore_post_mmio(const std::uint8_t index)
+{
+    LLK_ASSERT(index < ckernel::semaphore::NUM_SEMAPHORES, "Semaphore index out of bounds.");
+    LLK_ASSERT(semaphore_read_mmio(index) < ckernel::semaphore::SEMAPHORE_MAX_VALUE, "Semaphore must not be already at max value.");
+    ckernel::pc_buf_base[ckernel::PC_BUF_SEMAPHORE_BASE + index] = 0; // LSB clear selects SEMPOST.
+}
+
+/** @brief Acquire one token with an atomic MMIO decrement, floored at zero. */
+inline __attribute__((always_inline)) void semaphore_get_mmio(const std::uint8_t index)
+{
+    LLK_ASSERT(index < ckernel::semaphore::NUM_SEMAPHORES, "Semaphore index out of bounds.");
+    LLK_ASSERT(semaphore_read_mmio(index) > 0, "Semaphore must not be already at 0.");
+    ckernel::pc_buf_base[ckernel::PC_BUF_SEMAPHORE_BASE + index] = 1; // LSB set selects SEMGET.
+}
+
 } // namespace detail
 
 namespace mutex
@@ -356,7 +382,7 @@ inline __attribute__((always_inline)) void post()
     static_assert(detail::is_valid(S), "Semaphore index must be in [0, 7]");
     if constexpr (A == Access::MMIO)
     {
-        ckernel::semaphore_post(hal::to_underlying(S));
+        detail::semaphore_post_mmio(hal::to_underlying(S));
     }
     else
     {
@@ -372,7 +398,7 @@ inline __attribute__((always_inline)) void post(const Semaphore semaphore)
     if constexpr (A == Access::MMIO)
     {
         LLK_ASSERT(detail::is_valid(semaphore), "Semaphore index must be in [0, 7]");
-        ckernel::semaphore_post(hal::to_underlying(semaphore));
+        detail::semaphore_post_mmio(hal::to_underlying(semaphore));
     }
     else
     {
@@ -414,7 +440,7 @@ inline __attribute__((always_inline)) void get()
     static_assert(detail::is_valid(S), "Semaphore index must be in [0, 7]");
     if constexpr (A == Access::MMIO)
     {
-        ckernel::semaphore_get(hal::to_underlying(S));
+        detail::semaphore_get_mmio(hal::to_underlying(S));
     }
     else
     {
@@ -430,7 +456,7 @@ inline __attribute__((always_inline)) void get(const Semaphore semaphore)
     if constexpr (A == Access::MMIO)
     {
         LLK_ASSERT(detail::is_valid(semaphore), "Semaphore index must be in [0, 7]");
-        ckernel::semaphore_get(hal::to_underlying(semaphore));
+        detail::semaphore_get_mmio(hal::to_underlying(semaphore));
     }
     else
     {
@@ -443,14 +469,14 @@ template <Semaphore S>
 inline __attribute__((always_inline)) std::uint8_t read()
 {
     static_assert(detail::is_valid(S), "Semaphore index must be in [0, 7]");
-    return ckernel::semaphore_read(hal::to_underlying(S));
+    return detail::semaphore_read_mmio(hal::to_underlying(S));
 }
 
 /** @brief Read one runtime-selected semaphore value through the RISC MMIO window. */
 inline __attribute__((always_inline)) std::uint8_t read(const Semaphore semaphore)
 {
     LLK_ASSERT(detail::is_valid(semaphore), "Semaphore index must be in [0, 7]");
-    return ckernel::semaphore_read(hal::to_underlying(semaphore));
+    return detail::semaphore_read_mmio(hal::to_underlying(semaphore));
 }
 
 } // namespace semaphore
