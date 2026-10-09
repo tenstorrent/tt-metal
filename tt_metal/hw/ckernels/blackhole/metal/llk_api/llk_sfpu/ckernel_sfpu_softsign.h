@@ -21,10 +21,15 @@ inline void calculate_softsign() {
         // Bound the ARGUMENT, never the result: for |x| >= 2**100 softsign(x) is
         // within 2**-100 of +-1, i.e. exact in fp32, and 1 + |x| then stays far
         // below the reciprocal's saturation point.
-        v = sfpi::symmetric_clamp(v, 1.2676506e30f);  // 2**100
-        sfpi::vFloat tmp = sfpi::abs(v) + 1.0f;
-        tmp = sfpu_reciprocal<APPROXIMATION_MODE>(tmp);
-        sfpi::dst_reg[0] = v * tmp;
+        //
+        // The bound is taken on |v| once and the sign restored afterwards. This is
+        // symmetric_clamp(v) followed by abs(v) bit for bit -- the clamped value's
+        // magnitude is exactly a and the product takes the sign of its first factor
+        // because the reciprocal is positive -- without recomputing the magnitude
+        // the bound already produced.
+        const sfpi::vFloat a   = sfpi::min(sfpi::abs(v), 1.2676506e30f);  // 2**100
+        const sfpi::vFloat tmp = sfpu_reciprocal<APPROXIMATION_MODE>(a + 1.0f);
+        sfpi::dst_reg[0]       = sfpi::copysgn(a, v) * tmp;
         sfpi::dst_reg++;
     }
 }

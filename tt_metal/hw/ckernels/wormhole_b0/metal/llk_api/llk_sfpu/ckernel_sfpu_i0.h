@@ -106,7 +106,10 @@ inline void calculate_i0() {
                             x);
 
         v_if(abs_x > I0_THRESHOLD) {
-            result = calculate_i0_asymptotic_(sfpi::min(abs_x, vFloat(I0_MAX_FINITE)));
+            // No bound on the argument: every lane with abs_x >= I0_MAX_FINITE
+            // (inf, and NaN, which the compares admit) is overwritten just below,
+            // and every other lane is already under it.
+            result = calculate_i0_asymptotic_(abs_x);
             // abs_x * inf rather than the constant: +inf for every |x| past the
             // overflow point, but a NaN (which the compares above admit) stays NaN.
             v_if(abs_x >= I0_MAX_FINITE) { result = abs_x * vFloat(std::numeric_limits<float>::infinity()); }
