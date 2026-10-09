@@ -31,24 +31,30 @@ using namespace ckernel::unpacker;
  * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
  * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param tensor_shape: Shape of the tensor, including face_r_dim and num_faces.
+ * @param unpack_src_format: L1 format of the data operand; the default keeps the REDUCE_SCALAR clear for every format.
  *
  * @note For tiny tiles (face_r_dim < 16), padding is applied to prevent incorrect outputs.
- * @note The REDUCE_SCALAR math kernel writes SrcA rows 0 to 15 (MOVB2A); a full face rewrites them on the next unpack,
- *       so only tiny tiles need the source clear.
+ * @note For REDUCE_SCALAR operations, SrcA is cleared before unpacking because SrcA is clobbered in the Math kernel.
+ *       A full face rewrites those rows, so MAX of a Float16, Float16_b or Float32 input skips the clear (faster).
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
-inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_shape)
+inline void _llk_unpack_AB_reduce_mop_config_(
+    const ckernel::TensorShape tensor_shape, const std::uint32_t unpack_src_format = to_underlying(DataFormat::Invalid))
 {
     // Validate tensor shape for tile-dependent operations
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_reduce_mop_config_", tensor_shape);
 
     constexpr bool is_max                  = pool_type == PoolType::MAX;
     constexpr bool swap_operands           = (reduce_dim == ReduceDim::REDUCE_ROW) && !is_max;
+    constexpr bool is_scalar               = reduce_dim == ReduceDim::REDUCE_SCALAR;
     constexpr std::uint32_t REPLAY_BUF_LEN = 2;
     constexpr std::uint32_t clear_src      = swap_operands ? Srcs::SrcB : Srcs::SrcA;
 
     const bool full_tile          = swap_operands && (tensor_shape.total_num_faces() == 4);
     const bool is_tiny            = tensor_shape.face_r_dim < FACE_R_DIM;
+    const DataFormat src_format   = static_cast<DataFormat>(unpack_src_format);
+    const bool scalar_clear =
+        is_scalar && !(is_max && (src_format == DataFormat::Float16 || src_format == DataFormat::Float16_b || src_format == DataFormat::Float32));
     const std::uint32_t innerloop = full_tile ? 1 : tensor_shape.total_num_faces();
     const std::uint32_t clear_val = is_max ? p_unpacr_nop::CLR_SRC_NEGINF : p_unpacr_nop::CLR_SRC_0;
 
@@ -71,7 +77,7 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
 
     const std::uint32_t replay = lltt::replay_insn(0, REPLAY_BUF_LEN);
 
-    if (is_tiny)
+    if (is_tiny || scalar_clear)
     {
         ckernel_template tmp(
             1, innerloop, TT_OP_UNPACR_NOP(clear_src, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, clear_val, p_unpacr_nop::CLR_SRC), replay);
@@ -96,6 +102,7 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
  * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
  * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param tensor_shape: Shape of the tensor, including face_r_dim and num_faces.
+ * @param unpack_src_format: L1 format of the data operand, see @ref _llk_unpack_AB_reduce_mop_config_.
  *
  * @note For SUM/AVG REDUCE_ROW, operands are swapped: scaler→SrcA, data→SrcB.
  * @note For MAX REDUCE_ROW, original layout is kept: data→SrcA (transposed via haloize), scaler→SrcB.
@@ -105,7 +112,7 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
  * @ref _llk_math_reduce_init_ is the matching init on the math thread (this is the scaler operand unpack pairing).
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
-inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape)
+inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t unpack_src_format = to_underlying(DataFormat::Invalid))
 {
     // The partial-face clear picks CLR_SRC_NEGINF only for MAX, so MIN would pad SrcA with zero where it needs +inf.
     static_assert(
@@ -136,7 +143,7 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape)
     }
 
     // Configure unpack MOP
-    _llk_unpack_AB_reduce_mop_config_<pool_type, reduce_dim>(tensor_shape);
+    _llk_unpack_AB_reduce_mop_config_<pool_type, reduce_dim>(tensor_shape, unpack_src_format);
 }
 
 /**
