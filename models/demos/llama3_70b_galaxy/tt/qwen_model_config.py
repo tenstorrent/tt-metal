@@ -125,10 +125,23 @@ def qwen_prefill_ring_ag_params(seq_len, buffer_key):
     return dict(num_workers_per_link=6)
 
 
+# Ring SDPA k_chunk for the measured long prefill (HiFi2 fp32 acc, exp_approx, q320, S=40960, sdpa_sweep job91):
+# k512 17.86 ms -> k640 17.08 ms. 640 must divide the ring slice (S / 8) so every K chunk is whole.
+RING_SDPA_LONG_K_CHUNK = 640
+
+
+def ring_sdpa_k_chunk(seq_len, default_k_chunk, ring_size=4):
+    """k_chunk_size for ring_distributed SDPA: RING_SDPA_LONG_K_CHUNK where measured and it divides the slice."""
+    if seq_len > RING_SDPA_MAX_MEASURED_SEQ_LEN or (seq_len // (2 * ring_size)) % RING_SDPA_LONG_K_CHUNK != 0:
+        return default_k_chunk
+    return RING_SDPA_LONG_K_CHUNK
+
+
 def qwen_ring_sdpa_program_config(base_program_config, seq_len, n_local_heads, exp_approx_mode):
     """Ring SDPA program config: base_program_config (SDPA_PROGCFG for this seq_len) with q_chunk_size
-    replaced by ring_sdpa_balanced_q_chunk and exp_approx_mode set by the caller. Grid and k_chunk come from
-    the base config, and the picker's core count is the base grid's, so the two cannot drift apart."""
+    replaced by ring_sdpa_balanced_q_chunk, k_chunk_size by ring_sdpa_k_chunk and exp_approx_mode set by the
+    caller. The grid comes from the base config, and the picker's core count is the base grid's, so the two
+    cannot drift apart."""
     grid = base_program_config.compute_with_storage_grid_size
     num_cores = grid.x * grid.y
     cfg = ttnn.SDPAProgramConfig(
@@ -137,7 +150,7 @@ def qwen_ring_sdpa_program_config(base_program_config, seq_len, n_local_heads, e
         q_chunk_size=ring_sdpa_balanced_q_chunk(
             seq_len, n_local_heads=n_local_heads, num_cores=num_cores, default_q_chunk=base_program_config.q_chunk_size
         ),
-        k_chunk_size=base_program_config.k_chunk_size,
+        k_chunk_size=ring_sdpa_k_chunk(seq_len, base_program_config.k_chunk_size),
     )
     out_grid = cfg.compute_with_storage_grid_size
     assert out_grid.x * out_grid.y == num_cores, f"ring SDPA grid {out_grid} != {num_cores} cores used by the picker"
