@@ -25,9 +25,7 @@ os.environ.setdefault("HF_MODEL", "openai/gpt-oss-20b")
 # Weight upload from the ttnn cache through the pinned host-memory path is ~10x slower on this QB2 (#57763);
 # the copy path is used instead. Host load time only; device timing is unaffected.
 os.environ.setdefault("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES", "0")
-os.environ.setdefault(
-    "TT_CACHE_PATH", str(Path(__file__).resolve().parents[5] / "generated" / "gpt_oss_20b_tt_cache")
-)
+os.environ.setdefault("TT_CACHE_PATH", str(Path(__file__).resolve().parents[5] / "generated" / "gpt_oss_20b_tt_cache"))
 
 import pytest  # noqa: E402
 import torch  # noqa: E402
@@ -93,7 +91,9 @@ def test_optimizer_direct_perf(mesh_device, device_params):
         assert enable_trace, "verdict must run trace+1cq, but TT_PERF_TRACE=0 disabled it"
         assert timed_tokens >= 128, f"verdict needs sustained decode; got {timed_tokens} timed token(s)"
 
-    generator, model_args, model, page_table, kv_cache, tokenizer = build_generator(mesh_device, num_layers=depth or None)
+    generator, model_args, model, page_table, kv_cache, tokenizer = build_generator(
+        mesh_device, num_layers=depth or None
+    )
     assert model[0].args.n_layers == (depth or FULL_DEPTH) and mesh_device.get_num_devices() == 4
 
     prompt = json.loads(PROMPTS.read_text())[0]["prompt"]

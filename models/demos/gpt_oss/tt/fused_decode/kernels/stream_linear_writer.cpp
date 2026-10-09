@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Activation gather + output scatter (BRISC, NOC1) for the decode streamed linear op (experts/stream.py:
+// Activation gather + output scatter (BRISC, NOC1) for the decode streamed linear op (fused_decode/stream.py:
 // LinearStream).
 //
 // 1. Gathers the activation row into 1x32 BF16 tiles. x_pages = 0: the source is a flat BF16 vector (the layer
-//    boundary's normed hidden, tt/decode_boundary.py: value h at byte 2 h), read in one piece; otherwise tile j is
+//    boundary's normed hidden, fused_decode/boundary.py: value h at byte 2 h), read in one piece; otherwise tile j is
 //    row (j / x_pages) of 32x32 BF16 tile page (j % x_pages) of the source tensor (the [heads, head_dim] SDPA output
 //    read head by head; a row of a 32x32 tile is 16 values in face 0/2 and 16 in face 1/3). A last 1x32 tile carries
 //    `nbias` ones (they multiply the bias rows of each weight column's extra K tile).
@@ -19,9 +19,9 @@
 //                the softmax runs in Q16 fixed point (exp2 = integer shift x degree-5 polynomial, ~1e-5 relative),
 //                then rounds to BF16;
 //    out_mode 5: flat BF16 output (the boundary's partial-sum input): column n -> one 64-byte write at byte 64 n.
-// 3. topk = 1 (the fused decode LM head, tt/decode_terminal.py): also keeps this core's top-32 output values (ties to
-//    the lower output index; index = 32 n + lane) and, after the last column, writes them as 32 UINT32 order keys + 32
-//    UINT32 indices into slot `list_idx` of the merge core's list buffer and increments its semaphore `merge_sem`.
+// 3. topk = 1 (the fused decode LM head, fused_decode/terminal.py): also keeps this core's top-32 output values (ties
+//    to the lower output index; index = 32 n + lane) and, after the last column, writes them as 32 UINT32 order keys +
+//    32 UINT32 indices into slot `list_idx` of the merge core's list buffer and increments its semaphore `merge_sem`.
 //
 // runtime args: [x_addr, out_addr, col0, k_addr, v_addr, lists_addr, list_idx]
 
@@ -61,7 +61,7 @@ void kernel_main() {
     constexpr uint32_t notify_x = get_compile_time_arg_val(notify_ct + 1);
     constexpr uint32_t notify_y = get_compile_time_arg_val(notify_ct + 2);
     constexpr uint32_t notify_sem = get_compile_time_arg_val(notify_ct + 3);
-    // 1: x is the normed output of a boundary fused into this op (tt/decode_boundary.py: consumer_parts); wait for
+    // 1: x is the normed output of a boundary fused into this op (fused_decode/boundary.py: consumer_parts); wait for
     // the boundary core's notification (program semaphore 0) before reading it.
     constexpr uint32_t wait_x = get_compile_time_arg_val(notify_ct + 4);
     constexpr uint32_t topk = get_compile_time_arg_val(notify_ct + 5);
@@ -190,7 +190,7 @@ void kernel_main() {
     }
     noc_async_write_barrier();
     if constexpr (notify) {
-        // Fused all-reduce send (tt/decode_boundary.py: DecodeBoundary.sending_program): this core's columns of the
+        // Fused all-reduce send (fused_decode/boundary.py: DecodeBoundary.sending_program): this core's columns of the
         // partial sum are written; tell the boundary core's sender.
         noc_semaphore_inc(get_noc_addr(notify_x, notify_y, get_semaphore(notify_sem)), 1);
         noc_async_atomic_barrier();

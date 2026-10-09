@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Routed-expert gate|up weight streamer (NCRISC, NOC0) for the gpt-oss decode MoE (experts/stream.py).
+// Routed-expert gate|up weight streamer (NCRISC, NOC0) for the gpt-oss decode MoE (fused_decode/stream.py).
 //
 // Each worker core streams the weight columns it owns from one DRAM bank. Per bank the weights are stored
 // column-major (all K tiles of a column contiguous), grouped per expert and per reader core, so a routed

@@ -17,7 +17,7 @@ from .experts_throughput import (
     ThroughputExperts,
     create_fused_moe_gpt_config,
 )
-from .fused_decode import fused_decode_supported
+from .fused_decode.config import fused_decode_supported
 from .topk import TopKRouter
 
 
@@ -175,11 +175,11 @@ class MLP:
             Expert output tensor [batch, seq_len, hidden_size]
         """
         if is_decode and self.indexed_decode:
-            # Fused decode (experts/stream.py): the router (top-k + softmax fused) and the experts read the flat
+            # Fused decode (fused_decode/stream.py): the router (top-k + softmax fused) and the experts read the flat
             # norm output of the layer boundary; the routed ids / weights live in shared buffers. Returns this
             # device's flat MoE partial sum (the next boundary all-reduces it).
             # hidden_states may be the pending post-attention boundary, which then runs inside the router op
-            # (decode_boundary.py consumer_parts); the experts read its normed output.
+            # (fused_decode/boundary.py consumer_parts); the experts read its normed output.
             expert_indices, expert_weights = self.router.decode_indexed(hidden_states)
             x = hidden_states if isinstance(hidden_states, ttnn.Tensor) else hidden_states.x
             return self.experts(

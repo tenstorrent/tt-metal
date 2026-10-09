@@ -54,7 +54,7 @@ class Attention:
             weight_dtype: Data type for weights (default: bfloat8_b)
             tensor_cache_path: Optional path for weight caching
             create_kv_cache: Whether to create KV cache (default: True)
-            fused_decode: Fused decode path (fused_decode.py): QKV + fused QK RoPE + fused K/V cache update, and
+            fused_decode: Fused decode path (fused_decode/): QKV + fused QK RoPE + fused K/V cache update, and
                 o_proj written into the fused all-reduce that returns the width-sharded residual layout
         """
         self.config = config

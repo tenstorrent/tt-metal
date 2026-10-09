@@ -7,8 +7,8 @@ from models.demos.gpt_oss.utils.substate import substate
 
 from .attention import Attention, AttentionConfig
 from .attention_configs import GPTOSSAttentionProgramConfig
-from .decode_boundary import PendingBoundary
-from .fused_decode import DECODE_BOUNDARY_FUSE_CONSUMER
+from .fused_decode.boundary import PendingBoundary
+from .fused_decode.config import DECODE_BOUNDARY_FUSE_CONSUMER
 from .mlp import MLP
 from .rms_norm import RMSNorm
 
@@ -92,7 +92,7 @@ class DecoderLayer:
         )
         self.mesh_device = mesh_device
         # Fused decode (one token per device, TP over mesh columns): between the projections the residual stream is
-        # the flat replicated vector of decode_boundary.py, and each boundary all-reduces the row-parallel partial
+        # the flat replicated vector of fused_decode/boundary.py, and each boundary all-reduces the row-parallel partial
         # sums, adds them to the residual and applies the next RMSNorm in one op; the MoE computes only the routed
         # experts.
         self.fused_decode = self.mlp.indexed_decode
@@ -101,7 +101,7 @@ class DecoderLayer:
                 hf_config.hidden_size, hf_config.rms_norm_eps, mesh_config.tp_axis
             )
             # The producing o_proj / MoE down ops send their partial sums themselves, and each boundary runs inside the
-            # op consuming its output (fused_decode.py).
+            # op consuming its output (fused_decode/config.py).
             self.boundary_sent = ccl_manager.decode_boundary_send(hf_config.hidden_size, "attn") is not None
             self.boundary_fuse_consumer = DECODE_BOUNDARY_FUSE_CONSUMER and self.boundary_sent
             self.input_norm_gamma = self.boundary.flat_gamma(self.input_layernorm)
@@ -123,23 +123,23 @@ class DecoderLayer:
     def set_decode_next_norm(self, norm, is_last_layer, lm_head_fused=False):
         """Fused decode: the layer's last boundary applies the next RMSNorm (the next layer's input norm, or the
         model's final norm after the last layer). lm_head_fused: the last layer returns its pending boundary, which the
-        streamed LM head runs (decode_terminal.py)."""
+        streamed LM head runs (fused_decode/terminal.py)."""
         self.next_norm_gamma = self.boundary.flat_gamma(norm)
         self.is_last_layer = is_last_layer
         self.lm_head_fused = lm_head_fused
 
     def _consumer_input(self, pending):
         """The input of a boundary's consumer op: the pending boundary itself when it runs fused into that op
-        (fused_decode.DECODE_BOUNDARY_FUSE_CONSUMER), else its normed output after running it on its own."""
+        (fused_decode.config.DECODE_BOUNDARY_FUSE_CONSUMER), else its normed output after running it on its own."""
         if self.boundary_fuse_consumer:
             return pending
         return pending.run()[1]
 
     def _decode_forward(self, hidden_states, position_embeddings, position_idx, page_table, kv_cache):
-        """One decode token through the inter-layer contract of decode_boundary.py.
+        """One decode token through the inter-layer contract of fused_decode/boundary.py.
 
         hidden_states: the previous layer's pending boundary (all-reduce of its MoE partial sums + residual add + this
-        layer's input norm; decode_boundary.PendingBoundary), or for the first layer the [1, 1, 1, hidden] BF16
+        layer's input norm; fused_decode.boundary.PendingBoundary), or for the first layer the [1, 1, 1, hidden] BF16
         row-major embedding. Runs [boundary] -> attention -> [boundary: all-reduce of the o_proj partial sums + residual
         add + post-attention norm] -> MoE, each boundary inside the op consuming its normed output (QKV, router).
         Returns the pending MoE boundary for the next layer (for the last layer: with the final norm; the model's

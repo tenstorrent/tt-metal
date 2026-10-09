@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Dense weight streamer (NCRISC, NOC0) for the decode streamed linear op (experts/stream.py: LinearStream).
+// Dense weight streamer (NCRISC, NOC0) for the decode streamed linear op (fused_decode/stream.py: LinearStream).
 // This core's weight columns are one contiguous range of its DRAM bank (groups of G columns, K-major); it is read
 // as `num_blocks` blocks of `block_tiles` tiles (one K block of one column group) in `page_bytes` packets, with one
 // block in flight ahead of compute, into a ring of `num_buffers` blocks (the circular buffer's depth).

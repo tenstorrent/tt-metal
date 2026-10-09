@@ -31,7 +31,7 @@ def create_tt_model(
     Uses clean MeshConfig abstraction for optimal device parallelization
     """
     from models.demos.gpt_oss.config import MeshConfig
-    from models.demos.gpt_oss.tt.fused_decode import fused_decode_supported
+    from models.demos.gpt_oss.tt.fused_decode.config import fused_decode_supported
     from models.demos.gpt_oss.tt.model import Model
     from models.demos.gpt_oss.tt.model_config import ModelArgs
 
@@ -62,7 +62,7 @@ def create_tt_model(
     # state_dict is None  -> decide here (warm cache => {} skip, else cold load).
     # state_dict == {}     -> explicit skip (--skip-model-load) or a prior DP model already skipped.
     # state_dict populated -> reuse across DP models (avoid reloading for every submesh).
-    # The fused decode layers (tt/fused_decode.py) cache extra decode-only weights; a cache is only complete for
+    # The fused decode layers (fused_decode/) cache extra decode-only weights; a cache is only complete for
     # them if a fused build wrote it.
     fused_decode = fused_decode_supported(
         mesh_device,

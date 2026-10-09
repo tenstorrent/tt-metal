@@ -14,9 +14,9 @@ from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
-from .decode_inputs import DecodeInputs
-from .decode_terminal import DecodeTerminal, FusedSamplingGenerator
-from .fused_decode import fused_decode_supported
+from .fused_decode.config import fused_decode_supported
+from .fused_decode.inputs import DecodeInputs
+from .fused_decode.terminal import DecodeTerminal, FusedSamplingGenerator
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
 
@@ -150,8 +150,8 @@ class Model:
             mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1)
         )
 
-        # Fused decode layers (tt/fused_decode.py): decode carries the flat replicated residual of
-        # tt/decode_boundary.py through the layers (each layer boundary all-reduces + adds + applies the next norm,
+        # Fused decode layers (fused_decode/): decode carries the flat replicated residual of
+        # fused_decode/boundary.py through the layers (each layer boundary all-reduces + adds + applies the next norm,
         # the last one the final norm) and rotates Q and K in one op.
         self.fused_decode = fused_decode_supported(
             mesh_device, self.mesh_config, hf_config, use_throughput_experts, max_local_batch_size
@@ -194,7 +194,7 @@ class Model:
             cache_file_name=get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # Fused decode: the token's embedding row and the Q/K RoPE rows come from one op (tt/decode_inputs.py).
+        # Fused decode: the token's embedding row and the Q/K RoPE rows come from one op (fused_decode/inputs.py).
         self.decode_inputs = (
             DecodeInputs(mesh_device, self.embedding_weight, self.rope_setup, hf_config.hidden_size)
             if self.fused_decode
@@ -233,7 +233,7 @@ class Model:
                 layer.set_decode_next_norm(
                     self.norm if last else self.layers[i + 1].input_layernorm, last, lm_head_fused=last
                 )
-            # Decode terminal path (tt/decode_terminal.py): the last layer's boundary (+ final norm) runs inside the
+            # Decode terminal path (fused_decode/terminal.py): the last layer's boundary (+ final norm) runs inside the
             # streamed LM head, which writes folded logits for the split sampler. Prefill keeps the LM head below.
             self.decode_terminal = DecodeTerminal(
                 mesh_device,
@@ -466,7 +466,7 @@ class Model:
 
         if self.fused_decode and mode == Mode.DECODE:
             # The last fused decode layer returns its pending boundary (MoE all-reduce + residual + final norm); the
-            # streamed LM head runs it and writes the folded logits of the split sampler (tt/decode_terminal.py).
+            # streamed LM head runs it and writes the folded logits of the split sampler (fused_decode/terminal.py).
             pending = hidden_states
             logits = self.decode_terminal.lm_head(
                 pending, sampling=self._decode_sampling, current_pos=current_pos, rot_idxs=self._decode_rot_idxs
@@ -597,7 +597,7 @@ class Model:
             rope_mats = self.rope_setup.get_rot_mats(self.get_tt_pos_idx(rot_mat_idxs))
 
         # The fused decode LM head also produces the sampler candidates and advances the positions when sampling on
-        # device (tt/decode_terminal.py).
+        # device (fused_decode/terminal.py).
         self._decode_sampling = on_device_logits
         self._decode_rot_idxs = rot_mat_idxs
         # Forward through layers and head (shared with prefill)

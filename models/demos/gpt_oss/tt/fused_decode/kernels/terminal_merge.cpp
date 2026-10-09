@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Per-device candidate merge of the fused decode sampler (tt/decode_terminal.py), one core.
+// Per-device candidate merge of the fused decode sampler (fused_decode/terminal.py), one core.
 //
 // Input: the row-wise top-k of the folded logits (ttnn.topk, sorted): values [1, 1, 32, k] BF16 and positional
 // indices [1, 1, 32, k] UINT16, one 32x32 tile each (k = 32). Row r of the folded logits holds the local vocab ids

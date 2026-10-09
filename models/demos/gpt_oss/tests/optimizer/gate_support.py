@@ -58,7 +58,9 @@ def _build(mesh_device, state_dict, num_layers=None):
     from models.tt_transformers.tt.generator import Generator
 
     # The demo's builder with the layer count capped (the profiler's depth knob, TT_PERF_LAYERS) when asked.
-    text_demo.create_tt_model = functools.partial(create_tt_model, num_layers=num_layers) if num_layers else create_tt_model
+    text_demo.create_tt_model = (
+        functools.partial(create_tt_model, num_layers=num_layers) if num_layers else create_tt_model
+    )
     prepare_gpt_oss_generator_args = text_demo.prepare_gpt_oss_generator_args
 
     mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0]))
@@ -143,7 +145,12 @@ def append_history(env_name: str, record: dict) -> None:
     path = os.environ.get(env_name)
     if not path:
         return
-    record = {"utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "tree": git_head(), "diff": tree_diff_hash(), **record}
+    record = {
+        "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "tree": git_head(),
+        "diff": tree_diff_hash(),
+        **record,
+    }
     try:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a") as handle:

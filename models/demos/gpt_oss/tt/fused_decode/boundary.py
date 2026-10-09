@@ -10,7 +10,7 @@ Inter-layer residual contract (decode, one token, TP over the mesh row):
     for hidden 2880). Its tile structure is only a container: every op on it is elementwise or a whole-vector sum,
     and every reader / writer addresses it by byte offset;
   * each boundary also produces the next RMSNorm's output in the same flat form; the streamed projections read it in
-    one contiguous read (its 32-value groups are the 1x32 activation tiles of experts/stream.py);
+    one contiguous read (its 32-value groups are the 1x32 activation tiles of fused_decode/stream.py);
   * the row-parallel projections (o_proj, MoE down) write their per-device partial sums into a persistent flat
     partial buffer, which the boundary all-reduces.
 So the only collective between two decoder layers is the boundary's own all-reduce of the 6 KB partial: there is no
@@ -21,7 +21,7 @@ width-sharded layout the LM-head path reads.
 All-reduce: every device NOC-copies its partial into slot `ring index` of the site's receive buffer and multicasts it
 over the fabric into the same slot on every other device of the ring (fused write + semaphore increment); the
 boundary then sums the slots in slot order (bit-identical residual on every device), adds the residual and applies
-the RMSNorm (FP32 statistics, HiFi2). With fused_decode.DECODE_BOUNDARY_FUSED_SEND the sender runs inside the
+the RMSNorm (FP32 statistics, HiFi2). With fused_decode.config.DECODE_BOUNDARY_FUSED_SEND the sender runs inside the
 producing o_proj / MoE down op (sending_program), so the transfer starts as soon as the partial is complete.
 """
 
@@ -32,9 +32,9 @@ import torch
 
 import ttnn
 
-from .fused_decode import DECODE_BOUNDARY_CCL, DECODE_BOUNDARY_LINKS, residual_memory_config
+from .config import DECODE_BOUNDARY_CCL, DECODE_BOUNDARY_LINKS, residual_memory_config
 
-KERNEL_DIR = Path(__file__).parent / "experts" / "kernels"
+KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE = ttnn.TILE_SIZE
 PAGE = TILE * TILE * 2
 

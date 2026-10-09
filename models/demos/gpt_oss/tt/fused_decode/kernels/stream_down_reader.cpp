@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Routed-expert down-projection weight streamer (NCRISC, NOC0) for the gpt-oss decode MoE (experts/stream.py).
+// Routed-expert down-projection weight streamer (NCRISC, NOC0) for the gpt-oss decode MoE (fused_decode/stream.py).
 //
 // Per DRAM bank the down weights are stored expert-major, then output column, then K tile (I_pad / 32 weight tiles
 // + 1 bias tile), so one (expert, column) segment is contiguous. For every output column this core owns, the

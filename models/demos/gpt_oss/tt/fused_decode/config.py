@@ -4,9 +4,9 @@
 """Layouts and decode policy of the fused decode layer (one token per user, TP across mesh columns).
 
 Between the projections, decode keeps the residual stream as a flat BF16 vector on one core, replicated on every TP
-device (decode_boundary.py, which also defines the inter-layer residual contract): each layer boundary all-reduces
+device (fused_decode/boundary.py, which also defines the inter-layer residual contract): each layer boundary all-reduces
 the row-parallel partial sums over the fabric, adds them to the residual and applies the next RMSNorm in one op. The
-projections are the DRAM-streaming ops of experts/stream.py, which read the flat norm output in one read and write
+projections are the DRAM-streaming ops of fused_decode/stream.py, which read the flat norm output in one read and write
 their results straight into the next op's layout (Q/K/V heads, the flat partial sum, the routed ids / scores).
 """
 
@@ -27,9 +27,9 @@ def fused_decode_layout_supported(
     (grid: the device compute-with-storage grid, x by y; dram_banks: the device's DRAM bank count).
 
     The fused layer serves one token per device with TP over a single mesh row and no expert parallelism. Its
-    layouts (the flat 3-page residual and boundary all-reduce of decode_boundary.py on a 4-device ring, the 30-core
-    LM-head input, Q/K/V head buffers, the streamed weights' per-DRAM-bank column split and worker cores) are sized
-    for the gpt-oss-20b shapes on the 11x10 Blackhole grid at TP=4, and its decode-only streamed weight copies
+    layouts (the flat 3-page residual and boundary all-reduce of fused_decode/boundary.py on a 4-device ring, the
+    30-core LM-head input, Q/K/V head buffers, the streamed weights' per-DRAM-bank column split and worker cores) are
+    sized for the gpt-oss-20b shapes on the 11x10 Blackhole grid at TP=4, and its decode-only streamed weight copies
     (about +3.2 GB of DRAM per device) were budgeted for that model. Every other layout keeps the original decode
     path."""
     return (
@@ -78,7 +78,7 @@ OPROJ_STREAM_READERS = 1
 GATE_UP_STREAM_READERS = 3
 DOWN_STREAM_READERS = 2
 
-# Decode LM head (decode_terminal.py): a DRAM-streaming copy of the LM-head weight, vocab split evenly over the TP
+# Decode LM head (fused_decode/terminal.py): a DRAM-streaming copy of the LM-head weight, vocab split evenly over the TP
 # devices, BFP8 x BF16 LoFi like the other dense projections. Readers per DRAM bank (probes/bench_terminal.py: 1 and 2
 # reach ~504 GB/s, 4-5 are slower); weight columns buffered ahead while the fused final boundary runs.
 LM_HEAD_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
@@ -88,7 +88,8 @@ LM_HEAD_STREAM_PREFETCH = 4
 # candidates (kernels/terminal_pick.cpp); "sampling" = ttnn.sampling with k=1 (the seeded top-k / top-p draw).
 DECODE_GREEDY_SAMPLER = "split_argmax"
 # Sampler candidates of the fused terminal path: "fused" = per-core top-32 in the LM-head writers + merge + fabric
-# exchange inside the LM-head op (decode_terminal.TerminalExchange); "ops" = ttnn.topk + merge op + two all_gathers.
+# exchange inside the LM-head op (fused_decode.terminal.TerminalExchange); "ops" = ttnn.topk + merge op + two
+# all_gathers.
 DECODE_TERMINAL_EXCHANGE = "fused"
 
 # Paged decode SDPA K chunk per layer type (probes/bench_sdpa.py, 8x8 grid): the 128-token sliding window is fastest
@@ -106,15 +107,15 @@ def sdpa_decode_program_config(sliding_window):
     )
 
 
-# Layer boundary all-reduce (decode_boundary.py): "fabric" = the boundary op's own fabric multicast of the flat partial
-# sums; "ttnn" = ttnn.experimental.all_reduce_async on the flat partial, then the boundary's add + norm (the measured
-# alternative, work_log.md).
+# Layer boundary all-reduce (fused_decode/boundary.py): "fabric" = the boundary op's own fabric multicast of the flat
+# partial sums; "ttnn" = ttnn.experimental.all_reduce_async on the flat partial, then the boundary's add + norm (the
+# measured alternative, work_log.md).
 DECODE_BOUNDARY_CCL = "fabric"
 # Fused matmul + all-reduce send: the producing o_proj / MoE down stream op runs the boundary's fabric sender
-# (decode_boundary.py DecodeBoundary.sending_program); the boundary op then only waits, adds and normalizes.
+# (fused_decode/boundary.py DecodeBoundary.sending_program); the boundary op then only waits, adds and normalizes.
 DECODE_BOUNDARY_FUSED_SEND = True
 # Consumer fusion: each boundary runs inside the op that consumes its normed output (the next QKV stream, the router
-# stream), whose weight readers stream ahead while it waits / computes (decode_boundary.py consumer_parts). Needs
+# stream), whose weight readers stream ahead while it waits / computes (fused_decode/boundary.py consumer_parts). Needs
 # DECODE_BOUNDARY_FUSED_SEND with the fabric all-reduce.
 DECODE_BOUNDARY_FUSE_CONSUMER = True
 # The fused consumer's weight circular buffer holds all its columns (not 3), so its readers never stall on the boundary.

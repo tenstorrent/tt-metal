@@ -10,8 +10,8 @@ from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
-from ..experts.stream import NBIAS, as_stream_tensor, linear_stream_rows, stream_linear_layout
-from ..fused_decode import OPROJ_DECODE_WEIGHT_DTYPE, QKV_DECODE_WEIGHT_DTYPE
+from ..fused_decode.config import OPROJ_DECODE_WEIGHT_DTYPE, QKV_DECODE_WEIGHT_DTYPE
+from ..fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, stream_linear_layout
 from .config import AttentionConfig
 
 
@@ -27,7 +27,7 @@ class AttentionWeights:
     sinks: ttnn.Tensor
     # Decode o_proj without the CCL tile padding: the decode all-reduce is a fused all_reduce_async over the full
     # hidden width, so the padded columns (and the slice that removes them) are not needed.
-    # Fused decode QKV / o_proj weights + biases in the streamed layout of experts/stream.py (LinearStream); the
+    # Fused decode QKV / o_proj weights + biases in the streamed layout of fused_decode/stream.py (LinearStream); the
     # o_proj bias is applied on the first TP device only (row-parallel).
     wqkv_stream: ttnn.Tensor = None
     o_proj_stream: ttnn.Tensor = None

@@ -91,10 +91,10 @@ class CCLManager:
         return self.barrier_semaphore[cur_idx]
 
     def get_decode_boundary(self, hidden_size, eps=None, cluster_axis=None):
-        """Layer boundary op (all-reduce + residual add + RMSNorm, decode_boundary.py) shared by every decoder
+        """Layer boundary op (all-reduce + residual add + RMSNorm, fused_decode/boundary.py) shared by every decoder
         layer's decode path, with its persistent receive buffers and semaphores. Created by the first decoder layer
         (eps, cluster_axis); the producer ops look it up by hidden size."""
-        from .decode_boundary import DecodeBoundary
+        from .fused_decode.boundary import DecodeBoundary
 
         if hidden_size not in self._decode_boundary:
             self._decode_boundary[hidden_size] = DecodeBoundary(self.mesh_device, hidden_size, eps, cluster_axis)
@@ -102,19 +102,19 @@ class CCLManager:
 
     def decode_boundary_send(self, hidden_size, site):
         """`send` argument of the producer stream ops: fuse the boundary's fabric send (None: the boundary sends)."""
-        from .fused_decode import DECODE_BOUNDARY_CCL, DECODE_BOUNDARY_FUSED_SEND
+        from .fused_decode.config import DECODE_BOUNDARY_CCL, DECODE_BOUNDARY_FUSED_SEND
 
         if DECODE_BOUNDARY_FUSED_SEND and DECODE_BOUNDARY_CCL == "fabric":
             return (self.get_decode_boundary(hidden_size), site)
         return None
 
     def get_decode_expert_stream(self, hidden, inter_pad, top_k, swiglu_limit, alpha):
-        """Routed-expert stream ops (experts/stream.py) and their persistent buffers, shared by every decoder layer's
-        decode path: the [k, I_pad] BF16 row-major activation and the flat partial sum (get_decode_partial)."""
+        """Routed-expert stream ops (fused_decode/stream.py) and their persistent buffers, shared by every decoder
+        layer's decode path: the [k, I_pad] BF16 row-major activation and the flat partial sum (get_decode_partial)."""
         key = (hidden, inter_pad, top_k)
         if key not in self._decode_expert_stream:
-            from .experts.stream import ExpertDownStream, ExpertGateUpStream
-            from .fused_decode import DOWN_STREAM_READERS, GATE_UP_STREAM_READERS
+            from .fused_decode.config import DOWN_STREAM_READERS, GATE_UP_STREAM_READERS
+            from .fused_decode.stream import ExpertDownStream, ExpertGateUpStream
 
             self._decode_expert_stream[key] = {
                 "gate_up": ExpertGateUpStream(
@@ -139,10 +139,10 @@ class CCLManager:
         )
 
     def get_decode_partial(self, hidden):
-        """Flat BF16 partial sum (decode_boundary.py: value h at byte 2 h of a [1, 1, 32, 32 * pages] tile tensor on
-        the boundary core) written by the streamed o_proj and MoE down of every layer and all-reduced by the layer
+        """Flat BF16 partial sum (fused_decode/boundary.py: value h at byte 2 h of a [1, 1, 32, 32 * pages] tile tensor
+        on the boundary core) written by the streamed o_proj and MoE down of every layer and all-reduced by the layer
         boundaries; the padding past hidden is never written and stays zero."""
-        from .decode_boundary import flat_memory_config, flat_shape
+        from .fused_decode.boundary import flat_memory_config, flat_shape
 
         key = ("partial", hidden)
         if key not in self._decode_stream_buffers:
@@ -189,8 +189,8 @@ class CCLManager:
         return self._decode_stream_buffers[key]
 
     def get_decode_linear_stream(self, name, *args, **kwargs):
-        """LinearStream op (experts/stream.py) for one decode role, shared by every layer."""
-        from .experts.stream import LinearStream
+        """LinearStream op (fused_decode/stream.py) for one decode role, shared by every layer."""
+        from .fused_decode.stream import LinearStream
 
         if name not in self._decode_stream_buffers:
             self._decode_stream_buffers[name] = LinearStream(self.mesh_device, *args, **kwargs)

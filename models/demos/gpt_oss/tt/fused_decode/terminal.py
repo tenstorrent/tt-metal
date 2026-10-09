@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Terminal path of the fused decode layers (tt/fused_decode.py): final norm -> LM head -> logits -> sampling.
+"""Terminal path of the fused decode layers (fused_decode/): final norm -> LM head -> logits -> sampling.
 
-LM head: a DRAM-streaming LinearStream (experts/stream.py) over a decode-only BFP8 copy of the LM-head weight, split
-evenly over the TP devices (device d owns the vocab ids [d * vd, (d + 1) * vd), vd = vocab / tp rounded up to a tile;
-ids >= vocab get a -1e30 bias). Its input is the last layer's pending boundary (the MoE all-reduce + residual + final
-RMSNorm runs inside the op, decode_boundary.py consumer_parts), and it writes the logits "folded": local vocab tile n
-goes to row n // row_tiles, tile n % row_tiles of a persistent [1, 1, 32, width] BF16 tensor (width = row_tiles * 32
-rounded up to a power of two; the never-written tail stays -1e30). One token's logits thus fill all 32 rows of the
-tile layout, so the row-wise top-k runs on 32 x width elements instead of 32 rows of the full vocab shard.
+LM head: a DRAM-streaming LinearStream (fused_decode/stream.py) over a decode-only BFP8 copy of the LM-head weight,
+split evenly over the TP devices (device d owns the vocab ids [d * vd, (d + 1) * vd), vd = vocab / tp rounded up to a
+tile; ids >= vocab get a -1e30 bias). Its input is the last layer's pending boundary (the MoE all-reduce + residual +
+final RMSNorm runs inside the op, fused_decode/boundary.py consumer_parts), and it writes the logits "folded": local
+vocab tile n goes to row n // row_tiles, tile n % row_tiles of a persistent [1, 1, 32, width] BF16 tensor (width =
+row_tiles * 32 rounded up to a power of two; the never-written tail stays -1e30). One token's logits thus fill all 32
+rows of the tile layout, so the row-wise top-k runs on 32 x width elements instead of 32 rows of the full vocab shard.
 
 Sampling (split, top-k / top-p / temperature capable). Candidates, DECODE_TERMINAL_EXCHANGE = "fused" (default): the
 LM-head op itself produces them (TerminalExchange): each LM-head writer core keeps the top-32 of its own logits, an
@@ -30,15 +30,15 @@ import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.common.sampling.tt_sampling import TTSampling
 
-from .decode_boundary import KERNEL_DIR
-from .experts.stream import LinearStream, as_stream_tensor, linear_stream_rows, stream_linear_layout
-from .fused_decode import (
+from .boundary import KERNEL_DIR
+from .config import (
     DECODE_GREEDY_SAMPLER,
     DECODE_TERMINAL_EXCHANGE,
     LM_HEAD_DECODE_WEIGHT_DTYPE,
     LM_HEAD_STREAM_PREFETCH,
     LM_HEAD_STREAM_READERS,
 )
+from .stream import LinearStream, as_stream_tensor, linear_stream_rows, stream_linear_layout
 
 TILE = ttnn.TILE_SIZE
 MASK = -1.0e30  # logit of a padded vocab id
@@ -250,7 +250,7 @@ class TerminalExchange:
         self.core = EXCHANGE_CORE
         self.cores = ttnn.CoreRangeSet([ttnn.CoreRange(self.core, self.core)])
         writer_cores = {(c.x, c.y) for c, *_ in terminal.op.assignments}
-        from .decode_boundary import BOUNDARY_CORE
+        from .boundary import BOUNDARY_CORE
 
         assert (self.core.x, self.core.y) not in writer_cores and (self.core.x, self.core.y) != BOUNDARY_CORE
         self.n_lists = len(terminal.op.assignments)
@@ -407,7 +407,8 @@ class FusedDecodeSampling(TTSampling):
         super().__init__(mesh_device=mesh_device, tt_ccl=tt_ccl, args=args)
         self.terminal = terminal
         # Greedy requests (k=1, p in {0, 1}, temp=1) take the argmax of the gathered candidates instead of the
-        # seeded ttnn.sampling draw (fused_decode.DECODE_GREEDY_SAMPLER). Keyed as force-argmax by SamplingGenerator.
+        # seeded ttnn.sampling draw (fused_decode.config.DECODE_GREEDY_SAMPLER). Keyed as force-argmax by
+        # SamplingGenerator.
         self._allow_force_argmax_sampling = DECODE_GREEDY_SAMPLER == "split_argmax"
         self._force_argmax_sampling = False
         self._params_key = None
@@ -442,7 +443,7 @@ class FusedDecodeSampling(TTSampling):
                 self._force_argmax_sampling = forced
         if self.log_probs_calculator.enable_log_probs:
             raise NotImplementedError(
-                "log-probs are not implemented on the fused batch-1 decode path (tt/decode_terminal.py)"
+                "log-probs are not implemented on the fused batch-1 decode path (fused_decode/terminal.py)"
             )
         values, ids = self.terminal.candidates(x)
         if self._force_argmax_sampling:
@@ -502,7 +503,7 @@ class FusedSamplingGenerator(SamplingGenerator):
     def _run_sampling(self, logits, *, penalties_on, tt_out_tok, count_tokens=True):
         if penalties_on and self.terminal.is_folded(logits):
             raise NotImplementedError(
-                "sampling penalties are not implemented on the fused batch-1 decode path (tt/decode_terminal.py)"
+                "sampling penalties are not implemented on the fused batch-1 decode path (fused_decode/terminal.py)"
             )
         return super()._run_sampling(
             logits, penalties_on=penalties_on, tt_out_tok=tt_out_tok, count_tokens=count_tokens
@@ -537,7 +538,7 @@ class FusedSamplingGenerator(SamplingGenerator):
         if self._penalties_active or getattr(self, "_log_probs_active", False):
             raise NotImplementedError(
                 "sampling penalties / log-probs are not implemented on the fused batch-1 decode path "
-                "(tt/decode_terminal.py)"
+                "(fused_decode/terminal.py)"
             )
 
     def sample(self, logits, *, enable_trace=True, tt_out_tok=None, skip_precompile=False, count_tokens=True):

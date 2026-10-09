@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Candidate merge + exchange of the fused decode LM head (tt/decode_terminal.py), BRISC of the exchange core, part of
-// the LM-head program (experts/stream.py LinearStream with an exchange):
+// Candidate merge + exchange of the fused decode LM head (fused_decode/terminal.py), BRISC of the exchange core, part
+// of the LM-head program (fused_decode/stream.py LinearStream with an exchange):
 //   1. waits until the `n_lists` LM-head writer cores delivered their top-K lists (K order keys + K local indices
 //      each, kernels/stream_linear_writer.cpp topk = 1) and merges them into this device's top-K, ordered by (value
 //      descending, index ascending); writes it as the payload [K BF16 values | K UINT32 global ids] (global id =

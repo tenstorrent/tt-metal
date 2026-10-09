@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Decode step inputs of the fused decode path (tt/decode_inputs.py), one core (BRISC):
+// Decode step inputs of the fused decode path (fused_decode/inputs.py), one core (BRISC):
 //   - the token's embedding row: row tokens[0] of the row-major BF16 embedding table -> emb (one row-major page);
 //   - the RoPE rows of the fused Q/K rotary op: for user u in [0, users) (Q users then K users), row rot[u] of the
 //     row-major BF16 cos / sin tables ([.., positions, head_dim], one page per position) -> row 0 of the head_dim / 32

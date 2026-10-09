@@ -93,7 +93,7 @@ class Experts:
         self.prefill_sparsity = self._create_prefill_sparsity()
 
         # Fused decode (TP over mesh columns, no expert parallelism): only the routed experts are computed, by the
-        # DRAM-streaming ops of experts/stream.py (ops and buffers shared by every layer through the CCL manager).
+        # DRAM-streaming ops of fused_decode/stream.py (ops and buffers shared by every layer through the CCL manager).
         self.decode_weights = None
         self.decode_stream = None
         if indexed_decode:

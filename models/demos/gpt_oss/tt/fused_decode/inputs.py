@@ -1,19 +1,19 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Decode step inputs of the fused decode path (tt/fused_decode.py) in one op (kernels/decode_inputs.cpp).
+"""Decode step inputs of the fused decode path (fused_decode/) in one op (kernels/decode_inputs.cpp).
 
 From the persistent decode trace inputs (token ids, RoPE row indices) it writes the token's embedding row (the
-[1, 1, 1, hidden] BF16 row-major input of the first layer's entry boundary, decode_boundary.py) and the cos / sin rows of
-the fused Q/K rotary op (height-sharded [1, 2 * batch, 1, head_dim] BF16 tiles on the RoPE setup's batch grid, row 0 of
-each shard: the op broadcasts row 0). The unfused decode path builds the same tensors with ttnn.embedding (+ a slice of
-the 32-slot token buffer) and RotarySetup.get_rot_mats (2 embeddings, 2 transposes, 2 slices, 2 interleaved-to-sharded
-copies): 10 ops per token.
+[1, 1, 1, hidden] BF16 row-major input of the first layer's entry boundary, fused_decode/boundary.py) and the cos / sin
+rows of the fused Q/K rotary op (height-sharded [1, 2 * batch, 1, head_dim] BF16 tiles on the RoPE setup's batch grid,
+row 0 of each shard: the op broadcasts row 0). The unfused decode path builds the same tensors with ttnn.embedding (+ a
+slice of the 32-slot token buffer) and RotarySetup.get_rot_mats (2 embeddings, 2 transposes, 2 slices, 2
+interleaved-to-sharded copies): 10 ops per token.
 """
 
 import ttnn
 
-from .decode_boundary import KERNEL_DIR
+from .boundary import KERNEL_DIR
 
 CORE = ttnn.CoreCoord(0, 0)
 

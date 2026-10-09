@@ -32,9 +32,7 @@ os.environ.setdefault("HF_MODEL", "openai/gpt-oss-20b")
 # Weight upload from the ttnn cache through the pinned host-memory path is ~10x slower on this QB2 (#57763);
 # the copy path is used instead. Host load time only; device timing is unaffected.
 os.environ.setdefault("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES", "0")
-os.environ.setdefault(
-    "TT_CACHE_PATH", str(Path(__file__).resolve().parents[5] / "generated" / "gpt_oss_20b_tt_cache")
-)
+os.environ.setdefault("TT_CACHE_PATH", str(Path(__file__).resolve().parents[5] / "generated" / "gpt_oss_20b_tt_cache"))
 
 import pytest  # noqa: E402
 import torch  # noqa: E402

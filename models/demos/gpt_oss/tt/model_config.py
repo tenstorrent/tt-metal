@@ -333,7 +333,7 @@ class ModelArgs:
         manual --skip-model-load flag. Set GPT_OSS_FORCE_MODEL_LOAD=1 to force a fresh load
         (e.g. to regenerate the cache).
 
-        fused_decode: the model about to be built uses the fused decode layers (tt/fused_decode.py), whose
+        fused_decode: the model about to be built uses the fused decode layers (fused_decode/), whose
         decode-only weights are only written by a fused build; a marker from a non-fused build of the same
         model (e.g. batch > 1 on the same mesh) does not cover them."""
         if os.getenv("GPT_OSS_FORCE_MODEL_LOAD") == "1":

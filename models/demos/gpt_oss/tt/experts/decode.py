@@ -197,9 +197,9 @@ def decode_forward(
 
 
 def decode_forward_stream(hidden_states, expert_indices, expert_weights, weights, stream, send=None):
-    """Decode MoE for one token over its top-k experts with the DRAM-streaming ops of experts/stream.py.
+    """Decode MoE for one token over its top-k experts with the DRAM-streaming ops of fused_decode/stream.py.
 
-    hidden_states: the flat BF16 norm output of the layer boundary (decode_boundary.py, one token).
+    hidden_states: the flat BF16 norm output of the layer boundary (fused_decode/boundary.py, one token).
     expert_indices / expert_weights: the streamed router's [1, 32] UINT16 ids / BF16 softmax weights buffers (top-k
     in the first k entries; shared, not deallocated here).
     gate|up + bias + SwiGLU + routing-weight scaling run in one op into the shared [k, I_pad] activation; the down

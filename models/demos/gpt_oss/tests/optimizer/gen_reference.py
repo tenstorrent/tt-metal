@@ -69,7 +69,9 @@ def main():
         logits = model(full).logits[0, len(prompt_ids) - 1 :].float()
         assert logits.shape[0] == args.tokens
         agree = int((logits.argmax(-1) == torch.tensor(cont)).sum())
-        print(f"teacher-forced forward in {time.time() - t2:.0f} s; argmax == greedy at {agree}/{args.tokens}", flush=True)
+        print(
+            f"teacher-forced forward in {time.time() - t2:.0f} s; argmax == greedy at {agree}/{args.tokens}", flush=True
+        )
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     torch.save(

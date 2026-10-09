@@ -3,7 +3,7 @@
 
 import ttnn
 
-from ..fused_decode import (
+from ..fused_decode.config import (
     OPROJ_DECODE_WEIGHT_DTYPE,
     OPROJ_STREAM_READERS,
     QKV_DECODE_WEIGHT_DTYPE,
@@ -48,9 +48,9 @@ def decode_forward(
         position_idx: Current position index
         page_table: Page table for paged attention (optional)
         ccl_manager: Communication manager
-        fused: Fused decode path (fused_decode.py): hidden_states is the flat normed hidden of the layer boundary
-            (decode_boundary.py, one token); returns this device's flat o_proj partial sum, which the next boundary
-            all-reduces
+        fused: Fused decode path (fused_decode/): hidden_states is the flat normed hidden of the layer boundary
+            (fused_decode/boundary.py, one token); returns this device's flat o_proj partial sum, which the next
+            boundary all-reduces
 
     Returns:
         Attention output [batch, 1, hidden_size]
@@ -83,7 +83,7 @@ def decode_forward(
         # rope_mats / transformation_mat are laid out for rotary_embedding_llama_fused_qk: cos/sin rows for the Q
         # users then the K users (Model use_qk_fused).
         assert rope_mats[0].shape[1] == 2 * batch_size, "fused decode needs the fused-QK RoPE layout (use_qk_fused)"
-        # Streamed QKV + bias (experts/stream.py) from the flat norm output, written straight into the shared
+        # Streamed QKV + bias (fused_decode/stream.py) from the flat norm output, written straight into the shared
         # Q / K / V head tensors: Q and K on disjoint cores (V shares Q's), the layout the fused QK RoPE and the fused
         # K/V cache update require (what nlp_create_qkv_heads_decode(overlap_qk_coregrid=False) produced).
         qkv_stream = ccl_manager.get_decode_linear_stream(
@@ -202,7 +202,7 @@ def decode_forward(
 
     if fused:
         # Streamed o_proj + bias (on the first TP device only) reading the heads straight out of the DRAM SDPA output
-        # (concat heads = head-major row order) and writing this device's flat partial sum (decode_boundary.py),
+        # (concat heads = head-major row order) and writing this device's flat partial sum (fused_decode/boundary.py),
         # which the layer's next boundary all-reduces.
         partial = ccl_manager.get_decode_partial(hidden_size)
         o_stream = ccl_manager.get_decode_linear_stream(

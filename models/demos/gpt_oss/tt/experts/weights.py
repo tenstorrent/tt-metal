@@ -163,8 +163,8 @@ def load_expert_weights(
     )
 
 
-# Decode-only expert weights for the streamed MoE (experts/stream.py). Each TP shard of the intermediate dimension is
-# zero-padded up to a multiple of DECODE_INTERMEDIATE_ALIGN so the gate|up column pairs split evenly over the DRAM
+# Decode-only expert weights for the streamed MoE (fused_decode/stream.py). Each TP shard of the intermediate dimension
+# is zero-padded up to a multiple of DECODE_INTERMEDIATE_ALIGN so the gate|up column pairs split evenly over the DRAM
 # banks (720 -> 768 = 24 tiles = 3 pairs per bank for gpt-oss-20b at TP=4). Padded gate/up columns are zero (weight
 # and bias), so their SwiGLU output is exactly zero and the padded down rows contribute nothing.
 DECODE_INTERMEDIATE_ALIGN = 256
@@ -173,7 +173,7 @@ DECODE_INTERMEDIATE_ALIGN = 256
 @dataclass(frozen=True)
 class DecodeExpertWeights:
     # Per device: packed [gate | up] (+ bias) and down (+ bias, real on the first TP device only) of every expert, in
-    # the per-DRAM-bank streamed layouts of experts/stream.py.
+    # the per-DRAM-bank streamed layouts of fused_decode/stream.py.
     gate_up_stream: ttnn.Tensor
     down_stream: ttnn.Tensor
     intermediate_padded: int
@@ -187,7 +187,13 @@ def load_decode_expert_weights(
     weight_dtype=ttnn.bfloat4_b,
     tensor_cache_path=None,
 ) -> DecodeExpertWeights:
-    from .stream import NBIAS, as_stream_tensor, columns_per_bank, stream_down_layout, stream_gate_up_layout
+    from ..fused_decode.stream import (
+        NBIAS,
+        as_stream_tensor,
+        columns_per_bank,
+        stream_down_layout,
+        stream_gate_up_layout,
+    )
 
     tp = mesh_config.decode.tp
     inter_local = config.intermediate_size // tp

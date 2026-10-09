@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Decode layer boundary, fabric sender (BRISC) (tt/decode_boundary.py: DecodeBoundary).
+// Decode layer boundary, fabric sender (BRISC) (fused_decode/boundary.py: DecodeBoundary).
 //
 // Publishes this device's flat partial sum (the row-parallel o_proj / MoE down output, `payload` bytes in the local
 // partial buffer) into slot `slot` of the receive buffer on every device of the TP ring:

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Routed-expert gate|up matmul + GPT-OSS SwiGLU (TRISC) for the decode MoE stream (experts/stream.py).
+// Routed-expert gate|up matmul + GPT-OSS SwiGLU (TRISC) for the decode MoE stream (fused_decode/stream.py).
 //
 // For each routed expert and each (gate, up) column pair this core owns:
 //   g = x . W[:, gate col] + b_g,  u = x . W[:, up col] + b_u   (custom_mm, 1x32 activation tile, LoFi;

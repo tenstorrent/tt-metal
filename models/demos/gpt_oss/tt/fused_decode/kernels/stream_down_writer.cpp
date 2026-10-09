@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Down-projection activation gather + output scatter (BRISC, NOC1) for the routed-expert stream
-// (experts/stream.py).
+// (fused_decode/stream.py).
 //
 // 1. in0 = k segments of seg_tiles 1x32 tiles: segment e is the score-weighted SwiGLU activation of routed expert e
 //    (one [I_pad] BF16 row of the compact activation buffer, already scaled by w_e) followed by one tile holding
 //    w_e in its first `nbias` entries, which multiply the bias rows of the weight stream (sum_e w_e * b_e).
 // 2. Each 1x32 BF16 output tile (one 32-wide column n of the expert sum) is written into the flat BF16 partial
-//    sum the layer boundary all-reduces (tt/decode_boundary.py: hidden value h at byte 2 h): one 64-byte write at
+//    sum the layer boundary all-reduces (fused_decode/boundary.py: hidden value h at byte 2 h): one 64-byte write at
 //    byte 64 n. Columns past the hidden size (bank padding) are dropped.
 //
 // runtime args: [act_addr, scores_addr, out_addr, col0]
@@ -80,7 +80,7 @@ void kernel_main() {
     }
     noc_async_write_barrier();
     if constexpr (notify) {
-        // Fused all-reduce send (tt/decode_boundary.py: DecodeBoundary.sending_program): this core's columns of the
+        // Fused all-reduce send (fused_decode/boundary.py: DecodeBoundary.sending_program): this core's columns of the
         // partial sum are written; tell the boundary core's sender.
         noc_semaphore_inc(get_noc_addr(notify_x, notify_y, get_semaphore(notify_sem)), 1);
         noc_async_atomic_barrier();

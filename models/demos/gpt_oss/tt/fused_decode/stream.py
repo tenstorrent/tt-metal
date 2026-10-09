@@ -15,7 +15,7 @@ These ttnn.generic_op ops (kernels/stream_*.cpp) stream the weights per DRAM ban
   rounded to the weight format (q1 = q(b), q2 = q(b - q1), ...); the activation's extra 1x32 tile holds the matching
   multipliers (ones, or the routing score for the expert down projection), so the matmul adds the bias.
 * Compute: worker cores next to each DRAM bank run custom_mm with 1x32 activation tiles (LoFi, FP32 accumulation).
-  The activation is the flat normed hidden of the layer boundary (tt/decode_boundary.py: value h at byte 2 h, so its
+  The activation is the flat normed hidden of the layer boundary (fused_decode/boundary.py: value h at byte 2 h, so its
   32-value groups are the 1x32 tiles, read in one piece), or for o_proj the SDPA output gathered head by head.
 
 Ops: LinearStream (dense projection + bias: QKV straight into the head-split layout, o_proj straight into the flat
@@ -31,7 +31,7 @@ import torch
 
 import ttnn
 
-from ..fused_decode import DECODE_BOUNDARY_PREFETCH_ALL
+from .config import DECODE_BOUNDARY_PREFETCH_ALL
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 NBIAS = 4  # residual terms carrying a bias (BFP4: relative error ~ 8^-NBIAS of the 16-value group maximum)
@@ -238,8 +238,9 @@ class _BankStreamOp:
 
 
 class ExpertGateUpStream(_BankStreamOp):
-    """(x, ids, scores, weights, act) -> act. x: the flat BF16 normed hidden (tt/decode_boundary.py); ids / scores: UINT16 / BF16 row-major buffers whose first k entries are the routed experts and their
-    softmax weights; act: [k, I_pad] BF16 row-major L1, receives w_e * SwiGLU(gate_e, up_e) per routed expert e."""
+    """(x, ids, scores, weights, act) -> act. x: the flat BF16 normed hidden (fused_decode/boundary.py); ids / scores:
+    UINT16 / BF16 row-major buffers whose first k entries are the routed experts and their softmax weights; act: [k,
+    I_pad] BF16 row-major L1, receives w_e * SwiGLU(gate_e, up_e) per routed expert e."""
 
     def __init__(self, mesh_device, hidden, inter_pad, num_sel, swiglu_limit, alpha, readers):
         super().__init__(mesh_device, readers)
@@ -305,7 +306,7 @@ class ExpertGateUpStream(_BankStreamOp):
 
 class ExpertDownStream(_BankStreamOp):
     """(act, ids, scores, weights, out) -> out. act: [k, I_pad] BF16 row-major (score-weighted SwiGLU outputs);
-    out: the flat BF16 partial sum (tt/decode_boundary.py: value h at byte 2 h) receives
+    out: the flat BF16 partial sum (fused_decode/boundary.py: value h at byte 2 h) receives
     sum_e w_e * (act_e @ Wd_e + bd_e) (one matmul per output column over the K = k segments [w_e * act_e | w_e] of
     the routed experts)."""
 
@@ -326,7 +327,8 @@ class ExpertDownStream(_BankStreamOp):
         return num_experts * self.C * self.seg_tiles * TILE
 
     def __call__(self, act, ids, scores, weights, out, send=None):
-        """send = (boundary, site): fuse the boundary all-reduce's fabric send (decode_boundary.py sending_program)."""
+        """send = (boundary, site): fuse the boundary all-reduce's fabric send (fused_decode/boundary.py
+        sending_program)."""
         cb_in0, cb_w, cb_idx, cb_scr, cb_out = 0, 1, 2, 3, 16
         kt = self.num_sel * self.seg_tiles
         cbs = [
@@ -370,7 +372,7 @@ class ExpertDownStream(_BankStreamOp):
 class LinearStream(_BankStreamOp):
     """Dense decode linear y = x @ W + b for one token, weights streamed per DRAM bank (stream_linear_layout).
 
-    x: x_pages = 0: the flat BF16 normed hidden of the layer boundary (tt/decode_boundary.py); otherwise a BF16
+    x: x_pages = 0: the flat BF16 normed hidden of the layer boundary (fused_decode/boundary.py); otherwise a BF16
     32x32-tile tensor (any TensorAccessor layout; a DRAM source is staged in L1 first) whose activation is row
     (j / x_pages) of tile page (j % x_pages) for j < k_tiles (x_pages = 2: the [heads, 64] SDPA output, head by head).
     prefetch_cols: cap on the weight columns buffered ahead (default: all of them when a boundary is fused in, else 3).
@@ -420,11 +422,11 @@ class LinearStream(_BankStreamOp):
         return self.C * self.kt * TILE
 
     def __call__(self, x, weights, out, send=None, exchange=None):
-        """send = (boundary, site), out_mode 5: fuse the boundary all-reduce's fabric send (decode_boundary.py
-        sending_program). x may be a decode_boundary.PendingBoundary: the boundary producing x then runs inside this
-        op (DecodeBoundary.consumer_parts) while the weight readers stream ahead. exchange (out_mode 3): an object
+        """send = (boundary, site), out_mode 5: fuse the boundary all-reduce's fabric send (fused_decode/boundary.py
+        sending_program). x may be a fused_decode.boundary.PendingBoundary: the boundary producing x then runs inside
+        this op (DecodeBoundary.consumer_parts) while the weight readers stream ahead. exchange (out_mode 3): an object
         whose writer_args() / program() add the fused decode LM head's top-k candidate merge and exchange
-        (decode_terminal.py TerminalExchange)."""
+        (fused_decode/terminal.py TerminalExchange)."""
         pending = None
         if not isinstance(x, ttnn.Tensor):
             pending = x
@@ -439,7 +441,7 @@ class LinearStream(_BankStreamOp):
         cb_x, cb_w, cb_scr, cb_stage, cb_out = 0, 1, 3, 4, 16
         stage = self.x_pages if x.memory_config().buffer_type == ttnn.BufferType.DRAM else 0
         # A fused boundary's consumer can buffer all its weight columns: the readers stream them while the boundary
-        # runs (fused_decode.DECODE_BOUNDARY_PREFETCH_ALL).
+        # runs (fused_decode.config.DECODE_BOUNDARY_PREFETCH_ALL).
         w_cols = max(3, self.cols) if pending is not None and DECODE_BOUNDARY_PREFETCH_ALL else 3
         if self.prefetch_cols is not None:
             # Large columns (the LM head's ~97 KB): cap the ring at what L1 holds.

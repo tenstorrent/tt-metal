@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Greedy pick of the fused decode sampler (tt/decode_terminal.py), one core: the argmax over the gathered candidates
+// Greedy pick of the fused decode sampler (fused_decode/terminal.py), one core: the argmax over the gathered candidates
 // of user 0 (row 0 of values BF16 [1, 1, 32, n] tile layout and ids UINT32 [1, 1, 32, n] row-major), ties to the
 // lowest id, written as the user-0 token into the decode token tensor (UINT32 [1, 1, 1, 32] row-major, one page);
 // the other 31 token slots are written as 0.

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Decode layer boundary fused into its consumer op (tt/decode_boundary.py: DecodeBoundary.consumer_parts), BRISC of
+// Decode layer boundary fused into its consumer op (fused_decode/boundary.py: DecodeBoundary.consumer_parts), BRISC of
 // the boundary core: once the boundary compute has packed the normed output x (cb_x, backed by the x tensor), increment
 // program semaphore `sem_id` on every consumer core; their writers wait for it before reading x.
 //

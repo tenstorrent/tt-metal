@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Activation gather + SwiGLU output scatter (BRISC, NOC1) for the routed-expert gate|up stream (experts/stream.py).
+// Activation gather + SwiGLU output scatter (BRISC, NOC1) for the routed-expert gate|up stream
+// (fused_decode/stream.py).
 //
-// 1. Reads the flat BF16 MoE input (the layer boundary's normed hidden, tt/decode_boundary.py: hidden value h at
+// 1. Reads the flat BF16 MoE input (the layer boundary's normed hidden, fused_decode/boundary.py: hidden value h at
 //    byte 2 h) in one read: its 32-value groups are the 1x32 activation tiles. A last 1x32 tile carries `nbias`
 //    ones, which multiply the bias rows stored in the extra K tile of every weight column.
 // 2. Reads the k routing scores (BF16) and hands them to the compute MATH thread through the TRISC mailbox

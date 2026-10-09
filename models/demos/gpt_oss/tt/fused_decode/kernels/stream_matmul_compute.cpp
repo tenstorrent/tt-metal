@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Streamed matmul (TRISC) for the decode stream ops (experts/stream.py): one 1x32 output tile per weight column,
+// Streamed matmul (TRISC) for the decode stream ops (fused_decode/stream.py): one 1x32 output tile per weight column,
 // out[col] = in0 . W[:, col] over kt K tiles (1x32 activation tiles, custom_mm, LoFi, FP32 accumulation). The down
 // stream uses it for the score-weighted expert sum (K = k segments [w_e * act_e | w_e]), LinearStream for a dense
 // projection + bias.

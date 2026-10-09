@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Decode layer boundary, compute (TRISC) (tt/decode_boundary.py: DecodeBoundary).
+// Decode layer boundary, compute (TRISC) (fused_decode/boundary.py: DecodeBoundary).
 //
 // The decode residual stream is a flat BF16 vector stored in `tiles` 32x32 tile pages (hidden value h at byte 2 h,
 // zero padded). Every op here is elementwise or a whole-vector sum, so the tile structure is only a container:

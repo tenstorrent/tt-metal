@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Decode layer boundary, receiver (NCRISC) (tt/decode_boundary.py: DecodeBoundary).
+// Decode layer boundary, receiver (NCRISC) (fused_decode/boundary.py: DecodeBoundary).
 //
 // Feeds the boundary compute: the RMSNorm weight (`tiles` BF16 pages read from DRAM) and the reduce scaler (both
 // once per call), the residual stream (cb_res) and, once every device's partial sum has arrived (the receive

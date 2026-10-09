@@ -15,8 +15,8 @@ import torch
 import ttnn
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
-from .experts.stream import NBIAS, as_stream_tensor, linear_stream_rows, stream_linear_layout
-from .fused_decode import ROUTER_DECODE_WEIGHT_DTYPE
+from .fused_decode.config import ROUTER_DECODE_WEIGHT_DTYPE
+from .fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, stream_linear_layout
 
 
 def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_config=None):
@@ -107,8 +107,8 @@ class TopKRouter:
             self._bias_torch = None
 
     def _init_indexed_decode(self, mesh_device, torch_weight, torch_bias, tensor_cache_path, ccl_manager):
-        # Fused decode router (experts/stream.py: LinearStream out_mode 4): [hidden, num_experts] + bias streamed from
-        # DRAM, then top-k and the softmax over the selected logits in the same op.
+        # Fused decode router (fused_decode/stream.py: LinearStream out_mode 4): [hidden, num_experts] + bias streamed
+        # from DRAM, then top-k and the softmax over the selected logits in the same op.
         self.ccl_manager = ccl_manager
         banks = mesh_device.dram_grid_size().x
         layout = None
@@ -174,7 +174,7 @@ class TopKRouter:
     def decode_indexed(self, hidden_states):
         """Fused decode routing for one token.
 
-        hidden_states: the flat norm output of the layer boundary (decode_boundary.py).
+        hidden_states: the flat norm output of the layer boundary (fused_decode/boundary.py).
         Returns persistent [1, 32] UINT16 expert ids and BF16 softmax weights holding the top-k in their first k
         entries (shared by every layer; not to be deallocated)."""
         router = self.ccl_manager.get_decode_linear_stream(

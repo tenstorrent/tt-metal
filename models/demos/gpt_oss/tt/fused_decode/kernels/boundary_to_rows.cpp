@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Flat hidden vector -> row 0 of a width-sharded BF16 [32, hidden] tile tensor (tt/decode_boundary.py:
+// Flat hidden vector -> row 0 of a width-sharded BF16 [32, hidden] tile tensor (fused_decode/boundary.py:
 // DecodeBoundary.to_rows), on each shard core (NCRISC). Shard tile t of core c is global tile g = tile0 + t, whose
 // row 0 holds hidden values [32 g, 32 g + 32): bytes [64 g, 64 g + 32) of the flat vector go to face 0 row 0 (bytes
 // [0, 32)) and the next 32 bytes to face 1 row 0 (bytes [512, 544)); everything else is zero.
