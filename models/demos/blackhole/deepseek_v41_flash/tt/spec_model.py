@@ -658,20 +658,53 @@ class SpecRunner:
         self._seed_replay(tokens, lens, first)
         r_r = self._ring_rows(lens)
         cos = lambda a, b: float((a * b).sum() / (a.norm() * b.norm()).clamp(min=1e-12))
-        worst = []
+        allc = [[], [], []]  # per stage: (user, position, cosine)
         for st in range(3):
-            cs, rel = [], []
             for b in range(B):
-                if int(lens[b]) <= 1:
+                S = int(lens[b])
+                if S <= 1:
                     continue
                 a, b_ = r_t[b][st], r_r[b][st]
-                cs.append(min(cos(a[i], b_[i]) for i in range(a.shape[0])))
-                rel.append(float((a - b_).abs().max() / b_.abs().max().clamp(min=1e-6)))
-            worst.append((min(cs), max(rel)))
+                for i in range(a.shape[0]):
+                    allc[st].append((b, max(0, S - 128) + i, cos(a[i], b_[i])))
+        worst = []
+        for st in range(3):
+            cc = torch.tensor([c for _, _, c in allc[st]])
+            pp = torch.tensor([p for _, p, _ in allc[st]])
+            q = cc.quantile(torch.tensor([0.01, 0.05, 0.5]))
+            worst.append(
+                (
+                    float(cc.min()),
+                    float(q[0]),
+                    float(q[1]),
+                    float(q[2]),
+                    float((cc < 0.95).float().mean()),
+                    int(pp[cc.argmin()]),
+                )
+            )
+        try:
+            torch.save(
+                {
+                    "lens": lens,
+                    "ring_taps": r_t,
+                    "ring_replay": r_r,
+                    "d_taps": d_t,
+                    "d_replay": self.d_final,
+                    "conf_taps": c_t,
+                    "conf_replay": self.conf_final,
+                    "cos": allc,
+                },
+                os.environ.get("DSV41_SEED_COMPARE_DUMP", "/tmp/seed_compare_dump.pt"),
+            )
+        except Exception as e:  # diagnostics only
+            self.log(f"SEED_COMPARE dump failed: {e}")
         same = (d_t[:, : self.k] == self.d_final[:, : self.k]).float().mean(0).tolist()
         self.log(
-            "SEED_COMPARE ring rows (replay vs taps), per stage (min over users and rows of the cosine, max relative abs diff): "
-            + "; ".join(f"stage {i}: cos {c:.5f} rel {r:.4f}" for i, (c, r) in enumerate(worst))
+            "SEED_COMPARE ring rows (replay vs taps) cosine over all (user, position) rows, per stage: "
+            + "; ".join(
+                f"stage {i}: min {a:.4f} (at position {pm}) p1 {b:.4f} p5 {c:.4f} median {d:.4f}, share < 0.95 {e:.3f}"
+                for i, (a, b, c, d, e, pm) in enumerate(worst)
+            )
             + f"; first drafts equal per draft index {[round(x, 3) for x in same]}; max |conf diff| {float((c_t - self.conf_final).abs().max()):.4f}; mean conf taps {float(c_t[:, : self.k].mean()):.3f} replay {float(self.conf_final[:, : self.k].mean()):.3f}"
         )
 
