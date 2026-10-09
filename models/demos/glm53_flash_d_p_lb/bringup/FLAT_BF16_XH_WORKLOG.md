@@ -97,3 +97,17 @@ B. Keep the row-major y writes off the h (and bf16 x) traffic. With bfp8 h the y
    Re-measure with the isolation switches (MIMO_FL_YRM_NOWRITE, MIMO_FL_X_RESIDENT): the target is "normal" close to
    "no y writes" (335.1 at M 2048).
 Do A first: it shrinks the sub-block count and so also the number of h/y interleavings B has to manage.
+
+## Other expert shapes (balanced sweep, one chip, 36 experts, us per expert; plan mt / hbuf)
+M:                     32    64   128   256   512  1024  2048 | math90 @2048 | plan bfp8 / bf16
+H 4096 I 2048 bfp8   34.1  36.3  40.9  51.0  73.5 140.5 275.5 | 75%          | mt 4 hb 3 / mt 2 hb 4
+              bf16   34.2  36.5  42.0  55.6 100.5 191.1 374.0 | 55%          |
+H 7168 I 2048 bfp8   61.5  64.0  70.4  82.8 119.2 223.7 437.2 | 83%          | mt 2 hb 3 / mt 2 hb 3
+              bf16   61.8  64.3  71.8  87.1 159.4 304.8 595.9 | 61%          |
+H 6144 I 2048 bfp8   52.4  55.2  61.0  73.4 114.6 222.1 437.1 | 71%          | mt 4 hb 3 / mt 2 hb 3
+              bf16   52.3  55.1  62.1  82.5 139.9 265.2 515.7 | 60%          |
+H 3584 I 3072 bfp8   48.4  50.3  55.3  67.4 104.1 204.6 405.1 | 67%          | mt 2 hb 3 / mt 2 hb 2 (np 2)
+              bf16   48.9  51.2  57.6  91.9 174.6 339.4 668.9 | 41%          |
+All pass. bf16 costs <= 4% up to M 128 at every shape. H 7168 runs 64-row sub-blocks even in bfp8 and still reaches
+83%: the 64-row penalty seen at H 4096 is shape-specific. H 6144 bfp8 equals H 7168 bfp8 at M 2048 with 6/7 of the
+work (71% vs 83%): not explained yet. I 3072: bf16 h only gets 2 h buffers (+65% at 2048) -> idea A matters most here.
