@@ -14,6 +14,9 @@ Main table, one row per group:
 Secondary sections: per-chip spread (median chip vs slowest chip, which chip); context scaling (the same op at a second
 chunk position, when a second set of calls is given); CCL details (bytes per call, group size, axis, links, topology).
 
+TODO: feed the report from the program real-time profiler (no per-op syncs; tests/test_realtime_probe.py) instead of
+the device profiler's op mode, so the whole model can be profiled in one normal-speed pass.
+
 Layer weights: when only representative layers were profiled, ``layer_weights`` maps each profiled layer to how many
 model layers it stands for (e.g. one layer per block type x the block type's layer count); totals and calls are then
 the full model's. Cost models and peaks are approximations; every assumption is listed in the report's notes.
