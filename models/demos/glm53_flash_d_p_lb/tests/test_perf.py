@@ -27,6 +27,7 @@ from pathlib import Path
 
 import torch
 
+import ttnn
 from models.demos.common.bringup.testing.harness import device_timeout, mesh_parametrize, spec
 
 S = spec()
@@ -57,6 +58,14 @@ def test_perf(mesh_device):
     load_s = time.time() - t0
     cfg = model.cfg
     print(f"loaded {len(layers)} layers in {load_s:.0f}s; seq {seq}, chunk {chunk}", flush=True)
+    mv = ttnn.get_memory_view(
+        mesh_device, ttnn.BufferType.DRAM
+    )  # allocator view (per chip: every chip allocates alike)
+    print(
+        f"DRAM per chip after load: allocated {mv.total_bytes_allocated_per_bank * mv.num_banks / 2**30:.2f} GB of "
+        f"{mv.total_bytes_per_bank * mv.num_banks / 2**30:.2f} GB",
+        flush=True,
+    )
 
     def run_chunk(start: int, per_layer: dict | None = None, keep_hidden: bool = False):
         h = model.embed(tokens[start : start + chunk])
