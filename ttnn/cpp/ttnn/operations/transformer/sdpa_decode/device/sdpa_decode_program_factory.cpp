@@ -880,6 +880,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     } else {
         compute_defines["DYNAMIC_CHUNK_SIZE"] = "1";
     }
+    // Blackhole's reduce_c sums a resident row of 8 or more tiles in one block call: faster at HiFi2, not at HiFi4.
+    if (device->arch() == tt::ARCH::BLACKHOLE && math_fidelity == tt::tt_metal::MathFidelity::HiFi2) {
+        compute_defines["REDUCE_ROW_BLOCK"] = "1";
+    }
 
     KernelDescriptor::Defines compute_defines_vec;
     compute_defines_vec.reserve(compute_defines.size());
