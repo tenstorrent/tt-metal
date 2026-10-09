@@ -16,7 +16,6 @@ import os
 import time
 from typing import Any, Callable, List, Optional, Sequence, Tuple
 
-import numpy as np
 import torch
 import ttnn
 from huggingface_hub import snapshot_download
@@ -27,7 +26,7 @@ from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import ModelArgs
 
 from ..grpo_trainer import RolloutBatch, RolloutSampler, check_new_weight_version
-from ..rollout_batch_source import validate_rollout_batch
+from ..rollout_batch_source import pad_logprobs, validate_rollout_batch
 
 OptimizationsFn = Callable[[int, str], Any]
 
@@ -186,11 +185,7 @@ class TTTRolloutSampler(RolloutSampler):
             completions.extend(c)
             token_logprobs.extend(lp)
 
-        logprobs = np.zeros((len(prompts_x), W), dtype=np.float32)
-        for r, (c, lp) in enumerate(zip(completions, token_logprobs)):
-            if len(lp) != len(c):
-                raise RuntimeError(f"row {r}: {len(lp)} log-probs for {len(c)} tokens")
-            logprobs[r, : len(c)] = lp
+        logprobs = pad_logprobs(completions, token_logprobs, W)
         batch = RolloutBatch(weight_version=version, prompts=prompts_x, completions=completions, logprobs=logprobs)
         validate_rollout_batch(batch, num_prompts=len(prompts), num_generations=g, max_completion_length=W)
         return batch
