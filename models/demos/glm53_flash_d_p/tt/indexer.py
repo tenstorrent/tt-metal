@@ -7,7 +7,8 @@ Keys (all S rows, every chip): k = LayerNorm(x wk^T) (k_norm w + b, eps 1e-6); g
 p = sum_j softmax_j(gate[4p + j]) k[4p + j] (fp32, elementwise over 4 slices of the [S/4, 512] reshape), written into
 the replicated pooled-key cache [1, 1, max_seq / 4 + 32, 128] bf16 at row start / 4 (ttnn.fill_cache).
 Queries (chip d = 2 r + c takes rows d S/4 .. (d + 1) S/4, two ttnn.mesh_partition): q = heads(q_resid wq_b^T),
-w = x weights_proj^T / 64 (32^-0.5 128^-0.5 folded, exact) -> ttnn.experimental.indexer_score_dsa over the whole cache
+w = x weights_proj^T / 64 (32^-0.5 128^-0.5 folded, exact) -> ttnn.bringup.indexer_score_dsa (fp32 DEST, GLM_INDEXER_SCORE)
+over the whole local cache
 with chunk_start_idx = kv_len = (start + S) / 4 (every pool below kv_len visible to every row; the op needs a tile-aligned
 start below T, so the cache has 32 spare rows) -> the chunk's own pool columns get a constant pool-causal mask
 (pool j visible iff 4 j + 3 <= row) -> ttnn.experimental.topk_large_indices (k 512) over the first kv_len columns.
@@ -27,6 +28,7 @@ import torch
 import ttnn
 from models.demos.glm53_flash_d_p.reference.weights import PREFIX
 from models.demos.glm53_flash_d_p.tt.common import attn_fidelity, env_fidelity, hifi4_config, mm_config, replicate
+from models.demos.glm53_flash_d_p.tt.mm_configs import linear_config
 
 KP = 4
 TOPK_POOLS = 512
@@ -108,12 +110,26 @@ class TtIndexer:
     def _pooled_keys(self, x: ttnn.Tensor, s: int) -> ttnn.Tensor:
         """x [1, 1, S, H] -> pooled keys [1, 1, S/4, 128] bf16."""
         m, hd = s // KP, self.hd
-        k = ttnn.linear(x, self.wk, dtype=ttnn.float32, compute_kernel_config=mm_config(self.mm), memory_config=MC)
+        k = ttnn.linear(
+            x,
+            self.wk,
+            dtype=ttnn.float32,
+            program_config=linear_config(x, self.wk, ttnn.float32),
+            compute_kernel_config=mm_config(self.mm),
+            memory_config=MC,
+        )
         kn = ttnn.layer_norm(
             k, weight=self.kn_w, bias=self.kn_b, epsilon=1e-6, compute_kernel_config=self.mm, memory_config=MC
         )
         ttnn.deallocate(k)
-        g = ttnn.linear(x, self.wg, dtype=ttnn.float32, compute_kernel_config=mm_config(self.mm), memory_config=MC)
+        g = ttnn.linear(
+            x,
+            self.wg,
+            dtype=ttnn.float32,
+            program_config=linear_config(x, self.wg, ttnn.float32),
+            compute_kernel_config=mm_config(self.mm),
+            memory_config=MC,
+        )
         g4 = ttnn.reshape(g, (1, 1, m, KP * hd))
         k4 = ttnn.reshape(kn, (1, 1, m, KP * hd))
         lg = ttnn.add(g4, self.ape, memory_config=MC)
@@ -157,7 +173,14 @@ class TtIndexer:
         ttnn.deallocate(pooled)
 
         qr = q_resid if q_local else self._local_rows(q_resid)
-        q = ttnn.linear(qr, self.wq, dtype=ttnn.bfloat16, compute_kernel_config=mm_config(self.mm), memory_config=MC)
+        q = ttnn.linear(
+            qr,
+            self.wq,
+            dtype=ttnn.bfloat16,
+            program_config=linear_config(qr, self.wq, ttnn.bfloat16),
+            compute_kernel_config=mm_config(self.mm),
+            memory_config=MC,
+        )
         if qr is not q_resid:
             ttnn.deallocate(qr)
         qh, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -166,7 +189,14 @@ class TtIndexer:
         ttnn.deallocate(q)
         xl = self._local_rows(x)
         wdt = ttnn.float32 if self.score_mode == "heads" else ttnn.bfloat16
-        wts = ttnn.linear(xl, self.wp, dtype=wdt, compute_kernel_config=mm_config(self.mm), memory_config=MC)
+        wts = ttnn.linear(
+            xl,
+            self.wp,
+            dtype=wdt,
+            program_config=linear_config(xl, self.wp, wdt),
+            compute_kernel_config=mm_config(self.mm),
+            memory_config=MC,
+        )
         ttnn.deallocate(xl)
         score = self._scores_heads(qh, wts, kv) if self.score_mode == "heads" else self._scores_op(qh, wts, kv)
         ttnn.deallocate(qh)
@@ -242,6 +272,7 @@ class TtIndexer:
                 q1,
                 kt,
                 dtype=ttnn.float32,
+                program_config=linear_config(q1, kt, ttnn.float32),
                 activation="relu",
                 compute_kernel_config=mm_config(self.mm),
                 memory_config=MC,

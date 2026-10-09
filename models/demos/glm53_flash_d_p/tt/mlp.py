@@ -17,11 +17,14 @@ From models/demos/mimo_v2_6_d_p_2x2/tt/mlp.py:TtDenseMLP (fused silu -> explicit
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
 from models.demos.glm53_flash_d_p.reference.weights import PREFIX
 from models.demos.glm53_flash_d_p.tt.common import hifi4_config, mm_config
+from models.demos.glm53_flash_d_p.tt.mm_configs import linear_config
 
 TILE = 32
 
@@ -35,8 +38,14 @@ class TtDenseMLP:
         inter, hidden = w_gate.shape
         assert inter % (n * TILE) == 0, f"intermediate {inter} not tile aligned over {n} chips"
         self.per = inter // n
-        self.w_gate = self._shard(w_gate.float().T.reshape(1, 1, hidden, inter), -1)
-        self.w_up = self._shard(w_up.float().T.reshape(1, 1, hidden, inter), -1)
+        # gate and up as one [H, 2 I/n] weight per chip (chip c: its gate columns, then its up columns): one matmul with
+        # N = 2 I/n (shared expert 2 x 0.297 -> 0.261 ms, tests/test_matmul_tune.py), outputs sliced apart
+        gt, ut = w_gate.float().T, w_up.float().T  # [H, I]
+        per = self.per
+        gu = torch.cat(
+            [torch.cat([gt[:, c * per : (c + 1) * per], ut[:, c * per : (c + 1) * per]], -1) for c in range(n)], -1
+        )
+        self.w_gu = self._shard(gu.reshape(1, 1, hidden, 2 * inter), -1)
         self.w_down = self._shard(w_down.float().T.reshape(1, 1, inter, hidden), -2)
         self.cfg = hifi4_config()
 
@@ -55,18 +64,42 @@ class TtDenseMLP:
         split: return this chip's [1, 1, S/4, H] quarter instead (reduce_scatter on both axes, fp32)."""
         mc = ttnn.DRAM_MEMORY_CONFIG
         lim = self.limit
-        g = ttnn.linear(x, self.w_gate, dtype=ttnn.float32, compute_kernel_config=mm_config(self.cfg), memory_config=mc)
+        gu = ttnn.linear(
+            x,
+            self.w_gu,
+            dtype=ttnn.float32,
+            program_config=linear_config(x, self.w_gu, ttnn.float32),
+            compute_kernel_config=mm_config(self.cfg),
+            memory_config=mc,
+        )
+        s_, per = gu.shape[-2], self.per
+        g = ttnn.slice(gu, (0, 0, 0, 0), (1, 1, s_, per), memory_config=mc)
+        u = ttnn.slice(gu, (0, 0, 0, per), (1, 1, s_, 2 * per), memory_config=mc)
+        ttnn.deallocate(gu)
         gc = ttnn.minimum(g, lim, memory_config=mc)
         ttnn.deallocate(g)
         a = ttnn.silu(gc, memory_config=mc)
         ttnn.deallocate(gc)
-        u = ttnn.linear(x, self.w_up, dtype=ttnn.float32, compute_kernel_config=mm_config(self.cfg), memory_config=mc)
         uc = ttnn.clamp(u, min=-lim, max=lim, memory_config=mc)
         ttnn.deallocate(u)
         h = ttnn.multiply(a, uc, dtype=ttnn.float32, memory_config=mc)
         ttnn.deallocate(a)
         ttnn.deallocate(uc)
-        o = ttnn.linear(h, self.w_down, dtype=ttnn.float32, compute_kernel_config=mm_config(self.cfg), memory_config=mc)
+        # split + bf16 fabric reduce-scatter: emit the partial in bf16 (it is cast to bf16 for the reduce-scatter anyway;
+        # halves the 5120 x 4096 output write that bounds this K=256 matmul)
+        odt = (
+            ttnn.bfloat16
+            if split and os.environ.get("GLM_SCATTER_OP", "fabric_bf16") == "fabric_bf16"
+            else ttnn.float32
+        )
+        o = ttnn.linear(
+            h,
+            self.w_down,
+            dtype=odt,
+            program_config=linear_config(h, self.w_down, odt),
+            compute_kernel_config=mm_config(self.cfg),
+            memory_config=mc,
+        )
         ttnn.deallocate(h)
         # reduce over both mesh axes: split -> scatter_rows (bf16 fabric_reduce_scatter by default, see common.py); the
         # replicated path keeps an fp32 all_reduce (a bf16 all_reduce scaled the sum by +0.19% on the 2x2 mesh).
