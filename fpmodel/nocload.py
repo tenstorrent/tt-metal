@@ -289,3 +289,38 @@ def link_bytes_banked(g, d, pats):
                 acc += (np.outer(b0[idx], ua[nz]) + np.outer(b1[idx], ub[nz])).max(axis=1)
         out[idx] = acc / nb
     return out
+
+
+_wcache = {}
+
+
+def write_link(g, d):
+    """per row: bytes on the most-loaded link per byte of output one core writes, every writer core writing its block
+    to the interleaved DRAM banks at once on NOC0 (the in1 / writer kernel's NoC); 0 for non-DRAM outputs"""
+    out = np.zeros(len(d))
+    gx = d.grid_x.fillna(1).to_numpy(int)
+    gy = d.grid_y.fillna(1).to_numpy(int)
+    fuse = d.fuse_batch.fillna(0).to_numpy() == 1
+    Mrows = np.where(fuse, g["B"] * g["Mt"], g["Mt"])
+    R2 = np.nan_to_num(np.ceil(Mrows / d.per_core_M.to_numpy(float)))
+    C2 = np.nan_to_num(np.ceil(g["Nt"] / d.per_core_N.to_numpy(float)))
+    for i in range(len(d)):
+        if g["dst_o"][i] != 0 or g["fam"][i] == "multicore":
+            continue
+        arch, fam = g["arch"][i], g["fam"][i]
+        cores = int(g["cores"][i])
+        if fam == "2d":
+            cs = [(c, r) for r in range(int(R2[i])) for c in range(int(C2[i]))]
+        else:  # 1D and Reuse: cores in raster order over the grid
+            cs = [(k % gx[i], k // gx[i]) for k in range(cores)]
+        key = (arch, tuple(cs))
+        if key not in _wcache:
+            a = ARCH[arch]
+            L = np.zeros((2, 2, a["X"], a["Y"]))
+            for ci, cj in cs:
+                src = _phys(a, min(ci, len(a["cols"]) - 1), min(cj, len(a["rows"]) - 1))
+                for ch, e0, e1 in a["banks"]:
+                    _route(L, a, 0, src, a["chan"][ch][e0], 1.0 / len(a["banks"]))
+            _wcache[key] = L.max()
+        out[i] = _wcache[key]
+    return out

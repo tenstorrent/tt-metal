@@ -38,6 +38,8 @@ EXPERIMENTAL = {
     "linkmc": "multicast traffic has its own link efficiency (link_eff then describes read traffic)",
     "linkbank": "link loads from only the DRAM banks each K step touches (bank camping concentrates link traffic)",
     "msync0": "in0 mcast only: receivers ack after computing on the block, so the ack collection adds to each compute step",
+    "wlink": "output writes from every writer core to the DRAM banks load the NoC links; the most-loaded link bounds the write",
+    "wov2d": "2D: most cores only receive in1, so their writer overlaps the next block's pipeline (only the excess is exposed)",
     "reusesync": "Reuse cores never synchronise, so only part of their per-step link load coincides (fitted fraction)",
     "shardhop": "sharded in0: each K block's mcast sender is the core holding that slice, so every step pays a sender handoff",
 }
@@ -210,6 +212,8 @@ def geometry(d):
         g["link"] = d.link_bytes.to_numpy(float)
     if "bank_a" in d:
         g["bk_a"], g["bk_b"] = d.bank_a.to_numpy(float), d.bank_b.to_numpy(float)
+    if "wlink" in d:
+        g["wlink"] = d.wlink.to_numpy(float)
     if "link_mcast" in d:
         g["link_mc"] = d.link_mcast.to_numpy(float)
     return g
@@ -226,6 +230,8 @@ def annotate(d):
             d["link_bytes"] = nocload.link_bytes_banked(geometry(d), d, bankload.patterns(geometry(d), d))
         else:
             d["link_bytes"] = nocload.link_bytes(geometry(d), d)
+        if on("wlink"):
+            d["wlink"] = nocload.write_link(geometry(d), d)
         if on("linkmc"):
             d["link_mcast"] = nocload.link_bytes(geometry(d), d, part="mcast")
     if on("bank"):
@@ -312,6 +318,10 @@ def predict(g, p, parts=False):
             [nsb * p["lat_write"] + wbytes / rate_w, nsb * p["lat_l1"] + wbytes / noc],
             0.0,
         )
+        if on("wlink"):  # every writer core writes its block at once: the busiest link carries wlink x one core's bytes
+            write = np.maximum(
+                write, np.where(g["dst_o"] == 0, wbytes * g["wlink"] / (s["noc_Bpc"] * p["link_eff"]), 0.0)
+            )
 
     if on("mcast") and (on("msync0") or on("msync")):  # the sender gathers each receiver's ack after it computed
         sync = g["rx0"] * p["ack_rx"] + (g["rx1"] * p["ack_rx"] if on("msync") else 0.0)
@@ -320,7 +330,11 @@ def predict(g, p, parts=False):
         comp = comp + np.where((g["src_a"] == 2) & (g["rx0"] > 0), p["lat_shard"], 0.0)
     piped = read + (nK - 1) * np.maximum(read, comp) + comp  # double-buffered K loop
     serial = nK * (read + comp)
-    block = np.where(g["dbuf"], piped, serial) + epi + write
+    if on("wov2d"):  # 2D receivers: writing block b overlaps block b+1's reads and compute
+        loop = np.where(g["dbuf"], piped, serial)
+        block = loop + epi + np.where(g["fam"] == "2d", np.maximum(write - loop, write / np.maximum(nsb, 1)), write)
+    else:
+        block = np.where(g["dbuf"], piped, serial) + epi + write
     pad = 0.0
     if on("pad"):  # last K block: per in0 row tile, a read barrier then the zero fill, serial on the in0 reader
         lat0 = np.select([g["src_a"] == 0, g["src_a"] == 1], [p["lat_dram"], p["lat_l1"]], 0.0)
