@@ -39,8 +39,15 @@ void kernel_main() {
             if (i == 0) {
                 copy_tile_to_dfb<dfb::in0, dfb::max>();
             } else {
+                // SOFTMIN runs the same running reduce with the other extreme: min(x) keeps
+                // the shift finite for rows holding +inf, where a max-based shift is +inf and
+                // exp(max(x) - x) saturates the row (see #56371).
                 ckl::binary_sfpu<
+#ifdef SOFTMAX
                     ckl::BinaryMax<>,
+#else
+                    ckl::BinaryMin<>,
+#endif
                     ckl::input(dfb::in0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                     ckl::input(dfb::max, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                     ckl::output(dfb::max, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
