@@ -24,3 +24,10 @@ from .grpo_trainer import (
     save_checkpoint,
     upload_micro_advantages,
 )
+from .rollout_batch_source import (
+    InProcessRolloutBatchSource,
+    RolloutBatchSource,
+    ScoredRolloutBatch,
+    build_rollout_batch_source,
+    validate_rollout_batch,
+)
