@@ -128,6 +128,20 @@ repos:
       types: [file]
       files: ^ttnn/.*/device/.*\.(cpp|hpp)$
       pass_filenames: true
+    - id: check-bool-from-arithmetic
+      name: Forbid a bool initialized from a multiplicative expression
+      entry: python3 scripts/check_bool_from_arithmetic.py
+      language: system
+      types: [file]
+      files: ^(tt_metal|ttnn|tt_stl|tt-train|tests)/.*\.(c|cc|cpp|cxx|h|hpp|inl)$
+      pass_filenames: true
+    - id: check-bool-from-arithmetic-tests
+      name: Run the bool-from-arithmetic checker's tests when it or they change
+      entry: pytest -q -p no:cacheprovider --noconftest scripts/test_check_bool_from_arithmetic.py
+      language: python
+      additional_dependencies: ["pytest==8.3.5"]
+      files: ^scripts/(test_)?check_bool_from_arithmetic\.py$
+      pass_filenames: false
 - repo: local
   hooks:
     - id: validate-golden-csv-columns
@@ -173,6 +187,20 @@ repos:
       language: system
       # All three architectures: the check is lexical and needs no per-arch tables.
       files: ^tt_metal/tt-llk/tt_llk_.*\.(h|hpp)$
+    - id: llk-instr-encoding-args
+      name: "llk: STALLWAIT/SEMWAIT argument roles and instruction-scoped constants"
+      entry: python3 tt_metal/tt-llk/infra/check_instr_encoding_args.py
+      language: system
+      # Zero findings in both trees, so no baseline. A change to the checker, to its lexer
+      # (check_mutex_balance.py) or to a ckernel*_ops.h instruction-definition header rescans
+      # every header.
+      files: |
+        (?x)^(
+          tt_metal/tt-llk/tt_llk_.*\.(h|hpp)|
+          tt_metal/hw/ckernels/[^/]+/metal/.*\.h|
+          tt_metal/tt-llk/infra/check_instr_encoding_args\.py|
+          tt_metal/tt-llk/infra/check_mutex_balance\.py
+        )$
     - id: llk-xthread-cfg-wormhole
       name: "llk: cross-thread config write (wormhole)"
       entry: python3 tt_metal/tt-llk/infra/check_cross_thread_cfg.py

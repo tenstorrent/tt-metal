@@ -40,7 +40,7 @@ void py_module_types(nb::module_& mod) {
                uint32_t max_socket_page_size_bytes,
                std::unique_ptr<ttnn::distributed::TensorToMesh> mapper,
                tt::tt_metal::BufferType socket_buffer_type,
-               std::optional<CoreRange> worker_cores,
+               std::optional<tt::tt_metal::CoreRange> worker_cores,
                uint32_t metadata_size_bytes,
                bool parallel_host_push,
                uint32_t host_push_thread_count) {
