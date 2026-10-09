@@ -296,20 +296,25 @@ void kernel_main() {
             // The RUNTIME token tile-rows this block works on — the SAME number the reader uses for its
             // multicast rounds and compute uses for its matmul shape (moe_fused_swiglu_common.hpp).
             const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, b, M_BLOCK, M_EFF_MIN);
-            const bool wd_mrow = WD_MROW_ROUNDS && (m_eff == M_BLOCK);
+            const auto hrp = moe_fused_swiglu::h_row_plan(m_eff, M_BLOCK, HN_PAD, KGROUPS, HGROUPS);
+            const bool wd_mrow = WD_MROW_ROUNDS && hrp.on;
+            const uint32_t h_rounds = wd_mgroup ? MGROUP_ROWS : m_eff;
+            const bool row_sender = is_row_agg && (wd_mgroup || my_row < h_rounds);
+            // Reduce workers this block: rows [0, h_rounds * per_row) of every column.
+            const bool row_worker = my_row < h_rounds * hrp.per_row;
             // The reader's twins, advanced from the same grid-uniform predicates so both RISC-Vs reach
             // the identical running total on the identical block. A closed form in `b` cannot: an
             // expert's ragged tail skips the mrow path, and the next expert would start one short.
-            if (wd_mrow ? is_row_agg : is_root) {
+            if (wd_mrow ? row_sender : is_root) {
                 hfree_seq += wd_mgroup ? MGROUP_CORES : NUM_CORES;
             }
-            if (wd_mrow && !wd_mgroup && is_row_agg && h_round_on_writer(my_row)) {
+            if (wd_mrow && !wd_mgroup && row_sender && h_round_on_writer(my_row)) {
                 ++hsend_seq;
             }
-            if (wd_mrow) {
+            if (wd_mrow && row_worker) {
                 ++hrow_seq;
             }
-            hslice_seq += wd_mrow ? (is_row_agg ? HGROUPS : 0)
+            hslice_seq += wd_mrow ? (row_sender ? HGROUPS * hrp.per_row : 0)
                                   : (is_root ? moe_fused_swiglu::slice_workers(m_eff * HN_PAD, KGROUPS) : 0);
             const uint32_t gu_block_tiles = m_eff * HN_PAD;
             const uint32_t out_rows = wd_mgroup ? MGROUP_ROWS : m_eff;
@@ -503,24 +508,37 @@ void kernel_main() {
                     // The full-M reduce gives row r exactly one HN_PAD-wide token tile-row in every
                     // hidden column.  Gather those eleven adjacent fragments horizontally onto the
                     // diagonal row aggregator, producing one contiguous HID_T-wide W_down operand.
+                    // A short block splits each token row over `per_row` workers: worker my_row owns
+                    // columns [n0, n0 + slice) of token row t, sent to that row's diagonal C(t, t).
                     Semaphore<>(SEM_HROW_FREE).wait_min(hrow_seq);
-                    rvx = row_agg_vx;
-                    rvy = row_agg_vy;
-                    dst = h_local_buf.get_write_ptr() + hstart * H_TILE;
-                    bytes = hn * H_TILE;
+                    const uint32_t t = my_row / hrp.per_row;
+                    const uint32_t n0 = (my_row % hrp.per_row) * hrp.slice;
+                    if (m_eff == M_BLOCK) {
+                        rvx = row_agg_vx;
+                        rvy = row_agg_vy;
+                    } else {
+                        const uint32_t packed = mailbox_words[moe_fused_swiglu::MBOX_ROW_AGG + t];
+                        rvx = packed & 0xFFFFu;
+                        rvy = packed >> 16;
+                    }
+                    dst = h_local_buf.get_write_ptr() + (hstart + n0) * H_TILE;
+                    const uint32_t real = (n0 < hn) ? ((hn - n0 < hrp.slice) ? (hn - n0) : hrp.slice) : 0u;
+                    bytes = real * H_TILE;
                 } else {
                     rvx = get_arg_val<uint32_t>(RT_PEERS + 2 * root_row + 0);
                     rvy = get_arg_val<uint32_t>(RT_PEERS + 2 * root_row + 1);
                     dst = h_local_buf.get_write_ptr() + my_row * slice_bytes;
                     bytes = slice_bytes;
                 }
-                noc.async_write(
-                    use<CircularBuffer::AddrSelector::READ_PTR>(h_slice_buf),
-                    UnicastEndpoint{},
-                    bytes,
-                    {},
-                    {.noc_x = rvx, .noc_y = rvy, .addr = dst});
-                noc.async_write_barrier();
+                if (bytes != 0) {  // a padding-only fragment still signals, so arrival counts stay uniform
+                    noc.async_write(
+                        use<CircularBuffer::AddrSelector::READ_PTR>(h_slice_buf),
+                        UnicastEndpoint{},
+                        bytes,
+                        {},
+                        {.noc_x = rvx, .noc_y = rvy, .addr = dst});
+                    noc.async_write_barrier();
+                }
                 Semaphore<>(SEM_HSLICE).up(noc, rvx, rvy, 1);
                 noc.async_atomic_barrier();
                 h_slice_buf.pop_front(SLICE_FULL);
@@ -530,7 +548,7 @@ void kernel_main() {
             // diagonal writer can launch its round as soon as every destination has acknowledged it;
             // it need not wait for the readers to reach r in program order.  That is what overlaps
             // round 1/4/7 with the intervening NoC0 rounds instead of merely moving serial traffic.
-            if (wd_mrow && !wd_mgroup && is_row_agg && h_round_on_writer(my_row)) {
+            if (wd_mrow && !wd_mgroup && row_sender && h_round_on_writer(my_row)) {
                 MaybeDeviceZoneScope("writer_hsend");
                 moe_fused_swiglu::sem_wait_min(SEM_HSLICE, hslice_seq);
                 moe_fused_swiglu::sem_wait_min(SEM_H_FREE, hfree_seq);

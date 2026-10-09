@@ -357,6 +357,19 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* mailbox_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_addr);
     mailbox_words[moe_fused_swiglu::MBOX_HSEND_DONE] = 0;
     mailbox_words[moe_fused_swiglu::MBOX_UP_SCATTER_DONE] = 0;
+    // Short-block row mode: the writer sends its h fragment to the diagonal aggregator of its token
+    // row, which may sit in another column. Only this kernel holds the full-grid coordinate table,
+    // so hand the diagonal's coordinates over in the mailbox page (published before the first magic).
+    static_assert(moe_fused_swiglu::MBOX_ROW_AGG + M_BLOCK <= 16, "row-agg table exceeds the 64 B mailbox");
+    for (uint32_t t = 0; t < M_BLOCK; ++t) {
+        uint32_t packed = 0;
+        if (t < KGROUPS && t < HGROUPS) {
+            const uint32_t sidx = t * HGROUPS + t;
+            packed = get_common_arg_val<uint32_t>(COMMON_HMCAST + 4 + 2 * sidx + 0) |
+                     (get_common_arg_val<uint32_t>(COMMON_HMCAST + 4 + 2 * sidx + 1) << 16);
+        }
+        mailbox_words[moe_fused_swiglu::MBOX_ROW_AGG + t] = packed;
+    }
 
     // Row multicast state.  All receivers initialize their own flag before
     // acknowledging a sender; the sender waits for every acknowledgement, so
@@ -616,17 +629,22 @@ void kernel_main() {
             // a pure function of the same mailbox words), which is what keeps the three collectives'
             // round counts and landing addresses in lockstep across the grid.
             const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, block_idx, M_BLOCK, M_EFF_MIN);
-            const bool wd_mrow = WD_MROW_ROUNDS && (m_eff == M_BLOCK);
+            const auto hrp = moe_fused_swiglu::h_row_plan(m_eff, M_BLOCK, HN_PAD, KGROUPS, HGROUPS);
+            const bool wd_mrow = WD_MROW_ROUNDS && hrp.on;
+            // Row rounds this block broadcasts: one per token tile-row (m_eff == KGROUPS on a full block).
+            const uint32_t h_rounds = wd_mgroup ? MGROUP_ROWS : m_eff;
+            const uint32_t h_pad_slots = moe_fused_swiglu::h_row_pad_slots(h_rounds, M_BLOCK, DEPTH_H, wd_mgroup);
+            // A diagonal aggregator sends this block only if its token row exists.
+            const bool row_sender = is_row_agg && (wd_mgroup || my_row < h_rounds);
             // Both running totals are advanced from GRID-UNIFORM predicates rather than from the branch
             // actually taken, so the writer reaches the identical value on the identical block.
-            if (wd_mrow ? is_row_agg : is_root) {
+            if (wd_mrow ? row_sender : is_root) {
                 hfree_seq += wd_mgroup ? MGROUP_CORES : NUM_CORES;
             }
-            if (wd_mrow && !wd_mgroup && is_row_agg && h_round_on_writer(my_row)) {
+            if (wd_mrow && !wd_mgroup && row_sender && h_round_on_writer(my_row)) {
                 ++hsend_seq;
             }
-            h_cursor += wd_mrow ? ((wd_mgroup ? MGROUP_ROWS : KGROUPS) * HROW_T + (wd_mgroup ? 0u : HROW_T))
-                                : (HGROUPS * m_eff * HN_PAD);
+            h_cursor += wd_mrow ? ((h_rounds + h_pad_slots) * HROW_T) : (HGROUPS * m_eff * HN_PAD);
             while (h_cursor >= H_CAP) {
                 h_cursor -= H_CAP;
             }
@@ -636,13 +654,18 @@ void kernel_main() {
             // The diagonal core in row r owns that row's HID_T-wide assembly slot.  Invite every
             // hidden-column worker only after the preceding block's phase 2 has consumed the slot.
             // The writer waits this monotone counter before depositing its reduced HN fragment.
-            if (wd_mrow && is_row_agg) {
+            // On a short block token row t's fragments come from workers [t * per_row, (t + 1) * per_row)
+            // of every column, so those are the cores this diagonal invites.
+            if (wd_mrow && row_sender) {
                 Semaphore<> hrow_free(SEM_HROW_FREE);
-                for (uint32_t x = 0; x < HGROUPS; ++x) {
-                    const uint32_t sidx = my_row * HGROUPS + x;
-                    const uint32_t vx = get_common_arg_val<uint32_t>(COMMON_HMCAST + 4 + 2 * sidx + 0);
-                    const uint32_t vy = get_common_arg_val<uint32_t>(COMMON_HMCAST + 4 + 2 * sidx + 1);
-                    hrow_free.up(noc, vx, vy, 1);
+                for (uint32_t j = 0; j < hrp.per_row; ++j) {
+                    const uint32_t wrow = my_row * hrp.per_row + j;
+                    for (uint32_t x = 0; x < HGROUPS; ++x) {
+                        const uint32_t sidx = wrow * HGROUPS + x;
+                        const uint32_t vx = get_common_arg_val<uint32_t>(COMMON_HMCAST + 4 + 2 * sidx + 0);
+                        const uint32_t vy = get_common_arg_val<uint32_t>(COMMON_HMCAST + 4 + 2 * sidx + 1);
+                        hrow_free.up(noc, vx, vy, 1);
+                    }
                 }
                 noc.async_atomic_barrier();
             }
@@ -876,7 +899,12 @@ void kernel_main() {
                     }
                 }
             };
-            issue_wd_batch();
+            // A short row-mode block issues its whole W_down batch only after its up-scatter, so the
+            // issue loop does not sit in front of the reduce on this RISC-V.
+            const bool wd_issue_late = wd_mrow && (m_eff != M_BLOCK);
+            if (!wd_issue_late) {
+                issue_wd_batch();
+            }
 
             // Start block_idx+1's activation read before block_idx's reduce + phase 2. At the supported
             // grids HGROUPS >= M_BLOCK, so each core injects at most one row and the existing one-row
@@ -995,6 +1023,9 @@ void kernel_main() {
                         BFP8_TILE);
                 }
                 cb_pop_front(cb_up_acc, GU_FULL);
+                if (wd_issue_late) {
+                    issue_wd_batch();
+                }
             }
             if (slice_tiles) {
                 // One signal per payload by default; SCATTER_ONE_SIGNAL keeps both payloads concurrent
@@ -1030,8 +1061,8 @@ void kernel_main() {
             // counter rather than a CB front. `slice_worker_count` slices land per M-block; the counter is monotone and
             // cumulative, like every other semaphore in this op.
             if (wd_mrow) {
-                if (is_row_agg) {
-                    h_arrivals += HGROUPS;
+                if (row_sender) {
+                    h_arrivals += HGROUPS * hrp.per_row;
                 }
             } else if (is_root) {
                 h_arrivals += slice_worker_count;
@@ -1055,7 +1086,7 @@ void kernel_main() {
                     // mode runs two concurrent four-round schedules over rows 0..3 and 4..7; each
                     // receiver only ingests its group's rows and each sender waits for 44, not 88,
                     // window acks. W_down's complete resident shard is already published.
-                    const uint32_t round_count = wd_mgroup ? MGROUP_ROWS : KGROUPS;
+                    const uint32_t round_count = h_rounds;
                     const uint32_t round_base = wd_mgroup ? (my_row / MGROUP_ROWS) * MGROUP_ROWS : 0;
                     uint32_t next_ack = 0;
                     for (uint32_t lr = 0; lr < round_count; ++lr) {
@@ -1114,11 +1145,11 @@ void kernel_main() {
                         }
                         cb_push_back(cb_h, HROW_T);
                     }
-                    if (!wd_mgroup) {
-                        // Eight 64-tile pushes advance a 3x64-tile CB by two slots. Publish one
-                        // payload-free slot so an ordinary dispatch can switch to a smaller tail.
-                        cb_reserve_back(cb_h, HROW_T);
-                        cb_push_back(cb_h, HROW_T);
+                    if (h_pad_slots != 0) {
+                        // Eight 64-tile pushes advance a 3x64-tile CB by two slots. Publish
+                        // payload-free slots so every block restarts at the CB base.
+                        cb_reserve_back(cb_h, h_pad_slots * HROW_T);
+                        cb_push_back(cb_h, h_pad_slots * HROW_T);
                     }
                 } else {
                     bool wd_pending = false;
