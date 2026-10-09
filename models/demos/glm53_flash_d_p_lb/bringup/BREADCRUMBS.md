@@ -207,3 +207,6 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
   the payload to a token row): every collective moves tile pages, floor(payload / page) per packet, so 14400 B = 7 bf16
   / 3 fp32 tiles. harness.device_params builds the FabricRouterConfig; BRINGUP_FABRIC_PAYLOAD overrides it.
 - Warm 56k prefill 8.62 -> 8.26 s (6817 tok/s, KDA HiFi4). s4096 ladder identical (data movement only).
+- Payload sweep (warm 56k prefill, KDA HiFi4): 4352 8.62 s, 6144 8.27, 8192 8.07, 10240 8.07, 12288 8.06, 14400 8.26,
+  15232 8.28. Plateau 8192..12288; the larger packets lose (fewer packets in flight per router channel). Spec: 8192 =
+  one bf16 token row (4096 x 2 B), as the DeepSeek-family configs size it to the dispatched row; 4 bf16 / 2 fp32 tiles.
