@@ -667,12 +667,21 @@ def test_moe_compute_expert_rows_listing_over_tokens(mesh_device, mesh_shape, co
 
 
 # weight-stationary jobs: (E, T, K, N, H, activation, limit, bias); hot_last routing gives the two experts output 4
-# keeps T rows (jobs of several row tiles), cold_last gives them 20 (one-row-tile jobs among jobs of several)
+# keeps T rows (jobs of several row tiles), cold_last gives them 20 (one-row-tile jobs among jobs of several). On 8
+# DRAM banks 2560/640 (20-tile transactions, half-width last W2 iteration) and 2816/704 have compact W0/W1 layouts:
+# odd column counts (half block-columns) and slices that go on in the next bank; 2880/704 with bias stores an odd K
+# (91 tiles) in its half block-columns; 2048/1792 has 7 columns per bank, so a core holds a column pair and a half
+# block-column, and with 10 experts of top 8 most jobs are of 3 row tiles (hot_last 96 and about 72 rows, cold_last
+# about 91), which leave 4- and 2-tile partials between x chunks.
 ROW_TILE_SHAPES = {
     "deepseek_e16_t128": (16, 128, 8, 2048, 7168, MoEActivationFunction.SILU, None, False),
     "glm53_e18_t96_clamped": (18, 96, 8, 2048, 4096, MoEActivationFunction.CLAMPED_SILU, 10.0, False),
     "qwen36_e32_t128": (32, 128, 8, 512, 2048, MoEActivationFunction.SILU, None, False),
     "gpt_oss_e8_t128_bias": (8, 128, 4, 2880, 2880, MoEActivationFunction.SWIGLU, None, True),
+    "flash_next_e32_t128": (32, 128, 8, 640, 2560, MoEActivationFunction.SILU, None, False),
+    "gemma_e16_t128_gelu": (16, 128, 8, 704, 2816, MoEActivationFunction.GELU, None, False),
+    "h2880_n704_e8_t128_bias": (8, 128, 4, 704, 2880, MoEActivationFunction.SWIGLU, None, True),
+    "h2048_n1792_e10_t96": (10, 96, 8, 1792, 2048, MoEActivationFunction.SILU, None, False),
 }
 
 
@@ -719,16 +728,25 @@ def test_moe_compute_expert_rows_row_tiles(mesh_device, mesh_shape, shape, row_t
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("kind", ["hot_last", "cold_last"])
 @pytest.mark.parametrize("mode", sorted(PRECISION_MODES))
+@pytest.mark.parametrize("shape", ["deepseek_e16_t128", "flash_next_e32_t128", "gemma_e16_t128_gelu"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_row_tiles_deterministic(mesh_device, mesh_shape, mode, kind):
+def test_moe_compute_expert_rows_row_tiles_deterministic(mesh_device, mesh_shape, shape, mode, kind):
     """In every DEST mode: jobs of 4 row tiles (and of one row tile in the same program) give one row tile per job's
-    rows bitwise; eager, repeated eager and two trace replays are bitwise equal."""
+    rows bitwise, and those equal the ring's; eager, repeated eager and two trace replays are bitwise equal."""
     _skip_unless_blackhole(mesh_device)
     precision = PRECISION_MODES[mode]
-    case = _Case(mesh_device, 16, 128, 8, 2048, 7168, kind=kind)
+    E, T, K, N, H, act, limit, bias = ROW_TILE_SHAPES[shape]
+    case = _Case(mesh_device, E, T, K, N, H, act=act, limit=limit, has_bias=bias, kind=kind)
     one = _rows_with(case, 1, **precision)
     first = _rows_with(case, 4, **precision)
     assert (diff := case.defined_equal(one, first)) is None, f"4 row tiles per job differ from 1: {diff}"
+    with _kernel("ring"):
+        ring = case.read(case.call(**precision))
+    for e in range(E - 2, E):
+        n = int(case.counts[0, e])
+        assert torch.equal(
+            ring["rows"][e % 2, :n].view(torch.int16), first["rows"][e % 2, :n].view(torch.int16)
+        ), f"expert {e}: 4 row tiles per job differ from the ring's rows"
     with _kernel("expert_rows"), _env(ROW_TILES_ENV, 4):
         second = case.read(case.call(**precision))
         assert (diff := case.defined_equal(first, second)) is None, f"repeated eager call differs: {diff}"
