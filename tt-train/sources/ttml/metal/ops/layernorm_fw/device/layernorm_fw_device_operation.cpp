@@ -67,6 +67,21 @@ void LayerNormForwardDeviceOperation::validate_on_program_cache_miss(
     if (preallocated_rstd_tensor.has_value()) {
         check_tensor(preallocated_rstd_tensor.value(), "Preallocated rstd");
     }
+
+    const auto& input_shape = input_tensor.logical_shape();
+    TT_FATAL(input_shape.rank() == 4U, "LayerNormForward input must be rank 4, got shape {}", input_shape);
+
+    const auto expected_parameter_shape = ttnn::Shape({1U, 1U, 1U, input_shape[-1]});
+    TT_FATAL(
+        gamma_tensor.logical_shape() == expected_parameter_shape,
+        "LayerNormForward gamma shape must be {}, got {}",
+        expected_parameter_shape,
+        gamma_tensor.logical_shape());
+    TT_FATAL(
+        beta_tensor.logical_shape() == expected_parameter_shape,
+        "LayerNormForward beta shape must be {}, got {}",
+        expected_parameter_shape,
+        beta_tensor.logical_shape());
 }
 
 spec_return_value_t LayerNormForwardDeviceOperation::compute_output_specs(
