@@ -97,6 +97,20 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    # Skip on Blackhole 1x2 mesh (col_1d fabric): causes device wedge/SMI reset failure, refs #52427
+    import os as _os_run
+    _arch = ""
+    try:
+        _arch = ttnn.get_arch_name().lower()
+    except Exception:
+        _arch = _os_run.environ.get("ARCH_NAME", "").lower()
+    _mesh_env = _os_run.environ.get("MESH_DEVICE_SHAPE", "").strip().lower()
+    if "blackhole" in _arch and _mesh_env in ("1x2", "2x1"):
+        return [
+            (True, "Skipped: multiply_model_traced on Blackhole 1x2 mesh col_1d causes device wedge/SMI reset failure, refs #52427"),
+            0,
+        ]
+
     # Extract kwargs
     scalar = kwargs.get("scalar", None)
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
