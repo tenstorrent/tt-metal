@@ -106,7 +106,7 @@ the `prefill_chunk` alignment assert on M3.
 |---|---|---|
 | `PREFILL_TRACE_DIR` | unset (required in single-run) | Golden trace dir (`metadata.json` with `token_ids`, plus `kv_cache/` for the PCC check). In multi-run mode it only seeds the initial capacity and the default `PREFILL_GOLDEN_ROOT`. |
 | `PREFILL_CHUNKED` | `0` | `1` = chunked prefill (exercises the cache-read path); `0` = one-shot. |
-| `PREFILL_CHUNK_SIZE` | `5120` | Tokens per chunk (>= 2048 so the first MSA chunk has 16 blocks). |
+| `PREFILL_CHUNK_SIZE` | `5120` | Tokens per chunk: whole 128-token MSA blocks per SP rank (a multiple of 1024 at SP=8). |
 | `PREFILL_NUM_LAYERS` | all 60 | Build / run only the first N layers (sets `M3_LOAD_NLAYERS`). |
 | `PREFILL_TPS_ITERS` | `1` | Timed whole-sequence repetitions. |
 | `PREFILL_SKIP_PCC` | unset | `1` = perf only, skip the per-layer KV PCC (synthetic traces carry no golden). |
