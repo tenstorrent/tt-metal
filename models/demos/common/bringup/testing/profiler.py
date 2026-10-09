@@ -32,12 +32,16 @@ _TRACY = bool(os.environ.get("BRINGUP_TRACY_SIGNPOSTS"))
 _P = {"mesh": None}
 
 
-def enable(mesh, ops: bool = False, timeline: bool = False, calls: bool = False) -> None:
+def enable(mesh, ops: bool = False, timeline: bool = False, calls: bool = False, rt: bool = False) -> None:
     """ops: op mode (sync + drain per outermost ttnn call). timeline: no syncs at all; each outermost call's host
     dispatch time is timed and the device programs are read once, by ``collect_timeline()`` (F44).
     calls (with ops): also keep every call individually in ``calls`` with its per-chip device ns and full metadata
     (every tensor argument's and output's per-device shape / dtype / layout / buffer, the CCL and compute kwargs),
-    for the per-op report (testing/op_report.py)."""
+    for the per-op report (testing/op_report.py).
+    rt (with calls): the program real-time profiler instead of the device profiler: no syncs and no profiler build;
+    each outermost call records the device-operation id range it launched ([id before, id after)), and
+    ``finish_rt()`` (after the run) joins the real-time records (per chip, per program: end - start at the chip's
+    clock) to fill each call's per-chip ns."""
     import ttnn
 
     dev_to_chip = {int(d): c for c, d in enumerate(mesh.get_device_ids())}
@@ -59,15 +63,63 @@ def enable(mesh, ops: bool = False, timeline: bool = False, calls: bool = False)
         dev_to_chip=dev_to_chip,
         keep_calls=calls,
         calls=[],
+        rt=rt,
+        rt_records={},
+        rt_handle=None,
     )
     ttnn.synchronize_device(mesh)
+    if rt:
+        assert ttnn.device.IsProgramRealtimeProfilerActive(), "the program real-time profiler is not active"
+        recs = _P["rt_records"]
+
+        def on_batch(batch):
+            for r in batch.records:  # [runtime id] -> {chip: ns}
+                ns = (r.end_timestamp - r.start_timestamp) / r.frequency  # cycles / GHz = ns
+                recs.setdefault(int(r.runtime_id), {})[int(r.chip_id)] = float(ns)
+
+        _P["rt_handle"] = ttnn.device.RegisterProgramRealtimeProfilerCallback(on_batch)
+        _patch_ops()
+        return
     ttnn.ReadDeviceProfiler(mesh)
     ttnn.get_latest_programs_perf_data()
     if ops or timeline:
         _patch_ops()
 
 
+def finish_rt(settle_s: float = 1.0) -> list:
+    """rt mode: sync, let the receiver deliver the last records, unregister, and fill every call's per-chip ns and
+    program count from the records of its id range. Returns the calls."""
+    import ttnn
+
+    p = _P
+    ttnn.synchronize_device(p["mesh"])
+    time.sleep(settle_s)
+    if p.get("rt_handle") is not None:
+        ttnn.device.UnregisterProgramRealtimeProfilerCallback(p["rt_handle"])
+        p["rt_handle"] = None
+    recs = p["rt_records"]
+    chip_of = p["dev_to_chip"]
+    for c in p["calls"]:
+        a, b = c.pop("ids")
+        ns_dev, n = {}, 0
+        for i in range(a, b):
+            per = recs.get(i)
+            if per:
+                n += 1
+                for d, ns in per.items():
+                    chip = chip_of.get(d, d)
+                    ns_dev[chip] = ns_dev.get(chip, 0.0) + ns
+        c["ns_dev"], c["programs"] = ns_dev, n
+    p["calls"] = [c for c in p["calls"] if c["programs"]]
+    return p["calls"]
+
+
 def disable() -> None:
+    if _P.get("rt_handle") is not None:  # rt mode left before finish_rt (an exception): drop the callback
+        import ttnn
+
+        ttnn.device.UnregisterProgramRealtimeProfilerCallback(_P["rt_handle"])
+        _P["rt_handle"] = None
     _P["mesh"] = None
     _unpatch_ops()
 
@@ -166,7 +218,7 @@ def signpost(name: str) -> None:
 
         ttnn.tracy_message(f"`TT_SIGNPOST: {name}`")
     if _P["mesh"] is not None:
-        if _P.get("timeline"):  # no sync: only the section name changes
+        if _P.get("timeline") or _P.get("rt"):  # no sync: only the section name changes
             layer = _P.get("layer")
             _P["current_full"] = f"L{layer}.{name}" if layer is not None and not re.match(r"^L\d+\.", name) else name
         else:
@@ -423,6 +475,29 @@ def _patch_ops() -> None:
                 p["depth"] -= 1
         name = self.python_fully_qualified_name
         name = name[5:] if name.startswith("ttnn.") else name
+        if p.get("rt"):  # no sync: the call's device-operation id range, joined with the real-time records later
+            import ttnn
+
+            p["depth"] = 1
+            i0 = ttnn._ttnn.get_device_operation_id()
+            try:
+                out = orig(self, *args, **kwargs)
+            finally:
+                p["depth"] = 0
+            i1 = ttnn._ttnn.get_device_operation_id()
+            if p.get("keep_calls") and i1 > i0 and p["current_full"] is not None:
+                p["calls"].append(
+                    {
+                        "key": p["current_full"],
+                        "layer": p.get("layer"),
+                        "op": name,
+                        "ins": [_desc(t) for t in _tensors(list(args) + list(kwargs.values()), limit=8)],
+                        "outs": [_desc(t) for t in _tensors(out, limit=4)],
+                        "kw": _kw_of(kwargs),
+                        "ids": (i0, i1),
+                    }
+                )
+            return out
         if p.get("timeline"):  # host dispatch time of the call, no sync
             p["depth"] = 1
             t0 = time.perf_counter_ns()
