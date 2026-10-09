@@ -25,7 +25,10 @@ def _to_device(t, device):
 @pytest.mark.parametrize(
     "m, k, h",
     [
-        (32, 64, 64),
+        (32, 64, 64),  # 1 tile row: 1 Tensix
+        (64, 64, 64),  # 2 tile rows: 2 Tensix
+        (128, 64, 64),  # 4 tile rows: all 4 Tensix
+        (256, 64, 64),  # 8 tile rows: 4 Tensix, 2 rows each
     ],
 )
 def test_routed_expert_ffn(device, m, k, h):

@@ -21,7 +21,8 @@ using ttnn::device_operation::ProgramArtifacts;
 
 namespace {
 constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/experimental/quasar/routed_expert_ffn/device/kernels/";
-constexpr uint32_t kStreamEntries = 2;  // double buffering for streamed tiles
+constexpr uint32_t kStreamEntries = 2;         // per tile counter: double buffering for streamed tiles
+constexpr uint32_t kQuasarComputeThreads = 4;  // every Tensix engine of a Neo cluster
 }  // namespace
 
 ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::create_program_artifacts(
@@ -51,6 +52,7 @@ ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::creat
 
     // One Neo cluster: the whole op runs on node (0, 0).
     const m2::NodeCoord node{0, 0};
+    const bool is_quasar = tensor_args.x.device()->arch() == tt::ARCH::QUASAR;
 
     const DataFormat data_format = datatype_to_dataformat_converter(x.dtype());
     const uint32_t tile_bytes = tile_size(data_format);
@@ -58,6 +60,18 @@ ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::creat
     const uint32_t Mt = x.padded_shape()[-2] / tile.get_height();
     const uint32_t Kt = x.padded_shape()[-1] / tile.get_width();
     const uint32_t Ht = w_gate.padded_shape()[-1] / tile.get_width();
+
+    // Compute threads split the tile rows of x: thread t owns rows t, t + T, t + 2T, ... Each row needs the whole
+    // gate * up row, so rows are the only split with no data exchange between Tensix engines. The reader and writer
+    // rotate over the threads one tile at a time, so every thread must own the same number of rows: T is the largest
+    // of 4, 2, 1 that divides Mt.
+    uint32_t compute_threads = 1;
+    if (is_quasar) {
+        compute_threads = kQuasarComputeThreads;
+        while (Mt % compute_threads != 0) {
+            compute_threads /= 2;
+        }
+    }
 
     auto make_dfb = [&](const m2::DFBSpecName& name, uint32_t num_entries) {
         return m2::DataflowBufferSpec{
@@ -78,7 +92,7 @@ ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::creat
              m2::TensorBinding{.tensor_parameter_name = W_GATE, .accessor_name = "w_gate"},
              m2::TensorBinding{.tensor_parameter_name = W_UP, .accessor_name = "w_up"},
              m2::TensorBinding{.tensor_parameter_name = W_DOWN, .accessor_name = "w_down"}},
-        .runtime_arg_schema = {.runtime_arg_names = {"Mt", "Kt", "Ht"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"Mt", "Kt", "Ht", "compute_threads"}},
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
@@ -87,7 +101,7 @@ ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::creat
         .source = std::filesystem::path{std::string(kKernelDir) + "dataflow/writer_routed_expert_ffn.cpp"},
         .dfb_bindings = {m2::ConsumerOf(OUT_DFB, "out")},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = Y, .accessor_name = "y"}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"Mt", "Kt", "compute_threads"}},
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
@@ -95,6 +109,7 @@ ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::creat
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::filesystem::path{std::string(kKernelDir) + "compute/routed_expert_ffn.cpp"},
+        .num_threads = compute_threads,
         .dfb_bindings =
             {m2::ConsumerOf(X_DFB, "x"),
              m2::ConsumerOf(W_DFB, "w"),
@@ -109,18 +124,19 @@ ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::creat
         .hw_config = m2::ComputeHardwareConfig{},
     };
 
-    // x holds one tile row of x (Kt tiles) for all of phase 1; act holds one tile row of gate * up (Ht tiles)
-    // for all of phase 2.
+    // Every DFB is split into one tile counter per compute thread, so num_entries is per-thread entries times
+    // compute_threads. x holds one tile row of x (Kt tiles) per thread for all of phase 1; act holds one tile row of
+    // gate * up (Ht tiles) per thread for all of phase 2.
     m2::ProgramSpec spec{
         .name = "routed_expert_ffn",
         .kernels = {reader, writer, compute},
         .dataflow_buffers =
-            {make_dfb(X_DFB, Kt),
-             make_dfb(W_DFB, kStreamEntries),
-             make_dfb(GATE_DFB, kStreamEntries),
-             make_dfb(UP_DFB, kStreamEntries),
-             make_dfb(ACT_DFB, Ht),
-             make_dfb(OUT_DFB, kStreamEntries)},
+            {make_dfb(X_DFB, Kt * compute_threads),
+             make_dfb(W_DFB, kStreamEntries * compute_threads),
+             make_dfb(GATE_DFB, kStreamEntries * compute_threads),
+             make_dfb(UP_DFB, kStreamEntries * compute_threads),
+             make_dfb(ACT_DFB, Ht * compute_threads),
+             make_dfb(OUT_DFB, kStreamEntries * compute_threads)},
         .tensor_parameters =
             {m2::TensorParameter{.unique_id = X, .spec = x.tensor_spec()},
              m2::TensorParameter{.unique_id = W_GATE, .spec = w_gate.tensor_spec()},
@@ -134,9 +150,12 @@ ProgramArtifacts RoutedExpertFfnDeviceOperation::SingleNodeProgramFactory::creat
     run_args.kernel_run_args = {
         m2::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"Mt", Mt}, {"Kt", Kt}, {"Ht", Ht}})},
+            .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(
+                node, {{"Mt", Mt}, {"Kt", Kt}, {"Ht", Ht}, {"compute_threads", compute_threads}})},
         m2::KernelRunArgs{
-            .kernel = WRITER, .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", Mt * Kt}})},
+            .kernel = WRITER,
+            .runtime_arg_values =
+                m2::MakeRuntimeArgsForSingleNode(node, {{"Mt", Mt}, {"Kt", Kt}, {"compute_threads", compute_threads}})},
         m2::KernelRunArgs{.kernel = COMPUTE},
     };
     run_args.tensor_args = {

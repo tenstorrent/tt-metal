@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// routed_expert_ffn compute: y = ((x @ w_gate) * (x @ w_up)) @ w_down on one Tensix engine, one tile at a time.
-// For each tile row m of x:
+// routed_expert_ffn compute: y = ((x @ w_gate) * (x @ w_up)) @ w_down, one tile at a time. Runs as T threads, one per
+// Tensix engine; thread t owns tile rows t, t + T, ... of x and receives exactly its own rows' tiles from the reader.
+// For each owned tile row m of x:
 //   phase 1, for each h: gate = x[m, :] @ w_gate[:, h], up = x[m, :] @ w_up[:, h], act[h] = gate * up
 //   phase 2, for each n: y[m, n] = act[0..Ht) @ w_down[:, n]
 // gate, up and act are compute-only DFBs: the pack thread produces them and the unpack thread consumes them.
@@ -17,6 +18,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 
 namespace {
@@ -35,6 +37,7 @@ void kernel_main() {
     constexpr uint32_t Ht = get_arg(args::Ht);
     constexpr uint32_t gate_dst = 0;
     constexpr uint32_t up_dst = 1;
+    const uint32_t my_rows = Mt / get_num_threads();
 
     DataflowBuffer dfb_x(dfb::x);
     DataflowBuffer dfb_w(dfb::w);
@@ -45,7 +48,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::x, dfb::w, dfb::gate);
 
-    for (uint32_t m = 0; m < Mt; ++m) {
+    for (uint32_t m = 0; m < my_rows; ++m) {
         dfb_x.wait_front(Kt);
         for (uint32_t h = 0; h < Ht; ++h) {
             matmul_init(dfb::x, dfb::w);

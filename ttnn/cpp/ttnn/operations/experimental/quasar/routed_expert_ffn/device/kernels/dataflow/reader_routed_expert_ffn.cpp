@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // routed_expert_ffn reader: pushes tiles in the exact order compute consumes them, one thread, explicit sync.
-// For each tile row m of x:
-//   x[m, 0..Kt)                                  -> dfb::x (held by compute for all of phase 1)
-//   for h: w_gate[0..Kt, h], then w_up[0..Kt, h] -> dfb::w
-//   for n: w_down[0..Ht, n]                      -> dfb::w
+// Each push_back moves to the next compute thread's tile counter, so push j of a DFB goes to thread j % T. Thread t
+// owns tile rows t, t + T, ...; rows are handled in rounds of T, one per thread. For each round:
+//   x[row of t, k] for k, then t                 -> dfb::x (held by compute for all of phase 1)
+//   for h: w_gate[0..Kt, h], then w_up[0..Kt, h] -> dfb::w, each tile once per thread
+//   for n: w_down[0..Ht, n]                      -> dfb::w, each tile once per thread
 // All matrices are row-major in tiles, so tile (r, c) of an R x C tile matrix is page r * C + c.
 
 #include <cstdint>
@@ -20,6 +21,7 @@ void kernel_main() {
     const uint32_t Mt = get_arg(args::Mt);
     const uint32_t Kt = get_arg(args::Kt);
     const uint32_t Ht = get_arg(args::Ht);
+    const uint32_t T = get_arg(args::compute_threads);
 
     Noc noc;
     DataflowBuffer dfb_x(dfb::x);
@@ -37,21 +39,29 @@ void kernel_main() {
         dfb.push_back(1);
     };
 
-    for (uint32_t m = 0; m < Mt; ++m) {
+    auto push_to_all = [&](const auto& src, uint32_t page) {
+        for (uint32_t t = 0; t < T; ++t) {
+            push_tile(dfb_w, src, page);
+        }
+    };
+
+    for (uint32_t round_start = 0; round_start < Mt; round_start += T) {
         for (uint32_t k = 0; k < Kt; ++k) {
-            push_tile(dfb_x, x, m * Kt + k);
+            for (uint32_t t = 0; t < T; ++t) {
+                push_tile(dfb_x, x, (round_start + t) * Kt + k);
+            }
         }
         for (uint32_t h = 0; h < Ht; ++h) {
             for (uint32_t k = 0; k < Kt; ++k) {
-                push_tile(dfb_w, w_gate, k * Ht + h);
+                push_to_all(w_gate, k * Ht + h);
             }
             for (uint32_t k = 0; k < Kt; ++k) {
-                push_tile(dfb_w, w_up, k * Ht + h);
+                push_to_all(w_up, k * Ht + h);
             }
         }
         for (uint32_t n = 0; n < Kt; ++n) {
             for (uint32_t h = 0; h < Ht; ++h) {
-                push_tile(dfb_w, w_down, h * Kt + n);
+                push_to_all(w_down, h * Kt + n);
             }
         }
     }
