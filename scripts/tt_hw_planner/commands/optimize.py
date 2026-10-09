@@ -710,6 +710,8 @@ def cmd_optimize(args) -> int:
         print("error: " + _tf)
         return 1
     os.environ["PERF_MCP_DEVICES"] = (getattr(args, "devices", "") or "").strip()
+    if getattr(args, "achievable_band", None):
+        os.environ["TT_PERF_ACHIEVABLE_BAND"] = str(args.achievable_band).strip()
     # Both the BEFORE bookend (this env var's own default) and every check_full_pipeline_latency
     # verdict read PERF_MCP_FULLPIPE_SAMPLES, so passing --fullpipe-samples here keeps the two
     # comparable at whatever sample count the operator picks -- see run.py's own note on why a

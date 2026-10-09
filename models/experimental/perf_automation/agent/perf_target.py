@@ -71,6 +71,40 @@ _MOE_BAND_HI = 0.50
 # same shape at 0.375-0.50.
 _BAND_LO_OF_HI = 0.75
 
+
+def _achievable_override():
+    """Operator override of the achievable band as (lo_frac, hi_frac), from the env var
+    ``TT_PERF_ACHIEVABLE_BAND`` (e.g. '60-80' or '0.6-0.8'). Set by ``optimize --achievable-band``
+    to say what the roofline calls achievable, instead of the model's physics-derived band.
+    Returns None when unset or malformed."""
+    import os
+    import re
+
+    raw = (os.environ.get("TT_PERF_ACHIEVABLE_BAND") or "").strip()
+    if not raw:
+        return None
+    try:
+        nums = [float(x) for x in re.split(r"[-,:/ ]+", raw) if x]
+    except ValueError:
+        return None
+    if len(nums) != 2:
+        return None
+    lo, hi = nums
+    if lo > 1 or hi > 1:  # given as percentages
+        lo, hi = lo / 100.0, hi / 100.0
+    lo, hi = max(0.0, min(1.0, lo)), max(0.0, min(1.0, hi))
+    if hi <= 0 or lo > hi:
+        return None
+    return (lo, hi)
+
+
+def _apply_band_override(theo, band):
+    """Replace a physics-derived band with the operator's, when TT_PERF_ACHIEVABLE_BAND is set."""
+    ov = _achievable_override()
+    if ov and theo and float(theo) > 0:
+        return (ov[0] * float(theo), ov[1] * float(theo))
+    return band
+
 # --- COMPUTE term -----------------------------------------------------------------------------------
 # A weight is used in one multiply-accumulate per token, and a MAC is 2 FLOPs, so the work ONE unit of
 # work costs is 2 x (params it reads) x (tokens in that unit). Model-agnostic: it needs the same param
@@ -494,7 +528,7 @@ def rate_and_band(bytes_per_unit: float, peak_bw_bytes_s: float, *, frac: float 
     # and so sets the band's top, with the bottom a fixed ratio below it.
     theo = pk / per_dev
     hi = fr * theo
-    return theo, (_BAND_LO_OF_HI * hi, hi)
+    return theo, _apply_band_override(theo, (_BAND_LO_OF_HI * hi, hi))
 
 
 def chip_peak_flops(hw_facts: dict, fidelity: str = "") -> float:
@@ -762,7 +796,7 @@ def compute_target(
     if theo_c > 0 and (theo <= 0 or theo_c < theo):
         theo, bound = theo_c, "compute"
         _hi = frac * theo
-        band = (_BAND_LO_OF_HI * _hi, _hi)
+        band = _apply_band_override(theo, (_BAND_LO_OF_HI * _hi, _hi))
     # DP AND PP ARE NOT IN THE CEILING. Replicas and pipeline stages do not reduce what ONE unit of work
     # reads or computes, so they cannot make one token faster -- they multiply how many run at once.
     # Folding them in is what inflated every mesh run by its chip count. Carried separately so a report

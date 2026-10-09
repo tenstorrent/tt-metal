@@ -2433,6 +2433,16 @@ def _roofline_tables(
     _LOF, _HIF = 0.60, 0.80
     if band and band[0] and band[1] and theo:
         _LOF, _HIF = float(band[0]) / float(theo), float(band[1]) / float(theo)
+    # Operator override (optimize --achievable-band / TT_PERF_ACHIEVABLE_BAND): the RUN_REPORT
+    # header shows exactly the requested band, even on a row with no model band to read.
+    try:
+        from ..agent.perf_target import _achievable_override as _ov_fn
+
+        _ov = _ov_fn()
+        if _ov:
+            _LOF, _HIF = _ov
+    except Exception:
+        pass
 
     # COLUMN GEOMETRY IN ONE PLACE. Number and unit occupy fixed sub-fields, so the digits form a
     # straight line down the page and the unit words start at their own column. Left-aligned on the
