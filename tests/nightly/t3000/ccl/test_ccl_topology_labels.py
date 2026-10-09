@@ -20,7 +20,9 @@ error rather than a warning; the negative controls assert that error.
 
 Meshes: 1x2 (N300), 1x8 (T3K line), 2x4 (T3K / galaxy submesh), 8x4 (galaxy; the mesh_device fixture skips it on a
 smaller box). Cases that need two non-trivial mesh axes skip on the lines; whole-mesh (cluster_axis=None) cases run on
-the lines only. Fabric: 1D, Linear topology (the axis-wise collectives on a 2-D mesh run per row / column).
+the lines only, except ``ttnn.reduce_scatter``'s, whose host wrapper runs one reduce_scatter per mesh axis on a 2-D
+mesh (test_reduce_scatter_prim_whole_mesh). Fabric: 1D, Linear topology (the axis-wise collectives on a 2-D mesh run
+per row / column).
 
 The ``ttnn.reduce_scatter`` (prim ccl/reduce_scatter path) and ``ttnn.broadcast`` sections cover two ops that had no
 ``compute_output_topologies`` at all: their pre-change label was always the union default, i.e. the input's label,
@@ -779,7 +781,7 @@ def test_reduce_scatter_prim_collapsed_shard_outer_axis_warn_only_keeps_input_la
 def test_reduce_scatter_prim_whole_mesh(mesh_device, strict_ccl_topology):
     """cluster_axis=None. On a line the wrapper hands the prim the whole mesh: every device ends up with a distinct
     piece in coordinate order, the collapsed {N}, [Shard(3)]. On a 2-D mesh the wrapper runs one reduce_scatter per
-    axis (rows, then columns): the first gives [Shard(3), Replicate], the second scatters dim 3 again along the
+    axis (cluster_axis 0, then 1): the first gives [Shard(3), Replicate], the second scatters dim 3 again along the
     inner axis and collapses to {N}, [Shard(3)] (rule (c)) -- device (r, c) holds piece Cr+c of N * T. Negative
     control: before this change both paths returned the input's {N}, [Replicate]; composing it asserts identical
     bytes everywhere."""
