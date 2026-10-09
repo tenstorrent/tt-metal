@@ -255,8 +255,8 @@ ttt_model.update_weights(received_hf_dict, hf_rope=False)
 ```
 
 End-to-end smoke tests:
-- In-process: [`test_ttml_to_ttt_weight_transfer.py`](../sources/examples/grpo/tests/test_ttml_to_ttt_weight_transfer.py).
-- Cross-rank: [`weight_transfer/test_bridge_transfer.py`](../sources/examples/grpo/tests/weight_transfer/test_bridge_transfer.py).
+- Cross-rank ttml -> TTT transfer: [`weight_transfer/test_weight_transfer.py`](../tests/python/remote_rollout/weight_transfer/test_weight_transfer.py).
+- `HostWeightBridge` alone: [`weight_bridge/test_weight_bridge.py`](../tests/python/remote_rollout/weight_bridge/test_weight_bridge.py).
 
 ---
 

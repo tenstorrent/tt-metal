@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from _completer_utils import as_update_input, open_completer
+from _ttt_sampler_utils import as_update_input, open_sampler
 
 SEQ_LEN = 32  # one decode tile
 
@@ -21,18 +21,18 @@ SMALL_EPS = 1e-12
 
 
 @pytest.fixture(scope="module")
-def completer_and_norm():
-    with open_completer(dummy_weights=True) as completer:
-        model = completer.models[0]
+def sampler_and_norm():
+    with open_sampler(dummy_weights=True) as sampler:
+        model = sampler.models[0]
         dn = model.layers[0].attention_norm
-        yield completer, dn, dn.norm
+        yield sampler, dn, dn.norm
 
 
-def _build_random_rms_input(completer):
+def _build_random_rms_input(sampler):
     """Construct a synthetic ``(1, 1, SEQ_LEN, dim)`` RMSNorm input."""
     import ttnn
 
-    model = completer.models[0]
+    model = sampler.models[0]
     dim = model.args.dim
     return ttnn.from_torch(
         torch.randn(1, 1, SEQ_LEN, dim, dtype=torch.bfloat16),
@@ -44,21 +44,21 @@ def _build_random_rms_input(completer):
     )
 
 
-def test_rmsnorm_forward_is_zero_when_gamma_is_zero(completer_and_norm):
+def test_rmsnorm_forward_is_zero_when_gamma_is_zero(sampler_and_norm):
     """Zero gamma via the ``DistributedNorm`` passthrough and check the
     forward output is elementwise zero (within bf16 noise)."""
     import ttnn
 
     from models.tt_transformers.tt.common import Mode
 
-    completer, distributed_norm, rms = completer_and_norm
-    model = completer.models[0]
+    sampler, distributed_norm, rms = sampler_and_norm
+    model = sampler.models[0]
 
     gamma_hf = torch.zeros(model.args.dim, dtype=torch.bfloat16)
     distributed_norm.update(weight=as_update_input(gamma_hf, model.mesh_device))
     rms.eps = SMALL_EPS
 
-    out = ttnn.to_torch(rms.forward(_build_random_rms_input(completer), Mode.PREFILL))
+    out = ttnn.to_torch(rms.forward(_build_random_rms_input(sampler), Mode.PREFILL))
 
     assert torch.allclose(out, torch.zeros_like(out), atol=1e-6), (
         "RMSNorm.forward != 0 after zeroing gamma: "

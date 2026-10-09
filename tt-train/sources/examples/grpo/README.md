@@ -180,7 +180,7 @@ For a `[1, 4]` mesh per rank (8 chips), set `device_config.mesh_shape` and
 `device_config.device_ids`, and add a `configurations/split_4_4/` directory
 (`hosts.txt`, `mgd.textproto` with `device_topology { dims: [ 1, 4 ] }`,
 `rank_bindings.yaml` with 4 chips per rank). The weight-transfer test's
-[`configurations/4-4/`](../../../tests/python/grpo_remote_rollout/weight_transfer/configurations/4-4/)
+[`configurations/4-4/`](../../../tests/python/remote_rollout/weight_transfer/configurations/4-4/)
 is a working `[1, 4]` template. Point `CONFIG_DIR` in
 `run_remote_rollout.sh` (or `--rank-bindings` / `--hostfile`) at the new
 directory.

@@ -21,7 +21,7 @@ not raise. Uses dummy weights, so no HF token or weight download is
 needed.
 
 Run (needs >= 2 chips):
-    cd tt-train/tests/python/grpo_remote_rollout
+    cd tt-train/tests/python/remote_rollout
     python3 -m pytest -s test_ttt_worker_trace_capture.py
 """
 
@@ -42,7 +42,7 @@ MAX_NEW_TOKENS = 2
 def test_traced_generate_does_not_fatal_on_first_call():
     import ttnn
 
-    from _completer_utils import _TRACE_REGION_SIZE, build_completer
+    from _ttt_sampler_utils import _TRACE_REGION_SIZE, build_sampler
 
     if len(ttnn.get_device_ids()) < MESH_SHAPE[0] * MESH_SHAPE[1]:
         pytest.skip(f"needs >= {MESH_SHAPE[0] * MESH_SHAPE[1]} chips")
@@ -51,14 +51,14 @@ def test_traced_generate_does_not_fatal_on_first_call():
         mesh_shape=ttnn.MeshShape(*MESH_SHAPE),
         trace_region_size=_TRACE_REGION_SIZE,
     )
-    completer = None
+    sampler = None
     try:
-        completer = build_completer(mesh_device, dummy_weights=True, max_batch_size=1)
+        sampler = build_sampler(mesh_device, dummy_weights=True, max_batch_size=1)
 
         prompt = list(range(1, PROMPT_LEN + 1))
 
         try:
-            completions = completer.generate_tokens(
+            completions = sampler.generate_tokens(
                 [prompt],
                 max_new_tokens=MAX_NEW_TOKENS,
                 enable_trace=True,
@@ -71,6 +71,6 @@ def test_traced_generate_does_not_fatal_on_first_call():
 
         assert len(completions) == 1, f"expected 1 completion, got {len(completions)}"
     finally:
-        completer = None
+        sampler = None
         gc.collect()
         ttnn.close_mesh_device(mesh_device)

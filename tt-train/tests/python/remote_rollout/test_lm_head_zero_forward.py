@@ -12,16 +12,16 @@ from __future__ import annotations
 import pytest
 import torch
 
-from _completer_utils import as_update_input, generate_one, open_completer
+from _ttt_sampler_utils import as_update_input, generate_one, open_sampler
 
 PROMPT = "Explain a tensor in a paragraph."
 MAX_NEW_TOKENS = 8
 
 
 @pytest.fixture(scope="module")
-def completer():
+def sampler():
     """Module-scoped: build once, zero the LM head once, run both tests."""
-    with open_completer(dummy_weights=True) as c:
+    with open_sampler(dummy_weights=True) as c:
         model = c.models[0]
         V = model.lm_head.vocab_size
         H = model.lm_head.args.dim
@@ -30,7 +30,7 @@ def completer():
         yield c
 
 
-def _build_random_hidden_state(completer):
+def _build_random_hidden_state(sampler):
     """Construct a synthetic ``(1, 1, 32, dim)`` hidden state in the layout
     ``LMHead.forward`` expects in prefill mode.
 
@@ -42,7 +42,7 @@ def _build_random_hidden_state(completer):
 
     from models.tt_transformers.tt.common import Mode
 
-    model = completer.models[0]
+    model = sampler.models[0]
     dim = model.args.dim
     x = ttnn.from_torch(
         torch.randn(1, 1, 32, dim, dtype=torch.bfloat16),
@@ -60,12 +60,12 @@ def _build_random_hidden_state(completer):
     return x
 
 
-def test_lm_head_logits_zero_when_weights_zero(completer):
+def test_lm_head_logits_zero_when_weights_zero(sampler):
     """Zero weights -> zero logits elementwise."""
     import ttnn
 
-    model = completer.models[0]
-    logits = ttnn.to_torch(model.lm_head.forward(_build_random_hidden_state(completer)))
+    model = sampler.models[0]
+    logits = ttnn.to_torch(model.lm_head.forward(_build_random_hidden_state(sampler)))
     assert torch.equal(logits, torch.zeros_like(logits)), (
         "LMHead logits != 0 after zeroing weights: "
         f"max|logits|={float(logits.abs().max()):.6g}, "
@@ -73,10 +73,10 @@ def test_lm_head_logits_zero_when_weights_zero(completer):
     )
 
 
-def test_lm_head_greedy_collapses_to_single_token(completer):
+def test_lm_head_greedy_collapses_to_single_token(sampler):
     """Uniform softmax + greedy decoding -> all generated tokens identical."""
-    prompt_ids = completer.tokenizer.encode(PROMPT, add_special_tokens=True)
-    tokens = generate_one(completer, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
+    prompt_ids = sampler.tokenizer.encode(PROMPT, add_special_tokens=True)
+    tokens = generate_one(sampler, prompt_ids, max_new_tokens=MAX_NEW_TOKENS)
     assert (
         len(set(tokens)) <= 1
     ), f"greedy decoding under uniform logits did not collapse to a single token: tokens={tokens}"
