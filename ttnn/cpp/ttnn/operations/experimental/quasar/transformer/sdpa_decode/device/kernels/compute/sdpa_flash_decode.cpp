@@ -823,4 +823,9 @@ void kernel_main() {
         release_writer_constant(dfb_sliding_window_mask_in, Sq_chunk_t * Sk_chunk_t_dynamic);
     }
 #endif
+#ifdef USE_ATTENTION_SINK
+    // The reader pushes the attention sink (Sq_chunk_t tiles) on every core with local data; only the core
+    // that finalizes the output reads it (by index, never popped). Release it on every core.
+    release_writer_constant(dfb_attention_sink, Sq_chunk_t);
+#endif
 }
