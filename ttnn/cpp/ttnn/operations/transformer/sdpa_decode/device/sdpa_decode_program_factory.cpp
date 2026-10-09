@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
+#include <string>
 #include "sdpa_decode_device_operation.hpp"
 
 #include <bit>
@@ -881,7 +883,8 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         compute_defines["DYNAMIC_CHUNK_SIZE"] = "1";
     }
     // Blackhole's reduce_c sums a resident row of 8 or more tiles in one block call: faster at HiFi2, not at HiFi4.
-    if (device->arch() == tt::ARCH::BLACKHOLE && math_fidelity == tt::tt_metal::MathFidelity::HiFi2) {
+    if (device->arch() == tt::ARCH::BLACKHOLE && math_fidelity == tt::tt_metal::MathFidelity::HiFi2 &&
+        !(std::getenv("RC_ALT") != nullptr && std::string(std::getenv("RC_ALT")).rfind("BOFF", 0) == 0)) {
         compute_defines["REDUCE_ROW_BLOCK"] = "1";
     }
 

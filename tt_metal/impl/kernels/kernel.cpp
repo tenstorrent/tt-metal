@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <core_coord.hpp>
 #include <device.hpp>
 #include <fmt/format.h>
@@ -165,6 +166,10 @@ Kernel::Kernel(
         tt::tt_metal::MetalContext::instance(context_id).rtoptions().get_watcher_enabled() &&
         !tt::tt_metal::MetalContext::instance(context_id).rtoptions().watcher_assert_disabled()),
     watcher_count_word_offset_(watcher_assert_enabled_ ? 1 : 0) {
+    // Measurement build only: RC_ALT=<v> adds the define RC_ALT_<v> to every kernel (in-process alternation of forms).
+    if (const char* rc_alt = std::getenv("RC_ALT"); rc_alt != nullptr && *rc_alt != '\0') {
+        this->defines_["RC_ALT_" + std::string(rc_alt)] = "1";
+    }
     this->register_kernel_with_watcher();
 
     size_t max_x = 0, max_y = 0;
