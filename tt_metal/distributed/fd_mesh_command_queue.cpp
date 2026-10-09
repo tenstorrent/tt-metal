@@ -1418,7 +1418,7 @@ void FDMeshCommandQueue::submit_replay_buffer(
 }
 
 void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) {
-    // No lock_api_function_() here: the caller (MeshDeviceImpl::begin_mesh_trace) already holds the device API lock.
+    auto lock = lock_api_function_();
     trace_dispatch::reset_host_dispatch_state_for_trace(
         mesh_device_->num_sub_devices(),
         cq_shared_state_->worker_launch_message_buffer_state,

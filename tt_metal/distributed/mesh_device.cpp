@@ -1569,12 +1569,14 @@ SystemMemoryManager& MeshDeviceImpl::sysmem_manager() {
 }
 
 void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
-    // Serializes the trace-pool erase with the trace check in acquire_command_list_builder.
-    auto lock = lock_api();
     TracyTTMetalReleaseMeshTrace(this->get_device_ids(), *trace_id);
 
     validate_sub_device_manager_tracker();
-    sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(trace_id);
+    {
+        // Serializes the trace-pool erase with the trace check in acquire_command_list_builder.
+        auto lock = lock_api();
+        sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(trace_id);
+    }
 
     // Drop any Tensor prefetcher requests captured under this trace so they don't outlive it.
     if (tensor_prefetcher_) {
@@ -1598,33 +1600,37 @@ MeshTraceId MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id) {
 }
 
 void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
-    // Held across the check and trace creation so a CommandListBuilder cannot be created in between.
-    auto lock = lock_api();
-    TT_FATAL(
-        !command_list_builder_active_ && num_command_lists_ == 0,
-        "Cannot begin trace capture while a CommandListBuilder or CommandList exists on the MeshDevice");
-    TracyTTMetalBeginMeshTrace(this->get_device_ids(), *trace_id);
-    TT_FATAL(
-        !this->mesh_command_queues_[cq_id]->trace_id().has_value(),
-        "CQ {} is already being used for tracing tid {}",
-        (uint32_t)cq_id,
-        *trace_id);
-    // Start tracking DRAM high water mark if trace_region_size is 0 (dynamic allocation mode)
-    auto trace_region_size = this->allocator_impl()->get_config().trace_region_size;
-    if (trace_region_size == 0) {
-        this->allocator_impl()->begin_dram_high_water_mark_tracking();
-    }
+    std::shared_ptr<MeshTraceDescriptor> trace_desc;
+    {
+        // Held from the check through trace creation so a CommandListBuilder cannot be created in between.
+        // Released before record_begin, which takes the API lock itself.
+        auto lock = lock_api();
+        TT_FATAL(
+            !command_list_builder_active_ && num_command_lists_ == 0,
+            "Cannot begin trace capture while a CommandListBuilder or CommandList exists on the MeshDevice");
+        TracyTTMetalBeginMeshTrace(this->get_device_ids(), *trace_id);
+        TT_FATAL(
+            !this->mesh_command_queues_[cq_id]->trace_id().has_value(),
+            "CQ {} is already being used for tracing tid {}",
+            (uint32_t)cq_id,
+            *trace_id);
+        // Start tracking DRAM high water mark if trace_region_size is 0 (dynamic allocation mode)
+        auto trace_region_size = this->allocator_impl()->get_config().trace_region_size;
+        if (trace_region_size == 0) {
+            this->allocator_impl()->begin_dram_high_water_mark_tracking();
+        }
 
-    // Create an empty trace buffer here. This will get initialized in end_trace
-    auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-    TT_FATAL(
-        active_sub_device_manager->get_trace(trace_id) == nullptr,
-        "Trace already exists for tid {} on device {}'s active sub-device manager {}",
-        *trace_id,
-        this->mesh_id_,
-        active_sub_device_manager->id());
-    auto& trace_buffer = active_sub_device_manager->create_trace(trace_id);
-    this->mesh_command_queues_[cq_id]->record_begin(trace_id, trace_buffer->desc);
+        // Create an empty trace buffer here. This will get initialized in end_trace
+        auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+        TT_FATAL(
+            active_sub_device_manager->get_trace(trace_id) == nullptr,
+            "Trace already exists for tid {} on device {}'s active sub-device manager {}",
+            *trace_id,
+            this->mesh_id_,
+            active_sub_device_manager->id());
+        trace_desc = active_sub_device_manager->create_trace(trace_id)->desc;
+    }
+    this->mesh_command_queues_[cq_id]->record_begin(trace_id, trace_desc);
 }
 
 void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
