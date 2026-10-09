@@ -32,6 +32,7 @@ case $1 in
            done ;;
   f1b)     for i in 1 2 3; do ab f1b - EB_R3_NO_BLOCK=1 "llama8b_decode"; done ;;
   qb2)      for i in 1 2 3; do ab qb2 - EB_R3_NO_BLOCK=1 "test_qb2_add"; done ;;
+  pt2)      for i in 1 2 3; do ab pt2 - EB_R3_PER_FACE=1 "test_mul_tg or glxq_"; done ;;
   pt)       for i in 1 2 3; do ab pt - EB_R3_PER_FACE=1 "test_mul_tg or (sdxl_refiner_geglu and d1) or mul_bfp8 or glx_prefill or k3_mla or kv_zero"; done ;;
   dp)       for i in 1 2 3; do ab dp - EB_R3_NO_BLOCK=1 "test_qb2_add and (dp_post or dp_add or llama_p150 or qwen_qb2_40 or llama_qb2)"; done ;;
   csa2)     for i in 1 2; do ab csa_dr $O/off_csa_dr.txt - "test_csa_compressor_single_device" models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_csa_compressor.py; done ;;

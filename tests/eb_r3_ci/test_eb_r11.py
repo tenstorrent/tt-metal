@@ -364,7 +364,8 @@ def test_sdxl_refiner_geglu(device, dcache, cfg):
     ttnn.deallocate(c["mod"].forward(x))
 
 
-def test_mul_tg(device):
+@pytest.mark.parametrize("width", [960, 800])
+def test_mul_tg(device, width):
     # llama3_70b_galaxy decode (Llama 3.3-70B, Qwen3-32B on a Blackhole Galaxy), one chip's ff1ff3: bfp8 width shards of
     # [32, 32] on 30 cores of the model's sub-core grids from (1, 0), SiLU on a, bfp8 out (llama_mlp.py)
     grids = ttnn.CoreRangeSet(
@@ -381,7 +382,7 @@ def test_mul_tg(device):
     )
     torch.manual_seed(1)
     mk = lambda: ttnn.from_torch(
-        torch.rand(1, 1, 32, 960) * 2 - 1, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc
+        torch.rand(1, 1, 32, width) * 2 - 1, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc
     )
     a, b = mk(), mk()
     for _ in range(4):
@@ -448,6 +449,12 @@ MUL_CFGS = [
     ("glx_prefill_mlp_2048", [1, 1, 2048, 3200], [1, 1, 2048, 3200], "bfp8", "bfp8", "bfp8", "silu", None),
     ("k3_mla_gate_640", [1, 1, 640, 2048], [1, 1, 640, 2048], "bfp8", "bf16", None, None, None),  # deepseek_v3_d_p mla.py:1507
     ("kv_zero_bfp8", [8, 8, 128, 128], 0.0, "bfp8", None, None, None, None),  # QB2 generators' KV cache reset
+    # Qwen3-32B on a Blackhole Galaxy, the census's shapes (run 37924272725): llama_mlp.py:439 prefill, llama_attention.py:1270
+    ("glxq_mlp_s128", [1, 1, 128, 800], [1, 1, 128, 800], "bfp8", "bfp8", "bfp8", "silu", None),
+    ("glxq_mlp_s1024", [1, 1, 1024, 800], [1, 1, 1024, 800], "bfp8", "bfp8", "bfp8", "silu", None),
+    ("glxq_mlp_s4096", [1, 1, 4096, 800], [1, 1, 4096, 800], "bfp8", "bfp8", "bfp8", "silu", None),
+    ("glxq_attn_s128", [1, 8, 128, 128], [1, 1, 1, 1], "bfp8", "bf16", None, None, None),
+    ("glxq_attn_s1024", [1, 8, 1024, 128], [1, 1, 1, 1], "bfp8", "bf16", None, None, None),
 ]
 _DT = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, None: None}
 
