@@ -97,13 +97,7 @@ def test_exact_piecewise_ops(device, ttnn_op):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "ttnn_op",
-    [
-        ttnn.hardsigmoid,
-    ],
-)
-def test_piecewise_division_ops(device, ttnn_op):
+def test_hardsigmoid(device):
     """Exhaustive normal bfloat16 coverage for hardsigmoid.
 
     hardsigmoid = clip(x/6 + 0.5, 0, 1): division/clip/add round at most
@@ -113,10 +107,10 @@ def test_piecewise_division_ops(device, ttnn_op):
 
     tt_in = to_tt_tensor(input_tensor, device)
 
-    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden_function = ttnn.get_golden_function(ttnn.hardsigmoid)
     golden = golden_function(input_tensor, device=device)
 
-    tt_result = ttnn_op(tt_in)
+    tt_result = ttnn.hardsigmoid(tt_in)
     result = ttnn.to_torch(tt_result)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
