@@ -119,6 +119,10 @@ struct RecipeBlockingProblem {
     bool causal = false;
     uint32_t sliding_window = 0;
     uint32_t q_offset = 0;
+    // Dense/joint program features that grow the kernel images (recipe_program_fits): an attention sink, and K or
+    // joint K rows that are not tile multiples (a K tail at every K chunk size).
+    bool attention_sink = false;
+    bool k_rows_unaligned = false;
 };
 
 struct RecipeBlocking {
@@ -129,6 +133,11 @@ struct RecipeBlocking {
     uint32_t jobs_per_core = 0;  // Q chunks on the busiest core (exp ring: passes)
     RecipeL1Estimate l1{};
 };
+
+// False when a dense/joint geometry's program (every RISC image plus runtime args and CB configs) is known to exceed
+// the 70656 B kernel config buffer; the chooser never emits one. Measured exclusion, not a size model: see the
+// definition. Ring and exp ring programs are not covered.
+bool recipe_program_fits(const RecipeBlockingProblem& problem, uint32_t q_tiles, uint32_t k_tiles);
 
 // Every feasible blocking with its modeled cost, cheapest first (the chooser's candidate list).
 std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProblem& problem);
