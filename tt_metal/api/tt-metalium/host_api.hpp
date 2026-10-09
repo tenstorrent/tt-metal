@@ -4,7 +4,11 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
+#include <memory>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -21,6 +25,10 @@
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <hostdevcommon/common_values.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device_types.hpp>
+#include <tt-metalium/hal_types.hpp>
 
 /** @file */
 
