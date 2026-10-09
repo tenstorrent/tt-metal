@@ -85,7 +85,15 @@ def precision_valid(e):
 if os.environ.get("NO_PRECISION_RULE") != "1":  # v14 on
     e = precision_valid(e).reset_index(drop=True)
 e = M.annotate(e)
-e["pred"] = M.predict(M.geometry(e), p)
+if os.environ.get("RESID"):  # v18r: learned within-problem correction on top of the base prediction
+    import lightgbm as lgb
+    import resid_cv as R
+
+    base, g, pr = R.base_parts(e, p)
+    corr = lgb.Booster(model_file=os.environ["RESID"]).predict(R.features(e, g, pr))
+    e["pred"] = base * np.exp(float(os.environ.get("SHRINK", "1.0")) * corr)
+else:
+    e["pred"] = M.predict(M.geometry(e), p)
 r = e.loc[e.groupby("case").pred.idxmin(), ["case", "config", "family", "origin", "pred"]]
 r["pred_us"] = (r.pred / 1e3).round(2)
 r.drop(columns="pred").to_csv(out, index=False)
