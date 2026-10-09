@@ -1175,6 +1175,16 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
 
     // threshold is the number of transactions that each txn ID needs to process before posting/acking
     // for reads the transaction needs to be committed to dst, for writes the transaction needs to be sent out
+    // The ISR threshold and per-txn counts travel to the device in uint8_t fields; a wider value would be
+    // silently truncated and the ISR would fire on the wrong counts.
+    const uint32_t wide_per_txn_all = num_entries / num_txn_ids;
+    const uint32_t wide_threshold = consumes_all ? num_prods_or_cons * wide_per_txn_all : wide_per_txn_all;
+    TT_FATAL(
+        wide_threshold <= std::numeric_limits<uint8_t>::max(),
+        "DFB txn threshold {} (num_entries {} / {} txn ids) exceeds the 8-bit field; use fewer entries",
+        wide_threshold,
+        num_entries,
+        num_txn_ids);
     uint8_t threshold;
     uint8_t per_txn;
     if (consumes_all) {
@@ -1216,7 +1226,7 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
 // compute_txn_descriptor() enforces:
 //   ALL consumer:  num_entries % (n * num_tcs_per_risc) == 0
 //   all other cases:   num_entries % (n * num_prods_or_cons * num_tcs_per_risc) == 0
-// Falls back to 1 if no n > 1 satisfies the constraint.
+// and whose ISR threshold fits the 8-bit field. Falls back to 1 if no n > 1 satisfies both.
 // If even n=1 does not satisfy the constraint the configuration is invalid
 // and compute_txn_descriptor() will catch it with a TT_FATAL.
 static uint8_t compute_optimal_txn_id_count(
@@ -1224,7 +1234,8 @@ static uint8_t compute_optimal_txn_id_count(
     for (uint8_t n = 2; n <= ::dfb::NUM_TXN_IDS; n++) {
         uint32_t divisor = consumes_all ? static_cast<uint32_t>(n) * num_tcs_per_risc
                                         : static_cast<uint32_t>(n) * num_prods_or_cons * num_tcs_per_risc;
-        if (num_entries % divisor == 0) {
+        const uint32_t threshold = consumes_all ? num_prods_or_cons * (num_entries / n) : num_entries / n;
+        if (num_entries % divisor == 0 && threshold <= std::numeric_limits<uint8_t>::max()) {
             return n;
         }
     }
