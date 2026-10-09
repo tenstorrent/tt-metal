@@ -27,8 +27,10 @@ void kernel_main() {
     constexpr uint32_t Tt = get_compile_time_arg_val(7);  // 32-row tile rows
     constexpr uint32_t idx_page = get_compile_time_arg_val(8);
     constexpr uint32_t wgt_page = get_compile_time_arg_val(9);
-    constexpr uint32_t cb_buf = 0;
-    constexpr auto sel_args = TensorAccessorArgs<10>();
+    // both data-movement RISCs run this kernel: RISC r of core c takes units 2 * c + r, 2 * c + r + 2 * cores, ...
+    constexpr uint32_t risc = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_buf = risc;
+    constexpr auto sel_args = TensorAccessorArgs<11>();
     constexpr auto sc_args = TensorAccessorArgs<sel_args.next_compile_time_args_offset()>();
     constexpr auto idx_args = TensorAccessorArgs<sc_args.next_compile_time_args_offset()>();
     constexpr auto wgt_args = TensorAccessorArgs<idx_args.next_compile_time_args_offset()>();
@@ -57,7 +59,7 @@ void kernel_main() {
     } scale;
     scale.u = scale_bits;
 
-    for (uint32_t u = core; u < Tt * 4; u += num_cores) {
+    for (uint32_t u = 2 * core + risc; u < Tt * 4; u += 2 * num_cores) {
         const uint32_t g = u / 4, r0 = (u % 4) * R;
         const uint32_t face0 = (r0 / 16) * 2, row_off = (r0 % 16) * 64;
         for (uint32_t j = 0; j < Et; ++j) {
