@@ -2527,24 +2527,45 @@ std::vector<std::vector<std::vector<tt::tt_fabric::RoutingDirection>>> build_exp
     return rtg.get_intra_mesh_table();
 }
 
-// Walk the memoryless intra-mesh table for every same-column row pair along the express (dim-0) axis
-// and assert the deadlock-free invariants of the generated table:
+// Walk the memoryless intra-mesh table for every pair of chips on one express-axis line (same column
+// on a dim-0 express mesh, same row on a dim-1 one) and assert the deadlock-free invariants of the
+// generated table:
 //   * every route reaches its destination in bounded hops (loop-free / memoryless-consistent),
 //   * a leaf is never an intermediate toward a destination outside its own skipped run,
 //   * it uses at most ONE ring crossover, and a crossing into the continuing family is terminal.
-// Consumes only the generated table + mesh graph -> no hardware.
+// `axis_len` is the express axis's length and `lane_count` the other axis's. Consumes only the
+// generated table + mesh graph -> no hardware.
 void assert_spine_deadlock_free(
     const tt::tt_fabric::MeshGraph& mesh_graph,
     const std::vector<std::vector<std::vector<tt::tt_fabric::RoutingDirection>>>& intra,
-    int L0,
-    int row_size) {
+    int axis_len,
+    int lane_count) {
     using D = tt::tt_fabric::RoutingDirection;
     const tt::tt_fabric::MeshId mesh{0};
     const auto& conn = mesh_graph.get_intra_mesh_connectivity()[0];
 
     const auto rings = tt::tt_fabric::derive_express_ring_topology(mesh_graph, mesh);
     ASSERT_TRUE(rings.has_value()) << "descriptor declares no express links";
-    const auto row_of = [&](int chip) { return static_cast<int>(mesh_graph.chip_to_coordinate(mesh, chip)[0]); };
+    const int axis = rings->axis_dim;
+    ASSERT_TRUE(axis == 0 || axis == 1);
+    ASSERT_EQ(rings->axis_len, axis_len);
+    // chip = row * width + col, where the express axis is rows (dim 0) or columns (dim 1).
+    const auto chip_at = [&](int pos, int lane) {
+        if (axis == 0) {
+            return pos * lane_count + lane;
+        }
+        return lane * axis_len + pos;
+    };
+    const auto on_axis = [&](D dir) {
+        if (dir == D::Z) {
+            return true;
+        }
+        if (axis == 0) {
+            return dir == D::N || dir == D::S;
+        }
+        return dir == D::E || dir == D::W;
+    };
+    const auto row_of = [&](int chip) { return static_cast<int>(mesh_graph.chip_to_coordinate(mesh, chip)[axis]); };
     const auto step = [&](int c, D dir) -> int {
         for (const auto& [v, edge] : conn[c]) {
             if (edge.port_direction == dir) {
@@ -2554,18 +2575,18 @@ void assert_spine_deadlock_free(
         return -1;
     };
 
-    for (int col = 0; col < row_size; ++col) {
-        for (int rs = 0; rs < L0; ++rs) {
-            for (int rd = 0; rd < L0; ++rd) {
+    for (int lane = 0; lane < lane_count; ++lane) {
+        for (int rs = 0; rs < axis_len; ++rs) {
+            for (int rd = 0; rd < axis_len; ++rd) {
                 if (rs == rd) {
                     continue;
                 }
-                const int src = rs * row_size + col;
-                const int dst = rd * row_size + col;
+                const int src = chip_at(rs, lane);
+                const int dst = chip_at(rd, lane);
                 int cur = src, crossovers = 0, hops = 0;
                 while (cur != dst) {
                     const D dir = intra[0][cur][dst];
-                    ASSERT_TRUE(dir == D::N || dir == D::S || dir == D::Z)
+                    ASSERT_TRUE(on_axis(dir))
                         << "non-axis dir on spine route " << src << "->" << dst << " at chip " << cur;
                     const int nxt = step(cur, dir);
                     ASSERT_GE(nxt, 0) << "no neighbor for dir at chip " << cur;
@@ -2592,7 +2613,7 @@ void assert_spine_deadlock_free(
                         }
                     }
                     cur = nxt;
-                    ASSERT_LE(++hops, L0 + 4) << "routing loop on spine route " << src << "->" << dst;
+                    ASSERT_LE(++hops, axis_len + 4) << "routing loop on spine route " << src << "->" << dst;
                 }
                 EXPECT_LE(crossovers, 1)
                     << "spine route " << src << "->" << dst << " used " << crossovers << " crossovers";
@@ -2621,7 +2642,7 @@ TEST(ExpressLinkRoutingTest, IntraMesh8x4DeadlockFree) {
     EXPECT_EQ(table[8][16], D::Z);
     EXPECT_EQ(table[0][1], D::E);
     EXPECT_EQ(table[8][8], D::C);
-    assert_spine_deadlock_free(*mg, intra, /*L0=*/8, /*row_size=*/4);
+    assert_spine_deadlock_free(*mg, intra, /*axis_len=*/8, /*lane_count=*/4);
 }
 
 // 16x4 LINE axis with ex4 and ex8 fused into one protected family.
@@ -2637,7 +2658,7 @@ TEST(ExpressLinkRoutingTest, IntraMesh16x4MergedFamiliesDeadlockFree) {
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_16x4_mesh_graph_descriptor.textproto", mg);
     ASSERT_EQ(intra.size(), 1u);
     ASSERT_EQ(intra[0].size(), 64u);
-    assert_spine_deadlock_free(*mg, intra, /*L0=*/16, /*row_size=*/4);
+    assert_spine_deadlock_free(*mg, intra, /*axis_len=*/16, /*lane_count=*/4);
 }
 
 // 32x4 two-family spine routing with at most one crossover.
@@ -2666,7 +2687,7 @@ TEST(ExpressLinkRoutingTest, IntraMesh32x4DeadlockFree) {
     EXPECT_EQ(t[0][8], D::S);   // row0(ex8)->row2(ex4): single crossover, base S first
     EXPECT_EQ(t[0][0], D::C);   // self
 
-    assert_spine_deadlock_free(*mg, intra, /*L0=*/32, /*row_size=*/4);
+    assert_spine_deadlock_free(*mg, intra, /*axis_len=*/32, /*lane_count=*/4);
 }
 
 TEST(ExpressLinkRoutingTest, IntraMesh4x32ExpressOnDim1) {
@@ -2696,6 +2717,8 @@ TEST(ExpressLinkRoutingTest, IntraMesh4x32ExpressOnDim1) {
     // Dimension order is unchanged: N/S completes before the E/W express phase.
     EXPECT_EQ(t[0][39], D::S);   // (0,0)->(1,7)
     EXPECT_EQ(t[32][39], D::Z);  // then col0->col7 on row 1
+
+    assert_spine_deadlock_free(*mg, intra, /*axis_len=*/32, /*lane_count=*/4);
 }
 
 // Verify representative direct hops lower to physical channels.
@@ -2814,6 +2837,51 @@ TEST_F(ControlPlaneFixture, TestExpressPhysicalLowering32x4) {
         try {
             EXPECT_FALSE(control_plane->get_active_fabric_eth_channels_in_direction(src, D::Z).empty())
                 << "no physical Z channels at local chip " << (ra * 4);
+            local_sources_checked++;
+        } catch (const std::exception&) {
+            remote_sources_skipped++;
+        }
+    }
+    EXPECT_GT(local_sources_checked, 0) << remote_sources_skipped << " express sources threw as remote on this rank";
+}
+
+// The transpose of TestExpressPhysicalLowering32x4: the chords run along the 32 columns, so every
+// express-endpoint column pair on row 0 must route via Z and be backed by physical Z channels on the
+// rank that owns the source. This is the check that the 4x32 logical mesh places onto the Galaxy
+// with its express axis on the physical long axis.
+TEST_F(ControlPlaneFixture, TestExpressPhysicalLowering4x32) {
+    if (!express_link_cluster_available()) {
+        GTEST_SKIP() << kNoClusterSkipMsg;
+    }
+    if (world_size() != 4) {
+        GTEST_SKIP() << "express_links_4x32 declares 4 host ranks; run under tt-run with 4 ranks";
+    }
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_4x32_mesh_graph_descriptor.textproto";
+
+    // FABRIC_2D_TORUS_XY: [RING, RING] keeps both wraps.
+    auto control_plane = make_control_plane(
+        desc_path,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
+
+    using D = tt::tt_fabric::RoutingDirection;
+    // One direct express pair per rank, plus the wrapping span-4 chord. chip = row * 32 + col.
+    const std::vector<std::pair<int, int>> column_blocks = {{0, 7}, {8, 15}, {16, 23}, {24, 31}, {30, 1}};
+    int local_sources_checked = 0;
+    int remote_sources_skipped = 0;
+    for (const auto& [ca, cb] : column_blocks) {
+        tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(ca)};
+        tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(cb)};
+
+        auto dir = control_plane->get_forwarding_direction(src, dst);
+        EXPECT_TRUE(dir.has_value() && *dir == D::Z) << "express c" << ca << "->c" << cb << " not routed via Z";
+
+        // Local chips must have physical Z channels; remote sources throw on this rank.
+        try {
+            EXPECT_FALSE(control_plane->get_active_fabric_eth_channels_in_direction(src, D::Z).empty())
+                << "no physical Z channels at local chip " << ca;
             local_sources_checked++;
         } catch (const std::exception&) {
             remote_sources_skipped++;
