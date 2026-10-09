@@ -14,6 +14,7 @@ from .grpo_trainer import (
     RolloutBatch,
     RolloutSampler,
     build_rollout_sampler,
+    check_new_weight_version,
     compute_advantages_host,
     dispatch_reward,
     get_grpo_config,
