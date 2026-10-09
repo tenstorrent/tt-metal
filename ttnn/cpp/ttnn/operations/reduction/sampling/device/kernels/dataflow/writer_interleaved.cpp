@@ -78,6 +78,9 @@ void kernel_main() {
     const CoreLocalMem<volatile uint32_t> k_ptr(dfb_k_ptr);
     // Index into the chunk to get this core's value
     const uint32_t k = k_ptr[core_id];
+    // dfb_k is a self-loop (this kernel is producer and consumer); release the entry once the value is read.
+    dfb_k.wait_front(1);
+    dfb_k.pop_front(1);
 
     const auto addrg_p = TensorAccessor(tensor::p);
     dfb_p.reserve_back(1);
@@ -89,6 +92,9 @@ void kernel_main() {
     const CoreLocalMem<volatile uint16_t> p_ptr(dfb_p_ptr);
     // Index into the chunk to get this core's value
     const uint32_t p = p_ptr[core_id];
+    // dfb_p is a self-loop (this kernel is producer and consumer); release the entry once the value is read.
+    dfb_p.wait_front(1);
+    dfb_p.pop_front(1);
 
     const auto addrg_temp = TensorAccessor(tensor::temp);
     // dfb_temp.reserve_back(1);
