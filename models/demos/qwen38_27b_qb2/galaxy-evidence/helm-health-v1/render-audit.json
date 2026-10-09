@@ -1,0 +1,35 @@
+{
+  "state": "rendered_unqualified",
+  "ttis_revision": "2485b039be071f75fa29adff6c84ecc87d60359e",
+  "byte_identical_bundle_files": [
+    "g0.json",
+    "runtime-model-spec.json",
+    "verify_image.py"
+  ],
+  "runtime_spec_sha256": "81a7bf216c7c7e66a1cb4d5f9bf30d9cc71c54eeb0b773429653f21d04204fbd",
+  "values_sha256": "3d0c223f87437d10b438d4a3fc08ce1c6cd22727040ace750c4f8af48be886a1",
+  "container_image": "ghcr.io/tenstorrent/tt-inference-server/qwen38-galaxy@sha256:0b11f045bf089088a62b6e3c1aeb9b64cc72b74a632935f25203609b1e023579",
+  "probes": {
+    "startupProbe": {
+      "path": "/health",
+      "port": "http"
+    },
+    "readinessProbe": {
+      "path": "/health",
+      "port": "http"
+    },
+    "livenessProbe": {
+      "path": "/health",
+      "port": "http"
+    }
+  },
+  "auth_still_enabled": true,
+  "kubernetes_install_performed": false,
+  "hardware_opened": false,
+  "tests": {
+    "command": "python -m pytest -q tests/test_qwen38_galaxy_release.py --tb=short",
+    "passed": 19,
+    "failed": 0,
+    "before_fix_chart_regressions_failed": 4
+  }
+}

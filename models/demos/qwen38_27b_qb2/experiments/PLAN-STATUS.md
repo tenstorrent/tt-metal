@@ -1,5 +1,13 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 07:39 UTC update: found and fixed the Qwen Helm overlay's authenticated
+liveness failure. Pinned vLLM returns 401 on unauthenticated `/v1/models`;
+all probes now use `/health`, with inference authentication preserved. Nineteen
+packaging tests pass; corrected values and the TTIS commit are pushed. This is
+not container hardware or Kubernetes qualification. Head-control G0 remains
+actively loading; there is no new GPQA score.
+[Probe reproduction and bundle](../galaxy-evidence/helm-health-v1/README.md).
+
 Oct 9 07:10 UTC update: native physical-Galaxy HTTP completed all nine admitted
 cells; the three KV-capacity-guard cells remain untested. Fresh-prefill aggregate
 output rates range from 314.31 tok/s at 16K/C128 to 12.75 at near-256K/C32;

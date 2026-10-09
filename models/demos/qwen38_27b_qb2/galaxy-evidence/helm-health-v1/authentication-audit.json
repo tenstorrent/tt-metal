@@ -1,0 +1,30 @@
+{
+  "state": "completed",
+  "vllm_version": "0.26.0+empty",
+  "source_path": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/serving_env/lib/python3.10/site-packages/vllm/entrypoints/serve/utils/server_utils.py",
+  "source_sha256": "52a4e59852a5c478ddf9d4dec1737dd5c8a807000d646ee61c9828d49f2d8491",
+  "scope": "Unmodified AST-extracted vLLM authentication middleware with a synthetic downstream ASGI app; no engine, hardware or network listener",
+  "hardware_opened": false,
+  "cases": [
+    {
+      "path": "/v1/models",
+      "credentials": "absent",
+      "status": 401
+    },
+    {
+      "path": "/v1/models",
+      "credentials": "valid_test_key",
+      "status": 200
+    },
+    {
+      "path": "/health",
+      "credentials": "absent",
+      "status": 200
+    },
+    {
+      "path": "/health",
+      "credentials": "invalid_test_key",
+      "status": 200
+    }
+  ]
+}

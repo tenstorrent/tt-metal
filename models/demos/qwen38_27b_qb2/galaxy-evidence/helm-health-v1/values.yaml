@@ -1,0 +1,83 @@
+model: Qwen3.8-27B
+device: blackhole_galaxy
+engine: vllm
+impl: qwen38_27b_qb2
+requireImageDigests: true
+initContainerImage: busybox@sha256:66a6306db78bf2dbf3487f293aa8d6990d8e506fdffab9cc43fe422becf886e4
+hfCacheDir: /home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2
+deviceBoardNames:
+  blackhole_galaxy: galaxy-blackhole
+deviceBoardCounts:
+  blackhole_galaxy: 32
+deviceChipCounts:
+  blackhole_galaxy: 32
+models:
+  Qwen3.8-27B:
+    vllm:
+      blackhole_galaxy:
+        defaultImpl: qwen38_27b_qb2
+        impls:
+          qwen38_27b_qb2:
+            image:
+              repository: ghcr.io/tenstorrent/tt-inference-server/qwen38-galaxy
+            progressDeadlineSeconds: 7200
+            probes:
+              liveness:
+                path: /health
+              readiness:
+                path: /health
+            resources:
+              requests:
+                cpu: '24'
+                memory: 256Gi
+              limits:
+                memory: 384Gi
+            env:
+            - name: ARCH_NAME
+              value: blackhole
+            - name: DISABLE_METAL_OP_TIMEOUT
+              value: '1'
+            - name: EXTRA_MODELS_DIR
+              value: /home/container_app_user/tt-metal/models/demos
+            - name: HF_HUB_OFFLINE
+              value: '1'
+            - name: MESH_DEVICE
+              value: (8, 4)
+            - name: QWEN_BATCHED_DECODE_ROPE
+              value: '1'
+            - name: QWEN_BATCHED_PREFILL
+              value: '1'
+            - name: QWEN_COMPACT_DECODE_ATTENTION
+              value: '1'
+            - name: QWEN_COMPACT_DECODE_MLP
+              value: '1'
+            - name: QWEN_COMPACT_DECODE_RESIDUAL
+              value: '1'
+            - name: QWEN_DECODE_BUCKETS
+              value: '1'
+            - name: QWEN_EXPECTED_PRECISION_SHA256
+              value: 5202698e424ef9a593a741a3c3779efff72a70bb64b3f0cadf229fd4a80b3e39
+            - name: QWEN_PRECISION_CONFIG
+              value: /home/container_app_user/tt-metal/models/demos/qwen38_27b_qb2/config/precision_accurate_decode.json
+            - name: QWEN_PREFILL_BATCHED_HEAD
+              value: '1'
+            - name: QWEN_PREFILL_MAX_BATCH_TOKENS
+              value: '32768'
+            - name: QWEN_PREFILL_RESIDUAL_LAYOUT
+              value: sharded_replicated_norm
+            - name: QWEN_PREFILL_SKIP_INTERMEDIATE_HEAD
+              value: '1'
+            - name: QWEN_PREFILL_STARTUP_WARMUP
+              value: '1'
+            - name: QWEN_VLLM_HOST_COMPATIBILITY
+              value: '1'
+            - name: QWEN_VLLM_KV_POOL_TOKENS
+              value: '1050592'
+            - name: TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES
+              value: '0'
+            - name: VLLM_DEBUG_LOG_API_SERVER_RESPONSE
+              value: 'false'
+            - name: VLLM_NO_USAGE_STATS
+              value: '1'
+            - name: VLLM_TARGET_DEVICE
+              value: tt

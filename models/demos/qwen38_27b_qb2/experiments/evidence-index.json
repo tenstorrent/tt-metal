@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T07:22:25.789258+00:00",
+  "generated_at": "2026-10-09T07:41:01.577792+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -49,8 +49,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 74725,
-      "sha256": "b0e4aee5cdf39b04654d4c048cf004f9a553ca10d7f0f69e7261e5b66c4a13e7"
+      "bytes": 76896,
+      "sha256": "d72557cfd693ab8821562370a61a9193868ac4afd99af9cc6b7df1d726e7dd40"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -59,8 +59,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 24528,
-      "sha256": "08dbb18b10b1fa8a4d362a9198997e2772a1bf5281bc6a63c990e1810af5f1df"
+      "bytes": 25041,
+      "sha256": "40151b2bc0af8c9917562cee56aba09d037fed95dea35329b597bcd83be0a784"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -2232,6 +2232,31 @@
       "path": "galaxy-evidence/hardware-followup-launch-v1/collection.json",
       "bytes": 6471,
       "sha256": "6b78eef295c691232effd7e9bea16a8e6bb30a581e4c586c4cf17fc9efd87edb"
+    },
+    {
+      "path": "galaxy-evidence/helm-health-v1/README.md",
+      "bytes": 2940,
+      "sha256": "6600b069c7fe29d833b57199a1d86cc135ce4c9aeac5975e38f3a4b070b6aa25"
+    },
+    {
+      "path": "galaxy-evidence/helm-health-v1/authentication-audit.json",
+      "bytes": 888,
+      "sha256": "6090ff816f2779d2261149484f51a908719b7ad46600af2bcf0297a299dfb436"
+    },
+    {
+      "path": "galaxy-evidence/helm-health-v1/authentication-audit.py",
+      "bytes": 3042,
+      "sha256": "f460042e4b7a71fc52847f92ad2b60c88f3adb5f6c1475963f5d6466d95488a3"
+    },
+    {
+      "path": "galaxy-evidence/helm-health-v1/render-audit.json",
+      "bytes": 1067,
+      "sha256": "db3fa94c79ed99abcd00f696ddaf67e8fcac468083cfa3c3ae9ca1793408a15f"
+    },
+    {
+      "path": "galaxy-evidence/helm-health-v1/values.yaml",
+      "bytes": 2917,
+      "sha256": "3d0c223f87437d10b438d4a3fc08ce1c6cd22727040ace750c4f8af48be886a1"
     },
     {
       "path": "galaxy-evidence/hf-layer-reference-v1/README.md",

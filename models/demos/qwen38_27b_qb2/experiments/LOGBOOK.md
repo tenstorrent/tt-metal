@@ -960,3 +960,35 @@ No session connection is needed for that queue to continue.
   loading replicas for G0; the most recent GPQA remains 170/198.
 
 [Audit and reproduction](../galaxy-evidence/tau-review-v1/README.md).
+
+## Oct 9, 07:31-07:39 UTC: authenticated Helm probe fix
+
+- Checked whether no-device image validation could run early on the idle .34
+  host. Its 28.07 GB available disk does not meet the existing 33.51 GB import
+  budget including reserve. Compared the actual OCI configuration's layer
+  prefix against all three existing Metal images: zero reusable prefix layers.
+  Kept the original persistent .98 container-check queue; deleted nothing.
+- Audited the generated runtime spec and rendered chart against the measured
+  native launch. Found an authenticated-deployment failure: the inherited
+  liveness route is `/v1/models`, but pinned vLLM protects that path and kubelet
+  sends no bearer token. Executing the unmodified authentication class against
+  synthetic ASGI requests reproduced 401, while `/health` passed the guard.
+  This did not import vLLM, open devices, or start a listener. Source inspection
+  confirms `/health` invokes engine health and reports a dead engine as 503.
+- Changed only the Qwen overlay to select `/health` for all probes. Four chart
+  cases failed before the fix; all 19 packaging tests passed after it, with
+  API-key injection still enabled. Ruff and diff checks passed. Pushed TTIS
+  commit `2485b039be071f75fa29adff6c84ecc87d60359e` under
+  `anatarajan/qwen38-galaxy-release-20261009`.
+- Regenerated the real native bundle from the exact G0 source pin. G0 receipt,
+  runtime ModelSpec and image verifier remain byte-identical to the built image
+  inputs. Preserved corrected values and a render receipt; the image is still
+  unqualified and not registry-published. Also corrected the packaging report
+  to include Tau3's step-limit outcome and partial manual-review findings.
+- Head-control PID 1103813 remains live in invocation
+  `ff89c12d6a9b4feaa268d7eff48b4132`, actively loading another replica for G0.
+  No new accuracy result: full GPQA remains 170/198 and Tau3 remains 3/12.
+  Review of recurrent-attention source did not establish another numerical bug;
+  the queued HF layer comparison is still needed to localize the remaining gap.
+
+[Helm probe evidence and corrected values](../galaxy-evidence/helm-health-v1/README.md).
