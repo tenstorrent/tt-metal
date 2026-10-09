@@ -18,6 +18,7 @@ struct AllGatherMulticastFactory {
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
         tt::tt_metal::GlobalSemaphore barrier_sem;
+        tt::tt_metal::GlobalSemaphore done_sem;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
@@ -43,6 +44,7 @@ private:
         const AllGatherInputs& tensor_args,
         const Tensor& output_tensor,
         const tt::tt_metal::GlobalSemaphore& barrier_sem,
+        const tt::tt_metal::GlobalSemaphore& done_sem,
         uint32_t num_available_cores);
 };
 

@@ -16,6 +16,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -416,6 +417,8 @@ std::vector<uint32_t> build_mux_downstream_sender_rt_args(
 
     std::vector<uint32_t> downstream_rt_args;
     tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(
+        tt::tt_metal::MetalContext::instance().get_cluster(),
+        tt::tt_metal::MetalContext::instance().hal(),
         sender_worker_adapter_spec,
         device->id(),
         {mux_logical_core},

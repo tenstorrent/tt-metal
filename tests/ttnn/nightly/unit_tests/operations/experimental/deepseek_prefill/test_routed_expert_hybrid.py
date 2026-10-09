@@ -39,7 +39,6 @@ from tests.ttnn.utils_for_testing import comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
     _ISL_ALLOCATED_TOKENS,
-    reshard_expert_weights_nd,
     _ISL_EXHAUSTIVE_MODELS,
     _ISL_EXHAUSTIVE_SWEEP,
     _ISL_FUNCTIONAL_SWEEP,
@@ -167,11 +166,10 @@ def run_routed_expert_hybrid(
         weights_dtype=weights_dtype,
         activation=activation,
         hybrid_token_threshold=threshold,
+        # One weight set serves both bands, so a placement is not a per-band choice: whichever band
+        # claims the count reads the weights in the layout the module built them in.
+        weights_dram_nd_sharded=weights_dram_sharded,
     )
-    # One weight set serves both bands, so a placement is not a per-band choice: whichever band
-    # claims the count reads the weights in whatever layout they were left in.
-    if weights_dram_sharded:
-        reshard_expert_weights_nd(tt_expert, device)
     tt_output = tt_expert(tt_input, idx_tensor([active_tokens]), idx_tensor([0]))
 
     # For a 1-device replicated tensor, ConcatMeshToTensor(dim=0) with 1 slice returns the tensor.
@@ -303,9 +301,7 @@ def test_tt_routed_expert_hybrid_isl_sweep(
     x_row_major: bool,
     weights_dram_sharded: bool,
 ):
-    """The aligned sweep, which straddles each model's threshold in both directions: kimi_k26's
-    sentinel keeps every count fused, glm_51's 1792 puts 1024 and below in the fused band and 2048
-    and above in the composite's."""
+    """The aligned sweep, which straddles each model's threshold in both directions."""
     run_routed_expert_hybrid(
         mesh_device,
         allocated_tokens,

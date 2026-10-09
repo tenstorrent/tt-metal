@@ -760,8 +760,9 @@ _OP_DOMAIN_REGISTRY: Dict[
     #
     # Bounded by accuracy rather than representable range: a**b evaluates as
     # exp(b * ln a), and the relative error is roughly flat in the operands, so the bounds
-    # pair with the rtol in BINARY_CUSTOM_TOLERANCES. A <= 16 is left out because it drives
-    # |a**b| to Float16's ceiling, which would make this an overflow test.
+    # pair with the rtol SfpuElwpow declares in sfpu_accuracy_budget.yaml. A <= 16 is
+    # left out because it drives |a**b| to Float16's ceiling, which would make this an
+    # overflow test.
     MathOperation.SfpuElwpow: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=8.0),
         spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=4.0),
@@ -771,12 +772,40 @@ _OP_DOMAIN_REGISTRY: Dict[
     #
     # x's ceiling is an absolute-accuracy bound: the error is dominated by
     # x * abs_err(ln y) and so grows with x while a fixed atol does not, which is what pairs
-    # it with the atol in BINARY_CUSTOM_TOLERANCES. Most of that error is output
-    # quantization rather than the kernel. y keeps its full log-uniform span.
+    # it with the atol SfpuXlogy declares in sfpu_accuracy_budget.yaml. Most of that error
+    # is output quantization rather than the kernel. y keeps its full log-uniform span.
     MathOperation.SfpuXlogy: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=8.0),
         spec_B=StimuliSpec(
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=10.0
+        ),
+    ),
+    # logaddexp: finite for any finite pair, so the sweep deliberately crosses the
+    # exp() overflow boundary (|x| > 88.7) where the naive log(exp(a) + exp(b))
+    # composition returns +/-inf. Independent +/-200 draws land ~10% of positions
+    # with |a - b| < 20 — the band where the log1p(exp(-|a-b|)) correction is
+    # non-negligible — and the rest exercise the max-dominated path at magnitudes
+    # the composed form cannot survive. +/-200 stays representable in fp16.
+    MathOperation.SfpuLogaddexp: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+        spec_B=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+    ),
+    # logaddexp2: same shape, tighter boundary. The composed log2(2**a + 2**b) form
+    # overflows past |x| > 127 rather than 88.7, so the same +/-200 draw crosses it
+    # with room to spare: 33.2% of positions have max(a, b) past 127. The
+    # log2(1 + 2**-|a - b|) correction is worth more than half an ulp of the result
+    # on 1.3% of positions, against 0.7% for logaddexp -- a band 1.85x wider,
+    # because 2**-|a - b| decays more slowly than e**-|a - b|.
+    MathOperation.SfpuLogaddexp2: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+        spec_B=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
         ),
     ),
     MathOperation.SfpuAddTopRow: OperandSpecs(
@@ -1061,6 +1090,8 @@ _SFPU_BINARY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwpow,
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuXlogy,
+        MathOperation.SfpuLogaddexp,
+        MathOperation.SfpuLogaddexp2,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLogicalRightShift,
@@ -2038,6 +2069,14 @@ def specials_safe(
     return True
 
 
+def unpacks_to_dest(input_format: DataFormat, dest_acc: Union[bool, Enum]) -> bool:
+    """Does the unpack write *input_format* straight into Dest, rather than through
+    SrcA and the datacopy? A 32-bit input at dest_acc=Yes. One rule for the ULP sweep
+    driver's TestConfig, the sweep's input masks and :func:`negative_zero_delivered`,
+    so the three cannot drift apart."""
+    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
+
+
 def negative_zero_delivered(
     input_format: DataFormat, dest_acc: Optional[Union[bool, Enum]]
 ) -> bool:
@@ -2055,7 +2094,7 @@ def negative_zero_delivered(
     """
     if dest_acc is None:
         return True
-    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
+    return unpacks_to_dest(input_format, dest_acc)
 
 
 def _dest_is_32_bit(
@@ -2288,13 +2327,15 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Composition through a reciprocal / log / exp. Each builds its result from a primitive
         # the ISA specifies only inside a stated finite range, so what the composition does with
         # a non-finite input is an LLK decision rather than an ISA one, and one answer decides
-        # all six.
+        # all eight.
         MathOperation.SfpuElwdiv,  # reciprocal + Newton-Raphson
         MathOperation.SfpuXlogy,  # x * log(y)
         MathOperation.SfpuElwpow,  # exp(b * ln a)
         MathOperation.SfpuBinaryFmod,  # quotient via reciprocal
         MathOperation.SfpuBinaryRemainder,  # as fmod
         MathOperation.SfpuAtan2,  # ratio plus a format-specific polynomial; 2 cells, not 4
+        MathOperation.SfpuLogaddexp,  # max(a, b) + log1p(exp(-|a - b|))
+        MathOperation.SfpuLogaddexp2,  # as logaddexp, correction scaled by log2(e)
         # Compare-against-zero on an operand that may be a NaN: calculate_mask lowers to
         # SFPSETCC, which is unspecified for a negative zero or a NaN. The same thing that
         # holds Sign and Heaviside out of the unary gate.

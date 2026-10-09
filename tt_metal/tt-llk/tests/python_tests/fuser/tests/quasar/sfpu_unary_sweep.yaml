@@ -29,7 +29,9 @@ operations:
         unpack_to_dest: true
         block_size: [32, 32]
       - type: "UnarySfpu"
-        operation: all
+        # The ops this sweep covered before the BH SFPI port registered more; `all` would now also
+        # pick the Int32-only and domain-limited ports, which this float, [0.005, 10] sweep cannot test.
+        operation: [Abs, Exp, Gelu, Reciprocal, Relu, Rsqrt, Sigmoid, Silu, Sqrt, Square, Tanh, EqualZero, NotEqualZero, LessThanZero, GreaterThanZero, LessThanEqualZero, GreaterThanEqualZero]
         approximation_mode: all
         iterations: 32
         block_size: [32, 32]

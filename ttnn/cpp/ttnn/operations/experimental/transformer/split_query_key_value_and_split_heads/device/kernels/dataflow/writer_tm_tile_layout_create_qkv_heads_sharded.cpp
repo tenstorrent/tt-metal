@@ -28,7 +28,6 @@ void kernel_main() {
     constexpr uint32_t cb_out2 = tt::CBIndex::c_18;
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_in0);
-    const DataFormat data_format = get_dataformat(cb_in0);
 
     CircularBuffer cb_in0_obj(cb_in0);
     CircularBuffer cb_im0_obj(cb_im0);

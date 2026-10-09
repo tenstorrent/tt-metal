@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/distributed/named_shm.hpp"
-#include "tt_metal/distributed/shm_resource_tracker.hpp"
+#include <tt-metalium/experimental/sockets/named_shm.hpp>
+#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 
 #include <tt_stl/assert.hpp>
 #include <fmt/format.h>
@@ -44,6 +44,7 @@ NamedShm NamedShm::create(const std::string& name, size_t size) {
     TT_FATAL(!name.empty() && name[0] == '/', "POSIX shm name must start with '/': {}", name);
     TT_FATAL(size > 0, "Shared memory size must be > 0");
 
+    auto& tracker = ShmResourceTracker::instance();
     int fd = shm_open(name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
     TT_FATAL(
         fd != -1,
@@ -70,7 +71,7 @@ NamedShm NamedShm::create(const std::string& name, size_t size) {
     }
 
     std::memset(ptr, 0, size);
-    ShmResourceTracker::instance().track_shm(name);
+    tracker.track_shm(name);
     return NamedShm(name, ptr, size);
 }
 

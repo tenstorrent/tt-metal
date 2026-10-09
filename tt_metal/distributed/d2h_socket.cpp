@@ -7,11 +7,11 @@
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
-#include "tt_metal/distributed/named_shm.hpp"
+#include <tt-metalium/experimental/sockets/named_shm.hpp>
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
-#include "tt_metal/distributed/hd_socket_descriptor.hpp"
+#include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
 #include "tt_metal/distributed/pcie_core_writer.hpp"
-#include "tt_metal/distributed/shm_resource_tracker.hpp"
+#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 #include "tt_metal/impl/buffers/d2h_socket_internal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"

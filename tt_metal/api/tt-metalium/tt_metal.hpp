@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <map>
 #include <memory>
-#include <optional>
 #include <string>
 #include <span>
 #include <vector>
@@ -16,10 +15,8 @@
 #include <tt_stl/span.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/cluster.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device_types.hpp>
 // UMD: re-exports CoreType (used in SetRuntimeArgs/GetRuntimeArgs default parameter).
 #include <umd/device/types/core_coordinates.hpp>
@@ -95,6 +92,9 @@ IDevice* GetActiveDevice(ChipId device_id);
  * host_buffer | Buffer on host to copy data from                | Span<const uint8_t> &   | Host buffer size must match
  * buffer               | Yes      |
  */
+[[deprecated(
+    "Use distributed::WriteShard or distributed::EnqueueWriteMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer);
 /**
  * Copies data from a host buffer into the specified buffer
@@ -108,17 +108,30 @@ void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer);
  * buffer               | Yes      |
  */
 template <typename DType>
+[[deprecated(
+    "Use distributed::WriteShard or distributed::EnqueueWriteMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void WriteToBuffer(Buffer& buffer, const std::vector<DType>& host_buffer) {
+// Compatibility shim: calling the deprecated overload is intentional (GCC warns even without instantiation).
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     WriteToBuffer(
         buffer,
         ttsl::Span<const uint8_t>(
             reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(DType)));
+#pragma GCC diagnostic pop
 }
 template <typename DType>
+[[deprecated(
+    "Use distributed::WriteShard or distributed::EnqueueWriteMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void WriteToBuffer(const std::shared_ptr<Buffer>& buffer, const std::vector<DType>& host_buffer) {
     WriteToBuffer(*buffer, host_buffer);
 }
 
+[[deprecated(
+    "Use distributed::ReadShard or distributed::EnqueueReadMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer);
 /**
  * Copies data from a buffer into a host buffer
@@ -131,13 +144,23 @@ void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer);
  * host_buffer | Buffer on host to copy data into                | std::vector<DType> &    | | Yes      | |
  */
 template <typename DType>
+[[deprecated(
+    "Use distributed::ReadShard or distributed::EnqueueReadMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void ReadFromBuffer(Buffer& buffer, std::vector<DType>& host_buffer) {
     auto buffer_size = buffer.size();
     TT_FATAL(buffer_size % sizeof(DType) == 0, "Buffer size is not divisible by dtype size");
     host_buffer.resize(buffer.size() / sizeof(DType));
+// Compatibility shim: calling the deprecated overload is intentional (GCC warns even without instantiation).
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     ReadFromBuffer(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()));
+#pragma GCC diagnostic pop
 }
 template <typename DType>
+[[deprecated(
+    "Use distributed::ReadShard or distributed::EnqueueReadMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<DType>& host_buffer) {
     ReadFromBuffer(*buffer, host_buffer);
 }
@@ -171,6 +194,9 @@ void LaunchProgram(
     const std::shared_ptr<Program>& program,
     bool wait_until_cores_done = true,
     bool force_slow_dispatch = false);
+[[deprecated(
+    "Use MeshCommandQueue synchronization (e.g. distributed::Finish) instead. This API will be removed after "
+    "2026-10-28.")]]
 void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results = true);
 
 /**
@@ -214,12 +240,18 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch 
  * | program             | The program holding the runtime args                                   | const Program & | |
  * Yes      |
  */
+[[deprecated(
+    "distributed::EnqueueMeshWorkload writes runtime args as part of the launch. This API will be removed after "
+    "2026-10-28.")]]
 void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 // Configures a given device with a given program.
 // - Loads all kernel binaries into L1s of assigned Tensix cores
 // - Configures circular buffers (inits regs with buffer data)
 // - Takes the device out of reset
+[[deprecated(
+    "Use distributed::EnqueueMeshWorkload, or experimental::ConfigureProgramWithoutLaunch to configure without "
+    "launching. This API will be removed after 2026-10-28.")]]
 bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**
@@ -255,6 +287,7 @@ uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, 
  * | host_buffer  | Buffer on host to copy data from                       | std::span<const uint8_t> | Host buffer must be fully fit DRAM buffer | Yes      |
  */
 // clang-format on
+[[deprecated("WriteToDeviceDRAMChannel is an internal-only API; it will be removed after 2026-10-30.")]]
 bool WriteToDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, std::span<const uint8_t> host_buffer);
 /**
@@ -271,6 +304,7 @@ bool WriteToDeviceDRAMChannel(
  * | [DRAM_UNRESERVED_BASE, dram_size)         | Yes      | | host_buffer  | Buffer on host to copy data from |
  * std::vector<uint32_t> | Host buffer must be fully fit DRAM buffer | Yes      |
  */
+[[deprecated("WriteToDeviceDRAMChannel is an internal-only API; it will be removed after 2026-10-30.")]]
 bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer);
 
 // clang-format off
@@ -287,6 +321,7 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
  * | host_buffer  | Buffer on host to copy data into                             | std::span<uint8_t>    |                                | Yes      |
  */
 // clang-format on
+[[deprecated("ReadFromDeviceDRAMChannel is an internal-only API; it will be removed after 2026-10-30.")]]
 bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer);
 
 /**
@@ -304,6 +339,7 @@ bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addre
  * device in bytes                  | uint32_t              |                                | Yes      | | host_buffer
  * | Buffer on host to copy data into                             | std::vector<uint32_t> | | Yes      |
  */
+[[deprecated("ReadFromDeviceDRAMChannel is an internal-only API; it will be removed after 2026-10-30.")]]
 bool ReadFromDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer);
 

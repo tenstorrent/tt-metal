@@ -51,11 +51,22 @@ sfpi_inline sfpi::vInt _float_to_int32_for_exp_21f_(sfpi::vFloat val) {
  * Use this variant when the caller has already clamped its input (e.g. i1's
  * asymptotic path operates on |x| ∈ [10, 88.5]).
  *
+ * The overload taking c0, c1 and c2 is for a caller that evaluates it once per element
+ * (e.g. logaddexp): it can load the fractional-part coefficients once, before its loop.
+ * Each is a full fp32 value, two SFPLOADIs, which the one-argument form reloads on every
+ * call. Pass EXP_21F_BF16_C0..C2, each as a float or as a vFloat already holding it: like
+ * PolynomialEvaluator::eval, the overload takes either, so the one-argument form, which
+ * passes floats, compiles exactly as it did before.
+ *
  * @param val The input value, must be in the safe range described above.
  * @return sfpi::vFloat Result of exp(val), 21-bit accuracy (~3 FP32 ULP).
  */
-template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
+constexpr float EXP_21F_BF16_C0 = 1.0017248f;
+constexpr float EXP_21F_BF16_C1 = 7.839635491371155e-08f;
+constexpr float EXP_21F_BF16_C2 = 4.791750143340323e-15f;
+
+template <bool is_fp32_dest_acc_en, typename C0, typename C1, typename C2>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val, C0 c0, C1 c1, C2 c2) {
     constexpr float ONE_LN2 = 1.4426950216293334961f;
     sfpi::vFloat xlog2 = (val * ONE_LN2 + 127.f);
 
@@ -69,7 +80,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
     // This uses a 2nd degree polynomial adjustment of the fractional part
-    frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+    frac = PolynomialEvaluator::eval(frac, c0, c1, c2);
 
     // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
     sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
@@ -85,6 +96,11 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
     return y;
 }
 
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
+    return _sfpu_exp_21f_bf16_unsafe_<is_fp32_dest_acc_en>(val, EXP_21F_BF16_C0, EXP_21F_BF16_C1, EXP_21F_BF16_C2);
+}
+
 /*
  * This function implements the exponential function using a polynomial approximation algorithm
  * based on "Simple Multiple Precision Algorithms for Exponential Functions [Tips & Tricks]"
@@ -98,8 +114,10 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
-template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
+// Like the unsafe overload, accepts EXP_21F_BF16_C0..C2 as floats or preloaded
+// vFloats. A fused caller can retain them across its loop without changing the clamp.
+template <bool is_fp32_dest_acc_en, typename C0, typename C1, typename C2>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val, C0 c0, C1 c1, C2 c2) {
     // This function computes exp(x) by leveraging mathematic properties of exp(x):
     // That is, exp(x) = 2**(x / ln2) = 2**(x_i) * 2**(x_f) where
     // - z_i = trunc(x / ln2) (integer part)
@@ -133,7 +151,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
     // This uses a 2nd degree polynomial adjustment of the fractional part
-    frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+    frac = PolynomialEvaluator::eval(frac, c0, c1, c2);
 
     // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
     sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
@@ -147,6 +165,11 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
     }
 
     return y;
+}
+
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
+    return _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(val, EXP_21F_BF16_C0, EXP_21F_BF16_C1, EXP_21F_BF16_C2);
 }
 
 /*

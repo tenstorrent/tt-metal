@@ -170,7 +170,7 @@ def test_reduce_w_height_sharded_uneven_split(device, num_cores):
 
 
 def test_reduce_w_height_sharded_float_min(device):
-    """bfloat16 min lowers to -MAX(-x) (reduce_w_neg), a different kernel on the same fast path."""
+    """bfloat16 min runs the SFPU MIN reduce, a different engine on the same fast path."""
     torch.manual_seed(0)
     torch_input = torch.randn(SHARDED_W_SHAPE, dtype=torch.bfloat16)
     torch_output = torch.amin(torch_input, dim=-1, keepdim=True)

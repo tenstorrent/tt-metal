@@ -209,6 +209,7 @@ class TtMoe(LightweightModule):
         routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         routed_expert_activation=ttnn.RoutedExpertActivation.Silu,
         routed_expert_hybrid_token_threshold=None,
+        routed_expert_weights_dram_nd_sharded: Optional[bool] = None,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation: str = ACTIVATION_SILU,
@@ -307,6 +308,11 @@ class TtMoe(LightweightModule):
                 host sync. The crossover is per model and per shape, not a constant -- measure
                 before choosing T: the two ops' per-shape device times are gated by
                 test_moe_fused_swiglu_perf.py and test_single_routed_expert_perf.py.
+            routed_expert_weights_dram_nd_sharded: DRAM placement of the routed-expert weights.
+                None (default) takes TtRoutedExpert's arch default -- ND-sharded on Blackhole, where
+                both routed-expert ops read a per-core weight slice as one NoC transaction per
+                K-row; interleaved elsewhere. Passed straight through; the cache is placement-
+                agnostic, so this never invalidates one.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -528,6 +534,7 @@ class TtMoe(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
             activation=routed_expert_activation,
             hybrid_token_threshold=routed_expert_hybrid_token_threshold,
+            weights_dram_nd_sharded=routed_expert_weights_dram_nd_sharded,
         )
 
         # Initialize shared expert (col axis: axis 1)
@@ -713,7 +720,7 @@ class TtMoe(LightweightModule):
                 (build_padding_config_device) instead of on host — the host builder's from_torch is
                 illegal inside a trace capture, and a config baked in at capture time would be wrong
                 for every later chunk. Ignored unless padding awareness is active (actual_isl set and
-                a DEVICE_FP32 gate).
+                a DEVICE_FP32 or GPT_DEVICE gate).
             input_ids: host token ids for the whole sequence, flat, one per row of x. Required by
                 the HASH_HOST / HASH_DEVICE gate modes, which select experts by tid2eid[input_ids].
                 HASH_DEVICE ships them per forward, so it is illegal inside a trace capture and
@@ -755,8 +762,8 @@ class TtMoe(LightweightModule):
 
         # Build the per-device [local_real_tokens, pad_side] config once and share the
         # SAME tensor between the gate topk (sentinel-marks padded rows) and the dispatch
-        # op (bounds its token loop). This is only valid in DEVICE_FP32, where the gate
-        # actually sentinel-marks padded tokens so routing_setup/combine stay consistent
+        # op (bounds its token loop). This is only valid in DEVICE_FP32 and GPT_DEVICE, where
+        # the gate sentinel-marks padded tokens so routing_setup/combine stay consistent
         # with a shortened dispatch loop. In other gate modes padded tokens keep real
         # expert indices, so dispatch must process the full range -> padding_config=None.
         #
@@ -772,7 +779,8 @@ class TtMoe(LightweightModule):
         #     on-device. A caller that wanted padding awareness OFF under trace would pass
         #     actual_isl=None and get a capture with no padding-aware path at all.
         padding_config = None
-        if actual_isl is not None and self.gate.fallback_mode == GateComputeMode.DEVICE_FP32:
+        gate_marks_padding = self.gate.fallback_mode in (GateComputeMode.DEVICE_FP32, GateComputeMode.GPT_DEVICE)
+        if actual_isl is not None and gate_marks_padding:
             if metadata is not None:
                 # Traced path: the per-chunk scalars live on-device in the metadata tensors, so build
                 # the config with the device op. The host builder's from_torch cannot run inside a
@@ -795,7 +803,7 @@ class TtMoe(LightweightModule):
 
         self._dump_routing(indices, scores, actual_start or 0, cache_user_id, metadata is not None)
 
-        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
+        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _, _ = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
             num_routed_experts=self.num_routed_experts,
             num_experts_per_tok=self.num_experts_per_tok,

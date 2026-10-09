@@ -6,7 +6,11 @@ from itertools import product
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import (
+    ChipArchitecture,
+    get_chip_architecture,
+    is_4row_arch,
+)
 from helpers.constraints import get_valid_math_fidelities
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -29,6 +33,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
     quasar_mx_smoke,
+    runtime,
     select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -135,7 +140,9 @@ def reduce_pool_type_and_math_fidelity_combinations(formats, *, is_perf=False):
 @pytest.mark.quasar
 @parametrize(
     formats=REDUCE_FORMATS,
-    tile_dimensions=lambda formats: reduce_tile_dimensions(formats, is_perf=False),
+    tile_dimensions=runtime(
+        lambda formats: reduce_tile_dimensions(formats, is_perf=False)
+    ),
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=False),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=lambda formats: reduce_pool_type_and_math_fidelity_combinations(
@@ -319,8 +326,8 @@ _ARCH = get_chip_architecture()
 # the FP4 zf mux while srca_fmt_spec is still MXFP4_2x -- producing all-zero Dest.
 @pytest.mark.quasar
 @pytest.mark.skipif(
-    _ARCH != ChipArchitecture.QUASAR,
-    reason="MxFp4_2x GAPOOL reduce is op_mmul-family-only and exists on Quasar. Architecture derivations don't support it.",
+    _ARCH != ChipArchitecture.QUASAR or is_4row_arch(),
+    reason="MxFp4_2x GAPOOL reduce is not implemented on this architecture",
 )
 @parametrize(
     register_format_hint=[DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B],

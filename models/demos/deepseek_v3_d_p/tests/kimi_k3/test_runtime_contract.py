@@ -10,7 +10,7 @@ silently becomes a block argument and raises `TypeError` on the first layer, aft
 weight load. That is a long way to travel for a signature mismatch, and it is only reachable through
 `build_runtime`, which no eager test exercises.
 
-`tp_shard_kv` did exactly this: it arrived with GLM-5.2's 2D KV sharding (#51968), after the branch's
+`tp_shard_kv` did exactly this: it arrived with GLM-5.3's 2D KV sharding (#51968), after the branch's
 merge-base, and broke every runner construction until it was named.
 
 Hardware-free: this reads the call site's keyword list out of the source and binds it against the two
@@ -19,8 +19,8 @@ signatures. No mesh, no weights, no checkpoint.
 
 from __future__ import annotations
 
+import ast
 import inspect
-import re
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, create_autospec
@@ -30,21 +30,39 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, TtK3KdaAttention, build_attention
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import (
+    K3AttnContext,
+    K3KdaChunk,
+    TtK3KdaAttention,
+    build_attention,
+)
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 
 _RUNTIME_SRC = Path(__file__).parents[2] / "tt" / "tt_prefill_runtime.py"
 
 
+def _call_sites(callee: str, expected: int = 1) -> list[ast.Call]:
+    """The calls to `callee` in `TtPrefillRuntime`, read off the source."""
+    tree = ast.parse(_RUNTIME_SRC.read_text(encoding="utf-8"))
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and ast.unparse(node.func) == callee]
+    assert (
+        len(calls) == expected
+    ), f"expected {expected} {callee} call site(s), found {len(calls)}; the test needs updating, not deleting"
+    for call in calls:
+        assert not any(isinstance(arg, ast.Starred) for arg in call.args) and all(
+            kw.arg for kw in call.keywords
+        ), f"{callee} is called with */** expansion, which this test cannot bind; the test needs updating"
+    return calls
+
+
+def _bind(func, call: ast.Call, *leading) -> None:
+    inspect.signature(func).bind(*leading, *[None] * len(call.args), **{kw.arg: None for kw in call.keywords})
+
+
 def _model_cls_kwargs() -> list[str]:
-    """The keywords `_build_model` passes to `MODEL_CLS`, read off the call site."""
-    src = _RUNTIME_SRC.read_text(encoding="utf-8")
-    start = src.index("self.MODEL_CLS(")
-    call = src[start : src.index("\n        )\n", start)]
-    names = re.findall(r"^\s{12}(\w+)=", call, re.M)
-    assert names, "could not parse the MODEL_CLS call site; the test needs updating, not deleting"
-    return names
+    """The keywords `_build_model` passes to `MODEL_CLS`."""
+    return [kw.arg for kw in _call_sites("self.MODEL_CLS")[0].keywords]
 
 
 def test_every_runtime_kwarg_binds_to_the_transformer_or_the_block():
@@ -60,6 +78,40 @@ def test_every_runtime_kwarg_binds_to_the_transformer_or_the_block():
         f"on the first layer. Name them in TtKimiK3Transformer.__init__ (rejecting the values "
         f"Kimi-K3 cannot honour) rather than widening TtKimiK3Block."
     )
+
+
+def test_the_cache_check_call_binds_to_the_transformer():
+    """`check_cache_complete` runs before the model is built, so a kwarg it rejects fails every runner."""
+    _bind(TtKimiK3Transformer.check_cache_complete, _call_sites("self.MODEL_CLS.check_cache_complete")[0])
+
+
+def test_every_forward_call_binds_to_the_transformer():
+    """The eager and traced chunk paths both call `self.model.forward`; neither is reached by an eager test."""
+    for call in _call_sites("self.model.forward", expected=2):
+        _bind(TtKimiK3Transformer.forward, call, None)
+
+
+@pytest.mark.parametrize(
+    "mtp_kwargs",
+    [{"mtp_union": object()}, {"on_mtp_complete": Mock()}, {"input_is_embedded": True}, {"provided_levels": 1}],
+)
+def test_forward_rejects_mtp_arguments_before_device_work(expect_error, mtp_kwargs):
+    model = object.__new__(TtKimiK3Transformer)
+    with expect_error(ValueError, "no MTP predictor"):
+        model.forward(object(), **mtp_kwargs)
+
+
+def test_runtime_rejects_mtp_before_the_shared_build(monkeypatch, expect_error):
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
+
+    runtime = object.__new__(TtKimiK3Runtime)
+    runtime.config = SimpleNamespace(mtp_levels=2)
+    parent_build = create_autospec(TtPrefillRuntime._build_model)
+    monkeypatch.setattr(TtPrefillRuntime, "_build_model", parent_build)
+    with expect_error(ValueError, "no MTP predictor"):
+        runtime._build_model({})
+    parent_build.assert_not_called()
 
 
 def test_the_block_kwargs_that_are_swept_through_are_genuinely_block_level():
@@ -142,6 +194,7 @@ def test_kda_forward_uses_live_metadata_or_eager_position(monkeypatch, host_star
         states.read.return_value,
         actual_start=scalar,
         actual_end=end_scalar if use_metadata or host_end is not None else None,
+        selections=None,
     )
     states.commit.assert_called_once_with(1, new_state, 2)
     if use_metadata:
@@ -164,6 +217,42 @@ def test_kda_forward_uses_live_metadata_or_eager_position(monkeypatch, host_star
             "mesh_mapper": mapper,
         }
         assert any(call.args == (scalar,) for call in deallocate.call_args_list)
+
+
+def test_kda_chunk_shares_bounds_and_selections_across_layers(monkeypatch):
+    kdas = [create_autospec(ttKDA, instance=True) for _ in range(2)]
+    device = object()
+    for kda in kdas:
+        kda.device = device
+        kda.sequence_parallel_axis = 0
+        kda.active_seq_len_local = 640
+        kda.config = SimpleNamespace(num_heads=24, head_k_dim=128, head_v_dim=128)
+        kda.forward.return_value = object(), object()
+    start, end = object(), object()
+    from_torch = Mock(side_effect=[start, end])
+    deallocate = Mock()
+    monkeypatch.setattr(ttnn, "from_torch", from_torch)
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda device: object())
+    monkeypatch.setattr(ttnn, "deallocate", deallocate)
+    monkeypatch.setattr(ttnn, "all_gather", lambda tensor, **kwargs: tensor)
+    monkeypatch.setattr(ttnn, "squeeze", lambda tensor, **kwargs: tensor)
+    monkeypatch.setattr(ttnn, "unsqueeze", lambda tensor, **kwargs: tensor)
+    chunk = K3KdaChunk(5120, 10240)
+    ctx = K3AttnContext(actual_start=5120, actual_end=10240, kda_chunk=chunk)
+    for layer_idx, kda in enumerate(kdas):
+        TtK3KdaAttention(kda, layer_idx, 1, 1, ttnn.Topology.Linear, Mock()).forward(object(), ctx)
+
+    assert from_torch.call_count == 2
+    kdas[0].selections.assert_called_once_with(start, end)
+    kdas[1].selections.assert_not_called()
+    shared = kdas[0].selections.return_value
+    for kda in kdas:
+        assert kda.forward.call_args.kwargs == {"actual_start": start, "actual_end": end, "selections": shared}
+    # The layers do not free the shared bounds; the transformer releases them once per chunk.
+    assert all(call.args not in ((start,), (end,)) for call in deallocate.call_args_list)
+    deallocate.reset_mock()
+    chunk.release()
+    assert [call.args for call in deallocate.call_args_list] == [(start,), (end,)]
 
 
 @pytest.mark.parametrize("start,end", [(1, 64), (0, 33), (-32, 32), (32, 32), (64, 32)])

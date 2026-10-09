@@ -15,7 +15,9 @@
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #include "hostdev/dev_msgs.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tools/profiler/perf_counters.hpp"
 #include "api/kernel_thread_globals.h"
+#include "internal/tt-2xx/worker_go_signalling.h"
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -49,6 +51,9 @@ uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
+#if defined(NOC_API_V1)
+uint32_t noc_cmd_buf_lock[NOC_NUM_CMD_BUFS] __attribute__((used));
+#endif
 
 // temporary for things to build
 thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
@@ -73,7 +78,8 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
-inline void invalidate_kernel_binary_l2_cache(uintptr_t kernel_lma, launch_msg_t* launch_msg, uint32_t processor_index) {
+inline void invalidate_kernel_binary_l2_cache(
+    uintptr_t kernel_lma, launch_msg_t* launch_msg, uint32_t processor_index) {
     uint32_t kernel_size = launch_msg->kernel_config.kernel_text_size[processor_index];
     if (kernel_size == 0) {
         return;
@@ -210,8 +216,13 @@ inline void start_subordinate_kernel_run_early(uint32_t enables) {
 // Wake DM1 to run setup_dfb_remapper in parallel with DM0's ISR setup.
 // DM1 has a dedicated DFB-init-only loop and never runs user kernels.
 // Called before DM0's setup_dfb_implicit_sync so both run concurrently.
-inline void start_dm1_dfb_init() {
-    *((volatile uint8_t*)&(subordinate_sync->dm1)) = RUN_SYNC_MSG_GO;
+inline void start_dm1_dfb_init() { *((volatile uint8_t*)&(subordinate_sync->dm1)) = RUN_SYNC_MSG_GO; }
+
+// Idle cores still receive the go signal and read the launch slot at launch_msg_rd_ptr, which was not
+// written for this program: enables is 0 but local_cb_mask/local_cb_offset are stale and point at L1 that
+// may have been reused. Such a slot describes no DFBs.
+inline uint32_t get_num_local_dfbs(const launch_msg_t* launch_msg) {
+    return launch_msg->kernel_config.enables ? launch_msg->kernel_config.local_cb_mask : 0;
 }
 
 inline void wait_subordinates() {
@@ -228,18 +239,38 @@ inline void wait_subordinates() {
 
 inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
+// Publishes RUN_MSG_DONE and tells the dispatcher. worker_completion_group is the FDS group for this
+// launch, or 0 when the launch is on the NOC.
+inline void signal_dispatch_core_done(uint32_t go_message_index, uint32_t worker_completion_group) {
+    if (worker_completion_group != 0) {
+        DPRINT("DM0-FW: completion FDS\n");
+        mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+        signal_worker_completion(worker_completion_group);
+    } else {
+        DPRINT("DM0-FW: completion NOC\n");
+        mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+        const uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+        DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+        notify_dispatch_core_done(dispatch_addr, noc_index);
+    }
+}
+
 extern "C" uint32_t _start1() {
     configure_csr();
     // Raw read: hw_thread_idx has not been filled yet, and do_thread_crt1() below zeroes the .tbss
     // it lives in, so caching it any earlier would just be discarded.
     uint32_t hartid = internal_::read_hw_thread_idx();
     if (hartid == 0) {
+        do {
+            set_deassert_addresses();
+            assert_trisc_reset();
+        } while (READ_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR) != 0b1111);
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
         // Must precede the ready flag below, which releases the other pushers.
         WATCHER_RING_BUFFER_INIT();
         zero_semaphore_regions();
-        // Originally initalized to WAIT by host firmware initializer.
+        // Originally initialized to WAIT by host firmware initializer.
         // Will be set back to WAIT immediately before running kernels.
         (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
     }
@@ -255,7 +286,11 @@ extern "C" uint32_t _start1() {
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[0] != SHARED_GLOBALS_READY_GO) {
     }
     WAYPOINT("I");
-    DPRINT("DM0-FW: initialized\n");
+    if (hartid == 0) {
+        // Reset the shared print lock and announce from DM0 only.
+        DEVICE_PRINT_INITIALIZE_LOCK();
+        DPRINT("DM0-FW: initialized\n");
+    }
 
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
@@ -280,9 +315,7 @@ extern "C" uint32_t _start1() {
         deassert_trisc();
         DPRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
-        mailboxes->go_messages[0].signal = RUN_MSG_DONE;
-
-        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+        init_go_signalling(mailboxes);
         trigger_sync_register_init();
 
         DeviceProfilerInit();
@@ -310,16 +343,11 @@ extern "C" uint32_t _start1() {
                             DeviceIncrementTraceCount();
                             DeviceTraceOnlyProfilerInit();
                         }
-                        uint32_t go_message_index = mailboxes->go_message_index;
                         // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
                         // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
                         // value. For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC
-                        // txn is not issued.
-                        uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-                        mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
-                        // Notify dispatcher that this has been done
-                        DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-                        notify_dispatch_core_done(dispatch_addr, noc_index);
+                        // txn is not issued. dispatch_s only puts RUN_MSG_GO on the FDS wire, so this always uses NOC.
+                        signal_dispatch_core_done(mailboxes->go_message_index, /*worker_completion_group=*/0);
                     }
                 }
             }
@@ -328,6 +356,10 @@ extern "C" uint32_t _start1() {
 
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
+            uint32_t worker_completion_group =
+                go_message_signal == RUN_MSG_GO
+                    ? prepare_worker_completion_signal(mailboxes, launch_msg_address, /*wait_for_go=*/false)
+                    : 0;
             {
                 // Only include this iteration in the device profile if the launch message is valid. This is because all
                 // workers get a go signal regardless of whether they're running a kernel or not. We don't want to
@@ -349,6 +381,8 @@ extern "C" uint32_t _start1() {
                     mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
                 }
 
+                // The counter window runs from here to StopPerfCounters after wait_subordinates.
+                StartPerfCounters();
                 run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
@@ -372,32 +406,42 @@ extern "C" uint32_t _start1() {
                 // prev_noc_mode = noc_mode;
 
                 uint32_t tt_l1_ptr* dfb_l1_base =
-                    (uint32_t tt_l1_ptr*)(kernel_config_base +
-                                          launch_msg_address->kernel_config.local_cb_offset);
+                    (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
                 start_subordinate_kernel_run_early(enables);
 
-                // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or not.
-                uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
+                // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or
+                // not.
+                uint32_t num_local_dfbs = get_num_local_dfbs(launch_msg_address);
                 // Kick DM1 to run remapper config in parallel with DM0's ISR setup.
-                start_dm1_dfb_init();
+                if (num_local_dfbs != 0) {
+                    start_dm1_dfb_init();
+                }
                 WAYPOINT("R");
                 setup_dfb_implicit_sync(dfb_l1_base, num_local_dfbs);
                 WAYPOINT("D");
 
+                if (worker_completion_group == 0 && go_message_signal != RUN_MSG_GO) {
+                    worker_completion_group =
+                        prepare_worker_completion_signal(mailboxes, launch_msg_address, /*wait_for_go=*/true);
+                }
                 wait_subordinates();
+
+                // Every TRISC is done: the window spans the whole kernel and the TRISC profiler buffers are final.
+                StopPerfCounters();
+                ReadPerfCounters(enables);
 
                 trigger_sync_register_init();
 
                 // Need to ensure that Remapper state is cleared for next kernel launch
-                // Remapper initialization by DM1 tracks which pairs were configured. This will clear valid bits for all configured remappings.
+                // Remapper initialization by DM1 tracks which pairs were configured. This will clear valid bits for all
+                // configured remappings.
                 g_remapper_configurator.clear_clientL_valid_up_to_high_watermark_hw();
                 g_remapper_configurator.reset_pair_high_watermark();
             }
 
             // Signal host/dispatcher completion after the DM0-FW zone above has finalized, so DM0's markers
             // are readable when the host wakes on RUN_MSG_DONE.
-            uint32_t go_message_index = mailboxes->go_message_index;
-            mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+            const uint32_t go_message_index = mailboxes->go_message_index;
 
             // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
@@ -405,14 +449,14 @@ extern "C" uint32_t _start1() {
                 // run if a valid launch message is sent.
                 launch_msg_address->kernel_config.enables = 0;
                 launch_msg_address->kernel_config.preload = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-                DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid
-                // launch messages in the ring buffer. Must be executed before the atomic increment, as after that
+                // launch messages in the ring buffer. Must be executed before signalling completion, as after that
                 // the launch message is no longer owned by us.
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                notify_dispatch_core_done(dispatch_addr, noc_index);
+                signal_dispatch_core_done(go_message_index, worker_completion_group);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
+            } else {
+                mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
             }
         }
     }
@@ -436,9 +480,9 @@ extern "C" uint32_t _start1() {
         uintptr_t kernel_lma =
             static_cast<uint32_t>(kernel_config_base) + launch_msg->kernel_config.kernel_text_offset[index];
 
-        uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
-                                                                launch_msg->kernel_config.local_cb_offset);
-        uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
+        uint32_t tt_l1_ptr* dfb_l1_base =
+            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
+        uint32_t num_local_dfbs = get_num_local_dfbs(launch_msg);
 
         if (hartid == 1) {
             setup_dfb_remapper(dfb_l1_base, num_local_dfbs);

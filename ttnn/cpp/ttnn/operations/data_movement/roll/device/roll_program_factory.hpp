@@ -31,4 +31,7 @@ struct RollShardedProgramFactory {
 // route those away (e.g. interleaved round-trip). Pure function of shape / shard / shift / dim.
 bool dram_rm_roll_needs_extra_source_shards(const Tensor& input, uint32_t shift, int32_t dim);
 
+// True for tile padding or an overhanging last shard, which the native roll would rotate into real data.
+bool sharded_roll_input_has_padding(const Tensor& input);
+
 }  // namespace ttnn::prim

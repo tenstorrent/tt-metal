@@ -32,6 +32,7 @@ from models.demos.common.prefill.runners.runner_utils import (
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_rows as d2d_rows_for
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_width as d2d_width
 from models.demos.common.prefill.runners.runner_utils import make_h2d_spec, num_mtp_tokens, open_mesh_device
+from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 
 
 def _apply_manifest_env():
@@ -55,10 +56,26 @@ _apply_manifest_env()
 SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
 METADATA_SIZE_BYTES = 12
 
+# Worker grid for the socket copies on both ends of a stage boundary (activation <-> backing tensor).
+# Each worker copies its page slice with one NoC round trip per page, so the copy time divides by the
+# core count; 64 cores leave a fraction of a millisecond per copy and more would only chase that
+# remainder. The H2D token stream and the D2H acks stay on SYNC_WORKER_CORES: they move a page or less
+# per transfer, so extra workers would have nothing to do.
+D2D_WORKER_GRID_MAX = 8
+
+
+def d2d_worker_cores(mesh_device) -> ttnn.CoreRange:
+    grid = mesh_device.compute_with_storage_grid_size()
+    return ttnn.CoreRange(
+        ttnn.CoreCoord(0, 0),
+        ttnn.CoreCoord(min(D2D_WORKER_GRID_MAX, grid.x) - 1, min(D2D_WORKER_GRID_MAX, grid.y) - 1),
+    )
+
 
 LAYER_ACK_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_LAYER_ACK_FIFO_BYTES", 4 * 1024))
 
 SHUTDOWN_METADATA_WORD = -1
+WARMUP_METADATA_WORD = -2
 
 H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
 
@@ -103,16 +120,23 @@ if MTP_LEVELS:
     _L1_SMALL_SIZE += 512
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
-assert not (DFLASH_ENABLED and USE_TRACE), (
-    "PREFILL_DFLASH=1 is incompatible with PREFILL_USE_TRACE=1: the DFlash drafter path is not "
-    "trace-captured. Run DFlash with PREFILL_USE_TRACE=0."
-)
 
 assert not (MTP_LEVELS and USE_TRACE), (
     "PREFILL_MTP_LEVELS>0 is incompatible with PREFILL_USE_TRACE=1: the MTP levels are not "
     "trace-captured. Run MTP with PREFILL_USE_TRACE=0."
 )
 assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DFLASH=1 are mutually exclusive"
+
+# DFlash runs traced, and only traced. The eager drafter path is no longer a supported configuration:
+# the tap fires from inside the verifier forward, so trace capture is what the wiring is built and
+# validated against, and an untraced drafter is a second path nothing gates. The manifests pin
+# PREFILL_USE_TRACE=1; this catches a run that overrides it back to 0 rather than letting it start and
+# diverge silently. To re-measure traced-vs-eager equivalence, drop this assert in a scratch tree --
+# deliberately not an env escape hatch, so a production run cannot reach the eager path by accident.
+assert not (DFLASH_ENABLED and not USE_TRACE), (
+    "PREFILL_DFLASH=1 requires PREFILL_USE_TRACE=1: the DFlash drafter is only supported on the "
+    "traced path. Unset PREFILL_USE_TRACE (the dflash manifest pins it to 1) or drop PREFILL_DFLASH."
+)
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 
@@ -184,8 +208,13 @@ def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
     if meta["actual_end"] < meta["actual_start"] + CHUNK_SIZE:
         return 0
     assert mtp_tokens is not None, "MTP is on but no lookahead tensor arrived with this chunk"
-    last_chip = ttnn.get_device_tensors(mtp_tokens)[-1]
-    ids = ttnn.to_torch(last_chip).view(torch.int32).flatten()
+    lookahead = mtp_lookahead_positions(meta["actual_start"], _sp, CHUNK_SIZE // _sp, meta["actual_end"], MTP_LEVELS)
+    chips = [c for c, slots in enumerate(lookahead) if slots[0] == meta["actual_end"]]
+    assert len(chips) == 1, f"expected one chip whose lookahead starts at {meta['actual_end']}, got {chips}"
+    device_tensors = ttnn.get_device_tensors(mtp_tokens)
+    assert len(device_tensors) == _sp * _tp, f"got {len(device_tensors)} device tensors for a {_sp}x{_tp} mesh"
+    # H2D_MAPPER_CONFIG shards SP over mesh axis 0 and device tensors are row-major, so chip c is device c * _tp
+    ids = ttnn.to_torch(device_tensors[chips[0] * _tp]).view(torch.int32).flatten()
     assert ids.numel() >= MTP_LEVELS, f"lookahead row is {ids.numel()} ids, need at least {MTP_LEVELS}"
     provided = 0
     for tok in ids[:MTP_LEVELS].tolist():
@@ -200,6 +229,14 @@ def _is_shutdown_sentinel(meta: dict) -> bool:
         meta["slot_id"] == SHUTDOWN_METADATA_WORD
         and meta["actual_start"] == SHUTDOWN_METADATA_WORD
         and meta["actual_end"] == SHUTDOWN_METADATA_WORD
+    )
+
+
+def _is_warmup_sentinel(meta: dict) -> bool:
+    return (
+        meta["slot_id"] == WARMUP_METADATA_WORD
+        and meta["actual_start"] == WARMUP_METADATA_WORD
+        and meta["actual_end"] == WARMUP_METADATA_WORD
     )
 
 
@@ -228,13 +265,15 @@ def build_d2d_pipeline_endpoints(
     # Separate specs per direction: a model whose boundary payload grows with depth (Kimi-K3 carries
     # one AttnRes snapshot per completed block) sends more planes than it received. This rank's
     # outbound_planes must equal the next rank's inbound_planes or the rendezvous rejects the pair.
+    workers = d2d_worker_cores(mesh_device)
+
     def _common(planes):
         return dict(
             global_spec=activation_global_spec(d2d_rows, d2d_width, planes),
             mapper=ttnn.create_mesh_mapper(mesh_device, D2D_MAPPER_CONFIG),
             fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
-            sender_worker_cores=SYNC_WORKER_CORES,
-            receiver_worker_cores=SYNC_WORKER_CORES,
+            sender_worker_cores=workers,
+            receiver_worker_cores=workers,
             metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
             share_fabric_links=True,
             socket_buffer_type=ttnn.BufferType.L1,
@@ -254,7 +293,7 @@ def build_d2d_pipeline_endpoints(
         )
     logger.info(
         f"[pp rank {rank}] [d2d] endpoints up (inbound={'yes' if inbound else 'no'}/{inbound_planes}p "
-        f"outbound={'yes' if outbound else 'no'}/{outbound_planes}p, workers={SYNC_WORKER_CORES}, "
+        f"outbound={'yes' if outbound else 'no'}/{outbound_planes}p, workers={workers}, "
         f"fifo={D2D_FIFO_SIZE_BYTES}B)"
     )
     return inbound, outbound
@@ -324,6 +363,21 @@ def _forward_shutdown(d2d_out, rank: int, d2d_rows: int, d2d_width: int, planes:
     _d2d_send(d2d_out, dummy, rank, sentinel)
     d2d_out.release_fabric_links()
     logger.info(f"[pp rank {rank}] forwarded SHUTDOWN sentinel to rank {rank + 1}")
+
+
+def _forward_send_warmup(runtime, d2d_out, rank: int) -> None:
+    """Compile the traced send before this rank's capture; the next rank drops the record."""
+    get_inputs = getattr(runtime, "send_warmup_inputs", None)
+    inputs = get_inputs((WARMUP_METADATA_WORD,) * 3) if get_inputs is not None and not MTP_LEVELS else None
+    if inputs is None:
+        return
+    activation, md_tensor = inputs
+    ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2d_out, activation, metadata=md_tensor)
+    d2d_out.release_fabric_links()
+    d2d_out.wait_for_fabric_links()
+    ttnn.deallocate(activation)
+    ttnn.deallocate(md_tensor)
+    logger.info(f"[pp rank {rank}] forwarded send warm-up record to rank {rank + 1}")
 
 
 def _lease_reclaim(d2d_in, d2d_out) -> None:
@@ -431,6 +485,7 @@ def run_request_loop(
     d2d_in=None,
     d2d_out=None,
     d2h_service=None,
+    before_first_chunk=None,
 ) -> None:
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
@@ -459,6 +514,15 @@ def run_request_loop(
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, d2d_rows, d2d_width, outbound_planes)
             break
+        warmup = _is_warmup_sentinel(meta)
+        if warmup:
+            ttnn.deallocate(inp)
+            ttnn.deallocate(metadata_msg)
+        if before_first_chunk is not None:
+            before_first_chunk()
+            before_first_chunk = None
+        if warmup:
+            continue
         t = _compute_and_send(
             runtime,
             kv_caches,
@@ -607,6 +671,11 @@ def main() -> None:
     )
 
     runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    if USE_TRACE and getattr(runtime, "capture_trace", None) is None:
+        raise RuntimeError(
+            f"PREFILL_USE_TRACE=1 but runtime {type(runtime).__name__} does not implement "
+            "capture_trace(kv_caches); run with PREFILL_USE_TRACE=0."
+        )
     kv_caches = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     runtime.compile(kv_caches)
 
@@ -681,6 +750,12 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # worker attaches to it during its pipeline bring-up and only then issues the KV-manager connect
     # that the migration layer needs before it can report WORKER_READY to wait_ready() below.
     use_d2h = os.environ.get("PREFILL_LAYER_ACK_D2H", "0") == "1"
+    if use_d2h and getattr(runtime, "set_d2h_ack_service", None) is None:
+        raise RuntimeError(
+            f"PREFILL_LAYER_ACK_D2H=1 but runtime {type(runtime).__name__} does not implement "
+            "set_d2h_ack_service(service); it reports layer completion through set_layer_completion_sink "
+            "only, so run with PREFILL_LAYER_ACK_D2H=0."
+        )
 
     from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionRouter
 
@@ -805,7 +880,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
     if _migration_enabled:
         from models.demos.common.prefill.runners.migration import (
-            KvCacheStage,
             allgather_kv_stage_layouts,
             deliver_device_map_and_gather_stage_layouts,
             export_device_map_file_and_gather_stage_layouts,
@@ -839,17 +913,13 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
             )
 
-        _multi_cache_runtime = hasattr(runtime, "kv_migration_stages")
-        if _multi_cache_runtime:
-            kv_stages = runtime.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
-        elif hasattr(runtime, "kv_migration_base_address"):
-            kv_stages = [KvCacheStage(runtime.kv_migration_base_address(kv_caches), first_layer_idx, num_my_layers)]
-        else:
+        if not hasattr(runtime, "kv_migration_stages"):
             raise RuntimeError(
-                f"migration enabled but runtime {type(runtime).__name__} implements neither "
-                "kv_migration_stages nor kv_migration_base_address "
+                f"migration enabled but runtime {type(runtime).__name__} does not implement "
+                "kv_migration_stages, so its KV cache layout cannot be described "
                 "(see docs/ADDING_A_PREFILL_MODEL.md §2)."
             )
+        kv_stages = runtime.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
         _mock_migration = os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1"
         if _mock_migration:
             stage_layouts = allgather_kv_stage_layouts(mesh_device, kv_stages, GLOBAL_MESH_SHAPE)
@@ -859,8 +929,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             )
         else:
             stage_layouts = deliver_device_map_and_gather_stage_layouts(mesh_device, kv_stages, GLOBAL_MESH_SHAPE, rank)
-
-        _layout_kwarg = {"stage_layouts": stage_layouts} if _multi_cache_runtime else {"stage_layout": stage_layouts[0]}
 
         if _mock_migration:
             device_map_path = rank_scoped_device_map_path(
@@ -875,7 +943,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     table_path,
                     first_layer_idx=first_layer_idx,
                     num_my_layers=num_my_layers,
-                    **_layout_kwarg,
+                    stage_layouts=stage_layouts,
                 )
                 logger.info(f"[mock-migration] merged KV chunk table -> {table_path} (no migration worker)")
             logger.info(f"[mock-migration] rank {rank}: local device map -> {device_map_path}")
@@ -886,7 +954,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     table_path,
                     first_layer_idx=first_layer_idx,
                     num_my_layers=num_my_layers,
-                    **_layout_kwarg,
+                    stage_layouts=stage_layouts,
                 )
                 logger.info(f"[migration] merged KV chunk table -> {table_path} (file export; no worker handshake)")
             logger.info(f"[migration] rank {rank}: exported local device map -> {migration_device_map_file_path()}")
@@ -905,7 +973,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     table_path,
                     first_layer_idx=first_layer_idx,
                     num_my_layers=num_my_layers,
-                    **_layout_kwarg,
+                    stage_layouts=stage_layouts,
                 )
                 migration_endpoint = publish_serialized_table_and_wait_ready(
                     table_path=table_path,
@@ -933,7 +1001,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             f"(no migration worker); prefill_producer can import them"
         )
 
-    if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
+    def _capture_trace() -> None:
+        if d2d_out is not None:
+            _forward_send_warmup(runtime, d2d_out, rank)
         runtime.capture_trace(kv_caches)
         if use_d2h and layer_ack_service is not None:
             n_warm = getattr(runtime, "warmup_ack_count", lambda: 0)()
@@ -942,6 +1012,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             if n_warm:
                 logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
             layer_ack_service.start()
+
+    # Capture after the first record so the socket programs are compiled first; on non-first ranks
+    # that record is the upstream warm-up.
+    traced = bool(getattr(runtime, "capture_trace", None)) and runtime.config.use_trace
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
@@ -958,6 +1032,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2d_in=d2d_in,
             d2d_out=d2d_out,
             d2h_service=d2h_service,
+            before_first_chunk=_capture_trace if traced else None,
         )
     finally:
         import gc
