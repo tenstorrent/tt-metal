@@ -63,6 +63,11 @@ SECTIONS
     . = ALIGN(128);
     *(.text.llk_zone.record)
     . = ALIGN(128);
+    /* INIT measurement build (LLK_PERF_INIT_ONLY): the helpers INIT calls, INIT's body, the zone around it; ahead of main
+       and the kernel, so no code outside INIT moves them (empty in every other build) */
+    *(.text.llk_init_callee)
+    *(.llk_init_body)
+    *(.llk_init_tramp)
     *(.text.unlikely .text.*_unlikely .text.unlikely.*)
     *(.text.exit .text.exit.*)
     *(.text.startup .text.startup.*)
