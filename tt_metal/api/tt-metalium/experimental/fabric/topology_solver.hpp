@@ -14,6 +14,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <unordered_set>
 #include <utility>
@@ -1687,5 +1688,6 @@ private:
 #ifndef TOPOLOGY_SOLVER_TPP_INCLUDING
 #define TOPOLOGY_SOLVER_TPP_INCLUDING
 #endif
+// Template definitions; the check sees no use of the .tpp from here.
 // NOLINTNEXTLINE(misc-header-include-cycle) - Guard macro prevents actual circular dependency
-#include <tt-metalium/experimental/fabric/topology_solver.tpp>
+#include <tt-metalium/experimental/fabric/topology_solver.tpp>  // IWYU pragma: keep

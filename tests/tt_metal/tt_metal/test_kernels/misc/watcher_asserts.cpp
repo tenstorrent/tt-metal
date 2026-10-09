@@ -6,6 +6,7 @@
 #include "api/debug/assert.h"
 #include "api/debug/ring_buffer.h"
 #include "internal/firmware_common.h"
+#include "watcher_test_helpers.h"
 #include "api/compile_time_args.h"
 
 /*
@@ -33,8 +34,7 @@ void kernel_main() {
         go_message_in->signal = RUN_MSG_DONE;
 #else
         // FD: ACTIVE_ETH notifies dispatcher via NOC
-        uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
-        notify_dispatch_core_done(dispatch_addr, noc_index);
+        signal_completion_before_hang();
 #endif
     }
     if (assert_type == DebugAssertHwFault && a==b) {
