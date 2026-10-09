@@ -118,7 +118,7 @@ struct ComputeHardwareConfig {
     // NOTE: The target architecture is selected at program construction time.
     //       See MakeProgramFromSpec for more details.
 
-    // ---- 1st-gen (1xx) specific (Wormhole, Blackhole) ----
+    // ---- TT-1.x.x specific (Wormhole, Blackhole) ----
     struct Compute1XXConfig {
         // Pack-stage precision tweak for block-float formats.
         // Affects how exponents are reconciled when converting Dest contents to BFP in
@@ -128,7 +128,7 @@ struct ComputeHardwareConfig {
     };
     std::optional<Compute1XXConfig> config_1xx = std::nullopt;
 
-    // ---- 2nd-gen (2xx) specific (Quasar and derivatives) ----
+    // ---- TT-2.x.x specific (Quasar and derivatives) ----
     // Empty today.
     struct Compute2XXConfig {};
     std::optional<Compute2XXConfig> config_2xx = std::nullopt;

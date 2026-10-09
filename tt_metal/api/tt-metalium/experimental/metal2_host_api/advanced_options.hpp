@@ -226,7 +226,7 @@ struct DFBAdvancedOptions {
     // different types of producer kernels on different nodes.)
     //
     // "Multi-binding" refers to a DFB instance that has more than one producer
-    // and/or more than one consumer kernel instance. 1st-gen (1xx) hardware (Wormhole and
+    // and/or more than one consumer kernel instance. 1st-gen (1xx) hardware (Wormhole,
     // Blackhole) is technically capable of supporting multi-binding: a DFB lowers
     // to a plain circular buffer there, so the FIFO pointers are shared L1 state
     // that any number of producer/consumer RISCs can drive.
@@ -353,14 +353,21 @@ struct SemaphoreAdvancedOptions {
     uint32_t initial_value = 0;
 
     ////////////////////////////////////////////////////////////////////////////////
-    // Capacity (compute semaphores only)
+    // Compute semaphores (experimental; Blackhole only)
     ////////////////////////////////////////////////////////////////////////////////
 
-    // For a semaphore bound by a Blackhole compute kernel: the capacity in credits, i.e. the depth of
-    // the L1 ring the semaphore guards. The producer's Semaphore::wait_not_full() blocks while the
-    // value is at this capacity, so the producer can never run more than max_value slots ahead of the
-    // consumer. Range 1..15 (the Tensix hardware semaphore is 4 bits). 0 = default capacity 15.
-    // Rejected unless the semaphore is bound only by compute kernels.
+    // A semaphore bound only by compute kernels is a "compute semaphore". It synchronizes the Pack and
+    // Unpack stages of a single compute kernel instance (e.g. to hand tiles from Pack back to Unpack
+    // through an L1 ring, without a DFB). Data-movement kernels and other nodes cannot reach it.
+    //
+    // Rules: Blackhole only. At most one compute semaphore per Program. It cannot also be bound by a
+    // data-movement kernel, and its initial value is always 0. For kernel-side usage, see api/semaphore.h.
+    //
+    // max_value is the compute semaphore's capacity, in credits: typically the number of slots in the ring
+    // it guards. Semaphore::wait_not_full() blocks while the semaphore is at capacity.
+    // Range 1..15; 0 (the default) means 15. Must be 0 for a semaphore not bound by compute kernels.
+    //
+    // CAUTION: Compute semaphores are experimental, and may change or be removed.
     uint32_t max_value = 0;
 };
 
