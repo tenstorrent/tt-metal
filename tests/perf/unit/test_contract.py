@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""Tests for contract.py: parsing benchmark JSON, aggregating repetitions and rejecting malformed output."""
+
 import json
 
 import pytest

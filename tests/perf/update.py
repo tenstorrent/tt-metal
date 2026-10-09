@@ -2,7 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Golden updates. All-or-nothing: anything that needs consent refuses the whole update unless forced."""
+"""Updates a golden from a comparison, all or nothing.
+
+Only cases outside tolerance are rewritten, so small drifts cannot accumulate into the golden. A regressed, new,
+missing or errored case refuses the whole update unless forced. Updates never run in CI.
+"""
 
 from __future__ import annotations
 

@@ -2,7 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Terminal and Markdown summaries of a comparison. Both come from the same rows."""
+"""Renders a comparison as a terminal table, or as Markdown for the GitHub step summary.
+
+Cases are counted per group of names, then only the cases that did not pass are listed, unless all are asked for.
+"""
 
 from __future__ import annotations
 
