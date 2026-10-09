@@ -62,7 +62,8 @@ use_fused = fused_decode_supported(mesh_device, mesh_config, hf_config, use_thro
 ## Tests
 
 ```bash
-# Decode perf (all 24 layers, trace, 128 timed tokens) and accuracy (teacher-forced top-1 / top-5 / logits PCC)
+# Decode perf (128 random input tokens, all 24 layers, trace, 128 timed tokens) and accuracy (teacher-forced
+# top-1 / top-5 / logits PCC)
 pytest models/demos/gpt_oss/tests/optimizer/test_optimizer_perf.py
 pytest models/demos/gpt_oss/tests/optimizer/test_optimizer_pcc.py
 ```

@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Decode workload for optimizer runs on gpt-oss-20b (QuietBox 2, 1x4 mesh, batch 1, all 24 layers).
 
-Measures decode the way demo/text_demo.py measures it for prefill_128: the demo's first prompt is prefilled,
-then Generator.decode_forward runs with the decode trace and on-device greedy sampling, one call per token,
-each call reading the sampled token back to the host. The first decode call compiles and captures the trace
-and is not timed; decode ms/token is the mean wall time of the remaining calls (tokens/s/user = 1000 / that).
+Prefills a fixed random prompt of TT_PERF_ISL_TOKENS token ids (default 128; a power of 2, at least 128; seeded,
+so every run feeds the same ids), then Generator.decode_forward runs with the decode trace and on-device greedy
+sampling, one call per token, each call reading the sampled token back to the host. The first decode call compiles
+and captures the trace and is not timed; decode ms/token is the mean wall time of the remaining calls (tokens/s/user =
+1000 / that).
 
 Environment: TT_PERF_LAYERS caps the depth (unset or 0 = all 24 layers); TT_PERF_OSL_TOKENS sets the number of decode calls (default 129: 1 capture + 128 timed);
 TT_METAL_DEVICE_PROFILER=1 or TT_PERF_TRACE=0 runs eager decode, and under the profiler the decode window is
@@ -15,7 +16,6 @@ window at decode; PERF_GATE_ROLE=verdict refuses anything but every layer, trace
 
 from __future__ import annotations
 
-import json
 import os
 import statistics
 import time
@@ -32,8 +32,8 @@ import torch  # noqa: E402
 
 import ttnn  # noqa: E402
 from models.demos.gpt_oss.tests.optimizer.gate_support import (  # noqa: E402
+    MAX_SEQ_LEN,
     MESH_SHAPE,
-    PROMPTS,
     append_history,
     build_generator,
     device_params,
@@ -44,6 +44,9 @@ from models.demos.gpt_oss.tests.optimizer.gate_support import (  # noqa: E402
 HF_MODEL_ID = "openai/gpt-oss-20b"
 FULL_DEPTH = 24
 PREFILL_SAMPLES = 3
+# Random prompt ids: ordinary vocabulary ids (no special tokens), fixed seed.
+PROMPT_SEED = 1234
+PROMPT_ID_RANGE = (1000, 199000)
 
 STAGE_PREFILL = "prefill"
 STAGE_DECODE = "decode"
@@ -69,9 +72,14 @@ def signpost(name: str, enabled: bool) -> None:
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("mesh_device, device_params", [(MESH_SHAPE, device_params())], ids=["1x4"], indirect=True)
 def test_optimizer_direct_perf(mesh_device, device_params):
-    """The demo's prefill_128 prompt, then traced batch-1 decode with on-device greedy sampling on QB2 (1x4)."""
+    """A random prompt of TT_PERF_ISL_TOKENS ids, then traced batch-1 decode with on-device greedy sampling on QB2 (1x4)."""
     depth = max(0, int(os.environ.get("TT_PERF_LAYERS", "0") or 0))
     output_tokens = max(2, int(os.environ.get("TT_PERF_OSL_TOKENS", "129")))
+    P = int(os.environ.get("TT_PERF_ISL_TOKENS", "128"))
+    assert P >= 128 and P & (P - 1) == 0, f"TT_PERF_ISL_TOKENS must be a power of 2 >= 128, got {P}"
+    assert (
+        P + output_tokens <= MAX_SEQ_LEN
+    ), f"{P} input + {output_tokens} decode tokens exceed the {MAX_SEQ_LEN} context"
     profiling = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
     if profiling:
         output_tokens = min(output_tokens, 1 + max(1, int(os.environ.get("TT_PERF_PROFILE_DECODE_TOKENS", "4"))))
@@ -81,7 +89,7 @@ def test_optimizer_direct_perf(mesh_device, device_params):
     prefill_samples = 1 if profiling else PREFILL_SAMPLES
     print(
         f"GATE_CONFIG role={role} model={HF_MODEL_ID} profiling={int(profiling)} trace={int(enable_trace)} "
-        f"layers={depth or FULL_DEPTH} decode_calls={output_tokens} timed_decode_tokens={timed_tokens} "
+        f"layers={depth or FULL_DEPTH} isl={P} decode_calls={output_tokens} timed_decode_tokens={timed_tokens} "
         f"prefill_samples={prefill_samples} profiler_buffer={PROFILER_BUFFER_AT_IMPORT} decode_only={int(DECODE_ONLY)} "
         f"trace_region={device_params.get('trace_region_size', 'yaml')}",
         flush=True,
@@ -96,9 +104,8 @@ def test_optimizer_direct_perf(mesh_device, device_params):
     )
     assert model[0].args.n_layers == (depth or FULL_DEPTH) and mesh_device.get_num_devices() == 4
 
-    prompt = json.loads(PROMPTS.read_text())[0]["prompt"]
-    prompt_ids = model_args[0].encode_prompt(prompt, instruct=False)
-    P = len(prompt_ids)
+    g = torch.Generator().manual_seed(PROMPT_SEED)
+    prompt_ids = torch.randint(*PROMPT_ID_RANGE, (P,), generator=g).tolist()
 
     def prefill():
         return generator.prefill_forward_text(
@@ -165,7 +172,7 @@ def test_optimizer_direct_perf(mesh_device, device_params):
     wall_ms = ttft_ms + decode_seconds * 1000.0
     print(f"GATE_TEXT {tokenizer.decode(tokens)[:300]!r}", flush=True)
     print(
-        f"PERF wall_ms={wall_ms:.3f} ttft_ms={ttft_ms:.3f} "
+        f"PERF isl={P} wall_ms={wall_ms:.3f} ttft_ms={ttft_ms:.3f} "
         f"ttft_samples_ms={','.join(f'{ms:.3f}' for ms in prefill_ms)} decode_ms_per_token={per_token_ms:.4f} "
         f"decode_median_ms={statistics.median(step_ms):.4f} decode_tokens_per_second_per_user={tokens_per_second_per_user:.3f}",
         flush=True,
@@ -177,6 +184,7 @@ def test_optimizer_direct_perf(mesh_device, device_params):
             "profiling": int(profiling),
             "trace": int(enable_trace),
             "layers": depth or FULL_DEPTH,
+            "isl_tokens": P,
             "decode_tokens": timed_tokens,
             "decode_ms_per_token": round(per_token_ms, 4),
             "decode_median_ms": round(statistics.median(step_ms), 4),

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One-command check of gpt-oss-20b decode on a QuietBox 2 (4 Blackhole chips, 1x4 mesh, batch 1):
-# the shared perf test N times (default 5, median reported) and the accuracy test once.
+# the perf test N times (default 5, median reported; 128 random input tokens, TT_PERF_ISL_TOKENS to change) and the
+# accuracy test once.
 # Run from the tt-metal root with the python env active:  bash models/demos/gpt_oss/tests/optimizer/run_check.sh [N]
 # The accuracy test needs generated/optimizer_reference/gpt-oss-20b-logits.pt and the pinned start scores
 # generated/optimizer_accuracy_baseline_gpt-oss-20b.json (not in git).
