@@ -155,7 +155,9 @@ def _accessor(t) -> list[int]:
     return list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
 
-def _build_program(device, plan, pairs, col, q, cos, sin, trans_mat, gamma, eps, depth) -> ttnn.ProgramDescriptor:
+def _build_program(
+    device, plan, pairs, col, q, cos, sin, trans_mat, gamma, eps, depth, src, src_layout
+) -> ttnn.ProgramDescriptor:
     n_coords = [n for n, _ in pairs]
     r_coords = [r for _, r in pairs]
     n_set = _core_range_set(n_coords)
@@ -208,7 +210,9 @@ def _build_program(device, plan, pairs, col, q, cos, sin, trans_mat, gamma, eps,
         h0, j0, tl0 = plan.row_coords(start) if count else (0, 0, 0)
         n_phys = device.worker_core_from_logical_core(ttnn.CoreCoord(*n_xy))
         r_phys = device.worker_core_from_logical_core(ttnn.CoreCoord(*r_xy))
-        n_reader_rt.append((n_xy, [q.buffer_address(), gamma.buffer_address(), count, h0, j0, tl0] + walk))
+        n_reader_rt.append(
+            (n_xy, [src.buffer_address(), gamma.buffer_address(), count, h0, j0, tl0] + walk + list(src_layout))
+        )
         n_compute_rt.append((n_xy, [count]))
         n_writer_rt.append((n_xy, [count, r_phys.x, r_phys.y, depth]))
         r_reader_rt.append(
@@ -227,7 +231,7 @@ def _build_program(device, plan, pairs, col, q, cos, sin, trans_mat, gamma, eps,
             kernel_source=f"{KERNEL_ROOT}/norm_reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=n_set,
-            compile_time_args=[_f32_bits(eps)] + _accessor(q) + _accessor(gamma),
+            compile_time_args=[_f32_bits(eps)] + _accessor(src) + _accessor(gamma),
             runtime_args=n_reader_rt,
             config=ttnn.ReaderConfigDescriptor(),
         ),
@@ -301,11 +305,17 @@ def qwen_q_prep(
     grid: tuple[int, int] | None = None,
     handoff_depth: int = DEFAULT_HANDOFF_DEPTH,
     all_rows: bool = False,
+    src: ttnn.Tensor | None = None,
+    src_col: int = 0,
 ) -> ttnn.Tensor:
     """typecast -> q_norm -> RoPE -> typecast on this column's two ring slices of q, in place.
 
     all_rows=True processes every position on every device instead (the K path: ring SDPA reads all of K),
     as two "slices" of S/2 rows; gamma / eps are then k_norm's.
+
+    src: read the input rows from this fused QKV buffer instead of q ([1, 1, S, W] bf8 TILE DRAM interleaved, the
+    heads at columns src_col + 128 * h), as nlp_create_qkv_heads would copy them; q is then only written (its
+    other rows are not touched). Without src, q is updated in place.
 
     Returns ``q``. See the module docstring for the tensor contract. Raises ValueError on any
     shape, dtype or layout mismatch; there is no fallback to the stock ops.
@@ -319,6 +329,21 @@ def qwen_q_prep(
     if grid is None:
         g = device.compute_with_storage_grid_size()
         grid = (int(g.x), int(g.y))
+    if src is None:
+        src = q
+        src_layout = (0, WT, (seq_len // 32) * WT)
+    else:
+        s = tuple(src.shape)
+        if len(s) != 4 or s[0] != 1 or s[1] != 1 or s[2] != seq_len or s[3] % 32:
+            raise ValueError(f"src must be [1, 1, {seq_len}, W], got {s}")
+        if src.dtype != ttnn.bfloat8_b or src.layout != ttnn.TILE_LAYOUT:
+            raise ValueError(f"src must be bfloat8_b TILE, got {src.dtype} {src.layout}")
+        smc = src.memory_config()
+        if smc.buffer_type != ttnn.BufferType.DRAM or smc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+            raise ValueError(f"src must be DRAM interleaved, got {smc}")
+        if src_col % 32 or src_col + n_heads * HEAD_DIM > s[3]:
+            raise ValueError(f"src_col {src_col} + {n_heads} heads does not fit in width {s[3]}")
+        src_layout = (src_col // 32, s[3] // 32, WT)
     pairs = pair_cores(*grid)
     if not pairs:
         raise ValueError(f"grid {grid} has no core pairs")
@@ -328,6 +353,8 @@ def qwen_q_prep(
         tuple(device.shape),
         grid,
         all_rows,
+        src_layout,
+        src.buffer_address(),
         handoff_depth,
         n_heads,
         seq_len,
@@ -342,7 +369,9 @@ def qwen_q_prep(
     if mesh_program is None:
         mesh_program = ttnn.MeshProgramDescriptor()
         for col in range(cols):
-            program = _build_program(device, plan, pairs, col, q, cos, sin, trans_mat, gamma, eps, handoff_depth)
+            program = _build_program(
+                device, plan, pairs, col, q, cos, sin, trans_mat, gamma, eps, handoff_depth, src, src_layout
+            )
             mesh_range = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, col), ttnn.MeshCoordinate(mesh_rows - 1, col))
             mesh_program[mesh_range] = program
         if len(_DESCRIPTOR_CACHE) >= _DESCRIPTOR_CACHE_MAX:
@@ -350,4 +379,6 @@ def qwen_q_prep(
         _DESCRIPTOR_CACHE[key] = mesh_program
 
     # io_tensors: inputs, then the output last (q, updated in place).
-    return ttnn.generic_op([cos, sin, trans_mat, gamma, q], mesh_program)
+    if src is q:
+        return ttnn.generic_op([cos, sin, trans_mat, gamma, q], mesh_program)
+    return ttnn.generic_op([src, cos, sin, trans_mat, gamma, q], mesh_program)
