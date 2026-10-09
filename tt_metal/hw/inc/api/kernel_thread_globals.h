@@ -92,27 +92,36 @@ extern thread_local uint32_t my_barrier_id;
 
 #endif  // !COMPILE_FOR_TRISC
 
-// Semaphores 27–30: thread barriers; 31: watcher ring buffer.
+// Semaphores 0–26: ClusterSemaphore (api/compute/experimental/cluster_semaphore.h); 27–30: thread barriers;
+// 31: watcher ring buffer.
 constexpr uintptr_t TENSIX_GLOBAL_SEM_BASE = 0x01840000;
 constexpr uint32_t TENSIX_GLOBAL_SEM_STRIDE = 0x40;
 constexpr uint32_t COMPUTE_BARRIER_ARRIVED_SEM_IDX = 30;
 constexpr uint32_t COMPUTE_BARRIER_GENERATION_SEM_IDX = 29;
 constexpr uint32_t DM_COMPUTE_BARRIER_ARRIVED_SEM_IDX = 28;
 constexpr uint32_t DM_COMPUTE_BARRIER_GENERATION_SEM_IDX = 27;
+constexpr uint32_t TENSIX_GLOBAL_SEM_USER_COUNT = 27;
 constexpr uint32_t TENSIX_GLOBAL_SEM_VALUE_MASK = 0xFFFFu;
 
 inline volatile uint32_t* tensix_global_sem(uint32_t idx) {
     return reinterpret_cast<volatile uint32_t*>(TENSIX_GLOBAL_SEM_BASE + idx * TENSIX_GLOBAL_SEM_STRIDE);
 }
 
+// INIT sets the count and clears sticky semaphore errors. POST on an uninitialized slot raises an error.
 inline void tensix_global_sem_init(uint32_t idx, uint32_t value) { *tensix_global_sem(idx) = value; }
 
 inline uint32_t tensix_global_sem_read(uint32_t idx) { return *tensix_global_sem(idx); }
 
-// A read at +4*(inc+8) posts `inc` and returns the pre-increment value (same alias as the watcher ring buffer).
-// Only inc=1 is exercised; the upper bound the alias supports is not documented in tensix_neo_reg.h.
+// A read at +4*(inc+8) posts `inc` (0..7) and returns the pre-increment value (same alias as the watcher ring
+// buffer). A post past 0xFFFF leaves the count unchanged and raises a semaphore error.
 inline uint32_t tensix_global_sem_fetch_add(uint32_t idx, uint32_t inc) {
     return *reinterpret_cast<volatile uint32_t*>(reinterpret_cast<uintptr_t>(tensix_global_sem(idx)) + 4 * (inc + 8));
+}
+
+// A read at +4*dec gets `dec` (1..7) and returns the pre-decrement value. A get below 0 leaves the count
+// unchanged and raises a semaphore error.
+inline uint32_t tensix_global_sem_fetch_sub(uint32_t idx, uint32_t dec) {
+    return *reinterpret_cast<volatile uint32_t*>(reinterpret_cast<uintptr_t>(tensix_global_sem(idx)) + 4 * dec);
 }
 
 #endif  // ARCH_QUASAR
@@ -164,6 +173,11 @@ inline void thread_sync_init() {
     tensix_global_sem_init(COMPUTE_BARRIER_GENERATION_SEM_IDX, 0);
     tensix_global_sem_init(DM_COMPUTE_BARRIER_ARRIVED_SEM_IDX, 0);
     tensix_global_sem_init(DM_COMPUTE_BARRIER_GENERATION_SEM_IDX, 0);
+    // A post to an uninitialized semaphore raises an error, so ClusterSemaphore's semaphores start at 0 here
+    // and kernels leave them at 0.
+    for (uint32_t i = 0; i < TENSIX_GLOBAL_SEM_USER_COUNT; i++) {
+        tensix_global_sem_init(i, 0);
+    }
 #endif
 #endif
 }
