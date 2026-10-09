@@ -17,13 +17,18 @@ KDA_RECURRENT_STATE_DTYPE = ttnn.float32
 KDA_AFFINE_SUMMARY_DTYPE = ttnn.bfloat16
 KDA_SCAN_OUTPUT_DTYPE = ttnn.bfloat16
 KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
+# The L1 budgets below are static: they are sized on Galaxy SP8xTP4 against what is live next to these tensors
+# there (the local summary and prefix buffers, the scans' circular buffers and the CCL semaphores), not measured at
+# run time. They assume the device is opened with an L1_SMALL region (as the model's prefill tests do), so the CCL
+# semaphores the first call allocates do not land between the chunk terms and fragment L1.
+#
 # The chunk terms stay in interleaved L1 for both scans when their share of each worker core fits this budget;
 # larger geometries keep them in DRAM. Kimi-K3 on Galaxy SP8xTP4 (24 heads, 640 rows per device) needs 256 KiB per
 # core; the rest of L1 holds the summary, prefix and scan buffers that run while the chunk terms are alive.
 # Single-device and longer-sequence geometries exceed the budget and would clash with those buffers.
 KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
-# The decay gate stays in interleaved L1 from its projection through the scans when its share of each worker core
-# fits this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
+# The decay gate stays in interleaved L1 from its projection until chunk preparation has read it when its share of
+# each worker core fits this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
 KDA_DECAY_L1_BYTES_PER_CORE = 48 * 1024
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
@@ -156,19 +161,33 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
     )
 
 
+_DECAY_OUT_BLOCK_TILES = 32
+
+
 def decay_projection_program_config(
     grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int, fused_activation: ttnn.UnaryWithParam | None
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
-    """Spread the decay projection's [rows, key_dim] x [key_dim, width] output blocks over the whole worker grid."""
+    """Spread the decay projection's [rows, key_dim] x [key_dim, width] output over the whole worker grid.
+
+    Each core's output is computed in blocks of at most _DECAY_OUT_BLOCK_TILES tiles, which bounds the output and
+    FP32 intermediate circular buffers on geometries with many rows or heads per core (one Kimi-K3 Galaxy SP8xTP4
+    core holds a single 2 x 8 block).
+    """
     tile = ttnn.TILE_SIZE
     per_core_M = math.ceil(rows // tile / grid.y)
     per_core_N = math.ceil(width // tile / grid.x)
+    out_block_w = max(w for w in range(1, min(per_core_N, _DECAY_OUT_BLOCK_TILES) + 1) if per_core_N % w == 0)
+    out_block_h = max(
+        h for h in range(1, per_core_M + 1) if per_core_M % h == 0 and h * out_block_w <= _DECAY_OUT_BLOCK_TILES
+    )
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=key_dim // tile,
         out_subblock_h=1,
         # FP32 accumulation holds four tiles in DST.
-        out_subblock_w=max(w for w in range(1, 5) if per_core_N % w == 0),
+        out_subblock_w=max(w for w in range(1, 5) if out_block_w % w == 0),
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         transpose_mcast=False,

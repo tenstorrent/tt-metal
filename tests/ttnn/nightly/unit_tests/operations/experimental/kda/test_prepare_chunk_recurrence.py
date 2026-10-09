@@ -533,12 +533,16 @@ def test_prepare_chunk_recurrence_rejects_invalid_beta_logits_window(device, exp
 
 @pytest.mark.parametrize("gate_scale", [-4.0, -5.0], ids=["power-of-two", "kimi-k3-lower-bound"])
 def test_prepare_chunk_recurrence_gate_scale_matches_prescaled_gate(device: ttnn.Device, gate_scale: float) -> None:
-    """gate_scale must equal scaling g on the host: bit for bit for a power of two, within rounding otherwise."""
+    """gate_scale must equal scaling g on the host bit for bit when the host product is exact in BF16."""
     case = _UNIT_TEST_CASE
     host_inputs = _case_host_inputs(case, seed=1931)
-    unscaled_gate = tuple(host_inputs[:3]) + (host_inputs[3] / gate_scale,) + tuple(host_inputs[4:])
-    prescaled_inputs = _device_inputs(host_inputs, device)
-    unscaled_inputs = _device_inputs(unscaled_gate, device)
+    # Eighths in [-2, 2] times a scale of magnitude at most 5 need at most 7 mantissa bits, so both the unscaled
+    # gate and its host-scaled copy are exact in BF16, and the device's FP32 product is exact for any BF16 scale.
+    unscaled_g = torch.round((host_inputs[3] / gate_scale).clamp(-2.0, 2.0) * 8) / 8
+    prescaled_inputs = _device_inputs(
+        tuple(host_inputs[:3]) + (unscaled_g * gate_scale,) + tuple(host_inputs[4:]), device
+    )
+    unscaled_inputs = _device_inputs(tuple(host_inputs[:3]) + (unscaled_g,) + tuple(host_inputs[4:]), device)
     start = make_actual_start(device, 0)
 
     def run(inputs: tuple[ttnn.Tensor, ...], **kwargs) -> list[ttnn.Tensor]:
@@ -549,21 +553,45 @@ def test_prepare_chunk_recurrence_gate_scale_matches_prescaled_gate(device: ttnn
 
     prescaled = run(prescaled_inputs)
     scaled = run(unscaled_inputs, gate_scale=gate_scale)
-    exact = gate_scale == -4.0
     for name, expected, actual in zip(OUTPUT_NAMES, prescaled, scaled, strict=True):
-        if exact:
-            assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name=f"{name} gate_scale")
-        else:
-            assert_accurate(
-                ttnn.to_torch(expected).float(),
-                ttnn.to_torch(actual).float(),
-                name=f"{name} gate_scale {gate_scale}",
-                pcc_threshold=0.9999,
-                # Measured worst case: rel. RMSE 1.2e-3, rel. L-inf 3.1e-2 (host rounding of g / gate_scale).
-                rmse_threshold=4e-3,
-                linf_threshold=0.1,
-            )
+        assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name=f"{name} gate_scale {gate_scale}")
     for tensor in (*prescaled, *scaled, *prescaled_inputs, *unscaled_inputs, start):
+        ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize("start_row", [0, 32, 48], ids=["start0", "chunk-aligned-start", "mid-chunk-start"])
+def test_prepare_chunk_recurrence_beta_logits_with_gate_scale_and_start(device: ttnn.Device, start_row: int) -> None:
+    """The production combination: beta logits in place, a folded gate scale and a nonzero actual_start."""
+    case = _TestCase("h40-n2-k32-v32", 40, 2, 32, 32)
+    host_inputs = _case_host_inputs(case, seed=1941)
+    rows = case.num_chunks * CHUNK_SIZE
+    beta_offset = 32
+    logits = torch.randn(1, rows, case.num_heads, generator=torch.Generator().manual_seed(5)).to(torch.bfloat16)
+    wide = torch.zeros(1, rows, beta_offset + 64, dtype=torch.bfloat16)
+    wide[..., beta_offset : beta_offset + case.num_heads] = logits
+    inputs = _device_inputs(host_inputs, device)
+    logits_tt = _to_device(logits.float(), device, ttnn.bfloat16)
+    activated = ttnn.sigmoid(ttnn.typecast(logits_tt, ttnn.float32))
+    wide_tt = _to_device(wide.float(), device, ttnn.bfloat16)
+    start = make_actual_start(device, start_row)
+
+    def run(beta: ttnn.Tensor, **kwargs) -> list[ttnn.Tensor]:
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            return ttnn.experimental.kda.prepare_chunk_recurrence(
+                *inputs[:4],
+                beta,
+                case.num_heads,
+                actual_start=start,
+                output_bf16_mask=_PRODUCTION_OUTPUT_BF16_MASK,
+                gate_scale=-5.0,
+                **kwargs,
+            )
+
+    expected = run(activated)
+    actual = run(wide_tt, beta_logits_column_offset=beta_offset)
+    for name, want, got in zip(OUTPUT_NAMES, expected, actual, strict=True):
+        assert_bit_identical(ttnn.to_torch(want), ttnn.to_torch(got), name=f"{name} beta logits start {start_row}")
+    for tensor in (*expected, *actual, *inputs, logits_tt, activated, wide_tt, start):
         ttnn.deallocate(tensor)
 
 
