@@ -564,3 +564,15 @@ def test_qb2_add(device, cfg):
         ttnn.deallocate(ttnn.add(a, b, **kw))
     ttnn.deallocate(a)
     ttnn.deallocate(b)
+
+
+@pytest.mark.parametrize("b_rows", [1, 2])
+def test_qwen36_softplus_add(device, b_rows):
+    # blackhole/qwen36/tt/gdn/tp.py:29 _softplus_add (decode, B=1: no broadcast; B=2: the same per row): a slice of qkvzab in L1
+    # plus dt_bias in DRAM, SOFTPLUS(1.0, 20.0) after
+    torch.manual_seed(1)
+    a = ttnn.from_torch(torch.rand(1, b_rows, 12) - 0.5, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    b = ttnn.from_torch(torch.rand(1, b_rows, 12) - 0.5, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for _ in range(8):
+        ttnn.deallocate(ttnn.add(a, b, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)]))
+
