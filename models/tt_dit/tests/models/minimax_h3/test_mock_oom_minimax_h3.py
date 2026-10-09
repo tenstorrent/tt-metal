@@ -30,14 +30,16 @@ Environment:
   - MINIMAX_H3_REQUIRE_WEIGHTS=1 fails instead of skipping when the weights can neither be found nor fetched.
   - The test skips unless the mock descriptor is set, so it never takes a galaxy.
 
-CI ("Minimax H3 Ref2VA Memory Test" in tests/pipeline_reorg/models_unit_tests.yaml, wh_n150, tier 1) runs
-from a cold kernel cache every time, and nearly all of the time is kernel JIT on the host CPU:
+CI ("Minimax H3 Ref2VA Memory Test" in tests/pipeline_reorg/models_unit_tests.yaml, wh_llmbox, tier 1) runs
+from a cold kernel cache every time. The converted weights come from the shared cloud MLPerf NFS, which the WH
+pools mount at /mnt/MLPerf: the snapshot under HF_HOME since 2026-10-07, the tt_dit cache under TT_DIT_CACHE_DIR
+(the FLUX.2 entries' layout). A cache hit only reads. A miss converts and writes, so populating either tree needs
+a dispatch with mlperf-read-only=false; the entry's normal read-only mount fails a miss instead of writing.
+Without the cache every ladder rung reconverts the text encoder and the transformer:
   - galaxy host: about 55 min cold, about 10 min warm.
-  - N150 cloud VM: about 2.5 h cold (snapshot download 3 min, construction 7, ladder walk 44, VAE warm 8,
-    audio warm 30, prompt-encoder warm about 40).
-Hence the 3 h pytest marker and the 240 min job timeout. The shared cloud MLPerf NFS the N150 VMs mount at
-/mnt/MLPerf/huggingface has held the snapshot since 2026-10-07; populating a mount needs a dispatch with
-mlperf-read-only=false.
+  - T3K cloud VM (wh_llmbox), no cache: 2 h 34 min (weight conversion 1 h 22, kernel JIT 58 min).
+  - N150 cloud VM: 2 h 06 min with a local cache; without one the 3 h marker fires at rung 14 of 17.
+Hence the 3 h pytest marker and the 240 min job timeout.
 """
 
 from __future__ import annotations
@@ -96,8 +98,8 @@ def _dram_line(mesh_device: ttnn.MeshDevice, label: str) -> str:
     )
 
 
-# A cold kernel cache compiles every H3 program: ~55 min on a galaxy host, ~2.5 h on an N150 cloud VM (ladder walk
-# 44 min, VAE warm 8, audio warm 30, prompt-encoder warm ~40); warm: ~10 min on the galaxy host.
+# A cold kernel cache compiles every H3 program: ~55 min on a galaxy host, ~1 h of a 2.5 h run on a T3K cloud VM
+# (the rest is weight conversion when TT_DIT_CACHE_DIR is unset); warm: ~10 min on the galaxy host.
 @pytest.mark.timeout(10800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 def test_ref2va_warmup_fits_on_mock(mesh_device):
