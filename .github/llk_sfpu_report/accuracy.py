@@ -13,6 +13,7 @@ report shows what changed.
 """
 
 import hashlib
+import shutil
 import sys
 from pathlib import Path
 
@@ -20,7 +21,10 @@ import runner
 
 sys.path.insert(0, str(runner.PYTHON_TESTS))
 
+#: The driver lives next to this file. pytest applies the harness's conftest.py only to
+#: files under tests/python_tests/, so each run copies it there and removes it after.
 DRIVER = "test_sfpu_report_accuracy.py"
+DRIVER_SOURCE = Path(__file__).resolve().parent / DRIVER
 
 #: Special-value classes of test_sfpu_report_accuracy.special_values().
 CLASSES = ("nan", "inf", "zero", "subnormal", "extreme")
@@ -37,10 +41,13 @@ def measure(side, arch, ops, out_dir, log, jobs=8, formats=()):
         "SFPU_REPORT_BINARY_OPS": ",".join(binary),
         "SFPU_REPORT_FORMATS": ",".join(formats),
     }
-    # A variant that fails on one side shows up as missing in the comparison.
-    runner.produce_consume(
-        side, arch, [DRIVER], env=env, log=log, producer_jobs=jobs, check=False
-    )
+    installed = runner.PYTHON_TESTS / DRIVER
+    shutil.copyfile(DRIVER_SOURCE, installed)
+    try:
+        # A variant that fails on one side shows up as missing in the comparison.
+        runner.produce_consume(side, arch, [DRIVER], env=env, log=log, producer_jobs=jobs, check=False)
+    finally:
+        installed.unlink(missing_ok=True)
     return out_dir
 
 
@@ -60,19 +67,13 @@ def _sweep_stats(d):
     # The Dest width decides which inputs reach the SFPU as subnormals (flushed), so
     # the sweep's own masking needs it, as the nightly ULP sweep passes it.
     dest = DestAccumulation[d["dest_acc"]]
-    mask = measurable_mask(
-        src, golden, result, in_fmt, output_format=out_fmt, dest_acc=dest
-    )
+    mask = measurable_mask(src, golden, result, in_fmt, output_format=out_fmt, dest_acc=dest)
     if d.get("binary"):
         # A lane is measurable only if both operands are.
-        mask = mask & measurable_mask(
-            d["src_b"], golden, result, in_fmt, output_format=out_fmt, dest_acc=dest
-        )
+        mask = mask & measurable_mask(d["src_b"], golden, result, in_fmt, output_format=out_fmt, dest_acc=dest)
     distance = ulp_distance(golden, result)
     stats = ulp_stats(distance, mask)
-    nonfinite = nonfinite_failures(
-        MathOperation[d["op"]], src, golden, result, in_fmt, out_fmt, dest_acc=dest
-    )
+    nonfinite = nonfinite_failures(MathOperation[d["op"]], src, golden, result, in_fmt, out_fmt, dest_acc=dest)
     flat = distance.reshape(-1).to(torch.int64)
     measured = mask.reshape(-1) & (flat >= 0)
     le1 = float(((flat <= 1) & measured).sum()) / max(int(measured.sum()), 1)
@@ -85,14 +86,9 @@ def _sweep_stats(d):
         "le1": le1,
         "nonfinite": int(nonfinite.sum()),
         "nonfinite_examples": [
-            (float(src[i]), float(golden[i]), float(result[i]))
-            for i in nonfinite.nonzero().flatten()[:3].tolist()
+            (float(src[i]), float(golden[i]), float(result[i])) for i in nonfinite.nonzero().flatten()[:3].tolist()
         ],
-        "worst_input": (
-            float(src.reshape(-1)[stats["worst_index"]])
-            if stats["worst_index"] is not None
-            else None
-        ),
+        "worst_input": (float(src.reshape(-1)[stats["worst_index"]]) if stats["worst_index"] is not None else None),
         "_distance": flat,
         "_measured": measured,
     }
@@ -142,9 +138,7 @@ def _specials(d):
     import torch
 
     src, result = d["src"].reshape(-1), d["result"].reshape(-1)
-    bits = lambda t, i: int(
-        t[i].to(torch.float64).view(torch.int64)
-    )  # noqa: E731; NaN != NaN
+    bits = lambda t, i: int(t[i].to(torch.float64).view(torch.int64))  # noqa: E731; NaN != NaN
     out = {}
     if d.get("binary"):
         src_b = d["src_b"].reshape(-1)
@@ -175,8 +169,7 @@ def specials_diff(base, head):
             if _bits(old) != _bits(new) and not (old != old and new != new):
                 changed.append({"class": cls, "input": x, "old": old, "new": new})
     nan_ok = {
-        side: all(r != r for c, _, r in spec.values() if c == "nan")
-        for side, spec in (("base", base), ("head", head))
+        side: all(r != r for c, _, r in spec.values() if c == "nan") for side, spec in (("base", base), ("head", head))
     }
     return {"changed": changed, "nan_propagates": nan_ok}
 
@@ -217,12 +210,8 @@ def compare(base_dir, head_dir):
                     hs.pop("_wrong")
                 else:
                     both = bs["_measured"] & hs["_measured"]
-                    rec["worse"] = int(
-                        ((hs["_distance"] > bs["_distance"]) & both).sum()
-                    )
-                    rec["better"] = int(
-                        ((hs["_distance"] < bs["_distance"]) & both).sum()
-                    )
+                    rec["worse"] = int(((hs["_distance"] > bs["_distance"]) & both).sum())
+                    rec["better"] = int(((hs["_distance"] < bs["_distance"]) & both).sum())
                     for side in (bs, hs):
                         side.pop("_distance")
                         side.pop("_measured")
