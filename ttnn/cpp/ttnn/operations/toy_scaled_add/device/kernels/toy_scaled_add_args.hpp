@@ -16,9 +16,8 @@
 //
 namespace toy_scaled_add {
 
-// Dense from 0: every launch sends one circular-buffer config slot per index up to the highest one
-// the program uses. gamma, the only optional buffer, takes the last id, so a program without it
-// leaves no hole.
+// Dense from 0, the values the kernels used when the operation was a Python generic_op: the port names
+// them here and keeps them as they were. gamma is the only optional buffer.
 namespace cb {
 constexpr uint32_t A = 0;
 constexpr uint32_t B = 1;
