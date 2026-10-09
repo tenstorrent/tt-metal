@@ -1335,13 +1335,13 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
-          # Seeded from local 1x8-lane runs on a WH Galaxy (2026-10-08, arg/qwen25_vl_optimizations_v2);
+          # Measured on the wh_llmbox_perf CI runner (all-model-tests run 37830531384, 2026-10-09);
           # wide tolerances until scheduled runs establish the run-to-run spread.
           - batch_size: 1
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_first_token: 220
+              prefill_time_to_first_token: 65
               prefill_time_to_first_token_tolerance: 0.4
               decode_t/s/u: 40.0
               decode_t_s_u_tolerance: 0.25
@@ -1354,7 +1354,7 @@ targets:
             seq_len: 2048
             status: active
             perf:
-              prefill_time_to_first_token: 500
+              prefill_time_to_first_token: 280
               prefill_time_to_first_token_tolerance: 0.4
               decode_t/s/u: 31.0
               decode_t_s_u_tolerance: 0.25
