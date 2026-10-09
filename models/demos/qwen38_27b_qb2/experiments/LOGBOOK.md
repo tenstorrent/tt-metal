@@ -831,3 +831,29 @@ future sweeps; the active immutable source was not edited.
   continue prefill progress. No reset or source mutation was performed.
 
 [Release source evidence](../galaxy-evidence/release-source-binding-v1/README.md).
+
+## Oct 9, 06:21-06:34 UTC: conditional layer-by-layer HF accuracy diagnosis
+
+- Added a B1 eager TP4 diagnostic using the queued CPU HF reference's exact
+  teacher-forced tokens. It compares all 64 decoder inputs across four ranks,
+  final normalization and logits, then runs the device head on the HF hidden
+  state to separate head-only error. Checked the installed Transformers source:
+  its last captured hidden state is after final norm, not the raw decoder output.
+- Sixteen CPU tests passed locally and remotely; native runtime imports passed
+  without opening hardware. Initial remote preflight found a fixture-interface
+  mismatch hidden by the lightweight local fixture. Fixed the message-pattern
+  argument and corrected that fixture; preserved the failed log and JUnit.
+- Local SSH sandbox denied the initial staging command. After a successful
+  approved retry, verified the partial new-directory contents before completing
+  the immutable snapshot. Existing running/queued sources remained unchanged.
+- At 06:33:25 UTC, launched qwen38-hf-layer-v1-20261009.service. PID 1255121 is
+  live and waiting on the exact post-head CPU service. It runs only if full
+  head-control GPQA remains below 177/198, and after CPU reference completion.
+  A passing head control skips this extra hardware diagnosis. Its scope is
+  numerical localization, not GPQA or throughput qualification.
+- Original native HTTP sweep completed 128K/C64: 34.65 aggregate end-to-end
+  output tok/s, median stream rate 1.348 tok/s/user, p50/p90 TTFT 139.74/222.84 s,
+  median burst 236.39 s. These 128K-input/128-output bursts include all prefill
+  work. The near-256K/C32 cell is now active; no full sweep pass is claimed yet.
+
+[Diagnostic source and launch](../galaxy-evidence/hf-layer-reference-v1/README.md).

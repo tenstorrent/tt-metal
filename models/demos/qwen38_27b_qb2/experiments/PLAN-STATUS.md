@@ -1,5 +1,12 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 06:34 UTC update: a conditional B1 TP4/HF layer diagnostic is persistently
+queued after the CPU reference. It runs only if the complete head-control GPQA
+still misses 177/198. Sixteen CPU tests and native imports passed; hardware
+comparison is unrun. It compares all decoder inputs, final norm and the device
+head on matched teacher-forced inputs. Native HTTP has reached near-256K after
+completing both 128K cells. [Diagnostic](../galaxy-evidence/hf-layer-reference-v1/README.md).
+
 Oct 9 06:00 UTC update: bounded Tau3 finished 3/12 successes in 32m36s,
 with four task timeouts and one 300-second request timeout. Tool-call parsing
 recorded no malformed arguments across 277 calls; this is not equivalent to

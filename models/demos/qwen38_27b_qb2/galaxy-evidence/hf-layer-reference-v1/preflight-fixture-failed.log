@@ -1,0 +1,361 @@
+.FFFFF..FFFF.FFFs                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_bad_alignment_is_rejected_before_hardware[token] _____________
+
+failure = 'token'
+expect_error = <function expect_error.<locals>.expect_error_ at 0x74e505145090>
+
+    @pytest.mark.parametrize("failure", ["token", "step", "missing_norm", "wrong_width", "wrong_vocab"])
+    def test_bad_alignment_is_rejected_before_hardware(failure, expect_error):
+        rows = reference()
+        if failure == "token":
+            rows[1]["input_ids"] = TensorFixture([[3]])
+        elif failure == "step":
+            rows[1]["step"] = 2
+        elif failure == "missing_norm":
+            rows[0]["layer_last_hidden"].pop()
+        elif failure == "wrong_width":
+            rows[0]["layer_last_hidden"][0] = TensorFixture([[1, 2]])
+        else:
+            rows[0]["logits"] = TensorFixture([[1, 2]])
+>       with expect_error(ValueError):
+
+models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py:58:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:281: in helper
+    return _GeneratorContextManager(func, args, kwds)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <contextlib._GeneratorContextManager object at 0x74e5051422c0>
+func = <function expect_error.<locals>.expect_error_ at 0x74e505144f70>
+args = (<class 'ValueError'>,), kwds = {}
+
+    def __init__(self, func, args, kwds):
+>       self.gen = func(*args, **kwds)
+E       TypeError: expect_error.<locals>.expect_error_() missing 1 required positional argument: 'message'
+
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:103: TypeError
+_____________ test_bad_alignment_is_rejected_before_hardware[step] _____________
+
+failure = 'step'
+expect_error = <function expect_error.<locals>.expect_error_ at 0x74e505146320>
+
+    @pytest.mark.parametrize("failure", ["token", "step", "missing_norm", "wrong_width", "wrong_vocab"])
+    def test_bad_alignment_is_rejected_before_hardware(failure, expect_error):
+        rows = reference()
+        if failure == "token":
+            rows[1]["input_ids"] = TensorFixture([[3]])
+        elif failure == "step":
+            rows[1]["step"] = 2
+        elif failure == "missing_norm":
+            rows[0]["layer_last_hidden"].pop()
+        elif failure == "wrong_width":
+            rows[0]["layer_last_hidden"][0] = TensorFixture([[1, 2]])
+        else:
+            rows[0]["logits"] = TensorFixture([[1, 2]])
+>       with expect_error(ValueError):
+
+models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py:58:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:281: in helper
+    return _GeneratorContextManager(func, args, kwds)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <contextlib._GeneratorContextManager object at 0x74e5050e20b0>
+func = <function expect_error.<locals>.expect_error_ at 0x74e5051464d0>
+args = (<class 'ValueError'>,), kwds = {}
+
+    def __init__(self, func, args, kwds):
+>       self.gen = func(*args, **kwds)
+E       TypeError: expect_error.<locals>.expect_error_() missing 1 required positional argument: 'message'
+
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:103: TypeError
+_________ test_bad_alignment_is_rejected_before_hardware[missing_norm] _________
+
+failure = 'missing_norm'
+expect_error = <function expect_error.<locals>.expect_error_ at 0x74e505146830>
+
+    @pytest.mark.parametrize("failure", ["token", "step", "missing_norm", "wrong_width", "wrong_vocab"])
+    def test_bad_alignment_is_rejected_before_hardware(failure, expect_error):
+        rows = reference()
+        if failure == "token":
+            rows[1]["input_ids"] = TensorFixture([[3]])
+        elif failure == "step":
+            rows[1]["step"] = 2
+        elif failure == "missing_norm":
+            rows[0]["layer_last_hidden"].pop()
+        elif failure == "wrong_width":
+            rows[0]["layer_last_hidden"][0] = TensorFixture([[1, 2]])
+        else:
+            rows[0]["logits"] = TensorFixture([[1, 2]])
+>       with expect_error(ValueError):
+
+models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py:58:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:281: in helper
+    return _GeneratorContextManager(func, args, kwds)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <contextlib._GeneratorContextManager object at 0x74e505281c90>
+func = <function expect_error.<locals>.expect_error_ at 0x74e5051468c0>
+args = (<class 'ValueError'>,), kwds = {}
+
+    def __init__(self, func, args, kwds):
+>       self.gen = func(*args, **kwds)
+E       TypeError: expect_error.<locals>.expect_error_() missing 1 required positional argument: 'message'
+
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:103: TypeError
+_________ test_bad_alignment_is_rejected_before_hardware[wrong_width] __________
+
+failure = 'wrong_width'
+expect_error = <function expect_error.<locals>.expect_error_ at 0x74e505146c20>
+
+    @pytest.mark.parametrize("failure", ["token", "step", "missing_norm", "wrong_width", "wrong_vocab"])
+    def test_bad_alignment_is_rejected_before_hardware(failure, expect_error):
+        rows = reference()
+        if failure == "token":
+            rows[1]["input_ids"] = TensorFixture([[3]])
+        elif failure == "step":
+            rows[1]["step"] = 2
+        elif failure == "missing_norm":
+            rows[0]["layer_last_hidden"].pop()
+        elif failure == "wrong_width":
+            rows[0]["layer_last_hidden"][0] = TensorFixture([[1, 2]])
+        else:
+            rows[0]["logits"] = TensorFixture([[1, 2]])
+>       with expect_error(ValueError):
+
+models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py:58:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:281: in helper
+    return _GeneratorContextManager(func, args, kwds)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <contextlib._GeneratorContextManager object at 0x74e50511fa90>
+func = <function expect_error.<locals>.expect_error_ at 0x74e505145cf0>
+args = (<class 'ValueError'>,), kwds = {}
+
+    def __init__(self, func, args, kwds):
+>       self.gen = func(*args, **kwds)
+E       TypeError: expect_error.<locals>.expect_error_() missing 1 required positional argument: 'message'
+
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:103: TypeError
+_________ test_bad_alignment_is_rejected_before_hardware[wrong_vocab] __________
+
+failure = 'wrong_vocab'
+expect_error = <function expect_error.<locals>.expect_error_ at 0x74e505146d40>
+
+    @pytest.mark.parametrize("failure", ["token", "step", "missing_norm", "wrong_width", "wrong_vocab"])
+    def test_bad_alignment_is_rejected_before_hardware(failure, expect_error):
+        rows = reference()
+        if failure == "token":
+            rows[1]["input_ids"] = TensorFixture([[3]])
+        elif failure == "step":
+            rows[1]["step"] = 2
+        elif failure == "missing_norm":
+            rows[0]["layer_last_hidden"].pop()
+        elif failure == "wrong_width":
+            rows[0]["layer_last_hidden"][0] = TensorFixture([[1, 2]])
+        else:
+            rows[0]["logits"] = TensorFixture([[1, 2]])
+>       with expect_error(ValueError):
+
+models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py:58:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:281: in helper
+    return _GeneratorContextManager(func, args, kwds)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <contextlib._GeneratorContextManager object at 0x74e505130cd0>
+func = <function expect_error.<locals>.expect_error_ at 0x74e505146dd0>
+args = (<class 'ValueError'>,), kwds = {}
+
+    def __init__(self, func, args, kwds):
+>       self.gen = func(*args, **kwds)
+E       TypeError: expect_error.<locals>.expect_error_() missing 1 required positional argument: 'message'
+
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:103: TypeError
+___________ test_invalid_comparisons_are_rejected[actual0-expected0] ___________
+
+actual = [], expected = []
+expect_error = <function expect_error.<locals>.expect_error_ at 0x74e505147520>
+
+    @pytest.mark.parametrize("actual,expected", [([], []), ([1], [1, 2]), ([float("nan")], [1]), ([1], [float("inf")])])
+    def test_invalid_comparisons_are_rejected(actual, expected, expect_error):
+>       with expect_error(ValueError):
+
+models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py:81:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:281: in helper
+    return _GeneratorContextManager(func, args, kwds)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <contextlib._GeneratorContextManager object at 0x74e505135390>
+func = <function expect_error.<locals>.expect_error_ at 0x74e505147400>
+args = (<class 'ValueError'>,), kwds = {}
+
+    def __init__(self, func, args, kwds):
+>       self.gen = func(*args, **kwds)
+E       TypeError: expect_error.<locals>.expect_error_() missing 1 required positional argument: 'message'
+
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:103: TypeError
+___________ test_invalid_comparisons_are_rejected[actual1-expected1] ___________
+
+actual = [1], expected = [1, 2]
+expect_error = <function expect_error.<locals>.expect_error_ at 0x74e505147760>
+
+    @pytest.mark.parametrize("actual,expected", [([], []), ([1], [1, 2]), ([float("nan")], [1]), ([1], [float("inf")])])
+    def test_invalid_comparisons_are_rejected(actual, expected, expect_error):
+>       with expect_error(ValueError):
+
+models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py:81:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:281: in helper
+    return _GeneratorContextManager(func, args, kwds)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <contextlib._GeneratorContextManager object at 0x74e5052bbac0>
+func = <function expect_error.<locals>.expect_error_ at 0x74e5051477f0>
+args = (<class 'ValueError'>,), kwds = {}
+
+    def __init__(self, func, args, kwds):
+>       self.gen = func(*args, **kwds)
+E       TypeError: expect_error.<locals>.expect_error_() missing 1 required positional argument: 'message'
+
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:103: TypeError
+___________ test_invalid_comparisons_are_rejected[actual2-expected2] ___________
+
+actual = [nan], expected = [1]
+expect_error = <function expect_error.<locals>.expect_error_ at 0x74e505146dd0>
+
+    @pytest.mark.parametrize("actual,expected", [([], []), ([1], [1, 2]), ([float("nan")], [1]), ([1], [float("inf")])])
+    def test_invalid_comparisons_are_rejected(actual, expected, expect_error):
+>       with expect_error(ValueError):
+
+models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py:81:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:281: in helper
+    return _GeneratorContextManager(func, args, kwds)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <contextlib._GeneratorContextManager object at 0x74e5050e2e60>
+func = <function expect_error.<locals>.expect_error_ at 0x74e505146cb0>
+args = (<class 'ValueError'>,), kwds = {}
+
+    def __init__(self, func, args, kwds):
+>       self.gen = func(*args, **kwds)
+E       TypeError: expect_error.<locals>.expect_error_() missing 1 required positional argument: 'message'
+
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:103: TypeError
+___________ test_invalid_comparisons_are_rejected[actual3-expected3] ___________
+
+actual = [1], expected = [inf]
+expect_error = <function expect_error.<locals>.expect_error_ at 0x74e505147b50>
+
+    @pytest.mark.parametrize("actual,expected", [([], []), ([1], [1, 2]), ([float("nan")], [1]), ([1], [float("inf")])])
+    def test_invalid_comparisons_are_rejected(actual, expected, expect_error):
+>       with expect_error(ValueError):
+
+models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py:81:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:281: in helper
+    return _GeneratorContextManager(func, args, kwds)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <contextlib._GeneratorContextManager object at 0x74e5052bb040>
+func = <function expect_error.<locals>.expect_error_ at 0x74e505147be0>
+args = (<class 'ValueError'>,), kwds = {}
+
+    def __init__(self, func, args, kwds):
+>       self.gen = func(*args, **kwds)
+E       TypeError: expect_error.<locals>.expect_error_() missing 1 required positional argument: 'message'
+
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:103: TypeError
+_________________ test_replaced_or_failed_cpu_job_is_rejected __________________
+
+expect_error = <function expect_error.<locals>.expect_error_ at 0x74e505144310>
+
+    def test_replaced_or_failed_cpu_job_is_rejected(expect_error):
+        for updates in (dict(InvocationID="different"), dict(Result="timeout")):
+>           with expect_error(ValueError):
+
+models/demos/qwen38_27b_qb2/tests/unit/test_hf_layer_followup.py:24:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:281: in helper
+    return _GeneratorContextManager(func, args, kwds)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <contextlib._GeneratorContextManager object at 0x74e50511cee0>
+func = <function expect_error.<locals>.expect_error_ at 0x74e505147d90>
+args = (<class 'ValueError'>,), kwds = {}
+
+    def __init__(self, func, args, kwds):
+>       self.gen = func(*args, **kwds)
+E       TypeError: expect_error.<locals>.expect_error_() missing 1 required positional argument: 'message'
+
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:103: TypeError
+_____________ test_missing_service_requires_completed_cpu_evidence _____________
+
+expect_error = <function expect_error.<locals>.expect_error_ at 0x74e505146950>
+
+    def test_missing_service_requires_completed_cpu_evidence(expect_error):
+        properties = dict(stopped(), InvocationID="", LoadState="not-found")
+        assert cpu_predecessor_ready(properties, receipt(), "owned")
+        for bad in (None, dict(state="running"), dict(state="completed", stages=[])):
+>           with expect_error(ValueError):
+
+models/demos/qwen38_27b_qb2/tests/unit/test_hf_layer_followup.py:32:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:281: in helper
+    return _GeneratorContextManager(func, args, kwds)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <contextlib._GeneratorContextManager object at 0x74e504fd6860>
+func = <function expect_error.<locals>.expect_error_ at 0x74e5051468c0>
+args = (<class 'ValueError'>,), kwds = {}
+
+    def __init__(self, func, args, kwds):
+>       self.gen = func(*args, **kwds)
+E       TypeError: expect_error.<locals>.expect_error_() missing 1 required positional argument: 'message'
+
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:103: TypeError
+___________________ test_skip_only_for_complete_passing_gpqa ___________________
+
+expect_error = <function expect_error.<locals>.expect_error_ at 0x74e505145000>
+
+    def test_skip_only_for_complete_passing_gpqa(expect_error):
+        result = dict(completed_samples=198, dataset_samples=198, correct=176, passed=False)
+        assert needs_diagnostic(dict(gpqa_result=result))
+        assert not needs_diagnostic(dict(gpqa_result=dict(result, correct=177, passed=True)))
+        for updates in (dict(completed_samples=197), dict(passed=True), dict(correct=177)):
+>           with expect_error(ValueError):
+
+models/demos/qwen38_27b_qb2/tests/unit/test_hf_layer_followup.py:41:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:281: in helper
+    return _GeneratorContextManager(func, args, kwds)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <contextlib._GeneratorContextManager object at 0x74e505282170>
+func = <function expect_error.<locals>.expect_error_ at 0x74e505147e20>
+args = (<class 'ValueError'>,), kwds = {}
+
+    def __init__(self, func, args, kwds):
+>       self.gen = func(*args, **kwds)
+E       TypeError: expect_error.<locals>.expect_error_() missing 1 required positional argument: 'message'
+
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py:103: TypeError
+=========================== short test summary info ============================
+FAILED models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py::test_bad_alignment_is_rejected_before_hardware[token]
+FAILED models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py::test_bad_alignment_is_rejected_before_hardware[step]
+FAILED models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py::test_bad_alignment_is_rejected_before_hardware[missing_norm]
+FAILED models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py::test_bad_alignment_is_rejected_before_hardware[wrong_width]
+FAILED models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py::test_bad_alignment_is_rejected_before_hardware[wrong_vocab]
+FAILED models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py::test_invalid_comparisons_are_rejected[actual0-expected0]
+FAILED models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py::test_invalid_comparisons_are_rejected[actual1-expected1]
+FAILED models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py::test_invalid_comparisons_are_rejected[actual2-expected2]
+FAILED models/demos/qwen38_27b_qb2/tests/unit/test_reference_comparison.py::test_invalid_comparisons_are_rejected[actual3-expected3]
+FAILED models/demos/qwen38_27b_qb2/tests/unit/test_hf_layer_followup.py::test_replaced_or_failed_cpu_job_is_rejected
+FAILED models/demos/qwen38_27b_qb2/tests/unit/test_hf_layer_followup.py::test_missing_service_requires_completed_cpu_evidence
+FAILED models/demos/qwen38_27b_qb2/tests/unit/test_hf_layer_followup.py::test_skip_only_for_complete_passing_gpqa
+12 failed, 4 passed, 1 skipped in 0.33s

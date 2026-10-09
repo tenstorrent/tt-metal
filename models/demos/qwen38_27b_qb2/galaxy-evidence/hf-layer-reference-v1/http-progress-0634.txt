@@ -1,0 +1,17 @@
+HTTP_SWEEP_BEGIN isl=32768 concurrency=32
+HTTP_SWEEP_COMPLETE {"tokens_per_second_per_user": 16.66238026791428, "aggregate_e2e_tokens_per_second": 141.32028160160655, "ttft_p50_s": 21.122567310463637, "ttft_p90_s": 21.26553364749998, "tpot_ms": 60.0154350051438, "elapsed_s": 28.983808647841215, "samples": 3}
+HTTP_SWEEP_BEGIN isl=32768 concurrency=64
+HTTP_SWEEP_COMPLETE {"tokens_per_second_per_user": 16.0831333709625, "aggregate_e2e_tokens_per_second": 163.2743274886859, "ttft_p50_s": 41.846730244578794, "ttft_p90_s": 42.078664232604204, "tpot_ms": 62.17693884236904, "elapsed_s": 50.17322763474658, "samples": 3}
+HTTP_SWEEP_BEGIN isl=32768 concurrency=128
+HTTP_SWEEP_COMPLETE {"tokens_per_second_per_user": 2.705101703484182, "aggregate_e2e_tokens_per_second": 172.26076161050878, "ttft_p50_s": 47.47413482074626, "ttft_p90_s": 82.49480151454918, "tpot_ms": 369.6718680528706, "elapsed_s": 95.11161942407489, "samples": 3}
+HTTP_SWEEP_BEGIN isl=16384 concurrency=32
+HTTP_SWEEP_COMPLETE {"tokens_per_second_per_user": 17.05684404068755, "aggregate_e2e_tokens_per_second": 226.34995715825923, "ttft_p50_s": 10.508832270512357, "ttft_p90_s": 10.584399836603552, "tpot_ms": 58.627492730460034, "elapsed_s": 18.09587265411392, "samples": 3}
+HTTP_SWEEP_BEGIN isl=16384 concurrency=64
+HTTP_SWEEP_COMPLETE {"tokens_per_second_per_user": 16.786250869790038, "aggregate_e2e_tokens_per_second": 290.40868668969733, "ttft_p50_s": 20.39554057037458, "ttft_p90_s": 20.560107565810902, "tpot_ms": 59.57256374618378, "elapsed_s": 28.2085225940682, "samples": 3}
+HTTP_SWEEP_BEGIN isl=16384 concurrency=128
+HTTP_SWEEP_COMPLETE {"tokens_per_second_per_user": 11.33385699280798, "aggregate_e2e_tokens_per_second": 314.3136931897343, "ttft_p50_s": 40.583703994052485, "ttft_p90_s": 40.86660955096595, "tpot_ms": 88.23121737238793, "elapsed_s": 52.126268613152206, "samples": 3}
+HTTP_SWEEP_BEGIN isl=131072 concurrency=32
+HTTP_SWEEP_COMPLETE {"tokens_per_second_per_user": 3.378445780079148, "aggregate_e2e_tokens_per_second": 33.2544294767986, "ttft_p50_s": 84.67168683884665, "ttft_p90_s": 113.42660870379768, "tpot_ms": 295.9940946504024, "elapsed_s": 123.1715613361448, "samples": 3}
+HTTP_SWEEP_BEGIN isl=131072 concurrency=64
+HTTP_SWEEP_COMPLETE {"tokens_per_second_per_user": 1.3480435814247915, "aggregate_e2e_tokens_per_second": 34.654581343437954, "ttft_p50_s": 139.74104641540907, "ttft_p90_s": 222.84303450053557, "tpot_ms": 741.8157793853127, "elapsed_s": 236.39010146493092, "samples": 3}
+HTTP_SWEEP_BEGIN isl=262016 concurrency=32
