@@ -16,9 +16,12 @@
 //    The root also writes the table block to DRAM for the metadata program.
 // 2. Streams this core's share of each job's expert weights in compute order P1(0), P1(1), P2(0), P1(2), P2(1), ...:
 //    P1 = this core's W0/W1 column groups, P2 = its W2 output groups, both in moe_compute's prepared layout (the K
-//    padding rows at each group's end are not read). A unit is what the compute holds at once: one group's run for a
-//    job of one row tile; for a job of several (M > 1) one chunk of one group, P1 chunk-major (chunk 0 of every column
-//    group, then chunk 1, ...), P2 group-major, each unit padded to the same number of CB blocks.
+//    padding rows at each group's end are not read): a W0/W1 group is read from the bank pieces of the (layer, expert)
+//    stream it lies in (a ring position's slice can go on in the next bank), a W2 group from this ring position's own
+//    bank; a half block-column and a half-width last W2 group hold 2 tiles per K row. A unit is what the compute holds
+//    at once: one group's run for a job of one row tile; for a job of several (M > 1) one chunk of one group, P1
+//    chunk-major (chunk 0 of every column group, then chunk 1, ...), P2 group-major, each unit padded to the same
+//    number of CB blocks.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
@@ -67,13 +70,13 @@ void kernel_main() {
     constexpr uint32_t RTBS = get_named_compile_time_arg_val("rt_table_bytes");
     constexpr uint32_t JBO = get_named_compile_time_arg_val("rt_jobs");
     constexpr uint32_t ENO = get_named_compile_time_arg_val("rt_areas");
-    // weights in moe_compute's prepared layout (tiles)
-    constexpr uint32_t P1_RUN = get_named_compile_time_arg_val("w0_w1_run_tiles");
+    // weights in moe_compute's prepared layout (tiles, PreparedLayout in moe_expert_rows.cpp): the stride of a ring
+    // position's W0/W1 column groups and a bank piece of W0/W1 per (layer, expert); the stride of its W2 output groups
+    // and its W2 per (layer, expert)
     constexpr uint32_t P1_STRIDE = get_named_compile_time_arg_val("w0_w1_group_tiles");
-    constexpr uint32_t P1_GROUPS = get_named_compile_time_arg_val("w0_w1_groups_per_core");
-    constexpr uint32_t P2_RUN = get_named_compile_time_arg_val("w2_run_tiles");
+    constexpr uint32_t P1_PIECE = get_named_compile_time_arg_val("w0_w1_piece_tiles");
     constexpr uint32_t P2_STRIDE = get_named_compile_time_arg_val("w2_group_tiles");
-    constexpr uint32_t P2_GROUPS = get_named_compile_time_arg_val("w2_groups_per_core");
+    constexpr uint32_t P2_SLICE = get_named_compile_time_arg_val("w2_slice_tiles");
     constexpr uint32_t M = get_named_compile_time_arg_val("row_tiles");
     constexpr uint32_t KC = get_named_compile_time_arg_val("chunk_tiles");
     constexpr uint32_t SB = get_named_compile_time_arg_val("chunk_blocks");
@@ -104,22 +107,28 @@ void kernel_main() {
     constexpr uint32_t KST = IDX_PAGE / 2;  // u16 per index page
 
     uint32_t a = 0;
-    const uint32_t bank_id = get_arg_val<uint32_t>(a++);
+    const uint32_t bank_id = get_arg_val<uint32_t>(a++);  // this ring position's bank (its W2)
     const uint32_t idx_addr = get_arg_val<uint32_t>(a++);
     const uint32_t sc_addr = get_arg_val<uint32_t>(a++);
     const uint32_t map_addr = get_arg_val<uint32_t>(a++);
     [[maybe_unused]] const uint32_t tab_addr = get_arg_val<uint32_t>(a++);
     const uint32_t w01_addr = get_arg_val<uint32_t>(a++);
     const uint32_t w2_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t g0 = get_arg_val<uint32_t>(a++), ng = get_arg_val<uint32_t>(a++);
+    const uint32_t s0 = get_arg_val<uint32_t>(a++);  // first W0/W1 tile of this core's groups in the expert stream
+    const uint32_t ng = get_arg_val<uint32_t>(a++);
     const uint32_t q0 = get_arg_val<uint32_t>(a++), nq = get_arg_val<uint32_t>(a++);
     const uint32_t g = get_arg_val<uint32_t>(a++);
     const uint32_t me = get_arg_val<uint32_t>(a++), NP = get_arg_val<uint32_t>(a++);
     const uint32_t rx = get_arg_val<uint32_t>(a++), ry = get_arg_val<uint32_t>(a++);
     const uint32_t device_id = get_arg_val<uint32_t>(a++);
-    // common args: mapping row of each source (count first), virtual x / y of the grid, mask of the program's cores
+    // the last W0/W1 group is a half block-column, the last W2 group the half-width last a2a iteration
+    const bool half_col = get_arg_val<uint32_t>(a++) == 1;
+    const bool half_out = get_arg_val<uint32_t>(a++) == 1;
+    // common args: mapping row of each source (count first), virtual x / y of the grid, mask of the program's cores,
+    // bank of each W0/W1 piece (shard)
     const uint32_t src_at = 0;
     const uint32_t vx_at = get_common_arg_val<uint32_t>(0) + 1, vy_at = vx_at + GW, all_at = vy_at + GH;
+    const uint32_t piece_bank_at = all_at + MW;
     const bool root = me == 0;
 
     // ---- routing ----
@@ -443,49 +452,71 @@ void kernel_main() {
     constexpr uint32_t C2 = (NT + KC2 - 1) / KC2;
     constexpr uint32_t UNIT_BLOCKS = HELD ? SB : 1;
     auto pad_to_unit = [](uint32_t b) { return (UNIT_BLOCKS - b % UNIT_BLOCKS) % UNIT_BLOCKS; };
-    auto p1_tiles = [&](uint32_t c, uint32_t kc, uint32_t chunks) {
-        return 4 * ((c + 1 < chunks ? kc : KT - c * kc) + (c + 1 == chunks ? BIAS : 0));
+    // tiles per K row of W0/W1 group u and of W2 group q: 4, or 2 for a half group (always a core's last)
+    auto p1_width = [&](uint32_t u) -> uint32_t { return half_col && u + 1 == ng ? 2 : 4; };
+    auto p2_width = [&](uint32_t q) -> uint32_t { return half_out && q + 1 == nq ? 2 : 4; };
+    // K rows of chunk c of `chunks` chunks of kc of the k rows (the bias row ends the last)
+    auto chunk_rows = [](uint32_t c, uint32_t kc, uint32_t chunks, uint32_t k) {
+        return (c + 1 < chunks ? kc : k - c * kc) + (c + 1 == chunks ? BIAS : 0);
     };
     // blocks of a one-row-tile pass before its padding
     auto stream_blocks = [&](uint32_t ph) {
-        if (ph == 1) {
-            return nq * ((P2_RUN + BT - 1) / BT);
-        }
         uint32_t b = 0;
-        for (uint32_t c = 0; c < C1S; ++c) {
-            b += (p1_tiles(c, KC1, C1S) + BT - 1) / BT;
-        }
-        return ng * b;
-    };
-    // unit i of a pass: DRAM address, real tiles, CB blocks; unit `units` of a padded pass carries no data
-    auto unit_of =
-        [&](uint32_t ph, bool held, uint32_t slot, uint32_t i, uint32_t& addr, uint32_t& tiles, uint32_t& blocks) {
-            if (ph == 0) {
-                const uint32_t kc = held ? KC : KC1, chunks = held ? C1 : C1S;
-                const uint32_t u = i % ng, c = i / ng;
-                addr = w01_addr + ((slot * P1_GROUPS + g0 + u) * P1_STRIDE + 4 * c * kc) * TB;
-                tiles = p1_tiles(c, kc, chunks);
-            } else if (held) {
-                const uint32_t q = i / C2, p = i % C2;
-                addr = w2_addr + ((slot * P2_GROUPS + q0 + q) * P2_STRIDE + 4 * p * KC2) * TB;
-                tiles = 4 * ((p + 1 < C2 ? KC2 : NT - p * KC2) + (p + 1 == C2 ? BIAS : 0));
-            } else {
-                addr = w2_addr + ((slot * P2_GROUPS + q0 + i) * P2_STRIDE) * TB;
-                tiles = P2_RUN;
+        if (ph == 1) {
+            for (uint32_t q = 0; q < nq; ++q) {
+                b += (p2_width(q) * (NT + BIAS) + BT - 1) / BT;
             }
-            blocks = held ? SB : (tiles + BT - 1) / BT;
-        };
-    const uint64_t bank_noc = get_noc_addr_from_bank_id<true>(bank_id, 0);
-    const uint32_t bank_lo = (uint32_t)bank_noc;
+            return b;
+        }
+        for (uint32_t u = 0; u < ng; ++u) {
+            for (uint32_t c = 0; c < C1S; ++c) {
+                b += (p1_width(u) * chunk_rows(c, KC1, C1S, KT) + BT - 1) / BT;
+            }
+        }
+        return b;
+    };
+    // read cursor: byte address in its bank, that bank, the W0/W1 piece and the tiles to its end (a W2 run never
+    // leaves its bank)
+    uint32_t addr = 0, rd_bank = bank_id, piece = 0, piece_left = 0;
+    // unit i of a pass: read cursor, real tiles, CB blocks; unit `units` of a padded pass carries no data
+    auto unit_of = [&](uint32_t ph, bool held, uint32_t slot, uint32_t i, uint32_t& tiles, uint32_t& blocks) {
+        if (ph == 0) {
+            const uint32_t kc = held ? KC : KC1, chunks = held ? C1 : C1S;
+            const uint32_t u = i % ng, c = i / ng, w = p1_width(u);
+            const uint32_t at = s0 + u * P1_STRIDE + w * c * kc;  // tile of the (layer, expert) stream
+            piece = at / P1_PIECE;
+            piece_left = (piece + 1) * P1_PIECE - at;
+            rd_bank = get_common_arg_val<uint32_t>(piece_bank_at + piece);
+            addr = w01_addr + (slot * P1_PIECE + at - piece * P1_PIECE) * TB;
+            tiles = w * chunk_rows(c, kc, chunks, KT);
+        } else {
+            const uint32_t kc = held ? KC2 : NT, chunks = held ? C2 : 1;
+            const uint32_t q = i / chunks, p = i % chunks, w = p2_width(q);
+            rd_bank = bank_id;
+            piece_left = 0xFFFFFFFF;
+            addr = w2_addr + (slot * P2_SLICE + (q0 + q) * P2_STRIDE + w * p * kc) * TB;
+            tiles = w * chunk_rows(p, kc, chunks, NT);
+        }
+        blocks = held ? SB : (tiles + BT - 1) / BT;
+    };
     const uint32_t slots = get_write_ptr(cb_w);
-    noc_async_read_one_packet_set_state<true>(bank_noc, PT * TB, 0);
+    // the bank and packet size the read command buffer is set to (set_state), changed only when a packet needs others
+    uint32_t state_bank = 0, state_tiles = 0, bank_lo = 0;
+    auto set_read_state = [&](uint32_t bank, uint32_t tiles) {
+        const uint64_t bank_noc = get_noc_addr_from_bank_id<true>(bank, 0);
+        noc_async_read_one_packet_set_state<true>(bank_noc, tiles * TB, 0);
+        bank_lo = (uint32_t)bank_noc;
+        state_bank = bank;
+        state_tiles = tiles;
+    };
+    set_read_state(bank_id, PT);
     // cursor over (pass, unit, block)
-    uint32_t pass = 0, ph = 0, slot = 0, unit = 0, units = 0, addr = 0, left = 0, block = 0, blocks = 0;
+    uint32_t pass = 0, ph = 0, slot = 0, unit = 0, units = 0, left = 0, block = 0, blocks = 0;
     bool held = false;
     auto open_unit = [&]() {
         uint32_t tiles = 0;
         if (unit < units) {
-            unit_of(ph, held, slot, unit, addr, tiles, blocks);
+            unit_of(ph, held, slot, unit, tiles, blocks);
         } else {
             blocks = pad_to_unit(stream_blocks(ph));
         }
@@ -539,20 +570,25 @@ void kernel_main() {
             const uint32_t nt = left < BT ? left : BT;
             if (nt) {  // a unit's padding blocks carry no data
                 noc_async_read_set_trid(trid);
-                for (uint32_t done = 0; done < nt; done += PT) {  // the block's packets share its transaction id
-                    const uint32_t pt = nt - done < PT ? nt - done : PT;
-                    if (pt != PT) {
-                        noc_async_read_one_packet_set_state<true>(bank_noc, pt * TB, 0);
+                // the block's packets share its transaction id; a packet ends where the cursor's bank piece does
+                for (uint32_t done = 0; done < nt;) {
+                    if (piece_left == 0) {  // the stream goes on at this (layer, expert)'s start in the next bank
+                        rd_bank = get_common_arg_val<uint32_t>(piece_bank_at + ++piece);
+                        addr -= P1_PIECE * TB;
+                        piece_left = P1_PIECE;
                     }
-                    noc_async_read_one_packet_with_state_with_trid(
-                        bank_lo, addr + done * TB, slots + bslot * BB + done * TB, trid);
-                    if (pt != PT) {
-                        noc_async_read_one_packet_set_state<true>(bank_noc, PT * TB, 0);
+                    uint32_t pt = nt - done < PT ? nt - done : PT;
+                    pt = pt < piece_left ? pt : piece_left;
+                    if (rd_bank != state_bank || pt != state_tiles) {
+                        set_read_state(rd_bank, pt);
                     }
+                    noc_async_read_one_packet_with_state_with_trid(bank_lo, addr, slots + bslot * BB + done * TB, trid);
+                    done += pt;
+                    addr += pt * TB;
+                    piece_left -= pt;
                 }
             }
             ++issued;
-            addr += nt * TB;
             left -= nt;
             ++block;
             advance();
