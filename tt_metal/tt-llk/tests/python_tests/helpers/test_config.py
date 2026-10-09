@@ -1279,6 +1279,8 @@ class TestConfig:
             "temp_elfs",
             # Host-side determinism-check opt-out; does not affect the compiled kernel.
             "expected_nondeterministic",
+            # Which ELF set a launch runs (the INIT measurement launch); the variant is the same.
+            "init_launch",
         ]
 
         if not TestConfig.SPEED_OF_LIGHT:
@@ -1720,7 +1722,7 @@ class TestConfig:
         run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
 
     def _build_kernel_part(
-        self, name: str, variant_dir: Path, elf_dir: Path, pads=None
+        self, name: str, variant_dir: Path, elf_dir: Path, pads=None, init_only=False
     ):
         """Compiles and links one thread's ELF of this variant into elf_dir. Wormhole perf builds compile to assembly
         once and link it with the layout pads (pads = (P, Z) bytes, see perf/layout.py) as assembler symbols.
@@ -1761,6 +1763,8 @@ class TestConfig:
             )
         if TestConfig.ENABLE_PERF_COUNTERS:
             optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
+        if init_only:  # the INIT measurement build of the driver (counters.h, perf.h)
+            optional_kernel_flags += " -DLLK_PERF_INIT_ONLY"
         if (
             self._wormhole_perf_barrier()
             and (name, os.path.basename(str(self.test_source_path or self.test_name)))
@@ -1844,7 +1848,8 @@ class TestConfig:
             return
 
         # the assembly is kept compressed for the padded copies: with debug info it is about 0.6 MB a thread
-        assembly = variant_dir / "obj" / f"{name}.s"
+        assembly = variant_dir / ("obj_init" if init_only else "obj") / f"{name}.s"
+        assembly.parent.mkdir(parents=True, exist_ok=True)
         if pads is None:
             compile_command = [
                 TestConfig.GXX,
@@ -1918,10 +1923,20 @@ class TestConfig:
         with gzip.open(assembly, "rt") as f:
             return layout.code_key(f.read())
 
+    # Wormhole perf: INIT is measured in its own launch of the INIT measurement build (counters.h LLK_PERF_INIT_ONLY), so
+    # no code outside INIT (the loop, the kernel around it) can change INIT's code, placement or neighbours.
+    PERF_INIT_LAUNCH: ClassVar[bool] = (
+        os.environ.get("LLK_PERF_INIT_LAUNCH", "1") == "1"
+    )
+
     def _layout_elf_dir(self, build: bool) -> Path:
         """ELF dir to run for the current runtime arguments. Wormhole perf builds run a copy of the variant whose
         measured loop threads take the pads perf/layout.py picks for these arguments; build makes it when missing.
         """
+        if getattr(self, "init_launch", False):
+            return (
+                TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "init_elf"
+            )
         variant_dir = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
         if not self._wormhole_perf_barrier():
             return variant_dir / "elf"
@@ -2084,6 +2099,36 @@ class TestConfig:
                         ],
                         TestConfig.TESTS_WORKING_DIR,
                     )
+
+            # Wormhole perf builds: the INIT measurement ELFs (LLK_PERF_INIT_ONLY, unpadded) and their profiler metadata
+            # under <variant>_init, for the INIT launch of perf/core.py
+            if self._wormhole_perf_barrier() and TestConfig.PERF_INIT_LAUNCH:
+                init_elf_dir = VARIANT_DIR / "init_elf"
+                create_directories([init_elf_dir])
+                for name in TestConfig.KERNEL_COMPONENTS:
+                    self._build_kernel_part(
+                        name, VARIANT_DIR, init_elf_dir, None, init_only=True
+                    )
+                if self.profiler_build == ProfilerBuild.Yes:
+                    meta_dir = Path(
+                        TestConfig.PROFILER_META
+                        / self.test_name
+                        / f"{self.variant_id}_init"
+                    )
+                    meta_dir.mkdir(exist_ok=True, parents=True)
+                    for component in TestConfig.KERNEL_COMPONENTS:
+                        run_shell_command(
+                            [
+                                TestConfig.OBJCOPY,
+                                "-O",
+                                "binary",
+                                "-j",
+                                ".profiler_meta",
+                                str(init_elf_dir / f"{component}.elf"),
+                                str(meta_dir / f"{component}.meta.bin"),
+                            ],
+                            TestConfig.TESTS_WORKING_DIR,
+                        )
 
             # Mark build as complete so other processes know they can use the artefacts
             done_marker.touch()

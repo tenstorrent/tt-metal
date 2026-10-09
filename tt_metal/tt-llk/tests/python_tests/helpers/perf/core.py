@@ -1036,6 +1036,7 @@ class PerfConfig(TestConfig):
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
 
+        stats_by_run_type = {}  # INIT rows are replaced from the INIT launch below
         for templates, runtimes, run_type in self.run_configs:
             self._select_run_type(templates, runtimes, run_type)
 
@@ -1091,6 +1092,7 @@ class PerfConfig(TestConfig):
             if not stats_df.empty or not counter_only_build:
                 PerfConfig._validate_profiler_stats(stats_df, run_type)
                 results.append(stats_df)
+                stats_by_run_type[run_type] = stats_df
 
             if variant_counter_results:
                 all_counters = pd.concat(variant_counter_results, ignore_index=True)
@@ -1123,6 +1125,69 @@ class PerfConfig(TestConfig):
                     )
                     if not counter_csv_df.empty:
                         counter_results_list.append(counter_csv_df)
+
+        # Wormhole perf: INIT comes from the INIT measurement build (test_config.py init_elf), launched after the measured
+        # kernels so they keep their predecessors, after one unrecorded pass so each recorded INIT kernel follows another.
+        if (
+            self._wormhole_perf_barrier()
+            and TestConfig.PERF_INIT_LAUNCH
+            and not TestConfig.TEST_TARGET.run_simulator
+        ):
+            self.init_launch = True
+            try:
+                for templates, runtimes, run_type in self.warmup_configs:
+                    self._select_run_type(templates, runtimes, run_type)
+                    self.write_runtimes_to_L1()
+                    self.run_elf_files()
+                    self.wait_for_tensix_operations_finished()
+                for templates, runtimes, run_type in self.run_configs:
+                    self._select_run_type(templates, runtimes, run_type)
+                    self.write_runtimes_to_L1()
+                    self.run_elf_files()
+                    self.wait_for_tensix_operations_finished()
+                    init_data = Profiler.get_data(
+                        self.test_name,
+                        f"{self.variant_id}_init",
+                        TestConfig.TENSIX_LOCATION,
+                    )
+                    init_data.df["run_index"] = 0
+                    init_stats = Profiler.STATS_FUNCTION[run_type](
+                        ProfilerData.concat([init_data])
+                    )
+                    target = stats_by_run_type.get(run_type)
+                    row = (
+                        init_stats[init_stats[MARKER] == "INIT"]
+                        if not init_stats.empty
+                        else init_stats
+                    )
+                    if target is None or row.empty:
+                        continue
+                    row = row.copy()
+                    if run_type == PerfRunType.L1_TO_L1:
+                        # BRISC releases the three INITs one after another (brisc.cpp, the INIT park), so the span from
+                        # unpack's start to pack's end holds the release gaps: report the longest of the three INITs
+                        raw = init_data.zones().raw()
+                        raw = raw[raw[MARKER] == "INIT"]
+                        lengths = []
+                        for thread in ("unpack", "math", "pack"):
+                            t = raw[raw["thread"] == thread]
+                            starts = t[t["type"] == "ZONE_START"][
+                                "timestamp"
+                            ].to_numpy()
+                            ends = t[t["type"] == "ZONE_END"]["timestamp"].to_numpy()
+                            if len(starts) and len(starts) == len(ends):
+                                lengths.append(float((ends - starts).max()))
+                        if lengths:
+                            for column in row.columns:
+                                if column.startswith("mean("):
+                                    row[column] = max(lengths)
+                    for column in target.columns:
+                        if column != MARKER and column in row.columns:
+                            target.loc[target[MARKER] == "INIT", column] = row[
+                                column
+                            ].values[0]
+            finally:
+                self.init_launch = False
 
         # Assemble the per-test report frame (pure — see build_report_frame).
         combined = PerfConfig.build_report_frame(

@@ -10,8 +10,12 @@
 // The type RUNTIME_PARAMETERS expands to; build.h is not included because some kernels define RuntimeParams.
 struct RuntimeParams;
 
+#if defined(LLK_PERF_INIT_ONLY) // INIT measurement build: INIT runs from fixed sections ahead of main, run_kernel's place is free
+__attribute__((noinline, section(".text.run_kernel"))) void run_kernel(const struct RuntimeParams& params);
+#else
 __attribute__((noinline, section(".text.run_kernel"), aligned(2048))) void run_kernel(const struct RuntimeParams& params);
-#if defined(LLK_DBG_BARRIER)
+#endif
+#if defined(LLK_DBG_BARRIER) && !defined(LLK_PERF_INIT_ONLY)
 // run_kernel's callees start on the thread's period (sections.ld), so run_kernel's size cannot move them, after
 // llk_loop_end_pad bytes of NOPs that perf/layout.py sets at link time (the OOL threads also pad in profiler.h).
 #if defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 1

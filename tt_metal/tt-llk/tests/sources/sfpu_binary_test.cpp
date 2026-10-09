@@ -238,11 +238,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    LLK_INIT_BEGIN
+    LLK_UNINIT_BEGIN
     {
         _llk_math_eltwise_unary_datacopy_uninit_<BROADCAST_TYPE, unpack_to_dest>();
     }
-    LLK_INIT_END;
+    LLK_UNINIT_END;
 }
 
 #endif
