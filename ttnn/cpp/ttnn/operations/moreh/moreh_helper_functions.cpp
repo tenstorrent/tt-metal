@@ -14,7 +14,6 @@
 
 #include "tt-metalium/hal.hpp"
 #include "ttnn/device_operation_detail.hpp"
-#include "ttnn/operations/core/caller_owned_topology.hpp"
 
 namespace ttnn::operations {
 
@@ -557,8 +556,9 @@ std::vector<tt::tt_metal::TensorTopology> preallocated_or_union_output_topologie
             topologies.push_back(union_topology);
             continue;
         }
-        topologies.push_back(ttnn::operations::core::caller_owned_output_topology(*preallocated, operands, op_name)
-                                 .value_or(union_topology));
+        topologies.push_back(
+            ttnn::device_operation::detail::caller_owned_output_topology(*preallocated, operands, op_name)
+                .value_or(union_topology));
     }
     return topologies;
 }

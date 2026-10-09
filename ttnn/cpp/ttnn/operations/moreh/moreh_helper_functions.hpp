@@ -176,11 +176,11 @@ void check_tensor(
 //
 // A preallocated (caller-owned) output keeps the label it arrived with while that label still describes the data:
 // no operand may be sharded along a mesh axis on which the output is replicated, and every operand must span the
-// output's mesh coordinates (core::caller_owned_output_topology, shared with the in-place softmax / layer_norm and
-// KV-cache hooks of PRs #59329-#59332). Otherwise -- a gradient sharded along an axis on which the parameter is
-// replicated leaves every device with a different parameter -- it takes the union of every tensor in tensor_args, which
-// is data-preserving, exactly like an output the op allocates itself. Returns {} when nothing is preallocated: the
-// framework then applies its union default itself.
+// output's mesh coordinates (ttnn::device_operation::detail::caller_owned_output_topology, shared with the in-place
+// softmax / layer_norm and KV-cache hooks of PRs #59329-#59332). Otherwise -- a gradient sharded along an axis on which
+// the parameter is replicated leaves every device with a different parameter -- it takes the union of every tensor in
+// tensor_args, which is data-preserving, exactly like an output the op allocates itself. Returns {} when nothing is
+// preallocated: the framework then applies its union default itself.
 std::vector<tt::tt_metal::TensorTopology> preallocated_or_union_output_topologies(
     std::initializer_list<const Tensor*> operands,
     const Tensor& primary_input,

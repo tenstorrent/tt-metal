@@ -11,7 +11,6 @@ set(TTNN_OP_CORE_SRCS
 
 set(TTNN_OP_CORE_API_HEADERS
     core.hpp
-    caller_owned_topology.hpp
     to_dtype/to_dtype_op.hpp
     to_layout/to_layout_op.hpp
     compute_kernel/compute_kernel_config.hpp

@@ -11,7 +11,7 @@ preallocated ``*_out`` (tt-train's MorehAdamW hands in the parameter itself), mo
 fresh output, but for a caller-owned one it can drop the caller's distribution shape (a collapsed 1-D label against
 an N-D input) or replace the caller's shard dim with an input's.
 
-Contract pinned here (``ttnn::operations::core::caller_owned_output_topology``, shared with the in-place softmax /
+Contract pinned here (``ttnn::device_operation::detail::caller_owned_output_topology``, shared with the in-place softmax /
 layer_norm and KV-cache hooks of PRs #59329-#59332):
   * a preallocated (caller-owned) output keeps the label it arrived with while that label still describes the data:
     no input may be sharded along a mesh axis on which the output is replicated;

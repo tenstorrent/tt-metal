@@ -5,7 +5,7 @@
 #include "moreh_dot_backward_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 
-#include "ttnn/operations/core/caller_owned_topology.hpp"
+#include "ttnn/device_operation_detail.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -91,8 +91,8 @@ std::vector<tt::tt_metal::TensorTopology> MorehDotBackwardOperation::compute_out
     // Every output is caller-owned: create_output_tensors hands output_tensors back as is, and compute_output_specs
     // has an entry only for a slot the caller filled. input_grad = output_grad * other and other_grad = output_grad *
     // input: each present grad keeps the label it arrived with while the two tensors that produce it are compatible
-    // with that label (core::caller_owned_output_topology), else it takes the union of every tensor here -- a
-    // replicated input_grad written from a mesh-sharded `other` differs on every device.
+    // with that label (device_operation::detail::caller_owned_output_topology), else it takes the union of every tensor
+    // here -- a replicated input_grad written from a mesh-sharded `other` differs on every device.
     std::vector<std::reference_wrapper<const Tensor>> all_tensors = {
         tensor_args.output_grad, tensor_args.input, tensor_args.other};
     for (const auto& output_tensor : tensor_args.output_tensors) {
@@ -109,7 +109,7 @@ std::vector<tt::tt_metal::TensorTopology> MorehDotBackwardOperation::compute_out
             continue;
         }
         const Tensor* factor = slot == 0 ? &tensor_args.other : &tensor_args.input;
-        topologies.push_back(ttnn::operations::core::caller_owned_output_topology(
+        topologies.push_back(ttnn::device_operation::detail::caller_owned_output_topology(
                                  *output_tensor, {&tensor_args.output_grad, factor}, "ttnn::moreh_dot_backward")
                                  .value_or(union_topology));
     }
