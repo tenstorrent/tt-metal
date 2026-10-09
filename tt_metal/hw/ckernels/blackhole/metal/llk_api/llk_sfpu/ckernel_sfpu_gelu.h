@@ -412,6 +412,10 @@ constexpr float GELU_DERIV_H6 = 6.0921474869e-06f;
 constexpr float GELU_DERIV_H7 = -2.3764030743e-07f;
 constexpr float GELU_DERIV_H8 = 4.2734988881e-09f;
 
+// Saturation threshold: GELU'(x) rounds to exactly 1 in BF16 for x >= 3.1719. Both destination
+// arms below test it (the fp32 arm as -x <= -GELU_DERIV_SAT_ONE), so it lives in one place.
+constexpr float GELU_DERIV_SAT_ONE = 3.1719f;
+
 // GELU Derivative Evaluation with Polynomial Approximation
 // Saturation thresholds derived from exhaustive BF16 research (DAZ+FTZ model):
 // - Zero saturation: x <= -13.375 (GELU'(x) becomes 0 in BF16)
@@ -421,13 +425,36 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -13.375
 
-    // For x >= 3.1719, output saturates to 1 (verified saturation threshold)
-    v_if(x >= 3.1719f) { result = 1.0f; }
+    // NaN (fp32 destination only). The region tests are sign-magnitude ordered compares, which
+    // sort +NaN above +inf and -NaN below -inf, so +NaN used to saturate to 1.0 and -NaN to fall
+    // through to 0 (tenstorrent/tt-llk#1701 item 12). x*1 and x*-1 are exact for every other
+    // input (a denormal flushes to a zero, which lands in the same region) and turn every NaN
+    // into the canonical +NaN. Testing -x <= -GELU_DERIV_SAT_ONE then keeps NaN out of the
+    // saturation region, and x >= -3 sends it into the polynomial, which propagates it.
+    // Hoisting x*x, which both remaining regions computed separately before, offsets one of the
+    // two SFPMADs; net +1 instruction per row.
+    // The products must be raw SFPMADs: written as x * 1.0f / -x, sfpi is free to fold the
+    // multiply by one away and to lower the negation to a sign flip, neither of which touches
+    // a NaN, and the canonicalisation would silently be lost.
+    // A bfloat16 destination keeps the plain compares: convert<vFloat16b> below (SFPSTOCHRND)
+    // turns any NaN into an infinity, so that arm could not return NaN anyway.
+    sfpi::vFloat neg_x, x2;
+    if constexpr (is_fp32_dest_acc_en) {
+        sfpi::vFloat zero = 0.0f;
+        sfpi::vFloat one = 1.0f;
+        sfpi::vFloat neg_one = -1.0f;
+        neg_x = __builtin_rvtt_sfpmad(x.get(), neg_one.get(), zero.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        x = __builtin_rvtt_sfpmad(x.get(), one.get(), zero.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        x2 = x * x;
+    }
+
+    // For x >= GELU_DERIV_SAT_ONE, output saturates to 1 (verified saturation threshold)
+    v_if(is_fp32_dest_acc_en ? (neg_x <= -GELU_DERIV_SAT_ONE) : (x >= GELU_DERIV_SAT_ONE)) { result = 1.0f; }
     // Core region [-3, 3.1719]: GELU'(x) = 0.5 + x * h(x²)
     // Odd-function decomposition: GELU'(x) + GELU'(-x) = 1, so GELU'(x) - 0.5
     // is odd and can be written as x * h(x²). Degree-8 in u=x² (~12 ops vs ~32).
     v_elseif(x >= -3.0f) {
-        sfpi::vFloat u = x * x;
+        sfpi::vFloat u = is_fp32_dest_acc_en ? x2 : x * x;
         sfpi::vFloat h = PolynomialEvaluator::eval(
             u,
             GELU_DERIV_H0,
@@ -455,7 +482,9 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     v_elseif(x > -13.375f) {
         constexpr float INV_SQRT_2PI = 0.3989422804014327f;  // 1/sqrt(2*pi)
 
-        sfpi::vFloat x2 = x * x;
+        if constexpr (!is_fp32_dest_acc_en) {
+            x2 = x * x;
+        }
         sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
 
         sfpi::vFloat x_exp = x_times_exp_negative_tail(x, t);
