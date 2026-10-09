@@ -30,7 +30,7 @@ inline void calculate_logical_not() {
         sfpi::vUInt,
         std::conditional_t<INSTRUCTION_MODE == InstrModLoadStore::INT32, sfpi::vInt, sfpi::vFloat>>;
 
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vType v = sfpi::dst_reg[0].mode<layout>();
         vType r = 0;
