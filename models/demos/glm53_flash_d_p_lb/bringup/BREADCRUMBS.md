@@ -262,3 +262,7 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
   per layer); the ring score (full-mesh snake, Topology.Ring) applies the pool-causal mask, top-k on [0, kv).
   load_state / state_torch stripe / un-stripe at the harness boundary. Serving slots (bind_cache) need RING=0.
 - Warm 56k prefill 7.09 s (replicated + gather 7.03 s); last-chunk top1 0.6519, identical to the replicated path.
+- Batched check after the matmul configs, DSA own-row keys and the ring indexer (s4096 ladder + 56k): KV PCC min/mean
+  kv_latent 0.96918 / 0.98528, index_key 0.98931 / 0.99575, kda_recurrent 0.97490 / 0.99403, kda_conv 0.96516 /
+  0.99398 (unified 0.96928 / 0.98530, 0.98870 / 0.99533, 0.97420 / 0.99374, 0.96762 / 0.99431); final hidden 0.9463;
+  56k top1 0.8673. Warm 56k prefill 7.09 s (from 10.74 s at the start of the day; unified 13.77 s).
