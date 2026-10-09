@@ -30,11 +30,12 @@ from helpers.test_variant_parameters import (
     GATED_REDUCE_SCALARS,
     TILE_COUNT,
 )
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 
 pytestmark = blackhole_only
 
 TILES = 12
-ELEMENTS = 1024
+DATUMS = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 BF16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 BF16_TO_FP32 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32)
 FP32 = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
@@ -48,7 +49,7 @@ def _run(
     formats, dest_acc, gate, up, flags, rows=32, sync=DestSync.Half, rounding=False
 ):
     generator = torch.Generator().manual_seed(3448)
-    source = torch.empty((TILES, ELEMENTS)).uniform_(-8, 8, generator=generator)
+    source = torch.empty((TILES, DATUMS)).uniform_(-8, 8, generator=generator)
     # Exact zeros, signs, and both sides of the clamp boundary in every face.
     edges = torch.tensor([-8, -1.5, -1.25, -1, -0.0, 0, 1, 1.25, 1.5, 8])
     source.view(TILES, 4, 256)[:, :, : len(edges)] = edges
@@ -100,7 +101,7 @@ def _run(
         variant_stimuli=StimuliConfig(
             source.flatten(),
             formats.input_format,
-            torch.zeros(ELEMENTS, dtype=source.dtype),
+            torch.zeros(DATUMS, dtype=source.dtype),
             formats.input_format,
             formats.output_format,
             tile_count_A=TILES,
