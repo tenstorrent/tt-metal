@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 
@@ -268,6 +270,10 @@ def test_pre_all_gather_interleaved_honors_memory_config(device, is_rmsnorm):
 
 # The 2D pre-all-gather grid used to bound its X extent by grid.y. Column dispatch makes the grid taller
 # than wide, so num_tile_rows == grid.y used to place cores past the last column.
+@pytest.mark.skipif(
+    bool(os.environ.get("TT_METAL_SIMULATOR")),
+    reason="The 2D pre-all-gather merge uses multicast semaphore atomics, which the simulator does not implement",
+)
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_rms_norm_pre_all_gather_2d_grid_taller_than_wide(device):
     grid = device.compute_with_storage_grid_size()
