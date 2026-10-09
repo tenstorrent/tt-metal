@@ -660,7 +660,6 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 
 fi # bh-subtorus-sc16
 
-an 
 # Factory-descriptor reliability.
 # A matching descriptor reports no downed links. The 4-host pod deletes three same-host cables and
 # one cross-host cable. The subtorus connection the mesh graph does not use is unused. The torus
