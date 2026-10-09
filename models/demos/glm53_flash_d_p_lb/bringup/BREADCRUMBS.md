@@ -282,3 +282,18 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
 - Tools: tests/test_ab_layers.py (in-model A/B over a few layers, runtime module switches, base-vs-base determinism
   check; start 0 so KDA restarts from its zero state), tests/test_mla_bmm_repro.py (single chip / mesh repro, live-input
   replay via GLM_MLA_CHECK_DUMP, predecessor-op and block-count sweeps), mla_attention.CHECK_BMM (per-op config vs auto).
+
+## Head-parallel MLA projections (2026-10-09), GLM_MLA_TP=1 default (split + own-row keys)
+
+- GLM non-flash's MLA layout (deepseek_v3_d_p/tt/mla/mla.py _sparse_mla): projections head-parallel over TP, sparse
+  SDPA fully sequence-parallel through a heads <-> sequence all_to_all around it (non-flash needs it because
+  sparse_sdpa wants >= 32 heads per chip; GLM's 64 heads at tp=4 leave 16). Here: q_b / w_uk / w_uv / o_proj sharded
+  by heads over mesh axis 1 (16 heads per chip), computed on the mesh row's S/2 rows (q latent gathered over axis 1);
+  all_to_all_async_generic(in_dim=1, out_dim=2) to [64 heads, own S/8 rows] for sparse_sdpa (unchanged, ring indexer
+  ids unchanged) and back (in_dim=2, out_dim=1); o_proj head partials -> fabric_reduce_scatter (bf16) to own rows.
+  The all-to-all's in_dim is the GATHERED dim, out_dim the SPLIT one (tests/test_mla_tp_a2a.py, exact); 0.82 ms each
+  way at [16, 2560, 512] <-> [64, 640, 512] bf16, 2 links.
+- Layer-3 A/B (tests/test_ab_layers.py GLM_AB_CAPTURE_MLA=1, two builds via GLM_AB_SAVE / GLM_AB_REF): MLA output vs the
+  replicated path rel 4.1e-3, PCC 0.999993 (bf16 head partial sums); layer output 4.8e-2 (MoE routing amplification).
+- Full model, back to back: DRAM allocated per chip after load 29.90 -> 28.22 GB (of 31.83); warm 56k prefill 7.39 ->
+  7.28 s; last-chunk top1 0.630 -> 0.637.

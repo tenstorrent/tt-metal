@@ -40,10 +40,24 @@ def test_ab_layers(mesh_device):
     layers = [i for i in S.layers() if lo <= i <= hi]
     toks = prompt_tokens(S, start + chunk).to(torch.long)[start : start + chunk]
     model = S.hooks().device_model(mesh_device, S, layers, lm_head=False)
+    mla_out = []  # GLM_AB_CAPTURE_MLA=1: every MLA call's output (split rows, all chips), compared like the layers
+    if os.environ.get("GLM_AB_CAPTURE_MLA") == "1":
+        from models.demos.glm53_flash_d_p.tt import mla_attention
+        from models.demos.glm53_flash_d_p.tt.common import split_to_host
+
+        orig = mla_attention.TtMLA.__call__
+
+        def wrapped(self, *a, **k):
+            y = orig(self, *a, **k)
+            mla_out.append(split_to_host(y).float())
+            return y
+
+        mla_attention.TtMLA.__call__ = wrapped
     if os.environ.get("GLM_AB_NO_PROGRAM_CACHE") == "1":  # every op compiles fresh (isolates program-cache hits)
         mesh_device.disable_and_clear_program_cache()
 
     def run():
+        mla_out.clear()
         outs = {}
         h = model.embed(toks)
         for i in layers:
@@ -52,6 +66,8 @@ def test_ab_layers(mesh_device):
             h = h2
             outs[i] = model.to_host(h).float()
         model.free(h)
+        for j, t in enumerate(mla_out):
+            outs[f"mla{j}"] = t
         return outs
 
     def flip(sw):
@@ -69,6 +85,15 @@ def test_ab_layers(mesh_device):
     for i in layers:
         rel, pcc, nd = _cmp(again[i], base[i])
         print(f"[ab] base-again  L{i:02d} rel {rel:.3e} pcc {pcc:.7f} differing {nd}", flush=True)
+    # build-time switches (env read at model construction) need two processes: GLM_AB_SAVE=file keeps this build's
+    # base outputs, GLM_AB_REF=file compares this build's base outputs against a saved one
+    if os.environ.get("GLM_AB_SAVE"):
+        torch.save(base, os.environ["GLM_AB_SAVE"])
+    if os.environ.get("GLM_AB_REF"):
+        ref = torch.load(os.environ["GLM_AB_REF"])
+        for i in [k for k in base if k in ref]:
+            rel, pcc, nd = _cmp(base[i], ref[i])
+            print(f"[ab] vs-saved-ref {i} rel {rel:.3e} pcc {pcc:.7f} differing {nd}", flush=True)
     for sw in [s for s in os.environ.get("GLM_AB_SWITCHES", "").split(",") if s]:
         flipped = [flip(one) for one in sw.split("+")]  # "a.X=1+b.Y=0": several switches in one run
         try:
