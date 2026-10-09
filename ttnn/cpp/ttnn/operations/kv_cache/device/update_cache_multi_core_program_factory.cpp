@@ -171,8 +171,10 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
 
     std::uint32_t B = input_tensor.padded_shape()[-2];
     std::uint32_t Bcache = cache_tensor.padded_shape()[0];
-    const std::uint32_t granularity =
-        std::min(static_cast<std::uint32_t>(2), Bcache);  // granularity = 2 best for performance
+    // The input's last batch tile may contain padding. Use granularity 1 for an odd
+    // final group so every real user is updated and no padded user is processed.
+    const std::uint32_t last_tile_users = Bcache - (B / TILE_HEIGHT - 1) * TILE_HEIGHT;
+    const std::uint32_t granularity = (std::min(TILE_HEIGHT, Bcache) % 2 == 0 && last_tile_users % 2 == 0) ? 2 : 1;
     std::uint32_t num_batched_heads = input_tensor.padded_shape()[1] * B / tt::constants::TILE_HEIGHT;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -268,9 +270,6 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
     const TensorParameter cache_param{.unique_id = CACHE, .spec = cache_tensor.tensor_spec()};
     const TensorParameter input_param{.unique_id = INPUT, .spec = input_tensor.tensor_spec()};
 
-    const std::uint32_t u_range = std::min(static_cast<std::uint32_t>(32), Bcache);
-    const std::uint32_t u_count = u_range / granularity;
-
     // ---- Reader ----
     KernelSpec::CompilerOptions::Defines reader_defines;
     if (input_sharded) {
@@ -297,7 +296,7 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
              DFBBinding{
                  .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = reader_tensor_bindings,
-        .compile_time_args = {{"granularity", granularity}, {"u_count", u_count}},
+        .compile_time_args = {{"granularity", granularity}},
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"Wt",
@@ -334,7 +333,7 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
                  .accessor_name = "untilized_input",
                  .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = CACHE, .accessor_name = "cache"}},
-        .compile_time_args = {{"granularity", granularity}, {"u_count", u_count}},
+        .compile_time_args = {{"granularity", granularity}},
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"Wt",
@@ -399,7 +398,8 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
                 {{"num_batched_heads", num_batched_heads_per_core_group},
                  {"Wt", Wt},
                  {"granularity", granularity},
-                 {"u_count", u_count}},
+                 {"Bcache", Bcache}},
+            .runtime_arg_schema = {.runtime_arg_names = {"batch_start_id"}},
             .hw_config = compute_hw,
         };
     };
@@ -428,6 +428,8 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
 
     KernelRunArgs reader_run_args{.kernel = READER};
     KernelRunArgs writer_run_args{.kernel = WRITER};
+    KernelRunArgs compute_g1_run_args{.kernel = COMPUTE_G1};
+    KernelRunArgs compute_g2_run_args{.kernel = COMPUTE_G2};
     std::uint32_t total_batched_heads = 0;
     for (std::uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores.at(i);
@@ -462,6 +464,8 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
              {"Wbytes", dyn.Wbytes},
              {"offset", dyn.tile_update_offset},
              {"batch_read_offset", dyn.batch_read_offset}});
+        auto& compute_run_args = (i < g1_numcores) ? compute_g1_run_args : compute_g2_run_args;
+        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"batch_start_id", batch_start_id}});
         total_batched_heads += num_batched_heads_per_core;
     }
 
@@ -473,9 +477,11 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
         .work_units = std::move(work_units),
     };
 
-    // The compute kernels have no runtime args, so they need no KernelRunArgs entry.
     ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_g1_run_args)};
+    if (has_group_2) {
+        run_args.kernel_run_args.push_back(std::move(compute_g2_run_args));
+    }
     // The cache tensor is the in-place output; bind it from tensor_return_value. Input is the source.
     run_args.tensor_args = {{CACHE, tensor_return_value.mesh_tensor()}, {INPUT, input_tensor.mesh_tensor()}};
 

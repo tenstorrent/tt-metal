@@ -22,7 +22,6 @@ void kernel_main() {
     const std::uint32_t batch_start_id = get_arg(args::batch_start_id);
 
     constexpr auto granularity = get_arg(args::granularity);
-    constexpr auto u_count = get_arg(args::u_count);
 
     Noc noc;
     // cache = input tensor s0 (read from the cache/output tensor); input = the update source (s1).
@@ -43,8 +42,14 @@ void kernel_main() {
 
     std::uint32_t cache_id = cache_start_id;
     std::uint32_t b = batch_start_id;
+    const std::uint32_t tiles_per_head = (B + 31) / 32;
+    const std::uint32_t full_tile_count = (B < 32 ? B : 32) / granularity;
+    const std::uint32_t last_tile_count = (B - (tiles_per_head - 1) * 32) / granularity;
+    const std::uint32_t start_tile = batch_start_id / 32;
 
     for (std::uint32_t h = 0; h < num_batched_heads; ++h) {
+        const std::uint32_t tile_in_head = (start_tile + h) % tiles_per_head;
+        const std::uint32_t u_count = (tile_in_head + 1 == tiles_per_head) ? last_tile_count : full_tile_count;
 #ifndef INPUT_SHARDED
         dfb_input.reserve_back(Wt);
         std::uint32_t input_l1_write_offset = 0;

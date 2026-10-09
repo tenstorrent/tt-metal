@@ -21,11 +21,18 @@ void kernel_main() {
     constexpr std::uint32_t num_batched_heads = get_arg(args::num_batched_heads);
     constexpr std::uint32_t Wt = get_arg(args::Wt);
     constexpr std::uint32_t granularity = get_arg(args::granularity);
-    constexpr std::uint32_t u_count = get_arg(args::u_count);
+    constexpr std::uint32_t Bcache = get_arg(args::Bcache);
+    const std::uint32_t batch_start_id = get_arg(args::batch_start_id);
+    constexpr std::uint32_t tiles_per_head = (Bcache + 31) / 32;
+    constexpr std::uint32_t full_tile_count = (Bcache < 32 ? Bcache : 32) / granularity;
+    constexpr std::uint32_t last_tile_count = (Bcache - (tiles_per_head - 1) * 32) / granularity;
+    const std::uint32_t start_tile = batch_start_id / 32;
 
     compute_kernel_hw_startup(input, untilized_input);
 
     for (std::uint32_t h = 0; h < num_batched_heads; ++h) {
+        const std::uint32_t tile_in_head = (start_tile + h) % tiles_per_head;
+        const std::uint32_t u_count = (tile_in_head + 1 == tiles_per_head) ? last_tile_count : full_tile_count;
         // Untilize input (standalone operation)
         compute_kernel_lib::untilize<
             Wt,

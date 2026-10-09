@@ -27,7 +27,6 @@ void kernel_main() {
     const std::uint32_t batch_read_offset = get_arg(args::batch_read_offset);
 
     constexpr auto granularity = get_arg(args::granularity);
-    constexpr auto u_count = get_arg(args::u_count);
 
     Noc noc;
     // cache holds tilized data destined for the cache tensor (the output DFB); untilized_cache /
@@ -44,8 +43,14 @@ void kernel_main() {
 
     std::uint32_t cache_id = cache_start_id;
     std::uint32_t b = batch_start_id;
+    const std::uint32_t tiles_per_head = (B + 31) / 32;
+    const std::uint32_t full_tile_count = (B < 32 ? B : 32) / granularity;
+    const std::uint32_t last_tile_count = (B - (tiles_per_head - 1) * 32) / granularity;
+    const std::uint32_t start_tile = batch_start_id / 32;
 
     for (std::uint32_t h = 0; h < num_batched_heads; ++h) {
+        const std::uint32_t tile_in_head = (start_tile + h) % tiles_per_head;
+        const std::uint32_t u_count = (tile_in_head + 1 == tiles_per_head) ? last_tile_count : full_tile_count;
         dfb_untilized_input.wait_front(Wt);
         std::uint32_t input_l1_read_addr = dfb_untilized_input.get_read_ptr() + batch_read_offset;
 

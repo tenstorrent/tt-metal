@@ -569,3 +569,22 @@ class TestUpdateCacheWithKVPE:
 
         logger.info(output)
         assert eq, output
+
+
+@pytest.mark.parametrize("num_users", [3, 31, 32, 33, 34, 40, 63, 64])
+@pytest.mark.parametrize("num_heads", [1, 2])
+@pytest.mark.parametrize("cache_idx", [0, 5])
+def test_update_cache_decode_non_tile_batch(num_users, num_heads, cache_idx, device):
+    """The final input tile contains padding, which must not overwrite real users."""
+    head_dim, max_seq_len = 64, 64
+    cache = torch.full((num_users, num_heads, max_seq_len, head_dim), -1.0, dtype=torch.bfloat16)
+    values = torch.arange(1, num_users + 1, dtype=torch.bfloat16)
+    update = values.view(1, 1, num_users, 1).expand(1, num_heads, num_users, head_dim).contiguous()
+    cache_tt = ttnn.from_torch(cache, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    update_tt = ttnn.from_torch(update, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn.update_cache(cache_tt, update_tt, cache_idx)
+
+    expected = cache.clone()
+    expected[:, :, cache_idx, :] = update[0].permute(1, 0, 2)
+    assert torch.equal(ttnn.to_torch(cache_tt), expected)
