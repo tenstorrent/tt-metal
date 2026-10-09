@@ -338,16 +338,34 @@ public:
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
-    // Device queries. `P` is a tag from <tt-metalium/info.hpp>, e.g. info::l1_alignment, and
-    // `P::return_type` is the type of the property. Only the properties listed below the class are supported.
+    // Device queries. In the three calls below, `P` is a property tag from <tt-metalium/info.hpp>
+    // (e.g. info::l1_alignment) and `P::return_type` is the type of its value. Only the properties listed after the
+    // class are supported; asking for any other tag fails to link.
 
-    // Returns the property of the device at `coord`. Every property is implemented for this form; the two forms
-    // below are built on it. Throws if `coord` is out of bounds or the device is remote (owned by another host).
+    /**
+     * @brief Queries a property of the device at a single mesh coordinate.
+     *
+     * This is the form every property implements; get_info<P>() and get_info_per_device<P>() are built on it.
+     *
+     * @tparam P Property tag from `<tt-metalium/info.hpp>`, e.g. `info::l1_alignment`.
+     * @param coord Coordinate of the device in this mesh.
+     * @return The value of the property for that device, of type `P::return_type`.
+     * @throws std::runtime_error If `coord` is out of bounds of this mesh, or the device is remote (owned by another
+     * host).
+     */
     template <class P>
     typename P::return_type get_info(const MeshCoordinate& coord) const;
 
-    // Returns the property of this mesh, which must be the same on every local device; throws if it is not, or if
-    // the mesh has no local devices. Use get_info_per_device() for properties that can differ between devices.
+    /**
+     * @brief Queries a property of this mesh as a whole.
+     *
+     * The property must have the same value on every local device. Use get_info_per_device<P>() or
+     * get_info<P>(coord) for properties that can differ between devices.
+     *
+     * @tparam P Property tag from `<tt-metalium/info.hpp>`, e.g. `info::l1_alignment`.
+     * @return The value shared by all local devices, of type `P::return_type`.
+     * @throws std::runtime_error If the mesh has no local devices, or if the local devices report different values.
+     */
     template <class P>
     typename P::return_type get_info() const {
         const std::vector<MeshCoordinate> coords = local_coordinates();
@@ -361,7 +379,13 @@ public:
         return value;
     }
 
-    // Returns the property of every device in the mesh. Remote devices are marked as remote.
+    /**
+     * @brief Queries a property of every device in this mesh.
+     *
+     * @tparam P Property tag from `<tt-metalium/info.hpp>`, e.g. `info::l1_alignment`.
+     * @return A container shaped like the mesh. Entries for local devices hold the property value, of type
+     * `P::return_type`; entries for remote devices (owned by another host) are marked remote.
+     */
     template <class P>
     DistributedMeshContainer<typename P::return_type> get_info_per_device() const {
         DistributedMeshContainer<typename P::return_type> result(shape());
@@ -376,13 +400,16 @@ public:
     MeshDeviceImpl& impl() { return *pimpl_; }
 
 private:
+    // Coordinates of the devices that are local to this host, in row-major order.
     std::vector<MeshCoordinate> local_coordinates() const;
+    // Throws if `coord` is out of bounds of this mesh or refers to a remote device.
     void check_info_coordinate(const MeshCoordinate& coord) const;
+    // Throws because the device at `coord` reports a different value than the first local device.
     [[noreturn]] void throw_non_uniform_info(const MeshCoordinate& coord) const;
 };
 
-// Properties supported by MeshDevice::get_info. Each is defined in mesh_device.cpp; asking for any other tag fails
-// to link.
+// Properties supported by MeshDevice::get_info (see <tt-metalium/info.hpp> for what each one means). Each is defined
+// in mesh_device.cpp; asking for any other tag fails to link.
 template <>
 std::uint32_t MeshDevice::get_info<info::l1_alignment>(const MeshCoordinate& coord) const;
 template <>
