@@ -418,3 +418,77 @@ def test_cumsum_bf16_accuracy(size, dim, sequence_type, reverse_order, device):
 
     assert output.dtype == torch.bfloat16
     assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=1)
+
+
+def _cumsum_calltrace(input_tensor, **kwargs):
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        output_tensor = ttnn.cumsum(input_tensor, **kwargs)
+    finally:
+        captured_graph = ttnn.graph.end_graph_capture()
+    return output_tensor, ttnn.graph.extract_calltrace(captured_graph)
+
+
+@pytest.mark.parametrize(
+    "size, dim",
+    [
+        ([1048576], 0),  # 1D: the permute used to pad every element out to its own tile
+        ([1, 151936], -1),
+        ([151936, 1], -2),
+        ([33, 35, 37], -1),
+        ([33, 35, 37], -2),
+        ([100, 64, 64], -1),  # more rows of tiles than cores: both core groups
+        ([100, 64, 64], -2),
+        ([2, 3, 5, 33, 128], -1),
+    ],
+)
+def test_cumsum_tile_axis_runs_in_place(size, dim, device):
+    """A forward bf16 cumsum along H or W must scan the tiles in place (#24824, #23264).
+
+    Before, the scan axis was permuted to dim 0, which pads every remaining element of a thin tensor
+    out to its own row or tile: 32x the memory, and 1024x for a 1D tensor (a 10.8M-element int32
+    scan tried to allocate 44 GB). The call trace checks the structure directly: no permute, and the
+    output is the only device tensor the op creates.
+    """
+    torch.manual_seed(29112024)
+    torch_input = torch.randn(size).to(torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
+    output_tensor, calltrace = _cumsum_calltrace(input_tensor, dim=dim)
+
+    assert "PermuteDeviceOperation" not in calltrace, calltrace
+    assert calltrace.count("tt::tt_metal::create_device_tensor") == 1, calltrace
+    assert_with_ulp(
+        expected_result=torch.cumsum(torch_input, dim),
+        actual_result=ttnn.to_torch(output_tensor),
+        ulp_threshold=1,
+    )
+
+
+@pytest.mark.parametrize(
+    "torch_dtype, reverse_order",
+    [
+        (torch.float32, False),  # keeps the compensated (Kahan) accumulation of the permuted path
+        (torch.int32, False),  # cumsum_tile only adds floats
+        (torch.bfloat16, True),  # cumsum_tile only scans forward
+    ],
+)
+def test_cumsum_tile_axis_fallback_permutes(torch_dtype, reverse_order, device):
+    """Scans the tile-axis kernel does not cover yet still take the permuted path, and stay correct.
+
+    This also shows the call-trace check in test_cumsum_tile_axis_runs_in_place can see a permute.
+    """
+    torch.manual_seed(29112024)
+    size, dim = [33, 35, 37], -1
+    torch_input = torch.randint(-2, 3, size, dtype=torch_dtype)
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+
+    output_tensor, calltrace = _cumsum_calltrace(input_tensor, dim=dim, reverse_order=reverse_order)
+
+    assert "PermuteDeviceOperation" in calltrace, calltrace
+    if reverse_order:
+        expected = torch.flip(torch.cumsum(torch.flip(torch_input, [dim]), dim), [dim])
+    else:
+        expected = torch.cumsum(torch_input, dim)
+    assert_cumsum_quality(expected, ttnn.to_torch(output_tensor, dtype=torch_dtype))
