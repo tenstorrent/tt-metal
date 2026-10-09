@@ -90,6 +90,7 @@
 #include "tt_metal.hpp"  // WriteRuntimeArgsToDevice
 #include "kernels/kernel.hpp"
 #include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
+#include <tt-metalium/experimental/op_profiler_support.hpp>
 #include <tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -829,7 +830,7 @@ const std::vector<std::pair<uint32_t, std::string>>& ProgramImpl::get_dfb_borrow
 }
 // ============================================================================
 
-std::vector<detail::KernelMeta> detail::collect_kernel_meta(
+std::vector<detail::KernelMeta> experimental::collect_kernel_meta(
     const Program& program, distributed::MeshDevice& mesh_device) {
     return program.impl().collect_kernel_meta(&mesh_device);
 }
