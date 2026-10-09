@@ -230,6 +230,14 @@ void RemoteCompileCoordinator::write_elf_blob(const std::string& path, const jit
     std::ofstream elf_file(tmp.path(), std::ios::binary);
     TT_FATAL(elf_file.is_open(), "Cannot write ELF to {}", tmp.path());
     elf_file.write(reinterpret_cast<const char*>(blob.data.data()), static_cast<std::streamsize>(blob.data.size()));
+    // Keep a per-target log beside the cached ELF. The normal extractor can then restore zone names
+    // on subsequent client cache hits, even after the global profiler log has been cleared.
+    tt::jit_build::utils::FileRenamer log_tmp(fs::path(path).parent_path() / "remote_profiler.o.log");
+    std::ofstream zone_log(log_tmp.path());
+    TT_FATAL(zone_log.is_open(), "Cannot write profiler metadata to {}", log_tmp.path());
+    zone_log << blob.profiler_zone_log;
+    zone_log.close();
+    TT_FATAL(!zone_log.fail(), "Failed to write profiler metadata to {}", log_tmp.path());
 }
 
 }  // namespace tt::tt_metal

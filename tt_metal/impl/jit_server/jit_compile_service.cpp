@@ -195,6 +195,7 @@ std::uint64_t JitCompileService::calculate_compile_response_bytes_out(const Comp
     std::uint64_t bytes = 0;
     for (const auto& elf_blob : response.elf_blobs) {
         bytes += elf_blob.data.size();
+        bytes += elf_blob.profiler_zone_log.size();
     }
     return bytes;
 }
@@ -318,6 +319,7 @@ kj::Promise<void> JitCompileService::compile(CompileContext context) {
             blobs_builder[i].setName(response.elf_blobs[i].name);
             blobs_builder[i].setData(
                 kj::arrayPtr(response.elf_blobs[i].data.data(), response.elf_blobs[i].data.size()));
+            blobs_builder[i].setProfilerZoneLog(response.elf_blobs[i].profiler_zone_log);
         }
     });
 }

@@ -170,12 +170,14 @@ protected:
     bool need_link(const std::string& out_dir) const;
     void link(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
     void weaken(const std::string& out_dir) const;
-    void extract_zone_src_locations(const std::string& out_dir) const;
 
 public:
     JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config, const Hal& hal);
 
     void build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets = {}) const;
+
+    // Also used after remote compilation, where object diagnostics arrive beside the ELF.
+    void extract_zone_src_locations(const std::string& out_dir) const;
 
     const std::string& get_out_path() const { return this->out_path_; }
     const std::string& get_target_name() const { return this->target_name_; }

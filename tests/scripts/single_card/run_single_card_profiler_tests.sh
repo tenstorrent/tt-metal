@@ -62,7 +62,7 @@ run_device_profiler_test() {
         device_profiler_marker_args=(-m "not skip_post_commit")
     fi
 
-    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360 "${device_profiler_marker_args[@]}"
+    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py $PROFILER_TEST_SCRIPTS_ROOT/test_remote_compile_profiler.py --noconftest --timeout 360 "${device_profiler_marker_args[@]}"
 }
 
 run_perf_op_report_test() {
