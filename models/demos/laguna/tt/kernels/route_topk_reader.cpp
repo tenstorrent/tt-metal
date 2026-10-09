@@ -3,10 +3,10 @@
 
 // Exact fp32 top-K router for prefill (Laguna), row-major outputs for token dispatch. Inputs: sel = sigmoid(logits)
 // + bias [T, E] fp32 TILE and either scores = sigmoid(logits) [T, E] (mode 0) or the bias row [1, E] fp32 TILE
-// (mode 1: a picked expert's score is sel - bias, so only sel is streamed). Work unit = 8 token rows of one 32-row tile row (unit
-// u: tile row u / 4, rows (u % 4) * 8 ..); a core takes units core, core + cores, ... and, per unit, reads the 8
-// rows of every [32 x 32] tile as one 512-byte run per face (rows 0-15 live in faces 0/1, 16-31 in faces 2/3). Per
-// row it picks the K experts with the largest sel (fp32 compared as order-preserving integers; a strictly larger
+// (mode 1: a picked expert's score is sel - bias, so only sel is streamed). Work unit = R token rows (R = 8, 4, 2 or 1)
+// of one 32-row tile row (unit u: tile row u / (32 / R), rows (u % (32 / R)) * R ..); a core takes units core,
+// core + cores, ... and, per unit, reads the R rows of every [32 x 32] tile as one R * 64-byte run per face (rows
+// 0-15 live in faces 0/1, 16-31 in faces 2/3). Per row it picks the K experts with the largest sel (fp32 compared as order-preserving integers; a strictly larger
 // key displaces, so equal keys keep the lower expert id) and writes
 //   idx[t, :]  = the K expert ids, best first (uint16)
 //   wgt[t, :]  = score * routed_scaling / (sum of the K picked scores)   (bf16, round to nearest even)
@@ -31,13 +31,13 @@ void kernel_main() {
     // both data-movement RISCs run this kernel: RISC r of core c takes units 2 * c + r, 2 * c + r + 2 * cores, ...
     constexpr uint32_t risc = get_compile_time_arg_val(10);
     constexpr uint32_t mode = get_compile_time_arg_val(11);  // 0: scores tensor, 1: bias row (score = sel - bias)
+    constexpr uint32_t R = get_compile_time_arg_val(12);     // rows per unit (divides 16)
     constexpr uint32_t cb_buf = risc;
-    constexpr auto sel_args = TensorAccessorArgs<12>();
+    constexpr auto sel_args = TensorAccessorArgs<13>();
     constexpr auto sc_args = TensorAccessorArgs<sel_args.next_compile_time_args_offset()>();
     constexpr auto idx_args = TensorAccessorArgs<sc_args.next_compile_time_args_offset()>();
     constexpr auto wgt_args = TensorAccessorArgs<idx_args.next_compile_time_args_offset()>();
     constexpr uint32_t Et = E / 32;
-    constexpr uint32_t R = 8;                    // rows per unit
     constexpr uint32_t stage = Et * 2 * R * 64;  // bytes of one tensor's unit: [tile][face half][row][16 fp32]
 
     const uint32_t sel_addr = get_common_arg_val<uint32_t>(0);
@@ -72,8 +72,9 @@ void kernel_main() {
     } scale;
     scale.u = scale_bits;
 
-    for (uint32_t u = 2 * core + risc; u < Tt * 4; u += 2 * num_cores) {
-        const uint32_t g = u / 4, r0 = (u % 4) * R;
+    constexpr uint32_t units_per_tile_row = 32 / R;
+    for (uint32_t u = 2 * core + risc; u < Tt * units_per_tile_row; u += 2 * num_cores) {
+        const uint32_t g = u / units_per_tile_row, r0 = (u % units_per_tile_row) * R;
         const uint32_t face0 = (r0 / 16) * 2, row_off = (r0 % 16) * 64;
         for (uint32_t j = 0; j < Et; ++j) {
             for (uint32_t h = 0; h < 2; ++h) {
