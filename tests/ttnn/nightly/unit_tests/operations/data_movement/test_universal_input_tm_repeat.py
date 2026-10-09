@@ -789,6 +789,28 @@ def test_repeat_nd_memory_config_conflicts_with_preallocated_output_raises(devic
         )
 
 
+def test_repeat_nd_memory_config_allocation_mode_mismatch_raises(device, expect_error):
+    """Same nd_shard_spec as the prealloc but a different allocation mode must be rejected."""
+    x = torch.rand((1, 2, 64, 64), dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=L1_INTERLEAVED)
+    prealloc_mem_config = _nd_shard_config((1, 1, 32, 64), num_cores=4)
+    prealloc_mem_config.experimental_set_range_lockstep_allocation(True)
+    out = ttnn.from_torch(
+        torch.zeros((1, 4, 64, 64), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=prealloc_mem_config,
+    )
+
+    with expect_error(RuntimeError, "allocation mode must match"):
+        ttnn.repeat(
+            ttnn_input,
+            [1, 2, 1, 1],
+            memory_config=_nd_shard_config((1, 1, 32, 64), num_cores=4),
+            optional_output_tensor=out,
+        )
+
+
 # TILE universal-I/O matrix: essential input × output routing paths.
 @pytest.mark.parametrize(
     "dtype",

@@ -8,6 +8,8 @@
 #include <optional>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/operations/core/core.hpp"
@@ -384,6 +386,15 @@ void validate_optional_output(
             TT_FATAL(
                 memory_config->nd_shard_spec() == out_mc.nd_shard_spec(),
                 "repeat: memory_config nd_shard_spec must match optional_output_tensor");
+            // Only the layout is relaxed: the allocation flags change allocator semantics, as in operator==.
+            namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
+            namespace range_lockstep_allocation = tt::tt_metal::experimental::range_lockstep_allocation;
+            TT_FATAL(
+                per_core_allocation::is_per_core_allocation(*memory_config) ==
+                        per_core_allocation::is_per_core_allocation(out_mc) &&
+                    range_lockstep_allocation::is_range_lockstep_allocation(*memory_config) ==
+                        range_lockstep_allocation::is_range_lockstep_allocation(out_mc),
+                "repeat: memory_config allocation mode must match optional_output_tensor");
         } else {
             TT_FATAL(
                 memory_config->memory_layout() == out_mc.memory_layout(),
