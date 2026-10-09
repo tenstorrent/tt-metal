@@ -13,6 +13,7 @@ import ttnn
 from loguru import logger
 import pytest
 from models.common.utility_functions import is_slow_dispatch
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import run_sdpa_block_mask
 
 
 def is_watcher_enabled():
@@ -2185,3 +2186,10 @@ def test_sdpa_zero_k_heads(device, expect_error):
     k, v = _zero_div_tensors(device, 2, heads=0)
     with expect_error(RuntimeError, "Q num_heads must be >= K num_heads"):
         ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False)
+
+
+@pytest.mark.parametrize("p_masked", [0.25, 0.5, 0.75])
+@pytest.mark.parametrize("q_chunk_size, k_chunk_size", [(128, 128), (128, 256)])
+@pytest.mark.parametrize("s, nkv, bcast_heads", [(2048, 8, True), (4096, 2, False)])
+def test_sdpa_noncausal_block_mask_sweep(device, s, nkv, bcast_heads, q_chunk_size, k_chunk_size, p_masked):
+    run_sdpa_block_mask(device, 1, 8, nkv, s, 128, q_chunk_size, k_chunk_size, p_masked, bcast_heads)
