@@ -2,10 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fixtures for the GLM-5.2 MTP prefill tests.
+"""Fixtures for the GLM-5.3 MTP prefill tests.
 
 Weight axis follows ``tests/dflash_prefill/conftest.py``: an indirect ``use_pretrained`` fixture with
-the resource fixtures hanging off it. The ground truth is the CPU reference in reference/glm_5_2.
+the resource fixtures hanging off it. The ground truth is the CPU reference in reference/glm_5_3.
 """
 
 from __future__ import annotations
@@ -19,18 +19,18 @@ import torch
 
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.reference import pretrained_mla_weights
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.weights import _dequant_fp8
-from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config, glm_5_2_hf_config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config, glm_5_3_hf_config
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import load_mtp_state_dict
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 
-HF_ENV = "GLM52_HF_MODEL"
-DEFAULT_GLM52_PATH = "/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8"
+HF_ENV = "GLM53_HF_MODEL"
+DEFAULT_GLM53_PATH = "/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4"
 
 
-def glm52_checkpoint_path() -> str | None:
-    """The GLM-5.2 checkout, from ``$GLM52_HF_MODEL`` or the adapter's default. None if absent."""
-    path = os.environ.get(HF_ENV) or DEFAULT_GLM52_PATH
+def glm53_checkpoint_path() -> str | None:
+    """The GLM-5.3 checkout, from ``$GLM53_HF_MODEL`` or the adapter's default. None if absent."""
+    path = os.environ.get(HF_ENV) or DEFAULT_GLM53_PATH
     return path if os.path.exists(os.path.join(path, "config.json")) else None
 
 
@@ -55,7 +55,7 @@ def random_mtp_state_dict(cfg: MTPConfig, seed: int = 42) -> dict:
 
 @pytest.fixture
 def use_pretrained(request) -> bool:
-    """Weight axis: ``random`` = seeded weights, no checkpoint; ``pretrained`` = the real GLM-5.2 MTP
+    """Weight axis: ``random`` = seeded weights, no checkpoint; ``pretrained`` = the real GLM-5.3 MTP
     tensors. INDIRECT -- every test using the fixtures below MUST parametrize it:
     ``@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)``.
     """
@@ -65,12 +65,12 @@ def use_pretrained(request) -> bool:
 @pytest.fixture
 def mtp_cfg(use_pretrained) -> MTPConfig:
     """The device ``MTPConfig``. Pretrained reads (and verifies against) the checkpoint; random builds
-    it from ``glm_5_2_hf_config()`` so the leg runs with no checkpoint at all."""
+    it from ``glm_5_3_hf_config()`` so the leg runs with no checkpoint at all."""
     if not use_pretrained:
-        return MTPConfig.from_hf_config(glm_5_2_hf_config())
-    path = glm52_checkpoint_path()
+        return MTPConfig.from_hf_config(glm_5_3_hf_config())
+    path = glm53_checkpoint_path()
     if path is None:
-        pytest.skip(f"set {HF_ENV}=/path/to/GLM-5.2 (dir with config.json + MTP weights)")
+        pytest.skip(f"set {HF_ENV}=/path/to/GLM-5.3 (dir with config.json + MTP weights)")
     return MTPConfig.from_pretrained(path)
 
 
@@ -82,9 +82,9 @@ def mtp_state_dict(use_pretrained, mtp_cfg) -> dict:
     """
     if not use_pretrained:
         return random_mtp_state_dict(mtp_cfg)
-    path = glm52_checkpoint_path()
+    path = glm53_checkpoint_path()
     if path is None:
-        pytest.skip(f"set {HF_ENV}=/path/to/GLM-5.2 (dir with config.json + MTP weights)")
+        pytest.skip(f"set {HF_ENV}=/path/to/GLM-5.3 (dir with config.json + MTP weights)")
     sd = load_mtp_state_dict(path, layer_idx=mtp_cfg.mtp_layer_idx)
     return {k: v.to(torch.bfloat16) for k, v in sd.items()}
 
@@ -141,15 +141,15 @@ def mtp_layer_state_dict(use_pretrained, mtp_cfg, config_only) -> dict | None:
     """
     if not use_pretrained:
         return None
-    path = glm52_checkpoint_path()
+    path = glm53_checkpoint_path()
     if path is None:
-        pytest.skip(f"set {HF_ENV}=/path/to/GLM-5.2 (dir with config.json + MTP weights)")
-    return glm_layer_state_dict(config_only, path, mtp_cfg.mtp_layer_idx, GLM52Config.NUM_ROUTED_EXPERTS)
+        pytest.skip(f"set {HF_ENV}=/path/to/GLM-5.3 (dir with config.json + MTP weights)")
+    return glm_layer_state_dict(config_only, path, mtp_cfg.mtp_layer_idx, GLM53Config.NUM_ROUTED_EXPERTS)
 
 
 @pytest.fixture
 def mtp_config_and_glm_config(mtp_cfg):
-    """``(MTPConfig, glm_hf_config)`` pair with matching hidden size, for tests that need both."""
-    config = glm_5_2_hf_config()
-    assert config.hidden_size == mtp_cfg.hidden_size == GLM52Config.EMB_SIZE
+    """``(MTPConfig, glm_5_3_hf_config)`` pair with matching hidden size, for tests that need both."""
+    config = glm_5_3_hf_config()
+    assert config.hidden_size == mtp_cfg.hidden_size == GLM53Config.EMB_SIZE
     return mtp_cfg, config

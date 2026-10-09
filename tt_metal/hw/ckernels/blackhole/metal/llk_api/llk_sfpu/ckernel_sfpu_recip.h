@@ -24,7 +24,8 @@ namespace sfpu {
 // max_iter = 2 (with fewer iterations the result stays just below 2**-126 and still flushes); every other
 // input is unchanged.
 // It costs about 11 SFPU instructions per call, so only callers that need ±2**-126 (softsign) enable it.
-template <int max_iter = 2, bool fold_exponent_126 = false>
+// normalized=true requires a finite input with magnitude in [1, 2).
+template <int max_iter = 2, bool normalized = false, bool fold_exponent_126 = false>
 sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat x_in) {
     sfpi::vFloat x = x_in;
     if constexpr (fold_exponent_126) {
@@ -41,7 +42,14 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat x_in) {
         // Equivalently, we could use v_if (t >= 2.0) instead, but SFPI doesn't support SFPLE/SFPGT at the moment.
         sfpi::vFloat t = x * y - sfpi::vConstFloatPrgm0;
 
-        if constexpr (max_iter > 1) {
+        if constexpr (normalized) {
+            // Normalized operands cannot trigger the exceptional reciprocal cases.
+            y = y * -t - 0.0f;
+            if constexpr (max_iter > 1) {
+                t = x * y - sfpi::vConstFloatPrgm0;
+                y = y * -t - 0.0f;
+            }
+        } else if constexpr (max_iter > 1) {
             sfpi::vFloat y1 = y * -t - 0.0f;
             // If t=NaN, then t>=0.  This check consumes the SFPNOP slot of the preceding SFPMAD.
             v_if(t < 0) {

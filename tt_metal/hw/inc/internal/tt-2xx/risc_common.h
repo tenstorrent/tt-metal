@@ -379,9 +379,9 @@ constexpr uint32_t INTERRUPT_TABLE_BASE = MEM_DISPATCH_INTERRUPT_TABLE_BASE;
 constexpr uint32_t INTERRUPT_TABLE_BASE = MEM_INTERRUPT_TABLE_BASE;
 #endif
 
-constexpr uint32_t SYNC_INTERRUPT_INDEX = 0;                  // synchronized interrupts index
-constexpr uint32_t MACHINE_EXTERNAL_INTERRUPT_OFFSET = 11;    // machine external interrupt offset
-constexpr uint32_t ROCC_INTERRUPT_INDEX = 13;                 // rocc interrupt index
+constexpr uint32_t SYNC_INTERRUPT_INDEX = 0;                // synchronized interrupts index
+constexpr uint32_t MACHINE_EXTERNAL_INTERRUPT_OFFSET = 11;  // machine external interrupt offset
+constexpr uint32_t ROCC_INTERRUPT_INDEX = 13;               // rocc interrupt index
 
 // Encodes a 21-bit byte offset into a RISC-V J-type immediate field
 inline __attribute__((always_inline)) uint32_t encode_j_immediate(int32_t offset) {
@@ -405,11 +405,11 @@ inline __attribute__((always_inline)) uint32_t encode_j_immediate(int32_t offset
     return instruction_bits;
 }
 
-inline __attribute__((always_inline)) void register_handler_for_interrupt(uint32_t interrupt_index, void(*handler)()) {
+inline __attribute__((always_inline)) void register_handler_for_interrupt(uint32_t interrupt_index, void (*handler)()) {
     uint64_t isr_address = reinterpret_cast<uint64_t>(handler);
     uint32_t encoded_offset =
         encode_j_immediate(int32_t(isr_address) - int32_t(INTERRUPT_TABLE_BASE + interrupt_index * sizeof(uint32_t)));
-    uint32_t instruction = 0x0000006f | encoded_offset; // create a jump instruction to the handler
+    uint32_t instruction = 0x0000006f | encoded_offset;  // create a jump instruction to the handler
     *((uint32_t*)(INTERRUPT_TABLE_BASE) + interrupt_index) = instruction;
 }
 
@@ -438,9 +438,7 @@ inline __attribute__((always_inline)) void enable_dfb_tile_isr() {
 inline __attribute__((always_inline)) void disable_dfb_tile_isr() {
     // Disable ROCC interrupt in mie
     asm volatile("csrrc zero, mie, %0" : : "r"(1 << 13));
-
-    // Disable MIE in mstatus
-    asm volatile("csrrc zero, mstatus, %0" : : "r"(1 << 3));
+    // Keep machine interrupts enabled so an FDS machine-external go interrupt can reach DM0.
 }
 #else
 inline __attribute__((interrupt, hot)) void handle_interrupt() {

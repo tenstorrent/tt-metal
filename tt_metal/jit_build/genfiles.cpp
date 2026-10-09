@@ -43,6 +43,8 @@
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel_source.hpp"
+#include "impl/data_format/hw_data_format.hpp"
+#include "impl/metal2_host_api/llk_metadata.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal {
@@ -180,6 +182,27 @@ void emit_programmatic_binding_token_getter(
     content << "}\n";
 }
 
+// Generates the list of cached semaphores this kernel binds: each one's id and how many harts on
+// this core use it. The list may be empty.
+string generate_cached_semaphore_list(const JitBuildSettings& settings) {
+    // Keyed by accessor name so the output is deterministic for the JIT build cache.
+    map<string, string> cached_semaphore_entries;
+    settings.process_semaphore_binding_handles(
+        [&cached_semaphore_entries](const string& name, uint16_t id, SemScope scope, uint32_t total_binder_harts) {
+            if (scope == SemScope::DM_LOCAL_CACHED) {
+                cached_semaphore_entries.emplace(name, fmt::format("{{{}u, {}u}}", id, total_binder_harts));
+            }
+        });
+    return fmt::format(
+        "#include \"internal/tt-2xx/quasar/semaphore_cached_pool.h\"\n"
+        "namespace sem_internal {{\n"
+        // fmt's escape rule makes this look weird, trying to emit: kCachedSemaphores {{entry... }}
+        "inline constexpr std::array<::sem_internal::CachedSemaphore, {}> kCachedSemaphores{{{{{}}}}};\n"
+        "}}  // namespace sem_internal\n",
+        cached_semaphore_entries.size(),
+        fmt::join(views::values(cached_semaphore_entries), ", "));
+}
+
 // METAL 2.0 only:
 // This is only invoked for Metal 2.0 kernels created via the new ProgramSpec host APIs.
 // Legacy kernels (created via CreateKernel) do not get kernel_bindings_generated.h.
@@ -194,11 +217,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         uint16_t id;
         bool is_relay;
         uint8_t prefetcher_pipe_id;
+        std::optional<LLKMetadata> metadata;
     };
     vector<DfbEntry> dfb_entries;
     settings.process_dataflow_buffer_binding_handles(
-        [&dfb_entries](const string& name, uint16_t id, bool is_relay, uint8_t prefetcher_pipe_id) {
-            dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id});
+        [&dfb_entries](
+            const string& name,
+            uint16_t id,
+            bool is_relay,
+            uint8_t prefetcher_pipe_id,
+            const std::optional<LLKMetadata>& metadata) {
+            dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id, metadata});
         });
     sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
@@ -211,10 +240,6 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         });
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
-    // Gates the cached-semaphore list below.
-    const bool has_cached_sem = std::any_of(
-        sem_entries.begin(), sem_entries.end(), [](const auto& e) { return e.scope == SemScope::DM_LOCAL_CACHED; });
-
     // Get the tensor binding handles from the settings callback
     // Tensor bindings come from a std::vector populated in user-specified order, so no sort is needed here.
     // (Kernel::compute_hash also hashes them in the same order... these two must be the same.)
@@ -222,12 +247,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         string name;
         uint32_t cta_offset;
         uint32_t addr_crta_offset;
+        LLKMetadata metadata;
     };
     vector<TaEntry> ta_entries;
     settings.process_tensor_binding_handles(
-        [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset, uint32_t /*num_rt_words*/) {
-            ta_entries.push_back({name, cta_offset, addr_crta_offset});
-        });
+        [&ta_entries](
+            const string& name,
+            uint32_t cta_offset,
+            uint32_t addr_crta_offset,
+            uint32_t /*num_rt_words*/,
+            const LLKMetadata& metadata) { ta_entries.push_back({name, cta_offset, addr_crta_offset, metadata}); });
 
     // Get the scratchpad bindings from the settings callback.
     // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed
@@ -236,12 +265,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         string name;
         uint32_t size_bytes;
         uint32_t addr_crta_word;
+        std::optional<LLKMetadata> metadata;
     };
     vector<ScratchEntry> scratch_entries;
-    settings.process_scratchpad_binding_handles(
-        [&scratch_entries](const string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
-            scratch_entries.push_back({name, size_bytes, addr_crta_word});
-        });
+    settings.process_scratchpad_binding_handles([&scratch_entries](
+                                                    const string& name,
+                                                    uint32_t size_bytes,
+                                                    uint32_t addr_crta_word,
+                                                    const std::optional<LLKMetadata>& metadata) {
+        scratch_entries.push_back({name, size_bytes, addr_crta_word, metadata});
+    });
 
     // PrefetcherPipe bindings: sorted by name for a deterministic header (Kernel::compute_hash
     // hashes them in binding order; both orders carry the same set, so the cache key is stable).
@@ -305,13 +338,6 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         // so it is safe on compute builds too.
         content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
     }
-    if (has_cached_sem) {
-        // Include for the entry/exit stubs' bodies (get_semaphore + the MEM_ defines),
-        // guarded exactly like those bodies (the pool is DM-only).
-        content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
-        content << "#include \"api/semaphore.h\"\n";
-        content << "#endif\n";
-    }
 
     // This is included unconditionally for the `get_token_if_present()` helper, as it needs to see the full templated
     // definition of TensorBindingToken.
@@ -348,6 +374,10 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                 content << ", " << static_cast<uint32_t>(entry.prefetcher_pipe_id);
             }
             content << "};\n";
+        } else if (entry.metadata.has_value()) {
+            content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << ", ";
+            content << serialize_llk_metadata(*entry.metadata);
+            content << "};\n";
         } else {
             content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << "};\n";
         }
@@ -367,10 +397,6 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 
     // Emit Semaphore bindings
     tt::tt_metal::emit_semaphore_binding_tokens(content, sem_entries);
-    if (has_cached_sem) {
-        content << "#define TT_DM_CACHED_SEM_STUBS 1\n";
-        tt::tt_metal::emit_cached_semaphore_list(content, sem_entries);
-    }
 
     // Emit Tensor bindings
     content << "namespace tensor {\n";
@@ -386,7 +412,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     for (const auto& entry : ta_entries) {
         content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset << "u, "
                 << entry.addr_crta_offset << "u>;\n";
-        content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+        content << "constexpr " << entry.name << "_t " << entry.name << "{";
+        content << serialize_llk_metadata(entry.metadata);
+        content << "};\n";
     }
 
     // Unlike other binding token types, TensorBindingToken has meaningful template parameters associated with it.
@@ -411,8 +439,15 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // The token's members are opaque, so the framework can extend it later without touching
     // kernel source.
     for (const auto& entry : scratch_entries) {
-        content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
-                << entry.size_bytes << "u};\n";
+        if (entry.metadata.has_value()) {
+            content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
+                    << entry.size_bytes << "u, ";
+            content << serialize_llk_metadata(*entry.metadata);
+            content << "};\n";
+        } else {
+            content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
+                    << entry.size_bytes << "u};\n";
+        }
     }
 
     emit_programmatic_binding_token_getter(content, scratch_entries, "ScratchpadBindingToken");
@@ -689,8 +724,6 @@ void jit_build_genfiles_kernel_include(
     const bool is_metal2 = settings.is_metal2_kernel();
     string kernel_header_content;
     if (is_metal2) {
-        // When the kernel binds cached semaphores, the generated header lists them and dmk.cc
-        // runs the pool entry/exit around kernel_main() (TT_DM_CACHED_SEM_STUBS).
         write_kernel_bindings_generated_header(out_dir, settings);
         write_kernel_args_generated_header(out_dir, settings);
         kernel_header_content =
@@ -707,6 +740,12 @@ void jit_build_genfiles_kernel_include(
         kernel_header_content += "#include \"named_args_generated.h\"\n";
     }
     ////////////////////////////////////////////////////////////
+
+    // Quasar DM firmware (dmk.cc) seeds and restores the pool rows of the kernel's cached
+    // semaphores around kernel_main(), so every Quasar kernel gets the list, possibly empty.
+    if (env.get_arch() == tt::ARCH::QUASAR) {
+        kernel_header_content += generate_cached_semaphore_list(settings);
+    }
 
     kernel_header_content += get_kernel_source_to_include(kernel_src);
 
@@ -802,34 +841,13 @@ void emit_formats_array(
         fmt::join(arr, ","));
 }
 
-// Quasar HW DataFormat codes (mirror of the relevant entries in
-// tensix_types.h. A few host DataFormat
-// enumerators use a value that differs from the HW encoding to keep host enum
-// values unique / avoid collisions, so device compilation needs the real HW
-// code. Keep these in sync with tensix_types.h.
-using hw_format_t = std::underlying_type_t<DataFormat>;
-constexpr hw_format_t kHwInt16 = 9;        // host Int16 is 13 (UInt16 owns 9 on host)
-constexpr hw_format_t kHwMxFp4_2x_B = 24;  // host MxFp4_2x_B is 29 (UInt32 owns 24 on host)
-constexpr hw_format_t kHwMxInt8 = 2;       // host MxInt8 is 12 (Bfp8 owns 2 on host)
-constexpr hw_format_t kHwMxInt4 = 3;       // host MxInt4 is 16 (Bfp4 owns 3 on host)
-constexpr hw_format_t kHwMxInt2 = 11;      // host MxInt2 is 17 (Bfp2 owns 11 on host)
-
 void emit_formats_array(
     std::ostream& out,
     std::string_view array_type,
     std::string_view array_name,
     int array_size,
     const std::vector<DataFormat>& formats) {
-    auto as_int = [](DataFormat f) -> hw_format_t {
-        switch (f) {
-            case DataFormat::Int16: return kHwInt16;
-            case DataFormat::MxFp4_2x_B: return kHwMxFp4_2x_B;
-            case DataFormat::MxInt8: return kHwMxInt8;
-            case DataFormat::MxInt4: return kHwMxInt4;
-            case DataFormat::MxInt2: return kHwMxInt2;
-            default: return static_cast<hw_format_t>(f);
-        }
-    };
+    auto as_int = [](DataFormat f) -> hw_format_t { return host_data_format_to_hw(f); };
     emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
 }
 
@@ -1168,6 +1186,7 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOption
     fs::create_directories(options.path);
     generate_all_descriptors(env, options);
 }
+
 // clang-format on
 
 }  // namespace tt::tt_metal

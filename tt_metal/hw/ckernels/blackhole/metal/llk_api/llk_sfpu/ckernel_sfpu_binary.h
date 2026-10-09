@@ -36,15 +36,16 @@ sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vF
     // Normalize base to calculation range
     sfpi::vFloat x = sfpi::setexp(base, 127);  // set exp to exp bias (put base in range of 1-2)
 
-    // 3rd order polynomial approx - determined using rminimax over [1,2]
-    sfpi::vFloat series_result = x * (x * (x * 0x2.44734p-4f - 0xd.e712ap-4f) + 0x2.4f5388p+0f) - 0x1.952992p+0f;
+    // 3rd order polynomial approx - determined using rminimax over [1,2], see LogPolyNoInit
+    sfpi::vFloat series_result =
+        x * (x * (x * LogPolyNoInit::A - LogPolyNoInit::B) + LogPolyNoInit::C) - LogPolyNoInit::D;
 
     // Convert exponent to float
     sfpi::vSMag exp = sfpi::convert<sfpi::vSMag>(exexp(base));
     sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::Nearest);
 
     // De-normalize to original range
-    sfpi::vFloat vConstLn2 = 0.692871f;
+    sfpi::vFloat vConstLn2 = LogPolyNoInit::LN2;
     sfpi::vFloat log_result = expf * vConstLn2 + series_result;  // exp correction: ln(1+x) + exp*ln(2)
 
     // Base case when input is 0. ln(0) = -inf
@@ -103,6 +104,16 @@ template <
 inline void calculate_sfpu_binary(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+    // XLOGY: the log body's two polynomial constants are bound here and held in LREGs across the
+    // loop; as literals inside the loop they would be re-materialised on every row.
+    // Declared for every op but loaded only for XLOGY: sfpi does not drop an unused SFPLOADI.
+    // Unassigned for every other op, so do not read them outside the XLOGY branch.
+    sfpi::vFloat log_c;
+    sfpi::vFloat log_d;
+    if constexpr (BINOP == BinaryOp::XLOGY) {
+        log_c = LogPoly::C;
+        log_d = LogPoly::D;
+    }
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -127,7 +138,7 @@ inline void calculate_sfpu_binary(
             v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
             v_else {
                 sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in1;
-                _calculate_log_body_<false>(0, dst_index_out);
+                _calculate_log_body_(log_c, log_d, dst_index_out);
                 result = sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * in0;
             }
             v_endif;
@@ -233,30 +244,56 @@ inline void calculate_sfpu_binary_div(
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        sfpi::vFloat r = sfpu_reciprocal_iter<2>(in1);
-        sfpi::vFloat result = in0 * r;
+        sfpi::vFloat result;
         if constexpr (is_fp32_dest_acc_en) {
-            // Skip quotient refinement when in0*r is already non-finite.
-            // If in0*r = +/-inf, then the residual e = in0 - (+/-inf)*in1 = -/+inf and
-            // result + e*r = inf + (-inf) = NaN, which would corrupt IEEE overflow behavior.
-            v_if(sfpi::is_finite(result)) {
-                // Residual (Markstein) refinement removes the double-rounding of in0 * round(1/in1).
-                // The residual subtraction is exact under Sterbenz's lemma.
-                sfpi::vFloat e = in0 - result * in1;
-                result = result + e * r;
-            }
-            v_endif;
-        }
+            // Refine signed mantissas with magnitudes in [1, 2), so neither the
+            // reciprocal nor the residual underflows, then restore the exponent.
+            sfpi::vFloat ma = sfpi::setexp(in0, 127);
+            sfpi::vFloat mb = sfpi::setexp(in1, 127);
+            // The hardware seed needs one Newton step before quotient refinement.
+            sfpi::vFloat r = sfpu_reciprocal_iter<1, true>(mb);
+            sfpi::vFloat q = ma * r;
+            sfpi::vFloat residual = ma - q * mb;
+            q = q + residual * r;
 
-        v_if(in1 == 0) {
-            v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
-            v_else {
-                result = std::numeric_limits<float>::infinity();
-                result = sfpi::copysgn(result, in0);
+            sfpi::vInt ea = sfpi::exexp(in0, sfpi::ExponentMode::Biased);
+            // eb is unbiased, which absorbs the bias in exponent below.
+            sfpi::vInt eb = sfpi::exexp(in1);
+            // Split exponent restoration between two factors. Their product
+            // supplies hardware overflow/underflow handling, while power-of-two
+            // scaling is exact for normal results.
+            sfpi::vInt exponent = ea - eb + sfpi::exexp(q, sfpi::ExponentMode::Biased);
+            sfpi::vInt half = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(exponent) >> 1);
+            result = sfpi::setexp(q, half) * sfpi::setexp(sfpi::vFloat(1.0f), exponent - half);
+
+            // For exceptional inputs only the reciprocal's sign and zero/Inf
+            // classification matter. Inverting its exponent gives Inf for zero,
+            // zero for Inf/NaN, and a finite nonzero scale for every normal divisor.
+            // Zero scales would hide NaN divisors, so add an all-ones NaN bit
+            // pattern where |in1| > +Inf in sign-magnitude order, and +0 elsewhere.
+            // Normal inputs have biased exponents in [1, 254], or unbiased exponents
+            // in [-126, 127]; zero/subnormal and Inf/NaN fall outside. Each bound is a
+            // sign test on SFPIADD, and the compares narrow lanes without SFPAND.
+            v_if(!(ea >= 1 && ea < 255 && eb >= -126 && eb < 128)) {
+                sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(~sfpi::as<sfpi::vInt>(in1)), 0);
+                sfpi::vFloat nan_divisor = sfpi::vFloat(__builtin_rvtt_sfpgt(
+                    sfpi::setsgn(in1, 0).get(), sfpi::vFloat(std::numeric_limits<float>::infinity()).get(), 8));
+                // Inverting in1 also inverts the scale's sign, so negate the product.
+                result = nan_divisor - in0 * scale;
+            }
+            v_endif;
+        } else {
+            result = in0 * sfpu_reciprocal_iter<2>(in1);
+            v_if(in1 == 0) {
+                v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+                v_else {
+                    result = std::numeric_limits<float>::infinity();
+                    result = sfpi::copysgn(result, in0);
+                }
+                v_endif;
             }
             v_endif;
         }
-        v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
             // software RNE approach:

@@ -1,4 +1,7 @@
-set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_PACK_SCALED_FP8_KV_CACHE_API_HEADERS pack_scaled_fp8_kv_cache.hpp)
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_PACK_SCALED_FP8_KV_CACHE_API_HEADERS
+    pack_scaled_fp8_kv_cache.hpp
+    packed_kv_layout.hpp
+)
 
 set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_PACK_SCALED_FP8_KV_CACHE_SRCS
     device/pack_scaled_fp8_kv_cache_device_operation.cpp

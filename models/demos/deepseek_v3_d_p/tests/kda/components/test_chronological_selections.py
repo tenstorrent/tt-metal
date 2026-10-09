@@ -40,8 +40,6 @@ def test_chronological_selections(mesh_device, device_params, sp_axis, bounded):
     history_host = torch.arange(3 * partitions).reshape(1, -1, 1).expand(1, -1, 32).bfloat16()
     qkv = device(qkv_host, ttnn.ROW_MAJOR_LAYOUT)
     histories = device(history_host, ttnn.ROW_MAJOR_LAYOUT)
-    transforms = device(torch.arange(1, partitions + 1).reshape(-1, 1, 1, 1).expand(-1, 1, 32, 64))
-    entries = device(torch.arange(11, 11 + partitions).reshape(-1, 1, 1, 1).expand(-1, 1, 32, 32))
     finals = device(torch.arange(21, 21 + partitions).reshape(-1, 1, 1).expand(-1, 32, 32))
     prefix = device(torch.full((1, 32, 32), 99))
 
@@ -55,10 +53,8 @@ def test_chronological_selections(mesh_device, device_params, sp_axis, bounded):
             selections.select_outgoing_history(qkv),
             selections.select_predecessor_history(histories),
             selections.select_final_history(histories),
-            selections.select_local_entry_state(entries),
             selections.select_final_state(finals, prefix),
-            selections.select_local_final_history(qkv, partitions),
-            *(selections.select_affine_transform(transforms, step) for step in range(partitions)),
+            selections.select_local_final_history(qkv),
         )
 
     for _ in range(2):
@@ -109,10 +105,8 @@ def test_chronological_selections(mesh_device, device_params, sp_axis, bounded):
                     qkv_host[:, end - 3 : end],
                     history_host[:, 3 * previous : 3 * (previous + 1)],
                     history_host[:, 3 * last : 3 * (last + 1)],
-                    torch.full((1, 1, 32, 32), 11 + topology.chip_order.index(rank)),
                     torch.full((1, 1, 32, 32), 21 + last if has_tail else 99),
                     qkv_host[:, local_history_end - 3 : local_history_end],
-                    *(torch.full((1, 1, 32, 64), 1 + physical) for physical in topology.chip_order),
                 ]
                 for selector, (wanted, actual) in enumerate(zip(expected, shards, strict=True)):
                     assert torch.equal(
@@ -120,6 +114,6 @@ def test_chronological_selections(mesh_device, device_params, sp_axis, bounded):
                     ), f"selector={selector} start={start} length={length} rank={rank}"
     finally:
         ttnn.release_trace(mesh_device, trace)
-        for tensor in (*outputs, qkv, histories, transforms, entries, finals, prefix, actual_start, actual_end):
+        for tensor in (*outputs, qkv, histories, finals, prefix, actual_start, actual_end):
             if tensor is not None:
                 ttnn.deallocate(tensor)

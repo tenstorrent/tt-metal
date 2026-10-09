@@ -56,9 +56,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.TILE_SIZE_UNPACK_A); // SrcB tile size (in0)
 
     // compressed_custom_mm unpack init takes only unpB_face_r_dim (no CT_DIM, unlike custom_mm).
-    _llk_unpack_AB_compressed_custom_mm_init_<false /* transpose */>(params.in0_face_r_dim);
+    _llk_unpack_AB_compressed_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim);
 
-    _llk_unpack_AB_compressed_custom_mm_<true /* clear_src */>(
+    _llk_unpack_AB_compressed_custom_mm_(
         L1_ADDRESS(params.buffer_B[0]), // base_address_a -> SrcA (in1, BFP-compressed full tile)
         L1_ADDRESS(params.buffer_A[0]), // base_address_b -> SrcB (in0, partial tile)
         params.buffer_C[0],             // base_address_meta -> per-tile compression metadata. NOT L1_ADDRESS(): the primitive

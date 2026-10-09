@@ -17,7 +17,7 @@ inline void calculate_softsign() {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vFloat tmp = sfpi::abs(v) + 1.0f;
         // 1 + |v| is 2**126 at |v| = 2**126; fold it so softsign returns ±1 there, not 0.
-        tmp = sfpu_reciprocal_iter<APPROXIMATION_MODE ? 0 : 2, !APPROXIMATION_MODE>(tmp);
+        tmp = sfpu_reciprocal_iter<APPROXIMATION_MODE ? 0 : 2, false, !APPROXIMATION_MODE>(tmp);
         sfpi::dst_reg[0] = v * tmp;
         sfpi::dst_reg++;
     }

@@ -1,0 +1,7 @@
+# Cross-thread config-register writes accepted for now (wormhole_b0).
+#
+# Key is path:kind:field -- content, not line numbers, so an entry survives code motion and stops
+# applying when the sequence changes. Multiple sites in one file for one field share an entry.
+#
+# The check fails only on sites NOT listed here. Removing a line is how you assert a site is fixed.
+# Adding one requires a reason; "it passes today" is not a reason.

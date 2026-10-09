@@ -28,6 +28,7 @@ class Qwen36ModelArgs(ModelArgs):
         mesh_device=None,
         max_batch_size=1,
         max_seq_len=2048,
+        enable_mtp=None,
         **kwargs,
     ):
         # HF_MODEL is canonical (defaults to Qwen/Qwen3.6-27B). Snapshot hub ids unless
@@ -86,6 +87,30 @@ class Qwen36ModelArgs(ModelArgs):
         self.linear_k_dim = self.linear_num_key_heads * self.linear_key_head_dim
         self.linear_v_dim = self.linear_num_value_heads * self.linear_value_head_dim
 
+        # MTP (multi-token prediction) head. Every Qwen3.5/3.6 checkpoint ships a single-layer
+        # MTP head (mtp.*) that reuses the main embedding + LM head; it is the speculative-decode
+        # drafter. mtp_use_dedicated_embeddings=False means it shares tok_embeddings.
+        # Loading the head is ON by default for dense checkpoints that ship one (it is the production
+        # decode path) and OFF for MoE until validated. QWEN36_MTP=1/0 forces it either way;
+        # enable_mtp=False skips its weights, KV cache and construction entirely (plain decode only).
+        self.mtp_num_hidden_layers = getattr(text_config, "mtp_num_hidden_layers", 0)
+        self.mtp_use_dedicated_embeddings = getattr(text_config, "mtp_use_dedicated_embeddings", False)
+        if enable_mtp is None:
+            env = os.environ.get("QWEN36_MTP")
+            if env is not None:
+                enable_mtp = env != "0"
+            else:
+                # MTP spec decode is validated on the dense checkpoints only; MoE (35B-A3B) stays off unless forced.
+                enable_mtp = (getattr(text_config, "num_experts", 0) or 0) == 0
+        self.has_mtp = self.mtp_num_hidden_layers > 0 and bool(enable_mtp)
+        if self.has_mtp:
+            assert (
+                self.mtp_num_hidden_layers == 1
+            ), f"Only single-layer MTP is supported (got mtp_num_hidden_layers={self.mtp_num_hidden_layers})"
+            assert (
+                not self.mtp_use_dedicated_embeddings
+            ), "mtp_use_dedicated_embeddings=True is unsupported (would need a separate MTP embedding/head)"
+
         # ------------------------------------------------------------------
         # MoE (Qwen3.5-MoE / Qwen3-Next sparse layers). All read from the parsed
         # HF text config. Absent on the dense 9B/27B, where num_experts defaults
@@ -130,6 +155,8 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_dk = self.linear_key_head_dim
         self.gdn_nv = self.linear_num_value_heads
         self.gdn_dv = self.linear_value_head_dim
+        self.gdn_program_config = None
+        self.gdn_wy_inverse = None
         self.gdn_conv_kernel_size = self.linear_conv_kernel_dim
         self.gdn_key_dim = self.linear_q_dim  # q and k equal
         self.gdn_value_dim = self.linear_v_dim
@@ -148,10 +175,6 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_nk_tp = self.gdn_nk // tp
         self.gdn_nv_tp = self.gdn_nv // tp
         self.gdn_qkv_dim_tp = self.gdn_qkv_dim // tp
-        # Native depthwise conv1d (prefill) keeps all qkv_dim_tp channels resident per core (L1_FULL);
-        # the 35B-A3B channel count overflows L1 on BH. Split the conv over N channel chunks (exact —
-        # depthwise is per-channel-independent) so each call fits. 27B (chunks=1) is unchanged.
-        self.gdn_conv_channel_chunks = 2 if self.moe_num_experts > 0 else 1
         self.gdn_z_dim_tp = self.gdn_z_dim // tp
         self.gdn_qkvz_dim_tp = (self.gdn_qkv_dim + self.gdn_z_dim) // tp
         # Per-device width of the [qkv|z|a|b] fused in-projection: folding the tiny a/b (decay/beta)
@@ -367,11 +390,13 @@ class Qwen36ModelArgs(ModelArgs):
         Overrides base meta-key loader."""
         from models.demos.blackhole.qwen36.tt.weight_mapping import (
             is_fp8_checkpoint,
+            load_mtp_tensors,
             load_qwen36_state_dict_fp8,
             remap_qwen36_state_dict,
         )
 
         # Block FP8 checkpoints: dequant + remap for TP loaders (skip the HF model).
+        # The FP8 loader already keeps mtp.* (read raw from safetensors), so no extra merge.
         if is_fp8_checkpoint(self.CKPT_DIR):
             return load_qwen36_state_dict_fp8(self.CKPT_DIR)
 
@@ -408,4 +433,7 @@ class Qwen36ModelArgs(ModelArgs):
         model = _HFForCausalLM.from_pretrained(self.CKPT_DIR, config=text_config, dtype="auto")
         state_dict = remap_qwen36_state_dict(model.state_dict())
         del model
+        # AutoModelForCausalLM drops mtp.* before remap; read the drafter weights directly.
+        if getattr(self, "has_mtp", False):
+            state_dict.update(load_mtp_tensors(self.CKPT_DIR))
         return state_dict

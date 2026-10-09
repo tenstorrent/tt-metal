@@ -68,7 +68,7 @@ uint32_t reduce_h_num_cols(
 auto reduce_h_split_work(const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a, uint32_t num_cols) {
     return attrs.sub_core_grids.has_value()
                ? tt::tt_metal::split_work_to_cores(*attrs.sub_core_grids, num_cols)
-               : tt::tt_metal::split_work_to_cores(a.mutable_device().compute_with_storage_grid_size(), num_cols);
+               : tt::tt_metal::split_work_to_cores(a.device().compute_with_storage_grid_size(), num_cols);
 }
 
 // Whether the compute_g2 kernel exists. override_runtime_arguments cannot see the built Program,
@@ -121,7 +121,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    tt_metal::distributed::MeshDevice& device = a.mutable_device();
+    const tt_metal::distributed::MeshDevice& device = a.device();
 
     // Fast path aliases I/O CBs onto the tensors; CBs are L1-only.
     const bool use_width_sharding = reduce_h_use_width_sharding(a, output);
@@ -165,7 +165,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     // PostMul means the compute kernel applies the scalar after the reduction.
     const bool use_post_mul = operation_attributes.scaler_mode == ScalerMode::PostMul;
 
-    // Int32 max/min/sum use the SFPU reduce path; fp32 SUM only for the accurate mean opt-in.
+    // Int32 max/min/sum and bf16 min use the SFPU reduce path; fp32 only for the accurate opt-in.
     const bool is_sfpu_reduce =
         use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
@@ -638,8 +638,8 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     uint32_t compute_Wt = use_width_sharding ? (num_cols_per_core_group_1 / NC) : num_cols_per_core_group_1;
     uint32_t compute_NC = use_width_sharding ? NC : 1;
 
-    // MIN on an SFPU path uses the base reduce.cpp kernel (negate=false); fast-mode float/bf16 MIN
-    // uses -MAX(-x) in reduce_h_neg.
+    // MIN on an SFPU path uses the base reduce.cpp kernel (negate=false); every other MIN
+    // (bfloat8_b, fast-mode fp32) uses -MAX(-x) in reduce_h_neg.
     const std::string compute_kernel =
         rm_path ? std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_rm.cpp")
                 : std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +

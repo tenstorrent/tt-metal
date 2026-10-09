@@ -119,9 +119,20 @@ class TtDFlashDrafter:
         # K/V caches are owned by the CALLER (see allocate_dflash_kv_cache) and passed into
         # forward() — the drafter does not hold them, mirroring the MLA prefill model's kvpe_cache.
         self._reduced_accum: Optional[ttnn.Tensor] = None  # running TP-partial FC sum (Σ fc_slice_i @ h_i)
+        # Scratch for the non-first tap's matmul. Both this and _reduced_accum are allocated ONCE (on the
+        # first tap, which happens during the runtime's pre-capture warmup) and then written in place, so a
+        # trace capture of the verifier forward records no allocation, no deallocate and no shape change.
+        self._tap_scratch: Optional[ttnn.Tensor] = None
+        # The lowest target layer this rank owns. Taps fire in ascending layer order within a forward, so
+        # this one OVERWRITES the accumulator and the rest add into it: that removes the per-chunk reset
+        # (nothing to zero) and makes the op sequence identical on every chunk, which is what a captured
+        # program requires. Constant per rank, so the branch below is decided at build time, not per call.
+        self._first_owned_id: Optional[int] = min(self._owned_set) if self._owned_set else None
         # Partial forwarded from upstream pipeline ranks (import_partial), already reduce_scattered to
         # [1,1,seq,H/tp]; summed into this rank's finalized partial. None on rank 0 / single-rank.
         self._running_sharded: Optional[ttnn.Tensor] = None
+        # False when _running_sharded is the caller's persistent buffer (import_partial(owned=False)).
+        self._running_owned = True
 
     # ------------------------------------------------------------------ setup
     def _mesh_mappers(self):
@@ -217,10 +228,10 @@ class TtDFlashDrafter:
     def reset(self):
         """Clear the FC accumulator + any imported upstream partial — call at the start of each prefill
         sequence/chunk."""
-        if self._reduced_accum is not None:
-            ttnn.deallocate(self._reduced_accum)
-        self._reduced_accum = None
-        if self._running_sharded is not None:
+        # _reduced_accum is deliberately NOT freed or nulled: it is the persistent tap accumulator, and
+        # the next chunk's first owned tap overwrites it wholesale. Freeing it here would reintroduce a
+        # per-chunk allocation, which is exactly what a trace capture of the verifier forward cannot have.
+        if self._running_sharded is not None and self._running_owned:
             ttnn.deallocate(self._running_sharded)
         self._running_sharded = None
 
@@ -239,27 +250,52 @@ class TtDFlashDrafter:
         another pipeline rank)."""
         if global_layer_idx not in self._owned_set:
             return
-        partial = ttnn.linear(
-            hidden_states,
-            self.fc_slices[global_layer_idx],
-            compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # TODO: add a tuned program_config.
-        )
+        first = global_layer_idx == self._first_owned_id
         if self._reduced_accum is None:
-            self._reduced_accum = partial
+            # First tap ever: let ttnn size the buffer, then keep it forever. This runs during the
+            # runtime's warmup forward, BEFORE any trace capture, so the allocation is never recorded.
+            self._reduced_accum = ttnn.linear(
+                hidden_states,
+                self.fc_slices[global_layer_idx],
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # TODO: add a tuned program_config.
+            )
+            return
+        if first:
+            # Overwrite: this is chunk N's first contribution, so the previous chunk's sum must not leak in.
+            ttnn.linear(
+                hidden_states,
+                self.fc_slices[global_layer_idx],
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                optional_output_tensor=self._reduced_accum,
+            )
+            return
+        if self._tap_scratch is None:
+            self._tap_scratch = ttnn.linear(
+                hidden_states,
+                self.fc_slices[global_layer_idx],
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         else:
-            summed = ttnn.add(self._reduced_accum, partial)
-            ttnn.deallocate(self._reduced_accum)
-            ttnn.deallocate(partial)
-            self._reduced_accum = summed
+            ttnn.linear(
+                hidden_states,
+                self.fc_slices[global_layer_idx],
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                optional_output_tensor=self._tap_scratch,
+            )
+        ttnn.add(self._reduced_accum, self._tap_scratch, output_tensor=self._reduced_accum)
 
-    def import_partial(self, sharded: ttnn.Tensor) -> None:
+    def import_partial(self, sharded: ttnn.Tensor, *, owned: bool = True) -> None:
         """Seed the running partial with the upstream rank's finalized sharded partial [1,1,seq,H/tp]
-        (from its export_partial). The drafter takes ownership (freed in _finalize_sharded_partial/reset).
-        Non-first pipeline ranks call this once per chunk, before the tap phase."""
+        (from its export_partial). Non-first pipeline ranks call this once per chunk, before the tap phase.
+        ``owned=False``: a caller-owned persistent buffer, read but never freed (traced path)."""
         assert self._running_sharded is None, "import_partial called twice without reset()"
         self._running_sharded = sharded
+        self._running_owned = owned
 
     def _finalize_sharded_partial(self) -> ttnn.Tensor:
         """Combine this rank's accumulated row-parallel FC partials across TP (reduce_scatter → the thin
@@ -269,11 +305,13 @@ class TtDFlashDrafter:
         if self._reduced_accum is None:
             # This rank owns no target layer this chunk — pass the upstream partial straight through.
             assert self._running_sharded is not None, "_finalize: this rank neither tapped nor imported a partial"
-            out = self._running_sharded
+            out = self._running_sharded if self._running_owned else ttnn.clone(self._running_sharded)
             self._running_sharded = None
             return out
+        # PERSISTENT: _reduced_accum is allocated once and rewritten in place by tap(), so it is neither
+        # nulled nor deallocated here. The next chunk's first owned tap overwrites it, which is what
+        # replaces the old per-chunk reset -- and what lets the verifier forward be trace-captured.
         reduced_partial = self._reduced_accum
-        self._reduced_accum = None
         # reduce_scatter SUMS the row-parallel partials across TP AND scatters on hidden in ONE op → the
         # [1,1,seq,H/tp] shard the distributed hidden_norm wants. Matches MLA o_proj/q_a_proj + MoE tt_reduce.
         if self.tp_factor > 1:
@@ -284,13 +322,16 @@ class TtDFlashDrafter:
                 num_links=self.num_links,
                 topology=self.topology,
             )  # [1,1,seq,H/tp] — summed FC output, TP-sharded on hidden
-            ttnn.deallocate(reduced_partial)
+            # NOT deallocated: reduced_partial is the persistent accumulator, not a per-chunk temporary.
         else:
-            reduced = reduced_partial  # tp==1: the partial IS the full sum; hidden_norm handles full H
+            # tp==1: the partial IS the full sum, but hand the caller its OWN buffer -- returning the
+            # persistent accumulator would let a downstream deallocate free the buffer tap() reuses.
+            reduced = ttnn.clone(reduced_partial)
         if self._running_sharded is not None:
             summed = ttnn.add(reduced, self._running_sharded)  # += upstream ranks' partial (same layout)
             ttnn.deallocate(reduced)
-            ttnn.deallocate(self._running_sharded)
+            if self._running_owned:
+                ttnn.deallocate(self._running_sharded)
             self._running_sharded = None
             reduced = summed
         return reduced
@@ -329,6 +370,8 @@ class TtDFlashDrafter:
         metadata_msg: Optional[ttnn.Tensor] = None,
         on_layer_complete: Optional[Callable[[int], None]] = None,
         layer_ack_base: int = 0,
+        metadata: Optional[tuple] = None,
+        trace_controller=None,
     ) -> None:
         """Finalize into the caller-owned ``k_cache``/``v_cache`` (allocate via
         ``allocate_dflash_kv_cache``): consume the accumulated TP-partial FC output, TP-reduce it,
@@ -359,6 +402,9 @@ class TtDFlashDrafter:
         layer count (draft layer i -> global ``layer_ack_base + i``). Used by the host-callback path only;
         the device path is counted positionally by ``LayerAckService`` and ignores the record's contents.
 
+        ``metadata``: (slot_id, actual_start, actual_end) device tensors, replacing the host scalars for
+        tracing. ``trace_controller`` routes the host-callback ack via ``layer_ack``.
+
         The taps for this chunk need NOT be seq-contiguous: token ids entering the transformer are already
         block-cyclic-gathered, so each chip's tap slice is exactly the rows its cache shard will hold, and
         the interleaved indexed rope op derives each chip's shard offset on-device from the whole-cache table
@@ -381,7 +427,7 @@ class TtDFlashDrafter:
         assert (
             v_cache.shape[0] // cfg.num_hidden_layers == num_slots
         ), f"k/v caches disagree on slot count ({num_slots} vs {v_cache.shape[0] // cfg.num_hidden_layers})"
-        assert 0 <= slot_idx < num_slots, f"slot_idx {slot_idx} out of range [0, {num_slots})"
+        assert metadata is not None or 0 <= slot_idx < num_slots, f"slot_idx {slot_idx} out of range [0, {num_slots})"
         assert (
             k_cache.shape[-1] == cfg.head_dim and v_cache.shape[-1] == cfg.head_dim
         ), f"kv cache head_dim {k_cache.shape[-1]}/{v_cache.shape[-1]} != {cfg.head_dim}"
@@ -396,24 +442,25 @@ class TtDFlashDrafter:
             f"chunk_global ({chunk_global}) must be a multiple of TILE_SIZE * sp "
             f"({ttnn.TILE_SIZE * self.sp_factor})"
         )
-        assert (
-            kv_actual_global % ttnn.TILE_SIZE == 0
-        ), f"kv_actual_global ({kv_actual_global}) must be tile-aligned (a multiple of {ttnn.TILE_SIZE})"
-        # With actual_end the writes are clamped to the real tokens, so that is what must fit.
-        write_end = (
-            -(-actual_end // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-            if actual_end is not None
-            else kv_actual_global + chunk_global
-        )
-        assert write_end <= self.cache_seq, (
-            f"this chunk writes up to {write_end} (kv_actual_global={kv_actual_global}, "
-            f"chunk_global={chunk_global}, actual_end={actual_end}), past the global cache depth "
-            f"({self.cache_seq}); construct with a larger max_seq_len (windowing happens at migration)"
-        )
-        assert actual_end is None or kv_actual_global <= actual_end <= kv_actual_global + chunk_global, (
-            f"actual_end ({actual_end}) must lie in this chunk's window "
-            f"[{kv_actual_global}, {kv_actual_global + chunk_global}]"
-        )
+        if metadata is None:
+            assert (
+                kv_actual_global % ttnn.TILE_SIZE == 0
+            ), f"kv_actual_global ({kv_actual_global}) must be tile-aligned (a multiple of {ttnn.TILE_SIZE})"
+            # With actual_end the writes are clamped to the real tokens, so that is what must fit.
+            write_end = (
+                -(-actual_end // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+                if actual_end is not None
+                else kv_actual_global + chunk_global
+            )
+            assert write_end <= self.cache_seq, (
+                f"this chunk writes up to {write_end} (kv_actual_global={kv_actual_global}, "
+                f"chunk_global={chunk_global}, actual_end={actual_end}), past the global cache depth "
+                f"({self.cache_seq}); construct with a larger max_seq_len (windowing happens at migration)"
+            )
+            assert actual_end is None or kv_actual_global <= actual_end <= kv_actual_global + chunk_global, (
+                f"actual_end ({actual_end}) must lie in this chunk's window "
+                f"[{kv_actual_global}, {kv_actual_global + chunk_global}]"
+            )
         assert self.cache_seq % chunk_global == 0, (
             f"cache_seq ({self.cache_seq}) must be a whole number of chunk_global ({chunk_global}) blocks; "
             "update_padded_kv_cache tiles the per-user cache block-cyclically in chunk_global-sized blocks, "
@@ -457,14 +504,24 @@ class TtDFlashDrafter:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.default_compute_kernel_config,
             )
-            k = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
-                k,
-                self._rope["cos_matrix"],
-                self._rope["sin_matrix"],
-                self._rope["trans_matrix"],
-                kv_actual_global=kv_actual_global,
-                cluster_axis=self.sp_axis,
-            )
+            if metadata is not None:
+                k = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                    k,
+                    self._rope["cos_matrix"],
+                    self._rope["sin_matrix"],
+                    self._rope["trans_matrix"],
+                    metadata[1],  # actual_start = kv_actual_global
+                    cluster_axis=self.sp_axis,
+                )
+            else:
+                k = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                    k,
+                    self._rope["cos_matrix"],
+                    self._rope["sin_matrix"],
+                    self._rope["trans_matrix"],
+                    kv_actual_global=kv_actual_global,
+                    cluster_axis=self.sp_axis,
+                )
             # The cache is bf8 (align w/ the decode KV cache) while k/v leave the projections in bf16;
             # update_padded_kv_cache FATALs unless cache and input dtypes match exactly, so typecast down
             # first — TILE both sides, so no relayout (mirrors MLA _to_cache_format). Keyed off *_cache.dtype
@@ -483,16 +540,28 @@ class TtDFlashDrafter:
             # mesh_dispatch_coordinate and so cannot express the per-chip staircase at all.
             # ALWAYS keyword args: the two nanobind overloads order the scalars differently.
             for cache, tensor in ((k_cache, k), (v_cache, v)):
-                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                    cache,
-                    tensor,
-                    slot_idx=slot_idx,
-                    layer_idx=i,
-                    num_layers=cfg.num_hidden_layers,
-                    kv_actual_global=kv_actual_global,
-                    cluster_axis=self.sp_axis,
-                    valid_global=actual_end,
-                )
+                if metadata is not None:
+                    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                        cache,
+                        tensor,
+                        metadata[0],  # slot_idx
+                        metadata[1],  # kv_actual_global
+                        layer_idx=i,
+                        num_layers=cfg.num_hidden_layers,
+                        cluster_axis=self.sp_axis,
+                        valid_global=metadata[2],  # actual_end
+                    )
+                else:
+                    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                        cache,
+                        tensor,
+                        slot_idx=slot_idx,
+                        layer_idx=i,
+                        num_layers=cfg.num_hidden_layers,
+                        kv_actual_global=kv_actual_global,
+                        cluster_axis=self.sp_axis,
+                        valid_global=actual_end,
+                    )
             ttnn.deallocate(k)
             ttnn.deallocate(v)
             # Ack AFTER both caches are written, so one ack means draft layer i is complete for K and V.
@@ -502,6 +571,10 @@ class TtDFlashDrafter:
             if d2h_service is not None:
                 ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
             elif on_layer_complete is not None:
-                ttnn.synchronize_device(self.mesh_device)
-                on_layer_complete(layer_ack_base + i)
+                # The controller splits the capture at the ack, like kv_ack.zero_pad_and_ack.
+                if trace_controller is not None and trace_controller.has_layer_ack():
+                    trace_controller.layer_ack(layer_ack_base + i)
+                else:
+                    ttnn.synchronize_device(self.mesh_device)
+                    on_layer_complete(layer_ack_base + i)
         ttnn.deallocate(target_hidden)

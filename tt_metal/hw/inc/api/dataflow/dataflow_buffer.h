@@ -107,6 +107,12 @@ public:
     // Low-level constructor: prefer DFBBindingToken / RelayDFBBindingToken for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
 
+#ifdef ARCH_QUASAR
+    // Drains outstanding credits (posted == acked) and, on DM, waits for writes out of the DFB to land.
+    // Only the original object drains. Copies passed into helpers never drain; the original must outlive them.
+    ~DataflowBuffer();
+#endif
+
     uint16_t get_id() const { return logical_dfb_id_; }
 
     // Returns the size of each entry in the DFB
@@ -311,12 +317,14 @@ public:
     T read_tile_value(uint32_t tile_index, uint32_t element_offset);
 #endif
 
-    void finish() { finish_impl(); }
+    // Deprecated no-op: on Quasar the drain runs in ~DataflowBuffer(); on WH/BH there is nothing to drain.
+    void finish() {}
 
 #ifndef COMPILE_FOR_TRISC
-    // This should not be used on WH/BH if the read into/write out of the DFB uses transaction ids because the transaction ids are not tracked.
-    // Instead, use noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid})
-    void write_barrier(const Noc &noc) const { write_barrier_impl(noc); }
+    // Deprecated no-op on Quasar: the write barrier runs in ~DataflowBuffer().
+    // On WH/BH this should not be used if the read into/write out of the DFB uses transaction ids because the
+    // transaction ids are not tracked. Instead, use noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid})
+    void write_barrier(const Noc& noc) const { write_barrier_impl(noc); }
 #endif
 
     // Peek current FIFO cursors (byte address / arch units). Use for local entry data access —
@@ -326,6 +334,36 @@ public:
     // cache strategy.
     uint32_t get_write_ptr() const { return get_write_ptr_impl() + L1_UNCACHED_OFFSET; }
     uint32_t get_read_ptr() const { return get_read_ptr_impl() + L1_UNCACHED_OFFSET; }
+
+#ifdef COMPILE_FOR_TRISC
+    // Returns the LLKOperand pointing to the front (reading address) of the DFB
+    // Functionalities meant to be used with LLKOperand for LLK 2.0
+    //
+    // Parameters:
+    // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
+    template <typename Operand>
+    [[nodiscard]] Operand front() const {
+#ifdef UCK_CHLKC_MATH
+        return Operand{0};
+#else
+        return Operand{(get_read_ptr_impl() >> (4 - cb_addr_shift)) - 1};
+#endif
+    }
+
+    // Returns the LLKOperand pointing to the back (writing address) of the DFB
+    // Functionalities meant to be used with LLKOperand for LLK 2.0
+    //
+    // Parameters:
+    // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
+    template <typename Operand>
+    [[nodiscard]] Operand back() const {
+#ifdef UCK_CHLKC_MATH
+        return Operand{0};
+#else
+        return Operand{(get_write_ptr_impl() >> (4 - cb_addr_shift)) - 1};
+#endif
+    }
+#endif
 
 #ifndef ARCH_QUASAR
     // WH/BH only — mutate FIFO cursor state (rewind / jump / hold-wr style surgery).
@@ -360,7 +398,9 @@ private:
     void push_back_impl(uint16_t num_entries);
     void wait_front_impl(uint16_t num_entries);
     void pop_front_impl(uint16_t num_entries);
+#ifdef ARCH_QUASAR
     void finish_impl();
+#endif
     uint32_t get_write_ptr_impl() const;
     uint32_t get_read_ptr_impl()  const;
 
@@ -377,7 +417,10 @@ private:
 #ifndef COMPILE_FOR_TRISC
     friend struct noc_traits_t<DataflowBuffer>;
 
-    void write_barrier_impl(const Noc &noc) const;
+    void write_barrier_impl(const Noc& noc) const;
+#ifdef ARCH_QUASAR
+    void write_barrier_impl(uint8_t noc_id) const;
+#endif
 #endif
 
     struct ScopedLockRegion {
@@ -434,6 +477,11 @@ private:
     uint16_t ctxn_id_loop_cnt_ = 0;
     uint8_t ctxn_id_index_ = 0;
     uint32_t ctiles_written_ = 0;  // not the same as tile counter: HW has no way to track pending acks
+
+    // The implicit copy constructor copies this pointer, so every copy points at the original. Traffic is
+    // recorded on the original, and only the original drains.
+    DataflowBuffer* drain_owner_ = this;
+    bool has_outbound_writes_ = false;
 #endif
 };
 
@@ -459,6 +507,9 @@ struct noc_traits_t<DataflowBuffer> {
         static_assert(
             address_type == Noc::AddressType::LOCAL_L1,
             "DataflowBuffer without mcast range can only be used as L1 source");
+#ifdef ARCH_QUASAR
+        src.drain_owner_->has_outbound_writes_ = true;
+#endif
         // Use cached addresses for NOC APIs
         return src.get_noc_read_addr() + args.offset_bytes;
     }
