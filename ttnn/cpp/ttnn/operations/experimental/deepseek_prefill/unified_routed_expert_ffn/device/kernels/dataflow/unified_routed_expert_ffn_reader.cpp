@@ -44,7 +44,18 @@
 #define MaybeDeviceZoneScope(name)
 #endif
 
+// Profile-only weight DRAM read accounting for the NoC split: issue -> read-barrier wall-clock
+// cycles and bytes per weight stream, summed and emitted as data records at kernel end (a zone per
+// K-block would blow the record budget).
+#if defined(PROFILE_KERNEL)
+#define URF_PROF_CLK() (*reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L))
+#define URF_PROF(...) __VA_ARGS__
+#else
+#define URF_PROF(...)
+#endif
+
 void kernel_main() {
+    URF_PROF(uint32_t prof_wg_cyc = 0, prof_wg_bytes = 0, prof_wd_cyc = 0, prof_wd_bytes = 0, prof_t0 = 0;)
     // -------------------------- runtime args ------------------------------
     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t counts_addr = get_common_arg_val<uint32_t>(1);
@@ -753,7 +764,9 @@ void kernel_main() {
                 const uint32_t gate_col0 = my_nt_gu * per_core_N_gu;
                 const uint32_t gate_col_end =
                     (gate_col0 + per_core_N_gu < N_gate_tiles_full) ? gate_col0 + per_core_N_gu : N_gate_tiles_full;
+                URF_PROF(prof_t0 = URF_PROF_CLK();)
                 for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                    URF_PROF(prof_wg_bytes += (gate_col_end - gate_col0) * gate_tile_bytes;)
                     GuRuns::read(
                         noc_read,
                         gate_acc,
@@ -790,6 +803,7 @@ void kernel_main() {
                     }
                 }
                 noc_read.async_read_barrier();
+                URF_PROF(prof_wg_cyc += URF_PROF_CLK() - prof_t0;)
 
                 // IN1_WRITER_MCAST: gate is in L1 -- hand this slot to the writer, which
                 // multicasts it (and `up`, which it read itself) on NoC 1. Signalled BEFORE
@@ -970,9 +984,11 @@ void kernel_main() {
                 const uint32_t down_col0 = my_nt_d * per_core_N_d;
                 const uint32_t down_col_end =
                     (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
+                URF_PROF(prof_t0 = URF_PROF_CLK();)
                 for (uint32_t k = 0; k < down_split_k; ++k) {
                     const uint32_t row = kb * in0_block_w_d + k;
                     if (row < K_down_tiles) {
+                        URF_PROF(prof_wd_bytes += (down_col_end - down_col0) * down_tile_bytes;)
                         DRuns::read(
                             noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w, down_tile_bytes);
                     }
@@ -990,6 +1006,7 @@ void kernel_main() {
             if (is_in1_sender) {
                 MaybeDeviceZoneScope("rd_wd_send");
                 noc_read.async_read_barrier();
+                URF_PROF(prof_wd_cyc += URF_PROF_CLK() - prof_t0;)
                 // DOWN_SPLIT: the writer's block must have landed before it is multicast
                 // (or consumed locally at GRID_Y == 1).
                 if constexpr (split_down) {
@@ -1116,4 +1133,11 @@ void kernel_main() {
     // is a posted atomic; without an explicit barrier it can still be in
     // flight at kernel exit, leading to timing-dependent corruption.
     noc.async_atomic_barrier();
+#if defined(PROFILE_KERNEL)
+    // One record per source line: the profiler keys data records by their line.
+    DeviceTimestampedData("prof_noc0_wg_cyc", prof_wg_cyc);
+    DeviceTimestampedData("prof_noc0_wg_bytes", prof_wg_bytes);
+    DeviceTimestampedData("prof_noc0_wd_cyc", prof_wd_cyc);
+    DeviceTimestampedData("prof_noc0_wd_bytes", prof_wd_bytes);
+#endif
 }

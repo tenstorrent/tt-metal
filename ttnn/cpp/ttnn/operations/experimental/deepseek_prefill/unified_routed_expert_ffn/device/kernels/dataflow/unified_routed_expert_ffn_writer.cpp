@@ -52,7 +52,18 @@ constexpr uint32_t TILE_HEIGHT = 32;
 #define MaybeDeviceZoneScope(name)
 #endif
 
+// Profile-only weight DRAM read accounting for the NoC split: issue -> read-barrier wall-clock
+// cycles and bytes per weight stream, summed and emitted as data records at kernel end (a zone per
+// K-block would blow the record budget).
+#if defined(PROFILE_KERNEL)
+#define URF_PROF_CLK() (*reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L))
+#define URF_PROF(...) __VA_ARGS__
+#else
+#define URF_PROF(...)
+#endif
+
 void kernel_main() {
+    URF_PROF(uint32_t prof_wu_cyc = 0, prof_wu_bytes = 0, prof_wd_cyc = 0, prof_wd_bytes = 0, prof_t0 = 0;)
     Noc noc;
 #ifdef PROFILE_KERNEL
     uint32_t prof_out_bytes = 0;  // profile-only: output bytes this core wrote (one record at the end)
@@ -302,7 +313,9 @@ void kernel_main() {
                         // N-OOB hidden padding columns left UNWRITTEN: their up output lands on
                         // a down K position the down matmul never reduces (the compute bounds
                         // its K-loop by real_k_tiles), so stale L1 is dropped.
+                        URF_PROF(prof_t0 = URF_PROF_CLK();)
                         for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                            URF_PROF(prof_wu_bytes += (up_col_end - up_col0) * up_tile_bytes;)
                             GuRuns::read(
                                 noc_up,
                                 up_acc,
@@ -315,6 +328,7 @@ void kernel_main() {
                             l1_w_up += per_core_N_gu * up_tile_bytes;
                         }
                         noc_up.async_read_barrier();
+                        URF_PROF(prof_wu_cyc += URF_PROF_CLK() - prof_t0;)
                         up_done_sem.set(up_seq);
 
                         // IN1_WRITER_MCAST: wait for the reader's gate read (mcast_go), then
@@ -415,9 +429,11 @@ void kernel_main() {
                         // Both OOB directions left UNWRITTEN, matching the reader: the compute
                         // bounds its down K-loop by real_k_tiles and the writer's col guard drops
                         // phantom output columns.
+                        URF_PROF(prof_t0 = URF_PROF_CLK();)
                         for (uint32_t k = down_split_k; k < in0_block_w_d; ++k) {
                             const uint32_t row = kb * in0_block_w_d + k;
                             if (row < K_down_tiles) {
+                                URF_PROF(prof_wd_bytes += (down_col_end - down_col0) * down_tile_bytes;)
                                 DRuns::read(
                                     noc_up,
                                     down_acc,
@@ -431,6 +447,7 @@ void kernel_main() {
                             l1_w += per_core_N_d * down_tile_bytes;
                         }
                         noc_up.async_read_barrier();
+                        URF_PROF(prof_wd_cyc += URF_PROF_CLK() - prof_t0;)
                         down_done_sem.set(down_seq);
                     }
                 }
@@ -534,6 +551,10 @@ void kernel_main() {
     // kernel returns (the next dispatched op may read this output).
 #ifdef PROFILE_KERNEL
     DeviceTimestampedData("prof_out_bytes", prof_out_bytes);
+    DeviceTimestampedData("prof_noc1_wu_cyc", prof_wu_cyc);
+    DeviceTimestampedData("prof_noc1_wu_bytes", prof_wu_bytes);
+    DeviceTimestampedData("prof_noc1_wd_cyc", prof_wd_cyc);
+    DeviceTimestampedData("prof_noc1_wd_bytes", prof_wd_bytes);
 #endif
     MaybeDeviceZoneScope("wr_out_barrier");
     noc.async_write_barrier();
