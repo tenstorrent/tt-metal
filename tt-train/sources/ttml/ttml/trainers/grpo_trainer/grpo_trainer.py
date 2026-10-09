@@ -127,7 +127,9 @@ class RolloutSampler(ABC):
         """
 
 
-ROLLOUT_SOURCES = ("ttml",)
+ROLLOUT_SOURCES = ("ttml", "ttt")
+ROLLOUT_MODES = ("in_process", "remote_sync")
+VALID_ROLLOUT_COMBINATIONS = (("ttml", "in_process"), ("ttt", "remote_sync"))
 
 
 def build_rollout_sampler(
@@ -149,6 +151,18 @@ def build_rollout_sampler(
 
         return TTMLRolloutSampler(model, tokenizer, max_completion_length, temperature, completions_per_prompt)
     raise ValueError(f"unknown rollout_source {source!r}; expected one of {list(ROLLOUT_SOURCES)}")
+
+
+@dataclass
+class RemoteRolloutConfig:
+    """Rollout rank settings for rollout_mode="remote_sync"."""
+
+    mesh_shape: List[int]
+    max_batch_size: int
+    max_seq_len: int
+    seed: Optional[int] = None
+    top_k: int = 32
+    top_p: float = 1.0
 
 
 @dataclass
@@ -179,8 +193,8 @@ class GRPOConfig:
     max_completion_length: int
     num_generations: int
     warmup_steps: int
-    # Which RolloutSampler the trainer builds (see ROLLOUT_SOURCES above).
-    # "ttml": in-process TTMLRolloutSampler that generates with the trainer's policy model.
+    # Which engine generates rollouts (see ROLLOUT_SOURCES above).
+    # "ttml": TTMLRolloutSampler with the trainer's policy model; "ttt": tt-transformers.
     rollout_source: str
     # LR schedule shape AFTER warmup. Names match HuggingFace transformers / TRL
     # so users familiar with those configs can map yamls directly:
@@ -210,6 +224,13 @@ class GRPOConfig:
     # num_generations. Kept only so older configs that still set it construct
     # without error; the trainer ignores any value provided here.
     batch_size: Optional[int] = None
+    # How rollouts reach the trainer (see ROLLOUT_MODES / VALID_ROLLOUT_COMBINATIONS above).
+    # "in_process": same process. "remote_sync": rank 1 of a 2-rank tt-run job generates on request.
+    rollout_mode: str = "in_process"
+    # remote_sync: push the policy weights to the rollout rank every N optimizer steps.
+    weight_sync_every: int = 1
+    # remote_sync: rollout rank settings, from the top-level remote_rollout_config yaml section.
+    remote_rollout: Optional[RemoteRolloutConfig] = None
 
     def __post_init__(self) -> None:
         # num_generations is the GRPO group size: each prompt must produce at least
@@ -273,6 +294,21 @@ class GRPOConfig:
             raise ValueError(
                 f"grpo_config: 'rollout_source' must be one of {list(ROLLOUT_SOURCES)} "
                 f"(got {self.rollout_source!r})."
+            )
+        if self.rollout_mode not in ROLLOUT_MODES:
+            raise ValueError(
+                f"grpo_config: 'rollout_mode' must be one of {list(ROLLOUT_MODES)} (got {self.rollout_mode!r})."
+            )
+        if (self.rollout_source, self.rollout_mode) not in VALID_ROLLOUT_COMBINATIONS:
+            raise ValueError(
+                f"grpo_config: rollout_source={self.rollout_source!r} with rollout_mode={self.rollout_mode!r} "
+                f"is not supported; valid (rollout_source, rollout_mode) pairs: {list(VALID_ROLLOUT_COMBINATIONS)}."
+            )
+        if self.weight_sync_every < 1:
+            raise ValueError(f"grpo_config: 'weight_sync_every' must be >= 1 (got {self.weight_sync_every}).")
+        if self.rollout_mode == "remote_sync" and self.remote_rollout is None:
+            raise ValueError(
+                "grpo_config: rollout_mode='remote_sync' needs a top-level 'remote_rollout_config' section."
             )
 
         # ``report_to`` is intentionally a plain string in this framework
@@ -345,6 +381,10 @@ def get_grpo_config(yaml_config: dict, output_dir: str = "") -> GRPOConfig:
             "use 'per_device_train_batch_size' instead."
         )
         fields.setdefault("per_device_train_batch_size", old_value)
+
+    remote_section = yaml_config.get("remote_rollout_config")
+    if remote_section is not None:
+        fields.setdefault("remote_rollout", RemoteRolloutConfig(**remote_section))
 
     return GRPOConfig(**fields)
 

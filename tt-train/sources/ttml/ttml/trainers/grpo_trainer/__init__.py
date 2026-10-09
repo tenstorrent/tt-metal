@@ -3,11 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .grpo_trainer import (
+    ROLLOUT_MODES,
     ROLLOUT_SOURCES,
+    VALID_ROLLOUT_COMBINATIONS,
     GRPOCompleter,
     GRPOConfig,
     GRPOMonitor,
     GRPOTrainer,
+    RemoteRolloutConfig,
     RolloutBatch,
     RolloutSampler,
     build_rollout_sampler,
