@@ -23,6 +23,7 @@
 #include <hostdevcommon/common_values.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/device_info.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_config.hpp>
@@ -337,10 +338,59 @@ public:
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
+    // Device queries. `P` is a tag from <tt-metalium/device_info.hpp>, e.g. info::l1_alignment, and
+    // `P::return_type` is the type of the property. Only the properties listed below the class are supported.
+
+    // Returns the property of the device at `coord`. Every property is implemented for this form; the two forms
+    // below are built on it. Throws if `coord` is out of bounds or the device is remote (owned by another host).
+    template <class P>
+    typename P::return_type get_info(const MeshCoordinate& coord) const;
+
+    // Returns the property of this mesh, which must be the same on every local device; throws if it is not, or if
+    // the mesh has no local devices. Use get_info_per_device() for properties that can differ between devices.
+    template <class P>
+    typename P::return_type get_info() const {
+        const std::vector<MeshCoordinate> coords = local_coordinates();
+        TT_FATAL(!coords.empty(), "Cannot query a mesh device that has no local devices");
+        typename P::return_type value = get_info<P>(coords.front());
+        for (const MeshCoordinate& coord : coords) {
+            if (!(get_info<P>(coord) == value)) {
+                throw_non_uniform_info(coord);
+            }
+        }
+        return value;
+    }
+
+    // Returns the property of every device in the mesh. Remote devices are marked as remote.
+    template <class P>
+    DistributedMeshContainer<typename P::return_type> get_info_per_device() const {
+        DistributedMeshContainer<typename P::return_type> result(shape());
+        for (const MeshCoordinate& coord : local_coordinates()) {
+            result.at(coord) = MaybeRemote<typename P::return_type>::local(get_info<P>(coord));
+        }
+        return result;
+    }
+
     // Only for internal and testing purposes
     const MeshDeviceImpl& impl() const { return *pimpl_; }
     MeshDeviceImpl& impl() { return *pimpl_; }
+
+private:
+    std::vector<MeshCoordinate> local_coordinates() const;
+    void check_info_coordinate(const MeshCoordinate& coord) const;
+    [[noreturn]] void throw_non_uniform_info(const MeshCoordinate& coord) const;
 };
+
+// Properties supported by MeshDevice::get_info. Each is defined in mesh_device.cpp; asking for any other tag fails
+// to link.
+template <>
+std::uint32_t MeshDevice::get_info<info::l1_alignment>(const MeshCoordinate& coord) const;
+template <>
+std::uint32_t MeshDevice::get_info<info::dram_alignment>(const MeshCoordinate& coord) const;
+template <>
+tt::ARCH MeshDevice::get_info<info::architecture>(const MeshCoordinate& coord) const;
+template <>
+std::string MeshDevice::get_info<info::architecture_name>(const MeshCoordinate& coord) const;
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);
 

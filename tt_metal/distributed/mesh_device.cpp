@@ -17,6 +17,7 @@
 #include <system_mesh.hpp>
 #include <maybe_remote.hpp>
 #include <tt_metal.hpp>
+#include "tt_metal/common/tt_backend_api_types.hpp"
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -2283,5 +2284,52 @@ void MeshDevice::enqueue_to_thread_pool(std::function<void()>&& f) { pimpl_->enq
 void MeshDevice::wait_for_thread_pool() { pimpl_->wait_for_thread_pool(); }
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
+
+std::vector<MeshCoordinate> MeshDevice::local_coordinates() const {
+    std::vector<MeshCoordinate> coords;
+    for (const MeshCoordinate& coord : MeshCoordinateRange(shape())) {
+        if (pimpl_->is_local(coord)) {
+            coords.push_back(coord);
+        }
+    }
+    return coords;
+}
+
+void MeshDevice::check_info_coordinate(const MeshCoordinate& coord) const {
+    // is_local throws if the coordinate is out of bounds of this mesh.
+    TT_FATAL(pimpl_->is_local(coord), "Cannot query the device at {}: it is remote (owned by another host)", coord);
+}
+
+void MeshDevice::throw_non_uniform_info(const MeshCoordinate& coord) const {
+    TT_THROW(
+        "The queried property differs between the devices of this mesh (first mismatch at {}); use "
+        "get_info_per_device() or get_info(coord) instead",
+        coord);
+}
+
+// All of the properties below are architecture-wide today: they come from the Hal of the MetalEnv the mesh was
+// created from, so every local device reports the same value. `coord` is only validated.
+template <>
+std::uint32_t MeshDevice::get_info<info::l1_alignment>(const MeshCoordinate& coord) const {
+    check_info_coordinate(coord);
+    return pimpl_->metal_env().get_hal().get_alignment(HalMemType::L1);
+}
+
+template <>
+std::uint32_t MeshDevice::get_info<info::dram_alignment>(const MeshCoordinate& coord) const {
+    check_info_coordinate(coord);
+    return pimpl_->metal_env().get_hal().get_alignment(HalMemType::DRAM);
+}
+
+template <>
+tt::ARCH MeshDevice::get_info<info::architecture>(const MeshCoordinate& coord) const {
+    check_info_coordinate(coord);
+    return pimpl_->metal_env().get_hal().get_arch();
+}
+
+template <>
+std::string MeshDevice::get_info<info::architecture_name>(const MeshCoordinate& coord) const {
+    return tt::get_string_lowercase(get_info<info::architecture>(coord));
+}
 
 }  // namespace tt::tt_metal::distributed
