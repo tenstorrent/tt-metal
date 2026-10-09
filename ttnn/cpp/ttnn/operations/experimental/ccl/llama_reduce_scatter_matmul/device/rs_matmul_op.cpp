@@ -123,7 +123,9 @@ std::vector<tt::tt_metal::TensorTopology> Matmul_RS::compute_output_topologies(
     // reduce_scatter input is either the caller's rs_tensor (delegate to LlamaReduceScatterDeviceOperation) or, with
     // a second weight, the first matmul's output -- a fresh tensor that carries no meaningful label yet, so its
     // reduce_scatter label is derived from the union label computed here. No honest reduce_scatter label (nullopt,
-    // already warned about): {} keeps the union default for every output.
+    // already reported): the rs output keeps the label of the tensor it scatters -- the delegate returns rs_tensor's
+    // label, the second-weight path the first matmul's -- so the fallback is a function of the inputs alone
+    // (returning {} would hand the framework the union over every tensor argument, rs_tensor included).
     const auto& input_topology = tensor_args.matmul.input_tensor.tensor_topology();
     const auto& mesh_coords = input_topology.mesh_coords();
     const auto union_with = [&](const TensorTopology& weight_topology) {
@@ -134,29 +136,22 @@ std::vector<tt::tt_metal::TensorTopology> Matmul_RS::compute_output_topologies(
     };
     const TensorTopology mm_topology = union_with(tensor_args.matmul.weight_tensor.tensor_topology());
 
-    std::optional<TensorTopology> rs_topology;
     if (tensor_args.second_weight_tensor.has_value()) {
         const auto& rs_input = tensor_args.rs.input_tensor;
-        rs_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
-            mm_topology,
-            operation_attributes.rs_op.cluster_axis,
-            rs_input.device()->shape(),
-            static_cast<uint32_t>(rs_input.logical_shape().rank()),
-            static_cast<int32_t>(operation_attributes.rs_op.dim));
-    } else {
-        const auto delegated =
-            LlamaReduceScatterDeviceOperation::compute_output_topologies(operation_attributes.rs_op, tensor_args.rs);
-        if (!delegated.empty()) {
-            rs_topology = delegated.front();
-        }
+        TensorTopology rs_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
+                                         mm_topology,
+                                         operation_attributes.rs_op.cluster_axis,
+                                         rs_input.device()->shape(),
+                                         static_cast<uint32_t>(rs_input.logical_shape().rank()),
+                                         static_cast<int32_t>(operation_attributes.rs_op.dim))
+                                         .value_or(mm_topology);
+        return {mm_topology, union_with(tensor_args.second_weight_tensor->tensor_topology()), std::move(rs_topology)};
     }
-    if (!rs_topology.has_value()) {
-        return {};
-    }
-    if (tensor_args.second_weight_tensor.has_value()) {
-        return {mm_topology, union_with(tensor_args.second_weight_tensor->tensor_topology()), *rs_topology};
-    }
-    return {mm_topology, *rs_topology};
+    // Exactly one label: LlamaReduceScatterDeviceOperation's hook returns rs_tensor's own label on a refusal.
+    return {
+        mm_topology,
+        LlamaReduceScatterDeviceOperation::compute_output_topologies(operation_attributes.rs_op, tensor_args.rs)
+            .front()};
 }
 
 ttsl::hash::hash_t Matmul_RS::compute_program_hash(

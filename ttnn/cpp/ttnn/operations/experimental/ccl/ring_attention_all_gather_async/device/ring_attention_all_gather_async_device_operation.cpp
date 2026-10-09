@@ -161,8 +161,9 @@ std::vector<tt::tt_metal::TensorTopology> RingAttentionAllGatherAsyncDeviceOpera
     // input gathered along `dim` on `cluster_axis`: Replicate on the cluster axis, that input's placements elsewhere;
     // a collapsed 1-D label is expanded per mesh axis first (all_gather_async convention). The count must match
     // create_output_tensors, which takes the persistent buffers when the first is present; a count that differs from
-    // the inputs is rejected by validation right after this hook, so return {} rather than a partial label. No honest
-    // label for any input (nullopt, already warned about): {} for all.
+    // the inputs is rejected by validation right after this hook, and no per-slot input label exists for it, so {}
+    // rather than a partial label. No honest label for an input (nullopt, already reported): that output keeps its
+    // input's label (returning {} would hand the framework the union over every input and persistent buffer).
     const auto& inputs = tensor_args.input_tensor;
     const auto& persistent = tensor_args.persistent_output_buffer;
     const size_t num_outputs =
@@ -173,12 +174,9 @@ std::vector<tt::tt_metal::TensorTopology> RingAttentionAllGatherAsyncDeviceOpera
     std::vector<tt::tt_metal::TensorTopology> topologies;
     topologies.reserve(inputs.size());
     for (const auto& input : inputs) {
-        const auto output_topology = ttnn::operations::ccl::common::all_gather_output_topology(
-            input, operation_attributes.cluster_axis, operation_attributes.dim);
-        if (!output_topology.has_value()) {
-            return {};
-        }
-        topologies.push_back(*output_topology);
+        topologies.push_back(ttnn::operations::ccl::common::all_gather_output_topology(
+                                 input, operation_attributes.cluster_axis, operation_attributes.dim)
+                                 .value_or(input.tensor_topology()));
     }
     return topologies;
 }

@@ -137,13 +137,11 @@ std::vector<tt::tt_metal::TensorTopology> StridedAllGatherMinimalMatmulAsync::co
     // plain matmul over those operands). The addcmul, fused_ternary_input_a + scalar * matmul * fused_ternary_input_b,
     // is elementwise on the matmul result, so a ternary operand sharded on a mesh axis the matmul result replicates
     // makes the result Shard there -- validation does not constrain the ternary tensors' labels, so they have to be
-    // in the union. No honest all_gather label (already warned about): {} keeps the union default for every slot.
+    // in the union. The delegate returns exactly one label, the input's when it has no honest all_gather label
+    // (already reported), so the chunks' fallback is the union over the inputs alone.
     const auto gathered = StridedAllGatherAsync::compute_output_topologies(
         attributes.strided_all_gather_async_struct,
         StridedAllGatherAsyncInputs{tensor_args.input_tensor, tensor_args.persistent_output_buffer});
-    if (gathered.empty()) {
-        return {};
-    }
     std::vector<std::reference_wrapper<const TensorTopology>> operands{
         std::cref(gathered.front()), std::cref(tensor_args.weight_tensor.tensor_topology())};
     if (tensor_args.bias.has_value()) {

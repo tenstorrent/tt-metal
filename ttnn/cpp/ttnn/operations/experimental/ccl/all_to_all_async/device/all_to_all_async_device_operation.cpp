@@ -194,15 +194,18 @@ std::vector<tt::tt_metal::TensorTopology> AllToAllAsyncDeviceOperation::compute_
     // the mesh BOUNDARY (top row left to right, right column down, bottom row right to left, left column up), not the
     // coordinate (row-major) order a label's coordinates follow. The two agree only on a line (one axis of size > 1):
     // on a 2x4, device (1, 0) holds piece 7 where {8}, [Shard{out_dim}] over row-major coordinates says piece 4. A
-    // label cannot carry the ring order (consumers iterate the storage order), so a mesh with two non-trivial axes
-    // keeps the union default ({}) until the factory indexes the ring by coordinate or the label can express the
-    // walk. No honest label from the helper (nullopt, already warned about): {} as well.
+    // label cannot carry the ring order (consumers iterate the storage order), so on a mesh with two non-trivial axes
+    // the output keeps the input's label until the factory indexes the ring by coordinate or the label can express
+    // the walk. No honest label from the helper (nullopt, already reported): the input's label as well. Returning {}
+    // would instead hand the framework the union over every tensor argument, the caller's persistent intermediate
+    // and output buffers and their stale labels included.
     //
     // On a line the label is spelled over the ring coordinates themselves (get_ring_coordinates(), the list the
     // factory indexes; defined for a 2-D view only, as the factory requires) rather than over the input label's: the
     // helper's whole-mesh rule keeps a collapsed label's coordinates without checking their order, and a label built
     // from an explicit coordinate list (from_host_shards, combine_device_tensors) need not walk the line in order. A
-    // label that does not cover exactly the ring's devices keeps the union default.
+    // label that does not cover exactly the ring's devices keeps the input's label.
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     auto* mesh_device = tensor_args.input_tensor.device();
     const auto& mesh_shape = mesh_device->shape();
     size_t non_trivial_axes = 0;
@@ -210,12 +213,12 @@ std::vector<tt::tt_metal::TensorTopology> AllToAllAsyncDeviceOperation::compute_
         non_trivial_axes += mesh_shape[static_cast<int32_t>(axis)] > 1 ? 1 : 0;
     }
     if (mesh_shape.dims() != 2 || non_trivial_axes > 1) {
-        return {};
+        return {input_topology};
     }
     const auto gathered = ttnn::operations::ccl::common::all_gather_output_topology(
         tensor_args.input_tensor, std::nullopt, static_cast<int32_t>(args.in_dim));
     if (!gathered.has_value()) {
-        return {};
+        return {input_topology};
     }
     const auto output_topology = ttnn::operations::ccl::common::all_to_all_output_topology(
         *gathered,
@@ -224,13 +227,13 @@ std::vector<tt::tt_metal::TensorTopology> AllToAllAsyncDeviceOperation::compute_
         static_cast<uint32_t>(tensor_args.input_tensor.logical_shape().rank()),
         static_cast<int32_t>(args.out_dim));
     if (!output_topology.has_value()) {
-        return {};
+        return {input_topology};
     }
     std::vector<MeshCoordinate> ring_coords = mesh_device->get_view().get_ring_coordinates();
     const auto& label_coords = output_topology->mesh_coords();
     if (label_coords.size() != ring_coords.size() ||
         !std::is_permutation(label_coords.begin(), label_coords.end(), ring_coords.begin())) {
-        return {};
+        return {input_topology};
     }
     return {
         TensorTopology(output_topology->distribution_shape(), output_topology->placements(), std::move(ring_coords))};

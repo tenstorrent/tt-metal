@@ -133,11 +133,14 @@ std::vector<tt::tt_metal::TensorTopology> LlamaReduceScatterCreateHeadsDeviceOpe
     // (test_llama_reduce_scatter_create_heads_async_TG composes q/k/v with ConcatMesh2dToTensor dims=(0, 1) against
     // the row-sliced reduction). So every output carries the reduce_scatter label for scatter dim 2, renumbered to the
     // output layout: Shard{2} -> Shard{1}, Shard{0} stays, Replicate stays. A Shard of dim 1 (summed away) or dim 3
-    // (reshaped into heads) on a non-cluster axis has no output dim this hook can vouch for: {} (union default).
+    // (reshaped into heads) on a non-cluster axis has no output dim this hook can vouch for: every output keeps the
+    // input's label then, as when the helper has no honest label (nullopt, already reported). Returning {} would
+    // instead hand the framework the union over every tensor argument.
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     const auto rs_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
         tensor_args.input_tensor, attributes.cluster_axis, /*scatter_dim=*/2);
     if (!rs_topology.has_value()) {
-        return {};
+        return {input_topology, input_topology, input_topology};
     }
     const auto rank = static_cast<uint32_t>(tensor_args.input_tensor.logical_shape().rank());
     ttnn::operations::ccl::common::TopologyPlacements placements;
@@ -154,7 +157,7 @@ std::vector<tt::tt_metal::TensorTopology> LlamaReduceScatterCreateHeadsDeviceOpe
         } else if (dim == 0u) {
             placements.push_back(Shard{0});
         } else {
-            return {};
+            return {input_topology, input_topology, input_topology};
         }
     }
     const tt::tt_metal::TensorTopology heads_topology(

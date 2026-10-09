@@ -39,14 +39,12 @@ std::vector<tt::tt_metal::TensorTopology> StridedAllGatherAsync::compute_output_
     // The output (or the caller's persistent output buffer, which IS the output) holds every device's `dim` piece
     // along `cluster_axis`: Replicate on the cluster axis, the input's placements elsewhere. The helper expands a
     // collapsed 1-D label to one placement per mesh axis first and refuses a gather that would interleave the shards
-    // of a 1-D-mapped tensor (all_gather_async convention). No honest label (nullopt, already warned about): {}
-    // keeps the union default.
+    // of a 1-D-mapped tensor (all_gather_async convention). No honest label (nullopt, already reported): the output
+    // keeps the input's label (returning {} would hand the framework the union over every tensor argument, the
+    // caller's persistent output buffer and its stale label included).
     const auto output_topology = ttnn::operations::ccl::common::all_gather_output_topology(
         tensor_args.input_tensor, attributes.cluster_axis, static_cast<int32_t>(attributes.dim));
-    if (!output_topology.has_value()) {
-        return {};
-    }
-    return {*output_topology};
+    return {output_topology.value_or(tensor_args.input_tensor.tensor_topology())};
 }
 
 tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(

@@ -125,18 +125,19 @@ std::vector<tt::tt_metal::TensorTopology> LlamaAllGatherMatmulAsyncDeviceOperati
     // multicast cores): Replicate on the cluster axis, input0's placements elsewhere. The matmul of the gathered
     // activation by input1 takes the union-default label of {aggregated, input1} (what launch() gives a plain
     // matmul). `intermediate` is caller-owned scratch outside the return value. No honest gather label (nullopt,
-    // already warned about): {} keeps the union default for both.
-    const auto aggregated_topology = ttnn::operations::ccl::common::all_gather_output_topology(
-        tensor_args.input0, args.cluster_axis, static_cast<int32_t>(args.dim));
-    if (!aggregated_topology.has_value()) {
-        return {};
-    }
+    // already reported): `aggregated` keeps input0's label and the matmul takes the union over that, so the fallback
+    // is a function of the inputs alone (returning {} would hand the framework the union over every tensor argument,
+    // `intermediate` and its stale label included).
+    const TensorTopology aggregated_topology =
+        ttnn::operations::ccl::common::all_gather_output_topology(
+            tensor_args.input0, args.cluster_axis, static_cast<int32_t>(args.dim))
+            .value_or(tensor_args.input0.tensor_topology());
     const std::vector<std::reference_wrapper<const TensorTopology>> operands{
-        std::cref(*aggregated_topology), std::cref(tensor_args.input1.tensor_topology())};
+        std::cref(aggregated_topology), std::cref(tensor_args.input1.tensor_topology())};
     auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(operands);
     TensorTopology matmul_topology(
         std::move(shape), std::move(placements), tensor_args.input0.tensor_topology().mesh_coords());
-    return {std::move(matmul_topology), *aggregated_topology};
+    return {std::move(matmul_topology), aggregated_topology};
 }
 
 ttsl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_hash(

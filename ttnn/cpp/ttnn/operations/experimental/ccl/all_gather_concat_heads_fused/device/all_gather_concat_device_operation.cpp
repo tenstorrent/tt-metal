@@ -84,17 +84,19 @@ std::vector<tt::tt_metal::TensorTopology> AllGatherConcatDeviceOperation::comput
     using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
     // The heads are gathered along `dim` on `cluster_axis` and concatenated into [seq, 1, batch, heads * head_dim]:
     // Replicate on the cluster axis. That reshape renumbers the output's dims, so a Shard any other axis still holds
-    // would name an input dim the output no longer has in that position -- {} (union default) then, rather than a
-    // label this hook cannot vouch for. `buffer_tensor` is caller-owned scratch outside the return value. No honest
-    // gather label (nullopt, already warned about): {}.
+    // would name an input dim the output no longer has in that position: the output keeps the input's label then,
+    // rather than one this hook cannot vouch for, as it does when the helper has no honest gather label (nullopt,
+    // already reported). Returning {} would instead hand the framework the union over every tensor argument,
+    // `buffer_tensor` (caller-owned scratch outside the return value) and its stale label included.
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     const auto output_topology = ttnn::operations::ccl::common::all_gather_output_topology(
         tensor_args.input_tensor, args.cluster_axis, static_cast<int32_t>(args.dim));
     if (!output_topology.has_value()) {
-        return {};
+        return {input_topology};
     }
     for (const auto& placement : output_topology->placements()) {
         if (std::holds_alternative<Shard>(placement)) {
-            return {};
+            return {input_topology};
         }
     }
     return {*output_topology};

@@ -257,12 +257,13 @@ std::vector<tt::tt_metal::TensorTopology> AllToAllAsyncGenericDeviceOperation::c
     // by the input's device-storage coordinates (get_linearized_index_from_physical_coord), not by the label's
     // coordinate order the pure overloads keep, so that label is spelled over the storage coordinates
     // (over_storage_ring_order, the reduce_scatter Tensor overload's rule); with a cluster_axis the ring rank is the
-    // coordinate value and the label is kept as is. No honest label (nullopt, already warned about): {} keeps the
-    // union default.
+    // coordinate value and the label is kept as is. No honest label (nullopt, already reported): the output keeps the
+    // input's label. Returning {} would instead hand the framework the union over every tensor argument.
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     const auto gathered = ttnn::operations::ccl::common::all_gather_output_topology(
         tensor_args.input_tensor, operation_attributes.cluster_axis, static_cast<int32_t>(operation_attributes.in_dim));
     if (!gathered.has_value()) {
-        return {};
+        return {input_topology};
     }
     const auto output_topology = ttnn::operations::ccl::common::over_storage_ring_order(
         ttnn::operations::ccl::common::all_to_all_output_topology(
@@ -274,10 +275,7 @@ std::vector<tt::tt_metal::TensorTopology> AllToAllAsyncGenericDeviceOperation::c
         tensor_args.input_tensor,
         operation_attributes.cluster_axis,
         "all_to_all_async_generic");
-    if (!output_topology.has_value()) {
-        return {};
-    }
-    return {*output_topology};
+    return {output_topology.value_or(input_topology)};
 }
 
 ttsl::hash::hash_t AllToAllAsyncGenericDeviceOperation::compute_program_hash(

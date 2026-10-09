@@ -445,26 +445,23 @@ std::vector<tt::tt_metal::TensorTopology> AllGatherMinimalMatmulAsyncOp::compute
     // fused_ternary_input_b, is elementwise on the matmul result, so a ternary operand sharded on a mesh axis the
     // matmul result replicates makes the result Shard there -- validation does not constrain the ternary tensors'
     // labels, so they have to be in the union; SwiGLU acts on the result alone and adds nothing. No honest gather
-    // label (nullopt, already warned about): {} keeps the union default for every slot.
-    const auto activation_topology = ttnn::operations::ccl::common::all_gather_output_topology(
-        tensor_args.input_tensor, attributes.cluster_axis, /*gathered_dim=*/-1);
-    if (!activation_topology.has_value()) {
-        return {};
-    }
+    // label (nullopt, already reported): that slot keeps the label of the tensor it gathers (the activation's, the
+    // weight's) and the chunks take the union over those, so the fallback is a function of the inputs alone.
+    // Returning {} would instead hand the framework the union over every tensor argument, the caller's persistent
+    // output buffer and its stale label included.
+    const TensorTopology activation_topology =
+        ttnn::operations::ccl::common::all_gather_output_topology(
+            tensor_args.input_tensor, attributes.cluster_axis, /*gathered_dim=*/-1)
+            .value_or(tensor_args.input_tensor.tensor_topology());
     const bool fsdp_fused = attributes.fsdp_cluster_axis.has_value();
-    std::optional<TensorTopology> weight_topology;
-    if (fsdp_fused) {
-        weight_topology = ttnn::operations::ccl::common::all_gather_output_topology(
-            tensor_args.weight_tensor, attributes.fsdp_cluster_axis, /*gathered_dim=*/-2);
-        if (!weight_topology.has_value()) {
-            return {};
-        }
-    } else {
-        weight_topology = tensor_args.weight_tensor.tensor_topology();
-    }
+    const TensorTopology weight_topology =
+        fsdp_fused ? ttnn::operations::ccl::common::all_gather_output_topology(
+                         tensor_args.weight_tensor, attributes.fsdp_cluster_axis, /*gathered_dim=*/-2)
+                         .value_or(tensor_args.weight_tensor.tensor_topology())
+                   : tensor_args.weight_tensor.tensor_topology();
 
     std::vector<std::reference_wrapper<const TensorTopology>> operands{
-        std::cref(*activation_topology), std::cref(*weight_topology)};
+        std::cref(activation_topology), std::cref(weight_topology)};
     if (tensor_args.bias_tensor.has_value()) {
         operands.emplace_back(tensor_args.bias_tensor->tensor_topology());
     }
@@ -479,9 +476,9 @@ std::vector<tt::tt_metal::TensorTopology> AllGatherMinimalMatmulAsyncOp::compute
     const size_t num_outputs = compute_output_specs(attributes, tensor_args).size();
     std::vector<TensorTopology> topologies;
     topologies.reserve(num_outputs);
-    topologies.push_back(*activation_topology);
+    topologies.push_back(activation_topology);
     if (fsdp_fused) {
-        topologies.push_back(*weight_topology);
+        topologies.push_back(weight_topology);
     }
     while (topologies.size() < num_outputs) {
         topologies.push_back(matmul_topology);

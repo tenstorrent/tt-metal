@@ -92,8 +92,10 @@ std::vector<tt::tt_metal::TensorTopology> MatmulReduceScatterAsyncDeviceOperatio
     // its own input. The host prim always passes cluster_axis = nullopt, and the program factory ranks that
     // whole-mesh ring by `tensor_args.input`'s device-storage coordinates (get_linearized_index_from_physical_coord),
     // so the label is spelled over those coordinates (over_storage_ring_order, as the helper's Tensor overload does
-    // for a plain reduce_scatter) rather than over the matmul label's. No honest label (nullopt, already warned
-    // about): {} keeps the union default for both.
+    // for a plain reduce_scatter) rather than over the matmul label's. No honest label (nullopt, already reported):
+    // the reduce_scatter output keeps the matmul label -- the label of the tensor it scatters -- so the fallback is a
+    // function of the inputs alone (returning {} would hand the framework the union over every tensor argument, the
+    // caller's persistent output buffer and its stale label included).
     const auto& input_topology = tensor_args.input.tensor_topology();
     std::vector<std::reference_wrapper<const TensorTopology>> operands{
         std::cref(input_topology), std::cref(tensor_args.weight.tensor_topology())};
@@ -112,10 +114,8 @@ std::vector<tt::tt_metal::TensorTopology> MatmulReduceScatterAsyncDeviceOperatio
             static_cast<int32_t>(args.reduce_scatter_params.dim)),
         tensor_args.input,
         args.reduce_scatter_params.cluster_axis);
-    if (!reduce_scatter_topology.has_value()) {
-        return {};
-    }
-    return {std::move(mm_topology), std::move(*reduce_scatter_topology)};
+    TensorTopology output_topology = std::move(reduce_scatter_topology).value_or(mm_topology);
+    return {std::move(mm_topology), std::move(output_topology)};
 }
 
 ttsl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_hash(
