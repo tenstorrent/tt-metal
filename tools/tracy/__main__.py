@@ -181,8 +181,7 @@ def main():
     parser.add_option(
         "--profiler-capture-perf-counters",
         type="string",
-        help="Comma-separated list of performance counter groups to capture: fpu, pack, unpack, l1_0..l1_5, instrn, "
-        "all; on Quasar also l1_client=<subport*8 + event> for the l1_client event counter",
+        help="Comma-separated list of performance counter groups to capture: fpu, pack, unpack, l1_0..l1_5, instrn, all",
         action="callback",
         callback=split_comma_list,
         dest="perf_counter_groups",

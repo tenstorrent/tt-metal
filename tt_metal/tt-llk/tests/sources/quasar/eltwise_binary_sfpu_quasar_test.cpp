@@ -16,7 +16,6 @@
 #include <cstdint>
 
 #include "ckernel.h"
-#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -47,7 +46,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             // DEST DVALID handshake: T0 is the producer. The producer differs
@@ -85,7 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             if constexpr (!unpack_to_dest)
@@ -151,7 +150,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const DataFormat math_format = static_cast<DataFormat>(formats.math);
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             // DEST DVALID handshake. On the FPU path T1 is both the datacopy
@@ -189,7 +188,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             if constexpr (!unpack_to_dest)
@@ -259,7 +258,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             // PACK runs without the L1_TO_L1 producer chain in isolated modes.
@@ -286,7 +285,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)

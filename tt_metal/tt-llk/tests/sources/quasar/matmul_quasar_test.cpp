@@ -7,7 +7,6 @@
 #include <cstdio>
 
 #include "ckernel.h"
-#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -48,7 +47,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
         // Matmul flips the unpacker roles: _llk_unpack_matmul_init_ arg0 drives UNPACR1/SrcB, arg1 drives
         // UNPACR0/SrcA -- so operand A is recorded under Unp1 and operand B under Unp0 (matches product).
@@ -63,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
@@ -112,7 +111,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr ckernel::TensorShape tensor_shape_B = ckernel::make_tensor_shape(in1_face_r_dim, in1_face_c_dim, num_faces_r_dim_B, num_faces_c_dim_B);
 #endif
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         // Only end-to-end and math-isolate runs use the FPU→PACK dest-dvalid
         // handshake.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -132,7 +131,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
@@ -190,7 +189,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr ckernel::TensorShape output_shape = ckernel::make_tensor_shape(in0_face_r_dim, in1_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_B);
 #endif
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
@@ -209,7 +208,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }

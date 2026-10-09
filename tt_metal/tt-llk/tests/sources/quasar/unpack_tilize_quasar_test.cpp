@@ -7,7 +7,6 @@
 #include <cstdio>
 
 #include "ckernel.h"
-#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -35,7 +34,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         if constexpr (unpack_to_dest)
         {
             // UNP_DEST and PACK share DEST. Keep them on the producer/consumer
@@ -104,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
         std::uint32_t y_stride_external         = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 
@@ -192,11 +191,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces       = params.num_faces;
     const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
 #endif
-    // Every thread opens both zones even when it has no work here: the rendezvous waits for all four.
+    if constexpr (!unpack_to_dest)
     {
-        START_PERF_MEASURE("INIT")
-        if constexpr (!unpack_to_dest)
         {
+            ZONE_SCOPED("INIT")
             // Only end-to-end and math-isolate runs use the FPU→PACK
             // dest-dvalid handshake.
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -209,13 +207,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(
                 num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
+            PROFILER_SYNC();
         }
-        PROFILER_SYNC();
-    }
-    {
-        START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (!unpack_to_dest)
         {
+            ZONE_SCOPED("TILE_LOOP")
             if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
             {
             }
@@ -257,8 +252,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
                 }
             }
+            PROFILER_SYNC();
         }
-        PROFILER_SYNC();
     }
 }
 
@@ -283,7 +278,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         // PACK_ISOLATE and SrcA/SrcB L1_CONGESTION have no active DEST producer,
         // so they must clear the persisted pack wait mask. UNP_DEST congestion
         // instead uses the unpack→pack chain because both threads share DEST.
@@ -305,7 +300,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {

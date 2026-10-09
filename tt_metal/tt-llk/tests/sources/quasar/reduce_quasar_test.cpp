@@ -7,7 +7,6 @@
 #include <cstdio>
 
 #include "ckernel.h"
-#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -38,7 +37,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         const auto bfd_a =
             ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
         const auto bfd_b =
@@ -50,7 +49,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
@@ -111,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t max_tiles_dest    = is_fp32_dest_acc_en ? 4 : 8;
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
@@ -135,7 +134,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
@@ -218,7 +217,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t max_tiles_dest    = is_fp32_dest_acc_en ? 4 : 8;
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
@@ -238,7 +237,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }

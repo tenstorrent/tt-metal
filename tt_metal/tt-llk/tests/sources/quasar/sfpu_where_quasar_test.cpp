@@ -13,7 +13,6 @@
 #include <cstdint>
 
 #include "ckernel.h"
-#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -45,7 +44,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     LLK_ASSERT(TILE_CNT == 3, "Where stages three Dest tiles (cond, true, false)");
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
             ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
@@ -86,7 +85,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             if constexpr (!unpack_to_dest)
@@ -144,7 +143,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     DataFormat src_format = static_cast<DataFormat>(formats.math);
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
 
         if constexpr (!unpack_to_dest)
@@ -183,7 +182,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             if constexpr (!unpack_to_dest)
@@ -260,7 +259,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
             ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
@@ -290,7 +289,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)

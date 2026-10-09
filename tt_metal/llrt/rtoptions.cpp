@@ -1177,7 +1177,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_PROFILE_PERF_COUNTERS
         // Bitfield selecting perf counter groups. Only one L1 bank bit may be set per run.
-        // Bits 16-24 select the Quasar l1_client event counter, subport*8 + event (0 = off).
         // Default: 0 (disabled)
         // Usage: export TT_METAL_PROFILE_PERF_COUNTERS=47
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:

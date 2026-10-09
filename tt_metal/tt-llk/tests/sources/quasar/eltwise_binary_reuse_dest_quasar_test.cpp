@@ -8,7 +8,6 @@
 #include <cstdio>
 
 #include "ckernel.h"
-#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -46,7 +45,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t unp_sel_phase2 = (REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         // Setup data valid scheme
         set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
 
@@ -60,7 +59,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
@@ -130,7 +129,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
 #endif
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         // L1_TO_L1 / MATH_ISOLATE keep the math↔pack handshake: set up FPU→PACK dest-dvalid.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
@@ -143,7 +142,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         const int num_total_tiles = INPUT_NUM_TILES_IN_BLOCK * INPUT_NUM_BLOCKS;
         const int tiles_in_block  = OUTPUT_NUM_TILES_IN_BLOCK;
         const int num_tiles_accum = INPUT_NUM_TILES_IN_BLOCK / tiles_in_block;
@@ -218,7 +217,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
@@ -237,7 +236,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         const int output_tiles_in_block = OUTPUT_NUM_TILES_IN_BLOCK;
         const int output_num_blocks     = OUTPUT_NUM_BLOCKS;
 

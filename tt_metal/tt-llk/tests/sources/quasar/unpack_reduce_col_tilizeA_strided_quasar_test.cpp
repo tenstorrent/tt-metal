@@ -6,7 +6,6 @@
 #include <cstdio>
 
 #include "ckernel.h"
-#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -40,7 +39,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         // SrcA is tilized out of a row-major tensor, so its descriptor must address L1 in units of a single
         // 16-datum row (y_dim = z_dim = 1) for every tile shape.
         const auto bfd_a = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(
@@ -57,7 +56,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -117,7 +116,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         // Only end-to-end and math-isolate runs use the FPU→PACK dest-dvalid
         // handshake.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -132,7 +131,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
@@ -193,7 +192,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
@@ -214,7 +213,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }

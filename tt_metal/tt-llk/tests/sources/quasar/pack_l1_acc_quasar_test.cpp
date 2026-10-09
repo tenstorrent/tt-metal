@@ -6,7 +6,6 @@
 #include <cstdio>
 
 #include "ckernel.h"
-#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -39,7 +38,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         if constexpr (unpack_to_dest)
         {
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
@@ -81,7 +80,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -152,11 +151,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t INPUT_NUM_BLOCKS          = params.INPUT_NUM_BLOCKS;
 #endif
-    // Every thread opens both zones even when it has no work here: the rendezvous waits for all four.
+    if constexpr (!unpack_to_dest)
     {
-        START_PERF_MEASURE("INIT")
-        if constexpr (!unpack_to_dest)
         {
+            ZONE_SCOPED("INIT")
             // Only end-to-end and math-isolate runs use the FPU→PACK
             // dest-dvalid handshake.
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -169,13 +167,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
                 num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
+            PROFILER_SYNC();
         }
-        PROFILER_SYNC();
-    }
-    {
-        START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (!unpack_to_dest)
         {
+            ZONE_SCOPED("TILE_LOOP")
             const std::uint32_t tiles_in_block = OUTPUT_NUM_TILES_IN_BLOCK;
             const std::uint32_t num_blocks     = static_cast<std::uint32_t>(INPUT_NUM_BLOCKS);
 
@@ -221,8 +216,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                 }
             }
+            PROFILER_SYNC();
         }
-        PROFILER_SYNC();
     }
 }
 
@@ -251,7 +246,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        START_PERF_MEASURE("INIT")
+        ZONE_SCOPED("INIT")
         // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
@@ -279,7 +274,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        START_PERF_MEASURE("TILE_LOOP")
+        ZONE_SCOPED("TILE_LOOP")
         const std::uint32_t output_num_blocks     = static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS);
         const std::uint32_t output_tiles_in_block = OUTPUT_NUM_TILES_IN_BLOCK;
 
