@@ -48,3 +48,12 @@ ring sizes are tried 24 -> 16 -> 12 and the first that fits wins; at 24 slots on
     Dropped.
 Probe switches left in (env, inert by default): MIMO_FL_MT, MIMO_FL_DRING, MIMO_FL_DCH, MIMO_FL_HPIECES,
 MIMO_FL_LINK_DEPTH, MIMO_FL_RDOWN, MIMO_FL_PCD_R, MIMO_FL_GU_FULL_SYNC, MIMO_FL_WAITZ (+ GU_ACQ zone).
+
+## Final
+Perf (us per expert, M 32 / 128 / 160 / 256 / 512 / 2048 / 5120):
+bfp8/bfp8 34.1 / 40.8 / 44.0 / 50.7 / 73.5 / 275.4 / 681.7 (plan and output unchanged, bit-identical);
+bfp8 x + bf16 h 34.2 / 41.9 / 44.2 / 55.2 / 102.0 / 382.8 / 955.9; bf16 x + bfp8 h 34.2 / 41.0 / 44.1 / 49.5 / 91.4 /
+366.2 / 917.0; bf16/bf16 34.3 / 41.8 / 44.2 / 55.7 / 100.2 / 374.5 / 933.5.
+Accuracy (LoFi, layer 4 real input, rel L2 vs fp32 on the same bits): 0.0188 / 0.0130 / 0.0120 / 0.0101.
+Unit tests (correctness): 21/21. Determinism (test_flat_stress.py, 2x4 mesh, regimes switching every 10k calls):
+2,000,000 mesh calls (16M chip calls), 1,999,972 compared bit-exact, all markers 0, no hang (1 h 50 min).
