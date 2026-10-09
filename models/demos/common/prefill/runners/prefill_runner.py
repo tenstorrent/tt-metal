@@ -33,6 +33,7 @@ from models.demos.common.prefill.runners.runner_utils import d2d_activation_rows
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_width as d2d_width
 from models.demos.common.prefill.runners.runner_utils import make_h2d_spec, num_mtp_tokens, open_mesh_device
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
 
 def _apply_manifest_env():
@@ -119,6 +120,9 @@ _L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_si
 if MTP_LEVELS:
     _L1_SMALL_SIZE += 512
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
+# Primary KV cache format. Unset leaves the adapter's own default (bf16 for GLM); dense-MLA models reject
+# any explicit format, so only the sparse models' manifests set this.
+SCALED_FP8_KV_CACHE = os.environ.get("PREFILL_SCALED_FP8_KV_CACHE", "0") == "1"
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
 
 assert not (MTP_LEVELS and USE_TRACE), (
@@ -665,7 +669,7 @@ def main() -> None:
         dflash_checkpoint_path=DFLASH_MODEL,
         mtp_levels=MTP_LEVELS,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
-        sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
+        sparse_kv_cache_format=MlaKvCacheFormat.SCALED_FP8 if SCALED_FP8_KV_CACHE else None,
         use_trace=USE_TRACE,
         overlap_shared_expert_with_dispatch=os.environ.get("PREFILL_OVERLAP_SHARED_EXPERT", "1") == "1",
     )
