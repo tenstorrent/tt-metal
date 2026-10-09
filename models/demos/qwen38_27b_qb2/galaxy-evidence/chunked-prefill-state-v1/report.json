@@ -1,0 +1,28 @@
+{
+  "original_plugin_sha": "b7e4292e4193cba20abe9c7c68ce489201b2e36b",
+  "fixed_plugin_sha": "e5b02d58bda26ee326fe0e7cbed9e4828adb9426",
+  "repository": "https://github.com/anatarajan-tt/vllm-tt-plugin",
+  "branch": "anatarajan/qwen38-chunked-state-slots-20261009",
+  "upstream_write_permission": false,
+  "current_model_chunked_prefill_enabled": false,
+  "deployed": false,
+  "hardware_qualified": false,
+  "results": {
+    "before": {
+      "tests": 19,
+      "failures": 4,
+      "errors": 0,
+      "skipped": 0
+    },
+    "after": {
+      "tests": 167,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "source_sha256": {
+    "src/vllm_tt_plugin/model_runner.py": "d4d65c6373bb1f9e7ad223ec26c134135b3e61d666689f1e14394b16054def4f",
+    "tests/test_state_slots.py": "de9f556c2e52daf731b6dbf248b8d9f1ad15b9a9a41a382952e481bac9bf1a2c"
+  }
+}

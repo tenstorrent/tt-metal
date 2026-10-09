@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="4" skipped="0" tests="19" time="6.821" timestamp="2026-10-09T06:42:56.000074+00:00" hostname="bh-glx-EXP-d02u07"><testcase classname="tests.test_state_slots" name="test_state_follows_the_request_across_row_moves" time="0.153" /><testcase classname="tests.test_state_slots" name="test_accepting_the_decode_remap_advances_the_ownership_map" time="0.000" /><testcase classname="tests.test_state_slots" name="test_release_keeps_a_merely_unscheduled_request" time="0.000" /><testcase classname="tests.test_state_slots" name="test_preemption_frees_the_slot_a_later_prefill_needs" time="0.000" /><testcase classname="tests.test_state_slots" name="test_a_resumed_preempted_request_gets_a_slot_and_a_valid_remap" time="0.000" /><testcase classname="tests.test_state_slots" name="test_remap_carries_off_batch_state" time="0.000" /><testcase classname="tests.test_state_slots" name="test_chunked_prefill_keeps_state_when_an_earlier_request_finishes" time="0.000"><failure message="assert [0] == [1]&#10;  &#10;  At index 0 diff: 0 != 1&#10;  Use -v to get more diff">def test_chunked_prefill_keeps_state_when_an_earlier_request_finishes():
+        r = _runner()
+        assert _prefill(r, ["A", "B"]) == [0, 1]
+        state = ["A", "B"] + [None] * (SLOTS - 2)
+        _release(r, finished=["A"])
+        r.requests.pop("A")
+
+        # B's next chunk arrives at host row 0. Its recurrent state is still in
+        # device slot 1: allocating slot 0 does not copy or reset that state.
+&gt;       assert _prefill(r, ["B"]) == [1]
+E       assert [0] == [1]
+E
+E         At index 0 diff: 0 != 1
+E         Use -v to get more diff
+
+tests/test_state_slots.py:260: AssertionError</failure></testcase><testcase classname="tests.test_state_slots" name="test_prefill_continuations_reserve_their_state_before_new_rows[rows0]" time="0.001"><failure message="AssertionError: continuation read another request's state&#10;assert 'A' == 'B'&#10;  &#10;  - B&#10;  + A">rows = ['B', 'A']
+
+    @pytest.mark.parametrize("rows", [["B", "A"], ["C", "A", "B"]])
+    def test_prefill_continuations_reserve_their_state_before_new_rows(rows):
+        r = _runner()
+        assert _prefill(r, ["A", "B"]) == [0, 1]
+        state = ["A", "B"] + [None] * (SLOTS - 2)
+
+        slots = _prefill(r, rows)
+        for req_id, slot in zip(rows, slots):
+            if req_id == "C":
+                assert state[slot] is None, "new prefill overwrote a continuation"
+                state[slot] = req_id
+            else:
+&gt;               assert state[slot] == req_id, "continuation read another request's state"
+E               AssertionError: continuation read another request's state
+E               assert 'A' == 'B'
+E
+E                 - B
+E                 + A
+
+tests/test_state_slots.py:278: AssertionError</failure></testcase><testcase classname="tests.test_state_slots" name="test_prefill_continuations_reserve_their_state_before_new_rows[rows1]" time="0.000"><failure message="AssertionError: new prefill overwrote a continuation&#10;assert 'A' is None">rows = ['C', 'A', 'B']
+
+    @pytest.mark.parametrize("rows", [["B", "A"], ["C", "A", "B"]])
+    def test_prefill_continuations_reserve_their_state_before_new_rows(rows):
+        r = _runner()
+        assert _prefill(r, ["A", "B"]) == [0, 1]
+        state = ["A", "B"] + [None] * (SLOTS - 2)
+
+        slots = _prefill(r, rows)
+        for req_id, slot in zip(rows, slots):
+            if req_id == "C":
+&gt;               assert state[slot] is None, "new prefill overwrote a continuation"
+E               AssertionError: new prefill overwrote a continuation
+E               assert 'A' is None
+
+tests/test_state_slots.py:275: AssertionError</failure></testcase><testcase classname="tests.test_state_slots" name="test_chunked_prefill_uses_the_state_location_after_interleaved_decode" time="0.001"><failure message="assert [1, 2] == [2, 1]&#10;  &#10;  At index 0 diff: 1 != 2&#10;  Use -v to get more diff">def test_chunked_prefill_uses_the_state_location_after_interleaved_decode():
+        r = _runner()
+        assert _prefill(r, ["A", "B", "D"]) == [0, 1, 2]
+        state = ["A", "B", "D"] + [None] * (SLOTS - 3)
+        # D decodes while A/B still have prompt chunks to compute. The full
+        # permutation moves A/B too; their next chunks must use the new owners.
+        state = _gather(state, _decode(r, ["D"]))
+        _assert_state_found(r, state)
+&gt;       assert _prefill(r, ["B", "A"]) == [state.index("B"), state.index("A")]
+E       assert [1, 2] == [2, 1]
+E
+E         At index 0 diff: 1 != 2
+E         Use -v to get more diff
+
+tests/test_state_slots.py:290: AssertionError</failure></testcase><testcase classname="tests.test_state_slots" name="test_preemption_releases_its_state_slot" time="0.000" /><testcase classname="tests.test_state_slots" name="test_slot_exhaustion_fails_instead_of_guessing" time="0.000" /><testcase classname="tests.test_state_slots" name="test_more_decode_rows_than_slots_raises" time="0.000" /><testcase classname="tests.test_state_slots" name="test_a_clean_map_is_silent_and_a_broken_one_raises" time="0.000" /><testcase classname="tests.test_state_slots" name="test_a_decoding_request_without_a_slot_raises" time="0.000" /><testcase classname="tests.test_state_slots" name="test_cancelling_an_older_request_keeps_a_reused_slots_live_session" time="0.000" /><testcase classname="tests.test_state_slots" name="test_the_model_is_told_about_a_gather_only_once_it_is_accepted" time="0.000" /><testcase classname="tests.test_state_slots" name="test_identity_gathers_report_nothing_to_the_model" time="0.000" /><testcase classname="tests.test_state_slots" name="test_a_model_without_the_move_hook_still_releases" time="0.000" /></testsuite></testsuites>

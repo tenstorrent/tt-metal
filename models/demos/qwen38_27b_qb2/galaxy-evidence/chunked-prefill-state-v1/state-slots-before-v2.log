@@ -1,0 +1,98 @@
+......FFFF.........                                                      [100%]
+=================================== FAILURES ===================================
+______ test_chunked_prefill_keeps_state_when_an_earlier_request_finishes _______
+
+    def test_chunked_prefill_keeps_state_when_an_earlier_request_finishes():
+        r = _runner()
+        assert _prefill(r, ["A", "B"]) == [0, 1]
+        state = ["A", "B"] + [None] * (SLOTS - 2)
+        _release(r, finished=["A"])
+        r.requests.pop("A")
+
+        # B's next chunk arrives at host row 0. Its recurrent state is still in
+        # device slot 1: allocating slot 0 does not copy or reset that state.
+>       assert _prefill(r, ["B"]) == [1]
+E       assert [0] == [1]
+E
+E         At index 0 diff: 0 != 1
+E         Use -v to get more diff
+
+tests/test_state_slots.py:260: AssertionError
+____ test_prefill_continuations_reserve_their_state_before_new_rows[rows0] _____
+
+rows = ['B', 'A']
+
+    @pytest.mark.parametrize("rows", [["B", "A"], ["C", "A", "B"]])
+    def test_prefill_continuations_reserve_their_state_before_new_rows(rows):
+        r = _runner()
+        assert _prefill(r, ["A", "B"]) == [0, 1]
+        state = ["A", "B"] + [None] * (SLOTS - 2)
+
+        slots = _prefill(r, rows)
+        for req_id, slot in zip(rows, slots):
+            if req_id == "C":
+                assert state[slot] is None, "new prefill overwrote a continuation"
+                state[slot] = req_id
+            else:
+>               assert state[slot] == req_id, "continuation read another request's state"
+E               AssertionError: continuation read another request's state
+E               assert 'A' == 'B'
+E
+E                 - B
+E                 + A
+
+tests/test_state_slots.py:278: AssertionError
+____ test_prefill_continuations_reserve_their_state_before_new_rows[rows1] _____
+
+rows = ['C', 'A', 'B']
+
+    @pytest.mark.parametrize("rows", [["B", "A"], ["C", "A", "B"]])
+    def test_prefill_continuations_reserve_their_state_before_new_rows(rows):
+        r = _runner()
+        assert _prefill(r, ["A", "B"]) == [0, 1]
+        state = ["A", "B"] + [None] * (SLOTS - 2)
+
+        slots = _prefill(r, rows)
+        for req_id, slot in zip(rows, slots):
+            if req_id == "C":
+>               assert state[slot] is None, "new prefill overwrote a continuation"
+E               AssertionError: new prefill overwrote a continuation
+E               assert 'A' is None
+
+tests/test_state_slots.py:275: AssertionError
+____ test_chunked_prefill_uses_the_state_location_after_interleaved_decode _____
+
+    def test_chunked_prefill_uses_the_state_location_after_interleaved_decode():
+        r = _runner()
+        assert _prefill(r, ["A", "B", "D"]) == [0, 1, 2]
+        state = ["A", "B", "D"] + [None] * (SLOTS - 3)
+        # D decodes while A/B still have prompt chunks to compute. The full
+        # permutation moves A/B too; their next chunks must use the new owners.
+        state = _gather(state, _decode(r, ["D"]))
+        _assert_state_found(r, state)
+>       assert _prefill(r, ["B", "A"]) == [state.index("B"), state.index("A")]
+E       assert [1, 2] == [2, 1]
+E
+E         At index 0 diff: 1 != 2
+E         Use -v to get more diff
+
+tests/test_state_slots.py:290: AssertionError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/serving_env/lib/python3.10/site-packages/torch/jit/_script.py:365: 14 warnings
+  /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/serving_env/lib/python3.10/site-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_state_slots.py::test_chunked_prefill_keeps_state_when_an_earlier_request_finishes
+FAILED tests/test_state_slots.py::test_prefill_continuations_reserve_their_state_before_new_rows[rows0]
+FAILED tests/test_state_slots.py::test_prefill_continuations_reserve_their_state_before_new_rows[rows1]
+FAILED tests/test_state_slots.py::test_chunked_prefill_uses_the_state_location_after_interleaved_decode
+4 failed, 15 passed, 16 warnings in 6.82s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

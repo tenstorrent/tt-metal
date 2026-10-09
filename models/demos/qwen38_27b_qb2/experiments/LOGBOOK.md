@@ -857,3 +857,29 @@ future sweeps; the active immutable source was not edited.
   work. The near-256K/C32 cell is now active; no full sweep pass is claimed yet.
 
 [Diagnostic source and launch](../galaxy-evidence/hf-layer-reference-v1/README.md).
+
+## Oct 9, 06:38-06:49 UTC: prefill scheduling review and state-slot prerequisite
+
+- Confirmed the installed plugin pin already supports decode interleaving and
+  scheduler token chunks. Qwen disables chunked prefill, so its internal model
+  chunks bound memory without allowing the scheduler to insert decode between
+  them. Smaller scheduling quanta need model qualification before enablement.
+- Found and reproduced a plugin allocator defect for continuing prefills:
+  changing host rows can change a request's state slot without moving its
+  recurrent state. New arrivals can also take a continuation's slot. All four
+  corrected regression cases fail on the original pin; 167 surrounding tests
+  pass after preserving every live owner's slot. Hardware remains untested.
+- One intermediate test assumed the wrong exact decode permutation. Replaced
+  that assumption with the independently gathered physical-state locations,
+  then reran both arms. An earlier command named a missing host test path and
+  collected no tests; failed receipts are preserved.
+- Upstream plugin main still contains the same allocator but has advanced to
+  vLLM 0.29. Kept this fix on the deployed vLLM 0.26 plugin source in a separate
+  worktree. Upstream push failed because this account has read-only access;
+  published `e5b02d5` under `anatarajan/qwen38-chunked-state-slots-20261009`
+  in `anatarajan-tt/vllm-tt-plugin`. Pre-commit passed before commit.
+- This is a prerequisite for a future chunked-prefill experiment, not the
+  cause of the current GPQA misses and not an enabled model/runtime change.
+  Original near-256K HTTP work and all three followers remain active.
+
+[Reproduction and remaining work](../galaxy-evidence/chunked-prefill-state-v1/README.md).

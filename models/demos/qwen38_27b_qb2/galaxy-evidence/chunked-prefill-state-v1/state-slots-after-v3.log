@@ -1,0 +1,17 @@
+........................................................................ [ 43%]
+........................................................................ [ 86%]
+.......................                                                  [100%]
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../../kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/serving_env/lib/python3.10/site-packages/torch/jit/_script.py:365: 14 warnings
+  /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/serving_env/lib/python3.10/site-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+167 passed, 16 warnings in 7.31s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

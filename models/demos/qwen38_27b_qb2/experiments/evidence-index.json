@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T06:36:13.976296+00:00",
+  "generated_at": "2026-10-09T06:55:58.203200+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -39,8 +39,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 67905,
-      "sha256": "d139dab3b762af3ff673ef8fa93eaf102af899ca4df25b03e2fd078ac0ef658d"
+      "bytes": 69656,
+      "sha256": "7f63641edb8f32c3312900e3d8ee574cf6e79c1f67ce104ba0ec50b7d960e493"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -992,6 +992,66 @@
         "errors": 0,
         "skipped": 0
       }
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-state-v1/README.md",
+      "scope": "CPU-only recurrent-state ownership regression; not hardware or GPQA qualification",
+      "bytes": 3900,
+      "sha256": "6798e4aec3203d40f5bf14d97fce86528b459e2c5c42bc3bf6014be979ab1ccf"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-state-v1/report.json",
+      "scope": "CPU-only recurrent-state ownership regression; not hardware or GPQA qualification",
+      "bytes": 864,
+      "sha256": "dd4e55507cd69774c5a05286fa6febf08414063fe9dffb2a54473de9b37db864"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-state-v1/state-slots-after-v2.log",
+      "scope": "CPU-only recurrent-state ownership regression; not hardware or GPQA qualification",
+      "bytes": 2210,
+      "sha256": "bdc02070f4439b56198853f6ecc51f40fa49336e627ba9dd4146fdd9a0cd4618"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-state-v1/state-slots-after-v2.xml",
+      "scope": "CPU-only recurrent-state ownership regression; not hardware or GPQA qualification",
+      "bytes": 22243,
+      "sha256": "565c9d260301f9c20993a814f263d4e0d3fb5ee46b38258a9410f79ccab0eedb"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-state-v1/state-slots-after-v3.log",
+      "scope": "CPU-only recurrent-state ownership regression; not hardware or GPQA qualification",
+      "bytes": 1194,
+      "sha256": "5616ddadc9f453cca53fe802f225506e6113c6d62b9befe9b60c9b1cea2ea3d2"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-state-v1/state-slots-after-v3.xml",
+      "scope": "CPU-only recurrent-state ownership regression; not hardware or GPQA qualification",
+      "bytes": 21458,
+      "sha256": "0eb5ec29f4dc4ad004c9a8a556cb029a46d1a713514e9dafc9a4457b39a4ff73"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-state-v1/state-slots-after.log",
+      "scope": "CPU-only recurrent-state ownership regression; not hardware or GPQA qualification",
+      "bytes": 90,
+      "sha256": "654fb2ab6d925a021a925e91248b788fd30eb4d42c17fbb08d4e53b56c76973a"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-state-v1/state-slots-after.xml",
+      "scope": "CPU-only recurrent-state ownership regression; not hardware or GPQA qualification",
+      "bytes": 244,
+      "sha256": "f2ea054cf154f47fba6a138c0dd34397774f536ae4a11332496c83a03d2af8f8"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-state-v1/state-slots-before-v2.log",
+      "scope": "CPU-only recurrent-state ownership regression; not hardware or GPQA qualification",
+      "bytes": 4699,
+      "sha256": "be92dc20d0f2f82fcb3a37b30a9f7ac69463c0767855ac48befc3cfc882d30f8"
+    },
+    {
+      "path": "galaxy-evidence/chunked-prefill-state-v1/state-slots-before-v2.xml",
+      "scope": "CPU-only recurrent-state ownership regression; not hardware or GPQA qualification",
+      "bytes": 5829,
+      "sha256": "58d3e7565fc5375fe03073df8551ebf527b651125a0e51b7fede441701cffb96"
     },
     {
       "path": "galaxy-evidence/delivery-pass-v2/README.md",
