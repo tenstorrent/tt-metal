@@ -353,10 +353,13 @@ std::vector<tt::tt_metal::TensorTopology> MinimalMatmulStridedReduceScatterAsync
     // {mm, rs_intermediate, rs_output}. The matmul output takes the union-default label of its operands (input,
     // weight, bias and the optional second in0 source). The reduce_scatter consumes the matmul output: its
     // intermediate is scratch over that tensor and keeps its label (reduce_scatter_minimal_async convention); its
-    // output is the reduce_scatter of the matmul LABEL along `cluster_axis` for `dim`. Caller-supplied persistent
-    // buffers are those tensors and take the same labels. The fused addcmul is elementwise on the reduce_scatter
-    // result and leaves its distribution alone. No honest label (nullopt, already warned about): {} keeps the union
-    // default for all three.
+    // output is the reduce_scatter of the matmul LABEL along `cluster_axis` for `dim`. Without a cluster_axis the
+    // program ranks the whole-mesh ring by `input_tensor`'s device-storage coordinates
+    // (get_linearized_index_from_physical_coord), so that label is spelled over those coordinates
+    // (over_storage_ring_order, as the helper's Tensor overload does for a plain reduce_scatter) rather than over the
+    // matmul label's. Caller-supplied persistent buffers are those tensors and take the same labels. The fused
+    // addcmul is elementwise on the reduce_scatter result and leaves its distribution alone. No honest label
+    // (nullopt, already warned about): {} keeps the union default for all three.
     const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     std::vector<std::reference_wrapper<const TensorTopology>> operands{
         std::cref(input_topology), std::cref(tensor_args.weight_tensor.tensor_topology())};
@@ -369,12 +372,15 @@ std::vector<tt::tt_metal::TensorTopology> MinimalMatmulStridedReduceScatterAsync
     auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(operands);
     TensorTopology mm_topology(std::move(shape), std::move(placements), input_topology.mesh_coords());
 
-    auto rs_output_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
-        mm_topology,
-        attributes.cluster_axis,
-        tensor_args.input_tensor.device()->shape(),
-        static_cast<uint32_t>(tensor_args.input_tensor.logical_shape().rank()),
-        static_cast<int32_t>(attributes.dim));
+    auto rs_output_topology = ttnn::operations::ccl::common::over_storage_ring_order(
+        ttnn::operations::ccl::common::reduce_scatter_output_topology(
+            mm_topology,
+            attributes.cluster_axis,
+            tensor_args.input_tensor.device()->shape(),
+            static_cast<uint32_t>(tensor_args.input_tensor.logical_shape().rank()),
+            static_cast<int32_t>(attributes.dim)),
+        tensor_args.input_tensor,
+        attributes.cluster_axis);
     if (!rs_output_topology.has_value()) {
         return {};
     }
