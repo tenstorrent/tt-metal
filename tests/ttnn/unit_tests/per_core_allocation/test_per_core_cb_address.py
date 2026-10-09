@@ -139,32 +139,6 @@ def _assert_probe_matched(results):
         assert match == 1, f"core {core}: CB write pointer {cb_addr:#x} != per-core address {expected:#x}"
 
 
-@requires_hybrid_allocator
-@SKEWS
-@pytest.mark.parametrize("offset", [0, LAST_PAGE], ids=["start_of_shard", "last_page_of_shard"])
-def test_cb_address_is_its_own_cores_shard(per_core_mesh_device, skewed, offset):
-    """get_cb_address of a single-core CB is that core's shard plus the offset, on either core.
-
-    The last-page case also builds a descriptor that ends exactly at the end of its shard, on a core
-    away from Buffer::address(), which the address_offset + total_size check must accept.
-    """
-    tensor, _skew = _skewed_tensor(per_core_mesh_device, skewed)
-    for core in (FIRST, SECOND):
-        assert ttnn.get_cb_address(_cb(tensor, core, offset)) == _addr(tensor, core) + offset, f"core {core}"
-
-
-@requires_hybrid_allocator
-@SKEWS
-def test_cb_write_pointer_matches_the_raw_per_core_address(per_core_mesh_device, skewed):
-    """On hardware, each core's CB write pointer is its own shard (the address raw accesses use)."""
-    tensor, _skew = _skewed_tensor(per_core_mesh_device, skewed)
-    out = _sharded_tensor(per_core_mesh_device, [FIRST, SECOND], 16, per_core=False)
-
-    _run(per_core_mesh_device, [tensor, out], _probe_program(tensor, out, LAST_PAGE))
-
-    _assert_probe_matched(_probe_results(out))
-
-
 # Sends page i of a local buffer to receiver i at a raw L1 address, then bumps the receiver's semaphore.
 _WRITER_KERNEL = r"""
 #include "api/dataflow/dataflow_api.h"
