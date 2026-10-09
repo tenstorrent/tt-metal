@@ -66,8 +66,8 @@ def test_it_clears_only_on_a_measured_win(monkeypatch):
     monkeypatch.setattr(m, "_ledger", lambda: type("L", (), {"is_win": staticmethod(lambda a: bool(a.get("won")))})())
     monkeypatch.setattr(m, "_load_attempts", lambda: [])
     prof = _prof([_op("A", 30, 1.0), _op("B", 30, 1.0), _op("C", 90, 5.0)])
-    assert m._fold_gate(prof, [{"kernel_kind": "fold", "won": False}]) is not None
-    assert m._fold_gate(prof, [{"kernel_kind": "fold", "won": True}]) is None
+    assert m._fold_gate(prof, [{"kernel_kind": "fold", "won": False, "op_signature": "C"}]) is not None
+    assert m._fold_gate(prof, [{"kernel_kind": "fold", "won": True, "op_signature": "C"}]) is None
 
 
 def test_not_foldable_is_a_legitimate_outcome(monkeypatch):
@@ -79,8 +79,10 @@ def test_not_foldable_is_a_legitimate_outcome(monkeypatch):
     # The fold's 'none' spends the FOLD; the group then climbs the rest of the fusion ladder
     # (test_a_repeated_group_climbs_a_fusion_ladder) and closes only when every rung is spent.
     monkeypatch.setattr(m, "_ttl_available", lambda: False)
-    assert m._fold_gate(prof, [{"kernel_kind": "fold"}] * 3)["next_rung"] == "structural-share"
-    spent = [{"kernel_kind": "fold"}] * 3 + [{"kernel_kind": k} for k in ("share", "fuse-ttnn", "fuse-cpp")]
+    assert m._fold_gate(prof, [{"kernel_kind": "fold", "op_signature": "C"}] * 3)["next_rung"] == "structural-share"
+    spent = [{"kernel_kind": "fold", "op_signature": "C"}] * 3 + [
+        {"kernel_kind": k, "op_signature": "C"} for k in ("share", "fuse-ttnn", "fuse-cpp")
+    ]
     assert m._fold_gate(prof, spent) is None
     assert "none: <why not foldable>" in m._fold_gate(prof, [])["reason"]
 

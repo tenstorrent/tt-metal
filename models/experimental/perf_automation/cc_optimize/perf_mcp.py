@@ -5959,6 +5959,12 @@ _GATE_ATTEMPT_DEFAULT = "3"
 # expected answer for most groups, and three apiece would spend a dozen attempts walking a group that
 # nothing helps. Each stays overridable through its own env var.
 _GATE_CAP_DEFAULTS = {cap_env: "1" for _kinds, cap_env in _FUSION_LADDER[1:]}
+# How many repeated groups the ladder is held to at once: the largest by per-request cost. Each group
+# keeps its own ladder, and a run may not stop while one of these has a rung owed. Unbounded, a profile
+# whose ops mostly run once per capture counts every op seen twice as a repeat -- 207 material groups on
+# an image-edit port, over a thousand attempts owed before a run could end, most on ops nothing fuses.
+_FUSION_GROUPS_ENV = "PERF_MCP_FUSION_GROUPS"
+_FUSION_GROUPS_DEFAULT = "3"
 # Kinds recorded without a kernel marker. The fusion ladder's kernel rungs are NOT among them: like
 # cpp and tt-lang they must show a kernel in the source (_KERNEL_AUTHORED_RUNGS).
 _GATE_KINDS = frozenset(k for kinds, _cap_env in _GATE_LEVERS for k in kinds) - _FUSE_KERNEL_KINDS
@@ -6804,10 +6810,23 @@ _FUSION_RUNG_ASKS = {
 }
 
 
+def _group_name(o: dict) -> str:
+    """A repeated group's own name: its op_code, plus its shape when the op_code carries none.
+
+    A matmul's op_code names its dims, so it is already one group. An elementwise op's is the bare
+    class: every BinaryNg in a model shares 'BinaryNgDeviceOperation', so one fold win on any of them
+    read as the answer for all of them, and stage_of_op placed all of them in the stage where the class
+    costs most. The shape is what the profile groups fingerprints by; _op_match then tells groups apart
+    by it, as it already does for matmul dims."""
+    code = str(o.get("op_code") or "")
+    shape = str(o.get("shape") or "")
+    return code if (_re.search(r"\d", code) or not shape) else "%s %s" % (code, shape)
+
+
 def _fusion_rung_target(lever, worst: dict, baseline: int, gap: float) -> dict:
     """The work item for a repeated group on a rung after the fold -- same shape as the fold's own."""
     kind = lever[0][0]
-    op = str(worst.get("op_code") or "repeated_op")
+    op = _group_name(worst) or "repeated_op"
     per_layer = int(worst.get("count") or 0) // max(1, baseline)
     return {
         "op": op,
@@ -6870,14 +6889,38 @@ def _fold_gate(prof: dict, attempts: list) -> dict | None:
     gap = sum(float(o.get("gap_ms") or 0.0) for o in cands)
     if gap < _material_gap_ms(float(prof.get("device_ms") or 0.0)):
         return None
-    lever = _fusion_rung(attempts)
+    # THE LADDER IS PER GROUP. It was read off every attempt the model ever recorded, so one fold win on
+    # one group answered the ladder for all of them: an image-edit port's early folds of its vision
+    # reduction and its VAE convs closed it, and no repeated group of its 50-step denoise was ever
+    # offered a share or a fusion rung. Each group's rung comes from its OWN attempts (_op_match, the
+    # matcher the per-op ladder uses); a group already answered yields to the next one held.
+    # Ranked by what the group costs ONE REQUEST -- its gap times its stage's cost weight, the weight
+    # the blocking ranking uses -- so a group in a stage a request repeats is not queued behind groups
+    # in stages it runs once. Only the first _FUSION_GROUPS_ENV groups are held to the ladder.
+    # A stage is read off the op_code only when that code names ONE group: several open groups under one
+    # bare class name cannot be placed by name, and such a group keeps weight 1 rather than borrow the
+    # stage where its class costs most (which boosted a vision elementwise group 130x as "denoise").
+    _w = stage_cost_weights(prof)
+    _codes = [str(o.get("op_code") or "") for o in ops]
+
+    def _per_request(o):
+        code = str(o.get("op_code") or "")
+        stage = stage_of_op(code, prof) if _codes.count(code) == 1 else ""
+        return float(o.get("gap_ms") or 0.0) * float(_w.get(stage or "", 1.0))
+
+    _held = int(os.environ.get(_FUSION_GROUPS_ENV, _FUSION_GROUPS_DEFAULT) or _FUSION_GROUPS_DEFAULT)
+    lever = worst = None
+    for o in sorted(cands, key=lambda o: -_per_request(o))[: max(1, _held)]:
+        lever = _fusion_rung([a for a in attempts if _op_match(_group_name(o), a)])
+        if lever is not None:
+            worst = o
+            break
     if lever is None:
-        return None  # (2) a measured win on any rung, or (3) every rung spent
-    worst = max(cands, key=lambda o: float(o.get("gap_ms") or 0.0))
+        return None  # (2) a measured win on some rung of every held group, or (3) every rung spent
     if lever is not _FOLD_LEVER:
         return _fusion_rung_target(lever, worst, baseline, gap)
     return {
-        "op": str(worst.get("op_code") or "repeated_op"),
+        "op": _group_name(worst) or "repeated_op",
         "op_class": str(worst.get("bucket") or ""),
         "gap_ms": round(gap, 4),
         "bound_by": worst.get("bound_by"),
@@ -6898,12 +6941,12 @@ def _fold_gate(prof: dict, attempts: list) -> dict | None:
             "MEASURED reduction."
         )
         % (
-            str(worst.get("op_code") or ""),
+            _group_name(worst),
             int(worst.get("count") or 0),
             baseline,
             int(worst.get("count") or 0) // baseline,
             int(worst.get("count") or 0) // baseline,
-            str(worst.get("op_code") or "repeated_op"),
+            _group_name(worst) or "repeated_op",
         ),
     }
 
