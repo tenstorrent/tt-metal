@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <thread>
@@ -975,7 +976,8 @@ void run_stress_write_program(
     uint32_t num_iterations,
     bool read_after = true,
     uint32_t wait_iters = 0,
-    uint32_t burst_size = 0) {
+    uint32_t burst_size = 0,
+    uint32_t source_slots = 128) {
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
     auto dest_core_virtual =
         mesh_device->worker_core_from_logical_core(CoreCoord{compute_grid_size.x - 1, compute_grid_size.y - 1});
@@ -994,7 +996,7 @@ void run_stress_write_program(
     auto l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
     std::map<std::string, std::string> defines = {
         {"SRC_BASE_ADDR", std::to_string(l1_buffer->address())},
-        {"SRC_SLOTS", std::to_string(kBufferBytes / kSlotBytes)},
+        {"SRC_SLOTS", std::to_string(std::min(source_slots, kBufferBytes / kSlotBytes))},
         {"OTHER_CORE_X", std::to_string(dest_core_virtual.x)},
         {"OTHER_CORE_Y", std::to_string(dest_core_virtual.y)},
         {"DST_ADDR", std::to_string(l1_buffer->address())},
@@ -1074,6 +1076,10 @@ private:
         // Must cover EVERY device the thread originally covered (profiler_initializer.cpp launches it with all of
         // them): a device left out stops being drained, and later tests running on it see no events at all.
         tt::tt_metal::LaunchIntervalBasedProfilerReadThread(devices_);
+        // Wait until the relaunched thread has completed one read. Without this readiness boundary a cached kernel can
+        // start and finish before the new thread reaches its first poll, making the bounded regression test depend on
+        // JIT compilation latency.
+        psm->signal_debug_dump_read();
     }
 
     std::vector<tt::tt_metal::IDevice*> devices_;
@@ -1135,8 +1141,8 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingDuringLongKernel) {
 // It is a short kernel rather than a huge one because the event COUNT was never what the stress test needed. What
 // matters is the event time SPAN: process_accumulated_events_up_to() holds back everything within margin_ticks of the
 // newest event it has seen, so events only become processable once the span exceeds the margin. At the 3000 ms
-// default no short kernel can ever qualify. Shrinking the margin to 60 ms (and the full-read period to 20 ms, so
-// several passes land while the kernel is still running) gets the same coverage from a sub-second kernel.
+// default no short kernel can ever qualify. Shrinking the margin to 30 ms (and the full-read period to 10 ms, so
+// several passes land while the kernel is still running) gets the same coverage from a bounded CI kernel.
 TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
     // Collected here (where the fixture's device list is in scope) because the retuned thread has to be relaunched
     // covering every device, not just the one this test runs on -- see ScopedDebugDumpTuning.
@@ -1165,15 +1171,18 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
             // Relaunching the thread above drains the device once, which can push leftovers from earlier tests.
             noc_debug_state->reset_state();
 
-            // 400 writes in 10 bursts, each burst followed by an on-device idle, giving a sub-second kernel. The
-            // source slot wraps after SRC_SLOTS(=128) writes, so the unbarriered source reuse -- the violation this
-            // asserts on -- happens around burst 4, early enough to fall behind the watermark before the kernel ends.
-            constexpr uint32_t writes = 400;
-            constexpr uint32_t burst = 40;
+            // Cross the profiler's local-buffer capacity, forcing the background thread to drain events while the
+            // kernel is still active. Reuse a small source set within every burst so issue detection does not depend
+            // on pending-write state surviving profiler flushes between independently processed batches.
+            constexpr uint32_t writes = 10'000;
+            constexpr uint32_t burst = 1'000;
+            constexpr uint32_t source_slots = 8;
+            // Ten bounded idle windows let the 10 ms background poll run without exceeding CI's 5 s device timeout.
             constexpr uint32_t wait_iters = 8'000'000u;
 
             // NO user read: only the background thread drains, processes, reports and discharges.
-            run_stress_write_program(fixture, mesh_device, writes, /*read_after=*/false, wait_iters, burst);
+            run_stress_write_program(
+                fixture, mesh_device, writes, /*read_after=*/false, wait_iters, burst, source_slots);
             // Let the last full-read pass land after the kernel finished.
             std::this_thread::sleep_for(std::chrono::milliseconds(300));
 

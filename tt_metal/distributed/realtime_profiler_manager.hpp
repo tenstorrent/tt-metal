@@ -60,9 +60,10 @@ public:
     // and notifies deactivation. Safe to call multiple times.
     void shutdown();
 
-    // Requests the receiver to run a finish-path sync and blocks until it completes or times out; throttled to one
-    // request per 60s and a no-op when no devices are active.
-    void trigger_sync_check();
+    // Requests the receiver to run a finish-path sync and blocks until it completes or times out. Normal requests are
+    // throttled to one per 60s; callers that require an explicit stream boundary may bypass the throttle.
+    // No-op when no devices are active.
+    void trigger_sync_check(bool bypass_throttle = false);
 
     // RT-profiler diagnostics
     uint32_t peak_fifo_pages() const { return peak_fifo_pages_.load(std::memory_order_relaxed); }
