@@ -12,7 +12,6 @@
 #include "cmath_common.h"
 #include "llk_math_eltwise_sfpu_common.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_typecast_int32_fp16b.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -203,7 +202,6 @@ inline void _calculate_typecast_arith_sfp_rows_() {
  * @tparam DST_FMT: Destination data format to convert each element to.
  * @tparam ITERATIONS: Number of SFPU passes (each covers SFP_ROWS rows) needed to span the tile.
  * @note Call @ref init_typecast first to program the ADDR_MOD_6 the generic path stores through.
- *       Int32 → Float16_b is the dedicated TTI kernel, which walks Dest via ADDR_MOD_7 instead.
  */
 template <DataFormat SRC_FMT, DataFormat DST_FMT, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_typecast() {
