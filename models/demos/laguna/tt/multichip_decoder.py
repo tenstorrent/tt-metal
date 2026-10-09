@@ -276,6 +276,7 @@ class MultichipDecoder(OptimizedDecoder):
         self._head_norm_4d = _parse_binary_env("TT_LAGUNA_HEAD_NORM_4D", True)  # decode q/k norm without flattening
         self._decode_heads_op = _parse_binary_env("TT_LAGUNA_DECODE_HEADS_OP", True)  # fused decode head split/concat
         self._moe1_kernels = _parse_binary_env("TT_LAGUNA_MOE1_KERNELS", True)  # batch-1 decode MoE generic_ops
+        self._router32 = _parse_binary_env("TT_LAGUNA_ROUTER32", True)  # exact top-K router kernel, 32-row tiles
         self._fused_kv_update = _parse_binary_env("TT_LAGUNA_FUSED_KV_UPDATE", True)  # K+V cache in one op
         self._sharded_residual = _parse_binary_env("TT_LAGUNA_SHARDED_RESIDUAL", True)  # decode residual in L1 shards
         self._glu_out_sharded = _parse_binary_env("TT_LAGUNA_GLU_OUT_SHARDED", True)  # decode MLP out stays sharded

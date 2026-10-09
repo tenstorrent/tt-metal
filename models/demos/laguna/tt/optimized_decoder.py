@@ -1042,6 +1042,13 @@ class OptimizedDecoder(LightweightModule):
             # a full 32-token tile reads the row-repeated bias / expert ids (no row broadcast), when loaded
             full_tile = logits32.shape[-2] == TILE and "e_bias_f32_rows" in self.w
             sel = ttnn.add(scores, self.w["e_bias_f32_rows" if full_tile else "e_bias_f32"])
+            if want_dense and full_tile and getattr(self, "_router32", False):
+                # exact fp32 top-K + normalisation for the 32 rows in one generic_op (one core per token) instead of
+                # the bf16 coarse top-(K+1), its index untilize/tilize chain, the fp32 cut-off and the row-sum matmul
+                from .router32 import route32
+
+                dense = route32(sel, scores, K, cfg.routed_scaling, cfg.norm_topk_prob)
+                return logits, None, (dense if self._router_fp32_out else ttnn.typecast(dense, ttnn.bfloat16))
             _, idx_coarse = ttnn.topk(ttnn.typecast(sel, ttnn.bfloat16), k=K + 1, dim=-1, sorted=True)
             rows = [idx_coarse.shape[i] for i in range(len(idx_coarse.shape) - 1)]
             pair_idx = ttnn.slice(idx_coarse, [0] * len(rows) + [K - 1], rows + [K + 1])
