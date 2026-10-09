@@ -5,6 +5,8 @@
 #include <gtest/gtest.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <limits>
+#include <stdexcept>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/system_mesh.hpp>
@@ -150,7 +152,7 @@ TEST(MetalEnv, EmptyPathIsNotMock) {
     EXPECT_FALSE(settings.is_mock_device());
 }
 
-// --- FabricConfigDescriptor tests ---
+// --- Fabric configuration tests ---
 
 TEST(MetalEnv, FabricConfigDescriptorDefaults) {
     FabricConfigDescriptor desc;
@@ -162,18 +164,21 @@ TEST(MetalEnv, FabricConfigDescriptorDefaults) {
     EXPECT_EQ(desc.fabric_manager, tt_fabric::FabricManagerMode::DEFAULT);
 }
 
-TEST(MetalEnv, DescriptorWithFabricConfig) {
+MetalEnvDescriptor wormhole_mock_descriptor() {
+    return {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)};
+}
+
+TEST(MetalEnv, ConfigureFabricStoresDescriptor) {
     FabricConfigDescriptor fc;
     fc.fabric_config = tt_fabric::FabricConfig::FABRIC_1D;
     fc.reliability_mode = tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
     fc.num_routing_planes = 4;
     fc.fabric_tensix_config = tt_fabric::FabricTensixConfig::MUX;
 
-    const MetalEnvDescriptor settings{
-        .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1), .fabric = fc};
+    MetalEnv env(wormhole_mock_descriptor());
+    env.configure_fabric(fc);
 
-    EXPECT_TRUE(settings.is_mock_device());
-    const auto& stored = settings.fabric;
+    const auto& stored = env.get_fabric_config_descriptor();
     EXPECT_EQ(stored.fabric_config, tt_fabric::FabricConfig::FABRIC_1D);
     EXPECT_EQ(stored.reliability_mode, tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     EXPECT_TRUE(stored.num_routing_planes.has_value());
@@ -181,32 +186,70 @@ TEST(MetalEnv, DescriptorWithFabricConfig) {
     EXPECT_EQ(stored.fabric_tensix_config, tt_fabric::FabricTensixConfig::MUX);
 }
 
-TEST(MetalEnv, DefaultDescriptorFabricConfigIsDisabled) {
-    const MetalEnvDescriptor settings;
-    EXPECT_EQ(settings.fabric.fabric_config, tt_fabric::FabricConfig::DISABLED);
+TEST(MetalEnv, DefaultFabricConfigIsDisabled) {
+    MetalEnv env(wormhole_mock_descriptor());
+    EXPECT_EQ(env.get_fabric_config_descriptor().fabric_config, tt_fabric::FabricConfig::DISABLED);
 }
 
-TEST(MetalEnv, FabricConfigPreservedThroughEnv) {
-    FabricConfigDescriptor fc;
-    fc.fabric_config = tt_fabric::FabricConfig::FABRIC_2D;
+TEST(MetalEnv, ConfigureFabricLastCallWins) {
+    MetalEnv env(wormhole_mock_descriptor());
+    env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_1D});
+    env.configure_fabric(
+        {.fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
+         .fabric_tensix_config = tt_fabric::FabricTensixConfig::MUX});
 
-    MetalEnv env(
-        {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2), .fabric = fc});
-
-    const auto& stored = env.get_descriptor().fabric;
-    EXPECT_EQ(stored.fabric_config, tt_fabric::FabricConfig::FABRIC_2D);
+    EXPECT_EQ(env.get_fabric_config_descriptor().fabric_config, tt_fabric::FabricConfig::FABRIC_2D);
+    EXPECT_EQ(MetalEnvAccessor(env).impl().get_fabric_config(), tt_fabric::FabricConfig::FABRIC_2D);
+    EXPECT_EQ(MetalEnvAccessor(env).impl().get_fabric_tensix_config(), tt_fabric::FabricTensixConfig::MUX);
 }
 
-TEST(MetalEnv, AccessorFabricConfigMatchesDescriptor) {
-    FabricConfigDescriptor fc;
-    fc.fabric_config = tt_fabric::FabricConfig::FABRIC_1D_RING;
-    fc.fabric_udm_mode = tt_fabric::FabricUDMMode::ENABLED;
+TEST(MetalEnv, ConfigureFabricNormalizesRoutingPlanes) {
+    MetalEnv env(wormhole_mock_descriptor());
+    env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_1D});
 
-    MetalEnv env(
-        {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1), .fabric = fc});
+    EXPECT_FALSE(env.get_fabric_config_descriptor().num_routing_planes.has_value());
+    EXPECT_EQ(MetalEnvAccessor(env).impl().get_num_fabric_active_routing_planes(), std::numeric_limits<uint8_t>::max());
+
+    env.configure_fabric({});
+    EXPECT_EQ(MetalEnvAccessor(env).impl().get_num_fabric_active_routing_planes(), 0);
+}
+
+TEST(MetalEnv, ConfigureFabricRejectsZeroRoutingPlanes) {
+    MetalEnv env(wormhole_mock_descriptor());
+    EXPECT_THROW(
+        env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_1D, .num_routing_planes = 0}),
+        std::runtime_error);
+}
+
+TEST(MetalEnv, ConfigureFabricThrowsAfterSystemMesh) {
+    MetalEnv env(wormhole_mock_descriptor());
+    (void)env.get_system_mesh();
+    EXPECT_THROW(env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_1D}), std::runtime_error);
+}
+
+TEST(MetalEnv, ConfigureFabricThrowsAfterCreateMeshDevice) {
+    MetalEnv env(wormhole_mock_descriptor());
+    auto mesh = env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape{1u, 1u}));
+    EXPECT_THROW(env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_1D}), std::runtime_error);
+    mesh->close();
+    EXPECT_THROW(env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_1D}), std::runtime_error);
+}
+
+TEST(MetalEnv, QueryThenConfigureFabric) {
+    MetalEnv env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2)});
+    EXPECT_GT(env.get_num_available_devices(), 0u);
+
+    env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_1D});
+    EXPECT_EQ(env.get_fabric_config_descriptor().fabric_config, tt_fabric::FabricConfig::FABRIC_1D);
+}
+
+TEST(MetalEnv, AccessorFabricConfigMatchesRequest) {
+    MetalEnv env(wormhole_mock_descriptor());
+    env.configure_fabric(
+        {.fabric_config = tt_fabric::FabricConfig::FABRIC_1D_RING,
+         .fabric_udm_mode = tt_fabric::FabricUDMMode::ENABLED});
 
     MetalEnvImpl& accessor = MetalEnvAccessor(env).impl();
-
     EXPECT_EQ(accessor.get_fabric_config(), tt_fabric::FabricConfig::FABRIC_1D_RING);
     EXPECT_EQ(accessor.get_fabric_udm_mode(), tt_fabric::FabricUDMMode::ENABLED);
 }
@@ -228,34 +271,33 @@ TEST(MetalEnv, SystemMeshSameEnv) {
     EXPECT_EQ(&mesh1, &mesh2);
 }
 
-// The MetalEnv constructor are user settings.
-// If fabric not enabled by the user, but it turns out we need dispatch on fabric, then the
-// env needs to be reconfigured to enable fabric.
-TEST(MetalEnv, ReconfigureFabricForDispatch) {
+// If the user left fabric disabled but dispatch to a remote device needs it, the runtime enables FABRIC_1D
+// without replacing a system mesh that was already handed out.
+TEST(MetalEnv, DispatchFabricKeepsSystemMesh) {
     MetalEnv env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2)});
-
-    // MetalEnv cannot be reconfigured after init so use the internal accessor
     MetalEnvImpl& accessor = MetalEnvAccessor(env).impl();
 
     EXPECT_EQ(accessor.get_fabric_config(), tt_fabric::FabricConfig::DISABLED);
 
+    // Register this env's context before the control plane is built. Building it first leaves
+    // MetalContext::instance() with nothing to find, and it opens the physical cluster.
+    auto& mesh_before = env.get_system_mesh();
     auto& cp_before = accessor.get_control_plane();
     EXPECT_EQ(cp_before.get_fabric_config(), tt_fabric::FabricConfig::DISABLED);
-
-    auto& mesh_before = env.get_system_mesh();
     EXPECT_GT(mesh_before.shape().mesh_size(), 0);
-    const auto* cp_ptr_before = &cp_before;
 
-    accessor.set_fabric_config(
-        tt_fabric::FabricConfig::FABRIC_1D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+    accessor.enable_fabric_for_dispatch();
 
     EXPECT_EQ(accessor.get_fabric_config(), tt_fabric::FabricConfig::FABRIC_1D);
+    // The request the user made (nothing) is unchanged; only the runtime fabric config moved.
+    EXPECT_EQ(env.get_fabric_config_descriptor().fabric_config, tt_fabric::FabricConfig::DISABLED);
 
     auto& cp_after = accessor.get_control_plane();
     EXPECT_EQ(cp_after.get_fabric_config(), tt_fabric::FabricConfig::FABRIC_1D);
-    EXPECT_NE(cp_ptr_before, &cp_after);
+    EXPECT_NE(&cp_before, &cp_after);
 
     auto& mesh_after = env.get_system_mesh();
+    EXPECT_EQ(&mesh_before, &mesh_after);
     EXPECT_GT(mesh_after.shape().mesh_size(), 0);
 }
 
