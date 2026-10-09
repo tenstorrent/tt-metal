@@ -158,15 +158,48 @@ def test_permute_negative_dim(device, h, w, dtype):
     assert_equal(torch_output_tensor, output_tensor)
 
 
-def test_permute_bfloat8(device):
+# PCC floor per block-float type. bfloat4_b carries a 3-bit mantissa, so a correctly ordered
+# result sits well below the bfloat8_b floor; 0.99 is the contract a bfloat16 fallback meets.
+_BLOCK_FLOAT_PCC = {ttnn.bfloat8_b: 0.9999, ttnn.bfloat4_b: 0.99}
+
+_BFP4_NO_FALLBACK = "#48813: bfloat4_b has no bfloat16 permute fallback"
+
+
+@pytest.mark.parametrize(
+    "dtype, perm",
+    [
+        pytest.param(ttnn.bfloat8_b, (0, 2, 3, 1), id="bfloat8_b-0231"),
+        pytest.param(ttnn.bfloat8_b, (1, 0, 2, 3), id="bfloat8_b-1023-cn"),
+        pytest.param(ttnn.bfloat8_b, (0, 1, 3, 2), id="bfloat8_b-0132-wh"),
+        pytest.param(ttnn.bfloat8_b, (0, 2, 1, 3), id="bfloat8_b-0213"),
+        pytest.param(ttnn.bfloat8_b, (2, 0, 1, 3), id="bfloat8_b-2013"),
+        pytest.param(
+            ttnn.bfloat4_b,
+            (0, 2, 3, 1),
+            marks=pytest.mark.skip(reason="#48813: bfloat4_b permute aborts on a misaligned NoC read here"),
+            id="bfloat4_b-0231",
+        ),
+        pytest.param(ttnn.bfloat4_b, (1, 0, 2, 3), id="bfloat4_b-1023-cn"),
+        pytest.param(
+            ttnn.bfloat4_b, (0, 1, 3, 2), marks=pytest.mark.xfail(reason=_BFP4_NO_FALLBACK), id="bfloat4_b-0132-wh"
+        ),
+        pytest.param(
+            ttnn.bfloat4_b, (0, 2, 1, 3), marks=pytest.mark.xfail(reason=_BFP4_NO_FALLBACK), id="bfloat4_b-0213"
+        ),
+        pytest.param(
+            ttnn.bfloat4_b, (2, 0, 1, 3), marks=pytest.mark.xfail(reason=_BFP4_NO_FALLBACK), id="bfloat4_b-2013"
+        ),
+    ],
+)
+def test_permute_block_float(device, dtype, perm):
     torch.manual_seed(2005)
     input_a = torch.randn(1, 160, 32, 32)
-    torch_output = torch.permute(input_a, (0, 2, 3, 1))
+    torch_output = torch.permute(input_a, perm)
 
-    tt_input = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-    tt_output = ttnn.permute(tt_input, (0, 2, 3, 1))
+    tt_input = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    tt_output = ttnn.permute(tt_input, perm)
     tt_output = ttnn.to_torch(tt_output)
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_with_pcc(torch_output, tt_output, _BLOCK_FLOAT_PCC[dtype])
 
 
 @pytest.mark.parametrize(
