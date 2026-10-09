@@ -148,6 +148,22 @@ public:
     std::optional<size_t> get_buffer_index_semaphore_address(uint32_t vc_idx, size_t compact_idx) const {
         return downstream_edm_buffer_index_semaphore_addresses.at(vc_idx).at(compact_idx);
     }
+    // Per-downstream lookups by compact index (for plugin builders that emit their own CT args).
+    std::optional<size_t> get_downstream_buffer_base_address(uint32_t vc_idx, size_t compact_idx) const {
+        return downstream_edm_buffer_base_addresses.at(vc_idx).at(compact_idx);
+    }
+    std::optional<size_t> get_downstream_sender_channel_id(uint32_t vc_idx, size_t compact_idx) const {
+        return downstream_sender_channel_ids.at(vc_idx).at(compact_idx);
+    }
+    std::optional<tt::tt_metal::CoreCoord> get_downstream_noc_for_direction(
+        uint32_t vc_idx, eth_chan_directions direction) const {
+        for (const auto& [dir, xy] : downstream_edms_connected_by_vc.at(vc_idx)) {
+            if (dir == direction) {
+                return xy;
+            }
+        }
+        return std::nullopt;
+    }
 
 private:
     uint32_t pack_downstream_noc_y_rt_arg(uint32_t vc_idx) const;
