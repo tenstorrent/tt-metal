@@ -145,9 +145,8 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
 }
 
 /**
- * @brief Whether the two-operand unpack can hand each operand over as one source bank holding the whole tile: SrcDvalid::PerTile, with or
- *        without a broadcast; it does without transpose and for the shapes of @ref unpack_AB_tile_shape. The math init
- *        (@ref _llk_math_eltwise_binary_init_) applies the same rule.
+ * @brief Whether the two-operand unpack hands each operand over as one source bank; the init adds the transpose and shape checks, and the
+ *        math init applies the same rule so both threads agree.
  */
 template <BroadcastType BType, SrcDvalid src_dvalid>
 inline constexpr bool unpack_AB_tile_dvalid = src_dvalid == SrcDvalid::PerTile;
@@ -164,9 +163,8 @@ inline bool unpack_AB_tile_shape(const ckernel::TensorShape tensor_shape)
 }
 
 /**
- * @brief Configure the MOP that hands each operand over as one source bank (see @ref unpack_AB_tile_dvalid): one UNPACR reads every face
- *        of A (datum count set by the init) and publishes it once; B fills its bank in the layout the math MOP reads, then publishes it.
- *        No broadcast: B's whole tile. Scalar: B's face 0. Column: faces 0, 0, 2, 2, one per 16 rows. Row: faces 0 and 1, twice.
+ * @brief Configure the MOP that hands each operand over as one source bank: one UNPACR of A's whole tile; B in the layout the math MOP
+ *        reads (whole tile, face 0 for a scalar, faces 0 0 2 2 for a column broadcast, faces 0 and 1 twice for a row broadcast).
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  */

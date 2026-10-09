@@ -1132,8 +1132,8 @@ def test_eltwise_binary_dest_reuse(
     )
 
 
-# The hand-off sweeps below run nightly; the PR smoke runs their subsets at the end of this module, since the LLK smoke splits
-# its tests in two groups by count. The per-tile hand-off itself runs in the smoke through the functional default above.
+# The hand-off sweeps below run nightly; their smoke subsets are at the end of this module, since the smoke splits its tests
+# into groups by count.
 # The per-face hand-off (Blackhole's SrcDvalid::PerFace, the compute API default) on the two-operand path, every broadcast form.
 @pytest.mark.nightly
 @parametrize(
@@ -1430,8 +1430,7 @@ def test_eltwise_binary_unpack_ab_block_fixed_b(
     )
 
 
-# PR smoke subsets of the nightly hand-off sweeps: bf16 (and fp32 with a 32-bit DEST) on full tiles, the partial-face tiles of
-# the dest-reuse unpack, and the block unpack at 2 and 16 tiles per block as binary_ng's block section runs it.
+# Smoke subsets of the nightly hand-off sweeps above.
 SMOKE_FORMATS = {
     DestAccumulation.No: [
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)

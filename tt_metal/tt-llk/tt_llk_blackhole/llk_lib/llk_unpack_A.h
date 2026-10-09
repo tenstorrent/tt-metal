@@ -231,10 +231,8 @@ inline void _llk_unpack_A_mop_config_(
 }
 
 /**
- * @brief Whether the dest-reuse unpack can hand the L1 operand over as one source bank holding the whole tile: SrcDvalid::PerTile on the
- *        dest-reuse form without unpack to dest, without broadcast or with a row broadcast of the L1 operand (DEST_TO_SRCA); it does without
- *        transpose and with two or more full 16-row faces, 2 x 2 of them for the row broadcast. The math init (@ref _llk_math_eltwise_binary_init_)
- *        applies the same rule.
+ * @brief Whether the dest-reuse unpack hands the L1 operand over as one source bank (no broadcast, or a row broadcast with DEST_TO_SRCA).
+ *        The init adds the run-time shape check; the math init applies the same rule so both threads agree.
  */
 template <BroadcastType BType, bool acc_to_dest, EltwiseBinaryReuseDestType binary_reuse_dest, bool unpack_to_dest, SrcDvalid src_dvalid>
 inline constexpr bool unpack_A_tile_dvalid =
@@ -242,8 +240,8 @@ inline constexpr bool unpack_A_tile_dvalid =
     (BType == BroadcastType::NONE || (BType == BroadcastType::ROW && binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA));
 
 /**
- * @brief Configure the dest-reuse MOP that hands the L1 operand over as one source bank (see @ref unpack_A_tile_dvalid): one UNPACR of
- *        every face (datum count set by the init), or for a row broadcast faces 0 and 1 twice, and one dummy publication for the reused source.
+ * @brief Configure the dest-reuse MOP that hands the L1 operand over as one source bank: one UNPACR of every face, or faces 0 and 1
+ *        twice for a row broadcast, and one dummy publication for the reused source.
  *
  * @tparam BType: Broadcast type of the L1 operand, values = <NONE/ROW>
  * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <DEST_TO_SRCA/DEST_TO_SRCB>
