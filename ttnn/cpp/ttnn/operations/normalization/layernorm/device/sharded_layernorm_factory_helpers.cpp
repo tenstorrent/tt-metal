@@ -1031,6 +1031,10 @@ void add_writer_defines(m2::KernelSpec& kernel, const SpecConfig& c) {
     if (!c.writes_back) {
         kernel.compiler_options.defines.emplace("SKIP_WRITE_BACK", "1");
     }
+    // Matches bind_writer_resources: after the all-gather the writer holds both ends of the scaler DFB.
+    if (c.is_post_all_gather && !c.use_welford) {
+        kernel.compiler_options.defines.emplace("SCALER_SELF_LOOP", "1");
+    }
     if (c.do_col_mask) {
         kernel.compiler_options.defines.emplace("DO_COL_MASK", "1");
     }
