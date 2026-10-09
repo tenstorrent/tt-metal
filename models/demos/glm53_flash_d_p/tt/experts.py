@@ -378,8 +378,9 @@ class TtExperts:
 
 def build_experts(mesh, loader, cfg, layer: int, max_chunk: int, weights_dtype=ttnn.bfloat8_b) -> TtExperts:
     """TtExperts for one MoE layer (288 / chips experts per chip; bfp8 by default, bfp4 for the whole model on a
-    LoudBox). GLM_EXPERTS_MODE=loop selects the per-expert path, ag the MiMo all-gather MoE ops (tt/experts_ag.py)."""
-    if os.environ.get("GLM_EXPERTS_MODE") == "ag":
+    LoudBox). GLM_EXPERTS_MODE: ag (default) the MiMo all-gather MoE ops (tt/experts_ag.py), unified / loop TtExperts.
+    """
+    if os.environ.get("GLM_EXPERTS_MODE", "ag") == "ag":
         from models.demos.glm53_flash_d_p.tt.experts_ag import build_experts_ag
 
         return build_experts_ag(mesh, loader, cfg, layer, max_chunk, weights_dtype=weights_dtype)
