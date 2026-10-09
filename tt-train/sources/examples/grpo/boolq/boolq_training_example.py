@@ -111,9 +111,12 @@ if __name__ == "__main__":
 
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 
-    dataset = (
-        load_dataset("google/boolq", split="train").shuffle(seed=args.seed).map(make_format_boolq(tokenizer, is_qwen3))
-    )
+    def make_dataset():
+        return (
+            load_dataset("google/boolq", split="train")
+            .shuffle(seed=args.seed)
+            .map(make_format_boolq(tokenizer, is_qwen3))
+        )
 
     output_dir = os.path.join(
         tt_metal_root,
@@ -126,7 +129,7 @@ if __name__ == "__main__":
         transformer_config=transformer_config,
         device_config=device_config,
         model_source=model_id,
-        dataset=dataset,
+        dataset_func=make_dataset,
         config=grpo_config,
         reward_funcs=[accuracy_reward, brevity_reward],
         optimizer_dict=optimizer_dict,
