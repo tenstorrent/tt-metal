@@ -943,8 +943,10 @@ class OptimizedDecoder(LightweightModule):
         if T % TILE:
             return ttnn.linear(x, w, compute_kernel_config=ck, **kw)
         if T > self._SMALL_PREFILL_MM_MAX:
-            # fp32-accumulating linears keep the default: their 4-tile subblocks lost to it (512 tokens 136 -> 154 ms)
-            fp32 = getattr(ck, "fp32_dest_acc_en", False)
+            # wide fp32-accumulating linears keep the default: their 4-tile subblocks lost to it (512 tokens 136 -> 154
+            # ms). The narrow router (N = 256: an 8 x 10 grid, K block 8) gains: 1K rows 92 -> 56 us, 8K 359 -> 267 us,
+            # same error vs a float64 reference.
+            fp32 = getattr(ck, "fp32_dest_acc_en", False) and w.padded_shape[-1] > 512
             pc = self._prefill_2d_pc(x, w, kw.get("dtype"), ck) if self._PREFILL_2D_AUTO and not fp32 else None
             if pc is None:
                 return ttnn.linear(x, w, compute_kernel_config=ck, **kw)

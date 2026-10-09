@@ -1078,9 +1078,14 @@ class MultichipDecoder(OptimizedDecoder):
             from .router32 import route_topk_rm
 
             logits32 = self._prefill_linear(ln_flat, self.w["gate_w"], self._ck_router_precise, dtype=ttnn.float32)
-            scores = ttnn.sigmoid(logits32)
-            sel = ttnn.add(scores, self.w["e_bias_f32"])
-            return route_topk_rm(sel, scores, cfg.top_k, cfg.routed_scaling, cfg.norm_topk_prob)
+            # sigmoid as the bias add's lhs activation (no standalone sigmoid); the kernel reads only sel and recovers
+            # each picked score as sel - bias
+            sig = [ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)]
+            sel = ttnn.add(logits32, self.w["e_bias_f32"], input_tensor_a_activations=sig)
+            ttnn.deallocate(logits32)
+            return route_topk_rm(
+                sel, None, cfg.top_k, cfg.routed_scaling, cfg.norm_topk_prob, bias=self.w["e_bias_f32"]
+            )
         for start in range(0, seq_len, rows):
             end = min(start + rows, seq_len)
             chunk = ln_flat if rows >= seq_len else ttnn.slice(ln_flat, [0, 0, start, 0], [1, 1, end, cfg.hidden])

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Exact fp32 top-K router for prefill (Laguna), row-major outputs for token dispatch. Inputs: sel = sigmoid(logits)
-// + bias and scores = sigmoid(logits), both [T, E] fp32 TILE. Work unit = 8 token rows of one 32-row tile row (unit
+// + bias [T, E] fp32 TILE and either scores = sigmoid(logits) [T, E] (mode 0) or the bias row [1, E] fp32 TILE
+// (mode 1: a picked expert's score is sel - bias, so only sel is streamed). Work unit = 8 token rows of one 32-row tile row (unit
 // u: tile row u / 4, rows (u % 4) * 8 ..); a core takes units core, core + cores, ... and, per unit, reads the 8
 // rows of every [32 x 32] tile as one 512-byte run per face (rows 0-15 live in faces 0/1, 16-31 in faces 2/3). Per
 // row it picks the K experts with the largest sel (fp32 compared as order-preserving integers; a strictly larger
@@ -29,8 +30,9 @@ void kernel_main() {
     constexpr uint32_t wgt_page = get_compile_time_arg_val(9);
     // both data-movement RISCs run this kernel: RISC r of core c takes units 2 * c + r, 2 * c + r + 2 * cores, ...
     constexpr uint32_t risc = get_compile_time_arg_val(10);
+    constexpr uint32_t mode = get_compile_time_arg_val(11);  // 0: scores tensor, 1: bias row (score = sel - bias)
     constexpr uint32_t cb_buf = risc;
-    constexpr auto sel_args = TensorAccessorArgs<11>();
+    constexpr auto sel_args = TensorAccessorArgs<12>();
     constexpr auto sc_args = TensorAccessorArgs<sel_args.next_compile_time_args_offset()>();
     constexpr auto idx_args = TensorAccessorArgs<sc_args.next_compile_time_args_offset()>();
     constexpr auto wgt_args = TensorAccessorArgs<idx_args.next_compile_time_args_offset()>();
@@ -51,8 +53,19 @@ void kernel_main() {
 
     const uint32_t buf = get_write_ptr(cb_buf);
     const uint32_t sel_l1 = buf, sc_l1 = buf + stage, out_l1 = buf + 2 * stage;  // out: R rows x (idx 64 B, wgt 64 B)
-    volatile tt_l1_ptr uint32_t* selv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sel_l1);
-    volatile tt_l1_ptr float* scv = reinterpret_cast<volatile tt_l1_ptr float*>(sc_l1);
+    // plain (cached) loads: the staged unit is read after a barrier + cache invalidate, and only by this RISC
+    const uint32_t* selv = reinterpret_cast<const uint32_t*>(sel_l1);
+    const float* scv = reinterpret_cast<const float*>(sc_l1);
+    // mode 1: the bias row, read once (row 0 of every [32 x 32] fp32 tile: 16 values at byte 0 of face 0 and 16 at
+    // byte 1024 of face 1), as bias[e] at sc_l1 (the scores stage is unused)
+    if constexpr (mode == 1) {
+        for (uint32_t j = 0; j < Et; ++j) {
+            noc_async_read(sc.get_noc_addr(j), sc_l1 + j * 128, 64);
+            noc_async_read(sc.get_noc_addr(j) + 1024, sc_l1 + j * 128 + 64, 64);
+        }
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+    }
     union {
         uint32_t u;
         float f;
@@ -67,7 +80,9 @@ void kernel_main() {
                 const uint32_t off = (face0 + h) * 1024 + row_off;
                 const uint32_t dst = (j * 2 + h) * R * 64;
                 noc_async_read(sel.get_noc_addr(g * Et + j) + off, sel_l1 + dst, R * 64);
-                noc_async_read(sc.get_noc_addr(g * Et + j) + off, sc_l1 + dst, R * 64);
+                if constexpr (mode == 0) {
+                    noc_async_read(sc.get_noc_addr(g * Et + j) + off, sc_l1 + dst, R * 64);
+                }
             }
         }
         noc_async_read_barrier();
@@ -78,26 +93,47 @@ void kernel_main() {
             uint32_t picked[K];
             uint32_t top[K];
             uint32_t count = 0;
-            for (uint32_t e = 0; e < E; ++e) {
-                const uint32_t key = order_key(selv[at(e)]);
-                if (count == K && key <= top[K - 1]) {
-                    continue;
+            uint32_t thr = 0;  // smallest kept key once K are held
+            // walk the staged unit in memory order: per (tile j, face half h) 16 consecutive experts of row i
+            for (uint32_t jh = 0; jh < Et * 2; ++jh) {
+                const uint32_t* row = selv + jh * R * 16 + i * 16;
+                const uint32_t e0 = (jh / 2) * 32 + (jh % 2) * 16;
+                for (uint32_t q = 0; q < 16; ++q) {
+                    const uint32_t key = order_key(row[q]);
+                    if (count == K && key <= thr) {
+                        continue;
+                    }
+                    uint32_t pos = count < K ? count : K - 1;
+                    while (pos > 0 && top[pos - 1] < key) {
+                        top[pos] = top[pos - 1];
+                        picked[pos] = picked[pos - 1];
+                        --pos;
+                    }
+                    top[pos] = key;
+                    picked[pos] = e0 + q;
+                    if (count < K) {
+                        ++count;
+                    }
+                    thr = top[K - 1];
                 }
-                uint32_t pos = count < K ? count : K - 1;
-                while (pos > 0 && top[pos - 1] < key) {
-                    top[pos] = top[pos - 1];
-                    picked[pos] = picked[pos - 1];
-                    --pos;
-                }
-                top[pos] = key;
-                picked[pos] = e;
-                if (count < K) {
-                    ++count;
+            }
+            // a picked expert's score: the scores tensor (mode 0) or sel - bias (mode 1)
+            float pscore[K];
+            for (uint32_t k = 0; k < K; ++k) {
+                if constexpr (mode == 0) {
+                    pscore[k] = scv[at(picked[k])];
+                } else {
+                    union {
+                        uint32_t u;
+                        float f;
+                    } v;
+                    v.u = selv[at(picked[k])];
+                    pscore[k] = v.f - scv[picked[k]];
                 }
             }
             float sum = 0.0f;
             for (uint32_t k = 0; k < K; ++k) {
-                sum += scv[at(picked[k])];
+                sum += pscore[k];
             }
             const float mult = norm ? scale.f / sum : scale.f;
             volatile tt_l1_ptr uint16_t* io = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(out_l1 + i * 128);
@@ -107,7 +143,7 @@ void kernel_main() {
                     float f;
                     uint32_t u;
                 } w;
-                w.f = scv[at(picked[k])] * mult;
+                w.f = pscore[k] * mult;
                 io[k] = static_cast<uint16_t>(picked[k]);
                 wo[k] = static_cast<uint16_t>((w.u + 0x7FFFu + ((w.u >> 16) & 1u)) >> 16);
             }

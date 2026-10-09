@@ -41,10 +41,11 @@ def route32(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_config=tt
     return out
 
 
-def route_topk_rm(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+def route_topk_rm(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_config=ttnn.DRAM_MEMORY_CONFIG, bias=None):
     """Prefill: sel, scores [1, 1, T, E] fp32 TILE interleaved, T a multiple of 32. Returns (weights, indices): the
-    [1, T, K] bf16 routing weights and uint16 expert ids, row-major (token dispatch's input layout). See
-    kernels/route_topk_reader.cpp."""
+    [1, T, K] bf16 routing weights and uint16 expert ids, row-major (token dispatch's input layout). With ``bias``
+    (the [1, 1, 1, E] fp32 TILE score-correction bias) ``scores`` is not read: a picked expert's score is sel - bias.
+    See kernels/route_topk_reader.cpp."""
     device = sel.device()
     T, E = sel.shape[-2], sel.shape[-1]
     K = int(top_k)
@@ -66,8 +67,10 @@ def route_topk_rm(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_con
         )
         for i in range(2)
     ]
+    mode = 1 if bias is not None else 0
+    second = bias if mode else scores
     args = []
-    for t in (sel, scores, idx, wgt):
+    for t in (sel, second, idx, wgt):
         args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     scale_bits = struct.unpack("<I", struct.pack("<f", float(routed_scaling)))[0]
     kernels = [
@@ -76,11 +79,11 @@ def route_topk_rm(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_con
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=grid,
             compile_time_args=[E, K, grid_size.x, cores, int(bool(norm_topk_prob)), scale_bits, 4096, T // 32]
-            + [K * 2, K * 2, risc]
+            + [K * 2, K * 2, risc, mode]
             + args,
             common_runtime_args=[
                 sel.buffer_address(),
-                scores.buffer_address(),
+                second.buffer_address(),
                 idx.buffer_address(),
                 wgt.buffer_address(),
             ],
@@ -88,7 +91,7 @@ def route_topk_rm(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_con
         )
         for risc in range(2)
     ]
-    ttnn.generic_op([sel, scores, idx, wgt], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=bufs))
+    ttnn.generic_op([sel, second, idx, wgt], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=bufs))
     return wgt, idx
 
 
