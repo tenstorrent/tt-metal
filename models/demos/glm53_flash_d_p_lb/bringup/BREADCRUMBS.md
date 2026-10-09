@@ -199,3 +199,11 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
   s4096 KV PCC min/mean kv_latent 0.96868 / 0.98509 (HiFi2 0.96713 / 0.98405; unified 0.96928 / 0.98530),
   index_key 0.98867 / 0.99546 (0.98798 / 0.99491), kda_recurrent 0.97493 / 0.99403 (0.97242 / 0.99320); final hidden
   0.9465 (0.9445), L44 0.9508 (0.9492).
+
+## Fabric packet payload 14400 B (2026-10-09), spec box.device_params.fabric_payload_bytes
+
+- The spec had no router config: the fabric ran at the router default, 4352 B per packet (2 bf16 tiles). MiMo opens
+  its mesh at 14400 B (14 KiB + 64). The ag path has no dispatch / combine (the reason the DeepSeek-family configs size
+  the payload to a token row): every collective moves tile pages, floor(payload / page) per packet, so 14400 B = 7 bf16
+  / 3 fp32 tiles. harness.device_params builds the FabricRouterConfig; BRINGUP_FABRIC_PAYLOAD overrides it.
+- Warm 56k prefill 8.62 -> 8.26 s (6817 tok/s, KDA HiFi4). s4096 ladder identical (data movement only).
