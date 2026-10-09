@@ -393,23 +393,24 @@ FALLBACKS = {
 }
 
 # target -> where it matched the real op (PCC >= 0.999 on every captured case, bf16, HiFi4, bf16 dest acc).
-# Certified before the 2026-10-06 rebase onto main 6a3ecc02796 (as af544975e4d; 37be61a6ea7 after it).
+# Certified on ttsim WH at af544975e4d (37be61a6ea7 after the 2026-10-06 rebase onto 6a3ecc02796, f6d9256507f after the
+# 2026-10-09 rebase onto a27fa47c28b; the op code under it changed with each rebase).
 CERTIFIED: dict = {
-    "ttnn.linear": "test_fallbacks.py[test_linear-*] (12 cases) @ ttsim WH 37be61a6ea7",
-    "ttnn.rms_norm": "test_fallbacks.py[test_rms_norm-*] (8 cases) @ ttsim WH 37be61a6ea7",
-    "ttnn.layer_norm": "test_fallbacks.py[test_layer_norm-*] (3 cases) @ ttsim WH 37be61a6ea7",
-    "ttnn.add": "test_fallbacks.py[test_add-*] (9 cases) @ ttsim WH 37be61a6ea7",
-    "ttnn.multiply": "test_fallbacks.py[test_multiply-*] (3 cases) @ ttsim WH 37be61a6ea7",
-    "ttnn.transformer.scaled_dot_product_attention": "test_fallbacks.py[test_scaled_dot_product_attention-*] (2 cases) @ ttsim WH 37be61a6ea7",
-    "ttnn.transformer.paged_scaled_dot_product_attention_decode": "test_fallbacks.py[test_paged_scaled_dot_product_attention_decode-*] (1 cases) @ ttsim WH 37be61a6ea7",
-    "ttnn.experimental.minimal_matmul": "test_fallbacks.py[test_minimal_matmul-*] (2 cases) @ ttsim WH 37be61a6ea7",
-    "ttnn.experimental.nlp_create_qkv_heads": "test_fallbacks.py[test_nlp_create_qkv_heads-*] (2 cases) @ ttsim WH 37be61a6ea7",
-    "ttnn.experimental.nlp_create_qkv_heads_decode": "test_fallbacks.py[test_nlp_create_qkv_heads_decode-*] (1 cases) @ ttsim WH 37be61a6ea7",
-    "ttnn.experimental.nlp_concat_heads": "test_fallbacks.py[test_nlp_concat_heads-*] (2 cases) @ ttsim WH 37be61a6ea7",
-    "ttnn.experimental.nlp_concat_heads_decode": "test_fallbacks.py[test_nlp_concat_heads_decode-*] (1 cases) @ ttsim WH 37be61a6ea7",
-    "ttnn.experimental.rotary_embedding_llama": "test_fallbacks.py[test_rotary_embedding_llama-*] (5 cases) @ ttsim WH 37be61a6ea7",
-    "ttnn.experimental.paged_update_cache": "test_fallbacks.py[test_paged_update_cache-*] (1 cases) @ ttsim WH 37be61a6ea7",
-    "ttnn.experimental.paged_fill_cache": "test_fallbacks.py[test_paged_fill_cache-*] (1 cases) @ ttsim WH 37be61a6ea7",
+    "ttnn.linear": "test_fallbacks.py[test_linear-*] (12 cases) @ ttsim WH f6d9256507f",
+    "ttnn.rms_norm": "test_fallbacks.py[test_rms_norm-*] (8 cases) @ ttsim WH f6d9256507f",
+    "ttnn.layer_norm": "test_fallbacks.py[test_layer_norm-*] (3 cases) @ ttsim WH f6d9256507f",
+    "ttnn.add": "test_fallbacks.py[test_add-*] (9 cases) @ ttsim WH f6d9256507f",
+    "ttnn.multiply": "test_fallbacks.py[test_multiply-*] (3 cases) @ ttsim WH f6d9256507f",
+    "ttnn.transformer.scaled_dot_product_attention": "test_fallbacks.py[test_scaled_dot_product_attention-*] (2 cases) @ ttsim WH f6d9256507f",
+    "ttnn.transformer.paged_scaled_dot_product_attention_decode": "test_fallbacks.py[test_paged_scaled_dot_product_attention_decode-*] (1 cases) @ ttsim WH f6d9256507f",
+    "ttnn.experimental.minimal_matmul": "test_fallbacks.py[test_minimal_matmul-*] (2 cases) @ ttsim WH f6d9256507f",
+    "ttnn.experimental.nlp_create_qkv_heads": "test_fallbacks.py[test_nlp_create_qkv_heads-*] (2 cases) @ ttsim WH f6d9256507f",
+    "ttnn.experimental.nlp_create_qkv_heads_decode": "test_fallbacks.py[test_nlp_create_qkv_heads_decode-*] (1 cases) @ ttsim WH f6d9256507f",
+    "ttnn.experimental.nlp_concat_heads": "test_fallbacks.py[test_nlp_concat_heads-*] (2 cases) @ ttsim WH f6d9256507f",
+    "ttnn.experimental.nlp_concat_heads_decode": "test_fallbacks.py[test_nlp_concat_heads_decode-*] (1 cases) @ ttsim WH f6d9256507f",
+    "ttnn.experimental.rotary_embedding_llama": "test_fallbacks.py[test_rotary_embedding_llama-*] (5 cases) @ ttsim WH f6d9256507f",
+    "ttnn.experimental.paged_update_cache": "test_fallbacks.py[test_paged_update_cache-*] (1 cases) @ ttsim WH f6d9256507f",
+    "ttnn.experimental.paged_fill_cache": "test_fallbacks.py[test_paged_fill_cache-*] (1 cases) @ ttsim WH f6d9256507f",
 }
 
 
