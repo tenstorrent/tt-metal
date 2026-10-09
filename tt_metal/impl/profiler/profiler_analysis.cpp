@@ -484,7 +484,7 @@ void writeProgramsPerfResultsToCSV(
     MetalContext& ctx, const ProgramsPerfResults& programs_perf_results, const std::filesystem::path& report_path) {
     ZoneScoped;
 
-    std::scoped_lock lock(ctx.profiler_state_manager()->programs_perf_report_write_mutex);
+    std::scoped_lock lock(ProfilerRegistry::instance().programs_perf_report_write_mutex);
 
     struct CsvRowData {
         std::string base_columns;

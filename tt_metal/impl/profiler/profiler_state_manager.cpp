@@ -12,6 +12,8 @@
 #include "hostdev/profiler_common.h"
 #include "context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "profiler_state.hpp"
+#include <tt_stl/indestructible.hpp>
 #include "context/metal_env_accessor.hpp"
 #include "math.hpp"
 #include "tt_cluster.hpp"
@@ -105,7 +107,43 @@ uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rt
 }
 
 ProfilerStateManager::ProfilerStateManager(MetalContext& ctx) :
-    ctx_(ctx), env_(MetalEnvAccessor(ctx.get_env()).impl()), do_sync_on_close(true) {}
+    ctx_(ctx), env_(MetalEnvAccessor(ctx.get_env()).impl()), do_sync_on_close(true) {
+    if (getDeviceProfilerState(env_)) {
+        ProfilerRegistry::instance().attach(*this);
+        attached_to_registry = true;
+    }
+}
+
+ProfilerStateManager::~ProfilerStateManager() {
+    if (attached_to_registry) {
+        ProfilerRegistry::instance().detach(*this);
+    }
+}
+
+ProfilerRegistry& ProfilerRegistry::instance() {
+    // Indestructible is only needed while MetalContext lifetime is in transition. Once every context is owned by a
+    // MetalEnv and destroyed with it, a plain function-local static is enough (unless a MetalEnv itself has static
+    // storage duration, since it would then be destroyed after this object).
+    // Until then, a ProfilerStateManager can be torn down from MetalContext's atexit handler (destroy_all_instances).
+    // That handler is registered before this object is first constructed, so it runs after a plain static would have
+    // been destroyed, and the detach would touch a destroyed registry.
+    static ttsl::Indestructible<ProfilerRegistry> registry;
+    return registry.get();
+}
+
+void ProfilerRegistry::attach(ProfilerStateManager& profiler_state_manager) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TT_FATAL(
+        attached_.empty(),
+        "The device profiler supports only one profiled MetalContext per process; context {} is already profiled",
+        attached_.front()->ctx_.get_context_id());
+    attached_.push_back(&profiler_state_manager);
+}
+
+void ProfilerRegistry::detach(ProfilerStateManager& profiler_state_manager) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::erase(attached_, &profiler_state_manager);
+}
 
 void ProfilerStateManager::cleanup_device_profilers() {
     // This thread only exists when debug dump is enabled
