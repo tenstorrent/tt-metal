@@ -18,6 +18,9 @@ the 544p variants keep 12/3. A wrong shift is a valid schedule over the wrong si
 completes, and it costs quality rather than correctness. The canvas and its shifts therefore travel
 together in ``WORKING_POINTS`` rather than being independently settable.
 
+The ``hyperflow`` working point runs the HyperFlow 8-step file the same way, at the checkpoint's own
+shifts; its sigma grid and interval conditioning come from the file's header.
+
 Quality is recorded, not gated: the bars elsewhere are calibrated against the 49-forward base model
 and a 4- or 8-forward student has no reason to reproduce them.
 """
@@ -28,13 +31,16 @@ import os
 from pathlib import Path
 
 import pytest
+import torch
 from loguru import logger
 from PIL import Image
 
+import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames
 from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import TURBO_NUM_FORWARDS, MiniMaxH3TurboPipeline
+from ....utils import tensor as tt_tensor
 from ....utils.video import Audio, export_video_audio_yuv
 from .common import GALAXY_MESHES
 from .common_av import (
@@ -51,6 +57,7 @@ from .common_av import (
 WORKING_POINTS = {
     "768p": {"size": (768, 1344), "video_shift": 6.0, "audio_shift": 3.0},
     "544p": {"size": (544, 960), "video_shift": 12.0, "audio_shift": 3.0},
+    "hyperflow": {"size": (768, 1344), "video_shift": 12.0, "audio_shift": 3.0},
 }
 WORKING_POINT = os.environ.get("MINIMAX_H3_TURBO_POINT", "768p")
 HEIGHT, WIDTH = WORKING_POINTS[WORKING_POINT]["size"]
@@ -71,6 +78,53 @@ NUM_INFERENCE_STEPS = NUM_FORWARDS + 1
 
 # One adapter file serves both; the keyframe is the only difference between the two tasks.
 TASK = os.environ.get("MINIMAX_H3_TURBO_TASK", "fl2va")
+
+# 50 transformer blocks and 2 refiner blocks, each with fused to_qkv, to_out, ff1 and ff2.
+DEVICE_BOUND_TARGETS = 52 * 4
+
+
+def _assert_two_time_temb_matches_host(pipeline, mesh_device) -> None:
+    """The blended embedding on device against float32 torch over the same fused weights.
+
+    Both embedders are float32 on device and fused on host in float32; this is the check that the
+    adapter's float32 time-embedder deltas survive to the blend rather than being rounded away.
+    """
+    transformer = pipeline._transformer
+    two_time = transformer.two_time
+    assert two_time is not None, "a HyperFlow adapter is bound but the transformer has no endpoint embedder"
+    assert two_time.gate == pipeline.hyperflow.gate
+
+    t = torch.tensor([0.05, 0.5, 0.93], dtype=torch.float32)
+    r = torch.tensor([0.16, 0.7, 1.0], dtype=torch.float32)
+
+    def on_device(levels):
+        return tt_tensor.from_torch(levels.reshape(1, 1, -1, 1), device=mesh_device, dtype=ttnn.float32)
+
+    def on_host(value):
+        return ttnn.to_torch(ttnn.get_device_tensors(value)[0]).float().reshape(t.numel(), -1)
+
+    freq_t = transformer.time_proj(on_device(t))
+    freq_r = transformer.time_proj(on_device(r))
+    emb_t = transformer.time_embedder(freq_t)
+    emb_r = two_time.embedder(freq_r)
+    blended = on_host(ttnn.add(emb_t, ttnn.multiply(ttnn.subtract(emb_r, emb_t), two_time.gate)))
+
+    def reference(state, freq):
+        hidden = torch.nn.functional.silu(freq @ state["linear_1.weight"].T + state["linear_1.bias"])
+        return hidden @ state["linear_2.weight"].T + state["linear_2.bias"]
+
+    states = pipeline._time_embedder_states
+    ref_t = reference(states["time_embedder"], on_host(freq_t))
+    ref_r = reference(states["endpoint_time_embedder"], on_host(freq_r))
+    expected = ref_t + two_time.gate * (ref_r - ref_t)
+
+    pcc = torch.corrcoef(torch.stack([blended.flatten(), expected.flatten()]))[0, 1].item()
+    max_err = (blended - expected).abs().max().item()
+    endpoint_shift = (ref_r - ref_t).abs().max().item()
+    logger.info(
+        f"two-time temb vs float32 host: pcc {pcc:.7f}, max |err| {max_err:.3e}, max |emb_r - emb_t| {endpoint_shift:.3e}"
+    )
+    assert pcc > 0.9999, f"two-time temb diverges from the float32 host reference: pcc {pcc}"
 
 
 # pytest.ini caps a test at 300 s; a cold pass pays weight conversion and JIT well past that.
@@ -132,6 +186,12 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
     handle = pipeline.adapter
     assert handle is not None and len(handle) > 0, "the transformer was built without an adapter bound"
     logger.info(f"adapter {handle.name}: {len(handle)} bound targets")
+    if pipeline.hyperflow is not None:
+        assert pipeline.hyperflow.num_forwards == NUM_FORWARDS
+        assert (
+            len(handle) == DEVICE_BOUND_TARGETS
+        ), f"bound {len(handle)} device targets, expected {DEVICE_BOUND_TARGETS}"
+        _assert_two_time_temb_matches_host(pipeline, mesh_device)
 
     log_pipeline_perf(
         benchmark_profiler,
