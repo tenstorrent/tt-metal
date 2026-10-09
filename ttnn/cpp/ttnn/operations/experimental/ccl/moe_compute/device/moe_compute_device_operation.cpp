@@ -756,6 +756,15 @@ std::vector<ttnn::Tensor> moe_compute(
             .optional_cross_device_semaphore = optional_cross_device_semaphore};
     }
 
+    experimental::prim::MoEComputePath path = experimental::prim::MoEComputePath::FullCcl;
+    if (compute_only) {
+        path = experimental::prim::MoEComputePath::ComputeOnly;
+    } else if (single_device) {
+        path = experimental::prim::MoEComputePath::SingleDevice;
+    } else if (single_cluster) {
+        path = experimental::prim::MoEComputePath::SingleCluster;
+    }
+
     const OperationType::operation_attributes_t attributes{
         .layer_id = layer_id,
         .output_height_shard_dim = output_height_shard_dim,
@@ -764,10 +773,7 @@ std::vector<ttnn::Tensor> moe_compute(
         .has_bias = has_bias,
         .num_token_parallel_cores = num_token_parallel_cores,
         .num_data_parallel_cores = num_data_parallel_cores,
-        .path = compute_only     ? experimental::prim::MoEComputePath::ComputeOnly
-                : single_device  ? experimental::prim::MoEComputePath::SingleDevice
-                : single_cluster ? experimental::prim::MoEComputePath::SingleCluster
-                                 : experimental::prim::MoEComputePath::FullCcl,
+        .path = path,
         .bh_ring_size = ring_n,
         .combine_params = combine_params,
         .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU),
