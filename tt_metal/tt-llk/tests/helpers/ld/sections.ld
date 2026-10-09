@@ -71,6 +71,8 @@ SECTIONS
   {
     /* run_kernel on a 2 KiB boundary (kernel_placement.h), then its out of line callees. */
     *(.text.run_kernel)
+    . = ALIGN(DEFINED(llk_text_tail_align) ? llk_text_tail_align : 1);
+    *(.text.run_kernel.tail)
     *(.text.hot .text.hot.*)
     *(.text .stub .text.* .gnu.linkonce.t.*)
     *(.gnu.warning)
