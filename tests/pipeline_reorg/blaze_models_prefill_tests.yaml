@@ -398,6 +398,7 @@
   budget_type: demo
   sp_config: sc1
 
+
 - name: "(Kimi-K2.7-1T) DFlash drafter accuracy"
   fabric_profile: torus_xy
   cmd: |
@@ -692,6 +693,7 @@
   sp_config: sc1
 
 # ===== GLM-5.3-744B ====================================================================================
+
 - name: "(GLM-5.2-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k"
   fabric_profile: torus_xy
   cmd: |
