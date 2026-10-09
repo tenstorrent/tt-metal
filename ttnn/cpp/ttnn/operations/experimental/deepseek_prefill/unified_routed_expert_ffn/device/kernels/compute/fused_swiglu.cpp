@@ -106,6 +106,65 @@
 #include "api/compute/clamped_silu_glu.h"
 #endif
 
+// Plain SiLU (no variant define): evaluate silu(gate) * up as one binary SFPU op over the raw
+// bf16 accumulators, through the same fused path as the variants above. This replaces the exact
+// silu_tile (exp_21f + Newton reciprocal, ~1 us/tile), the bf8 gate_intermed round trip and the
+// separate multiply phase. It is local to this kernel; the global silu_tile is unchanged.
+// sigmoid(g) = 0.5 + 0.5 * tanh(g / 2), with tanh from the 6-entry FP16 SFPLUTFP32 table of
+// tanh_init<true> (ckernel_sfpu_tanh.h): max |sigmoid error| 0.0094, saturating to 1 at |g| >= 6.
+// Op PCC is unchanged from the exact SiLU (bfp4 weights and bf8 output dominate the error).
+#if !defined(FUSED_BINARY_ACT)
+#define FAST_SILU_GLU 1
+#define FUSED_BINARY_ACT 1
+#ifdef TRISC_MATH
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+namespace ckernel::sfpu {
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void calculate_fast_silu_glu(const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx) {
+    constexpr uint dst_tile_size = 32;  // 32 rows per tile in SFPU addressing
+    // Slopes packed hi/lo in LReg0/1/2, intercepts in LReg4/5/6 (loaded by fast_silu_glu_init).
+    sfpi::vLut16ss s01 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vLut16ss s23 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vLut16ss s45 = sfpi::l_reg[sfpi::LRegs::LReg2];
+    sfpi::vLut16ii i01 = sfpi::l_reg[sfpi::LRegs::LReg4];
+    sfpi::vLut16ii i23 = sfpi::l_reg[sfpi::LRegs::LReg5];
+    sfpi::vLut16ii i45 = sfpi::l_reg[sfpi::LRegs::LReg6];
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        // The six table registers leave two LRegs, so up is loaded only once gate is consumed,
+        // and both 0.5 constants come from vConstFloatPrgm0 instead of a loaded register.
+        sfpi::vFloat gate = sfpi::dst_reg[gate_tile_idx * dst_tile_size];
+        sfpi::vFloat t = sfpi::lut(gate * sfpi::vConstFloatPrgm0, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Retain);
+        t = gate * (t + sfpi::vConstFloatPrgm0);
+        // No explicit bf16 rounding: SFPSTORE truncates and the pack to bf8_b rounds again.
+        // Rounding first costs ~1 us at ISL 1024 and moves PCC by < 1e-5.
+        sfpi::dst_reg[out_tile_idx * dst_tile_size] = t * sfpi::dst_reg[up_tile_idx * dst_tile_size];
+        sfpi::dst_reg++;
+    }
+    sfpi::l_reg[sfpi::LRegs::LReg0] = s01;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = s23;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = s45;
+    sfpi::l_reg[sfpi::LRegs::LReg4] = i01;
+    sfpi::l_reg[sfpi::LRegs::LReg5] = i23;
+    sfpi::l_reg[sfpi::LRegs::LReg6] = i45;
+}
+
+inline void fast_silu_glu_init() {
+    // Program the constant first: SFPCONFIG writes it from LReg0, which the table then owns.
+    sfpi::vConstFloatPrgm0 = 0.5f;
+    // tanh_init<true>'s TABLE1 (breakpoints |v| = 0.5, 1, 1.5, 2, 3; max |err| 0.018) with every
+    // slope and intercept halved (exact in fp16), so the LUT returns 0.5 * tanh(v) directly.
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.96191406f * 0.5f, 0.57617188f * 0.5f);
+    sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.192871094f * 0.5f);
+    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut16ss(0.28710938f * 0.5f, 0.0964355469f * 0.5f);
+    sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vLut16ii(0.48193359f * 0.5f, 0.76806641f * 0.5f);
+    sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut16ss(0.0390625f * 0.5f, 0.0f);
+    sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vLut16ii(0.8828125f * 0.5f, 0.5f);
+}
+}  // namespace ckernel::sfpu
+#endif  // TRISC_MATH
+#endif  // !FUSED_BINARY_ACT
+
 // Stage zones, device profiler only; see the reader for the record budget.
 #ifdef PROFILE_KERNEL
 #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
@@ -760,6 +819,18 @@ FORCE_INLINE void matmul_phase_fused_gu(
 // clamped_silu_glu_tile takes its fp32-dest mode from DST_ACCUM_MODE and wraps itself in MATH().
 #define BINARY_ACT_INIT() clamped_silu_glu_tile_init()
 #define BINARY_ACT_TILE(fp32, g, u, o) clamped_silu_glu_tile(g, u, o)
+#elif defined(FAST_SILU_GLU)
+#define BINARY_ACT_INIT() MATH((SFPU_BINARY_INIT_FN_NO_ARGS(unused, ckernel::sfpu::fast_silu_glu_init)))
+#define BINARY_ACT_TILE(fp32, g, u, o) \
+    MATH((SFPU_BINARY_CALL(            \
+        DST_SYNC_MODE,                 \
+        DST_ACCUM_MODE,                \
+        calculate_fast_silu_glu,       \
+        (fp32, 8 /* ITERATIONS */),    \
+        g,                             \
+        u,                             \
+        o,                             \
+        ckernel::VectorMode::RC)))
 #else
 #error "FUSED_BINARY_ACT is set but no activation variant matched"
 #endif
