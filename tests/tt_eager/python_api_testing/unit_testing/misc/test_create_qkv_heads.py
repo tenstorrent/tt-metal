@@ -309,6 +309,7 @@ def run_create_q_and_kv_heads_test(
         (2, 1024, 96, 8, 8, 96, 2, 8),
         (2, 256, 96, 8, 8, 160, 2, 8),
         (2, 64, 96, 8, 8, 160, 2, 4),
+        (2, 64, 96, 8, 8, 160, 2, 8),
     ),
 )
 def test_nlp_create_q_and_kv_heads_separate_test(

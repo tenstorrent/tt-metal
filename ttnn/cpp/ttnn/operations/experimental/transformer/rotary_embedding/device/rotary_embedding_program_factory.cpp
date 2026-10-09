@@ -810,9 +810,10 @@ ProgramDescriptor create_multi_tile_descriptor(
     compute_desc_g1.core_ranges = core_group_1;
     compute_desc_g1.compile_time_args = compute_kernel_args_group_1;
     compute_desc_g1.defines = compute_kernel_defines;
-    // NOTE: legacy create() left math_fidelity/fp32_dest_acc_en unset for the g1
-    // ComputeConfig in the multi-tile path; preserve those defaults here.
-    compute_desc_g1.config = ComputeConfigDescriptor{};
+    compute_desc_g1.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+    };
 
     std::optional<KernelDescriptor> compute_desc_g2;
     if (!core_group_2.ranges().empty()) {

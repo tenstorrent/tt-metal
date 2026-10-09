@@ -147,7 +147,7 @@ void bind_rmsnorm_post_all_gather_operation(nb::module_& mod) {
               - All tensors must be on device.
               - :attr:`input_tensor` must be rank-4 with batch dimension 1 and channel dimension 1 (shape [1, 1, S, H]).
               - :attr:`input_tensor`.logical_last_dim must equal its padded last dim; H must be divisible by
-                :attr:`num_heads_per_device`.
+                :attr:`num_heads_per_device` * TILE_WIDTH (32), so each head spans whole tiles.
               - :attr:`stats` last padded dim must be a multiple of TILE_WIDTH (32); its first three padded dims must
                 match :attr:`input_tensor`. One tile column per device is expected.
               - If :attr:`weight` is provided it must be TILE layout BFLOAT16 with shape [1, H].
