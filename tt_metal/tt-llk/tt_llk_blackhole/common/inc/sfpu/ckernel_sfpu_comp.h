@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <limits>
 
+#include "ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_is_fp16_zero.h"
 #include "llk_sfpu_types.h"
 #include "sfpi.h"
@@ -561,7 +562,7 @@ sfpi_inline void apply_unary_float_comp<SfpuType::unary_le>(sfpi::vFloat v, sfpi
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_comp_unary_(std::uint32_t value)
 {
-    const sfpi::vFloat s = value;
+    const sfpi::vFloat s = Converter::as_float(value); // value is the threshold's fp32 bit pattern
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
