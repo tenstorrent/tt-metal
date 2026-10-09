@@ -8,13 +8,14 @@ model contract (``initialize_vllm_model``, ``allocate_kv_cache``, ``prefill_forw
 is the precedent).
 
 Requests and state. The plugin hands prefill and decode rows with vLLM's block tables; this model keeps its own
-caches (one ``V41PrefillState`` per request slot, ``max_batch_size`` of them, each with its decode captures) and
-ignores the KV tensors it allocates for the plugin, so a request is identified by the first block of its block table
-(block 0 is vLLM's null block, never a request's): a prefill takes the slot of that block or the least recently used
-free one, a decode row finds its slot by it. Every row is text, single-chunk prefill (``start_pos`` 0), host sampling
-(the logits of the full vocabulary come to the host); prefill runs eagerly (``TtV41Transformer.prefill_into``), decode
-replays the slot's captures (``TtV41Decoder``, ``trace=True``). Prompts need at least ``SLIDING_WINDOW`` tokens (the
-decode step starts after a full window) and prompt plus output at most ``max_model_len - 32``.
+caches and ignores the KV tensors it allocates for the plugin, so a request is identified by the first block of its
+block table (block 0 is vLLM's null block, never a request's). A prefill runs into one of ``TT_V41_PREFILL_SLOTS``
+prefill states (``V41PrefillState``; traced per state and prompt length, else eager) and joins the request's decode
+slot (``TtV41BatchDecoder``: ``max_batch_size`` slots in a pool sharded over the mesh rows; the slot of that block,
+or the least recently used one); a decode call steps every row's slot at once (one replayed capture) and reads the
+gathered logits once. Every row is text, single-chunk prefill (``start_pos`` 0), host sampling (the logits of the
+full vocabulary come to the host). Prompts need at least ``SLIDING_WINDOW`` tokens (the decode step starts after a
+full window) and prompt plus output at most ``max_model_len``.
 
 Environment: ``TT_V41_CHECKPOINT`` (the pinned snapshot; ``weights.resolve_checkpoint``), ``TT_V41_WEIGHT_CACHE``
 (the device MoE cache, ``tests/v41/weight_cache.py``), ``TT_V41_ENGRAM_MMAP`` (the Engram tables mapped from disk).
@@ -32,14 +33,16 @@ from loguru import logger
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import weight_cache_dir
+from models.demos.deepseek_v3_d_p.tt.v41.batch_decode import TtV41BatchDecoder
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
-from models.demos.deepseek_v3_d_p.tt.v41.decode import ROWS, TtV41Decoder
+from models.demos.deepseek_v3_d_p.tt.v41.decode import ROWS
 from models.demos.deepseek_v3_d_p.tt.v41.engram_checkpoint import build_engram_modules
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer, V41PrefillTrace
 from models.demos.deepseek_v3_d_p.tt.v41.weights import load_layer, load_layer_dense, resolve_checkpoint
 
 WARMUP_PROMPT = 255  # tokens of the warm-up prompt (a full window; odd, so the ratio-2 carry path runs first)
-WARMUP_DECODE_STEPS = 16  # at most; the slot is done once both parities are captured and replayed once
+WARMUP_DECODE_STEPS = 8  # at most; done once the step is captured and replayed once
+PREFILL_SLOTS = "TT_V41_PREFILL_SLOTS"  # prefill states (default 2): requests prefill through them into the pool
 # Traced prefill: ``TT_V41_TRACE_PREFILL_LENGTHS`` lists prompt lengths (tokens, comma-separated) whose prefill is
 # captured per slot at warm-up (the trace phase) and replayed for every prompt of exactly that length; other
 # lengths run eagerly, or are captured on their first request when ``TT_V41_TRACE_PREFILL_ON_MISS=1``.
@@ -76,9 +79,10 @@ class DeepseekV41ForCausalLM:
         self,
         mesh_device,
         model: TtV41Transformer,
-        decoder: TtV41Decoder,
+        decoder: TtV41BatchDecoder,
         tokenizer,
         max_batch_size: int,
+        prefill_slots: int = 2,
         vllm_config=None,
     ):
         """``vllm_config``: unused; vLLM's registry classifies a model as generative by the shape of ``__init__``,
@@ -87,11 +91,13 @@ class DeepseekV41ForCausalLM:
         self.mesh_device, self.model, self.decoder, self.tokenizer = mesh_device, model, decoder, tokenizer
         self.config = model.config
         self.max_batch_size = max_batch_size
-        # request slots: first block id -> state, least recently used first
-        self.slots: OrderedDict[int, V41PrefillState] = OrderedDict()
-        self.free: list[V41PrefillState] = [model.new_state() for _ in range(max_batch_size)]
-        for state in self.free:
-            decoder.prepare(state)  # every slot's buffers before the first capture (TtV41Decoder.prepare)
+        assert decoder.num_slots == max_batch_size, (decoder.num_slots, max_batch_size)
+        # decode slots: first block id -> pool slot, least recently used first; the free slots
+        self.slots: OrderedDict[int, int] = OrderedDict()
+        self.free: list[int] = list(range(max_batch_size))
+        # prefill states, in use round-robin (a request's rows are in its decode slot once its prefill returns)
+        self.prefill_states: list[V41PrefillState] = [model.new_state() for _ in range(prefill_slots)]
+        self.next_prefill_state = 0
         self.warmed_up = False
         # traced prefill per (slot, prompt length): the fixed input buffers are shared by every trace
         self.prefill_traces: dict[tuple[int, int], V41PrefillTrace] = {}
@@ -145,12 +151,18 @@ class DeepseekV41ForCausalLM:
             engram_hash=engram_hash,
             weight_cache_path=root,
         )
-        decoder = TtV41Decoder(model, root, trace=True)
+        sp = tuple(mesh_device.shape)[0]
+        assert (
+            max_batch_size % sp == 0
+        ), f"max_num_seqs {max_batch_size}: the pool holds the same slots per mesh row ({sp})"
+        decoder = TtV41BatchDecoder(model, root, users_per_rank=max_batch_size // sp, trace=True)
+        prefill_slots = int(os.environ.get(PREFILL_SLOTS, 2))
         logger.info(
             f"DeepSeek-V4.1-Flash: {len(layers)} layers built in {time.time() - t0:.0f} s; max_seq_len {max_seq} "
-            f"(chunk {chunk}), {max_batch_size} request slots, mesh {tuple(mesh_device.shape)}"
+            f"(chunk {chunk}), {max_batch_size} decode slots ({max_batch_size // sp} per mesh row), {prefill_slots} "
+            f"prefill states, mesh {tuple(mesh_device.shape)}"
         )
-        return cls(mesh_device, model, decoder, tokenizer, max_batch_size)
+        return cls(mesh_device, model, decoder, tokenizer, max_batch_size, prefill_slots)
 
     @classmethod
     def get_max_tokens_all_users(
@@ -174,19 +186,24 @@ class DeepseekV41ForCausalLM:
         assert key != 0, f"row {row}: block table starts with the null block"
         return key
 
-    def _slot_for_prefill(self, key: int) -> V41PrefillState:
+    def _slot_for_prefill(self, key: int) -> int:
         if key in self.slots:
-            state = self.slots.pop(key)
+            slot = self.slots.pop(key)
         elif self.free:
-            state = self.free.pop()
+            slot = self.free.pop()
         else:
-            _, state = self.slots.popitem(last=False)  # the least recently used request is done or preempted
-        self.slots[key] = state
-        return state
+            _, slot = self.slots.popitem(last=False)  # the least recently used request is done or preempted
+        self.slots[key] = slot
+        return slot
 
-    def _slot_for_decode(self, key: int) -> V41PrefillState:
-        state = self.slots.pop(key)
-        self.slots[key] = state  # most recently used
+    def _slot_for_decode(self, key: int) -> int:
+        slot = self.slots.pop(key)
+        self.slots[key] = slot  # most recently used
+        return slot
+
+    def _prefill_state(self) -> V41PrefillState:
+        state = self.prefill_states[self.next_prefill_state]
+        self.next_prefill_state = (self.next_prefill_state + 1) % len(self.prefill_states)
         return state
 
     def prefill_forward(self, **kwargs) -> torch.Tensor:
@@ -208,7 +225,8 @@ class DeepseekV41ForCausalLM:
                 n + ROWS <= self.model.max_seq_len
             ), f"prompt of {n} tokens beyond max_seq_len {self.model.max_seq_len}"
             prompt = tokens[i, :n].to(torch.int64)
-            state = self._slot_for_prefill(self._request_key(page_table, i))
+            slot = self._slot_for_prefill(self._request_key(page_table, i))
+            state = self._prefill_state()
             t0 = time.time()
             trace = self.prefill_traces.get((id(state), n))
             if trace is None and self.trace_on_miss:
@@ -220,12 +238,12 @@ class DeepseekV41ForCausalLM:
             else:
                 logits = self.model.prefill_into(prompt, state)
             t1 = time.time()
-            self.decoder.begin(prompt, state)
+            self.decoder.join(slot, prompt, state)
             mode = "replay" if trace is not None else "eager"
             phases = "" if trace is None else " " + " ".join(f"{k} {v:.3f}" for k, v in trace.last.items())
             logger.info(
                 f"DeepSeek-V4.1-Flash: prefill of {n} tokens in {time.time() - t0:.2f} s ({mode};{phases} "
-                f"begin {time.time() - t1:.3f})"
+                f"join {time.time() - t1:.3f})"
             )
             out[i, 0] = logits[-1]
         return out
@@ -248,17 +266,29 @@ class DeepseekV41ForCausalLM:
 
     def decode_forward(self, **kwargs) -> torch.Tensor:
         """``tokens`` [B, 1], ``start_pos`` [B], ``page_table`` [B, blocks] -> fp32 logits ``[B, 1, vocab]``; rows
-        whose block table starts with the null block are idle."""
+        whose block table starts with the null block are idle. One step of the pool for every active row."""
         tokens, positions, page_table = kwargs["tokens"], kwargs["start_pos"], kwargs["page_table"]
         assert kwargs.get("sampling_params") is None, "host sampling only"
         out = torch.zeros(tokens.shape[0], 1, self.config.VOCAB_SIZE, dtype=torch.float32)
+        step, rows = {}, {}
         for i in range(tokens.shape[0]):
             if int(page_table[i, 0]) == 0:
                 continue
-            state = self._slot_for_decode(self._request_key(page_table, i))
+            slot = self._slot_for_decode(self._request_key(page_table, i))
             p = int(positions[i])
-            assert p == state.start, f"row {i}: vLLM position {p}, state at {state.start}"
-            out[i, 0] = self.decoder.decode(int(tokens[i, 0]), state)
+            assert p == self.decoder.position(
+                slot
+            ), f"row {i}: vLLM position {p}, slot {slot} at {self.decoder.position(slot)}"
+            step[slot] = int(tokens[i, 0])
+            rows[slot] = i
+        if not step:
+            return out
+        t0 = time.time()
+        logits = self.decoder.decode(step)
+        for slot, i in rows.items():
+            out[i, 0] = logits[slot]
+        last = self.decoder.last
+        logger.debug(f"DeepSeek-V4.1-Flash: decode step of {len(step)} rows in {time.time() - t0:.3f} s {last}")
         return out
 
     def read_decode_output(self, tt_out, async_read=False):
@@ -266,16 +296,16 @@ class DeepseekV41ForCausalLM:
 
     # --- warm-up (the plugin's model_runner.warmup_model) ---------------------------------------------------------------
     def warmup_model_prefill(self, enable_trace: bool, **kwargs) -> None:
-        """Compile the prefill (one prompt per slot) on the first call; the second (trace) call, which the plugin
-        makes after the decode captures, captures the prefill of every ``TT_V41_TRACE_PREFILL_LENGTHS`` length on
-        every slot (the captures' persistent tensors are consumed right after each replay, so they may share
-        addresses with the decode captures' intermediates; the slot states and carry buffers predate every
-        capture). Other lengths keep running eagerly."""
+        """Compile the prefill (one prompt per prefill state, each joining every decode slot) on the first call;
+        the second (trace) call, which the plugin makes after the decode capture, captures the prefill of every
+        ``TT_V41_TRACE_PREFILL_LENGTHS`` length on every prefill state (the captures' persistent tensors are
+        consumed right after each replay, so they may share addresses with the decode capture's intermediates; the
+        pool and the prefill states predate every capture). Other lengths keep running eagerly."""
         if enable_trace:
             if self.prefill_traced:
                 return
             for n in self.trace_lengths:
-                for state in self.free:
+                for state in self.prefill_states:
                     t0 = time.time()
                     self._capture_prefill(state, n)
                     logger.info(
@@ -285,33 +315,42 @@ class DeepseekV41ForCausalLM:
             return
         if self.warmed_up:
             return
+        self._warmup_join()
+
+    def _warmup_join(self) -> None:
+        """Prefill the warm-up prompt into every prefill state and join every decode slot from them."""
         prompt = self._warmup_prompt()
-        for state in self.free:
+        for k, state in enumerate(self.prefill_states):
             t0 = time.time()
             self.model.prefill_into(prompt, state)
-            self.decoder.begin(prompt, state)
             logger.info(f"DeepSeek-V4.1-Flash warm-up: prefill of {prompt.numel()} tokens in {time.time() - t0:.1f} s")
+        t0 = time.time()
+        for slot in range(self.max_batch_size):
+            self.decoder.join(slot, prompt, self.prefill_states[slot % len(self.prefill_states)])
+        logger.info(f"DeepSeek-V4.1-Flash warm-up: {self.max_batch_size} slots joined in {time.time() - t0:.1f} s")
 
     def warmup_model_decode(self, enable_trace: bool, **kwargs) -> None:
-        """Run the decode step on every slot until its two parities are captured (the first call compiles, the
-        captures follow; the second call finds every slot captured)."""
+        """Run the decode step on every slot until it is captured and replayed once (the first call compiles, the
+        capture follows; the second call finds it captured)."""
         if self.warmed_up:
             return
+        if not self.decoder.slots:  # the prefill warm-up did not run
+            self._warmup_join()
         prompt = self._warmup_prompt()
-        for state in self.free:
-            if state.start == 0:  # the prefill warm-up did not run
-                self.model.prefill_into(prompt, state)
-                self.decoder.begin(prompt, state)
-            token, replays = int(prompt[-1]), 0
-            for step in range(WARMUP_DECODE_STEPS):
-                t0 = time.time()
-                token = int(self.decoder.decode(token, state).argmax())
-                mode = self.decoder.last.get("mode")
-                replays += mode == "replay"
-                logger.info(f"DeepSeek-V4.1-Flash warm-up: decode step {step} ({mode}) in {time.time() - t0:.2f} s")
-                if self.decoder.traced(state) and replays >= 1:
-                    break
-            assert self.decoder.traced(state), "the decode step was not captured"
+        tokens = {slot: int(prompt[-1]) for slot in range(self.max_batch_size)}
+        replays = 0
+        for step in range(WARMUP_DECODE_STEPS):
+            t0 = time.time()
+            logits = self.decoder.decode(tokens)
+            tokens = {slot: int(logits[slot].argmax()) for slot in tokens}
+            mode = self.decoder.last.get("mode")
+            replays += mode == "replay"
+            logger.info(
+                f"DeepSeek-V4.1-Flash warm-up: decode step {step} ({mode}) in {time.time() - t0:.2f} s {self.decoder.last}"
+            )
+            if self.decoder.capture is not None and replays >= 1:
+                break
+        assert self.decoder.capture is not None, "the decode step was not captured"
         self.warmed_up = True
 
     def _warmup_prompt(self, n: int = WARMUP_PROMPT) -> torch.Tensor:

@@ -81,18 +81,21 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
     }
 
     t0 = time.time()
-    model = DeepseekV41ForCausalLM.initialize_vllm_model(None, mesh_device, max_batch_size=2, max_seq_len=max_seq_len)
+    batch = int(os.environ.get("V41_GEN_BATCH", 8))  # decode slots: a multiple of the mesh rows (the pool)
+    model = DeepseekV41ForCausalLM.initialize_vllm_model(
+        None, mesh_device, max_batch_size=batch, max_seq_len=max_seq_len
+    )
     result["build_s"] = round(time.time() - t0, 1)
     kv = model.allocate_kv_cache((16, 1, 64, 512), torch.bfloat16, len(layers))
     assert len(kv) == len(layers)
     t0 = time.time()
     model.warmup_model_prefill(enable_trace=False, kv_cache=kv, can_sample_on_device=False)
     model.warmup_model_decode(
-        enable_trace=False, kv_cache=kv, max_batch_size=2, num_blocks=16, can_sample_on_device=False
+        enable_trace=False, kv_cache=kv, max_batch_size=batch, num_blocks=16, can_sample_on_device=False
     )
     model.warmup_model_prefill(enable_trace=True, kv_cache=kv, can_sample_on_device=False)
     model.warmup_model_decode(
-        enable_trace=True, kv_cache=kv, max_batch_size=2, num_blocks=16, can_sample_on_device=False
+        enable_trace=True, kv_cache=kv, max_batch_size=batch, num_blocks=16, can_sample_on_device=False
     )
     result["warmup_s"] = round(time.time() - t0, 1)
     result["dram_after_warmup_bytes"] = _dram_bytes(mesh_device)
@@ -159,7 +162,8 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
     result["book_text"] = tokenizer.decode(book_a[prompt + 1 : prompt + steps + 1].tolist())
     result["other_text"] = tokenizer.decode(text_b)
 
-    # --- a third request takes the least recently used slot: the same book prompt, from the start ---
+    # --- a third request (a free slot, or the least recently used one when V41_GEN_BATCH is 2 per 1 mesh row):
+    # the same book prompt, from the start ---
     logits = prefill([(11, book_a[:prompt])])
     fed, hits2, preds = int(book_a[prompt]), 0, []
     for s in range(min(steps, 8)):

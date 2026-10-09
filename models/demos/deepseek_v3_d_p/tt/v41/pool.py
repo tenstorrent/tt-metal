@@ -28,9 +28,11 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.cache import WINDOW_SLOT, V41PrefillState, replicated_zeros
+from models.demos.deepseek_v3_d_p.tt.v41.ccl import fabric_num_links
 from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import _cores, _split
-from models.demos.deepseek_v3_d_p.tt.v41.layout import V41MeshLayout
+from models.demos.deepseek_v3_d_p.tt.v41.layout import SP_AXIS, V41MeshLayout
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, MlaKvCacheGeometry
 
 ROWS = 32  # the decode tile
@@ -147,6 +149,9 @@ class V41DecodePool:
         }
         self._window = {l: self._window_rows(l) for l in self.layers}
         self._offsets = {src: self._user_offsets(src) for src in sources}
+        self._ccl = get_tt_ccl(mesh_device) if self.sp > 1 else None
+        self._num_links = fabric_num_links()
+        self._sp_topology = per_axis_topology()[SP_AXIS]
         self.step = 0  # the global step: the ring slot every user's next window row goes to is step % RING
 
     def _replicated(self, host, dtype, layout=ttnn.TILE_LAYOUT):
@@ -167,6 +172,21 @@ class V41DecodePool:
             dtype=dtype,
             layout=layout,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, (self.sp, self.tp), dims=(0, None)),
+        )
+
+    def gather_sp(self, t, dim: int):
+        """Concatenate ``t`` over the mesh rows along ``dim`` (rank order) on every chip."""
+        if self._ccl is None:
+            return t
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=dim,
+            multi_device_global_semaphore=self._ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=SP_AXIS),
+            barrier_semaphore=self._ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=SP_AXIS),
+            num_links=self._num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self._sp_topology,
+            cluster_axis=SP_AXIS,
         )
 
     # --- addressing ----------------------------------------------------------------------------------------

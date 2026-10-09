@@ -179,15 +179,18 @@ class TtV41BatchDecoder(TtV41Decoder):
             inputs[f"comp{ratio}"] = self.pool.per_rank(comp.view(sp, 1, 1, ROWS), ttnn.uint32, device=False)
         if self.model.engram:
             hash_ = self.model.engram_hash
-            hashed = {}  # slot -> [n_layers, cols] of its token after its history
-            for slot, token in tokens.items():
-                hashed[slot] = hash_(torch.tensor([token]), self.slots[slot].engram_history)[0][0]
+            order = list(tokens)
+            if order:
+                ids_batch, _ = hash_.step(
+                    torch.tensor([tokens[s] for s in order]),
+                    torch.stack([self.slots[s].engram_history for s in order]),
+                )  # [U, n_layers, cols]
             inputs["engram"] = {}
             for l, e in self.model.engram.items():
                 ids = torch.zeros(sp * ROWS, hash_.n_hash_cols, dtype=torch.int64)
-                for slot, h in hashed.items():
+                for k, slot in enumerate(order):
                     r, u = divmod(slot, users)
-                    ids[r * ROWS + u] = h[hash_.layer_index(l)]
+                    ids[r * ROWS + u] = ids_batch[k, hash_.layer_index(l)]
                 inputs["engram"][l] = e.prepare_host(ids, sp * ROWS)
         return inputs
 
@@ -234,23 +237,22 @@ class TtV41BatchDecoder(TtV41Decoder):
         if mode == "eager":
             ttnn.deallocate(logits)
         self.last["read_s"] = round(time.time() - t6, 4)
-        for slot, token in tokens.items():
-            user = self.slots[slot]
-            if self.model.engram:
-                _, user.engram_history = self.model.engram_hash(torch.tensor([token]), user.engram_history)
-            user.position += 1
+        if self.model.engram and tokens:
+            order = list(tokens)
+            _, histories = self.model.engram_hash.step(
+                torch.tensor([tokens[s] for s in order]), torch.stack([self.slots[s].engram_history for s in order])
+            )
+            for k, slot in enumerate(order):
+                self.slots[slot].engram_history = histories[k]
+        for slot in tokens:
+            self.slots[slot].position += 1
         self.pool.step += 1
         return out
 
     def _logits_to_host(self, logits, tokens: dict[int, int]) -> dict[int, torch.Tensor]:
-        tiles = {}
-        out = {}
-        for slot in tokens:
-            r, u = divmod(slot, self.users)
-            if r not in tiles:
-                tiles[r] = self.model.head._tile_to_host(logits, r)
-            out[slot] = tiles[r][u]
-        return out
+        """The gathered ``[1, 1, slots, vocab]`` fp32 logits (the same on every chip) -> slot -> ``[vocab]``."""
+        rows = ttnn.to_torch(ttnn.get_device_tensors(logits)[0])[0, 0].float()
+        return {slot: rows[slot] for slot in tokens}
 
     def replay_device_time(self, repeats: int = 3) -> dict:
         """Device time of one replay of the captured step without host work -> {"step": min seconds}."""
@@ -313,8 +315,17 @@ class TtV41BatchDecoder(TtV41Decoder):
             if on_block is not None:
                 on_block(layer, x)
         final = ttnn.typecast(model.blocks[-1].residual.final_collapse(x, pre), ttnn.bfloat16)
-        logits, _ = model.head(final, 0)
-        return logits
+        logits, _ = model.head(final, 0)  # [1, 1, ROWS, vocab/tp] fp32 per chip, row u slot u of the chip's rank
+        # the slots' rows, gathered over TP (the vocabulary) and SP (the ranks): one [1, 1, slots, vocab] read
+        rows = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(logits)
+        if self.users < ROWS:
+            part = ttnn.slice(rows, [0, 0, 0, 0], [1, 1, self.users, rows.shape[3]])
+            ttnn.deallocate(rows)
+            rows = part
+        # the ranks first (pages of vocab/tp fp32; a full-vocabulary row is beyond L1 as an input page)
+        rows = self.pool.gather_sp(rows, dim=2)
+        return model.blocks[0].attn.ccl.tp_all_gather(rows, dim=3)
 
     def _mask(self, ratio: int):
         """Additive ``[1, 1, ROWS, cap + 32]`` bf16: row u -inf at the columns at or past its visible count."""

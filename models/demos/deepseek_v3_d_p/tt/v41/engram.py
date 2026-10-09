@@ -199,6 +199,24 @@ class V41EngramHash:
             hashes.append(rolling.unsqueeze(-1) % self.primes[:, i - 1])
         return torch.cat(hashes, dim=-1) + self.offsets, seq[-(n - 1) :].clone()
 
+    def step(self, tokens: torch.Tensor, histories: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """One token of each of ``U`` requests at once: ``tokens`` [U], ``histories`` [U, n - 1] (each a request's
+        history from :meth:`__call__`, full: the request has at least n - 1 tokens) -> (hash ids [U, n_layers,
+        n_hash_cols], the histories after the tokens [U, n - 1]); what ``U`` calls of :meth:`__call__` with one token
+        return, in one pass (the batched decode's per-step host work)."""
+        n = self.layout.max_ngram_size
+        assert histories.shape == (tokens.numel(), n - 1), (tuple(histories.shape), tokens.numel(), n)
+        compressed = self.token_map[tokens.to(torch.int64)]
+        seq = torch.cat([histories, compressed[:, None]], dim=1)  # [U, n]: the token last
+        grams = seq.flip(1)  # look-back 0 .. n - 1
+        grams = torch.where(grams == DEAD, torch.full_like(grams, self.pad_id), grams)
+        products = grams.unsqueeze(1) * self.multipliers  # [U, n_layers, n]
+        rolling, hashes = products[..., 0], []
+        for i in range(1, n):
+            rolling = torch.bitwise_xor(rolling, products[..., i])
+            hashes.append(rolling.unsqueeze(-1) % self.primes[:, i - 1])
+        return torch.cat(hashes, dim=-1) + self.offsets, seq[:, 1:].clone()
+
 
 class V41EngramTable:
     """One Engram layer's table on the host (N3), from the checkpoint's float8_e4m3fn rows ``[R, head_dim]`` and
