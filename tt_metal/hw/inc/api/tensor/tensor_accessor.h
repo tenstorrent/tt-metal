@@ -180,12 +180,11 @@ public:
         ASSERT(end <= dspec().tensor_volume());
 
         const int d = contiguous_page_dim();
+        const uint32_t stride = dspec().tensor_strides()[d];
 
-        // The shard is one page wide inside d, so the walk starts at d.
-        uint32_t coords = page_id;
-        for (int i = dspec().rank() - 1; i > d; --i) {
-            coords /= dspec().tensor_shape()[i];
-        }
+        // The shard is one page wide after d, so the walk starts at d. Dividing by stride drops the dims after d;
+        // skip it when d is the last dim (stride 1), so runtime shapes don't pay for a divide.
+        uint32_t coords = (d == static_cast<int>(dspec().rank()) - 1) ? page_id : page_id / stride;
 
         uint32_t run = 1;
         uint32_t block = 1;  // run entries per step of dim i
@@ -207,7 +206,6 @@ public:
         }
 
         // end is in page ids, the run steps by stride.
-        const uint32_t stride = dspec().tensor_strides()[d];
         const uint32_t room = (end - page_id - 1) / stride + 1;
         return run < room ? run : room;
     }
