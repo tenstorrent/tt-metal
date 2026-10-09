@@ -259,7 +259,7 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
         transformer_config=TINY_TRANSFORMER_CONFIG,
         device_config=DEVICE_CONFIG,
         model_source=HF_MODEL_ID,
-        dataset=dataset,
+        dataset_func=lambda: dataset,
         config=grpo_cfg,
         reward_func=reward_func,
         optimizer_dict=optimizer_dict,

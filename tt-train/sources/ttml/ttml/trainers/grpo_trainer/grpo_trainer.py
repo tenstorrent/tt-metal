@@ -1045,7 +1045,7 @@ class GRPOTrainer:
         transformer_config: Any,
         device_config: Any,
         model_source: str,
-        dataset: Any,
+        dataset_func: Callable[[], Any],
         config: GRPOConfig,
         reward_func: Optional[Callable[..., List[float]]] = None,
         optimizer_dict: Optional[dict] = None,
@@ -1060,22 +1060,26 @@ class GRPOTrainer:
             model_source: HuggingFace model ID or local checkpoint directory
                 the trainer loads the model from, and whose HF config is saved
                 with checkpoints.
+            dataset_func: Zero-argument callable that returns the training
+                dataset. The trainer calls it once, in the constructor.
 
         The trainer opens the device and builds the policy model and tokenizer
         (``self.model`` / ``self.tokenizer``) with
         :func:`~ttml.trainers.grpo_trainer.grpo_ttml_model.setup_ttml_model`,
         then builds its :class:`RolloutSampler` from ``config.rollout_source``
-        with that model and tokenizer, exposed as ``self.rollout_sampler``. The
-        trainer runs its own forward pass with gradients on the model and never
-        changes its run mode.
+        with that model and tokenizer, exposed as ``self.rollout_sampler``. It
+        also builds the optimizer, LR scheduler and tokenized prompts, so
+        ``train()`` only runs the loop. The trainer runs its own forward pass
+        with gradients on the model and never changes its run mode.
         """
         if optimizer_dict is None:
             raise ValueError("GRPOTrainer: 'optimizer_dict' is required.")
+        if not callable(dataset_func):
+            raise TypeError("GRPOTrainer: 'dataset_func' must be a zero-argument callable returning the dataset.")
 
         self._init_rewards(reward_func, reward_funcs)
 
         # Constructor inputs (immutable during ``train``).
-        self.dataset = dataset
         self.config = config
         self.optimizer_dict = optimizer_dict
         self.callbacks: List[Any] = list(callbacks or [])
@@ -1105,7 +1109,8 @@ class GRPOTrainer:
 
         # Resolved-at-setup state. Pre-declared with ``None`` sentinels so the
         # full trainer lifecycle is visible in one place; populated by
-        # ``_setup()`` on the first ``train()`` call.
+        # ``_setup()`` at the end of the constructor.
+        self._train_called: bool = False
         self._pad_token: int = 0
         self._optimizer: Any = None
         self._lr_scheduler: Any = None
@@ -1137,6 +1142,8 @@ class GRPOTrainer:
             # Either way we skip auto-appending to avoid duplicate CSV writes.
             if not any(isinstance(cb, GRPOMonitor) or type(cb).__name__ == "GRPOMonitor" for cb in self.callbacks):
                 self.callbacks.append(GRPOMonitor(self.config))
+
+        self._setup(dataset_func())
 
     def _init_rewards(
         self,
@@ -1216,9 +1223,9 @@ class GRPOTrainer:
         per_device_batch_len = completions_batch_len / ddp_world_size
         return ttml.ops.unary.mean(weighted_surr_4d) * (-float(B_local) * float(Tp) / per_device_batch_len)
 
-    def _setup(self) -> None:
+    def _setup(self, dataset: Any) -> None:
         """One-shot training setup: validate config, build optimizer, resolve
-        the device-parallelism topology, and tokenize the dataset.
+        the device-parallelism topology, and tokenize ``dataset``.
 
         Populates the ``self._foo`` attributes pre-declared in ``__init__`` (all
         the parallelism-topology and batching state that every phase helper
@@ -1369,7 +1376,7 @@ class GRPOTrainer:
         prompts_per_microbatch = completions_per_microbatch // grpo_cfg.num_generations
         generation_batch_prompts = prompts_per_microbatch * grad_accum
 
-        total_prompts = min(int(grpo_cfg.prompts_to_train), len(self.dataset))
+        total_prompts = min(int(grpo_cfg.prompts_to_train), len(dataset))
         if total_prompts % generation_batch_prompts != 0:
             raise ValueError(
                 f"prompts_to_train ({total_prompts}) must be divisible by the generation batch size "
@@ -1377,7 +1384,7 @@ class GRPOTrainer:
                 f"{grad_accum} = {generation_batch_prompts}) to avoid a ragged final batch that can break "
                 "micro-batch sharding"
             )
-        dataset = self.dataset.select(range(total_prompts))
+        dataset = dataset.select(range(total_prompts))
         prompts = [tokenizer.encode(row["prompt"]) for row in dataset]
         extra_columns = {k: list(dataset[k]) for k in dataset.column_names if k != "prompt"}
 
@@ -1719,7 +1726,12 @@ class GRPOTrainer:
     # -- training loop -------------------------------------------------------
 
     def train(self) -> None:
-        self._setup()
+        if self._train_called:
+            raise RuntimeError(
+                "GRPOTrainer.train() can only be called once: the step counter restarts at 0 while sampler "
+                "weight versions only increase. Build a new GRPOTrainer to train again."
+            )
+        self._train_called = True
         for cb in self.callbacks:
             cb.on_train_begin(self)
         self.metrics = {"step": 0}
