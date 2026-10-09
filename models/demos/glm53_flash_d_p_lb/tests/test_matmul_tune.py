@@ -47,6 +47,11 @@ SHAPES = {
     "mlp_down": (5120, 1536, 4096, FP32, BF16, FP32, HIFI4, 3),
 }
 SEL = os.environ.get("GLM_MMT_SHAPES", ",".join(SHAPES)).split(",")
+# batched, one weight per batch (MLA per-head absorb): name: (B, M, K, N, dtypes..., fidelity, calls per chunk)
+BMM = {
+    "mla_uk": (64, 640, 256, 512, BF16, BF16, BF16, HIFI2, 11),
+    "mla_uv": (64, 640, 512, 256, BF16, BF16, BF16, HIFI2, 11),
+}
 
 
 def _ckc(fid, l1acc=True):
@@ -126,6 +131,81 @@ def minimal_configs(grid, M, N):
             )
         )
     return out
+
+
+def bmm_configs(grid, M, K, N):
+    """MatmulMultiCoreReuseProgramConfig candidates for a batched matmul with per-batch weights: per-core M blocks
+    that divide the per-batch M (a block never straddles two batches), per-core N blocks dividing N."""
+    Mt, Kt, Nt = M // 32, K // 32, N // 32
+    out = []
+    for pm in _divisors(Mt, 20):
+        for pn in _divisors(Nt, 16):
+            if pm * pn > 160:  # output block + in0 / in1 blocks within L1
+                continue
+            sw = max(_divisors(pn, 4))
+            sh = max(_divisors(pm, max(1, 4 // sw)))
+            for bw in (2, 4, 8):
+                if Kt % bw:
+                    continue
+                out.append(
+                    (
+                        f"bmm pm{pm} pn{pn} bw{bw} sb{sh}x{sw}",
+                        ttnn.MatmulMultiCoreReuseProgramConfig(
+                            compute_with_storage_grid_size=grid,
+                            in0_block_w=bw,
+                            out_subblock_h=sh,
+                            out_subblock_w=sw,
+                            per_core_M=pm,
+                            per_core_N=pn,
+                        ),
+                    )
+                )
+    return out
+
+
+@pytest.mark.timeout(10800)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+def test_bmm_tune(device):
+    """The batched per-head matmuls (GLM_MMT_BMM comma list, default all): auto vs MatmulMultiCoreReuseProgramConfig."""
+    grid = device.compute_with_storage_grid_size()
+    cores = grid.x * grid.y
+    torch.manual_seed(0)
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    for name in os.environ.get("GLM_MMT_BMM", ",".join(BMM)).split(","):
+        B, M, K, N, adt, wdt, odt, fid, calls = BMM[name]
+        a = ttnn.from_torch(torch.randn(1, B, M, K), dtype=adt, layout=ttnn.TILE_LAYOUT, device=device)
+        w = ttnn.from_torch(torch.randn(1, B, K, N) / K**0.5, dtype=wdt, layout=ttnn.TILE_LAYOUT, device=device)
+        truth = (ttnn.to_torch(a).double() @ ttnn.to_torch(w).double()).reshape(-1)
+        flops = 2 * B * M * K * N
+        peak = cores * 4096 * 1.35e9 / PHASES[fid]
+        nbytes = B * (M * K * TILE_BYTES[adt] + K * N * TILE_BYTES[wdt] + M * N * TILE_BYTES[odt]) / 1024
+        ckc = _ckc(fid)
+        res = []
+        for tag, cfg in [("matmul auto", None)] + bmm_configs(grid, M, K, N):
+            try:
+                ms, out = _timed(
+                    device,
+                    lambda: ttnn.matmul(
+                        a, w, dtype=odt, compute_kernel_config=ckc, memory_config=mc, program_config=cfg
+                    ),
+                )
+                o = ttnn.to_torch(out).double().reshape(-1)
+                rel = float((o - truth).norm() / truth.norm())
+                ttnn.deallocate(out)
+                res.append((tag, ms, rel))
+            except Exception as ex:
+                res.append((f"{tag} FAILED {str(ex).splitlines()[0][:50]}", float("inf"), float("nan")))
+        res.sort(key=lambda r: r[1])
+        base = next(r for r in res if r[0] == "matmul auto")
+        print(f"[bmm] == {name}: {B}x{M}x{K}x{N} {fid}, {calls} calls / chunk", flush=True)
+        for tag, ms, rel in res[:8] + ([base] if base not in res[:8] else []):
+            print(
+                f"[bmm]   {ms:7.3f} ms  math {flops / (ms * 1e-3) / peak * 100:5.1f}%  "
+                f"dram {nbytes / (ms * 1e-3) / 512e9 * 100:5.1f}%  x{base[1] / ms:4.2f}  rel {rel:.2e}  {tag}",
+                flush=True,
+            )
+        ttnn.deallocate(a)
+        ttnn.deallocate(w)
 
 
 @pytest.mark.timeout(10800)
