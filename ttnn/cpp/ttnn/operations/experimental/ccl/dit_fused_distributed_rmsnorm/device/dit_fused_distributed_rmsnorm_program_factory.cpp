@@ -5,6 +5,7 @@
 #include "dit_fused_distributed_rmsnorm_program_factory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstdlib>
 #include <map>
@@ -16,6 +17,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <cstdint>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/cb_utils.hpp"
@@ -49,13 +51,31 @@ namespace ttnn::experimental::prim {
 
 // num_tile_rows below this uses a single worker — spinning up forwarders + the
 // per-round AG handshake doesn't pay off with <4 tile-rows of compute per chip.
-constexpr uint32_t kMuxRowsThreshold = 4u;
+constexpr std::uint32_t kMuxRowsThreshold = 4u;
+// Two-wave column split (sizing.col_split_capable): wave slot j's stick sits at
+// dit_rmsnorm_wave_slot_offset(j) inside its wave's region, as fp32 tile row 0 (face_00 row 0 there,
+// face_01 row 0 at +1024). A row's two column halves are slots 2p / 2p+1, 64 B apart, so one
+// kWavePairReadBytes read lands both, and compute addresses each half's tile at a 64 B granular
+// offset of the gathered CB (kGatherCbPageBytes pages).
+constexpr std::uint32_t kGatherCbPageBytes = 64u;
+constexpr std::uint32_t kWaveMaxSlots = 32u;
+constexpr std::uint32_t kWavePairReadBytes = 1024u + 2u * 64u;
+constexpr std::uint32_t dit_rmsnorm_wave_slot_offset(std::uint32_t slot) {
+    return (slot / 16u) * 2048u + (slot % 16u) * 64u;
+}
+// Rows in wave A (the rest go to wave B). The read is aggregate-bound, so A's read end scales with its share,
+// and A's drain should finish before B's starts (equal waves overlapped their drains, which then ran at the
+// shared write rate from A's drain start). A slightly smaller first wave starts A's chain earlier.
+constexpr std::uint32_t dit_rmsnorm_wave_a_rows(std::uint32_t rows) {
+    const std::uint32_t a = (rows * 9u) / 20u;
+    return a == 0u ? 1u : a;
+}
 // input_cb double-buffer depth (chunks): reader fills chunk N+1 while compute is in
 // chunk N's post phase. 2 = one in flight + one filling.
-constexpr uint32_t kInputCbChunks = 2u;
+constexpr std::uint32_t kInputCbChunks = 2u;
 // Depth (in block_size groups) of the STREAMED per-head cos/sin CBs — a couple of
 // blocks of reader look-ahead (one in flight + one filling).
-constexpr uint32_t kRopeStreamBlocks = 2u;
+constexpr std::uint32_t kRopeStreamBlocks = 2u;
 
 // Worker-count ceiling. Three bounds, smallest wins (details in the body):
 //   1. grid budget: cores − one forwarder per link, rounded DOWN to whole grid rows
@@ -66,20 +86,20 @@ constexpr uint32_t kRopeStreamBlocks = 2u;
 //   3. measured DRAM/compute knee (arch-specific; Blackhole = 48).
 // Read inside the single-source-of-truth sizing path so the op + create_stats_buffer
 // agree on num_workers / buffer geometry.
-uint32_t derive_worker_cap(
+std::uint32_t derive_worker_cap(
     const CoreCoord& grid_size,
-    uint32_t num_links,
+    std::uint32_t num_links,
     tt::ARCH arch,
-    uint32_t stick_bytes = 128u,
-    uint32_t ring_size = 1u,
-    uint32_t num_tile_rows = 0u) {
-    const uint32_t max_cores = grid_size.x * grid_size.y;
-    const uint32_t num_forwarders = std::max<uint32_t>(1u, num_links);  // one forwarder per link
-    const uint32_t budget = max_cores > num_forwarders ? max_cores - num_forwarders : 1u;
+    std::uint32_t stick_bytes = 128u,
+    std::uint32_t ring_size = 1u,
+    std::uint32_t num_tile_rows = 0u) {
+    const std::uint32_t max_cores = grid_size.x * grid_size.y;
+    const std::uint32_t num_forwarders = std::max<std::uint32_t>(1u, num_links);  // one forwarder per link
+    const std::uint32_t budget = max_cores > num_forwarders ? max_cores - num_forwarders : 1u;
     // Round down to whole grid rows (grid.x cores each); fall back to the raw budget if
     // even a single row doesn't fit.
-    const uint32_t whole_rows = (grid_size.x > 0) ? (budget / grid_size.x) * grid_size.x : 0u;
-    uint32_t cap = whole_rows > 0u ? whole_rows : budget;
+    const std::uint32_t whole_rows = (grid_size.x > 0) ? (budget / grid_size.x) * grid_size.x : 0u;
+    std::uint32_t cap = whole_rows > 0u ? whole_rows : budget;
     // DEV worker-count sweep knob: WAN_RMSNORM_WORKER_CAP overrides the grid-derived cap
     // (still validity-clamped below, and it bypasses the arch knee). Used to re-sweep the
     // per-shape optimum before finalizing the heuristic.
@@ -87,7 +107,7 @@ uint32_t derive_worker_cap(
     if (worker_cap_env != nullptr) {
         const int forced = std::atoi(worker_cap_env);
         if (forced > 0) {
-            cap = static_cast<uint32_t>(forced);
+            cap = static_cast<std::uint32_t>(forced);
         }
     }
     // Validity clamp: a forwarder coalesces at most sticks_per_packet 128 B sticks
@@ -95,8 +115,8 @@ uint32_t derive_worker_cap(
     // must not exceed it. Bound cap by sticks_per_packet * num_forwarders. On BH the
     // raw grid budget is 108 (12x10) -> 54 workers/forwarder > 32 -> would TT_FATAL;
     // this clamps it to the valid 64 (RMS, 128 B sticks) or 32 (LayerNorm, 256 B).
-    const uint32_t sticks_per_packet =
-        std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / stick_bytes);
+    const std::uint32_t sticks_per_packet =
+        std::max<std::uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / stick_bytes);
     cap = std::min(cap, sticks_per_packet * num_forwarders);
     // Perf knee is ARCH- AND WORKLOAD-specific. The BH worker sweep (2026-07-01, in
     // REBENCH_baseline_vs_fused.md) shows the optimum is set by two competing effects:
@@ -117,10 +137,10 @@ uint32_t derive_worker_cap(
     // Tuned to the DiT (Wan/LTX/FLUX) shape suite; 48 is the conservative fallback.
     // The WAN_RMSNORM_WORKER_CAP override bypasses this knee so it can sweep BH freely.
     if (arch == tt::ARCH::BLACKHOLE && worker_cap_env == nullptr) {
-        constexpr uint32_t kBhContentionKnee = 48u;
-        constexpr uint32_t kBhRoundBoundCap = 64u;
-        constexpr uint32_t kBhRing4RowThreshold = 448u;  // between Wan sp8 (296, want 64) and sp4 (592, want 48)
-        const uint32_t bh_knee =
+        constexpr std::uint32_t kBhContentionKnee = 48u;
+        constexpr std::uint32_t kBhRoundBoundCap = 64u;
+        constexpr std::uint32_t kBhRing4RowThreshold = 448u;  // between Wan sp8 (296, want 64) and sp4 (592, want 48)
+        const std::uint32_t bh_knee =
             (ring_size <= 4u && num_tile_rows <= kBhRing4RowThreshold) ? kBhRoundBoundCap : kBhContentionKnee;
         cap = std::min(cap, bh_knee);
     }
@@ -142,39 +162,40 @@ uint32_t derive_worker_cap(
 // ~1,666,432 B). `kFixedOverheadBytes` covers the remaining small CBs (rope,
 // stats, scalars, packed-AG, packet headers).
 bool decide_streaming_low_l1(
-    uint32_t num_tile_cols,
-    uint32_t block_size,
-    uint32_t chunk_size_rows,
-    uint32_t input_tile_bytes,
-    uint32_t intermediate_tile_bytes,
-    uint32_t output_tile_bytes,
+    std::uint32_t num_tile_cols,
+    std::uint32_t block_size,
+    std::uint32_t chunk_size_rows,
+    std::uint32_t input_tile_bytes,
+    std::uint32_t intermediate_tile_bytes,
+    std::uint32_t output_tile_bytes,
     bool has_weight,
-    uint32_t weight_tile_bytes,
+    std::uint32_t weight_tile_bytes,
     bool per_head_norm,
-    uint32_t extra_resident_bytes = 0u) {
+    std::uint32_t extra_resident_bytes = 0u) {
     // per_head_norm uses head-block reduces over small head_dim shards; its L1
     // profile never overflows and the streamed compute path only handles the
     // whole-row reduce, so never auto-enable streaming for it.
     if (per_head_norm) {
         return false;
     }
-    const uint32_t padded_row = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
-    const uint64_t input_bytes =
-        static_cast<uint64_t>(kInputCbChunks) * chunk_size_rows * num_tile_cols * input_tile_bytes;
+    const std::uint32_t padded_row = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
+    const std::uint64_t input_bytes =
+        static_cast<std::uint64_t>(kInputCbChunks) * chunk_size_rows * num_tile_cols * input_tile_bytes;
     // intermediate_cb + rotated_input_cb (both row-sized, intermediate_tile_bytes).
-    const uint64_t intermediate_bytes = 2ull * padded_row * intermediate_tile_bytes;
+    const std::uint64_t intermediate_bytes = 2ull * padded_row * intermediate_tile_bytes;
     // output_cb is 2 padded rows.
-    const uint64_t output_bytes = 2ull * padded_row * output_tile_bytes;
+    const std::uint64_t output_bytes = 2ull * padded_row * output_tile_bytes;
     // Broadcast weight is num_tile_cols tiles of weight_tile_bytes (2048 bf16 / 4096 fp32).
     // Per-token is larger but those shapes have small num_tile_cols and don't trigger streaming.
-    const uint64_t weight_bytes = has_weight ? static_cast<uint64_t>(num_tile_cols) * weight_tile_bytes : 0ull;
-    constexpr uint64_t kFixedOverheadBytes = 196608ull;      // ~192 KB of small CBs
-    constexpr uint64_t kResidentL1BudgetBytes = 1572864ull;  // static-CB cap per core
+    const std::uint64_t weight_bytes =
+        has_weight ? static_cast<std::uint64_t>(num_tile_cols) * weight_tile_bytes : 0ull;
+    constexpr std::uint64_t kFixedOverheadBytes = 196608ull;      // ~192 KB of small CBs
+    constexpr std::uint64_t kResidentL1BudgetBytes = 1572864ull;  // static-CB cap per core
     // extra_resident_bytes: CBs the resident layout adds beyond the above (e.g. the
     // Welford recip LUT, reduce_width*4 B). Counting them here lets a borderline-resident
     // shard (e.g. LTX TP2 at 64 tiles) correctly fall to the streaming/block-major layout
     // instead of overflowing L1 with the extra CB.
-    const uint64_t total =
+    const std::uint64_t total =
         input_bytes + intermediate_bytes + output_bytes + weight_bytes + kFixedOverheadBytes + extra_resident_bytes;
     return total > kResidentL1BudgetBytes;
 }
@@ -193,44 +214,44 @@ bool decide_streaming_low_l1(
 // streaming_low_l1 (input is streamed too) and per_head_norm==0 (streaming is
 // never auto-enabled for per_head_norm — that path is a separate L1 question).
 bool decide_block_major_post(
-    uint32_t num_tile_cols,
-    uint32_t block_size,
-    uint32_t intermediate_tile_bytes,
-    uint32_t output_tile_bytes,
+    std::uint32_t num_tile_cols,
+    std::uint32_t block_size,
+    std::uint32_t intermediate_tile_bytes,
+    std::uint32_t output_tile_bytes,
     bool has_weight,
     bool has_bias,
-    uint32_t weight_tile_bytes,
-    uint32_t bias_tile_bytes,
-    uint32_t weight_cb_tiles,
-    uint32_t bias_cb_tiles,
+    std::uint32_t weight_tile_bytes,
+    std::uint32_t bias_tile_bytes,
+    std::uint32_t weight_cb_tiles,
+    std::uint32_t bias_cb_tiles,
     bool fuse_rope,
     bool is_layernorm,
     bool per_head_norm,
-    uint32_t input_tile_bytes,
-    uint64_t l1_cap_bytes) {
-    const uint32_t padded = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
+    std::uint32_t input_tile_bytes,
+    std::uint64_t l1_cap_bytes) {
+    const std::uint32_t padded = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
     // Whole-row CBs that the block-major layout collapses to O(block_size):
-    uint64_t whole_row = static_cast<uint64_t>(padded) * intermediate_tile_bytes;  // intermediate_cb
+    std::uint64_t whole_row = static_cast<std::uint64_t>(padded) * intermediate_tile_bytes;  // intermediate_cb
     // rotated_input_cb sizing. With per_head_norm, create_cb keeps both rotated_input_cb and
     // input_cb resident whole-row even for RMS no-rope, so count both. Otherwise use the original
     // gate (unchanged for callers that don't set per_head_norm).
     if (per_head_norm) {
-        whole_row += static_cast<uint64_t>(padded) * intermediate_tile_bytes;  // rotated_input_cb (whole-row)
-        whole_row += 2ull * num_tile_cols * input_tile_bytes;                  // resident input_cb (2 rows)
+        whole_row += static_cast<std::uint64_t>(padded) * intermediate_tile_bytes;  // rotated_input_cb (whole-row)
+        whole_row += 2ull * num_tile_cols * input_tile_bytes;                       // resident input_cb (2 rows)
     } else {
-        whole_row += (fuse_rope || is_layernorm) ? static_cast<uint64_t>(padded) * intermediate_tile_bytes : 0ull;
+        whole_row += (fuse_rope || is_layernorm) ? static_cast<std::uint64_t>(padded) * intermediate_tile_bytes : 0ull;
     }
     whole_row += 2ull * padded * output_tile_bytes;  // output_cb (2 rows)
     // weight_cb / bias_cb tile counts (passed in): every affine mode holds ONE row (num_tile_cols)
     // — broadcast resident, per-token / per-batch streamed per row. block-major does NOT shrink
     // these (only the intermediate/output whole-row CBs), so the decision counts them here at
     // their real size (num_tile_cols) rather than assuming they collapse.
-    whole_row += has_weight ? static_cast<uint64_t>(weight_cb_tiles) * weight_tile_bytes : 0ull;  // weight_cb
-    whole_row += has_bias ? static_cast<uint64_t>(bias_cb_tiles) * bias_tile_bytes : 0ull;        // bias_cb
+    whole_row += has_weight ? static_cast<std::uint64_t>(weight_cb_tiles) * weight_tile_bytes : 0ull;  // weight_cb
+    whole_row += has_bias ? static_cast<std::uint64_t>(bias_cb_tiles) * bias_tile_bytes : 0ull;        // bias_cb
     // Streamed input_cb + resident cos/sin + the dozen small fp32 stat/scalar CBs +
     // forwarder packet/header. Calibrated against the observed FLUX TP=2 feat-3072
     // streamed-input allocation (1,601,824 B at the same big-CB sum).
-    constexpr uint64_t kSmallCbOverheadBytes = 225000ull;
+    constexpr std::uint64_t kSmallCbOverheadBytes = 225000ull;
     return whole_row + kSmallCbOverheadBytes > l1_cap_bytes;
 }
 // The POST phase is sub-phase-major (mul-rms -> weight -> matmul -> rope, each
@@ -244,45 +265,44 @@ bool decide_block_major_post(
 // overflow (1,593,632 B) vs the feat-1024 TP=4 case (fits). Trigger with margin
 // below the real L1 cap so a borderline shard fuses rather than OOM-ing.
 bool post_rotated_overflows_l1(
-    uint32_t num_tile_cols,
-    uint32_t block_size,
-    uint32_t input_tile_bytes,
-    uint32_t intermediate_tile_bytes,
-    uint32_t output_tile_bytes,
-    uint32_t rope_cb_tiles,
-    uint32_t rope_tile_bytes,
+    std::uint32_t num_tile_cols,
+    std::uint32_t block_size,
+    std::uint32_t input_tile_bytes,
+    std::uint32_t intermediate_tile_bytes,
+    std::uint32_t output_tile_bytes,
+    std::uint32_t rope_cb_tiles,
+    std::uint32_t rope_tile_bytes,
     bool has_weight) {
-    const uint32_t padded = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
-    uint64_t total = static_cast<uint64_t>(num_tile_cols) * input_tile_bytes;     // input_cb (chunk=1)
-    total += 2ull * padded * intermediate_tile_bytes;                             // intermediate + rotated (whole row)
-    total += 2ull * padded * output_tile_bytes;                                   // output_cb (2 rows)
-    total += has_weight ? static_cast<uint64_t>(num_tile_cols) * 2048ull : 0ull;  // weight_cb
-    total += 2ull * rope_cb_tiles * rope_tile_bytes;                              // streamed cos + sin
-    constexpr uint64_t kPostFixedOverheadBytes = 491520ull;  // stats/packed-AG/pre-interm/scalars/trans/headers
-    constexpr uint64_t kFuseTriggerBytes = 1400000ull;       // margin below the ~1.43 MB L1 cap
+    const std::uint32_t padded = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
+    std::uint64_t total = static_cast<std::uint64_t>(num_tile_cols) * input_tile_bytes;  // input_cb (chunk=1)
+    total += 2ull * padded * intermediate_tile_bytes;  // intermediate + rotated (whole row)
+    total += 2ull * padded * output_tile_bytes;        // output_cb (2 rows)
+    total += has_weight ? static_cast<std::uint64_t>(num_tile_cols) * 2048ull : 0ull;  // weight_cb
+    total += 2ull * rope_cb_tiles * rope_tile_bytes;                                   // streamed cos + sin
+    constexpr std::uint64_t kPostFixedOverheadBytes = 491520ull;  // stats/packed-AG/pre-interm/scalars/trans/headers
+    constexpr std::uint64_t kFuseTriggerBytes = 1400000ull;       // margin below the ~1.43 MB L1 cap
     return total + kPostFixedOverheadBytes > kFuseTriggerBytes;
 }
-uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows, uint32_t cap) {
+std::uint32_t pick_num_workers_tp_gt_1(std::uint32_t num_tile_rows, std::uint32_t cap) {
     if (num_tile_rows < kMuxRowsThreshold) {
         return 1u;
     }
     // One worker per tile-row, clamped to the workload-aware cap (derive_worker_cap:
     // grid budget, fabric-packet validity, and the BH perf knee).
-    return std::min<uint32_t>(num_tile_rows, cap);
+    return std::min<std::uint32_t>(num_tile_rows, cap);
 }
 
 // Sizing derivation used in both spec computation (to size the stats scratch
 // tensor in `compute_output_specs`) and the program factory (to lay out
 // kernels + CBs). Single source of truth so the two cannot drift.
-DitFusedDistributedRmsnormSizing compute_sizing(
-    const DitFusedDistributedRmsnormParams& args, const Tensor& input) {
+DitFusedDistributedRmsnormSizing compute_sizing(const DitFusedDistributedRmsnormParams& args, const Tensor& input) {
     // Page geometry depends only on the input shape, ring size, links, and norm_type — NOT on
     // weight/bias/RoPE or the streaming decision (window_size is fixed: 1 here, sticks_per_packet *
     // stats_per_token on the mux path). So there is no tensor_args to consult.
     DitFusedDistributedRmsnormSizing s;
     const auto& padded = input.padded_shape();
-    const uint32_t W = padded[-1];
-    const uint32_t folded_H = input.physical_volume() / W;
+    const std::uint32_t W = padded[-1];
+    const std::uint32_t folded_H = input.physical_volume() / W;
     s.num_tile_rows = folded_H / TILE_HEIGHT;
     // per_head_norm reduces locally over head_dim per head — no AG needed even
     // when ring_size > 1. From the kernel's perspective this is "is_tp_1" =
@@ -321,18 +341,44 @@ DitFusedDistributedRmsnormSizing compute_sizing(
         // sticks_per_packet 128 B sticks per row-round; the DRAM scratch page IS
         // one packet. Pages per device = num_forwarders * max_rounds, where a
         // round is one tile-row of the worker group.
-        const uint32_t num_links_requested = std::max<uint32_t>(1u, args.num_links);
-        const uint32_t num_forwarders = std::min<uint32_t>(num_links_requested, s.num_workers);
-        const uint32_t max_rounds = tt::div_up(s.num_tile_rows, s.num_workers);
+        const std::uint32_t num_links_requested = std::max<std::uint32_t>(1u, args.num_links);
+        const std::uint32_t num_forwarders = std::min<std::uint32_t>(num_links_requested, s.num_workers);
+        const std::uint32_t max_rounds = tt::div_up(s.num_tile_rows, s.num_workers);
         // Pack as many 128 B fp32 sticks as fit one fabric packet. Reuse the
         // existing page formula by setting window_size = sticks_per_packet:
         // page_size_bytes = TILE_HEIGHT(=32) * window_size * 4 = sticks * 128.
         // Token-tiles (each stick_bytes wide) that fit one fabric packet.
-        const uint32_t sticks_per_packet =
-            std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / s.stick_bytes);
+        const std::uint32_t sticks_per_packet =
+            std::max<std::uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / s.stick_bytes);
         // window_size is the logical fp32 page width / TILE_HEIGHT; keep the page
         // formula page_size = TILE_HEIGHT * window_size * 4 == sticks_per_packet * stick_bytes.
         s.window_size = sticks_per_packet * s.stats_per_token;
+        // Two-wave column split: one forwarder, one row per worker, RMS sticks, an even tile-col count,
+        // an even row count, and room for 2 * rows workers + the forwarder. Wave A takes
+        // dit_rmsnorm_wave_a_rows rows and wave B the rest; each wave owns a span of the page holding 2 sticks
+        // per row in the tile-row-0 slot layout.
+        const auto grid = input.device()->compute_with_storage_grid_size();
+        const std::uint32_t num_tile_cols = W / TILE_WIDTH;
+        const std::uint32_t wave_a_rows = dit_rmsnorm_wave_a_rows(s.num_tile_rows);
+        const std::uint32_t wave_b_rows = s.num_tile_rows > wave_a_rows ? s.num_tile_rows - wave_a_rows : 0u;
+        // Wave regions are sized for the larger wave B; each wave-A worker gates at most two wave-B readers.
+        const std::uint32_t wave_slots = 2u * std::max(wave_a_rows, wave_b_rows);
+        const std::uint32_t wave_span =
+            tt::round_up(dit_rmsnorm_wave_slot_offset(wave_slots - 1u) + kWavePairReadBytes - 64u, kGatherCbPageBytes);
+        s.col_split_capable = input.device()->arch() == tt::ARCH::BLACKHOLE && s.stats_per_token == 1u &&
+                              num_forwarders == 1u && max_rounds == 1u && s.num_workers == s.num_tile_rows &&
+                              s.num_tile_rows >= 4u && s.num_tile_rows % 2u == 0u && wave_slots <= kWaveMaxSlots &&
+                              num_tile_cols % 2u == 0u && wave_b_rows >= wave_a_rows &&
+                              wave_b_rows <= 2u * wave_a_rows && num_tile_cols >= 8u && args.ring_size <= 8u &&
+                              2u * s.num_tile_rows + 1u <= grid.x * grid.y &&
+                              wave_span <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+        if (s.col_split_capable) {
+            s.wave_slots = wave_slots;
+            s.wave_a_slots = 2u * wave_a_rows;
+            s.wave_span_bytes = wave_span;
+            s.window_size =
+                std::max<std::uint32_t>(s.window_size, tt::div_up(2u * wave_span, TILE_HEIGHT * sizeof(float)));
+        }
         s.num_chunks_per_device = num_forwarders * max_rounds;
         s.total_pages = args.ring_size * s.num_chunks_per_device;
         s.page_size_bytes = TILE_HEIGHT * s.window_size * sizeof(float);
@@ -341,10 +387,15 @@ DitFusedDistributedRmsnormSizing compute_sizing(
 }
 
 tt::tt_metal::TensorSpec make_stats_tensor_spec(const DitFusedDistributedRmsnormSizing& sizing) {
-    // Row-major fp32 DRAM-interleaved scratch: one accessor page per packed stats page.
+    // Row-major fp32 L1-interleaved scratch: one accessor page per packed stats page.
     // Kept in one place so the pre-alloc helper, compute_output_specs, and validate agree.
+    // L1, not DRAM: the gathered sticks are on the post-AG critical path twice -- every landing
+    // write (local + each peer's fused write+atomic, flush=true) is acked before the forwarder can
+    // release go, and each worker then reads its 2*ring_size 64 B face-rows back. An L1 bank round
+    // trip is much shorter than a DRAM one. Still a mesh-coherent MeshBuffer (same address and
+    // bank->core map on every chip), and the kernels address it through a TensorAccessor either way.
     ttnn::Shape stats_shape({1u, 1u, sizing.total_pages, TILE_HEIGHT * sizing.window_size});
-    MemoryConfig stats_mem{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    MemoryConfig stats_mem{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
     return tt::tt_metal::TensorSpec(
         stats_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), stats_mem));
 }
@@ -370,14 +421,14 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     Program program = CreateProgram();
 
     const auto& input_shape = input_tensor.padded_shape();
-    const uint32_t W = input_shape[-1];                            // hidden dim per device
-    const uint32_t folded_H = input_tensor.physical_volume() / W;  // total seq rows
-    const uint32_t num_tile_cols = W / TILE_WIDTH;
-    const uint32_t num_tile_rows = folded_H / TILE_HEIGHT;
+    const std::uint32_t W = input_shape[-1];                            // hidden dim per device
+    const std::uint32_t folded_H = input_tensor.physical_volume() / W;  // total seq rows
+    const std::uint32_t full_tile_cols = W / TILE_WIDTH;                // tile-cols per device row
+    const std::uint32_t num_tile_rows = folded_H / TILE_HEIGHT;
 
-    const uint32_t num_heads_per_device = args.num_heads_per_device;
-    const uint32_t head_dim = W / num_heads_per_device;
-    const uint32_t head_dim_tiles = head_dim / TILE_WIDTH;
+    const std::uint32_t num_heads_per_device = args.num_heads_per_device;
+    const std::uint32_t head_dim = W / num_heads_per_device;
+    const std::uint32_t head_dim_tiles = head_dim / TILE_WIDTH;
 
     const bool has_weight = weight.has_value();
     const bool has_bias = bias.has_value();
@@ -395,38 +446,49 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // index wbatch = global_tile_row / rows_per_batch_tiles), so compute consumes per row with no
     // batch offset of its own — same as per-token. batch>1 is only reachable with
     // num_heads_per_device==1 (validated in the device op).
-    const uint32_t batch = input_tensor.logical_shape()[1];
-    const uint32_t rows_per_batch_tiles = (batch > 0) ? (num_tile_rows / batch) : num_tile_rows;
-    auto affine_tile_rows = [](const Tensor& t) -> uint32_t {
+    const std::uint32_t batch = input_tensor.logical_shape()[1];
+    const std::uint32_t rows_per_batch_tiles = (batch > 0) ? (num_tile_rows / batch) : num_tile_rows;
+    auto affine_tile_rows = [](const Tensor& t) -> std::uint32_t {
         return (t.physical_volume() / t.padded_shape()[-1]) / TILE_HEIGHT;  // padded tile-rows spanned
     };
-    const bool per_batch_weight =
-        has_weight && !per_token_weight && batch > 1 && affine_tile_rows(*weight) == batch;
+    const bool per_batch_weight = has_weight && !per_token_weight && batch > 1 && affine_tile_rows(*weight) == batch;
     const bool per_batch_bias = has_bias && !per_token_bias && batch > 1 && affine_tile_rows(*bias) == batch;
     // Broadcast reader read count: 1 row for true-broadcast, `batch` rows for per-batch adaLN.
     // Broadcast bulk-read count is one row (num_tile_cols): only TRUE broadcast [1,1,H] uses the
     // one-shot resident read. per-batch adaLN now streams its per-row batch slice (like per-token),
     // so it does NOT bulk-read all batches here.
-    const uint32_t weight_bcast_tiles = num_tile_cols;
-    const uint32_t bias_bcast_tiles = num_tile_cols;
     const bool fuse_rope = trans_mat.has_value() && rope_cos.has_value() && rope_sin.has_value();
+
+    // Two-wave column split (see compute_sizing): two workers per tile-row, each owning one column half,
+    // and the rows split into two all-gather waves. Wave A reads first, wave B's read queues behind it, and
+    // each wave gets its own fabric gather + go release, so A's gather overlaps B's read and B's gather
+    // overlaps A's drain. Every kernel runs on its half: num_tile_cols below is the per-worker width;
+    // full_tile_cols stays the DRAM row stride. Only the plain resident RMS + broadcast-gamma path.
+    const auto split_sizing = compute_sizing(args, input_tensor);
+    const bool col_split = split_sizing.col_split_capable && args.norm_type == DitFusedNormType::RMS &&
+                           !args.per_head_norm && args.num_heads_per_device == 1u && args.ring_size > 1u && !has_bias &&
+                           !fuse_rope && !per_token_weight && !per_batch_weight && full_tile_cols / 2u <= 32u;
+    const std::uint32_t num_tile_cols = col_split ? full_tile_cols / 2u : full_tile_cols;
+
+    const std::uint32_t weight_bcast_tiles = num_tile_cols;
+    const std::uint32_t bias_bcast_tiles = num_tile_cols;
 
     // Per-head RoPE: cos/sin shape[1] == num_heads_per_device gives each head
     // its own cos/sin block. shape[1] == 1 means broadcast (current default).
     // rope_seqlen_tiles = cos sequence length in tiles, used by reader as the
     // per-head stride when computing tile indices.
     const bool per_head_rope = fuse_rope && (rope_cos->logical_shape()[1] == num_heads_per_device);
-    const uint32_t rope_seqlen_tiles = fuse_rope ? (rope_cos->logical_shape()[2] / TILE_HEIGHT) : 0u;
+    const std::uint32_t rope_seqlen_tiles = fuse_rope ? (rope_cos->logical_shape()[2] / TILE_HEIGHT) : 0u;
     // Per-row RoPE push count: num_tile_cols for per-head (all heads' cos for
     // this row, packed contiguously), head_dim_tiles for broadcast.
-    const uint32_t rope_tiles_per_row = per_head_rope ? num_tile_cols : head_dim_tiles;
+    const std::uint32_t rope_tiles_per_row = per_head_rope ? num_tile_cols : head_dim_tiles;
     // Batched RoPE: cos/sin dim0 is 1 (broadcast the same RoPE to every input batch) or `batch`
     // (per-batch cos/sin). The reader indexes cos/sin by the within-batch seq row plus a per-batch
     // offset of rope_batch_stride_tiles tiles (== one batch's whole cos/sin: num_heads_dim *
     // rope_seqlen_tiles * head_dim_tiles). 0 for the broadcast case -> the offset collapses to 0.
     const bool rope_per_batch = fuse_rope && batch > 1 && (rope_cos->logical_shape()[0] == batch);
-    const uint32_t rope_num_heads_dim = per_head_rope ? num_heads_per_device : 1u;
-    const uint32_t rope_batch_stride_tiles =
+    const std::uint32_t rope_num_heads_dim = per_head_rope ? num_heads_per_device : 1u;
+    const std::uint32_t rope_batch_stride_tiles =
         rope_per_batch ? (rope_num_heads_dim * rope_seqlen_tiles * head_dim_tiles) : 0u;
 
     // ------------------------------------------------------------------------
@@ -438,7 +500,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     std::optional<ttnn::MeshCoordinate> backward_coord = std::nullopt;
     std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
     std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
-    uint32_t device_index = 0;
+    std::uint32_t device_index = 0;
     if (args.ring_size > 1 && !args.per_head_norm) {
         forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
             input_tensor, mesh_coordinate, /*offset=*/1, args.topology, args.cluster_axis);
@@ -454,8 +516,8 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         }
     }
 
-    uint32_t num_targets_forward = 0;
-    uint32_t num_targets_backward = 0;
+    std::uint32_t num_targets_forward = 0;
+    std::uint32_t num_targets_backward = 0;
     if (args.ring_size > 1 && !args.per_head_norm) {
         if (args.topology == ttnn::ccl::Topology::Linear) {
             ttnn::ccl::LineTopology line_topology(args.ring_size, device_index);
@@ -482,16 +544,16 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     MeshDevice* device = input_tensor.device();
     const auto grid_size = device->compute_with_storage_grid_size();
     const auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-    const uint32_t max_cores = core_grid.size();
+    const std::uint32_t max_cores = core_grid.size();
 
     // LayerNorm gathers 2 stats/token (mean, M2) -> 256 B sticks; RMS 1 (128 B).
     // Must match compute_sizing so the stats-buffer geometry and the program agree.
-    const uint32_t stick_bytes = (args.norm_type == DitFusedNormType::LAYERNORM) ? 256u : 128u;
-    const uint32_t stats_per_token = stick_bytes / 128u;  // 1 RMS, 2 LayerNorm (mean, var)
+    const std::uint32_t stick_bytes = (args.norm_type == DitFusedNormType::LAYERNORM) ? 256u : 128u;
+    const std::uint32_t stats_per_token = stick_bytes / 128u;  // 1 RMS, 2 LayerNorm (mean, var)
 
-    uint32_t num_workers;
+    std::uint32_t num_workers;
     if (is_tp_1) {
-        num_workers = std::min<uint32_t>(max_cores, num_tile_rows);
+        num_workers = std::min<std::uint32_t>(max_cores, num_tile_rows);
     } else {
         // TP>1 (forwarder AG): one worker per tile-row, capped at the core budget
         // (grid − forwarders). Same derivation as compute_sizing so the stats-buffer
@@ -499,15 +561,20 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         num_workers = pick_num_workers_tp_gt_1(
             num_tile_rows,
             derive_worker_cap(grid_size, args.num_links, device->arch(), stick_bytes, args.ring_size, num_tile_rows));
+        if (col_split) {
+            TT_FATAL(
+                num_workers == num_tile_rows, "dit_fused_distributed_rmsnorm: column split needs one row per worker");
+            num_workers = 2u * num_tile_rows;
+        }
     }
     use_mux = !is_tp_1;  // "uses the fabric-forwarder all-gather"
 
     // Forwarder model: one coalescing forwarder core per independent routing
     // plane (num_forwarders = min(num_links, num_workers)). Each forwarder owns a
     // contiguous worker group and holds the fwd+bwd fabric connections for its link.
-    const uint32_t num_links_requested = std::max<uint32_t>(1u, args.num_links);
-    const uint32_t num_forwarders = use_mux ? std::min<uint32_t>(num_links_requested, num_workers) : 0u;
-    const uint32_t total_cores_needed = num_workers + num_forwarders;
+    const std::uint32_t num_links_requested = std::max<std::uint32_t>(1u, args.num_links);
+    const std::uint32_t num_forwarders = use_mux ? std::min<std::uint32_t>(num_links_requested, num_workers) : 0u;
+    const std::uint32_t total_cores_needed = num_workers + num_forwarders;
     TT_FATAL(
         total_cores_needed <= max_cores,
         "dit_fused_distributed_rmsnorm needs {} cores ({} workers + {} forwarders) but only {} available",
@@ -516,16 +583,16 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         num_forwarders,
         max_cores);
 
-    const uint32_t num_tile_rows_per_worker = tt::div_up(num_tile_rows, num_workers);
-    const uint32_t workers_per_forwarder = use_mux ? tt::div_up(num_workers, num_forwarders) : num_workers;
-    const uint32_t max_rounds = num_tile_rows_per_worker;  // forwarder round == tile-row
+    const std::uint32_t num_tile_rows_per_worker = col_split ? 1u : tt::div_up(num_tile_rows, num_workers);
+    const std::uint32_t workers_per_forwarder = use_mux ? tt::div_up(num_workers, num_forwarders) : num_workers;
+    const std::uint32_t max_rounds = num_tile_rows_per_worker;  // forwarder round == tile-row
 
     // [worker_0..N-1, forwarder_0..F-1] on the device grid (row-major).
     const auto all_cores_vec = corerange_to_cores(core_grid, max_cores, /*row_wise=*/true);
     std::vector<CoreCoord> worker_cores(all_cores_vec.begin(), all_cores_vec.begin() + num_workers);
     std::vector<CoreCoord> forwarder_cores;
     forwarder_cores.reserve(num_forwarders);
-for (uint32_t f = 0; f < num_forwarders; f++) {
+    for (std::uint32_t f = 0; f < num_forwarders; f++) {
         forwarder_cores.push_back(all_cores_vec[num_workers + f]);
     }
 
@@ -545,28 +612,84 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
 
     // Partition helpers: worker w -> forwarder (w / wpf), slot (w % wpf);
     // contiguous tile-row split (worker w owns [w*rpw, min((w+1)*rpw, N))).
-    auto worker_forwarder = [&](uint32_t w) -> uint32_t { return use_mux ? (w / workers_per_forwarder) : 0u; };
-    auto worker_slot = [&](uint32_t w) -> uint32_t { return use_mux ? (w % workers_per_forwarder) : 0u; };
-    auto worker_num_rows = [&](uint32_t w) -> uint32_t {
-        const uint32_t s = std::min(w * num_tile_rows_per_worker, num_tile_rows);
-        const uint32_t e = std::min(s + num_tile_rows_per_worker, num_tile_rows);
+    auto worker_forwarder = [&](std::uint32_t w) -> std::uint32_t {
+        return use_mux ? (w / workers_per_forwarder) : 0u;
+    };
+    auto worker_slot = [&](std::uint32_t w) -> std::uint32_t { return use_mux ? (w % workers_per_forwarder) : 0u; };
+    auto worker_num_rows = [&](std::uint32_t w) -> std::uint32_t {
+        if (col_split) {
+            return 1u;
+        }
+        const std::uint32_t s = std::min(w * num_tile_rows_per_worker, num_tile_rows);
+        const std::uint32_t e = std::min(s + num_tile_rows_per_worker, num_tile_rows);
         return e - s;
     };
+    // Column split: worker i -> wave, wave slot j -> (row j / 2 of the wave, column half j % 2). Wave A holds
+    // rows [0, wave_a_rows) (wave_a_slots workers), wave B the rest; a row's two halves are adjacent slots
+    // 2p / 2p+1. The wave-A workers are spread evenly over the row-major workers so each wave
+    // spans every worker position. Each wave-B worker's read is gated by the nearest preceding wave-A worker
+    // (the first one if none precedes it), so a wave-A worker signals one or two partners.
+    const std::uint32_t wave_a_rows = split_sizing.wave_a_slots / 2u;
+    std::vector<std::uint32_t> split_wave_of(col_split ? num_workers : 0u, 0u);
+    std::vector<std::uint32_t> split_slot_of(col_split ? num_workers : 0u, 0u);
+    std::vector<std::vector<std::uint32_t>> split_partners(col_split ? num_workers : 0u);
+    if (col_split) {
+        const std::uint32_t n_a = split_sizing.wave_a_slots;
+        TT_FATAL(
+            n_a > 0u && n_a <= num_workers && num_workers - n_a <= split_sizing.wave_slots &&
+                num_workers - n_a <= 2u * n_a,
+            "dit_fused_distributed_rmsnorm: bad wave split {} / {}",
+            n_a,
+            num_workers - n_a);
+        // Wave-A workers sit at ceil(k * N / n_a), k < n_a: worker 0 is wave A and the gaps between them
+        // hold one or two wave-B workers (n_a <= N - n_a <= 2 * n_a).
+        std::vector<bool> is_wave_a(num_workers, false);
+        for (std::uint32_t k = 0; k < n_a; k++) {
+            is_wave_a[tt::div_up(k * num_workers, n_a)] = true;
+        }
+        std::uint32_t next_a = 0u, next_b = 0u;
+        std::int32_t last_a = -1;
+        std::vector<std::uint32_t> orphan_b;
+        for (std::uint32_t w = 0; w < num_workers; w++) {
+            const bool is_a = is_wave_a[w];
+            split_wave_of[w] = is_a ? 0u : 1u;
+            split_slot_of[w] = is_a ? next_a++ : next_b++;
+            if (is_a) {
+                last_a = static_cast<std::int32_t>(w);
+                for (const std::uint32_t b : orphan_b) {
+                    split_partners[w].push_back(b);
+                }
+                orphan_b.clear();
+            } else if (last_a >= 0) {
+                split_partners[last_a].push_back(w);
+            } else {
+                orphan_b.push_back(w);
+            }
+        }
+        TT_FATAL(next_a == n_a && orphan_b.empty(), "dit_fused_distributed_rmsnorm: wave split mapping");
+        for (std::uint32_t w = 0; w < num_workers; w++) {
+            TT_FATAL(split_partners[w].size() <= 2u, "dit_fused_distributed_rmsnorm: >2 wave-B partners");
+        }
+    }
+    auto split_wave = [&](std::uint32_t w) -> std::uint32_t { return split_wave_of[w]; };
+    auto split_slot = [&](std::uint32_t w) -> std::uint32_t { return split_slot_of[w]; };
+    auto split_row = [&](std::uint32_t w) -> std::uint32_t { return split_wave(w) * wave_a_rows + split_slot(w) / 2u; };
+    auto split_half = [&](std::uint32_t w) -> std::uint32_t { return split_slot(w) % 2u; };
 
     // The compute kernel processes one tile-row at a time (a sweep over chunk 1-4 showed
     // chunk=1 best-or-tied everywhere: fabric/AG is only ~2us exposed so bigger chunks buy
     // no amortization, and chunk>1 was ~10% slower on the large shapes). So chunk is fixed
     // at 1 and is no longer a compute-kernel arg; kept as a local for the CB/AG-page sizing
     // below (which is trivially per-row). num_chunks_per_device (below) = the AG page count.
-    const uint32_t chunk_size_rows = 1u;
+    const std::uint32_t chunk_size_rows = 1u;
 
     // ------------------------------------------------------------------------
     // Compute kernel config + dtype/format setup
     // ------------------------------------------------------------------------
     const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), args.compute_kernel_config);
-    const uint32_t dst_reg_count = get_dest_reg_count(args.compute_kernel_config);
-    const uint32_t block_size = dst_reg_count;
+    const std::uint32_t dst_reg_count = get_dest_reg_count(args.compute_kernel_config);
+    const std::uint32_t block_size = dst_reg_count;
 
     const tt::DataFormat input_format = datatype_to_dataformat_converter(input_tensor.dtype());
     const DataType output_dtype = args.dtype.value_or(input_tensor.dtype());
@@ -574,16 +697,16 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     const tt::DataFormat fp32_format = tt::DataFormat::Float32;
     const tt::DataFormat bf16_format = tt::DataFormat::Float16_b;
 
-    const uint32_t input_tile_size = tt::tile_size(input_format);
-    const uint32_t output_tile_size = tt::tile_size(output_format);
-    const uint32_t fp32_tile_size = tt::tile_size(fp32_format);
-    const uint32_t bf16_tile_size = tt::tile_size(bf16_format);
+    const std::uint32_t input_tile_size = tt::tile_size(input_format);
+    const std::uint32_t output_tile_size = tt::tile_size(output_format);
+    const std::uint32_t fp32_tile_size = tt::tile_size(fp32_format);
+    const std::uint32_t bf16_tile_size = tt::tile_size(bf16_format);
 
     // intermediate/rotated CBs are fp32 when fp32_dest_acc_en (full precision
     // across post sub-phases), bf16 otherwise. Needed both for the streaming
     // decision (below) and the CB allocation (further down).
     const tt::DataFormat intermediate_format = fp32_dest_acc_en ? fp32_format : bf16_format;
-    const uint32_t intermediate_tile_size = tt::tile_size(intermediate_format);
+    const std::uint32_t intermediate_tile_size = tt::tile_size(intermediate_format);
 
     // Welford reciprocal LUT (LayerNorm only): a caller-provided fp32 [.., reduce_width]
     // DRAM tensor of [1/1..1/reduce_width]. The reader NoC-reads it once into a CB so the
@@ -594,7 +717,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // (before the streaming decision) so its resident CB cost is accounted for.
     const bool is_layernorm = (args.norm_type == DitFusedNormType::LAYERNORM);
     const bool use_recip_lut = is_layernorm && reciprocals.has_value();
-    const uint32_t recip_lut_bytes = num_tile_cols * 128u;
+    const std::uint32_t recip_lut_bytes = num_tile_cols * 128u;
     // Per-batch adaLN's tile-offset indexing is only wired into the LayerNorm compute kernel
     // (the RMS kernel ignores CT 41/42/43 and would silently apply batch-0's weight to all
     // batches). Reject a per-batch affine tensor on the RMS path up front.
@@ -606,11 +729,11 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // L1 decisions) so the resident-budget estimates count the true CB byte size for fp32 affine.
     const tt::DataFormat weight_format = has_weight ? datatype_to_dataformat_converter(weight->dtype()) : bf16_format;
     const tt::DataFormat bias_format = has_bias ? datatype_to_dataformat_converter(bias->dtype()) : bf16_format;
-    const uint32_t weight_tile_sz = tt::tile_size(weight_format);
-    const uint32_t bias_tile_sz = tt::tile_size(bias_format);
+    const std::uint32_t weight_tile_sz = tt::tile_size(weight_format);
+    const std::uint32_t bias_tile_sz = tt::tile_size(bias_format);
     // welford_zero_cb (LayerNorm warm-row accumulator reset): 2 resident fp32 tiles, always present
     // for LN. Counted in the resident budget so wide LN shards correctly choose block-major.
-    const uint32_t welford_zero_bytes = is_layernorm ? 2u * fp32_tile_size : 0u;
+    const std::uint32_t welford_zero_bytes = is_layernorm ? 2u * fp32_tile_size : 0u;
 
     // Streaming low-L1 fallback: when the resident input_cb + row-sized
     // intermediate/rotated/output CBs would overflow L1, stream input_cb in
@@ -649,7 +772,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     }
     // is_layernorm / use_recip_lut / recip_lut_bytes are defined above (before the
     // streaming decision, so the recip CB's resident cost is accounted for there).
-    uint64_t l1_cap_bytes = static_cast<uint64_t>(device->l1_size_per_core()) - 112640ull;
+    std::uint64_t l1_cap_bytes = static_cast<std::uint64_t>(device->l1_size_per_core()) - 112640ull;
     if (use_recip_lut) {
         // Account for the resident recip CB so the block-major decision still fits L1.
         l1_cap_bytes -= recip_lut_bytes;
@@ -658,8 +781,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     l1_cap_bytes -= welford_zero_bytes;
     // weight/bias CB tile counts — MUST match the create_cb sizing below. All modes hold ONE
     // row (num_tile_cols): broadcast resident, per-token / per-batch streamed per row.
-    const uint32_t weight_cb_tiles_est = has_weight ? num_tile_cols : 0u;
-    const uint32_t bias_cb_tiles_est = has_bias ? num_tile_cols : 0u;
+    const std::uint32_t weight_cb_tiles_est = has_weight ? num_tile_cols : 0u;
+    const std::uint32_t bias_cb_tiles_est = has_bias ? num_tile_cols : 0u;
     const bool overflows_resident_post = decide_block_major_post(
         num_tile_cols,
         block_size,
@@ -720,7 +843,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // Forwarder AG: DRAM pages per device = num_forwarders * max_rounds (one page
     // per forwarder per row-round). Page idx = my_device*num_chunks_per_device +
     // forwarder*max_rounds + round.
-    const uint32_t num_chunks_per_device = use_mux ? (num_forwarders * max_rounds) : 0u;
+    const std::uint32_t num_chunks_per_device = use_mux ? (num_forwarders * max_rounds) : 0u;
     TT_FATAL(
         !streaming_low_l1 || (num_tile_cols % block_size == 0),
         "dit_fused_distributed_rmsnorm streaming low-L1 path requires num_tile_cols ({}) divisible by block_size "
@@ -771,22 +894,22 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // ------------------------------------------------------------------------
     // CB allocations (on worker cores)
     // ------------------------------------------------------------------------
-    constexpr uint32_t input_cb_id = tt::CBIndex::c_0;
-    constexpr uint32_t stats_local_cb_id = tt::CBIndex::c_1;
-    constexpr uint32_t stats_gathered_cb_id = tt::CBIndex::c_2;
-    constexpr uint32_t weight_cb_id = tt::CBIndex::c_3;
-    constexpr uint32_t reduce_scalar_sum_cb_id = tt::CBIndex::c_4;
-    constexpr uint32_t reduce_scalar_avg_cb_id = tt::CBIndex::c_5;
-    constexpr uint32_t epsilon_cb_id = tt::CBIndex::c_6;
-    constexpr uint32_t reduce_result_cb_id = tt::CBIndex::c_7;
-    constexpr uint32_t intermediate_cb_id = tt::CBIndex::c_8;
-    constexpr uint32_t pre_intermediate_cb_id = tt::CBIndex::c_9;
-    constexpr uint32_t output_cb_id = tt::CBIndex::c_10;
-    constexpr uint32_t transformation_mat_cb_id = tt::CBIndex::c_11;
-    constexpr uint32_t rope_cos_cb_id = tt::CBIndex::c_12;
-    constexpr uint32_t rope_sin_cb_id = tt::CBIndex::c_13;
-    constexpr uint32_t rotated_input_cb_id = tt::CBIndex::c_14;
-    constexpr uint32_t reserved_packet_header_cb_id = tt::CBIndex::c_15;
+    constexpr std::uint32_t input_cb_id = tt::CBIndex::c_0;
+    constexpr std::uint32_t stats_local_cb_id = tt::CBIndex::c_1;
+    constexpr std::uint32_t stats_gathered_cb_id = tt::CBIndex::c_2;
+    constexpr std::uint32_t weight_cb_id = tt::CBIndex::c_3;
+    constexpr std::uint32_t reduce_scalar_sum_cb_id = tt::CBIndex::c_4;
+    constexpr std::uint32_t reduce_scalar_avg_cb_id = tt::CBIndex::c_5;
+    constexpr std::uint32_t epsilon_cb_id = tt::CBIndex::c_6;
+    constexpr std::uint32_t reduce_result_cb_id = tt::CBIndex::c_7;
+    constexpr std::uint32_t intermediate_cb_id = tt::CBIndex::c_8;
+    constexpr std::uint32_t pre_intermediate_cb_id = tt::CBIndex::c_9;
+    constexpr std::uint32_t output_cb_id = tt::CBIndex::c_10;
+    constexpr std::uint32_t transformation_mat_cb_id = tt::CBIndex::c_11;
+    constexpr std::uint32_t rope_cos_cb_id = tt::CBIndex::c_12;
+    constexpr std::uint32_t rope_sin_cb_id = tt::CBIndex::c_13;
+    constexpr std::uint32_t rotated_input_cb_id = tt::CBIndex::c_14;
+    constexpr std::uint32_t reserved_packet_header_cb_id = tt::CBIndex::c_15;
     // Forwarder all-gather CBs (use_mux path):
     //   stats_transposed_local_cb : 1 fp32 tile, post-transpose. The per-token
     //       sum-of-squares lives in row 0 (2 contiguous 64-byte spans at
@@ -798,20 +921,20 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     //   stats_transposed_gathered_cb : ring_size fp32 tiles. The worker writer
     //       lands the ring gather in row 0 of these; compute transposes them back
     //       to col 0 so the post-reduce<AVG,REDUCE_ROW> chain runs unchanged.
-    constexpr uint32_t stats_transposed_local_cb_id = tt::CBIndex::c_16;
-    constexpr uint32_t packet_cb_id = tt::CBIndex::c_17;  // forwarder coalesced packet (grid-wide, depth 2)
-    constexpr uint32_t stats_transposed_gathered_cb_id = tt::CBIndex::c_19;
-    constexpr uint32_t bias_cb_id = tt::CBIndex::c_20;
+    constexpr std::uint32_t stats_transposed_local_cb_id = tt::CBIndex::c_16;
+    constexpr std::uint32_t packet_cb_id = tt::CBIndex::c_17;  // forwarder coalesced packet (grid-wide, depth 2)
+    constexpr std::uint32_t stats_transposed_gathered_cb_id = tt::CBIndex::c_19;
+    constexpr std::uint32_t bias_cb_id = tt::CBIndex::c_20;
     // Welford reciprocal LUT CB (LayerNorm; c_18 is otherwise free). One contiguous page
     // of reduce_width fp32 reciprocals; the reader fills it once, compute reads it as a
     // std::array<uint32_t, reduce_width>. A tiny stub when the LUT is unused.
-    constexpr uint32_t recip_lut_cb_id = tt::CBIndex::c_18;
+    constexpr std::uint32_t recip_lut_cb_id = tt::CBIndex::c_18;
     // Holds a zeroed Welford state (mean=0 tile, M2=0 tile) captured ONCE at cold start while the
     // SFPU is clean, then reloaded each row via copy_tile + welford_restore_state to reset the
     // welford accumulator (mirrors the standard layernorm_large_tensor_welford fuse_pre_add path).
     // copy_tile is an unpredicated L1->DST read, so it resets every token lane — unlike
     // welford_init's SFPLOADI clear, which a prior row's combine can leave CC-predicated (ISSUE 3A).
-    constexpr uint32_t welford_zero_cb_id = tt::CBIndex::c_21;
+    constexpr std::uint32_t welford_zero_cb_id = tt::CBIndex::c_21;
 
     // Double-buffer input_cb: reader can fill chunk N+1 while compute is in
     // chunk N's post phase. The cumulative wait_front in compute pairs
@@ -824,14 +947,14 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // PRE, once for the POST re-read — and compute pops each block as it goes,
     // so the CB just needs enough depth for the reader to run a few blocks
     // ahead of compute within each pass.
-    const uint32_t chunk_input_tiles = chunk_size_rows * num_tile_cols;
+    const std::uint32_t chunk_input_tiles = chunk_size_rows * num_tile_cols;
     // Shallower streaming depth on the AG path (use_mux): the per-shard stats +
     // ring-gather + combine CBs consume L1 that the is_tp_1 path doesn't, so a
     // streamed wide TP>1 shard (LayerNorm) would overflow at depth 4. Depth 2 is
     // still double-buffered (reader one block ahead). RMS TP>1 shapes fit resident
     // (never stream), so this only affects wide TP>1 LayerNorm.
-    const uint32_t kStreamingInputBlocks = use_mux ? 2u : 4u;
-    const uint32_t input_cb_tiles =
+    const std::uint32_t kStreamingInputBlocks = use_mux ? 2u : 4u;
+    const std::uint32_t input_cb_tiles =
         streaming_low_l1 ? (kStreamingInputBlocks * block_size) : (kInputCbChunks * chunk_input_tiles);
     create_cb(input_cb_id, program, worker_core_set, input_tile_size, input_cb_tiles, input_format);
 
@@ -841,13 +964,13 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // into stats_gathered_cb (skipping stats_local). When per_head_norm is on
     // but is_tp_1 path is used we still need stats_gathered_cb sized for the
     // per-head fan-out.
-    const uint32_t per_row_stats_count = args.per_head_norm ? args.num_heads_per_device : args.ring_size;
-    const uint32_t stats_local_tiles = (args.ring_size > 1 && !args.per_head_norm) ? chunk_size_rows : 1;
+    const std::uint32_t per_row_stats_count = args.per_head_norm ? args.num_heads_per_device : args.ring_size;
+    const std::uint32_t stats_local_tiles = (args.ring_size > 1 && !args.per_head_norm) ? chunk_size_rows : 1;
     create_cb(stats_local_cb_id, program, worker_core_set, fp32_tile_size, stats_local_tiles, fp32_format);
     // Both paths (forwarder AG and is_tp_1) push gathered stats one chunk at a time,
     // so a chunk-sized CB suffices.
-    const uint32_t stats_gathered_rows = chunk_size_rows;
-    const uint32_t stats_gathered_tiles = stats_gathered_rows * per_row_stats_count;
+    const std::uint32_t stats_gathered_rows = chunk_size_rows;
+    const std::uint32_t stats_gathered_tiles = stats_gathered_rows * per_row_stats_count;
     create_cb(stats_gathered_cb_id, program, worker_core_set, fp32_tile_size, stats_gathered_tiles, fp32_format);
 
     // Transposed stat CBs on the worker cores. For is_tp_1 these are unused stubs
@@ -855,24 +978,42 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // stats_per_token (1 RMS sum-sq, 2 LayerNorm mean+var); gathered is
     // stats_per_token * ring_size (the per-device partials to merge).
     create_cb(stats_transposed_local_cb_id, program, worker_core_set, fp32_tile_size, stats_per_token, fp32_format);
-    create_cb(
-        stats_transposed_gathered_cb_id,
-        program,
-        worker_core_set,
-        fp32_tile_size,
-        use_mux ? args.ring_size * stats_per_token : 1u,
-        fp32_format);
-    uint32_t unit_packet_bytes = 0u;
+    // Column split: device d's pair read (both halves' sticks) lands at d * gather_pair_stride of the
+    // gathered CB, and compute reads half h's fp32 tile at page d * gather_pair_pages + h (64 B pages). The
+    // CB extends one full tile past the last pair so that tile view stays inside it.
+    const std::uint32_t gather_pair_stride = col_split ? tt::round_up(kWavePairReadBytes, kGatherCbPageBytes) : 0u;
+    const std::uint32_t gather_pair_pages = gather_pair_stride / kGatherCbPageBytes;
+    const std::uint32_t gathered_cb_pages =
+        col_split
+            ? tt::div_up(
+                  (args.ring_size - 1u) * gather_pair_stride + kGatherCbPageBytes + fp32_tile_size, kGatherCbPageBytes)
+            : 0u;
+    if (col_split) {
+        tt::tt_metal::CircularBufferConfig gathered_cfg =
+            tt::tt_metal::CircularBufferConfig(
+                gathered_cb_pages * kGatherCbPageBytes, {{stats_transposed_gathered_cb_id, fp32_format}})
+                .set_page_size(stats_transposed_gathered_cb_id, kGatherCbPageBytes);
+        tt::tt_metal::CreateCircularBuffer(program, worker_core_set, gathered_cfg);
+    } else {
+        create_cb(
+            stats_transposed_gathered_cb_id,
+            program,
+            worker_core_set,
+            fp32_tile_size,
+            use_mux ? args.ring_size * stats_per_token : 1u,
+            fp32_format);
+    }
+    std::uint32_t unit_packet_bytes = 0u;
     if (use_mux) {
         // Coalesced fabric packet, allocated on the WHOLE grid so its L1 address
         // is identical on every worker + forwarder core (a worker writes its 128 B
         // stick into its forwarder's copy at this same address; the forwarder reads
         // its own). page == one fabric packet (sticks_per_packet * 128 B), depth 2.
-        const uint32_t sticks_per_packet =
-            std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / stick_bytes);
-        unit_packet_bytes = sticks_per_packet * stick_bytes;
+        const std::uint32_t sticks_per_packet =
+            std::max<std::uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / stick_bytes);
+        unit_packet_bytes = col_split ? split_sizing.page_size_bytes : sticks_per_packet * stick_bytes;
         TT_FATAL(
-            sticks_per_packet >= workers_per_forwarder,
+            col_split || sticks_per_packet >= workers_per_forwarder,
             "dit_fused_distributed_rmsnorm: fabric packet holds {} sticks but a forwarder group has {} workers",
             sticks_per_packet,
             workers_per_forwarder);
@@ -898,9 +1039,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     //    popped per row (streamed, not all-batches-resident) — so a wide per-batch shard fits L1
     //    at TP=1 (the full unsharded width) instead of holding batch*num_tile_cols tiles.
     // chunk_size_rows==1, so per-token's chunk_size_rows*num_tile_cols is also just num_tile_cols.
-    const uint32_t weight_cb_tiles = has_weight ? num_tile_cols : 1;
+    const std::uint32_t weight_cb_tiles = has_weight ? num_tile_cols : 1;
     create_cb(weight_cb_id, program, worker_core_set, weight_tile_sz, weight_cb_tiles, weight_format);
-    const uint32_t bias_cb_tiles = has_bias ? num_tile_cols : 1;
+    const std::uint32_t bias_cb_tiles = has_bias ? num_tile_cols : 1;
     create_cb(bias_cb_id, program, worker_core_set, bias_tile_sz, bias_cb_tiles, bias_format);
     // Recip LUT CB: one contiguous page of reduce_width fp32 (== recip_lut_bytes). A 4 B
     // stub when unused (the reader/compute gate on use_recip and never touch it).
@@ -935,8 +1076,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         // and the compute reconfigs the unpacker via reconfig_data_format(), so
         // both follow this format automatically.
         const tt::DataFormat rope_format = datatype_to_dataformat_converter(rope_cos->dtype());
-        const uint32_t rope_tile_size = tt::tile_size(rope_format);
-        const uint32_t rope_resident_tiles = chunk_size_rows * rope_tiles_per_row;
+        const std::uint32_t rope_tile_size = tt::tile_size(rope_format);
+        const std::uint32_t rope_resident_tiles = chunk_size_rows * rope_tiles_per_row;
         // Decide block-major POST FIRST, using the RESIDENT (whole-row) cos/sin + rotated
         // footprint — so we only leave the fast resident layout when it would actually
         // overflow L1 (TP=2 feat-2048). All TP=4 per-head shards fit, so they stay resident.
@@ -956,9 +1097,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         // Block-major POST consumes cos/sin RESIDENT (the reader pushes the whole
         // row's cos/sin before the deferred POST input re-read pass), so never
         // stream them when block_major_post — keep the whole-row resident size.
-        const uint32_t rope_cb_tiles = (per_head_rope && fuse_mm_rope && !block_major_post)
-                                           ? std::min(rope_resident_tiles, kRopeStreamBlocks * block_size)
-                                           : rope_resident_tiles;
+        const std::uint32_t rope_cb_tiles = (per_head_rope && fuse_mm_rope && !block_major_post)
+                                                ? std::min(rope_resident_tiles, kRopeStreamBlocks * block_size)
+                                                : rope_resident_tiles;
         create_cb(rope_cos_cb_id, program, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
         create_cb(rope_sin_cb_id, program, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
     } else {
@@ -985,7 +1126,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // Block-major POST collapses intermediate_cb to O(block_size) (double-buffered)
     // so wide low-TP shards fit L1; the resident/input-streaming paths keep the
     // whole (padded) row for sub-phase-major handoff.
-    const uint32_t intermediate_cb_tiles =
+    const std::uint32_t intermediate_cb_tiles =
         block_major_post ? (2u * block_size) : (tt::div_up(num_tile_cols, block_size) * block_size);
     create_cb(
         intermediate_cb_id,
@@ -998,7 +1139,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // to hold a block (double-buffered for matmul->rope pipelining) instead of a
     // whole row — this is what reclaims the L1 for wide per-head shards. The
     // resident sub-phase-major path (everything else) keeps the whole-row buffer.
-    const uint32_t rotated_cb_tiles = fuse_mm_rope ? (2u * block_size) : intermediate_cb_tiles;
+    const std::uint32_t rotated_cb_tiles = fuse_mm_rope ? (2u * block_size) : intermediate_cb_tiles;
     create_cb(
         rotated_input_cb_id, program, worker_core_set, intermediate_tile_size, rotated_cb_tiles, intermediate_format);
     // output_cb sized to 2 full padded rows so the writer can deep-drain a
@@ -1008,7 +1149,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // drain at ~22% of POST as back-pressure (P_ADD's 5.9× core-to-core spread
     // = shared DRAM-write contention). A row-deep CB lets writes pipeline at
     // DRAM depth (the writer drains the whole row under one flush).
-    const uint32_t output_cb_tiles = 2u * intermediate_cb_tiles;
+    const std::uint32_t output_cb_tiles = 2u * intermediate_cb_tiles;
     create_cb(output_cb_id, program, worker_core_set, output_tile_size, output_cb_tiles, output_format);
 
     // Packet header CB. The forwarder reserves 2 header slots (fwd+bwd) from it,
@@ -1018,10 +1159,10 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // single device with fabric uninitialized). Only the AG path (use_mux) uses this CB, so on
     // the is_tp_1 path use a fixed stub page size instead of querying fabric — the stub is
     // allocated for CB-index consistency but never read.
-    const uint32_t packet_header_size_bytes =
-        use_mux ? tt::tt_fabric::get_tt_fabric_packet_header_size_bytes() : sizeof(uint32_t);
+    const std::uint32_t packet_header_size_bytes =
+        use_mux ? tt::tt_fabric::get_tt_fabric_packet_header_size_bytes() : sizeof(std::uint32_t);
     {
-        const uint32_t header_tiles = use_mux ? 4u : 1u;
+        const std::uint32_t header_tiles = use_mux ? 4u : 1u;
         const CoreRangeSet& header_cores = use_mux ? forwarder_core_set : worker_core_set;
         tt::tt_metal::CircularBufferConfig packet_header_cb_config =
             tt::tt_metal::CircularBufferConfig(
@@ -1035,33 +1176,35 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // the WHOLE grid so their L1 address is identical across workers + forwarders
     // (kernels resolve via Semaphore(id)). out_ready is the caller's GlobalSemaphore,
     // fabric-inc'd by peer forwarders (resolved later).
-    const uint32_t arrival_sem_id = use_mux ? tt::tt_metal::CreateSemaphore(program, all_core_set, 0u) : 0u;
-    const uint32_t go_sem_id = use_mux ? tt::tt_metal::CreateSemaphore(program, all_core_set, 0u) : 0u;
+    const std::uint32_t arrival_sem_id = use_mux ? tt::tt_metal::CreateSemaphore(program, all_core_set, 0u) : 0u;
+    const std::uint32_t go_sem_id = use_mux ? tt::tt_metal::CreateSemaphore(program, all_core_set, 0u) : 0u;
+    // Column split: a wave-B worker's reader waits on start_sem until its wave-A partner's read is nearly in.
+    const std::uint32_t start_sem_id = col_split ? tt::tt_metal::CreateSemaphore(program, worker_core_set, 0u) : 0u;
 
     // ------------------------------------------------------------------------
     // Reader kernel (on worker cores)
     // ------------------------------------------------------------------------
-    const uint32_t H_full = W * args.ring_size;
+    const std::uint32_t H_full = W * args.ring_size;
     // Per-head norm reduces over head_dim only, so the AVG scalar divides by
     // head_dim instead of H_full.
-    const uint32_t reduce_factor = args.per_head_norm ? (W / args.num_heads_per_device) : H_full;
-    std::vector<uint32_t> reader_compile_args = {
+    const std::uint32_t reduce_factor = args.per_head_norm ? (W / args.num_heads_per_device) : H_full;
+    std::vector<std::uint32_t> reader_compile_args = {
         input_cb_id,
         weight_cb_id,
         rope_cos_cb_id,
         rope_sin_cb_id,
         num_tile_cols,
         block_size,
-        static_cast<uint32_t>(has_weight),
-        static_cast<uint32_t>(fuse_rope),
+        static_cast<std::uint32_t>(has_weight),
+        static_cast<std::uint32_t>(fuse_rope),
         head_dim_tiles,
-        static_cast<uint32_t>(per_head_rope),
+        static_cast<std::uint32_t>(per_head_rope),
         rope_seqlen_tiles,
         bias_cb_id,
-        static_cast<uint32_t>(has_bias),
-        static_cast<uint32_t>(per_token_weight),
-        static_cast<uint32_t>(per_token_bias),
-        static_cast<uint32_t>(streaming_low_l1),
+        static_cast<std::uint32_t>(has_bias),
+        static_cast<std::uint32_t>(per_token_weight),
+        static_cast<std::uint32_t>(per_token_bias),
+        static_cast<std::uint32_t>(streaming_low_l1),
         // reader input_schedule (CT arg 17): WHERE the streaming input passes are read
         // relative to the resident weight/bias/cos pushes that the block-major POST
         // consumes mid-pass. 0=INPUT_FIRST (all input at top: resident, or streaming
@@ -1069,12 +1212,12 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         // block-major — no AG, so delaying PRE is free), 2=SPLIT (PRE pass at top so the
         // local stats / ring gather start ASAP, then side inputs, then the POST pass:
         // the AG (ring>1) block-major path — fixes the deadlock without delaying the AG).
-        static_cast<uint32_t>(
+        static_cast<std::uint32_t>(
             (block_major_post && streaming_low_l1) ? (is_tp_1 ? 1u /*DEFER_ALL*/ : 2u /*SPLIT*/) : 0u /*INPUT_FIRST*/),
         // CT 17/18: recip LUT (LayerNorm). use_recip gates a one-time DRAM read of the
         // reciprocals tensor into recip_lut_cb at the top of the reader; compute then
         // reads the CB as the Welford reciprocal_lut. recip accessor is appended last.
-        static_cast<uint32_t>(use_recip_lut),
+        static_cast<std::uint32_t>(use_recip_lut),
         recip_lut_cb_id,
         // CT 19/20: broadcast affine read counts (always num_tile_cols: only TRUE broadcast
         // [1,1,H] uses the one-shot resident read).
@@ -1086,8 +1229,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         // CT 22/23/24: per-batch adaLN weight/bias ([batch,1,H]) — streamed per row (face-row
         // broadcast read at wbatch*num_tile_cols, wbatch = tile_row / rows_per_batch_tiles),
         // consumed + popped per row like per-token. rows_per_batch_tiles = num_tile_rows / batch.
-        static_cast<uint32_t>(per_batch_weight),
-        static_cast<uint32_t>(per_batch_bias),
+        static_cast<std::uint32_t>(per_batch_weight),
+        static_cast<std::uint32_t>(per_batch_bias),
         rows_per_batch_tiles,
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
@@ -1114,13 +1257,36 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     } else {
         TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);  // dummy
     }
+    // Broadcast [1,H] gamma on the AG path with a resident POST: the worker writer (BRISC,
+    // idle until PRE ends) reads it at kernel start, so the reader's queue carries only input.
+    const bool writer_reads_weight =
+        use_mux && has_weight && !per_token_weight && !per_batch_weight && !block_major_post;
+    reader_compile_args.push_back(static_cast<std::uint32_t>(writer_reads_weight));
+    TT_FATAL(
+        !col_split || (!streaming_low_l1 && !block_major_post && (writer_reads_weight || !has_weight)),
+        "dit_fused_distributed_rmsnorm: column split needs the resident POST with writer-read broadcast gamma");
+    // Column split: DRAM row stride (full tile-cols) + the wave-B start semaphore.
+    reader_compile_args.push_back(full_tile_cols);
+    reader_compile_args.push_back(start_sem_id);
+
+    // Path-aware dual-NoC output drain (AG worker writer, Blackhole, DRAM-interleaved output): the
+    // writer (BRISC, NoC1) sends part of its output tiles on NoC0, so both DM kernels on the worker
+    // cores run in dynamic-NoC mode (a core's DM kernels must share the noc mode). Each keeps its
+    // default NoC; only the writer's drain issues on the other one.
+    const bool dual_noc_drain = use_mux && device->arch() == tt::ARCH::BLACKHOLE &&
+                                output_tensor.buffer()->buffer_type() == BufferType::DRAM &&
+                                output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
+    DataMovementConfig reader_config = ReaderDataMovementConfig(reader_compile_args);
+    if (dual_noc_drain) {
+        reader_config.noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+    }
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
         "dit_rmsnorm_fused_reader.cpp",
         worker_core_set,
-        ReaderDataMovementConfig(reader_compile_args));
+        reader_config);
 
     // ------------------------------------------------------------------------
     // Writer kernel (on worker cores). Two variants:
@@ -1132,11 +1298,11 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     KernelHandle writer_kernel_id;
     if (!use_mux) {
         // Drain-only writer for the is_tp_1 (no-AG) path.
-        std::vector<uint32_t> writer_compile_args = {
+        std::vector<std::uint32_t> writer_compile_args = {
             output_cb_id,
             num_tile_cols,
             block_size,
-            /*is_tp_1=*/static_cast<uint32_t>(is_tp_1 ? 1u : 0u),
+            /*is_tp_1=*/static_cast<std::uint32_t>(is_tp_1 ? 1u : 0u),
             stats_local_cb_id,
             stats_gathered_cb_id,
             reserved_packet_header_cb_id,
@@ -1156,8 +1322,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         writer_compile_args.push_back(epsilon_cb_id);
         writer_compile_args.push_back(transformation_mat_cb_id);
         writer_compile_args.push_back(reduce_factor);
-        writer_compile_args.push_back(std::bit_cast<uint32_t>(args.epsilon));
-        writer_compile_args.push_back(static_cast<uint32_t>(fuse_rope));
+        writer_compile_args.push_back(std::bit_cast<std::uint32_t>(args.epsilon));
+        writer_compile_args.push_back(static_cast<std::uint32_t>(fuse_rope));
         if (fuse_rope) {
             TensorAccessorArgs(trans_mat.value().buffer()).append_to(writer_compile_args);
         } else {
@@ -1176,7 +1342,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         // go-sem, reads the coalesced ring gather from DRAM into row-0 of the
         // transposed-gathered tiles, and drains output. my_forwarder_index /
         // my_slot are per-core runtime args (set in the rt loop).
-        std::vector<uint32_t> writer_compile_args = {
+        std::vector<std::uint32_t> writer_compile_args = {
             output_cb_id,
             num_tile_cols,
             block_size,
@@ -1199,30 +1365,47 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         writer_compile_args.push_back(epsilon_cb_id);
         writer_compile_args.push_back(transformation_mat_cb_id);
         writer_compile_args.push_back(reduce_factor);
-        writer_compile_args.push_back(std::bit_cast<uint32_t>(args.epsilon));
-        writer_compile_args.push_back(static_cast<uint32_t>(fuse_rope));
+        writer_compile_args.push_back(std::bit_cast<std::uint32_t>(args.epsilon));
+        writer_compile_args.push_back(static_cast<std::uint32_t>(fuse_rope));
         if (fuse_rope) {
             TensorAccessorArgs(trans_mat.value().buffer()).append_to(writer_compile_args);
         } else {
             TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
+        }
+        writer_compile_args.push_back(static_cast<std::uint32_t>(writer_reads_weight));
+        writer_compile_args.push_back(weight_cb_id);
+        writer_compile_args.push_back(weight_bcast_tiles);
+        if (has_weight) {
+            TensorAccessorArgs(weight.value().buffer()).append_to(writer_compile_args);
+        } else {
+            TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
+        }
+        writer_compile_args.push_back(static_cast<std::uint32_t>(dual_noc_drain));
+        // Column split: tile-row-0 stick slots, one pair read per device into the 64 B-page gathered CB.
+        writer_compile_args.push_back(static_cast<std::uint32_t>(col_split));
+        writer_compile_args.push_back(gathered_cb_pages);
+        writer_compile_args.push_back(gather_pair_stride);
+        DataMovementConfig writer_config = WriterDataMovementConfig(writer_compile_args);
+        if (dual_noc_drain) {
+            writer_config.noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
         }
         writer_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
             "dit_rmsnorm_fused_worker_writer.cpp",
             worker_core_set,
-            WriterDataMovementConfig(writer_compile_args));
+            writer_config);
     }
 
     // ------------------------------------------------------------------------
     // Forwarder kernels (AG path): one per forwarder core (per-core CT args).
     // ------------------------------------------------------------------------
     std::vector<KernelHandle> forwarder_kernel_ids(num_forwarders, 0);
-    for (uint32_t f = 0; f < num_forwarders; f++) {
-        const uint32_t group_begin = f * workers_per_forwarder;
-        const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
-        const uint32_t group_size = group_end - group_begin;
-        std::vector<uint32_t> fwd_ct = {
+    for (std::uint32_t f = 0; f < num_forwarders; f++) {
+        const std::uint32_t group_begin = f * workers_per_forwarder;
+        const std::uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
+        const std::uint32_t group_size = group_end - group_begin;
+        std::vector<std::uint32_t> fwd_ct = {
             packet_cb_id,
             reserved_packet_header_cb_id,
             args.ring_size,
@@ -1248,10 +1431,19 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
         fwd_ct.insert(fwd_ct.end(), forward_route.begin(), forward_route.end());
         fwd_ct.insert(fwd_ct.end(), backward_route.begin(), backward_route.end());
+        if (col_split) {
+            // Two-wave forwarder: wave w's sticks are the page region [w * span, (w + 1) * span); wave A has
+            // wave_a_slots sticks, wave B the rest of the group.
+            fwd_ct.push_back(split_sizing.wave_slots);
+            fwd_ct.push_back(split_sizing.wave_span_bytes);
+            fwd_ct.push_back(split_sizing.wave_a_slots);
+        }
         forwarder_kernel_ids[f] = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_norm_common/kernels/dataflow/"
-            "dit_fused_norm_forwarder.cpp",
+            col_split ? "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/"
+                        "dataflow/dit_rmsnorm_wave_forwarder.cpp"
+                      : "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_norm_common/kernels/dataflow/"
+                        "dit_fused_norm_forwarder.cpp",
             CoreRangeSet({CoreRange(forwarder_cores[f], forwarder_cores[f])}),
             WriterDataMovementConfig(fwd_ct));
     }
@@ -1259,7 +1451,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // ------------------------------------------------------------------------
     // Compute kernel (on worker cores)
     // ------------------------------------------------------------------------
-    std::vector<uint32_t> compute_compile_args = {
+    std::vector<std::uint32_t> compute_compile_args = {
         input_cb_id,
         stats_local_cb_id,
         stats_gathered_cb_id,
@@ -1277,9 +1469,11 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         rotated_input_cb_id,
         num_tile_cols,
         block_size,
-        /*stats_tiles_cols=*/args.ring_size,
-        static_cast<uint32_t>(has_weight),
-        static_cast<uint32_t>(fuse_rope),
+        // Column split: each device contributes both column halves' partials (2 * ring_size tiles), and the
+        // combine's 1/(num_tile_cols * 32 * stats_tiles_cols) stays 1/H_full with the halved num_tile_cols.
+        /*stats_tiles_cols=*/col_split ? 2u * args.ring_size : args.ring_size,
+        static_cast<std::uint32_t>(has_weight),
+        static_cast<std::uint32_t>(fuse_rope),
         head_dim_tiles,
         // is_tp_1 must match the factory-level is_tp_1 (== ring_size==1 ||
         // per_head_norm). per_head_norm reduces locally per head (no AG), so the
@@ -1288,30 +1482,30 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         // them locally in POST. With the old (ring_size==1)-only form, per_head
         // ring>1 routed PRE to stats_local_cb (sized 1 tile, no consumer) and
         // wedged on the 2nd head's reserve_back.
-        /*is_tp_1=*/static_cast<uint32_t>(is_tp_1 ? 1u : 0u),
+        /*is_tp_1=*/static_cast<std::uint32_t>(is_tp_1 ? 1u : 0u),
         // Packed AG CBs (all-gather path). For is_tp_1 the compute kernel
         // sidesteps the packed path entirely (pushes col-0 stats straight into
         // stats_gathered_cb).
         stats_transposed_local_cb_id,
         stats_transposed_gathered_cb_id,
-        static_cast<uint32_t>(use_mux ? 1u : 0u),  // packed_ag_enabled
-        static_cast<uint32_t>(per_head_rope),
+        static_cast<std::uint32_t>(use_mux ? 1u : 0u),  // packed_ag_enabled
+        static_cast<std::uint32_t>(per_head_rope),
         bias_cb_id,
-        static_cast<uint32_t>(has_bias),
-        static_cast<uint32_t>(args.per_head_norm ? 1u : 0u),
+        static_cast<std::uint32_t>(has_bias),
+        static_cast<std::uint32_t>(args.per_head_norm ? 1u : 0u),
         args.num_heads_per_device,
-        static_cast<uint32_t>(per_token_weight),
-        static_cast<uint32_t>(per_token_bias),
-        std::bit_cast<uint32_t>(args.epsilon),  // eps_bits: fp32 scalar for fused +eps in reduce post-op
-        static_cast<uint32_t>(streaming_low_l1),
-        static_cast<uint32_t>(fuse_mm_rope),      // block-major POST: fuse matmul+rope per block (rotated block-local)
-        static_cast<uint32_t>(block_major_post),  // full block-major POST (all sub-phases per block; wide low-TP)
-        static_cast<uint32_t>(args.norm_type),    // 0=RMS (sum-of-squares), 1=Welford LayerNorm (mean/variance)
+        static_cast<std::uint32_t>(per_token_weight),
+        static_cast<std::uint32_t>(per_token_bias),
+        std::bit_cast<std::uint32_t>(args.epsilon),  // eps_bits: fp32 scalar for fused +eps in reduce post-op
+        static_cast<std::uint32_t>(streaming_low_l1),
+        static_cast<std::uint32_t>(fuse_mm_rope),  // block-major POST: fuse matmul+rope per block (rotated block-local)
+        static_cast<std::uint32_t>(block_major_post),  // full block-major POST (all sub-phases per block; wide low-TP)
+        static_cast<std::uint32_t>(args.norm_type),    // 0=RMS (sum-of-squares), 1=Welford LayerNorm (mean/variance)
         // CT 37/38: recip LUT (LayerNorm). When use_recip the LN kernel reads recip_lut_cb
         // as a std::array<uint32_t, reduce_width> and passes it to welford_update/finalize
         // (array load vs soft-float 1/(N+1)); else it uses the runtime-division fallback.
         recip_lut_cb_id,
-        static_cast<uint32_t>(use_recip_lut),
+        static_cast<std::uint32_t>(use_recip_lut),
         // CT 39: zeroed welford-state CB (LayerNorm warm-row accumulator reset).
         welford_zero_cb_id,
         // CT 40/41/42: per-batch adaLN. per_batch_weight/bias tell the compute to consume + POP
@@ -1319,9 +1513,14 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         // using mul_bcast_rows — same per-row consumption as per-token, broadcast op.
         // rows_per_batch_tiles is unused by compute now (the reader owns batch indexing); kept for
         // arg stability.
-        static_cast<uint32_t>(per_batch_weight),
-        static_cast<uint32_t>(per_batch_bias),
+        static_cast<std::uint32_t>(per_batch_weight),
+        static_cast<std::uint32_t>(per_batch_bias),
         rows_per_batch_tiles,
+        // CT 43/44/45: column split. The gathered CB has 64 B pages; device d / half h's partial is the fp32
+        // tile at page d * gather_pair_pages + h.
+        static_cast<std::uint32_t>(col_split),
+        gathered_cb_pages,
+        gather_pair_pages,
     };
 
     // fp32 dest accumulation is REQUIRED, unconditionally — not just for fp32
@@ -1357,17 +1556,17 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // ------------------------------------------------------------------------
     // Common runtime args
     // ------------------------------------------------------------------------
-    const uint32_t input_addr = input_tensor.buffer()->address();
-    const uint32_t output_addr = output_tensor.buffer()->address();
-    const uint32_t weight_addr = has_weight ? weight.value().buffer()->address() : 0;
-    const uint32_t bias_addr = has_bias ? bias.value().buffer()->address() : 0;
-    const uint32_t rope_cos_addr = fuse_rope ? rope_cos.value().buffer()->address() : 0;
-    const uint32_t rope_sin_addr = fuse_rope ? rope_sin.value().buffer()->address() : 0;
-    const uint32_t trans_mat_addr_rt = fuse_rope ? trans_mat.value().buffer()->address() : 0u;
-    const uint32_t recip_addr_rt = use_recip_lut ? reciprocals.value().buffer()->address() : 0u;
-    const uint32_t stats_dram_addr = use_mux ? stats_dram_buffer->address() : 0u;
+    const std::uint32_t input_addr = input_tensor.buffer()->address();
+    const std::uint32_t output_addr = output_tensor.buffer()->address();
+    const std::uint32_t weight_addr = has_weight ? weight.value().buffer()->address() : 0;
+    const std::uint32_t bias_addr = has_bias ? bias.value().buffer()->address() : 0;
+    const std::uint32_t rope_cos_addr = fuse_rope ? rope_cos.value().buffer()->address() : 0;
+    const std::uint32_t rope_sin_addr = fuse_rope ? rope_sin.value().buffer()->address() : 0;
+    const std::uint32_t trans_mat_addr_rt = fuse_rope ? trans_mat.value().buffer()->address() : 0u;
+    const std::uint32_t recip_addr_rt = use_recip_lut ? reciprocals.value().buffer()->address() : 0u;
+    const std::uint32_t stats_dram_addr = use_mux ? stats_dram_buffer->address() : 0u;
 
-    uint32_t out_ready_sem_bank_addr = 0;
+    std::uint32_t out_ready_sem_bank_addr = 0;
     if (args.ring_size > 1 && !args.per_head_norm) {
         TT_FATAL(
             !args.multi_device_global_semaphore.empty(),
@@ -1378,11 +1577,11 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // Virtual (NoC) coords: workers write sticks / inc arrival on their forwarder;
     // forwarders inc the go-sem on their workers.
     std::vector<CoreCoord> forwarder_virtual(num_forwarders);
-    for (uint32_t f = 0; f < num_forwarders; f++) {
+    for (std::uint32_t f = 0; f < num_forwarders; f++) {
         forwarder_virtual[f] = mesh_device->worker_core_from_logical_core(forwarder_cores[f]);
     }
     std::vector<CoreCoord> worker_virtual(num_workers);
-    for (uint32_t i = 0; i < num_workers; i++) {
+    for (std::uint32_t i = 0; i < num_workers; i++) {
         worker_virtual[i] = mesh_device->worker_core_from_logical_core(worker_cores[i]);
     }
 
@@ -1394,32 +1593,69 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     SetCommonRuntimeArgs(
         program, reader_kernel_id, {input_addr, weight_addr, bias_addr, rope_cos_addr, rope_sin_addr, recip_addr_rt});
     if (use_mux) {
-        SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt, stats_dram_addr});
+        SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt, stats_dram_addr, weight_addr});
     } else {
         SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt});
     }
-    for (uint32_t i = 0; i < num_workers; i++) {
+    for (std::uint32_t i = 0; i < num_workers; i++) {
         const auto& core = worker_cores[i];
-        const uint32_t tile_row_start = std::min(i * num_tile_rows_per_worker, num_tile_rows);
-        const uint32_t tile_row_end = std::min(tile_row_start + num_tile_rows_per_worker, num_tile_rows);
-        const uint32_t this_core_rows = tile_row_end - tile_row_start;
+        const std::uint32_t tile_row_start =
+            col_split ? split_row(i) : std::min(i * num_tile_rows_per_worker, num_tile_rows);
+        const std::uint32_t tile_row_end = std::min(tile_row_start + num_tile_rows_per_worker, num_tile_rows);
+        const std::uint32_t this_core_rows = tile_row_end - tile_row_start;
 
-        SetRuntimeArgs(program, reader_kernel_id, core, {tile_row_start, tile_row_end});
+        // Column split: column offset of this worker's half, and its wave role (1 = wave A, ups its
+        // wave-B partners' start_sem; 2 = wave B, waits for it; 0 = no waves) + up to two partner coords.
+        const std::uint32_t col_offset = col_split ? split_half(i) * num_tile_cols : 0u;
+        std::uint32_t wave_role = 0u;
+        std::array<CoreCoord, 2> wave_partner{CoreCoord{0, 0}, CoreCoord{0, 0}};
+        std::uint32_t num_wave_partners = 0u;
+        if (col_split) {
+            if (split_wave(i) == 1u) {
+                wave_role = 2u;
+            } else {
+                wave_role = 1u;
+                for (const std::uint32_t b : split_partners[i]) {
+                    wave_partner[num_wave_partners++] = mesh_device->worker_core_from_logical_core(worker_cores[b]);
+                }
+            }
+        }
+        SetRuntimeArgs(
+            program,
+            reader_kernel_id,
+            core,
+            {tile_row_start,
+             tile_row_end,
+             col_offset,
+             wave_role,
+             num_wave_partners,
+             static_cast<std::uint32_t>(wave_partner[0].x),
+             static_cast<std::uint32_t>(wave_partner[0].y),
+             static_cast<std::uint32_t>(wave_partner[1].x),
+             static_cast<std::uint32_t>(wave_partner[1].y)});
 
-        std::vector<uint32_t> writer_rt_args = {tile_row_start, tile_row_end};
+        std::vector<std::uint32_t> writer_rt_args = {tile_row_start, tile_row_end};
         if (use_mux) {
             // Per-worker row range followed by forwarder NoC x/y, group index, and slot.
-            const uint32_t f = worker_forwarder(i);
-            writer_rt_args.push_back(static_cast<uint32_t>(forwarder_virtual[f].x));
-            writer_rt_args.push_back(static_cast<uint32_t>(forwarder_virtual[f].y));
+            const std::uint32_t f = worker_forwarder(i);
+            writer_rt_args.push_back(static_cast<std::uint32_t>(forwarder_virtual[f].x));
+            writer_rt_args.push_back(static_cast<std::uint32_t>(forwarder_virtual[f].y));
             writer_rt_args.push_back(f);
             writer_rt_args.push_back(worker_slot(i));
+            // Column split: column offset, stick byte offset in the page, the row pair's read offset, and
+            // the arrival increment (wave w counts in its own 16-bit field of the forwarder's arrival sem).
+            const std::uint32_t wave_base = col_split ? split_wave(i) * split_sizing.wave_span_bytes : 0u;
+            writer_rt_args.push_back(col_offset);
+            writer_rt_args.push_back(
+                col_split ? wave_base + dit_rmsnorm_wave_slot_offset(split_slot(i)) : worker_slot(i) * stick_bytes);
+            writer_rt_args.push_back(col_split ? wave_base + dit_rmsnorm_wave_slot_offset(split_slot(i) & ~1u) : 0u);
+            writer_rt_args.push_back(col_split ? (1u << (16u * split_wave(i))) : 1u);
         }
         SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
 
         // RT arg 1 (tile_row_start): the worker's first GLOBAL tile-row, so LN compute can map
         // each local row to its batch (global_row / rows_per_batch_tiles) for per-batch adaLN.
-        std::vector<uint32_t> compute_rt_args = {this_core_rows, tile_row_start};
+        std::vector<std::uint32_t> compute_rt_args = {this_core_rows, tile_row_start};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_rt_args);
     }
 
@@ -1435,35 +1671,47 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // ------------------------------------------------------------------------
     if (num_forwarders > 0) {
         const auto local_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
-        for (uint32_t f = 0; f < num_forwarders; f++) {
-        const auto& core = forwarder_cores[f];
-        const uint32_t group_begin = f * workers_per_forwarder;
-        const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
-        std::vector<uint32_t> fwd_rt = {stats_dram_addr, out_ready_sem_bank_addr};
-        for (uint32_t w = group_begin; w < group_end; w++) {
-            fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].x));
-            fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].y));
-        }
-        for (uint32_t r = 0; r < max_rounds; r++) {
-            uint32_t pc = 0;
-            for (uint32_t w = group_begin; w < group_end; w++) {
-                if (worker_num_rows(w) > r) {
-                    pc++;
+        for (std::uint32_t f = 0; f < num_forwarders; f++) {
+            const auto& core = forwarder_cores[f];
+            const std::uint32_t group_begin = f * workers_per_forwarder;
+            const std::uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
+            std::vector<std::uint32_t> fwd_rt = {stats_dram_addr, out_ready_sem_bank_addr};
+            if (col_split) {
+                // Compact wave-major, slot order: wave A's wave_a_slots workers, then wave B's (the go release order).
+                std::vector<std::uint32_t> slot_worker(group_end - group_begin, 0u);
+                for (std::uint32_t w = group_begin; w < group_end; w++) {
+                    slot_worker[split_wave(w) * split_sizing.wave_a_slots + split_slot(w)] = w;
+                }
+                for (const std::uint32_t w : slot_worker) {
+                    fwd_rt.push_back(static_cast<std::uint32_t>(worker_virtual[w].x));
+                    fwd_rt.push_back(static_cast<std::uint32_t>(worker_virtual[w].y));
+                }
+            } else {
+                for (std::uint32_t w = group_begin; w < group_end; w++) {
+                    fwd_rt.push_back(static_cast<std::uint32_t>(worker_virtual[w].x));
+                    fwd_rt.push_back(static_cast<std::uint32_t>(worker_virtual[w].y));
                 }
             }
-            fwd_rt.push_back(pc);
-        }
-        fwd_rt.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
-        if (forward_fabric_node_id.has_value()) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                local_node_id, forward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
-        }
-        fwd_rt.push_back(backward_fabric_node_id.has_value() ? 1u : 0u);
-        if (backward_fabric_node_id.has_value()) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                local_node_id, backward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
-        }
-        SetRuntimeArgs(program, forwarder_kernel_ids[f], core, fwd_rt);
+            for (std::uint32_t r = 0; r < max_rounds; r++) {
+                std::uint32_t pc = 0;
+                for (std::uint32_t w = group_begin; w < group_end; w++) {
+                    if (worker_num_rows(w) > r) {
+                        pc++;
+                    }
+                }
+                fwd_rt.push_back(pc);
+            }
+            fwd_rt.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
+            if (forward_fabric_node_id.has_value()) {
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    local_node_id, forward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
+            }
+            fwd_rt.push_back(backward_fabric_node_id.has_value() ? 1u : 0u);
+            if (backward_fabric_node_id.has_value()) {
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    local_node_id, backward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
+            }
+            SetRuntimeArgs(program, forwarder_kernel_ids[f], core, fwd_rt);
         }
     }
 
@@ -1473,7 +1721,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         .forwarder_runtime_args = {},
     };
     TT_ASSERT(shared.reader_common_args->size() == 6);
-    TT_ASSERT(shared.writer_common_args->size() == (use_mux ? 3 : 2));
+    TT_ASSERT(shared.writer_common_args->size() == (use_mux ? 4 : 2));
     shared.forwarder_runtime_args.reserve(forwarder_kernel_ids.size());
     for (size_t f = 0; f < forwarder_kernel_ids.size(); ++f) {
         auto& runtime_args = GetRuntimeArgs(program, forwarder_kernel_ids[f], forwarder_cores[f]);
@@ -1526,25 +1774,27 @@ void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
     const DitFusedDistributedRmsnormParams& operation_attributes,
     const DitFusedDistributedRmsnormInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
-    const uint32_t input_addr = tensor_args.input.buffer()->address();
-    const uint32_t output_addr = tensor_return_value.at(0).buffer()->address();
-    const uint32_t weight_addr = tensor_args.weight.has_value() ? tensor_args.weight.value().buffer()->address() : 0;
-    const uint32_t bias_addr = tensor_args.bias.has_value() ? tensor_args.bias.value().buffer()->address() : 0;
-    const uint32_t trans_mat_addr =
+    const std::uint32_t input_addr = tensor_args.input.buffer()->address();
+    const std::uint32_t output_addr = tensor_return_value.at(0).buffer()->address();
+    const std::uint32_t weight_addr =
+        tensor_args.weight.has_value() ? tensor_args.weight.value().buffer()->address() : 0;
+    const std::uint32_t bias_addr = tensor_args.bias.has_value() ? tensor_args.bias.value().buffer()->address() : 0;
+    const std::uint32_t trans_mat_addr =
         tensor_args.transformation_mat.has_value() ? tensor_args.transformation_mat.value().buffer()->address() : 0;
-    const uint32_t rope_cos_addr =
+    const std::uint32_t rope_cos_addr =
         tensor_args.rope_cos.has_value() ? tensor_args.rope_cos.value().buffer()->address() : 0;
-    const uint32_t rope_sin_addr =
+    const std::uint32_t rope_sin_addr =
         tensor_args.rope_sin.has_value() ? tensor_args.rope_sin.value().buffer()->address() : 0;
     // Stats DRAM scratch and the output are refreshed on each cache hit.
-    const uint32_t stats_dram_addr = tensor_return_value.size() > 1 ? tensor_return_value[1].buffer()->address() : 0u;
+    const std::uint32_t stats_dram_addr =
+        tensor_return_value.size() > 1 ? tensor_return_value[1].buffer()->address() : 0u;
     // Recip LUT tensor is also a regular (caller-owned) device tensor; refresh its addr.
-    const uint32_t recip_addr =
+    const std::uint32_t recip_addr =
         tensor_args.reciprocals.has_value() ? tensor_args.reciprocals.value().buffer()->address() : 0u;
 
-    const uint32_t out_ready_sem_addr = operation_attributes.multi_device_global_semaphore.empty()
-                                            ? 0u
-                                            : operation_attributes.multi_device_global_semaphore.front().address();
+    const std::uint32_t out_ready_sem_addr = operation_attributes.multi_device_global_semaphore.empty()
+                                                 ? 0u
+                                                 : operation_attributes.multi_device_global_semaphore.front().address();
     // The workload owns the kernels backing these argument objects. No program,
     // kernel, or core lookup is needed; data() follows dispatch payload relocation.
     for (const auto& [range, shared] : cached_workload.shared_variables) {
@@ -1561,6 +1811,7 @@ void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
         writer_common[1] = trans_mat_addr;
         if (!shared.forwarder_runtime_args.empty()) {
             writer_common[2] = stats_dram_addr;
+            writer_common[3] = weight_addr;
         }
         // Forwarders read the stats DRAM scratch base at rt[0] and the out_ready
         // GlobalSemaphore address at rt[1]. BOTH must be refreshed on cache hits:

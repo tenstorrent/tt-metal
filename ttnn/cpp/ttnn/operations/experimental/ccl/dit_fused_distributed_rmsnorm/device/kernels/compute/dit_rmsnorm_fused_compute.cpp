@@ -39,82 +39,84 @@
 #include "api/compute/matmul.h"
 #include "api/compute/transpose.h"
 #include "api/compute/transpose_dest.h"
+#include "api/compute/experimental/add_rsqrt.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     // === Compile-time args ===
-    constexpr uint32_t input_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t stats_local_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t stats_gathered_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t weight_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t reduce_scalar_sum_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t reduce_scalar_avg_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t epsilon_cb = get_compile_time_arg_val(6);
-    constexpr uint32_t reduce_result_cb = get_compile_time_arg_val(7);
-    constexpr uint32_t intermediate_cb = get_compile_time_arg_val(8);
-    constexpr uint32_t pre_intermediate_cb = get_compile_time_arg_val(9);
-    constexpr uint32_t output_cb = get_compile_time_arg_val(10);
-    constexpr uint32_t transformation_mat_cb = get_compile_time_arg_val(11);
-    constexpr uint32_t rope_cos_cb = get_compile_time_arg_val(12);
-    constexpr uint32_t rope_sin_cb = get_compile_time_arg_val(13);
-    constexpr uint32_t rotated_input_cb = get_compile_time_arg_val(14);
-    constexpr uint32_t num_tile_cols = get_compile_time_arg_val(15);
-    constexpr uint32_t block_size = get_compile_time_arg_val(16);
-    constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(17);
-    constexpr uint32_t chunk_size_rows = 1u;  // chunk size is always 1 (no CT arg)
-    constexpr uint32_t has_weight = get_compile_time_arg_val(18);
-    constexpr uint32_t fuse_rope = get_compile_time_arg_val(19);
-    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(20);
+    constexpr std::uint32_t input_cb = get_compile_time_arg_val(0);
+    constexpr std::uint32_t stats_local_cb = get_compile_time_arg_val(1);
+    constexpr std::uint32_t stats_gathered_cb = get_compile_time_arg_val(2);
+    constexpr std::uint32_t weight_cb = get_compile_time_arg_val(3);
+    constexpr std::uint32_t reduce_scalar_sum_cb = get_compile_time_arg_val(4);
+    constexpr std::uint32_t reduce_scalar_avg_cb = get_compile_time_arg_val(5);
+    constexpr std::uint32_t epsilon_cb = get_compile_time_arg_val(6);
+    constexpr std::uint32_t reduce_result_cb = get_compile_time_arg_val(7);
+    constexpr std::uint32_t intermediate_cb = get_compile_time_arg_val(8);
+    constexpr std::uint32_t pre_intermediate_cb = get_compile_time_arg_val(9);
+    constexpr std::uint32_t output_cb = get_compile_time_arg_val(10);
+    constexpr std::uint32_t transformation_mat_cb = get_compile_time_arg_val(11);
+    constexpr std::uint32_t rope_cos_cb = get_compile_time_arg_val(12);
+    constexpr std::uint32_t rope_sin_cb = get_compile_time_arg_val(13);
+    constexpr std::uint32_t rotated_input_cb = get_compile_time_arg_val(14);
+    constexpr std::uint32_t num_tile_cols = get_compile_time_arg_val(15);
+    constexpr std::uint32_t block_size = get_compile_time_arg_val(16);
+    constexpr std::uint32_t stats_tiles_cols = get_compile_time_arg_val(17);
+    constexpr std::uint32_t chunk_size_rows = 1u;  // chunk size is always 1 (no CT arg)
+    constexpr std::uint32_t has_weight = get_compile_time_arg_val(18);
+    constexpr std::uint32_t fuse_rope = get_compile_time_arg_val(19);
+    constexpr std::uint32_t head_dim_tiles = get_compile_time_arg_val(20);
     // When is_tp_1 is true, the compute kernel skips stats_local_cb entirely
     // and pushes per-row stats directly into stats_gathered_cb. This makes
     // TP=1 (single-device) operation self-contained — no forwarder needed.
-    constexpr uint32_t is_tp_1 = get_compile_time_arg_val(21);
+    constexpr std::uint32_t is_tp_1 = get_compile_time_arg_val(21);
     // Packed-page all-gather (the forwarder AG path). When enabled the pre phase
     // transposes the per-row stat tile (real data in col 0 → row 0) so the worker
     // can extract two contiguous 64-byte spans per tile and the forwarder packs
     // `window_size` of them into a single fabric packet. The post phase then
     // transposes the row-0 gathered tiles back to col 0 before the
     // existing reduce<AVG,REDUCE_ROW> chain runs.
-    constexpr uint32_t stats_transposed_local_cb = get_compile_time_arg_val(22);
-    constexpr uint32_t stats_transposed_gathered_cb = get_compile_time_arg_val(23);
-    constexpr uint32_t packed_ag_enabled = get_compile_time_arg_val(24);
+    constexpr std::uint32_t stats_transposed_local_cb = get_compile_time_arg_val(22);
+    constexpr std::uint32_t stats_transposed_gathered_cb = get_compile_time_arg_val(23);
+    constexpr std::uint32_t packed_ag_enabled = get_compile_time_arg_val(24);
     // Per-head RoPE: reader pushes num_tile_cols (num_heads * head_dim_tiles)
     // cos/sin tiles per row (one per col). The post phase reads them by
     // absolute index (col_tile + i) — no wrap-cycling. Broadcast RoPE
     // (per_head_rope=0) pushes only head_dim_tiles and wraps.
-    constexpr uint32_t per_head_rope = get_compile_time_arg_val(25);
+    constexpr std::uint32_t per_head_rope = get_compile_time_arg_val(25);
     // Optional row-broadcast bias: tilized [1, H] tensor added after weight
     // multiply (sub-phase 2.5). Mirrors weight handling.
-    constexpr uint32_t bias_cb = get_compile_time_arg_val(26);
-    constexpr uint32_t has_bias = get_compile_time_arg_val(27);
+    constexpr std::uint32_t bias_cb = get_compile_time_arg_val(26);
+    constexpr std::uint32_t has_bias = get_compile_time_arg_val(27);
     // Per-head normalization (FLUX.2): reduce over head_dim per head instead
     // of the full row. Forces is_tp_1 path (skip AG entirely); pre phase
     // produces num_heads_per_device stat tiles per row, post phase computes
     // an rsqrt per head and applies it to that head's columns.
-    constexpr uint32_t per_head_norm = get_compile_time_arg_val(28);
-    constexpr uint32_t num_heads_per_device = get_compile_time_arg_val(29);
+    constexpr std::uint32_t per_head_norm = get_compile_time_arg_val(28);
+    constexpr std::uint32_t num_heads_per_device = get_compile_time_arg_val(29);
     // Per-token weight / bias: [N, H] (vs broadcast [1, H]). Reader pushes
     // per-row tiles. Compute uses mul_tiles / add_tiles (no _bcast_rows) and
     // pops the row's weight/bias tiles at end of each row in the chunk.
-    constexpr uint32_t per_token_weight = get_compile_time_arg_val(30);
-    constexpr uint32_t per_token_bias = get_compile_time_arg_val(31);
+    constexpr std::uint32_t per_token_weight = get_compile_time_arg_val(30);
+    constexpr std::uint32_t per_token_bias = get_compile_time_arg_val(31);
     // Bit-packed fp32 epsilon for the fused +eps SFPU scalar-add in the reduce
     // post-op (replaces the prior bf16 epsilon_cb add_tiles path; fp32 is at
     // least as precise).
-    constexpr uint32_t eps_bits = get_compile_time_arg_val(32);
+    constexpr std::uint32_t eps_bits = get_compile_time_arg_val(32);
     // Streaming low-L1: input_cb is block-sized, so PRE reads input block by
     // block (popping each) and POST sub-phase 1 (x*1/rms) re-reads a second
     // streamed pass from the reader (also popping each block). Only the whole-
     // row reduce path is supported (per_head_norm stays resident). The math /
     // accumulation order is identical to the resident path, so the result is
     // bit-exact; only the input_cb residency window changes.
-    constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(33);
+    constexpr std::uint32_t streaming_low_l1 = get_compile_time_arg_val(33);
     // Block-major POST: fuse the matmul rotate + RoPE finalize into one per-block
     // loop so rotated_input_cb is block-local (host shrinks it when the whole-row
     // resident POST would overflow L1 at wide per-head shards). Adds per-block
     // reconfigs (slower) but fits L1; only set for the OOMing config.
-    constexpr uint32_t fuse_mm_rope = get_compile_time_arg_val(34);
+    constexpr std::uint32_t fuse_mm_rope = get_compile_time_arg_val(34);
     // Full block-major POST: fuse ALL post sub-phases (x*1/rms, weight, bias,
     // matmul-rotate, RoPE) into ONE per-block loop so intermediate_cb /
     // rotated_input_cb / output_cb are block-local (O(block_size)). Engaged by the
@@ -122,22 +124,40 @@ void kernel_main() {
     // shards: TP=1 WAN/FLUX/LTX-video, TP=2 FLUX). Implies streaming_low_l1 and
     // per_head_norm==0. Bit-exact with the resident path (same math + order, fp32
     // intermediates), trading per-block reconfigs for a bounded L1 footprint.
-    constexpr uint32_t block_major_post = get_compile_time_arg_val(35);
+    constexpr std::uint32_t block_major_post = get_compile_time_arg_val(35);
     // Normalization variant: 0 = RMSNorm (PRE sum-of-squares, POST x*rsqrt(E[x^2]+eps)),
     // 1 = Welford LayerNorm (PRE per-shard Welford (mean, M2), POST merge +
     // (x-mean)*rsqrt(var+eps)). Wired in Phase 1; the LayerNorm code paths land in
     // later phases. Until then only RMS is exercised, so this stays inert.
-    constexpr uint32_t norm_type = get_compile_time_arg_val(36);
+    constexpr std::uint32_t norm_type = get_compile_time_arg_val(36);
     static_assert(norm_type == 0u, "Welford LayerNorm (norm_type=1) is not yet implemented in the compute kernel");
 
-    constexpr uint32_t stats_dest_cb = (is_tp_1 != 0) ? stats_gathered_cb : stats_local_cb;
+    constexpr std::uint32_t stats_dest_cb = (is_tp_1 != 0) ? stats_gathered_cb : stats_local_cb;
     // Per-row post reduce reads ring_size tiles. With packed AG enabled the
     // ring_size tiles live in stats_transposed_gathered_cb (post-transpose);
     // otherwise (is_tp_1) the local reduce uses stats_gathered_cb directly.
-    constexpr uint32_t stats_reduce_src_cb =
+    constexpr std::uint32_t stats_reduce_src_cb =
         (packed_ag_enabled != 0) ? stats_transposed_gathered_cb : stats_gathered_cb;
 
-    const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
+    // Resident whole-row packed-AG PRE: turn S = sum_k x_k*x_k (DST-accumulated, packed once) into the
+    // ROW-0 stick layout with ONE matmul C = ones * S^T, where ones = the SUM reduce-scalar tile (1.0 in
+    // row 0 of every face), so C[0][i] = sum_j S[i][j]. That replaces reduce<SUM,REDUCE_ROW> (col 0) plus
+    // the col-0 -> row-0 transpose: one unpack/math/pack round trip instead of two on the AG-start path.
+    // S is unpacked to tf32 in SrcA exactly as the reduce did, so the stat precision is unchanged.
+    constexpr bool mm_row_stat = (packed_ag_enabled != 0) && (streaming_low_l1 == 0) && (per_head_norm == 0);
+
+    const std::uint32_t num_tile_rows = get_arg_val<std::uint32_t>(0);
+
+    // Two-wave column split: the writer lands one pair read per device in the gathered CB, whose pages are
+    // 64 B. Partial t (device t / 2, column half t % 2) is the fp32 tile whose row 0 starts at page
+    // (t / 2) * gather_pair_pages + t % 2; the rest of that tile view is other slots' data, unused.
+    constexpr std::uint32_t col_split = get_compile_time_arg_val(43);
+    constexpr std::uint32_t gathered_cb_pages = get_compile_time_arg_val(44);
+    constexpr std::uint32_t gather_pair_pages = get_compile_time_arg_val(45);
+    constexpr std::uint32_t gathered_wait_pages = (col_split != 0) ? gathered_cb_pages : stats_tiles_cols;
+    auto gathered_tile = [](std::uint32_t t) -> std::uint32_t {
+        return (col_split != 0) ? (t / 2u) * gather_pair_pages + (t % 2u) : t;
+    };
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_cb, transformation_mat_cb, rotated_input_cb);
     matmul_init(intermediate_cb, transformation_mat_cb);
@@ -172,23 +192,32 @@ void kernel_main() {
         cb_transformation_mat.wait_front(1);
     }
 
-    constexpr uint32_t mul_rms_result_cb = (fuse_rope || has_weight) ? intermediate_cb : output_cb;
+    constexpr std::uint32_t mul_rms_result_cb = (fuse_rope || has_weight) ? intermediate_cb : output_cb;
     // has_bias implies has_weight (enforced in validate). Weight output stays
     // in intermediate when bias or rope follows.
-    constexpr uint32_t mul_weight_result_cb = (fuse_rope || has_bias) ? intermediate_cb : output_cb;
-    constexpr uint32_t add_bias_result_cb = fuse_rope ? intermediate_cb : output_cb;
+    constexpr std::uint32_t mul_weight_result_cb = (fuse_rope || has_bias) ? intermediate_cb : output_cb;
+    constexpr std::uint32_t add_bias_result_cb = fuse_rope ? intermediate_cb : output_cb;
 
     CircularBuffer cb_mul_rms_result(mul_rms_result_cb);
     CircularBuffer cb_mul_weight_result(mul_weight_result_cb);
     CircularBuffer cb_add_bias_result(add_bias_result_cb);
 
+    // Pre-scale by gamma under the AG wait: x * gamma doesn't depend on the gathered
+    // stats, so for the plain broadcast-weight path compute it into intermediate_cb
+    // (fp32, whole padded row) right after the local stat is pushed, while the
+    // forwarder ring-gathers. POST then collapses to ONE pass:
+    // out = (x * gamma) * bcast_col(1/rms), replacing sub-phases 1 (x * 1/rms) and 2 (* gamma).
+    constexpr bool prescale_weight = (has_weight != 0) && (per_token_weight == 0) && (has_bias == 0) &&
+                                     (fuse_rope == 0) && (per_head_norm == 0) && (streaming_low_l1 == 0) &&
+                                     (block_major_post == 0) && (packed_ag_enabled != 0);
+
     // Process the core's tile rows one at a time (chunk size is always 1).
     // per_head_norm produces num_heads_per_device stats per row (one per
     // head) instead of stats_tiles_cols (== ring_size) for the AG path.
-    constexpr uint32_t per_row_stats_count = (per_head_norm != 0) ? num_heads_per_device : stats_tiles_cols;
-    for (uint32_t row_processed = 0; row_processed < num_tile_rows; ++row_processed) {
-        const uint32_t chunk_input_tiles = num_tile_cols;
-        const uint32_t chunk_stats_tiles = per_row_stats_count;
+    constexpr std::uint32_t per_row_stats_count = (per_head_norm != 0) ? num_heads_per_device : stats_tiles_cols;
+    for (std::uint32_t row_processed = 0; row_processed < num_tile_rows; ++row_processed) {
+        const std::uint32_t chunk_input_tiles = num_tile_cols;
+        const std::uint32_t chunk_stats_tiles = per_row_stats_count;
 
         // -------- PHASE 1: PRE — sum(x**2) per row --------
         // Cumulative input wait: instead of one wait_front for the whole
@@ -198,8 +227,8 @@ void kernel_main() {
         // Per-head norm: inner reduce spans head_dim_tiles columns per head;
         // we run num_heads_per_device reduces per row. Whole-row norm: single
         // reduce over num_tile_cols per row.
-        constexpr uint32_t pre_groups_per_row = (per_head_norm != 0) ? num_heads_per_device : 1u;
-        constexpr uint32_t pre_group_width = (per_head_norm != 0) ? head_dim_tiles : num_tile_cols;
+        constexpr std::uint32_t pre_groups_per_row = (per_head_norm != 0) ? num_heads_per_device : 1u;
+        constexpr std::uint32_t pre_group_width = (per_head_norm != 0) ? head_dim_tiles : num_tile_cols;
         {
             // PERF NOTE (RMS_PRE = ~29% of the compute floor, ALL shapes): this phase
             // is sum(x^2) per row = mul_tiles(x,x) (num_tile_cols FPU muls) then
@@ -226,17 +255,17 @@ void kernel_main() {
                     mul_init(input_cb, input_cb);
 
                     cb_pre_intermediate.reserve_back(1);
-                    for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                        const uint32_t tiles_in_block =
+                    for (std::uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                        const std::uint32_t tiles_in_block =
                             ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
                         cb_input.wait_front(tiles_in_block);
                         tile_regs_acquire();
-                        for (uint32_t i = 0; i < tiles_in_block; i++) {
+                        for (std::uint32_t i = 0; i < tiles_in_block; i++) {
                             mul_tiles(input_cb, input_cb, i, i, i);
                         }
                         tile_regs_commit();
                         tile_regs_wait();
-                        for (uint32_t i = 0; i < tiles_in_block; i++) {
+                        for (std::uint32_t i = 0; i < tiles_in_block; i++) {
                             pack_tile<true>(i, pre_intermediate_cb, 0);
                             if (col_tile == 0 && i == 0) {
                                 PACK((llk_pack_reconfig_l1_acc(1)));
@@ -256,12 +285,12 @@ void kernel_main() {
                         stats_dest_cb>(compute_kernel_lib::ReduceInputBlockShape::single());
                 }
             } else {
-                uint32_t input_tiles_waited = 0;
+                std::uint32_t input_tiles_waited = 0;
                 {  // single row per iteration (chunk size is 1)
-                    constexpr uint32_t row_base = 0u;
+                    constexpr std::uint32_t row_base = 0u;
 
-                    for (uint32_t g = 0; g < pre_groups_per_row; g++) {
-                        const uint32_t group_base = row_base + g * pre_group_width;
+                    for (std::uint32_t g = 0; g < pre_groups_per_row; g++) {
+                        const std::uint32_t group_base = row_base + g * pre_group_width;
 
                         reconfig_data_format(input_cb, input_cb);
                         pack_reconfig_data_format(pre_intermediate_cb);
@@ -270,48 +299,65 @@ void kernel_main() {
 
                         cb_pre_intermediate.reserve_back(1);
 
-                        for (uint32_t col_tile = 0; col_tile < pre_group_width; col_tile += block_size) {
-                            const uint32_t tiles_in_block = ((pre_group_width - col_tile) >= block_size)
-                                                                ? block_size
-                                                                : (pre_group_width - col_tile);
+                        // Accumulate sum(x**2) for the whole group in DST tile 0: ELWMUL always
+                        // accumulates onto Dst (Dst += SrcA*SrcB; DST is zeroed on release), so
+                        // every mul_tiles into dst 0 adds its square to the running fp32 sum. One
+                        // pack per group instead of one L1-accumulating fp32 pack per input tile
+                        // (the packer was the PRE bottleneck, ~125 ns/tile). DST is held across
+                        // the cumulative input waits; nothing upstream depends on compute here.
+                        tile_regs_acquire();
+                        for (std::uint32_t col_tile = 0; col_tile < pre_group_width; col_tile += block_size) {
+                            const std::uint32_t tiles_in_block = ((pre_group_width - col_tile) >= block_size)
+                                                                     ? block_size
+                                                                     : (pre_group_width - col_tile);
                             // Cumulative wait covers the absolute tile range we need:
                             // r*num_tile_cols + g*pre_group_width + col_tile + tiles_in_block.
                             // Reader pushes block_size at a time across the whole row, so
                             // a wait for fewer-than-block_size tiles is satisfied by the
                             // next reader push regardless.
-                            const uint32_t need = group_base + col_tile + tiles_in_block;
+                            const std::uint32_t need = group_base + col_tile + tiles_in_block;
                             if (need > input_tiles_waited) {
                                 cb_input.wait_front(need);
                                 input_tiles_waited = need;
                             }
 
-                            tile_regs_acquire();
-                            for (uint32_t i = 0; i < block_size && col_tile + i < pre_group_width; i++) {
-                                const uint32_t abs_idx = group_base + col_tile + i;
-                                mul_tiles(input_cb, input_cb, abs_idx, abs_idx, i);
+                            for (std::uint32_t i = 0; i < tiles_in_block; i++) {
+                                const std::uint32_t abs_idx = group_base + col_tile + i;
+                                mul_tiles(input_cb, input_cb, abs_idx, abs_idx, 0);
                             }
-                            tile_regs_commit();
-
-                            tile_regs_wait();
-                            for (uint32_t i = 0; i < block_size && col_tile + i < pre_group_width; i++) {
-                                pack_tile<true>(i, pre_intermediate_cb, 0);
-                                if (col_tile == 0 && i == 0) {
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
-                                }
-                            }
-                            tile_regs_release();
                         }
-                        cb_pre_intermediate.push_back(1);
-                        PACK((llk_pack_reconfig_l1_acc(0)));
+                        tile_regs_commit();
 
-                        // Row/head reduce → 1 stat tile. SUM (col 0 = sum). Post phase
-                        // divides by H_full or head_dim via the AVG scalar.
-                        compute_kernel_lib::reduce<
-                            PoolType::SUM,
-                            ReduceDim::REDUCE_ROW,
-                            pre_intermediate_cb,
-                            reduce_scalar_sum_cb,
-                            stats_dest_cb>(compute_kernel_lib::ReduceInputBlockShape::single());
+                        tile_regs_wait();
+                        pack_tile(0, pre_intermediate_cb);
+                        tile_regs_release();
+                        cb_pre_intermediate.push_back(1);
+
+                        if constexpr (mm_row_stat) {
+                            // Row sums straight into row 0 (see mm_row_stat): matmul transposes in1 (S).
+                            reconfig_data_format(pre_intermediate_cb, reduce_scalar_sum_cb);
+                            pack_reconfig_data_format(stats_transposed_local_cb);
+                            matmul_init(reduce_scalar_sum_cb, pre_intermediate_cb, /*transpose=*/1);
+                            cb_pre_intermediate.wait_front(1);
+                            cb_stats_transposed_local.reserve_back(1);
+                            tile_regs_acquire();
+                            matmul_tiles(reduce_scalar_sum_cb, pre_intermediate_cb, 0, 0, 0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_tile(0, stats_transposed_local_cb);
+                            tile_regs_release();
+                            cb_stats_transposed_local.push_back(1);
+                            cb_pre_intermediate.pop_front(1);
+                        } else {
+                            // Row/head reduce → 1 stat tile. SUM (col 0 = sum). Post phase
+                            // divides by H_full or head_dim via the AVG scalar.
+                            compute_kernel_lib::reduce<
+                                PoolType::SUM,
+                                ReduceDim::REDUCE_ROW,
+                                pre_intermediate_cb,
+                                reduce_scalar_sum_cb,
+                                stats_dest_cb>(compute_kernel_lib::ReduceInputBlockShape::single());
+                        }
                     }
                 }
             }
@@ -322,7 +368,7 @@ void kernel_main() {
         // 32 strided fp32 col-0 loads. transpose_wh maps col 0 (face_00 col0 +
         // face_10 col0) -> row 0 (face_00 row0 + face_01 row0). Packed-AG (all-gather)
         // path only; is_tp_1 keeps col 0 and reduces locally (no forwarder involved).
-        if constexpr (packed_ag_enabled != 0) {
+        if constexpr (packed_ag_enabled != 0 && !mm_row_stat) {
             transpose_init(stats_local_cb);
             pack_reconfig_data_format(stats_transposed_local_cb);
             {  // single row per iteration (chunk size is 1)
@@ -339,6 +385,30 @@ void kernel_main() {
             }
         }
 
+        // -------- x * gamma → intermediate_cb (overlaps the AG) --------
+        if constexpr (prescale_weight) {
+            reconfig_data_format(input_cb, weight_cb);
+            pack_reconfig_data_format(intermediate_cb);
+            mul_bcast_rows_init(input_cb, weight_cb);
+            for (std::uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                const std::uint32_t tiles_in_block =
+                    (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
+                cb_weight.wait_front(col_tile + tiles_in_block);
+                cb_intermediate.reserve_back(block_size);
+                tile_regs_acquire();
+                for (std::uint32_t i = 0; i < tiles_in_block; i++) {
+                    mul_tiles_bcast_rows(input_cb, weight_cb, col_tile + i, col_tile + i, i);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (std::uint32_t i = 0; i < tiles_in_block; i++) {
+                    pack_tile(i, intermediate_cb);
+                }
+                tile_regs_release();
+                cb_intermediate.push_back(block_size);
+            }
+        }
+
         // -------- WAIT FOR FORWARDER TO COMPLETE AG FOR THIS CHUNK --------
         {
             // Packed-AG path: the worker writer lands the ring gather in row-0 of the
@@ -349,21 +419,21 @@ void kernel_main() {
         // -------- PHASE 3: POST — finalize normalization --------
         {
             {  // single row per iteration (chunk size is 1)
-                constexpr uint32_t row_base = 0u;
+                constexpr std::uint32_t row_base = 0u;
                 // Single shared cos/sin tile cursor: in broadcast RoPE the cos
                 // and sin sequences cycle identically over head_dim_tiles, and
                 // the fused finalize multiplies both with the same index.
-                uint32_t rope_cos_tile_in_head = 0;
+                std::uint32_t rope_cos_tile_in_head = 0;
 
                 // Per-head norm: do reduce + eps+rsqrt + sub-phase 1 per head, so
                 // each head's rsqrt only stays in reduce_result_cb long enough to
                 // be consumed by that head's mul. Whole-row norm: one iteration.
-                constexpr uint32_t post_groups_per_row = (per_head_norm != 0) ? num_heads_per_device : 1u;
-                constexpr uint32_t post_group_width = (per_head_norm != 0) ? head_dim_tiles : num_tile_cols;
+                constexpr std::uint32_t post_groups_per_row = (per_head_norm != 0) ? num_heads_per_device : 1u;
+                constexpr std::uint32_t post_group_width = (per_head_norm != 0) ? head_dim_tiles : num_tile_cols;
                 {
-                    for (uint32_t g = 0; g < post_groups_per_row; g++) {
-                        const uint32_t group_col_base = g * post_group_width;
-                        const uint32_t group_abs_base = row_base + group_col_base;
+                    for (std::uint32_t g = 0; g < post_groups_per_row; g++) {
+                        const std::uint32_t group_col_base = g * post_group_width;
+                        const std::uint32_t group_abs_base = row_base + group_col_base;
 
                         // Per-head / is_tp_1 path: the stat is already in COL 0 of
                         // stats_gathered_cb (compute pushed it locally — no AG), so
@@ -376,7 +446,7 @@ void kernel_main() {
                         // eps reconfigs per row. fp32 scalar eps >= the prior bf16
                         // epsilon_cb add in precision, and rsqrt sees the un-truncated
                         // fp32 mean still in DST.
-                        auto eps_rsqrt = [](uint32_t dst_idx) {
+                        auto eps_rsqrt = [](std::uint32_t dst_idx) {
                             binop_with_scalar_tile_init();
                             add_unary_tile(dst_idx, eps_bits);
                             rsqrt_tile_init();
@@ -413,8 +483,8 @@ void kernel_main() {
                                 static_assert(
                                     stats_tiles_cols == 1 || stats_tiles_cols % 2 == 0,
                                     "eltwise stats-sum needs even ring_size");
-                                constexpr uint32_t recip_h_full_bits = __builtin_bit_cast(
-                                    uint32_t, 1.0f / static_cast<float>(num_tile_cols * 32u * stats_tiles_cols));
+                                constexpr std::uint32_t recip_h_full_bits = __builtin_bit_cast(
+                                    std::uint32_t, 1.0f / static_cast<float>(num_tile_cols * 32u * stats_tiles_cols));
                                 if constexpr (packed_ag_enabled != 0) {
                                     // All-gather path: the worker writer lands each device's stats in
                                     // ROW 0 of stats_transposed_gathered_cb (two contiguous 64 B face-rows).
@@ -422,19 +492,41 @@ void kernel_main() {
                                     // tile IN DST (row 0 -> col 0) with transpose_dest — no CB
                                     // round-trip — then *1/H + eps + rsqrt on col 0. One transpose
                                     // total (deferred past the sum) vs one per gathered tile.
-                                    cb_stats_transposed_gathered.wait_front(stats_tiles_cols);
+                                    cb_stats_transposed_gathered.wait_front(gathered_wait_pages);
+                                    DeviceZoneScopedN("C_COMB");
                                     reconfig_data_format(stats_transposed_gathered_cb, stats_transposed_gathered_cb);
                                     pack_reconfig_data_format(reduce_result_cb);
                                     tile_regs_acquire();
                                     binary_tiles_init<true, EltwiseBinaryType::ELWADD>(
                                         stats_transposed_gathered_cb, stats_transposed_gathered_cb, false);
-                                    add_tiles(stats_transposed_gathered_cb, stats_transposed_gathered_cb, 0, 1, 0);
+                                    add_tiles(
+                                        stats_transposed_gathered_cb,
+                                        stats_transposed_gathered_cb,
+                                        gathered_tile(0),
+                                        gathered_tile(1),
+                                        0);
                                     binary_tiles_init<false, EltwiseBinaryType::ELWADD>(
                                         stats_transposed_gathered_cb, stats_transposed_gathered_cb, true);
-                                    for (uint32_t k = 2; k < stats_tiles_cols; k += 2) {
+                                    for (std::uint32_t k = 2; k < stats_tiles_cols; k += 2) {
                                         add_tiles(
-                                            stats_transposed_gathered_cb, stats_transposed_gathered_cb, k, k + 1, 0);
+                                            stats_transposed_gathered_cb,
+                                            stats_transposed_gathered_cb,
+                                            gathered_tile(k),
+                                            gathered_tile(k + 1),
+                                            0);
                                     }
+#if defined(ARCH_BLACKHOLE)
+                                    // 1/rms = rsqrt(sum * 1/H + eps) on ROW 0 only, before the transpose: the 32
+                                    // per-token sums are tile row 0 (faces 0/1). One BH SFPLOAD covers 4 rows x 8
+                                    // cols of one column parity, so ITERATIONS=2 per face = rows 0-3, all columns;
+                                    // VectorMode::R = faces 0 and 1. 4 SFPU iterations of one fused MAD + rsqrt
+                                    // instead of 3 full-tile (96-iteration) passes on the post-AG critical path.
+                                    add_rsqrt_tile_init();
+                                    add_rsqrt_tile<false, VectorMode::R, 2, false, recip_h_full_bits>(0, eps_bits);
+                                    // row-0 1/rms -> col-0, in place (fp32 DST).
+                                    transpose_dest_init<true>(stats_transposed_gathered_cb);
+                                    transpose_dest<true>(0);
+#else
                                     // row-0 sum -> col-0, in place (fp32 DST).
                                     transpose_dest_init<true>(stats_transposed_gathered_cb);
                                     transpose_dest<true>(0);
@@ -443,13 +535,14 @@ void kernel_main() {
                                     add_unary_tile(0, eps_bits);
                                     rsqrt_tile_init();
                                     rsqrt_tile(0);
+#endif
                                     tile_regs_commit();
                                     tile_regs_wait();
                                     cb_reduce_result.reserve_back(1);
                                     pack_tile(0, reduce_result_cb);
                                     cb_reduce_result.push_back(1);
                                     tile_regs_release();
-                                    cb_stats_transposed_gathered.pop_front(stats_tiles_cols);
+                                    cb_stats_transposed_gathered.pop_front(gathered_wait_pages);
                                 } else {
                                     // Non-packed path: gathered tiles are in COL 0.
                                     cb_stats_gathered.wait_front(stats_tiles_cols);
@@ -462,7 +555,7 @@ void kernel_main() {
                                     add_tiles(stats_gathered_cb, stats_gathered_cb, 0, 1, 0);
                                     binary_tiles_init<false, EltwiseBinaryType::ELWADD>(
                                         stats_gathered_cb, stats_gathered_cb, true);
-                                    for (uint32_t k = 2; k < stats_tiles_cols; k += 2) {
+                                    for (std::uint32_t k = 2; k < stats_tiles_cols; k += 2) {
                                         add_tiles(stats_gathered_cb, stats_gathered_cb, k, k + 1, 0);
                                     }
                                     // mean = sum / H_full, then + eps, then rsqrt.
@@ -494,13 +587,43 @@ void kernel_main() {
                                     eps_rsqrt);
                             }
 
-                            cb_reduce_result.wait_front(1);
+                            // The prescale POST waits after its unpack reconfig/init (below), so the
+                            // unpacker sets up POST while math/pack still run the stat combine.
+                            if constexpr (!prescale_weight) {
+                                cb_reduce_result.wait_front(1);
+                            }
                         }  // P_NRED
 
                         // block_major_post fuses mul-rms into the single per-block POST loop
                         // below, so the standalone P_NMUL sub-phase is skipped (and
                         // reduce_result_cb stays resident for that loop to consume).
-                        if constexpr (!block_major_post) {
+                        if constexpr (prescale_weight) {
+                            // ----- Single POST pass: (x * gamma) * (1/rms) → output_cb -----
+                            reconfig_data_format(intermediate_cb, reduce_result_cb);
+                            pack_reconfig_data_format(output_cb);
+                            mul_bcast_cols_init(intermediate_cb, reduce_result_cb);
+                            cb_reduce_result.wait_front(1);
+                            DeviceZoneScopedN("C_POST");
+                            for (std::uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                                const std::uint32_t tiles_in_block =
+                                    (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
+                                cb_intermediate.wait_front(block_size);
+                                cb_output.reserve_back(block_size);
+                                tile_regs_acquire();
+                                for (std::uint32_t i = 0; i < tiles_in_block; i++) {
+                                    mul_tiles_bcast_cols(intermediate_cb, reduce_result_cb, i, 0, i);
+                                }
+                                tile_regs_commit();
+                                tile_regs_wait();
+                                for (std::uint32_t i = 0; i < tiles_in_block; i++) {
+                                    pack_tile(i, output_cb);
+                                }
+                                tile_regs_release();
+                                cb_intermediate.pop_front(block_size);
+                                cb_output.push_back(block_size);
+                            }
+                            cb_reduce_result.pop_front(1);
+                        } else if constexpr (!block_major_post) {
                             // ----- Sub-phase 1: x * (1/rms) → mul_rms_result_cb -----
                             reconfig_data_format(input_cb, reduce_result_cb);
                             pack_reconfig_data_format(mul_rms_result_cb);
@@ -513,16 +636,16 @@ void kernel_main() {
                                 // streaming_low_l1 implies per_head_norm==0, so there is a
                                 // single group with post_group_width == num_tile_cols, and
                                 // num_tile_cols % block_size == 0 (host TT_FATAL invariant).
-                                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                                for (std::uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                                     cb_input.wait_front(block_size);
                                     cb_mul_rms_result.reserve_back(block_size);
                                     tile_regs_acquire();
-                                    for (uint32_t i = 0; i < block_size; i++) {
+                                    for (std::uint32_t i = 0; i < block_size; i++) {
                                         mul_tiles_bcast_cols(input_cb, reduce_result_cb, i, 0, i);
                                     }
                                     tile_regs_commit();
                                     tile_regs_wait();
-                                    for (uint32_t i = 0; i < block_size; i++) {
+                                    for (std::uint32_t i = 0; i < block_size; i++) {
                                         pack_tile(i, mul_rms_result_cb);
                                     }
                                     tile_regs_release();
@@ -530,26 +653,26 @@ void kernel_main() {
                                     cb_input.pop_front(block_size);
                                 }
                             } else {
-                                for (uint32_t col_tile = 0; col_tile < post_group_width; col_tile += block_size) {
+                                for (std::uint32_t col_tile = 0; col_tile < post_group_width; col_tile += block_size) {
                                     // Per_head_norm pushes head_dim_tiles per head (no padding)
                                     // so multiple heads don't blow past intermediate_cb. The
                                     // whole-row path keeps the block_size-padded push so
                                     // downstream sub-phases (still block_size-driven) consume
                                     // matching counts even when num_tile_cols < block_size.
-                                    const uint32_t tiles_in_block = (per_head_norm != 0)
-                                                                        ? (((post_group_width - col_tile) >= block_size)
-                                                                               ? block_size
-                                                                               : (post_group_width - col_tile))
-                                                                        : block_size;
+                                    const std::uint32_t tiles_in_block =
+                                        (per_head_norm != 0) ? (((post_group_width - col_tile) >= block_size)
+                                                                    ? block_size
+                                                                    : (post_group_width - col_tile))
+                                                             : block_size;
                                     cb_mul_rms_result.reserve_back(tiles_in_block);
                                     tile_regs_acquire();
-                                    for (uint32_t i = 0; i < block_size && col_tile + i < post_group_width; i++) {
-                                        const uint32_t abs_idx = group_abs_base + col_tile + i;
+                                    for (std::uint32_t i = 0; i < block_size && col_tile + i < post_group_width; i++) {
+                                        const std::uint32_t abs_idx = group_abs_base + col_tile + i;
                                         mul_tiles_bcast_cols(input_cb, reduce_result_cb, abs_idx, 0, i);
                                     }
                                     tile_regs_commit();
                                     tile_regs_wait();
-                                    for (uint32_t i = 0; i < block_size && col_tile + i < post_group_width; i++) {
+                                    for (std::uint32_t i = 0; i < block_size && col_tile + i < post_group_width; i++) {
                                         pack_tile(i, mul_rms_result_cb);
                                     }
                                     tile_regs_release();
@@ -569,23 +692,23 @@ void kernel_main() {
                             // end-of-chunk). reduce_result holds this head's 1/rms (front),
                             // popped after this head. Broadcast cos/sin are held resident
                             // across heads (cyclic index); popped once after the head loop.
-                            for (uint32_t col_tile = 0; col_tile < post_group_width; col_tile += block_size) {
-                                const uint32_t tiles_in_block = ((post_group_width - col_tile) >= block_size)
-                                                                    ? block_size
-                                                                    : (post_group_width - col_tile);
+                            for (std::uint32_t col_tile = 0; col_tile < post_group_width; col_tile += block_size) {
+                                const std::uint32_t tiles_in_block = ((post_group_width - col_tile) >= block_size)
+                                                                         ? block_size
+                                                                         : (post_group_width - col_tile);
                                 // ---- x * (1/rms_head): resident input cols -> mul_rms_result_cb ----
                                 reconfig_data_format(input_cb, reduce_result_cb);
                                 pack_reconfig_data_format(mul_rms_result_cb);
                                 mul_bcast_cols_init(input_cb, reduce_result_cb);
                                 cb_mul_rms_result.reserve_back(block_size);
                                 tile_regs_acquire();
-                                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                for (std::uint32_t i = 0; i < tiles_in_block; i++) {
                                     mul_tiles_bcast_cols(
                                         input_cb, reduce_result_cb, group_abs_base + col_tile + i, 0, i);
                                 }
                                 tile_regs_commit();
                                 tile_regs_wait();
-                                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                for (std::uint32_t i = 0; i < tiles_in_block; i++) {
                                     pack_tile(i, mul_rms_result_cb);
                                 }
                                 tile_regs_release();
@@ -604,7 +727,7 @@ void kernel_main() {
                                     }
                                     cb_mul_weight_result.reserve_back(block_size);
                                     tile_regs_acquire();
-                                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                    for (std::uint32_t i = 0; i < tiles_in_block; i++) {
                                         if constexpr (per_token_weight != 0) {
                                             mul_tiles(
                                                 mul_rms_result_cb, weight_cb, i, group_abs_base + col_tile + i, i);
@@ -616,7 +739,7 @@ void kernel_main() {
                                     tile_regs_commit();
                                     cb_mul_rms_result.pop_front(block_size);
                                     tile_regs_wait();
-                                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                    for (std::uint32_t i = 0; i < tiles_in_block; i++) {
                                         pack_tile(i, mul_weight_result_cb);
                                     }
                                     tile_regs_release();
@@ -635,7 +758,7 @@ void kernel_main() {
                                     }
                                     cb_add_bias_result.reserve_back(block_size);
                                     tile_regs_acquire();
-                                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                    for (std::uint32_t i = 0; i < tiles_in_block; i++) {
                                         if constexpr (per_token_bias != 0) {
                                             add_tiles(
                                                 mul_weight_result_cb, bias_cb, i, group_abs_base + col_tile + i, i);
@@ -647,7 +770,7 @@ void kernel_main() {
                                     tile_regs_commit();
                                     cb_mul_weight_result.pop_front(block_size);
                                     tile_regs_wait();
-                                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                    for (std::uint32_t i = 0; i < tiles_in_block; i++) {
                                         pack_tile(i, add_bias_result_cb);
                                     }
                                     tile_regs_release();
@@ -664,7 +787,7 @@ void kernel_main() {
                                     matmul_block(intermediate_cb, transformation_mat_cb, 0, 0, 0, 0, 1, block_size, 1);
                                     tile_regs_commit();
                                     tile_regs_wait();
-                                    for (uint32_t i = 0; i < block_size; i++) {
+                                    for (std::uint32_t i = 0; i < block_size; i++) {
                                         pack_tile(i, rotated_input_cb);
                                     }
                                     tile_regs_release();
@@ -687,21 +810,23 @@ void kernel_main() {
                                     tile_regs_acquire();
                                     binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(
                                         intermediate_cb, rope_cos_cb, false);
-                                    for (uint32_t i = 0; i < tiles_in_block; i++) {
-                                        const uint32_t ridx = (per_head_rope != 0) ? (group_abs_base + col_tile + i)
-                                                                                   : ((col_tile + i) % head_dim_tiles);
+                                    for (std::uint32_t i = 0; i < tiles_in_block; i++) {
+                                        const std::uint32_t ridx = (per_head_rope != 0)
+                                                                       ? (group_abs_base + col_tile + i)
+                                                                       : ((col_tile + i) % head_dim_tiles);
                                         mul_tiles(intermediate_cb, rope_cos_cb, i, ridx, i);
                                     }
                                     binary_tiles_init<false, EltwiseBinaryType::ELWMUL>(
                                         rotated_input_cb, rope_sin_cb, true);
-                                    for (uint32_t i = 0; i < tiles_in_block; i++) {
-                                        const uint32_t ridx = (per_head_rope != 0) ? (group_abs_base + col_tile + i)
-                                                                                   : ((col_tile + i) % head_dim_tiles);
+                                    for (std::uint32_t i = 0; i < tiles_in_block; i++) {
+                                        const std::uint32_t ridx = (per_head_rope != 0)
+                                                                       ? (group_abs_base + col_tile + i)
+                                                                       : ((col_tile + i) % head_dim_tiles);
                                         mul_tiles(rotated_input_cb, rope_sin_cb, i, ridx, i);
                                     }
                                     tile_regs_commit();
                                     tile_regs_wait();
-                                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                    for (std::uint32_t i = 0; i < tiles_in_block; i++) {
                                         pack_tile(i, output_cb);
                                     }
                                     tile_regs_release();
@@ -736,8 +861,8 @@ void kernel_main() {
                     // O(block_size)). The aliases route the LAST affine sub-phase to
                     // output_cb when !fuse_rope, so the no-rope case needs no extra copy.
                     // reduce_result_cb (1/rms) is still at the front (P_NMUL skipped).
-                    uint32_t rope_cursor = 0;  // broadcast cos/sin cyclic index (mod head_dim_tiles)
-                    for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                    std::uint32_t rope_cursor = 0;  // broadcast cos/sin cyclic index (mod head_dim_tiles)
+                    for (std::uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                         // ---- x * (1/rms): input 2nd-pass block (streamed) -> mul_rms_result_cb ----
                         cb_input.wait_front(block_size);
                         reconfig_data_format(input_cb, reduce_result_cb);
@@ -745,12 +870,12 @@ void kernel_main() {
                         mul_bcast_cols_init(input_cb, reduce_result_cb);
                         cb_mul_rms_result.reserve_back(block_size);
                         tile_regs_acquire();
-                        for (uint32_t i = 0; i < block_size; i++) {
+                        for (std::uint32_t i = 0; i < block_size; i++) {
                             mul_tiles_bcast_cols(input_cb, reduce_result_cb, i, 0, i);
                         }
                         tile_regs_commit();
                         tile_regs_wait();
-                        for (uint32_t i = 0; i < block_size; i++) {
+                        for (std::uint32_t i = 0; i < block_size; i++) {
                             pack_tile(i, mul_rms_result_cb);
                         }
                         tile_regs_release();
@@ -770,7 +895,7 @@ void kernel_main() {
                             }
                             cb_mul_weight_result.reserve_back(block_size);
                             tile_regs_acquire();
-                            for (uint32_t i = 0; i < block_size; i++) {
+                            for (std::uint32_t i = 0; i < block_size; i++) {
                                 if constexpr (per_token_weight != 0) {
                                     mul_tiles(mul_rms_result_cb, weight_cb, i, col_tile + i, i);
                                 } else {
@@ -780,7 +905,7 @@ void kernel_main() {
                             tile_regs_commit();
                             cb_mul_rms_result.pop_front(block_size);
                             tile_regs_wait();
-                            for (uint32_t i = 0; i < block_size; i++) {
+                            for (std::uint32_t i = 0; i < block_size; i++) {
                                 pack_tile(i, mul_weight_result_cb);
                             }
                             tile_regs_release();
@@ -800,7 +925,7 @@ void kernel_main() {
                             }
                             cb_add_bias_result.reserve_back(block_size);
                             tile_regs_acquire();
-                            for (uint32_t i = 0; i < block_size; i++) {
+                            for (std::uint32_t i = 0; i < block_size; i++) {
                                 if constexpr (per_token_bias != 0) {
                                     add_tiles(mul_weight_result_cb, bias_cb, i, col_tile + i, i);
                                 } else {
@@ -810,7 +935,7 @@ void kernel_main() {
                             tile_regs_commit();
                             cb_mul_weight_result.pop_front(block_size);
                             tile_regs_wait();
-                            for (uint32_t i = 0; i < block_size; i++) {
+                            for (std::uint32_t i = 0; i < block_size; i++) {
                                 pack_tile(i, add_bias_result_cb);
                             }
                             tile_regs_release();
@@ -845,7 +970,7 @@ void kernel_main() {
                                 /*kt_dim=*/1);
                             tile_regs_commit();
                             tile_regs_wait();
-                            for (uint32_t i = 0; i < block_size; i++) {
+                            for (std::uint32_t i = 0; i < block_size; i++) {
                                 pack_tile(i, rotated_input_cb);
                             }
                             tile_regs_release();
@@ -868,17 +993,17 @@ void kernel_main() {
                             cb_output.reserve_back(block_size);
                             reconfig_data_format(intermediate_cb, rope_cos_cb);
                             pack_reconfig_data_format(output_cb);
-                            const uint32_t rope_base = rope_cursor;
+                            const std::uint32_t rope_base = rope_cursor;
                             tile_regs_acquire();
                             binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(intermediate_cb, rope_cos_cb, false);
-                            for (uint32_t i = 0; i < block_size; i++) {
-                                const uint32_t ridx =
+                            for (std::uint32_t i = 0; i < block_size; i++) {
+                                const std::uint32_t ridx =
                                     (per_head_rope != 0) ? (col_tile + i) : ((rope_base + i) % head_dim_tiles);
                                 mul_tiles(intermediate_cb, rope_cos_cb, i, ridx, i);
                             }
                             binary_tiles_init<false, EltwiseBinaryType::ELWMUL>(rotated_input_cb, rope_sin_cb, true);
-                            for (uint32_t i = 0; i < block_size; i++) {
-                                const uint32_t ridx =
+                            for (std::uint32_t i = 0; i < block_size; i++) {
+                                const std::uint32_t ridx =
                                     (per_head_rope != 0) ? (col_tile + i) : ((rope_base + i) % head_dim_tiles);
                                 mul_tiles(rotated_input_cb, rope_sin_cb, i, ridx, i);
                             }
@@ -887,7 +1012,7 @@ void kernel_main() {
                             }
                             tile_regs_commit();
                             tile_regs_wait();
-                            for (uint32_t i = 0; i < block_size; i++) {
+                            for (std::uint32_t i = 0; i < block_size; i++) {
                                 pack_tile(i, output_cb);
                             }
                             tile_regs_release();
@@ -902,13 +1027,13 @@ void kernel_main() {
                     if constexpr (fuse_rope) {
                         // cos/sin held resident across the whole row; drain once. Per-head holds
                         // num_tile_cols tiles (one per col); broadcast holds head_dim_tiles.
-                        const uint32_t rope_row_tiles = (per_head_rope != 0) ? num_tile_cols : head_dim_tiles;
+                        const std::uint32_t rope_row_tiles = (per_head_rope != 0) ? num_tile_cols : head_dim_tiles;
                         cb_rope_cos.pop_front(rope_row_tiles);
                         cb_rope_sin.pop_front(rope_row_tiles);
                     }
                 }
 
-                if constexpr (has_weight && !block_major_post) {
+                if constexpr (has_weight && !block_major_post && !prescale_weight) {
                     // ----- Sub-phase 2: (x * 1/rms) * weight → mul_weight_result_cb -----
                     // Broadcast weight (default): weight_cb holds num_tile_cols
                     // row-broadcast tiles pushed once per worker; we use
@@ -926,13 +1051,13 @@ void kernel_main() {
                         mul_bcast_rows_init(mul_rms_result_cb, weight_cb);
                     }
 
-                    for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                        const uint32_t tiles_in_block =
+                    for (std::uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                        const std::uint32_t tiles_in_block =
                             (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
                         cb_weight.wait_front(col_tile + tiles_in_block);
                         cb_mul_rms_result.wait_front(block_size);
                         tile_regs_acquire();
-                        for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                        for (std::uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                             if constexpr (per_token_weight != 0) {
                                 mul_tiles(mul_rms_result_cb, weight_cb, i, col_tile + i, i);
                             } else {
@@ -943,7 +1068,7 @@ void kernel_main() {
                         cb_mul_rms_result.pop_front(block_size);
                         cb_mul_weight_result.reserve_back(block_size);
                         tile_regs_wait();
-                        for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                        for (std::uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                             pack_tile(i, mul_weight_result_cb);
                         }
                         tile_regs_release();
@@ -963,13 +1088,13 @@ void kernel_main() {
                     } else {
                         add_bcast_rows_init(mul_weight_result_cb, bias_cb);
                     }
-                    for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                        const uint32_t tiles_in_block =
+                    for (std::uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                        const std::uint32_t tiles_in_block =
                             (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
                         cb_bias.wait_front(col_tile + tiles_in_block);
                         cb_mul_weight_result.wait_front(block_size);
                         tile_regs_acquire();
-                        for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                        for (std::uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                             if constexpr (per_token_bias != 0) {
                                 add_tiles(mul_weight_result_cb, bias_cb, i, col_tile + i, i);
                             } else {
@@ -980,7 +1105,7 @@ void kernel_main() {
                         cb_mul_weight_result.pop_front(block_size);
                         cb_add_bias_result.reserve_back(block_size);
                         tile_regs_wait();
-                        for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                        for (std::uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                             pack_tile(i, add_bias_result_cb);
                         }
                         tile_regs_release();
@@ -997,8 +1122,8 @@ void kernel_main() {
                         // matmul<->rope reconfigs (the resident sub-phase-major path below is
                         // faster). fuse_mm_rope is only set when per_head_rope, so cos/sin are
                         // streamed: block-relative index, popped per block.
-                        for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                            const uint32_t tiles_in_block =
+                        for (std::uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                            const std::uint32_t tiles_in_block =
                                 (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
                             // --- rotate this block: intermediate[front] * trans -> rotated[block] ---
                             reconfig_data_format(transformation_mat_cb, intermediate_cb);
@@ -1025,7 +1150,7 @@ void kernel_main() {
                                 /*kt_dim=*/1);
                             tile_regs_commit();
                             tile_regs_wait();
-                            for (uint32_t i = 0; i < block_size; i++) {
+                            for (std::uint32_t i = 0; i < block_size; i++) {
                                 pack_tile(i, rotated_input_cb);
                             }
                             tile_regs_release();
@@ -1039,16 +1164,16 @@ void kernel_main() {
                             pack_reconfig_data_format(output_cb);
                             tile_regs_acquire();
                             binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(intermediate_cb, rope_cos_cb, false);
-                            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                            for (std::uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                                 mul_tiles(intermediate_cb, rope_cos_cb, i, i, i);  // block-relative cos
                             }
                             binary_tiles_init<false, EltwiseBinaryType::ELWMUL>(rotated_input_cb, rope_sin_cb, true);
-                            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                            for (std::uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                                 mul_tiles(rotated_input_cb, rope_sin_cb, i, i, i);  // + rotate*sin (acc)
                             }
                             tile_regs_commit();
                             tile_regs_wait();
-                            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                            for (std::uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                                 pack_tile(i, output_cb);
                             }
                             tile_regs_release();
@@ -1078,7 +1203,7 @@ void kernel_main() {
                                 /*ct_dim=*/1,
                                 /*rt_dim=*/block_size,
                                 /*kt_dim=*/1);
-                            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                            for (std::uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                                 // Don't pop intermediate — the RoPE finalize re-reads it.
                                 cb_intermediate.wait_front(col_tile + block_size);
                                 cb_rotated_input.reserve_back(block_size);
@@ -1095,7 +1220,7 @@ void kernel_main() {
                                     /*kt_dim=*/1);
                                 tile_regs_commit();
                                 tile_regs_wait();
-                                for (uint32_t i = 0; i < block_size; i++) {
+                                for (std::uint32_t i = 0; i < block_size; i++) {
                                     pack_tile(i, rotated_input_cb);
                                 }
                                 tile_regs_release();
@@ -1118,8 +1243,8 @@ void kernel_main() {
                             // recompute the cursor from rope_base for both mul passes.
                             reconfig_data_format(intermediate_cb, rope_cos_cb);
                             pack_reconfig_data_format(output_cb);
-                            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                                const uint32_t tiles_in_block =
+                            for (std::uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                                const std::uint32_t tiles_in_block =
                                     (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
                                 // Per-head RoPE: cos/sin are STREAMED — the reader pushes this
                                 // block's tiles (block_size groups) and we pop them at block end,
@@ -1138,12 +1263,12 @@ void kernel_main() {
                                 cb_intermediate.wait_front(block_size);
                                 cb_rotated_input.wait_front(block_size);
                                 cb_output.reserve_back(block_size);
-                                const uint32_t rope_base = rope_cos_tile_in_head;
+                                const std::uint32_t rope_base = rope_cos_tile_in_head;
                                 tile_regs_acquire();
                                 // x*cos -> dst (overwrite: acc_to_dest=false)
                                 binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(intermediate_cb, rope_cos_cb, false);
-                                for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                                    const uint32_t rope_idx =
+                                for (std::uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                                    const std::uint32_t rope_idx =
                                         (per_head_rope != 0) ? i : ((rope_base + i) % head_dim_tiles);
                                     mul_tiles(intermediate_cb, rope_cos_cb, i, rope_idx, i);
                                 }
@@ -1154,9 +1279,9 @@ void kernel_main() {
                                 // re-runs to flip acc_to_dest. Skips a redundant unpack init.
                                 binary_tiles_init<false, EltwiseBinaryType::ELWMUL>(
                                     rotated_input_cb, rope_sin_cb, true);
-                                uint32_t valid = 0;
-                                for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                                    const uint32_t rope_idx =
+                                std::uint32_t valid = 0;
+                                for (std::uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                                    const std::uint32_t rope_idx =
                                         (per_head_rope != 0) ? i : ((rope_base + i) % head_dim_tiles);
                                     mul_tiles(rotated_input_cb, rope_sin_cb, i, rope_idx, i);
                                     valid++;
@@ -1166,7 +1291,7 @@ void kernel_main() {
                                 }
                                 tile_regs_commit();
                                 tile_regs_wait();
-                                for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                                for (std::uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                                     pack_tile(i, output_cb);
                                 }
                                 tile_regs_release();

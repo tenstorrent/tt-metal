@@ -6,6 +6,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <cstdint>
 
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -18,12 +19,12 @@ using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
 
-uint32_t dit_fused_norm_ring_size(const MeshDevice& mesh_device, std::optional<uint32_t> cluster_axis) {
+std::uint32_t dit_fused_norm_ring_size(const MeshDevice& mesh_device, std::optional<std::uint32_t> cluster_axis) {
     if (!cluster_axis.has_value()) {
         return 1u;
     }
     const auto& mesh_view = mesh_device.get_view();
-    return static_cast<uint32_t>((*cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols());
+    return static_cast<std::uint32_t>((*cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols());
 }
 
 void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
@@ -86,7 +87,7 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     //     the writer's flat (b*rows_per_batch + r)*head_dim_tiles layout; the caller reshapes the
     //     seq dim back to (batch, N).
     TT_FATAL(shape[0] == 1, "Input dim0 must be 1 (shape [1, batch, N, H]); got {}", shape[0]);
-    const uint32_t batch = shape[1];
+    const std::uint32_t batch = shape[1];
     if (batch > 1) {
         TT_FATAL(!args.per_head_norm, "Batched input (dim1={}) does not support per_head_norm", batch);
         // Per-token weight/bias ([.,N,H]) with batch>1 is untested: the per-token reader indexes
@@ -233,7 +234,7 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             tensor_args.persistent_output_buffer.has_value(),
             "persistent_output_buffer is required for TP>1 with multiple workers (use_mux). "
             "Allocate it as a regular device tensor with shape "
-            "[1, 1, {}, {}], dtype=FLOAT32, layout=ROW_MAJOR, DRAM INTERLEAVED.",
+            "[1, 1, {}, {}], dtype=FLOAT32, layout=ROW_MAJOR, L1 INTERLEAVED.",
             e_shape[2],
             e_shape[3]);
         const auto& buf = tensor_args.persistent_output_buffer.value();
@@ -251,7 +252,7 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             buf.dtype());
         TT_FATAL(
             buf.memory_config().buffer_type() == expected.memory_config().buffer_type(),
-            "persistent_output_buffer must be in DRAM");
+            "persistent_output_buffer must be in L1 (allocate it with the op's create_stats_buffer)");
         TT_FATAL(
             buf.memory_config().memory_layout() == expected.memory_config().memory_layout(),
             "persistent_output_buffer must be INTERLEAVED");
@@ -288,9 +289,9 @@ DitFusedDistributedRmsnormDeviceOperation::compute_output_specs(
     //   - num_heads_per_device>1 (head-split): heads occupy dim1, so batch folds into the seq
     //     dim -> [1, num_heads, batch*N, head_dim]. batch==1 leaves this as [1, num_heads, N, hd]
     //     (unchanged). The caller reshapes the seq dim back to (batch, N).
-    const uint32_t batch = logical[1];
-    const uint32_t out_dim1 = (args.num_heads_per_device == 1) ? batch : args.num_heads_per_device;
-    const uint32_t out_dim2 = (args.num_heads_per_device == 1) ? logical[2] : batch * logical[2];
+    const std::uint32_t batch = logical[1];
+    const std::uint32_t out_dim1 = (args.num_heads_per_device == 1) ? batch : args.num_heads_per_device;
+    const std::uint32_t out_dim2 = (args.num_heads_per_device == 1) ? logical[2] : batch * logical[2];
     ttnn::Shape output_shape({1u, out_dim1, out_dim2, logical[3] / args.num_heads_per_device});
     const auto out_dtype = args.dtype.value_or(input.dtype());
     specs.emplace_back(output_shape, TensorLayout(out_dtype, PageConfig(Layout::TILE), args.output_mem_config));
@@ -359,7 +360,7 @@ ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_ha
         args.ring_size,
         args.topology,
         args.compute_kernel_config,
-        static_cast<uint8_t>(args.norm_type),
+        static_cast<std::uint8_t>(args.norm_type),
         subdevice_core_range_set,
         tensor_args);
 }
@@ -370,12 +371,12 @@ namespace ttnn::prim {
 
 Tensor dit_fused_distributed_rmsnorm(
     const Tensor& input_tensor,
-    std::optional<uint32_t> cluster_axis,
+    std::optional<std::uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     ttnn::ccl::Topology topology,
     float epsilon,
-    uint32_t num_heads_per_device,
+    std::uint32_t num_heads_per_device,
     bool per_head_norm,
     const std::optional<const Tensor>& weight,
     const std::optional<const Tensor>& bias,
@@ -399,7 +400,7 @@ Tensor dit_fused_distributed_rmsnorm(
     auto kernel_config_val = init_device_compute_kernel_config(
         arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, false, true, false);
 
-    const uint32_t num_devices = ttnn::experimental::prim::dit_fused_norm_ring_size(mesh_device, cluster_axis);
+    const std::uint32_t num_devices = ttnn::experimental::prim::dit_fused_norm_ring_size(mesh_device, cluster_axis);
 
     auto operation_attributes = OperationType::operation_attributes_t(
         epsilon,
@@ -408,8 +409,8 @@ Tensor dit_fused_distributed_rmsnorm(
         dtype,
         memory_config.value_or(input_tensor.memory_config()),
         cluster_axis.value_or(0),
-        static_cast<uint32_t>(num_preferred_links.value_or(1)),
-        static_cast<uint32_t>(num_devices),
+        static_cast<std::uint32_t>(num_preferred_links.value_or(1)),
+        static_cast<std::uint32_t>(num_devices),
         topology,
         multi_device_global_semaphore,
         subdevice_id,
