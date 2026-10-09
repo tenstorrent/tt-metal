@@ -61,37 +61,6 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
     return kv_cache
 
 
-def _install_worker_crash_diagnostics():
-    """Make an engine-worker exit during model bring-up explain itself in the server log.
-
-    Multi-process DP workers that die during start-up are only reported as "died unexpectedly" by
-    vLLM; this dumps Python stacks on fatal signals and logs termination signals and interpreter exit.
-    """
-    import atexit
-    import faulthandler
-    import signal
-    import sys
-
-    try:
-        faulthandler.enable(file=sys.stderr, all_threads=True)
-    except Exception:  # noqa: BLE001
-        pass
-    pid = os.getpid()
-
-    def _on_signal(signum, frame):
-        logger.error(f"pid {pid}: received signal {signum} ({signal.Signals(signum).name}) during/after model bring-up")
-        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
-        signal.signal(signum, signal.SIG_DFL)
-        os.kill(pid, signum)
-
-    for sig in (signal.SIGTERM, signal.SIGHUP):
-        try:
-            signal.signal(sig, _on_signal)
-        except (ValueError, OSError):  # not the main thread / not supported
-            pass
-    atexit.register(lambda: logger.warning(f"pid {pid}: interpreter exiting (parent pid {os.getppid()})"))
-
-
 class _ColdCacheLock:
     """Serialise model loading across data-parallel engine processes while the tensor cache is cold.
 
@@ -286,7 +255,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 f"max_seq_len {max_seq_len} is not supported for {hf_model_id}, using {max_seq_len_native} instead"
             )
             max_seq_len = max_seq_len_native
-        _install_worker_crash_diagnostics()
         cache_lock = _ColdCacheLock().__enter__()
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
