@@ -1,11 +1,13 @@
 # BoolQ training example
 
 GRPO fine-tuning of `meta-llama/Llama-3.2-1B-Instruct` on
-`google/boolq`, with a Yes/No correctness reward. The training loop
-itself is the generic `GRPOTrainer` from `ttml.trainers` (see
+`google/boolq`, with a Yes/No correctness reward, with rollouts
+generated on a second MPI rank. The script
+([`boolq_training_example.py`](boolq_training_example.py)) is a plain
+`GRPOTrainer` script (see
 [`tt-train/docs/GRPO_TRAINER.md`](../../../../docs/GRPO_TRAINER.md));
-this directory only adds the deployment-level wiring needed to run it
-across two MPI ranks.
+its config selects `rollout_source: "ttt"` and
+`rollout_mode: "remote_sync"`, and `runner.sh` launches it on both ranks.
 
 ---
 
@@ -16,274 +18,95 @@ a captured ttnn trace. Training-side `ttml.Llama` and inference-side
 `tt-transformers.Transformer` are different model implementations
 with different mesh-shape constraints, so this example splits them
 across two MPI ranks: the trainer keeps a free policy mesh, the
-worker keeps a captured decode trace, and weights are pushed from one
-to the other every step.
+rollout rank keeps a captured decode trace, and weights are pushed
+from one to the other every `weight_sync_every` steps.
 
 ```text
                  mpirun (tt-run, world_size = 2)
                 ─────────────────────────────────
 
-  rank 0 (TTML)                    rank 1 (TTT)
-  ───────────────                   ──────────────
-  ttml.Llama policy                 Nx tt-transformers Transformer
-  GRPOTrainer + optimizer           Nx TttGenerationWorker
-  mesh: [1, N] (DDP)                mesh: [1, N] -> Nx [1, 1] submesh
-       │                                ▲
-       │  MPIRolloutClient    OP_GENERATE / OP_TRANSFER / OP_SHUTDOWN
-       └──────────────► MPI ───────────► MPIRolloutServer
-       │                                │
-       └────── WeightBridge socket ─────┘
+  rank 0 (TTML)                      rank 1 (TTT)
+  ───────────────                     ──────────────
+  ttml.Llama policy                   TTTRolloutSampler
+  GRPOTrainer + optimizer               Nx tt-transformers Transformer
+  SyncRemoteRolloutBatchSource        MPIRolloutServer
+  mesh: [1, N] (DDP)                  mesh: [1, N] -> Nx [1, 1] submesh
+       │                                   ▲
+       │  MPIRolloutClient   OP_GENERATE / OP_REQUEST_TRANSFER / OP_SHUTDOWN
+       └──────────────► MPI ──────────────►┘
+       │                                   │
+       └──────── HostWeightBridge ─────────┘
 ```
 
-`N` is the per-rank mesh width, picked by `--split` on the Python
-entrypoint: `2` for `2-2` (4 chips total) or `4` for `4-4` (8 chips
-total). `--split` must match the `device_topology` in the
-`mgd.textproto` you point tt-run at. See [How to run](#how-to-run).
+`N` is the per-rank mesh width: `device_config.mesh_shape` on rank 0 and
+`remote_rollout_config.mesh_shape` on rank 1. It must match the
+`device_topology` in the `mgd.textproto` you point tt-run at. See
+[How to run](#how-to-run).
 
-`GRPOTrainer` is unaware of the rank split. It calls
-`completer.generate(...)`; `LlamaCompleterRemoteRollout` hides the cross-rank
-RPC inside that call. The [trainer doc](../../../../docs/GRPO_TRAINER.md)
-covers the model- and rank-agnostic API; everything below is
-specific to this two-rank deployment.
+Both ranks construct the same `GRPOTrainer`; the constructor picks the
+role from the rank:
+
+- **Rank 0** builds the ttml policy, calls `dataset_func`, and builds a
+  `SyncRemoteRolloutBatchSource`. For each batch it sends the prompts to
+  rank 1, gets back the completions, tt-transformers' per-token log-probs
+  and rank 1's weight version, and computes the rewards. After every
+  `weight_sync_every` optimizer steps it pushes the policy weights.
+- **Rank 1** opens the rollout mesh, builds a `TTTRolloutSampler` and an
+  `MPIRolloutServer`, and never loads the dataset. `trainer.train()` serves
+  requests until rank 0 is done.
+
+Both ranks boot with the Hub weights of `model_source` (weight version
+0), so no initial weight push is needed.
 
 ---
-
-
 
 ## Components
 
-
-| Class                         | Side | Role                                                                                                                                                                                                                           |
-| ----------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `LlamaCompleterRemoteRollout` | TTML | Concrete `GRPOCompleter`. Owns the ttml policy. Routes `generate(...)` and `push_weights()` to the peer rank via `inference_client`.                                                                                           |
-| `MPIRolloutClient`            | TTML | MPI client + `WeightBridge` owner. Constructed before the completer; its constructor blocks until the peer's server is up.                                                                                                     |
-| `MPIRolloutServer`            | TTT  | Dispatches `OP_GENERATE` / `OP_TRANSFER` / `OP_SHUTDOWN` to user-supplied callbacks. Blocks in `serve_forever()` until shutdown.                                                                                               |
-| `TttGenerationWorker`         | TTT  | Hosts the `tt-transformers.Transformer` and a captured decode trace. Exposes `generate` and `update_weights` callbacks.                                                                                                        |
-| `WeightBridge`                | both | Replicated-tensor transport (ABC). `HostWeightBridge` moves each weight to host via MPI and re-uploads it to each receiver submesh. Wire-format spec: [`LLAMA_WEIGHT_TRANSFER.md`](../../../../docs/LLAMA_WEIGHT_TRANSFER.md). |
-| `WeightSyncCallback`          | TTML | `TrainerCallback` that calls `completer.push_weights()` every `every` optimizer steps. Opt-in.                                                                                                                                 |
-
+| Class                          | Side | Role |
+| ------------------------------ | ---- | ---- |
+| `SyncRemoteRolloutBatchSource` | TTML | The trainer's `RolloutBatchSource` in `remote_sync`: remote generate, reward scoring, versioned weight pushes. |
+| `MPIRolloutClient`             | TTML | `remote_generate(prompts) -> (completions, logprobs, weight_version)` and `send_weights(hf_dict, version=)`. Its constructor blocks until the peer's server is up. |
+| `MPIRolloutServer`             | TTT  | Serves a `RolloutSampler`: `OP_GENERATE` calls `sampler.generate`, `OP_REQUEST_TRANSFER` calls `sampler.update_weights` with the version from the request header. Blocks in `serve_forever()` until `OP_SHUTDOWN`. |
+| `TTTRolloutSampler`            | TTT  | Hosts the `tt-transformers.Transformer` copies and a captured decode trace; returns completions with tt-transformers' on-device sampled-token log-probs. |
+| `WeightBridge`                 | both | Replicated-tensor transport (ABC). `HostWeightBridge` moves each weight to host via MPI and re-uploads it to each receiver submesh. Wire-format spec: [`LLAMA_WEIGHT_TRANSFER.md`](../../../../docs/LLAMA_WEIGHT_TRANSFER.md). |
 
 ---
-
-
-
-## LlamaCompleterRemoteRollout
-
-```python
-from grpo_remote_rollout.utils.llama_grpo_completer import LlamaCompleterRemoteRollout, LlamaCompletionCtx
-```
-
-Llama-specific implementation of `GRPOCompleter`. Loads the ttml
-policy from a HuggingFace ID or local safetensors directory, manages
-the KV cache, and dispatches generation requests over MPI to the TTT
-rank.
-
-```python
-completer = LlamaCompleterRemoteRollout(
-    ctx=LlamaCompletionCtx(
-        max_tokens_to_complete=256,
-        temperature=0.7,
-        completions_per_prompt=8,
-    ),
-    transformer_config=transformer_config,   # TransformerConfig
-    mesh_device=mesh_device,                 # opened ttnn.MeshDevice
-    model_source="meta-llama/Llama-3.2-1B-Instruct",
-    inference_client=client,                 # MPIRolloutClient
-    enable_ddp=True,
-)
-```
-
-
-| Parameter            | Type                 | Description                                                                                                           |
-| -------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `ctx`                | `LlamaCompletionCtx` | Generation parameters (max tokens, temperature, completions per prompt).                                              |
-| `transformer_config` | `TransformerConfig`  | Model architecture config (parsed from the YAML training config).                                                     |
-| `mesh_device`        | `ttnn.MeshDevice`    | Already-opened TTML mesh. The caller owns its lifetime; the completer does not open or close it.                      |
-| `model_source`       | `str`                | HuggingFace model ID or path to a local directory containing `model.safetensors`.                                     |
-| `inference_client`   | `MPIRolloutClient`   | RPC client to the TTT rank. The completer routes `generate` and `push_weights` calls through this.                    |
-| `enable_ddp`         | `bool`               | Enable distributed data parallelism across the TTML mesh. Must agree with the `enable_ddp` in the YAML device config. |
-
-
-
-
-### Methods used by the user
-
-
-| Method           | Description                                                                                                                               |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `push_weights()` | Export the current ttml policy as an HF-keyed dict and push it to the TTT rank. Used once at startup, before the first `trainer.train()`. |
-
-
-For per-step pushes, register `WeightSyncCallback(completer, every=N)`
-as a trainer callback; it calls `push_weights()` after every `N`
-optimizer steps.
-
----
-
-
-
-## TTML rank skeleton (rank 0)
-
-```python
-import os
-from datasets import load_dataset
-from ttml.trainers.grpo_trainer.remote_rollout.mpi_rollout import MPIRolloutClient
-from grpo_remote_rollout.utils.llama_grpo_completer import (
-    LlamaCompletionCtx, LlamaCompleterRemoteRollout, WeightSyncCallback,
-)
-from ttml.trainers import GRPOTrainer, get_grpo_config
-
-TTML_RANK, TTT_RANK = 0, 1
-mesh_device = ...                         # opened from YAML config
-
-# Bridge handshake: blocks until rank 1 also constructs its server.
-client = MPIRolloutClient(peer_rank=TTT_RANK, device=mesh_device)
-
-dataset = load_dataset("google/boolq", split="train").map(format_example)
-
-completer = LlamaCompleterRemoteRollout(
-    ctx=LlamaCompletionCtx(
-        max_tokens_to_complete=256,
-        temperature=0.7,
-        completions_per_prompt=8,
-    ),
-    transformer_config=transformer_config,    # parsed from YAML
-    mesh_device=mesh_device,
-    model_source="meta-llama/Llama-3.2-1B-Instruct",
-    inference_client=client,
-    enable_ddp=True,
-)
-
-# One-off: replace the worker's dummy boot weights with real instruct
-# weights before the first generate call.
-completer.push_weights()
-
-trainer = GRPOTrainer(
-    completer=completer,
-    dataset=dataset,
-    config=get_grpo_config(yaml_dict, output_dir=output_dir),
-    reward_func=my_reward,
-    optimizer_dict={"type": "MorehAdamW", "lr": 5.0e-6},
-    callbacks=[WeightSyncCallback(completer, every=1)],   # push policy every step
-    model_source="meta-llama/Llama-3.2-1B-Instruct",
-)
-try:
-    trainer.train()
-finally:
-    client.shutdown()                     # must run before the TTML mesh closes
-```
-
----
-
-
-
-## TTT rank skeleton (rank 1)
-
-```python
-import ttnn
-from ttml.trainers.grpo_trainer.remote_rollout.mpi_rollout import MPIRolloutServer
-from ttml.trainers.grpo_trainer.remote_rollout.ttt_generation_worker import TttGenerationWorker
-from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import HostWeightBridge
-from ttml.trainers.grpo_trainer.remote_rollout.llama_ttt_presets import (
-    bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad,
-)
-
-ttnn.init_distributed_context()
-parent_mesh = ttnn.open_mesh_device(
-    mesh_shape=ttnn.MeshShape(1, 4),
-    offset=ttnn.MeshCoordinate(0, 0),
-)
-submeshes = parent_mesh.create_submeshes(ttnn.MeshShape(1, 1))   # four [1, 1] submeshes
-
-stop_token_ids, pad_token_id = llama_stop_and_pad("meta-llama/Llama-3.2-1B-Instruct")
-
-workers = [
-    TttGenerationWorker(
-        mesh_device=submesh,
-        model_source="meta-llama/Llama-3.2-1B-Instruct",
-        max_batch_size=32,
-        max_seq_len=2048,
-        instruct=True,
-        optimizations=bf16_attn_bfp8_mlp_optimizations,
-        stop_token_ids=stop_token_ids,
-        pad_token_id=pad_token_id,
-        temperature=0.7, top_k=0, top_p=1.0, seed=None,
-    )
-    for submesh in submeshes
-]
-
-# The bridge replicates each transferred policy onto every submesh.
-bridge = HostWeightBridge.init_receiver(mesh=parent_mesh, peer_rank=0, submeshes=submeshes)
-server = MPIRolloutServer(
-    peer_rank=0,
-    bridge=bridge,
-    generate_fn=workers[0].generate,          # generation served by submesh 0
-    on_weights_received=lambda per_submesh: [
-        w.update_weights(d) for w, d in zip(workers, per_submesh)
-    ],
-)
-server.serve_forever()                    # blocks until rank 0 sends OP_SHUTDOWN
-```
-
----
-
-
-
-## Single-file dispatch
-
-Both ranks live in the same Python file
-([`boolq_training_example.py`](boolq_training_example.py)) and are
-dispatched on the MPI rank set by `mpirun` / `tt-run`:
-
-```python
-if int(os.environ["OMPI_COMM_WORLD_RANK"]) == 0:
-    ttml_main()
-else:
-    ttt_main()
-```
-
----
-
-
 
 ## Configuration
 
 Everything runtime-tunable lives in a single training YAML,
 [`grpo_boolq_llama_1b_remote_rollout.yaml`](../../../../configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml).
-Both ranks load it: the TTML rank consumes `training_config` /
-`device_config` (standard `GRPOTrainer` inputs, described in the
-[trainer doc](../../../../docs/GRPO_TRAINER.md)); the TTT rank
-consumes `remote_rollout_config` plus the same `grpo_config.temperature`
-so both sides bake in matching sampling.
+Both ranks load it. `training_config`, `device_config` and `grpo_config`
+are the standard `GRPOTrainer` blocks (see the
+[trainer doc](../../../../docs/GRPO_TRAINER.md)); the remote-specific
+fields are:
 
-### `remote_rollout_config` — TTT rollout-rank knobs
+| Field | Description |
+| ----- | ----------- |
+| `training_config.model_source` | HuggingFace Hub id. Both ranks load their weights from it; a local path is rejected in `remote_sync`. |
+| `grpo_config.rollout_source` / `rollout_mode` | `"ttt"` / `"remote_sync"`. |
+| `grpo_config.weight_sync_every` | Push the policy weights to rank 1 every *N* optimizer steps (default 1). |
+| `grpo_config.temperature` | Baked into rank 1's decode trace at construction. tt-transformers emits no log-probs on its greedy path, so `temperature: 0` is rejected. |
 
-Consumed only by the TTT rank (`_ttt_main` in
-[`boolq_training_example.py`](boolq_training_example.py)) when it
-opens the rollout mesh and constructs `TttGenerationWorker`.
+### `remote_rollout_config` — rollout-rank knobs
 
-| Field            | Type        | Default      | Description                                                                                                                                                                                                                    |
-| ---------------- | ----------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `mesh_shape`     | `list[int]` | `[1, 2]`     | Shape of the TTT parent mesh `[rows, cols]`. The worker splits it into `rows * cols` `[1, 1]` submeshes; each hosts one `tt-transformers.Transformer` copy and generation runs data-parallel across them.                     |
-| `max_batch_size` | `int`       | `32`         | Per-submesh concurrent decode capacity. Global generation batch = `max_batch_size * num_submeshes`. Sets the paged KV-cache block budget on each submesh — over-sizing costs L1 / DRAM; under-sizing rejects large requests. |
-| `max_seq_len`    | `int`       | `2048`       | Max prompt + completion length. Sets the KV-cache page-table depth: `max_num_blocks_per_user = ceil(max_seq_len / block_size)`. Must fit the longest prompt (post chat-template) plus `grpo_config.max_completion_length`.    |
+| Field            | Type        | Default      | Description |
+| ---------------- | ----------- | ------------ | ----------- |
+| `mesh_shape`     | `list[int]` | —            | Shape of the TTT parent mesh `[rows, cols]`. The sampler splits it into `rows * cols` `[1, 1]` submeshes; each hosts one `tt-transformers.Transformer` copy and generation runs data-parallel across them. |
+| `max_batch_size` | `int`       | —            | Per-submesh concurrent decode capacity. One tt-transformers call serves `max_batch_size * num_submeshes` completions; larger batches are split into several calls. Sets the paged KV-cache block budget on each submesh. |
+| `max_seq_len`    | `int`       | —            | Max prompt + completion length. A prompt longer than `max_seq_len - grpo_config.max_completion_length` (after the chat template) raises `ValueError`; prompts are never truncated. |
+| `seed`           | `int`       | `None`       | On-device sampling seed. |
+| `top_k`          | `int`       | `32`         | tt-transformers samples from at most the top 32 tokens; the reported log-prob is the full-vocab one. |
+| `top_p`          | `float`     | `1.0`        | Nucleus sampling threshold. |
 
-### `training_config` extras
+### Limitations
 
-Set alongside the standard `GRPOTrainer` blocks under `training_config`:
-
-| Field               | Type   | Default                                | Description                                                                                                              |
-| ------------------- | ------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `model_id`          | `str`  | `"meta-llama/Llama-3.2-1B-Instruct"`   | HF repo path. TTML rank uses it for tokenizer + `LlamaCompleterRemoteRollout`; TTT rank uses it for `llama_stop_and_pad` and `TttGenerationWorker.model_source`. |
-| `weight_sync_every` | `int`  | `1`                                    | Cadence (in optimizer steps) at which `WeightSyncCallback` pushes fresh policy weights from the TTML rank to the TTT worker. |
-
-The rest of `training_config` (GRPO / optimizer knobs) and `device_config`
-(trainer-mesh shape / DDP) are the standard `GRPOTrainer` blocks —
-see [`tt-train/docs/GRPO_TRAINER.md`](../../../../docs/GRPO_TRAINER.md).
+Cross-rank calls are blocking MPI sends and receives without deadlines.
+An exception on either rank ends the tt-run job, but a rank that exits
+cleanly without reaching its peer's matching call, or a stuck peer,
+hangs the other rank.
 
 ---
-
-
 
 ## How to run
 
@@ -351,7 +174,7 @@ Set these before running:
 
 ### 3. Run
 
-`./tt-train/sources/examples/grpo_remote_rollout/runner.sh`
+`./tt-train/sources/examples/grpo_remote_rollout/boolq/runner.sh`
 
 ### 4. Observe the outputs
 
@@ -362,10 +185,12 @@ checkpoint directories (see
 [Checkpointing](../../../../docs/GRPO_TRAINER.md#checkpointing) in
 the trainer doc for the layout).
 
-To train on a different model or dataset, copy this directory and
-swap `MODEL_ID`, the YAML path, and the dataset / reward function.
-Keep the two-rank dispatch and the `WeightSyncCallback` wiring — that
-is what keeps the inference worker in sync with the trainer.
+To train on a different Llama model or dataset, change `model_source`
+in the YAML and the dataset / reward functions in the script. Any
+`GRPOTrainer` script runs in this mode when launched through tt-run
+with a `remote_sync` config; for example the single-process
+[`grpo/boolq/boolq_training_example.py`](../../grpo/boolq/boolq_training_example.py)
+accepts this YAML via `--config`.
 
 ---
 
