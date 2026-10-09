@@ -96,6 +96,15 @@ tt::tt_metal::Shape convert_shape_to_pages(tt::tt_metal::Shape shape, const tt::
     return shape;
 }
 
+// Page-id step of dim d: the product of the tensor dims after it.
+uint32_t tensor_stride(const tt::tt_metal::Shape& tensor_shape, int d) {
+    uint32_t stride = 1;
+    for (int i = static_cast<int>(tensor_shape.rank()) - 1; i > d; --i) {
+        stride *= tensor_shape[i];
+    }
+    return stride;
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -223,7 +232,7 @@ int BufferDistributionSpec::contiguous_page_dim() const {
 }
 
 uint32_t BufferDistributionSpec::contiguous_page_stride() const {
-    return compute_strides(tensor_shape_in_pages_)[contiguous_page_dim()];
+    return CMAKE_UNIQUE_NAMESPACE::tensor_stride(tensor_shape_in_pages_, contiguous_page_dim());
 }
 
 uint32_t BufferDistributionSpec::num_contiguous_pages(uint32_t page_id, uint32_t end_page_id) const {
@@ -233,12 +242,11 @@ uint32_t BufferDistributionSpec::num_contiguous_pages(uint32_t page_id, uint32_t
     TT_FATAL(end <= tensor_volume, "end_page_id {} exceeds tensor volume {}", end, tensor_volume);
 
     const int d = contiguous_page_dim();
+    const uint32_t stride = CMAKE_UNIQUE_NAMESPACE::tensor_stride(tensor_shape_in_pages_, d);
 
-    // The shard is one page wide inside d, so the walk starts at d.
-    uint32_t coords = page_id;
-    for (int i = static_cast<int>(tensor_shape_in_pages_.rank()) - 1; i > d; --i) {
-        coords /= tensor_shape_in_pages_[i];
-    }
+    // The shard is one page wide after d, so the walk starts at d. Dividing by stride drops the dims after d;
+    // skip it when d is the last dim (stride 1), matching the device accessor.
+    uint32_t coords = (d == static_cast<int>(tensor_shape_in_pages_.rank()) - 1) ? page_id : page_id / stride;
 
     uint32_t run = 1;
     uint32_t block = 1;  // run entries per step of dim i
@@ -260,7 +268,6 @@ uint32_t BufferDistributionSpec::num_contiguous_pages(uint32_t page_id, uint32_t
     }
 
     // end is in page ids, the run steps by stride.
-    const uint32_t stride = contiguous_page_stride();
     const uint32_t room = (end - page_id - 1) / stride + 1;
     return std::min(run, room);
 }
