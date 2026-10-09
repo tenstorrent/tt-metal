@@ -31,3 +31,17 @@ class PrefillMetadata:
         """Update the existing device buffers before executing or replaying a chunk."""
         for tensor, value in ((self.slot_idx, slot_idx), (self.kv_actual_global, kv_actual_global)):
             ttnn.copy_host_to_device_tensor(self._host_scalar(value), tensor)
+
+
+class PrefillLanes(list):
+    """A batched step's per-request metadata plus each request's CP-local rows.
+
+    The rows are static at trace capture, so a step with different per-request chunk widths is a different trace.
+    A plain list of metadata means every request has the same width.
+    """
+
+    def __init__(self, metadata, rows):
+        super().__init__(metadata)
+        if len(rows) != len(self):
+            raise ValueError(f"{len(self)} lanes but {len(rows)} row counts")
+        self.rows = tuple(int(r) for r in rows)
