@@ -160,3 +160,62 @@ def down_sum(glu, w_down, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG):
     program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
     ttnn.generic_op([glu, w_down, sparsity, out], program)
     return out
+
+
+def swiglu32(gu, wv, sparsity, memory_config=ttnn.L1_MEMORY_CONFIG):
+    """Batched decode routed SwiGLU over only the active experts: gu [1, E, 32, 2I] packed gate|up sparse_matmul
+    output, wv [1, E, 32, 1] per-(expert, token) routing weights, sparsity [1, 1, 1, E] bf16 ROW_MAJOR union.
+    Returns [1, E, 32, I] = silu(gate) * up * w for active experts (inactive experts' tiles unwritten; the down
+    sparse_matmul skips them)."""
+    device = gu.device()
+    E = gu.shape[1]
+    nt = gu.padded_shape[-1] // TILE // 2
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, E, gu.shape[2], nt * TILE]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory_config
+    )
+    grid_size = device.compute_with_storage_grid_size()
+    num_cores = int(os.environ.get("TT_LAGUNA_SW32_CORES", grid_size.x * grid_size.y))
+    grid = ttnn.num_cores_to_corerangeset(num_cores, grid_size, True)
+    page, sp_page = 2048, max(E * 2, 64)
+    cbs = [
+        _cb(grid, 0, ttnn.bfloat16, page, 2),
+        _cb(grid, 1, ttnn.bfloat16, page, 2),
+        _cb(grid, 2, ttnn.bfloat16, page, 2),
+        _cb(grid, 3, ttnn.uint32, 64, 1),
+        _cb(grid, 4, ttnn.bfloat16, sp_page, 1),
+        _cb(grid, 5, ttnn.bfloat16, sp_page, 1),
+        _cb(grid, 6, ttnn.uint32, E * 4, 1),
+        _cb(grid, 7, ttnn.uint32, E * 4, 1),
+        _cb(grid, 16, ttnn.bfloat16, page, 2),
+    ]
+    ct = [nt, E, page, sp_page, grid_size.x, num_cores]
+    reader = ttnn.KernelDescriptor(
+        kernel_source=str(_KDIR / "swiglu32_reader.cpp"),
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=grid,
+        compile_time_args=ct + _accessor_args(gu, wv, sparsity),
+        common_runtime_args=[gu.buffer_address(), wv.buffer_address(), sparsity.buffer_address()],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    writer = ttnn.KernelDescriptor(
+        kernel_source=str(_KDIR / "swiglu32_writer.cpp"),
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=grid,
+        compile_time_args=ct + _accessor_args(out, sparsity),
+        common_runtime_args=[out.buffer_address(), sparsity.buffer_address()],
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    cfg = ttnn.ComputeConfigDescriptor()
+    cfg.math_fidelity = ttnn.MathFidelity.HiFi4
+    cfg.fp32_dest_acc_en = os.environ.get("TT_LAGUNA_SW32_FP32_DST", "0") == "1"  # silu/products in fp32 DST
+    cfg.math_approx_mode = False
+    compute = ttnn.KernelDescriptor(
+        kernel_source=str(_KDIR / "swiglu32_compute.cpp"),
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=grid,
+        compile_time_args=[],
+        config=cfg,
+    )
+    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+    ttnn.generic_op([gu, wv, sparsity, out], program)
+    return out

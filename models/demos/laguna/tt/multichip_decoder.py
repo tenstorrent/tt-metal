@@ -276,7 +276,8 @@ class MultichipDecoder(OptimizedDecoder):
         self._head_norm_4d = _parse_binary_env("TT_LAGUNA_HEAD_NORM_4D", True)  # decode q/k norm without flattening
         self._decode_heads_op = _parse_binary_env("TT_LAGUNA_DECODE_HEADS_OP", True)  # fused decode head split/concat
         self._moe1_kernels = _parse_binary_env("TT_LAGUNA_MOE1_KERNELS", True)  # batch-1 decode MoE generic_ops
-        self._router32 = _parse_binary_env("TT_LAGUNA_ROUTER32", True)  # exact top-K router kernel, 32-row tiles
+        self._router32 = _parse_binary_env("TT_LAGUNA_ROUTER32", True)  # exact top-K router kernel, <= 32-row tiles
+        self._swiglu32 = _parse_binary_env("TT_LAGUNA_SWIGLU32", True)  # fused routed SwiGLU, 32-row decode
         self._fused_kv_update = _parse_binary_env("TT_LAGUNA_FUSED_KV_UPDATE", True)  # K+V cache in one op
         self._sharded_residual = _parse_binary_env("TT_LAGUNA_SHARDED_RESIDUAL", True)  # decode residual in L1 shards
         self._glu_out_sharded = _parse_binary_env("TT_LAGUNA_GLU_OUT_SHARDED", True)  # decode MLP out stays sharded
@@ -1156,8 +1157,10 @@ class MultichipDecoder(OptimizedDecoder):
                 gu = ttnn.reshape(gu, (1, LE, T, 2 * I))
             else:
                 gu = ttnn.reshape(gu, (1, LE, T, 2 * I))
-            gate_o = ttnn.slice(gu, [0, 0, 0, 0], [1, LE, T, I])
-            up_o = ttnn.slice(gu, [0, 0, 0, I], [1, LE, T, 2 * I])
+            fused_glu = T == TILE and not tile_sparse and getattr(self, "_swiglu32", False)
+            if not fused_glu:
+                gate_o = ttnn.slice(gu, [0, 0, 0, 0], [1, LE, T, I])
+                up_o = ttnn.slice(gu, [0, 0, 0, I], [1, LE, T, 2 * I])
             if T == 1:  # [1,1,1,LE] -> [1,LE,1,1] is the same element order: one reshape, no permute
                 wv = ttnn.reshape(dense_local, (1, LE, 1, 1))
             else:
@@ -1167,8 +1170,13 @@ class MultichipDecoder(OptimizedDecoder):
             # silu fused into the gate*up mul, and the per-(expert, token) routing weight applied BEFORE the
             # linear down projection on the I-wide glu (I < H): w*(glu@Wd) == (w*glu)@Wd, and sparse_matmul
             # zero-fills skipped experts, so the H-wide post-down weighting mul is gone.
-            glu = ttnn.mul(gate_o, up_o, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
-            glu = ttnn.mul(glu, wv)
+            if fused_glu:
+                # one generic_op over the active experts only: gate/up read in place from the packed output (no
+                # slices), silu(gate) * up * w with the per-token weights column-broadcast (moe_decode1.swiglu32)
+                glu = moe_decode1.swiglu32(gu, wv, sparsity)
+            else:
+                glu = ttnn.mul(gate_o, up_o, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+                glu = ttnn.mul(glu, wv)
             dn_pc = _sparse_pc(H, T, I)
             weighted = ttnn.sparse_matmul(
                 glu,
