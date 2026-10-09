@@ -41,6 +41,7 @@ EXPERIMENTAL = {
     "wlink": "output writes from every writer core to the DRAM banks load the NoC links; the most-loaded link bounds the write",
     "wov2d": "2D: most cores only receive in1, so their writer overlaps the next block's pipeline (only the excess is exposed)",
     "wburst": "DRAM writes congest with the bytes each writer has in flight per barrier (one subblock), like L1 read bursts",
+    "mcovl": "the async multicast write overlaps the sender's next fetch; only the handshake is serial with it",
     "reusesync": "Reuse cores never synchronise, so only part of their per-step link load coincides (fitted fraction)",
     "shardhop": "sharded in0: each K block's mcast sender is the core holding that slice, so every step pays a sender handoff",
 }
@@ -282,8 +283,19 @@ def predict(g, p, parts=False):
             return np.where(rx > 0, nbytes / rate, 0.0)
         return np.where(rx > 0, p["lat_mcast"] + rx * p["ack_rx"] + nbytes / rate, 0.0)
 
-    step0 = fetch(b0, g["src_a"], g["rd0"], ea, cg0, g["tb_a"]) + mcast(b0, g["rx0"])  # in0 path (sender)
-    step1 = fetch(b1, g["src_b"], g["rd1"], eb, cg1, g["tb_b"]) + mcast(b1, g["rx1"])  # in1 path (sender)
+    if on("mcovl"):  # sender: fetch block k+1 while block k's multicast data is still in flight
+
+        def path(nbytes, src, rd, eff, cg, tile, rx):
+            f = fetch(nbytes, src, rd, eff, cg, tile)
+            m = mcast(nbytes, rx)
+            hs = np.where(rx > 0, p["lat_mcast"] + rx * p["ack_rx"], 0.0) if on("mcast") else 0.0
+            return np.maximum(f, m - hs) + hs
+
+        step0 = path(b0, g["src_a"], g["rd0"], ea, cg0, g["tb_a"], g["rx0"])
+        step1 = path(b1, g["src_b"], g["rd1"], eb, cg1, g["tb_b"], g["rx1"])
+    else:
+        step0 = fetch(b0, g["src_a"], g["rd0"], ea, cg0, g["tb_a"]) + mcast(b0, g["rx0"])  # in0 path (sender)
+        step1 = fetch(b1, g["src_b"], g["rd1"], eb, cg1, g["tb_b"]) + mcast(b1, g["rx1"])  # in1 path (sender)
     da, db = g["rd0"] * b0 * (g["src_a"] == 0), g["rd1"] * b1 * (g["src_b"] == 0)  # chip DRAM bytes per K step
     la, lb = g["rd0"] * b0 * (g["src_a"] == 1), g["rd1"] * b1 * (g["src_b"] == 1)  # chip interleaved-L1 bytes
     chip = np.maximum((da + db) / dram, (la * cg0 + lb * cg1) / l1bw)
