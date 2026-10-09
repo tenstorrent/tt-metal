@@ -20,7 +20,10 @@ import torch
 
 import ttnn
 
-E, NG, H, I, T, CAP = 36, 288, 4096, 2048, 5120, 8192
+E, NG, T, CAP = 36, 288, 5120, 8192
+# GLM_SWEEP_H / GLM_SWEEP_I: other expert shapes (hidden, intermediate), e.g. 7168 / 2048, 6144 / 2048, 3584 / 3072
+H = int(os.environ.get("GLM_SWEEP_H", "4096"))
+I = int(os.environ.get("GLM_SWEEP_I", "2048"))
 MS = (32, 64, 96, 128, 160, 192, 256, 384, 512, 768, 1024, 2048, 5120)
 ITERS = int(os.environ.get("GLM_SWEEP_ITERS", "10"))
 BFP4_TILE = 576  # bytes: 512 mantissa + 64 shared exponents
