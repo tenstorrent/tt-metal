@@ -41,7 +41,14 @@ def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
 _LOFI_PROJECTION_MIN_ROWS = 512
 
 
+# Set by tests to pin the projections' fidelity, e.g. so a batched step's stacked rows (>= 512 per device) do not
+# switch them to LoFi; None keeps the row-count rule.
+PROJECTION_FIDELITY_OVERRIDE = None
+
+
 def projection_math_fidelity(rows):
+    if PROJECTION_FIDELITY_OVERRIDE is not None:
+        return PROJECTION_FIDELITY_OVERRIDE
     return ttnn.MathFidelity.LoFi if rows >= _LOFI_PROJECTION_MIN_ROWS else ttnn.MathFidelity.HiFi2
 
 

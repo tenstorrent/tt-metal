@@ -168,6 +168,11 @@ def write_chunk_to_global_ring_cache(
         chunk.deallocate(True)
 
 
+def lane_buffer_key(key, lane):
+    """Receive-buffer key of a batched step's request `lane`; lane 0 keeps the unbatched key."""
+    return key if lane == 0 else (key, lane)
+
+
 def global_ring_prefill_attention(
     tt_q,
     cache_kv,
@@ -183,8 +188,13 @@ def global_ring_prefill_attention(
     program_config=None,
     layer_idx=0,
     num_layers=1,
+    lane=0,
 ):
-    """Attend over the packed cache: K is its first GLOBAL_HEAD_DIM columns and V its last GLOBAL_HEAD_DIM."""
+    """Attend over the packed cache: K is its first GLOBAL_HEAD_DIM columns and V its last GLOBAL_HEAD_DIM.
+
+    lane is the request's position in a batched step; each lane gathers into its own receive buffer, so one
+    request's gather cannot overwrite the buffer the previous request's SDPA is still reading.
+    """
     mesh_device = mesh_config.device
     if program_config is None:
         sdpa_grid = ccl_manager.compute_grid_size
@@ -208,7 +218,12 @@ def global_ring_prefill_attention(
     gather_seq = ring_cache_seq_len(max_seq_len, cp) * cp
     # The fused gather's bank-owned schedule needs an interleaved output; the packed cache itself is ND-sharded.
     buffer_kv = ccl_manager.get_ring_gather_buffer(
-        "ring_kv", num_local_kv_heads, gather_seq, GLOBAL_PACKED_DIM, cache_kv.dtype, ttnn.DRAM_MEMORY_CONFIG
+        lane_buffer_key("ring_kv", lane),
+        num_local_kv_heads,
+        gather_seq,
+        GLOBAL_PACKED_DIM,
+        cache_kv.dtype,
+        ttnn.DRAM_MEMORY_CONFIG,
     )
     # ring_mla rather than ring_joint_scaled_dot_product_attention: only ring_mla reads K and V out of one packed
     # tensor (MLA-style latent V; here Gemma4's [K | V] rows). Both call the same device op,

@@ -9,6 +9,7 @@ from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_
 from models.demos.gemma4_d_p.tt.ccl import ccl_allgather
 from models.demos.gemma4_d_p.tt.matmul_config import short_m_gather_memcfg
 from models.demos.gemma4_d_p.tt.mlp import MLP
+from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillLanes
 from models.demos.gemma4_d_p.tt.rms_norm import RMSNorm
 from models.demos.gemma4_d_p.utils.substate import substate
 
@@ -118,6 +119,16 @@ class Gemma4DecoderLayer:
         # closing reduce-scatter returns 1/TP again.
         residual = hidden_states
         normed = self.input_layernorm.forward(hidden_states)
+        batched = isinstance(prefill_metadata, PrefillLanes) or (
+            isinstance(prefill_metadata, (list, tuple)) and len(prefill_metadata) > 1
+        )
+        if batched and residual.is_sharded():
+            # A batched step's stacked residual, or one request wider than the model's chunk (a PrefillLanes of one),
+            # lands lower in L1 than an unbatched one and clashes with the ring SDPA's circular buffers, so hold it
+            # in DRAM across attention; the reshard below brings it back.
+            spilled = ttnn.sharded_to_interleaved(residual, ttnn.DRAM_MEMORY_CONFIG)
+            residual.deallocate(True)
+            residual = spilled
         normed = self._gather_rows(normed)
         attn_output = self.self_attn(
             normed,
