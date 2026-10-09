@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T06:05:00.293771+00:00",
+  "generated_at": "2026-10-09T06:19:41.657271+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -29,8 +29,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 64915,
-      "sha256": "0eb4deb39c1f9c77e96554d22cb0318f60690ba62eed00b442760b0840d5c9e4"
+      "bytes": 66111,
+      "sha256": "0ca476ff46c21145d562d2cc702df57891d9aaa146a33365c215798b651fd9da"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -3343,6 +3343,21 @@
       "path": "galaxy-evidence/qualification-overnight-v2/unit.xml.gz",
       "bytes": 7241,
       "sha256": "83cb65befaacaa068fa880d19106f845dcc2fad112033b82e8de485549d8fce4"
+    },
+    {
+      "path": "galaxy-evidence/release-source-binding-v1/README.md",
+      "bytes": 2079,
+      "sha256": "8f79b85cea4cc191da2ca5dd364e1e1e3ed02e885a21f469f2f42986dc3dcb21"
+    },
+    {
+      "path": "galaxy-evidence/release-source-binding-v1/commit-source-tests.xml",
+      "bytes": 2857,
+      "sha256": "a432b832e020f8b8db1f779dff5592b8a3e9f56d9a06b58f8591ae996c13d9bf"
+    },
+    {
+      "path": "galaxy-evidence/release-source-binding-v1/head-source.json",
+      "bytes": 3743,
+      "sha256": "04eb6546ebb73d287400aa41c3ef93abe919fc36ee6209688582dffd29126924"
     },
     {
       "path": "galaxy-evidence/replica-timing-host.xml",

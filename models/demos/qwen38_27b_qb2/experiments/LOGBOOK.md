@@ -812,3 +812,22 @@ stall or a complete stage breakdown. Overall HTTP output rate is 172.26 tok/s,
 including all prompt work for 32K-input/128-output requests. It must not replace
 a decode-only long-context rate. Added warmup and per-burst timing logs for
 future sweeps; the active immutable source was not edited.
+
+## Oct 9, 06:14-06:18 UTC: immutable source preparation for head qualification
+
+- Closed a release reproducibility gap: Git's tracked-file cleanliness check
+  did not reject a locally qualified untracked or ignored precision policy.
+  TTIS now checks each qualified runtime/policy hash against the advertised
+  commit's actual blob. Seventeen tests passed. Re-preparing the native bundle
+  against its real G0 receipt produced five byte-identical artifacts.
+- Pushed TTIS `5f5302944` and separate model-source branch
+  `anatarajan/qwen38-head-control-runtime-20261009` at `d3e8d6021f7`.
+  The latter adds only the exact queued BFP8/HiFi2-head policy. All 28 source
+  hashes match the frozen queue and the committed blobs; all 64 decoder
+  policies are unchanged. No replacement G0 receipt or head score was created.
+- Original hardware controller PID 917206 remains live in its original
+  invocation; the 128K/C64 HTTP cell is active. Head-control PID 1103813 and
+  post-head CPU/image PID 1209320 remain live and waiting. Serving workers
+  continue prefill progress. No reset or source mutation was performed.
+
+[Release source evidence](../galaxy-evidence/release-source-binding-v1/README.md).

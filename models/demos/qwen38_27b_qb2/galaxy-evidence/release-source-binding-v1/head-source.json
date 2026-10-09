@@ -1,0 +1,61 @@
+{
+  "state": "source_verified_hardware_unqualified",
+  "checked_at": "2026-10-09T06:17:53.505976+00:00",
+  "model_sha": "d3e8d6021f7aadcb28ba3903d79bd04b288a2819",
+  "model_branch": "anatarajan/qwen38-head-control-runtime-20261009",
+  "ttis_sha": "5f53029442415eeb833b3232cf35a63a8810f1ce",
+  "frozen_manifest_sha256": "5cf660dff2005feae7b2af8c3340d9a97fd3c21e59531fe3849548da999afdb9",
+  "source_sha256": {
+    "tt/__init__.py": "501d5b563ca412fa21db82bf39117b5480ecf99bcaf11996b9c3d5f1093bb9a8",
+    "tt/decode_attention.py": "233021a907845fb954d689934cecd57b6879a6b9343b19c5e74888351637a6f8",
+    "tt/decode_conv.py": "7a80916276118500e04798f3de08058f2074552cbafb7d2a07ced16a67292e52",
+    "tt/decoder.py": "28687cccf1e53a7427b19f9c9468f363c86c013add7fbd40afe4d124885ddfad",
+    "tt/decoder_tp.py": "1c8815b901c1e6de4d28bf1249b528d6ed44185e39f6e2165556e283c013c283",
+    "tt/dram_read_probe.py": "0d8e03cbe18b1f70d3de023622263313474e891acf88a01904dfa29b722df645",
+    "tt/dram_read_probe_reader.cpp": "ddd7913289d724a4c45f07980f299a4f403729a1142c4c1acf8258a2595843ab",
+    "tt/dram_read_probe_writer.cpp": "0df5575b2530009e16ae66bb65bffe8e287f0f94d38c9443e11f5903e379edaf",
+    "tt/gdn_step/__init__.py": "c94ebc138e25c01aae5a492beeebe5fca1f7bbbb3a0be4c55c8d6198cba2f48f",
+    "tt/gdn_step/compute.cpp": "bda53aae8011aa35e99a8888a638f8fc1581968199f6f374ea2848f388b176d0",
+    "tt/gdn_step/compute_math.hpp": "c3f00d246fa3f99eb216140776b735fecf053613fb40262f7fff557063f5e639",
+    "tt/gdn_step/model_adapter.py": "3724234bef696eeecd7dc1c5f888c9ac369f3e7871aacc58ae1bd5ac3d945deb",
+    "tt/gdn_step/op.py": "834c3f6b4f3980a6bc335ab7078767211eb0e3bb1aa8b7ee4c45a6bece2472dc",
+    "tt/gdn_step/prepare_compute.cpp": "0e9f16810ef84e0441e43431a425ebe461c41672b99769ff480f7d8549195c8e",
+    "tt/gdn_step/prepare_reader.cpp": "c9f30a86d923b85ec5c1d006e2bf3cd6b79e675267db0a1bb2e11ede384e52ca",
+    "tt/gdn_step/prepare_writer.cpp": "c76787b3bffea7861c043aad2233ddc21075fa577827efb4bd80ca44835c85a2",
+    "tt/gdn_step/reader.cpp": "16d7813672d8fb33bffa1f10aecc38a76769d00809f5dcf75295ba55106ecd90",
+    "tt/gdn_step/shared_qk.py": "a4e71be1421024d8cb59a7a83ab8c549fe1598a7b0e4f1f1ba610567fe9aa713",
+    "tt/gdn_step/workspace.py": "0f6e34f2617b124f95318f3992bfe90fa3e62de0e4e3d4669e72da6dd92fc350",
+    "tt/gdn_step/writer.cpp": "2632705ff4fc977076094b537ff67175f819f78d996f550d78d9955277b7698d",
+    "tt/generator.py": "74cde91a050d40f2d5a7e678c929b9854c0d9d7a7e9ef9dcb0e357619c0b557f",
+    "tt/generator_vllm.py": "2761aa20a8f939a42353780deb294d491fa59caff8fe434a936fa985716119b0",
+    "tt/model.py": "5a30843e69d55cc21b66fe8a182772a154b72ca5e990b88c98bf5a0e31418c28",
+    "tt/precision.py": "280ea0b2d8cf3bb9221116b092fff3c5bfaac136db881b1a0503fe21e60cc0f6",
+    "tt/prefill_schedule.py": "a18a210057682998669c995e86b0ad8c471a20f5161670f2087f0f165af98a59",
+    "tt/topology.py": "915668bdd65c9fb5c7454273840324877b700d088dcca362d7b936cfcebbb37f",
+    "config/precision.json": "33a8fa95c118a85ceb53e6ba707ae4d6eb74631263d5120c1842afa6605628d1",
+    "effective_precision_override": "e4f24f9d92b4bf109f51c2c796c858edd5d4866514a4aa2386048f512aefc2e1"
+  },
+  "exact_frozen_runtime_match": true,
+  "all_source_bytes_exist_at_model_sha": true,
+  "decoder_layers_unchanged": 64,
+  "precision_changes": [
+    {
+      "field": "compute_fidelities.head",
+      "native": "LoFi",
+      "head_control": "HiFi2"
+    },
+    {
+      "field": "config_id",
+      "native": "head_bfp4_lofi_accurate_decode",
+      "head_control": "head_bfp8_hifi2_accurate_decode"
+    },
+    {
+      "field": "weight_groups.head",
+      "native": "bfloat4_b",
+      "head_control": "bfloat8_b"
+    }
+  ],
+  "g0_passed": null,
+  "gpqa_score": null,
+  "built_image_unchanged": true
+}
