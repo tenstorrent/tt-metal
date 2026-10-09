@@ -1,12 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The unary SFPU registry bodies in the call form of their compute API entry points.
-
-perf_eltwise_unary_sfpu.py times each body as one 32-row call per tile; every <op>_tile issues it as four 8-row
-calls (VectorMode::RC, 8 iterations), which is what ttnn runs. This module times that form, through the same
-dispatch, on Float16_b tiles with a 16-bit DEST. The TopK bodies are left out (their entry points make one call per
-tile, as the registry sweep does), and so is erfinv (the registry already issues it as four 8-row calls).
+"""The unary SFPU registry bodies as their <op>_tile issues them, four 8-row calls per tile (VectorMode::RC, 8
+iterations), on Float16_b with a 16-bit DEST; perf_eltwise_unary_sfpu.py times them as one 32-row call per tile.
 """
 
 import pytest
@@ -41,6 +37,8 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
 )
 
+# The TopK entry points make one call per tile, as the registry sweep does, and the registry already issues erfinv
+# as four 8-row calls.
 _NOT_IN_API_FORM = {
     MathOperation.TopKDefuse,
     MathOperation.TopKLocalSort,

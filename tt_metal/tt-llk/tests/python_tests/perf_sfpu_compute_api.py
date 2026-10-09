@@ -1,10 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Perf rows for the Blackhole compute API SFPU entry points that the registry sweeps do not time.
-
-Each row runs one entry point the way its <op>_tile does (its vector mode, init and template and scalar arguments, as
-ttnn calls it), through helpers/include/sfpu_compute_api.h, over the tile formats the entry point is written for.
+"""Perf rows for the Blackhole compute API SFPU entry points, each run as its <op>_tile runs it (vector mode, init,
+template and scalar arguments) through helpers/include/sfpu_compute_api.h, over the formats it is written for.
 """
 
 import pytest

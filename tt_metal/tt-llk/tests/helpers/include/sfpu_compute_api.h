@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The compute API SFPU entry points the registry sweeps do not time, at the llk layer: each branch is the body,
-// template arguments, vector mode and init of its <op>_tile / <op>_tile_init in tt_metal/hw/inc/api/compute, with the
-// scalar arguments ttnn passes.
+// The tt-llk tests cannot include api/compute, so each branch repeats one <op>_tile / <op>_tile_init at the llk layer:
+// its body, template arguments, vector mode and init, with the scalar arguments ttnn passes.
 
 #pragma once
 
