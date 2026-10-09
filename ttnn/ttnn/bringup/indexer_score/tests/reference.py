@@ -45,13 +45,30 @@ def query_start(chunk_start: int, sp_rank: int, tp_rank: int, rows: int, chunk_l
     return chunk_start + sp_rank * chunk_local + tp_rank * rows
 
 
-def dsa_score(q: torch.Tensor, k: torch.Tensor, w: torch.Tensor, q_start: int) -> torch.Tensor:
+def dsa_score(q: torch.Tensor, k: torch.Tensor, w: torch.Tensor, q_start: int, key_stride: int = 1) -> torch.Tensor:
     """q [H, S, D], k [T, D] (natural order), w [S, H] -> [S, T] float32; key t visible to row s iff
-    t <= q_start + s, the rest -inf."""
+    t <= q_start + s, the rest -inf.
+
+    key_stride R (the fork's pooled-key mode): key t pools query tokens [R*t, R*t + R) and is visible to row s iff
+    R*t + R - 1 <= q_start + s (q_start in tokens, t in keys). R = 1 is the plain causal mask above."""
     q, k, w = q.float(), k.float(), w.float()
     kt = k.t().contiguous()
     score = torch.zeros(q.shape[1], k.shape[0])
     for h in range(q.shape[0]):
         score.add_(torch.relu(q[h] @ kt).mul_(w[:, h : h + 1]))
-    future = torch.arange(k.shape[0])[None, :] > (q_start + torch.arange(q.shape[1]))[:, None]
+    r = key_stride
+    future = (r * torch.arange(k.shape[0])[None, :] + r - 1) > (q_start + torch.arange(q.shape[1]))[:, None]
     return score.masked_fill_(future, float("-inf"))
+
+
+def full_mesh_key_local_positions(t: int, n_dev: int, key_stripe: int) -> torch.Tensor:
+    """[n_dev, t / n_dev] int64: natural key of each k_local row on a full-mesh block-cyclic ring (key units).
+    Chip d (row-major tensor rank) holds, for every chunk c of n_dev * key_stripe keys, keys
+    c * n_dev * key_stripe + d * key_stripe + [0, key_stripe) at local rows c * key_stripe + [0, key_stripe)."""
+    chunk = n_dev * key_stripe
+    assert t % chunk == 0
+    i = torch.arange(t // n_dev)
+    c, w = i // key_stripe, i % key_stripe
+    out = torch.stack([c * chunk + d * key_stripe + w for d in range(n_dev)])
+    assert torch.equal(out.flatten().sort().values, torch.arange(t))
+    return out
