@@ -566,6 +566,27 @@ PERF_TEST_SCHEMAS = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {"perf_pack_untilize": "perf_pack_untilize"},
     },
+    "perf_sinkhorn": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "perf_stage",
+            "sinkhorn_iters",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_sinkhorn": "perf_sinkhorn"},
+    },
     "perf_reduce": {
         "version": 3,
         "columns": [
