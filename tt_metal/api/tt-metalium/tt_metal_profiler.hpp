@@ -39,6 +39,9 @@ void InitDeviceProfiler(IDevice* device);
  * Required |
  * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
  * */
+[[deprecated(
+    "ProfilerSync is an internal API: profiler sync runs automatically when devices are opened and closed, so remove "
+    "the call. It will be removed after 2026-11-09.")]]
 void ProfilerSync(ProfilerSyncState state);
 
 // clang-format off
