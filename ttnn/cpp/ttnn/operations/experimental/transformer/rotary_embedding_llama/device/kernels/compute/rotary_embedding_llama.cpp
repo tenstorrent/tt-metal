@@ -138,8 +138,8 @@ void kernel_main() {
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,
                         bulk_block_input(rotated_in_interm_dfb),
-                        sin_cos_input(sin_dfb)>{0u, sin_cos_row_cnt * Wt},
-                    ckl::PackTile<bulk_output(sin_interm_dfb)>{});
+                        sin_cos_input(sin_dfb)>{rotated_in_interm_dfb_obj, sin_dfb_obj, 0u, sin_cos_row_cnt * Wt},
+                    ckl::PackTile<bulk_output(sin_interm_dfb)>{sin_interm_dfb_obj});
 
                 reconfig_data_format(rotated_in_interm_dfb, in_dfb, sin_dfb, cos_dfb);
                 pack_reconfig_data_format(sin_interm_dfb, cos_interm_dfb);
@@ -154,14 +154,17 @@ void kernel_main() {
                             ckl::PopPolicy::AtEnd,
                             ckl::InputTileMapping::Block,
                             ckl::DataFormatReconfig::Disabled),
-                        sin_cos_input(cos_dfb)>{0u, sin_cos_row_cnt * Wt},
-                    ckl::PackTile<bulk_output(cos_interm_dfb)>{});
+                        sin_cos_input(cos_dfb)>{in_dfb_obj, cos_dfb_obj, 0u, sin_cos_row_cnt * Wt},
+                    ckl::PackTile<bulk_output(cos_interm_dfb)>{cos_interm_dfb_obj});
 
                 reconfig_data_format(in_dfb, cos_interm_dfb, cos_dfb, sin_interm_dfb);
                 pack_reconfig_data_format(cos_interm_dfb, out_dfb);
                 // out = cos_interim + sin_interim
                 ckl::add<bulk_block_input(cos_interm_dfb), bulk_block_input(sin_interm_dfb), bulk_output(out_dfb)>(
-                    ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt));
+                    ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
+                    cos_interm_dfb_obj,
+                    sin_interm_dfb_obj,
+                    out_dfb_obj);
 
 #if RELOAD_IMPL == 0
                 // no-reload needs to increment this counter

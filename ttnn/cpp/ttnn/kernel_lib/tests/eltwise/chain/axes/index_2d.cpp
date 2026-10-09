@@ -21,6 +21,10 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t mode = get_compile_time_arg_val(2);  // 1 = Col index, 2 = Row index
 
+    DataflowBuffer cb_a_obj(cb_a);
+    DataflowBuffer cb_b_obj(cb_b);
+    DataflowBuffer cb_out_obj(cb_out);
+
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
 
     using namespace compute_kernel_lib;
@@ -30,15 +34,15 @@ void kernel_main() {
             BinaryFpu<
                 BinaryFpuOp::Add,
                 input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
-                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Row)>{},
-            PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
+                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Row)>{cb_a_obj, cb_b_obj},
+            PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{cb_out_obj});
     } else {  // Col index on B
         eltwise_chain(
             IterationShape::grid(Ht, Wt),
             BinaryFpu<
                 BinaryFpuOp::Add,
                 input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
-                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col)>{},
-            PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
+                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col)>{cb_a_obj, cb_b_obj},
+            PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{cb_out_obj});
     }
 }

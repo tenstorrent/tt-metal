@@ -19,6 +19,9 @@ void kernel_main() {
     constexpr auto dfb_grad_out_id = tt::CBIndex::c_0;
     constexpr auto dfb_input_id = tt::CBIndex::c_1;
     constexpr auto dfb_grad_in_id = tt::CBIndex::c_2;
+    DataflowBuffer dfb_grad_out(dfb_grad_out_id);
+    DataflowBuffer dfb_input(dfb_input_id);
+    DataflowBuffer dfb_grad_in(dfb_grad_in_id);
 
     compute_kernel_hw_startup(dfb_grad_out_id, dfb_grad_in_id);
 
@@ -36,7 +39,7 @@ void kernel_main() {
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
                 operand_reconfig),
-            ckl::Dst::D0>{},
+            ckl::Dst::D0>{dfb_grad_out},
         ckl::CopyTile<
             ckl::input(
                 dfb_input_id,
@@ -44,12 +47,12 @@ void kernel_main() {
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
                 operand_reconfig),
-            ckl::Dst::D1>{},
+            ckl::Dst::D1>{dfb_input},
         ckl::GeluDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},     // dest[1] = GELU'(input)
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},  // dest[0] = grad_out * GELU'(input)
         ckl::PackTile<ckl::output(
             dfb_grad_in_id,
             ckl::ReservePolicy::PerBlockSize,
             ckl::PushPolicy::PerBlockSize,
-            ckl::DataFormatReconfig::Disabled)>{});
+            ckl::DataFormatReconfig::Disabled)>{dfb_grad_in});
 }

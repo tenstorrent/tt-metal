@@ -29,6 +29,9 @@ void kernel_main() {
         static_assert(num_outputs > 0);
         compute_kernel_hw_startup(cb_a, cb_b, cb_out);
 
+        DataflowBuffer cb_a_obj(cb_a);
+        DataflowBuffer cb_b_obj(cb_b);
+
         using PerRowAccumulate = BinaryFpu<
             BinaryFpuOp::Add,
             input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
@@ -70,34 +73,34 @@ void kernel_main() {
             TileAddressing::Direct,
             DestAccumulation::WholeShape)>;
 
-        CircularBuffer output_buffer(cb_out);
+        DataflowBuffer output_buffer(cb_out);
         if constexpr (whole_shape) {
             if constexpr (caller_managed) {
                 output_buffer.reserve_back(1);
                 eltwise_chain(
                     IterationShape::grid(num_outputs, n).block_size(block_size),
-                    WholeShapeAccumulate{},
-                    WholeShapeCallerPack{});
+                    WholeShapeAccumulate{cb_a_obj, cb_b_obj},
+                    WholeShapeCallerPack{output_buffer});
                 output_buffer.push_back(1);
             } else {
                 eltwise_chain(
                     IterationShape::grid(num_outputs, n).block_size(block_size),
-                    WholeShapeAccumulate{},
-                    WholeShapeManagedPack{});
+                    WholeShapeAccumulate{cb_a_obj, cb_b_obj},
+                    WholeShapeManagedPack{output_buffer});
             }
         } else {
             if constexpr (caller_managed) {
                 output_buffer.reserve_back(num_outputs);
                 eltwise_chain(
                     IterationShape::grid(num_outputs, n).block_size(block_size),
-                    PerRowAccumulate{},
-                    PerRowCallerPack{});
+                    PerRowAccumulate{cb_a_obj, cb_b_obj},
+                    PerRowCallerPack{output_buffer});
                 output_buffer.push_back(num_outputs);
             } else {
                 eltwise_chain(
                     IterationShape::grid(num_outputs, n).block_size(block_size),
-                    PerRowAccumulate{},
-                    PerRowManagedPack{});
+                    PerRowAccumulate{cb_a_obj, cb_b_obj},
+                    PerRowManagedPack{output_buffer});
             }
         }
     } else {
@@ -107,7 +110,9 @@ void kernel_main() {
         static_assert(n > 1);
         compute_kernel_hw_startup(cb_in, cb_acc);
 
-        CircularBuffer accumulator(cb_acc);
+        DataflowBuffer cb_in_obj(cb_in);
+        DataflowBuffer accumulator(cb_acc);
+        DataflowBuffer cb_out_obj(cb_out);
         using ManagedPack = PackTile<output(
             cb_acc,
             ReservePolicy::OneUpfront,
@@ -129,15 +134,18 @@ void kernel_main() {
             accumulator.reserve_back(1);
             eltwise_chain(
                 IterationShape::tiles(n),
-                CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{},
-                CallerPack{});
+                CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{
+                    cb_in_obj},
+                CallerPack{accumulator});
             accumulator.push_back(1);
         } else {
             eltwise_chain(
                 IterationShape::tiles(n),
-                CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{},
-                ManagedPack{});
+                CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{
+                    cb_in_obj},
+                ManagedPack{accumulator});
         }
-        eltwise_chain(IterationShape::one_tile(), CopyTile<input(cb_acc)>{}, PackTile<output(cb_out)>{});
+        eltwise_chain(
+            IterationShape::one_tile(), CopyTile<input(cb_acc)>{accumulator}, PackTile<output(cb_out)>{cb_out_obj});
     }
 }

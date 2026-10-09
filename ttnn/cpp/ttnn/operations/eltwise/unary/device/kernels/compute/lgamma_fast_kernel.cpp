@@ -21,6 +21,8 @@ void kernel_main() {
 
     constexpr auto dfb_input_id = tt::CBIndex::c_0;
     constexpr auto dfb_output_id = tt::CBIndex::c_2;
+    DataflowBuffer dfb_input(dfb_input_id);
+    DataflowBuffer dfb_output(dfb_output_id);
     constexpr float M_PI = 3.14159265358979323846f;
 
     compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
@@ -30,10 +32,10 @@ void kernel_main() {
         // x -> D0 (owns the wait), x -> D1.
         ckl::CopyTile<
             ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D0>{},
+            ckl::Dst::D0>{dfb_input},
         ckl::CopyTile<
             ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D1>{},
+            ckl::Dst::D1>{dfb_input},
         // D0 = stirling(x)
         ckl::LgammaStirling<ckl::Dst::D0>{},
         // D2 = M_PI ; D1 = sin(frac(x) * M_PI)
@@ -44,10 +46,10 @@ void kernel_main() {
         // reload x -> D2, D3 ; D3 = floor(x) ; D2 = (x == floor(x))
         ckl::CopyTile<
             ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D2>{},
+            ckl::Dst::D2>{dfb_input},
         ckl::CopyTile<
             ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D3>{},
+            ckl::Dst::D3>{dfb_input},
         ckl::Floor<ckl::Dst::D3>{},
         ckl::EqBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
         // D3 = 0 ; D1 = where(cond=D2, a=0, b=sin) -> 0 at integers else sin
@@ -59,11 +61,9 @@ void kernel_main() {
         // reload x -> D2 (owns the pop) ; D0 = adjusted(stirling=D0, logsin=D1, x=D2)
         ckl::CopyTile<
             ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D2>{},
+            ckl::Dst::D2>{dfb_input},
         ckl::LgammaAdjusted<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
-            dfb_output_id,
-            ckl::ReservePolicy::PerTile,
-            ckl::PushPolicy::PerTile,
-            ckl::DataFormatReconfig::Disabled)>{});
+            dfb_output_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+            dfb_output});
 }

@@ -12,6 +12,7 @@ void kernel_main() {
     using namespace compute_kernel_lib;
 
     constexpr uint32_t output_dfb_id = get_compile_time_arg_val(0);
+    DataflowBuffer output_dfb(output_dfb_id);
 
     const uint32_t seed = get_arg_val<uint32_t>(0);
     union {
@@ -35,5 +36,6 @@ void kernel_main() {
     eltwise_chain(
         IterationShape::tiles(num_tiles),
         RandTile<Dst::D0>{f2u_lower_bound.u, f2u_scale.u, seed, start_id},
-        PackTile<output(output_dfb_id, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
+        PackTile<output(output_dfb_id, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{
+            output_dfb});
 }

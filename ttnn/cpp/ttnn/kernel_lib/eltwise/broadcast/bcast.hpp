@@ -21,11 +21,14 @@ struct UnaryBcastImpl;
 
 }  // namespace detail
 
+/// Broadcast one input tile into `DstSlot`. Constructor: `{in}`, `{in, base}` or `{in, range}`, where `in`
+/// is the DataflowBuffer named by `Input`.
 template <BroadcastDim Dim, InputSpec Input, Dst DstSlot = Dst::D0>
 using UnaryBcast = detail::UnaryBcastImpl<Input.cb_id, detail::unary_bcast_config_bits(Dim, Input, DstSlot)>;
 
+/// UnaryBcast -> PackTile. `in` / `out` are the DataflowBuffers named by `Input` / `Output`.
 template <BroadcastDim Dim, InputSpec Input, OutputSpec Output>
-ALWI void unary_bcast(IterationShape shape);
+ALWI void unary_bcast(IterationShape shape, DataflowBuffer& in, DataflowBuffer& out);
 
 }  // namespace compute_kernel_lib
 

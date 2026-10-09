@@ -73,9 +73,11 @@ void kernel_main() {
     constexpr uint32_t cb_x2 = cb_x;  // x^2
 
 #ifdef FUSE_PRE_ADD
-    CircularBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_in0_obj(cb_in0);
+    DataflowBuffer cb_in1_obj(cb_in1);
 #endif
-    CircularBuffer cb_x2_obj(cb_x2);
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_x2_obj(cb_x2);
     CircularBuffer cb_scaler_obj(cb_scaler);
     CircularBuffer cb_ex_partial2_obj(cb_ex_partial2);
     CircularBuffer cb_signaling(signaling_cb);
@@ -93,7 +95,7 @@ void kernel_main() {
         ckl::input(cb_in0, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
         ckl::input(cb_in1, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
         ckl::output(cb_in, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-        ckl::IterationShape::tiles(num_tiles_per_block).block_size(subblock_w));
+        ckl::IterationShape::tiles(num_tiles_per_block).block_size(subblock_w), cb_in0_obj, cb_in1_obj, cb_in_obj);
     index_h_offset += block_w;
     cb_in_obj.wait_front(num_tiles_per_block);
     pack_reconfig_data_format(cb_in, cb_x2);
@@ -107,7 +109,7 @@ void kernel_main() {
     ckl::square<
         ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
         ckl::output(cb_x2, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>(
-        ckl::IterationShape::tiles(num_tiles_per_block).block_size(subblock_w));
+        ckl::IterationShape::tiles(num_tiles_per_block).block_size(subblock_w), cb_in_obj, cb_x2_obj);
 
     // E(x^2)
     reconfig_data_format(cb_scaler, cb_x2);
@@ -179,11 +181,19 @@ void kernel_main() {
     index = 0;
 
     constexpr uint32_t cb_outgamma = cb_out;
+    DataflowBuffer cb_xmm_obj(cb_xmm);
+    DataflowBuffer cb_ex_global_obj(cb_ex_global);
+    DataflowBuffer cb_im_obj(cb_im);
+    DataflowBuffer cb_gamma_obj(cb_gamma);
+    DataflowBuffer cb_outgamma_obj(cb_outgamma);
     if constexpr (is_allgather_worker) {
         const bool enable_sqrt = get_arg_val<uint32_t>(4) == 1;
         if (enable_sqrt) {
             uint32_t num_distributed_blocks = get_arg_val<uint32_t>(5);
             CircularBuffer cb_stats_obj(cb_stats);
+            DataflowBuffer cb_var_obj(cb_var);
+            DataflowBuffer cb_eps_obj(cb_eps);
+            DataflowBuffer cb_stats_reduced_obj(cb_stats_reduced);
 
             // The factory gives cb_var and cb_x2 the same cb_data_format, so the existing packer
             // configuration also covers this INPUT-only reduce after the stats handshake.
@@ -201,9 +211,9 @@ void kernel_main() {
             // cb_var is cb_stats in case of RMS norm
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
-                ckl::BinaryFpu<ckl::BinaryFpuOp::Add, ckl::input(cb_var), ckl::input(cb_eps)>{},
+                ckl::BinaryFpu<ckl::BinaryFpuOp::Add, ckl::input(cb_var), ckl::input(cb_eps)>{cb_var_obj, cb_eps_obj},
                 ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
-                ckl::PackTile<ckl::output(cb_stats_reduced)>{});
+                ckl::PackTile<ckl::output(cb_stats_reduced)>{cb_stats_reduced_obj});
         }
     }
     // Normalize x with the gathered reciprocal RMS, then apply gamma.
@@ -211,7 +221,10 @@ void kernel_main() {
         ckl::input(cb_xmm, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
         ckl::input(cb_ex_global, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
         ckl::output(cb_im, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-        ckl::IterationShape::tiles(num_tiles_per_block).block_size(subblock_w));
+        ckl::IterationShape::tiles(num_tiles_per_block).block_size(subblock_w),
+        cb_xmm_obj,
+        cb_ex_global_obj,
+        cb_im_obj);
 
     ckl::mul<
         ckl::input(cb_im, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
@@ -222,5 +235,8 @@ void kernel_main() {
             ckl::PopPolicy::None,
             ckl::InputTileMapping::Block),
         ckl::output(cb_outgamma, ckl::ReservePolicy::Upfront, ckl::PushPolicy::PerBlockSize)>(
-        ckl::IterationShape::tiles(num_tiles_per_block).block_size(subblock_w));
+        ckl::IterationShape::tiles(num_tiles_per_block).block_size(subblock_w),
+        cb_im_obj,
+        cb_gamma_obj,
+        cb_outgamma_obj);
 }

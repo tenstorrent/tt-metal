@@ -31,6 +31,8 @@ void kernel_main() {
 
     constexpr auto dfb_input_id = tt::CBIndex::c_0;
     constexpr auto dfb_output_id = tt::CBIndex::c_2;
+    DataflowBuffer dfb_input(dfb_input_id);
+    DataflowBuffer dfb_output(dfb_output_id);
 
     compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
 
@@ -40,7 +42,7 @@ void kernel_main() {
         ckl::CopyTile<
             ckl::input(
                 dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D0>{},
+            ckl::Dst::D0>{dfb_input},
         // true_value -> D1 (inactive flavor folds to a FillTileTag no-op).
         // kWhereDF carries main's #48602 fix: Int32 for int32 inputs, UInt32 for uint32 inputs.
         ckl::Optional<kIsInt, ckl::FillInt<kWhereDF, ckl::Dst::D1>>{packed_scalar1},
@@ -51,8 +53,6 @@ void kernel_main() {
         // where(D0, D1, D2) -> D0.
         ckl::Where<kWhereDF, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
-            dfb_output_id,
-            ckl::ReservePolicy::PerTile,
-            ckl::PushPolicy::PerTile,
-            ckl::DataFormatReconfig::Disabled)>{});
+            dfb_output_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+            dfb_output});
 }

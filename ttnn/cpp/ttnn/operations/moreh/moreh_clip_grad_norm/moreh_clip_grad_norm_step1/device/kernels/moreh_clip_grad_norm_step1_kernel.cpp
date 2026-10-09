@@ -24,6 +24,7 @@ void kernel_main() {
     const auto origin_w = get_arg_val<uint32_t>(i++);
 
     constexpr uint32_t cb_x = 0;
+    DataflowBuffer dfb_x_obj(cb_x);
     constexpr uint32_t cb_one = 1;
     DataflowBuffer dfb_one_obj(cb_one);
     constexpr uint32_t cb_decimal = 2;
@@ -39,6 +40,12 @@ void kernel_main() {
     constexpr uint32_t cb_logx = 27;          // log(|x|)
     constexpr uint32_t cb_exp_lxmd = 28;      // exp(log(|x|) * decimal)
     constexpr uint32_t cb_correct_xpow = 29;  // |x|^p * exp(log(|x|) * decimal)
+    DataflowBuffer dfb_xabs_obj(cb_xabs);
+    DataflowBuffer dfb_xpow_obj(cb_xpow);
+    DataflowBuffer dfb_xpowadd_obj(cb_xpowadd);
+    DataflowBuffer dfb_logx_obj(cb_logx);
+    DataflowBuffer dfb_exp_lxmd_obj(cb_exp_lxmd);
+    DataflowBuffer dfb_correct_xpow_obj(cb_correct_xpow);
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t mask_w_tile_index = 1;
@@ -87,27 +94,37 @@ void kernel_main() {
         const bool mw = do_mask_w && ((tile_idx + 1) % wt) == 0;
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
-            ckl::CopyTile<ckl::input(cb_x, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, data_format_reconfig)>{},
-            ckl::runtime_if(mh, CopyMaskH{}, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{}),
-            ckl::runtime_if(mw, CopyMaskW{mask_w_tile_index}, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{}),
+            ckl::CopyTile<ckl::input(cb_x, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, data_format_reconfig)>{
+                dfb_x_obj},
+            ckl::runtime_if(mh, CopyMaskH{dfb_mask_h_w_obj}, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{}),
+            ckl::runtime_if(
+                mw, CopyMaskW{dfb_mask_h_w_obj, mask_w_tile_index}, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{}),
             ckl::Abs<ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
-                cb_xabs, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, data_format_reconfig)>{});
+                cb_xabs, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, data_format_reconfig)>{dfb_xabs_obj});
 
         // |x + decimal|^p
-        power_tile_to_dfb<cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow>(p, p_is_negative);
+        power_tile_to_dfb<cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow>(
+            dfb_xabs_obj,
+            dfb_xpow_obj,
+            dfb_logx_obj,
+            dfb_decimal_obj,
+            dfb_exp_lxmd_obj,
+            dfb_correct_xpow_obj,
+            p,
+            p_is_negative);
 
         if (tile_idx == 0) {
             ckl::copy<
                 ckl::input(cb_correct_xpow, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, data_format_reconfig),
                 ckl::output(cb_xpowadd, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, data_format_reconfig)>(
-                ckl::IterationShape::one_tile());
+                ckl::IterationShape::one_tile(), dfb_correct_xpow_obj, dfb_xpowadd_obj);
         } else {
             ckl::add<
                 ckl::input(cb_correct_xpow, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, data_format_reconfig),
                 ckl::input(cb_xpowadd, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, data_format_reconfig),
                 ckl::output(cb_xpowadd, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, data_format_reconfig)>(
-                ckl::IterationShape::one_tile());
+                ckl::IterationShape::one_tile(), dfb_correct_xpow_obj, dfb_xpowadd_obj, dfb_xpowadd_obj);
         }
     }
 

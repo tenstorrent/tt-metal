@@ -16,6 +16,8 @@ void kernel_main() {
 
     constexpr auto dfb_input_id = tt::CBIndex::c_0;
     constexpr auto dfb_output_id = tt::CBIndex::c_2;
+    DataflowBuffer dfb_input(dfb_input_id);
+    DataflowBuffer dfb_output(dfb_output_id);
 
     compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
 
@@ -23,16 +25,14 @@ void kernel_main() {
         ckl::IterationShape::tiles(num_tiles),
         ckl::CopyTile<
             ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D0>{},
+            ckl::Dst::D0>{dfb_input},
         ckl::CopyTile<
             ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D1>{},
+            ckl::Dst::D1>{dfb_input},
         ckl::Negative<ckl::Dst::D1>{},
         ckl::Exp<ckl::Approx::Fast, ckl::Dst::D1>{},
         ckl::Logsigmoid<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
-            dfb_output_id,
-            ckl::ReservePolicy::PerTile,
-            ckl::PushPolicy::PerTile,
-            ckl::DataFormatReconfig::Disabled)>{});
+            dfb_output_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+            dfb_output});
 }

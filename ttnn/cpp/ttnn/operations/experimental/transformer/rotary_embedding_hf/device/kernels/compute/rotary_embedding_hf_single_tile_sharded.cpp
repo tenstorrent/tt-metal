@@ -31,14 +31,14 @@ void kernel_main() {
         return ckl::output(cb_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd);
     };
 
-    CircularBuffer in_cb(in_cb_id);
-    CircularBuffer cos_cb(cos_cb_id);
-    CircularBuffer sin_cb(sin_cb_id);
+    DataflowBuffer in_cb(in_cb_id);
+    DataflowBuffer cos_cb(cos_cb_id);
+    DataflowBuffer sin_cb(sin_cb_id);
     CircularBuffer trans_mat_cb(trans_mat_cb_id);
-    CircularBuffer rotated_in_interm_cb(rotated_in_interm_cb_id);
-    CircularBuffer cos_interm_cb(cos_interm_cb_id);
-    CircularBuffer sin_interm_cb(sin_interm_cb_id);
-    CircularBuffer out_cb(out_cb_id);
+    DataflowBuffer rotated_in_interm_cb(rotated_in_interm_cb_id);
+    DataflowBuffer cos_interm_cb(cos_interm_cb_id);
+    DataflowBuffer sin_interm_cb(sin_interm_cb_id);
+    DataflowBuffer out_cb(out_cb_id);
 
     trans_mat_cb.wait_front(onetile);
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb_id, trans_mat_cb_id, rotated_in_interm_cb_id);
@@ -75,13 +75,14 @@ void kernel_main() {
             ckl::mul<
                 ckl::input(rotated_in_interm_cb_id),
                 ckl::input(sin_cb_id, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
-                pre_reserved_output(sin_interm_cb_id)>(ckl::IterationShape::one_tile());
+                pre_reserved_output(sin_interm_cb_id)>(
+                ckl::IterationShape::one_tile(), rotated_in_interm_cb, sin_cb, sin_interm_cb);
             ckl::mul<
                 ckl::input(in_cb_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd),
                 ckl::input(cos_cb_id, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
-                pre_reserved_output(cos_interm_cb_id)>(ckl::IterationShape::one_tile());
+                pre_reserved_output(cos_interm_cb_id)>(ckl::IterationShape::one_tile(), in_cb, cos_cb, cos_interm_cb);
             ckl::add<ckl::input(cos_interm_cb_id), ckl::input(sin_interm_cb_id), pre_reserved_output(out_cb_id)>(
-                ckl::IterationShape::one_tile());
+                ckl::IterationShape::one_tile(), cos_interm_cb, sin_interm_cb, out_cb);
         }
 
         sin_cb.pop_front(onetile);

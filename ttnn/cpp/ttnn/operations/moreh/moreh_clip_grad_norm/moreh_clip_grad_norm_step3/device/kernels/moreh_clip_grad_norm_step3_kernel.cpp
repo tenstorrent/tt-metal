@@ -14,6 +14,9 @@ void kernel_main() {
     constexpr uint32_t cb_x = 0;
     constexpr uint32_t cb_clip_coef_clamped = 1;  // clip_coef_clamped
     constexpr uint32_t cb_y = 16;
+    DataflowBuffer cb_x_obj(cb_x);
+    DataflowBuffer cb_clip_coef_clamped_obj(cb_clip_coef_clamped);
+    DataflowBuffer cb_y_obj(cb_y);
 
     compute_kernel_hw_startup(cb_x, cb_clip_coef_clamped, cb_y);
 
@@ -26,5 +29,5 @@ void kernel_main() {
             ckl::PopPolicy::AtEnd,
             ckl::DataFormatReconfig::Disabled),
         ckl::output(cb_y, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>(
-        ckl::IterationShape::tiles(num_tiles));
+        ckl::IterationShape::tiles(num_tiles), cb_x_obj, cb_clip_coef_clamped_obj, cb_y_obj);
 }

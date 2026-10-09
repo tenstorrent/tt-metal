@@ -40,13 +40,17 @@ void kernel_main() {
     DataflowBuffer dfb_y_obj(dfb::y);              // output(==y), c_1
     DataflowBuffer dfb_dy_obj(dfb::dy);            // output_grad(==dy), c_2
     DataflowBuffer dfb_decimal_obj(dfb::decimal);  // decimal, c_3
-
-#ifdef NORM_INF
-    // Only the +/-inf sub-gradient path still drives these buffers by hand.
     DataflowBuffer dfb_dx_obj(dfb::dx);
     DataflowBuffer dfb_tmp4_obj(dfb::tmp4);
     DataflowBuffer dfb_tmp5_obj(dfb::tmp5);
     DataflowBuffer dfb_sign_obj(dfb::sign);
+    DataflowBuffer dfb_xpow_obj(dfb::xpow);
+    DataflowBuffer dfb_logx_obj(dfb::logx);
+    DataflowBuffer dfb_exp_lxmd_obj(dfb::exp_lxmd);
+    DataflowBuffer dfb_correct_xpow_obj(dfb::correct_xpow);
+    DataflowBuffer dfb_recip_ypow_obj(dfb::recip_ypow);
+
+#ifdef NORM_INF
     constexpr uint32_t dst0 = 0;
 #endif
 
@@ -60,7 +64,7 @@ void kernel_main() {
         dfb_y_obj.wait_front(onetile);   // comes from the reader
         dfb_dy_obj.wait_front(onetile);  // comes from the reader
 
-        sign_tile_to_dfb<dfb::x, dfb::sign>(0, /*pop=*/0);
+        sign_tile_to_dfb<dfb::x, dfb::sign>(dfb_x_obj, dfb_sign_obj, 0, /*pop=*/0);
 
 #ifdef NORM_INF
         // ±inf sub-gradient: dx = sign(x) * dy * eq(|x|, y). The mask eq(|x| - y, 0) selects the
@@ -169,7 +173,14 @@ void kernel_main() {
 #else
         // x^(p - 1)
         power_tile_with_abs_x_to_dfb<dfb::x, dfb::xpow, dfb::logx, dfb::decimal, dfb::exp_lxmd, dfb::correct_xpow>(
-            p_minus_one, p_minus_one_is_negative);
+            dfb_x_obj,
+            dfb_xpow_obj,
+            dfb_logx_obj,
+            dfb_decimal_obj,
+            dfb_exp_lxmd_obj,
+            dfb_correct_xpow_obj,
+            p_minus_one,
+            p_minus_one_is_negative);
 
         // x^(p - 1) * y -> dfb::tmp4
         ckl::eltwise_chain(
@@ -184,9 +195,9 @@ void kernel_main() {
                     ckl::PopPolicy::None,
                     ckl::InputTileMapping::Scalar,
                     kDataFormatReconfig,
-                    ckl::TileAddressing::Offset)>{},
+                    ckl::TileAddressing::Offset)>{dfb_correct_xpow_obj, dfb_y_obj},
             ckl::PackTile<ckl::output(
-                dfb::tmp4, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                dfb::tmp4, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{dfb_tmp4_obj});
 
         // x^(p - 1) * y * dy -> dfb::tmp5
         ckl::eltwise_chain(
@@ -201,13 +212,20 @@ void kernel_main() {
                     ckl::PopPolicy::None,
                     ckl::InputTileMapping::Scalar,
                     kDataFormatReconfig,
-                    ckl::TileAddressing::Offset)>{},
+                    ckl::TileAddressing::Offset)>{dfb_tmp4_obj, dfb_dy_obj},
             ckl::PackTile<ckl::output(
-                dfb::tmp5, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                dfb::tmp5, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{dfb_tmp5_obj});
 
         // 1 / y^p
         power_and_recip_tile_to_dfb<dfb::y, dfb::xpow, dfb::logx, dfb::decimal, dfb::exp_lxmd, dfb::recip_ypow>(
-            p, p_is_negative);
+            dfb_y_obj,
+            dfb_xpow_obj,
+            dfb_logx_obj,
+            dfb_decimal_obj,
+            dfb_exp_lxmd_obj,
+            dfb_recip_ypow_obj,
+            p,
+            p_is_negative);
 
         // (x^(p - 1) * y * dy) / y^p -> dfb::tmp4
         ckl::eltwise_chain(
@@ -216,14 +234,15 @@ void kernel_main() {
                 ckl::BinaryFpuOp::Mul,
                 ckl::input(dfb::tmp5, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(
-                    dfb::recip_ypow, kBcast, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
+                    dfb::recip_ypow, kBcast, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{
+                dfb_tmp5_obj, dfb_recip_ypow_obj},
             ckl::PackTile<ckl::output(
-                dfb::tmp4, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                dfb::tmp4, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{dfb_tmp4_obj});
 
         dfb_dy_obj.pop_front(onetile);
 
         // multiply abs sign
-        mul_tiles_to_dfb<dfb::sign, dfb::tmp4, dfb::dx>();
+        mul_tiles_to_dfb<dfb::sign, dfb::tmp4, dfb::dx>(dfb_sign_obj, dfb_tmp4_obj, dfb_dx_obj);
 #endif
     }
 

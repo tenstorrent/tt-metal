@@ -92,7 +92,11 @@ void kernel_main() {
                         dfb::masked_input,
                         compute_kernel_lib::ReservePolicy::PerTile,
                         compute_kernel_lib::PushPolicy::PerTile,
-                        kDataFormatReconfig)>(compute_kernel_lib::IterationShape::tiles(onetile));
+                        kDataFormatReconfig)>(
+                    compute_kernel_lib::IterationShape::tiles(onetile),
+                    dfb_input_obj,
+                    dfb_mask_w_obj,
+                    dfb_masked_input_obj);
                 dfb_input_id = dfb::masked_input;
             }
 

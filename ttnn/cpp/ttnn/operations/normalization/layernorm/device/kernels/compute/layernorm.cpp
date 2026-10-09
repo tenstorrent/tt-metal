@@ -119,6 +119,18 @@ void kernel_main() {
 #ifndef RMSNORM
     DataflowBuffer dfb_ex(dfb_ex_id);
 #endif
+#ifdef FUSE_PRE_ADD
+    DataflowBuffer dfb_inb(dfb_inb_id);
+#endif
+#ifdef FUSE_GAMMA
+    DataflowBuffer dfb_gamma(dfb_gamma_id);
+#endif
+#ifdef FUSE_BETA
+    DataflowBuffer dfb_beta(dfb_beta_id);
+#endif
+#if defined(FUSE_GAMMA) || defined(FUSE_BETA)
+    DataflowBuffer dfb_fusion(dfb_fusion_id);
+#endif
 
 #ifdef TILIZE_IN
     // Row-major input staging; the tilize step below turns it into tiles in dfb_in.
@@ -145,6 +157,8 @@ void kernel_main() {
 
 #ifndef RMSNORM
     DataflowBuffer dfb_x(dfb_x_id);
+#elif defined(FUSE_PRE_ADD)
+    DataflowBuffer& dfb_x = dfb_xmm;
 #endif
 
 #ifdef TILIZE_IN
@@ -163,8 +177,10 @@ void kernel_main() {
     // when there is gamma or beta to fold in, otherwise the output buffer directly.
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
     constexpr auto dfb_im_or_out_id = dfb_fusion_id;
+    DataflowBuffer& dfb_im_or_out = dfb_fusion;
 #else
     constexpr auto dfb_im_or_out_id = dfb_out_id;
+    DataflowBuffer& dfb_im_or_out = dfb_out;
 #endif
 
     // Intermediate buffers need to be reserved/pushed/popped
@@ -195,7 +211,8 @@ void kernel_main() {
                 dfb_in_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
             ckl::input(
                 dfb_inb_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
-            ckl::output(dfb_x_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(row_shape);
+            ckl::output(dfb_x_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+            row_shape, dfb_in, dfb_inb, dfb_x);
         // by the end of this loop we should end up with Wt tiles in dfb_x_id
 #ifndef RMSNORM
         reconfig_data_format(dfb_in_id, dfb_x_id, dfb_inb_id, dfb_scaler_id);
@@ -234,7 +251,7 @@ void kernel_main() {
                 dfb_xmm_id,
                 ckl::ReservePolicy::PerBlockSize,
                 ckl::PushPolicy::PerBlockSize,
-                ckl::DataFormatReconfig::Disabled)>(row_shape);
+                ckl::DataFormatReconfig::Disabled)>(row_shape, dfb_x, dfb_ex, dfb_xmm);
         dfb_ex.pop_front(1);
 
 #ifndef FUSE_PRE_ADD
@@ -258,7 +275,7 @@ void kernel_main() {
                 dfb_xmm2_id,
                 ckl::ReservePolicy::PerBlockSize,
                 ckl::PushPolicy::PerBlockSize,
-                ckl::DataFormatReconfig::Disabled)>(row_shape);
+                ckl::DataFormatReconfig::Disabled)>(row_shape, dfb_xmm, dfb_xmm2);
 #if defined RMSNORM and not defined FUSE_PRE_ADD
         reconfig_data_format(dfb_xmm_id, dfb_xmm2_id, dfb_xmm_id, dfb_scaler_id);
 #endif
@@ -277,9 +294,9 @@ void kernel_main() {
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
                 ckl::input(dfb_ex2_id),
-                ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
+                ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{dfb_ex2, dfb_eps},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(dfb_ex2pe_id)>{});
+            ckl::PackTile<ckl::output(dfb_ex2pe_id)>{dfb_ex2pe});
 
         // Gamma and beta each contain one row and remain resident across all NCHt rows; tile
         // offsets select the current width block. TODO: wait on gamma/beta only on the first NCHt row.
@@ -302,7 +319,7 @@ void kernel_main() {
                         ckl::DataFormatReconfig::Enabled,
                         ckl::TileAddressing::Offset),
                     ckl::input(dfb_ex2pe_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{
-                    block.start(), 0u},
+                    dfb_xmm, dfb_ex2pe, block.start(), 0u},
                 // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
                 // activation will be applied after the gamma/beta multiplication/addition.
                 // Otherwise, we can apply the activation here.
@@ -310,7 +327,7 @@ void kernel_main() {
                 // pack either to intermediate (dfb_fusion or dfb_out)
                 // if no gamma/beta are provided, this will be passed on to the writer
                 ckl::PackTile<ckl::output(
-                    dfb_im_or_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                    dfb_im_or_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{dfb_im_or_out});
 
 #if defined RMSNORM and not defined FUSE_PRE_ADD
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
@@ -319,6 +336,7 @@ void kernel_main() {
 #endif
 #ifdef FUSE_GAMMA
             constexpr uint32_t dfb_outg_id = do_beta ? dfb_fusion_id : dfb_out_id;
+            DataflowBuffer& dfb_outg = do_beta ? dfb_fusion : dfb_out;
             if constexpr (!do_beta) {
                 pack_reconfig_data_format(dfb_out_id);
 #ifdef ARCH_QUASAR
@@ -343,7 +361,7 @@ void kernel_main() {
                         ckl::PopPolicy::None,
                         ckl::InputTileMapping::Block,
                         ckl::DataFormatReconfig::Disabled,
-                        ckl::TileAddressing::Offset)>{0u, block.start()},
+                        ckl::TileAddressing::Offset)>{dfb_fusion, dfb_gamma, 0u, block.start()},
                 // Activation must be applied last. If do_beta != 0 then
                 // activation will be applied after the beta addition.
                 // Otherwise, we can apply the activation here.
@@ -353,7 +371,7 @@ void kernel_main() {
                     dfb_outg_id,
                     ckl::ReservePolicy::PerBlockSize,
                     ckl::PushPolicy::PerBlockSize,
-                    ckl::DataFormatReconfig::Disabled)>{});
+                    ckl::DataFormatReconfig::Disabled)>{dfb_outg});
 #endif
 #ifdef FUSE_BETA
             pack_reconfig_data_format(dfb_out_id);
@@ -382,13 +400,13 @@ void kernel_main() {
                         ckl::PopPolicy::None,
                         ckl::InputTileMapping::Block,
                         ckl::DataFormatReconfig::Disabled,
-                        ckl::TileAddressing::Offset)>{0u, block.start()},
+                        ckl::TileAddressing::Offset)>{dfb_fusion, dfb_beta, 0u, block.start()},
                 ckl::Optional<fused_activation_enabled, FusedActivation>{},
                 ckl::PackTile<ckl::output(
                     dfb_out_id,
                     ckl::ReservePolicy::PerBlockSize,
                     ckl::PushPolicy::PerBlockSize,
-                    ckl::DataFormatReconfig::Disabled)>{});
+                    ckl::DataFormatReconfig::Disabled)>{dfb_out});
 #endif  // FUSE_BETA
         }
         dfb_ex2pe.pop_front(1);

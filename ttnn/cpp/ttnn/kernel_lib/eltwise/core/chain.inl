@@ -17,7 +17,6 @@
 // Impl-only includes (the public chain.hpp surface — element decls + enums — needs
 // none of these; they live here, with the implementation that uses them).
 #include "api/compute/bcast.h"
-#include "api/dataflow/dataflow_buffer.h"  // DataflowBuffer — chain routes CB sync (wait/pop/reserve/push) through it
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
@@ -832,10 +831,9 @@ constexpr bool chain_requests_no_reconfig() {
 // Every CB-reader element's wait/pop hooks are a function of exactly one operand
 // tuple (Cb, Policy, Mapping, Addressing, tile_base); every CB-writer's reserve/push
 // hooks of one (Cb, Policy, Addressing, tile_base). Cb and the spec remain compile-time
-// element metadata for planning/reconfig. The existing chain workers emit the lifecycle
-// operations directly and pass the CB ids to DataflowBuffer as ordinary values; ALWI
-// inlining constant-folds those values and the policy gates without creating one
-// stream-method specialization per element configuration.
+// element metadata for planning/reconfig. The runtime half of each operand is the caller's
+// `DataflowBuffer`, bound by reference when the element is constructed: the chain issues every
+// wait/pop/reserve/push through that object and never constructs a DataflowBuffer of its own.
 //
 // Single-stream elements (CopyTile / DestReuseBinary / UnaryBcast) inherit the
 // non-template `InputStream` state; BinaryFpu holds two and the driver handles its
@@ -845,24 +843,88 @@ constexpr bool chain_requests_no_reconfig() {
 // a wrong gate is a hang or a PCC failure, never benign.
 // =============================================================================
 
+namespace detail {
+
+// Checks (under the watcher) that `buffer` is the buffer named by the element's spec. A
+// compile-time check is not possible: GCC cannot prove a DataflowBuffer's id constant early enough
+// for __builtin_constant_p under the kernels' LTO pipeline.
+template <uint32_t Cb>
+ALWI void check_bound_dataflow_buffer([[maybe_unused]] const DataflowBuffer& buffer) {
+    ASSERT(buffer.get_id() == Cb);
+}
+
+// An element constructed without its DataflowBuffer(s) leading the arguments — `CopyTile<input(id)>{}`,
+// `{id}`, `{base}`, or a temporary `{DataflowBuffer(id)}` — selects the element's rejecting
+// constructor template, which instantiates this from the caller's expression and fails with a
+// message naming the fix, rather than an overload-resolution dump.
+struct MissingDataflowBuffer {};
+
+template <class T>
+inline constexpr bool is_dataflow_buffer_lvalue_v =
+    std::is_lvalue_reference_v<T> && std::is_same_v<std::remove_reference_t<T>, DataflowBuffer>;
+
+template <std::size_t N, class... Args>
+constexpr bool leading_dataflow_buffers() {
+    if constexpr (sizeof...(Args) < N) {
+        return false;
+    } else {
+        constexpr bool is_buffer[] = {is_dataflow_buffer_lvalue_v<Args>...};
+        for (std::size_t i = 0; i < N; ++i) {
+            if (!is_buffer[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
+// True for an argument list the element's real constructors cannot accept because it does not start
+// with `NumBuffers` DataflowBuffer lvalues. A single argument of the element's own type is a copy or
+// move and is never rejected.
+template <class Self, std::size_t NumBuffers, class... Args>
+constexpr bool rejects_constructor_args() {
+    if constexpr (sizeof...(Args) == 1 && (std::is_base_of_v<Self, std::decay_t<Args>> && ...)) {
+        return false;
+    } else {
+        return !leading_dataflow_buffers<NumBuffers, Args...>();
+    }
+}
+
+template <bool Missing>
+constexpr void require_bound_dataflow_buffers() {
+    static_assert(
+        !Missing,
+        "eltwise_chain: chain elements take the DataflowBuffer of each input(...) / output(...) spec as "
+        "leading constructor arguments, in spec order — e.g. CopyTile<input(dfb::in)>{in}, "
+        "BinaryFpu<BinaryFpuOp::Add, input(dfb::a), input(dfb::b)>{a, b}, PackTile<output(dfb::out)>{out}.");
+}
+
+}  // namespace detail
+
 struct InputStream {
+    DataflowBuffer* buffer;
     uint32_t tile_base = 0;
     uint32_t row_stride = 0;
 
-    constexpr InputStream() noexcept = default;
-    constexpr explicit InputStream(uint32_t base) noexcept : tile_base(base) {}
-    constexpr explicit InputStream(StridedTileRange range) noexcept :
-        tile_base(range.base), row_stride(range.row_stride) {}
+    // Only for an element's rejecting default constructor (see require_bound_dataflow_buffers).
+    constexpr explicit InputStream(detail::MissingDataflowBuffer) noexcept : buffer(nullptr) {}
+    constexpr explicit InputStream(DataflowBuffer& dfb) noexcept : buffer(&dfb) {}
+    constexpr InputStream(DataflowBuffer& dfb, uint32_t base) noexcept : buffer(&dfb), tile_base(base) {}
+    constexpr InputStream(DataflowBuffer& dfb, StridedTileRange range) noexcept :
+        buffer(&dfb), tile_base(range.base), row_stride(range.row_stride) {}
 };
 
 struct OutputStream {
+    DataflowBuffer* buffer;
     uint32_t tile_base = 0;
     uint32_t row_stride = 0;
 
-    constexpr OutputStream() noexcept = default;
-    constexpr explicit OutputStream(uint32_t base) noexcept : tile_base(base) {}
-    constexpr explicit OutputStream(StridedTileRange range) noexcept :
-        tile_base(range.base), row_stride(range.row_stride) {}
+    // Only for an element's rejecting default constructor (see require_bound_dataflow_buffers).
+    constexpr explicit OutputStream(detail::MissingDataflowBuffer) noexcept : buffer(nullptr) {}
+    constexpr explicit OutputStream(DataflowBuffer& dfb) noexcept : buffer(&dfb) {}
+    constexpr OutputStream(DataflowBuffer& dfb, uint32_t base) noexcept : buffer(&dfb), tile_base(base) {}
+    constexpr OutputStream(DataflowBuffer& dfb, StridedTileRange range) noexcept :
+        buffer(&dfb), tile_base(range.base), row_stride(range.row_stride) {}
 };
 
 // =============================================================================
@@ -907,9 +969,17 @@ struct detail::CopyTileImpl : InputStream, CopyTileTag {
     // defaults them to NO_PREV_DFB.
     static constexpr uint32_t reconfig_srca_dfb = (Reconfig == DataFormatReconfig::Enabled) ? Cb : NO_PREV_DFB;
 
-    constexpr CopyTileImpl() noexcept = default;
-    constexpr explicit CopyTileImpl(uint32_t base) noexcept : Base(base) {}
-    constexpr explicit CopyTileImpl(StridedTileRange range) noexcept : Base(range) {}
+    template <class... Args, std::enable_if_t<rejects_constructor_args<CopyTileImpl, 1, Args...>(), int> = 0>
+    CopyTileImpl(Args&&...) noexcept : Base(MissingDataflowBuffer{}) {
+        require_bound_dataflow_buffers<rejects_constructor_args<CopyTileImpl, 1, Args...>()>();
+    }
+    ALWI explicit CopyTileImpl(DataflowBuffer& in) noexcept : Base(in) { check_bound_dataflow_buffer<Cb>(in); }
+    ALWI CopyTileImpl(DataflowBuffer& in, uint32_t base) noexcept : Base(in, base) {
+        check_bound_dataflow_buffer<Cb>(in);
+    }
+    ALWI CopyTileImpl(DataflowBuffer& in, StridedTileRange range) noexcept : Base(in, range) {
+        check_bound_dataflow_buffer<Cb>(in);
+    }
 
     // ---- chain pipeline hooks ----
     static ALWI void init() { copy_init(Cb); }
@@ -1020,9 +1090,17 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     // srca/srcb absent -> dfb_for_side defaults them to NO_PREV_DFB; PackTile programs pack only.
     static constexpr uint32_t reconfig_pack_dfb = (Reconfig == DataFormatReconfig::Enabled) ? Cb : NO_PREV_DFB;
 
-    constexpr PackTileImpl() noexcept = default;
-    constexpr explicit PackTileImpl(uint32_t base) noexcept : Base(base) {}
-    constexpr explicit PackTileImpl(StridedTileRange range) noexcept : Base(range) {}
+    template <class... Args, std::enable_if_t<rejects_constructor_args<PackTileImpl, 1, Args...>(), int> = 0>
+    PackTileImpl(Args&&...) noexcept : Base(MissingDataflowBuffer{}) {
+        require_bound_dataflow_buffers<rejects_constructor_args<PackTileImpl, 1, Args...>()>();
+    }
+    ALWI explicit PackTileImpl(DataflowBuffer& out) noexcept : Base(out) { check_bound_dataflow_buffer<Cb>(out); }
+    ALWI PackTileImpl(DataflowBuffer& out, uint32_t base) noexcept : Base(out, base) {
+        check_bound_dataflow_buffer<Cb>(out);
+    }
+    ALWI PackTileImpl(DataflowBuffer& out, StridedTileRange range) noexcept : Base(out, range) {
+        check_bound_dataflow_buffer<Cb>(out);
+    }
 
     static ALWI void configure_relu() {
         if constexpr (Relu == PackRelu::Zero) {
@@ -1158,13 +1236,45 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     InputStream a;
     InputStream b;
 
-    constexpr BinaryFpuImpl() noexcept = default;
-    constexpr BinaryFpuImpl(uint32_t base_a, uint32_t base_b) noexcept : a(base_a), b(base_b) {}
-    constexpr explicit BinaryFpuImpl(uint32_t base_a) noexcept : a(base_a) {}
-    constexpr BinaryFpuImpl(StridedTileRange range_a, StridedTileRange range_b) noexcept : a(range_a), b(range_b) {}
-    constexpr BinaryFpuImpl(StridedTileRange range_a, uint32_t base_b) noexcept : a(range_a), b(base_b) {}
-    constexpr BinaryFpuImpl(uint32_t base_a, StridedTileRange range_b) noexcept : a(base_a), b(range_b) {}
-    constexpr explicit BinaryFpuImpl(StridedTileRange range_a) noexcept : a(range_a) {}
+    // Leading arguments: the DataflowBuffers of AInput and BInput, in that order (pass the same
+    // object twice when both specs name one buffer). Optional per-side tile bases follow.
+    template <class... Args, std::enable_if_t<rejects_constructor_args<BinaryFpuImpl, 2, Args...>(), int> = 0>
+    BinaryFpuImpl(Args&&...) noexcept : a(MissingDataflowBuffer{}), b(MissingDataflowBuffer{}) {
+        require_bound_dataflow_buffers<rejects_constructor_args<BinaryFpuImpl, 2, Args...>()>();
+    }
+    ALWI BinaryFpuImpl(DataflowBuffer& in_a, DataflowBuffer& in_b) noexcept : a(in_a), b(in_b) {
+        check_bound(in_a, in_b);
+    }
+    ALWI BinaryFpuImpl(DataflowBuffer& in_a, DataflowBuffer& in_b, uint32_t base_a, uint32_t base_b) noexcept :
+        a(in_a, base_a), b(in_b, base_b) {
+        check_bound(in_a, in_b);
+    }
+    ALWI BinaryFpuImpl(DataflowBuffer& in_a, DataflowBuffer& in_b, uint32_t base_a) noexcept :
+        a(in_a, base_a), b(in_b) {
+        check_bound(in_a, in_b);
+    }
+    ALWI BinaryFpuImpl(
+        DataflowBuffer& in_a, DataflowBuffer& in_b, StridedTileRange range_a, StridedTileRange range_b) noexcept :
+        a(in_a, range_a), b(in_b, range_b) {
+        check_bound(in_a, in_b);
+    }
+    ALWI BinaryFpuImpl(DataflowBuffer& in_a, DataflowBuffer& in_b, StridedTileRange range_a, uint32_t base_b) noexcept :
+        a(in_a, range_a), b(in_b, base_b) {
+        check_bound(in_a, in_b);
+    }
+    ALWI BinaryFpuImpl(DataflowBuffer& in_a, DataflowBuffer& in_b, uint32_t base_a, StridedTileRange range_b) noexcept :
+        a(in_a, base_a), b(in_b, range_b) {
+        check_bound(in_a, in_b);
+    }
+    ALWI BinaryFpuImpl(DataflowBuffer& in_a, DataflowBuffer& in_b, StridedTileRange range_a) noexcept :
+        a(in_a, range_a), b(in_b) {
+        check_bound(in_a, in_b);
+    }
+
+    static ALWI void check_bound(const DataflowBuffer& in_a, const DataflowBuffer& in_b) {
+        check_bound_dataflow_buffer<CbA>(in_a);
+        check_bound_dataflow_buffer<CbB>(in_b);
+    }
 
     // Lifecycle fan-out lives in the chain driver. When same_dfb, it emits one
     // physical wait/pop and uses max(base_a, base_b) for the shared window.
@@ -1330,9 +1440,17 @@ struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
                                                                                                           : NO_PREV_DFB;
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB.
 
-    constexpr DestReuseBinaryImpl() noexcept = default;
-    constexpr explicit DestReuseBinaryImpl(uint32_t base) noexcept : Base(base) {}
-    constexpr explicit DestReuseBinaryImpl(StridedTileRange range) noexcept : Base(range) {}
+    template <class... Args, std::enable_if_t<rejects_constructor_args<DestReuseBinaryImpl, 1, Args...>(), int> = 0>
+    DestReuseBinaryImpl(Args&&...) noexcept : Base(MissingDataflowBuffer{}) {
+        require_bound_dataflow_buffers<rejects_constructor_args<DestReuseBinaryImpl, 1, Args...>()>();
+    }
+    ALWI explicit DestReuseBinaryImpl(DataflowBuffer& in) noexcept : Base(in) { check_bound_dataflow_buffer<Cb>(in); }
+    ALWI DestReuseBinaryImpl(DataflowBuffer& in, uint32_t base) noexcept : Base(in, base) {
+        check_bound_dataflow_buffer<Cb>(in);
+    }
+    ALWI DestReuseBinaryImpl(DataflowBuffer& in, StridedTileRange range) noexcept : Base(in, range) {
+        check_bound_dataflow_buffer<Cb>(in);
+    }
 
     // srca / srcb reconfig is fold-driven; init() programs only the per-op
     // LLK shape.
@@ -1599,8 +1717,6 @@ struct ElemDesc {
     uint32_t lane_width;
     uint32_t transient_lane_width;
     bool supports_block;
-    uint32_t row_stream_input_a_cb;
-    uint32_t row_stream_input_b_cb;
     bool wait_a_per_row;
     bool wait_b_per_row;
     bool pop_a_per_row;
@@ -1682,27 +1798,6 @@ constexpr uint32_t transient_lane_width_of() {
         return 0u;
     }
     return elem_lane_width_v<E>;
-}
-
-template <class E>
-constexpr uint32_t row_stream_input_a_cb_of() {
-    if constexpr (is_binary_fpu_op_v<E>) {
-        return E::dfb_a_id();
-    } else if constexpr (is_cb_reader_op_v<E>) {
-        return E::dfb;
-    } else {
-        return INVALID_DFB;
-    }
-}
-
-template <class E>
-constexpr uint32_t row_stream_input_b_cb_of() {
-    if constexpr (is_binary_fpu_op_v<E>) {
-        if constexpr (!E::same_dfb) {
-            return E::dfb_b_id();
-        }
-    }
-    return INVALID_DFB;
 }
 
 template <class E>
@@ -1795,8 +1890,6 @@ constexpr ElemDesc describe() {
         elem_lane_width_v<E>,
         transient_lane_width_of<E>(),
         element_supports_block<E>(),
-        row_stream_input_a_cb_of<E>(),
-        row_stream_input_b_cb_of<E>(),
         wait_a_per_row_of<E>(),
         wait_b_per_row_of<E>(),
         pop_a_per_row_of<E>(),
@@ -2412,35 +2505,56 @@ constexpr bool pushes_at_end() {
     return false;
 }
 
-// All CB lifecycle operations terminate in one of these four emitters. `Enabled` is a
-// compile-time policy fact, so disabled actions disappear without a runtime sentinel check;
-// the emitted function identity is independent of both the element type and the chain pack.
+// All CB lifecycle operations terminate in one of these four emitters, each issued on the
+// DataflowBuffer the caller bound to the element. `Enabled` is a compile-time policy fact, so
+// disabled actions disappear without a runtime sentinel check.
 template <bool Enabled>
-ALWI void emit_wait(uint32_t cb, uint32_t count) {
+ALWI void emit_wait(DataflowBuffer& buffer, uint32_t count) {
     if constexpr (Enabled) {
-        DataflowBuffer(cb).wait_front(count);
+        buffer.wait_front(count);
     }
 }
 
 template <bool Enabled>
-ALWI void emit_pop(uint32_t cb, uint32_t count) {
+ALWI void emit_pop(DataflowBuffer& buffer, uint32_t count) {
     if constexpr (Enabled) {
-        DataflowBuffer(cb).pop_front(count);
+        buffer.pop_front(count);
     }
 }
 
 template <bool Enabled>
-ALWI void emit_reserve(uint32_t cb, uint32_t count) {
+ALWI void emit_reserve(DataflowBuffer& buffer, uint32_t count) {
     if constexpr (Enabled) {
-        DataflowBuffer(cb).reserve_back(count);
+        buffer.reserve_back(count);
     }
 }
 
 template <bool Enabled>
-ALWI void emit_push(uint32_t cb, uint32_t count) {
+ALWI void emit_push(DataflowBuffer& buffer, uint32_t count) {
     if constexpr (Enabled) {
-        DataflowBuffer(cb).push_back(count);
+        buffer.push_back(count);
     }
+}
+
+// The bound DataflowBuffer behind an element's srcA-side input (the only input of a single-stream
+// reader), its BinaryFpu srcB input, and a PackTile's output.
+template <class E>
+ALWI DataflowBuffer& input_a_buffer(const E& elem) {
+    if constexpr (is_binary_fpu_op_v<E>) {
+        return *elem.a.buffer;
+    } else {
+        return *elem.buffer;
+    }
+}
+
+template <class E>
+ALWI DataflowBuffer& input_b_buffer(const E& elem) {
+    return *elem.b.buffer;
+}
+
+template <class E>
+ALWI DataflowBuffer& output_buffer(const E& elem) {
+    return *elem.buffer;
 }
 
 // init() dispatch convention — the compute-cohort init is emitted on the element
@@ -2694,28 +2808,28 @@ ALWI void elem_apply_compute(
         // placed exactly once rather than re-issued per block-iter relying on idempotency.
         if constexpr (is_binary_fpu_op_v<ElemT>) {
             if constexpr (ElemT::AWait == WaitPolicy::PerTile && ElemT::AMapping != InputTileMapping::Col) {
-                emit_wait<true>(ElemT::dfb_a_id(), 1);
+                emit_wait<true>(input_a_buffer(elem), 1);
             } else if constexpr (ElemT::AWait == WaitPolicy::Cumulative) {
-                emit_wait<true>(ElemT::dfb_a_id(), i_flat + inner_count);
+                emit_wait<true>(input_a_buffer(elem), i_flat + inner_count);
             } else if constexpr (ElemT::AWait == WaitPolicy::PerBlockSize) {
-                emit_wait<true>(ElemT::dfb_a_id(), block_sync_count);
+                emit_wait<true>(input_a_buffer(elem), block_sync_count);
             }
             if constexpr (!ElemT::same_dfb) {
                 if constexpr (ElemT::BWait == WaitPolicy::PerTile && ElemT::BMapping != InputTileMapping::Col) {
-                    emit_wait<true>(ElemT::dfb_b_id(), 1);
+                    emit_wait<true>(input_b_buffer(elem), 1);
                 } else if constexpr (ElemT::BWait == WaitPolicy::Cumulative) {
-                    emit_wait<true>(ElemT::dfb_b_id(), i_flat + inner_count);
+                    emit_wait<true>(input_b_buffer(elem), i_flat + inner_count);
                 } else if constexpr (ElemT::BWait == WaitPolicy::PerBlockSize) {
-                    emit_wait<true>(ElemT::dfb_b_id(), block_sync_count);
+                    emit_wait<true>(input_b_buffer(elem), block_sync_count);
                 }
             }
         } else {
             if constexpr (ElemT::Wait == WaitPolicy::PerTile && ElemT::Mapping != InputTileMapping::Col) {
-                emit_wait<true>(ElemT::dfb, 1);
+                emit_wait<true>(input_a_buffer(elem), 1);
             } else if constexpr (ElemT::Wait == WaitPolicy::Cumulative) {
-                emit_wait<true>(ElemT::dfb, i_flat + inner_count);
+                emit_wait<true>(input_a_buffer(elem), i_flat + inner_count);
             } else if constexpr (ElemT::Wait == WaitPolicy::PerBlockSize) {
-                emit_wait<true>(ElemT::dfb, block_sync_count);
+                emit_wait<true>(input_a_buffer(elem), block_sync_count);
             }
         }
         if constexpr (EmitMathInit && !eltwise_chain_skip_compute_v) {
@@ -2743,22 +2857,22 @@ ALWI void elem_apply_compute(
         }
         if constexpr (is_binary_fpu_op_v<ElemT>) {
             if constexpr (ElemT::APop == PopPolicy::PerTile && ElemT::AMapping != InputTileMapping::Col) {
-                emit_pop<true>(ElemT::dfb_a_id(), 1);
+                emit_pop<true>(input_a_buffer(elem), 1);
             } else if constexpr (ElemT::APop == PopPolicy::PerBlockSize) {
-                emit_pop<true>(ElemT::dfb_a_id(), block_sync_count);
+                emit_pop<true>(input_a_buffer(elem), block_sync_count);
             }
             if constexpr (!ElemT::same_dfb) {
                 if constexpr (ElemT::BPop == PopPolicy::PerTile && ElemT::BMapping != InputTileMapping::Col) {
-                    emit_pop<true>(ElemT::dfb_b_id(), 1);
+                    emit_pop<true>(input_b_buffer(elem), 1);
                 } else if constexpr (ElemT::BPop == PopPolicy::PerBlockSize) {
-                    emit_pop<true>(ElemT::dfb_b_id(), block_sync_count);
+                    emit_pop<true>(input_b_buffer(elem), block_sync_count);
                 }
             }
         } else {
             if constexpr (ElemT::Pop == PopPolicy::PerTile && ElemT::Mapping != InputTileMapping::Col) {
-                emit_pop<true>(ElemT::dfb, 1);
+                emit_pop<true>(input_a_buffer(elem), 1);
             } else if constexpr (ElemT::Pop == PopPolicy::PerBlockSize) {
-                emit_pop<true>(ElemT::dfb, block_sync_count);
+                emit_pop<true>(input_a_buffer(elem), block_sync_count);
             }
         }
     } else if constexpr (is_dest_only_op_v<ElemT> && !eltwise_chain_skip_compute_v) {
@@ -2796,9 +2910,9 @@ ALWI void elem_apply_pack(
         emit_per_stage_pack_reconfig(dfb_for_side<Side::Pack, ElemT>(), PrevPack, LastPackCb, PackHetero);
     }
     if constexpr (ElemT::Reserve == ReservePolicy::PerTile) {
-        emit_reserve<true>(ElemT::dfb, 1);
+        emit_reserve<true>(output_buffer(elem), 1);
     } else if constexpr (ElemT::Reserve == ReservePolicy::PerBlockSize) {
-        emit_reserve<true>(ElemT::dfb, block_sync_count);
+        emit_reserve<true>(output_buffer(elem), block_sync_count);
     }
     if constexpr (AnyPackRelu && !eltwise_chain_skip_compute_v) {
         elem.configure_relu();
@@ -2811,9 +2925,9 @@ ALWI void elem_apply_pack(
         }
     }
     if constexpr (ElemT::Push == PushPolicy::PerTile) {
-        emit_push<true>(ElemT::dfb, 1);
+        emit_push<true>(output_buffer(elem), 1);
     } else if constexpr (ElemT::Push == PushPolicy::PerBlockSize) {
-        emit_push<true>(ElemT::dfb, block_sync_count);
+        emit_push<true>(output_buffer(elem), block_sync_count);
     }
 }
 
@@ -2845,29 +2959,32 @@ ALWI void emit_wait_upfront(SelectedElement<E> selected, uint32_t Ht, uint32_t W
             const uint32_t base_b = tile_base_value<E::AddressingB>(e.b.tile_base);
             const uint32_t base = base_a > base_b ? base_a : base_b;
             if constexpr (E::AWait == WaitPolicy::Upfront && E::APop == PopPolicy::PerTile) {
-                emit_wait<true>(E::dfb_a_id(), Ht * Wt + base);
+                emit_wait<true>(input_a_buffer(e), Ht * Wt + base);
             } else if constexpr (E::AWait == WaitPolicy::Upfront) {
-                emit_wait<true>(E::dfb_a_id(), detail::window<E::AMapping>(Ht, Wt) + base);
+                emit_wait<true>(input_a_buffer(e), detail::window<E::AMapping>(Ht, Wt) + base);
             }
         } else {
             if constexpr (E::AWait == WaitPolicy::Upfront && E::APop == PopPolicy::PerTile) {
-                emit_wait<true>(E::dfb_a_id(), Ht * Wt + tile_base_value<E::AddressingA>(e.a.tile_base));
+                emit_wait<true>(input_a_buffer(e), Ht * Wt + tile_base_value<E::AddressingA>(e.a.tile_base));
             } else if constexpr (E::AWait == WaitPolicy::Upfront) {
                 emit_wait<true>(
-                    E::dfb_a_id(), detail::window<E::AMapping>(Ht, Wt) + tile_base_value<E::AddressingA>(e.a.tile_base));
+                    input_a_buffer(e),
+                    detail::window<E::AMapping>(Ht, Wt) + tile_base_value<E::AddressingA>(e.a.tile_base));
             }
             if constexpr (E::BWait == WaitPolicy::Upfront && E::BPop == PopPolicy::PerTile) {
-                emit_wait<true>(E::dfb_b_id(), Ht * Wt + tile_base_value<E::AddressingB>(e.b.tile_base));
+                emit_wait<true>(input_b_buffer(e), Ht * Wt + tile_base_value<E::AddressingB>(e.b.tile_base));
             } else if constexpr (E::BWait == WaitPolicy::Upfront) {
                 emit_wait<true>(
-                    E::dfb_b_id(), detail::window<E::BMapping>(Ht, Wt) + tile_base_value<E::AddressingB>(e.b.tile_base));
+                    input_b_buffer(e),
+                    detail::window<E::BMapping>(Ht, Wt) + tile_base_value<E::AddressingB>(e.b.tile_base));
             }
         }
     } else if constexpr (is_cb_reader_op_v<E>) {
         if constexpr (E::Wait == WaitPolicy::Upfront && E::Pop == PopPolicy::PerTile) {
-            emit_wait<true>(E::dfb, Ht * Wt + tile_base_value<E::Addressing>(e.tile_base));
+            emit_wait<true>(input_a_buffer(e), Ht * Wt + tile_base_value<E::Addressing>(e.tile_base));
         } else if constexpr (E::Wait == WaitPolicy::Upfront) {
-            emit_wait<true>(E::dfb, detail::window<E::Mapping>(Ht, Wt) + tile_base_value<E::Addressing>(e.tile_base));
+            emit_wait<true>(
+                input_a_buffer(e), detail::window<E::Mapping>(Ht, Wt) + tile_base_value<E::Addressing>(e.tile_base));
         }
     }
 }
@@ -2878,9 +2995,9 @@ template <class E>
 ALWI void emit_reserve_upfront(SelectedElement<E> selected, uint32_t Ht, uint32_t Wt) {
     const E& e = selected.value;
     if constexpr (E::Reserve == ReservePolicy::Upfront) {
-        emit_reserve<true>(E::dfb, (Ht * Wt) + tile_base_value<E::Addressing>(e.tile_base));
+        emit_reserve<true>(output_buffer(e), (Ht * Wt) + tile_base_value<E::Addressing>(e.tile_base));
     } else if constexpr (E::Reserve == ReservePolicy::OneUpfront) {
-        emit_reserve<true>(E::dfb, 1);
+        emit_reserve<true>(output_buffer(e), 1);
     }
 }
 
@@ -2895,21 +3012,24 @@ ALWI void emit_pop_at_end(SelectedElement<E> selected, uint32_t Ht, uint32_t Wt)
                 const uint32_t base_a = tile_base_value<E::AddressingA>(e.a.tile_base);
                 const uint32_t base_b = tile_base_value<E::AddressingB>(e.b.tile_base);
                 const uint32_t base = base_a > base_b ? base_a : base_b;
-                emit_pop<true>(E::dfb_a_id(), detail::window<E::AMapping>(Ht, Wt) + base);
+                emit_pop<true>(input_a_buffer(e), detail::window<E::AMapping>(Ht, Wt) + base);
             }
         } else {
             if constexpr (E::APop == PopPolicy::AtEnd) {
                 emit_pop<true>(
-                    E::dfb_a_id(), detail::window<E::AMapping>(Ht, Wt) + tile_base_value<E::AddressingA>(e.a.tile_base));
+                    input_a_buffer(e),
+                    detail::window<E::AMapping>(Ht, Wt) + tile_base_value<E::AddressingA>(e.a.tile_base));
             }
             if constexpr (E::BPop == PopPolicy::AtEnd) {
                 emit_pop<true>(
-                    E::dfb_b_id(), detail::window<E::BMapping>(Ht, Wt) + tile_base_value<E::AddressingB>(e.b.tile_base));
+                    input_b_buffer(e),
+                    detail::window<E::BMapping>(Ht, Wt) + tile_base_value<E::AddressingB>(e.b.tile_base));
             }
         }
     } else if constexpr (is_cb_reader_op_v<E>) {
         if constexpr (E::Pop == PopPolicy::AtEnd) {
-            emit_pop<true>(E::dfb, detail::window<E::Mapping>(Ht, Wt) + tile_base_value<E::Addressing>(e.tile_base));
+            emit_pop<true>(
+                input_a_buffer(e), detail::window<E::Mapping>(Ht, Wt) + tile_base_value<E::Addressing>(e.tile_base));
         }
     }
 }
@@ -2920,32 +3040,46 @@ template <class E>
 ALWI void emit_push_at_end(SelectedElement<E> selected, uint32_t Ht, uint32_t Wt) {
     const E& e = selected.value;
     if constexpr (E::Push == PushPolicy::AtEnd) {
-        emit_push<true>(E::dfb, (E::walk ? (Ht * Wt) : 1u) + tile_base_value<E::Addressing>(e.tile_base));
+        emit_push<true>(output_buffer(e), (E::walk ? (Ht * Wt) : 1u) + tile_base_value<E::Addressing>(e.tile_base));
     } else if constexpr (E::Push == PushPolicy::OneAtEnd) {
-        emit_push<true>(E::dfb, 1);
+        emit_push<true>(output_buffer(e), 1);
     }
 }
 
-template <bool WaitA, bool WaitB>
-ALWI void emit_wait_per_row(uint32_t cb_a, uint32_t cb_b) {
-    emit_wait<WaitA>(cb_a, 1);
-    emit_wait<WaitB>(cb_b, 1);
+// Row-stream inputs (PerTile + Col) wait/pop one front tile per grid row; PerOuter outputs
+// reserve/push one window per grid row. Elements without such an operand are unselected.
+ALWI void emit_wait_per_row(UnselectedElement) {}
+
+template <class E>
+ALWI void emit_wait_per_row(SelectedElement<E> selected) {
+    emit_wait<wait_a_per_row_of<E>()>(input_a_buffer(selected.value), 1);
+    if constexpr (wait_b_per_row_of<E>()) {
+        emit_wait<true>(input_b_buffer(selected.value), 1);
+    }
 }
 
-template <bool PopA, bool PopB>
-ALWI void emit_pop_per_row(uint32_t cb_a, uint32_t cb_b) {
-    emit_pop<PopA>(cb_a, 1);
-    emit_pop<PopB>(cb_b, 1);
+ALWI void emit_pop_per_row(UnselectedElement) {}
+
+template <class E>
+ALWI void emit_pop_per_row(SelectedElement<E> selected) {
+    emit_pop<pop_a_per_row_of<E>()>(input_a_buffer(selected.value), 1);
+    if constexpr (pop_b_per_row_of<E>()) {
+        emit_pop<true>(input_b_buffer(selected.value), 1);
+    }
 }
 
-template <bool Reserve>
-ALWI void emit_reserve_per_outer(uint32_t cb, uint32_t count) {
-    emit_reserve<Reserve>(cb, count);
+ALWI void emit_reserve_per_outer(UnselectedElement, uint32_t) {}
+
+template <class E>
+ALWI void emit_reserve_per_outer(SelectedElement<E> selected, uint32_t count) {
+    emit_reserve<true>(output_buffer(selected.value), count);
 }
 
-template <bool Push>
-ALWI void emit_push_per_outer(uint32_t cb, uint32_t count) {
-    emit_push<Push>(cb, count);
+ALWI void emit_push_per_outer(UnselectedElement, uint32_t) {}
+
+template <class E>
+ALWI void emit_push_per_outer(SelectedElement<E> selected, uint32_t count) {
+    emit_push<true>(output_buffer(selected.value), count);
 }
 
 }  // namespace detail
@@ -3124,20 +3258,18 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     }
     for (uint32_t ht = 0; ht < Ht; ++ht) {
         const uint32_t row_base = ht * Wt;
-        (detail::emit_wait_per_row<
-             detail::ChainTraits<Es...>::d[Is].wait_a_per_row,
-             detail::ChainTraits<Es...>::d[Is].wait_b_per_row>(
-             detail::ChainTraits<Es...>::d[Is].row_stream_input_a_cb,
-             detail::ChainTraits<Es...>::d[Is].row_stream_input_b_cb),
+        (detail::emit_wait_per_row(
+             detail::select_element < detail::ChainTraits<Es...>::d[Is].wait_a_per_row ||
+             detail::ChainTraits<Es...>::d[Is].wait_b_per_row > (elts)),
          ...);
         if constexpr (per_row_dest_accumulation) {
-            (detail::emit_reserve_per_outer<detail::ChainTraits<Es...>::d[Is].reserve_per_outer>(
-                 detail::ChainTraits<Es...>::d[Is].pack_dfb, 1),
+            (detail::emit_reserve_per_outer(
+                 detail::select_element<detail::ChainTraits<Es...>::d[Is].reserve_per_outer>(elts), 1),
              ...);
             tile_regs_acquire();
         } else if constexpr (!dest_accumulation) {
-            (detail::emit_reserve_per_outer<detail::ChainTraits<Es...>::d[Is].reserve_per_outer>(
-                 detail::ChainTraits<Es...>::d[Is].pack_dfb, Wt),
+            (detail::emit_reserve_per_outer(
+                 detail::select_element<detail::ChainTraits<Es...>::d[Is].reserve_per_outer>(elts), Wt),
              ...);
         }
         for (uint32_t wt_base = 0; wt_base < Wt;) {
@@ -3225,19 +3357,17 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                  Wt),
              ...);
             tile_regs_release();
-            (detail::emit_push_per_outer<detail::ChainTraits<Es...>::d[Is].push_per_outer>(
-                 detail::ChainTraits<Es...>::d[Is].pack_dfb, 1),
+            (detail::emit_push_per_outer(
+                 detail::select_element<detail::ChainTraits<Es...>::d[Is].push_per_outer>(elts), 1),
              ...);
         } else if constexpr (!dest_accumulation) {
-            (detail::emit_push_per_outer<detail::ChainTraits<Es...>::d[Is].push_per_outer>(
-                 detail::ChainTraits<Es...>::d[Is].pack_dfb, Wt),
+            (detail::emit_push_per_outer(
+                 detail::select_element<detail::ChainTraits<Es...>::d[Is].push_per_outer>(elts), Wt),
              ...);
         }
-        (detail::emit_pop_per_row<
-             detail::ChainTraits<Es...>::d[Is].pop_a_per_row,
-             detail::ChainTraits<Es...>::d[Is].pop_b_per_row>(
-             detail::ChainTraits<Es...>::d[Is].row_stream_input_a_cb,
-             detail::ChainTraits<Es...>::d[Is].row_stream_input_b_cb),
+        (detail::emit_pop_per_row(
+             detail::select_element < detail::ChainTraits<Es...>::d[Is].pop_a_per_row ||
+             detail::ChainTraits<Es...>::d[Is].pop_b_per_row > (elts)),
          ...);
     }
     if constexpr (whole_shape_dest_accumulation) {

@@ -64,9 +64,17 @@ struct detail::UnaryBcastImpl : InputStream, UnaryBcastTag {
     static constexpr uint32_t reconfig_srca_dfb = Input.reconfig == DataFormatReconfig::Enabled ? Cb : NO_PREV_DFB;
     static constexpr uint32_t reconfig_srcb_dfb = Input.reconfig == DataFormatReconfig::Enabled ? Cb : NO_PREV_DFB;
 
-    constexpr UnaryBcastImpl() noexcept = default;
-    constexpr explicit UnaryBcastImpl(uint32_t base) noexcept : Base(base) {}
-    constexpr explicit UnaryBcastImpl(StridedTileRange range) noexcept : Base(range) {}
+    template <class... Args, std::enable_if_t<rejects_constructor_args<UnaryBcastImpl, 1, Args...>(), int> = 0>
+    UnaryBcastImpl(Args&&...) noexcept : Base(MissingDataflowBuffer{}) {
+        require_bound_dataflow_buffers<rejects_constructor_args<UnaryBcastImpl, 1, Args...>()>();
+    }
+    ALWI explicit UnaryBcastImpl(DataflowBuffer& in) noexcept : Base(in) { check_bound_dataflow_buffer<Cb>(in); }
+    ALWI UnaryBcastImpl(DataflowBuffer& in, uint32_t base) noexcept : Base(in, base) {
+        check_bound_dataflow_buffer<Cb>(in);
+    }
+    ALWI UnaryBcastImpl(DataflowBuffer& in, StridedTileRange range) noexcept : Base(in, range) {
+        check_bound_dataflow_buffer<Cb>(in);
+    }
 
     static ALWI void init() {
         constexpr ckernel::BroadcastType bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
@@ -84,8 +92,8 @@ struct detail::UnaryBcastImpl : InputStream, UnaryBcastTag {
 };
 
 template <BroadcastDim Dim, InputSpec Input, OutputSpec Output>
-ALWI void unary_bcast(IterationShape shape) {
-    eltwise_chain(shape, UnaryBcast<Dim, Input>{}, PackTile<Output>{});
+ALWI void unary_bcast(IterationShape shape, DataflowBuffer& in, DataflowBuffer& out) {
+    eltwise_chain(shape, UnaryBcast<Dim, Input>{in}, PackTile<Output>{out});
 }
 
 }  // namespace compute_kernel_lib

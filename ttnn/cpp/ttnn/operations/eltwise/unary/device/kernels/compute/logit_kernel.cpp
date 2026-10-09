@@ -23,6 +23,9 @@ void kernel_main() {
     constexpr auto dfb_input_id = tt::CBIndex::c_0;
     constexpr auto dfb_tmp0_id = tt::CBIndex::c_1;
     constexpr auto dfb_output_id = tt::CBIndex::c_2;
+    DataflowBuffer dfb_input(dfb_input_id);
+    DataflowBuffer dfb_tmp0(dfb_tmp0_id);
+    DataflowBuffer dfb_output(dfb_output_id);
 
     // The legacy kernel boots unpack from the input and pack for the final output once;
     // tmp0 has the same element format and is only an in-kernel handoff.
@@ -36,24 +39,22 @@ void kernel_main() {
             ckl::CopyTile<
                 ckl::input(
                     dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-                ckl::Dst::D0>{},
+                ckl::Dst::D0>{dfb_input},
             ckl::Optional<kDoClamp, ckl::Clamp<ckl::Dst::D0>>{packed_scalar1, packed_scalar2},
             ckl::PackTile<ckl::output(
-                dfb_tmp0_id,
-                ckl::ReservePolicy::PerTile,
-                ckl::PushPolicy::PerTile,
-                ckl::DataFormatReconfig::Disabled)>{});
+                dfb_tmp0_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+                dfb_tmp0});
 
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
             ckl::CopyTile<
                 ckl::input(
                     dfb_tmp0_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
-                ckl::Dst::D0>{},
+                ckl::Dst::D0>{dfb_tmp0},
             ckl::CopyTile<
                 ckl::input(
                     dfb_tmp0_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-                ckl::Dst::D1>{},
+                ckl::Dst::D1>{dfb_tmp0},
             ckl::RsubUnary<ckl::Dst::D0>{0x3F800000u},  // 1.0 - x
             ckl::DivBinary<ckl::Dst::D1, ckl::Dst::D0, ckl::Dst::D0>{},
             ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>{},
@@ -61,6 +62,6 @@ void kernel_main() {
                 dfb_output_id,
                 ckl::ReservePolicy::PerTile,
                 ckl::PushPolicy::PerTile,
-                ckl::DataFormatReconfig::Disabled)>{});
+                ckl::DataFormatReconfig::Disabled)>{dfb_output});
     }
 }

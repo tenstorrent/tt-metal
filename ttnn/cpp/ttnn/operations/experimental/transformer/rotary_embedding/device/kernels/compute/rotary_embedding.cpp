@@ -15,7 +15,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
 template <bool kDecodeMode, uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb>
-ALWI void mul_tiles_chain(uint32_t in1_idx) {
+ALWI void mul_tiles_chain(DataflowBuffer& cb_in0, DataflowBuffer& cb_in1, DataflowBuffer& cb_out, uint32_t in1_idx) {
     using namespace compute_kernel_lib;
     if constexpr (kDecodeMode) {
         eltwise_chain(
@@ -31,14 +31,15 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
                     PopPolicy::None,
                     InputTileMapping::Scalar,
                     DataFormatReconfig::Disabled,
-                    compute_kernel_lib::TileAddressing::Offset)>{0u, in1_idx},
-            PackTile<output(out_cb, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
+                    compute_kernel_lib::TileAddressing::Offset)>{cb_in0, cb_in1, 0u, in1_idx},
+            PackTile<output(out_cb, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{
+                cb_out});
     } else {
         (void)in1_idx;
         mul<input(in0_cb, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
             input(in1_cb, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
             output(out_cb, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>(
-            IterationShape::one_tile());
+            IterationShape::one_tile(), cb_in0, cb_in1, cb_out);
     }
 }
 
@@ -84,7 +85,13 @@ void kernel_main() {
     constexpr uint32_t half_Wt = get_compile_time_arg_val(11);
     constexpr bool kDecodeMode = get_compile_time_arg_val(12) != 0;
 
-    CircularBuffer cb_scalar(scalar_cb);
+    DataflowBuffer cb_scalar(scalar_cb);
+    DataflowBuffer cb_in(in_cb);
+    DataflowBuffer cb_rotated_in(rotated_in_cb);
+    DataflowBuffer cb_rotated_in_interm(rotated_in_interm_cb);
+    DataflowBuffer cb_cos_interm(cos_interm_cb);
+    DataflowBuffer cb_sin_interm(sin_interm_cb);
+    DataflowBuffer cb_out(out_cb);
     cb_scalar.wait_front(onetile);
 
 #ifdef DECODE_MODE
@@ -108,6 +115,8 @@ void kernel_main() {
     constexpr uint32_t updated_cos_cb = cos_cb;
     constexpr uint32_t updated_sin_cb = sin_cb;
 #endif
+    DataflowBuffer cb_updated_cos(updated_cos_cb);
+    DataflowBuffer cb_updated_sin(updated_sin_cb);
     for (uint32_t i = 0; i < num_rows; ++i) {
         for (uint32_t j = 0; j < Wt; ++j) {
             const uint32_t in1_idx = kDecodeMode ? j : 0;
@@ -121,26 +130,30 @@ void kernel_main() {
                         compute_kernel_lib::WaitPolicy::None,
                         compute_kernel_lib::PopPolicy::None),
                     compute_kernel_lib::output(rotated_in_interm_cb)>(
-                    compute_kernel_lib::IterationShape::tiles(onetile));
+                    compute_kernel_lib::IterationShape::tiles(onetile), cb_rotated_in, cb_scalar, cb_rotated_in_interm);
                 reconfig_data_format_srcb(scalar_cb, updated_sin_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
                 // Multiply rotated input by sin
-                mul_tiles_chain<kDecodeMode, rotated_in_interm_cb, updated_sin_cb, sin_interm_cb>(in1_idx);
+                mul_tiles_chain<kDecodeMode, rotated_in_interm_cb, updated_sin_cb, sin_interm_cb>(
+                    cb_rotated_in_interm, cb_updated_sin, cb_sin_interm, in1_idx);
             } else {
                 reconfig_data_format(rotated_in_cb, updated_sin_cb);
                 pack_reconfig_data_format(out_cb, sin_interm_cb);
                 // Multiply rotated input by sin
-                mul_tiles_chain<kDecodeMode, rotated_in_cb, updated_sin_cb, sin_interm_cb>(in1_idx);
+                mul_tiles_chain<kDecodeMode, rotated_in_cb, updated_sin_cb, sin_interm_cb>(
+                    cb_rotated_in, cb_updated_sin, cb_sin_interm, in1_idx);
             }
 
             // Multiply input by cos
-            mul_tiles_chain<kDecodeMode, in_cb, updated_cos_cb, cos_interm_cb>(in1_idx);
+            mul_tiles_chain<kDecodeMode, in_cb, updated_cos_cb, cos_interm_cb>(
+                cb_in, cb_updated_cos, cb_cos_interm, in1_idx);
 
             // Add applied sin/cos tensors
             compute_kernel_lib::add<
                 compute_kernel_lib::input(cos_interm_cb),
                 compute_kernel_lib::input(sin_interm_cb),
-                compute_kernel_lib::output(out_cb)>(compute_kernel_lib::IterationShape::tiles(onetile));
+                compute_kernel_lib::output(out_cb)>(
+                compute_kernel_lib::IterationShape::tiles(onetile), cb_cos_interm, cb_sin_interm, cb_out);
         }
     }
 }

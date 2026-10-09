@@ -19,6 +19,8 @@ void kernel_main() {
 
     constexpr auto dfb_input_id = tt::CBIndex::c_0;
     constexpr auto dfb_output_id = tt::CBIndex::c_2;
+    DataflowBuffer dfb_input_id_obj(dfb_input_id);
+    DataflowBuffer dfb_output_id_obj(dfb_output_id);
 
     compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
 
@@ -28,11 +30,11 @@ void kernel_main() {
         ckl::CopyTile<
             ckl::input(
                 dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D0>{},
+            ckl::Dst::D0>{dfb_input_id_obj},
         ckl::Dropout<ckl::Dst::D0>{int_probability, int_scale_factor, seed},
         ckl::PackTile<ckl::output(
             dfb_output_id,
             ckl::ReservePolicy::PerBlockSize,
             ckl::PushPolicy::PerBlockSize,
-            ckl::DataFormatReconfig::Disabled)>{});
+            ckl::DataFormatReconfig::Disabled)>{dfb_output_id_obj});
 }

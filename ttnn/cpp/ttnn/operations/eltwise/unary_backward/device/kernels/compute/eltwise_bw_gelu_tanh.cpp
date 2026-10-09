@@ -21,6 +21,9 @@ void kernel_main() {
     constexpr auto dfb_grad_out_id = tt::CBIndex::c_0;
     constexpr auto dfb_input_id = tt::CBIndex::c_1;
     constexpr auto dfb_grad_in_id = tt::CBIndex::c_2;
+    DataflowBuffer dfb_grad_out(dfb_grad_out_id);
+    DataflowBuffer dfb_input(dfb_input_id);
+    DataflowBuffer dfb_grad_in(dfb_grad_in_id);
 
     constexpr float kSqrt2 = 1.41421356237309504880f;          // sqrt(2)
     constexpr float kTwoOverSqrtPi = 1.12837916709551257390f;  // 2/sqrt(pi)
@@ -33,16 +36,16 @@ void kernel_main() {
         ckl::IterationShape::tiles(num_tiles),
         ckl::CopyTile<
             ckl::input(dfb_grad_out_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, operand_reconfig),
-            ckl::Dst::D0>{},
+            ckl::Dst::D0>{dfb_grad_out},
         ckl::CopyTile<
             ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, operand_reconfig),
-            ckl::Dst::D1>{},
+            ckl::Dst::D1>{dfb_input},
         ckl::CopyTile<
             ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, operand_reconfig),
-            ckl::Dst::D2>{},
+            ckl::Dst::D2>{dfb_input},
         ckl::CopyTile<
             ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, operand_reconfig),
-            ckl::Dst::D5>{},
+            ckl::Dst::D5>{dfb_input},
         ckl::Square<ckl::Dst::D1>{},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
         // tile[1] = kKappa * x³
@@ -85,8 +88,6 @@ void kernel_main() {
         ckl::AddBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1, BF16_ROUNDING_MODE>{},
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},  // tile[0] = grad * (CDF + PDF)
         ckl::PackTile<ckl::output(
-            dfb_grad_in_id,
-            ckl::ReservePolicy::PerTile,
-            ckl::PushPolicy::PerTile,
-            ckl::DataFormatReconfig::Disabled)>{});
+            dfb_grad_in_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+            dfb_grad_in});
 }

@@ -32,48 +32,56 @@ void kernel_main() {
 
     DataflowBuffer dfb_eps_obj(dfb::eps);  // one tile of eps, filled by the reader
     dfb_eps_obj.wait_front(1);
+    DataflowBuffer dfb_batch_var_obj(dfb::batch_var);
+    DataflowBuffer dfb_den_obj(dfb::den);
+    DataflowBuffer dfb_input_obj(dfb::input);
+    DataflowBuffer dfb_batch_mean_obj(dfb::batch_mean);
+    DataflowBuffer dfb_weight_obj(dfb::weight);
+    DataflowBuffer dfb_bias_obj(dfb::bias);
+    DataflowBuffer dfb_out_obj(dfb::out);
 
     // out = ((input - batch_mean) / sqrt(batch_var + eps)) * optional(weight) + optional(bias).
-    const auto batchnorm_bcast_tiles = [](uint32_t freq, uint32_t tile_start) __attribute__((always_inline)) {
+    const auto batchnorm_bcast_tiles = [&](uint32_t freq, uint32_t tile_start) __attribute__((always_inline)) {
         // 1/(sqrt(batch_var + eps))
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
                 ckl::input(dfb::batch_var, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-                ckl::input(dfb::eps, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
+                ckl::input(dfb::eps, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{dfb_batch_var_obj, dfb_eps_obj},
             ckl::Rsqrt<>{},
-            ckl::PackTile<ckl::output(dfb::den)>{});
+            ckl::PackTile<ckl::output(dfb::den)>{dfb_den_obj});
 
         const uint32_t inner_count = freq - tile_start;
 
         // The batch mean is the broadcast operand of the subtraction; the input tiles are the other one.
-        constexpr auto sub_op = ckl::BinaryFpu<
+        const auto sub_op = ckl::BinaryFpu<
             ckl::BinaryFpuOp::Sub,
             ckl::input(dfb::input),
             // batch_mean, broadcast against the input
-            ckl::input(dfb::batch_mean, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{};
+            ckl::input(dfb::batch_mean, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{
+            dfb_input_obj, dfb_batch_mean_obj};
         // (input - batch_mean)/(sqrt(batch_var + eps)) = result
-        constexpr auto mul_den = ckl::DestReuseBinary<
+        const auto mul_den = ckl::DestReuseBinary<
             ckl::BinaryFpuOp::Mul,
             ckl::input(dfb::den, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-            ckl::DestReuseType::DEST_TO_SRCA>{};
+            ckl::DestReuseType::DEST_TO_SRCA>{dfb_den_obj};
         // result = result * weight
-        constexpr auto mul_weight = ckl::Optional<
+        const auto mul_weight = ckl::Optional<
             weight_has_value,
             ckl::DestReuseBinary<
                 ckl::BinaryFpuOp::Mul,
                 // weight tensor
                 ckl::input(dfb::weight, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-                ckl::DestReuseType::DEST_TO_SRCA>>{};
+                ckl::DestReuseType::DEST_TO_SRCA>>{dfb_weight_obj};
         // result = result + bias
-        constexpr auto add_bias = ckl::Optional<
+        const auto add_bias = ckl::Optional<
             bias_has_value,
             ckl::DestReuseBinary<
                 ckl::BinaryFpuOp::Add,
                 ckl::input(dfb::bias, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-                ckl::DestReuseType::DEST_TO_SRCA>>{};
-        constexpr auto pack_out = ckl::PackTile<ckl::output(dfb::out)>{};
+                ckl::DestReuseType::DEST_TO_SRCA>>{dfb_bias_obj};
+        const auto pack_out = ckl::PackTile<ckl::output(dfb::out)>{dfb_out_obj};
 
         ckl::eltwise_chain(ckl::IterationShape::tiles(inner_count), sub_op, mul_den, mul_weight, add_bias, pack_out);
     };

@@ -18,6 +18,12 @@ namespace ckl = compute_kernel_lib;
 void kernel_main() {
     DataflowBuffer dfb_recipsumexps_obj(dfb::recip_sum_exps);
     DataflowBuffer dfb_max_obj(dfb::max);
+    DataflowBuffer dfb_in0_obj(dfb::in0);
+    DataflowBuffer dfb_mask_obj(dfb::mask);
+    DataflowBuffer dfb_tmp_obj(dfb::tmp);
+    DataflowBuffer dfb_exps_obj(dfb::exps);
+    DataflowBuffer dfb_add_obj(dfb::add);
+    DataflowBuffer dfb_out0_obj(dfb::out0);
 
     compute_kernel_hw_startup(dfb::in0, dfb::max_scaler, dfb::out0);
 
@@ -31,7 +37,8 @@ void kernel_main() {
     for (std::uint32_t n = 0; n < N; ++n) {
         // find max
         if (Ht == 1) {
-            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(0, 0, /*pop0=*/1, /*popm=*/0);
+            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
 
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::tmp, dfb::max_scaler, dfb::max>(
                 ckl::ReduceInputBlockShape::single());
@@ -40,7 +47,8 @@ void kernel_main() {
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::in0, dfb::max_scaler, dfb::max>(
                 ckl::ReduceInputBlockShape::col(Ht - 1));
 
-            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(0, 0, /*pop0=*/1, /*popm=*/0);
+            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
 
             // Phase 2: Reduce final masked tile with accumulation
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::tmp, dfb::max_scaler, dfb::max>(
@@ -51,16 +59,23 @@ void kernel_main() {
 
         for (std::uint32_t h = 0; h < Ht; h += onetile) {
             // compute exp(x - max(x))
-            sub_tiles_bcast_rows_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_rows_to_dfb<dfb::in0, dfb::max, dfb::tmp>(
+                dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
             if (h == Ht - 1) {
 #ifdef SOFTMAX
                 exp_tile_and_mask_tile_to_dfb<dfb::tmp, dfb::mask, dfb::exps>(
+                    dfb_tmp_obj,
+                    dfb_mask_obj,
+                    dfb_exps_obj,
                     /*itile=*/0,
                     /*mtile=*/0,
                     /*pop=*/1,
                     /*popm=*/0);
 #else
                 rexp_tile_and_mask_tile_to_dfb<dfb::tmp, dfb::mask, dfb::exps>(
+                    dfb_tmp_obj,
+                    dfb_mask_obj,
+                    dfb_exps_obj,
                     /*itile=*/0,
                     /*mtile=*/0,
                     /*pop=*/1,
@@ -68,16 +83,16 @@ void kernel_main() {
 #endif
             } else {
 #ifdef SOFTMAX
-                exp_tile_to_dfb<dfb::tmp, dfb::exps>();
+                exp_tile_to_dfb<dfb::tmp, dfb::exps>(dfb_tmp_obj, dfb_exps_obj);
 #else
-                rexp_tile_to_dfb<dfb::tmp, dfb::exps>();
+                rexp_tile_to_dfb<dfb::tmp, dfb::exps>(dfb_tmp_obj, dfb_exps_obj);
 #endif
             }
 
             if (h == 0) {
-                copy_tile_to_dfb<dfb::exps, dfb::add>();
+                copy_tile_to_dfb<dfb::exps, dfb::add>(dfb_exps_obj, dfb_add_obj);
             } else {
-                add_tiles_to_dfb<dfb::add, dfb::exps, dfb::add>();
+                add_tiles_to_dfb<dfb::add, dfb::exps, dfb::add>(dfb_add_obj, dfb_exps_obj, dfb_add_obj);
             }
         }
 
@@ -120,27 +135,33 @@ void kernel_main() {
 #ifdef LOG
 #ifdef SOFTMAX
             // x - max - log(sum)
-            sub_tiles_bcast_rows_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_rows_to_dfb<dfb::in0, dfb::max, dfb::tmp>(
+                dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 
-            sub_tiles_bcast_rows_to_dfb<dfb::tmp, dfb::recip_sum_exps, dfb::out0>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_rows_to_dfb<dfb::tmp, dfb::recip_sum_exps, dfb::out0>(
+                dfb_tmp_obj, dfb_recipsumexps_obj, dfb_out0_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 #else
             // logsoftmin not implemented
 #endif
 #else
 #ifdef SOFTMAX
             // exp(x - max) / sum
-            sub_tiles_bcast_rows_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_rows_to_dfb<dfb::in0, dfb::max, dfb::tmp>(
+                dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 
-            exp_tile_to_dfb<dfb::tmp, dfb::exps>();
+            exp_tile_to_dfb<dfb::tmp, dfb::exps>(dfb_tmp_obj, dfb_exps_obj);
 
-            mul_tiles_bcast_rows_to_dfb<dfb::exps, dfb::recip_sum_exps, dfb::out0>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            mul_tiles_bcast_rows_to_dfb<dfb::exps, dfb::recip_sum_exps, dfb::out0>(
+                dfb_exps_obj, dfb_recipsumexps_obj, dfb_out0_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 #else
             // rexp(x - max) / sum
-            sub_tiles_bcast_rows_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_rows_to_dfb<dfb::in0, dfb::max, dfb::tmp>(
+                dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 
-            rexp_tile_to_dfb<dfb::tmp, dfb::exps>();
+            rexp_tile_to_dfb<dfb::tmp, dfb::exps>(dfb_tmp_obj, dfb_exps_obj);
 
-            mul_tiles_bcast_rows_to_dfb<dfb::exps, dfb::recip_sum_exps, dfb::out0>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            mul_tiles_bcast_rows_to_dfb<dfb::exps, dfb::recip_sum_exps, dfb::out0>(
+                dfb_exps_obj, dfb_recipsumexps_obj, dfb_out0_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 #endif
 #endif
         }

@@ -35,10 +35,13 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
 
     using namespace compute_kernel_lib;
-    CircularBuffer cb_b_obj(cb_b);
+    DataflowBuffer cb_a_obj(cb_a);
+    DataflowBuffer cb_b_obj(cb_b);
+    DataflowBuffer cb_out_obj(cb_out);
 
     // A: streaming. B: held single tile (Scalar index, relative tile 0). Output: streaming.
-    auto pack = PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{};
+    auto pack =
+        PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{cb_out_obj};
 
     if constexpr (life == 0) {  // Bulk — chain owns both edges
         eltwise_chain(
@@ -46,7 +49,7 @@ void kernel_main() {
             BinaryFpu<
                 BinaryFpuOp::Add,
                 input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, DataFormatReconfig::Disabled)>{},
+                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, DataFormatReconfig::Disabled)>{cb_a_obj, cb_b_obj},
             pack);
     } else if constexpr (life == 1) {  // HeldBulk — chain waits upfront, caller pops after
         eltwise_chain(
@@ -54,7 +57,7 @@ void kernel_main() {
             BinaryFpu<
                 BinaryFpuOp::Add,
                 input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-                input(cb_b, WaitPolicy::Upfront, PopPolicy::None, DataFormatReconfig::Disabled)>{},
+                input(cb_b, WaitPolicy::Upfront, PopPolicy::None, DataFormatReconfig::Disabled)>{cb_a_obj, cb_b_obj},
             pack);
         cb_b_obj.pop_front(1);
     } else if constexpr (life == 2) {  // HeldStream — chain waits per-iter, caller pops after
@@ -63,7 +66,7 @@ void kernel_main() {
             BinaryFpu<
                 BinaryFpuOp::Add,
                 input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-                input(cb_b, WaitPolicy::PerTile, PopPolicy::None, DataFormatReconfig::Disabled)>{},
+                input(cb_b, WaitPolicy::PerTile, PopPolicy::None, DataFormatReconfig::Disabled)>{cb_a_obj, cb_b_obj},
             pack);
         cb_b_obj.pop_front(1);
     } else if constexpr (life == 3) {  // CallerManaged — chain emits nothing for B
@@ -73,7 +76,7 @@ void kernel_main() {
             BinaryFpu<
                 BinaryFpuOp::Add,
                 input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-                input(cb_b, WaitPolicy::None, PopPolicy::None, DataFormatReconfig::Disabled)>{},
+                input(cb_b, WaitPolicy::None, PopPolicy::None, DataFormatReconfig::Disabled)>{cb_a_obj, cb_b_obj},
             pack);
         cb_b_obj.pop_front(1);
     } else {  // life == 4: DeferredPop — caller waits before, chain pops at end
@@ -83,7 +86,7 @@ void kernel_main() {
             BinaryFpu<
                 BinaryFpuOp::Add,
                 input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-                input(cb_b, WaitPolicy::None, PopPolicy::AtEnd, DataFormatReconfig::Disabled)>{},
+                input(cb_b, WaitPolicy::None, PopPolicy::AtEnd, DataFormatReconfig::Disabled)>{cb_a_obj, cb_b_obj},
             pack);
     }
 }

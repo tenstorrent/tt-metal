@@ -11,6 +11,9 @@ void kernel_main() {
     auto B = get_arg(args::B);
     auto Ht = get_arg(args::Ht);
     auto Wt = get_arg(args::Wt);
+    DataflowBuffer dfb_in0_obj(dfb::in0);
+    DataflowBuffer dfb_in1_obj(dfb::in1);
+    DataflowBuffer dfb_out_obj(dfb::out);
 
     compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
 
@@ -30,10 +33,10 @@ void kernel_main() {
                 CHAIN_BCAST_DIM,
                 compute_kernel_lib::WaitPolicy::PerTile,
                 compute_kernel_lib::PopPolicy::PerTile,
-                compute_kernel_lib::DataFormatReconfig::Disabled)>{},
+                compute_kernel_lib::DataFormatReconfig::Disabled)>{dfb_in0_obj, dfb_in1_obj},
         compute_kernel_lib::PackTile<compute_kernel_lib::output(
             dfb::out,
             compute_kernel_lib::ReservePolicy::PerTile,
             compute_kernel_lib::PushPolicy::PerTile,
-            compute_kernel_lib::DataFormatReconfig::Disabled)>{});
+            compute_kernel_lib::DataFormatReconfig::Disabled)>{dfb_out_obj});
 }
