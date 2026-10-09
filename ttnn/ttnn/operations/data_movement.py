@@ -684,10 +684,15 @@ def _golden_function_quantize(input_tensor, scale, zero_point, *_, axis=None, dt
     # q = round(x / scale) + zero_point; per-channel args broadcast along `axis`.
     scale = _broadcast_quantization_arg(scale, input_tensor, axis)
     zero_point = _broadcast_quantization_arg(zero_point, input_tensor, axis)
-    output = torch.round(torch.div(input_tensor, scale)) + zero_point
     torch_dtype = _quantized_output_dtype(dtype, output_tensor)
-    if torch_dtype in (torch.int32, torch.uint8) and isinstance(zero_point, torch.Tensor):
-        return output.to(torch_dtype)
+    scaled_input = torch.div(input_tensor, scale)
+    if isinstance(zero_point, torch.Tensor):
+        output = scaled_input + zero_point
+        if torch_dtype in (torch.int32, torch.uint8):
+            return output.to(torch_dtype)
+        output = torch.round(output)
+    else:
+        output = torch.round(scaled_input) + zero_point
     q_min, q_max = (0, 255) if torch_dtype == torch.uint8 else (-128, 127)
     return torch.clamp(output, q_min, q_max).to(torch_dtype)
 
@@ -728,10 +733,15 @@ def _golden_function_requantize(
     in_zero_point = _broadcast_quantization_arg(in_zero_point, input_tensor, axis)
     out_scale = _broadcast_quantization_arg(out_scale, input_tensor, axis)
     out_zero_point = _broadcast_quantization_arg(out_zero_point, input_tensor, axis)
-    output = torch.round((input_tensor - in_zero_point) * (in_scale / out_scale)) + out_zero_point
     torch_dtype = _quantized_output_dtype(dtype, output_tensor)
-    if torch_dtype in (torch.int32, torch.uint8) and isinstance(out_zero_point, torch.Tensor):
-        return output.to(torch_dtype)
+    scaled_input = (input_tensor - in_zero_point) * (in_scale / out_scale)
+    if isinstance(out_zero_point, torch.Tensor):
+        output = scaled_input + out_zero_point
+        if torch_dtype in (torch.int32, torch.uint8):
+            return output.to(torch_dtype)
+        output = torch.round(output)
+    else:
+        output = torch.round(scaled_input) + out_zero_point
     q_min, q_max = (0, 255) if torch_dtype == torch.uint8 else (-128, 127)
     return torch.clamp(output, q_min, q_max).to(torch_dtype)
 
