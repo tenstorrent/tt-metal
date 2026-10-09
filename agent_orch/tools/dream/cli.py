@@ -329,10 +329,16 @@ def cmd_check(a):
     )
     say(f"setting up on {t.machine} (ledger, eval checkout)")
     t.dream("_setup", t.name)
-    say("measuring the baseline (the first run builds the eval checkout; that can take a while)")
+    say(
+        "measuring the baseline: the first run builds the eval checkout (30-60 min from scratch), then runs the "
+        f"test {spec['eval']['baseline_runs']} times; progress lines follow"
+    )
     args = ["_baseline", t.name] + (["--force"] if a.rebaseline else [])
     t.dream(*args)
-    say(f"ready. Start with: dream start {t.name}")
+    report = f"{t.home}/{t.name}/report/index.html"
+    say(f"ready. The report so far is {report} on {t.machine}.")
+    say(f"Start with: dream start {t.name}. For a live page that updates every step, run /dream in Claude Code")
+    say(f"(it publishes the report and follows the campaign), or copy it here with: dream report {t.name} --out FILE")
 
 
 def cmd_start(a, resume: bool = False):

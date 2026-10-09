@@ -12,6 +12,7 @@ import fcntl
 import fnmatch
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -40,7 +41,7 @@ def device_lock(c: Campaign):
 
 
 def run_cmd(
-    cmd: str, cwd: Path, env: dict, log: Path, timeout_s: int, sessions: Path | None = None
+    cmd: str, cwd: Path, env: dict, log: Path, timeout_s: int, sessions: Path | None = None, what: str = ""
 ) -> tuple[int, float]:
     """Run a shell command in its own process group; kill the whole group on timeout. Returns (rc, seconds)."""
     from .agents import track
@@ -51,21 +52,54 @@ def run_cmd(
             ["bash", "-c", cmd], cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True
         )
         with track(p.pid, sessions):
-            rc = _wait_cmd(p, timeout_s)
+            rc = _wait_cmd(p, timeout_s, log, what)
     return rc, time.time() - t0
 
 
-def _wait_cmd(p: subprocess.Popen, timeout_s: int) -> int:
+NINJA = re.compile(r"^\[(\d+)/(\d+)\]")
+PROGRESS_S = float(os.environ.get("DREAM_PROGRESS_S", 60))
+
+
+def progress_line(log: Path) -> str:
+    """The most informative recent line of a build or eval log: a ninja [n/N] line or an adapter line."""
     try:
-        return p.wait(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        os.killpg(p.pid, signal.SIGTERM)
+        with open(log, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 65536))
+            lines = f.read().decode(errors="replace").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        if NINJA.match(line):
+            m = NINJA.match(line)
+            return f"[{m.group(1)}/{m.group(2)}] {int(m.group(1)) * 100 // int(m.group(2))}%"
+        if line.startswith("[adapter]"):
+            return line[len("[adapter]") :].strip()[:150]
+    return next((l.strip()[:150] for l in reversed(lines) if l.strip()), "")
+
+
+def _wait_cmd(p: subprocess.Popen, timeout_s: int, log: Path | None = None, what: str = "") -> int:
+    """Wait for p (up to timeout_s), printing a progress line from its log every PROGRESS_S seconds."""
+    t0 = last = time.time()
+    while True:
         try:
-            p.wait(timeout=30)
+            return p.wait(timeout=min(5.0, PROGRESS_S, max(0.1, t0 + timeout_s - time.time())))
         except subprocess.TimeoutExpired:
-            os.killpg(p.pid, signal.SIGKILL)
-            p.wait()
-        return 124
+            pass
+        now = time.time()
+        if now - t0 >= timeout_s:
+            break
+        if log and what and now - last >= PROGRESS_S:
+            last = now
+            m, s = divmod(int(now - t0), 60)
+            print(f"[eval]   {what} {m}m{s:02d}s: {progress_line(log)}", flush=True)
+    os.killpg(p.pid, signal.SIGTERM)
+    try:
+        p.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        os.killpg(p.pid, signal.SIGKILL)
+        p.wait()
+    return 124
 
 
 def needs_build(c: Campaign, ev: Path, snap: str) -> bool:
@@ -113,12 +147,18 @@ def run_eval(c: Campaign, snap: str, label: str) -> dict:
         git("submodule", "update", "--init", "--recursive", "-q", cwd=ev)
         if needs_build(c, ev, snap):
             blog = c.logs / f"build_{label}.log"
-            print(f"[eval] building (log: {blog})", flush=True)
+            print(f"[eval] building (log: {blog}; progress every {PROGRESS_S:.0f}s)", flush=True)
             env = dict(os.environ, CCACHE_DIR=os.environ.get("CCACHE_DIR", str(c.dream_home / ".ccache")))
             if (c.python_env / "bin").exists():
                 env["PATH"] = f"{c.python_env / 'bin'}:{env['PATH']}"
             rc, secs = run_cmd(
-                c.cfg["build"]["command"], ev, env, blog, int(c.cfg["build"]["timeout_s"]), c.home / "sessions"
+                c.cfg["build"]["command"],
+                ev,
+                env,
+                blog,
+                int(c.cfg["build"]["timeout_s"]),
+                c.home / "sessions",
+                what="building",
             )
             info["build_seconds"] = round(secs)
             if rc != 0:
@@ -142,7 +182,13 @@ def run_eval(c: Campaign, snap: str, label: str) -> dict:
         timeout = int(c.cfg["eval"]["timeout_s"])
         print(f"[eval] running eval.command (timeout {timeout}s, log: {log})", flush=True)
         rc, secs = run_cmd(
-            c.cfg["eval"]["command"], ev, eval_env(c, ev, label, result, rep), log, timeout, c.home / "sessions"
+            c.cfg["eval"]["command"],
+            ev,
+            eval_env(c, ev, label, result, rep),
+            log,
+            timeout,
+            c.home / "sessions",
+            what=f"{label} running",
         )
         info["eval_seconds"] = round(secs)
         text = log.read_text(errors="replace")
