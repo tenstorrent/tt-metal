@@ -765,6 +765,12 @@ class Gemma4Model:
         # Return as list of per-layer tensors
         return [per_layer_inputs[:, :, i, :].to(torch.bfloat16) for i in range(n_layers)]
 
+    def _decode_pli_on_device(self):
+        """Plain decode uses device PLI only on a loaded PLI target with GEMMA4_PLI=device."""
+        if not (self.hidden_size_per_layer_input and self.per_layer_input_weights):
+            return False
+        return pli_env.pli_on_device(default=False)
+
     def _validate_pli_stacked(self, pli_stacked):
         if self.hidden_size_per_layer_input and pli_stacked.shape[0] != len(self.layers):
             raise ValueError(
@@ -1651,8 +1657,8 @@ class Gemma4Model:
             (logits [1,1,P,vocab], hidden [1,1,P,hidden]) — same contract as
             ``ttnn_verify_forward``.
         """
-        if pli_on_device and pli_stacked is not None:
-            raise ValueError("pass either pli_on_device=True or pli_stacked, not both")
+        if pli_on_device and (pli_stacked is not None or pli_device_tensors is not None):
+            raise ValueError("pass either pli_on_device=True or explicit PLI tensors, not both")
         if pli_stacked is None and not pli_on_device:
             pli_device_tensors = self._verify_pli_device_tensors(token_ids_host, pli_device_tensors)
         input_embeds = self.embed_tokens(x)
@@ -2455,7 +2461,7 @@ class Gemma4Model:
         if self.hidden_size_per_layer_input and self.per_layer_input_weights:
             if batch != 1:
                 raise NotImplementedError("Batched decode with per-layer inputs (E2B/E4B) is not yet supported")
-            if pli_env.pli_on_device(default=False):
+            if self._decode_pli_on_device():
                 # Host preparation precedes trace capture; upload the opt-in
                 # table here so no weight allocation occurs inside capture.
                 self.init_pli_device_weights()
@@ -2565,7 +2571,7 @@ class Gemma4Model:
             pli_combined = self._decode_pli_combined
 
         pli_stacked = None
-        if pli_env.pli_on_device(default=False) and self.hidden_size_per_layer_input:
+        if self._decode_pli_on_device():
             if x.dtype not in (ttnn.uint32, ttnn.int32):
                 raise ValueError("device PLI decode requires token-id input")
             pli_stacked = self.compute_pli_device(x_embed, input_embeds)
