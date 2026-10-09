@@ -165,7 +165,7 @@ private:
         uint32_t size_bytes,
         uint32_t vc,
         Issue&& issue) const {
-        tt_buf_rw::note_if_bound<tt_buf_rw::READ, Src>();
+        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();
         noc_traits_t<Src>::issue_read(src, *this, src_args, dst_local_l1_addr, size_bytes, vc, issue);
     }
 
@@ -190,7 +190,7 @@ private:
         uint32_t vc,
         uint32_t trid,
         Issue&& issue) const {
-        tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, Dst>();
+        tt_buf_rw::note_if_bound<tt_buf_rw::kWrite, Dst>();
         noc_traits_t<Dst>::template issue_write<posted, use_trid>(
             dst, *this, dst_args, src_local_l1_addr, size_bytes, vc, trid, issue);
     }
