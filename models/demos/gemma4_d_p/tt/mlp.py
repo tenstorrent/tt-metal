@@ -146,7 +146,9 @@ class MLP:
         hidden_states.deallocate(True)
         if x is not hidden_states:
             x.deallocate(True)
-        hidden = ttnn.mul(gate, up, memory_config=act_mc)
+        # binary_ng runs a bfloat16 multiply on the SFPU unless asked for the FPU path, which is within 1 ULP
+        # and about 4x faster here.
+        hidden = ttnn.mul(gate, up, memory_config=act_mc, fast_and_approximate_mode=True)
         gate.deallocate(True)
         up.deallocate(True)
         if short_m:
