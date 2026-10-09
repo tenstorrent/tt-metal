@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""Tests for golden file loading and saving, and for report rendering."""
+
 import json
 
 import pytest

@@ -2,7 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared flow for pytest and the CLI: run, record, compare, report, update."""
+"""Ties the modules together for one suite: run, record, compare, report and update.
+
+execute() runs the suite, re-runs cases that came out of tolerance and writes measurements.json. evaluate(),
+publish() and update_golden() then compare it with the golden, print the report and apply updates. Both the
+pytest plugin and the CLI are thin wrappers around these functions.
+"""
 
 from __future__ import annotations
 

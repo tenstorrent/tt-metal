@@ -2,7 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""CLI for perf results outside pytest.
+"""Command line tools for perf results, used outside pytest.
+
+update downloads a CI run's measurements.json artifacts and updates goldens from them. report compares a
+measurements.json with its golden, or with another run.
 
   python -m tests.perf update --from-run <run-id> [--suite NAME] [--force]
   python -m tests.perf report measurements.json [base_measurements.json] [--all]

@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""Tests for the statuses compare.py assigns and the golden update rules in update.py."""
+
 import pytest
 
 from tests.perf import compare as cmp
