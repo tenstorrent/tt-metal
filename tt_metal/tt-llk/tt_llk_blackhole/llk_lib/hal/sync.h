@@ -266,8 +266,7 @@ inline constexpr __attribute__((always_inline)) std::uint32_t acquire_operation(
 template <Mutex M>
 inline __attribute__((always_inline)) void acquire()
 {
-    (void)acquire_operation<M>();
-    TTI_ATGETM(hal::to_underlying(M));
+    TTI_INSN((acquire_operation<M>()));
 }
 
 /** @brief Acquire a runtime-selected mutex through the Tensix instruction buffer. */
@@ -296,8 +295,7 @@ inline constexpr __attribute__((always_inline)) std::uint32_t release_operation(
 template <Mutex M>
 inline __attribute__((always_inline)) void release()
 {
-    (void)release_operation<M>();
-    TTI_ATRELM(hal::to_underlying(M));
+    TTI_INSN((release_operation<M>()));
 }
 
 /** @brief Release a runtime-selected mutex through the Tensix instruction buffer. */
