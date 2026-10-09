@@ -17,6 +17,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
     KDA_INTERMEDIATE_L1_BYTES_PER_CORE,
     KDA_OUTPUT_MEMORY_CONFIG,
+    KDA_PROJECTION_L1_BYTES_PER_CORE,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
     decay_projection_config,
@@ -29,12 +30,21 @@ from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_wei
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
-def _slice_width(tensor: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
+def _slice_width(
+    tensor: ttnn.Tensor, start: int, end: int, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
+) -> ttnn.Tensor:
     stop = list(tensor.shape)
     begin = [0] * len(stop)
     begin[-1] = start
     stop[-1] = end
-    return ttnn.slice(tensor, tuple(begin), tuple(stop), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.slice(tensor, tuple(begin), tuple(stop), memory_config=memory_config)
+
+
+def _untilize_leading_columns(tensor: ttnn.Tensor, end: int) -> ttnn.Tensor:
+    """The row-major copy of ``tensor``'s first ``end`` columns, untilized in one pass without a slice."""
+    output_end = [dim - 1 for dim in tensor.shape]
+    output_end[-1] = end - 1
+    return ttnn.untilize_with_unpadding(tensor, output_end, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 def _largest_divisor_at_most(value: int, limit: int) -> int:
@@ -159,6 +169,18 @@ class ttKDA:
             KDA_INTERMEDIATE_L1_BYTES_PER_CORE,
             what="normalized heads",
         )
+        input_k, input_n = tuple(self.weights.input_projection.shape)[-2:]
+        # The tuned geometry keeps the fused input projection in L1 when it fits; the others keep it in DRAM.
+        self._projection_memory = (
+            l1_when_it_fits(
+                mesh_device,
+                self.active_seq_len_local * input_n * 2,
+                KDA_PROJECTION_L1_BYTES_PER_CORE,
+                what="fused input projection",
+            )
+            if program_config.tuned_projection_matmuls
+            else ttnn.DRAM_MEMORY_CONFIG
+        )
         self._partial_output_memory = (
             l1_when_it_fits(
                 mesh_device,
@@ -192,12 +214,14 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self.input_projection_minimal_matmul_config, self.output_projection_program_config = (
+        self.input_projection_program_config, self.output_projection_program_config = (
             tuned_projection_matmul_configs(
                 mesh_device.compute_with_storage_grid_size(),
                 self.active_seq_len_local,
+                input_k,
+                input_n,
                 *tuple(self.weights.output_projection.shape)[-2:],
-                program_config.input_projection_math_fidelity,
+                input_projection_in_l1=self._projection_memory.buffer_type == ttnn.BufferType.L1,
             )
             if program_config.tuned_projection_matmuls
             else (None, None)
@@ -349,29 +373,22 @@ class ttKDA:
         """Run the fused input projection and split its semantic outputs."""
         config = self.config
         weights = self.weights
-        if self.input_projection_minimal_matmul_config is not None:
-            projected = ttnn.experimental.minimal_matmul(
-                hidden_states,
-                weights.input_projection,
-                config=self.input_projection_minimal_matmul_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.input_projection_compute_config,
-            )
-        else:
-            projected = ttnn.linear(
-                hidden_states,
-                weights.input_projection,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.input_projection_compute_config,
-            )
+        projected = ttnn.linear(
+            hidden_states,
+            weights.input_projection,
+            memory_config=self._projection_memory,
+            program_config=self.input_projection_program_config,
+            compute_kernel_config=self.input_projection_compute_config,
+        )
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
-            qkv=_slice_width(projected, 0, auxiliary_start),
+            # The convolution reads the leading q/k/v columns row-major.
+            qkv=_untilize_leading_columns(projected, auxiliary_start),
             # The decay projection reads its low-rank columns in place.
             decay_rank=projected,
             decay_rank_offset=auxiliary_start,
             # The gated norm reads its gate columns straight from the fused projection, which therefore
-            # stays allocated until the norm instead of only its gate slice.
+            # stays allocated until the norm instead of only its gate slice (in DRAM; see forward for L1).
             output_gate=projected,
             output_gate_offset=auxiliary_start + config.head_k_dim,
             # Chunk preparation reads beta's logits in place and applies the sigmoid.
@@ -514,12 +531,25 @@ class ttKDA:
         if selections is None:
             selections = self.selections(actual_start, actual_end)
         projected = self._project_inputs(hidden_states)
-        qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qkv = projected.qkv
         convolution_state = ttnn.to_layout(
             state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, selections, actual_start)
         gate = self._compute_decay(projected.decay_rank, projected.decay_rank_offset)
+        if self._projection_memory.buffer_type == ttnn.BufferType.L1:
+            # The fused projection would crowd the recurrence's L1 buffers: keep only the gate and beta columns
+            # the recurrence and the gated norm still read (33 KiB per core for K3) and free it.
+            fused = projected.output_gate
+            tail = _slice_width(fused, projected.output_gate_offset, fused.shape[-1], ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(fused)
+            projected = replace(
+                projected,
+                output_gate=tail,
+                output_gate_offset=0,
+                beta=tail,
+                beta_offset=projected.beta_offset - projected.output_gate_offset,
+            )
         result = self.recurrence(
             q=q,
             k=k,

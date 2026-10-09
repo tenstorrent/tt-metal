@@ -28,6 +28,9 @@ KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
 # SP8xTP4 needs 32 and 77 KiB per core on its 12x10 grid. The scan output stays in DRAM: in L1 it slows the scan
 # by about as much as it speeds up the norm that reads it.
 KDA_INTERMEDIATE_L1_BYTES_PER_CORE = 128 * 1024
+# The fused input projection stays in L1 for the convolution, decay projection and gated norm under this budget:
+# K3 on Galaxy SP8xTP4 needs 133 KiB per core, which spares its matmul writing 16 MB to DRAM.
+KDA_PROJECTION_L1_BYTES_PER_CORE = 136 * 1024
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
@@ -109,13 +112,25 @@ class KDAProgramConfig:
 _TUNED_PROJECTION_ROWS = 640
 
 
+def _subblock(per_core_m: int, per_core_n: int) -> tuple[int, int]:
+    """The largest output subblock within the 4-tile FP32 destination limit that divides the per-core block."""
+    for h, w in ((2, 2), (1, 4), (1, 3), (2, 1), (1, 2), (1, 1)):
+        if per_core_m % h == 0 and per_core_n % w == 0:
+            return h, w
+    raise AssertionError("unreachable")
+
+
 def tuned_projection_matmul_configs(
     grid: ttnn.CoreCoord,
     rows: int,
+    input_k: int,
+    input_n: int,
     output_k: int,
     output_n: int,
-    input_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4,
-) -> tuple[ttnn.MinimalMatmulConfig | None, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None]:
+    input_projection_in_l1: bool = False,
+) -> tuple[
+    ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None
+]:
     """Return the tuned input and output projection schedules laid out on ``grid``.
 
     Tuned on the 12x10 Blackhole worker grid at 640 rows per device with the production numerics
@@ -124,35 +139,32 @@ def tuned_projection_matmul_configs(
     """
     row_tiles = rows // ttnn.TILE_SIZE
     per_core_m = math.ceil(row_tiles / grid.y)
-    per_core_n = math.ceil(output_n // ttnn.TILE_SIZE / grid.x)
-    if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8:
+    if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8 or (input_k // ttnn.TILE_SIZE) % 7:
         return None, None
-    # HiFi4 is compute-bound with short blocks. At HiFi2 the math halves and the weight stream becomes the
-    # bottleneck: longer N blocks cut the per-block overhead, and 8-tile K blocks keep each column's DRAM reader
-    # flowing better than 16 (K3 at 640 rows: 758 -> 567 us per device).
-    n_block = 3 if input_projection_math_fidelity == ttnn.MathFidelity.HiFi4 else 12
-    input_projection = ttnn.MinimalMatmulConfig(
-        M_block_size=2,
-        K_block_size=8,
-        N_block_size=n_block,
-        subblock_h=1,
-        subblock_w=3,
-        compute_with_storage_grid_size=grid,
-    )
-    output_projection = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=8,
-        out_subblock_h=2,
-        out_subblock_w=1,
-        out_block_h=per_core_m,
-        out_block_w=per_core_n,
-        per_core_M=per_core_m,
-        per_core_N=per_core_n,
-        transpose_mcast=False,
-        fused_activation=None,
-        fuse_batch=True,
-    )
-    return input_projection, output_projection
+
+    def schedule(in0_block_w: int, n: int) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+        per_core_n = math.ceil(n // ttnn.TILE_SIZE / grid.x)
+        subblock_h, subblock_w = _subblock(per_core_m, per_core_n)
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=in0_block_w,
+            out_subblock_h=subblock_h,
+            out_subblock_w=subblock_w,
+            out_block_h=per_core_m,
+            out_block_w=per_core_n,
+            per_core_M=per_core_m,
+            per_core_N=per_core_n,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=True,
+        )
+
+    # Both projections stream their weights from DRAM once, one column of the grid per N slice. With its output in
+    # DRAM the input projection runs best with the longest K blocks that fit L1 (K3, HiFi2: 7-tile blocks 564 us vs
+    # 582 us at 4 and 651 us at 2); an L1 output leaves room only for 4-tile blocks, but sparing the DRAM writes
+    # outweighs that (534 us). The output projection's 12 K blocks of 8 tiles leave a longer pipeline fill than 24
+    # of 4 (147 -> 145 us).
+    return schedule(4 if input_projection_in_l1 else 7, input_n), schedule(4, output_n)
 
 
 def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
