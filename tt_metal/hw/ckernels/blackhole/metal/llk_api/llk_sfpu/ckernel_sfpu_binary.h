@@ -209,7 +209,6 @@ inline void calculate_sfpu_binary(
     };
 
     if constexpr (BINOP == BinaryOp::POW || (BINOP == BinaryOp::XLOGY && is_fp32_dest_acc_en)) {
-        // Not unrolled: pow, and xlogy on a 32-bit DEST, measured slower unrolled.
         for (int d = 0; d < ITERATIONS; d++) {
             row();
         }
@@ -235,7 +234,7 @@ inline void calculate_sfpu_binary_mul(
 
         if constexpr (!is_fp32_dest_acc_en) {
             // Software RNE with 0 * x = 0 and x * 0 = 0, to match FPU behaviour for bfloat16 multiplication:
-            // where either input is zero the sum stays 0x7fff, which the mask turns into +0.
+            // where either input is +0 the sum stays 0x7fff, which the mask turns into +0.
             sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(result);
             sfpi::vUInt rounded = 0x7fffU;
             v_if(in0 != 0 && in1 != 0) { rounded += bits + ((bits >> 16) & 1); }
@@ -248,10 +247,8 @@ inline void calculate_sfpu_binary_mul(
     }
 }
 
-// The 32-bit division row: the operations of #59381's sfpi form (normalized mantissas, one Newton step, the residual
-// step, the exponent restored in two factors, the exceptional-input fix-up), reordered so that no instruction reads a
-// multiply-add result on the next cycle, with the NaN test against Prgm1 = +inf and the fix-up's ENCC and the store
-// scheduled by load macro 0. Every lane's result is the sfpi form's.
+// The 32-bit division row, ordered so that no instruction reads a multiply-add result on the next cycle; load macro 0
+// issues the exceptional-input fix-up's SFPENCC and the store.
 template <int ITERATIONS>
 inline void calculate_sfpu_binary_div_fp32_rows(
     const std::uint32_t in0, const std::uint32_t in1, const std::uint32_t out) {
@@ -306,11 +303,8 @@ inline void calculate_sfpu_binary_div_fp32_rows(
     }
 }
 
-// The 16-bit division row of the sfpi form (reciprocal, two Newton steps, product, zero-divisor arm, nearest-even
-// rounding), ordered so that no instruction reads a multiply-add result on the next cycle (the second step's first
-// multiply-add runs on every lane into L5, which only the predicated second one reads). The rounding is #58207's
-// (ldjurovicTT) store form: bits + 0x7fff + lsb with the lsb from two shifts and no mask, since the store to a 16-bit
-// Float16_b DEST keeps only the high half. Load macro 0 issues the rounding's last add and the store.
+// The 16-bit division row, ordered so that no instruction reads a multiply-add result on the next cycle. It rounds to
+// nearest even as bits + 0x7fff + lsb with no mask, since the store to a Float16_b DEST keeps only the high half.
 template <int ITERATIONS>
 inline void calculate_sfpu_binary_div_bf16_rows(
     const std::uint32_t in0, const std::uint32_t in1, const std::uint32_t out) {
@@ -370,7 +364,7 @@ inline void calculate_sfpu_binary_div(
 template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
 inline void sfpu_binary_init() {
     if constexpr (BINOP == BinaryOp::DIV) {
-        // Initialisation for sfpu_reciprocal_iter<2> in DIV and the zero-divisor infinity of the div arm.
+        // The division rows read 2.0 for the Newton steps from Prgm0 and +inf from Prgm1.
         sfpu_reciprocal_init<false>();
         sfpi::vConstFloatPrgm1 = std::numeric_limits<float>::infinity();
     } else if constexpr (BINOP == BinaryOp::POW) {

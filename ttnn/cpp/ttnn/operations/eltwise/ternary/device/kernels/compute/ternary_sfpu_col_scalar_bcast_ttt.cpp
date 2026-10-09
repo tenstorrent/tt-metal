@@ -30,7 +30,6 @@ constexpr bool copy_init_shared_with_c0() {
 #endif
 
 #if defined(ARCH_BLACKHOLE) && (defined(TRISC_UNPACK) || defined(TRISC_MATH))
-// Inits once with bfloat16 operands only: the float32 callers measured equal.
 constexpr bool init_once = unpack_src_format[tt::CBIndex::c_0] == static_cast<std::uint32_t>(DataFormat::Float16_b);
 #else
 constexpr bool init_once = false;

@@ -28,7 +28,6 @@ constexpr bool copy_init_shared_with_c0() {
 #endif
 
 #if defined(ARCH_BLACKHOLE)
-// With 32-bit operands the inits stay per tile: addcdiv on float32 measured slower without them.
 constexpr bool init_once = !DST_ACCUM_MODE;
 #else
 constexpr bool init_once = false;

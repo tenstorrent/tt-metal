@@ -116,7 +116,6 @@ inline void calculate_sfpu_atan2(const uint dst_index_in0, const uint dst_index_
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
     };
-    // Unrolled on a 16-bit DEST only: the 32-bit body measured slower unrolled as one 32-row call.
     if constexpr (is_fp32_dest_acc_en) {
         for (int d = 0; d < ITERATIONS; d++) {
             row();
