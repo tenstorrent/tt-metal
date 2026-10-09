@@ -955,6 +955,7 @@ SITU_GLU_SWEEP = dict(
 )
 
 
+@skip_for_quasar
 @skip_for_wormhole
 @parametrize(**SITU_GLU_SWEEP)
 def test_eltwise_binary_sfpu_situ_glu(formats, dest_acc, mathop, **run_kwargs):

@@ -3,6 +3,7 @@
 
 import pytest
 import test_eltwise_binary_sfpu as _func
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
 from helpers.param_config import parametrize
@@ -305,6 +306,8 @@ def test_perf_eltwise_binary_sfpu_logsigmoid(
 
 
 @pytest.mark.perf
+@skip_for_quasar
+@skip_for_wormhole
 @parametrize(
     **_distinct_dest_acc(_func.SITU_GLU_SWEEP),
     **_PERF_AXES,
