@@ -1,0 +1,4 @@
+# the rework head (sixth review): main's program (no block section, the re-init after a post activation) against the head,
+# every bf16 pattern (every bfp8_b datum for a bfp8_b a) through the census's sharded adds and through each post activation
+EB_R3_NO_BLOCK=1,EB_R3_MAIN_REINIT=1|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "test_qb2 or test_qwen32_glx"
+EB_R3_NO_BLOCK=1,EB_R3_MAIN_REINIT=1|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "test_post_act and nob"
