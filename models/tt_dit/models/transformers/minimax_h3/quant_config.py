@@ -57,17 +57,9 @@ class MiniMaxH3QuantConfig:
         return any(self.linear(n).quantized for n in LINEARS) or self.sdpa_input_dtype is not None
 
     @property
-    def out_weight(self) -> bool:
-        """`to_out`'s weight is quantized; its addcmul epilogue is then un-fused (it needs a bf16 weight)."""
-        return self.out.weight_dtype is not None
-
-    @property
     def fuse_out_addcmul(self) -> bool:
-        return not self.out_weight
-
-    @staticmethod
-    def default() -> MiniMaxH3QuantConfig:
-        return MiniMaxH3QuantConfig()
+        """The fused addcmul epilogue needs a bf16 weight; a quantized `to_out` weight un-fuses it."""
+        return self.out.weight_dtype is None
 
     @staticmethod
     def preset(
@@ -134,7 +126,7 @@ def _flag(var: str, default: bool | None = None) -> bool | None:
     raise ValueError(f"{var}={value!r}: expected 0 or 1")
 
 
-def math_fidelity_from_env(var: str) -> ttnn.MathFidelity | None:
+def _math_fidelity_from_env(var: str) -> ttnn.MathFidelity | None:
     name = os.environ.get(var)
     if not name:
         return None
@@ -159,7 +151,7 @@ def quant_config_from_env() -> MiniMaxH3QuantConfig:
     FIDELITY, FP32_ACC, SDPA, OUT_WEIGHT, BLOCKS}` (see MiniMaxH3.md)."""
     raw = os.environ.get(ENV_FLAG, "0").strip()
     if raw.lower() in _FALSE:
-        return MiniMaxH3QuantConfig.default()
+        return MiniMaxH3QuantConfig()
     name = "w8a8_lofi" if raw.lower() in _TRUE else raw
     if name not in PRESETS:
         raise ValueError(f"{ENV_FLAG}={raw!r}: expected 0, 1 or one of {PRESETS}")
@@ -168,7 +160,7 @@ def quant_config_from_env() -> MiniMaxH3QuantConfig:
         name,
         linears=linears,
         activations=_flag("FAST_H3_FP8_ACTIVATIONS"),
-        fidelity=math_fidelity_from_env("FAST_H3_FP8_FIDELITY"),
+        fidelity=_math_fidelity_from_env("FAST_H3_FP8_FIDELITY"),
         fp32_dest_acc=_flag("FAST_H3_FP8_FP32_ACC"),
         sdpa=_flag("FAST_H3_FP8_SDPA", False),
         out_weight=_flag("FAST_H3_FP8_OUT_WEIGHT"),
@@ -233,22 +225,3 @@ def apply_quant_config(model, config: MiniMaxH3QuantConfig) -> None:
         attn.fuse_out_addcmul = config.fuse_out_addcmul
     if config.active:
         logger.info(f"minimax-h3 8-bit matmuls: {config.describe()} on {len(blocks) - skipped} of {len(blocks)} block(s)")
-
-
-def apply_env_quant_config(model) -> MiniMaxH3QuantConfig:
-    config = quant_config_from_env()
-    apply_quant_config(model, config)
-    return config
-
-
-__all__ = [
-    "ENV_FLAG",
-    "LINEARS",
-    "PRESETS",
-    "LinearQuant",
-    "MiniMaxH3QuantConfig",
-    "apply_env_quant_config",
-    "apply_quant_config",
-    "math_fidelity_from_env",
-    "quant_config_from_env",
-]

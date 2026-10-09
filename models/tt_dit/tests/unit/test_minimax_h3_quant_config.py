@@ -34,7 +34,7 @@ def clean_env(monkeypatch):
 def test_unset_is_off(clean_env):
     config = qc.quant_config_from_env()
     assert not config.active
-    assert config == qc.MiniMaxH3QuantConfig.default()
+    assert config == qc.MiniMaxH3QuantConfig()
     assert config.describe() == "off"
 
 
@@ -54,7 +54,7 @@ def test_one_means_w8a8_lofi_with_an_unfused_out(clean_env):
         assert quant.activation_dtype == ttnn.bfloat8_b
         assert quant.math_fidelity == ttnn.MathFidelity.LoFi
         assert quant.fp32_dest_acc
-    assert config.out_weight and not config.fuse_out_addcmul
+    assert not config.fuse_out_addcmul
     assert config.sdpa_input_dtype is None
 
 
@@ -68,10 +68,10 @@ def test_w8a8_keeps_the_fused_out_epilogue(clean_env):
         assert quant.math_fidelity == ttnn.MathFidelity.HiFi2
     assert config.out.weight_dtype is None
     assert config.out.activation_dtype == ttnn.bfloat8_b
-    assert not config.out_weight and config.fuse_out_addcmul
+    assert config.fuse_out_addcmul
     clean_env.setenv("FAST_H3_FP8_OUT_WEIGHT", "0")
     clean_env.setenv(qc.ENV_FLAG, "w8a8_lofi")
-    assert not qc.quant_config_from_env().out_weight
+    assert qc.quant_config_from_env().fuse_out_addcmul
 
 
 def test_w8_is_weights_only(clean_env):
@@ -108,7 +108,7 @@ def test_overrides(clean_env):
     assert config.qkv.math_fidelity == ttnn.MathFidelity.LoFi and not config.qkv.fp32_dest_acc
     assert config.sdpa_input_dtype == ttnn.bfloat8_b
     assert config.describe() == "qkv:w8a8/LoFi/no-fp32-acc ff1:w8a8/LoFi/no-fp32-acc sdpa:in8"
-    assert not config.out_weight
+    assert config.fuse_out_addcmul
 
 
 def test_out_weight_requires_the_unfused_epilogue(clean_env):
@@ -116,7 +116,7 @@ def test_out_weight_requires_the_unfused_epilogue(clean_env):
     clean_env.setenv("FAST_H3_FP8_OUT_WEIGHT", "1")
     config = qc.quant_config_from_env()
     assert config.out.weight_dtype == ttnn.bfloat8_b
-    assert config.out_weight and not config.fuse_out_addcmul
+    assert not config.fuse_out_addcmul
 
 
 def test_block_range(clean_env, monkeypatch):
@@ -154,7 +154,6 @@ def test_bad_values_are_refused(clean_env, var, value):
 class _Param:
     def __init__(self, dtype):
         self._data = SimpleNamespace(dtype=dtype)
-        self.dtype = dtype
 
 
 class _Linear:

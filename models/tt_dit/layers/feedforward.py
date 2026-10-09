@@ -65,9 +65,6 @@ class ParallelFeedForward(Module):
         ff2_dtype=ttnn.bfloat16,
         activation_dtype=None,
         pin_output_bf16=False,
-        ff1_output_dtype=None,
-        ff1_compute_kernel_config=None,
-        ff2_compute_kernel_config=None,
     ):
         super().__init__()
 
@@ -82,9 +79,9 @@ class ParallelFeedForward(Module):
         self.bias = bias
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
-        self.ff1_output_dtype = ff1_output_dtype
-        self.ff1_compute_kernel_config = ff1_compute_kernel_config
-        self.ff2_compute_kernel_config = ff2_compute_kernel_config
+        self.ff1_output_dtype = None
+        self.ff1_compute_kernel_config = None
+        self.ff2_compute_kernel_config = None
 
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
