@@ -30,6 +30,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <random>
 #include <set>
@@ -1601,8 +1602,9 @@ INSTANTIATE_TEST_SUITE_P(
 //   *_with_state keeps the address's high 32 bits, which hold ATT selector and window bits that differ between banks.
 // - async_write_zeros: DRAM pages are addressed in software (zero-fill isn't a streaming path), and local L1 is zeroed
 //   by the iDMA zero device with no remote address.
-// The strided modes run several threads, each copying the pages (or shards) it owns. Checks the data, that every
-// address request went through generated_noc_addr (and, with ATT, through the address generator), and which modes push.
+// Checks the data, that every address request went through generated_noc_addr (and, with ATT, through the address
+// generator), and which modes push. Multi-threaded iteration (strided_pages()) is covered by
+// TensorAccessorAddrgenThreads.
 namespace api_cov {
 
 constexpr auto kKernel = "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/ta_api_copy.cpp";
@@ -1614,8 +1616,6 @@ enum class Mode : uint32_t {
     ShardPagesPartial = 1,
     TxnIdL1 = 2,
     InlineDwWrite = 3,
-    StridedPages = 4,
-    StridedShardPages = 5,
 };
 
 std::string mode_name(Mode m) {
@@ -1624,8 +1624,6 @@ std::string mode_name(Mode m) {
         case Mode::ShardPagesPartial: return "ShardPagesPartial";
         case Mode::TxnIdL1: return "TxnIdL1";
         case Mode::InlineDwWrite: return "InlineDwWrite";
-        case Mode::StridedPages: return "StridedPages";
-        case Mode::StridedShardPages: return "StridedShardPages";
     }
     return "?";
 }
@@ -1636,20 +1634,17 @@ bool may_push(Mode m) { return m != Mode::InlineDwWrite; }
 struct Param {
     std::string layout;
     Mode mode;
-    uint32_t threads = 1;
 };
 
-std::string param_name(const Param& p) {
-    return p.layout + "_" + mode_name(p.mode) + (p.threads > 1 ? fmt::format("_{}Threads", p.threads) : "");
-}
+std::string param_name(const Param& p) { return p.layout + "_" + mode_name(p.mode); }
 
 void PrintTo(const Param& p, std::ostream* os) { *os << param_name(p); }
 
 std::vector<Param> params() {
     std::vector<Param> out;
-    auto add = [&](Mode m, std::initializer_list<const char*> layouts, uint32_t threads = 1) {
+    auto add = [&](Mode m, std::initializer_list<const char*> layouts) {
         for (const char* l : layouts) {
-            out.push_back({l, m, threads});
+            out.push_back({l, m});
         }
     };
     add(Mode::PagesDefault,
@@ -1657,12 +1652,6 @@ std::vector<Param> params() {
     add(Mode::ShardPagesPartial, {"HeightL1", "WidthDram", "NdRoundRobinL1", "NdBlockRoundRobinL1"});
     add(Mode::TxnIdL1, {"InterleavedDram", "InterleavedL1", "HeightL1", "NdBlockRoundRobinL1"});
     add(Mode::InlineDwWrite, {"InterleavedL1", "HeightL1"});
-    for (uint32_t t : {2u, 3u}) {
-        add(Mode::StridedPages,
-            {"InterleavedDram", "InterleavedL1", "HeightL1", "NdRoundRobinL1", "NdBlockRoundRobinL1"},
-            t);
-    }
-    add(Mode::StridedShardPages, {"HeightL1", "WidthL1", "NdRoundRobinL1", "NdBlockRoundRobinL1"}, 2);
     return out;
 }
 
@@ -1694,7 +1683,7 @@ TEST_P(TensorAccessorAddrgenApi, CopiesThroughWalker) {
     m2::KernelSpec kernel{
         .unique_id = m2::KernelSpecName{"api"},
         .source = std::filesystem::path{api_cov::kKernel},
-        .num_threads = p.threads,
+        .num_threads = 1,
         .compile_time_args = {{"mode", static_cast<uint32_t>(p.mode)}, {"num_pages", pages}},
         .runtime_arg_schema = {.runtime_arg_names = {"report_addr"}},
         .hw_config = m2::DataMovementHardwareConfig{},
@@ -1715,9 +1704,9 @@ TEST_P(TensorAccessorAddrgenApi, CopiesThroughWalker) {
     spec.tensor_parameters.push_back({.unique_id = m2::TensorParamName{"dst"}, .spec = tensor_spec});
     Program program = m2::MakeProgramFromSpec(device, spec);
 
-    auto report = make_l1_region(device, p.threads * api_cov::kReportStride);
+    auto report = make_l1_region(device, api_cov::kReportStride);
     const uint32_t report_addr = static_cast<uint32_t>(report->address());
-    std::vector<uint32_t> report_init(p.threads * api_cov::kReportStride / sizeof(uint32_t), 0xDEADBEEF);
+    std::vector<uint32_t> report_init(api_cov::kReportStride / sizeof(uint32_t), 0xDEADBEEF);
     slow_dispatch::WriteToL1(device, node, report_addr, report_init);
 
     m2::ProgramRunArgs run_args;
@@ -1759,18 +1748,13 @@ TEST_P(TensorAccessorAddrgenApi, CopiesThroughWalker) {
     }
 
     std::vector<uint32_t> r;
-    ASSERT_TRUE(slow_dispatch::ReadFromL1(device, node, report_addr, p.threads * api_cov::kReportStride, r));
-    uint32_t hw = 0, requests = 0, pushes = 0;
-    for (uint32_t t = 0; t < p.threads; ++t) {
-        const uint32_t* w = &r[t * api_cov::kReportStride / sizeof(uint32_t)];
-        ASSERT_EQ(w[3], api_cov::kDoneMarker) << "thread " << t << " never finished";
-        log_info(
-            tt::LogTest, "{} thread {}: {} requests: hw {} ({} pushed)", api_cov::param_name(p), t, w[2], w[0], w[1]);
-        EXPECT_GT(w[2], 0u) << "thread " << t << " moved nothing";
-        hw += w[0];
-        pushes += w[1];
-        requests += w[2];
-    }
+    ASSERT_TRUE(slow_dispatch::ReadFromL1(device, node, report_addr, api_cov::kReportStride, r));
+    ASSERT_EQ(r[3], api_cov::kDoneMarker) << "the kernel never finished";
+    const uint32_t hw = r[0];
+    const uint32_t pushes = r[1];
+    const uint32_t requests = r[2];
+    log_info(tt::LogTest, "{}: {} requests: hw {} ({} pushed)", api_cov::param_name(p), requests, hw, pushes);
+    EXPECT_GT(requests, 0u) << "the kernel moved nothing";
     EXPECT_LE(hw, requests);
     if (!att_enabled()) {
         EXPECT_EQ(hw, 0u);
@@ -1790,6 +1774,255 @@ INSTANTIATE_TEST_SUITE_P(
     TensorAccessorAddrgenApi,
     ::testing::ValuesIn(api_cov::params()),
     [](const ::testing::TestParamInfo<api_cov::Param>& info) { return api_cov::param_name(info.param); });
+
+// ============================================================================
+// Multi-threaded TensorAccessor -> DFB -> TensorAccessor
+// ============================================================================
+//
+// P producer threads read the src tensor into a DFB and C consumer threads write it out to dst, each thread walking
+// its own pages with its own address-generator sequences (thread_local state, one DM core per thread):
+// - Strided: STRIDED producers and consumers. Thread t of T walks strided_pages() (pages t, t+T, ...), which match
+//   the DFB entries a STRIDED endpoint gets.
+// - All: STRIDED producers, ALL consumers. Every consumer thread gets every entry in page-id order and walks pages()
+//   (the same data to the same pages, once per thread). An ALL DM consumer must sync explicitly, so both sides do. (The
+//   DFB BLOCKED pattern isn't supported yet.)
+// Checks the data, and per thread that every transfer address came from the address generator and that in-order
+// hits pushed.
+namespace unit_tests::dm::ta_addrgen::threads {
+
+constexpr auto kReaderKernel =
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/ta_mt_reader_to_dfb.cpp";
+constexpr auto kWriterKernel =
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/ta_mt_writer_from_dfb.cpp";
+constexpr uint32_t kReportStride = 64;  // bytes per thread, as in the kernels
+constexpr uint32_t kDoneMarker = 0x600DD00Du;
+
+struct Param {
+    std::string layout;
+    uint32_t producers;
+    uint32_t consumers;
+    bool all_consumer;
+};
+
+// Transfers per thread that the short-run fallback (kMinRun in addrgen_sequencer.h) sends to software: a sequence whose
+// seeks keep covering fewer than 4 pages switches to software. NdBlockRoundRobinL1 has 8 pages per shard band, so 4
+// strided threads get 2 pages per band each: the second band's seek is short and the thread's last transfer is
+// software.
+uint32_t short_run_sw(const std::string& layout, uint32_t threads, bool all) {
+    return !all && threads == 4 && layout == "NdBlockRoundRobinL1" ? 1 : 0;
+}
+
+std::string param_name(const Param& p) {
+    return fmt::format("{}_{}P{}C_{}", p.layout, p.producers, p.consumers, p.all_consumer ? "All" : "Strided");
+}
+
+void PrintTo(const Param& p, std::ostream* os) { *os << param_name(p); }
+
+std::vector<Param> params() {
+    std::vector<Param> out;
+    for (const char* layout :
+         {"InterleavedDram", "InterleavedL1", "HeightL1", "WidthL1", "NdRoundRobinL1", "NdBlockRoundRobinL1"}) {
+        out.push_back({layout, 2, 2, false});
+        out.push_back({layout, 4, 2, false});
+        out.push_back({layout, 2, 4, false});
+        out.push_back({layout, 2, 2, true});
+        out.push_back({layout, 1, 4, true});
+    }
+    // One side single-threaded.
+    out.push_back({"InterleavedDram", 2, 1, false});
+    out.push_back({"InterleavedDram", 1, 2, false});
+    return out;
+}
+
+m2::KernelSpec make_thread_kernel(
+    const std::string& name,
+    const char* source,
+    uint32_t threads,
+    const std::string& dfb_accessor,
+    m2::DFBEndpointType endpoint,
+    m2::DFBAccessPattern pattern,
+    const std::string& tensor,
+    bool implicit_sync) {
+    m2::KernelSpec kernel{
+        .unique_id = m2::KernelSpecName{name},
+        .source = std::filesystem::path{source},
+        .num_threads = threads,
+        .runtime_arg_schema = {.runtime_arg_names = {"report_addr"}},
+        .hw_config = m2::DataMovementHardwareConfig{},
+    };
+    if (!implicit_sync) {
+        std::get<m2::DataMovementHardwareConfig>(kernel.hw_config).config_2xx =
+            m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for = {m2::DFBSpecName{"staging"}},
+            };
+    }
+    kernel.dfb_bindings = {
+        {.dfb_spec_name = m2::DFBSpecName{"staging"},
+         .accessor_name = dfb_accessor,
+         .endpoint_type = endpoint,
+         .access_pattern = pattern}};
+    m2::test_helpers::BindTensorParameterToKernel(kernel, tensor, tensor);
+    kernel.compiler_options.defines.emplace(kAddrgenStatsDefine, "1");
+    return kernel;
+}
+
+// Per-thread {hw, pushes, transfers}: every thread finished, moved `expected_transfers` pages, all but `expected_sw`
+// from the address generator (with ATT), and pushed.
+void expect_thread_reports(
+    const std::string& kernel,
+    const std::vector<uint32_t>& r,
+    uint32_t threads,
+    uint32_t expected_transfers,
+    uint32_t expected_sw = 0) {
+    for (uint32_t t = 0; t < threads; ++t) {
+        const uint32_t* w = &r[t * kReportStride / sizeof(uint32_t)];
+        const std::string counts =
+            fmt::format("{} thread {}: hw {} ({} pushed) of {} transfers", kernel, t, w[0], w[1], w[2]);
+        ASSERT_EQ(w[3], kDoneMarker) << kernel << " thread " << t << " never finished";
+        log_info(tt::LogTest, "{}", counts);
+        EXPECT_EQ(w[2], expected_transfers) << counts;
+        if (!att_enabled()) {
+            EXPECT_EQ(w[0], 0u) << counts << " -- expected the software path only";
+            continue;
+        }
+        EXPECT_EQ(w[0], w[2] - expected_sw)
+            << counts << " -- expected " << expected_sw << " transfer(s) in software, the rest from the HW AddrGen";
+        EXPECT_GT(w[1], 0u) << counts << " -- in-order hits should push";
+        EXPECT_LE(w[1], w[0]) << counts;
+    }
+}
+
+}  // namespace unit_tests::dm::ta_addrgen::threads
+
+class TensorAccessorAddrgenThreads : public QuasarMeshDeviceSingleCardFixture,
+                                     public ::testing::WithParamInterface<unit_tests::dm::ta_addrgen::threads::Param> {
+};
+
+TEST_P(TensorAccessorAddrgenThreads, CopiesThroughDfb) {
+    using namespace unit_tests::dm::ta_addrgen;
+    const auto& p = GetParam();
+    auto& device = *devices_.at(0);
+    const auto cases = layout_cases();
+    const auto it = std::find_if(cases.begin(), cases.end(), [&](const LayoutCase& c) { return c.name == p.layout; });
+    ASSERT_NE(it, cases.end()) << p.layout;
+    const LayoutCase lc = resolve_grid(device, *it);
+    if (const auto reason = skip_reason(device, lc); !reason.empty()) {
+        GTEST_SKIP() << lc.name << ": " << reason;
+    }
+    const m2::NodeCoord node{0, 0};
+    const uint32_t page_size = page_size_bytes(lc);
+    const uint32_t pages = num_pages(lc);
+    const uint32_t words_per_page = page_size / sizeof(uint32_t);
+    // Every thread moves the same number of pages, so the strided split leaves no thread waiting on a missing entry.
+    ASSERT_EQ(pages % std::lcm(p.producers, p.consumers), 0u) << pages << " pages";
+    const TensorSpec tensor_spec = make_tensor_spec(lc);
+    MeshTensor src_tensor = MeshTensor::allocate_on_device(device, tensor_spec);
+    MeshTensor dst_tensor = MeshTensor::allocate_on_device(device, tensor_spec);
+
+    // An ALL DM consumer must sync explicitly, and both endpoints of a DFB use the same sync mode.
+    const bool implicit_sync = !p.all_consumer;
+    m2::KernelSpec producer = threads::make_thread_kernel(
+        "producer",
+        threads::kReaderKernel,
+        p.producers,
+        "out",
+        m2::DFBEndpointType::PRODUCER,
+        m2::DFBAccessPattern::STRIDED,
+        "src",
+        implicit_sync);
+    producer.compile_time_args = {{"num_pages", pages}, {"implicit_sync", implicit_sync ? 1u : 0u}};
+    m2::KernelSpec consumer = threads::make_thread_kernel(
+        "consumer",
+        threads::kWriterKernel,
+        p.consumers,
+        "in",
+        m2::DFBEndpointType::CONSUMER,
+        p.all_consumer ? m2::DFBAccessPattern::ALL : m2::DFBAccessPattern::STRIDED,
+        "dst",
+        implicit_sync);
+    consumer.compile_time_args = {
+        {"num_pages", pages}, {"all_consumer", p.all_consumer ? 1u : 0u}, {"implicit_sync", implicit_sync ? 1u : 0u}};
+
+    // A whole number of strided rounds on both sides.
+    const uint32_t lcm = std::lcm(p.producers, p.consumers);
+    auto dfb = m2::test_helpers::MakeMinimalDFB("staging", page_size, lcm * ceil_div(kNumDfbEntries, lcm));
+    dfb.data_format_metadata = to_data_format(lc.dtype);
+
+    m2::ProgramSpec spec{
+        .name = "ta_addrgen_threads_" + lc.name,
+        .kernels = {producer, consumer},
+        .dataflow_buffers = {dfb},
+        .work_units = {m2::test_helpers::MakeMinimalWorkUnit("wu", node, {"producer", "consumer"})},
+    };
+    spec.tensor_parameters.push_back({.unique_id = m2::TensorParamName{"src"}, .spec = tensor_spec});
+    spec.tensor_parameters.push_back({.unique_id = m2::TensorParamName{"dst"}, .spec = tensor_spec});
+    Program program = m2::MakeProgramFromSpec(device, spec);
+
+    // Producer threads' reports first, then the consumers'.
+    const uint32_t producer_bytes = p.producers * threads::kReportStride;
+    const uint32_t consumer_bytes = p.consumers * threads::kReportStride;
+    auto report = make_l1_region(device, producer_bytes + consumer_bytes);
+    const uint32_t producer_report = static_cast<uint32_t>(report->address());
+    const uint32_t consumer_report = producer_report + producer_bytes;
+    std::vector<uint32_t> report_init((producer_bytes + consumer_bytes) / sizeof(uint32_t), 0xDEADBEEF);
+    slow_dispatch::WriteToL1(device, node, producer_report, report_init);
+
+    m2::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        {.kernel = m2::KernelSpecName{"producer"},
+         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"report_addr", producer_report}})},
+        {.kernel = m2::KernelSpecName{"consumer"},
+         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"report_addr", consumer_report}})}};
+    run_args.tensor_args.emplace(m2::TensorParamName{"src"}, std::cref(src_tensor));
+    run_args.tensor_args.emplace(m2::TensorParamName{"dst"}, std::cref(dst_tensor));
+    m2::SetProgramRunArgs(program, run_args);
+
+    std::vector<uint32_t> src_data(pages * words_per_page);
+    for (uint32_t i = 0; i < src_data.size(); ++i) {
+        src_data[i] = 0x5A000000u ^ (i * 2654435761u);
+    }
+    // dst starts zeroed, so a page the kernels skipped shows.
+    std::vector<uint32_t> dst_init(pages * words_per_page, 0u);
+    slow_dispatch::WriteToBuffer(src_tensor.mesh_buffer(), src_data);
+    slow_dispatch::WriteToBuffer(dst_tensor.mesh_buffer(), dst_init);
+    std::vector<uint32_t> readback;
+    slow_dispatch::ReadFromBuffer(src_tensor.mesh_buffer(), readback);
+    ASSERT_EQ(readback, src_data) << "source staging not visible before launch";
+    slow_dispatch::ReadFromBuffer(dst_tensor.mesh_buffer(), readback);
+    ASSERT_EQ(readback, dst_init) << "destination staging not visible before launch";
+
+    auto workload = LaunchProgram(device, std::move(program));
+
+    std::vector<uint32_t> out;
+    slow_dispatch::ReadFromBuffer(dst_tensor.mesh_buffer(), out);
+    ASSERT_EQ(out.size(), src_data.size());
+    for (uint32_t pg = 0; pg < pages; ++pg) {
+        for (uint32_t w = 0; w < words_per_page; ++w) {
+            const uint32_t idx = (pg * words_per_page) + w;
+            ASSERT_EQ(out[idx], src_data[idx]) << "first mismatch at page " << pg << " word " << w;
+        }
+    }
+
+    std::vector<uint32_t> r;
+    ASSERT_TRUE(slow_dispatch::ReadFromL1(device, node, producer_report, producer_bytes, r));
+    threads::expect_thread_reports(
+        "producer", r, p.producers, pages / p.producers, threads::short_run_sw(p.layout, p.producers, false));
+    ASSERT_TRUE(slow_dispatch::ReadFromL1(device, node, consumer_report, consumer_bytes, r));
+    threads::expect_thread_reports(
+        "consumer",
+        r,
+        p.consumers,
+        p.all_consumer ? pages : pages / p.consumers,
+        threads::short_run_sw(p.layout, p.consumers, p.all_consumer));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Threads,
+    TensorAccessorAddrgenThreads,
+    ::testing::ValuesIn(unit_tests::dm::ta_addrgen::threads::params()),
+    [](const ::testing::TestParamInfo<unit_tests::dm::ta_addrgen::threads::Param>& info) {
+        return unit_tests::dm::ta_addrgen::threads::param_name(info.param);
+    });
 
 // Randomized fuzz layer: same fixture/body as PatternMatrix, params drawn by fuzz_cases() instead of
 // the curated matrix(). Deterministic by default; see fuzz_cases() for the seed/count env overrides.

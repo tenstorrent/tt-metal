@@ -4,20 +4,17 @@
 
 // TensorAccessor API coverage (TensorAccessorAddrgenApi): copies tensor src to tensor dst through a scratchpad that
 // holds one slot per page, using one NoC/TensorAccessor API per mode, so each API's transfer address goes through
-// tensor_accessor::generated_noc_addr (on Quasar, the address-generator sequencer). With several threads, each thread
-// copies the pages it owns.
+// tensor_accessor::generated_noc_addr (on Quasar, the address-generator sequencer).
 //   mode 0  pages() with no range (sharded: the whole tensor) / pages(0, num_pages) (interleaved)
 //   mode 1  shard_pages(shard, start, end) in two halves per shard (sharded only)
 //   mode 2  async_read / async_write<NocOptions::TXN_ID> to and from L1 (the generic paths, not the DFB overloads)
 //   mode 3  inline_dw_write of one word per dst page (no read; the host checks the first word of every page)
-//   mode 4  strided_pages(): thread t of T copies pages t, t+T, ... (multi-threaded)
-//   mode 5  strided_shard_pages(): thread t of T copies shards t, t+T, ... (multi-threaded, sharded only)
 // Not covered here: the stateful set_*_state / *_with_state APIs (not supported on the address-generator path), and
 // async_write_zeros (DRAM pages are addressed in software; local L1 is zeroed by the iDMA zero device).
 //
 // Compile-time args: mode, num_pages.
-// Runtime args: report_addr -- per thread (at + thread * 64 bytes), 4 words: {hw, pushes, address requests, done
-// marker} (hw and pushes in TT_TA_ADDRGEN_STATS builds; see internal/tensor/generated_noc_addr.h).
+// Runtime args: report_addr -- 4 words: {hw, pushes, address requests, done marker} (hw and pushes in
+// TT_TA_ADDRGEN_STATS builds; see internal/tensor/generated_noc_addr.h).
 
 #include <type_traits>
 
@@ -26,7 +23,6 @@
 #include "experimental/kernel_args.h"
 
 namespace {
-constexpr uint32_t kReportStride = 64;
 constexpr uint32_t kDoneMarker = 0x600DD00Du;
 }  // namespace
 
@@ -116,53 +112,19 @@ void kernel_main() {
                     pad, dst, page_size, {.offset_bytes = p * page_size}, {.page_id = p}, {.trid = 1});
                 ++requests;
             }
-        } else if constexpr (mode == 3) {
+        } else {
+            static_assert(mode == 3, "unknown mode");
             for (uint32_t p = 0; p < num_pages; ++p) {
                 noc.inline_dw_write<NocOptions::INLINE_L1>(dst, 0xD0D00000u | p, {.page_id = p});
                 ++requests;
-            }
-        } else if constexpr (mode == 4) {
-            auto src_pages = [&] {
-                if constexpr (kSharded) {
-                    return src.strided_pages();
-                } else {
-                    return src.strided_pages(num_pages);
-                }
-            };
-            auto dst_pages = [&] {
-                if constexpr (kSharded) {
-                    return dst.strided_pages();
-                } else {
-                    return dst.strided_pages(num_pages);
-                }
-            };
-            for (const auto& page : src_pages()) {
-                read(page);
-            }
-            noc.async_read_barrier();
-            for (const auto& page : dst_pages()) {
-                write(page);
-            }
-        } else {
-            static_assert(mode == 5 && kSharded, "strided_shard_pages() needs a sharded tensor");
-            for (const auto& shard : src.strided_shard_pages()) {
-                for (const auto& page : shard) {
-                    read(page);
-                }
-            }
-            noc.async_read_barrier();
-            for (const auto& shard : dst.strided_shard_pages()) {
-                for (const auto& page : shard) {
-                    write(page);
-                }
             }
         }
     };
     run(src_ta, dst_ta);
     noc.async_write_barrier();
 
-    volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        report_addr + get_my_thread_id() * kReportStride + MEM_L1_UNCACHED_BASE);
+    volatile tt_l1_ptr uint32_t* report =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr + MEM_L1_UNCACHED_BASE);
 #if defined(TT_TA_ADDRGEN_STATS)
     report[0] = tensor_accessor::detail::transfer_stats.hw;
     report[1] = tensor_accessor::detail::transfer_stats.pushes;
