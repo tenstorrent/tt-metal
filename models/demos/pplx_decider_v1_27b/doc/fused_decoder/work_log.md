@@ -1,8 +1,10 @@
 # Fused decoder work log (stage 2, prefill only)
 
 Model `perplexity-ai/pplx-decider-v1-27b`, one Blackhole p150a (13x10 grid, 8 DRAM banks).
-Branch `gtobarTT/pplx-decider-bringup`. Baseline: stage 1 commit `248d1a8202c`.
+Branch `gtobarTT/pplx-decider-bringup`. Baseline: stage 1 commit `3d944442cb4`.
 Precision policy unchanged: `act_bf16__w_bfp8_all__hifi2`.
+Hashes are post-rewrite: the bring-up commits were re-authored to gtobarTT after stage 2 (tree
+unchanged; pre-rewrite stage 1 was `248d1a8202c`, stage 2 code `6def56eea90`).
 
 Labels: **measured** means a command and its output recorded here; **inferred** means it follows
 from code or arithmetic and was not run.
@@ -79,7 +81,7 @@ ad hoc after fusions 1-6: L0 0.999987 / 0.999993, L3 0.999991 / 0.999994 (**meas
 | PCC suite | `taskset -c 12-23 pytest models/demos/pplx_decider_v1_27b/tests/pcc -q -p no:cacheprovider` | 124 passed, 949 s, exit 0; min 0.999897; no drop > 1e-4 vs stage 1 (deltas -1.4e-6..+3.8e-6) |
 | fallback audit | `tests/pcc/test_runtime_audit.py`, part of the suite | passed; 0 host calls |
 | determinism | `tests/pcc/test_prefill_contract.py`, part of the suite | passed; bit-identical repeat |
-| before/after perf | interleaved A1 B1 A2 B2 (A = `248d1a8202c` tt/ and tests, B = HEAD) | README table; logs `stage2/perf_ab_*.jsonl`, `stage2/logs/ab_perf.log` |
+| before/after perf | interleaved A1 B1 A2 B2 (A = `3d944442cb4` tt/ and tests, B = HEAD) | README table; logs `stage2/perf_ab_*.jsonl`, `stage2/logs/ab_perf.log` |
 | device profiles | Tracy `test_profile_layer` L0/L3 x S128/2048/8192 | `doc/fused_decoder/perf/`; raw `stage2/tracy/final_*` |
 | watcher 10 s | `TT_METAL_WATCHER=10 ... test_decoder_layer.py -k "S2048 and (L0 or L3)"` | 2 passed, exit 0, 0 error lines |
 | watcher 1 s | `TT_METAL_WATCHER=1 ... -k "(S2048 or S8192) and (L0 or L3)"` | 4 passed, exit 0, 22 dumps, 0 error lines |

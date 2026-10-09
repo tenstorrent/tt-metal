@@ -1,17 +1,20 @@
 # Stage 2: fused decoder layers (prefill only)
 
 Model `perplexity-ai/pplx-decider-v1-27b`, one Blackhole p150a. Branch `gtobarTT/pplx-decider-bringup`.
-The baseline is the stage 1 functional commit `248d1a8202c`. The precision policy is unchanged
+The baseline is the stage 1 functional commit `3d944442cb4`. The precision policy is unchanged
 (`act_bf16__w_bfp8_all__hifi2`: BF16 activations, BFP8 weights, HiFi2 matmuls with fp32
 accumulation, HiFi4 norms), and the prefill chunk is still 2048. Labels: **measured** means a
 command and its output are recorded here or in [`work_log.md`](work_log.md); **inferred** means it
 follows from code or arithmetic.
 
+The bring-up commits were rewritten to author gtobarTT after stage 2 (tree unchanged); the hashes
+here are the post-rewrite ones (pre-rewrite: stage 1 `248d1a8202c`, stage 2 code `6def56eea90`).
+
 ## Approach
 
 - **Fusions are made in the existing modules.** They live in `tt/` (TTv2 style, one
   implementation, as in bge_m3). There is no parallel `fused_decoder.py`; stage 1 is commit
-  `248d1a8202c`, and every before/after number compares against that commit.
+  `3d944442cb4`, and every before/after number compares against that commit.
 - **Prefill only.** Decode, paged-decode trace and KV-cache items of the graph-fusing goal are N/A.
   The length contract is the buckets 128 / 1024 / 2048 / 4096 / 8192 at batch 1.
 - **One change per measurement.** A change is kept only if it is faster and PCC holds; see the
@@ -48,7 +51,7 @@ Stage 1 review fixes:
 ## PCC (measured)
 
 `pytest models/demos/pplx_decider_v1_27b/tests/pcc -q -p no:cacheprovider` on the fused working
-tree. That tree was then committed as `6def56eea90`; the pre-commit `black` hook re-wrapped one
+tree. That tree was then committed as `63e7f42d76a`; the pre-commit `black` hook re-wrapped one
 call in `tt/attention.py` and changed no code:
 **124 passed in 949 s, exit 0**, with 123 PCC records and 0 failures. Log:
 `artifacts/pplx_decider/stage2/logs/pcc_suite_final.log`; records:
@@ -70,7 +73,7 @@ Harness: `tests/perf/test_prefill_perf.py::test_layer_and_module_perf`, the same
 eager, 2 warm-ups, then the median of 7 passes, with `synchronize_device` around each pass.
 
 Baseline and fused code ran interleaved, A1 B1 A2 B2, under the same host load. A is the stage 1
-`tt/` and `tests/` (checked out from `248d1a8202c` for the run, then restored). B is HEAD. Each cell
+`tt/` and `tests/` (checked out from `3d944442cb4` for the run, then restored). B is HEAD. Each cell
 is the mean of the two run medians, in ms. Logs: `artifacts/pplx_decider/stage2/perf_ab_{A1,B1,A2,B2}.jsonl`.
 
 | target | kind | S=128 | S=1024 | S=2048 | S=4096 | S=8192 |
@@ -185,7 +188,7 @@ The environment is the same as stage 1 (`source python_env/bin/activate; export 
 | PCC suite | `pytest models/demos/pplx_decider_v1_27b/tests/pcc -q` |
 | PCC vs stage 1 | compare `pcc_suite_final.jsonl` with the stage 1 `logs/pcc_results.jsonl` by (module, layer, seq_len) |
 | warmed perf | `PPLX_DECIDER_PERF_LOG=<log> pytest models/demos/pplx_decider_v1_27b/tests/perf/test_prefill_perf.py -q -s -k test_layer_and_module_perf` |
-| baseline perf | `git checkout 248d1a8202c -- models/demos/pplx_decider_v1_27b/tt models/demos/pplx_decider_v1_27b/tests/{test_utils.py,pcc,probe,pcc_report.py}`, run the line above, then `git checkout HEAD -- models/demos/pplx_decider_v1_27b/tt models/demos/pplx_decider_v1_27b/tests` |
+| baseline perf | `git checkout 3d944442cb4 -- models/demos/pplx_decider_v1_27b/tt models/demos/pplx_decider_v1_27b/tests/{test_utils.py,pcc,probe,pcc_report.py}`, run the line above, then `git checkout HEAD -- models/demos/pplx_decider_v1_27b/tt models/demos/pplx_decider_v1_27b/tests` |
 | device profile | `python -m tracy -r -p -v --no-web-server -o <dir> -m pytest "models/demos/pplx_decider_v1_27b/tests/perf/test_prefill_perf.py::test_profile_layer[L0_linear-S2048-device_params0]"` (S128, S2048 and S8192; L0_linear or L3_full) |
 | perf report | `tt-perf-report <ops_perf_results.csv> --start-signpost PREFILL_START --end-signpost PREFILL_END --no-advice [--csv out.csv]` |
 | watcher | `TT_METAL_WATCHER=10 TT_METAL_LOGS_PATH=<dir> pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_decoder_layer.py -q -k "S2048 and (L0 or L3)"` |

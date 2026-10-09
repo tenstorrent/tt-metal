@@ -127,8 +127,8 @@ class PplxGatedDeltaNet(LightweightModule):
         h, hv, dk = a.linear_num_key_heads, a.linear_num_value_heads, a.linear_key_head_dim
         gate_width = (hv + TILE - 1) // TILE * TILE
 
-        # Three matmuls on the same input instead of one packed [qkv|z|b|a] output: slicing the
-        # wide qkv and z columns back out of a packed output cost two full copies per chunk.
+        # Two matmuls on the same input (qkv, and packed z|b|a) instead of one packed [qkv|z|b|a]
+        # output: slicing the wide qkv column block back out of a packed output cost a full copy per chunk.
         qkv = prefill_linear(x, self.in_qkv, "delta_in", opts.linear)
         zba = prefill_linear(x, self.in_zba, "delta_in", opts.linear)
         z_width = a.linear_value_dim
