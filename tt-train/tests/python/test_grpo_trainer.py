@@ -11,10 +11,9 @@ produces a non-degenerate gradient update.
 
 Speed strategy:
   * Tiny random-init Llama (1 layer, hidden=64, head_dim=32).
-  * Skip the HuggingFace weight download: ``snapshot_download`` (in ``grpo.utils.llama_completer``) and
-    ``_download_hf_repo`` (in ``ttml.trainers.grpo_trainer.grpo_ttml_model``) are patched to return a
-    directory holding only the tiny model's ``config.json``, and ``load_from_safetensors`` to do nothing,
-    so the model keeps its random init.
+  * Skip the HuggingFace weight download: ``_download_hf_repo`` in
+    ``ttml.trainers.grpo_trainer.grpo_ttml_model`` is patched to return a directory holding only the tiny
+    model's ``config.json``, and ``load_from_safetensors`` to do nothing, so the model keeps its random init.
   * ``max_completion_length=4`` so autoregressive generation is cheap.
   * Exactly one optimizer step (``gradient_accumulation_steps=1``,
     ``num_iterations=1``, ``prompts_to_train=2``). On this single device
@@ -35,8 +34,6 @@ from __future__ import annotations
 
 import csv
 import json
-import os
-import sys
 
 import numpy as np
 import pytest
@@ -52,20 +49,6 @@ from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback, get_grpo_con
 from ttml.trainers.grpo_trainer import grpo_ttml_model, layout_microbatch, place_old_nlog_probs, save_checkpoint
 from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 
-
-# The ``LlamaGRPOCompleter`` reference implementation lives under the examples
-# tree, not under ``ttml`` proper. Surface its package on the import path so
-# this test can use it.
-_EXAMPLES_DIR = os.path.join(
-    os.environ.get("TT_METAL_HOME", os.path.join(os.path.dirname(__file__), "..", "..", "..")),
-    "tt-train",
-    "sources",
-    "examples",
-)
-if _EXAMPLES_DIR not in sys.path:
-    sys.path.insert(0, _EXAMPLES_DIR)
-
-from grpo.utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter  # noqa: E402
 
 HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
 
@@ -162,9 +145,8 @@ CAPITALS_SYSTEM_PROMPT = (
 
 @pytest.fixture(autouse=True)
 def _reuse_open_device(monkeypatch):
-    """Override ``grpo_ttml_model.open_device`` (and the reference
-    ``LlamaGRPOCompleter.setup_device``) to reuse the already-open AutoContext
-    device instead of calling ``open_device`` again.
+    """Override ``grpo_ttml_model.open_device`` to reuse the already-open
+    AutoContext device instead of calling ``open_device`` again.
 
     Other tests in ``tests/python/`` lazily open the AutoContext device on
     first tensor use and never close it. When pytest collects this file
@@ -175,7 +157,6 @@ def _reuse_open_device(monkeypatch):
     """
     current_device = lambda *args: ttml.autograd.AutoContext.get_instance().get_device()  # noqa: E731
     monkeypatch.setattr(grpo_ttml_model, "open_device", current_device)
-    monkeypatch.setattr(LlamaGRPOCompleter, "setup_device", current_device)
 
 
 class _RecordingCallback(TrainerCallback):
@@ -203,104 +184,23 @@ class _RecordingCallback(TrainerCallback):
 
 
 def _patch_tiny_checkpoint(monkeypatch, checkpoint_dir, **config_overrides) -> None:
-    """Point the completer and ``grpo_ttml_model`` at *checkpoint_dir*, holding only the tiny model's
-    ``config.json``, and skip the weight load so the model keeps its random init.
+    """Point ``grpo_ttml_model`` at *checkpoint_dir*, holding only the tiny model's ``config.json``, and skip
+    the weight load so the model keeps its random init.
 
-    On ``grpo_ttml_model`` the download patch goes on ``_download_hf_repo``, which wraps
-    ``huggingface_hub.snapshot_download``; that one is left alone because transformers also uses it to fetch
-    the tokenizer this test loads. ``load_from_safetensors`` is bound with ``from ... import``, so it is
-    patched on each module, not on ``ttml.models.llama``.
+    The download patch goes on ``_download_hf_repo``, which wraps ``huggingface_hub.snapshot_download``;
+    that one is left alone because transformers also uses it to fetch the tokenizer this test loads.
+    ``load_from_safetensors`` is bound with ``from ... import``, so it is patched on ``grpo_ttml_model``,
+    not on ``ttml.models.llama``.
     """
-    from grpo.utils import llama_completer
-
     (checkpoint_dir / "config.json").write_text(json.dumps({**TINY_HF_CONFIG, **config_overrides}))
-    monkeypatch.setattr(llama_completer, "snapshot_download", lambda *args, **kwargs: str(checkpoint_dir))
     monkeypatch.setattr(grpo_ttml_model, "_download_hf_repo", lambda model_source: str(checkpoint_dir))
-    for module in (llama_completer, grpo_ttml_model):
-        monkeypatch.setattr(module, "load_from_safetensors", lambda *args, **kwargs: None)
+    monkeypatch.setattr(grpo_ttml_model, "load_from_safetensors", lambda *args, **kwargs: None)
 
 
 @pytest.fixture
 def patch_llama_weight_loading(monkeypatch, tmp_path_factory):
     """Skip the HF download / safetensors load so the tiny model keeps random init."""
     _patch_tiny_checkpoint(monkeypatch, tmp_path_factory.mktemp("tiny_llama"))
-
-
-def _tiny_completer(max_tokens_to_complete: int = 4, model_source: str = HF_MODEL_ID) -> LlamaGRPOCompleter:
-    return LlamaGRPOCompleter(
-        ctx=LlamaCompletionCtx(max_tokens_to_complete=max_tokens_to_complete, temperature=1.0),
-        transformer_config=TINY_TRANSFORMER_CONFIG,
-        device_config=DEVICE_CONFIG,
-        model_source=model_source,
-    )
-
-
-@pytest.mark.requires_device
-def test_rejects_a_tokenizer_larger_than_the_checkpoint_vocab(monkeypatch, tmp_path, expect_error):
-    """A token id past the checkpoint's vocab has no embedding row, so the completer refuses it up front."""
-    _patch_tiny_checkpoint(monkeypatch, tmp_path, vocab_size=128000)  # the tokenizer has 128256 tokens
-    with expect_error(ValueError, "the tokenizer has 128256 tokens but the checkpoint embeds 128000"):
-        _tiny_completer()
-
-
-@pytest.mark.requires_device
-def test_never_samples_a_checkpoint_row_past_the_tokenizer(monkeypatch, tmp_path):
-    """Rows past the tokenizer decode to nothing, so the logits mask covers them up to the logits' width: the
-    checkpoint's vocab, since the model slices off its tile padding. Here every such row outscores the real
-    ones, so one left unmasked gets sampled."""
-    _patch_tiny_checkpoint(monkeypatch, tmp_path, vocab_size=128256 + 8, tie_word_embeddings=False)
-    completer = _tiny_completer(max_tokens_to_complete=8)
-    model, num_tokens = completer.model, len(completer.tokenizer)
-    assert model.config.vocab_size > num_tokens, "premise: the checkpoint has rows past the tokenizer"
-
-    lm_head = np.zeros((model.padded_vocab_size, model.config.hidden_size), np.float32)
-    lm_head[num_tokens:] = np.random.default_rng(0).normal(0.0, 4.0, lm_head[num_tokens:].shape)
-    ttml.autograd.assign_numpy(model.fc.weight.tensor, lm_head)
-
-    completions = completer.generate([[1, 2, 3, 4]] * 4)
-
-    assert all(token < num_tokens for completion in completions for token in completion), completions
-    ttml.autograd.AutoContext.get_instance().reset_graph()
-
-
-def _save_trainer_checkpoint(completer, output_dir) -> str:
-    """Save *completer*'s model as the trainer does, with distinct values in every parameter so a fresh
-    init can't pass for a resumed one. The tiny model has no HF repo, so its config.json is written here."""
-    rng = np.random.default_rng(0)
-    for param in completer.model.parameters().values():
-        ttml.autograd.assign_numpy(param, rng.standard_normal(param.shape()).astype(np.float32))
-    save_checkpoint(completer.model, step=1, output_dir=str(output_dir), tokenizer=completer.tokenizer)
-    checkpoint_dir = output_dir / "checkpoints" / "grpo_step_1"
-    (checkpoint_dir / "config.json").write_text(json.dumps(TINY_HF_CONFIG))
-    return str(checkpoint_dir)
-
-
-@pytest.mark.requires_device
-def test_resumes_from_a_trainer_checkpoint(patch_llama_weight_loading, tmp_path):
-    saved = _tiny_completer()
-    checkpoint_dir = _save_trainer_checkpoint(saved, tmp_path)
-    expected = {name: param.to_numpy(ttnn.DataType.FLOAT32) for name, param in saved.model.parameters().items()}
-
-    resumed = _tiny_completer(model_source=checkpoint_dir)
-
-    for name, param in resumed.model.parameters().items():
-        assert np.array_equal(param.to_numpy(ttnn.DataType.FLOAT32), expected[name]), f"{name} was not resumed"
-    ttml.autograd.AutoContext.get_instance().reset_graph()
-
-
-@pytest.mark.requires_device
-def test_rejects_a_trainer_checkpoint_missing_a_parameter(patch_llama_weight_loading, tmp_path, expect_error):
-    """A checkpoint saved under older parameter names must not resume with those weights at init."""
-    from safetensors.numpy import load_file, save_file
-
-    checkpoint_dir = _save_trainer_checkpoint(_tiny_completer(), tmp_path)
-    weights_path = os.path.join(checkpoint_dir, "model.safetensors")
-    weights = load_file(weights_path)
-    del weights["Llama/blocks/0/attention/qkv_linear/weight"]
-    save_file(weights, weights_path)
-
-    with expect_error(RuntimeError, "lacks 1 of the model's"):
-        _tiny_completer(model_source=checkpoint_dir)
 
 
 @pytest.mark.requires_device
@@ -532,38 +432,32 @@ def test_capitals_one_by_one_equals_single_batch():
     """Greedy generation must give the same output one-by-one and batched.
 
     Loads the real Llama-3.2-1B-Instruct weights (no monkey-patch) and runs
-    the same four prompts through ``LlamaGRPOCompleter.generate_str`` twice:
+    the same four prompts through ``TTMLRolloutSampler.generate`` twice:
     once one prompt at a time, once as a single batch. With temperature=0
-    and ``num_generations=1`` the outputs must match exactly; any drift
+    and ``completions_per_prompt=1`` the outputs must match exactly; any drift
     indicates a batching / padding / mask bug in the generation path.
     """
-    completer = LlamaGRPOCompleter(
-        ctx=LlamaCompletionCtx(
-            max_tokens_to_complete=256,
-            temperature=0.0,
-            completions_per_prompt=1,
-        ),
-        transformer_config=LLAMA_1B_TRANSFORMER_CONFIG,
-        device_config=DEVICE_CONFIG,
-        model_source=HF_MODEL_ID,
-    )
+    model, tokenizer = grpo_ttml_model.setup_ttml_model(LLAMA_1B_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_MODEL_ID)
+    sampler = TTMLRolloutSampler(model, tokenizer, 256, 0.0, 1)
 
-    tokenizer = completer.tokenizer
     user_prompts = [
         "The capital of France is",
         "The capital of Portugal is",
         "The capital of United Kingdom is",
         "The capital of Czech Republic is",
     ]
-    prompts = [_to_capitals_chat_prompt(tokenizer, p) for p in user_prompts]
+    prompts = [tokenizer.encode(_to_capitals_chat_prompt(tokenizer, p)) for p in user_prompts]
+
+    def decode(batch):
+        return [tokenizer.decode(c, skip_special_tokens=False) for c in batch.completions]
 
     single_outputs = []
     for prompt in prompts:
-        completions = completer.generate_str([prompt])
+        completions = decode(sampler.generate([prompt]))
         assert len(completions) == 1
         single_outputs.append(completions[0])
 
-    batched_outputs = completer.generate_str(prompts)
+    batched_outputs = decode(sampler.generate(prompts))
     assert len(batched_outputs) == len(prompts)
 
     assert batched_outputs == single_outputs, (
