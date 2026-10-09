@@ -942,7 +942,7 @@
   sp_config: sc1
 
 # Gemma4 prefill perf gate: traced 256k prefill at chunks 2k/4k/8k, each failing if the wall
-# time to reach 1k/10k/100k/256k context exceeds its threshold in test_perf_glx.py.
+# time to reach 1k/10k/100k/256k context exceeds its threshold in test_model_perf_glx.py.
 - name: "(Gemma4-31B-it) D_P prefill perf gate 256k@2k/4k/8k"
   fabric_profile: 1d
   cmd: |
@@ -953,8 +953,8 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/gemma4_d_p/tests/test_perf_glx.py \
-        -vv --tb=short --timeout=900
+      python3 -m pytest models/demos/gemma4_d_p/tests/test_model_perf_glx.py \
+        -vv --tb=short
     '
   test_type: gemma4_d_p_perf
   test_tags: [gemma4_d_p]
@@ -962,7 +962,7 @@
   budget_type: demo
   skus:
     bh_sc1_high_power:
-      timeout: 20
+      timeout: 10
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic

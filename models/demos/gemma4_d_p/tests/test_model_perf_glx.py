@@ -57,8 +57,9 @@ RESULT_HEADER = f"{'Context':>8} | {'Chunk':>6} | {'Wall (ms)':>10} | {'Max (ms)
 
 
 @torch.no_grad()
+@pytest.mark.timeout(540)
 @parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
-def test_perf_glx(mesh_device, reset_seeds):
+def test_model_perf_glx(mesh_device, reset_seeds):
     """Gate the 1k/10k/100k/256k wall times of a traced 256k prefill at each chunk size, writing weights once."""
     if unset := [(c, k) for c in CHUNK_SIZES for k in REPORT_CONTEXT_KS if (c, k) not in WALL_MS_THRESHOLDS]:
         pytest.fail(f"no wall-time threshold for (chunk_size, context_k) {unset} (context in units of 1k)")

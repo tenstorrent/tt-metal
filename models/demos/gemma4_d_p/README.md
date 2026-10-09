@@ -35,10 +35,10 @@ Both tests take chunk sizes 2048, 4096, 8192, 16384, and 32768; a chunk must spl
 
 ### Prefill perf gate in CI
 
-The **Blaze Models Prefill tests** workflow runs `tests/test_perf_glx.py` as the `gemma4_d_p_perf` stage on a 14kW Galaxy, 8×4. Dispatch it with `test-type=gemma4_d_p_perf`; the `gemma4_d_p` tag and nightly runs include it. In one process, with each cached weight written to the device once (as in `test_prefill_chunk_sweep_traced`), it runs a traced 256k prefill at chunk sizes 2048, 4096 and 8192, and fails if the wall time to reach 1k, 10k, 100k or 256k context exceeds its entry in `WALL_MS_BASELINES` by more than its margin in `WALL_MS_MARGINS`. Wall time is the `[traced_perf] context wall times` table: host staging, trace dispatch and the wait for the device, excluding compile and capture, rounded up to whole chunks.
+The **Blaze Models Prefill tests** workflow runs `tests/test_model_perf_glx.py` as the `gemma4_d_p_perf` stage on a 14kW Galaxy, 8×4. Dispatch it with `test-type=gemma4_d_p_perf`; the `gemma4_d_p` tag and nightly runs include it. In one process, with each cached weight written to the device once (as in `test_prefill_chunk_sweep_traced`), it runs a traced 256k prefill at chunk sizes 2048, 4096 and 8192, and fails if the wall time to reach 1k, 10k, 100k or 256k context exceeds its entry in `WALL_MS_BASELINES` by more than its margin in `WALL_MS_MARGINS`. Wall time is the `[traced_perf] context wall times` table: host staging, trace dispatch and the wait for the device, excluding compile and capture, rounded up to whole chunks.
 
 ```bash
-pytest models/demos/gemma4_d_p/tests/test_perf_glx.py -sv
+pytest models/demos/gemma4_d_p/tests/test_model_perf_glx.py -sv
 ```
 
 ### Layer perf in CI
