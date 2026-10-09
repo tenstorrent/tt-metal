@@ -184,3 +184,14 @@ not run yet), a plain-matmul LoFi / HiFi probe on real weights, per-stage error 
 - Warm 56k prefill 9.34 -> 8.95 s (6290 tok/s). s4096 KV PCC min/mean kv_latent 0.96653 / 0.98409 (fp32 0.96674 /
   0.98401), index_key 0.98813 / 0.99491 (0.98806 / 0.99516), kda_conv min 0.9620 (0.9653); final hidden 0.9445 both.
   56k top1 0.8804 (fp32 0.8767, unified 0.8814). GLM_SCATTER_OP=ttnn restores the fp32 path.
+
+## KDA output: one MiMo fabric_reduce_scatter over rows (2026-10-09), GLM_KDA_OUT_RS=fabric default
+
+- Split layout: ttKDA's o_proj + fp32 reduce_scatter_minimal_async (hidden dim) + fp32 all_gather (hidden) +
+  mesh_partition (rows) is an all-reduce cut to a quarter of the rows. Now _GlmKDA returns o_proj's bf16 partial and
+  TtKdaAttention reduces it with ttnn.bringup.fabric_reduce_scatter over rows on axis 1 (straight to the quarter).
+- Warm 56k prefill 8.96 -> 8.47 s (6648 tok/s). s4096 KV PCC min/mean kv_latent 0.96713 / 0.98405, index_key 0.98798 /
+  0.99491 (before 0.96653 / 0.98409, 0.98813 / 0.99491); final hidden 0.9445 (same).
+- Pre-existing, found on the way: KDA at HiFi2 (attention fidelity) gives a ~3.4% low attention output on every row
+  (L0 component test rel L2 0.0345, norm ratio 0.960..0.979, fails 0.02); HiFi4 0.0071, 0.990..0.998 (passes).
+  GLM_KDA_FIDELITY overrides the KDA fidelity alone (default: GLM_ATTN_FIDELITY).
