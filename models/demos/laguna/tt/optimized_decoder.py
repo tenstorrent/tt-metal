@@ -276,6 +276,10 @@ def _largest_divisor(n: int, max_divisor: int = 8) -> int:
     return 1
 
 
+# rows up to which _rms width-shards a [1, rows, H] norm (the interleaved norm uses one core per 32-row tile row)
+_SHARDED_NORM_MAX_ROWS = int(os.environ.get("TT_LAGUNA_SHARDED_NORM_MAX_ROWS", "256"))
+
+
 def _decode_shard_cores(k: int, n: int, max_cores: int = 32) -> int:
     """Pick a compute-core count that divides K into tiles, keeps in0_block_w>=2
     (K-tiles/cores >= 2), and prefers dividing N-tiles cleanly. Bounded to keep the
@@ -810,10 +814,16 @@ class OptimizedDecoder(LightweightModule):
 
     # ---- shared ops -------------------------------------------------------- #
     def _rms(self, x, weight, out_cores=None, cores=None):
-        # Decode-sized rows: the interleaved norm runs on ONE core (~65 us for [32, 3072]); width-shard
-        # the row across cores (same 32-core split as the QKV matmul input) and normalize in L1.
+        # Decode-sized rows: the interleaved norm runs on ONE core per 32-row tile row (~65 us for [32, 3072]);
+        # width-shard the rows across cores (same 32-core split as the QKV matmul input) and normalize in L1.
+        # Also the local rows of a sequence-parallel prefill ([1, seq / D, H], 3D) up to _SHARDED_NORM_MAX_ROWS.
         rows = x.shape[-2]
-        if len(x.shape) == 4 and x.shape[0] * x.shape[1] == 1 and rows <= 128 and x.layout == ttnn.TILE_LAYOUT:
+        lead = math.prod(list(x.shape)[:-2])
+        max_rows = 128 if out_cores else _SHARDED_NORM_MAX_ROWS
+        if lead == 1 and len(x.shape) in (3, 4) and rows <= max_rows and x.layout == ttnn.TILE_LAYOUT:
+            shape3 = x.shape if len(x.shape) == 3 else None
+            if shape3 is not None:
+                x = ttnn.reshape(x, (1, 1, rows, x.shape[-1]))
             m = ((rows + TILE - 1) // TILE) * TILE
             h = x.shape[-1]
             # out_cores: shard on the NEXT DRAM-sharded matmul's input grid and return the sharded result
@@ -837,7 +847,13 @@ class OptimizedDecoder(LightweightModule):
                 ),
                 memory_config=x_sh.memory_config(),
             )
-            return out if out_cores else ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
+            if out_cores:
+                return out
+            # decode (4D) keeps the result in L1; prefill rows ([1, rows, H]) go back to DRAM, where the prefill ops
+            # downstream (the routed-expert op among them) require their inputs
+            decode = shape3 is None and rows <= 128
+            out = ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG if decode else ttnn.DRAM_MEMORY_CONFIG)
+            return ttnn.reshape(out, shape3) if shape3 is not None else out
         return ttnn.rms_norm(x, weight=weight, epsilon=self.cfg.eps, compute_kernel_config=self._norm_ck)
 
     def _per_head_norm(self, x, weight):
