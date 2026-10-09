@@ -4633,7 +4633,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         return torch.nn.functional.logsigmoid(t1.to(torch.float32))
 
     def _reshuffle_rows(self, tensor, src_idx, dst_idx, data_format):
-        """reshuffle_rows on a tilized Dest image; rounds after every row like the Dest store."""
+        """reshuffle_rows on a tilized Dest image; every row's SFPSTORE truncates to the Dest width."""
         result = tensor.clone()
         torch_format = format_dict[data_format]
 
@@ -4650,7 +4650,8 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             src = tile_row(src_idx, in_row)
             dst = tile_row(dst_idx, out_row)
             summed = result[dst].to(torch.float32) + result[src].to(torch.float32)
-            result[dst] = summed.to(torch_format).to(result.dtype)
+            stored = truncate_to_dest_width(summed, data_format)
+            result[dst] = stored.to(torch_format).to(result.dtype)
         return result
 
     def _add_top_row(
