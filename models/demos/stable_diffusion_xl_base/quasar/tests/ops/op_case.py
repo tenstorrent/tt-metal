@@ -250,7 +250,8 @@ def _fit_2d_matmul_program_config(pc, specs, params, device):
     Nt = math.ceil(w_shape[-1] / 32)
     per_core_M = math.ceil(Mt / gy)
     per_core_N = math.ceil(Nt / gx)
-    in0_block_w = pc["in0_block_w"] if Kt % pc["in0_block_w"] == 0 else 1
+    # largest K block <= the captured one that divides Kt (the captured value was chosen for the WH shard width)
+    in0_block_w = max(d for d in range(1, pc["in0_block_w"] + 1) if Kt % d == 0)
     ck = params.get("compute_kernel_config") or {}
     max_dst_tiles = 4 if ck.get("fp32_dest_acc_en") else 8
     best = (1, 1)
