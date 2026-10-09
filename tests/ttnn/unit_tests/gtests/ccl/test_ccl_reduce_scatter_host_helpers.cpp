@@ -5,11 +5,15 @@
 #include <fmt/base.h>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include "impl/buffers/semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
@@ -155,4 +159,83 @@ TEST(ReduceScatterDefaultWorkers, PlaceableCoreCountNonRectangularGrid) {
     EXPECT_EQ(ttnn::experimental::ccl::count_worker_cores_placeable_after_offset(grid, tt::tt_metal::CoreCoord(0, 8)), 16u);
     // Offset (0, 4): tall block rows 0..5 stay (48 cores); short block rows 0..1 land on its own rows 4..5 (6 cores).
     EXPECT_EQ(ttnn::experimental::ccl::count_worker_cores_placeable_after_offset(grid, tt::tt_metal::CoreCoord(0, 4)), 54u);
+}
+
+// add_semaphore_descriptor is the ProgramDescriptor counterpart of CreateSemaphore(program, cores, ...): it returns the
+// lowest id that no semaphore of the same core type in the descriptor uses on any of the requested cores.
+namespace {
+tt::tt_metal::CoreRangeSet core_block(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
+    return tt::tt_metal::CoreRangeSet(
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(x0, y0), tt::tt_metal::CoreCoord(x1, y1)));
+}
+
+tt::tt_metal::CoreRangeSet single_core(uint32_t x, uint32_t y) { return core_block(x, y, x, y); }
+}  // namespace
+
+TEST(AddSemaphoreDescriptor, EmptyDescriptorStartsAtZeroAndRecordsTheSemaphore) {
+    tt::tt_metal::ProgramDescriptor desc;
+    EXPECT_EQ(ttnn::experimental::ccl::add_semaphore_descriptor(desc, single_core(0, 0), /*initial_value=*/7), 0u);
+    ASSERT_EQ(desc.semaphores.size(), 1u);
+    const auto& sem = desc.semaphores.front();
+    EXPECT_EQ(sem.id, 0u);
+    EXPECT_EQ(sem.core_type, tt::CoreType::WORKER);
+    EXPECT_EQ(sem.core_ranges, single_core(0, 0));
+    EXPECT_EQ(sem.initial_value, 7u);
+}
+
+TEST(AddSemaphoreDescriptor, OverlappingCoresGetTheNextId) {
+    tt::tt_metal::ProgramDescriptor desc;
+    EXPECT_EQ(ttnn::experimental::ccl::add_semaphore_descriptor(desc, single_core(1, 1)), 0u);
+    // Shares only core (1, 1) with the first semaphore.
+    EXPECT_EQ(ttnn::experimental::ccl::add_semaphore_descriptor(desc, core_block(0, 0, 1, 1)), 1u);
+    EXPECT_EQ(ttnn::experimental::ccl::add_semaphore_descriptor(desc, core_block(0, 0, 2, 2)), 2u);
+}
+
+TEST(AddSemaphoreDescriptor, DisjointCoresReuseTheSameId) {
+    tt::tt_metal::ProgramDescriptor desc;
+    EXPECT_EQ(ttnn::experimental::ccl::add_semaphore_descriptor(desc, single_core(0, 0)), 0u);
+    EXPECT_EQ(ttnn::experimental::ccl::add_semaphore_descriptor(desc, single_core(1, 0)), 0u);
+    EXPECT_EQ(ttnn::experimental::ccl::add_semaphore_descriptor(desc, core_block(2, 0, 3, 3)), 0u);
+    EXPECT_EQ(desc.semaphores.size(), 3u);
+}
+
+TEST(AddSemaphoreDescriptor, OtherCoreTypeDoesNotCollide) {
+    tt::tt_metal::ProgramDescriptor desc;
+    EXPECT_EQ(ttnn::experimental::ccl::add_semaphore_descriptor(desc, single_core(0, 0)), 0u);
+    EXPECT_EQ(ttnn::experimental::ccl::add_semaphore_descriptor(desc, single_core(0, 0), 0, tt::CoreType::ETH), 0u);
+    EXPECT_EQ(ttnn::experimental::ccl::add_semaphore_descriptor(desc, single_core(0, 0)), 1u);
+    EXPECT_EQ(ttnn::experimental::ccl::add_semaphore_descriptor(desc, single_core(0, 0), 0, tt::CoreType::ETH), 1u);
+}
+
+TEST(AddSemaphoreDescriptor, IdMustBeFreeOnEveryRequestedCore) {
+    // Semaphores another builder already put in the descriptor: id 0 on core (0, 0), id 1 on core (1, 0).
+    tt::tt_metal::ProgramDescriptor desc;
+    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{.id = 0, .core_ranges = single_core(0, 0)});
+    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{.id = 1, .core_ranges = single_core(1, 0)});
+    // Each core has a free id below 2, but neither 0 nor 1 is free on both.
+    EXPECT_EQ(ttnn::experimental::ccl::add_semaphore_descriptor(desc, core_block(0, 0, 1, 0)), 2u);
+    // Core (0, 0) now holds 0 and 2; core (1, 0) holds 1 and 2.
+    EXPECT_EQ(ttnn::experimental::ccl::add_semaphore_descriptor(desc, single_core(0, 0)), 1u);
+    EXPECT_EQ(ttnn::experimental::ccl::add_semaphore_descriptor(desc, single_core(1, 0)), 0u);
+}
+
+TEST(AddSemaphoreDescriptor, ThrowsOnceEveryIdIsTakenOnARequestedCore) {
+    // add_semaphore_descriptor keeps its own copy of the per-core semaphore count, as no public header exposes
+    // NUM_SEMAPHORES. Running the ids out against the runtime's value fails if the two ever differ.
+    tt::tt_metal::ProgramDescriptor desc;
+    for (uint32_t id = 0; id < tt::tt_metal::NUM_SEMAPHORES; id++) {
+        EXPECT_EQ(ttnn::experimental::ccl::add_semaphore_descriptor(desc, single_core(0, 0)), id);
+    }
+    EXPECT_THROW(ttnn::experimental::ccl::add_semaphore_descriptor(desc, single_core(0, 0)), std::runtime_error);
+    // Core (1, 0) has every id free, but core (0, 0) has none.
+    EXPECT_THROW(ttnn::experimental::ccl::add_semaphore_descriptor(desc, core_block(0, 0, 1, 0)), std::runtime_error);
+    EXPECT_EQ(desc.semaphores.size(), tt::tt_metal::NUM_SEMAPHORES);
+    EXPECT_EQ(ttnn::experimental::ccl::add_semaphore_descriptor(desc, single_core(1, 0)), 0u);
+}
+
+TEST(AddSemaphoreDescriptor, ThrowsOnEmptyCoreRangeSet) {
+    tt::tt_metal::ProgramDescriptor desc;
+    EXPECT_THROW(
+        ttnn::experimental::ccl::add_semaphore_descriptor(desc, tt::tt_metal::CoreRangeSet()), std::runtime_error);
+    EXPECT_TRUE(desc.semaphores.empty());
 }
