@@ -314,11 +314,16 @@ add(
 )
 
 
-def bounds(blocks):
-    """pooled regression rates over the fresh draws with one-sided 95% Clopper-Pearson upper bounds"""
+def bounds(blocks, bh=False):
+    """pooled regression rates over the fresh draws (WH, or BH with bh=True) with one-sided 95% Clopper-Pearson upper
+    bounds"""
     from scipy.stats import beta
 
-    fr = [b for b in blocks if b["id"].startswith("fresh") and not b["id"].startswith("freshbh")]
+    fr = [
+        b
+        for b in blocks
+        if b["id"].startswith("freshbh" if bh else "fresh") and (bh or not b["id"].startswith("freshbh"))
+    ]
     if not fr:
         return None
     n = sum(b["n"] for b in fr)
@@ -334,6 +339,7 @@ for vid, meta in V.items():
     cv, _ = cv_block(CVPRED[vid])
     doc = dict(id=vid, commit=commit.get(vid), **meta, cv=cv, rules_cv=rules, device=DEV.get(vid, []))
     doc["bounds"] = bounds(doc["device"])
+    doc["bounds_bh"] = bounds(doc["device"], bh=True)
     sheet = {"v7": "abl/v7_nopad.json", "v8": "abl/v8_bhharv.json", "v9": "abl/v9.json"}.get(vid)
     if sheet and os.path.exists(sheet):  # written by cv7.py: per-arch value, fold spread, pinned, at bound
         import model7
