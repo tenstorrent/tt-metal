@@ -8,6 +8,7 @@
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
 #include <mesh_device.hpp>
+#include <experimental/mesh_device.hpp>
 #include <mesh_device_view.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/host_region.hpp"
@@ -2285,34 +2286,39 @@ void MeshDevice::wait_for_thread_pool() { pimpl_->wait_for_thread_pool(); }
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
-std::vector<MeshCoordinate> MeshDevice::local_coordinates() const {
+}  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental::mesh_device {
+
+using distributed::MeshCoordinate;
+using distributed::MeshCoordinateRange;
+using distributed::MeshDevice;
+
+std::vector<MeshCoordinate> detail::local_coordinates(const MeshDevice& mesh) {
     std::vector<MeshCoordinate> coords;
-    for (const MeshCoordinate& coord : MeshCoordinateRange(shape())) {
-        if (pimpl_->is_local(coord)) {
+    for (const MeshCoordinate& coord : MeshCoordinateRange(mesh.shape())) {
+        if (mesh.is_local(coord)) {
             coords.push_back(coord);
         }
     }
     return coords;
 }
 
-void MeshDevice::check_info_coordinate(const MeshCoordinate& coord, std::string_view property_name) const {
+static void check_info_coordinate(const MeshDevice& mesh, const MeshCoordinate& coord, std::string_view property_name) {
     TT_FATAL(
-        get_view().contains(coord),
+        mesh.get_view().contains(coord),
         "Cannot query {} at {}: coordinate is out of bounds of mesh {}",
         property_name,
         coord,
-        shape());
+        mesh.shape());
     TT_FATAL(
-        pimpl_->is_local(coord),
-        "Cannot query {} at {}: device is remote (owned by another host)",
-        property_name,
-        coord);
+        mesh.is_local(coord), "Cannot query {} at {}: device is remote (owned by another host)", property_name, coord);
 }
 
-void MeshDevice::throw_non_uniform_info(const MeshCoordinate& coord, std::string_view property_name) const {
+void detail::throw_non_uniform_info(const MeshCoordinate& coord, std::string_view property_name) {
     TT_THROW(
         "Property {} differs between the devices of this mesh (first mismatch at {}); use "
-        "get_info_per_device() or get_info(coord) instead",
+        "get_info_per_device(mesh) or get_info(mesh, coord) instead",
         property_name,
         coord);
 }
@@ -2320,27 +2326,27 @@ void MeshDevice::throw_non_uniform_info(const MeshCoordinate& coord, std::string
 // All of the properties below are architecture-wide today: they come from the Hal of the MetalEnv the mesh was
 // created from, so every local device reports the same value. `coord` is only validated.
 template <>
-std::uint32_t MeshDevice::get_info<info::l1_alignment>(const MeshCoordinate& coord) const {
-    check_info_coordinate(coord, info::l1_alignment::name);
-    return pimpl_->metal_env().get_hal().get_alignment(HalMemType::L1);
+std::uint32_t get_info<info::l1_alignment>(const MeshDevice& mesh, const MeshCoordinate& coord) {
+    check_info_coordinate(mesh, coord, info::l1_alignment::name);
+    return mesh.impl().metal_env().get_hal().get_alignment(HalMemType::L1);
 }
 
 template <>
-std::uint32_t MeshDevice::get_info<info::dram_alignment>(const MeshCoordinate& coord) const {
-    check_info_coordinate(coord, info::dram_alignment::name);
-    return pimpl_->metal_env().get_hal().get_alignment(HalMemType::DRAM);
+std::uint32_t get_info<info::dram_alignment>(const MeshDevice& mesh, const MeshCoordinate& coord) {
+    check_info_coordinate(mesh, coord, info::dram_alignment::name);
+    return mesh.impl().metal_env().get_hal().get_alignment(HalMemType::DRAM);
 }
 
 template <>
-tt::ARCH MeshDevice::get_info<info::architecture>(const MeshCoordinate& coord) const {
-    check_info_coordinate(coord, info::architecture::name);
-    return pimpl_->metal_env().get_hal().get_arch();
+tt::ARCH get_info<info::architecture>(const MeshDevice& mesh, const MeshCoordinate& coord) {
+    check_info_coordinate(mesh, coord, info::architecture::name);
+    return mesh.impl().metal_env().get_hal().get_arch();
 }
 
 template <>
-std::string MeshDevice::get_info<info::architecture_name>(const MeshCoordinate& coord) const {
-    check_info_coordinate(coord, info::architecture_name::name);
-    return tt::get_string_lowercase(pimpl_->metal_env().get_hal().get_arch());
+std::string get_info<info::architecture_name>(const MeshDevice& mesh, const MeshCoordinate& coord) {
+    check_info_coordinate(mesh, coord, info::architecture_name::name);
+    return tt::get_string_lowercase(mesh.impl().metal_env().get_hal().get_arch());
 }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal::experimental::mesh_device

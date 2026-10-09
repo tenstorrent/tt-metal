@@ -13,13 +13,16 @@
 
 /**
  * @file
+ * These experimental tags may change without notice.
+ *
  * @brief Tags for the device query API (`get_info<InfoType>()`).
  *
  * A tag is an empty struct with a `return_type` for its value and a static `name` for diagnostics. Tags are shared by
  * every object that can answer a query (currently MeshDevice), so a property has one name and one meaning everywhere.
  *
  * @code
- * uint32_t alignment = mesh_device->get_info<tt::tt_metal::info::l1_alignment>();
+ * namespace exp = tt::tt_metal::experimental;
+ * uint32_t alignment = exp::mesh_device::get_info<exp::info::l1_alignment>(*mesh_device);
  * @endcode
  *
  * To add a property, declare it with METALIUM_INFO here and implement it for each object that supports it.
@@ -38,7 +41,7 @@
  * `InfoType::return_type` is the type of the property's value.
  */
 
-namespace tt::tt_metal::info {
+namespace tt::tt_metal::experimental::info {
 
 /**
  * @brief Required address alignment, in bytes, for L1 allocations.
@@ -60,6 +63,6 @@ METALIUM_INFO(architecture, tt::ARCH);
  */
 METALIUM_INFO(architecture_name, std::string);
 
-}  // namespace tt::tt_metal::info
+}  // namespace tt::tt_metal::experimental::info
 
 #undef METALIUM_INFO

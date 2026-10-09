@@ -15,7 +15,6 @@
 #include <ostream>
 #include <set>
 #include <string>
-#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -26,7 +25,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/info.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
@@ -339,88 +337,10 @@ public:
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
-    // Device queries. In the three calls below, `InfoType` is a property tag from <tt-metalium/info.hpp>
-    // (e.g. info::l1_alignment) and `InfoType::return_type` is the type of its value. Only the properties listed after
-    // the class are supported; asking for any other tag fails to compile.
-
-    /**
-     * @brief Queries a property of the device at a single mesh coordinate.
-     *
-     * This is the form every property implements; get_info<InfoType>() and get_info_per_device<InfoType>() are built on
-     * it.
-     *
-     * @tparam InfoType Property tag from `<tt-metalium/info.hpp>`, e.g. `info::l1_alignment`.
-     * @param coord Coordinate of the device in this mesh.
-     * @return The value of the property for that device, of type `InfoType::return_type`.
-     * @throws std::runtime_error If `coord` is out of bounds of this mesh, or the device is remote (owned by another
-     * host).
-     */
-    // Reject unsupported tags at compile time; supported tags have explicit specializations below.
-    template <class InfoType>
-    typename InfoType::return_type get_info(const MeshCoordinate& coord) const = delete;
-
-    /**
-     * @brief Queries a property of this mesh as a whole.
-     *
-     * The property must have the same value on every local device. Use get_info_per_device<InfoType>() or
-     * get_info<InfoType>(coord) for properties that can differ between devices.
-     *
-     * @tparam InfoType Property tag from `<tt-metalium/info.hpp>`, e.g. `info::l1_alignment`.
-     * @return The value shared by all local devices, of type `InfoType::return_type`.
-     * @throws std::runtime_error If the mesh has no local devices, or if the local devices report different values.
-     */
-    template <class InfoType>
-    typename InfoType::return_type get_info() const {
-        const std::vector<MeshCoordinate> coords = local_coordinates();
-        TT_FATAL(!coords.empty(), "Cannot query {}: mesh device has no local devices", InfoType::name);
-        typename InfoType::return_type value = get_info<InfoType>(coords.front());
-        for (const MeshCoordinate& coord : coords) {
-            if (!(get_info<InfoType>(coord) == value)) {
-                throw_non_uniform_info(coord, InfoType::name);
-            }
-        }
-        return value;
-    }
-
-    /**
-     * @brief Queries a property of every device in this mesh.
-     *
-     * @tparam InfoType Property tag from `<tt-metalium/info.hpp>`, e.g. `info::l1_alignment`.
-     * @return A container shaped like the mesh. Entries for local devices hold the property value, of type
-     * `InfoType::return_type`; entries for remote devices (owned by another host) are marked remote.
-     */
-    template <class InfoType>
-    DistributedMeshContainer<typename InfoType::return_type> get_info_per_device() const {
-        DistributedMeshContainer<typename InfoType::return_type> result(shape());
-        for (const MeshCoordinate& coord : local_coordinates()) {
-            result.at(coord) = MaybeRemote<typename InfoType::return_type>::local(get_info<InfoType>(coord));
-        }
-        return result;
-    }
-
     // Only for internal and testing purposes
     const MeshDeviceImpl& impl() const { return *pimpl_; }
     MeshDeviceImpl& impl() { return *pimpl_; }
-
-private:
-    // Coordinates of the devices that are local to this host, in row-major order.
-    std::vector<MeshCoordinate> local_coordinates() const;
-    // Throws if `coord` is out of bounds of this mesh or refers to a remote device.
-    void check_info_coordinate(const MeshCoordinate& coord, std::string_view property_name) const;
-    // Throws because the device at `coord` reports a different value than the first local device.
-    [[noreturn]] void throw_non_uniform_info(const MeshCoordinate& coord, std::string_view property_name) const;
 };
-
-// Properties supported by MeshDevice::get_info (see <tt-metalium/info.hpp> for what each one means). Each is defined
-// in mesh_device.cpp; asking for any other tag fails to compile.
-template <>
-std::uint32_t MeshDevice::get_info<info::l1_alignment>(const MeshCoordinate& coord) const;
-template <>
-std::uint32_t MeshDevice::get_info<info::dram_alignment>(const MeshCoordinate& coord) const;
-template <>
-tt::ARCH MeshDevice::get_info<info::architecture>(const MeshCoordinate& coord) const;
-template <>
-std::string MeshDevice::get_info<info::architecture_name>(const MeshCoordinate& coord) const;
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);
 

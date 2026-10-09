@@ -61,6 +61,8 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/topology_solver.tpp
     api/tt-metalium/experimental/forge_backdoor/global_semaphore.hpp
     api/tt-metalium/experimental/global_circular_buffer.hpp
+    api/tt-metalium/experimental/info.hpp
+    api/tt-metalium/experimental/mesh_device.hpp
     api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/inspector_config.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
@@ -148,7 +150,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/hal_types.hpp
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
-    api/tt-metalium/info.hpp
     api/tt-metalium/int8.hpp
     api/internal/blitz_decode_pipeline.hpp
     api/internal/cluster.hpp
