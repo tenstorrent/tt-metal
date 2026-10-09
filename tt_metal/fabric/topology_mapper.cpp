@@ -515,7 +515,7 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         }
 
         auto pgd = ::tt::tt_fabric::PhysicalGroupingDescriptor::find_and_load(
-            /*pgd_path=*/std::nullopt, &physical_system_descriptor_);
+            cluster, /*pgd_path=*/std::nullopt, &physical_system_descriptor_);
         const auto asic_ranks = config.disable_rank_bindings ? decltype(asic_id_to_mesh_rank){} : asic_id_to_mesh_rank;
         const auto fabric_ranks =
             config.disable_rank_bindings ? decltype(fabric_node_id_to_mesh_rank){} : fabric_node_id_to_mesh_rank;

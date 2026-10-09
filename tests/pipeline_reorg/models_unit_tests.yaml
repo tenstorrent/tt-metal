@@ -213,8 +213,9 @@
     pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py -k "not test_model_tp_decode_batched and not test_model_tp_long_prefill_traced"
     # test_all_buckets_fit_trace_region is deselected here and runs last on its own budget (see below);
-    # the three kept here are host-only (monkeypatched, no device), so 120 s is ample.
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_bucket_trace_teardown_releases_all_stores or test_condense_remaps_gdn_before_decode_in_both_sampling_modes"
+    # the tests kept here are host-only (monkeypatched, no device), so 120 s is ample.
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_bucket_trace_teardown_releases_all_stores or test_condense_remaps_gdn_before_decode_in_both_sampling_modes or test_decode_warmup_stages_every_width_before_capture or test_decode_warmup_restages_when_num_blocks_changes or test_prefill_warmup_prepares_eagerly_and_only_records_when_traced or test_prefill_prepare_is_idempotent_and_record_requires_it"
+    TT_METAL_TRACE_ALLOC_TRACKING=1 pytest --timeout 900 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_vllm_warmup_leaves_no_late_allocations"
     # MTP speculative decode (unit-test coverage only until batch>1 lands; e2e runs plain decode).
     # QWEN36_SPEC_TEST_N_LAYERS=8: lossless/determinism hold on a truncated model, and the 8 layers are
     # already in the tensor cache from test_model_tp, so no 64-layer load happens in this leg.
@@ -801,7 +802,10 @@
   model: minimax-m3
   skus:
     bh_galaxy:
-      timeout: 15
+      # 15 -> 30 (2026-10-07): #58594 added four test_ep_moe_vs_ref cases (shared_schedule x3,
+      # overlap_release_recreate) at ~140-280 s each (host-side random-weight build + bf8 convert);
+      # the leg went from 700 s (last green, c187c31050b) to ~1410 s projected.
+      timeout: 30
       tier: 1
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
@@ -1617,8 +1621,8 @@
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
-    # The shared offline cache lacks this adapter. Fetch its pinned revision into
-    # writable job storage before pytest opens any devices; keep the tests offline.
+    # Resolve the adapter before pytest opens any devices; keep the tests offline. A hit in the
+    # shared /mnt/models cache is used in place; only a missing adapter is fetched into job storage.
     LORA_PATH=$(mpirun -np 1 --bind-to none --wdir "${TT_METAL_HOME}" \
       env HF_HUB_OFFLINE=0 python3 -m models.tt_dit.utils.ltx_lora_asset \
       --download-dir "${PIPELINE_DIR:?CI staging directory required}/.lora") || exit 1
