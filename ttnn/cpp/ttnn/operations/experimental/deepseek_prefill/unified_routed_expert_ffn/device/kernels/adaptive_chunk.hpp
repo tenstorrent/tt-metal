@@ -29,6 +29,41 @@ namespace adaptive_chunk {
 
 constexpr uint32_t kGridY = 8;  // M-row cores; a chunk spans per_core_M * kGridY tile-rows
 
+// Row-major x, tilized once per M-row: how many gate/up K-blocks ahead of its matmul an
+// owner core tilizes (it tilizes block kb + kXTilizeLookahead before MACing kb). The
+// reader and compute must agree on it. 2 measured slower than 1 at ISL 384/512 and no
+// better below. Must stay below the owner rotation period minus 2 so a core never
+// holds two of its own blocks in its single-slot x staging.
+constexpr uint32_t kXTilizeLookahead = 1;
+
+// Owner rotation for row-major x, tilized once per M-row. The weight (in1) sender of
+// column gx sits on row gx % kGridY; an owner on that core would run its x multicast
+// handshake ahead of the column's gate read every block it owns, stalling the column.
+// So each M-row rotates ownership only over its NON-weight-sender columns: block b is
+// owned by the (b % period)-th such column. Pure arithmetic, shared by the reader and
+// (through host-computed slots) the compute kernel; the host mirrors the rule.
+inline bool x_owner_eligible(uint32_t gx, uint32_t gy) { return (gx % kGridY) != gy; }
+inline uint32_t x_owner_period(uint32_t grid_x, uint32_t gy) {
+    uint32_t n = 0;
+    for (uint32_t c = 0; c < grid_x; ++c) {
+        n += x_owner_eligible(c, gy) ? 1u : 0u;
+    }
+    return n;
+}
+// Column of the owner of gate/up K-block b in M-row gy.
+inline uint32_t x_owner_col(uint32_t b, uint32_t grid_x, uint32_t gy, uint32_t period) {
+    uint32_t slot = b % period;
+    for (uint32_t c = 0; c < grid_x; ++c) {
+        if (x_owner_eligible(c, gy)) {
+            if (slot == 0) {
+                return c;
+            }
+            --slot;
+        }
+    }
+    return 0;
+}
+
 // Chunk layout for `count_tiles` tile-rows, given the CB-sized maximum chunk
 // `max_chunk` (= per_core_M_max * kGridY): a run of FULL chunks of max_chunk,
 // then ONE tail chunk sized down to the remainder. This minimizes the chunk
