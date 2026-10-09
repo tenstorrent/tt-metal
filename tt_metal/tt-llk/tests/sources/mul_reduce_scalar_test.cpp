@@ -126,6 +126,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t i = 0; i < tile_cnt; ++i)
     {
         LLK_ASSERT((i < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Multiply tile index exceeds maximum destination tiles");
+        if (_llk_math_mul_reduce_scalar_shares_slot_(tensor_shape))
+        {
+            _llk_math_mul_reduce_scalar_mul_half_slot_<MATH_FIDELITY>(tensor_shape, i);
+            continue;
+        }
         _llk_math_eltwise_binary_<
             EltwiseBinaryType::ELWMUL,
             BroadcastType::NONE,
@@ -139,7 +144,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, MATH_FIDELITY, false /* enforce_fp32_accumulation */>();
 
     // Step 4 - stage tile 0 into SrcA, fill SrcB with the scaler, clear DEST[0].
-    _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(DST_INDEX);
+    _llk_math_mul_reduce_scalar_move_product_(DST_INDEX, tile_cnt, tensor_shape);
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_calculate_fill_<false /* APPROX */, 2 /* ITERATIONS */>, DST_INDEX, VectorMode::RC_custom, REDUCE_SCALER);
     _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(DST_INDEX);
@@ -147,11 +152,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Step 6 - column-reduce every tile, accumulating into DEST[0].
     // (narrow_tile / num_faces are derived internally from the TensorShape.)
-    _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
+    _llk_math_mul_reduce_column_<MATH_FIDELITY, false>(DST_INDEX, tensor_shape);
     // The tile count is a runtime argument here; the API unrolls this loop for its compile-time count.
     for (std::uint32_t i = 1; i < tile_cnt; ++i)
     {
-        _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i);
+        _llk_math_mul_reduce_scalar_move_product_(i, tile_cnt, tensor_shape);
         _llk_math_mul_reduce_column_<MATH_FIDELITY, false>(DST_INDEX, tensor_shape);
     }
 

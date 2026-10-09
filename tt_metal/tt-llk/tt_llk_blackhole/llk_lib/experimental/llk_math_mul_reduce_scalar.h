@@ -9,6 +9,7 @@
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
+#include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_defs.h"
 #include "llk_math_common.h"
@@ -41,6 +42,24 @@ using namespace ckernel;
     MOVD2A_4_ROWS(base_offset, 13)  \
     MOVD2A_4_ROWS(base_offset, 14)  \
     MOVD2A_4_ROWS(base_offset, 15)
+
+#define MOVD2A_FACE(base_offset, face)         \
+    MOVD2A_4_ROWS(base_offset, (face) * 4 + 0) \
+    MOVD2A_4_ROWS(base_offset, (face) * 4 + 1) \
+    MOVD2A_4_ROWS(base_offset, (face) * 4 + 2) \
+    MOVD2A_4_ROWS(base_offset, (face) * 4 + 3)
+
+#define MOVD2A_FACES(base_offset, num_faces) \
+    MOVD2A_FACE(base_offset, 0)              \
+    if ((num_faces) > 1)                     \
+    {                                        \
+        MOVD2A_FACE(base_offset, 1)          \
+    }                                        \
+    if ((num_faces) > 2)                     \
+    {                                        \
+        MOVD2A_FACE(base_offset, 2)          \
+        MOVD2A_FACE(base_offset, 3)          \
+    }
 
 /**
  * @brief Execute GAPOOL operations with optional high fidelity phases
@@ -136,6 +155,82 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 8);
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 12, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 12);
         // The pooling passes read SrcB rows 0 to 15 only.
+    }
+}
+
+// The DEST_TO_SRCA move of only the faces the tile has: the column pass reads 16 SrcA rows per face.
+inline void _llk_math_mul_reduce_scalar_move_faces_to_srca_(const std::uint32_t idst, const ckernel::TensorShape tensor_shape)
+{
+    if (idst == 0)
+    {
+        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base());
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    }
+
+    math::srca_bank_wait();
+
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
+    switch (idst)
+    {
+        case 0:
+            MOVD2A_FACES(0, num_faces);
+            break;
+        case 1:
+            MOVD2A_FACES(64, num_faces);
+            break;
+        case 2:
+            MOVD2A_FACES(128, num_faces);
+            break;
+        case 3:
+            MOVD2A_FACES(192, num_faces);
+            break;
+        case 4:
+            MOVD2A_FACES(256, num_faces);
+            break;
+        case 5:
+            MOVD2A_FACES(320, num_faces);
+            break;
+        case 6:
+            MOVD2A_FACES(384, num_faces);
+            break;
+        case 7:
+            MOVD2A_FACES(448, num_faces);
+            break;
+        default:
+            break;
+    }
+}
+
+// A 16x32 product takes 32 rows and its column pass moves the SrcA counter 32 rows, so two share one 64-row DEST slot.
+inline bool _llk_math_mul_reduce_scalar_shares_slot_(const ckernel::TensorShape tensor_shape)
+{
+    return tensor_shape.face_r_dim == ckernel::MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == 1 && tensor_shape.num_faces_c_dim == 2;
+}
+
+// The multiply of product i at a 32-row DEST stride; otherwise _llk_math_eltwise_binary_'s ELWMUL path.
+template <MathFidelity math_fidelity>
+inline void _llk_math_mul_reduce_scalar_mul_half_slot_(const ckernel::TensorShape tensor_shape, const std::uint32_t product_index)
+{
+    math::set_dst_write_addr<DstTileShape::Tile32x16, UnpackDestination::SrcRegs>(product_index);
+    const std::uint32_t fidelity_loop = is_high_fidelity(math_fidelity) ? tensor_shape.total_num_faces() : 1;
+#pragma GCC unroll 0
+    for (std::uint32_t i = 0; i < fidelity_loop; i++)
+    {
+        ckernel_template::run();
+    }
+    math::clear_dst_reg_addr();
+}
+
+// The move before product i's column pass: with shared slots the first of a pair moves the whole slot, the second none.
+inline void _llk_math_mul_reduce_scalar_move_product_(const std::uint32_t i, const std::uint32_t num_products, const ckernel::TensorShape tensor_shape)
+{
+    if (!_llk_math_mul_reduce_scalar_shares_slot_(tensor_shape))
+    {
+        _llk_math_mul_reduce_scalar_move_faces_to_srca_(i, tensor_shape);
+    }
+    else if ((i & 1) == 0)
+    {
+        _llk_math_mul_reduce_scalar_move_faces_to_srca_(i / 2, i + 1 < num_products ? ckernel::DEFAULT_TENSOR_SHAPE : tensor_shape);
     }
 }
 

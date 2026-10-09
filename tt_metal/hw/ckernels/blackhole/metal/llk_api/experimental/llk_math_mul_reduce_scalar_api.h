@@ -27,12 +27,16 @@ inline void llk_math_eltwise_mul_reduce_scalar_init(
         EltwiseBinaryReuseDestType::NONE>(tensor_shape, acc_to_dest);
 }
 
-template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
+template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool share_slots = false>
 inline void llk_math_eltwise_mul_reduce_scalar(
     std::uint32_t dst_index, const std::uint32_t icb0, const bool clear_fp32_dst_acc = true) {
     SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(icb0);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+    if (share_slots && _llk_math_mul_reduce_scalar_shares_slot_(tensor_shape)) {
+        _llk_math_mul_reduce_scalar_mul_half_slot_<math_fidelity>(tensor_shape, dst_index);
+        return;
+    }
 
     _llk_math_eltwise_binary_<
         EltwiseBinaryType::ELWMUL,
@@ -85,4 +89,13 @@ template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestT
 inline void llk_math_mul_reduce_scalar_move_dest_to_src(std::uint32_t idst = 0) {
     SAN_HOOK(unsupported());
     _llk_math_mul_reduce_scalar_move_dest_to_src_<binary_reuse_dest>(idst);
+}
+
+// The move before product i's column pass, for products written with share_slots.
+inline void llk_math_mul_reduce_scalar_move_product(
+    const std::uint32_t i, const std::uint32_t num_products, const std::uint32_t icb0) {
+    SAN_HOOK(unsupported());
+    const std::uint32_t operand_id = get_operand_id(icb0);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+    _llk_math_mul_reduce_scalar_move_product_(i, num_products, tensor_shape);
 }

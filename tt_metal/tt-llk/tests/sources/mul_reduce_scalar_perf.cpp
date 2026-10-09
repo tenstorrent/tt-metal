@@ -108,7 +108,7 @@ inline void reduce_later_tiles(const ckernel::TensorShape& tensor_shape)
 #pragma GCC unroll 8
     for (std::uint32_t i = 1; i < row_tiles; ++i)
     {
-        _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i);
+        _llk_math_mul_reduce_scalar_move_product_(i, row_tiles, tensor_shape);
         _llk_math_mul_reduce_column_<MATH_FIDELITY, false>(DST_INDEX, tensor_shape);
     }
 }
@@ -119,6 +119,11 @@ inline void row_math(const std::uint32_t runtime_tile_cnt, const ckernel::Tensor
     _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(tensor_shape, 0);
     for (std::uint32_t i = 0; i < tile_cnt; ++i)
     {
+        if (_llk_math_mul_reduce_scalar_shares_slot_(tensor_shape))
+        {
+            _llk_math_mul_reduce_scalar_mul_half_slot_<MATH_FIDELITY>(tensor_shape, i);
+            continue;
+        }
         _llk_math_eltwise_binary_<
             EltwiseBinaryType::ELWMUL,
             BroadcastType::NONE,
@@ -128,11 +133,11 @@ inline void row_math(const std::uint32_t runtime_tile_cnt, const ckernel::Tensor
             EltwiseBinaryReuseDestType::NONE>(tensor_shape, i, true /* clear_fp32_dst_acc */);
     }
     _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, MATH_FIDELITY, false>();
-    _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(DST_INDEX);
+    _llk_math_mul_reduce_scalar_move_product_(DST_INDEX, tile_cnt, tensor_shape);
     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<false, 2>, DST_INDEX, VectorMode::RC_custom, REDUCE_SCALER);
     _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(DST_INDEX);
     _llk_math_mul_reduce_scalar_clear_tile_<is_fp32_dest_acc_en>(DST_INDEX);
-    _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
+    _llk_math_mul_reduce_column_<MATH_FIDELITY, false>(DST_INDEX, tensor_shape);
     if constexpr (ROW_TILES > 0)
     {
         reduce_later_tiles<ROW_TILES>(tensor_shape);
@@ -141,7 +146,7 @@ inline void row_math(const std::uint32_t runtime_tile_cnt, const ckernel::Tensor
     {
         for (std::uint32_t i = 1; i < tile_cnt; ++i)
         {
-            _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i);
+            _llk_math_mul_reduce_scalar_move_product_(i, tile_cnt, tensor_shape);
             _llk_math_mul_reduce_column_<MATH_FIDELITY>(DST_INDEX, tensor_shape);
         }
     }
