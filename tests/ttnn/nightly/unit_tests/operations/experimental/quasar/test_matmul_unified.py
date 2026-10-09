@@ -16,7 +16,9 @@ tests that set num_compute_threads > 1 are skipped.
 
 DM threads and buffering: on Quasar four reader threads take each C slice's K chunks round-robin (padded
 to a multiple of four with credit-only K chunks) and two writer threads take the compute threads' shares of C;
-Wormhole / Blackhole have one reader and one writer. Cores with several C slices keep two in flight.
+Wormhole / Blackhole have one reader and one writer. Cores with several C slices keep two in flight. When each
+core produces one C slice on a rectangle laid out like the C slices, A is multicast along rows of cores and B down
+columns, with one reader thread.
 
 Run on Wormhole / Blackhole:
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py
@@ -832,6 +834,33 @@ def test_dm_threads_with_K_spill_and_packer_l1_acc(device):
         subblock_N_tiles=2,
     )
     out = _run(device, a, b, config, packer_l1_acc=True)
+    _check(out, _golden(a, b))
+
+
+MULTICAST_GRIDS = [
+    # name, cores (columns, rows): one C slice per core, so A is multicast along each row of cores and B down
+    # each column (an operand with one core per row / column is read directly).
+    ("row_A_multicast", (4, 1)),
+    ("column_B_multicast", (1, 4)),
+    ("grid_A_and_B_multicast", (3, 2)),
+]
+
+
+@pytest.mark.parametrize("name,grid", MULTICAST_GRIDS, ids=[g[0] for g in MULTICAST_GRIDS])
+def test_multicast(device, name, grid):
+    """Batch 2, ragged M / K / N, three 2-tile K chunks: the first core of each row reads the A slices and
+    multicasts them along the row, and the first core of each column does the same with B."""
+    gx, gy = _grid(device)
+    columns, rows = grid
+    if columns > gx or rows > gy:
+        pytest.skip(f"needs a {columns}x{rows} grid, device has {gx}x{gy}")
+    B, M, K, N = 2, rows * 2 * TILE - 7, 5 * TILE + 20, columns * 3 * TILE - 11
+    torch.manual_seed(26)
+    a, b = _randn(1, B, M, K), _randn(1, B, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, columns - 1, rows - 1), C_slice_M_tiles=2, C_slice_N_tiles=3, K_chunk_tiles=2
+    )
+    out = _run(device, a, b, config)
     _check(out, _golden(a, b))
 
 

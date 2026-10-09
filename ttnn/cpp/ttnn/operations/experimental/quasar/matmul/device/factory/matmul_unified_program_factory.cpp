@@ -38,6 +38,11 @@ const DFBSpecName B_SLICE_DFB{"B_slice"};
 const DFBSpecName C_SLICE_DFB{"C_slice"};
 const DFBSpecName C_PARTIALS_DFB{"C_partials"};
 
+const SemaphoreSpecName A_RECEIVERS_READY_SEM{"A_receivers_ready"};
+const SemaphoreSpecName A_DATA_READY_SEM{"A_data_ready"};
+const SemaphoreSpecName B_RECEIVERS_READY_SEM{"B_receivers_ready"};
+const SemaphoreSpecName B_DATA_READY_SEM{"B_data_ready"};
+
 const TensorParamName A_TENSOR{"A"};
 const TensorParamName B_TENSOR{"B"};
 const TensorParamName C_TENSOR{"C"};
@@ -320,10 +325,21 @@ UnifiedMatmulPlan plan_unified_matmul(
         const bool C_shard_borrowable =
             C_shard_matches && one_C_slice_per_core_no_batch && plan.num_compute_threads == 1;
 
-        // ---- Reader threads and C slices in flight ----
-        // Several reader threads each own part of the A and B DFBs, which a borrowed shard cannot be split into.
+        // ---- Multicast, reader threads and C slices in flight ----
+        // One C slice per core on a rectangle laid out as the C slices tile C (walked row-major): the cores of a row
+        // then need the same A slice at the same time, and the cores of a column the same B slice.
+        const std::vector<CoreRange>& core_ranges = config.cores.ranges();
+        const bool cores_tile_C =
+            core_ranges.size() == 1 && plan.cores.size() == plan.C_slices_per_batch &&
+            core_ranges[0].grid_size().x == C_slices_across_N && core_ranges[0].grid_size().y == C_slices_down_M &&
+            (config.orientation == ShardOrientation::ROW_MAJOR || C_slices_across_N == 1 || C_slices_down_M == 1);
+        plan.A_mcast_num_dests = cores_tile_C && !A_shard_borrowable ? C_slices_across_N - 1 : 0;
+        plan.B_mcast_num_dests = cores_tile_C && !B_shard_borrowable ? C_slices_down_M - 1 : 0;
+        // Several reader threads each own part of the A and B DFBs, which a borrowed shard cannot be split into. A
+        // multicasting reader has one thread, so each operand has one handshake per core.
+        const bool multicasts = plan.A_mcast_num_dests > 0 || plan.B_mcast_num_dests > 0;
         plan.num_reader_threads =
-            is_quasar && !A_shard_borrowable && !B_shard_borrowable ? QUASAR_NUM_READER_THREADS : 1;
+            is_quasar && !multicasts && !A_shard_borrowable && !B_shard_borrowable ? QUASAR_NUM_READER_THREADS : 1;
         plan.C_buffer_depth = (uint64_t)plan.batch_size * plan.max_C_slices_per_core > 1 ? C_BUFFER_DEPTH : 1;
 
         // ---- Subblock: the C slice's tiles accumulated in DST at once ----
@@ -577,7 +593,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     log_debug(
         tt::LogOp,
         "MatmulUnifiedProgramConfig: borrow A={} B={} C={} (C slice {}x{}, subblock {}x{}, K chunk {} of {} tiles, "
-        "{} compute threads, {} reader threads, {} writer threads, {} A / B slices and {} C slices in flight)",
+        "{} compute threads, {} reader threads, {} writer threads, {} A / B slices and {} C slices in flight, A / B "
+        "multicast to {} / {} cores)",
         plan.borrow_A,
         plan.borrow_B,
         plan.borrow_C,
@@ -591,7 +608,9 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         plan.num_reader_threads,
         plan.num_writer_threads,
         plan.operand_buffer_depth,
-        plan.C_buffer_depth);
+        plan.C_buffer_depth,
+        plan.A_mcast_num_dests,
+        plan.B_mcast_num_dests);
     if (C.is_sharded() && !plan.borrow_C) {
         log_warning(
             tt::LogOp,
@@ -663,6 +682,13 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .num_threads = plan.num_reader_threads,
         .compiler_options = {},
         .dfb_bindings = {ProducerOf(A_SLICE_DFB, "A_slice"), ProducerOf(B_SLICE_DFB, "B_slice")},
+        .semaphore_bindings =
+            {
+                {.semaphore_spec_name = A_RECEIVERS_READY_SEM, .accessor_name = "A_receivers_ready"},
+                {.semaphore_spec_name = A_DATA_READY_SEM, .accessor_name = "A_data_ready"},
+                {.semaphore_spec_name = B_RECEIVERS_READY_SEM, .accessor_name = "B_receivers_ready"},
+                {.semaphore_spec_name = B_DATA_READY_SEM, .accessor_name = "B_data_ready"},
+            },
         .tensor_bindings =
             {
                 TensorBinding{.tensor_parameter_name = A_TENSOR, .accessor_name = "A"},
@@ -686,8 +712,27 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"A_borrowed", plan.borrow_A ? 1u : 0u},
                 {"B_borrowed", plan.borrow_B ? 1u : 0u},
                 {"num_reader_threads", plan.num_reader_threads},
+                {"A_mcast_num_dests", plan.A_mcast_num_dests},
+                {"B_mcast_num_dests", plan.B_mcast_num_dests},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"first_C_slice", "num_C_slices"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"first_C_slice",
+                  "num_C_slices",
+                  "A_mcast_receiver",
+                  "A_mcast_sender_x",
+                  "A_mcast_sender_y",
+                  "A_mcast_start_x",
+                  "A_mcast_start_y",
+                  "A_mcast_end_x",
+                  "A_mcast_end_y",
+                  "B_mcast_receiver",
+                  "B_mcast_sender_x",
+                  "B_mcast_sender_y",
+                  "B_mcast_start_x",
+                  "B_mcast_start_y",
+                  "B_mcast_end_x",
+                  "B_mcast_end_y"}},
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
@@ -804,13 +849,40 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     const uint32_t C_slices_per_core_floor = plan.C_slices_per_batch / num_active_cores;
     const uint32_t cores_with_extra_C_slice = plan.C_slices_per_batch % num_active_cores;
     uint32_t next_C_slice = 0;  // position in the walk of the next unassigned C slice
+    // Multicast follows a core's row (A) and column (B) of the core rectangle, each led by its first core. The reader
+    // is on NOC_0 (Quasar has one NoC), which takes a multicast rectangle from its lowest to its highest coordinates.
+    const CoreRange core_grid = config.cores.bounding_box();
     for (uint32_t core = 0; core < num_active_cores; ++core) {
         const uint32_t num_C_slices = C_slices_per_core_floor + (core < cores_with_extra_C_slice ? 1 : 0);
-        const std::initializer_list<std::pair<std::string, uint32_t>> run_start = {
-            {"first_C_slice", next_C_slice}, {"num_C_slices", num_C_slices}};
+        const CoreCoord logical = plan.cores[core];
+        const CoreCoord A_sender = device.worker_core_from_logical_core({core_grid.start_coord.x, logical.y});
+        const CoreCoord A_row_end = device.worker_core_from_logical_core({core_grid.end_coord.x, logical.y});
+        const CoreCoord B_sender = device.worker_core_from_logical_core({logical.x, core_grid.start_coord.y});
+        const CoreCoord B_column_end = device.worker_core_from_logical_core({logical.x, core_grid.end_coord.y});
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            logical,
+            {{"first_C_slice", next_C_slice},
+             {"num_C_slices", num_C_slices},
+             {"A_mcast_receiver", plan.A_mcast_num_dests > 0 && logical.x != core_grid.start_coord.x ? 1u : 0u},
+             {"A_mcast_sender_x", static_cast<uint32_t>(A_sender.x)},
+             {"A_mcast_sender_y", static_cast<uint32_t>(A_sender.y)},
+             {"A_mcast_start_x", static_cast<uint32_t>(std::min(A_sender.x, A_row_end.x))},
+             {"A_mcast_start_y", static_cast<uint32_t>(std::min(A_sender.y, A_row_end.y))},
+             {"A_mcast_end_x", static_cast<uint32_t>(std::max(A_sender.x, A_row_end.x))},
+             {"A_mcast_end_y", static_cast<uint32_t>(std::max(A_sender.y, A_row_end.y))},
+             {"B_mcast_receiver", plan.B_mcast_num_dests > 0 && logical.y != core_grid.start_coord.y ? 1u : 0u},
+             {"B_mcast_sender_x", static_cast<uint32_t>(B_sender.x)},
+             {"B_mcast_sender_y", static_cast<uint32_t>(B_sender.y)},
+             {"B_mcast_start_x", static_cast<uint32_t>(std::min(B_sender.x, B_column_end.x))},
+             {"B_mcast_start_y", static_cast<uint32_t>(std::min(B_sender.y, B_column_end.y))},
+             {"B_mcast_end_x", static_cast<uint32_t>(std::max(B_sender.x, B_column_end.x))},
+             {"B_mcast_end_y", static_cast<uint32_t>(std::max(B_sender.y, B_column_end.y))}});
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            logical,
+            {{"first_C_slice", next_C_slice}, {"num_C_slices", num_C_slices}});
         next_C_slice += num_C_slices;
-        AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, plan.cores[core], run_start);
-        AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, plan.cores[core], run_start);
         AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, plan.cores[core], {{"num_C_slices", num_C_slices}});
     }
 
@@ -818,6 +890,13 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .name = "matmul_unified",
         .kernels = {reader, compute, writer},
         .dataflow_buffers = std::move(dataflow_buffers),
+        .semaphores =
+            {
+                SemaphoreSpec{.unique_id = A_RECEIVERS_READY_SEM, .target_nodes = active_cores},
+                SemaphoreSpec{.unique_id = A_DATA_READY_SEM, .target_nodes = active_cores},
+                SemaphoreSpec{.unique_id = B_RECEIVERS_READY_SEM, .target_nodes = active_cores},
+                SemaphoreSpec{.unique_id = B_DATA_READY_SEM, .target_nodes = active_cores},
+            },
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
     };
