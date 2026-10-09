@@ -835,3 +835,40 @@ def test_chunked_sdpa_rejects_zero_chunk_sizes(expect_error, device):
     assert config.q_chunk_size == 0 and config.k_chunk_size == 0
     with expect_error(RuntimeError, ""):
         ttnn.transformer.chunked_scaled_dot_product_attention(q, paged, paged, page_table, 0, program_config=config)
+
+
+@pytest.mark.parametrize("precision", [None, ttnn.SDPAPrecision.ACCURATE], ids=["legacy", "accurate"])
+@pytest.mark.parametrize("op", ["dense", "causal", "chunked", "flash_mla", "joint"])
+def test_sdpa_prefill_rejects_max_cores_per_head_batch(expect_error, device, op, precision):
+    """max_cores_per_head_batch is a decode setting: every prefill entry point rejects it, with or without precision."""
+    b, nh, s, d, block = 1, 1, 128, 64, 32
+    config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=64,
+        k_chunk_size=64,
+        max_cores_per_head_batch=16,
+    )
+    unset = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=(8, 8), q_chunk_size=64, k_chunk_size=64)
+    assert unset.max_cores_per_head_batch is None and "max_cores_per_head_batch=" in repr(unset)
+
+    def tensor(*shape):
+        return ttnn.from_torch(torch.randn(shape), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    q, k, v = (tensor(b, nh, s, d) for _ in range(3))
+    kw = dict(program_config=config, precision=precision)
+    with expect_error(RuntimeError, "max_cores_per_head_batch is a decode setting"):
+        if op in ("dense", "causal"):
+            ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=op == "causal", **kw)
+        elif op == "chunked":
+            blocks = s // block
+            paged = tensor(blocks, nh, block, d)
+            page_table = ttnn.from_torch(
+                torch.arange(blocks, dtype=torch.int32).reshape(b, blocks), device=device, dtype=ttnn.int32
+            )
+            ttnn.transformer.chunked_scaled_dot_product_attention(q, paged, paged, page_table, 0, **kw)
+        elif op == "flash_mla":
+            ttnn.transformer.flash_mla_prefill(q, k, head_dim_v=d, **kw)
+        else:
+            ttnn.transformer.joint_scaled_dot_product_attention(
+                q, k, v, q, k, v, joint_strategy="rear", program_config=config, precision=precision
+            )
