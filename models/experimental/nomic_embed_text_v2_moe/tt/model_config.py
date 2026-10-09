@@ -19,17 +19,25 @@ on real weights and real-text activations:
                        expert w2, HiFi4 for the router. HiFi3 on bf16 x bf16 skips only the
                        low-bits-by-low-bits partial product and matches HiFi4's error to three
                        digits. fc1 at HiFi2 is 13% faster at 8x512. The transposed w1, bfloat8_b
-                       weights in in0, is bit-identical at HiFi2 and HiFi3, and its small-pass
-                       sparse_matmul is 16% faster at 128 tokens. w2 at LoFi is 25% faster on
-                       a 4096-token transposed pass and 5% to 7% on the token-major passes of
-                       1x128 and 2x37. The router, bound by reading its input, runs the same at
-                       every fidelity.
-  weights              bf16, but bfloat8_b for both expert weights. w1's sparse_matmul is bound by
-                       streaming them, 25% faster at 128 tokens; w2 gains 5% at 128 tokens and
-                       11% at 74.
-  expert intermediate  bfloat8_b for the (1, E, T, F) tensor that w1 writes, the GELU rewrites and
-                       w2 reads. w1 is 17% and w2 11% faster at 3520 tokens, 3.6% of device time
-                       at 8x512. The GELU runs the same in either dtype.
+                       weights in in0, is bit-identical at HiFi2 and HiFi3. w2 at LoFi is 25%
+                       faster on a 4096-token transposed pass. A stacked pass (tt/experts.py)
+                       runs both at the same fidelities. Its w2 at HiFi2 halves that one
+                       matmul's error, 10x the bfloat16 floor to 1.0x, and the pass's from 1.88e-2
+                       to 1.38e-2 relative on real activations, for 14 us of 198 at 128 tokens
+                       and 44 of 313 at 256; on real text it moved nothing measurable (retrieval
+                       at 256-token batches, every split within run-to-run noise), so it stays at
+                       LoFi, where the pass is still more accurate than the batched one it replaced
+                       (2.20e-2). Its w1 written to bfloat8_b measures the same at HiFi2 and HiFi3.
+                       The routing weights it spreads with a 0/1 matmul come out exact from HiFi3
+                       up, while HiFi2 drops their low bits, up to 3.9e-3; it runs at HiFi4. The
+                       router, bound by reading its input, runs the same at every fidelity.
+  weights              bf16, but bfloat8_b for both expert weights, which bound the small passes
+                       by streaming them: the old token-major w1 was 25% faster at 128 tokens, w2
+                       5% at 128 tokens and 11% at 74.
+  expert intermediate  bfloat8_b for the tensor that w1 writes and w2 reads, (1, 1, E*F, T) on a
+                       transposed pass, where w1 is 17% and w2 11% faster at 3520 tokens, 3.6% of
+                       device time at 8x512. A stacked pass keeps its (1, 1, T, E*F) GELU output
+                       and the gated product in it too.
   expert output        bfloat8_b on a transposed pass for the w2 output, the gate that weights it
                        and their product (see tt/experts.py). w2 is 11% and the reduce 43% faster
                        at 4096 tokens, 3.1% of device time at 8x512.
@@ -97,8 +105,9 @@ WEIGHT_DTYPE = ttnn.bfloat16
 # two selected weights are cast, after the selection, for the bfloat16 gate the experts consume.
 ROUTER_DTYPE = ttnn.float32
 
-# The (1, E, T, F) expert intermediate: the w1 output, the GELU and the w2 input. See the module
-# docstring.
+# The expert intermediate, (1, 1, T, E*F) on a stacked pass and (1, 1, E*F, T) on a transposed
+# one: the w1 output with its GELU, and on a stacked pass the gated product w2 reads. See the
+# module docstring.
 EXPERT_INTERMEDIATE_DTYPE = ttnn.bfloat8_b
 
 # The w2 output of a transposed expert pass, the gate that weights it and their product. See the
@@ -134,6 +143,9 @@ class OpGroup(Enum):
     ROUTER = "router"
     EXPERT_W1 = "expert_w1"
     EXPERT_W2 = "expert_w2"
+    STACKED_W1 = "stacked_w1"  # the experts of a stacked pass, tt/experts.py
+    STACKED_W2 = "stacked_w2"
+    EXPERT_GATE = "expert_gate"  # the 0/1 matmul spreading the routing weights over a stacked pass
     SDPA = "sdpa"
     SOFTMAX = "softmax"  # the router's
     NORM = "norm"  # emb_ln and both block norms
@@ -148,6 +160,9 @@ MATMUL_GROUPS = (
     OpGroup.ROUTER,
     OpGroup.EXPERT_W1,
     OpGroup.EXPERT_W2,
+    OpGroup.STACKED_W1,
+    OpGroup.STACKED_W2,
+    OpGroup.EXPERT_GATE,
 )
 
 
@@ -156,6 +171,9 @@ _MATMUL_FIDELITY = {
     OpGroup.ROUTER: ttnn.MathFidelity.HiFi4,
     OpGroup.EXPERT_W1: ttnn.MathFidelity.HiFi2,
     OpGroup.EXPERT_W2: ttnn.MathFidelity.LoFi,
+    OpGroup.STACKED_W1: ttnn.MathFidelity.HiFi2,
+    OpGroup.STACKED_W2: ttnn.MathFidelity.LoFi,
+    OpGroup.EXPERT_GATE: ttnn.MathFidelity.HiFi4,
 }
 
 # bfloat8_b halves the expert weight streams that bound the small passes. Every other matmul

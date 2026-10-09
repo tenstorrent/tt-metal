@@ -144,7 +144,7 @@ def generate_eltwise_unary_datacopy_combinations(
                                         fmt,
                                         dest_acc,
                                         data_copy_type,
-                                        dimensions,
+                                        runtime(dimensions),
                                         dest_sync,
                                         runtime(dest_index),
                                         runtime(tile_dims),

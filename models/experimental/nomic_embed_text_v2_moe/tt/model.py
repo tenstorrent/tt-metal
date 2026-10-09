@@ -56,6 +56,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt import pooling
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     LayerNormParameters,
     RotaryTables,
+    activation_memory_config,
     additive_attention_mask,
     pooling_mask,
     prepare_token_ids,
@@ -135,6 +136,7 @@ class TtNomicBertModel(LightweightModule):
             weight=weight,
             bias=bias,
             epsilon=self.config.layer_norm_epsilon,
+            memory_config=activation_memory_config(hidden),
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
         )
         ttnn.deallocate(hidden)

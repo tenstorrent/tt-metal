@@ -65,10 +65,8 @@ inline void llk_unpack_AB_reduce_block_max_row(
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
-    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandA_id);
-    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
-    const std::uint32_t buf_desc_id_a = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>();
-    const std::uint32_t buf_desc_id_b = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>();
+    const std::uint8_t buf_desc_id_a = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandA_id);
+    const std::uint8_t buf_desc_id_b = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
 
     _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(
         block_ct_dim, buf_desc_id_a, buf_desc_id_b, tensor_shape, respect_trigger);
