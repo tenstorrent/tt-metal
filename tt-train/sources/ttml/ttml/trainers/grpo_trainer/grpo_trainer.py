@@ -15,7 +15,7 @@ import math
 import random
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterable, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, List, Optional, Tuple
 
 import os
 import numpy as np
@@ -28,6 +28,9 @@ from ttml.modules import RunMode
 
 from ..callback import TrainerCallback
 from .grpo_ttml_model import setup_ttml_model
+
+if TYPE_CHECKING:
+    from .rollout_batch_source import RolloutBatchSource, ScoredRolloutBatch
 
 try:
     import wandb as _wandb  # type: ignore
@@ -1068,8 +1071,9 @@ class GRPOTrainer:
         :func:`~ttml.trainers.grpo_trainer.grpo_ttml_model.setup_ttml_model`,
         then builds its :class:`RolloutSampler` from ``config.rollout_source``
         with that model and tokenizer, exposed as ``self.rollout_sampler``. It
-        also builds the optimizer, LR scheduler and tokenized prompts, so
-        ``train()`` only runs the loop. The trainer runs its own forward pass
+        also builds the optimizer, LR scheduler and the
+        :class:`RolloutBatchSource` over the tokenized prompts
+        (``self.rollout_batch_source``), so ``train()`` only runs the loop. The trainer runs its own forward pass
         with gradients on the model and never changes its run mode.
         """
         if optimizer_dict is None:
@@ -1126,10 +1130,8 @@ class GRPOTrainer:
         self._grad_sync_world_size: int = 1
         self._completions_per_microbatch: int = 0
         self._prompts_per_microbatch: int = 0
-        self._generation_batch_prompts: int = 0
-        self._prompts: List[List[int]] = []
-        self._extra_dataset_columns: dict[str, list] = {}
         self._total_optimizer_steps: int = 0
+        self.rollout_batch_source: Optional[RolloutBatchSource] = None
 
         # Auto-append the framework's default GRPOMonitor unless the config
         # opts out. Placed last so any user-supplied callbacks (e.g. eval)
@@ -1384,9 +1386,9 @@ class GRPOTrainer:
                 f"{grad_accum} = {generation_batch_prompts}) to avoid a ragged final batch that can break "
                 "micro-batch sharding"
             )
-        dataset = dataset.select(range(total_prompts))
-        prompts = [tokenizer.encode(row["prompt"]) for row in dataset]
-        extra_columns = {k: list(dataset[k]) for k in dataset.column_names if k != "prompt"}
+        from .rollout_batch_source import build_rollout_batch_source, tokenize_prompts
+
+        prompts, extra_columns = tokenize_prompts(dataset, tokenizer, total_prompts)
 
         # Publish outputs onto self for the per-batch helpers.
         self._pad_token = int(pad_token)
@@ -1403,9 +1405,15 @@ class GRPOTrainer:
         self._grad_sync_world_size = grad_sync_world_size
         self._completions_per_microbatch = completions_per_microbatch
         self._prompts_per_microbatch = prompts_per_microbatch
-        self._generation_batch_prompts = generation_batch_prompts
-        self._prompts = prompts
-        self._extra_dataset_columns = extra_columns
+        self.rollout_batch_source = build_rollout_batch_source(
+            grpo_cfg,
+            sampler=self.rollout_sampler,
+            prompts=prompts,
+            extra_columns=extra_columns,
+            batch_prompts=generation_batch_prompts,
+            tokenizer=tokenizer,
+            reward_funcs=self.reward_funcs,
+        )
         # Total optimizer steps this run will take. Read by the LR scheduler.
         self._total_optimizer_steps = (total_prompts // generation_batch_prompts) * self.config.num_iterations
 
@@ -1432,93 +1440,41 @@ class GRPOTrainer:
     # return one primitive or nothing, and write any metrics they produce
     # directly into ``self.metrics``. ``train()`` composes them.
 
-    def _iter_prompt_batches(self) -> Iterator[Tuple[List[List[int]], dict]]:
-        """Yield ``(prompts, extra_dataset_columns)`` per generation batch.
+    def _iter_scored_batches(self) -> Iterator[ScoredRolloutBatch]:
+        """Yield the rollout batch source's batches, recording each one's metrics."""
+        batches = iter(self.rollout_batch_source)
+        while True:
+            start = time.perf_counter()
+            scored = next(batches, None)
+            if scored is None:
+                return
+            self._record_batch_metrics(scored, wait_s=time.perf_counter() - start)
+            yield scored
 
-        Prompts are UNEXPANDED (one entry per prompt); the rollout sampler's
-        ``generate`` fans them out to ``num_generations`` completions each.
-        """
-        gbp = self._generation_batch_prompts
-        prompts = self._prompts
-        extra_cols = self._extra_dataset_columns
-        for start in range(0, len(prompts), gbp):
-            end = min(start + gbp, len(prompts))
-            yield (
-                list(prompts[start:end]),
-                {k: list(col[start:end]) for k, col in extra_cols.items()},
-            )
-
-    def _rollout(self, prompts: List[List[int]]) -> RolloutBatch:
-        """Sync rollout: block on ``rollout_sampler.generate(prompts)`` and
-        return a :class:`RolloutBatch` with ``N * num_generations`` completions
-        and their ``log pi_old``. Writes ``generation_time_s`` to ``self.metrics``.
-        """
-        gen_t0 = time.perf_counter()
-        batch = self.rollout_sampler.generate(prompts)
-        self.metrics["generation_time_s"] = time.perf_counter() - gen_t0
-        return batch
-
-    def _expand_prompts_and_columns(
-        self,
-        prompts: List[List[int]],
-        extra_dataset_columns: dict,
-        batch: RolloutBatch,
-    ) -> dict:
-        """Replicate each dataset-column entry ``num_generations`` times so that
-        index ``i`` aligns 1:1 with completion ``i`` of ``batch``. Called AFTER
-        ``_rollout``; ``batch.prompts`` is already expanded by the sampler and
-        must match the same replication of ``prompts``.
-        """
-        g = self.config.num_generations
-        prompts_x = [list(p) for p in prompts for _ in range(g)]
-        assert [list(p) for p in batch.prompts] == prompts_x, (
-            "RolloutBatch.prompts must hold each prompt repeated num_generations times, in order "
-            f"(got {len(batch.prompts)} prompts for {len(prompts)} x {g})"
-        )
-        return {k: [v for v in col for _ in range(g)] for k, col in extra_dataset_columns.items()}
-
-    def _compute_rewards(
-        self,
-        prompts_x: List[List[int]],
-        completions: List[List[int]],
-        extra_cols_x: dict,
-    ) -> np.ndarray:
-        """Decode strings, dispatch each reward function, sum element-wise.
-
-        Writes the following to ``self.metrics``: ``reward_mean``,
-        ``reward_std``, per-function ``{name}_mean`` (only when >1 reward
-        function is configured), ``mean/min/max_completion_len``, and — when
-        ``log_completions`` is enabled — ``prompts`` / ``completions`` /
-        ``rewards`` display slices.
-        """
-        prompt_strs = [self.tokenizer.decode(p) for p in prompts_x]
-        completion_strs = [self.tokenizer.decode(c, skip_special_tokens=True) for c in completions]
-
-        per_func = [
-            np.array(dispatch_reward(fn, completion_strs, prompt_strs, extra_cols_x), dtype=np.float32)
-            for fn in self.reward_funcs
-        ]
+    def _record_batch_metrics(self, scored: ScoredRolloutBatch, wait_s: float) -> None:
+        rollout, rewards = scored.rollout, scored.rewards
+        self.metrics["generation_time_s"] = wait_s
         if len(self.reward_funcs) > 1:
-            for name, arr in zip(self._reward_func_names, per_func):
+            for name, arr in scored.reward_components.items():
                 self.metrics[f"{name}_mean"] = float(arr.mean()) if arr.size else 0.0
-        rewards_np = np.sum(per_func, axis=0).astype(np.float32)
 
-        self.metrics["reward_mean"] = float(rewards_np.mean())
-        self.metrics["reward_std"] = float(rewards_np.std())
+        self.metrics["reward_mean"] = float(rewards.mean())
+        self.metrics["reward_std"] = float(rewards.std())
 
-        lens = [len(c) for c in completions]
+        lens = [len(c) for c in rollout.completions]
         self.metrics["mean_completion_len"] = (sum(lens) / len(lens)) if lens else 0.0
         self.metrics["min_completion_len"] = min(lens) if lens else 0
         self.metrics["max_completion_len"] = max(lens) if lens else 0
+        self.metrics["rollout_weight_version"] = rollout.weight_version
 
         cfg = self.config
         if cfg.log_completions and cfg.num_completions_to_print > 0:
             k = cfg.num_completions_to_print
-            self.metrics["prompts"] = prompt_strs[:k]
-            self.metrics["completions"] = completion_strs[:k]
-            self.metrics["rewards"] = rewards_np[:k].tolist()
-
-        return rewards_np
+            self.metrics["prompts"] = [self.tokenizer.decode(p) for p in rollout.prompts[:k]]
+            self.metrics["completions"] = [
+                self.tokenizer.decode(c, skip_special_tokens=True) for c in rollout.completions[:k]
+            ]
+            self.metrics["rewards"] = rewards[:k].tolist()
 
     def _compute_advantages(self, rewards_np: np.ndarray) -> np.ndarray:
         """Group-relative advantages on host (per-prompt mean subtracted)."""
@@ -1732,25 +1688,27 @@ class GRPOTrainer:
                 "weight versions only increase. Build a new GRPOTrainer to train again."
             )
         self._train_called = True
+        self._train_policy()
+
+    def _train_policy(self) -> None:
         for cb in self.callbacks:
             cb.on_train_begin(self)
         self.metrics = {"step": 0}
         self._reset_step_metrics()
 
-        for prompts, extra_cols in self._iter_prompt_batches():
-            batch = self._rollout(prompts)
-            cols_x = self._expand_prompts_and_columns(prompts, extra_cols, batch)
-            rewards_np = self._compute_rewards(batch.prompts, batch.completions, cols_x)
-            advantages_np = self._compute_advantages(rewards_np)
-
-            for _ in range(self.config.num_iterations):
-                self._optimize(batch, advantages_np)
-                self._apply_gradients()
-                self.metrics["step"] += 1
-                self.rollout_sampler.update_weights(None, version=self.metrics["step"])
-                self._publish_step_metrics()
-                self._maybe_checkpoint()
-                self._reset_step_metrics()
+        try:
+            for scored in self._iter_scored_batches():
+                advantages_np = self._compute_advantages(scored.rewards)
+                for _ in range(self.config.num_iterations):
+                    self._optimize(scored.rollout, advantages_np)
+                    self._apply_gradients()
+                    self.metrics["step"] += 1
+                    self.rollout_batch_source.update_weights(self.model, self.metrics["step"])
+                    self._publish_step_metrics()
+                    self._maybe_checkpoint()
+                    self._reset_step_metrics()
+        finally:
+            self.rollout_batch_source.close()
 
         for cb in self.callbacks:
             cb.on_train_end(self)
