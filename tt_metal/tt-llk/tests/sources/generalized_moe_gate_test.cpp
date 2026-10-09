@@ -186,13 +186,6 @@ constexpr GeneralizedMoeGateEltwiseBinaryMode BINARY_MODE =
 #define GMG_SFPU_CALL(FN, TEMPLATES, ...) \
     SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, FN, TEMPLATES, 0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
 
-// The gate's own passes, issued as generalized_moe_gate.h issues them.
-#ifndef GMG_SFPU_UNARY_CALL
-#define GMG_SFPU_UNARY_CALL SFPU_UNARY_CALL
-#endif
-#define GMG_SFPU_PASS(FN, TEMPLATES, ...) \
-    GMG_SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, FN, TEMPLATES, 0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
-
 // The MOP runners take no dst_index, they address whatever tile DEST_TARGET_REG_CFG_MATH_Offset holds.
 // In the op that is tile 0, because the eltwise binary ahead of them runs at dst_index 0 and leaves
 // it there, which is why run_gate does not call this. MOVE and RUN skip the binary and reach the MOPs
@@ -333,13 +326,13 @@ static inline void gmg_copy4rows()
 
 static inline void run_gate()
 {
-    GMG_SFPU_PASS(generalized_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
+    GMG_SFPU_CALL(generalized_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
 
     gmg_step0();
 
     if constexpr (GMG_GROUPED)
     {
-        GMG_SFPU_PASS(generalized_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
+        GMG_SFPU_CALL(generalized_moe_gate_sort_top4_groups, (APPROX_MODE, is_fp32_dest_acc_en));
         gmg_step1();
         if constexpr (GMG_DO_EXTRA_SCALE)
         {
@@ -347,7 +340,7 @@ static inline void run_gate()
         }
         else
         {
-            GMG_SFPU_PASS(generalized_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), GMG_EPS, GMG_SCALE);
+            GMG_SFPU_CALL(generalized_moe_gate_top8, (APPROX_MODE, is_fp32_dest_acc_en), GMG_EPS, GMG_SCALE);
         }
     }
     else
@@ -358,13 +351,13 @@ static inline void run_gate()
         gmg_copy4rows<4 /* src */, 8 /* dst */, 16 /* srcb */>();
 
         gmg_step1_hi<0 /* d2b_dst */, 0 /* b2d_base */>();
-        GMG_SFPU_PASS(generalized_moe_gate_merge4_top8, (APPROX_MODE, is_fp32_dest_acc_en, 0 /* read_base */, 0 /* store_lo */, 2 /* store_hi */));
+        GMG_SFPU_CALL(generalized_moe_gate_merge4_top8, (APPROX_MODE, is_fp32_dest_acc_en, 0 /* read_base */, 0 /* store_lo */, 2 /* store_hi */));
 
         gmg_copy4rows<0 /* src */, 12 /* dst */, 20 /* srcb */>();
         gmg_copy4rows<8 /* src */, 4 /* dst */, 24 /* srcb */>();
 
         gmg_step1_hi<4 /* d2b_dst */, 0 /* b2d_base */>();
-        GMG_SFPU_PASS(generalized_moe_gate_merge4_top8, (APPROX_MODE, is_fp32_dest_acc_en, 0 /* read_base */, 4 /* store_lo */, 6 /* store_hi */));
+        GMG_SFPU_CALL(generalized_moe_gate_merge4_top8, (APPROX_MODE, is_fp32_dest_acc_en, 0 /* read_base */, 4 /* store_lo */, 6 /* store_hi */));
 
         gmg_copy4rows<12 /* src */, 0 /* dst */, 28 /* srcb */>();
 
@@ -374,7 +367,7 @@ static inline void run_gate()
         }
         else
         {
-            GMG_SFPU_PASS(generalized_moe_gate_finalize_ungrouped, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TOPK, GMG_SOFTMAX), GMG_EPS, GMG_SCALE);
+            GMG_SFPU_CALL(generalized_moe_gate_finalize_ungrouped, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TOPK, GMG_SOFTMAX), GMG_EPS, GMG_SCALE);
         }
     }
 

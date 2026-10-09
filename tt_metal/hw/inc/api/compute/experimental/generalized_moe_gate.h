@@ -14,10 +14,6 @@
 #include "experimental/llk_math_generalized_moe_gate_eltwise_binary_api.h"
 #include "experimental/llk_math_generalized_moe_gate_transpose_dest_single_face_api.h"
 #endif
-// The gate's own SFPU passes; Blackhole's gate llk_sfpu header defines them without the SFPU drain.
-#ifndef GMG_SFPU_UNARY_CALL
-#define GMG_SFPU_UNARY_CALL SFPU_UNARY_CALL
-#endif
 
 namespace ckernel {
 
@@ -216,7 +212,7 @@ ALWI void generalized_moe_gate(
     // Set srcb dummy valid for transpose wh (FPU)
     UNPACK((llk_unpack_set_srcb_dummy_valid()));
     // Sum top2 (SFPU)
-    MATH((GMG_SFPU_UNARY_CALL(
+    MATH((SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         generalized_moe_gate_sum_top2,
@@ -237,7 +233,7 @@ ALWI void generalized_moe_gate(
         generalized_moe_gate_fpu_copy4rows<4, 8, 16, is_fp32_dest_acc_en, is_32bit>();
         // topA = top8(groups 0-3): step1<d2b_dst=0> -> run at rows 0-7 -> merge -> topA at {0,2}.
         generalized_moe_gate_fpu_step1_hi<0, 0, is_fp32_dest_acc_en, is_32bit>();
-        MATH((GMG_SFPU_UNARY_CALL(
+        MATH((SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
             generalized_moe_gate_merge4_top8,
@@ -249,7 +245,7 @@ ALWI void generalized_moe_gate(
         generalized_moe_gate_fpu_copy4rows<8, 4, 24, is_fp32_dest_acc_en, is_32bit>();
         // topB = top8(groups 4-7): step1_hi<d2b_dst=4> -> run at rows 0-7 -> merge -> topB at {4,6}.
         generalized_moe_gate_fpu_step1_hi<4, 0, is_fp32_dest_acc_en, is_32bit>();
-        MATH((GMG_SFPU_UNARY_CALL(
+        MATH((SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
             generalized_moe_gate_merge4_top8,
@@ -271,7 +267,7 @@ ALWI void generalized_moe_gate(
         } else {
             // Single ≤256 block: full bitonic sort of topA{0,2}+topB{4,6} -> global top-8, then keep top-`topk`
             // (zero ranks >= topk before normalize) + normalize over those (softmax over the kept if output_softmax).
-            MATH((GMG_SFPU_UNARY_CALL(
+            MATH((SFPU_UNARY_CALL(
                 DST_SYNC_MODE,
                 is_fp32_dest_acc_en,
                 generalized_moe_gate_finalize_ungrouped,
@@ -283,7 +279,7 @@ ALWI void generalized_moe_gate(
         }
     } else {
         // Grouped DeepSeek gate: sort_top4 selects top-4 groups, step1 lays them out, top8 merges.
-        MATH((GMG_SFPU_UNARY_CALL(
+        MATH((SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
             generalized_moe_gate_sort_top4_groups,
@@ -303,7 +299,7 @@ ALWI void generalized_moe_gate(
                 scale,
                 extra_scale)));
         } else {
-            MATH((GMG_SFPU_UNARY_CALL(
+            MATH((SFPU_UNARY_CALL(
                 DST_SYNC_MODE,
                 is_fp32_dest_acc_en,
                 generalized_moe_gate_top8,

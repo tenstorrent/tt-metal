@@ -4,12 +4,9 @@
 
 #pragma once
 
-#include <utility>
-
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
-#include "llk_math_eltwise_sfpu_common.h"
 #include "sfpu/experimental/ckernel_sfpu_generalized_moe_gate_topk_single_face.h"
 
 using namespace sfpi;
@@ -69,18 +66,6 @@ inline void generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scale
     _generalized_moe_gate_finalize_ungrouped<APPROXIMATION_MODE, is_fp32_dest_acc_en, topk, output_softmax>(eps, scale);
 }
 
-// The gate's own passes follow its ELWADD or MOVB2D: three NOPs in place of the start's drain (SFPLOAD.md).
-template <typename Callable, typename... Args>
-inline void _generalized_moe_gate_sfpu_params_(
-    Callable&& sfpu_func, std::uint32_t dst_index, VectorMode vector_mode, Args&&... args) {
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    TTI_NOP;
-    TTI_NOP;
-    TTI_NOP;
-    _llk_math_eltwise_sfpu_apply_vector_mode_(std::forward<Callable>(sfpu_func), vector_mode, std::forward<Args>(args)...);
-    _llk_math_eltwise_sfpu_done_();
-}
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void generalized_moe_gate_topk_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -89,9 +74,3 @@ inline void generalized_moe_gate_topk_init() {
 
 }  // namespace sfpu
 }  // namespace ckernel
-
-// SFPU_UNARY_CALL for the gate's own passes; where this is not defined, generalized_moe_gate.h uses SFPU_UNARY_CALL.
-#define GMG_SFPU_UNARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
-    (::ckernel::_sfpu_check_<DST_SYNC>(DST_IDX, VECTOR_MODE),                              \
-     ::ckernel::sfpu::_generalized_moe_gate_sfpu_params_(                                  \
-         ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
