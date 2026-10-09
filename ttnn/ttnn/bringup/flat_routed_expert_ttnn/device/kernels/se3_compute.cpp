@@ -48,7 +48,7 @@
 #if SE_ACT == 4
 #include "api/compute/eltwise_unary/gelu.h"
 #endif
-#ifdef SE_ZONES
+#if defined(SE_ZONES) || defined(SE_WAITZ)
 #include "tools/profiler/kernel_profiler.hpp"
 #endif
 
@@ -355,6 +355,14 @@ FORCE_INLINE void gate_up_rp(uint32_t e, bool last, uint32_t ph0, uint32_t rows)
     constexpr uint32_t xblk = xmt * kblk;
     constexpr uint32_t xs = SE_XSLOTS;  // x ring blocks: block b of this sub-block sits in slot (front + b) % xs
     const uint32_t npass = (rows + rp - 1) / rp;
+#ifdef SE_WAITZ  // (sampled wait zones: one sub-block in 16)
+    static uint32_t calls = 0;
+    const bool wz = calls++ % 16 == SE_WAITZ;
+    if (wz) {
+        DeviceZoneScopedN("W_H");
+        cb_reserve_back(h_local_cb, mt * np);
+    }
+#endif
     cb_reserve_back(h_local_cb, mt * np);
     for (uint32_t ps = 0; ps < npass; ++ps) {
         const uint32_t r0 = ps * rp, rr = rows - r0 < rp ? rows - r0 : rp;
@@ -371,6 +379,16 @@ FORCE_INLINE void gate_up_rp(uint32_t e, bool last, uint32_t ph0, uint32_t rows)
             tile_regs_acquire();
             for (uint32_t b = 0; b < nk_gu; ++b) {
                 uint32_t xo = 0;
+#ifdef SE_WAITZ
+                if (wz) {
+                    DeviceZoneScopedN("W_X");
+                    cb_wait_front(x_cb, fin ? xblk : (b + 1) * xblk);
+                }
+                if (wz) {
+                    DeviceZoneScopedN("W_W");
+                    wblock_dyn(e * nk_gu + b, ph0 + b);
+                }
+#endif
                 if (fin) {  // the final pass consumes the blocks: block b is at the front
                     cb_wait_front(x_cb, xblk);
                 } else {  // (unpacker indices do not wrap: a block past the ring end gets a negative offset)
