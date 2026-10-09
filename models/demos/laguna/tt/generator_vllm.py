@@ -412,6 +412,15 @@ class LagunaForCausalLM:
         mappings = (getattr(self, "_decode", {}), getattr(self, "_verify_dec", {}))
         released = set()
         errors = []
+        pf_traces = getattr(self, "_pf_traces", {})
+        for L, trace_id in list(pf_traces.items()):
+            try:
+                ttnn.release_trace(self.mesh_device, trace_id)
+            except Exception as error:
+                errors.append((trace_id, error))
+            else:
+                released.add(trace_id)
+        pf_traces.clear()
         for mapping in mappings:
             for state in mapping.values():
                 trace_id = state.get("tid") if isinstance(state, dict) else None
@@ -1664,6 +1673,12 @@ class LagunaForCausalLM:
             L: self.gen._rep(torch.zeros([1, 1, 1, L], dtype=torch.float32), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
             for L in self._prefill_bucket_lens()
         }
+        # persistent token rows of the traced short buckets (see _prefill_traced)
+        st["tokbuf"] = {
+            L: self.gen._rep(torch.zeros([1, L], dtype=torch.int32), ttnn.uint32)
+            for L in self._prefill_trace_lens()
+            if L in st["sel"]
+        }
         if self._PACKED_PREFILL:
             # Packed prefill picks every packed user's last row with ONE [32, T] one-hot matmul, runs the LM head
             # once on [32, H] and samples all rows with its own batch-32 sampler (not the decode trace's).
@@ -1694,6 +1709,62 @@ class LagunaForCausalLM:
             self._allocate_prefill_runtime_offsets(st, block_size)
         self._pf = st
         return st
+
+    _PREFILL_TRACE_LENS = tuple(
+        int(v) for v in os.environ.get("TT_LAGUNA_PREFILL_TRACE_LENS", "128,256").split(",") if v.strip()
+    )
+
+    def _prefill_trace_lens(self):
+        """Short cold buckets whose whole prefill (embed .. layers .. last-row select .. LM head .. sample) replays
+        from a captured trace: their eager run is bound by host op dispatch (48-layer 128-token prefill ~150 ms
+        eager vs ~95 ms traced; from 512 tokens on the device time dominates and tracing gains nothing)."""
+        if self._DFLASH_SERVING_ENABLED or self._spec_mode == "1" or int(getattr(self, "D", 0)) != 4:
+            return ()
+        return self._PREFILL_TRACE_LENS
+
+    def _prefill_traced(self, u, padded, L, real_len, pt, fill_pt, kv_cache, sampling_params, st):
+        """Traced cold single-chunk prefill of request ``u`` (bucket L in _prefill_trace_lens, device sampling).
+        Inputs reach the trace through persistent buffers only: the token row (st["tokbuf"][L]), the attention /
+        fill page tables (shape-keyed persistent buffers), the one-hot last-row selector and the sampling params.
+        The first request at L runs eagerly and then captures the trace (no compile: warmup built every program);
+        later requests replay it. Returns the sampled token."""
+        tokbuf = st["tokbuf"][L]
+        ttnn.copy_host_to_device_tensor(
+            self.gen._host(padded.reshape(1, L).to(torch.int32), ttnn.uint32), tokbuf
+        )
+        onehot = torch.zeros([1, 1, 1, L], dtype=torch.float32)
+        onehot[0, 0, 0, int(real_len) - 1] = 1.0
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(onehot, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=_replicate(self.mesh_device)),
+            st["sel"][L],
+        )
+        self._refresh_prefill_sampling(st, sampling_params, u)
+
+        def body():
+            x = self.model.embed_prefill(tokbuf)
+            h = self.model.prefill_layers(
+                x, kv_cache, pt, fill_page_table=fill_pt, fill_page_table_base_pos=0, user_id=0, start_pos=0,
+                runtime_offsets=None,
+            )
+            ttnn.matmul(st["sel"][L], ttnn.reshape(h, (1, 1, L, self.hidden)), optional_output_tensor=st["last_h"])
+            shards = self.model.lm_head_shards_decode(st["last_h"])
+            st["sampler"].decode_forward(
+                shards, k=st["k"], p=st["p"], temp=st["t"], seeds=st["seeds"], tt_out_tok=st["tok"]
+            )
+
+        traces = self.__dict__.setdefault("_pf_traces", {})
+        tid = traces.get(L)
+        if tid is None:
+            body()  # eager (this request's result)
+            tok = self.gen._read_token(st["tok"], 1)[0]
+            tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            body()
+            ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+            traces[L] = tid
+            print(f"[laguna] prefill trace captured for bucket {L}", flush=True)
+            return tok
+        ttnn.execute_trace(self.mesh_device, tid, cq_id=0, blocking=False)
+        return self.gen._read_token(st["tok"], 1)[0]
 
     def _select_hidden_row(self, h, row, L, st):
         """Copy a host one-hot selector in and write the selected hidden row to ``st["last_h"]``.
@@ -1913,6 +1984,21 @@ class LagunaForCausalLM:
                 runtime_offsets = self._runtime_offsets_for_prefill(L, absolute_start, runtime_bs)
                 padded = torch.zeros(L, dtype=torch.int64)
                 padded[: chunk.real_len] = tokens[u, absolute_start:absolute_end]
+                if (
+                    device_sampling
+                    and len(plan) == 1
+                    and absolute_start == 0
+                    and runtime_offsets is None
+                    and L in st.get("tokbuf", {})
+                    and not self._in_prefill_warmup
+                ):
+                    sampled.append(
+                        self._prefill_traced(
+                            u, padded, L, int(chunk.real_len), pt, fill_pt, kv_cache, sampling_params, st
+                        )
+                    )
+                    final_hidden = "traced"
+                    break
                 tok_tt = self.gen._tokens_to_device(padded)
                 x = self.model.embed_prefill(tok_tt)
                 if self._DFLASH_SERVING_ENABLED:
@@ -1955,6 +2041,8 @@ class LagunaForCausalLM:
                     final_real_len = int(chunk.real_len)
                     final_bucket_len = L
 
+            if isinstance(final_hidden, str):  # served by _prefill_traced
+                continue
             if final_hidden is None or final_real_len is None or final_bucket_len is None:
                 raise RuntimeError(f"prefill request {u} produced no terminal stream chunk")
             # Only the final real chunk reaches the norm/LM-head/sampler. Earlier
