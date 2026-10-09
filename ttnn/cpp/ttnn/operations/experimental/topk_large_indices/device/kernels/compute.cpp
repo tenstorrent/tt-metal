@@ -109,7 +109,9 @@ inline void _topk_large_indices_move_accumulator_(const uint32_t l1_addr) {
             : "memory");
     }
     if constexpr (!to_l1) {
-        // A used load of the last stored word returns once the stores have landed.
+        // The fence sends every store's write request ahead of the used load of the last stored word, which returns
+        // once they have landed.
+        asm volatile("fence" : : : "memory");
         const uint32_t last = reinterpret_cast<volatile uint32_t*>(dst)[4095];
         asm volatile("and x0, x0, %0" : : "r"(last) : "memory");
     }
