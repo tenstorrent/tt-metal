@@ -380,9 +380,11 @@ void validate_optional_output(
         TT_FATAL(
             memory_config->buffer_type() == out_mc.buffer_type(),
             "repeat: memory_config must match optional_output_tensor memory config");
-        if (memory_config->nd_shard_spec().has_value() && !memory_config->shard_spec().has_value()) {
+        if (memory_config->created_with_nd_shard_spec()) {
             // A config built from an NdShardSpec is ND_SHARDED, but a tensor allocated from it is normalized to
             // HEIGHT/WIDTH/BLOCK_SHARDED when the spec fits a 2D shard. Compare the ND spec, not the layout.
+            // created_with_nd_shard_spec() also covers such a config read back from a tensor, which then carries
+            // a legacy shard_spec too.
             TT_FATAL(
                 memory_config->nd_shard_spec() == out_mc.nd_shard_spec(),
                 "repeat: memory_config nd_shard_spec must match optional_output_tensor");

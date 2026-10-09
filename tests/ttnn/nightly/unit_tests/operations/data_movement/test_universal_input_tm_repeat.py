@@ -742,10 +742,14 @@ def test_repeat_nd_sharded_output(shape, repeat_shape, layout, input_factory, ou
         pytest.param((1, 2, 64, 64), (1, 2, 1, 1), (1, 1, 32, 64), id="round_robin"),
     ],
 )
-# The same ND config may also be passed as memory_config: it must be accepted even though the preallocated
-# tensor's memory_layout was normalized away from ND_SHARDED.
-@pytest.mark.parametrize("pass_memory_config", [False, True], ids=["prealloc_only", "with_memory_config"])
-def test_repeat_nd_sharded_preallocated_output(shape, repeat_shape, shard_shape, pass_memory_config, device):
+# The same ND config may also be passed as memory_config, either as built or read back from the preallocated
+# tensor: both must be accepted even though the tensor's memory_layout was normalized away from ND_SHARDED.
+@pytest.mark.parametrize(
+    "memory_config_source",
+    [None, "nd_config", "tensor"],
+    ids=["prealloc_only", "with_memory_config", "with_tensor_memory_config"],
+)
+def test_repeat_nd_sharded_preallocated_output(shape, repeat_shape, shard_shape, memory_config_source, device):
     torch.manual_seed(12345)
     x = torch.rand(shape, dtype=torch.bfloat16)
     expected = x.repeat(*repeat_shape)
@@ -761,7 +765,7 @@ def test_repeat_nd_sharded_preallocated_output(shape, repeat_shape, shard_shape,
     result = ttnn.repeat(
         ttnn_input,
         list(repeat_shape),
-        memory_config=output_mem_config if pass_memory_config else None,
+        memory_config={None: None, "nd_config": output_mem_config, "tensor": out.memory_config()}[memory_config_source],
         optional_output_tensor=out,
     )
 
@@ -789,26 +793,33 @@ def test_repeat_nd_memory_config_conflicts_with_preallocated_output_raises(devic
         )
 
 
-def test_repeat_nd_memory_config_allocation_mode_mismatch_raises(device, expect_error):
+# tensor_derived reads the requested config back from a tensor: the ND spec fits a 2D shard, so it is
+# normalized to WIDTH_SHARDED and carries a legacy shard_spec as well as the nd_shard_spec.
+@pytest.mark.parametrize("request_source", ["nd_config", "tensor_derived"])
+def test_repeat_nd_memory_config_allocation_mode_mismatch_raises(request_source, device, expect_error):
     """Same nd_shard_spec as the prealloc but a different allocation mode must be rejected."""
-    x = torch.rand((1, 2, 64, 64), dtype=torch.bfloat16)
+    x = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+    out_shape = (1, 1, 64, 128)
     ttnn_input = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=L1_INTERLEAVED)
-    prealloc_mem_config = _nd_shard_config((1, 1, 32, 64), num_cores=4)
+    requested = _nd_shard_config((1, 1, 64, 32), num_cores=4)
+    if request_source == "tensor_derived":
+        requested = ttnn.from_torch(
+            torch.zeros(out_shape, dtype=torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=requested,
+        ).memory_config()
+    prealloc_mem_config = _nd_shard_config((1, 1, 64, 32), num_cores=4)
     prealloc_mem_config.experimental_set_range_lockstep_allocation(True)
     out = ttnn.from_torch(
-        torch.zeros((1, 4, 64, 64), dtype=torch.bfloat16),
+        torch.zeros(out_shape, dtype=torch.bfloat16),
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=prealloc_mem_config,
     )
 
     with expect_error(RuntimeError, "allocation mode must match"):
-        ttnn.repeat(
-            ttnn_input,
-            [1, 2, 1, 1],
-            memory_config=_nd_shard_config((1, 1, 32, 64), num_cores=4),
-            optional_output_tensor=out,
-        )
+        ttnn.repeat(ttnn_input, [1, 1, 1, 2], memory_config=requested, optional_output_tensor=out)
 
 
 # TILE universal-I/O matrix: essential input × output routing paths.
