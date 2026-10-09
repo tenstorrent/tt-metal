@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import namedtuple
-from enum import Enum, auto
+from enum import Enum, IntFlag, auto
 
 import torch
 
@@ -823,6 +823,16 @@ class UnpackerEngine(Enum):
 class ReluConfig(Enum):
     NoRelu = 0
     ZeroRelu = 1
+
+
+class GatedReduceScale(IntFlag):
+    """Independent input/output scaling flags for gated-reduce tests."""
+
+    None_ = 0
+    Gate = 1
+    Up = 2
+    Out = 4
+    All = Gate | Up | Out
 
 
 class SdpaOp(Enum):
