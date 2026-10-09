@@ -25,14 +25,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  pre-commit:
-    name: "🔍 Static checks"
-    uses: ./.github/workflows/pre-commit.yml
-
   detect-changes:
     name: "🔍 Detect changes"
     runs-on: ubuntu-latest
-    needs: pre-commit
     outputs:
       blackhole: ${{ steps.filter.outputs.blackhole_any_changed }}
       common: ${{ steps.filter.outputs.common_any_changed }}
@@ -145,7 +140,6 @@ jobs:
   build-images:
     name: "🐳️ Docker setup"
     uses: ./.github/workflows/build-images.yml
-    needs: pre-commit
     secrets: inherit
 
   setup-and-test-wormhole:
@@ -219,7 +213,6 @@ jobs:
     name: "✅ Check all green"
     if: always()
     needs:
-      - pre-commit
       - build-images
       - setup-and-test-wormhole
       - setup-and-test-blackhole

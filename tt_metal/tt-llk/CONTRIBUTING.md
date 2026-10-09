@@ -158,6 +158,10 @@ cd tests
 
 This script will install pre-commit and configure the git hooks for you.
 
+tt-llk has no pre-commit config of its own. The hooks come from the tt-metal repository root's `.pre-commit-config.yaml`, whose LLK section runs the LLK formatters and checks on `tt_metal/tt-llk/` only. The setup script installs the git hook from the repository root, so commits anywhere in the repository use that config.
+
+If your clone was set up before tt-llk dropped its own config, the installed hook still points at the removed `tt_metal/tt-llk/.pre-commit-config.yaml`, and every commit fails with "No tt_metal/tt-llk/.pre-commit-config.yaml file was found". Re-run `./setup_testing_env.sh`, or run `pre-commit install` from the repository root, to replace it.
+
 #### Manual Setup (Alternative)
 
 If you prefer to set up pre-commit manually or need to reinstall it, follow these steps:
@@ -171,7 +175,7 @@ If you prefer to set up pre-commit manually or need to reinstall it, follow thes
 
    *Note:* pre-commit is already installed if you are using the Python virtual environment.
 2. **Install the Git Hook Scripts**:
-   In your local repository, run the following command to install the pre-commit hooks:
+   From the tt-metal repository root (not from `tt_metal/tt-llk`), run:
 
    ```bash
    pre-commit install
@@ -185,10 +189,10 @@ If you prefer to set up pre-commit manually or need to reinstall it, follow thes
    If a hook makes changes to your files (e.g., auto-formatting), you will need to `git add` the modified files before committing again.
 
 4. **Run Pre-commit Hooks Manually (optional)**:
-   You can also run the hooks manually against all files at any time with:
+   To run the hooks on everything your branch changes, as CI does, run from the repository root:
 
    ```bash
-   pre-commit run --all-files
+   pre-commit run --from-ref origin/main --to-ref HEAD
    ```
 
 ### `clangd` setup for IDE Integration
