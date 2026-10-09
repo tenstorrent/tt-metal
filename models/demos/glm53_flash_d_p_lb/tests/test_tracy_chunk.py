@@ -31,6 +31,9 @@ def test_tracy_chunk(mesh_device):
     start = int(os.environ.get("GLM_PROF_START", seq - chunk))
     toks = prompt_tokens(S, start + chunk).to(torch.long)[start : start + chunk]
     layers = S.layers()
+    if os.environ.get("GLM_PROF_LAYERS"):  # e.g. "2-4": one layer of each block type
+        lo, hi = (int(v) for v in os.environ["GLM_PROF_LAYERS"].split("-"))
+        layers = [i for i in layers if lo <= i <= hi]
     model = S.hooks().device_model(mesh_device, S, layers, lm_head=False)
 
     def run(marks: bool):
