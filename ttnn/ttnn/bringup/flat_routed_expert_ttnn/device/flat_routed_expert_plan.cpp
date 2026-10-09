@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "flat_routed_expert_plan.hpp"
 
 #include <algorithm>
@@ -21,10 +22,10 @@ namespace ttnn::operations::bringup::flat_routed_expert {
 namespace plan_detail {
 using Core = tt::tt_metal::CoreCoord;
 
-constexpr uint32_t KBLK = kKBlk, MT_MAX = 4, BF8_TILE = kBf8Tile, H_TILE = kBf8Tile;
+constexpr uint32_t KBLK = kKBlk, MT_MAX = 4, BF8_TILE = kBf8Tile;
 constexpr uint32_t L1_BANK = 1427 * 1024;       // usable L1 per core for the arena (Blackhole)
 constexpr uint32_t GU_L1_BUDGET = 1400 * 1024;  // gate/up core: weight ring + x ring
-constexpr uint32_t D_CHAINS = 7, RM_CHUNKS = kRmChunks, SB_SLOTS = kSbSlots;
+constexpr uint32_t D_CHAINS = 7, RM_CHUNKS = kRmChunks;
 constexpr int NOC_X = 17, NOC_Y = 12;  // Blackhole NoC torus
 
 uint32_t al(uint32_t b) { return (b + 2047) / 2048 * 2048; }
@@ -52,7 +53,14 @@ std::pair<uint32_t, bool> gu_dst(uint32_t np, uint32_t ht, uint32_t x_slots, boo
 
 // Gate/up split for It tile columns: (NP pairs per core, G M-groups); see flat_expert.py _gu_split.
 std::optional<std::pair<uint32_t, uint32_t>> gu_split(
-    uint32_t it, uint32_t ht, uint32_t w_tile, uint32_t x_slots, uint32_t n_readers, uint32_t max_cores, bool fp32) {
+    uint32_t it,
+    uint32_t ht,
+    uint32_t w_tile,
+    uint32_t x_slots,
+    uint32_t n_readers,
+    uint32_t max_cores,
+    bool fp32,
+    uint32_t x_tile = BF8_TILE) {
     struct Cand {
         uint32_t cores, np, g;
     };
@@ -67,7 +75,7 @@ std::optional<std::pair<uint32_t, uint32_t>> gu_split(
                 continue;
             }
             const uint32_t mt_ = g * std::min(dst / (2 * np), MT_MAX / g);
-            if (2 * ht * 2 * np * w_tile + x_slots * mt_ * KBLK * BF8_TILE > GU_L1_BUDGET) {
+            if (2 * ht * 2 * np * w_tile + x_slots * mt_ * KBLK * x_tile > GU_L1_BUDGET) {
                 continue;
             }
             cands.push_back({ps * g, np, g});
@@ -209,6 +217,13 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     p.Ht = p.H / 32;
     p.It = p.I / 32;
     p.w_tile = cfg.weights_bf8 ? BF8_TILE : 576;
+    if (std::getenv("MIMO_FL_X_BF16")) {  // precision probe: x as bf16 tiles (relay tilize, multicast, gate/up x ring)
+        p.x_tile = 2048;
+        p.sb_slots = 2;
+    }
+    if (std::getenv("MIMO_FL_H_BF16")) {  // precision probe: h as bf16 tiles (gate/up pack, h exchange, down h_all)
+        p.h_tile = 2048;
+    }
     p.banks = device->dram_grid_size().x;
     const auto phys = [device](const Core& c) { return device->worker_core_from_logical_core(c); };
 
@@ -231,8 +246,8 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     // the x ring shrinks (24 -> 16 -> 12 slots) before the gate/up split gives up
     bool found = false;
     for (uint32_t xs : {24u, 16u, 12u}) {
-        const auto split = p.nsg == 1 ? gu_split(p.It, p.Ht, p.w_tile, xs, 16, 64, p.gu_fp32)
-                                      : gu_split(p.It, p.Ht, p.w_tile, xs, p.n_rd_sg, min_rect, p.gu_fp32);
+        const auto split = p.nsg == 1 ? gu_split(p.It, p.Ht, p.w_tile, xs, 16, 64, p.gu_fp32, p.x_tile)
+                                      : gu_split(p.It, p.Ht, p.w_tile, xs, p.n_rd_sg, min_rect, p.gu_fp32, p.x_tile);
         if (split) {
             std::tie(p.np, p.g) = *split;
             p.x_slots = xs;
@@ -249,7 +264,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     const uint32_t m_pad = (p.m + p.mt * 32 - 1) / (p.mt * 32) * p.mt * 32;
     p.rdown = p.Ht > 6 * 26;  // readers compute down columns when down is heavy (> 6 columns per down core)
     p.nh = p.g > 1 ? 2 : 1;
-    p.land_slots = p.nh > 1 ? 2 : 3;
+    p.land_slots = p.nh > 1 || p.x_tile != BF8_TILE ? 2 : 3;
     p.dring = cfg.pin ? 2.0f : 1.5f;
 
     // ---- layout ----
@@ -462,7 +477,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         p.ring_dr = pyround(p.dring * p.nblk_r);
         p.out_tiles_r = p.mt * p.pcd_r;
     }
-    const uint32_t x_bytes = p.mt * KBLK * BF8_TILE;
+    const uint32_t x_bytes = p.mt * KBLK * p.x_tile;
     p.h_tiles = p.It * p.mt;
     const uint32_t out_tiles = p.mt * pcd;
     uint32_t rect_min = 1000;
@@ -519,9 +534,11 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     p.h_off = al(std::max(dn_ring_max * p.w_tile, p.rd_off + (p.rdown ? p.ring_dr * p.slot_dr * p.w_tile : 0)));
     const uint32_t out_bytes = al(2 * out_tiles * BF8_TILE);
-    p.hbuf = p.h_off + al(3 * p.h_tiles * H_TILE) + out_bytes + 2048 <= L1_BANK ? 3 : 2;
-    p.o_off = p.h_off + al(p.hbuf * p.h_tiles * H_TILE);
-    const uint32_t dn_bytes = p.o_off + out_bytes + 2048;
+    p.hbuf = p.h_off + al(3 * p.h_tiles * p.h_tile) + out_bytes + 2048 <= L1_BANK ? 3 : 2;
+    p.o_off = p.h_off + al(p.hbuf * p.h_tiles * p.h_tile);
+    // (bf16 h: two h buffers leave the row-major y out CB less than out_bytes; it takes what is left, >= 1 row tile)
+    const uint32_t dn_bytes = std::min(p.o_off + out_bytes + 2048, L1_BANK);
+    TT_FATAL(p.o_off + al(pcd * 2048) + 2048 <= L1_BANK, "flat_routed_expert: down core arena does not fit");
     for (uint32_t t : {32u, 16u, 8u}) {
         if (p.Ht % t == 0 && t % KBLK == 0) {
             p.sbt = t;
@@ -531,8 +548,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     p.seg = p.sbt * 64;
     p.nsb = p.Ht / p.sbt;
     p.sb_off = al(RM_CHUNKS * 32 * p.seg);
-    p.land_off = p.sb_off + al(SB_SLOTS * p.mt * p.sbt * BF8_TILE);
-    const uint32_t relay_bytes = p.land_off + al(p.nh * p.land_slots * p.mt * p.sbt * BF8_TILE);
+    p.land_off = p.sb_off + al(p.sb_slots * p.mt * p.sbt * p.x_tile);
+    const uint32_t relay_bytes = p.land_off + al(p.nh * p.land_slots * p.mt * p.sbt * p.x_tile);
+    TT_FATAL(relay_bytes <= L1_BANK, "flat_routed_expert: relay arena does not fit");
     p.arena_tiles = std::max({gu_bytes, dn_bytes, relay_bytes, p.rd_off}) / 2048;
     p.vstride = 1 + p.nh;
     p.region_bytes = p.E * p.nk_gu * p.rg * p.slot * p.w_tile;

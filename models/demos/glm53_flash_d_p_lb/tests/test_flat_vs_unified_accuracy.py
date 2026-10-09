@@ -10,8 +10,8 @@ bits (asserted). Ops:
   flat     the all-gather MoE path's call (tt/experts_ag.py): C++ op, capacity 8192, indexed mode (token_index into the
            tokens), clamped_silu, LoFi, x tilized to bfp8 on the relays, fp32 DEST gate/up and down, bfp8 h,
            row-major bf16 y
-  unified  the unified path's call (tt/experts.py): ttnn.bringup.unified_routed_expert_moe, HiFi4, fp32 DEST, packer
-           L1 acc, high_precision (bf16 x / h / y), ClampedSiluGlu
+  unified  the unified path's call (tt/experts.py) at LoFi (the production fidelity): ttnn.bringup.unified_routed_expert_moe,
+           fp32 DEST, packer L1 acc, high_precision (bf16 x / h / y), ClampedSiluGlu
 Reference: y = (silu(min(x Wg, 10)) * clamp(x Wu, +-10)) Wd in fp32 on the bf16 x and the exact bfp4 weights.
 
 Inputs (x, bf16): the golden's real MoE input with its real routing (and x4), then synthetic x over skewed routing
@@ -19,7 +19,8 @@ Inputs (x, bf16): the golden's real MoE input with its real routing (and x4), th
 (8 channels x 100), log-normal row scales, 90 % sparse, DC-shifted. Per input and op: PCC, rel L2, scale coefficient
 <y, ref> / <ref, ref>, per-row rel error p50 / p99 / max, and flat vs unified directly; plus the error a bfp8-rounded
 x alone gives the reference (the flat op's input rounding), and flat with packer stochastic rounding (pack_stochastic_rounding, not
-the model's default: separates the packer's ties-away bias from bfp8 precision). GLM_ACC_DISTS (comma list) selects inputs.
+the model's default: separates the packer's ties-away bias from bfp8 precision). GLM_ACC_DISTS (comma list) selects inputs, GLM_ACC_OPS the ops
+(flat, flat_srnd, unified; default flat,unified).
 """
 
 import os
@@ -34,6 +35,7 @@ from models.demos.common.bringup.testing.harness import component_golden, spec
 S = spec()
 LAYER = int(os.environ.get("GLM_ACC_LAYER", "4"))
 E, NG, H, I, T, CAP = 36, 288, 4096, 2048, 5120, 8192
+OPS = os.environ.get("GLM_ACC_OPS", "flat,unified").split(",")  # flat, flat_srnd, unified
 DISTS = (
     "real",
     "real_x4",
@@ -131,7 +133,7 @@ def test_flat_vs_unified_accuracy(device):
     for i, k in enumerate(("gate", "up", "down")):  # the unified op's bits are the reference's bits
         assert torch.equal(ttnn.to_torch(uw[k][0]).float(), W[0][i]), k
     ucfg = ttnn.types.BlackholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+        math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
     )
     rm = lambda t, d: ttnn.from_torch(  # noqa: E731
         t, dtype=d, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -195,39 +197,42 @@ def test_flat_vs_unified_accuracy(device):
             rm(cnt, ttnn.uint32),
             rm(reg, ttnn.uint32),
         )
-        y_flat = flat(x_dev, c_dev, r_dev, token_index=t_dev, y_row_major=True, down_fp32=True)
-        y_flat = ttnn.to_torch(y_flat).float().reshape(rows, H)
-        y_srnd = flat(
-            x_dev, c_dev, r_dev, token_index=t_dev, y_row_major=True, down_fp32=True, pack_stochastic_rounding=True
-        )
-        y_srnd = ttnn.to_torch(y_srnd).float().reshape(rows, H)
+        y_flat = y_srnd = y_uni = None
+        if "flat" in OPS:
+            y_flat = flat(x_dev, c_dev, r_dev, token_index=t_dev, y_row_major=True, down_fp32=True)
+            y_flat = ttnn.to_torch(y_flat).float().reshape(rows, H)
+        if "flat_srnd" in OPS:
+            y_srnd = flat(
+                x_dev, c_dev, r_dev, token_index=t_dev, y_row_major=True, down_fp32=True, pack_stochastic_rounding=True
+            )
+            y_srnd = ttnn.to_torch(y_srnd).float().reshape(rows, H)
         # the unified op's buffer holds at least one expert's capacity of rows (GLM's dispatch buffer: ~43k rows)
         xb_dev = rm(torch.cat([xb, torch.zeros(max(0, CAP - rows), H, dtype=torch.bfloat16)]), ttnn.bfloat16)
-        y_uni = ttnn.bringup.unified_routed_expert_moe(
-            xb_dev,
-            r_dev,
-            c_dev,
-            gidx,
-            uw["gate"],
-            uw["up"],
-            uw["down"],
-            max_dispatched_tokens_per_expert=CAP,
-            compute_kernel_config=ucfg,
-            activation=ttnn.bringup.RoutedExpertActivation.ClampedSiluGlu,
-            high_precision=True,
-        )
-        y_uni = ttnn.to_torch(y_uni).float().reshape(-1, H)[:rows]
+        if "unified" in OPS:
+            y_uni = ttnn.bringup.unified_routed_expert_moe(
+                xb_dev,
+                r_dev,
+                c_dev,
+                gidx,
+                uw["gate"],
+                uw["up"],
+                uw["down"],
+                max_dispatched_tokens_per_expert=CAP,
+                compute_kernel_config=ucfg,
+                activation=ttnn.bringup.RoutedExpertActivation.ClampedSiluGlu,
+                high_precision=True,
+            )
+            y_uni = ttnn.to_torch(y_uni).float().reshape(-1, H)[:rows]
         for t_ in (x_dev, t_dev, c_dev, r_dev, xb_dev):
             ttnn.deallocate(t_)
 
         R = ref[mask]
-        res = {
-            "flat": _metrics(y_flat[mask], R),
-            "flat srnd": _metrics(y_srnd[mask], R),
-            "unified": _metrics(y_uni[mask], R),
-            "bfp8 x only": _metrics(ref8[mask], R),
-            "flat vs unified": _metrics(y_flat[mask], y_uni[mask]),
-        }
+        res = {"bfp8 x only": _metrics(ref8[mask], R)}
+        for name, y_ in (("flat", y_flat), ("flat srnd", y_srnd), ("unified", y_uni)):
+            if y_ is not None:
+                res[name] = _metrics(y_[mask], R)
+        if y_flat is not None and y_uni is not None:
+            res["flat vs unified"] = _metrics(y_flat[mask], y_uni[mask])
         print(
             f"[acc] == {kind}: {int(mask.sum())} rows, x std {float(x.float().std()):.4f}, "
             f"ref rms {float(R.pow(2).mean().sqrt()):.4f}, gate/up clamp hits "

@@ -87,6 +87,9 @@ struct FlatRoutedExpertPlan {
     uint32_t s = 1, v = 1, nk_gu = 1, slot = 1, rg = 1, r_ = 1, ring_g = 1;
     // relays
     uint32_t nh = 1, land_slots = 3, vstride = 2, sbt = 32, seg = 2048, nsb = 1;
+    // x / h tile bytes and formats (bfp8 1088; precision probes MIMO_FL_X_BF16 / MIMO_FL_H_BF16: bf16 2048), and the
+    // relay's tilized super-block slots (fewer with bf16 x, so the relay arena fits)
+    uint32_t x_tile = kBf8Tile, h_tile = kBf8Tile, sb_slots = kSbSlots;
     bool group_rect = false;
     // down
     bool rdown = false;
