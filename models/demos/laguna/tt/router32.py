@@ -54,9 +54,11 @@ def route_topk_rm(sel, scores, top_k, routed_scaling, norm_topk_prob, memory_con
     wgt = ttnn.allocate_tensor_on_device(ttnn.Shape([1, T, K]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, memory_config)
     grid_size = device.compute_with_storage_grid_size()
     max_cores = grid_size.x * grid_size.y
-    # rows per work unit: 8 when there are enough units for every RISC, fewer for short prompts (a RISC scans its
-    # unit's rows one after another, so 8-row units left 128-token prefill on 8 cores)
-    R = next((r for r in (8, 4, 2) if T // r >= 2 * max_cores), 1)
+    # rows per work unit: the size that minimises the rows the busiest RISC scans one after another (8-row units
+    # left a 128-token prefill on 8 cores; at 1K, 4-row units gave some RISCs 8 rows, 1-row units give 5); ties
+    # keep the larger unit (fewer NoC read batches)
+    risc_n = 2 * max_cores
+    R = min((8, 4, 2, 1), key=lambda r: (-(-(T // r) // risc_n) * r, -r))
     units = T // R
     cores = min(-(-units // 2), max_cores)  # two RISCs per core
     grid = ttnn.num_cores_to_corerangeset(cores, grid_size, True)
