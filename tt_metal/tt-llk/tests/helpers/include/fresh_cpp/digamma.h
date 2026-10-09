@@ -82,14 +82,18 @@ __attribute__((noinline)) void calculate_digamma_fresh_cpp()
         // float -- the Blinn magic-constant seed is only defined while it is, and at
         // x = 3.3e38 the integer subtraction underflows into the sign bit, giving
         // r = -inf and psi(3.3e38) = +inf where the answer is ln(x) = 88.5.
-        // Bound the ARGUMENT of the correction; ln(x) still sees the true x.
-        const sfpi::vFloat r  = fresh_recip_positive_blinn(sfpi::min(x, 9.2233720e18f)); // 2^63
-        const sfpi::vFloat r2 = r * r;
-        sfpi::vFloat tail     = A3;
-        tail                  = tail * r2 + A2;
-        tail                  = tail * r2 + A1;
-        tail                  = tail * r2;
-        sfpi::dst_reg[0]      = fresh_ln_positive(x) - 0.5f * r + tail - acc;
+        // Bound the ARGUMENT of the correction; ln(x) still sees the true x. ln(x) is formed
+        // first so x can be bounded in place: holding x and its bounded copy together
+        // exceeds the LREG file at the pinned compiler. The final sum keeps its order.
+        const sfpi::vFloat lnx = fresh_ln_positive(x);
+        x                      = sfpi::min(x, 9.2233720e18f); // 2^63
+        const sfpi::vFloat r   = fresh_recip_positive_blinn(x);
+        const sfpi::vFloat r2  = r * r;
+        sfpi::vFloat tail      = A3;
+        tail                   = tail * r2 + A2;
+        tail                   = tail * r2 + A1;
+        tail                   = tail * r2;
+        sfpi::dst_reg[0]       = lnx - 0.5f * r + tail - acc;
         sfpi::dst_reg++;
     }
 }
