@@ -40,7 +40,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu_params.h"
 
 #define TRISC_MATH
-#include "experimental/llk_sfpu/ckernel_sfpu_gated_reduce.h"
+#include "sfpu/experimental/ckernel_sfpu_gated_reduce.h"
 #undef TRISC_MATH
 
 using namespace ckernel;
