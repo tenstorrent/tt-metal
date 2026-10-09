@@ -3,10 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Multi-threaded DFB -> TensorAccessor writer, the consumer side of ta_mt_reader_to_dfb.cpp (whose DFB holds the
-// tensor's pages in page-id order).
+// tensor's pages in page-id order), or of its shards mode.
 //
 // Named CTAs:
 //   num_pages:     tensor pages (interleaved accessors don't know their volume)
+//   shards:        1 = thread t writes every page of its strided_shard_pages() (shards t, t+T, ...) in shard order,
+//                  the order the reader's thread t filled its entries in. Needs as many consumer threads as producer
+//                  threads and a STRIDED consumer, so consumer t gets exactly producer t's entries. Sharded only.
 //   all_consumer:  0 = STRIDED consumer pattern: thread t of T gets entries t, t+T, ... and writes its strided_pages();
 //                  1 = ALL consumer pattern: every thread gets every entry and writes all pages() (the same data to
 //                  the same pages, once per thread)
@@ -33,7 +36,9 @@ void kernel_main() {
     constexpr uint32_t num_pages = get_arg(args::num_pages);
     constexpr uint32_t all_consumer = get_arg(args::all_consumer);
     constexpr uint32_t implicit_sync = get_arg(args::implicit_sync);
+    constexpr uint32_t shards = get_arg(args::shards);
     static_assert(!(all_consumer && implicit_sync), "an ALL DM consumer must sync explicitly");
+    static_assert(!(all_consumer && shards), "shards mode needs a STRIDED consumer");
     const uint32_t report_addr = get_arg(args::report_addr);
 
     Noc noc;
@@ -51,7 +56,7 @@ void kernel_main() {
                 return all_consumer ? ta.pages() : ta.strided_pages();
             }
         };
-        for (const auto& page : my_pages()) {
+        auto write = [&](const auto& page) {
             using Traits = noc_traits_t<std::decay_t<decltype(page)>>;
             if constexpr (implicit_sync) {
                 noc.async_write<NocOptions::TXN_ID>(dfb, page, {}, typename Traits::dst_args_type{});
@@ -62,6 +67,18 @@ void kernel_main() {
                 dfb.pop_front(1);
             }
             ++transfers;
+        };
+        if constexpr (shards) {
+            static_assert(!TA::DSpec::is_interleaved, "strided_shard_pages() needs a sharded tensor");
+            for (const auto& shard : ta.strided_shard_pages()) {
+                for (const auto& page : shard) {
+                    write(page);
+                }
+            }
+        } else {
+            for (const auto& page : my_pages()) {
+                write(page);
+            }
         }
     };
     run(dst);

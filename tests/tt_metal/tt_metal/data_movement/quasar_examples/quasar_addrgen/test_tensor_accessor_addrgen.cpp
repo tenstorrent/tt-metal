@@ -1786,6 +1786,8 @@ INSTANTIATE_TEST_SUITE_P(
 // - All: STRIDED producers, ALL consumers. Every consumer thread gets every entry in page-id order and walks pages()
 //   (the same data to the same pages, once per thread). An ALL DM consumer must sync explicitly, so both sides do. (The
 //   DFB BLOCKED pattern isn't supported yet.)
+// - StridedShards: STRIDED producers and consumers, as many of each, every thread walking strided_shard_pages() (shards
+//   t, t+T, ..., each in shard order). Consumer t gets exactly producer t's entries, in the order it produced them.
 // Checks the data, and per thread that every transfer address came from the address generator and that in-order
 // hits pushed.
 namespace unit_tests::dm::ta_addrgen::threads {
@@ -1802,6 +1804,7 @@ struct Param {
     uint32_t producers;
     uint32_t consumers;
     bool all_consumer;
+    bool shards = false;  // walk strided_shard_pages() (sharded layouts, producers == consumers, STRIDED)
 };
 
 // Transfers per thread that the short-run fallback (kMinRun in addrgen_sequencer.h) sends to software: a sequence whose
@@ -1813,7 +1816,12 @@ uint32_t short_run_sw(const std::string& layout, uint32_t threads, bool all) {
 }
 
 std::string param_name(const Param& p) {
-    return fmt::format("{}_{}P{}C_{}", p.layout, p.producers, p.consumers, p.all_consumer ? "All" : "Strided");
+    return fmt::format(
+        "{}_{}P{}C_{}",
+        p.layout,
+        p.producers,
+        p.consumers,
+        p.all_consumer ? "All" : (p.shards ? "StridedShards" : "Strided"));
 }
 
 void PrintTo(const Param& p, std::ostream* os) { *os << param_name(p); }
@@ -1827,6 +1835,10 @@ std::vector<Param> params() {
         out.push_back({layout, 2, 4, false});
         out.push_back({layout, 2, 2, true});
         out.push_back({layout, 1, 4, true});
+    }
+    // NdRoundRobinL1 has 8 shards, so each thread walks 4. (4 + 4 threads would exceed the 6 user DM cores per node.)
+    for (const char* layout : {"HeightL1", "WidthL1", "NdRoundRobinL1", "NdBlockRoundRobinL1"}) {
+        out.push_back({layout, 2, 2, false, true});
     }
     // One side single-threaded.
     out.push_back({"InterleavedDram", 2, 1, false});
@@ -1930,7 +1942,8 @@ TEST_P(TensorAccessorAddrgenThreads, CopiesThroughDfb) {
         m2::DFBAccessPattern::STRIDED,
         "src",
         implicit_sync);
-    producer.compile_time_args = {{"num_pages", pages}, {"implicit_sync", implicit_sync ? 1u : 0u}};
+    producer.compile_time_args = {
+        {"num_pages", pages}, {"implicit_sync", implicit_sync ? 1u : 0u}, {"shards", p.shards ? 1u : 0u}};
     m2::KernelSpec consumer = threads::make_thread_kernel(
         "consumer",
         threads::kWriterKernel,
@@ -1941,7 +1954,10 @@ TEST_P(TensorAccessorAddrgenThreads, CopiesThroughDfb) {
         "dst",
         implicit_sync);
     consumer.compile_time_args = {
-        {"num_pages", pages}, {"all_consumer", p.all_consumer ? 1u : 0u}, {"implicit_sync", implicit_sync ? 1u : 0u}};
+        {"num_pages", pages},
+        {"all_consumer", p.all_consumer ? 1u : 0u},
+        {"implicit_sync", implicit_sync ? 1u : 0u},
+        {"shards", p.shards ? 1u : 0u}};
 
     // A whole number of strided rounds on both sides.
     const uint32_t lcm = std::lcm(p.producers, p.consumers);
