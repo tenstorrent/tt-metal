@@ -5,11 +5,11 @@
 #pragma once
 
 #include <cstdint>
-#include <type_traits>
 
 #include "cfg.h"
 #include "ckernel.h"
 #include "llk_assert.h"
+#include "utils/helpers.h"
 
 namespace hal::sync
 {
@@ -182,13 +182,6 @@ namespace detail
 inline constexpr std::uint32_t STREAM_TARGET_LOW_BITS = 10;
 inline constexpr std::uint32_t STREAM_TARGET_LOW_MASK = (1u << STREAM_TARGET_LOW_BITS) - 1u;
 
-template <typename Enum>
-constexpr std::uint32_t value(const Enum selector)
-{
-    static_assert(std::is_enum_v<Enum>, "Sync selectors must be enum values");
-    return static_cast<std::uint32_t>(selector);
-}
-
 constexpr bool is_valid(const Access access)
 {
     return access == Access::MMIO || access == Access::Tensix;
@@ -201,33 +194,33 @@ constexpr bool is_valid(const Mutex mutex)
 
 constexpr bool is_valid(const Semaphore semaphore)
 {
-    return value(semaphore) < 8u;
+    return hal::to_underlying(semaphore) < 8u;
 }
 
 constexpr bool is_valid(const SemaphoreMask mask)
 {
-    return value(mask) != 0u;
+    return hal::to_underlying(mask) != 0u;
 }
 
 constexpr bool is_valid(const StallTarget targets)
 {
-    return value(targets) <= value(StallTarget::All);
+    return hal::to_underlying(targets) <= hal::to_underlying(StallTarget::All);
 }
 
 constexpr bool is_valid(const StallCondition conditions)
 {
-    return value(conditions) <= value(StallCondition::All);
+    return hal::to_underlying(conditions) <= hal::to_underlying(StallCondition::All);
 }
 
 constexpr bool is_valid(const SemaphoreCondition conditions)
 {
-    const std::uint32_t encoded = value(conditions);
+    const std::uint32_t encoded = hal::to_underlying(conditions);
     return encoded != 0u && encoded <= 0x3u;
 }
 
 constexpr bool is_valid(const StreamSlot slot)
 {
-    return value(slot) < 4u;
+    return hal::to_underlying(slot) < 4u;
 }
 
 constexpr bool is_valid(const StreamTarget target)
@@ -247,11 +240,11 @@ constexpr std::uint32_t encode(const StreamId stream)
 
 constexpr std::uint32_t semaphore_bit(const Semaphore semaphore)
 {
-    return 1u << value(semaphore);
+    return 1u << hal::to_underlying(semaphore);
 }
 
 template <StreamSlot Slot>
-inline constexpr cfg::Sec stream_section = static_cast<cfg::Sec>(value(Slot));
+inline constexpr cfg::Sec stream_section = static_cast<cfg::Sec>(hal::to_underlying(Slot));
 
 template <StreamTarget Target>
 inline constexpr std::uint32_t max_stream_target = Target == StreamTarget::Phase ? ((1u << 20) - 1u) : ((1u << 17) - 1u);
@@ -266,14 +259,14 @@ template <Mutex M>
 inline constexpr std::uint32_t acquire_operation()
 {
     static_assert(detail::is_valid(M), "Blackhole mutex index must be 0 or in [2, 4]");
-    return TT_OP_ATGETM(detail::value(M));
+    return TT_OP_ATGETM(hal::to_underlying(M));
 }
 
 /** @brief Encode a runtime-selected ATGETM without issuing it. */
 inline __attribute__((always_inline)) std::uint32_t acquire_operation(const Mutex mutex)
 {
     LLK_ASSERT(detail::is_valid(mutex), "Blackhole mutex index must be 0 or in [2, 4]");
-    return TT_OP_ATGETM(detail::value(mutex));
+    return TT_OP_ATGETM(hal::to_underlying(mutex));
 }
 
 /** @brief Acquire a compile-time-selected mutex with one immediate ATGETM. */
@@ -281,14 +274,14 @@ template <Mutex M>
 inline __attribute__((always_inline)) void acquire()
 {
     (void)acquire_operation<M>();
-    TTI_ATGETM(detail::value(M));
+    TTI_ATGETM(hal::to_underlying(M));
 }
 
 /** @brief Acquire a runtime-selected mutex through the Tensix instruction buffer. */
 inline __attribute__((always_inline)) void acquire(const Mutex mutex)
 {
     LLK_ASSERT(detail::is_valid(mutex), "Blackhole mutex index must be 0 or in [2, 4]");
-    TT_ATGETM(detail::value(mutex));
+    TT_ATGETM(hal::to_underlying(mutex));
 }
 
 /** @brief Encode ATRELM without issuing it. */
@@ -296,14 +289,14 @@ template <Mutex M>
 inline constexpr std::uint32_t release_operation()
 {
     static_assert(detail::is_valid(M), "Blackhole mutex index must be 0 or in [2, 4]");
-    return TT_OP_ATRELM(detail::value(M));
+    return TT_OP_ATRELM(hal::to_underlying(M));
 }
 
 /** @brief Encode a runtime-selected ATRELM without issuing it. */
 inline __attribute__((always_inline)) std::uint32_t release_operation(const Mutex mutex)
 {
     LLK_ASSERT(detail::is_valid(mutex), "Blackhole mutex index must be 0 or in [2, 4]");
-    return TT_OP_ATRELM(detail::value(mutex));
+    return TT_OP_ATRELM(hal::to_underlying(mutex));
 }
 
 /** @brief Release a compile-time-selected mutex with one immediate ATRELM. */
@@ -311,14 +304,14 @@ template <Mutex M>
 inline __attribute__((always_inline)) void release()
 {
     (void)release_operation<M>();
-    TTI_ATRELM(detail::value(M));
+    TTI_ATRELM(hal::to_underlying(M));
 }
 
 /** @brief Release a runtime-selected mutex through the Tensix instruction buffer. */
 inline __attribute__((always_inline)) void release(const Mutex mutex)
 {
     LLK_ASSERT(detail::is_valid(mutex), "Blackhole mutex index must be 0 or in [2, 4]");
-    TT_ATRELM(detail::value(mutex));
+    TT_ATRELM(hal::to_underlying(mutex));
 }
 
 } // namespace mutex
@@ -333,7 +326,7 @@ inline constexpr std::uint32_t init_operation()
     static_assert(detail::is_valid(Mask), "SEMINIT requires at least one semaphore");
     static_assert(Initial < 16u, "SEMINIT initial value must fit in four bits");
     static_assert(Maximum < 16u, "SEMINIT maximum value must fit in four bits");
-    return TT_OP_SEMINIT(Maximum, Initial, detail::value(Mask));
+    return TT_OP_SEMINIT(Maximum, Initial, hal::to_underlying(Mask));
 }
 
 /** @brief Encode a runtime-selected SEMINIT without issuing it. */
@@ -342,7 +335,7 @@ inline __attribute__((always_inline)) std::uint32_t init_operation(const Semapho
     LLK_ASSERT(detail::is_valid(mask), "SEMINIT requires at least one semaphore");
     LLK_ASSERT(initial < 16u, "SEMINIT initial value must fit in four bits");
     LLK_ASSERT(maximum < 16u, "SEMINIT maximum value must fit in four bits");
-    return TT_OP_SEMINIT(maximum, initial, detail::value(mask));
+    return TT_OP_SEMINIT(maximum, initial, hal::to_underlying(mask));
 }
 
 /**
@@ -354,7 +347,7 @@ template <SemaphoreMask Mask, std::uint32_t Initial, std::uint32_t Maximum>
 inline __attribute__((always_inline)) void init()
 {
     (void)init_operation<Mask, Initial, Maximum>();
-    TTI_SEMINIT(Maximum, Initial, detail::value(Mask));
+    TTI_SEMINIT(Maximum, Initial, hal::to_underlying(Mask));
 }
 
 /** @brief Initialize runtime-selected semaphores through the Tensix instruction buffer. */
@@ -363,7 +356,7 @@ inline __attribute__((always_inline)) void init(const SemaphoreMask mask, const 
     LLK_ASSERT(detail::is_valid(mask), "SEMINIT requires at least one semaphore");
     LLK_ASSERT(initial < 16u, "SEMINIT initial value must fit in four bits");
     LLK_ASSERT(maximum < 16u, "SEMINIT maximum value must fit in four bits");
-    TT_SEMINIT(maximum, initial, detail::value(mask));
+    TT_SEMINIT(maximum, initial, hal::to_underlying(mask));
 }
 
 /** @brief Encode SEMPOST without issuing it. */
@@ -371,14 +364,14 @@ template <SemaphoreMask Mask>
 inline constexpr std::uint32_t post_operation()
 {
     static_assert(detail::is_valid(Mask), "SEMPOST requires at least one semaphore");
-    return TT_OP_SEMPOST(detail::value(Mask));
+    return TT_OP_SEMPOST(hal::to_underlying(Mask));
 }
 
 /** @brief Encode a runtime-selected SEMPOST without issuing it. */
 inline __attribute__((always_inline)) std::uint32_t post_operation(const SemaphoreMask mask)
 {
     LLK_ASSERT(detail::is_valid(mask), "SEMPOST requires at least one semaphore");
-    return TT_OP_SEMPOST(detail::value(mask));
+    return TT_OP_SEMPOST(hal::to_underlying(mask));
 }
 
 /** @brief Increment compile-time-selected semaphores through Tensix. */
@@ -386,14 +379,14 @@ template <SemaphoreMask Mask>
 inline __attribute__((always_inline)) void post()
 {
     (void)post_operation<Mask>();
-    TTI_SEMPOST(detail::value(Mask));
+    TTI_SEMPOST(hal::to_underlying(Mask));
 }
 
 /** @brief Increment runtime-selected semaphores through Tensix. */
 inline __attribute__((always_inline)) void post(const SemaphoreMask mask)
 {
     LLK_ASSERT(detail::is_valid(mask), "SEMPOST requires at least one semaphore");
-    TT_SEMPOST(detail::value(mask));
+    TT_SEMPOST(hal::to_underlying(mask));
 }
 
 /** @brief Increment one compile-time-selected semaphore through the chosen access path. */
@@ -404,7 +397,7 @@ inline __attribute__((always_inline)) void post()
     static_assert(detail::is_valid(S), "Semaphore index must be in [0, 7]");
     if constexpr (A == Access::MMIO)
     {
-        ckernel::semaphore_post(detail::value(S));
+        ckernel::semaphore_post(hal::to_underlying(S));
     }
     else
     {
@@ -420,7 +413,7 @@ inline __attribute__((always_inline)) void post(const Semaphore semaphore)
     LLK_ASSERT(detail::is_valid(semaphore), "Semaphore index must be in [0, 7]");
     if constexpr (A == Access::MMIO)
     {
-        ckernel::semaphore_post(detail::value(semaphore));
+        ckernel::semaphore_post(hal::to_underlying(semaphore));
     }
     else
     {
@@ -433,14 +426,14 @@ template <SemaphoreMask Mask>
 inline constexpr std::uint32_t get_operation()
 {
     static_assert(detail::is_valid(Mask), "SEMGET requires at least one semaphore");
-    return TT_OP_SEMGET(detail::value(Mask));
+    return TT_OP_SEMGET(hal::to_underlying(Mask));
 }
 
 /** @brief Encode a runtime-selected SEMGET without issuing it. */
 inline __attribute__((always_inline)) std::uint32_t get_operation(const SemaphoreMask mask)
 {
     LLK_ASSERT(detail::is_valid(mask), "SEMGET requires at least one semaphore");
-    return TT_OP_SEMGET(detail::value(mask));
+    return TT_OP_SEMGET(hal::to_underlying(mask));
 }
 
 /** @brief Decrement compile-time-selected semaphores through Tensix. */
@@ -448,14 +441,14 @@ template <SemaphoreMask Mask>
 inline __attribute__((always_inline)) void get()
 {
     (void)get_operation<Mask>();
-    TTI_SEMGET(detail::value(Mask));
+    TTI_SEMGET(hal::to_underlying(Mask));
 }
 
 /** @brief Decrement runtime-selected semaphores through Tensix. */
 inline __attribute__((always_inline)) void get(const SemaphoreMask mask)
 {
     LLK_ASSERT(detail::is_valid(mask), "SEMGET requires at least one semaphore");
-    TT_SEMGET(detail::value(mask));
+    TT_SEMGET(hal::to_underlying(mask));
 }
 
 /** @brief Decrement one compile-time-selected semaphore through the chosen access path. */
@@ -466,7 +459,7 @@ inline __attribute__((always_inline)) void get()
     static_assert(detail::is_valid(S), "Semaphore index must be in [0, 7]");
     if constexpr (A == Access::MMIO)
     {
-        ckernel::semaphore_get(detail::value(S));
+        ckernel::semaphore_get(hal::to_underlying(S));
     }
     else
     {
@@ -482,7 +475,7 @@ inline __attribute__((always_inline)) void get(const Semaphore semaphore)
     LLK_ASSERT(detail::is_valid(semaphore), "Semaphore index must be in [0, 7]");
     if constexpr (A == Access::MMIO)
     {
-        ckernel::semaphore_get(detail::value(semaphore));
+        ckernel::semaphore_get(hal::to_underlying(semaphore));
     }
     else
     {
@@ -495,14 +488,14 @@ template <Semaphore S>
 inline __attribute__((always_inline)) std::uint8_t read()
 {
     static_assert(detail::is_valid(S), "Semaphore index must be in [0, 7]");
-    return ckernel::semaphore_read(detail::value(S));
+    return ckernel::semaphore_read(hal::to_underlying(S));
 }
 
 /** @brief Read one runtime-selected semaphore value through the RISC MMIO window. */
 inline __attribute__((always_inline)) std::uint8_t read(const Semaphore semaphore)
 {
     LLK_ASSERT(detail::is_valid(semaphore), "Semaphore index must be in [0, 7]");
-    return ckernel::semaphore_read(detail::value(semaphore));
+    return ckernel::semaphore_read(hal::to_underlying(semaphore));
 }
 
 } // namespace semaphore
@@ -516,7 +509,7 @@ inline constexpr std::uint32_t stall_operation()
 {
     static_assert(detail::is_valid(Targets), "STALLWAIT target mask must fit in nine bits");
     static_assert(detail::is_valid(Conditions), "Blackhole STALLWAIT condition mask must fit in 13 bits");
-    return TT_OP_STALLWAIT(detail::value(Targets), detail::value(Conditions));
+    return TT_OP_STALLWAIT(hal::to_underlying(Targets), hal::to_underlying(Conditions));
 }
 
 /** @brief Encode a runtime-selected STALLWAIT without issuing it. */
@@ -524,7 +517,7 @@ inline __attribute__((always_inline)) std::uint32_t stall_operation(const StallT
 {
     LLK_ASSERT(detail::is_valid(targets), "STALLWAIT target mask must fit in nine bits");
     LLK_ASSERT(detail::is_valid(conditions), "Blackhole STALLWAIT condition mask must fit in 13 bits");
-    return TT_OP_STALLWAIT(detail::value(targets), detail::value(conditions));
+    return TT_OP_STALLWAIT(hal::to_underlying(targets), hal::to_underlying(conditions));
 }
 
 /** @brief Install a compile-time STALLWAIT in the current thread's wait gate. */
@@ -532,7 +525,7 @@ template <StallTarget Targets, StallCondition Conditions>
 inline __attribute__((always_inline)) void stall()
 {
     (void)stall_operation<Targets, Conditions>();
-    TTI_STALLWAIT(detail::value(Targets), detail::value(Conditions));
+    TTI_STALLWAIT(hal::to_underlying(Targets), hal::to_underlying(Conditions));
 }
 
 /** @brief Install a runtime STALLWAIT through the Tensix instruction buffer. */
@@ -540,7 +533,7 @@ inline __attribute__((always_inline)) void stall(const StallTarget targets, cons
 {
     LLK_ASSERT(detail::is_valid(targets), "STALLWAIT target mask must fit in nine bits");
     LLK_ASSERT(detail::is_valid(conditions), "Blackhole STALLWAIT condition mask must fit in 13 bits");
-    TT_STALLWAIT(detail::value(targets), detail::value(conditions));
+    TT_STALLWAIT(hal::to_underlying(targets), hal::to_underlying(conditions));
 }
 
 /** @brief Encode SEMWAIT without issuing it. */
@@ -550,7 +543,7 @@ inline constexpr std::uint32_t semaphore_operation()
     static_assert(detail::is_valid(Targets), "SEMWAIT target mask must fit in nine bits");
     static_assert(detail::is_valid(Mask), "SEMWAIT requires at least one semaphore");
     static_assert(detail::is_valid(Conditions), "SEMWAIT requires WhileZero, WhileMaximum, or both");
-    return TT_OP_SEMWAIT(detail::value(Targets), detail::value(Mask), detail::value(Conditions));
+    return TT_OP_SEMWAIT(hal::to_underlying(Targets), hal::to_underlying(Mask), hal::to_underlying(Conditions));
 }
 
 /** @brief Encode a runtime-selected SEMWAIT without issuing it. */
@@ -560,7 +553,7 @@ inline __attribute__((always_inline)) std::uint32_t semaphore_operation(
     LLK_ASSERT(detail::is_valid(targets), "SEMWAIT target mask must fit in nine bits");
     LLK_ASSERT(detail::is_valid(mask), "SEMWAIT requires at least one semaphore");
     LLK_ASSERT(detail::is_valid(conditions), "SEMWAIT requires WhileZero, WhileMaximum, or both");
-    return TT_OP_SEMWAIT(detail::value(targets), detail::value(mask), detail::value(conditions));
+    return TT_OP_SEMWAIT(hal::to_underlying(targets), hal::to_underlying(mask), hal::to_underlying(conditions));
 }
 
 /** @brief Install a compile-time SEMWAIT in the current thread's wait gate. */
@@ -568,7 +561,7 @@ template <StallTarget Targets, SemaphoreMask Mask, SemaphoreCondition Conditions
 inline __attribute__((always_inline)) void semaphore()
 {
     (void)semaphore_operation<Targets, Mask, Conditions>();
-    TTI_SEMWAIT(detail::value(Targets), detail::value(Mask), detail::value(Conditions));
+    TTI_SEMWAIT(hal::to_underlying(Targets), hal::to_underlying(Mask), hal::to_underlying(Conditions));
 }
 
 /** @brief Install a runtime SEMWAIT through the Tensix instruction buffer. */
@@ -577,7 +570,7 @@ inline __attribute__((always_inline)) void semaphore(const StallTarget targets, 
     LLK_ASSERT(detail::is_valid(targets), "SEMWAIT target mask must fit in nine bits");
     LLK_ASSERT(detail::is_valid(mask), "SEMWAIT requires at least one semaphore");
     LLK_ASSERT(detail::is_valid(conditions), "SEMWAIT requires WhileZero, WhileMaximum, or both");
-    TT_SEMWAIT(detail::value(targets), detail::value(mask), detail::value(conditions));
+    TT_SEMWAIT(hal::to_underlying(targets), hal::to_underlying(mask), hal::to_underlying(conditions));
 }
 
 /** @brief Program one STREAM_ID_SYNC slot with a compile-time NoC stream ID. */
@@ -673,7 +666,7 @@ inline constexpr std::uint32_t stream_operation()
     static_assert(detail::is_valid(Slot), "STREAMWAIT slot must be in [0, 3]");
     static_assert(detail::is_valid(Target), "STREAMWAIT target must be Phase or MessagesReceived");
     static_assert(TargetLow <= detail::STREAM_TARGET_LOW_MASK, "STREAMWAIT low target must fit in ten bits");
-    return TT_OP_STREAMWAIT(detail::value(Targets), TargetLow, detail::value(Target), detail::value(Slot));
+    return TT_OP_STREAMWAIT(hal::to_underlying(Targets), TargetLow, hal::to_underlying(Target), hal::to_underlying(Slot));
 }
 
 /** @brief Encode a runtime-selected raw STREAMWAIT without issuing it. */
@@ -684,7 +677,7 @@ inline __attribute__((always_inline)) std::uint32_t stream_operation(
     LLK_ASSERT(detail::is_valid(slot), "STREAMWAIT slot must be in [0, 3]");
     LLK_ASSERT(detail::is_valid(target), "STREAMWAIT target must be Phase or MessagesReceived");
     LLK_ASSERT(target_low <= detail::STREAM_TARGET_LOW_MASK, "STREAMWAIT low target must fit in ten bits");
-    return TT_OP_STREAMWAIT(detail::value(targets), target_low, detail::value(target), detail::value(slot));
+    return TT_OP_STREAMWAIT(hal::to_underlying(targets), target_low, hal::to_underlying(target), hal::to_underlying(slot));
 }
 
 /**
@@ -697,7 +690,7 @@ template <StallTarget Targets, StreamSlot Slot, StreamTarget Target, std::uint32
 inline __attribute__((always_inline)) void stream()
 {
     (void)stream_operation<Targets, Slot, Target, TargetLow>();
-    TTI_STREAMWAIT(detail::value(Targets), TargetLow, detail::value(Target), detail::value(Slot));
+    TTI_STREAMWAIT(hal::to_underlying(Targets), TargetLow, hal::to_underlying(Target), hal::to_underlying(Slot));
 }
 
 /** @brief Install one raw runtime STREAMWAIT through the Tensix instruction buffer. */
@@ -707,7 +700,7 @@ inline __attribute__((always_inline)) void stream(const StallTarget targets, con
     LLK_ASSERT(detail::is_valid(slot), "STREAMWAIT slot must be in [0, 3]");
     LLK_ASSERT(detail::is_valid(target), "STREAMWAIT target must be Phase or MessagesReceived");
     LLK_ASSERT(target_low <= detail::STREAM_TARGET_LOW_MASK, "STREAMWAIT low target must fit in ten bits");
-    TT_STREAMWAIT(detail::value(targets), target_low, detail::value(target), detail::value(slot));
+    TT_STREAMWAIT(hal::to_underlying(targets), target_low, hal::to_underlying(target), hal::to_underlying(slot));
 }
 
 /** @brief Configure a stream and full compile-time threshold, then install STREAMWAIT. */
