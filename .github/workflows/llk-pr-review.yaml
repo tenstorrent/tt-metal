@@ -258,6 +258,12 @@ jobs:
           # Real Anthropic API key — sent as x-api-key to api.anthropic.com.
           anthropic_api_key: ${{ secrets.LLK_PR_REVIEW_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # /llk-review (llk-pr-review-command.yaml) dispatches with
+          # GITHUB_TOKEN, so its runs belong to github-actions[bot], which the
+          # action otherwise refuses as a non-human actor. Only a workflow in
+          # this repository can act as that bot, and the dispatcher checks the
+          # commenter's write access first; the prompt stays fixed.
+          allowed_bots: "github-actions[bot]"
           show_full_output: ${{ inputs.debug_output }}
           # The full review contract is appended from the repository-local file
           # prepared above; this prompt supplies only the invocation arguments.

@@ -1,5 +1,5 @@
 name: LLK PR Review Command
-run-name: "/llk-review on PR #${{ github.event.issue.number }}"
+run-name: "/llk-review on #${{ github.event.issue.number }}"
 
 # Starts the LLK PR Review workflow (llk-pr-review.yaml) from a PR comment:
 #
@@ -13,7 +13,13 @@ run-name: "/llk-review on PR #${{ github.event.issue.number }}"
 # dispatch option.
 #
 # The human gate is the same as for a manual dispatch: the commenter must have
-# write access to the repository.
+# write access to the repository. The dispatched run's actor is
+# github-actions[bot], which llk-pr-review.yaml allows for that reason.
+#
+# The rocket means the review was dispatched, not that it started. A review
+# already running on the PR keeps running and the new one waits; a newer
+# /llk-review on the same PR then replaces the waiting one (GitHub keeps one
+# pending run per concurrency group).
 
 on:
   issue_comment:
@@ -23,7 +29,7 @@ jobs:
   dispatch:
     # Cheap pre-filter so unrelated comments start no run; the write-access
     # check below is the real control. Exact command only: `/llk-reviewer`
-    # does not fire it.
+    # does not fire it. `\r\n` is the line ending the web UI sends.
     if: "github.repository == 'tenstorrent/tt-metal'
       && github.event.issue.pull_request != null
       && contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'),
@@ -31,7 +37,7 @@ jobs:
       && (github.event.comment.body == '/llk-review'
           || startsWith(github.event.comment.body, '/llk-review ')
           || startsWith(github.event.comment.body, '/llk-review\n')
-          || startsWith(github.event.comment.body, '/llk-review\r'))"
+          || startsWith(github.event.comment.body, '/llk-review\r\n'))"
     runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
@@ -58,6 +64,7 @@ jobs:
             # Only 404 means "not a collaborator"; any other failure is the token, not a verdict.
             if ! grep -q "HTTP 404" "$RUNNER_TEMP/err"; then
               cat "$RUNNER_TEMP/err" >&2
+              echo "FAILURE_REASON=the workflow could not check your access to this repository" >> "$GITHUB_ENV"
               echo "::error::Cannot read ${ACTOR}'s access to ${GITHUB_REPOSITORY}"
               exit 1
             fi
@@ -82,7 +89,14 @@ jobs:
           set -euo pipefail
           line="${COMMENT_BODY%%$'\n'*}"
           line="${line%$'\r'}"
-          read -r _ effort extra <<< "$line"
+          read -r command effort extra <<< "$line"
+          # The job filter already matched the command; checked again here so
+          # the parser never trusts a prefix it did not see.
+          if [ "${command,,}" != "/llk-review" ]; then
+            echo "FAILURE_REASON=the command must be exactly /llk-review" >> "$GITHUB_ENV"
+            echo "::error::Unrecognized command on the /llk-review command line"
+            exit 1
+          fi
           effort="${effort:-xhigh}"
           effort="${effort,,}"
           case "$effort" in
@@ -110,9 +124,9 @@ jobs:
           set -euo pipefail
           gh workflow run llk-pr-review.yaml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH" \
             -f pr_number="$PR_NUMBER" -f effort="$EFFORT"
-          echo "Started an LLK review of PR #${PR_NUMBER} at effort ${EFFORT}"
+          echo "Dispatched an LLK review of PR #${PR_NUMBER} at effort ${EFFORT}"
 
-      - name: Confirm the review started
+      - name: Confirm the review was dispatched
         continue-on-error: true
         run: |
           gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
