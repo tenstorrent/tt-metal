@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
@@ -30,8 +31,10 @@ void kernel_main() {
     constexpr uint32_t core_dst_offset = is_reader ? 0 : aligned_dst_pixel_size;
 
     constexpr bool is_aligned = (pixel_size == aligned_pixel_size);
-    constexpr uint32_t elements_per_pixel = pixel_size / element_size;
-    constexpr uint32_t elements_per_aligned_pixel = aligned_pixel_size / element_size;
+    using element_t =
+        std::conditional_t<(element_size == 1), uint8_t, std::conditional_t<(element_size == 2), uint16_t, uint32_t>>;
+    constexpr uint32_t elements_per_pixel = pixel_size / sizeof(element_t);
+    constexpr uint32_t elements_per_aligned_pixel = aligned_pixel_size / sizeof(element_t);
 
     Noc noc;
     DataflowBuffer dfb_src0(dfb::src0);
@@ -61,13 +64,12 @@ void kernel_main() {
                     dst_pixel_addr += aligned_chunk_size;
                 } else {
                     // Slow path: element-wise copy for unaligned data
-                    // Cast to uint16_t* for element-level access to pixel data
-                    uint16_t* src_ptr = (uint16_t*)(src_addr_base + src_col_offset + h_offset);
-                    uint16_t* dst_ptr = (uint16_t*)dst_pixel_addr;
+                    element_t* src_ptr = (element_t*)(src_addr_base + src_col_offset + h_offset);
+                    element_t* dst_ptr = (element_t*)dst_pixel_addr;
 
                     // Gather pixels along stride_w dimension
                     for (uint32_t w = 0; w < stride_w; ++w) {
-                        // Copy elements_per_pixel (half-words) from source to destination
+                        // Copy elements_per_pixel elements from source to destination
                         for (uint32_t i = 0; i < elements_per_pixel; ++i) {
                             dst_ptr[i] = src_ptr[i];
                         }
