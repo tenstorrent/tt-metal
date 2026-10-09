@@ -8,7 +8,7 @@ from typing import Dict
 
 import pytest
 import torch
-from conftest import skip_for_quasar
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -249,6 +249,7 @@ _UNREGISTERED_BINARY_OPS = frozenset(
         MathOperation.SfpuRemainderInt32,
         MathOperation.SfpuRemainderUint32,
         MathOperation.SfpuRsubInt32,
+        MathOperation.SfpuSituGlu,
     }
 )
 
@@ -945,6 +946,20 @@ def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop, **run_kwargs)
         spec_A=_logsigmoid_stimuli_spec(),
         **run_kwargs,
     )
+
+
+SITU_GLU_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.SfpuSituGlu],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@skip_for_wormhole
+@parametrize(**SITU_GLU_SWEEP)
+def test_eltwise_binary_sfpu_situ_glu(formats, dest_acc, mathop, **run_kwargs):
+    # situ_glu(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel.
+    sfpu_binary(formats, dest_acc, mathop, **run_kwargs)
 
 
 # =============================================================================
