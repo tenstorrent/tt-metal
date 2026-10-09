@@ -22,6 +22,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     binary_ng/types.hpp
     binary/binary.hpp
     binary/binary_composite.hpp
+    unary/unary.hpp
     fold/fold.hpp
     interleaved_to_sharded/interleaved_to_sharded.hpp
     sharded_to_interleaved/sharded_to_interleaved.hpp
@@ -142,6 +143,10 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     binary/binary.cpp
     binary/common/binary_op_utils.cpp
     binary/device/binary_composite_op.cpp
+    # unary (Metal 2.0 port of the eltwise/unary SFPU TILE path; host op + device op + ProgramSpec factory)
+    unary/unary.cpp
+    unary/device/unary_device_operation.cpp
+    unary/device/unary_program_factory.cpp
     # fold (compositional: own device op + internal pad/transpose/slice/reshard -> quasar)
     fold/fold.cpp
     fold/device/fold_device_op.cpp
@@ -252,6 +257,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     slice_write/slice_write_nanobind.cpp
     matmul/matmul_nanobind.cpp
     binary/binary_nanobind.cpp
+    unary/unary_nanobind.cpp
     fold/fold_nanobind.cpp
     to_memory_config/to_memory_config_nanobind.cpp
     reshape_view/reshape_nanobind.cpp
