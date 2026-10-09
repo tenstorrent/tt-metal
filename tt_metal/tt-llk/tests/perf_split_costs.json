@@ -1,0 +1,230 @@
+{
+ "wormhole": {
+  "perf_eltwise_bcast_col_custom": {
+   "cost_s": 0.8,
+   "tests": 2
+  },
+  "perf_eltwise_binary": {
+   "cost_s": 53.7,
+   "tests": 2040
+  },
+  "perf_eltwise_binary_broadcast": {
+   "cost_s": 102.2,
+   "tests": 4456
+  },
+  "perf_eltwise_binary_sfpu": {
+   "cost_s": 747.6,
+   "tests": 1318
+  },
+  "perf_eltwise_unary_datacopy": {
+   "cost_s": 16.2,
+   "tests": 816
+  },
+  "perf_eltwise_unary_sfpu": {
+   "cost_s": 283.5,
+   "tests": 1510
+  },
+  "perf_eltwise_unary_typecast": {
+   "cost_s": 1.3,
+   "tests": 6
+  },
+  "perf_fast_tilize": {
+   "cost_s": 4.6,
+   "tests": 516
+  },
+  "perf_fast_tilize_full": {
+   "cost_s": 0.0,
+   "tests": 2
+  },
+  "perf_fast_untilize": {
+   "cost_s": 0.0,
+   "tests": 1
+  },
+  "perf_fast_untilize_baseline_compare": {
+   "cost_s": 0.0,
+   "tests": 1
+  },
+  "perf_fused": {
+   "cost_s": 0.0,
+   "tests": 1
+  },
+  "perf_math_matmul": {
+   "cost_s": 657.3,
+   "tests": 37280
+  },
+  "perf_matmul": {
+   "cost_s": 140.7,
+   "tests": 8000
+  },
+  "perf_pack": {
+   "cost_s": 31.4,
+   "tests": 1376
+  },
+  "perf_pack_dest_bank": {
+   "cost_s": 0.7,
+   "tests": 24
+  },
+  "perf_pack_untilize": {
+   "cost_s": 86.9,
+   "tests": 2304
+  },
+  "perf_reduce": {
+   "cost_s": 14.9,
+   "tests": 144
+  },
+  "perf_sfpu_binop_scalar": {
+   "cost_s": 7.5,
+   "tests": 20
+  },
+  "perf_sfpu_ema": {
+   "cost_s": 0.1,
+   "tests": 1
+  },
+  "perf_sfpu_reduce": {
+   "cost_s": 0.6,
+   "tests": 80
+  },
+  "perf_sfpu_reduce_sdpa": {
+   "cost_s": 0.1,
+   "tests": 20
+  },
+  "perf_sfpu_ternary": {
+   "cost_s": 10.9,
+   "tests": 18
+  },
+  "perf_transpose_dest": {
+   "cost_s": 0.3,
+   "tests": 16
+  },
+  "perf_unpack_a_bcast_eltwise": {
+   "cost_s": 1.2,
+   "tests": 18
+  },
+  "perf_unpack_tilize": {
+   "cost_s": 11.2,
+   "tests": 1604
+  },
+  "perf_unpack_transpose": {
+   "cost_s": 0.7,
+   "tests": 36
+  },
+  "perf_vif_targets": {
+   "cost_s": 3.6,
+   "tests": 6
+  }
+ },
+ "blackhole": {
+  "perf_eltwise_bcast_col_custom": {
+   "cost_s": 1.3,
+   "tests": 2
+  },
+  "perf_eltwise_binary": {
+   "cost_s": 92.0,
+   "tests": 2040
+  },
+  "perf_eltwise_binary_broadcast": {
+   "cost_s": 186.6,
+   "tests": 4456
+  },
+  "perf_eltwise_binary_sfpu": {
+   "cost_s": 944.6,
+   "tests": 1318
+  },
+  "perf_eltwise_unary_datacopy": {
+   "cost_s": 41.5,
+   "tests": 903
+  },
+  "perf_eltwise_unary_sfpu": {
+   "cost_s": 499.7,
+   "tests": 1508
+  },
+  "perf_eltwise_unary_typecast": {
+   "cost_s": 3.0,
+   "tests": 6
+  },
+  "perf_fast_tilize": {
+   "cost_s": 0.0,
+   "tests": 1
+  },
+  "perf_fast_tilize_full": {
+   "cost_s": 7.6,
+   "tests": 31
+  },
+  "perf_fast_untilize": {
+   "cost_s": 413.2,
+   "tests": 1620
+  },
+  "perf_fast_untilize_baseline_compare": {
+   "cost_s": 111.7,
+   "tests": 810
+  },
+  "perf_fused": {
+   "cost_s": 0.0,
+   "tests": 1
+  },
+  "perf_math_matmul": {
+   "cost_s": 985.3,
+   "tests": 37280
+  },
+  "perf_matmul": {
+   "cost_s": 232.9,
+   "tests": 8000
+  },
+  "perf_pack": {
+   "cost_s": 58.3,
+   "tests": 1376
+  },
+  "perf_pack_dest_bank": {
+   "cost_s": 1.3,
+   "tests": 24
+  },
+  "perf_pack_untilize": {
+   "cost_s": 165.6,
+   "tests": 2304
+  },
+  "perf_reduce": {
+   "cost_s": 17.3,
+   "tests": 144
+  },
+  "perf_sfpu_binop_scalar": {
+   "cost_s": 10.6,
+   "tests": 20
+  },
+  "perf_sfpu_ema": {
+   "cost_s": 0.2,
+   "tests": 1
+  },
+  "perf_sfpu_reduce": {
+   "cost_s": 1.0,
+   "tests": 80
+  },
+  "perf_sfpu_reduce_sdpa": {
+   "cost_s": 0.0,
+   "tests": 1
+  },
+  "perf_sfpu_ternary": {
+   "cost_s": 12.3,
+   "tests": 18
+  },
+  "perf_transpose_dest": {
+   "cost_s": 0.4,
+   "tests": 16
+  },
+  "perf_unpack_a_bcast_eltwise": {
+   "cost_s": 0.0,
+   "tests": 1
+  },
+  "perf_unpack_tilize": {
+   "cost_s": 32.2,
+   "tests": 1604
+  },
+  "perf_unpack_transpose": {
+   "cost_s": 0.9,
+   "tests": 36
+  },
+  "perf_vif_targets": {
+   "cost_s": 0.0,
+   "tests": 1
+  }
+ }
+}
