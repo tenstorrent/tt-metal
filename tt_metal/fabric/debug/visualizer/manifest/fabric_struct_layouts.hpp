@@ -12,7 +12,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake_types.hpp"
-#include "tt_metal/fabric/manifest/struct_layout.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
 
 namespace tt::tt_metal {
 class Hal;
