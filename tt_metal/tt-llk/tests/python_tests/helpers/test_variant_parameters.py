@@ -884,6 +884,32 @@ class REDUCE_ORDER(TemplateParameter):
 
 
 @dataclass
+class WELFORD_RECIP_SIZE(TemplateParameter):
+    """Size of the Welford reciprocal table (N entries of 1 / (i + 1) built on the math RISC);
+    0 selects the no-table form, which computes the reciprocal per row."""
+
+    welford_recip_size: int = 256
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr std::uint32_t WELFORD_RECIP_SIZE = {self.welford_recip_size}u;"
+        )
+
+
+@dataclass
+class WELFORD_RECIP_BASE(TemplateParameter):
+    """First index whose reciprocal sfpu_welford_recip_test.cpp computes: the run covers
+    1 / (idx + 1) for idx in [base, base + 32 * TILE_CNT)."""
+
+    welford_recip_base: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr std::uint32_t WELFORD_RECIP_BASE = {self.welford_recip_base}u;"
+        )
+
+
+@dataclass
 class SDPA_OP(TemplateParameter):
     sdpa_op: SdpaOp = SdpaOp.RecipIter
 

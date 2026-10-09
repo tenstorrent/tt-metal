@@ -28,6 +28,91 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 
+#ifdef WELFORD_SFPU_EXACT_RECIP
+sfpi_inline void _welford_sfpu_load_u32_(const std::uint32_t lreg, const std::uint32_t value)
+{
+    if (value < 0x10000)
+    {
+        TT_SFPLOADI(lreg, sfpi::SFPLOADI_MOD0_USHORT, value);
+    }
+    else
+    {
+        TT_SFPLOADI(lreg, sfpi::SFPLOADI_MOD0_UPPER, value >> 16);
+        TT_SFPLOADI(lreg, sfpi::SFPLOADI_MOD0_LOWER, value & 0xFFFF);
+    }
+}
+
+// LREG7 = the bits of 1.0f / static_cast<float>(count) for every count >= 1: two Newton steps from SFPARECIP, y minus
+// the sign of 1 - c * y (1/c toward zero), then an exact integer test of the midpoint above it. Overwrites LREG0, LREG6.
+sfpi_inline void _welford_sfpu_recip_(const std::uint32_t count)
+{
+    if (count < 0x80000000u)
+    {
+        _welford_sfpu_load_u32_(ckernel::p_sfpu::LREG0, count);
+        TTI_SFPCAST(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
+    }
+    else
+    {
+        // SFPCAST reads sign-magnitude: the RISC rounds the count to 24 bits, nearest even, as static_cast<float> does.
+        const std::uint32_t low      = count & 0xFF;
+        const std::uint32_t mantissa = (count >> 8) + ((low > 0x80) || ((low == 0x80) && ((count >> 8) & 1)));
+        _welford_sfpu_load_u32_(ckernel::p_sfpu::LREG0, (157u << 23) + mantissa);
+    }
+    TTI_SFPARECIP(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, sfpi::SFPARECIP_MOD1_RECIP);
+    // Two Newton steps, e = 1 - c * y (mod1 1 negates c) and y += e * y; then e once more for its sign.
+    TTI_SFPMAD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG7, 1);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG7, 1);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG7, 1);
+    if (count < (1u << 22))
+    {
+        _welford_sfpu_load_u32_(ckernel::p_sfpu::LREG0, count);
+        // LREG7 = y - sign(e); LREG6 = 2 * LREG7 + 1, the midpoint above it; LREG0 = count * LREG6 mod 2^23.
+        TTI_SFPSHFT((-31) & 0xFFF, 0, ckernel::p_sfpu::LREG7, 1);
+        TTI_SFPIADD(0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG7, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPSHFT(1, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG6, 1 | 4);
+        TTI_SFPIADD(1, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPMUL24(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0, sfpi::SFPMUL24_MOD1_LOWER);
+        TTI_SFPNOP;
+        // Bit 22 set: 1/c is above the midpoint.
+        TTI_SFPSHFT((-22) & 0xFFF, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, 1 | 4);
+        TTI_SFPIADD(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG7, sfpi::SFPIADD_MOD1_CC_NONE);
+    }
+    else
+    {
+        TTI_SFPEXMAN(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, sfpi::SFPEXMAN_MOD1_PAD8);
+        TTI_SFPSHFT((-31) & 0xFFF, 0, ckernel::p_sfpu::LREG7, 1);
+        TTI_SFPIADD(0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG7, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+        // LREG6 = Mc * (2M + 1) mod 2^32 = ((H + Mc + y) << 24) + Mc + 2L, H:L the product of the mantissa fractions.
+        TTI_SFPMUL24(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG6, sfpi::SFPMUL24_MOD1_UPPER);
+        TTI_SFPNOP;
+        TTI_SFPIADD(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(0, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG6, sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPSHFT(24, 0, ckernel::p_sfpu::LREG6, 1);
+        TTI_SFPIADD(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPMUL24(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0, sfpi::SFPMUL24_MOD1_LOWER);
+        TTI_SFPNOP;
+        TTI_SFPIADD(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, sfpi::SFPIADD_MOD1_CC_NONE);
+        // Sign bit set: 1/c is above the midpoint.
+        TTI_SFPSHFT((-31) & 0xFFF, 0, ckernel::p_sfpu::LREG6, 1);
+        TTI_SFPIADD(0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG7, sfpi::SFPIADD_MOD1_CC_NONE);
+    }
+}
+#endif
+
+// Row 0's SFPU reciprocal overwrites LREG0, so it runs before the block load, whose two transposes give LREG7 back.
+template <std::size_t reciprocal_size>
+constexpr bool _welford_recip_before_load_()
+{
+#ifdef WELFORD_SFPU_EXACT_RECIP
+    return reciprocal_size == 0;
+#else
+    return false;
+#endif
+}
+
 /**
  * @brief Loads the reciprocal of (idx + 1) into LREG7, using a lookup table if available.
  *
@@ -40,7 +125,8 @@
  * @param idx The (zero-based) index (in the reciprocal lookup table) of the value to load.
  * @param reciprocal_lut Lookup table containing precomputed reciprocals packed as uint32_t.
  *
- * @note The reciprocal is written to ckernel::p_sfpu::LREG7.
+ * @note The reciprocal is written to ckernel::p_sfpu::LREG7. Without a table on Blackhole it is computed on the SFPU,
+ * which also overwrites LREG0 and LREG6.
  */
 template <std::size_t reciprocal_size>
 sfpi_inline void _load_recip_of_idx_(const std::uint32_t idx, const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut)
@@ -53,11 +139,15 @@ sfpi_inline void _load_recip_of_idx_(const std::uint32_t idx, const std::array<s
         return;
     }
 
+#ifdef WELFORD_SFPU_EXACT_RECIP
+    _welford_sfpu_recip_(idx + 1);
+#else
     // Fallback to float division
     const float reciprocal = 1.0f / static_cast<float>(idx + 1);
     const FloatBits reciprocal_bits(reciprocal);
     TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, reciprocal_bits.high16);
     TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, reciprocal_bits.low16);
+#endif
 }
 
 /*
@@ -99,7 +189,7 @@ sfpi_inline void _welfords_load_block_()
  * - input_lreg: Input value (new sample x_{N+1}) (Either LREG0, LREG1, LREG2, or LREG3)
  * - LREG4: Mean of previous samples (mean_{N})
  * - LREG5: Running sum of squared differences from the current mean (M2_{N})
- * - LREG6: Placeholder for the new mean (mean_{N+1})
+ * - LREG6: Placeholder for the new mean (mean_{N+1}); with WELFORD_SFPU_IN_PLACE_MEAN_ROW it holds x_{N+1} - mean_{N}
  * - LREG7: Reciprocal of sample count (1/(N+1))
  *
  * The computation proceeds as:
@@ -114,6 +204,17 @@ sfpi_inline void _welfords_load_block_()
 template <std::uint32_t input_lreg>
 sfpi_inline void _compute_welfords_row_()
 {
+#ifdef WELFORD_SFPU_IN_PLACE_MEAN_ROW
+    // Each multiply-add takes the operands of its counterpart in the six-instruction form below, so the bits are the same.
+    // LREG6 = α = x_{N+1} - mean_{N}
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /*-1*/, ckernel::p_sfpu::LREG4, input_lreg, ckernel::p_sfpu::LREG6, 0);
+    // LREG4 = mean_{N+1} = α * (1/(N+1)) + mean_{N}
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG4, 0);
+    // input_lreg = β = x_{N+1} - mean_{N+1}
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /*-1*/, ckernel::p_sfpu::LREG4, input_lreg, input_lreg, 0);
+    // LREG5 = M2_{N+1} = α * β + M2_{N}
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, input_lreg, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
+#else
     // mean calculation
     // ----------------
     // mean_{N_+1} = mean_{N} + ((1/N+1) * (x_{N+1} - mean_{N}))
@@ -152,6 +253,7 @@ sfpi_inline void _compute_welfords_row_()
 
     // Moves mean to LREG4 from LREG6 since it now is considered the past mean
     TTI_SFPMOV(0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG4, 0);
+#endif
 }
 
 /**
@@ -203,9 +305,16 @@ sfpi_inline void _execute_welfords_row_replay_buffer_()
 template <std::size_t reciprocal_size, std::uint32_t I, std::uint32_t J>
 sfpi_inline void _calculate_welfords_block_(std::uint32_t start_idx, const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut)
 {
-    _welfords_load_block_<I, J>();
-
-    _load_recip_of_idx_<reciprocal_size>(start_idx, reciprocal_lut);
+    if constexpr (_welford_recip_before_load_<reciprocal_size>())
+    {
+        _load_recip_of_idx_<reciprocal_size>(start_idx, reciprocal_lut);
+        _welfords_load_block_<I, J>();
+    }
+    else
+    {
+        _welfords_load_block_<I, J>();
+        _load_recip_of_idx_<reciprocal_size>(start_idx, reciprocal_lut);
+    }
     _execute_welfords_row_replay_buffer_<ckernel::p_sfpu::LREG0>();
 
     _load_recip_of_idx_<reciprocal_size>(start_idx + 1, reciprocal_lut);
@@ -257,11 +366,22 @@ sfpi_inline void _calculate_welfords_block_w_offset_(
     start_row = block_start_row - block_min_row_idx;
     end_row   = block_end_row - block_min_row_idx;
 
+    if constexpr (_welford_recip_before_load_<reciprocal_size>())
+    {
+        if ((start_row == 0) && (end_row > 0))
+        {
+            _load_recip_of_idx_<reciprocal_size>(start_idx, reciprocal_lut);
+        }
+    }
+
     _welfords_load_block_<I, J>();
 
     if ((start_row == 0) && (end_row > 0))
     {
-        _load_recip_of_idx_<reciprocal_size>(start_idx, reciprocal_lut);
+        if constexpr (!_welford_recip_before_load_<reciprocal_size>())
+        {
+            _load_recip_of_idx_<reciprocal_size>(start_idx, reciprocal_lut);
+        }
         _execute_welfords_row_replay_buffer_<ckernel::p_sfpu::LREG0>();
         ++start_idx;
     }
