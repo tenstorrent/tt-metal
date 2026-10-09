@@ -127,7 +127,7 @@ optimizer steps.
 ```python
 import os
 from datasets import load_dataset
-from grpo_remote_rollout.utils.mpi_rollout import MPIRolloutClient
+from ttml.trainers.grpo_trainer.remote_rollout.mpi_rollout import MPIRolloutClient
 from grpo_remote_rollout.utils.llama_grpo_completer import (
     LlamaCompletionCtx, LlamaCompleterRemoteRollout, WeightSyncCallback,
 )
@@ -181,10 +181,10 @@ finally:
 
 ```python
 import ttnn
-from grpo_remote_rollout.utils.mpi_rollout import MPIRolloutServer
-from grpo_remote_rollout.utils.ttt_generation_worker import TttGenerationWorker
-from grpo_remote_rollout.utils.weight_bridge import HostWeightBridge
-from grpo_remote_rollout.utils.llama_ttt_presets import (
+from ttml.trainers.grpo_trainer.remote_rollout.mpi_rollout import MPIRolloutServer
+from ttml.trainers.grpo_trainer.remote_rollout.ttt_generation_worker import TttGenerationWorker
+from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import HostWeightBridge
+from ttml.trainers.grpo_trainer.remote_rollout.llama_ttt_presets import (
     bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad,
 )
 

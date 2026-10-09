@@ -36,7 +36,7 @@ from ttml.trainers.grpo_trainer import GRPOCompleter
 from ttml.trainers.grpo_trainer.grpo_ttml_model import weights_ref_hf_dict
 from ttml.trainers.grpo_trainer.llama_composite_kv import LlamaCompositeKV
 
-from .mpi_rollout import MPIRolloutClient
+from ttml.trainers.grpo_trainer.remote_rollout.mpi_rollout import MPIRolloutClient
 
 
 @dataclass
