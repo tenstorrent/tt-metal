@@ -15,7 +15,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-// TRISC0 computes c = a + b with RISC-V Vector instructions (enable_trisc0_rvv).
+// TRISC0 computes c = a + b with RISC-V Vector instructions (enable_unpack_rvv).
 TEST_F(QuasarMeshDeviceSingleCardFixture, Trisc0RvvVectorAdd) {
     // Skip if simulator is not available
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
@@ -49,7 +49,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, Trisc0RvvVectorAdd) {
     const experimental::KernelSpecName COMPUTE_KERNEL{"trisc0_rvv_vadd"};
 
     experimental::ComputeHardwareConfig hw_config{};
-    hw_config.config_2xx = experimental::ComputeHardwareConfig::Compute2XXConfig{.enable_trisc0_rvv = true};
+    hw_config.config_2xx = experimental::ComputeHardwareConfig::Compute2XXConfig{.enable_unpack_rvv = true};
 
     experimental::KernelSpec compute_kernel_spec{
         .unique_id = COMPUTE_KERNEL,
