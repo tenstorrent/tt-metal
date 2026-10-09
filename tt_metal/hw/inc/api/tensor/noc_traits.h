@@ -30,7 +30,9 @@ struct PushIssue {
     static constexpr bool may_push = true;
     static_assert(read_cmd_buf == 1 && write_cmd_buf == 0, "the push sides feed command buffers 1 (reads), 0 (writes)");
 
-    template <typename Src, typename Args, typename Issue>
+    // trace: the caller's enable_noc_tracing -- record a NoC event for a pushed transfer only when it is set, as the
+    // ordinary issue does.
+    template <bool trace, typename Src, typename Args, typename Issue>
     static FORCE_INLINE void issue_read(
         const Src& src,
         const Noc& noc,
@@ -54,7 +56,9 @@ struct PushIssue {
         const uint64_t pushed_addr = __builtin_riscv_ttrocc_cmdbuf_rd_reg(
             read_cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8);
         overlay::rocc_nop();  // reg read must not be in flight with the next value-returning RoCC (AIHWE-6506)
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, dst_local_l1_addr, pushed_addr, size, -1, false, noc_id);
+        if constexpr (trace) {
+            RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, dst_local_l1_addr, pushed_addr, size, -1, false, noc_id);
+        }
         DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_id, pushed_addr, dst_local_l1_addr, size);
 #endif
         WAYPOINT("NAOW");
@@ -64,7 +68,7 @@ struct PushIssue {
         WAYPOINT("NAOD");
     }
 
-    template <bool posted, bool use_trid, typename Dst, typename Args, typename Issue>
+    template <bool posted, bool use_trid, bool trace, typename Dst, typename Args, typename Issue>
     static FORCE_INLINE void issue_write(
         const Dst& dst,
         const Noc& noc,
@@ -89,7 +93,9 @@ struct PushIssue {
         constexpr auto event_type = use_trid ? KernelProfilerNocEventMetadata::NocEventType::WRITE_WITH_TRID
                                              : KernelProfilerNocEventMetadata::NocEventType::WRITE_;
         const int event_vc = use_trid ? -1 : static_cast<int>(vc);
-        RECORD_NOC_EVENT_WITH_ADDR(event_type, src_local_l1_addr, pushed_addr, size, event_vc, posted, noc_id);
+        if constexpr (trace) {
+            RECORD_NOC_EVENT_WITH_ADDR(event_type, src_local_l1_addr, pushed_addr, size, event_vc, posted, noc_id);
+        }
 #endif
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id, pushed_addr, src_local_l1_addr, size);
 #endif

@@ -157,7 +157,8 @@ private:
 
     // Issue a read from a source that may push its address into a command buffer. Its traits get the remote address and
     // either issue the read with it already in the command buffer, or call `issue` (the ordinary issue) with it.
-    template <typename Src, typename Issue>
+    // trace: the caller's enable_noc_tracing, passed on so a pushed transfer is traced exactly as the ordinary issue.
+    template <bool trace, typename Src, typename Issue>
     FORCE_INLINE void issue_read_maybe_pushed(
         const Src& src,
         const src_args_t<Src>& src_args,
@@ -166,7 +167,7 @@ private:
         uint32_t vc,
         Issue&& issue) const {
         tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();
-        noc_traits_t<Src>::issue_read(src, *this, src_args, dst_local_l1_addr, size_bytes, vc, issue);
+        noc_traits_t<Src>::template issue_read<trace>(src, *this, src_args, dst_local_l1_addr, size_bytes, vc, issue);
     }
 
     template <AddressType address_type, typename Dst>
@@ -181,7 +182,7 @@ private:
     }
 
     // Write variant of issue_read_maybe_pushed, the destination address may be pushed into a command buffer.
-    template <bool posted, bool use_trid, typename Dst, typename Issue>
+    template <bool posted, bool use_trid, bool trace, typename Dst, typename Issue>
     FORCE_INLINE void issue_write_maybe_pushed(
         const Dst& dst,
         const dst_args_t<Dst>& dst_args,
@@ -191,7 +192,7 @@ private:
         uint32_t trid,
         Issue&& issue) const {
         tt_buf_rw::note_if_bound<tt_buf_rw::kWrite, Dst>();
-        noc_traits_t<Dst>::template issue_write<posted, use_trid>(
+        noc_traits_t<Dst>::template issue_write<posted, use_trid, trace>(
             dst, *this, dst_args, src_local_l1_addr, size_bytes, vc, trid, issue);
     }
 
@@ -260,7 +261,7 @@ public:
             noc_async_read<max_page_size, enable_noc_tracing>(src_noc_addr, dst_addr, size_bytes, noc_id_, req_vc);
         };
         if constexpr (noc_addrgen_push_v<Src>) {
-            issue_read_maybe_pushed(src, src_args, dst_addr, size_bytes, req_vc, issue);
+            issue_read_maybe_pushed<enable_noc_tracing>(src, src_args, dst_addr, size_bytes, req_vc, issue);
         } else {
             issue(get_src_ptr<AddressType::NOC>(src, src_args));
         }
@@ -437,7 +438,7 @@ public:
                     noc_opts.trid);
             };
             if constexpr (noc_addrgen_push_v<Dst>) {
-                issue_write_maybe_pushed<posted, /*use_trid=*/true>(
+                issue_write_maybe_pushed<posted, /*use_trid=*/true, enable_noc_tracing>(
                     dst, dst_args, src_addr, size_bytes, vc, noc_opts.trid, issue);
             } else {
                 issue(get_dst_ptr<AddressType::NOC>(dst, dst_args));
@@ -453,7 +454,8 @@ public:
                     src_addr, dst_noc_addr, size_bytes, noc_id_, vc);
             };
             if constexpr (noc_addrgen_push_v<Dst>) {
-                issue_write_maybe_pushed<posted, /*use_trid=*/false>(dst, dst_args, src_addr, size_bytes, vc, 0, issue);
+                issue_write_maybe_pushed<posted, /*use_trid=*/false, enable_noc_tracing>(
+                    dst, dst_args, src_addr, size_bytes, vc, 0, issue);
             } else {
                 issue(get_dst_ptr<AddressType::NOC>(dst, dst_args));
             }
