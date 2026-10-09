@@ -291,6 +291,15 @@ class MultichipDecoder(OptimizedDecoder):
         self._ag_kw = {"num_buffers_per_channel": nb} if nb > 0 else {}
         # batch-1 decode: all-reduce only row 0 of the partials, fused with the residual add (allreduce_rows.py)
         self._ar_rows = _parse_binary_env("TT_LAGUNA_AR_ROWS", True)
+        # batch-1 decode attention prologue as one op (attn_prologue1.py); TT_LAGUNA_AP1=0 restores the op chain
+        self._ap1 = _parse_binary_env("TT_LAGUNA_AP1", True)
+        self._ap1_scaler = None
+        if self._ap1 and self.D >= 1:
+            from .attn_prologue1 import reduce_scaler
+
+            self._ap1_scaler = reduce_scaler(
+                mesh_device, self.cfg.head_dim, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+            )
         self._defer_reduce = False
         self._route_dense_mask = _parse_binary_env("TT_LAGUNA_ROUTE_DENSE_MASK", True)  # mask router, no topk#2
         self._route_rank = _parse_binary_env("TT_LAGUNA_ROUTE_RANK", True)  # 1-token router: rank<K, no topk
@@ -1840,43 +1849,77 @@ class MultichipDecoder(OptimizedDecoder):
             qkv = self._dram_mm(ln, self.w["wqkv"], self.w["wqkv_ds"], cfg.hidden, self.meta["qkv_w"], self._ck_qkv)
             if self.use_dram_sharded:
                 qkv = ttnn.sharded_to_interleaved(qkv, ttnn.DRAM_MEMORY_CONFIG)
-        if fold_g and B <= TILE and getattr(self, "_decode_heads_op", False):
-            # one fused head split (q/k/v height-sharded, one user per core) instead of 3 slices + 3 tile-relayout
-            # reshapes (the q reshape alone ~20 us at B = 32)
-            q_sh, k_sh0, v_sh0 = ttnn.experimental.nlp_create_qkv_heads_decode(
-                ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, B, self.meta["qkv_w"]], memory_config=ttnn.L1_MEMORY_CONFIG),
-                num_heads=cfg.num_heads,
-                num_kv_heads=cfg.num_kv_heads,
-                overlap_qk_coregrid=True,
-                memory_config=self._qkv_heads_decode_memcfg,
-            )
-            q = ttnn.sharded_to_interleaved(q_sh, ttnn.L1_MEMORY_CONFIG)
-            k = ttnn.sharded_to_interleaved(k_sh0, ttnn.L1_MEMORY_CONFIG)
-            v = v_sh0  # _shard_kv moves it onto the KV-write cores
-        else:
-            q, k, v = self._split_qkv(qkv, B, memory_config=split_mem)
-        q = self._per_head_norm_decode(q, self.w["q_norm"])
-        k = self._per_head_norm_decode(k, self.w["k_norm"])
-        # share the DRAM cos/sin gather across layers of a kind (rope_mats); shard to L1
-        # PER LAYER (an L1-sharded cos_sh cannot be hoisted — scratch, clobbered by later layers).
-        if rope_mats is None:  # local fallback (layer PCC tests / direct callers)
-            cos = self._rope_decode(rope_idx, B)
-            sin = self._rope_decode(rope_idx, B, sin=True)
-        else:
-            cos, sin = rope_mats
-        if self._use_fused_rope:  # gated (TT_LAGUNA_FUSED_ROPE=1): fused HF rotate_half — PCC-validate first
-            cos_sh = self._shard_cossin(cos, B, cfg.rotary_dim)
-            sin_sh = self._shard_cossin(sin, B, cfg.rotary_dim)
-            q = self._fused_rope_decode(q, cos_sh, sin_sh, cfg.num_heads, B)
-            # K straight from the RoPE's height shard into the KV write (no s2i to DRAM + reshard) when the
-            # layouts coincide (full-rotary layers)
-            k = self._fused_rope_decode(k, cos_sh, sin_sh, cfg.num_kv_heads, B, self._kv_shard_memcfg(B))
-        else:
-            q = self._apply_rope(q, cos, sin)
-            k = self._apply_rope(k, cos, sin)
         fused_kv = self._fused_kv_update and not (sequential_kv_write and B > 1) and B <= 4 * 8
-        k_sh = self._shard_kv(k, B)
-        v_sh = self._shard_kv(v, B, y0=4 if fused_kv else 0)  # B <= 32 -> K on rows 0-3, V on rows 4-7
+        if (
+            self._ap1
+            and fold_g
+            and B == 1
+            and not sequential_kv_write
+            and qkv.dtype == ttnn.bfloat16
+            and cfg.head_dim == 128
+            and cfg.rotary_dim in (64, 128)
+        ):
+            # batch 1: head split + q/k RMSNorm + RoPE + the KV-write shards in one op (attn_prologue1.py) instead of
+            # ~16 small ops
+            from .attn_prologue1 import attn_prologue1
+
+            if rope_mats is None:
+                cos = self._rope_decode(rope_idx, B)
+                sin = self._rope_decode(rope_idx, B, sin=True)
+            else:
+                cos, sin = rope_mats
+            q, k_sh, v_sh = attn_prologue1(
+                qkv,
+                cos,
+                sin,
+                self.w["q_norm"],
+                self.w["k_norm"],
+                self._ap1_scaler,
+                cfg.num_heads,
+                cfg.num_kv_heads,
+                cfg.rotary_dim,
+                cfg.eps,
+                self._kv_shard_memcfg(B),
+                self._kv_shard_memcfg(B, y0=4 if fused_kv else 0),
+            )
+        else:
+            if fold_g and B <= TILE and getattr(self, "_decode_heads_op", False):
+                # one fused head split (q/k/v height-sharded, one user per core) instead of 3 slices + 3 tile-relayout
+                # reshapes (the q reshape alone ~20 us at B = 32)
+                q_sh, k_sh0, v_sh0 = ttnn.experimental.nlp_create_qkv_heads_decode(
+                    ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, B, self.meta["qkv_w"]], memory_config=ttnn.L1_MEMORY_CONFIG),
+                    num_heads=cfg.num_heads,
+                    num_kv_heads=cfg.num_kv_heads,
+                    overlap_qk_coregrid=True,
+                    memory_config=self._qkv_heads_decode_memcfg,
+                )
+                q = ttnn.sharded_to_interleaved(q_sh, ttnn.L1_MEMORY_CONFIG)
+                k = ttnn.sharded_to_interleaved(k_sh0, ttnn.L1_MEMORY_CONFIG)
+                v = v_sh0  # _shard_kv moves it onto the KV-write cores
+            else:
+                q, k, v = self._split_qkv(qkv, B, memory_config=split_mem)
+            q = self._per_head_norm_decode(q, self.w["q_norm"])
+            k = self._per_head_norm_decode(k, self.w["k_norm"])
+            # share the DRAM cos/sin gather across layers of a kind (rope_mats); shard to L1
+            # PER LAYER (an L1-sharded cos_sh cannot be hoisted — scratch, clobbered by later layers).
+            if rope_mats is None:  # local fallback (layer PCC tests / direct callers)
+                cos = self._rope_decode(rope_idx, B)
+                sin = self._rope_decode(rope_idx, B, sin=True)
+            else:
+                cos, sin = rope_mats
+            if self._use_fused_rope:  # gated (TT_LAGUNA_FUSED_ROPE=1): fused HF rotate_half — PCC-validate first
+                cos_sh = self._shard_cossin(cos, B, cfg.rotary_dim)
+                sin_sh = self._shard_cossin(sin, B, cfg.rotary_dim)
+                q = self._fused_rope_decode(q, cos_sh, sin_sh, cfg.num_heads, B)
+                # K straight from the RoPE's height shard into the KV write (no s2i to DRAM + reshard) when the
+                # layouts coincide (full-rotary layers)
+                k = self._fused_rope_decode(k, cos_sh, sin_sh, cfg.num_kv_heads, B, self._kv_shard_memcfg(B))
+            else:
+                q = self._apply_rope(q, cos, sin)
+                k = self._apply_rope(k, cos, sin)
+            fused_kv = self._fused_kv_update and not (sequential_kv_write and B > 1) and B <= 4 * 8
+            k_sh = self._shard_kv(k, B)
+            v_sh = self._shard_kv(v, B, y0=4 if fused_kv else 0)  # B <= 32 -> K on rows 0-3, V on rows 4-7
         if fused_kv:  # one op writes K and V (instead of two paged_update_cache)
             ttnn.experimental.paged_fused_update_cache(
                 kv_cache["k"], k_sh, kv_cache["v"], v_sh, update_idxs_tensor=cur_pos, page_table=page_table
