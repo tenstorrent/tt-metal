@@ -176,10 +176,10 @@ void check_tensor(
 //
 // A preallocated (caller-owned) output keeps the label it arrived with while that label still describes the data:
 // no operand may be sharded along a mesh axis on which the output is replicated, and every operand must span the
-// output's mesh coordinates (core::caller_owned_output_topology, the rule the in-place softmax / layer_norm and
-// KV-cache hooks share). Otherwise -- a gradient sharded along an axis on which the parameter is replicated leaves
-// every device with a different parameter -- it takes the union of every tensor in tensor_args, which is
-// data-preserving, exactly like an output the op allocates itself. Returns {} when nothing is preallocated: the
+// output's mesh coordinates (core::caller_owned_output_topology, shared with the in-place softmax / layer_norm and
+// KV-cache hooks of PRs #59329-#59332). Otherwise -- a gradient sharded along an axis on which the parameter is
+// replicated leaves every device with a different parameter -- it takes the union of every tensor in tensor_args, which
+// is data-preserving, exactly like an output the op allocates itself. Returns {} when nothing is preallocated: the
 // framework then applies its union default itself.
 std::vector<tt::tt_metal::TensorTopology> preallocated_or_union_output_topologies(
     std::initializer_list<const Tensor*> operands,
@@ -189,7 +189,9 @@ std::vector<tt::tt_metal::TensorTopology> preallocated_or_union_output_topologie
     std::string_view op_name);
 
 // The framework's union default over `tensors` (every tensor in tensor_args), placed on `primary_input`'s mesh
-// coordinates: the label of an output that is per-device distinct whenever any input is.
+// coordinates: the label of an output that is per-device distinct whenever any input is. Assumes uniform storage
+// (every tensor spans the whole mesh), as these ops' tensors do; the framework filters a non-uniform output to the
+// coordinate intersection, and no label computed here describes such an output exactly.
 tt::tt_metal::TensorTopology union_output_topology(
     const std::vector<std::reference_wrapper<const Tensor>>& tensors, const Tensor& primary_input);
 

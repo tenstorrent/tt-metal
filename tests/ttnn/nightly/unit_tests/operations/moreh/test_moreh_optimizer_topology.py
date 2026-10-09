@@ -12,7 +12,7 @@ fresh output, but for a caller-owned one it can drop the caller's distribution s
 an N-D input) or replace the caller's shard dim with an input's.
 
 Contract pinned here (``ttnn::operations::core::caller_owned_output_topology``, shared with the in-place softmax /
-layer_norm and KV-cache hooks):
+layer_norm and KV-cache hooks of PRs #59329-#59332):
   * a preallocated (caller-owned) output keeps the label it arrived with while that label still describes the data:
     no input may be sharded along a mesh axis on which the output is replicated;
   * otherwise -- a gradient sharded along an axis on which the parameter is replicated leaves every device with a
@@ -179,12 +179,14 @@ class _AdamInputs:
         param_shard_dim=None,
         preallocate=True,
         grad_label="collapsed",
+        caller_label="collapsed",
     ):
         torch.manual_seed(0)
         self.mesh_device = mesh_device
         self.param_shard_dim = param_shard_dim
         self.amsgrad = amsgrad
         self.grad_label = GRAD_LABELS[grad_label]
+        self.caller_label = caller_label
         num_devices = mesh_device.get_num_devices()
         local_shape = [1, 1, 32, 64]
         param_shape = list(local_shape)
@@ -193,6 +195,8 @@ class _AdamInputs:
         else:
             param_shape[param_shard_dim] *= num_devices
             self.param_label = [f"Shard({param_shard_dim})"]
+        if caller_label == "nd":  # one placement per mesh axis: the row axis is replicated
+            self.param_label = ["Replicate"] + self.param_label
         grad_shape = list(local_shape)
         grad_shape[3] *= num_devices
 
@@ -224,6 +228,16 @@ class _AdamInputs:
 
     def _place(self, tensor):
         """Parameter-side tensors share one mapper, so their labels agree with each other."""
+        if self.caller_label == "nd":
+            column = (
+                ttnn.PlacementReplicate() if self.param_shard_dim is None else ttnn.PlacementShard(self.param_shard_dim)
+            )
+            mapper = ttnn.create_mesh_mapper(
+                self.mesh_device, ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), column])
+            )
+            return ttnn.from_torch(
+                tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh_device, mesh_mapper=mapper
+            )
         if self.param_shard_dim is None:
             return _replicated(tensor, self.mesh_device)
         return _sharded(tensor, self.mesh_device, self.param_shard_dim)
@@ -379,6 +393,75 @@ def test_adam_sharded_param_keeps_own_label(mesh_device, run, optim_cls, preallo
     else:
         _check_adam_labels(inputs, outputs, ["Replicate", "Shard(3)"])
     inputs.check_numerics(outputs, optim_cls=optim_cls)
+
+
+@pytest.mark.parametrize("run, optim_cls", ADAM_OPS)
+@pytest.mark.parametrize("param_shard_dim", [2, None], ids=["sharded_param", "replicated_param"])
+def test_adam_nd_caller_label(mesh_device, run, optim_cls, param_shard_dim):
+    """The caller's tensors carry one placement per mesh axis (an explicit N-D mapper) and the grad the N-D
+    ``{1,2},[Replicate, Shard(3)]`` label. ``sharded_param``: param / moments / outs ``[Replicate, Shard(2)]`` are
+    sharded along the same mesh axis as the grad, so the preallocated outputs keep that label (the union agrees, every
+    label having the mesh's rank). ``replicated_param``: ``[Replicate, Replicate]`` against a grad that differs per
+    device, so the outputs take the union ``['Replicate', 'Shard(3)']``. This is the per-axis branch of the rule for
+    the caller's own label, which the collapsed-label cases above never reach."""
+    inputs = _AdamInputs(
+        mesh_device, amsgrad=False, param_shard_dim=param_shard_dim, grad_label="nd", caller_label="nd"
+    )
+    outputs = run(inputs)
+    expected = ["Replicate", "Shard(2)"] if param_shard_dim == 2 else ["Replicate", "Shard(3)"]
+    _check_adam_labels(inputs, outputs, expected)
+    inputs.check_numerics(outputs, optim_cls=optim_cls)
+
+
+@pytest.mark.parametrize("run, optim_cls", ADAM_OPS)
+@pytest.mark.parametrize("param_shard_dim", [None, 2], ids=["replicated_param", "sharded_param"])
+def test_adam_aliased_outputs(mesh_device, run, optim_cls, param_shard_dim):
+    """tt-train's call shape (``MorehAdamW::step``): the parameter and the moments are passed as both the inputs and
+    the preallocated outputs, so the op updates them in place and the hook's label lands on the caller's only
+    handle. ``replicated_param`` with a per-device-different Shard(3) grad: that handle reads ['Shard(3)'] after the
+    step. ``sharded_param`` (``{2},[Shard(2)]``, the tensor-parallel layout): it keeps ['Shard(2)']. Numerics are
+    checked per device against torch on snapshots taken before the step, since the inputs are overwritten."""
+    inputs = _AdamInputs(mesh_device, amsgrad=False, param_shard_dim=param_shard_dim, preallocate=False)
+    before = {
+        name: _device_slices(t)
+        for name, t in (
+            ("param", inputs.param_in),
+            ("grad", inputs.grad_in),
+            ("exp_avg", inputs.exp_avg_in),
+            ("exp_avg_sq", inputs.exp_avg_sq_in),
+        )
+    }
+    inputs.param_out, inputs.exp_avg_out, inputs.exp_avg_sq_out = (
+        inputs.param_in,
+        inputs.exp_avg_in,
+        inputs.exp_avg_sq_in,
+    )
+
+    param_out, exp_avg_out, exp_avg_sq_out, max_exp_avg_sq_out = run(inputs)
+
+    assert max_exp_avg_sq_out is None
+    expected = ["Shard(3)"] if param_shard_dim is None else ["Shard(2)"]
+    for name, t in (("param", param_out), ("exp_avg", exp_avg_out), ("exp_avg_sq", exp_avg_sq_out)):
+        _assert_label(t, expected, name)
+    assert param_out.buffer_address() == inputs.param_in.buffer_address()
+    _assert_label(inputs.param_in, expected, "the caller's aliased param handle")
+    _assert_label(inputs.exp_avg_in, expected, "the caller's aliased exp_avg handle")
+    _assert_label(inputs.grad_in, ["Shard(3)"], "grad")
+
+    actual = [_device_slices(t) for t in (param_out, exp_avg_out, exp_avg_sq_out)]
+    _assert_devices_differ(actual[0], "param")
+    for dev in range(len(before["param"])):
+        expected_values = _adam_reference(
+            before["param"][dev],
+            before["grad"][dev],
+            before["exp_avg"][dev],
+            before["exp_avg_sq"][dev],
+            None,
+            optim_cls=optim_cls,
+            amsgrad=False,
+        )
+        for name, exp, act in zip(("param", "exp_avg", "exp_avg_sq"), expected_values, actual):
+            _assert_close(exp, act[dev], f"device {dev} {name}")
 
 
 @pytest.mark.parametrize("run, optim_cls", ADAM_OPS)
