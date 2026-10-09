@@ -463,38 +463,6 @@ sfpi_inline sfpi::vFloat _sfpu_exp_(sfpi::vFloat val) {
     return val;
 }
 
-template <bool APPROXIMATION_MODE>
-sfpi_inline sfpi::vFloat _calculate_exponential_body_(sfpi::vFloat in) {
-    sfpi::vFloat out;
-
-    if constexpr (APPROXIMATION_MODE) {
-        constexpr int FRAC_BITS = 3;
-        constexpr std::uint32_t SP_BIAS = 127 << FRAC_BITS;
-
-        // * by 1/ln2 and add convert to 7.3 FxP format
-        sfpi::vFloat vConstLn2Recip = sfpi::vConstFloatPrgm0;
-        sfpi::vFloat conv = in * vConstLn2Recip;
-
-        // Clear exp bits
-        sfpi::vInt c23_73 = p_exp::C23_73;
-        sfpi::vInt tmp = sfpi::as<sfpi::vInt>(conv) - c23_73;
-
-        // Add bias
-        tmp += SP_BIAS;
-
-        // SHL to move integer bits to exponent
-        out = sfpi::as<sfpi::vFloat>(tmp << (10 - FRAC_BITS));
-    } else {
-        // Force sign to 0 (make number positive)
-        out = _sfpu_exp_(sfpi::setsgn(in, 0));
-
-        v_if(in < 0) { out = sfpu_reciprocal_iter<2>(out); }
-        v_endif;
-    }
-
-    return out;
-}
-
 // The clamped approximate exponential over N vectors (8 or 32): every LOADMACRO carries its DEST row offset as an
 // immediate (ADDR_MOD_7 does not increment) and rotates the loaded value through LREG0 to LREG3.
 template <int VEC, int N>
