@@ -6,6 +6,7 @@
 #include <span>
 #include <tt_metal.hpp>
 #include "impl/buffers/semaphore.hpp"
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <map>
 #include <string>
