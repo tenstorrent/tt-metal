@@ -33,6 +33,7 @@ import pytest
 import torch
 from loguru import logger
 from safetensors import safe_open
+from safetensors.torch import save_file
 
 import ttnn
 from models.demos.pplx_decider_v1_27b.tests.runtime_audit import count_host_calls
@@ -109,7 +110,7 @@ def _write(name: str, payload) -> Path:
 
 @pytest.mark.timeout(3600)
 def test_decision_agreement(model, golden):
-    rows, layer_pcc = [], {}
+    rows, layer_pcc, raw = [], {}, {}
     for g in golden.rows:
         rid, count = g["id"], g["count"]
         ids = golden.tensor(rid, "input_ids").tolist()
@@ -143,6 +144,8 @@ def test_decision_agreement(model, golden):
             "seconds_incl_trace_readback": round(seconds, 3),
         }
         layer_pcc[rid] = [pcc(tt["layer_hidden"][i], hf_layers[i]) for i in range(hf_layers.shape[0])]
+        for name in ("probs", "logits", "final_hidden", "layer_hidden"):
+            raw[f"{rid}.{name}"] = tt[name].contiguous()
         row["layer_pcc_min"] = min(layer_pcc[rid])
         row["layer_pcc_last"] = layer_pcc[rid][-1]
         rows.append(row)
@@ -168,6 +171,8 @@ def test_decision_agreement(model, golden):
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     path = _write("e2e_decisions.json", {"summary": summary, "rows": rows, "layer_pcc": layer_pcc})
+    # Raw TT outputs, for bit-identity checks across code changes (tests/e2e/compare_outputs.py).
+    save_file(raw, str(OUT_DIR / "e2e_outputs.safetensors"), metadata={"policy": summary["policy"]})
     logger.info(f"decision agreement {agree}/{len(rows)}; {json.dumps(summary)} -> {path}")
 
     assert agree >= MIN_AGREE, f"Only {agree}/{len(rows)} rows agree with HF top-1 (need {MIN_AGREE})"

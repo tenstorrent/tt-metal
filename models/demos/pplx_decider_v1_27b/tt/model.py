@@ -18,11 +18,24 @@ weight cache (``LazyWeight.cache_dir_weight_name``). A cached load builds the we
 
 Between the token upload and the probability readback the forward issues TTNN device ops only.
 
+Images (``vision=True``): the 12A vision tower (``tt/vision``, BF16) is resident next to the text
+stack. ``prepare_images`` is per-request input prep on host - 3D position ids
+(``rope.get_rope_index``) -> per-request cos/sin (``PplxRequestRotary``), the splice index list,
+and the vision tower inputs - and uploads them. On device, ``embed_with_images`` gathers the
+embedding rows into ``[text embeddings ; image features]`` with one ``ttnn.embedding`` over the
+splice index (HF ``inputs_embeds.masked_scatter(input_ids == image_token_id, image_features)``),
+so the 5120-wide embeddings never leave the device. Then the same 64 layers and head run, with
+the request rotary in the 16 full-attention layers. Text-only requests take the unchanged path.
+
 Usage::
 
     model = PplxDeciderModel.from_snapshot(device)
     tokens, last_index = model.upload_tokens(input_ids)       # host -> device, padded to the bucket
     probs, logits, _ = model(tokens, last_index, count)        # device tensors [1, 1, 256] fp32
+
+    model = PplxDeciderModel.from_snapshot(device, vision=True)
+    tokens, last_index, images = model.prepare_images(processor_outputs)   # input prep + upload
+    probs, logits, _ = model(tokens, last_index, count, images=images)
 """
 
 from __future__ import annotations
@@ -47,7 +60,7 @@ from models.demos.pplx_decider_v1_27b.tt.embedding import EmbeddingConfig, PplxE
 from models.demos.pplx_decider_v1_27b.tt.head import PADDED_OPTIONS, DecisionHeadConfig, PplxDecisionHead
 from models.demos.pplx_decider_v1_27b.tt.model_config import APP_MAX_LENGTH, PplxDeciderArgs
 from models.demos.pplx_decider_v1_27b.tt.optimizations import Optimizations, PrecisionPolicy
-from models.demos.pplx_decider_v1_27b.tt.rope import PplxRotary
+from models.demos.pplx_decider_v1_27b.tt.rope import PplxRequestRotary, PplxRotary, get_rope_index
 from models.demos.pplx_decider_v1_27b.tt.weight_adapter import (
     build_decoder_layer_weights,
     build_embedding_weight,
@@ -60,6 +73,7 @@ DEFAULT_CACHE_ROOT = Path(
     os.environ.get("PPLX_DECIDER_WEIGHT_CACHE", "/local/ttuser/gtobar/artifacts/pplx_decider/weight_cache")
 )
 TEXT_PREFIX = "language_model."
+IMAGE_TOKEN_ID = 248056  # config.image_token_id (<|image_pad|>), checked against the config at load
 _ST_DTYPES = {"BF16": torch.bfloat16, "F32": torch.float32, "F16": torch.float16}
 
 
@@ -233,10 +247,33 @@ class ModelConfig:
     cache_dir: Path | None
 
 
-class PplxDeciderModel(LightweightModule):
-    """Embedding + decoder stack + decision head, all resident on one device."""
+@dataclass
+class ImageInputs:
+    """Device inputs of the image part of one request (built by ``PplxDeciderModel.prepare_images``).
 
-    def __init__(self, config: ModelConfig, embedding, layers, rotary, head, load_report: LoadReport | None = None):
+    ``splice_index[0, s]`` is the row of ``[text embeddings (bucket rows) ; image features]`` that
+    token ``s`` takes: ``s`` for text and padding tokens, ``bucket + k`` for the k-th image token.
+    """
+
+    vision: list  # VisionInputs per image, prompt order
+    splice_index: ttnn.Tensor  # [1, bucket] uint32 ROW_MAJOR
+    rotary: PplxRequestRotary  # 3D mRoPE cos/sin, [1, 1, bucket, 256] each
+    position_ids: torch.Tensor  # host [3, real_len] int64 (HF get_rope_index), for tests / logs
+    num_image_tokens: int
+
+    def deallocate(self) -> None:
+        for v in self.vision:
+            v.deallocate()
+        ttnn.deallocate(self.splice_index)
+        self.rotary.deallocate()
+
+
+class PplxDeciderModel(LightweightModule):
+    """Embedding + decoder stack + decision head (+ optional vision tower), all resident on one device."""
+
+    def __init__(
+        self, config: ModelConfig, embedding, layers, rotary, head, load_report: LoadReport | None = None, vision=None
+    ):
         super().__init__()
         self.config = config
         self.mesh_device = config.optimizations.mesh_device
@@ -244,6 +281,7 @@ class PplxDeciderModel(LightweightModule):
         self.layers = layers
         self.rotary = rotary
         self.head = head
+        self.vision = vision
         self.load_report = load_report or LoadReport()
 
     # -- construction ---------------------------------------------------------------------------
@@ -257,8 +295,11 @@ class PplxDeciderModel(LightweightModule):
         layer_ids=None,
         cache_dir: Path | str | None = "default",
         prefill_chunk: int = 2048,
+        vision: bool = False,
     ) -> "PplxDeciderModel":
         """Build and upload every weight. ``layer_ids`` (default: all 64) allows a reduced stack for debugging.
+
+        ``vision=True`` also loads the BF16 vision tower (``PplxVisionTower``, ~0.96 GiB) for image requests.
 
         ``policy`` defaults to ``PrecisionPolicy.default()`` (the stage-8 selected precision config).
         ``cache_dir="default"`` uses ``DEFAULT_CACHE_ROOT/<revision>/weights``, shared by every policy:
@@ -354,6 +395,16 @@ class PplxDeciderModel(LightweightModule):
                 )
             ),
         )
+        tower = None
+        if vision:
+            from models.demos.pplx_decider_v1_27b.tt.vision.tower import PplxVisionTower
+
+            start = time.perf_counter()
+            tower = PplxVisionTower.from_snapshot(mesh_device, reader)
+            report.seconds["vision"] = time.perf_counter() - start
+            full_config = json.loads((reader.path / "config.json").read_text())
+            if full_config.get("image_token_id") != IMAGE_TOKEN_ID:
+                raise ValueError(f"config image_token_id {full_config.get('image_token_id')} != {IMAGE_TOKEN_ID}")
         ttnn.synchronize_device(mesh_device)
         report.seconds["total"] = time.perf_counter() - t_start
         report.dram["after_load"] = dram_view(mesh_device)
@@ -366,7 +417,7 @@ class PplxDeciderModel(LightweightModule):
             cache_dir=cache_dir,
         )
         logger.info(f"model loaded: {json.dumps(report.seconds)}; DRAM {report.dram['after_load']}")
-        return cls(config, embedding, layers, rotary, head, report)
+        return cls(config, embedding, layers, rotary, head, report, vision=tower)
 
     # -- runtime ----------------------------------------------------------------------------------
     def upload_tokens(self, input_ids, bucket: int | None = None) -> tuple[ttnn.Tensor, int]:
@@ -389,12 +440,112 @@ class PplxDeciderModel(LightweightModule):
         )
         return tokens, len(ids) - 1
 
+    # -- image requests ---------------------------------------------------------------------------
+    def prepare_images(self, encoded: dict, bucket: int | None = None) -> tuple[ttnn.Tensor, int, ImageInputs | None]:
+        """Per-request input prep for a processor output (``input_ids``, ``mm_token_type_ids``,
+        ``pixel_values``, ``image_grid_thw``; batch 1, unpadded) and its upload.
+
+        Host work (like tokenization): 3D position ids (``get_rope_index``) -> per-request cos/sin,
+        the splice index list, the per-image vision inputs (``PplxVisionTower.prepare_inputs``).
+        Returns ``(tokens, last_index, images)``; ``images`` is None for a prompt without images,
+        which then runs the text-only path unchanged.
+        """
+        ids = torch.as_tensor(encoded["input_ids"]).reshape(-1)
+        if "pixel_values" not in encoded or encoded.get("image_grid_thw") is None:
+            if bool((ids == IMAGE_TOKEN_ID).any()):
+                raise ValueError("Prompt has image tokens but no pixel_values / image_grid_thw")
+            tokens, last_index = self.upload_tokens(ids.tolist(), bucket)
+            return tokens, last_index, None
+        if self.vision is None:
+            raise ValueError("Image request on a model built without the vision tower (from_snapshot(vision=True))")
+        types = torch.as_tensor(encoded["mm_token_type_ids"]).reshape(-1)
+        is_image = ids == IMAGE_TOKEN_ID
+        if not torch.equal(is_image, types == 1) or bool((types > 1).any()):
+            raise ValueError("mm_token_type_ids must mark exactly the image tokens (no video)")
+        grids = torch.as_tensor(encoded["image_grid_thw"]).reshape(-1, 3)
+        patches = [int(t * h * w) for t, h, w in grids.tolist()]
+        pixel_values = torch.as_tensor(encoded["pixel_values"])
+        if pixel_values.shape[0] != sum(patches):
+            raise ValueError(f"pixel_values has {pixel_values.shape[0]} rows, grids need {sum(patches)}")
+        merge = self.vision.config.args.merge_unit
+        num_image_tokens = int(is_image.sum())
+        if num_image_tokens != sum(p // merge for p in patches):
+            raise ValueError(f"{num_image_tokens} image tokens for {sum(patches) // merge} image features")
+
+        tokens, last_index = self.upload_tokens(ids.tolist(), bucket)
+        bucket = tokens.shape[-1]
+        a = self.config.args
+        position_ids = get_rope_index(ids, types, grids, spatial_merge_size=self.vision.config.args.spatial_merge_size)
+        rotary = PplxRequestRotary.from_position_ids(
+            position_ids,
+            bucket,
+            rotary_dim=a.rotary_dim,
+            theta=a.rope_theta,
+            head_dim=a.head_dim,
+            mesh_device=self.mesh_device,
+        )
+        vision = [
+            self.vision.prepare_inputs(pv, grid) for pv, grid in zip(torch.split(pixel_values, patches, dim=0), grids)
+        ]
+        index = torch.arange(bucket, dtype=torch.int32)
+        index[: ids.shape[0]][is_image] = bucket + torch.arange(num_image_tokens, dtype=torch.int32)
+        splice_index = ttnn.from_torch(
+            index.reshape(1, bucket),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        images = ImageInputs(
+            vision=vision,
+            splice_index=splice_index,
+            rotary=rotary,
+            position_ids=position_ids,
+            num_image_tokens=num_image_tokens,
+        )
+        return tokens, last_index, images
+
+    def image_features(self, images: ImageInputs) -> list[ttnn.Tensor]:
+        """Vision tower per image: [1, 1, n_i / 4, 5120] BF16 TILE each (device only)."""
+        return [self.vision(v) for v in images.vision]
+
+    def splice(self, tokens: ttnn.Tensor, images: ImageInputs, features: list[ttnn.Tensor]) -> ttnn.Tensor:
+        """Text embeddings with the image-token rows replaced by the image features, on device.
+
+        ``table = [embedding(tokens) ; features...]`` (ROW_MAJOR, bucket + N rows) and one
+        ``ttnn.embedding`` gather over ``splice_index`` -> [1, bucket, 5120] BF16 TILE. Both steps
+        copy rows only, so text rows equal the text-only embedding bit for bit and image rows equal
+        the vision features. Frees ``features``.
+        """
+        self.embedding.load_device_weights()
+        weight = self.embedding.weight
+        hidden, bucket = weight.shape[-1], tokens.shape[-1]
+        text = ttnn.embedding(tokens, weight, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        parts = [ttnn.reshape(text, [bucket, hidden])]
+        for f in features:
+            rows = ttnn.to_layout(f, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(f)
+            parts.append(ttnn.reshape(rows, [rows.shape[-2], hidden]))
+        table = ttnn.concat(parts, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for p in parts:
+            ttnn.deallocate(p)
+        x = ttnn.embedding(images.splice_index, table, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(table)
+        return ttnn.reshape(x, [1, bucket, hidden])
+
+    def embed_with_images(self, tokens: ttnn.Tensor, images: ImageInputs) -> ttnn.Tensor:
+        """Vision tower -> splice: the ``inputs_embeds`` of an image request [1, bucket, 5120] BF16 TILE."""
+        return self.splice(tokens, images, self.image_features(images))
+
+    # -- forward ----------------------------------------------------------------------------------
     def forward(
         self,
         tokens: ttnn.Tensor,
         last_index: int,
         count: int,
         *,
+        images: ImageInputs | None = None,
+        embeds: ttnn.Tensor | None = None,
         return_hidden: bool = False,
         collect_layer_hidden: bool = False,
     ):
@@ -403,12 +554,22 @@ class PplxDeciderModel(LightweightModule):
         probs / logits are [1, 1, 256] fp32 (probs zero from ``count`` on). ``extras`` is a dict that
         holds, on request, ``final_hidden`` (final-normed last real token [1, 1, 5120]) and
         ``layer_hidden`` (the last real token's residual after every layer, list of [1, 1, 5120]).
+
+        ``images`` (from ``prepare_images``): run the vision tower, splice its features into the
+        embeddings and use the request's 3D-mRoPE tables. ``embeds``: an already spliced
+        ``embed_with_images`` output to start from (consumed; for per-phase timing and tests).
+        Without either, this is the text-only path.
         """
         hidden_size = self.config.args.hidden_size
-        x = self.embedding(tokens)
+        if images is None:
+            x = self.embedding(tokens)
+            rotary = self.rotary
+        else:
+            x = embeds if embeds is not None else self.embed_with_images(tokens, images)
+            rotary = images.rotary
         layer_hidden = []
         for layer in self.layers:
-            y = layer(x, self.rotary)
+            y = layer(x, rotary)
             ttnn.deallocate(x)
             x = y
             if collect_layer_hidden:
@@ -429,6 +590,17 @@ class PplxDeciderModel(LightweightModule):
         out = ttnn.to_torch(probs).reshape(-1)[:count].tolist()
         for t in (tokens, probs, logits):
             ttnn.deallocate(t)
+        return out
+
+    def decide_encoded(self, encoded: dict, count: int, *, bucket: int | None = None) -> list[float]:
+        """``decide`` for a processor output that may hold images: input prep -> device forward -> one readback."""
+        tokens, last_index, images = self.prepare_images(encoded, bucket)
+        probs, logits, _ = self(tokens, last_index, count, images=images)
+        out = ttnn.to_torch(probs).reshape(-1)[:count].tolist()
+        for t in (tokens, probs, logits):
+            ttnn.deallocate(t)
+        if images is not None:
+            images.deallocate()
         return out
 
 
