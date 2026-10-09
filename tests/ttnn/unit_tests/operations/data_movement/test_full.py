@@ -145,9 +145,12 @@ def test_full_tile_device_fill_threshold(device, input_shape, fill_value, tt_dty
     assert torch.equal(device_output[not_nan], host_output[not_nan])
 
 
-# bfloat8_b is filled on the device only for +0.0, which both paths store exactly, and at any size, since packing
-# bfloat8_b on the host costs more than the device fill: one tile, small and large padded shapes, a KV-cache-like shape
-@pytest.mark.parametrize("input_shape", [[32, 32], [1, 1, 33, 100], [31, 121 * 32], [64, 1, 64, 128], [2, 3, 300, 300]])
+# bfloat8_b is filled on the device only for +0.0, which both paths store exactly, and from one tile up, since packing
+# bfloat8_b on the host costs more than the device fill: ranks 0 to 5, small and large padded shapes, a KV-cache-like shape
+@pytest.mark.parametrize(
+    "input_shape",
+    [[], [3], [32, 32], [1, 1, 33, 100], [31, 121 * 32], [64, 1, 64, 128], [2, 3, 300, 300], [2, 1, 3, 40, 70]],
+)
 @pytest.mark.parametrize("fill_value", [0.0, -0.0, 1.0])
 def test_full_tile_bfloat8_b_zero_device_fill(device, input_shape, fill_value):
     positive_zero = fill_value == 0.0 and math.copysign(1.0, fill_value) > 0
