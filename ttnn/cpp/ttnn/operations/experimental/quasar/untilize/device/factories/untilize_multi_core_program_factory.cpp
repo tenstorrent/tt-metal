@@ -181,8 +181,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         reader.source = kdir / "reader_unary_sharded_metal2.cpp";
         reader.runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}};
     } else {
-        // Interleaved input.
+        // Interleaved input. Implicit sync: the kernel issues TXN_ID reads instead of reserve_back / push_back.
         reader.source = kdir / "reader_unary_start_id_metal2.cpp";
+        reader.hw_config = ttnn::create_reader_datamovement_config();
         reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}};
         reader.runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_page_id"}};
     }

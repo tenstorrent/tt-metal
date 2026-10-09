@@ -23,15 +23,11 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer cb_in(dfb::in);
 
-    const uint32_t tile_bytes = cb_in.get_tile_size();
-
     const auto s = TensorAccessor(tensor::input);
 
     uint32_t end_page_id = start_page_id + num_tiles;
+    // Implicit sync: each TXN_ID read claims a DFB entry and posts its credit when it lands.
     for (uint32_t page_id = start_page_id; page_id < end_page_id; ++page_id) {
-        cb_in.reserve_back(1);
-        noc.async_read(s, cb_in, tile_bytes, {.page_id = page_id, .offset_bytes = 0}, {.offset_bytes = 0});
-        noc.async_read_barrier();
-        cb_in.push_back(1);
+        noc.async_read<NocOptions::TXN_ID>(s, cb_in, {.page_id = page_id, .offset_bytes = 0}, {});
     }
 }

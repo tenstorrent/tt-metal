@@ -173,7 +173,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
             .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
+        // Implicit sync: the kernel issues TXN_ID writes instead of wait_front / pop_front.
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // ---- Compute (Metal 2.0 fork of tilize) ----
