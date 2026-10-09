@@ -67,6 +67,9 @@ PCC = {
 }
 DEFAULT_PCC = 0.999
 
+# the Quasar ops take the Quasar copies of the matmul program-config structs, not the mainline ttnn.* ones
+QSR_OPS = ttnn._ttnn.operations.experimental.quasar
+
 
 def grid_mode():
     return os.environ.get("SDXL_QSR_GRID", "fit")
@@ -234,13 +237,59 @@ def _xy(d):
     raise ValueError(d)
 
 
-def build_matmul_program_config(pc):
-    if pc is None or grid_mode() == "fit":
+def _fit_2d_matmul_program_config(pc, specs, params, device):
+    """Remap a captured 2D (mcast) program config onto the device grid: same structure (blocking, fused
+    activation, fuse_batch), grid clamped, per-core M/N recomputed from the shapes, subblocks re-derived."""
+    cx, cy = _xy(pc["compute_with_storage_grid_size"])
+    dx, dy = device_grid(device)
+    gx, gy = min(cx, dx), min(cy, dy)
+    a_shape = specs["inputs"]["input"]["shape"]
+    w_shape = specs["inputs"]["weight"]["shape"]
+    Mt = math.ceil(a_shape[-2] / 32)
+    Kt = math.ceil(a_shape[-1] / 32)
+    Nt = math.ceil(w_shape[-1] / 32)
+    per_core_M = math.ceil(Mt / gy)
+    per_core_N = math.ceil(Nt / gx)
+    in0_block_w = pc["in0_block_w"] if Kt % pc["in0_block_w"] == 0 else 1
+    ck = params.get("compute_kernel_config") or {}
+    max_dst_tiles = 4 if ck.get("fp32_dest_acc_en") else 8
+    best = (1, 1)
+    for h in range(1, per_core_M + 1):
+        if per_core_M % h:
+            continue
+        for w in range(1, per_core_N + 1):
+            if per_core_N % w or h * w > max_dst_tiles:
+                continue
+            if h * w > best[0] * best[1] or (h * w == best[0] * best[1] and w > best[1]):
+                best = (h, w)
+    return QSR_OPS.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(gx, gy),
+        in0_block_w=in0_block_w,
+        out_subblock_h=best[0],
+        out_subblock_w=best[1],
+        out_block_h=per_core_M,
+        out_block_w=per_core_N,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=bool(pc["transpose_mcast"]),
+        fused_activation=build_activation(pc.get("fused_activation")),
+        fuse_batch=bool(pc["fuse_batch"]),
+    )
+
+
+def build_matmul_program_config(pc, specs=None, params=None, device=None):
+    if pc is None:
+        return None
+    if grid_mode() == "fit":
+        # 2D mcast configs are remapped onto the device grid (keeps the fused bias/activation path the model
+        # relies on); 1D configs are dropped and the op auto-configures.
+        if pc["type"] == "MatmulMultiCoreReuseMultiCastProgramConfig" and specs is not None:
+            return _fit_2d_matmul_program_config(pc, specs, params or {}, device)
         return None
     x, y = _xy(pc["compute_with_storage_grid_size"])
     act = build_activation(pc.get("fused_activation"))
     if pc["type"] == "MatmulMultiCoreReuseMultiCastProgramConfig":
-        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        return QSR_OPS.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(x, y),
             in0_block_w=pc["in0_block_w"],
             out_subblock_h=pc["out_subblock_h"],
@@ -254,7 +303,7 @@ def build_matmul_program_config(pc):
             fuse_batch=bool(pc["fuse_batch"]),
         )
     if pc["type"] == "MatmulMultiCoreReuseMultiCast1DProgramConfig":
-        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        return QSR_OPS.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(x, y),
             in0_block_w=pc["in0_block_w"],
             out_subblock_h=pc["out_subblock_h"],
@@ -531,9 +580,9 @@ def call_op(op, tensors, params, specs, device):
         )
         return (out,)
     if op in ("linear", "matmul"):
-        pc = build_matmul_program_config(p.get("program_config"))
-        # with the program config dropped (fit mode) a block-sharded output needs the program-config grid, so
-        # fall back to an interleaved output in the same buffer type
+        pc = build_matmul_program_config(p.get("program_config"), specs, p, device)
+        # with the program config dropped (fit mode, 1D configs) a block-sharded output needs the program-config
+        # grid, so fall back to an interleaved output in the same buffer type
         if pc is None and mem is not None and mem.is_sharded():
             mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, mem.buffer_type)
         kw = dict(

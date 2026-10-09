@@ -495,8 +495,16 @@ void kernel_main() {
     }
 
 #if OUT_SHARDED
-    cb_out.wait_front(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    // Quasar: cb_out is borrowed from the output shard, and a borrowed DFB ring holds only num_entries-1
+    // outstanding entries, so the packer's final reserve_back stalls at exact-fill and the pack / writer DFB
+    // drains never see the ring empty unless a consumer advances the credits. Pop the shard subblock by
+    // subblock, in the compute's push order: credit-only, the tiles are already resident in the output L1.
+    const uint32_t out_shard_tiles =
+        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h;
+    for (uint32_t t = 0; t < out_shard_tiles; t += out_subblock_tile_count) {
+        cb_out.wait_front(out_subblock_tile_count);
+        cb_out.pop_front(out_subblock_tile_count);
+    }
 #endif
     // [DEBUG #47797] Dump SW NoC issued-counters vs HW completion just before the drain. in1 hangs
     // in the nonposted-writes-sent wait (NIU_MST_NONPOSTED_WR_REQ_SENT == noc_nonposted_writes_num_issued).

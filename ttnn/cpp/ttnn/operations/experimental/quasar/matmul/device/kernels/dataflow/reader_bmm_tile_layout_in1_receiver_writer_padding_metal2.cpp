@@ -250,8 +250,16 @@ void kernel_main() {
     }
 
 #if OUT_SHARDED
-    cb_out.wait_front(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    // Quasar: cb_out is borrowed from the output shard, and a borrowed DFB ring holds only num_entries-1
+    // outstanding entries, so the packer's final reserve_back stalls at exact-fill and the pack / writer DFB
+    // drains never see the ring empty unless a consumer advances the credits. Pop the shard subblock by
+    // subblock, in the compute's push order: credit-only, the tiles are already resident in the output L1.
+    const uint32_t out_shard_tiles =
+        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h;
+    for (uint32_t t = 0; t < out_shard_tiles; t += out_subblock_tile_count) {
+        cb_out.wait_front(out_subblock_tile_count);
+        cb_out.pop_front(out_subblock_tile_count);
+    }
 #endif
     // Drain outstanding NOC writes AND atomics (sender_sem.up) before returning. Under Metal 2.0 the
     // FW kernel epilogue does not drain the kernel's outstanding NOC transactions the way the legacy
