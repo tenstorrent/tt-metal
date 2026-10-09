@@ -18,6 +18,10 @@ from data import load, SETS, CAND, evaluate, rank_quality, gm
 
 
 tag = (os.environ.get("ABLATE", "") or "full") + ("+" + os.environ["EXTRA"] if os.environ.get("EXTRA") else "")
+for k in filter(None, os.environ.get("UNPIN", "").split(",")):  # UNPIN=name,...: fit these WH constants freely
+    if k in M.PINNED:
+        M.PINNED[k] = ({a: v for a, v in M.PINNED[k][0].items() if a != "wh"}, M.PINNED[k][1])
+    tag += f"+unpin_{k}"
 for kv in filter(
     None, os.environ.get("PIN", "").split(",")
 ):  # PIN=name=value,...: hold extra WH constants at these values

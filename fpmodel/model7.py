@@ -43,6 +43,8 @@ EXPERIMENTAL = {
     "wov2d": "2D: most cores only receive in1, so their writer overlaps the next block's pipeline (only the excess is exposed)",
     "wburst": "DRAM writes congest with the bytes each writer has in flight per barrier (one subblock), like L1 read bursts",
     "mcovl": "the async multicast write overlaps the sender's next fetch; only the handshake is serial with it",
+    "mcout": "MultiCore: a fixed cost per output tile (dest acquire, pack, one-tile write and its barrier)",
+    "blkfix": "a fixed cost per output block: buffer handshakes, compute reconfiguration and output setup each block pays",
     "reusesync": "Reuse cores never synchronise, so only part of their per-step link load coincides (fitted fraction)",
 }
 OFF = set(filter(None, os.environ.get("ABLATE", "").split(",")))
@@ -77,7 +79,11 @@ CONSTANTS = {
     "lat_write": (65.0, "cycles: one subblock of output page writes + barrier", "write"),
     "sfpu_tile": (2000.0, "cycles per output tile of SFPU activation", "epilogue"),
     "issue": (100.0, "cycles per page read issued by one reader core", "issue"),
-    "mc_eff0": (0.59, "multicast rate as a fraction of the link rate, extrapolated to zero receivers", "mcrate"),
+    "mc_eff0": (
+        0.9,
+        "multicast rate as a fraction of the link rate, extrapolated to zero receivers (fitted; the one-to-all microbenchmark's 63-receiver point, 0.43, matches the fit)",
+        "mcrate",
+    ),
     "mc_eff_rx": (0.0026, "drop in that fraction per receiver", "mcrate"),
     "noc_eff_cc": (
         0.48,
@@ -90,6 +96,8 @@ CONSTANTS = {
         "reusesync",
     ),
     "wburst_KB": (20.0, "KB per writer per barrier at which its share of DRAM write bandwidth halves", "wburst"),
+    "mc_out": (500.0, "cycles per MultiCore output tile: acquire, pack, write + barrier", "mcout"),
+    "blk_fixed": (1000.0, "cycles per output block: CB handshakes, compute reconfig, output block setup", "blkfix"),
     "lat_shard": (
         500.0,
         "cycles per K step: handing the in0 mcast to the core that holds the next K slice",
@@ -115,8 +123,6 @@ PINNED = {
     ),
     "issue": ({"wh": 38.0}, "data-movement microbenchmark: per-page cost of small interleaved DRAM reads"),
     "noc_eff": ({"wh": 0.96}, "data-movement microbenchmark: one core's interleaved read rate, 30.7 of 32 B/cycle"),
-    "mc_eff0": ({"wh": 0.59}, "one-to-all multicast microbenchmark: 17.1 B/cycle to 24 receivers, 13.9 to 63"),
-    "mc_eff_rx": ({"wh": 0.0026}, "one-to-all multicast microbenchmark: slope of the rate with receivers"),
     "noc_eff_cc": ({"wh": 0.48}, "multi-core interleaved DRAM reads: 15.4 B/cycle per core with 4 cores reading"),
 }
 
@@ -351,6 +357,8 @@ def predict(g, p, parts=False):
         block = loop + epi + np.where(g["fam"] == "2d", np.maximum(write - loop, write / np.maximum(nsb, 1)), write)
     else:
         block = np.where(g["dbuf"], piped, serial) + epi + write
+    if on("blkfix"):
+        block = block + p["blk_fixed"]
     pad = 0.0
     if on("pad"):  # last K block: per in0 row tile, a read barrier then the zero fill, serial on the in0 reader
         lat0 = np.select([g["src_a"] == 0, g["src_a"] == 1], [p["lat_dram"], p["lat_l1"]], 0.0)
@@ -365,7 +373,8 @@ def predict(g, p, parts=False):
     mc_read = np.maximum(g["Kt"] * (2 * p["tile_rt"] + tb2 / noc), g["Kt"] * tb2 * g["cores"] / dram)
     mc_tile = np.maximum(mc_read, g["Kt"] * 16.0 * g["ph"])
     mc_pad = np.where(g["kpad"] > 0, g["kpad"] * p["pad_elem"], 0.0) if on("pad") else 0.0
-    core = np.where(mc, tiles_pc * (mc_tile + mc_pad + p.get("lat_write", 0.0)), core)
+    mc_fixed = p["mc_out"] if on("mcout") else p.get("lat_write", 0.0)
+    core = np.where(mc, tiles_pc * (mc_tile + mc_pad + mc_fixed), core)
 
     t = p["launch_us"] * 1e3 + core / clk * 1e9
     if parts:

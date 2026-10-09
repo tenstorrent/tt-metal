@@ -19,6 +19,8 @@ SETS = {  # name -> (path, arch); read-only inputs
     "wh_fresh1": (f"{WORK}/frozen/wh_fresh1_sweep.csv", "wh"),  # 59 swept draw-1 problems
     "wh_miss2": (f"{WORK}/frozen/wh_miss_draw2.csv", "wh"),  # draw-2 problems where v6 was > 3% slower than legacy
     "wh_sharded": (f"{WORK}/frozen/wh_sharded_sweep.csv", "wh"),  # sharded-input problems of draws 2 and 3
+    # fresh draws whose clean tests are done (legacy, rules and the then-current model's pick per problem)
+    "wh_draws": ([f"{WORK}/frozen/wh_draw{k}_timed.csv" for k in (2, 3, 4, 5)], "wh"),
 }
 KEY = ["problem_id", "origin", "config"]
 CAND = ("enumerated", "heuristic")
@@ -29,8 +31,20 @@ def load(names):
     parts = []
     for n in names:
         path, arch = SETS[n]
-        x = pd.read_csv(path, low_memory=False)
+        paths = path if isinstance(path, list) else [path]
+        x = pd.concat(
+            [
+                pd.read_csv(q, low_memory=False).assign(
+                    problem_id=lambda z, q=q: (q.split("/")[-1] + ":" if len(paths) > 1 else "")
+                    + z.problem_id.astype(str)
+                )
+                for q in paths
+            ],
+            ignore_index=True,
+        )
         x["set"], x["arch_"] = n, arch
+        if isinstance(path, list):  # timed draws: the model's pick is one of that problem's candidates
+            x["origin"] = x.origin.replace({"model": "enumerated"})
         x["problem_id"] = n + ":" + x.problem_id.astype(str)
         parts.append(x.drop_duplicates(KEY, keep="last"))
     d = pd.concat(parts, ignore_index=True)
