@@ -239,7 +239,10 @@ jobs:
       - name: Merge the run's shards into one file per architecture
         working-directory: ${{ env.LLK_PATH }}/tests/python_tests
         env:
-          PYTHONPATH: .
+          # `.` is the test tree (helpers). tt_llk_perf lives in tools/python;
+          # pytest puts it on sys.path via the plugin, but this step runs the
+          # merger directly.
+          PYTHONPATH: .:../../tools/python
           # Required, and not by the merge: importing anything under helpers
           # runs helpers/device.py, whose module scope calls
           # get_chip_architecture(), which probes a device when CHIP_ARCH is
