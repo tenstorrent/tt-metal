@@ -4,6 +4,7 @@
 set(UNIT_TESTS_LEGACY_SRC
     test_add_two_ints.cpp
     test_bcast.cpp
+    test_bfp4_conversion.cpp
     test_bfp8_conversion.cpp
     test_bmm.cpp
     test_compile_failure_drain.cpp
