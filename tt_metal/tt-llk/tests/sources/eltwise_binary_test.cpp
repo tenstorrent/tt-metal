@@ -22,9 +22,8 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 #if defined(ARCH_BLACKHOLE)
-// Each operand tile goes to math as one source bank (SrcDvalid::PerTile) unless the variant sets per_face_handoff, which the test
-// does for a transposed SrcA; partial faces (but for a column broadcast of 1 x 2 faces), and a column or row broadcast without 2 x 2
-// faces, fall back inside the LLK.
+// Each operand tile goes to math as one source bank unless the variant sets per_face_handoff; tile shapes the whole-tile
+// program does not cover fall back to per face inside the LLK.
 #define SRC_DVALID     (per_face_handoff ? ckernel::SrcDvalid::PerFace : ckernel::SrcDvalid::PerTile)
 #define SRC_DVALID_ARG , SRC_DVALID
 #define PER_TILE_MOCK(shape) \

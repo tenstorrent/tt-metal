@@ -33,6 +33,48 @@ constexpr std::uint32_t dest_reuse_dummy_unpack()
 } // namespace llk_unpack_a_detail
 
 /**
+ * @brief Whether @ref _llk_unpack_A_ programs the operand's L1 address into unpacker A (SEC0).
+ *
+ * Otherwise the address goes to unpacker B (SEC1): a broadcast or acc_to_dest operand's address goes
+ * to unpacker B unless DEST is reused as SrcB or the operand is unpacked to DEST. For example,
+ * acc_to_dest with DEST_TO_SRCA unpacks the operand to SrcB and moves DEST to SrcA.
+ * This only selects the address register; the MOP decides which sources are actually unpacked.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @return true if the operand's L1 base address goes to unpacker A (SEC0), false if it goes to unpacker B (SEC1).
+ */
+template <BroadcastType BType, bool acc_to_dest, EltwiseBinaryReuseDestType binary_reuse_dest, bool unpack_to_dest>
+constexpr bool _llk_unpack_A_address_on_unpacker_A_()
+{
+    return ((BType == BroadcastType::NONE) && (!acc_to_dest)) || binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB || unpack_to_dest;
+}
+
+/**
+ * @brief Whether the unpack A configuration asserts check unpacker B (SEC1) rather than unpacker A (SEC0).
+ *
+ * Unpacker B is checked only when it both holds the operand's address (see
+ * @ref _llk_unpack_A_address_on_unpacker_A_) and unpacks it from L1: broadcasts, and acc_to_dest with
+ * DEST_TO_SRCA. acc_to_dest without DEST reuse also routes the address to unpacker B, but the
+ * transpose-of-faces MOP that transpose_init configures with it unpacks only SrcA (SrcB is zeroed),
+ * and its paired per-tile unpack uses acc_to_dest = false, so unpacker A is checked there.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @return true if the asserts should check unpacker B (SEC1), false for unpacker A (SEC0).
+ */
+template <BroadcastType BType, bool acc_to_dest, EltwiseBinaryReuseDestType binary_reuse_dest, bool unpack_to_dest>
+constexpr bool _llk_unpack_A_asserts_check_unpacker_B_()
+{
+    return !_llk_unpack_A_address_on_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>() &&
+           ((BType != BroadcastType::NONE) || (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA));
+}
+
+/**
  * @brief Program the unpacker MOP for a single-operand (A) unpack.
  *
  * Selects the UNPACR instruction sequence based on broadcast type, dest-reuse mode and
@@ -231,10 +273,8 @@ inline void _llk_unpack_A_mop_config_(
 }
 
 /**
- * @brief Whether the dest-reuse unpack can hand the L1 operand over as one source bank holding the whole tile: SrcDvalid::PerTile on the
- *        dest-reuse form without unpack to dest, without broadcast or with a row broadcast of the L1 operand (DEST_TO_SRCA); it does without
- *        transpose and with two or more full 16-row faces, 2 x 2 of them for the row broadcast. The math init (@ref _llk_math_eltwise_binary_init_)
- *        applies the same rule.
+ * @brief Whether the dest-reuse unpack hands the L1 operand over as one source bank (no broadcast, or a row broadcast with DEST_TO_SRCA).
+ *        The init adds the run-time shape check; the math init applies the same rule so both threads agree.
  */
 template <BroadcastType BType, bool acc_to_dest, EltwiseBinaryReuseDestType binary_reuse_dest, bool unpack_to_dest, SrcDvalid src_dvalid>
 inline constexpr bool unpack_A_tile_dvalid =
@@ -242,8 +282,8 @@ inline constexpr bool unpack_A_tile_dvalid =
     (BType == BroadcastType::NONE || (BType == BroadcastType::ROW && binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA));
 
 /**
- * @brief Configure the dest-reuse MOP that hands the L1 operand over as one source bank (see @ref unpack_A_tile_dvalid): one UNPACR of
- *        every face (datum count set by the init), or for a row broadcast faces 0 and 1 twice, and one dummy publication for the reused source.
+ * @brief Configure the dest-reuse MOP that hands the L1 operand over as one source bank: one UNPACR of every face, or faces 0 and 1
+ *        twice for a row broadcast, and one dummy publication for the reused source.
  *
  * @tparam BType: Broadcast type of the L1 operand, values = <NONE/ROW>
  * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <DEST_TO_SRCA/DEST_TO_SRCB>
@@ -326,11 +366,14 @@ inline void _llk_unpack_A_init_(
 
     if constexpr (unpack_A_tile_dvalid<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, src_dvalid>)
     {
+        LLK_ASSERT(
+            transpose_of_faces == 0 && within_face_16x16_transpose == 0,
+            "SrcDvalid::PerTile publishes per face for a transposed operand; pair a transposed unpack with SrcDvalid::PerFace on both threads");
         if (transpose_of_faces == 0 && within_face_16x16_transpose == 0 && face_r_dim == FACE_R_DIM && num_faces > 1 &&
             (BType != BroadcastType::ROW || (tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2)))
         {
             // The L1 operand goes to SrcB for DEST_TO_SRCA and to SrcA for DEST_TO_SRCB
-            constexpr std::uint32_t UNP_SEL = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? p_setadc::UNP_B : p_setadc::UNP_A;
+            constexpr std::uint32_t UNP_SEL      = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? p_setadc::UNP_B : p_setadc::UNP_A;
             const std::uint32_t faces_per_unpack = (BType == BroadcastType::ROW) ? 2 : num_faces;
             TT_SETADCXX(UNP_SEL, faces_per_unpack * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
             _llk_unpack_A_mop_config_tile_<BType, binary_reuse_dest>();
@@ -423,7 +466,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     wait_for_next_context(2);
 
     // Set upk0/1 L1 read addr
-    if constexpr (((BType == BroadcastType::NONE) && (!acc_to_dest)) || binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB || unpack_to_dest)
+    if constexpr (_llk_unpack_A_address_on_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>())
     {
         const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
         cfg[upk0_reg]                = address;
