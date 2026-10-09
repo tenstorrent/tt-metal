@@ -101,11 +101,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     // formats.math holds a 2x-packed register format's non-2x family member, since the 2x formats exist only in the
     // Src registers; the ALU is configured with the register format itself, the one the unpacker implies
-    const DataFormat unpack_dst_format        = static_cast<DataFormat>(formats.unpack_A_dst);
-    const bool is_2x_format                   = (unpack_dst_format == DataFormat::MxFp4_2x_A) || (unpack_dst_format == DataFormat::MxFp4_2x_B);
-    DataFormat src_format                     = is_2x_format ? unpack_dst_format : static_cast<DataFormat>(formats.math);
-    const bool use_int32_dest_alu             = is_fp32_dest_acc_en && static_cast<DataFormat>(formats.pack_src) == DataFormat::Int32;
-    const bool is_int_fpu_en                  = use_int32_dest_alu && (REDUCE_DIM == ReduceDim::REDUCE_ROW || REDUCE_DIM == ReduceDim::REDUCE_SCALAR);
+    const DataFormat unpack_dst_format      = static_cast<DataFormat>(formats.unpack_A_dst);
+    const bool is_2x_format                 = (unpack_dst_format == DataFormat::MxFp4_2x_A) || (unpack_dst_format == DataFormat::MxFp4_2x_B);
+    DataFormat src_format                   = is_2x_format ? unpack_dst_format : static_cast<DataFormat>(formats.math);
+    const bool use_int32_dest_alu           = is_fp32_dest_acc_en && static_cast<DataFormat>(formats.pack_src) == DataFormat::Int32;
+    const bool is_int_fpu_en                = use_int32_dest_alu && (REDUCE_DIM == ReduceDim::REDUCE_ROW || REDUCE_DIM == ReduceDim::REDUCE_SCALAR);
+    constexpr bool int_fpu_reduce_supported = MATH_FIDELITY == MathFidelity::LoFi && !(REDUCE_DIM == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::SUM);
+    LLK_ASSERT(!is_int_fpu_en || int_fpu_reduce_supported, "Integer FPU reduce requires LoFi and does not support scalar SUM");
     const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
     constexpr std::uint32_t max_tiles_dest    = is_fp32_dest_acc_en ? 4 : 8;
 
@@ -121,8 +123,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if (is_int_fpu_en)
         {
-            // Int Scalar SUM is unsupported, see SFPU reduce.
-            if constexpr (MATH_FIDELITY == MathFidelity::LoFi && !(REDUCE_DIM == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::SUM))
+            if constexpr (int_fpu_reduce_supported)
             {
                 _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, true /* is_int_fpu_en */>(
                     IMPLIED_MATH_FORMAT ? static_cast<DataFormat>(formats.unpack_A_dst) : src_format,
@@ -158,7 +159,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if (is_int_fpu_en)
             {
-                if constexpr (!(REDUCE_DIM == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::SUM))
+                if constexpr (int_fpu_reduce_supported)
                 {
                     for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                     {

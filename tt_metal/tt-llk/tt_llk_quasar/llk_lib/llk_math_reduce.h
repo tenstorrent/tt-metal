@@ -531,8 +531,8 @@ inline void _llk_math_reduce_addrmod_(const MathFidelitySchedule fidelity, const
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, bool EN_32BIT_DEST, ckernel::MathFidelity MATH_FIDELITY_TYPE, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_init_(const DataFormat src_a_format, const DataFormat src_b_format, const TensorShape tensor_shape)
 {
-    static_assert(!is_int_fpu_en || MATH_FIDELITY_TYPE == MathFidelity::LoFi, "Integer reduction requires LoFi");
     constexpr MathFidelity FIDELITY = POOL_TYPE == PoolType::MAX ? MathFidelity::LoFi : MATH_FIDELITY_TYPE;
+    static_assert(!is_int_fpu_en || FIDELITY == MathFidelity::LoFi, "Integer reduction requires LoFi");
     if constexpr (POOL_TYPE == PoolType::SUM || POOL_TYPE == PoolType::AVG)
     {
         validate_math_fidelity<FIDELITY>(src_a_format, src_b_format);
