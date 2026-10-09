@@ -358,8 +358,12 @@ std::vector<tt::tt_metal::TensorTopology> MinimalMatmulStridedReduceScatterAsync
     // (get_linearized_index_from_physical_coord), so that label is spelled over those coordinates
     // (over_storage_ring_order, as the helper's Tensor overload does for a plain reduce_scatter) rather than over the
     // matmul label's. Caller-supplied persistent buffers are those tensors and take the same labels. The fused
-    // addcmul is elementwise on the reduce_scatter result and leaves its distribution alone. No honest label
-    // (nullopt, already warned about): {} keeps the union default for all three.
+    // addcmul, addcmul_input_tensor1 + scalar * rs + addcmul_input_tensor2, is applied at the reduce_scatter's final
+    // write, so the rs_output is also a function of those two operands: its label is the union of the reduce_scatter
+    // label (first, so its Shard{dim} on the scattered axis wins) and theirs, what launch() gives an elementwise op
+    // over the three; a ternary operand sharded on a mesh axis the reduce_scatter result replicates makes the result
+    // Shard there, and validation does not constrain the ternary tensors' labels. No honest label (nullopt, already
+    // warned about): {} keeps the union default for all three.
     const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     std::vector<std::reference_wrapper<const TensorTopology>> operands{
         std::cref(input_topology), std::cref(tensor_args.weight_tensor.tensor_topology())};
@@ -383,6 +387,16 @@ std::vector<tt::tt_metal::TensorTopology> MinimalMatmulStridedReduceScatterAsync
         attributes.cluster_axis);
     if (!rs_output_topology.has_value()) {
         return {};
+    }
+    if (tensor_args.addcmul_input_tensor1.has_value() && tensor_args.addcmul_input_tensor2.has_value()) {
+        std::vector<std::reference_wrapper<const TensorTopology>> final_operands{
+            std::cref(*rs_output_topology),
+            std::cref(tensor_args.addcmul_input_tensor1->tensor_topology()),
+            std::cref(tensor_args.addcmul_input_tensor2->tensor_topology())};
+        auto [final_placements, final_shape] =
+            ttnn::device_operation::detail::compute_output_placements_and_shape(final_operands);
+        rs_output_topology =
+            TensorTopology(std::move(final_shape), std::move(final_placements), rs_output_topology->mesh_coords());
     }
     return {mm_topology, mm_topology, std::move(*rs_output_topology)};
 }
