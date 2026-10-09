@@ -92,7 +92,9 @@ def test_full_float(device, input_shape, fill_value, tt_dtype, layout):
 
 
 @pytest.mark.parametrize("input_shape", [[32, 32], [3, 300, 1, 300]])
-@pytest.mark.parametrize("fill_value", [0.1, 1 / 3, 65504.0, 1e30, -1e-30, float("inf"), float("-inf"), float("nan")])
+@pytest.mark.parametrize(
+    "fill_value", [0.0, 0.1, 1 / 3, 65504.0, 1e30, -1e-30, float("inf"), float("-inf"), float("nan")]
+)
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_full_tile_device_matches_host(device, input_shape, fill_value, tt_dtype, memory_config):
@@ -141,6 +143,26 @@ def test_full_tile_device_fill_threshold(device, input_shape, fill_value, tt_dty
     assert torch.equal(torch.isnan(device_output), torch.isnan(host_output))
     not_nan = ~torch.isnan(host_output)
     assert torch.equal(device_output[not_nan], host_output[not_nan])
+
+
+# bfloat8_b is filled on the device only for +0.0, which both paths store exactly, and at any size, since packing
+# bfloat8_b on the host costs more than the device fill: one tile, small and large padded shapes, a KV-cache-like shape
+@pytest.mark.parametrize("input_shape", [[32, 32], [1, 1, 33, 100], [31, 121 * 32], [64, 1, 64, 128], [2, 3, 300, 300]])
+@pytest.mark.parametrize("fill_value", [0.0, -0.0, 1.0])
+def test_full_tile_bfloat8_b_zero_device_fill(device, input_shape, fill_value):
+    positive_zero = fill_value == 0.0 and math.copysign(1.0, fill_value) > 0
+    device.clear_program_cache()
+    programs_before = device.num_program_cache_entries()
+    if positive_zero:
+        tt_output = ttnn.zeros(input_shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    else:
+        tt_output = ttnn.full(input_shape, fill_value, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    programs_added = device.num_program_cache_entries() - programs_before
+
+    assert programs_added == (1 if positive_zero else 0)
+
+    host_output = ttnn.to_torch(ttnn.full(input_shape, fill_value, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT))
+    assert torch.equal(ttnn.to_torch(tt_output), host_output)
 
 
 # TODO (issue #16579): Add program cache test when ttnn.full is run on device

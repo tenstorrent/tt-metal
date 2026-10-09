@@ -21,7 +21,8 @@ namespace {
 // synchronize_device), that size is about 128 KiB on Wormhole and between 128 KiB and 256 KiB on Blackhole, the same
 // in bytes for bfloat16 and float32. The gate follows Wormhole: that costs Blackhole a few microseconds per call
 // between 128 KiB and its crossover, while a 256 KiB gate would cost Wormhole over 10 microseconds just below it.
-// Below the gate the call stays a host write, which cannot run during trace capture.
+// Below the gate the call stays a host write, which cannot run during trace capture. A bfloat8_b zero fill skips the
+// gate: its host path packs bfloat8_b on the CPU, which measured slower than the device fill at every size tried.
 constexpr std::size_t k_min_device_fill_bytes = 128 * 1024;
 
 }  // namespace
@@ -204,19 +205,23 @@ Tensor full_impl(
     // Fast on-device fill, the same path full_like_impl takes: allocate the tensor on the device and fill it
     // there instead of building it on the host and uploading it. The host path below stays for host tensors,
     // row-major layouts, the other dtypes, sharded memory configs, a bfloat16 NaN fill value (the device fill stores
-    // that as inf, the host path as NaN), and tensors smaller than k_min_device_fill_bytes.
+    // that as inf, the host path as NaN), bfloat8_b fill values other than +0.0 (the device fill rounds them through
+    // bfloat16 first, the host path does not; zero is exact on both), and tensors smaller than k_min_device_fill_bytes
+    // unless they are a bfloat8_b zero fill.
     const float float_value = static_cast<float>(fill_value);
     const bool output_on_device =
         !optional_output_tensor.has_value() || optional_output_tensor->storage_type() == StorageType::DEVICE;
     const bool device_fill_dtype =
-        dtype_value == DataType::FLOAT32 || (dtype_value == DataType::BFLOAT16 && !std::isnan(float_value));
+        dtype_value == DataType::FLOAT32 || (dtype_value == DataType::BFLOAT16 && !std::isnan(float_value)) ||
+        (dtype_value == DataType::BFLOAT8_B && float_value == 0.0f && !std::signbit(float_value));
     if (device_to_use != nullptr && output_on_device && device_fill_dtype && layout_value == Layout::TILE &&
         !mem_cfg.is_sharded()) {
         const tt::tt_metal::TensorSpec output_spec =
             optional_output_tensor.has_value()
                 ? optional_output_tensor->tensor_spec()
                 : tt::tt_metal::TensorSpec(shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));
-        if (output_spec.compute_packed_buffer_size_bytes() >= k_min_device_fill_bytes) {
+        if (dtype_value == DataType::BFLOAT8_B ||
+            output_spec.compute_packed_buffer_size_bytes() >= k_min_device_fill_bytes) {
             Tensor output = optional_output_tensor.has_value() ? *optional_output_tensor
                                                                : create_device_tensor(output_spec, device_to_use);
             // Round to bfloat16 on the host (ties to even, as the host path does), so the device stores exactly the
