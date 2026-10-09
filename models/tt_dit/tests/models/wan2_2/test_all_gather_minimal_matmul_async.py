@@ -76,6 +76,7 @@ def run_test_linear_impl(
     residual_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     num_buffers_per_channel=48,
+    output_dtype=None,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -271,6 +272,7 @@ def run_test_linear_impl(
                 chunks=chunks,
                 chunk_sizes=list(chunk_sizes) if chunk_sizes else [],
                 fuse_swiglu=fuse_swiglu,
+                dtype=output_dtype,
             )
 
         return tt_output
@@ -408,6 +410,7 @@ def run_test_linear(
     residual_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     num_buffers_per_channel=48,
+    output_dtype=None,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -521,6 +524,7 @@ def run_test_linear(
         residual_memory_config=residual_memory_config,
         gate_memory_config=gate_memory_config,
         num_buffers_per_channel=num_buffers_per_channel,
+        output_dtype=output_dtype,
     )
 
 

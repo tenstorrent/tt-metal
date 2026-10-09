@@ -489,7 +489,6 @@ def artifact_dir(name: str) -> Path:
 
 def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, profiler_iteration: int = 0, **gen_kwargs):
     """The timed generation; `profiler` (a `BenchmarkProfiler`), when given, wraps only this call in `"run"`."""
-    # A HyperFlow adapter samples a fixed grid and refuses any other step count outside the construction warm-up.
     contract = getattr(pipeline, "hyperflow", None)
     warmup_kwargs = {**gen_kwargs, "num_inference_steps": 3 if contract is None else contract.num_grid_points}
 

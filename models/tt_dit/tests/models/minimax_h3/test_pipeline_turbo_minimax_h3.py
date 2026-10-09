@@ -156,7 +156,7 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
         audio_shift=AUDIO_SHIFT,
     )
 
-    # Construction warms the 5 s rung only, and the 4x8 preset buckets without tracing, so a longer
+    # Construction warms the 5 s rung only, and the 4x8 preset does not bucket or trace, so a longer
     # clip would otherwise pay its kernel compiles inside the measured call.
     with pipeline.quiet():
         pipeline(

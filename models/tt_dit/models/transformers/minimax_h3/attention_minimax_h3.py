@@ -219,8 +219,6 @@ class MiniMaxH3Attention(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        # Per-linear precision, set by quant_config: compute configs for the two projections, an optional
-        # bfloat8_b cast of the ring SDPA's inputs, and whether to_out keeps its fused addcmul epilogue.
         self.qkv_compute_kernel_config = self.mm_compute_kernel_config
         self.out_compute_kernel_config = self.mm_compute_kernel_config
         self.sdpa_input_dtype: ttnn.DataType | None = None
@@ -548,8 +546,6 @@ class MiniMaxH3Attention(Module):
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
         exp_program_config = self._exp_sdpa_program_config(q_BHNE.shape[2])
-        # The ring SDPA wants one dtype across Q, K, V and the joint dummies, so the opt-in cast (after the
-        # norm and RoPE, which keep full precision) covers all of them; K/V are the SP ring's payload.
         dummy_joint = self.dummy_joint_input
         if self.sdpa_input_dtype is not None and self.use_ring:
             q_BHNE = maybe_cast_activation(q_BHNE, self.sdpa_input_dtype)

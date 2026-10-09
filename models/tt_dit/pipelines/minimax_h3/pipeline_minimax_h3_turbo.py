@@ -127,8 +127,6 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
         return self._adapter
 
     def _prepare_transformer(self):
-        # Load, bind the adapter into the bf16 weights, and only then quantize: the 8-bit cast must see the
-        # fused weight, and a reload after eviction restores the cached bf16 base, so both re-run per load.
         transformer = super()._load_transformer()
         contract = self.hyperflow
         if self._adapter is None:

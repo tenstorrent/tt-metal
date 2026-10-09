@@ -513,7 +513,6 @@ class MiniMaxH3Pipeline:
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
-        # Opt-in 8-bit block matmuls (FAST_H3_FP8); applied to the weights after every transformer load.
         self.quant_config = quant_config_from_env() if quant_config is None else quant_config
         self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)
         self.audio_shift = AUDIO_SHIFT if audio_shift is None else float(audio_shift)
@@ -1377,7 +1376,7 @@ class MiniMaxH3Pipeline:
         )
 
     def _load_transformer(self) -> MiniMaxH3Transformer3DModel:
-        """The cached base weights onto the device; a no-op while they are resident."""
+        """Load the cached base weights; a no-op while they are resident."""
         cache.load_model(
             self._transformer,
             model_name=MODEL_NAME,
@@ -1390,7 +1389,7 @@ class MiniMaxH3Pipeline:
         return self._transformer
 
     def _quantize_transformer(self, transformer: MiniMaxH3Transformer3DModel) -> None:
-        """Apply the 8-bit config to the loaded (and adapter-fused) weights. Idempotent, so it runs after every load."""
+        """Apply the 8-bit config to the loaded, adapter-fused weights (idempotent)."""
         if self.quant_config.active:
             apply_quant_config(transformer, self.quant_config)
 

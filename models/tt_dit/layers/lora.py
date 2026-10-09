@@ -361,8 +361,6 @@ class LoRAMixin:
         both bind and unbind, making the pair an exact negation. The full-size
         delta itself is never cached (that would cost a whole weight per adapter)."""
         if self.weight.data.dtype != ttnn.bfloat16:
-            # A rank-r delta is far below a block-float weight's quantization step, so the in-place add below
-            # would round it away; the adapter has to be bound before the weight is quantized.
             logger.warning(
                 f"LoRA delta applied to a {self.weight.data.dtype} weight; the merge is lossy or a no-op "
                 "(bind adapters before quantizing the weights)"

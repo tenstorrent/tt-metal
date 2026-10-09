@@ -654,7 +654,6 @@ class RowParallelLinear(Module):
         M, N = x.padded_shape[-2], weight.padded_shape[-1]
         core_grid = get_matmul_core_grid(self.mesh_device)
         matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
-        # The partial sums cross the fabric next; a block-float input must not make them block float too.
         dtype = resolve_output_dtype(dtype, x)
         output = ttnn.experimental.minimal_matmul(
             input_tensor=[x, x_second] if x_second is not None else x,
@@ -724,7 +723,6 @@ class RowParallelLinear(Module):
         K = weight.padded_shape[-2] if x_second is not None else x.padded_shape[-1]
         M, N = x.padded_shape[-2], weight.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
-        # The matmul output's dtype is also the reduce-scatter's; keep the partial sums bf16 for a block-float input.
         dtype = resolve_output_dtype(dtype, x)
 
         needs_reshape = len(x.shape) <= 3

@@ -66,6 +66,8 @@ class ParallelFeedForward(Module):
         activation_dtype=None,
         pin_output_bf16=False,
         ff1_output_dtype=None,
+        ff1_compute_kernel_config=None,
+        ff2_compute_kernel_config=None,
     ):
         super().__init__()
 
@@ -80,9 +82,9 @@ class ParallelFeedForward(Module):
         self.bias = bias
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
-        # Dtype ff1 writes its (activated) output in; it is ff2's input, so a quantized intermediate is produced
-        # here rather than cast afterwards. None follows the matmul's default (its input dtype).
         self.ff1_output_dtype = ff1_output_dtype
+        self.ff1_compute_kernel_config = ff1_compute_kernel_config
+        self.ff2_compute_kernel_config = ff2_compute_kernel_config
 
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
@@ -116,6 +118,14 @@ class ParallelFeedForward(Module):
             ccl_manager=ccl_manager,
         )
 
+    def _ff_compute_kernel_configs(self, compute_kernel_config):
+        ff1 = self.ff1_compute_kernel_config
+        ff2 = self.ff2_compute_kernel_config
+        return (
+            compute_kernel_config if ff1 is None else ff1,
+            compute_kernel_config if ff2 is None else ff2,
+        )
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -132,9 +142,10 @@ class ParallelFeedForward(Module):
         `default_block_size` and `force_transpose` are forwarded to ff1 only, for callers that have
         measured block sizes for their ff1 shape; ff2 keeps the generic path.
         """
+        ff1_config, ff2_config = self._ff_compute_kernel_configs(compute_kernel_config)
         ff1_out = self.ff1(
             x,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=ff1_config,
             parallel_config=parallel_config,
             default_block_size=default_block_size,
             force_transpose=force_transpose,
@@ -142,7 +153,7 @@ class ParallelFeedForward(Module):
             dtype=self.ff1_output_dtype,
         )
         return self.ff2(
-            ff1_out, compute_kernel_config=compute_kernel_config, use_persistent_buffer=use_persistent_buffer
+            ff1_out, compute_kernel_config=ff2_config, use_persistent_buffer=use_persistent_buffer
         )
 
     def forward_fused_addcmul(
@@ -166,9 +177,10 @@ class ParallelFeedForward(Module):
 
         `default_block_size` and `force_transpose` are forwarded to ff1 only, as in `forward`.
         """
+        ff1_config, ff2_config = self._ff_compute_kernel_configs(compute_kernel_config)
         ff1_out = self.ff1(
             x,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=ff1_config,
             parallel_config=parallel_config,
             default_block_size=default_block_size,
             core_grid=core_grid,
@@ -181,6 +193,6 @@ class ParallelFeedForward(Module):
             addcmul_a,
             addcmul_b,
             scalar=scalar,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=ff2_config,
             use_persistent_buffer=use_persistent_buffer,
         )

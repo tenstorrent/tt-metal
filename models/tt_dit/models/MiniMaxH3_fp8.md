@@ -82,7 +82,7 @@ FLOPs = 2·M·K·N over the per-device shard, per forward (50 blocks):
    eviction still passes the cache's dtype check, and the conversion is re-applied (idempotently) after every load.
 6. **Fidelity is set at the call site.** The block and the attention pass their own compute config into every linear
    call, overriding the linear's own; per-role configs (`qkv_compute_kernel_config`, `out_compute_kernel_config`,
-   `ff_compute_kernel_config`) are therefore set on the attention and the block, and `adaln_proj` keeps the original.
+   `ff1_compute_kernel_config`, `ff2_compute_kernel_config`) are therefore set on the attention and the feed-forward, and `adaln_proj` keeps the original.
 7. **The 4x8 preset runs the denoise eagerly** (buckets on, no denoise trace, audio traced), so the knob can change
    between generations in one process; programs recompile once per new dtype/fidelity combination. On the quad the
    denoise is traced per rung, so a weight typecast must precede capture (it does: the conversion runs in
