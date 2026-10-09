@@ -10233,6 +10233,7 @@ from .commands.op_synth import cmd_op_synth  # noqa: F401
 from .commands.emit_e2e import cmd_emit_e2e  # noqa: F401
 from .commands.optimize import cmd_optimize  # noqa: F401
 from .commands.optimize_dashboard import cmd_optimize_dashboard  # noqa: F401
+from .commands.autocommit import wrap as _autocommit_wrap, add_commit_push_args as _add_commit_push_args  # noqa: F401
 from .commands.publish_hf import cmd_publish_hf  # noqa: F401
 from .commands.run_demo import cmd_run_demo  # noqa: F401
 from .commands.auto_onboard import cmd_auto_onboard  # noqa: F401
@@ -10665,7 +10666,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             "On failure, the worktree is preserved for debug. Pass --isolation none to opt out."
         ),
     )
-    pup.set_defaults(func=cmd_up)
+    _add_commit_push_args(pup)
+    pup.set_defaults(func=_autocommit_wrap(cmd_up, "auto-up"))
 
     # `auto-up` is a zero-flag entry-point: hands the model_id to `up`
     # with all brain-orchestrated defaults locked in. Power users keep
@@ -11424,7 +11426,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             "on a 32 GB Blackhole box). Omit to keep the prompt unchanged."
         ),
     )
-    pe2e.set_defaults(func=cmd_emit_e2e)
+    _add_commit_push_args(pe2e)
+    pe2e.set_defaults(func=_autocommit_wrap(cmd_emit_e2e, "emit-e2e"))
 
     popt = sub.add_parser(
         "optimize",
@@ -11625,7 +11628,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         dest="dashboard_port",
         help="port for the --dashboard server (default 8798; falls back to a free port if taken).",
     )
-    popt.set_defaults(func=cmd_optimize)
+    _add_commit_push_args(popt)
+    popt.set_defaults(func=_autocommit_wrap(cmd_optimize, "optimize"))
 
     pdash = sub.add_parser(
         "optimize-dashboard",
