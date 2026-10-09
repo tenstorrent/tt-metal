@@ -1,0 +1,3 @@
+# seventh review: eltwise_binary.cpp's per-tile multiply against main's per-face program, every bf16 pattern (every bfp8_b
+# datum for the full operand) against the bf16 broadcast operand, as the prefix-caching mask multiply runs it
+EB_R3_PER_FACE=1|default|||tests/eb_r3_ci/test_eb_dump_bng.py -k "test_bcast_mul_mixed"

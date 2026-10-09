@@ -1424,6 +1424,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     if (eb_r3_env("EB_R3_PER_TILE")) {
         compute_kernel_defines["EB_R3_PER_TILE"] = "1";
     }
+    if (eb_r3_env("EB_R3_PER_FACE")) {
+        compute_kernel_defines["EB_R3_PER_FACE"] = "1";
+    }
     if (const char* eb_log = std::getenv("EB_R3_LOG_CALLS")) {  // CI only: one line per program built
         auto eb_def = [&](const char* k) {
             const auto it = compute_kernel_defines.find(k);

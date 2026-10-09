@@ -45,5 +45,7 @@ case $1 in
   csdpa)   for i in 1 2 3; do ab sdpa_b $O/off_sdpa_b.txt - "(llama8b_prefill and performance and 2048) or sdxl_transformer"; done ;;
   smsa)    ab sm_b $O/off_sm_b.txt - "softmax_cfg"
            ab sa_b $O/off_sa_b.txt - "llama8b_sampling" ;;
+  pt17)     for i in 1 2 3; do ab pt17 - EB_R3_PER_FACE=1 "test_mul_cfg and (glxq_attn or glxq_mlp_s1024)"; done ;;
+  gpre17)   for i in 1 2 3; do ab gpre17 - EB_R3_MAIN_REINIT=1 "test_gemma_prefill_post or (test_qb2_add and gemma_add)"; done ;;
 esac
 echo "##### end $(date -u +%T)"

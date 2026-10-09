@@ -354,3 +354,13 @@ def test_bcast_mul_bfp(device, kind, side, a_dt, b_dt, out_dt):
         ttnn.deallocate(tsm)
     for *_, d in diffs:
         d.report(f"({time.time() - t0:.1f} s)")
+
+
+# seventh review: eltwise_binary.cpp's multiply (a block-float operand times a bf16 broadcast operand, mixed formats, so
+# binary_ng's non-LLK broadcast kernel), as Qwen3-32B's prefix-caching mask multiply runs it (llama_attention.py:1270)
+BBM = [("scalar", "b", "bfp8", "bf16", "bfp8"), ("scalar", "b", "bfp8", "bf16", "bf16"), ("col", "b", "bfp8", "bf16", "bfp8")]
+
+
+@pytest.mark.parametrize("kind, side, a_dt, b_dt, out_dt", BBM, ids=["-".join(c) for c in BBM])
+def test_bcast_mul_mixed(device, kind, side, a_dt, b_dt, out_dt):
+    test_bcast_mul_bfp(device, kind, side, a_dt, b_dt, out_dt)

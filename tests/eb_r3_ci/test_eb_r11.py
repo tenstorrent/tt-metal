@@ -455,6 +455,13 @@ MUL_CFGS = [
     ("glxq_mlp_s4096", [1, 1, 4096, 800], [1, 1, 4096, 800], "bfp8", "bfp8", "bfp8", "silu", None),
     ("glxq_attn_s128", [1, 8, 128, 128], [1, 1, 1, 1], "bfp8", "bf16", None, None, None),
     ("glxq_attn_s1024", [1, 8, 1024, 128], [1, 1, 1, 1], "bfp8", "bf16", None, None, None),
+    # seventh review: the prefix-caching mask multiply (llama_attention.py:1270, eltwise_binary.cpp) at the model's other
+    # prefill lengths (generator.py:74 powers of two from 1024, max_prefill_chunk_size 40960)
+    ("glxq_attn_s2048", [1, 8, 2048, 128], [1, 1, 1, 1], "bfp8", "bf16", None, None, None),
+    ("glxq_attn_s4096", [1, 8, 4096, 128], [1, 1, 1, 1], "bfp8", "bf16", None, None, None),
+    ("glxq_attn_s8192", [1, 8, 8192, 128], [1, 1, 1, 1], "bfp8", "bf16", None, None, None),
+    ("glxq_attn_s16384", [1, 8, 16384, 128], [1, 1, 1, 1], "bfp8", "bf16", None, None, None),
+    ("glxq_attn_s32768", [1, 8, 32768, 128], [1, 1, 1, 1], "bfp8", "bf16", None, None, None),
 ]
 _DT = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, None: None}
 
@@ -613,3 +620,28 @@ def test_qwen36_softplus_add(device, b_rows):
     for _ in range(8):
         ttnn.deallocate(ttnn.add(a, b, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)]))
 
+
+
+# seventh review: Gemma-4 31B's prefill MLP residual add (gemma4_31b_qb2/tt/decoder.py:657-662), bf16 in DRAM, MUL_UNARY_SFPU by
+# the layer scalar after; prefill_input_width 5376 up to 128 rows and 1344 above, chunks of 1024 (sliding) and 6656 (global)
+GEMMA_PREFILL = {"s128": (128, 5376), "s1024": (1024, 1344), "s6656": (6656, 1344)}
+
+
+@pytest.mark.parametrize("cfg", list(GEMMA_PREFILL))
+def test_gemma_prefill_post(device, cfg):
+    rows, width = GEMMA_PREFILL[cfg]
+    torch.manual_seed(1)
+    mk = lambda: ttnn.from_torch(
+        torch.rand(1, 1, rows, width) - 0.5,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    a, b = mk(), mk()
+    for _ in range(8):
+        ttnn.deallocate(
+            ttnn.add(a, b, dtype=ttnn.bfloat16, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, 0.6875)])
+        )
+    ttnn.deallocate(a)
+    ttnn.deallocate(b)
