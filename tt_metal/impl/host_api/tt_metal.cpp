@@ -218,6 +218,11 @@ inline void SetRuntimeArgsImpl(
 
 namespace detail {
 
+bool DispatchStateCheck(bool isFastDispatch) {
+    MetalContext::instance().device_manager()->check_dispatch_mode(isFastDispatch);
+    return isFastDispatch;
+}
+
 bool WriteToDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, std::span<const std::uint8_t> host_buffer) {
     return slow_dispatch::WriteToDeviceDRAMChannel(*device, dram_channel, address, host_buffer);
