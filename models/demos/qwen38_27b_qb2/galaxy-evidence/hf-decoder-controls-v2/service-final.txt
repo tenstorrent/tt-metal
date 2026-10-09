@@ -1,0 +1,6 @@
+MainPID=0
+Result=success
+LoadState=not-found
+ActiveState=inactive
+SubState=dead
+InvocationID=

@@ -1,5 +1,16 @@
 # Qwen plan gates: observed status, Oct 9 2026 UTC
 
+Oct 9 09:32 UTC update: both decoder precision controls completed cleanly.
+BFP4/HiFi2 matched BFP4/LoFi metrics; BFP8/HiFi2 lowered mean relative logit
+RMS error from 38.65% to 9.16% across the eight public teacher-forced positions.
+This is numerical evidence, not an eval score. Full BFP8 eight-replica G0 and
+the unchanged 198-question GPQA are now persistent, with 423 preflight tests
+and 40 subtests passing. The independent completion auditor passed 22 tests
+and is queued after the exact new invocation. No new quality or performance
+qualification yet; Tau3 remains 3/12.
+[Controls](../galaxy-evidence/hf-decoder-controls-v2/README.md),
+[BFP8 GPQA launch](../galaxy-evidence/decoder-gpqa-v1/README.md).
+
 Oct 9 09:15 UTC update: repaired the HF report writer's set-serialization failure
 and completed the CPU plus full TP4 layer comparison. Full-model logit RMS error
 is 20.1-70.3% over eight short teacher-forced positions; the isolated device head

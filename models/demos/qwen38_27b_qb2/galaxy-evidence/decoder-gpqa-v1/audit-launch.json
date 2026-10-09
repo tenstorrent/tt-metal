@@ -1,0 +1,59 @@
+{
+  "created_at": 1791538210.8703794,
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-decoder-gpqa-audit-v2-20261009",
+    "--property=RuntimeMaxSec=9h",
+    "--property=MemoryMax=2G",
+    "--property=CPUQuota=100%",
+    "--property=TimeoutStopSec=20",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/decoder-gpqa-audit-v2/run.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/decoder-gpqa-audit-v2/run.log",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "/home/ttuser/qwen38-artifacts-20261007/decoder-gpqa-audit-v2/source/models/demos/qwen38_27b_qb2/demo/run_gpqa_audit_followup.py",
+    "--audit-source",
+    "/home/ttuser/qwen38-artifacts-20261007/decoder-gpqa-audit-v2/source/models/demos/qwen38_27b_qb2/tests/gpqa_response_audit.py",
+    "--audit-sha256",
+    "b52e9079ee462846713f81a33b448b5af4f21eb6a48cdfe562662cafcb726b08",
+    "--unit",
+    "qwen38-accuracy-decoder-v1-20261009.service",
+    "--invocation",
+    "ecb6408f79414ed0974c6352f006bce5",
+    "--receipt",
+    "/home/ttuser/qwen38-artifacts-20261007/accuracy-decoder-v1/queue.json",
+    "--results",
+    "/home/ttuser/qwen38-artifacts-20261007/accuracy-decoder-v1/native-control/evaluation/gpqa",
+    "--output",
+    "/home/ttuser/qwen38-artifacts-20261007/decoder-gpqa-audit-v2/results",
+    "--wait-timeout",
+    "30600"
+  ],
+  "source_sha256": {
+    "models/demos/qwen38_27b_qb2/demo/run_gpqa_audit_followup.py": "c5ee5ad3db72877e0a6c6de7aaa62db67ed286efaa97f6e86a9653641896ab66",
+    "models/demos/qwen38_27b_qb2/tests/gpqa_response_audit.py": "b52e9079ee462846713f81a33b448b5af4f21eb6a48cdfe562662cafcb726b08",
+    "models/demos/qwen38_27b_qb2/tests/unit/test_gpqa_audit_followup.py": "e10f13dcf6d3cea4c676c490393e42a153ac51f7a985959ccda92390e8ebf149",
+    "models/demos/qwen38_27b_qb2/tests/unit/test_gpqa_response_audit.py": "420827d3d3610acfdd74c1d4c8ef4dcdda9645a8b5ec77854775e65db3ba9def",
+    "conftest.py": "53668f80d1963f2329e91a3b322cffeb781eebba3268812963a93aaee83242ce"
+  },
+  "preflight_command": [
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "pytest",
+    "/home/ttuser/qwen38-artifacts-20261007/decoder-gpqa-audit-v2/source/models/demos/qwen38_27b_qb2/tests/unit",
+    "-c",
+    "/home/ttuser/qwen38-artifacts-20261007/decoder-gpqa-audit-v2/pytest.ini",
+    "--confcutdir=/home/ttuser/qwen38-artifacts-20261007/decoder-gpqa-audit-v2/source",
+    "-q",
+    "--junitxml=/home/ttuser/qwen38-artifacts-20261007/decoder-gpqa-audit-v2/unit.xml"
+  ],
+  "predecessor": {
+    "MainPID": "1449553",
+    "ActiveState": "active",
+    "InvocationID": "ecb6408f79414ed0974c6352f006bce5"
+  },
+  "read_only": true,
+  "hardware_opened": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false
+}

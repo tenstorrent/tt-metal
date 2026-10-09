@@ -1,0 +1,17 @@
+{
+  "state": "waiting",
+  "predecessor_unit": "qwen38-accuracy-decoder-v1-20261009.service",
+  "predecessor_invocation": "ecb6408f79414ed0974c6352f006bce5",
+  "hardware_opened": false,
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "started_at": 1791538210.9150586,
+  "updated_at": 1791538270.9964097,
+  "last_service": {
+    "MainPID": "1449553",
+    "Result": "success",
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "InvocationID": "ecb6408f79414ed0974c6352f006bce5"
+  }
+}

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-09T09:18:36.493033+00:00",
+  "generated_at": "2026-10-09T09:32:01.415168+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
@@ -34,8 +34,8 @@
     },
     {
       "path": "demo/run_accuracy_followup.py",
-      "bytes": 6208,
-      "sha256": "9a05866c746915e322773461edb0df76b42992666b1bb396e2d90792bbc1395b"
+      "bytes": 7339,
+      "sha256": "393b400046f65fb1cc63f868ee4a02d5f305b81982627604342581c7312987ca"
     },
     {
       "path": "demo/run_chunked_prefill_followup.py",
@@ -64,8 +64,8 @@
     },
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 92331,
-      "sha256": "fa80fdc27e8ad7f8c6a3cc29ac2241650349b59fa2d44583b2621ef1e71e1606"
+      "bytes": 94179,
+      "sha256": "55a46278e36556cecd6cbfe2f7739b38611c3fa5983702b1ce9c3105141050f6"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
@@ -74,8 +74,8 @@
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 29256,
-      "sha256": "4be193225aa7261a4734bd7b7e3866fd1a23d61696d4ae267bbf22be77d40114"
+      "bytes": 29966,
+      "sha256": "e84e081a64e0370e3d071f5e8cd5c2436a5bc913021a8b5453ae50eae3b9657b"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -1117,6 +1117,66 @@
       "scope": "CPU-only recurrent-state ownership regression; not hardware or GPQA qualification",
       "bytes": 5829,
       "sha256": "58d3e7565fc5375fe03073df8551ebf527b651125a0e51b7fede441701cffb96"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-v1/README.md",
+      "bytes": 2473,
+      "sha256": "ad2edcdfb5d93ffce301161a97482e494441376d227ef9862a3c2bb073588f55"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-v1/audit-launch.json",
+      "bytes": 2869,
+      "sha256": "bc2b7378a0a044c1cdb14cb2e943a3c850aeaf2aed914ce5c0eeff3bac4ba071"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-v1/audit-service-at-launch.txt",
+      "bytes": 81,
+      "sha256": "ddddabd08b20d0aa7cb8d978be67ad1f2c200596bb2d41e6e9ee262679ddfb5e"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-v1/audit-status-at-launch.json",
+      "bytes": 509,
+      "sha256": "c25260cef0c8e245fe9244530460c09002bf2a2237d193e4818d4d13d15b3ceb"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-v1/audit-unit.log.gz",
+      "bytes": 52,
+      "sha256": "c134386d38a48425a903a2161b90b5cde8cf0c3ae7dc2d4040277618138a480c"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-v1/audit-unit.xml.gz",
+      "bytes": 759,
+      "sha256": "d1dbf6862550e4fda015ff6ba07603031ea63eab318c057b5e7ac8105cb92ddc"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-v1/launch.json",
+      "bytes": 3501,
+      "sha256": "c36c7d094e88125f669e780e7c59dd046c4b44ce12cc1662c82e237cca9651cc"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-v1/preflight.log.gz",
+      "bytes": 307,
+      "sha256": "ad1c640e24c07ebccae3978645bd97948bb3af3309f8a8609a9e1b53fde7b18e"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-v1/service-at-launch.txt",
+      "bytes": 130,
+      "sha256": "e9bf37d59665d82804c9966f07b352c172b50a576ff948a8b66b5a19254bea4c"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-v1/source-manifest.json",
+      "bytes": 21671,
+      "sha256": "73ee67ce619698028df06677f0b52fd9dd2d6f89d4523aafe3320ad58ede80e3"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-v1/status-at-launch.json",
+      "bytes": 725,
+      "sha256": "2021c3b6099d4638b32f648822ac3a849d210e73c8c224b202b73355d591a43e"
+    },
+    {
+      "path": "galaxy-evidence/decoder-gpqa-v1/unit.xml.gz",
+      "bytes": 8339,
+      "sha256": "cacf808b4e0d8206a80b742ecac4a5f07f155d17029de0f57b8f1fc3196e9567"
     },
     {
       "path": "galaxy-evidence/decoder-precision-controls-v1/README.md",
@@ -2390,8 +2450,28 @@
     },
     {
       "path": "galaxy-evidence/hf-decoder-controls-v2/README.md",
-      "bytes": 2043,
-      "sha256": "2f4b46baa43e7f62f5814af1c951602e190357ae3a88378b275552947efa1a9e"
+      "bytes": 3109,
+      "sha256": "bfddfbc5fdfab249ea0737eab29ae77824eb4aab60180c3143a9ab7a79fc3862"
+    },
+    {
+      "path": "galaxy-evidence/hf-decoder-controls-v2/bfp4-hifi2-comparison.json.gz",
+      "bytes": 38776,
+      "sha256": "3287cf433fdce7ba25b8b760062c690851d45b42b5a273bc99ec2c2b1c60f34d"
+    },
+    {
+      "path": "galaxy-evidence/hf-decoder-controls-v2/bfp4-hifi2-hardware.xml.gz",
+      "bytes": 315,
+      "sha256": "aa833498ffaf4707887d3b88462a7f09a33c99493c0a13e466ece0388c919b82"
+    },
+    {
+      "path": "galaxy-evidence/hf-decoder-controls-v2/bfp8-hifi2-comparison.json.gz",
+      "bytes": 37277,
+      "sha256": "dbaaaaa77ce886e0013e5c881e2f2563dd56f8d9c0353689ca94466e5bdb71f9"
+    },
+    {
+      "path": "galaxy-evidence/hf-decoder-controls-v2/bfp8-hifi2-hardware.xml.gz",
+      "bytes": 318,
+      "sha256": "0682fb0655ef2c739f50c25731515cd3a6a4ca766f4527bd574a8d595284e69f"
     },
     {
       "path": "galaxy-evidence/hf-decoder-controls-v2/controller.py.gz",
@@ -2404,9 +2484,24 @@
       "sha256": "f3258eaf5a6bdc5f8846dba3c362a5c6620b69922b521de821b548abed050a52"
     },
     {
+      "path": "galaxy-evidence/hf-decoder-controls-v2/queue-final.json",
+      "bytes": 10944,
+      "sha256": "c2e7140f88bab44d41112904b684f3093f68b3e64cb72d638c84fd6ee7af4bd9"
+    },
+    {
+      "path": "galaxy-evidence/hf-decoder-controls-v2/run-final.log.gz",
+      "bytes": 4352,
+      "sha256": "3456825f35deca42226e78442e5ef2ff9d5891c922d2d9d6462448e359d4e716"
+    },
+    {
       "path": "galaxy-evidence/hf-decoder-controls-v2/service-at-launch.txt",
       "bytes": 81,
       "sha256": "b11ec912f9c50be936e710d100784606e9c5baf2b1b833e83b135a32cf8f7c40"
+    },
+    {
+      "path": "galaxy-evidence/hf-decoder-controls-v2/service-final.txt",
+      "bytes": 94,
+      "sha256": "05abf6accc6e937a13697fa719a3631106d293edf04c8715ff61dfbf246ba236"
     },
     {
       "path": "galaxy-evidence/hf-decoder-controls-v2/source-manifest.json",
@@ -5160,6 +5255,11 @@
       "path": "tests/unit/test_chunked_prefill_scenario.py",
       "bytes": 2243,
       "sha256": "3727fe41be4f20678cdec203dd5f7d8d2630e7d18d2c1bbf18e7054e09b537a9"
+    },
+    {
+      "path": "tests/unit/test_decoder_accuracy_followup.py",
+      "bytes": 2164,
+      "sha256": "509422a5eb93b4fc2a890f94fb3651c1ad6f20d66c6ecc41fde46aebe6f43b24"
     },
     {
       "path": "tests/unit/test_gpqa_audit_followup.py",

@@ -9,6 +9,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from models.demos.qwen38_27b_qb2.demo.run_chunked_prefill_followup import predecessor_ready as clean_predecessor_ready
 from models.demos.qwen38_27b_qb2.demo.run_long_context_capacity import save
 from models.demos.qwen38_27b_qb2.demo.run_overnight_qualification import run
 
@@ -41,6 +42,25 @@ def predecessor_ready(properties, receipt, expected_invocation):
     return True
 
 
+def decoder_controls_ready(properties, receipt, expected_invocation):
+    """Numerical controls must finish both policies and release devices before G0."""
+    if not clean_predecessor_ready(properties, receipt, expected_invocation):
+        return False
+    runs = receipt.get("runs", [])
+    if (
+        len(runs) != 2
+        or {row.get("name") for row in runs} != {"bfp4-hifi2", "bfp8-hifi2"}
+        or any(
+            row.get("state") != "completed"
+            or row.get("cleanup_completed") is not True
+            or len(row.get("logit_metrics", [])) != 8
+            for row in runs
+        )
+    ):
+        raise ValueError("Decoder controls did not both complete eight steps and clean up")
+    return True
+
+
 def follow(args):
     if args.status.exists() or args.results.exists():
         raise FileExistsError("Follow-up status and results must be new")
@@ -51,6 +71,7 @@ def follow(args):
         predecessor_invocation=args.predecessor_invocation,
         source_manifest_sha256=hashlib.sha256(args.source_manifest.read_bytes()).hexdigest(),
         precision=args.control_precision,
+        predecessor_kind=getattr(args, "predecessor_kind", "overnight"),
         survives_disconnect=True,
         resumes_after_reboot=False,
         started_at=time.time(),
@@ -94,7 +115,8 @@ def follow(args):
             receipt = json.loads(args.predecessor_receipt.read_text()) if args.predecessor_receipt.exists() else None
             state.update(last_service=properties, observed_at=time.time())
             save(args.status, state)
-            if predecessor_ready(properties, receipt, args.predecessor_invocation):
+            ready = decoder_controls_ready if state["predecessor_kind"] == "decoder-controls" else predecessor_ready
+            if ready(properties, receipt, args.predecessor_invocation):
                 break
             time.sleep(30)
         for relative, expected in manifest.items():
@@ -132,6 +154,7 @@ if __name__ == "__main__":
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--predecessor-unit", required=True)
     parser.add_argument("--predecessor-invocation", required=True)
+    parser.add_argument("--predecessor-kind", choices=("overnight", "decoder-controls"), default="overnight")
     parser.add_argument("--control-precision", required=True)
     parser.add_argument("--wait-timeout", type=float, default=43200)
     follow(parser.parse_args())

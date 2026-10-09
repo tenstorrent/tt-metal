@@ -1,0 +1,21 @@
+{
+  "state": "running",
+  "predecessor_unit": "qwen38-hf-controls-v2-20261009.service",
+  "predecessor_invocation": "79a488c86b8a4304b747388152292642",
+  "source_manifest_sha256": "73ee67ce619698028df06677f0b52fd9dd2d6f89d4523aafe3320ad58ede80e3",
+  "precision": "precision_accurate_decode_bfp8_all.json",
+  "predecessor_kind": "decoder-controls",
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "started_at": 1791538082.1493497,
+  "updated_at": "2026-10-09T09:28:02Z",
+  "last_service": {
+    "MainPID": "0",
+    "Result": "success",
+    "LoadState": "not-found",
+    "ActiveState": "inactive",
+    "InvocationID": ""
+  },
+  "observed_at": 1791538082.1568713,
+  "hardware_started_at": 1791538082.1604233
+}

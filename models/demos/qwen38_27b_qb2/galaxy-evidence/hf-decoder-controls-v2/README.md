@@ -1,5 +1,21 @@
 # Persistent decoder precision comparisons
 
+Both controls completed with clean shutdown at **09:25:38 UTC, Oct 9**.
+The BFP4/HiFi2 control reproduced every saved full-logit metric from the
+BFP4/LoFi baseline. Higher arithmetic fidelity alone provided no measured
+improvement on this prompt. With decoder BFP8/HiFi2, mean relative logit RMS
+error across the eight positions fell from **38.65% to 9.16%** (76.3% lower).
+Top-20 overlap improved from 11–17 to 17–20; all eight top-1 predictions agree
+with HF under both policies. Initial prefill layer-63 input RMS error fell
+from 88.56% to 22.49%. These are cumulative full-decoder errors, not individual
+layer errors or task scores. The short teacher-forced probe supports testing
+BFP8 on GPQA; it does not establish the reason for every benchmark failure.
+
+The matched [full GPQA follow-up](../decoder-gpqa-v1/README.md) uses BFP8.
+Runtime source, reference and policy hashes, both complete comparisons, the
+final queue, hardware test XML and logs are retained here. Controls took
+326/346 seconds, including model loading; these are not inference timings.
+
 After the completed [reference comparison](../hf-reference-recovery-v2/README.md),
 two matched-input experiments were launched at **09:14:25 UTC, Oct 9**:
 

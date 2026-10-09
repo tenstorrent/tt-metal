@@ -1213,3 +1213,30 @@ No session connection is needed for that queue to continue.
   as deterministic gzip files and the index corrected before pushing. The first
   local commit was made before that failed validation was inspected; the
   follow-up commit repairs the publication inventory without rewriting history.
+
+## Oct 9, 09:25-09:31 UTC: BFP8 improves reference agreement; full GPQA launched
+
+- Both decoder controls completed and cleaned up. BFP4/HiFi2 produced identical
+  saved full-logit metrics to BFP4/LoFi; BFP8/HiFi2 reduced mean relative RMS
+  from 38.65% to 9.16% across eight teacher-forced positions. All top-1 tokens
+  agree under both policies. The result motivates a full benchmark without
+  asserting that the short probe predicts GPQA or proves all prior causes.
+- Added a tested decoder-control predecessor gate to the existing persistent
+  accuracy follower. Fourteen focused local tests passed. Native preflight of
+  the frozen bundle passed 423 tests and 40 subtests, with one expected skip.
+- Launched BFP8 eight-replica G0 then unchanged full 198-question GPQA at
+  09:28:02 UTC, invocation `ecb6408f79414ed0974c6352f006bce5`, PID 1449553.
+  Precision, source, sampling, output budget, full denominator and 177/198
+  target are frozen. Host-memory bound is 256 GiB, total runtime bound eight
+  hours. No precision/performance promotion was made.
+- A first read-only collection printed too much comparison JSON and truncated
+  its display. A local collector captured full raw bytes instead, preserving
+  both comparisons, final queue, logs, XML, launch and source-manifest hashes.
+- First completion-auditor staging failed because its helper is absent from
+  the frozen inference snapshot. No directory, service or hardware was changed
+  by that failed attempt. Staged a separate audit-only bundle and passed all
+  22 tests. Its persistent service waits for the exact new GPQA invocation and
+  will verify all 198 response hashes and count incomplete answers as failures.
+
+[Completed decoder controls](../galaxy-evidence/hf-decoder-controls-v2/README.md),
+[full BFP8 qualification launch](../galaxy-evidence/decoder-gpqa-v1/README.md).

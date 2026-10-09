@@ -1,0 +1,329 @@
+{
+  "state": "completed",
+  "started_at": 1791537265.5524597,
+  "runs": [
+    {
+      "name": "bfp4-hifi2",
+      "state": "completed",
+      "started_at": 1791537265.5633483,
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/hf-controls-source-v2/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/hf-controls-source-v2/models/demos/qwen38_27b_qb2/tests/test_hf_layer_reference.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/hf-controls-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/hf-controls-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=2400",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/hf-controls-v2/bfp4-hifi2/hardware.xml"
+      ],
+      "precision_file": "precision_accurate_decode_hifi2.json",
+      "finished_at": 1791537591.955232,
+      "cleanup_completed": true,
+      "precision": {
+        "config_id": "decoder_bfp4_hifi2_head_bfp8_hifi2_accurate_decode",
+        "weight_groups": {
+          "attention": "bfloat4_b",
+          "output": "bfloat4_b",
+          "gate": "bfloat4_b",
+          "up": "bfloat4_b",
+          "down": "bfloat4_b",
+          "head": "bfloat8_b"
+        },
+        "compute_fidelities": {
+          "attention": "HiFi2",
+          "output": "HiFi2",
+          "gate": "HiFi2",
+          "up": "HiFi2",
+          "down": "HiFi2",
+          "head": "HiFi2"
+        },
+        "fp32_dest_acc_en": true,
+        "layer_exceptions": {},
+        "activation_dtype": {
+          "attention": "bfloat16",
+          "mlp": "bfloat16"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2",
+        "decode_attention": "accurate_full_tile",
+        "decode_recurrence": "native"
+      },
+      "logit_metrics": [
+        {
+          "elements": 248320,
+          "rms_error": 1.5377294358600129,
+          "relative_rms_error": 0.7010722929072896,
+          "max_absolute_error": 10.875,
+          "cosine": 0.7621159789147789,
+          "pcc": 0.720802778517542,
+          "top1": 1596,
+          "hf_top1": 1596,
+          "top20_overlap": 11,
+          "kl_from_hf": 0.5826760530471802
+        },
+        {
+          "elements": 248320,
+          "rms_error": 1.6852661903136268,
+          "relative_rms_error": 0.7031817289722053,
+          "max_absolute_error": 8.921875,
+          "cosine": 0.7989538795234229,
+          "pcc": 0.7600113448640307,
+          "top1": 1144,
+          "hf_top1": 1144,
+          "top20_overlap": 14,
+          "kl_from_hf": 4.504614025790943e-06
+        },
+        {
+          "elements": 248320,
+          "rms_error": 1.2305169968929417,
+          "relative_rms_error": 0.41665967831887474,
+          "max_absolute_error": 5.8369140625,
+          "cosine": 0.925253052226146,
+          "pcc": 0.860328569762393,
+          "top1": 4087,
+          "hf_top1": 4087,
+          "top20_overlap": 13,
+          "kl_from_hf": 0.07541675865650177
+        },
+        {
+          "elements": 248320,
+          "rms_error": 1.038443122356197,
+          "relative_rms_error": 0.29444581959610366,
+          "max_absolute_error": 5.0625,
+          "cosine": 0.9559843881893878,
+          "pcc": 0.9066746089896202,
+          "top1": 1156,
+          "hf_top1": 1156,
+          "top20_overlap": 15,
+          "kl_from_hf": 0.04427340254187584
+        },
+        {
+          "elements": 248320,
+          "rms_error": 0.6110093156558605,
+          "relative_rms_error": 0.20086669501484447,
+          "max_absolute_error": 3.25,
+          "cosine": 0.9797129113580664,
+          "pcc": 0.9611422372984705,
+          "top1": 25,
+          "hf_top1": 25,
+          "top20_overlap": 17,
+          "kl_from_hf": 0.013651104643940926
+        },
+        {
+          "elements": 248320,
+          "rms_error": 0.738688414114767,
+          "relative_rms_error": 0.23126932889249044,
+          "max_absolute_error": 4.875,
+          "cosine": 0.972921001273496,
+          "pcc": 0.9477665252075167,
+          "top1": 328,
+          "hf_top1": 328,
+          "top20_overlap": 14,
+          "kl_from_hf": 0.0017690380336716771
+        },
+        {
+          "elements": 248320,
+          "rms_error": 0.6334221419892286,
+          "relative_rms_error": 0.2504408489010576,
+          "max_absolute_error": 3.828125,
+          "cosine": 0.9681324805245205,
+          "pcc": 0.9571542043930298,
+          "top1": 814,
+          "hf_top1": 814,
+          "top20_overlap": 16,
+          "kl_from_hf": 8.141460421029478e-05
+        },
+        {
+          "elements": 248320,
+          "rms_error": 0.7983158269408946,
+          "relative_rms_error": 0.2943304263853707,
+          "max_absolute_error": 5.03125,
+          "cosine": 0.9612611522268344,
+          "pcc": 0.9402137569723752,
+          "top1": 20139,
+          "hf_top1": 20139,
+          "top20_overlap": 15,
+          "kl_from_hf": 5.009228516428266e-07
+        }
+      ]
+    },
+    {
+      "name": "bfp8-hifi2",
+      "state": "completed",
+      "started_at": 1791537591.956214,
+      "command": [
+        "/bin/bash",
+        "/home/ttuser/qwen38-artifacts-20261007/hf-controls-source-v2/scripts/run_safe_pytest.sh",
+        "/home/ttuser/qwen38-artifacts-20261007/hf-controls-source-v2/models/demos/qwen38_27b_qb2/tests/test_hf_layer_reference.py",
+        "--rootdir=/home/ttuser/qwen38-artifacts-20261007/hf-controls-source-v2",
+        "-c",
+        "/home/ttuser/qwen38-artifacts-20261007/hf-controls-source-v2/pytest.ini",
+        "-vv",
+        "-s",
+        "--timeout=2400",
+        "--junitxml=/home/ttuser/qwen38-artifacts-20261007/hf-controls-v2/bfp8-hifi2/hardware.xml"
+      ],
+      "precision_file": "precision_accurate_decode_bfp8_all.json",
+      "finished_at": 1791537938.3933659,
+      "cleanup_completed": true,
+      "precision": {
+        "config_id": "decoder_bfp8_hifi2_head_bfp8_hifi2_accurate_decode",
+        "weight_groups": {
+          "attention": "bfloat8_b",
+          "output": "bfloat8_b",
+          "gate": "bfloat8_b",
+          "up": "bfloat8_b",
+          "down": "bfloat8_b",
+          "head": "bfloat8_b"
+        },
+        "compute_fidelities": {
+          "attention": "HiFi2",
+          "output": "HiFi2",
+          "gate": "HiFi2",
+          "up": "HiFi2",
+          "down": "HiFi2",
+          "head": "HiFi2"
+        },
+        "fp32_dest_acc_en": true,
+        "layer_exceptions": {},
+        "activation_dtype": {
+          "attention": "bfloat16",
+          "mlp": "bfloat16"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2",
+        "decode_attention": "accurate_full_tile",
+        "decode_recurrence": "native"
+      },
+      "logit_metrics": [
+        {
+          "elements": 248320,
+          "rms_error": 0.4345552039266503,
+          "relative_rms_error": 0.19811977719036508,
+          "max_absolute_error": 2.75,
+          "cosine": 0.9809694848210412,
+          "pcc": 0.9791741719254264,
+          "top1": 1596,
+          "hf_top1": 1596,
+          "top20_overlap": 19,
+          "kl_from_hf": 0.004462894052267075
+        },
+        {
+          "elements": 248320,
+          "rms_error": 0.3981958562924117,
+          "relative_rms_error": 0.1661482632872124,
+          "max_absolute_error": 2.85546875,
+          "cosine": 0.9862807683087595,
+          "pcc": 0.9842902933546942,
+          "top1": 1144,
+          "hf_top1": 1144,
+          "top20_overlap": 17,
+          "kl_from_hf": 2.5106956513809564e-07
+        },
+        {
+          "elements": 248320,
+          "rms_error": 0.21621873618031212,
+          "relative_rms_error": 0.07321282785274728,
+          "max_absolute_error": 1.125,
+          "cosine": 0.9974957840362463,
+          "pcc": 0.9957026156048275,
+          "top1": 4087,
+          "hf_top1": 4087,
+          "top20_overlap": 19,
+          "kl_from_hf": 0.0009588714456185699
+        },
+        {
+          "elements": 248320,
+          "rms_error": 0.19623474906964147,
+          "relative_rms_error": 0.055641469695464935,
+          "max_absolute_error": 1.1875,
+          "cosine": 0.9984531447276666,
+          "pcc": 0.9965001603840533,
+          "top1": 1156,
+          "hf_top1": 1156,
+          "top20_overlap": 19,
+          "kl_from_hf": 6.617852341150865e-05
+        },
+        {
+          "elements": 248320,
+          "rms_error": 0.13152696450520102,
+          "relative_rms_error": 0.04323892613181484,
+          "max_absolute_error": 1.0,
+          "cosine": 0.9991274860996827,
+          "pcc": 0.9983138928401022,
+          "top1": 25,
+          "hf_top1": 25,
+          "top20_overlap": 19,
+          "kl_from_hf": 0.00010897858010139316
+        },
+        {
+          "elements": 248320,
+          "rms_error": 0.14750079542760736,
+          "relative_rms_error": 0.046179700828976815,
+          "max_absolute_error": 0.765625,
+          "cosine": 0.999174320240732,
+          "pcc": 0.9983600612900604,
+          "top1": 328,
+          "hf_top1": 328,
+          "top20_overlap": 20,
+          "kl_from_hf": 0.000994133297353983
+        },
+        {
+          "elements": 248320,
+          "rms_error": 0.15215377131392752,
+          "relative_rms_error": 0.060158174344346456,
+          "max_absolute_error": 0.875,
+          "cosine": 0.9982719630071631,
+          "pcc": 0.997678177863039,
+          "top1": 814,
+          "hf_top1": 814,
+          "top20_overlap": 18,
+          "kl_from_hf": 3.946670858567813e-06
+        },
+        {
+          "elements": 248320,
+          "rms_error": 0.24538939388495937,
+          "relative_rms_error": 0.09047242018158708,
+          "max_absolute_error": 1.5,
+          "cosine": 0.996020954691243,
+          "pcc": 0.9939219846013068,
+          "top1": 20139,
+          "hf_top1": 20139,
+          "top20_overlap": 19,
+          "kl_from_hf": -2.1788483905993417e-08
+        }
+      ]
+    }
+  ],
+  "survives_disconnect": true,
+  "resumes_after_reboot": false,
+  "is_gpqa_score": false,
+  "is_performance_measurement": false,
+  "updated_at": "2026-10-09T09:25:38Z",
+  "finished_at": 1791537938.3944917,
+  "cleanup_completed": true
+}
