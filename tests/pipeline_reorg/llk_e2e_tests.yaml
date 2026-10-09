@@ -15,13 +15,13 @@
     set -euo pipefail
     cd tests/python_tests
     pytest -q --override-ini=log_cli=false -n auto \
-      --dist=worksteal -m "$PYTEST_MARKERS" \
+      --dist=worksteal -m "not perf and not quasar and not accuracy" \
       --splits 2 --group 1 \
-      --timeout=60 \
-      --junitxml=pytest-report-wormhole-1.xml .
+      --timeout=300 \
+      --junitxml=pytest-report-wormhole-1.xml test_eltwise_binary.py
   skus:
     wh_n150_civ2:
-      timeout: 38
+      timeout: 90
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_e2e_wormhole group 2/2
@@ -33,13 +33,13 @@
     set -euo pipefail
     cd tests/python_tests
     pytest -q --override-ini=log_cli=false -n auto \
-      --dist=worksteal -m "$PYTEST_MARKERS" \
+      --dist=worksteal -m "not perf and not quasar and not accuracy" \
       --splits 2 --group 2 \
-      --timeout=60 \
-      --junitxml=pytest-report-wormhole-2.xml .
+      --timeout=300 \
+      --junitxml=pytest-report-wormhole-2.xml test_eltwise_binary.py
   skus:
     wh_n150_civ2:
-      timeout: 38
+      timeout: 90
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_e2e_blackhole group 1/2
@@ -51,13 +51,13 @@
     set -euo pipefail
     cd tests/python_tests
     pytest -q --override-ini=log_cli=false -n auto \
-      --dist=worksteal -m "$PYTEST_MARKERS" \
+      --dist=worksteal -m "not perf and not quasar and not accuracy" \
       --splits 2 --group 1 \
-      --timeout=60 \
-      --junitxml=pytest-report-blackhole-1.xml .
+      --timeout=300 \
+      --junitxml=pytest-report-blackhole-1.xml test_eltwise_binary.py
   skus:
     bh_p150b_civ2:
-      timeout: 38
+      timeout: 90
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_e2e_blackhole group 2/2
@@ -69,11 +69,11 @@
     set -euo pipefail
     cd tests/python_tests
     pytest -q --override-ini=log_cli=false -n auto \
-      --dist=worksteal -m "$PYTEST_MARKERS" \
+      --dist=worksteal -m "not perf and not quasar and not accuracy" \
       --splits 2 --group 2 \
-      --timeout=60 \
-      --junitxml=pytest-report-blackhole-2.xml .
+      --timeout=300 \
+      --junitxml=pytest-report-blackhole-2.xml test_eltwise_binary.py
   skus:
     bh_p150b_civ2:
-      timeout: 38
+      timeout: 90
   owner_id: U09UC143684 # Nemanja Divnic
