@@ -82,3 +82,8 @@ SITU_GLU_BETA_UP = 25.0
 # rand's default interval [RAND_FROM, RAND_FROM + RAND_SCALE] (RAND_FROM_BITS / RAND_SCALE_BITS).
 RAND_FROM = 1.0
 RAND_SCALE = 2.0
+
+# Dropout harness defaults (kDropoutScaleBits / kDropoutSeed); probability is p * INT_MAX.
+DROPOUT_SCALE = 2.0
+DROPOUT_PROBABILITY_MAX = 0x7FFFFFFF
+DROPOUT_SEED = 0xDEADBEEF

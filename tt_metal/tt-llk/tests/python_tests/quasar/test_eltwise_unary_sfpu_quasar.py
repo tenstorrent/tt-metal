@@ -36,6 +36,9 @@ from helpers.param_config import (
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.sfpu_dispatch_constants import (
+    DROPOUT_PROBABILITY_MAX,
+    DROPOUT_SCALE,
+    DROPOUT_SEED,
     RELU_MAX_THRESHOLD,
     RELU_MIN_THRESHOLD,
 )
@@ -57,6 +60,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
+    SFPU_DROPOUT_PARAMS,
     TEST_FACE_DIMS,
     TILE_COUNT,
     TYPECAST_FORMATS,
@@ -416,8 +420,8 @@ def prepare_inputs_for_operation(
         max_val = 2.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
-    elif mathop == MathOperation.Neg:
-        # Negation is exact for any representable value; span both signs (mirrors sfpu_domains' Neg spec).
+    elif mathop in (MathOperation.Neg, MathOperation.Dropout):
+        # Neg and dropout's p = 0 path (x * 2.0) are exact; span both signs.
         min_val = -10.0
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
@@ -874,6 +878,8 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    # p = 0 only (golden x * 2.0); the drop path is tested by test_dropout_* below.
+    OpConfig(MathOperation.Dropout, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # Column-wise cumulative sum: a whole-tile op (VectorMode::RC_custom, one call per
     # tile) whose running total lives in LREG4-7 between calls. Every tile is swept with
@@ -1031,7 +1037,7 @@ def test_eltwise_unary_sfpu_quasar(
     """
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
     variant (abs, exp, gelu, relu, lrelu, relu_min, relu_max, reciprocal, sqrt,
-    tanh, sigmoid, silu, rsqrt, square, cumsum, typecast,
+    tanh, sigmoid, silu, rsqrt, square, cumsum, dropout, typecast,
     floor/ceil/trunc/frac/round, the six
     compare-to-zero modes, and signbit), validated against the UnarySFPUGolden reference.
     Typecast sweeps explicit (src, dst) format pairs; every other op sweeps the
@@ -1548,4 +1554,261 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
         "Float32 -> UInt16 mismatch:\n"
         f"got      {result[:32].tolist()}\n"
         f"expected {expected_flat[:32].tolist()}"
+    )
+
+
+# Dropout drop path: the PRNG mask is unpredictable, so check 0-or-x*scale, the dropped fraction,
+# varying row-pair masks, and same-seed repeatability.
+DROPOUT_DETECTOR_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Float32], same=True
+)
+DROPOUT_FP32_FORMATS = input_output_formats([DataFormat.Float32], same=True)
+
+# Nonzero inputs, so a zero output can only mean a drop.
+DROPOUT_MIN_MAGNITUDE = 0.5
+DROPOUT_MAGNITUDE_SPAN = 9.5
+DROPOUT_NEGATIVE_FRACTION = 0.5
+DROPOUT_UNIFORM_SPEC = StimuliSpec.uniform(low=0.0, high=1.0)
+
+DROPOUT_ROW_PAIR_DATUMS = 32
+# A mask repeating per row pair gives one distinct mask; independent lanes give ~all distinct.
+DROPOUT_MIN_DISTINCT_MASK_FRACTION = 0.9
+
+DROPOUT_P_REAL = 0.3
+DROPOUT_SCALE_REAL = 1.0 / (1.0 - DROPOUT_P_REAL)
+
+DROPOUT_SEED_ALT = 0x1234ABCD
+DROPOUT_SEED_LFSR_LOCKUP = 0xFFFFFFFF
+
+
+# (name, probability operand, expected dropped fraction band, scale, seed)
+DROPOUT_PROBABILITY_CASES = (
+    ("drop_all", DROPOUT_PROBABILITY_MAX, (1.0, 1.0), DROPOUT_SCALE, DROPOUT_SEED),
+    (
+        "drop_half",
+        DROPOUT_PROBABILITY_MAX // 2,
+        (0.4, 0.6),
+        DROPOUT_SCALE,
+        DROPOUT_SEED,
+    ),
+    (
+        "drop_real_scale",
+        int(DROPOUT_P_REAL * DROPOUT_PROBABILITY_MAX),
+        (0.2, 0.4),
+        DROPOUT_SCALE_REAL,
+        DROPOUT_SEED,
+    ),
+    # All ones is the XNOR-LFSR lock-up seed, which init_prng_seed must remap.
+    (
+        "drop_half_lockup_seed",
+        DROPOUT_PROBABILITY_MAX // 2,
+        (0.4, 0.6),
+        DROPOUT_SCALE,
+        DROPOUT_SEED_LFSR_LOCKUP,
+    ),
+)
+# 1 / (1 - p) has a non-zero fp32 low half; only Float32 output keeps it.
+DROPOUT_CASE_FORMATS = {"drop_real_scale": DROPOUT_FP32_FORMATS}
+
+
+def _dropout_stimuli(formats, input_dimensions):
+    src_A, tile_cnt, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=DROPOUT_UNIFORM_SPEC,
+        spec_B=DROPOUT_UNIFORM_SPEC,
+    )
+    magnitudes = (
+        DROPOUT_MIN_MAGNITUDE + src_A.to(torch.float32) * DROPOUT_MAGNITUDE_SPAN
+    )
+    signs = torch.where(src_B.to(torch.float32) < DROPOUT_NEGATIVE_FRACTION, -1.0, 1.0)
+    src_A = (signs * magnitudes).to(format_dict[formats.input_format])
+    return src_A, src_B, tile_cnt
+
+
+def _dropout_config(variant, src_A, src_B, tile_cnt, dropout_params):
+    formats = variant.formats
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs={
+            "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=MathOperation.Dropout),
+                APPROX_MODE(ApproximationMode.No),
+                IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
+                DATA_COPY_TYPE(DataCopyType.A2D),
+                UNPACKER_ENGINE_SEL(
+                    UnpackerEngine.UnpDest
+                    if variant.unpack_to_dest
+                    else UnpackerEngine.UnpA
+                ),
+                DEST_SYNC(DestSync.Half),
+                TYPECAST_FORMATS(),
+                dropout_params,
+            ],
+            "runtimes": [
+                TILE_COUNT(tile_cnt),
+                NUM_FACES(MAX_NUM_FACES),
+                TEST_FACE_DIMS(),
+                DEST_INDEX(0),
+                LOOP_FACTOR(1),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt,
+                tile_count_B=tile_cnt,
+                tile_count_res=tile_cnt,
+                num_faces=MAX_NUM_FACES,
+            ),
+            "unpack_to_dest": variant.unpack_to_dest,
+            "dest_acc": variant.dest_acc,
+        },
+    )
+    variant.apply_formats(configuration.formats_config)
+    return configuration
+
+
+def _dropout_result(configuration, variant, src_A):
+    formats = variant.formats
+    res_from_L1 = configuration.run().result
+    result = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format]).to(
+        torch.float32
+    )
+    assert (
+        result.numel() == src_A.numel()
+    ), f"result has {result.numel()} elements, expected {src_A.numel()}"
+    return result
+
+
+def _check_dropout_values(name, src_A, result, scale, output_format):
+    """Every output is 0 or x * scale; returns the drop mask."""
+    kept = (
+        (src_A.to(torch.float32).flatten() * torch.tensor(scale, dtype=torch.float32))
+        .to(format_dict[output_format])
+        .to(torch.float32)
+    )
+    dropped = result == 0.0
+    stray = ~dropped & (result != kept)
+    assert not stray.any(), (
+        f"{name}: {int(stray.sum())} of {result.numel()} outputs are neither 0 nor "
+        f"x * {scale}; first got {result[stray][:8].tolist()}, "
+        f"expected {kept[stray][:8].tolist()}"
+    )
+    return dropped
+
+
+def _check_row_pair_masks_vary(name, dropped):
+    masks = dropped.reshape(-1, DROPOUT_ROW_PAIR_DATUMS)
+    distinct = torch.unique(masks, dim=0).shape[0]
+    assert distinct >= DROPOUT_MIN_DISTINCT_MASK_FRACTION * masks.shape[0], (
+        f"{name}: only {distinct} distinct masks among {masks.shape[0]} row pairs; "
+        "the PRNG is not stepping per lane / per row pair"
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    dropout_case_variant_dims=[
+        (MathOperation.Dropout, case, variant, dims)
+        for case in DROPOUT_PROBABILITY_CASES
+        for variant in generate_quasar_sfpu_format_variants(
+            MathOperation.Dropout,
+            DROPOUT_CASE_FORMATS.get(case[0], DROPOUT_DETECTOR_FORMATS),
+        )
+        for dims in TENSOR_DIMS
+    ],
+)
+def test_dropout_probability_quasar(dropout_case_variant_dims):
+    """Outputs are 0 or x * scale, the dropped fraction is near p, and row-pair masks vary."""
+    (
+        _,
+        (case_name, probability, (min_frac, max_frac), scale, seed),
+        variant,
+        input_dimensions,
+    ) = dropout_case_variant_dims[0]
+    formats = variant.formats
+
+    src_A, src_B, tile_cnt = _dropout_stimuli(formats, input_dimensions)
+    configuration = _dropout_config(
+        variant,
+        src_A,
+        src_B,
+        tile_cnt,
+        SFPU_DROPOUT_PARAMS(
+            dropout_probability=probability, dropout_scale=scale, dropout_seed=seed
+        ),
+    )
+    result = _dropout_result(configuration, variant, src_A)
+
+    dropped = _check_dropout_values(
+        case_name, src_A, result, scale, formats.output_format
+    )
+    dropped_frac = dropped.float().mean().item()
+    assert min_frac <= dropped_frac <= max_frac, (
+        f"{case_name}: dropped fraction {dropped_frac:.4f} outside "
+        f"[{min_frac}, {max_frac}] (probability operand {probability:#x})"
+    )
+    if min_frac < 1.0:
+        _check_row_pair_masks_vary(case_name, dropped)
+
+
+@pytest.mark.quasar
+@parametrize(
+    dropout_variant=[
+        (MathOperation.Dropout, variant)
+        for variant in generate_quasar_sfpu_format_variants(
+            MathOperation.Dropout, DROPOUT_DETECTOR_FORMATS
+        )
+    ],
+)
+def test_dropout_reseed_quasar(dropout_variant):
+    """Seeds A, A, B: the same seed must repeat the mask exactly, a different seed must change it."""
+    _, variant = dropout_variant[0]
+    formats = variant.formats
+    probability = DROPOUT_PROBABILITY_MAX // 2
+
+    src_A, src_B, tile_cnt = _dropout_stimuli(formats, TENSOR_DIMS[0])
+    seeds = (DROPOUT_SEED, DROPOUT_SEED, DROPOUT_SEED_ALT)
+    configurations = [
+        _dropout_config(
+            variant,
+            src_A,
+            src_B,
+            tile_cnt,
+            SFPU_DROPOUT_PARAMS(dropout_probability=probability, dropout_seed=seed),
+        )
+        for seed in seeds
+    ]
+    # Build every ELF first: in the split flow, run() ends the compile step after one config.
+    for configuration in configurations:
+        configuration.prepare()
+
+    masks = [
+        _check_dropout_values(
+            f"seed {seed:#x}",
+            src_A,
+            _dropout_result(configuration, variant, src_A),
+            DROPOUT_SCALE,
+            formats.output_format,
+        )
+        for seed, configuration in zip(seeds, configurations)
+    ]
+
+    same_seed_diff = int((masks[0] != masks[1]).sum())
+    assert same_seed_diff == 0, (
+        f"seed {DROPOUT_SEED:#x} run twice gave masks differing in {same_seed_diff} of "
+        f"{masks[0].numel()} datums; dropout_init does not reseed deterministically"
+    )
+    alt_seed_diff = int((masks[0] != masks[2]).sum())
+    assert alt_seed_diff > 0, (
+        f"seeds {DROPOUT_SEED:#x} and {DROPOUT_SEED_ALT:#x} gave identical masks; "
+        "dropout_init does not reach the PRNG"
     )

@@ -789,6 +789,21 @@ void set_up_dest_dvalid_per_thread(dest_dvalid_client const (&clients)[N])
     }
 }
 
+// Seeds every PRNG client via the HW seeder; it has no busy flag, so wait 1600 SFPNOPs (seeder RTL bound, as init_rand).
+// Don't wait on this cfg write with STALLWAIT(TRISC_CFG): it can deadlock (TEN-4849).
+inline void init_prng_seed(const std::uint32_t seed)
+{
+    constexpr std::uint32_t PRNG_SEED_WAIT_NOPS = 1600;
+    // All ones is the XNOR-LFSR lock-up state.
+    constexpr std::uint32_t PRNG_LFSR_LOCKUP_SEED = 0xFFFFFFFF;
+    auto cfg                                      = (std::uint32_t volatile *)TENSIX_CFG_BASE;
+    cfg[PRNG_SEED_Seed_Val_ADDR32]                = (seed == PRNG_LFSR_LOCKUP_SEED) ? seed - 1 : seed;
+    for (std::uint32_t i = 0; i < PRNG_SEED_WAIT_NOPS; i++)
+    {
+        TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);
+    }
+}
+
 // d e e p e s t l o r e
 __attribute__((always_inline)) inline void rv_wrcfg(
     std::uint32_t wrdata_hi, std::uint32_t wrdata_lo, std::uint32_t cfg_addr, std::uint32_t write_64b = 0, std::uint32_t byte_mask = 0xFF)
