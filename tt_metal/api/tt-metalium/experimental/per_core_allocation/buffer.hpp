@@ -28,8 +28,8 @@ void copy_per_core_addresses(Buffer& dst, const Buffer& src);
 // Buffer::address() for ordinary lockstep buffers, so callers need no mode check.
 DeviceAddr get_shard_base_address(const Buffer& buffer, CoreCoord core);
 
-// Single base address of ``buffer``'s shards on all of ``cores``. TT_FATALs if a per-core-allocated
-// buffer's shards differ across ``cores`` or one has no shard. Buffer::address() for lockstep buffers.
+// Single base address of buffer's shards on all of cores. TT_FATALs if a per-core-allocated buffer's
+// shards differ across cores or one has no shard. Buffer::address() for lockstep buffers.
 DeviceAddr get_shard_base_address(const Buffer& buffer, const CoreRangeSet& cores);
 
 // BufferShardingArgs free functions.

@@ -31,7 +31,7 @@ def _cores(cores):
 
 
 def _sharded_tensor(mesh, cores, shard_bytes, *, per_core, data=None):
-    """A HEIGHT_SHARDED uint8 L1 tensor with one ``shard_bytes`` shard on each of ``cores``."""
+    """A HEIGHT_SHARDED uint8 L1 tensor with one shard_bytes shard on each of cores."""
     mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
@@ -65,7 +65,7 @@ def _skewed_tensor(mesh, skewed, skew_bytes=2 * SHARD):
 
 
 def _cb(tensor, core, offset):
-    """One single-core CB on ``core`` over ``tensor``, a page long, ``offset`` into the shard."""
+    """One single-core CB on core over tensor, a page long, offset into the shard."""
     descriptor = ttnn.cb_descriptor_from_sharded_tensor(
         CB_INDEX, tensor, address_offset=offset, total_size=PAGE, core_ranges=_one(core)
     )
@@ -100,7 +100,7 @@ void kernel_main() {
 
 
 def _probe_program(tensor, out, offset):
-    """One CB per core over ``tensor``, and a kernel comparing each CB's write pointer with the raw address."""
+    """One CB per core over tensor, and a kernel comparing each CB's write pointer with the raw address."""
     runtime_args = ttnn.RuntimeArgs()
     for core in (FIRST, SECOND):
         runtime_args[core.x][core.y] = [_addr(tensor, core) + offset, out.buffer_address()]
