@@ -155,6 +155,7 @@ class TttGenerationWorker:
             # torch.Tensor of scalars.
             num_logprobs=[0] * n,
         )
+        self._sampling_warmed_up = False
 
     def generate(
         self,
@@ -202,6 +203,21 @@ class TttGenerationWorker:
         assert logprobs is not None, "collect_logprobs=True must return log-probs"
         return completions, logprobs
 
+    def _warm_up_sampling(self, prompts: List[List[int]], *, max_new_tokens: int, stop_at_eos: bool) -> None:
+        """Run one untraced generate with the worker's sampling params before the first trace capture.
+
+        Generator.warmup_model_prefill only warms log-prob sampling at batch size 1, so capturing a
+        trace for the full batch with log-probs enabled would otherwise hit uncompiled programs.
+        """
+        self._sampling_warmed_up = True
+        self._generate_impl(
+            prompts,
+            max_new_tokens=min(max_new_tokens, 2),
+            enable_trace=False,
+            stop_at_eos=stop_at_eos,
+            collect_logprobs=True,
+        )
+
     def _generate_impl(
         self,
         prompts: List[List[int]],
@@ -221,6 +237,9 @@ class TttGenerationWorker:
             empty_completions: List[List[int]] = [[] for _ in prompts]
             empty_logprobs: Optional[List[List[float]]] = [[] for _ in prompts] if collect_logprobs else None
             return empty_completions, empty_logprobs
+
+        if enable_trace and not self._sampling_warmed_up:
+            self._warm_up_sampling(prompts, max_new_tokens=max_new_tokens, stop_at_eos=stop_at_eos)
 
         _t_total = time.perf_counter()
 
