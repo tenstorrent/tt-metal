@@ -1,12 +1,13 @@
 # GPT-OSS: Mixture of Experts Language Model
 
-Inference implementation for GPT-OSS models on Tenstorrent Wormhole accelerators.
+Inference implementation for GPT-OSS models on Tenstorrent Wormhole and Blackhole accelerators.
 
 **Model Source**: [GPT-OSS on HuggingFace](https://huggingface.co/gpt-oss) (custom MoE architecture)
 
 **Target Hardware**:
 - **LoudBox**: Single Wormhole device (1×8 configuration)
 - **Galaxy**: Multi-device Wormhole mesh (4×8 configuration)
+- **QuietBox 2**: 4 Blackhole devices (1×4 configuration); batch-1 decode uses the fused decode path ([tt/fused_decode](tt/fused_decode/README.md))
 
 **Current Status**: This model is under active development.
 - ✅ Supported: Prefill up to sequence length 128, batch size 1, total sequence length 4096
@@ -21,6 +22,9 @@ export HF_MODEL="/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b"
 # Run text generation demo on Galaxy (4×8 mesh)
 cd tt-metal/models/demos/gpt_oss/demo
 pytest text_demo.py -k "4x8 and prefill_128"
+
+# Run text generation demo on QuietBox 2 (1×4 mesh)
+pytest text_demo.py -k "1x4 and prefill_128"
 ```
 
 ## Configuration
