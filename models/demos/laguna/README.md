@@ -7,10 +7,9 @@
 1,048,576-token context) served as an OpenAI-compatible vLLM server on four Blackhole ASICs: a TT-QuietBox 2 or four
 P150 cards.
 
-- [Results](#results): accuracy (batch 1 and 32), performance vs speed of light (batch 1 and 32, through vLLM and
-  without it)
+- [Results](#results): accuracy (batch 1 and 32), performance vs speed of light (batch 1 and 32)
 - [Quick start](#quick-start): set up, start, check, stop the server
-- [Reproduce the results](#reproduce-the-results): accuracy test, perf demo
+- [Reproduce the results](#reproduce-the-results): accuracy test, perf test, perf demo through the server
 - [Serving options](#serving-options): DFlash, prefix caching, concurrent requests and their context lengths
 - [Weight formats](#weight-formats): how the model fits on the QuietBox 2
 
@@ -40,88 +39,64 @@ Speed of light (SoL) is the roofline limit from
 [All About Transformer Inference](https://jax-ml.github.io/scaling-book/inference/): decode reads the 6.5 GB of
 weights a token uses plus the KV cache at 2.05 TB/s; time to first token (TTFT) is the larger of reading the weights
 and doing the FLOPs at 2.88 PFLOP/s (`demo/roofline.py` prints every number). The target is 50% of SoL, the usual
-mark for MoE models (80% for dense): half the decode speed, twice the TTFT. Measured on 2026-10-09 with the perf demo
-(through the vLLM server), normal decode.
+mark for MoE models (80% for dense): half the decode speed, twice the TTFT.
+
+SoL counts only device work, so the measured numbers come from `demo/perf_direct.py`, which runs the model with the
+server's settings in one process, without vLLM (no HTTP, chat template or scheduler): TTFT is the prefill of a prompt
+of exactly the stated length, the LM head on its last token, on-device greedy sampling and reading the token back
+(replayed from a trace up to 2,048 tokens, as the server does for short prompts); decode is one step of the captured
+decode trace at a context of the input length. Measured on 2026-10-09, normal decode.
 
 | Input tokens | Decode SoL (tok/s/user) | Decode target | Decode measured | TTFT SoL | TTFT target | TTFT measured |
 |---:|---:|---:|---:|---:|---:|---:|
-| 128 | 316 | 158 | 71.3 | 33 ms | 66 ms | 87 ms |
-| 1,024 | 313 | 157 | 67.5 | 33 ms | 66 ms | 186 ms |
-| 2,048 | 312 | 156 | 67.3 | 33 ms | 66 ms | 259 ms |
-| 4,096 | 310 | 155 | 67.0 | 33 ms | 66 ms | 445 ms |
-| 8,192 | 305 | 152 | 66.3 | 52 ms | 103 ms | 888 ms |
+| 128 | 316 | 158 | 75.9 | 33 ms | 66 ms | 60.5 ms |
+| 1,024 | 313 | 157 | 73.6 | 33 ms | 66 ms | 140 ms |
+| 2,048 | 312 | 156 | 73.2 | 33 ms | 66 ms | 238 ms |
+| 4,096 | 310 | 155 | 72.2 | 33 ms | 66 ms | 386 ms |
+| 8,192 | 305 | 152 | 72.3 | 52 ms | 103 ms | 716 ms |
 
-The perf demo's random prompts are re-tokenized through the chat template, so the real input lengths are 82, 1,066,
-1,939, 4,138 and 8,234 tokens, and the server pads each to its prefill bucket (1,066 runs as 1,152). The same model
-code measured without the server (exact lengths, device time plus the token readback) is in
-[Performance without vLLM](#performance-without-vllm).
-
-With DFlash speculative decoding (same run):
+With DFlash speculative decoding, measured through the vLLM server (`perf_demo.py --modes dflash`; `perf_direct.py`
+has no DFlash mode yet):
 
 | Input tokens | 128 | 1,024 | 2,048 | 4,096 | 8,192 |
 |---|---:|---:|---:|---:|---:|
 | Decode tok/s/user | 22.1 | 53.0 | 26.6 | 42.9 | 29.2 |
-| Decode speed relative to normal decode | 0.31x | 0.79x | 0.40x | 0.64x | 0.44x |
 | TTFT | 289 ms | 296 ms | 377 ms | 583 ms | 1,056 ms |
-| TTFT change from normal decode | +202 ms | +111 ms | +118 ms | +138 ms | +168 ms |
 
-DFlash is now slower than normal decode at every length: normal decode got about 4x faster, while each DFlash round
-(a draft block plus Laguna's verify pass over it) did not, so a round costs more than the tokens it accepts would take
-to decode one at a time. Its speed still depends on how much of the draft Laguna accepts, so it varies from prompt to
-prompt. Use normal decode (the default).
+DFlash is currently slower than normal decode at every length. Each DFlash round, the draft model proposes 15
+tokens and Laguna checks all 16 rows (the last accepted token plus the drafts) in one forward pass through its
+multi-token prefill path; the normal-decode speedups are one-token kernels that this pass does not use, so a round
+(about 22 ms draft + 85 ms check at 128 tokens) costs more than the tokens it accepts would take to decode one at a
+time. Use normal decode (the default) until DFlash is optimized.
 
 ### Performance (batch 32)
 
-32 users send their prompts at the same moment (`LAGUNA_MAX_NUM_SEQS=32`, normal decode, 512 output tokens each);
-measured on 2026-10-09 with `perf_demo.py --batch 32`. Decode SoL is one step for all 32 users: the weights the 32
-tokens' experts need (about 50 GB) plus 32 users' KV cache at 2.05 TB/s. TTFT SoL prefills all 32 prompts in one pass,
-so every user's first token arrives at the same time. Targets are again 50% of SoL.
+32 prompts arrive together and are prefilled in the server's groups: up to 4,096 tokens several prompts are packed
+into one prefill of at most 8,192 rows (32 prompts of 128 tokens in one pass, 8 of 1K, 4 of 2K, 2 of 4K), and 8K
+prompts one at a time. TTFT SoL prefills all 32 prompts in one pass, so every user's first token arrives at the same
+time; the measured TTFT is the last user's (the moment all 32 have a token) and the mean over the 32 users, who wait
+for the groups ahead of them. Decode SoL is one step for all 32 users: the weights the 32 tokens' experts need (about
+50 GB) plus 32 users' KV cache at 2.05 TB/s; the measured decode is one step of the batch-32 decode trace with 32
+different tokens at a context of the input length. Measured on 2026-10-09 with `demo/perf_direct.py` (no vLLM);
+targets are again 50% of SoL.
 
-The server prefills the prompts in groups: up to 4,096 tokens it packs several prompts into one prefill of at most
-8,192 rows (32 prompts of 128 tokens in one pass, 8 of 1K, 4 of 2K, 2 of 4K), and 8K prompts one at a time. A user's
-TTFT includes waiting for the groups ahead of it, and users already decoding slow down while later groups prefill.
-"All 32 decoding" is the fastest user's speed, i.e. a decode step once every prompt is prefilled (about 44-48 ms).
+| Input tokens | Decode SoL (tok/s/user) | Decode target | Decode measured | TTFT SoL | TTFT target | TTFT measured, last user | TTFT measured, mean |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 128 | 41 | 20 | 28.0 | 33 ms | 66 ms | 0.42 s | 0.42 s |
+| 1,024 | 39 | 20 | 26.4 | 193 ms | 386 ms | 2.89 s | 1.81 s |
+| 2,048 | 39 | 19 | 25.8 | 392 ms | 783 ms | 5.82 s | 3.27 s |
+| 4,096 | 37 | 19 | 23.5 | 799 ms | 1.60 s | 11.6 s | 6.19 s |
+| 8,192 | 35 | 18 | 22.4 | 1.65 s | 3.31 s | 23.4 s | 12.1 s |
 
-| Input tokens | Decode SoL (tok/s/user) | Decode target | Decode measured, all 32 decoding | Decode measured, mean | TTFT SoL | TTFT target | TTFT measured, mean | TTFT measured, first / last user |
-|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 128 | 41 | 20 | 22.9 | 22.8 | 33 ms | 66 ms | 2.04 s | 0.75 / 2.08 s |
-| 1,024 | 39 | 20 | 22.7 | 21.7 | 193 ms | 386 ms | 4.24 s | 1.37 / 5.29 s |
-| 2,048 | 39 | 19 | 22.5 | 20.1 | 392 ms | 783 ms | 6.05 s | 1.28 / 8.76 s |
-| 4,096 | 37 | 19 | 21.6 | 17.3 | 799 ms | 1.60 s | 9.27 s | 1.29 / 15.1 s |
-| 8,192 | 35 | 18 | 20.8 | 14.1 | 1.65 s | 3.31 s | 15.9 s | 2.54 / 27.6 s |
+Decode throughput across all 32 users:
 
-Throughput across all 32 users:
-
-| Input tokens | Decode SoL (tok/s) | Decode target | Measured, all 32 decoding | Measured over the whole run (prefills included) |
-|---:|---:|---:|---:|---:|
-| 128 | 1,300 | 650 | 733 | 671 |
-| 1,024 | 1,257 | 628 | 726 | 589 |
-| 2,048 | 1,237 | 618 | 720 | 520 |
-| 4,096 | 1,198 | 599 | 691 | 423 |
-| 8,192 | 1,128 | 564 | 666 | 314 |
-
-### Performance without vLLM
-
-The speed of light counts only device work, so `demo/perf_direct.py` measures the same model code (the serving
-settings of `serve_vllm.sh`) in one process with no server: no HTTP, chat template or scheduler, and prompts of exactly
-the stated length. TTFT is the prefill of the prompt, the LM head on its last token, on-device greedy sampling and
-reading the token back: traced (device time) up to 2,048 tokens, where the server also replays short prefills from a
-trace, and dispatched op by op above. Decode is one step of the captured decode trace at a context of the input
-length. At batch 32 the prompts are prefilled in the server's groups (see above) and TTFT is the last user's, the
-moment all 32 have a token, which the one-pass SoL bounds. Measured on 2026-10-09.
-
-| Input tokens | Batch 1 decode (tok/s/user) | Target | Batch 1 TTFT | Target | Batch 32 decode (tok/s/user) | Target | Batch 32 TTFT, last user | Target |
-|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 128 | 75.9 | 158 | 60.5 ms | 66 ms | 28.0 | 20 | 0.42 s | 66 ms |
-| 1,024 | 73.6 | 157 | 140 ms | 66 ms | 26.4 | 20 | 2.89 s | 386 ms |
-| 2,048 | 73.2 | 156 | 238 ms | 66 ms | 25.8 | 19 | 5.82 s | 783 ms |
-| 4,096 | 72.2 | 155 | 386 ms | 66 ms | 23.5 | 19 | 11.6 s | 1.60 s |
-| 8,192 | 72.3 | 152 | 716 ms | 103 ms | 22.4 | 18 | 23.4 s | 3.31 s |
-
-Batch-1 TTFT at 128 tokens and batch-32 decode meet their targets. Through vLLM, batch-1 decode is 6-8% lower (the
-server reads each token back and schedules the next step on the host) and TTFT is 21-59 ms higher up to 4K tokens
-(request handling, and real prompt lengths padded up to prefill buckets) and 172 ms higher at 8K, where the perf
-demo's prompt is 8,234 tokens, longer than the largest single prefill (8,192).
+| Input tokens | Decode SoL (tok/s) | Decode target | Decode measured |
+|---:|---:|---:|---:|
+| 128 | 1,300 | 650 | 896 |
+| 1,024 | 1,257 | 628 | 845 |
+| 2,048 | 1,237 | 618 | 826 |
+| 4,096 | 1,198 | 599 | 752 |
+| 8,192 | 1,128 | 564 | 717 |
 
 ## Quick start
 
@@ -182,7 +157,21 @@ cd /tmp && env -u TT_METAL_HOME PYTHONPATH=$REPO \
   $MODEL_DIR/.venv/bin/python -m pytest -s $MODEL_DIR/tests/test_accuracy.py
 ```
 
-### Perf demo
+### Perf test
+
+The performance tables above (no server may be running; ~10 min):
+
+```bash
+python models/demos/laguna/demo/perf_direct.py                          # batch 1 and 32, 128 .. 8K tokens
+python models/demos/laguna/demo/perf_direct.py --batch 1 --input-lens 128,1024
+```
+
+It prints one line per batch size and input length (TTFT, decode tok/s/user, the SoL) and then the tables with the
+targets. `--output FILE` saves the results as JSON.
+
+### Perf demo (through the server)
+
+End to end through vLLM, including DFlash:
 
 ```bash
 python models/demos/laguna/demo/perf_demo.py              # batch 1, normal and DFlash, ~20 min
@@ -191,16 +180,11 @@ python models/demos/laguna/demo/perf_demo.py --batch 32   # 32 concurrent users,
 
 For normal decode and then DFlash, it starts the server, prints the answers to two real prompts, measures TTFT and
 decode speed for random-token prompts of 128, 1K, 2K, 4K and 8K tokens (batch 1, 512 output tokens), stops the
-server and prints the table. Results go to `generated/laguna_perf_demo/<UTC time>/`. Options: `--modes normal|dflash`,
-`--input-lens 128,16384` (a 128K prefill takes about 6 minutes), `--prompts N` (average N prompts per length),
-`--output-tokens N`, `--batch N` (N concurrent users; adds total output tok/s).
-
-Without the server (no server may be running; ~10 min):
-
-```bash
-python models/demos/laguna/demo/perf_direct.py                          # batch 1 and 32, 128 .. 8K tokens
-python models/demos/laguna/demo/perf_direct.py --batch 1 --input-lens 128,1024
-```
+server and prints the table. The prompts are re-tokenized through the chat template, so their real lengths differ
+from the requested ones (82, 1,066, 1,939, 4,138 and 8,234 tokens); the server path adds about 20-60 ms to TTFT
+(170 ms at 8K, where the 8,234-token prompt is longer than the largest single prefill) and costs 6-8% of decode speed. Results go to `generated/laguna_perf_demo/<UTC time>/`. Options:
+`--modes normal|dflash`, `--input-lens 128,16384` (a 128K prefill takes about 6 minutes), `--prompts N` (average N
+prompts per length), `--output-tokens N`, `--batch N` (N concurrent users; adds total output tok/s).
 
 ### Speed of light
 
