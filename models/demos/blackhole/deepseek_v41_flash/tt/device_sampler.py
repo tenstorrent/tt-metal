@@ -186,6 +186,10 @@ class DSV41DeviceSampler:
         self._mark("search_k")
         mass_k = self._mass_ge(s4, e4, tau_k)
         tau_p = self._search(s4, e4, tau_k, hi0, ttnn.multiply(pp, mass_k), use_mass=True)
+        no_p = ttnn.ge(
+            pp, 1.0
+        )  # top_p off: keep the whole top-k set (mass below fp32 resolution of the sum would be cut otherwise)
+        tau_p = ttnn.add(ttnn.multiply(no_p, tau_k), ttnn.multiply(ttnn.subtract(1.0, no_p), tau_p))
         self._mark("search_p")
         w = ttnn.multiply(e4, ttnn.ge(s4, self._v4(tau_p)))
         # inclusive prefix over the slice in vocabulary order: within rows of 32 (matmul with a triangular matrix), then the exclusive prefix over the row totals
@@ -242,3 +246,37 @@ def sampling_rows(temperature, top_k, top_p, gens, B):
     else:
         u = torch.rand(B, generator=gens)
     return invT, k, p, u.clamp(max=1 - 1e-7), greedy
+
+
+# ---- CPU model of the device algorithm (tests/test_device_sampler_cpu.py; the device test compares the traced sampler with the exact reference) -------------------------------------------
+def emulate_keep_weights(logits, temperature, top_k=0, top_p=1.0, J=16, levels=3):
+    """Weights e * keep [V] of one row, computed exactly like ``DSV41DeviceSampler.forward`` (fp32, k-ary threshold searches over the full vocabulary)."""
+    l = logits.float()
+    s = (l - l.max()) * (1.0 / float(temperature))
+    e = torch.exp(s)
+
+    def search(lo, hi, target, use_mass):
+        for _ in range(levels):
+            width = hi - lo
+            taus = lo + width * (torch.arange(J, dtype=torch.float32) / J)
+            m = (s[None, :] >= taus[:, None]).float()
+            f = (m * e[None, :]).sum(1) if use_mass else m.sum(1)
+            jstar = max(int((f >= target).sum()) - 1, 0)
+            step = width / J
+            lo = lo + step * jstar
+            hi = lo + step
+        return lo
+
+    lo0, hi0 = s.min(), torch.tensor(1e-3)
+    k_eff = float(top_k) if top_k and top_k > 0 else float(l.numel())
+    tau_k = search(lo0, hi0, k_eff, False)
+    mass_k = (e * (s >= tau_k)).sum()
+    tau_p = tau_k if float(top_p) >= 1.0 else search(tau_k, hi0, float(top_p) * mass_k, True)
+    return e * (s >= tau_p)
+
+
+def emulate_draw(w, u):
+    """Vocabulary-order inverse CDF of the weights ``w`` [V] at ``u`` (scalar or tensor of uniforms): the first index whose cumulative weight exceeds u * total."""
+    cs = w.double().cumsum(0)
+    idx = torch.searchsorted(cs, torch.as_tensor(u, dtype=torch.float64) * cs[-1], right=True)
+    return idx.clamp(max=w.numel() - 1)
