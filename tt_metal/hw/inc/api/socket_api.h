@@ -16,7 +16,7 @@
 #include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 
 static_assert(offsetof(receiver_socket_md, bytes_sent) % L1_ALIGNMENT == 0);

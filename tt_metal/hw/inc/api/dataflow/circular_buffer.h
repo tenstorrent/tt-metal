@@ -14,8 +14,8 @@
 #endif
 #else  // !COMPILE_FOR_TRISC
 #include "api/dataflow/noc.h"
-#include "tools/profiler/noc_debugging_metadata.hpp"
-#include "tools/profiler/noc_debugging_profiler.hpp"
+#include "tt_metal/tools/profiler/noc_debugging_metadata.hpp"
+#include "tt_metal/tools/profiler/noc_debugging_profiler.hpp"
 #endif
 
 #include "api/lock.h"

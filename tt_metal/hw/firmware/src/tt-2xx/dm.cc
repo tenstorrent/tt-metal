@@ -14,8 +14,8 @@
 #include "internal/debug/sanitize.h"
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #include "hostdev/dev_msgs.h"
-#include "tools/profiler/kernel_profiler.hpp"
-#include "tools/profiler/perf_counters.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "tt_metal/tools/profiler/perf_counters.hpp"
 #include "api/kernel_thread_globals.h"
 #include "internal/tt-2xx/worker_go_signalling.h"
 

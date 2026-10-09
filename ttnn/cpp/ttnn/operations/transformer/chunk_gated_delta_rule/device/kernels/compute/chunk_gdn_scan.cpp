@@ -14,7 +14,7 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 // Scan-only: batch four fp32 output tiles per DST acquire in the shared math helpers.
 // The prep kernel stays per-tile (its Ct=2 binary is at the kernel-config-buffer limit).
 #define GDN_DST_TILES 4

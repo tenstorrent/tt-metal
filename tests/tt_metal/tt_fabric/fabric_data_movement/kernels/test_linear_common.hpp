@@ -13,7 +13,7 @@ using namespace tt::tt_fabric::mesh::experimental;
 #else
 #error "API_TYPE_Linear or API_TYPE_Mesh must be defined"
 #endif
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "tests/tt_metal/tt_fabric/common/test_host_kernel_common.hpp"
 using tt::tt_fabric::fabric_router_tests::FabricPacketType;
 using tt::tt_fabric::fabric_router_tests::NocPacketType;

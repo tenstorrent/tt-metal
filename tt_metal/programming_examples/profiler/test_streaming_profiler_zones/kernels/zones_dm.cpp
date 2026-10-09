@@ -5,7 +5,7 @@
 // iteration enters 10 differently-named DeviceZoneScopedN scopes with increasing durations. The name carries
 // a per-RISC tag (BR_/NC_) so each RISC's 10 zones are distinct, and N_ITERS repeats the sweep.
 #include <cstdint>
-#include "tools/profiler/kernel_profiler.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 #ifndef N_ITERS
 #define N_ITERS 50u

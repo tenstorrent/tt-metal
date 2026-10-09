@@ -8,7 +8,7 @@
 #include "api/dataflow/noc.h"
 #include "api/debug/assert.h"
 #include "dev_mem_map.h"
-#include "tools/profiler/kernel_profiler.hpp"  // SYNC_SIGNAL / SYNC_WAIT
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"  // SYNC_SIGNAL / SYNC_WAIT
 
 namespace semaphore_detail {
 

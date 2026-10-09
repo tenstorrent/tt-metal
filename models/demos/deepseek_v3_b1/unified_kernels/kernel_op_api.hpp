@@ -20,7 +20,7 @@ inline constexpr bool is_trisc = false;
 inline constexpr bool is_ncrisc = false;
 inline constexpr bool is_brisc = false;
 inline constexpr bool is_trisc = true;
-#include "tools/profiler/kernel_profiler.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include "api/compute/blank.h"
 #endif
 

@@ -11,7 +11,7 @@
 #include "stream_io_map.h"
 #include "llk_pack_common.h"
 #include "llk_assert.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 using namespace ckernel;
 

@@ -5,7 +5,7 @@
 // per TRISC (T0_/T1_/T2_) so each compute RISC emits its own 10 distinctly-named zones.
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 #ifndef N_ITERS
 #define N_ITERS 50u

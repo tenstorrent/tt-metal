@@ -7,8 +7,8 @@
 #if defined(PROFILE_NOC_EVENTS) && \
     (!defined(DISPATCH_KERNEL) || (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES)))
 
-#include "tools/profiler/noc_event_profiler.hpp"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/tools/profiler/noc_event_profiler.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "hostdev/profiler_common.h"
 
 namespace kernel_profiler {

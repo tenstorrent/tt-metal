@@ -12,7 +12,7 @@
 #include "api/dataflow/noc.h"
 #include "noc_address_backend.h"
 #include "api/lock.h"
-#include "tools/profiler/noc_debugging_profiler.hpp"
+#include "tt_metal/tools/profiler/noc_debugging_profiler.hpp"
 #endif
 
 namespace experimental {

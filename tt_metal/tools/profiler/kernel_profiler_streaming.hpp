@@ -511,7 +511,7 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 
 #include "noc_event_profiler.hpp"
 #include "perf_counters.hpp"
-#include "tools/profiler/synchronization_event_profiler.hpp"
+#include "tt_metal/tools/profiler/synchronization_event_profiler.hpp"
 
 #define DeviceZoneScopedN(name)    \
     TT_ZONE_DEFINE_ID(hash, name); \

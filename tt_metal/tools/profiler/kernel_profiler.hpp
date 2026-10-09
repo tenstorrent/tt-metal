@@ -4,7 +4,7 @@
 
 #pragma once
 #if defined(PROFILE_STREAMING)
-#include "tools/profiler/kernel_profiler_streaming.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler_streaming.hpp"
 #else
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
@@ -979,7 +979,7 @@ __attribute__((noinline)) void trace_only_init() {
 
 #include "noc_event_profiler.hpp"
 #include "perf_counters.hpp"
-#include "tools/profiler/synchronization_event_profiler.hpp"
+#include "tt_metal/tools/profiler/synchronization_event_profiler.hpp"
 
 // Not dispatch
 #if (!defined(DISPATCH_KERNEL))

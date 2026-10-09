@@ -12,7 +12,7 @@
 #include "eth_chan_noc_mapping.h"
 #include "hostdevcommon/fabric_common.h"
 #include "internal/tt-1xx/risc_common.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "fabric_2d_route_interface.h"
 
 using namespace tt::tt_fabric;

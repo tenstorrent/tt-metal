@@ -15,7 +15,7 @@
 #include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "internal/debug/stack_usage.h"
 

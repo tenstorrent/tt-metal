@@ -24,7 +24,7 @@
 
 #ifndef COMPILE_FOR_TRISC
 #include "api/dataflow/noc.h"
-#include "tools/profiler/noc_debugging_profiler.hpp"
+#include "tt_metal/tools/profiler/noc_debugging_profiler.hpp"
 
 class DataflowBuffer;
 template <>

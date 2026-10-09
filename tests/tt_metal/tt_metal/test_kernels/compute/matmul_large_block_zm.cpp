@@ -9,7 +9,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 
-// #include "tools/profiler/kernel_profiler.hpp"
+// #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 void kernel_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);              // inner block size in tiles
     uint32_t in0_num_subblocks = get_compile_time_arg_val(1);        // outer row block size (in inner row blocks)

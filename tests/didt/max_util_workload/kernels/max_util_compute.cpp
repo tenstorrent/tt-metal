@@ -6,7 +6,7 @@
 #include "api/compute/pack.h"
 #include "tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel.h"
 #include "max_util_pack_common.hpp"
-#include <tools/profiler/kernel_profiler.hpp>
+#include <tt_metal/tools/profiler/kernel_profiler.hpp>
 
 // Compute kernel for max-utilization workload.
 // Uses pre-loaded L1 buffers directly - completely decoupled from data movement.

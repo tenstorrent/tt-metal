@@ -10,7 +10,7 @@
 #include <cstdint>
 #include "hostdev/dev_msgs.h"
 
-#include "tools/profiler/kernel_profiler.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 #include "internal/debug/fw_debug.h"
 #include "internal/hw_thread.h"

@@ -521,7 +521,6 @@ void JitBuildEnv::init(
         root_,
         root_ + "ttnn",
         root_ + "ttnn/cpp",
-        root_ + "tt_metal",
         root_ + "tt_metal/hw/inc",
         root_ + "tt_metal/tt-llk/common",
         root_ + "tt_metal/tt-llk/tools/include",

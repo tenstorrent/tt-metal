@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     // do nothing

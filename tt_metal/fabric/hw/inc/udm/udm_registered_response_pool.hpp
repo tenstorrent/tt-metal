@@ -8,7 +8,7 @@
 #include "api/debug/assert.h"
 #include "api/dataflow/dataflow_api.h"
 #include "noc_parameters.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_fabric::udm {
 
