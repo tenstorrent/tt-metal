@@ -28,6 +28,7 @@ spans must lie in the first chunk (the reference asserts it). Image tokens route
 (``TtV41Moe``) and take no part in Engram n-grams and get no Engram update (hash and gate mask).
 """
 
+import os
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -52,6 +53,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.head import TP_AXIS, TtV41Embedding, Tt
 from models.demos.deepseek_v3_d_p.tt.v41.mhc import initial_pre_mix
 from models.demos.deepseek_v3_d_p.tt.v41.weights import begin_layer, complete_layer
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
 # merge-table rows of the span delimiters (checkpoint names), in table order; the image rows follow them
@@ -111,6 +113,7 @@ class TtV41Transformer(LightweightModule):
         image_embeds: dict | None = None,
         weight_cache_path=None,
         routed_expert_weights_dtype=ttnn.bfloat8_b,
+        kv_format: MlaKvCacheFormat | None = None,
     ):
         """``layer_weights(layer, include_moe)`` returns that block's ``TtV41Block`` weights (``weights.load_layer``
         for a checkpoint), without the MoE entries when ``include_moe`` is False; it is called once per layer, so
@@ -121,6 +124,9 @@ class TtV41Transformer(LightweightModule):
         images; each layer's ``gate_bias_vl`` comes with its ``layer_weights``."""
         self.mesh_device, self.config = mesh_device, config
         self.layers, self.chunk, self.max_seq_len = list(layers), chunk, max_seq_len
+        # the compressed layers' KV row format of every state this model creates (``new_state`` / ``prefill``):
+        # the argument, else ``TT_V41_KV_FORMAT`` (``bf16_rm``, the default, or ``scaled_fp8``)
+        self.kv_format = kv_format or MlaKvCacheFormat(os.environ.get("TT_V41_KV_FORMAT", "bf16_rm"))
         self._zero_hosts = {}  # reset_state's zero carries, per spec
         assert self.layers == sorted(set(self.layers)), "layers must be in execution order"
         needed = [l for l in self.layers if l in config.ENGRAM_LAYER_IDS]
@@ -236,7 +242,9 @@ class TtV41Transformer(LightweightModule):
         return _Request(tokens, total - logit_positions, token_types, image_features)
 
     def _new_state(self) -> V41PrefillState:
-        state = V41PrefillState(self.mesh_device, self.config, self.max_seq_len, self.chunk, self.layers)
+        state = V41PrefillState(
+            self.mesh_device, self.config, self.max_seq_len, self.chunk, self.layers, kv_format=self.kv_format
+        )
         if self.dspark is not None:
             state.dspark_rings = self.dspark.new_rings()
         return state
