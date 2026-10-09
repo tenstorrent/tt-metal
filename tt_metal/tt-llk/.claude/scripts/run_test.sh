@@ -106,7 +106,6 @@ TEST_FILE=""
 MAXFAIL="10"
 K_FILTER=""
 TEST_ID=""
-PORT="5556"
 TIMEOUT="600"
 JOBS="15"
 LOCKFILE=""  # set in _validate based on ARCH if not user-overridden
@@ -127,7 +126,7 @@ while [[ $# -gt 0 ]]; do
     --maxfail)       MAXFAIL="$2";       shift 2 ;;
     --k)             K_FILTER="$2";      shift 2 ;;
     --test-id)       TEST_ID="$2";       shift 2 ;;
-    --port)          PORT="$2";          shift 2 ;;
+    --port)          shift 2 ;;
     --timeout)       TIMEOUT="$2";       shift 2 ;;
     --jobs)          JOBS="$2";          shift 2 ;;
     --lock)          LOCKFILE="$2";      shift 2 ;;

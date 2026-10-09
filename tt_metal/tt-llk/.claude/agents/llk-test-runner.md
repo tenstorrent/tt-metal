@@ -88,7 +88,7 @@ For deeper context, look for these blocks (each appears at most once):
 | 0    | PASS         | Report PASS                                                           |
 | 1    | FAIL         | Surface failing variants from `= FAILURES =` section                  |
 | 2    | COMPILE_FAIL | Surface compile error from compile phase output                       |
-| 3    | ENV_ERROR    | Likely venv missing, simulator port stuck, or `flock` timeout. Report root cause; do **not** retry blindly |
+| 3    | ENV_ERROR    | Likely venv missing or `flock` timeout. Report root cause; do **not** retry blindly |
 | 4    | BAD_ARGS     | Bug in the skill/agent invocation — surface and stop                  |
 | 5    | HANG         | Surface the `RUN_LLK_TESTS_HANG` block (includes `tt-triage` for BH/WH). Do **not** retry — report HANG with the failing variant; the script has already cleaned up. |
 

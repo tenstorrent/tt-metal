@@ -2,8 +2,8 @@
 # run_llk_tests.sh — centralised LLK test runner for codegen agents.
 #
 # Encapsulates the two-step compile-then-simulate flow, flock-based simulator
-# serialisation, stale-process cleanup, and temp-file lifecycle so agents never
-# have to manage any of that themselves.
+# serialisation, and temp-file lifecycle so agents never have to manage any of
+# that themselves. Stale simulation hosts are killed by SimulationServer.
 #
 # Usage:
 #   run_llk_tests.sh <COMMAND> --worktree DIR --arch ARCH --test FILE [FILE ...] [OPTIONS]
@@ -91,7 +91,6 @@ TEST_FILES=()
 MAXFAIL=""
 K_FILTER=""
 TEST_ID=""
-PORT="5556"
 TIMEOUT="600"
 JOBS="15"
 LOCKFILE=""  # set in _validate based on ARCH if not user-overridden
@@ -110,7 +109,7 @@ while [[ $# -gt 0 ]]; do
     --maxfail)       MAXFAIL="$2";       shift 2 ;;
     --k)             K_FILTER="$2";      shift 2 ;;
     --test-id)       TEST_ID="$2";       shift 2 ;;
-    --port)          PORT="$2";          shift 2 ;;
+    --port)          shift 2 ;;
     --timeout)       TIMEOUT="$2";       shift 2 ;;
     --jobs)          JOBS="$2";          shift 2 ;;
     --lock)          LOCKFILE="$2";      shift 2 ;;
@@ -299,9 +298,8 @@ _do_compile() {
 # ── simulate ──────────────────────────────────────────────────────────────────
 # Runs the consumer step under a per-arch flock so only one agent at a time
 # uses the resource for that arch — the UMD simulator for quasar, or the
-# physical card for blackhole / wormhole. All internals (temp-script lifecycle,
-# stale-process cleanup, lock acquisition) are handled here; callers just read
-# the exit code.
+# physical card for blackhole / wormhole. All internals (temp-script lifecycle
+# and lock acquisition) are handled here; callers just read the exit code.
 
 _do_simulate() {
   _validate

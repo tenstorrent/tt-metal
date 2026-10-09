@@ -38,7 +38,7 @@ import signal
 import sys
 from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
 # ttsim runs in-process (no SimulationServer). Its init must complete before the
 # skip_for_* markers in this plugin call get_chip_architecture() (which reaches
@@ -80,7 +80,7 @@ from helpers.device import LLKAssertException
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
 from helpers.perf.core import PerfConfig, PerfReport, combine_perf_reports
-from helpers.simulation_server import SimulationServer
+from helpers.simulation_server import SimulationServer, pid_alive
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
 from ttexalens import check_context, tt_exalens_init
 from ttexalens.tt_exalens_lib import get_tensix_state
@@ -88,6 +88,10 @@ from ttexalens.tt_exalens_lib import get_tensix_state
 _sim_server: Optional[SimulationServer] = None
 # xdist worker: PID of the controller's simulation host.
 _sim_host_pid: Optional[int] = None
+# xdist worker: set in pytest_configure, raised from pytest_runtest_setup.
+# pytest.exit during configure looks like a worker crash, and xdist respawns
+# the worker until --max-worker-restart.
+_worker_fatal: Optional[str] = None
 _SIM_SERVER_DIR_KEY = "llk_sim_server_dir"
 _SIM_HOST_PID_KEY = "llk_sim_host_pid"
 
@@ -579,15 +583,13 @@ def pytest_configure(config):
                 _sim_server = SimulationServer(simulator_path=_SIMULATOR_PATH)
             else:
                 # xdist worker: attach to the host the controller started.
-                global _sim_host_pid
+                global _sim_host_pid, _worker_fatal
                 server_directory = config.workerinput.get(_SIM_SERVER_DIR_KEY)
                 if server_directory is None:
-                    pytest.exit(
-                        "ERROR: the controller started no simulation server to attach to.",
-                        returncode=1,
-                    )
-                _sim_host_pid = config.workerinput[_SIM_HOST_PID_KEY]
-                _attach_to_sim_server(server_directory)
+                    _worker_fatal = "ERROR: the controller started no simulation server to attach to."
+                else:
+                    _sim_host_pid = config.workerinput[_SIM_HOST_PID_KEY]
+                    _attach_to_sim_server(server_directory)
         else:
             tt_exalens_init.init_ttexalens()
             TestConfig.resolve_worker_tensix_location()
@@ -970,23 +972,31 @@ def _attach_to_sim_server(server_directory: str) -> None:
     TestConfig.resolve_worker_tensix_location()
 
 
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        pass
-    return True
+def _fail_xdist_worker(item, msg: str) -> NoReturn:
+    """Fail this item and stop the xdist session.
+
+    pytest.exit from a worker leaves the current item pending and reports
+    workerfinished with no shouldstop. pytest-xdist 3.8.0 then raises
+    INTERNALERROR (``assert not crashitem``) and the message never surfaces.
+    """
+    item.session.shouldstop = msg
+    pytest.fail(msg, pytrace=False)
 
 
 def pytest_runtest_setup(item):
-    """Start the host on the first test, or restart between tests if requested."""
+    """Start the host on the first test, or restart between tests if requested.
+
+    On an xdist worker, also stop the session when the controller's simulation
+    host was never started or has died.
+    """
     global _reset_simulator_pending
 
-    if _sim_host_pid is not None and not _pid_alive(_sim_host_pid):
-        pytest.exit(
-            f"Simulation host (PID {_sim_host_pid}) is no longer running.", returncode=1
+    if _worker_fatal is not None:
+        _fail_xdist_worker(item, _worker_fatal)
+
+    if _sim_host_pid is not None and not pid_alive(_sim_host_pid):
+        _fail_xdist_worker(
+            item, f"Simulation host (PID {_sim_host_pid}) is no longer running."
         )
 
     if _sim_server is None:

@@ -97,7 +97,7 @@ For deeper context, look for these blocks (each appears at most once):
 | 0    | PASS         | Report PASS                                                           |
 | 1    | FAIL         | Surface failing variants from `= FAILURES =` section                  |
 | 2    | COMPILE_FAIL | Surface compile error from compile phase output                       |
-| 3    | ENV_ERROR    | Likely venv missing, simulator port stuck, or `flock` timeout. Report root cause; do **not** retry blindly |
+| 3    | ENV_ERROR    | Likely venv missing or `flock` timeout. Report root cause; do **not** retry blindly |
 | 4    | BAD_ARGS     | Bug in the rule/agent invocation — surface and stop                   |
 | 5    | HANG         | Watchdog tripped or post-mortem detected `TENSIX TIMED OUT`. Surface the `RUN_LLK_TESTS_HANG` block (includes `tt-triage` output if available). Device has already been reset (`tt-smi -r`) and any stale `pytest --compile-consumer` killed. Do **not** retry — report HANG with the failing variant and the triage summary. |
 

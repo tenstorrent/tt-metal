@@ -16,6 +16,42 @@ from helpers.logger import logger
 from helpers.sim_host import READY_MARKER
 
 
+def _proc_stat_alive(stat: bytes) -> bool:
+    """True unless /proc/<pid>/stat shows a zombie or dead task.
+
+    comm is the second field and may itself contain spaces or ')'.
+    """
+    close = stat.rfind(b")")
+    if close < 0 or close + 2 >= len(stat):
+        return False
+    # "X" and "x" are both Dead in proc(5).
+    return stat[close + 2 : close + 3] not in (b"Z", b"X", b"x")
+
+
+def pid_alive(pid: int) -> bool:
+    """True when pid is a live process.
+
+    os.kill(pid, 0) succeeds for a zombie. Under xdist the controller does not
+    reap the simulation host, so a host that dies mid-run stays in state Z and
+    a kill-0 check would otherwise keep returning True.
+    """
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_bytes()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        stat = None
+    if stat is not None:
+        return _proc_stat_alive(stat)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 class SimulationServer:
     """Runs sim_host.py, the UMD simulation host that test processes attach to."""
 
@@ -23,6 +59,8 @@ class SimulationServer:
     READY_TIMEOUT_S = 600
     POLL_INTERVAL_S = 2
     EXIT_TIMEOUT_S = 30
+    NNG_SOCKET_ADDR = "NNG_SOCKET_ADDR"
+    STALE_HOST_POLL_S = 0.5
 
     def __init__(self, simulator_path: str):
         self._simulator_path = simulator_path
@@ -46,7 +84,7 @@ class SimulationServer:
 
         missing_vars = [
             v
-            for v in ("NNG_SOCKET_ADDR", "NNG_SOCKET_LOCAL_PORT")
+            for v in (self.NNG_SOCKET_ADDR, "NNG_SOCKET_LOCAL_PORT")
             if v not in os.environ
         ]
         if missing_vars:
@@ -67,9 +105,10 @@ class SimulationServer:
 
         logger.info(
             "Starting UMD simulation host (simulator={}, "
-            "NNG_SOCKET_ADDR={}, NNG_SOCKET_LOCAL_PORT={})...",
+            "{}={}, NNG_SOCKET_LOCAL_PORT={})...",
             self._simulator_path,
-            os.environ.get("NNG_SOCKET_ADDR", "<not set>"),
+            self.NNG_SOCKET_ADDR,
+            os.environ.get(self.NNG_SOCKET_ADDR, "<not set>"),
             os.environ.get("NNG_SOCKET_LOCAL_PORT", "<not set>"),
         )
         logger.info("Simulation host output: {}", self._log_path)
@@ -301,7 +340,8 @@ class SimulationServer:
             return
 
         my_pid = os.getpid()
-        nng_addr = os.environ.get("NNG_SOCKET_ADDR")
+        nng_addr = os.environ.get(self.NNG_SOCKET_ADDR)
+        nng_prefix = f"{self.NNG_SOCKET_ADDR}=".encode()
         stale_pids = []
         for line in result.stdout.strip().splitlines():
             try:
@@ -325,7 +365,7 @@ class SimulationServer:
                 (
                     entry.split(b"=", 1)[1].decode(errors="replace")
                     for entry in environ
-                    if entry.startswith(b"NNG_SOCKET_ADDR=")
+                    if entry.startswith(nng_prefix)
                 ),
                 None,
             )
@@ -337,9 +377,10 @@ class SimulationServer:
             return
 
         logger.warning(
-            "Found {} stale simulation host(s) for {} (NNG_SOCKET_ADDR={}): {}. Killing...",
+            "Found {} stale simulation host(s) for {} ({}={}): {}. Killing...",
             len(stale_pids),
             self._simulator_path,
+            self.NNG_SOCKET_ADDR,
             nng_addr,
             stale_pids,
         )
@@ -354,7 +395,7 @@ class SimulationServer:
         while time.monotonic() < deadline and any(
             Path(f"/proc/{pid}").exists() for pid in stale_pids
         ):
-            time.sleep(0.5)
+            time.sleep(self.STALE_HOST_POLL_S)
 
         for pid in stale_pids:
             try:
