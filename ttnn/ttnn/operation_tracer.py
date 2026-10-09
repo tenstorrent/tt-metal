@@ -377,10 +377,10 @@ def serialize_operation_parameters(
                     ]:
                         return compute_kernel_config_to_dict(value)
                     elif "ProgramConfig" in type_name and "Matmul" in type_name:
-                        # tensor_utils only handles Matmul program configs
+                        # config_serialization only handles Matmul program configs
                         return program_config_to_dict(value)
                 except Exception as e:
-                    logger.debug(f"tensor_utils serializer failed for {type_name}: {e}")
+                    logger.debug(f"config_serialization serializer failed for {type_name}: {e}")
                     # Fall through to use __repr__
                 # For other types, convert to string or get basic info
                 if hasattr(value, "__dict__"):
