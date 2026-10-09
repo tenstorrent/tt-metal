@@ -1,14 +1,16 @@
 name: "LLK SFPU report"
 # Before/after perf and accuracy of the SFPU ops a PR changes, on Wormhole and
 # Blackhole silicon. Dispatched by the `/llk-sfpu-test` PR command
-# (llk-sfpu-test.md), or by hand from the Actions tab. It never comments itself:
-# it uploads the `llk-sfpu-report` artifact, and llk-sfpu-summary.md posts it.
+# (llk-sfpu-test-command.yaml), or by hand from the Actions tab. The report is
+# always in the `llk-sfpu-report` artifact and the run summary; with post_comment
+# (the command sets it) it is also posted on the PR, replacing the earlier report
+# and the command's "measuring" note.
 #
 # Fork PRs are the point of this workflow, so it is built so that a PR's code
 # only ever runs on the Tensix:
 #   * it always runs from main (dispatch on main); the PR is an input, not a ref;
 #   * the measuring job checks out main, fetches the PR's commits by SHA, and
-#     compiles only their device C++ (tt_metal/tt-llk/sfpu_report/overlay.py);
+#     compiles only their device C++ (.github/llk_sfpu_report/overlay.py);
 #     every host-side line -- harness, pytest plugins, the tool -- is main's;
 #   * that job has a read-only token, no secrets, and persists no credentials;
 #   * the head SHA is pinned by the plan job; a later push is reported, not tested.
@@ -24,7 +26,7 @@ on:
       arch: {type: string, required: false, default: all}
       base: {type: string, required: false, default: merge-base}
       iterations: {type: string, required: false, default: "3"}
-      context: {type: string, required: false, default: "{}"}
+      post_comment: {type: boolean, required: false, default: false}
   workflow_dispatch:
     inputs:
       pr_number:
@@ -58,11 +60,11 @@ on:
         required: false
         default: "3"
         type: string
-      context:
-        description: "JSON passed through to the summary step (requester, hint, bounty targets)"
+      post_comment:
+        description: "Post the report on the PR, replacing its earlier report"
         required: false
-        default: "{}"
-        type: string
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -71,9 +73,6 @@ concurrency:
   # One report per PR at a time; a new command replaces the one in flight.
   group: llk-sfpu-report-${{ inputs.pr_number }}
   cancel-in-progress: true
-
-env:
-  LLK_PATH: tt_metal/tt-llk
 
 jobs:
   plan:
@@ -187,7 +186,6 @@ jobs:
           persist-credentials: false
       - name: Measure
         shell: bash
-        working-directory: ${{ env.LLK_PATH }}
         env:
           PR_NUMBER: ${{ inputs.pr_number }}
           HEAD_SHA: ${{ needs.plan.outputs.head_sha }}
@@ -212,10 +210,12 @@ jobs:
   collect:
     name: "Render the report"
     needs: [plan, measure]
-    if: ${{ always() && needs.plan.result == 'success' }}
+    # Not on cancel: a newer /llk-sfpu-test replaced this run and posts its own.
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
     runs-on: ubuntu-slim
     permissions:
       contents: read
+      pull-requests: write # post the report; this job runs no PR code
     steps:
       - name: Checkout main
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -223,7 +223,7 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: |
-            tt_metal/tt-llk/sfpu_report
+            .github/llk_sfpu_report
           sparse-checkout-cone-mode: true
       - name: Download the per-architecture results
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -236,7 +236,6 @@ jobs:
         env:
           PR_NUMBER: ${{ inputs.pr_number }}
           HEAD_SHA: ${{ needs.plan.outputs.head_sha }}
-          CONTEXT: ${{ inputs.context }}
           MEASURE_RESULT: ${{ needs.measure.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -245,22 +244,42 @@ jobs:
           shopt -s nullglob
           summaries=(parts/summary-*.json)
           if [ ${#summaries[@]} -gt 0 ]; then
-            python3 tt_metal/tt-llk/sfpu_report/report.py "${summaries[@]}" -o out/report.md
+            python3 .github/llk_sfpu_report/report.py "${summaries[@]}" -o out/report.md
             cp "${summaries[@]}" out/
           else
             printf '%s\n' '<!-- llk-sfpu-report -->' '## LLK SFPU report' '' \
               "The measurement did not finish (${MEASURE_RESULT}); see the [run](${RUN_URL})." > out/report.md
           fi
           cp parts/run-*.log out/ 2>/dev/null || true
-          # What the summary step needs, in one file it can trust: this job wrote it.
-          ctx="${CONTEXT:-}"
-          jq -e 'type == "object"' <<<"$ctx" >/dev/null 2>&1 || ctx='{}'
           jq -n --arg pr "$PR_NUMBER" --arg sha "$HEAD_SHA" --arg run "$RUN_URL" \
-                --arg result "$MEASURE_RESULT" --argjson context "$ctx" \
-                '{pr_number: ($pr|tonumber), head_sha: $sha, run_url: $run, measure: $result, context: $context}' > out/meta.json
+                --arg result "$MEASURE_RESULT" \
+                '{pr_number: ($pr|tonumber), head_sha: $sha, run_url: $run, measure: $result}' > out/meta.json
           cat out/report.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the report
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: llk-sfpu-report
           path: out/
+      # Hides this PR's earlier reports and the command's "measuring" note (only
+      # this bot's, matched by their first line), then posts the new report.
+      - name: Post the report on the PR
+        if: ${{ inputs.post_comment }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" --jq '
+            .[] | select(.user.login == "github-actions[bot]")
+                | select((.body | startswith("<!-- llk-sfpu-report -->"))
+                      or (.body | startswith("<!-- llk-sfpu-test:running -->")))
+                | .node_id' |
+            while read -r id; do
+              # shellcheck disable=SC2016 # $id is a GraphQL variable, not a shell one
+              gh api graphql --silent -f id="$id" -f query='
+                mutation($id: ID!) {
+                  minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId }
+                }' || echo "::warning::Could not hide an earlier report"
+            done
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file out/report.md

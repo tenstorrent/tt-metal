@@ -19,7 +19,8 @@ ARCH="$1"
 MODE="${MODE:-merge-base}"
 ITERATIONS="${ITERATIONS:-3}"
 
-LLK="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TOOL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LLK="$(cd "$TOOL/../../tt_metal/tt-llk" && pwd)"
 cd "$LLK"
 
 (cd tests && ./setup_testing_env.sh >/dev/null)
@@ -38,7 +39,7 @@ run_args=(--iterations "$ITERATIONS" --pr "$PR_NUMBER")
 [ -n "${HEAD_MOVED_TO:-}" ] && run_args+=(--head-moved-to "$HEAD_MOVED_TO")
 
 status=0
-python3 sfpu_report/cli.py "${args[@]}" run "${run_args[@]}" || status=$?
+python3 "$TOOL/cli.py" "${args[@]}" run "${run_args[@]}" || status=$?
 
 mkdir -p "$OUT_DIR"
 cp "${RUNNER_TEMP:-/tmp}"/llk-sfpu-report/{summary,report}-"$ARCH".* "$OUT_DIR"/ 2>/dev/null || true

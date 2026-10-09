@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sfpu_report"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import accuracy  # noqa: E402
 import cli  # noqa: E402
@@ -22,6 +22,7 @@ import detect  # noqa: E402
 import overlay  # noqa: E402
 import perf  # noqa: E402
 import report  # noqa: E402
+import runner  # noqa: E402
 
 NAN = float("nan")
 INF = float("inf")
@@ -50,9 +51,7 @@ def test_only_device_code_comes_from_the_pr(path, device):
 
 def test_ops_whose_own_kernel_changed_come_first():
     ops = ["Atan", "Erf", "Gelu", "Reciprocal", "Sigmoid"]
-    changed = [
-        "tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h"
-    ]
+    changed = ["tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h"]
     assert cli._prioritize(ops, changed) == [
         "Reciprocal",
         "Atan",
@@ -152,9 +151,7 @@ def _summary():
                 "better": 2010,
                 "bit_identical": False,
                 "head_digest": "x",
-                "specials": accuracy.specials_diff(
-                    _spec([("inf", INF, INF)]), _spec([("inf", INF, NAN)])
-                ),
+                "specials": accuracy.specials_diff(_spec([("inf", INF, INF)]), _spec([("inf", INF, NAN)])),
             }
         ],
         "notes": [],
@@ -188,9 +185,24 @@ def test_binary_ops_are_their_own_family():
 
 @pytest.mark.parametrize("family", sorted(detect.MODULES))
 def test_detection_compiles_modules_and_kernels_that_exist(family):
-    here = Path(__file__).resolve().parent
-    assert (here / detect.MODULES[family]).is_file()
-    assert (here.parent / "sources" / detect.SOURCES[family]).is_file()
+    assert (runner.PYTHON_TESTS / detect.MODULES[family]).is_file()
+    assert (runner.TOOL_LLK / "tests" / "sources" / detect.SOURCES[family]).is_file()
+
+
+def test_the_accuracy_driver_is_in_the_harness_only_while_it_runs(monkeypatch, tmp_path):
+    installed = runner.PYTHON_TESTS / accuracy.DRIVER
+    assert accuracy.DRIVER_SOURCE.is_file() and not installed.exists()
+    seen = []
+    monkeypatch.setattr(runner, "produce_consume", lambda *args, **kwargs: seen.append(installed.is_file()))
+    accuracy.measure(None, "wormhole", ["Tanh"], tmp_path / "out", log=None)
+    assert seen == [True]
+    assert not installed.exists()
+
+
+def test_requested_ops_take_any_case_and_skip_unknown_names():
+    ops, unknown = cli._requested_ops("tanh,SFPULOGSIGMOID,typecast,tanhh,Tanh")
+    assert ops == ["Tanh", "SfpuLogsigmoid", "Typecast"]
+    assert unknown == ["tanhh"]
 
 
 def test_broadcast_variants_get_their_own_perf_row():
@@ -279,9 +291,7 @@ def test_report_renders_exact_ops():
             "better": 0,
             "bit_identical": False,
             "specials": {
-                "changed": [
-                    {"class": "pair", "input": [INF, INF], "old": 0.0, "new": NAN}
-                ],
+                "changed": [{"class": "pair", "input": [INF, INF], "old": 0.0, "new": NAN}],
                 "nan_propagates": {"base": True, "head": True},
             },
         }

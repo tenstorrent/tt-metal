@@ -102,9 +102,7 @@ def compile_all(side, arch, family, log, jobs=8, only_ops=()):
     )
 
 
-def changed_ops(
-    base, head, arch, log, families=("unary", "typecast", "binary"), jobs=8, only_ops=()
-):
+def changed_ops(base, head, arch, log, families=("unary", "typecast", "binary"), jobs=8, only_ops=()):
     """Returns ``{family: {"changed": [...], "unchanged": [...], "unmatched": [...]}}``.
 
     ``unmatched`` are ops whose variants exist on one side only (the PR added or

@@ -85,9 +85,7 @@ def measure(side, arch, family, ops, schedule, out_csv, log, formats=()):
     )
     csv = _latest_csv(side, MODULES[family])
     if csv is None:
-        raise RuntimeError(
-            f"no perf CSV from the {side.name} side for {family} {ops}; see {log}"
-        )
+        raise RuntimeError(f"no perf CSV from the {side.name} side for {family} {ops}; see {log}")
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(csv, out_csv)
     return out_csv
@@ -116,9 +114,7 @@ def sweep(
         for i in range(1, iterations + 1):
             for side in (base, head):
                 csv = out_dir / family / schedule / side.name / f"run_{i}.csv"
-                runs[schedule][side.name].append(
-                    measure(side, arch, family, ops, schedule, csv, log, formats)
-                )
+                runs[schedule][side.name].append(measure(side, arch, family, ops, schedule, csv, log, formats))
     return runs
 
 

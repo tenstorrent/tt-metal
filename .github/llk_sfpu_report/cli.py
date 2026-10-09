@@ -58,25 +58,19 @@ def cmd_detect(args):
     work = Path(args.work).resolve()
     work.mkdir(parents=True, exist_ok=True)
     plan = overlay.make_plan(args.repo, args.head, args.base, args.main_ref)
-    print(
-        f"tool {plan.tool_sha[:12]}  base {plan.base_sha[:12]}  head {plan.head_sha[:12]}"
-    )
+    print(f"tool {plan.tool_sha[:12]}  base {plan.base_sha[:12]}  head {plan.head_sha[:12]}")
     print(f"device files taken from the PR: {len(plan.applied)}")
     for p in plan.applied:
         print(f"  {p}")
     base, head = _sides(plan, work, args.mode)
-    found = detect.changed_ops(
-        base, head, args.arch, work / "detect.log", jobs=args.jobs
-    )
+    found = detect.changed_ops(base, head, args.arch, work / "detect.log", jobs=args.jobs)
     print(json.dumps(found, indent=2))
     (work / "detect.json").write_text(json.dumps(found, indent=2))
 
 
 def _board():
     try:
-        out = subprocess.run(
-            ["tt-smi", "-ls"], capture_output=True, text=True, timeout=60
-        ).stdout
+        out = subprocess.run(["tt-smi", "-ls"], capture_output=True, text=True, timeout=60).stdout
         for line in out.splitlines():
             for name in ("n150", "n300", "p100", "p150", "p300"):
                 if name in line.lower():
@@ -121,9 +115,7 @@ def _prioritize(ops, changed_files):
 
     def direct(op):
         name = op.lower()
-        return any(
-            stem and (name.startswith(stem) or stem.startswith(name)) for stem in stems
-        )
+        return any(stem and (name.startswith(stem) or stem.startswith(name)) for stem in stems)
 
     return sorted(ops, key=lambda op: not direct(op))
 
@@ -134,6 +126,24 @@ def _binary_enum_to_op():
     from helpers.llk_params import SFPU_BINARY_OPERATIONS
 
     return {op.cpp_enum_value: op.name for op in SFPU_BINARY_OPERATIONS}
+
+
+def _requested_ops(text):
+    """Comma-separated names in any case (``tanh``) as MathOperation names (``Tanh``).
+
+    Returns ``(ops, unknown)``. ``Typecast`` selects the typecast family.
+    """
+    names = _math_op_names()
+    names["typecast"] = "Typecast"
+    ops, unknown = [], []
+    for raw in (o.strip() for o in text.split(",")):
+        if not raw:
+            continue
+        if raw.lower() in names:
+            ops.append(names[raw.lower()])
+        else:
+            unknown.append(raw)
+    return list(dict.fromkeys(ops)), unknown
 
 
 def _family_of(op):
@@ -168,14 +178,14 @@ def cmd_run(args):
     log = work / "run.log"
     log.write_text("")
     plan = overlay.make_plan(args.repo, args.head, args.base, args.main_ref)
-    print(
-        f"tool {plan.tool_sha[:12]}  base {plan.base_sha[:12]}  head {plan.head_sha[:12]}  mode {args.mode}"
-    )
+    print(f"tool {plan.tool_sha[:12]}  base {plan.base_sha[:12]}  head {plan.head_sha[:12]}  mode {args.mode}")
     base, head = _sides(plan, work, args.mode)
 
     notes = []
     if args.ops:
-        ops = [o.strip() for o in args.ops.split(",") if o.strip()]
+        ops, unknown = _requested_ops(args.ops)
+        if unknown:
+            notes.append("Not an op name, skipped: " + ", ".join(f"`{o}`" for o in unknown) + ".")
         why = "requested in the command"
         not_covered = []
         found = None
@@ -185,9 +195,7 @@ def cmd_run(args):
         ops, not_covered = _sfpu_type_to_op(unary)
         binary_names = _binary_enum_to_op()
         for enum in found.get("binary", {}).get("changed", []):
-            (ops if enum in binary_names else not_covered).append(
-                binary_names.get(enum, enum)
-            )
+            (ops if enum in binary_names else not_covered).append(binary_names.get(enum, enum))
         ops = _prioritize(list(dict.fromkeys(ops)), plan.applied)
         if found.get("typecast", {}).get("changed"):
             ops.append("Typecast")
@@ -202,9 +210,7 @@ def cmd_run(args):
     sfpu_files = [p for p in plan.applied if "sfpu" in p.lower() and "/tests/" not in p]
     arch_dir = {"wormhole": "wormhole_b0", "blackhole": "blackhole"}[args.arch]
     other_arch_only = sfpu_files and all(
-        any(d in p for d in ("wormhole_b0", "blackhole", "quasar"))
-        and arch_dir not in p
-        for p in sfpu_files
+        any(d in p for d in ("wormhole_b0", "blackhole", "quasar")) and arch_dir not in p for p in sfpu_files
     )
     if not ops and other_arch_only:
         notes.append(
@@ -243,13 +249,9 @@ def cmd_run(args):
                 formats=formats,
             )
             if runs is None:
-                notes.append(
-                    f"No perf test covers {', '.join(f'`{o}`' for o in fam_ops)}: accuracy only."
-                )
+                notes.append(f"No perf test covers {', '.join(f'`{o}`' for o in fam_ops)}: accuracy only.")
                 continue
-            verdicts = perf.compare(
-                runs, THRESHOLDS[args.arch], THRESHOLDS["min_cycles"]
-            )
+            verdicts = perf.compare(runs, THRESHOLDS[args.arch], THRESHOLDS["min_cycles"])
             perf_rows[family] = perf.rows(runs, verdicts)
 
     acc_ops = [o for o in ops if o != "Typecast"]
@@ -279,10 +281,7 @@ def cmd_run(args):
             notes.append(
                 "Measured on one side only (the variant did not build or run on the other; "
                 "see run.log): "
-                + ", ".join(
-                    f"`{r['key'][0]} {r['key'][1]} dest_acc={r['key'][4]}`"
-                    for r in one_sided[:8]
-                )
+                + ", ".join(f"`{r['key'][0]} {r['key'][1]} dest_acc={r['key'][4]}`" for r in one_sided[:8])
             )
         measured = {r["key"][0] for r in acc}
         missing = [o for o in acc_ops if o not in measured]
@@ -292,18 +291,14 @@ def cmd_run(args):
                 + ", ".join(f"`{o}`" for o in missing)
                 + " (not an elementwise function of its inputs, or the harness cannot feed it)."
             )
-        for cov in sorted(
-            {(r["key"][0], r["coverage"]) for r in acc if r.get("coverage")}
-        ):
+        for cov in sorted({(r["key"][0], r["coverage"]) for r in acc if r.get("coverage")}):
             notes.append(f"`{cov[0]}` accuracy: {cov[1]}.")
     if "Typecast" in ops:
-        notes.append(
-            "Typecast accuracy is not in this version of the report; its perf is."
-        )
+        notes.append("Typecast accuracy is not in this version of the report; its perf is.")
     if args.simulator:
         notes.append("Run on ttsim, the functional simulator: accuracy only, no perf.")
 
-    cmd = " ".join(["python3", "tt_metal/tt-llk/sfpu_report/cli.py", *sys.argv[1:]])
+    cmd = " ".join(["python3", ".github/llk_sfpu_report/cli.py", *sys.argv[1:]])
     summary = {
         "arch": args.arch,
         "pr_number": args.pr,
@@ -349,8 +344,7 @@ def cmd_rerender(args):
     for family in summary["perf"]:
         runs = {
             sched: {
-                side: sorted((work / "perf" / family / sched / side).glob("run_*.csv"))
-                for side in ("base", "head")
+                side: sorted((work / "perf" / family / sched / side).glob("run_*.csv")) for side in ("base", "head")
             }
             for sched in perf.SCHEDULES
             if (work / "perf" / family / sched).is_dir()
@@ -358,19 +352,15 @@ def cmd_rerender(args):
         verdicts = perf.compare(runs, THRESHOLDS[args.arch], THRESHOLDS["min_cycles"])
         summary["perf"][family] = perf.rows(runs, verdicts)
     if (work / "accuracy" / "head").is_dir():
-        summary["accuracy"] = accuracy.compare(
-            work / "accuracy" / "base", work / "accuracy" / "head"
-        )
+        summary["accuracy"] = accuracy.compare(work / "accuracy" / "base", work / "accuracy" / "head")
     path.write_text(json.dumps(summary, indent=1, default=str))
     (work / f"report-{args.arch}.md").write_text(report.render([summary]))
     print(f"rewrote {path}")
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    ap.add_argument("--repo", default=str(runner.TOOL_LLK.parents[1]))
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--repo", default=str(runner.TOOL_ROOT))
     ap.add_argument("--arch", required=True, choices=["wormhole", "blackhole"])
     ap.add_argument("--head", required=True, help="PR head: sha or ref")
     ap.add_argument("--base", help="baseline ref (default: merge-base with --main-ref)")
@@ -380,12 +370,8 @@ def main(argv=None):
     ap.add_argument("--mode", choices=["merge-base", "rebase"], default="merge-base")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("detect", help="list the ops whose machine code changed")
-    run = sub.add_parser(
-        "run", help="detect, measure perf and accuracy, write summary + report"
-    )
-    run.add_argument(
-        "--ops", help="comma-separated MathOperation names; skips detection"
-    )
+    run = sub.add_parser("run", help="detect, measure perf and accuracy, write summary + report")
+    run.add_argument("--ops", help="comma-separated MathOperation names; skips detection")
     run.add_argument("--iterations", type=int, default=3)
     run.add_argument("--no-perf", action="store_true", help="accuracy only")
     run.add_argument(
@@ -404,12 +390,8 @@ def main(argv=None):
         help="run on ttsim ($TT_METAL_SIMULATOR): implies --no-perf; for developing the tool",
     )
     run.add_argument("--run-url")
-    run.add_argument(
-        "--head-moved-to", help="the PR's current head, if it moved after the command"
-    )
-    sub.add_parser(
-        "rerender", help="recompute summary + report from a finished run's data"
-    )
+    run.add_argument("--head-moved-to", help="the PR's current head, if it moved after the command")
+    sub.add_parser("rerender", help="recompute summary + report from a finished run's data")
     args = ap.parse_args(argv)
     {"detect": cmd_detect, "run": cmd_run, "rerender": cmd_rerender}[args.cmd](args)
 
