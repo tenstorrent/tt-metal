@@ -21,6 +21,20 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
     return mem.buffer_type() == tt::tt_metal::BufferType::DRAM &&
            mem.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
 }
+
+// Laguna "column pages": a stacked [1, E, K, N] weight DRAM ND-sharded with one [1, 1, K, 32] shard per (expert,
+// tile column). Tile (e, k, c) is still accessor page (e * K/32 + k) * N/32 + c.
+bool is_dram_column_sharded(const ttnn::Tensor& t) {
+    const auto& mem = t.memory_config();
+    if (mem.buffer_type() != tt::tt_metal::BufferType::DRAM ||
+        mem.memory_layout() != tt::tt_metal::TensorMemoryLayout::ND_SHARDED || !mem.nd_shard_spec().has_value()) {
+        return false;
+    }
+    const auto& shard = mem.nd_shard_spec()->shard_shape;
+    const auto& shp = t.padded_shape();
+    return shard.rank() == 4 && shard[0] == 1 && shard[1] == 1 && shard[2] == shp[-2] &&
+           shard[3] == tt::constants::TILE_WIDTH;
+}
 }  // namespace
 
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
@@ -125,7 +139,11 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
                  {"down_proj", t.down_projs[e], t.down_projs[0]}}) {
             TT_FATAL(w.storage_type() == ttnn::StorageType::DEVICE, "{}[{}] must be on device", name, e);
             TT_FATAL(w.layout() == tt::tt_metal::Layout::TILE, "{}[{}] must be TILE layout", name, e);
-            TT_FATAL(is_dram_interleaved(w), "{}[{}] must be DRAM-interleaved", name, e);
+            TT_FATAL(
+                is_dram_interleaved(w) || (op.stacked_packed_weights && is_dram_column_sharded(w)),
+                "{}[{}] must be DRAM-interleaved (or, stacked, DRAM column-sharded)",
+                name,
+                e);
             TT_FATAL(
                 w.padded_shape() == ref.padded_shape() && w.dtype() == ref.dtype(),
                 "{}[{}] shape/dtype ({}, {}) must match expert 0 ({}, {}) — all experts share one program",

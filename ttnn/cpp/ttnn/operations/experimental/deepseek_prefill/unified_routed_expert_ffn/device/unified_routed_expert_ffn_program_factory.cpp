@@ -74,6 +74,10 @@ constexpr uint32_t CB_DOWN_BIAS = tt::CBIndex::c_19;
 // repeat one [1, E, K, N] interleaved DRAM tensor: expert e's slice starts at tile t0 = e * K/32 * N/32, which lives
 // at bank (t0 % banks), offset (t0 / banks) pages; with t0 a multiple of the bank count, page j of the slice is page
 // t0 + j of the tensor at the same bank, so the slice reads as an interleaved tensor based at that offset.
+// Column-sharded stacked weights (one [1, 1, K, 32] shard per expert column, shards round-robin over the banks) work
+// the same way: expert e's first shard e * N/32 is a multiple of the bank count, each bank holds its shards back to
+// back (K/32 pages each), so the slice starts (e * N/32 / banks) shards = (t0 / banks) pages into every bank and reads
+// as a column-sharded [1, 1, K, N] tensor based there.
 static uint32_t expert_weight_addr(const std::vector<ttnn::Tensor>& ws, uint32_t e, bool stacked) {
     if (!stacked) {
         return ws[e].buffer()->address();
@@ -84,6 +88,10 @@ static uint32_t expert_weight_addr(const std::vector<ttnn::Tensor>& ws, uint32_t
     const uint32_t banks = ws[0].device()->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     const uint32_t t0 = e * tiles;
     TT_FATAL(t0 % banks == 0, "stacked expert slice start tile {} must be a multiple of the {} DRAM banks", t0, banks);
+    if (ws[0].memory_config().is_sharded()) {
+        const uint32_t s0 = e * (shp[-1] / tt::constants::TILE_WIDTH);
+        TT_FATAL(s0 % banks == 0, "stacked expert slice start shard {} must be a multiple of the {} DRAM banks", s0, banks);
+    }
     return static_cast<uint32_t>(buf->address() + (t0 / banks) * buf->aligned_page_size());
 }
 

@@ -62,12 +62,8 @@ void kernel_main() {
     }
     for (uint32_t u = 0; u < n; ++u) {
         cb_reserve_back(cb_w, Kt);
-        uint32_t wdst = get_write_ptr(cb_w);
-        const uint32_t base = experts[u] * Kt * Nt + nt;
-        for (uint32_t kt = 0; kt < Kt; ++kt) {
-            noc_async_read_tile(base + kt * Nt, w, wdst);
-            wdst += w_page;
-        }
+        // column-sharded weight (colpage.py): one contiguous read of the column's Kt tiles
+        noc_async_read(w.get_noc_addr(experts[u] * Kt * Nt + nt), get_write_ptr(cb_w), Kt * w_page);
         cb_reserve_back(cb_x, Kt);
         const uint32_t x_l1 = get_write_ptr(cb_x);
         for (uint32_t kt = 0; kt < Kt; ++kt) {

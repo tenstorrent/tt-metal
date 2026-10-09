@@ -5,7 +5,8 @@
 // SLOTS active local experts in its group. The active experts and their routing weights come from the sparsity
 // row (bf16 routing weight per local expert, nonzero = active), so the program is trace-safe for any routing.
 // Pushes: cb_meta <- {n, fp32 bits of each unit's routing weight}; cb_in0 <- row 0 of the Kt activation tiles
-// (rows 1-31 zeroed); cb_w <- per unit Kt gate tiles then Kt up tiles from the packed [E, K, 2N] weight.
+// (rows 1-31 zeroed); cb_w <- per unit Kt gate tiles then Kt up tiles from the packed [E, K, 2N]
+// column-sharded weight (colpage.py), CHUNK tiles per contiguous read.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -80,15 +81,12 @@ void kernel_main() {
     cb_push_back(cb_in0, Kt);
 
     for (uint32_t u = 0; u < n; ++u) {
-        const uint32_t base = experts[u] * Kt * 2 * Nt + nt;
-        for (uint32_t half = 0; half < 2; ++half) {  // gate columns, then up columns (offset Nt)
+        for (uint32_t half = 0; half < 2; ++half) {  // gate column, then up column (offset Nt)
+            // column-sharded weight (colpage.py): the column's Kt tiles follow its first tile contiguously
+            const uint64_t col = w.get_noc_addr(experts[u] * Kt * 2 * Nt + half * Nt + nt);
             for (uint32_t k0 = 0; k0 < Kt; k0 += chunk) {
                 cb_reserve_back(cb_w, chunk);
-                uint32_t wdst = get_write_ptr(cb_w);
-                for (uint32_t i = 0; i < chunk; ++i) {
-                    noc_async_read_tile(base + half * Nt + (k0 + i) * 2 * Nt, w, wdst);
-                    wdst += w_page;
-                }
+                noc_async_read(col + k0 * w_page, get_write_ptr(cb_w), chunk * w_page);
                 noc_async_read_barrier();
                 cb_push_back(cb_w, chunk);
             }

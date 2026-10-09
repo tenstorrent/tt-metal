@@ -57,7 +57,7 @@ from .optimized_decoder import (
     _width_sharded_l1,
     weight_cache_key,
 )
-from . import moe_decode1
+from . import colpage, moe_decode1
 from .prefill_page_table import single_shot_fill_page_table
 
 TOKEN_DISPATCH_ENV = "TT_LAGUNA_MOE_TOKEN_DISPATCH"
@@ -275,7 +275,13 @@ class MultichipDecoder(OptimizedDecoder):
         self._route_rank_batch = _parse_binary_env("TT_LAGUNA_ROUTE_RANK_BATCH", False)
         self._head_norm_4d = _parse_binary_env("TT_LAGUNA_HEAD_NORM_4D", True)  # decode q/k norm without flattening
         self._decode_heads_op = _parse_binary_env("TT_LAGUNA_DECODE_HEADS_OP", True)  # fused decode head split/concat
-        self._moe1_kernels = _parse_binary_env("TT_LAGUNA_MOE1_KERNELS", True)  # batch-1 decode MoE generic_ops
+        # routed expert weights DRAM-sharded one shard per (expert, tile column) (colpage.py); the decode MoE kernels
+        # below read whole columns from it and need it
+        self._colpage = _parse_binary_env("TT_LAGUNA_COLPAGE", True)
+        # batch-1 decode MoE generic_ops
+        self._moe1_kernels = self._colpage and _parse_binary_env("TT_LAGUNA_MOE1_KERNELS", True)
+        # 32-token decode MoE generic_ops: gate/up + SwiGLU + routing weight, then down + expert sum
+        self._cp32 = self._colpage and _parse_binary_env("TT_LAGUNA_CP32", True)
         self._router32 = _parse_binary_env("TT_LAGUNA_ROUTER32", True)  # exact top-K router kernel, <= 32-row tiles
         self._swiglu32 = _parse_binary_env("TT_LAGUNA_SWIGLU32", True)  # fused routed SwiGLU, 32-row decode
         self._esum32 = _parse_binary_env("TT_LAGUNA_ESUM32", True)  # active-expert sum, no down zero fill
@@ -774,6 +780,11 @@ class MultichipDecoder(OptimizedDecoder):
             ttnn.deallocate(w["exp_up"])
             del w["exp_gate"]
             del w["exp_up"]
+            if self._colpage:  # same values, one DRAM shard per (expert, tile column); stock ops read it unchanged
+                for k in ("exp_gate_up", "exp_down"):
+                    cp = colpage.to_column_pages(w[k])
+                    ttnn.deallocate(w[k])
+                    w[k] = cp
             pack_dram_pair("sh_gate", "sh_up", "sh_gate_up", self.cfg.shared_intermediate)
         else:
             pack_dram_pair("mlp_gate", "mlp_up", "mlp_gate_up", self.cfg.intermediate)
@@ -1131,6 +1142,16 @@ class MultichipDecoder(OptimizedDecoder):
             x1 = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG) if ln_flat.is_sharded() else ln_flat
             glu = moe_decode1.gate_up_swiglu(x1, self.w["exp_gate_up"], sparsity)
             routed_local = moe_decode1.down_sum(glu, self.w["exp_down"], sparsity)
+        elif T == TILE and not tile_sparse and getattr(self, "_cp32", False):
+            # 32 tokens: generic_ops over the active experts that read whole weight columns (colpage.py) -- gate|up
+            # matmul + SwiGLU + per-token routing weight, then down matmul + expert sum -- instead of two sparse
+            # matmuls reading single tiles, the SwiGLU and the expert-sum ops
+            x32 = ttnn.sharded_to_interleaved(ln_flat, ttnn.L1_MEMORY_CONFIG) if ln_flat.is_sharded() else ln_flat
+            wv = ttnn.reshape(dense_local, (1, T, LE))
+            wv = ttnn.permute(wv, (0, 2, 1))
+            wv = ttnn.reshape(wv, (1, LE, T, 1))
+            glu = moe_decode1.gate_up32(x32, colpage.column_pages(self.w["exp_gate_up"]), wv, sparsity)
+            routed_local = moe_decode1.down32(glu, colpage.column_pages(self.w["exp_down"]), sparsity)
         else:
             otile = ttnn.Tile([TILE, TILE])
             gu_pc = _sparse_pc(2 * I, matmul_m, H)  # packed gate+up, N = 2*I
