@@ -1599,11 +1599,16 @@ class TtLlamaAttention(LightweightModule):
                 program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
             )
         else:
+            # Qwen long prefill on Wormhole: fp32 dest accumulation (S=40960 isolated op 1.25 -> 1.28 ms, error vs
+            # an fp32 reference of the same bf8 inputs 1.46e-2 -> 0.82e-2 relative L2; bf8 output rounding 0.79e-2).
+            wo_fp32_acc = self.is_qwen and not self.is_blackhole and batch_size == 1 and seq_len > 8192
             output_11SH = ttnn.experimental.minimal_matmul(
                 input_tensor=attn_output_11SH,
                 weight_tensor=self.wo_interleaved,
                 config=self.model_config["WO_PREFILL_MINIMAL_PROGCFG"](seq_len),
-                compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
+                compute_kernel_config=(
+                    self.compute_kernel_config_hifi2 if wo_fp32_acc else self.compute_kernel_config_hifi2_fp16
+                ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
