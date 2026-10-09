@@ -38,6 +38,7 @@ EXPERIMENTAL = {
     "linkmc": "multicast traffic has its own link efficiency (link_eff then describes read traffic)",
     "linkbank": "link loads from only the DRAM banks each K step touches (bank camping concentrates link traffic)",
     "msync0": "in0 mcast only: receivers ack after computing on the block, so the ack collection adds to each compute step",
+    "reusesync": "Reuse cores never synchronise, so only part of their per-step link load coincides (fitted fraction)",
     "shardhop": "sharded in0: each K block's mcast sender is the core holding that slice, so every step pays a sender handoff",
 }
 OFF = set(filter(None, os.environ.get("ABLATE", "").split(",")))
@@ -78,6 +79,11 @@ CONSTANTS = {
         0.48,
         "one core's DRAM read rate with other cores reading concurrently, fraction of 32 B/cycle",
         "corecc",
+    ),
+    "reuse_link": (
+        0.5,
+        "fraction of the lockstep link load that Reuse's unsynchronised cores actually put on a link at once",
+        "reusesync",
     ),
     "lat_shard": (
         500.0,
@@ -277,7 +283,8 @@ def predict(g, p, parts=False):
         chip = np.maximum(chip, np.maximum(da / (dram * ea), db / (dram * eb)))
     read = np.maximum(np.maximum(step0, step1), chip)
     if on("link"):
-        read = np.maximum(read, g["link"] / (s["noc_Bpc"] * p["link_eff"]))
+        lk = g["link"] * (np.where(g["fam"] == "reuse", p["reuse_link"], 1.0) if on("reusesync") else 1.0)
+        read = np.maximum(read, lk / (s["noc_Bpc"] * p["link_eff"]))
         if on("linkmc"):  # the most multicast-loaded link at the multicast efficiency
             read = np.maximum(read, g["link_mc"] / (s["noc_Bpc"] * p["link_eff_mc"]))
 
