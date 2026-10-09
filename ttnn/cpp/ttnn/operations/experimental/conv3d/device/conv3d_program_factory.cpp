@@ -80,7 +80,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
 
     // Extract compute kernel config early (needed for CB format decisions)
     [[maybe_unused]] auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), compute_kernel_config);
+        get_compute_kernel_config_args(input_tensor.device()->arch(), compute_kernel_config);
 
     /* Shapes/sizes needed in the kernel
         Reader does volume2column to convert some `T_block x H_block x W_block` of activation
@@ -130,7 +130,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     // row-major subblock layout, so keep sub_h = 1 with optimized blockings.
     const uint32_t dst_size = ttnn::get_dest_reg_count(compute_kernel_config);
     const uint32_t out_subblock_w = std::min(matmul_N_t, dst_size);
-    const auto arch = tt::tt_metal::hal::get_arch();
+    const auto arch = input_tensor.device()->arch();
     const bool scale_subblock_h = arch == tt::ARCH::WORMHOLE_B0 && out_subblock_w == matmul_N_t;
     const uint32_t out_subblock_h = scale_subblock_h ? largest_divisor_up_to(matmul_M_t, dst_size / out_subblock_w) : 1;
     const uint32_t output_write_bytes_per_transaction = C_out_block * dtype_bytes;
