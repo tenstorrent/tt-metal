@@ -12,24 +12,24 @@ from __future__ import annotations
 import pytest
 import torch
 
-from _completer_utils import as_update_input, open_completer
+from _ttt_sampler_utils import as_update_input, open_sampler
 
 # Stays below args.prefill_len_cutoff so MLP.forward skips the chunked-prefill branch.
 SEQ_LEN = 128
 
 
 @pytest.fixture(scope="module")
-def completer_and_mlp():
-    with open_completer(dummy_weights=True) as completer:
-        model = completer.models[0]
-        yield completer, model.layers[0].feed_forward
+def sampler_and_mlp():
+    with open_sampler(dummy_weights=True) as sampler:
+        model = sampler.models[0]
+        yield sampler, model.layers[0].feed_forward
 
 
-def _build_random_mlp_input(completer):
+def _build_random_mlp_input(sampler):
     """Construct a synthetic random ``(1, 1, SEQ_LEN, dim)`` MLP input."""
     import ttnn
 
-    model = completer.models[0]
+    model = sampler.models[0]
     dim = model.args.dim
     return ttnn.from_torch(
         torch.randn(1, 1, SEQ_LEN, dim, dtype=torch.bfloat16),
@@ -41,14 +41,14 @@ def _build_random_mlp_input(completer):
     )
 
 
-def test_mlp_forward_is_zero_when_weights_are_zero(completer_and_mlp):
+def test_mlp_forward_is_zero_when_weights_are_zero(sampler_and_mlp):
     """Zero all three MLP projections via ``MLP.update`` and check the
     forward output is elementwise zero."""
     import ttnn
 
     from models.tt_transformers.tt.common import Mode
 
-    completer, mlp = completer_and_mlp
+    sampler, mlp = sampler_and_mlp
 
     H = mlp.args.dim
     I = mlp.args.hidden_dim
@@ -62,7 +62,7 @@ def test_mlp_forward_is_zero_when_weights_are_zero(completer_and_mlp):
         down_proj=as_update_input(down_hf, mlp.mesh_device),
     )
 
-    x = _build_random_mlp_input(completer)
+    x = _build_random_mlp_input(sampler)
     out = ttnn.to_torch(mlp.forward(x, Mode.PREFILL))
 
     assert torch.equal(out, torch.zeros_like(out)), (

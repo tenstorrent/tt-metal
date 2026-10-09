@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from _completer_utils import as_update_input, open_completer
+from _ttt_sampler_utils import as_update_input, open_sampler
 
 WQKV_CONST_1 = 0.5
 WO_CONST_1 = 0.25
@@ -18,8 +18,8 @@ WO_CONST_2 = 0.0625
 
 @pytest.fixture(scope="module")
 def attn():
-    with open_completer(dummy_weights=True) as completer:
-        model = completer.models[0]
+    with open_sampler(dummy_weights=True) as sampler:
+        model = sampler.models[0]
         yield model.layers[0].attention
 
 
