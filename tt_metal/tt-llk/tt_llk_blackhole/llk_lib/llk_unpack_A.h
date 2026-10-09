@@ -326,11 +326,14 @@ inline void _llk_unpack_A_init_(
 
     if constexpr (unpack_A_tile_dvalid<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, src_dvalid>)
     {
+        LLK_ASSERT(
+            transpose_of_faces == 0 && within_face_16x16_transpose == 0,
+            "SrcDvalid::PerTile publishes per face for a transposed operand; pair a transposed unpack with SrcDvalid::PerFace on both threads");
         if (transpose_of_faces == 0 && within_face_16x16_transpose == 0 && face_r_dim == FACE_R_DIM && num_faces > 1 &&
             (BType != BroadcastType::ROW || (tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2)))
         {
             // The L1 operand goes to SrcB for DEST_TO_SRCA and to SrcA for DEST_TO_SRCB
-            constexpr std::uint32_t UNP_SEL = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? p_setadc::UNP_B : p_setadc::UNP_A;
+            constexpr std::uint32_t UNP_SEL      = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? p_setadc::UNP_B : p_setadc::UNP_A;
             const std::uint32_t faces_per_unpack = (BType == BroadcastType::ROW) ? 2 : num_faces;
             TT_SETADCXX(UNP_SEL, faces_per_unpack * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
             _llk_unpack_A_mop_config_tile_<BType, binary_reuse_dest>();
