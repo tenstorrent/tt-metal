@@ -20,6 +20,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
 
 DTYPE = "bfp8"  # opaque here: the stub's weight_cache_path ignores it; marker stores str(dtype)
@@ -75,6 +76,12 @@ def _touch_tensorbin(cache_dir):
 @pytest.fixture(autouse=True)
 def _clear_force_env(monkeypatch):
     monkeypatch.delenv("TT_TRANSFORMERS_FORCE_MODEL_LOAD", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _restore_as_tensor_cache_repair(monkeypatch):
+    # Building a warm state_dict turns as_tensor's cache repair off for the whole process.
+    monkeypatch.setattr(ttnn.operations.core, "_as_tensor_cache_repair", True)
 
 
 def test_cold_cache_is_incomplete(tmp_path):
@@ -435,3 +442,30 @@ def test_mark_survives_non_oserror_write_failure(tmp_path, monkeypatch):
     # Must not raise, and must not publish a marker that claims a sidecar it could not write.
     mark_weight_cache_complete(tmp_path, SAMPLE_SD, is_host_weight=lambda k: k == "tok_embeddings.weight", **SHARED_ID)
     assert weight_cache_is_complete(tmp_path, **SHARED_ID) is False
+
+
+def _build_modelargs_placeholders(cache_dir, sd):
+    args = _FakeArgs(cache_dir)
+    args.mark_weight_cache_complete(DTYPE, sd)
+    return args.placeholder_state_dict(DTYPE)
+
+
+def _build_shared_placeholders(cache_dir, sd):
+    mark_weight_cache_complete(cache_dir, sd, **SHARED_ID)
+    return build_cached_state_dict(cache_dir)
+
+
+@pytest.mark.parametrize("build_placeholders", [_build_modelargs_placeholders, _build_shared_placeholders])
+def test_warm_build_raises_on_unloadable_cache_file(tmp_path, build_placeholders, expect_error):
+    """A warm build must not let as_tensor rewrite an unloadable cache file from a placeholder:
+    that replaced a good gemma4 weight with zeros in the shared CI cache (#60134)."""
+    key = "layers.0.attention.wo.weight"
+    weight = torch.rand(8, 8)
+    ttnn.as_tensor(weight, dtype=ttnn.float32, cache_file_name=tmp_path / key)
+    placeholders = build_placeholders(tmp_path, {key: weight})
+
+    (cache_path,) = tmp_path.glob("*.tensorbin")
+    cache_path.write_bytes(b"not a tensorbin")
+    with expect_error(RuntimeError, "Failed to load cache file"):
+        ttnn.as_tensor(placeholders[key], dtype=ttnn.float32, cache_file_name=tmp_path / key)
+    assert cache_path.read_bytes() == b"not a tensorbin"

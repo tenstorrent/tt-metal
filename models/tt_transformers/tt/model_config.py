@@ -3461,6 +3461,8 @@ class ModelArgs:
                 return len(self._spec)
 
         logger.info(f"Warm ttnn weight cache: built placeholder state_dict for {len(manifest)} weights (no HF load).")
+        # The placeholders hold no weight data, so as_tensor must not rebuild a cache file from them.
+        ttnn.set_as_tensor_cache_repair(False)
         return _PlaceholderStateDict(manifest)
 
     def get_model_config(self):
