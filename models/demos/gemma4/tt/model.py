@@ -231,6 +231,9 @@ class Gemma4Model:
     # PLI is the safe class-level default. ``__init__`` enables feedback only
     # for variants whose token input has the rank-4 sampling output layout.
     _tt_supports_decode_token_feedback = False
+    # GEMMA4_DEVICE_PLI; set in ``__init__``.
+    _device_pli_requested = False
+    _device_pli = False
     # Sampling writes a tile-aligned [1,1,1,32] token vector; decode embeds only
     # the active batch. Non-PLI prepare_decode pads tokens to this width so the
     # sampled ids can be written straight back into the trace input buffer.
@@ -298,6 +301,12 @@ class Gemma4Model:
             "true",
             "yes",
         )
+        # GEMMA4_DEVICE_PLI=1: E2B/E4B per-layer inputs are computed inside the
+        # decode forward from the device token id (compute_device_pli) instead of
+        # on host in prepare_decode_inputs_host. Prefill PLI stays on host.
+        self._device_pli_requested = bool(self.hidden_size_per_layer_input) and os.environ.get(
+            "GEMMA4_DEVICE_PLI", "0"
+        ).lower() in ("1", "true", "yes")
         self._tt_vllm_always_refresh_decode_trace_inputs = bool(self.hidden_size_per_layer_input) or force_refresh
         self._tt_supports_decode_token_feedback = not self._tt_vllm_always_refresh_decode_trace_inputs
         n_layers = num_layers or hf_config.num_hidden_layers
@@ -463,6 +472,14 @@ class Gemma4Model:
 
                     logger.info(f"Per-layer input embeddings loaded (pli_size={pli_size})")
                     break
+
+        # Device PLI weights. Allocated here, before any decode trace capture.
+        # The CPU copies above stay: prefill PLI and the host reference use them.
+        self._device_pli = bool(self._device_pli_requested and self.per_layer_input_weights)
+        if self._device_pli_requested and not self._device_pli:
+            raise ValueError("GEMMA4_DEVICE_PLI=1 but the per-layer input weights are not in the state_dict")
+        if self._device_pli:
+            self._load_device_pli_weights(mesh_device, mesh_config, tensor_cache_path, tp, tp_suffix, replicate)
 
         # Decoder layers (each creates its own KV cache if requested)
         self.bounded_sliding_kv_cache = bounded_sliding_kv_cache
@@ -1538,6 +1555,123 @@ class Gemma4Model:
             return None
         return torch.stack(pli_list, dim=2)  # [1, 1, n_layers, pli_size]
 
+    def _load_device_pli_weights(self, mesh_device, mesh_config, tensor_cache_path, tp, tp_suffix, replicate):
+        """Device copies of the PLI weights for ``compute_device_pli``.
+
+        - ``embed_tokens_per_layer`` [vocab, L*P]: column-parallel like ``embed_tokens``
+          (each chip holds L*P/TP columns, replicated over mesh rows), row-major DRAM.
+        - ``per_layer_model_projection`` [L*P, H]: transposed to [H, L*P], replicated.
+          Replicated because the per-layer RMSNorm groups (P=256) do not line up
+          with an 8-way split of L*P.
+        - ``per_layer_projection_norm`` [P]: replicated, used as-is (not 1 + w),
+          matching ``_compute_per_layer_inputs``.
+        """
+        w = self.per_layer_input_weights
+        pli_size = self.hidden_size_per_layer_input
+        table = w["embed_tokens_per_layer"]
+        self._pli_full_n_layers = table.shape[-1] // pli_size
+        assert table.shape[-1] % (tp * ttnn.TILE_SIZE) == 0, f"PLI table width {table.shape[-1]} vs tp={tp}"
+        self.pli_embed_weight = ttnn.as_tensor(
+            table.to(torch.bfloat16).unsqueeze(0).unsqueeze(0),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_config.column_parallel(mesh_device) if tp > 1 else replicate,
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"embed_tokens_per_layer.weight{tp_suffix}_bf16"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.pli_proj_weight = ttnn.as_tensor(
+            w["per_layer_model_projection"].to(torch.bfloat16).transpose(0, 1).contiguous().unsqueeze(0).unsqueeze(0),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=replicate,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "per_layer_model_projection.weight_t_bf16"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # [1, 1, P/32, 32] row-major, the gamma layout ttnn.rms_norm takes (same as q_norm).
+        self.pli_norm_weight = ttnn.as_tensor(
+            w["per_layer_projection_norm"].to(torch.bfloat16).reshape(1, 1, -1, ttnn.TILE_SIZE),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=replicate,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "per_layer_projection_norm.weight_rm"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # The device projects the sqrt(H)-scaled main embedding and skips the host's
+        # H**-0.5, so its pre-norm values are sqrt(H) times the host's. RMSNorm is
+        # scale-invariant apart from eps: rms_norm(sqrt(H) * p, eps * H) == rms_norm(p, eps).
+        self._pli_norm_eps = self.hf_config.rms_norm_eps * self.hidden_size
+        self._pli_compute_cfg = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        self._pli_mm_program_config = _get_lm_head_program_config(
+            mesh_device, m=1, k=self.hidden_size, n=self._pli_full_n_layers * pli_size
+        )
+        logger.info(
+            f"Device PLI weights loaded: table {list(self.pli_embed_weight.shape)}/chip, "
+            f"projection {list(self.pli_proj_weight.shape)}, norm eps {self._pli_norm_eps:g}"
+        )
+
+    def compute_device_pli(self, token_ids, input_embeds=None):
+        """Per-layer inputs on device for one decode token (E2B/E4B).
+
+        Device version of ``compute_host_pli``; traceable (no host reads, weights
+        allocated at load).
+
+        Args:
+            token_ids: [1, 1] uint32 row-major device tensor.
+            input_embeds: [1, 1, 1, H] tile tensor from ``embed_tokens`` (already
+                scaled by sqrt(H)); looked up here when None.
+
+        Returns:
+            [1, 1, L, P] tile bf16, L = all layers in the checkpoint (layer i reads row i).
+        """
+        n_layers, pli_size = self._pli_full_n_layers, self.hidden_size_per_layer_input
+        if input_embeds is None:
+            input_embeds = ttnn.to_layout(ttnn.unsqueeze_to_4D(self.embed_tokens(token_ids)), ttnn.TILE_LAYOUT)
+
+        # Token half: embed_tokens_per_layer[tok] * sqrt(P)
+        tok_emb = ttnn.unsqueeze_to_4D(ttnn.embedding(token_ids, self.pli_embed_weight, dtype=ttnn.bfloat16))
+        if self.mesh_config is not None and self.mesh_config.tp > 1:
+            from models.demos.gemma4.tt.ccl import ccl_allgather
+
+            tok_emb = ccl_allgather(tok_emb, self.mesh_config, self.ccl_manager, dim=3)
+        tok_emb_rm = ttnn.reshape(tok_emb, (1, 1, n_layers, pli_size))
+        tok_emb = ttnn.to_layout(tok_emb_rm, ttnn.TILE_LAYOUT)
+        tok_emb_rm.deallocate(True)
+        tok_scaled = ttnn.mul(tok_emb, self.per_layer_embed_scale)  # sqrt(P) = 16, exact in bf16
+        tok_emb.deallocate(True)
+
+        # Projection half: rms_norm(embeds @ W^T) * norm_w (scales folded into eps, see load)
+        proj = ttnn.linear(
+            input_embeds,
+            self.pli_proj_weight,
+            program_config=self._pli_mm_program_config,
+            compute_kernel_config=self._pli_compute_cfg,
+        )
+        proj_r = ttnn.reshape(proj, (1, 1, n_layers, pli_size))
+        normed = ttnn.rms_norm(
+            proj_r,
+            weight=self.pli_norm_weight,
+            epsilon=self._pli_norm_eps,
+            compute_kernel_config=self._pli_compute_cfg,
+        )
+        proj_r.deallocate(True)
+
+        # (proj + tok) * 2**-0.5
+        combined = ttnn.add(normed, tok_scaled)
+        normed.deallocate(True)
+        tok_scaled.deallocate(True)
+        out = ttnn.mul(combined, self.per_layer_input_scale)
+        combined.deallocate(True)
+        return out
+
     def compute_host_embeddings(self, token_id):
         """Host token embedding + PLI (legacy fallback).
 
@@ -2229,7 +2363,7 @@ class Gemma4Model:
         if self.hidden_size_per_layer_input and self.per_layer_input_weights:
             if batch != 1:
                 raise NotImplementedError("Batched decode with per-layer inputs (E2B/E4B) is not yet supported")
-            pli = self.compute_host_pli(int(tok_flat[0].item()))
+            pli = None if self._device_pli else self.compute_host_pli(int(tok_flat[0].item()))
             if pli is not None:
                 pli_tt = ttnn.from_torch(
                     pli.to(torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
@@ -2313,7 +2447,13 @@ class Gemma4Model:
             if len(input_embeds.shape) == 3:
                 input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
             input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
+            if self._device_pli and pli_combined is None:
+                if int(x_embed.shape[-1]) != 1:
+                    raise NotImplementedError("Device PLI decode supports batch 1 only")
+                pli_combined = self.compute_device_pli(x_embed, input_embeds)
         else:
+            if self._device_pli and pli_combined is None:
+                raise ValueError("Device PLI needs token ids; got precomputed embeddings and no pli_combined")
             input_embeds = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         # RoPE: always use internal 2D caches with on-device embedding lookup
@@ -2330,7 +2470,7 @@ class Gemma4Model:
         # the PLI tensor produced by ``prepare_decode_inputs_host`` for
         # E2B/E4B per-layer inputs is dropped on the way in. Fall back
         # to the cached value the host-prep step stashed on ``self``.
-        if pli_combined is None:
+        if pli_combined is None and not self._device_pli:
             pli_combined = self._decode_pli_combined
 
         logits = self(

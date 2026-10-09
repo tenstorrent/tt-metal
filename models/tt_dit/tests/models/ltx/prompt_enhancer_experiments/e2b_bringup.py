@@ -32,7 +32,18 @@ rewritten after every repeat. Knobs (env):
 
 Prefill is eager and host-sampled in every arm (PLI models never trace prefill); only decode varies.
 Gemma4 runs its device sampler eagerly even under a decode trace (``_tt_disable_sampling_trace``).
-``GEMMA4_CCL_ASYNC`` is read at generator construction, so compare it across processes.
+``GEMMA4_CCL_ASYNC`` and ``GEMMA4_DEVICE_PLI`` are read at model construction, so compare them across
+processes. Two more timing knobs:
+
+- ``E2B_BASELINE_JSON``: a previous ``decode_timing_results.json``; every repeat's tokens are also
+  compared against its first completed repeat (``first_divergence_vs_baseline``).
+- ``E2B_STRICT=1``: fail the test (non-zero pytest exit) on a load/setup failure, any recorded error or a
+  reference mismatch.
+- ``E2B_BASELINE_MIN_MATCH=N`` (with ``E2B_BASELINE_JSON`` and ``E2B_STRICT=1``): also fail when a repeat
+  diverges from the baseline stream before token N.
+
+``test_e2b_device_pli_pcc`` (same file) checks device PLI (``GEMMA4_DEVICE_PLI=1``) against the host
+reference, eagerly and under a trace, and writes ``device_pli_results.json``.
 """
 
 import json
@@ -56,6 +67,7 @@ OUT_DIR = os.path.join(
 os.makedirs(OUT_DIR, exist_ok=True)
 RESULTS_PATH = os.path.join(OUT_DIR, "bringup_results.json")
 TIMING_RESULTS_PATH = os.path.join(OUT_DIR, "decode_timing_results.json")
+DEVICE_PLI_RESULTS_PATH = os.path.join(OUT_DIR, "device_pli_results.json")
 GALAXY_RING = [p for p in LTX_DISTILLED_MESH_PARAMS_DL if p.id == "4x8sp1tp0nl2_ring_is_fsdp0"]
 
 SNAPSHOT = (
@@ -424,6 +436,8 @@ def test_e2b_decode_timing(mesh_device, device_params, sp_axis, tp_axis, num_lin
     prompt = os.environ.get("E2B_PROMPT", "beekeeper")
     profile = os.environ.get("E2B_PROFILE", "0") == "1"
     profile_decode_steps = int(os.environ.get("E2B_PROFILE_DECODE_STEPS", "3"))
+    strict = os.environ.get("E2B_STRICT", "0") == "1"
+    baseline_min_match = int(os.environ.get("E2B_BASELINE_MIN_MATCH", "0"))
     if profile:
         new_tokens = 1 + profile_decode_steps  # step 0 apart, then the signposted window
     # The warm converted cache the enhancer itself uses (shared tt_cache dir when writable).
@@ -449,7 +463,14 @@ def test_e2b_decode_timing(mesh_device, device_params, sp_axis, tp_axis, num_lin
             "max_seq_len": MAX_SEQ_LEN,
             "env": {
                 k: os.environ.get(k)
-                for k in ("GEMMA4_CCL_ASYNC", "GEMMA4_CCL_TOPOLOGY", "GEMMA4_HOST_SAMPLE", "LTX_TRACED")
+                for k in (
+                    "GEMMA4_CCL_ASYNC",
+                    "GEMMA4_CCL_TOPOLOGY",
+                    "GEMMA4_HOST_SAMPLE",
+                    "GEMMA4_DEVICE_PLI",
+                    "GEMMA4_ALWAYS_REFRESH_DECODE",
+                    "LTX_TRACED",
+                )
             },
         },
         "model_path": None,
@@ -469,6 +490,8 @@ def test_e2b_decode_timing(mesh_device, device_params, sp_axis, tp_axis, num_lin
         generator, tt_kv_cache, tokenizer, page_table = _load_generator(full, results)
         if generator is None:
             results["status"] = "load_failure"
+            dump()
+            assert not strict, f"load failed, see {TIMING_RESULTS_PATH}"
             return
         max_prompt_budget = new_tokens + 1  # prefill token + decode steps must fit max_seq_len
         input_tokens_prefill_pt, _, decoding_pos, _ = _encode_prompt(
@@ -480,6 +503,10 @@ def test_e2b_decode_timing(mesh_device, device_params, sp_axis, tp_axis, num_lin
         )
         can_sample = model_can_sample_on_device(generator.model[0])
         results["can_sample_on_device"] = can_sample
+        results["device_pli"] = bool(getattr(generator.model[0], "_device_pli", False))
+        results["decode_token_feedback"] = bool(
+            getattr(generator.model[0], "_tt_supports_decode_token_feedback", False)
+        )
         results["sampling_dp"] = getattr(generator.model[0], "sampling_dp", None)
         stop_tokens = set(tokenizer.stop_tokens)
         dump()
@@ -488,6 +515,7 @@ def test_e2b_decode_timing(mesh_device, device_params, sp_axis, tp_axis, num_lin
         results["status"] = "exception"
         logger.error(results["errors"][-1]["traceback"])
         dump()
+        assert not strict, f"setup failed, see {TIMING_RESULTS_PATH}"
         return
 
     from models.common.sampling.generator import SamplingParams
@@ -511,6 +539,16 @@ def test_e2b_decode_timing(mesh_device, device_params, sp_axis, tp_axis, num_lin
         flush_profiler()  # load-time ops, so the first window starts from an empty buffer
 
     reference = None  # first completed repeat's tokens; every other repeat is compared to it
+    baseline_ids = None
+    baseline_path = os.environ.get("E2B_BASELINE_JSON")
+    if baseline_path:
+        with open(baseline_path) as f:
+            base = json.load(f)
+        baseline_ids = next(
+            (r["token_ids"] for a in base["arms"].values() for r in a.get("repeats", []) if r.get("token_ids")),
+            None,
+        )
+        results["baseline"] = {"path": baseline_path, "tokens": len(baseline_ids) if baseline_ids else None}
     for arm in arms:
         enable_trace, device_sample = TIMING_ARMS[arm]
         arm_res = results["arms"][arm] = {"enable_trace": enable_trace, "device_sampling": device_sample, "repeats": []}
@@ -602,6 +640,8 @@ def test_e2b_decode_timing(mesh_device, device_params, sp_axis, tp_axis, num_lin
                     reference = {"arm": arm, "repeat": rep, "token_ids": new_ids}
                 rep_res["first_divergence_vs_reference"] = _first_divergence(new_ids, reference["token_ids"])
                 rep_res["matches_reference"] = rep_res["first_divergence_vs_reference"] is None
+                if baseline_ids is not None:
+                    rep_res["first_divergence_vs_baseline"] = _first_divergence(new_ids, baseline_ids)
                 logger.info(
                     f"[timing] {arm} rep {rep}: prefill {rep_res['prefill_s']} s, step0 {rep_res.get('step0_s')} s, "
                     f"steady median {rep_res.get('steady_median_s')} s = {rep_res.get('steady_tok_s')} tok/s, "
@@ -627,9 +667,138 @@ def test_e2b_decode_timing(mesh_device, device_params, sp_axis, tp_axis, num_lin
             "steady_tok_s": round(statistics.median([r["steady_tok_s"] for r in warm]), 3) if warm else None,
             "prefill_s": round(statistics.median([r["prefill_s"] for r in warm]), 4) if warm else None,
             "all_match_reference": all(r.get("matches_reference") for r in arm_res["repeats"]) or None,
+            "first_divergence_vs_baseline": [r.get("first_divergence_vs_baseline") for r in arm_res["repeats"]],
             "skipped_or_failed": arm_res.get("skipped") or any("error" in r for r in arm_res["repeats"]),
         }
         results["summary"].append(row)
         logger.info(f"[timing] summary {json.dumps(row)}")
     results["status"] = "success" if not results["errors"] else "partial"
     dump()
+    if strict:
+        assert not results["errors"], f"{len(results['errors'])} errors, see {TIMING_RESULTS_PATH}"
+        mismatched = [r["arm"] for r in results["summary"] if not r["all_match_reference"]]
+        assert not mismatched, f"arms not matching the reference tokens: {mismatched}"
+        if baseline_ids is not None and baseline_min_match > 0:
+            early = [
+                (arm, r["repeat"], r["first_divergence_vs_baseline"])
+                for arm, a in results["arms"].items()
+                for r in a["repeats"]
+                if r.get("first_divergence_vs_baseline") is not None
+                and r["first_divergence_vs_baseline"] < baseline_min_match
+            ]
+            assert not early, f"diverged from the baseline before token {baseline_min_match}: {early}"
+
+
+def _pcc(a, b):
+    a, b = a.flatten().double(), b.flatten().double()
+    a, b = a - a.mean(), b - b.mean()
+    denom = a.norm() * b.norm()
+    return float((a @ b) / denom) if denom > 0 else float(torch.equal(a, b))
+
+
+@pytest.mark.parametrize(
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load",
+    GALAXY_RING,
+    indirect=["mesh_device", "device_params"],
+)
+def test_e2b_device_pli_pcc(mesh_device, device_params, sp_axis, tp_axis, num_links, topology, is_fsdp, dynamic_load):
+    """Device PLI (``compute_device_pli``) vs the host reference (``compute_host_pli``).
+
+    Eager over edge, random and real prompt token ids, then the same chain captured in a trace and
+    replayed with new ids. Gates: PCC >= ``E2B_PLI_MIN_PCC`` (default 0.999) overall and per layer, all
+    chips identical, traced output bit-identical to eager.
+    """
+    from models.tt_dit.pipelines.ltx.prompt_enhancer import resolve_enhancer_cache_dir
+
+    os.environ["GEMMA4_DEVICE_PLI"] = "1"
+    os.environ["TT_CACHE_PATH"] = resolve_enhancer_cache_dir()
+    min_pcc = float(os.environ.get("E2B_PLI_MIN_PCC", "0.999"))
+    results = {"tt_cache_path": os.environ["TT_CACHE_PATH"], "timings_s": {}, "errors": [], "ids": {}}
+
+    full = mesh_device.create_submesh(ttnn.MeshShape(*mesh_device.shape))
+    generator, _, tokenizer, _ = _load_generator(full, results)
+    assert generator is not None, "load failed, see device_pli_results.json"
+    model = generator.model[0]
+    assert model._device_pli, "GEMMA4_DEVICE_PLI=1 did not enable device PLI"
+    n_layers = len(model.layers)
+
+    torch.manual_seed(0)
+    edge = [0, 1, 2, 50, 106, 262143]
+    rand = torch.randint(0, 262144, (24,)).tolist()
+    prompt_ids = tokenizer.encode("A beekeeper in a white suit lifts a frame of honeycomb at golden hour.")
+    real = (prompt_ids[:10] + prompt_ids[-10:])[:20]
+    ids = edge + rand + real
+    results["ids"] = {"edge": edge, "random": rand, "real": real}
+
+    replicate = ttnn.ReplicateTensorToMesh(full)
+
+    def stage(tok):
+        return ttnn.from_torch(
+            torch.tensor([[tok]], dtype=torch.int64), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=replicate,
+        )
+
+    def read_all(out):
+        shards = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(out)]
+        shards = [t.reshape(1, 1, -1, t.shape[-1])[:, :, :n_layers, :].float() for t in shards]
+        return shards[0], all(torch.equal(shards[0], t) for t in shards[1:])
+
+    per_id = []
+    eager_out = {}
+    t0 = time.time()
+    for tok in ids:
+        out = model.compute_device_pli(ttnn.to_device(stage(tok), full))
+        dev, same = read_all(out)
+        out.deallocate(True)
+        ref = model.compute_host_pli(tok).float()
+        layer_pcc = [_pcc(dev[:, :, i], ref[:, :, i]) for i in range(n_layers)]
+        row = {
+            "id": tok,
+            "pcc": round(_pcc(dev, ref), 6),
+            "min_layer_pcc": round(min(layer_pcc), 6),
+            "worst_layer": int(torch.tensor(layer_pcc).argmin()),
+            "max_abs_diff": round(float((dev - ref).abs().max()), 5),
+            "ref_abs_max": round(float(ref.abs().max()), 4),
+            "chips_identical": same,
+        }
+        per_id.append(row)
+        eager_out[tok] = dev
+    results["timings_s"]["eager_s"] = round(time.time() - t0, 3)
+    results["eager"] = per_id
+
+    # Trace: persistent token buffer, compile run, capture, replay with new ids.
+    trace_rows = []
+    tok_buf = ttnn.to_device(stage(ids[0]), full)
+    model.compute_device_pli(tok_buf).deallocate(True)
+    tid = ttnn.begin_trace_capture(full, cq_id=0)
+    traced_out = model.compute_device_pli(tok_buf)
+    ttnn.end_trace_capture(full, tid, cq_id=0)
+    try:
+        for tok in ids[::3]:
+            ttnn.copy_host_to_device_tensor(stage(tok), tok_buf)
+            ttnn.execute_trace(full, tid, cq_id=0, blocking=True)
+            dev, same = read_all(traced_out)
+            trace_rows.append(
+                {"id": tok, "equals_eager": bool(torch.equal(dev, eager_out[tok])), "chips_identical": same}
+            )
+    finally:
+        ttnn.release_trace(full, tid)
+    results["traced"] = trace_rows
+
+    worst = min(per_id, key=lambda r: r["min_layer_pcc"])
+    results["summary"] = {
+        "ids": len(ids),
+        "min_pcc": min(r["pcc"] for r in per_id),
+        "min_layer_pcc": worst["min_layer_pcc"],
+        "worst_id": worst["id"],
+        "max_abs_diff": max(r["max_abs_diff"] for r in per_id),
+        "all_chips_identical": all(r["chips_identical"] for r in per_id + trace_rows),
+        "traced_equals_eager": all(r["equals_eager"] for r in trace_rows),
+        "min_pcc_gate": min_pcc,
+    }
+    logger.info(f"[device-pli] summary {json.dumps(results['summary'])}")
+    _dump(results, DEVICE_PLI_RESULTS_PATH)
+    s = results["summary"]
+    assert s["min_layer_pcc"] >= min_pcc, f"device PLI PCC {s['min_layer_pcc']} < {min_pcc} (id {s['worst_id']})"
+    assert s["all_chips_identical"], "device PLI differs across chips"
+    assert s["traced_equals_eager"], "traced device PLI differs from eager"
