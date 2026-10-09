@@ -29,12 +29,6 @@ public:
     // LRs this scheduler last computed, one per param group.
     [[nodiscard]] virtual std::vector<float> get_last_lrs() const;
 
-    // Single-LR API, kept while the derived schedulers move to per-group LRs.
-    // Last LR this scheduler computed (recorded by update_lr).
-    [[nodiscard]] virtual float get_last_lr() const;
-    // Live LR currently held by the optimizer.
-    [[nodiscard]] virtual float get_current_lr() const;
-
     [[nodiscard]] core::not_null<optimizers::OptimizerBase *> get_optimizer() const;
 
     // Returns the step count and the per-group base and last LRs.
@@ -51,9 +45,8 @@ private:
 protected:
     void validate_state_dict(const serialization::StateDict &dict) const;
 
-    // LR of one param group at m_last_step, given the group's base LR. Schedulers that still override step()
-    // and write a single LR through update_lr do not implement it.
-    [[nodiscard]] virtual float compute_lr(float base_lr) const;
+    // LR of one param group at m_last_step, given the group's base LR.
+    [[nodiscard]] virtual float compute_lr(float base_lr) const = 0;
 
     // Sets every group's LR to compute_lr(its base LR) at m_last_step and records them as the last LRs.
     virtual void apply_lrs();
@@ -65,12 +58,6 @@ protected:
     // Per-group LRs this scheduler last wrote. Initialized to the base LRs.
     std::vector<float> m_last_lrs;
     size_t m_last_step = 0;
-
-    // Write ``lr`` to the optimizer and record it as this scheduler's last LR (single-LR schedulers).
-    void update_lr(float lr);
-
-    // Last LR recorded for this scheduler (single-LR schedulers). Initialized to the optimizer's initial LR.
-    float m_last_lr = 0.F;
 };
 
 }  // namespace ttml::schedulers

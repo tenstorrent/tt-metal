@@ -17,16 +17,15 @@ class CosineAnnealingScheduler : public LRSchedulerBase {
 public:
     CosineAnnealingScheduler(optimizers::OptimizerBase* optimizer, size_t T_max, float eta_min = 0.F);
 
-    void step() override;
-
     [[nodiscard]] serialization::StateDict get_state_dict() const override;
     void set_state_dict(const serialization::StateDict& dict) override;
+
+protected:
+    [[nodiscard]] float compute_lr(float base_lr) const override;
 
 private:
     size_t m_T_max = 0;
     float m_eta_min = 0.F;
-    float m_base_lr = 0.F;
-    size_t m_last_step = 0;
 };
 
 }  // namespace ttml::schedulers

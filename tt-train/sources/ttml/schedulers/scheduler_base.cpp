@@ -13,10 +13,7 @@
 namespace ttml::schedulers {
 
 LRSchedulerBase::LRSchedulerBase(optimizers::OptimizerBase *optimizer) :
-    m_optimizer(optimizer),
-    m_base_lrs(optimizer->get_initial_group_lrs()),
-    m_last_lrs(m_base_lrs),
-    m_last_lr(optimizer->get_initial_lr()) {
+    m_optimizer(optimizer), m_base_lrs(optimizer->get_initial_group_lrs()), m_last_lrs(m_base_lrs) {
 }
 
 core::not_null<optimizers::OptimizerBase *> LRSchedulerBase::get_optimizer() const {
@@ -30,23 +27,6 @@ void LRSchedulerBase::step() {
 
 std::vector<float> LRSchedulerBase::get_last_lrs() const {
     return m_last_lrs;
-}
-
-float LRSchedulerBase::get_last_lr() const {
-    return m_last_lr;
-}
-
-float LRSchedulerBase::get_current_lr() const {
-    return m_optimizer->get_lr();
-}
-
-void LRSchedulerBase::update_lr(float lr) {
-    m_optimizer->set_lr(lr);
-    m_last_lr = lr;
-}
-
-float LRSchedulerBase::compute_lr(float /*base_lr*/) const {
-    throw std::logic_error("This scheduler computes no per-group LR; it writes a single LR through update_lr.");
 }
 
 void LRSchedulerBase::apply_lrs() {
