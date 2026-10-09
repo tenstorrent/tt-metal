@@ -113,6 +113,46 @@ def _reference_greedy(model, prompt_ids, page_table, kv_shape, force_tokens):
     return argmaxes, gaps
 
 
+def _assert_lossless_up_to_near_ties(spec, ref, gaps, tokenizer, tag=""):
+    """Compare every position of the spec output against the teacher-forced plain argmaxes.
+
+    A mismatch fails only where the plain argmax was CONFIDENT (top-2 gap >= NEAR_TIE_GAP); below
+    that the two kernels' ~1e-5 bf16 disagreement decides the coin flip and either token is a
+    faithful greedy continuation, so those are logged, not failed. ``tag`` names the user/run.
+    """
+    label = f"{tag}: " if tag else ""
+    n = len(spec)
+    assert len(ref) == n, f"{label}{len(ref)} reference positions for {n} spec tokens"
+    ties = [i for i in range(n) if gaps[i] < NEAR_TIE_GAP]
+    logger.info(
+        f"[lossless] {label}near-tie positions (plain top-2 gap < {NEAR_TIE_GAP}): {len(ties)}/{n} {ties}, "
+        f"min gap {min(gaps):.4f}"
+    )
+    mismatches = [i for i in range(n) if spec[i] != ref[i]]
+    confident_mismatches = [i for i in mismatches if gaps[i] >= NEAR_TIE_GAP]
+
+    assert not confident_mismatches, (
+        f"{label}spec decode committed a token plain greedy would NOT have chosen, where plain was CONFIDENT:\n"
+        + "\n".join(
+            f"  position {i}: spec {spec[i]} ({tokenizer.decode([spec[i]])!r}) vs plain argmax {ref[i]} "
+            f"({tokenizer.decode([ref[i]])!r}), plain top-2 gap = {gaps[i]:.4f} >= NEAR_TIE_GAP {NEAR_TIE_GAP}"
+            for i in confident_mismatches
+        )
+        + "\n  this is a real speculation bug, not bf16 noise"
+    )
+
+    if not mismatches:
+        logger.info(f"[lossless] {label}PASSED: spec decode matched plain greedy at all {n} positions, token for token")
+        return
+    logger.info(
+        f"[lossless] {label}PASSED: {n - len(mismatches)}/{n} positions identical; {len(mismatches)} near-tie flip(s) at "
+        + ", ".join(
+            f"{i} (gap {gaps[i]:.4f}: spec {tokenizer.decode([spec[i]])!r} vs plain {tokenizer.decode([ref[i]])!r})"
+            for i in mismatches
+        )
+    )
+
+
 @run_for_blackhole()
 @pytest.mark.parametrize("sampling_mode", ["greedy", "topk1"])
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
@@ -166,37 +206,5 @@ def test_spec_decode_matches_plain_greedy_up_to_near_ties(mesh_device, sampling_
     # --- reference: plain decode, teacher-forced down the spec trajectory --------------------- #
     ref, gaps = _reference_greedy(model, prompt_ids, pt, kv_shape, spec)
     logger.info(f"[lossless] plain-decode argmax at each spec position: {ref}")
-    assert len(ref) == MAX_NEW, f"expected {MAX_NEW} reference positions, got {len(ref)}"
 
-    # --- compare: every position -------------------------------------------------------------- #
-    n = MAX_NEW
-    ties = [i for i in range(n) if gaps[i] < NEAR_TIE_GAP]
-    logger.info(
-        f"[lossless] near-tie positions (plain top-2 gap < {NEAR_TIE_GAP}): {len(ties)}/{n} {ties}, "
-        f"min gap {min(gaps):.4f}"
-    )
-    mismatches = [i for i in range(n) if spec[i] != ref[i]]
-    confident_mismatches = [i for i in mismatches if gaps[i] >= NEAR_TIE_GAP]
-
-    assert not confident_mismatches, (
-        f"spec decode committed a token plain greedy would NOT have chosen, where plain was CONFIDENT:\n"
-        + "\n".join(
-            f"  position {i}: spec {spec[i]} ({tokenizer.decode([spec[i]])!r}) vs plain argmax {ref[i]} "
-            f"({tokenizer.decode([ref[i]])!r}), plain top-2 gap = {gaps[i]:.4f} >= NEAR_TIE_GAP {NEAR_TIE_GAP}"
-            for i in confident_mismatches
-        )
-        + "\n  this is a real speculation bug, not bf16 noise"
-    )
-
-    if not mismatches:
-        logger.info(f"[lossless] PASSED: spec decode matched plain greedy at all {n} positions, token for token")
-        return
-    # Every mismatch sits at a near-tie: both tokens are faithful greedy continuations and the two
-    # kernels' ~1e-5 bf16 disagreement decided the coin flip.
-    logger.info(
-        f"[lossless] PASSED: {n - len(mismatches)}/{n} positions identical; {len(mismatches)} near-tie flip(s) at "
-        + ", ".join(
-            f"{i} (gap {gaps[i]:.4f}: spec {tokenizer.decode([spec[i]])!r} vs plain {tokenizer.decode([ref[i]])!r})"
-            for i in mismatches
-        )
-    )
+    _assert_lossless_up_to_near_ties(spec, ref, gaps, tokenizer)

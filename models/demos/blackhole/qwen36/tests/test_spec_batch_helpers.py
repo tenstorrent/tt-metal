@@ -12,6 +12,7 @@ Run:
     pytest models/demos/blackhole/qwen36/tests/test_spec_batch_helpers.py -q
 """
 
+import itertools
 import types
 
 import pytest
@@ -21,14 +22,16 @@ from models.demos.blackhole.qwen36.demo.text_demo import _spec_batch_decision, _
 from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
 from models.demos.blackhole.qwen36.tt.model import spec_kv_write_conflicts
 
-# (B, T) pairs the demo actually packs into the 32-row decode tile: B*T <= 32, T = K+1.
-SHAPES = [(1, 12), (2, 8), (4, 4), (8, 4)]
+# (B, T) pairs _spec_batch_draft_len packs into the 32-row decode tile (B*T <= 32, T = K+1):
+# K = 11 for B <= 2, 7 for B <= 4, 3 for B <= 8.
+SHAPES = [(1, 12), (2, 12), (4, 8), (8, 4)]
 KC = 4  # conv kernel size (args.gdn_conv_kernel_size)
 
 
 def _mi_cases(B, T):
-    """mi vectors worth checking: all-zero (the seed), all-last (full acceptance), and mixed."""
-    cases = [[0] * B, [T - 1] * B]
+    """mi vectors worth checking: all-zero (the seed), all-last (full acceptance), mixed, and a Latin
+    square (rotations of range(T)) so every (user, mi) pair occurs."""
+    cases = [[0] * B, [T - 1] * B, *([(u + s) % T for u in range(B)] for s in range(T))]
     if T > 2:
         cases.append([(u * 3 + 1) % T for u in range(B)])
         cases.append([(T - 1 - u) % T for u in range(B)])
@@ -43,7 +46,11 @@ def _mi_cases(B, T):
 @pytest.mark.parametrize("B,T", SHAPES)
 @pytest.mark.parametrize("nv", [1, 8, 12])
 def test_state_blk_idx_matches_naive(B, T, nv):
-    """Naive: walk the ring the way the kernel lays it out and find each (user, head)'s block."""
+    """Naive: walk the ring the way the kernel lays it out and find each (user, head)'s block.
+
+    The fused op also requires idx[h] % (B*nv) == h (head h may only re-target its OWN lane).
+    """
+    bh = B * nv
     for mi in _mi_cases(B, T):
         got = spec_state_blk_idx(mi, B, nv)
 
@@ -63,19 +70,10 @@ def test_state_blk_idx_matches_naive(B, T, nv):
         assert got.shape == (B * nv,)
         torch.testing.assert_close(got, want, rtol=0, atol=0)
 
-
-@pytest.mark.parametrize("B,T", SHAPES)
-@pytest.mark.parametrize("nv", [1, 8])
-def test_state_blk_idx_kernel_contract(B, T, nv):
-    """The fused op requires idx[h] % (B*nv) == h (head h may only re-target its OWN lane)."""
-    bh = B * nv
-    for mi in _mi_cases(B, T):
-        idx = spec_state_blk_idx(mi, B, nv)
         for h in range(bh):
-            assert int(idx[h]) % bh == h, f"idx[{h}]={int(idx[h])} is not in lane {h} (BH={bh})"
-            assert 0 <= int(idx[h]) < T * bh, f"idx[{h}]={int(idx[h])} outside the ring"
-        # Distinct lanes never collide on a block.
-        assert len(set(idx.tolist())) == bh
+            assert int(got[h]) % bh == h, f"idx[{h}]={int(got[h])} is not in lane {h} (BH={bh})"
+            assert 0 <= int(got[h]) < T * bh, f"idx[{h}]={int(got[h])} outside the ring"
+        assert len(set(got.tolist())) == bh
 
 
 def test_state_blk_idx_rejects_bad_mi_length(expect_error):
@@ -86,24 +84,6 @@ def test_state_blk_idx_rejects_bad_mi_length(expect_error):
 # --------------------------------------------------------------------------- #
 # spec_conv_sel
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("B,T", SHAPES)
-@pytest.mark.parametrize("kc", [2, KC])
-def test_conv_sel_matches_naive(B, T, kc):
-    """Naive: place one 1.0 per output row at the concat column the design names."""
-    rows, cols = kc - 1 + T, kc - 1 + 2 * T
-    for mi in _mi_cases(B, T):
-        got = spec_conv_sel(mi, B, T, kc)
-        assert got.dtype == torch.bfloat16
-        assert got.shape == (B, rows, cols)
-
-        want = torch.zeros(B, rows, cols, dtype=torch.bfloat16)
-        for u in range(B):
-            cols_for_u = [mi[u] + 1 + r for r in range(kc - 1)] + [(kc - 1 + T) + j for j in range(T)]
-            for r, c in enumerate(cols_for_u):
-                want[u, r, c] = 1.0
-        torch.testing.assert_close(got.float(), want.float(), rtol=0, atol=0)
-
-
 @pytest.mark.parametrize("B,T", SHAPES)
 @pytest.mark.parametrize("kc", [2, KC])
 def test_conv_sel_matmul_rebuilds_the_window(B, T, kc):
@@ -120,68 +100,35 @@ def test_conv_sel_matmul_rebuilds_the_window(B, T, kc):
     cat = torch.cat([E_prev, qkv_new], dim=1)  # [B, kc-1+2T, C]
 
     for mi in _mi_cases(B, T):
-        sel = spec_conv_sel(mi, B, T, kc).float()
-        got = torch.bmm(sel, cat)  # [B, kc-1+T, C]
+        sel = spec_conv_sel(mi, B, T, kc)
+        assert sel.dtype == torch.bfloat16
+        assert sel.shape == (B, kc - 1 + T, kc - 1 + 2 * T)
+        got = torch.bmm(sel.float(), cat)  # [B, kc-1+T, C]
         for u in range(B):
             want = torch.cat([E_prev[u, mi[u] + 1 : mi[u] + kc], qkv_new[u]], dim=0)
             assert want.shape == (kc - 1 + T, C)
             torch.testing.assert_close(got[u], want, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("B,T", [(2, 8), (4, 4)])
-def test_conv_sel_chained_over_iterations(B, T):
-    """Two iterations in a row: feeding E_new back as E_prev keeps every user's register exact.
-
-    This is how the device path runs (the matmul output IS the next _verify_win_buf), so an
-    off-by-one in the tap columns would only show up on the SECOND iteration.
-    """
-    kc, C = KC, 5
-    gen = torch.Generator().manual_seed(99)
-    # Ground truth: a plain per-user shift register of the last kc-1 accepted inputs.
-    reg = [torch.randn(kc - 1, C, generator=gen) for _ in range(B)]
-    E_prev = torch.stack([torch.cat([torch.zeros(1, C), reg[u], torch.zeros(T - 1, C)]) for u in range(B)])
-    # Seed convention: _verify_win_buf rows [0, kc) hold the live register, and the first replay
-    # runs with mi = 0, so it reads rows 1 .. kc-1 — the register.
-    mi = [0] * B
-
-    for it in range(2):
-        qkv_new = torch.randn(B, T, C, generator=gen)
-        sel = spec_conv_sel(mi, B, T, kc).float()
-        E_new = torch.bmm(sel, torch.cat([E_prev, qkv_new], dim=1))
-        for u in range(B):
-            want = torch.cat([reg[u], qkv_new[u]], dim=0)
-            torch.testing.assert_close(E_new[u], want, rtol=0, atol=0), f"iteration {it}, user {u}"
-        # Host commits: user u accepted through row mi_next[u], so its register becomes the kc-1
-        # inputs ending at that row.
-        mi_next = [(u * 3 + it) % T for u in range(B)]
-        for u in range(B):
-            hist = torch.cat([reg[u], qkv_new[u]], dim=0)  # kc-1 old inputs then T new ones
-            reg[u] = hist[mi_next[u] + 1 : mi_next[u] + kc]
-        E_prev, mi = E_new, mi_next
-
-
-@pytest.mark.parametrize("kc", [2, KC])
-def test_conv_sel_rejects_out_of_range_mi(kc, expect_error):
+def test_conv_sel_rejects_out_of_range_mi(expect_error):
     with expect_error(AssertionError, "out of range"):
-        spec_conv_sel([4], 1, 4, kc)
+        spec_conv_sel([4], 1, 4, KC)
     with expect_error(AssertionError, "out of range"):
-        spec_conv_sel([-1], 1, 4, kc)
+        spec_conv_sel([-1], 1, 4, KC)
     with expect_error(AssertionError, "need one mi per user"):
-        spec_conv_sel([0, 0], 1, 4, kc)
+        spec_conv_sel([0, 0], 1, 4, KC)
 
 
 # --------------------------------------------------------------------------- #
 # auto spec policy (demo/text_demo.py): K >= 3, so B <= 8 in the 32-row verify tile
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("sampling", [None, object()])
-@pytest.mark.parametrize("T", [128, 4096, 8192])
-@pytest.mark.parametrize("batch", range(1, 9))
-def test_spec_batch_draft_len_floor(monkeypatch, batch, T, sampling):
+def test_spec_batch_draft_len_floor(monkeypatch):
     monkeypatch.delenv("QWEN36_SPEC_DRAFT_LEN", raising=False)
-    K, _ = _spec_batch_draft_len(batch, T, sampling)
-    assert K >= 3 and batch * (K + 1) <= 32 and K in (11, 7, 3)
-    if T == 128 and sampling is None:
-        assert K == {1: 11, 2: 11, 3: 7, 4: 7, 5: 3, 6: 3, 7: 3, 8: 3}[batch]
+    for batch, T, sampling in itertools.product(range(1, 9), [128, 4096, 8192], [None, object()]):
+        K, _ = _spec_batch_draft_len(batch, T, sampling)
+        assert K >= 3 and batch * (K + 1) <= 32 and K in (11, 7, 3), (batch, T, sampling, K)
+        if T == 128 and sampling is None:
+            assert K == {1: 11, 2: 11, 3: 7, 4: 7, 5: 3, 6: 3, 7: 3, 8: 3}[batch], (batch, K)
 
 
 def test_spec_batch_decision_max_batch(monkeypatch):

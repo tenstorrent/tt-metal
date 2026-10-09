@@ -9,12 +9,13 @@ argmax given the same prefix). Batching adds exactly one new way to be wrong: B 
 fed user v's state, KV block, position, page-table row or candidate row and STILL look healthy --
 acceptance stays high (the drafter and the verify agree with each other on the wrong story) and the
 text stays fluent. Only a per-user comparison against an independent single-user reference catches
-that, so these tests deliberately give every user DIFFERENT content and DIFFERENT prompt lengths:
+that, so the test deliberately gives every user DIFFERENT content and DIFFERENT prompt lengths:
 with identical prompts a row-mixing bug is invisible, and with equal lengths every user sits at the
 same position and the per-user position/page-table plumbing is never exercised.
 
 Method (mirrors test_spec_lossless.py, one user at a time):
-  1. run batched spec decode for MAX_NEW tokens at B users;
+  1. run batched spec decode for MAX_NEW tokens at B users, plus the per-B variants that must
+     reproduce that run (see test_spec_batched_lossless);
   2. TEACHER-FORCE the plain decode path down each user's trajectory on a SEPARATE max_batch_size=1
      model and record its argmax + top-2 logit gap at every position (test_spec_lossless's
      _reference_greedy, imported, not copied);
@@ -28,7 +29,8 @@ decode op only supports the full batch width (B == max_batch_size), and spec dec
 op. So the reference cannot run on the B-user model. Teacher forcing needs the spec trajectory
 first, so the order is: build the B-user model, run spec, free it (del + gc, as
 test_model_tp.py::...batched... does), then build the max_batch_size=1 reference model. Only one
-model is resident at a time.
+model is resident at a time. mesh_device is function-scoped, so all of it is one test body: the
+B-user model is loaded once and every variant reuses it.
 
 K per batch is the demo's auto-K policy (verify decodes B*(K+1) rows in one 32-row tile and the
 fused verify SDPA only has L1 plans for T = K+1 in {4, 8, 12}): B=2 -> K=11, B=4 -> K=7, B=8 -> K=3.
@@ -36,6 +38,7 @@ fused verify SDPA only has L1 plans for T = K+1 in {4, 8, 12}): B=2 -> K=11, B=4
 Run: MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/tests/test_spec_batched.py -v -s
 """
 
+import contextlib
 import gc
 import json
 
@@ -60,14 +63,12 @@ from models.demos.blackhole.qwen36.demo.text_demo import (
 from models.demos.blackhole.qwen36.tests.test_spec_lossless import (
     _N_LAYERS,
     MAX_NEW,
-    NEAR_TIE_GAP,
     NUM_BLOCKS,
     PROMPT_LEN,
+    _assert_lossless_up_to_near_ties,
     _reference_greedy,
 )
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
-
-RUNS = 3  # determinism: how many identical generate() calls must agree
 
 # 32 prompts, 28 of them distinct, each ~130-160 tokens. Entry 0 is skipped everywhere below: it
 # opens with the same "What is your favorite condiment?" text that _get_prompt returns for
@@ -95,6 +96,7 @@ def _batch_prompts(B, tokenizer):
     assert len(texts) >= B + 8, f"{_PROMPTS_FILE} has {len(texts)} prompts, need {B + 8} for B={B}"
 
     prompts = [_get_prompt(PROMPT_LEN, tokenizer)[0].tolist()]
+    assert len(prompts[0]) == PROMPT_LEN, f"wanted a {PROMPT_LEN}-token prompt, got {len(prompts[0])}"
     for u in range(1, B):
         n = 129 + 18 * u
         ids = tokenizer(texts[u] + "\n\n" + texts[u + 8], return_tensors="pt")["input_ids"][0, :n].tolist()
@@ -157,19 +159,25 @@ def _setup(mesh_device, B):
     return model, tokenizer, prompts, K, page_tables, kv_shape
 
 
-def _spec_run(model, kv_shape, B, K, prompts, page_tables):
-    """One fresh-KV batched spec generation: (per-user outputs, (accepted, iters, drafted))."""
+def _spec_run(model, kv_shape, B, K, prompts, page_tables, tag, **dec_kwargs):
+    """One fresh-KV batched spec generation: (per-user outputs, (accepted, iters, drafted), stats).
+
+    The traced-draft/reseed env flags are read in SpeculativeDecoder.__init__, so every run builds a
+    fresh decoder."""
     from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
 
     _fresh_kv(model, kv_shape, B)
-    dec = SpeculativeDecoder(model, page_tables, draft_len=K)
+    dec = SpeculativeDecoder(model, page_tables, draft_len=K, **dec_kwargs)
     outs = dec.generate(prompts, MAX_NEW)
-    return outs, (dec.total_accepted, dec.iters, dec.total_drafted)
+    return outs, (dec.total_accepted, dec.iters, dec.total_drafted), dec.log_stats(prefix=f"batched {tag}")
 
 
-def _assert_same_runs(a, b, B, tag):
-    """Per-user outputs token-identical and the acceptance counters equal."""
-    (a_outs, a_cnt), (b_outs, b_cnt) = a, b
+def _assert_same_runs(a, b, B, tag, counters=True):
+    """Per-user outputs token-identical and, unless ``counters`` is off, the acceptance counters equal.
+
+    Equal counters on top of equal tokens catch a rejection landing at a different depth that
+    recovery merely agreed with."""
+    (a_outs, a_cnt, _), (b_outs, b_cnt, _) = a, b
     for outs in (a_outs, b_outs):
         assert len(outs) == B, f"{tag}: expected {B} output rows, got {len(outs)}"
         for u in range(B):
@@ -177,372 +185,49 @@ def _assert_same_runs(a, b, B, tag):
     for u in range(B):
         div = next((i for i in range(MAX_NEW) if a_outs[u][i] != b_outs[u][i]), None)
         assert div is None, f"{tag}: user {u} diverged at token {div}.\nrun A={a_outs[u]}\nrun B={b_outs[u]}"
-    assert a_cnt == b_cnt, f"{tag}: (total_accepted, iters, total_drafted) {a_cnt} != {b_cnt}"
+    assert not counters or a_cnt == b_cnt, f"{tag}: (total_accepted, iters, total_drafted) {a_cnt} != {b_cnt}"
 
 
-def _assert_lossless(spec, ref, gaps, tokenizer, tag):
-    """test_spec_lossless's near-tie gate, per user.
-
-    A mismatch fails only where the plain argmax was CONFIDENT (top-2 gap >= NEAR_TIE_GAP); below
-    that threshold the two kernels' ~1e-5 bf16 disagreement decides the coin flip and either token
-    is a faithful greedy continuation.
-    """
-    n = len(spec)
-    assert len(ref) == n, f"{tag}: {len(ref)} reference positions for {n} spec tokens"
-    ties = [i for i in range(n) if gaps[i] < NEAR_TIE_GAP]
-    mismatches = [i for i in range(n) if spec[i] != ref[i]]
-    confident = [i for i in mismatches if gaps[i] >= NEAR_TIE_GAP]
-    logger.info(
-        f"[spec-batched] {tag}: near-tie positions (plain top-2 gap < {NEAR_TIE_GAP}): "
-        f"{len(ties)}/{n} {ties}, min gap {min(gaps):.4f}"
-    )
-    assert not confident, (
-        f"{tag}: spec decode committed a token plain greedy would NOT have chosen, where plain was CONFIDENT:\n"
-        + "\n".join(
-            f"  position {i}: spec {spec[i]} ({tokenizer.decode([spec[i]])!r}) vs plain argmax {ref[i]} "
-            f"({tokenizer.decode([ref[i]])!r}), plain top-2 gap = {gaps[i]:.4f} >= NEAR_TIE_GAP {NEAR_TIE_GAP}"
-            for i in confident
-        )
-        + "\n  this is a real speculation bug, not bf16 noise (a batched one: check this user's rows, "
-        "KV blocks, GDN slot and position against its neighbours)"
-    )
-    if not mismatches:
-        logger.info(f"[spec-batched] {tag}: PASSED, matched plain greedy at all {n} positions, token for token")
-        return
-    logger.info(
-        f"[spec-batched] {tag}: PASSED, {n - len(mismatches)}/{n} positions identical; "
-        f"{len(mismatches)} near-tie flip(s) at "
-        + ", ".join(
-            f"{i} (gap {gaps[i]:.4f}: spec {tokenizer.decode([spec[i]])!r} vs plain {tokenizer.decode([ref[i]])!r})"
-            for i in mismatches
-        )
-    )
-
-
-def _reference_model(device):
-    """The max_batch_size=1 model the plain greedy reference runs on (see the module docstring for
-    why it cannot be the B-user model). Build it only after the B-user model is gone."""
-    model = Qwen36Model.from_pretrained(
-        device, max_batch_size=1, max_seq_len=NUM_BLOCKS * BLOCK_SIZE, n_layers=_N_LAYERS
-    )
-    model.set_gdn_fused_decode(True)
-    pt = torch.arange(NUM_BLOCKS, dtype=torch.int32).reshape(1, NUM_BLOCKS)
-    kv_shape = [NUM_BLOCKS, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
-    return model, pt, kv_shape
-
-
-@run_for_blackhole()
-@pytest.mark.timeout(3600)  # two full model loads (B users, then the B=1 reference) + B references
-@pytest.mark.parametrize("batch", [2, 4, 8])
-@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_spec_batched_lossless(mesh_device, batch):
-    """Every user's batched spec output is that user's own plain greedy story, token for token."""
-    from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
-
-    # --- spec run: B users, distinct prompts, one shared paged KV ----------------------------- #
-    B = batch
-    model, tokenizer, prompts, K, page_tables, kv_shape = _setup(mesh_device, B)
-    _fresh_kv(model, kv_shape, B)
-    dec = SpeculativeDecoder(model, page_tables, draft_len=K)
-    rows = dec.generate(prompts, MAX_NEW)
-    dec.log_stats(prefix=f"batched-lossless B={B}")
-    accept = dec.accept_rate()
-    for u in range(B):
-        logger.info(f"[spec-batched] B={B} user {u} ({len(prompts[u])} prompt tokens): {rows[u]}")
-        logger.info(f"[spec-batched] B={B} user {u} text: {tokenizer.decode(rows[u])!r}")
-
-    assert len(rows) == B, f"expected {B} output rows, got {len(rows)}"
-    for u in range(B):
-        assert len(rows[u]) == MAX_NEW, f"user {u} produced {len(rows[u])} tokens, wanted {MAX_NEW}"
-    # Zero acceptance would still emit MAX_NEW correct tokens (one per iteration), so losslessness
-    # alone cannot tell a working drafter from a dead one at B > 1.
-    assert accept > 0, f"accept_rate() == {accept}: no draft was accepted for any user at B={B}"
-
-    # The B=1 reference model cannot coexist with this one; free it first (see module docstring).
-    model.free_kv_caches()
-    del dec, model
-    gc.collect()
-
-    # --- reference: plain B=1 decode, teacher-forced down each user's trajectory --------------- #
-    ref_model, pt1, kv1 = _reference_model(mesh_device)
+@contextlib.contextmanager
+def _variant(failures, name):
+    """Record a failed variant instead of aborting, so the other variants and the lossless leg
+    still run and one run reports every divergence."""
     try:
-        for u in range(B):
-            ref, gaps = _reference_greedy(ref_model, prompts[u], pt1, kv1, rows[u])
-            logger.info(f"[spec-batched] B={B} user {u} plain-decode argmax at each spec position: {ref}")
-            _assert_lossless(rows[u], ref, gaps, tokenizer, f"B={B} user {u}")
-    finally:
-        ref_model.free_kv_caches()
-    logger.info(f"[spec-batched] B={B}: all {B} users lossless, accept={accept:.2f}/{K}")
+        yield
+    except AssertionError as e:
+        logger.error(f"[spec-batched] variant {name!r} diverged from the base run: {e}")
+        failures.append(f"{name}: {e}")
 
 
-@run_for_blackhole()
-@pytest.mark.timeout(1800)
-@pytest.mark.parametrize("batch", [2, 8])
-@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_spec_batched_determinism(mesh_device, batch):
-    """Same prompts, same model, same tokens for every user, every run.
-
-    The B=1 version of this caught a KV read-modify-write race between candidate rows sharing a
-    block (test_spec_determinism.py). At B > 1 the same tile is shared by DIFFERENT users, so the
-    race has more ways to fire; a run-to-run difference in any row fails.
-    """
-    B = batch
-    model, _, prompts, K, page_tables, kv_shape = _setup(mesh_device, B)
-
-    # Same reset recipe as test_spec_determinism: _spec_run frees + reallocates the paged KV caches and
-    # builds a fresh decoder; the GDN recurrent state is re-zeroed inside the prefill.
-    runs = [_spec_run(model, kv_shape, B, K, prompts, page_tables) for _ in range(RUNS)]
-    model.free_kv_caches()
-
-    # Equal (accepted, iters, drafted) counters on top of equal tokens: identical tokens with a different
-    # acceptance would mean the rejection landed at a different depth and recovery merely agreed -- the same
-    # tell test_spec_determinism checks for.
-    for r in range(1, RUNS):
-        _assert_same_runs(runs[0], runs[r], B, f"B={B} run {r} vs run 0 (batched spec decode is nondeterministic)")
-    logger.info(f"[spec-batched-det] B={B}: {RUNS} runs identical for all {B} users, counters {runs[0][1]}")
-
-
-@run_for_blackhole()
-@pytest.mark.timeout(1800)
-@pytest.mark.parametrize("batch", [2, 8])
-@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_spec_batched_traced_matches_eager(mesh_device, batch, monkeypatch):
-    """The B-user traced draft chain and traced reseed replay the eager path, token for token.
-
-    Runs the same prompts twice on one model, once with QWEN36_TRACED_DRAFT=1 / QWEN36_TRACED_RESEED=1
-    and once with both 0 (the flags are read in SpeculativeDecoder.__init__, so each run builds a
-    fresh decoder), and requires every user's output and the iters / total_drafted / total_accepted
-    counters to be equal: the traces issue the same device ops as the python dispatch, so neither
-    the trajectory nor the acceptance history may move (the B=1 version is test_spec_determinism.py).
-    """
-    B = batch
-    model, _, prompts, K, page_tables, kv_shape = _setup(mesh_device, B)
-
-    results = {}  # mode -> (per-user outputs, (total_accepted, iters, total_drafted))
-    for mode in ("1", "0"):
-        monkeypatch.setenv("QWEN36_TRACED_DRAFT", mode)
-        monkeypatch.setenv("QWEN36_TRACED_RESEED", mode)
-        results[mode] = _spec_run(model, kv_shape, B, K, prompts, page_tables)
-        logger.info(f"[spec-batched-trace] B={B} {'traced' if mode == '1' else 'eager'}: counters {results[mode][1]}")
-    model.free_kv_caches()
-
-    # Identical tokens with different counters mean the traced path rejected at a different depth.
-    _assert_same_runs(results["1"], results["0"], B, f"B={B} traced draft/reseed vs eager")
-    logger.info(f"[spec-batched-trace] B={B}: traced == eager for all {B} users, counters {results['1'][1]}")
-
-
-@run_for_blackhole()
-@pytest.mark.timeout(1800)
-@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_spec_batched_null_block_padding(mesh_device):
-    """vLLM-style block tables (unused columns = the null block 0) change nothing.
-
-    Run 1 uses the standard disjoint per-user tables; run 2 zeroes every column past the blocks a
-    user can reach, so both rows share block 0 in their tails. The grouped verify KV write only
-    needs distinct (block, 32-row tile) per user within each candidate call, which still holds
-    (nothing writes the tails), so outputs and counters must be identical. The old whole-row
-    disjointness assertion rejected run 2 at capture.
-    """
-    B = 2
-    model, _, prompts, K, page_tables, kv_shape = _setup(mesh_device, B)
-
+def _null_padded_tables(page_tables, prompts, K):
+    """vLLM-style block tables: every column past the blocks a user can reach is the null block 0,
+    so all rows share block 0 in their tails. The grouped verify KV write only needs distinct
+    (block, 32-row tile) per user within each candidate call, which still holds (nothing writes the
+    tails)."""
     padded = page_tables.clone()
     nb = padded.shape[1]
-    for u in range(B):
-        needed = -(-(len(prompts[u]) + MAX_NEW + 2 * (K + 1) + 1) // BLOCK_SIZE) + 1
-        padded[u, min(needed, nb) :] = 0
-    assert nb > max(-(-(len(p) + MAX_NEW + 2 * (K + 1) + 1) // BLOCK_SIZE) + 1 for p in prompts), "no tail to pad"
+    needed = [-(-(len(p) + MAX_NEW + 2 * (K + 1) + 1) // BLOCK_SIZE) + 1 for p in prompts]
+    for u, n in enumerate(needed):
+        padded[u, min(n, nb) :] = 0
+    assert nb > max(needed), "no tail to pad"
     assert (padded[:, -1] == 0).all(), "both rows must share the null block in their tails"
-
-    plain = _spec_run(model, kv_shape, B, K, prompts, page_tables)
-    nullpad = _spec_run(model, kv_shape, B, K, prompts, padded)
-    model.free_kv_caches()
-    _assert_same_runs(plain, nullpad, B, f"B={B} null-block padding")
-    logger.info(f"[spec-batched-null] B={B}: null-block-padded tables == standard tables, counters {plain[1]}")
+    return padded
 
 
-@run_for_blackhole()
-@pytest.mark.timeout(1800)
-@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_spec_batched_verify_restage_page_tables(mesh_device, monkeypatch):
-    """Re-staging the page tables on every verify replay (continuous batching) changes nothing.
-
-    A wrapper makes every Qwen36Model.verify_traced call pass ``page_tables=`` (a copy of the run's
-    own tables, so the staged contents are identical): outputs and counters must match a normal run
-    that stages the tables only at capture.
-    """
-    B = 2
-    model, _, prompts, K, page_tables, kv_shape = _setup(mesh_device, B)
-
-    normal = _spec_run(model, kv_shape, B, K, prompts, page_tables)
-
-    calls = []
-    orig = Qwen36Model.verify_traced
-
-    def restaging(self, tokens, positions, mi_prev, read_logits=False, **_):
-        calls.append(1)
-        return orig(self, tokens, positions, mi_prev, read_logits=read_logits, page_tables=page_tables.clone())
-
-    with monkeypatch.context() as m:
-        m.setattr(Qwen36Model, "verify_traced", restaging)
-        restaged = _spec_run(model, kv_shape, B, K, prompts, page_tables)
-    model.free_kv_caches()
-
-    assert calls, "the restaging verify_traced wrapper was never called"
-    _assert_same_runs(normal, restaged, B, f"B={B} restaged page tables")
-    logger.info(f"[spec-batched-restage] B={B}: {len(calls)} restaged replays == normal run, counters {normal[1]}")
-
-
-@run_for_blackhole()
-@pytest.mark.timeout(3600)  # two full model loads (B=4 users, then the B=1 reference)
-@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_spec_batched_replicated_matches_single(mesh_device):
-    """Four users, ONE prompt: the rows must be identical to each other and lossless.
-
-    Identical prompts are the sharpest test of row independence -- any asymmetry between the four
-    users (a row picking up a neighbour's state, KV block or position) shows up as rows that differ
-    even though their inputs do not.
-
-    The rows are NOT required to equal a B=1 spec run token for token: verify splits its SDPA cores
-    per user, so a B=4 row and a B=1 row are the same math on different core counts and disagree at
-    ~1e-5, which flips greedy near ties. They are held to the same standard the B=1 run is held to
-    instead -- the near-tie gate against plain greedy decode.
-    """
-    if not _MULTI:
-        pytest.skip("spec decode is the TP path; run with MESH_DEVICE=P150x4")
-    from transformers import AutoTokenizer
-
-    from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
-
-    B = 4
-    K = _spec_batch_draft_len(B, PROMPT_LEN, None)[0]
-    mesh_device.enable_program_cache()
-    model = _build_model(mesh_device, B)
-    tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
-    prompt = _get_prompt(PROMPT_LEN, tokenizer)[0].tolist()
-    assert len(prompt) == PROMPT_LEN, f"wanted a {PROMPT_LEN}-token prompt, got {len(prompt)}"
-    prompts = [list(prompt) for _ in range(B)]
-
-    page_tables, kv_shape = _batched_kv(model, B, K, prompts)
-    _fresh_kv(model, kv_shape, B)
-    dec = SpeculativeDecoder(model, page_tables, draft_len=K)
-    rows = dec.generate(prompts, MAX_NEW)
-    dec.log_stats(prefix=f"batched-replicated B={B}")
-    accept = dec.accept_rate()
-    # Free before the reference model is built: only one model resident at a time.
-    model.free_kv_caches()
-    del dec, model
-    gc.collect()
-
-    assert len(rows) == B, f"expected {B} output rows, got {len(rows)}"
-    for u in range(B):
-        assert len(rows[u]) == MAX_NEW, f"user {u} produced {len(rows[u])} tokens, wanted {MAX_NEW}"
-    for u in range(1, B):
-        div = next((i for i in range(MAX_NEW) if rows[u][i] != rows[0][i]), None)
-        assert div is None, (
-            f"users 0 and {u} were given the SAME prompt but diverged at token {div} — the batched "
-            f"verify is not row-independent.\nuser0={rows[0]}\nuser{u}={rows[u]}"
-        )
-    assert accept > 0, f"accept_rate() == {accept}: no draft was accepted at B={B}"
-
-    ref_model, pt1, kv1 = _reference_model(mesh_device)
-    try:
-        ref, gaps = _reference_greedy(ref_model, prompt, pt1, kv1, rows[0])
-        _assert_lossless(rows[0], ref, gaps, tokenizer, f"B={B} replicated")
-    finally:
-        ref_model.free_kv_caches()
-    logger.info(f"[spec-batched] B={B} replicated: all rows identical and lossless, accept={accept:.2f}/{K}")
-
-
-@run_for_blackhole()
-@pytest.mark.timeout(1800)
-@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_spec_batched_sampling_topk1_equals_greedy(mesh_device):
-    """Batched spec SAMPLING at top_k=1 must reproduce the batched greedy output, row for row.
-
-    top_k 1 collapses the sampled target to a delta at the argmax of the SAME bf16 verify logits the
-    greedy path argmaxes on device, so "accept iff u < p(draft)" becomes "accept iff the draft IS
-    that argmax". This is a plumbing smoke test for the batched sampling path -- which [B*T, vocab]
-    logits row belongs to which user's which draft, and which row the commit index reads -- not a
-    test of the sampler's math (test_spec_sampling_math.py). Exact equality is the bar; the one
-    legitimate way it can fail is an EXACT bf16 tie broken differently by host torch.topk and device
-    ttnn.argmax, which would show up as a single-token difference at one position.
-    """
-    from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
-    from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSamplingParams
-
-    B = 4
-    model, tokenizer, prompts, K, page_tables, kv_shape = _setup(mesh_device, B)
-
-    _fresh_kv(model, kv_shape, B)
-    greedy = SpeculativeDecoder(model, page_tables, draft_len=K).generate(prompts, MAX_NEW)
-
-    _fresh_kv(model, kv_shape, B)
-    sampling = SpecSamplingParams(temperature=1.0, top_k=1, top_p=1.0, seed=0)
-    dec = SpeculativeDecoder(model, page_tables, draft_len=K, sampling=sampling)
-    sampled = dec.generate(prompts, MAX_NEW)
-    dec.log_stats(prefix=f"batched-topk1 B={B}")
-    model.free_kv_caches()
-
-    assert len(greedy) == len(sampled) == B, f"expected {B} output rows, got {len(greedy)} / {len(sampled)}"
-    for u in range(B):
-        assert len(greedy[u]) == MAX_NEW, f"greedy user {u} produced {len(greedy[u])} tokens, wanted {MAX_NEW}"
-        assert len(sampled[u]) == MAX_NEW, f"user {u} produced {len(sampled[u])} tokens, wanted {MAX_NEW}"
-        div = next((i for i in range(MAX_NEW) if sampled[u][i] != greedy[u][i]), None)
-        assert div is None, (
-            f"user {u}: top_k=1 spec sampling diverged from batched greedy at token {div} "
-            f"({sampled[u][div]} {tokenizer.decode([sampled[u][div]])!r} vs "
-            f"{greedy[u][div]} {tokenizer.decode([greedy[u][div]])!r}) — top_k=1 makes the sampled "
-            f"target a delta at the verify argmax, so the two runs must agree.\n"
-            f"greedy={greedy[u]}\ntopk1 ={sampled[u]}"
-        )
-    logger.info(f"[spec-batched] B={B} top_k=1 sampling reproduced batched greedy for all {B} users")
-
-
-@run_for_blackhole()
-@pytest.mark.timeout(1800)
-@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_spec_batched_freeze_stop_token(mesh_device):
+def _check_freeze(run, tokenizer, outs_a):
     """A user that hits a stop token FREEZES, and freezing must be invisible to everyone else.
 
     A frozen user keeps replaying its T verify rows (the row count is baked into the trace) with
     its pre-commit tokens and positions, but its accept result is discarded and neither its
     tokens, its statistics, nor -- the part that can actually break -- its neighbours' tokens may
-    move. This is the batched failure mode the other tests in this file cannot see: they pass no
-    stop tokens, so every user finishes on the same iteration and nothing is ever frozen.
+    move. Runs without stop tokens never freeze anyone, so only this variant sees it.
 
-    Method: run B=2 to MAX_NEW with no stop tokens (run A), then re-run with user 0's THIRD token
-    as the only stop token (run B). User 0 must stop exactly there, and user 1 -- which never sees
-    the stop token -- must reproduce run A token for token even though its partner spends most of
-    the run frozen.
+    ``outs_a`` is the no-stop-token run. Re-run with user 0's THIRD token as the only stop token:
+    user 0 must stop exactly there, and user 1 -- which never sees the stop token -- must
+    reproduce its run-A trajectory (cut after the first occurrence of the stop token, which may
+    legitimately occur in its story too) even though its partner spends most of the run frozen.
     """
-    from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
-
-    B = 2
-    model, tokenizer, prompts, K, page_tables, kv_shape = _setup(mesh_device, B)
-
-    # --- run A: no stop tokens, the reference trajectory for both users --------------------- #
-    _fresh_kv(model, kv_shape, B)
-    outs_a = SpeculativeDecoder(model, page_tables, draft_len=K).generate(prompts, MAX_NEW)
-    for u in range(B):
-        assert len(outs_a[u]) == MAX_NEW, f"run A user {u}: {len(outs_a[u])} tokens, wanted {MAX_NEW}"
-    logger.info(f"[spec-freeze] run A user 0: {outs_a[0]}")
-    logger.info(f"[spec-freeze] run A user 1: {outs_a[1]}")
-
-    # User 0's third token. It may legitimately occur in user 1's story too (' and' does, at
-    # index 39 of these fixed prompts), so the expectation for EVERY user is its own run-A
-    # trajectory cut after the first occurrence of the stop token: user 0 at index 2, user 1
-    # wherever the token first shows up (or not at all). What the test is really asserting is that
-    # nothing else moves -- user 1 reproduces run A token for token over its whole output even
-    # though its partner is frozen from the first iteration onwards.
+    B = len(outs_a)
     stop = outs_a[0][2]
     assert stop not in outs_a[0][:2], (
         f"token {stop} ({tokenizer.decode([stop])!r}) also appears at index "
@@ -566,15 +251,7 @@ def test_spec_batched_freeze_stop_token(mesh_device):
         f"{[len(e) for e in expect]} of {MAX_NEW} (user 0 ends at index 2)"
     )
 
-    # --- run B: same prompts, same K, user 0 stops after three tokens ----------------------- #
-    # Fresh KV + a fresh decoder, the reset recipe test_spec_determinism uses between runs.
-    _fresh_kv(model, kv_shape, B)
-    dec = SpeculativeDecoder(model, page_tables, draft_len=K, stop_tokens={stop})
-    outs_b = dec.generate(prompts, MAX_NEW)
-    dec.log_stats(prefix="batched-freeze B=2")
-    stats = dec.stats()
-    model.free_kv_caches()
-
+    outs_b, _, stats = run("freeze", stop_tokens={stop})
     assert len(outs_b) == B, f"run B returned {len(outs_b)} rows, wanted {B}"
     assert outs_b[0] == expect[0], (
         f"user 0 did not stop exactly at its stop token {stop} ({tokenizer.decode([stop])!r}):\n"
@@ -591,8 +268,125 @@ def test_spec_batched_freeze_stop_token(mesh_device):
 
     mlu = stats["mean_live_users"]
     logger.info(f"[spec-freeze] mean_live_users={mlu:.3f} over {stats['iters']} iterations (B={B})")
-    assert 1.0 <= mlu <= 2.0, (
+    assert 1.0 <= mlu <= B, (
         f"mean_live_users={mlu} outside [1, {B}]: user 0 freezes after three tokens while user 1 "
         f"runs to {MAX_NEW}, so the mean live-user count must sit between one and the full batch"
     )
-    logger.info("[spec-freeze] user 0 stopped at its stop token; user 1 is unchanged by the freeze")
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(3600)  # B-user load + up to 7 spec runs, then the B=1 reference load + B references
+@pytest.mark.parametrize("batch", [2, 4, 8])
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_spec_batched_lossless(mesh_device, batch, monkeypatch):
+    """Every user's batched spec output is that user's own plain greedy story, token for token.
+
+    Phase 1, on the one B-user model: a base greedy run (distinct prompts, one shared paged KV),
+    then the variants that must reproduce it exactly (outputs and, where noted, the acceptance
+    counters), each from fresh KV:
+      B=2: two repeat runs (a run-to-run difference is a KV read-modify-write race between users
+           sharing the tile); an eager run with the traced draft chain / reseed off; null-block-padded
+           page tables; verify_traced re-staging the page tables on every replay (continuous
+           batching); a stop-token run, where the frozen user must not move its neighbour.
+      B=4: top_k=1 sampling (plumbing of which [B*T, vocab] row belongs to which user's draft;
+           tokens only) and one prompt replicated across all rows, which must give identical rows
+           (the sharpest row-independence test; not required to equal a B=1 spec run, whose SDPA
+           core split differs at ~1e-5).
+      B=8: two repeat runs and an eager run.
+    Phase 2: free the B-user model, build the B=1 reference and run the near-tie gate per user.
+    """
+    B = batch
+    model, tokenizer, prompts, K, page_tables, kv_shape = _setup(mesh_device, B)
+    monkeypatch.setenv("QWEN36_TRACED_DRAFT", "1")
+    monkeypatch.setenv("QWEN36_TRACED_RESEED", "1")
+
+    def run(tag, prompts=prompts, tables=page_tables, **dec_kwargs):
+        return _spec_run(model, kv_shape, B, K, prompts, tables, f"B={B} {tag}", **dec_kwargs)
+
+    # --- phase 1: base run + variants --------------------------------------------------------- #
+    base = run("base")
+    rows, _, stats = base
+    for u in range(B):
+        logger.info(f"[spec-batched] B={B} user {u} ({len(prompts[u])} prompt tokens): {rows[u]}")
+        logger.info(f"[spec-batched] B={B} user {u} text: {tokenizer.decode(rows[u])!r}")
+    assert len(rows) == B, f"expected {B} output rows, got {len(rows)}"
+    for u in range(B):
+        assert len(rows[u]) == MAX_NEW, f"user {u} produced {len(rows[u])} tokens, wanted {MAX_NEW}"
+    # Zero acceptance would still emit MAX_NEW correct tokens (one per iteration), so losslessness
+    # alone cannot tell a working drafter from a dead one at B > 1.
+    accept = stats["accept_rate"]
+    assert accept > 0, f"accept_rate() == {accept}: no draft was accepted for any user at B={B}"
+
+    failures = []
+    if B != 4:
+        with _variant(failures, "repeat runs"):
+            for r in (1, 2):
+                _assert_same_runs(
+                    base, run(f"repeat {r}"), B, f"B={B} repeat {r} vs base (batched spec decode is nondeterministic)"
+                )
+        with _variant(failures, "traced vs eager"):
+            with monkeypatch.context() as m:
+                m.setenv("QWEN36_TRACED_DRAFT", "0")
+                m.setenv("QWEN36_TRACED_RESEED", "0")
+                eager = run("eager")
+            _assert_same_runs(base, eager, B, f"B={B} eager draft/reseed vs traced")
+    if B == 2:
+        with _variant(failures, "null-block padding"):
+            padded = _null_padded_tables(page_tables, prompts, K)
+            _assert_same_runs(base, run("null-block", tables=padded), B, f"B={B} null-block padding")
+        with _variant(failures, "restaged page tables"):
+            calls = []
+            orig = Qwen36Model.verify_traced
+
+            def restaging(self, tokens, positions, mi_prev, read_logits=False, **_):
+                calls.append(1)
+                return orig(self, tokens, positions, mi_prev, read_logits=read_logits, page_tables=page_tables.clone())
+
+            with monkeypatch.context() as m:
+                m.setattr(Qwen36Model, "verify_traced", restaging)
+                restaged = run("restage")
+            assert calls, "the restaging verify_traced wrapper was never called"
+            _assert_same_runs(base, restaged, B, f"B={B} restaged page tables")
+        with _variant(failures, "stop-token freeze"):
+            _check_freeze(run, tokenizer, rows)
+    if B == 4:
+        from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSamplingParams
+
+        with _variant(failures, "top_k=1 sampling"):
+            sampling = SpecSamplingParams(temperature=1.0, top_k=1, top_p=1.0, seed=0)
+            # Exact equality is the bar; the one legitimate failure is an EXACT bf16 tie broken
+            # differently by host torch.topk and device ttnn.argmax.
+            _assert_same_runs(
+                base, run("topk1", sampling=sampling), B, f"B={B} top_k=1 sampling vs greedy", counters=False
+            )
+        with _variant(failures, "replicated prompt"):
+            same, _, same_stats = run("replicated", prompts=[list(prompts[0]) for _ in range(B)])
+            for u in range(B):
+                assert len(same[u]) == MAX_NEW, f"replicated user {u} produced {len(same[u])} tokens, wanted {MAX_NEW}"
+            for u in range(1, B):
+                div = next((i for i in range(MAX_NEW) if same[u][i] != same[0][i]), None)
+                assert div is None, (
+                    f"users 0 and {u} were given the SAME prompt but diverged at token {div} -- the batched "
+                    f"verify is not row-independent.\nuser0={same[0]}\nuser{u}={same[u]}"
+                )
+            assert same_stats["accept_rate"] > 0, f"replicated accept_rate == 0 at B={B}"
+
+    # The B=1 reference model cannot coexist with this one; free it first (see module docstring).
+    model.free_kv_caches()
+    run = model = None  # the closure holds the model; the B=1 model must be the only one resident
+    gc.collect()
+
+    # --- phase 2: plain B=1 decode, teacher-forced down each user's trajectory ---------------- #
+    ref_model = _build_model(mesh_device, 1)
+    pt1 = torch.arange(NUM_BLOCKS, dtype=torch.int32).reshape(1, NUM_BLOCKS)
+    kv1 = [NUM_BLOCKS, ref_model.args.n_local_kv_heads, BLOCK_SIZE, ref_model.args.head_dim]
+    try:
+        for u in range(B):
+            ref, gaps = _reference_greedy(ref_model, prompts[u], pt1, kv1, rows[u])
+            logger.info(f"[spec-batched] B={B} user {u} plain-decode argmax at each spec position: {ref}")
+            _assert_lossless_up_to_near_ties(rows[u], ref, gaps, tokenizer, f"B={B} user {u}")
+    finally:
+        ref_model.free_kv_caches()
+    assert not failures, "variants diverged from the base run:\n" + "\n".join(failures)
+    logger.info(f"[spec-batched] B={B}: all {B} users lossless, accept={accept:.2f}/{K}")

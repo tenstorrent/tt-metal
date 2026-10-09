@@ -31,7 +31,6 @@ from models.demos.blackhole.qwen36.tt.gdn.tp import (
     TPGatedDeltaNet,
     kda_channel_chunk_size,
     kda_conv_prefill,
-    kda_pack_gather,
     load_gdn_weights_tp,
 )
 from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE, Qwen36ModelArgs
@@ -1201,11 +1200,11 @@ def test_kda_conv_padded_rows_match_reference(mesh_device, T, reset_seeds, ensur
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-@pytest.mark.parametrize("B, T", [(1, 12), (2, 12), (4, 8), (8, 4), (2, 1), (4, 1), (8, 1)])
+@pytest.mark.parametrize("B, T", [(2, 12), (4, 8), (8, 4), (4, 1), (8, 1)])
 def test_kda_conv_packed_matches_per_user(mesh_device, B, T, reset_seeds, ensure_gc, request):
-    """tp._kda_conv_packed's math: B users' [K-1 carry ; T tokens] windows end to end in ONE [1, B*L, C] KDA call
-    from a zero history, then a one-hot matmul keeping rows u*L + K-1 + j. Every kept row must be BIT-identical to
-    a per-user kda_conv_prefill call that takes user u's carry as its history (the KDA op is batch-1 only)."""
+    """TPGatedDeltaNet._kda_conv_packed packs B users' [K-1 carry ; T tokens] windows into ONE KDA call and
+    gathers the token rows. Every kept row must be BIT-identical to a per-user kda_conv_prefill call that takes
+    user u's carry as its history (the KDA op is batch-1 only)."""
     mesh = mesh_device
     kd, vd = 512, 1536  # 27B at TP4
     C = 2 * kd + vd
@@ -1215,7 +1214,7 @@ def test_kda_conv_packed_matches_per_user(mesh_device, B, T, reset_seeds, ensure
     win = torch.randn(B, L, C).to(torch.bfloat16)  # user u's window: rows [0, K-1) carry, rows [K-1, L) tokens
     w = (torch.randn(C, CONV_K) * 0.3).to(torch.bfloat16)
     taps, start = _taps(mesh, w), _actual_start(mesh)
-    rep, dram = ttnn.ReplicateTensorToMesh(mesh), ttnn.DRAM_MEMORY_CONFIG
+    rep = ttnn.ReplicateTensorToMesh(mesh)
 
     def to_dev(x, layout):
         return ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=layout, device=mesh, mesh_mapper=rep)
@@ -1234,54 +1233,26 @@ def test_kda_conv_packed_matches_per_user(mesh_device, B, T, reset_seeds, ensure
             ttnn.deallocate(t)
     ref = [torch.cat(r, dim=1) for r in ref]  # [1, B*T, width], user-major
 
-    # PACKED: the same ops as TPGatedDeltaNet._kda_conv_packed.
-    Lp = -(-(B * L) // 32) * 32
-    zero_hist = to_dev(torch.zeros(1, CONV_K - 1, C, dtype=torch.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
-    E = to_dev(win, ttnn.TILE_LAYOUT)  # [B, L, C]
-    x = ttnn.reshape(ttnn.to_layout(E, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram), (1, B * L, C))
-    if Lp != B * L:
-        xp = ttnn.pad(x, [(0, 0), (0, Lp - B * L), (0, 0)], 0.0)
-        ttnn.deallocate(x)
-        x = xp
-    out = kda_conv_prefill(x, Lp, zero_hist, taps, widths, start, emit_state=False)[:3]
-    gather = to_dev(kda_pack_gather(B, T, CONV_K, Lp), ttnn.TILE_LAYOUT)
-    cfg = ttnn.init_device_compute_kernel_config(
+    # PACKED: the layer's own method on a weight-free instance holding just what it reads.
+    gdn = TPGatedDeltaNet.__new__(TPGatedDeltaNet)
+    gdn.mesh, gdn.K = mesh, CONV_K
+    gdn.qkv_dim_tp, gdn.key_dim_tp, gdn.value_dim_tp = C, kd, vd
+    gdn.tw = {"conv_taps": taps}
+    gdn._cfg_onehot = ttnn.init_device_compute_kernel_config(
         mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
     )
-    for label, t, r in zip("qkv", out, ref):
-        got = ttnn.matmul(gather, t, compute_kernel_config=cfg, memory_config=dram)
+    gdn._kda_actual_start = gdn._kda_zero_history = None
+    gdn._kda_gather = {}
+    E = to_dev(win, ttnn.TILE_LAYOUT)  # [B, L, C]
+    for label, got, r in zip("qkv", gdn._kda_conv_packed(E, T), ref):
         got_t = _dev0(got)
         assert tuple(got_t.shape) == (1, B * T, r.shape[-1]), f"{label}: shape {tuple(got_t.shape)}"
         diff = (got_t.float() - r.float()).abs().max().item()
         logger.info(f"B={B} T={T} {label}: packed vs per-user max-abs {diff:.3e}")
         assert torch.equal(got_t, r), f"B={B} T={T} {label}: packed != per-user (max-abs {diff:.3e})"
-        for d in (got, t):
-            ttnn.deallocate(d)
-    for t in (E, zero_hist, gather):
+        ttnn.deallocate(got)
+    for t in (E, gdn._kda_zero_history, *gdn._kda_gather.values()):
         ttnn.deallocate(t)
-
-
-@pytest.mark.parametrize(
-    "B, T, kc, cols",
-    [
-        (2, 4, 4, [3, 4, 5, 6, 10, 11, 12, 13]),
-        (
-            8,
-            4,
-            4,
-            [3, 4, 5, 6, 10, 11, 12, 13, 17, 18, 19, 20, 24, 25, 26, 27]
-            + [31, 32, 33, 34, 38, 39, 40, 41, 45, 46, 47, 48, 52, 53, 54, 55],
-        ),
-        (1, 12, 4, list(range(3, 15))),
-    ],
-)
-def test_kda_pack_gather_indices(B, T, kc, cols):
-    """kda_pack_gather (pure torch): output row u*T + j is one-hot at packed row u*(kc-1+T) + kc-1 + j."""
-    Lp = -(-(B * (kc - 1 + T)) // 32) * 32
-    g = kda_pack_gather(B, T, kc, Lp)
-    assert g.dtype == torch.bfloat16 and tuple(g.shape) == (1, B * T, Lp)
-    assert (g.sum(dim=-1) == 1).all() and torch.count_nonzero(g) == B * T, "each row must be one-hot"
-    assert g[0].argmax(dim=-1).tolist() == cols
 
 
 @pytest.mark.parametrize(

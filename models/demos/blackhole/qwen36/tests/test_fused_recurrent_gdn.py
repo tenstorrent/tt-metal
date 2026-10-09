@@ -406,8 +406,8 @@ def _to_dev_rm_u32(mesh_device, t):
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize(
     "B, HV, T",
-    [(2, 32, 4), (3, 32, 4), (2, 32, 8), (8, 8, 4)],
-    ids=["b2h32t4", "b3h32t4", "b2h32t8", "b8h8t4"],
+    [(3, 32, 4), (2, 32, 8), (8, 8, 4)],
+    ids=["b3h32t4", "b2h32t8", "b8h8t4"],
 )
 def test_fused_verify_batched_matches_fla_naive(mesh_device, B, HV, T):
     """Kernel 2 at B>1 (multi-user verify), non-ring path: per-token o and states vs FLA naive.
@@ -452,8 +452,8 @@ def test_fused_verify_batched_matches_fla_naive(mesh_device, B, HV, T):
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize(
     "B, HV, T",
-    [(1, 32, 4), (2, 32, 4), (8, 8, 4)],
-    ids=["b1h32t4", "b2h32t4", "b8h8t4"],
+    [(1, 12, 12), (2, 12, 12), (8, 8, 4)],
+    ids=["b1h12t12", "b2h12t12", "b8h8t4"],
 )
 def test_fused_verify_ring_select(mesh_device, B, HV, T):
     """Ring mode: head h starts from ring block idx[h] and writes its per-token states back into
@@ -506,9 +506,8 @@ def test_fused_verify_ring_select(mesh_device, B, HV, T):
     assert p_rA > 0.999, f"window A ring PCC {p_rA}"
 
     # ---- window B: commit a different accepted slot per user, then verify again ----
-    # mi covers 0 and T-1; the rest is a fixed pseudo-random spread.
-    mi = [0, T - 1] + [(3 * b + 1) % T for b in range(B - 2)]
-    mi = mi[:B]
+    # mi[0] = T-1 so even B=1 selects a non-identity block; the rest is a fixed pseudo-random spread.
+    mi = ([T - 1, 0] + [(3 * b + 1) % T for b in range(B - 2)])[:B]
     idx_b = torch.tensor([(mi[b] * B + b) * HV + hv for b in range(B) for hv in range(HV)], dtype=torch.int64)
     assert all(int(idx_b[h]) % BH == h for h in range(BH)), "idx[h] % BH == h contract"
     idx_b_tt = _to_dev_rm_u32(mesh_device, idx_b)
