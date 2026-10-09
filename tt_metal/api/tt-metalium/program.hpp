@@ -71,7 +71,7 @@ struct KernelMeta;
 // Note: device is nullable
 [[deprecated(
     "Use experimental::collect_kernel_meta from <tt-metalium/experimental/op_profiler_support.hpp> instead. This "
-    "overload will be removed after 2026-11-06.")]]
+    "overload will be removed after 2026-11-09.")]]
 std::vector<detail::KernelMeta> collect_kernel_meta(const Program& program, IDevice* device);
 }; //namespace detail
 
