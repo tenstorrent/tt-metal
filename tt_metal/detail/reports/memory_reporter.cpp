@@ -15,7 +15,6 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include "tt_metal/detail/reports/report_utils.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -27,8 +26,9 @@ namespace tt::tt_metal::detail {
 using bank_to_statistics = std::map<uint32_t, Statistics>;
 
 namespace {
-std::string reports_dir_for(const IDevice* device) {
-    return metal_reports_dir(MetalContext::instance(extract_context_id(device)).rtoptions().get_logs_dir());
+fs::path metal_reports_dir(const IDevice* device) {
+    const auto& rtoptions = MetalContext::instance(extract_context_id(device)).rtoptions();
+    return fs::path(rtoptions.get_logs_dir()) / "generated" / "reports";
 }
 }  // namespace
 
@@ -142,11 +142,11 @@ void MemoryReporter::flush_program_memory_usage(uint64_t program_id, const IDevi
 void MemoryReporter::dump_memory_usage_state(const IDevice* device, const std::string& prefix) const {
     std::ofstream memory_usage_summary_report, l1_usage_summary_report, detailed_memory_usage_report;
 
-    const std::string reports_dir = reports_dir_for(device);
+    const fs::path reports_dir = metal_reports_dir(device);
     fs::create_directories(reports_dir);
-    memory_usage_summary_report.open(reports_dir + prefix + "memory_usage_summary.csv");
-    l1_usage_summary_report.open(reports_dir + prefix + "l1_usage_summary.csv");
-    detailed_memory_usage_report.open(reports_dir + prefix + "detailed_memory_usage.csv");
+    memory_usage_summary_report.open(reports_dir / (prefix + "memory_usage_summary.csv"));
+    l1_usage_summary_report.open(reports_dir / (prefix + "l1_usage_summary.csv"));
+    detailed_memory_usage_report.open(reports_dir / (prefix + "detailed_memory_usage.csv"));
 
     write_headers(memory_usage_summary_report, l1_usage_summary_report, /*add_program_id=*/false);
     populate_reports(device, memory_usage_summary_report, detailed_memory_usage_report, l1_usage_summary_report);
@@ -157,11 +157,11 @@ void MemoryReporter::dump_memory_usage_state(const IDevice* device, const std::s
 }
 
 void MemoryReporter::init_reports(const IDevice* device) {
-    const std::string reports_dir = reports_dir_for(device);
+    const fs::path reports_dir = metal_reports_dir(device);
     fs::create_directories(reports_dir);
-    this->program_memory_usage_summary_report_.open(reports_dir + "program_memory_usage_summary.csv");
-    this->program_l1_usage_summary_report_.open(reports_dir + "program_l1_usage_summary.csv");
-    this->program_detailed_memory_usage_report_.open(reports_dir + "program_detailed_memory_usage.csv");
+    this->program_memory_usage_summary_report_.open(reports_dir / "program_memory_usage_summary.csv");
+    this->program_l1_usage_summary_report_.open(reports_dir / "program_l1_usage_summary.csv");
+    this->program_detailed_memory_usage_report_.open(reports_dir / "program_detailed_memory_usage.csv");
     write_headers(
         this->program_memory_usage_summary_report_, this->program_l1_usage_summary_report_, /*add_program_id=*/true);
 }
