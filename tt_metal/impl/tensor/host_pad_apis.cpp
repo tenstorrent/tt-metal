@@ -16,6 +16,8 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tile.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
 
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>

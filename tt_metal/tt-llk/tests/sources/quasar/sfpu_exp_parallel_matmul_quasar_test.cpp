@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -30,30 +31,36 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t CT_DIM      = params.CT_DIM;
     const std::uint32_t RT_DIM      = params.RT_DIM;
     const std::uint32_t KT_DIM      = params.KT_DIM;
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t num_faces_A = params.num_faces_A;
+    const std::uint32_t num_faces_B = params.num_faces_B;
+    const Operand& buffer_A         = params.buffer_A;
+    const Operand& buffer_B         = params.buffer_B;
+#endif
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
 
-        const ckernel::TensorShape tensor_shape_A = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces_A);
-        const ckernel::TensorShape tensor_shape_B = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces_B);
+        const ckernel::TensorShape tensor_shape_A = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces_A);
+        const ckernel::TensorShape tensor_shape_B = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces_B);
         // Matmul flips the unpacker roles: _llk_unpack_matmul_init_ arg0 drives UNPACR1/SrcB, arg1 drives
         // UNPACR0/SrcA -- so operand A is recorded under Unp1 and operand B under Unp0 (matches product).
         const auto bfd_a =
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape_A, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
         const auto bfd_b =
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_B, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_B, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         _llk_unpack_configure_binary_<p_unpacr::UNP_B, p_unpacr::UNP_A>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
         _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(bfd_a, bfd_b, CT_DIM, RT_DIM, KT_DIM);
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
         }
@@ -88,13 +95,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t CT_DIM      = params.CT_DIM;
     const std::uint32_t RT_DIM      = params.RT_DIM;
     const std::uint32_t KT_DIM      = params.KT_DIM;
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -105,7 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
         }
@@ -160,8 +169,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t num_tiles   = params.TILE_CNT;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const Operand& buffer_S         = params.buffer_S;
+    const Operand& buffer_Res       = params.buffer_Res;
+#endif
+    const std::uint32_t num_tiles = TILE_CNT;
 
     const bool PARAM_SRCS_32BIT_MODE                = _is_srcs_32bit_mode_(static_cast<DataFormat>(formats.unpack_S_dst));
     constexpr std::uint32_t PARAM_SRCS_XDIM         = srcs_dims::XDIM;
@@ -184,12 +198,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     ckernel_template mop(PARAM_SRCS_SLICE_COUNT, 1 /*inner_loop_len*/, _exp_loadmacro_op_(num_sfpu_iterations));
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         const ckernel::TensorShape srcs_shape = tensor_shape_from_dimensions(PARAM_SRCS_YDIM, PARAM_SRCS_XDIM, PARAM_SRCS_ZDIM, PARAM_SRCS_ZDIM);
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(srcs_shape, L1_ADDRESS(params.buffer_S[0]), formats.unpack_S_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(srcs_shape, L1_ADDRESS(buffer_S[0]), formats.unpack_S_src);
         _llk_unpack_configure_unary_<p_unpacr::UNP_S>(static_cast<DataFormat>(formats.unpack_S_dst));
 
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack1>(srcs_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_S_dst);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack1>(srcs_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_S_dst);
         _llk_pack_hw_configure_<p_pacr::PACK1, false /*EN_32BIT_DEST*/>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
 
         _llk_unpack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
@@ -212,7 +226,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
             const std::uint8_t bfd_unpack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp2_Slice0>();
@@ -249,12 +263,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t CT_DIM      = params.CT_DIM;
     const std::uint32_t RT_DIM      = params.RT_DIM;
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t num_faces   = params.num_faces;
+    const Operand& buffer_C         = params.buffer_C;
+#endif
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
         // Explicitly clear wait_mask because CFG state can persist across run types.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
@@ -266,15 +284,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
-        const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces);
+        const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces);
         const auto bfd_pack =
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(params.buffer_C[0]), formats.pack_dst);
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(buffer_C[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_matmul_init_(bfd_pack, RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/);
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
         }
