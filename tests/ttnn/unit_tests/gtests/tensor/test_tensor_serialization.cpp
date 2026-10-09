@@ -822,128 +822,130 @@ TEST(TensorSerializationFlatbufferGuardTest, ShardedRoundtripPreservesTopology2D
     for (size_t i = 0; i < coords.size(); ++i) {
         EXPECT_THAT(shard_values(loaded_tensor, coords[i]), Pointwise(FloatEq(), data[i]));
     }
-    // A loaded tensor keeps its file mapped, so dump_overlapped_tensors has to replace an existing file rather than
-    // rewrite it: views loaded from the old file keep reading the old contents.
-    TEST(TensorSerializationOverwriteTest, OverwritingOverlappedTensorsFileKeepsLoadedViewContents) {
-        TemporaryFile test_file("overwrite.overlappedtensorbin");
-        const ttnn::Shape shape{1, 1, 32, 32};
-        const std::vector<uint32_t> original_data(shape.volume(), 1);
-        const std::vector<uint32_t> replacement_data(shape.volume(), 2);
-        const auto single_view = [&](const std::vector<uint32_t>& data) {
-            return std::vector<OverlappedTensorView>{{
-                .name = "view",
-                .fused_tensor = Tensor::from_vector(data, get_tensor_spec(shape, DataType::UINT32)),
-                .tensor_shape = {32, 32},
-                .shard_shape = {32, 32},
-                .core_range_set = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))),
-                .dtype = DataType::UINT32,
-                .tile_shape = {32, 32},
-                .byte_offset = 0,
-                .total_size = data.size() * sizeof(uint32_t),
-            }};
-        };
+}
 
-        dump_overlapped_tensors(test_file.string(), single_view(original_data));
-        std::vector<OverlappedTensorView> loaded_views = load_overlapped_tensors(test_file.string());
-        dump_overlapped_tensors(test_file.string(), single_view(replacement_data));
+// A loaded tensor keeps its file mapped, so dump_overlapped_tensors has to replace an existing file rather than
+// rewrite it: views loaded from the old file keep reading the old contents.
+TEST(TensorSerializationOverwriteTest, OverwritingOverlappedTensorsFileKeepsLoadedViewContents) {
+    TemporaryFile test_file("overwrite.overlappedtensorbin");
+    const ttnn::Shape shape{1, 1, 32, 32};
+    const std::vector<uint32_t> original_data(shape.volume(), 1);
+    const std::vector<uint32_t> replacement_data(shape.volume(), 2);
+    const auto single_view = [&](const std::vector<uint32_t>& data) {
+        return std::vector<OverlappedTensorView>{{
+            .name = "view",
+            .fused_tensor = Tensor::from_vector(data, get_tensor_spec(shape, DataType::UINT32)),
+            .tensor_shape = {32, 32},
+            .shard_shape = {32, 32},
+            .core_range_set = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))),
+            .dtype = DataType::UINT32,
+            .tile_shape = {32, 32},
+            .byte_offset = 0,
+            .total_size = data.size() * sizeof(uint32_t),
+        }};
+    };
 
-        ASSERT_THAT(loaded_views, SizeIs(1));
-        EXPECT_EQ(loaded_views[0].fused_tensor.to_vector<uint32_t>(), original_data);
-        std::vector<OverlappedTensorView> reloaded_views = load_overlapped_tensors(test_file.string());
-        ASSERT_THAT(reloaded_views, SizeIs(1));
-        EXPECT_EQ(reloaded_views[0].fused_tensor.to_vector<uint32_t>(), replacement_data);
+    dump_overlapped_tensors(test_file.string(), single_view(original_data));
+    std::vector<OverlappedTensorView> loaded_views = load_overlapped_tensors(test_file.string());
+    dump_overlapped_tensors(test_file.string(), single_view(replacement_data));
+
+    ASSERT_THAT(loaded_views, SizeIs(1));
+    EXPECT_EQ(loaded_views[0].fused_tensor.to_vector<uint32_t>(), original_data);
+    std::vector<OverlappedTensorView> reloaded_views = load_overlapped_tensors(test_file.string());
+    ASSERT_THAT(reloaded_views, SizeIs(1));
+    EXPECT_EQ(reloaded_views[0].fused_tensor.to_vector<uint32_t>(), replacement_data);
+}
+
+// Returns the permission column of the /proc/self/maps entry that contains `address` -- e.g. "r--s", where the
+// fourth character is 's' for a shared mapping and 'p' for a private one -- or nullopt if no entry contains it.
+std::optional<std::string> mapping_permissions(uintptr_t address) {
+    std::ifstream maps("/proc/self/maps");
+    std::string line;
+    while (std::getline(maps, line)) {
+        uintptr_t start = 0;
+        uintptr_t end = 0;
+        std::array<char, 5> permissions{};
+        if (std::sscanf(line.c_str(), "%" SCNxPTR "-%" SCNxPTR " %4s", &start, &end, permissions.data()) == 3 &&
+            start <= address && address < end) {
+            return std::string(permissions.data());
+        }
+    }
+    return std::nullopt;
+}
+
+using TensorSerializationPinnedUploadTest = MeshDevice1x1Fixture;
+
+// load_tensor_flatbuffer maps the file MAP_SHARED so that a pinned upload pins the file's page-cache pages in place,
+// instead of making the kernel copy every page of a private mapping first. This checks both halves: the loader's
+// mapping is shared, and an upload from it creates a device-read-only pin.
+TEST_F(TensorSerializationPinnedUploadTest, LargeLoadedTensorUploadPinsSharedFileMapping) {
+    const ttnn::Shape shape{1, 1, 1024, 9216};
+    const size_t size_bytes = static_cast<size_t>(shape.volume()) * sizeof(uint32_t);
+    ASSERT_GT(size_bytes, pinned_upload::k_pin_write_threshold_bytes);
+
+    distributed::MeshDevice& mesh_device = *mesh_device_;
+    const auto pinning_params = experimental::GetMemoryPinningParameters(mesh_device);
+    if (!pinning_params.can_map_to_noc || !pinning_params.supports_read_only) {
+        GTEST_SKIP() << "Device-read-only pinned NOC mappings are not available";
+    }
+    const size_t cache_limit =
+        MetalContext::instance(extract_context_id(&mesh_device)).rtoptions().get_pinned_memory_cache_limit_bytes();
+    if (cache_limit < size_bytes || pinning_params.max_total_pin_size < size_bytes || pinning_params.max_pins < 1) {
+        GTEST_SKIP() << "Requires a pin budget large enough for a " << size_bytes << " byte mapping";
     }
 
-    // Returns the permission column of the /proc/self/maps entry that contains `address` -- e.g. "r--s", where the
-    // fourth character is 's' for a shared mapping and 'p' for a private one -- or nullopt if no entry contains it.
-    std::optional<std::string> mapping_permissions(uintptr_t address) {
-        std::ifstream maps("/proc/self/maps");
-        std::string line;
-        while (std::getline(maps, line)) {
-            uintptr_t start = 0;
-            uintptr_t end = 0;
-            std::array<char, 5> permissions{};
-            if (std::sscanf(line.c_str(), "%" SCNxPTR "-%" SCNxPTR " %4s", &start, &end, permissions.data()) == 3 &&
-                start <= address && address < end) {
-                return std::string(permissions.data());
-            }
+    // Position-dependent contents, so the round trip below catches a wrong offset or a repeated page.
+    std::vector<uint32_t> data(shape.volume());
+    for (size_t i = 0; i < data.size(); i++) {
+        data[i] = static_cast<uint32_t>(i) * 2654435761u + 0x9e3779b9u;
+    }
+    TemporaryFile test_file("large_read_only.tensorbin");
+    dump_tensor_flatbuffer(test_file.string(), Tensor::from_vector(data, get_tensor_spec(shape, DataType::UINT32)));
+
+    // load_tensor_flatbuffer falls back to MAP_PRIVATE on a filesystem that refuses MAP_SHARED, so a private mapping
+    // there is correct behavior, not a regression. Probe the filesystem directly to tell the two apart.
+    // LargeReadOnlyPrivateFileBackedWriteUsesReadOnlyPinnedMemory in unit_tests_tensor covers pinning the fallback.
+    {
+        const int fd = open(test_file.string().c_str(), O_RDONLY | O_CLOEXEC);
+        ASSERT_NE(fd, -1) << strerror(errno);
+        void* probe = mmap(nullptr, size_bytes, PROT_READ, MAP_SHARED, fd, 0);
+        const int probe_errno = errno;
+        close(fd);
+        if (probe == MAP_FAILED) {
+            GTEST_SKIP() << "The filesystem holding " << test_file.string()
+                         << " refuses MAP_SHARED: " << strerror(probe_errno);
         }
-        return std::nullopt;
+        munmap(probe, size_bytes);
     }
 
-    using TensorSerializationPinnedUploadTest = MeshDevice1x1Fixture;
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+    const std::vector<uintptr_t> addresses = shard_addresses(loaded_tensor);
+    ASSERT_THAT(addresses, SizeIs(1));
+    EXPECT_EQ(mapping_permissions(addresses[0]), std::string("r--s"));
 
-    // load_tensor_flatbuffer maps the file MAP_SHARED so that a pinned upload pins the file's page-cache pages in
-    // place, instead of making the kernel copy every page of a private mapping first. This checks both halves: the
-    // loader's mapping is shared, and an upload from it creates a device-read-only pin.
-    TEST_F(TensorSerializationPinnedUploadTest, LargeLoadedTensorUploadPinsSharedFileMapping) {
-        const ttnn::Shape shape{1, 1, 1024, 9216};
-        const size_t size_bytes = static_cast<size_t>(shape.volume()) * sizeof(uint32_t);
-        ASSERT_GT(size_bytes, pinned_upload::k_pin_write_threshold_bytes);
+    auto& cache = experimental::PinnedMemoryCache::instance();
+    const size_t entries_before = cache.num_entries();
+    Tensor device_tensor = loaded_tensor.to_device(&mesh_device);
 
-        distributed::MeshDevice& mesh_device = *mesh_device_;
-        const auto pinning_params = experimental::GetMemoryPinningParameters(mesh_device);
-        if (!pinning_params.can_map_to_noc || !pinning_params.supports_read_only) {
-            GTEST_SKIP() << "Device-read-only pinned NOC mappings are not available";
-        }
-        const size_t cache_limit =
-            MetalContext::instance(extract_context_id(&mesh_device)).rtoptions().get_pinned_memory_cache_limit_bytes();
-        if (cache_limit < size_bytes || pinning_params.max_total_pin_size < size_bytes || pinning_params.max_pins < 1) {
-            GTEST_SKIP() << "Requires a pin budget large enough for a " << size_bytes << " byte mapping";
-        }
+    // The upload itself must have created the pin, and the pin must be device-read-only: the mapping is PROT_READ of
+    // an O_RDONLY descriptor, so a read/write pin of it would fail. The try_pin below finds the upload's entry rather
+    // than creating a second one, so the entry count does not move.
+    ASSERT_EQ(cache.num_entries(), entries_before + 1);
+    const auto coord = *distributed::MeshCoordinateRange(mesh_device.shape()).begin();
+    std::optional<HostBuffer> shard = loaded_tensor.host_storage().buffer().get_shard(coord);
+    ASSERT_TRUE(shard.has_value());
+    auto pinned = cache.try_pin(
+        mesh_device,
+        distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord)),
+        *shard,
+        /*map_to_noc=*/true,
+        experimental::PinnedMemoryDeviceAccess::ReadOnly);
+    ASSERT_TRUE(pinned);
+    EXPECT_EQ(cache.num_entries(), entries_before + 1);
+    EXPECT_EQ(pinned->get_device_access(), experimental::PinnedMemoryDeviceAccess::ReadOnly);
 
-        // Position-dependent contents, so the round trip below catches a wrong offset or a repeated page.
-        std::vector<uint32_t> data(shape.volume());
-        for (size_t i = 0; i < data.size(); i++) {
-            data[i] = static_cast<uint32_t>(i) * 2654435761u + 0x9e3779b9u;
-        }
-        TemporaryFile test_file("large_read_only.tensorbin");
-        dump_tensor_flatbuffer(test_file.string(), Tensor::from_vector(data, get_tensor_spec(shape, DataType::UINT32)));
-
-        // load_tensor_flatbuffer falls back to MAP_PRIVATE on a filesystem that refuses MAP_SHARED, so a private
-        // mapping there is correct behavior, not a regression. Probe the filesystem directly to tell the two apart.
-        // LargeReadOnlyPrivateFileBackedWriteUsesReadOnlyPinnedMemory in unit_tests_tensor covers pinning the fallback.
-        {
-            const int fd = open(test_file.string().c_str(), O_RDONLY | O_CLOEXEC);
-            ASSERT_NE(fd, -1) << strerror(errno);
-            void* probe = mmap(nullptr, size_bytes, PROT_READ, MAP_SHARED, fd, 0);
-            const int probe_errno = errno;
-            close(fd);
-            if (probe == MAP_FAILED) {
-                GTEST_SKIP() << "The filesystem holding " << test_file.string()
-                             << " refuses MAP_SHARED: " << strerror(probe_errno);
-            }
-            munmap(probe, size_bytes);
-        }
-
-        Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
-        const std::vector<uintptr_t> addresses = shard_addresses(loaded_tensor);
-        ASSERT_THAT(addresses, SizeIs(1));
-        EXPECT_EQ(mapping_permissions(addresses[0]), std::string("r--s"));
-
-        auto& cache = experimental::PinnedMemoryCache::instance();
-        const size_t entries_before = cache.num_entries();
-        Tensor device_tensor = loaded_tensor.to_device(&mesh_device);
-
-        // The upload itself must have created the pin, and the pin must be device-read-only: the mapping is PROT_READ
-        // of an O_RDONLY descriptor, so a read/write pin of it would fail. The try_pin below finds the upload's entry
-        // rather than creating a second one, so the entry count does not move.
-        ASSERT_EQ(cache.num_entries(), entries_before + 1);
-        const auto coord = *distributed::MeshCoordinateRange(mesh_device.shape()).begin();
-        std::optional<HostBuffer> shard = loaded_tensor.host_storage().buffer().get_shard(coord);
-        ASSERT_TRUE(shard.has_value());
-        auto pinned = cache.try_pin(
-            mesh_device,
-            distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord)),
-            *shard,
-            /*map_to_noc=*/true,
-            experimental::PinnedMemoryDeviceAccess::ReadOnly);
-        ASSERT_TRUE(pinned);
-        EXPECT_EQ(cache.num_entries(), entries_before + 1);
-        EXPECT_EQ(pinned->get_device_access(), experimental::PinnedMemoryDeviceAccess::ReadOnly);
-
-        EXPECT_EQ(device_tensor.cpu().to_vector<uint32_t>(), data);
-    }
+    EXPECT_EQ(device_tensor.cpu().to_vector<uint32_t>(), data);
+}
 
 }  // namespace
 }  // namespace ttnn

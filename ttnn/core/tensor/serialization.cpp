@@ -41,7 +41,7 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
         cpu_tensor = ttnn::distributed::host_ccl::all_gather(cpu_tensor);
         const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
         // Only rank 0 serializes and writes; the other ranks wait in the barrier below. If rank 0 throws before its
-        // barrier (a rejected tensor, a failed fopen or fwrite) they wait until the launcher tears the job down.
+        // barrier (a rejected tensor, a failed write) they wait until the launcher tears the job down.
         // Reporting the failure to every rank needs a collective in place of the barrier; follow-up.
         if (ctx->rank() != tt::tt_metal::distributed::multihost::Rank(0)) {
             ctx->barrier();
@@ -49,23 +49,12 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
         }
     }
 
-    // Serialize before opening the output file, so that a tensor `to_flatbuffer` rejects leaves no file behind: an
-    // empty file at the target path would otherwise replace the previous dump and read back as corrupt.
     std::vector<SerializedTensorBuffer> buffers;
     flatbuffers::FlatBufferBuilder builder;
     auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
     builder.Finish(tensor_offset);
 
-    FILE* output_file = fopen(file_name.c_str(), "wb");
-    TT_FATAL(
-        output_file != nullptr, "Cannot open \"{}\" for writing: errno={} \"{}\"", file_name, errno, strerror(errno));
-    auto cleanup = ttsl::make_cleanup([f = output_file, &file_name]() {
-        if (f && fclose(f) != 0) {
-            log_warning(tt::LogAlways, "Failed to close \"{}\"", file_name);
-        }
-    });
-
-    write_tensor_file(output_file, file_name, builder, buffers);
+    write_tensor_file(file_name, builder, buffers);
 
     if (mode == DumpTensorMode::DISTRIBUTED_GATHER) {
         const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
