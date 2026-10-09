@@ -298,9 +298,8 @@ extern "C" uint32_t _start1() {
 
         // Reset all remapper pairs, in case they are in some invalid sticky state left from previous
         // program runs.
-        g_remapper_configurator.set_pair_high_watermark(REMAP_NUM_PAIRS - 1);
-        g_remapper_configurator.clear_clientL_valid_up_to_high_watermark_hw();
-        g_remapper_configurator.reset_pair_high_watermark();
+        g_remapper_configurator.clear_all_pairs();
+        g_remapper_configurator.write_all_pairs();
 
         // Initialize wait for trisc FW
         for (uint32_t i = MaxDMProcessorsPerCoreType; i < MaxNumKernels; i++) {
