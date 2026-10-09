@@ -292,6 +292,7 @@ class MultichipDecoder(OptimizedDecoder):
         self._cp32 = self._colpage and _parse_binary_env("TT_LAGUNA_CP32", True)
         self._router32 = _parse_binary_env("TT_LAGUNA_ROUTER32", True)  # exact top-K router kernel, <= 32-row tiles
         self._route_topk_kernel = _parse_binary_env("TT_LAGUNA_ROUTE_TOPK_KERNEL", True)  # prefill dispatch router
+        self._combine_local = _parse_binary_env("TT_LAGUNA_COMBINE_LOCAL", True)  # all-core local combine kernel
         self._swiglu32 = _parse_binary_env("TT_LAGUNA_SWIGLU32", True)  # fused routed SwiGLU, 32-row decode
         self._esum32 = _parse_binary_env("TT_LAGUNA_ESUM32", True)  # active-expert sum, no down zero fill
         self._fused_kv_update = _parse_binary_env("TT_LAGUNA_FUSED_KV_UPDATE", True)  # K+V cache in one op
@@ -1092,12 +1093,20 @@ class MultichipDecoder(OptimizedDecoder):
         )
         ttnn.deallocate(dispatched)
 
-        combined_slots = bucket["combine"](
-            ttnn.unsqueeze(ttnn.unsqueeze(expert_outputs, 0), 0),
-            metadata,
-            counts,
-            region_offsets,
-        )
+        if self._combine_local:
+            # local-only combine on every core (combine_local.py) instead of the <= 4-sender combine pipeline
+            from .combine_local import combine_local
+
+            combined_slots = combine_local(
+                expert_outputs, metadata, counts, region_offsets, state["global_expert_idx"], seq_len, cfg.top_k
+            )
+        else:
+            combined_slots = bucket["combine"](
+                ttnn.unsqueeze(ttnn.unsqueeze(expert_outputs, 0), 0),
+                metadata,
+                counts,
+                region_offsets,
+            )
         ttnn.deallocate(expert_outputs)
         ttnn.deallocate(metadata)
         ttnn.deallocate(offsets)

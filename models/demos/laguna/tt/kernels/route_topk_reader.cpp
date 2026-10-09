@@ -43,8 +43,9 @@ void kernel_main() {
     const uint32_t core = get_absolute_logical_y() * grid_x + get_absolute_logical_x();
     const auto sel = TensorAccessor(sel_args, sel_addr, tile_bytes);
     const auto sc = TensorAccessor(sc_args, sc_addr, tile_bytes);
-    const auto idx_out = TensorAccessor(idx_args, idx_addr, idx_page);
-    const auto wgt_out = TensorAccessor(wgt_args, wgt_addr, wgt_page);
+    // row-major [T, K] outputs: K * 2-byte pages, addressed with the aligned page size from the accessor args
+    const auto idx_out = TensorAccessor(idx_args, idx_addr);
+    const auto wgt_out = TensorAccessor(wgt_args, wgt_addr);
 
     const uint32_t buf = get_write_ptr(cb_buf);
     const uint32_t sel_l1 = buf, sc_l1 = buf + stage, out_l1 = buf + 2 * stage;  // out: R rows x (idx 64 B, wgt 64 B)
