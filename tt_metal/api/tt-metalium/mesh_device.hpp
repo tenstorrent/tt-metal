@@ -23,9 +23,9 @@
 #include <hostdevcommon/common_values.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/device_info.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/info.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
@@ -338,7 +338,7 @@ public:
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
-    // Device queries. `P` is a tag from <tt-metalium/device_info.hpp>, e.g. info::l1_alignment, and
+    // Device queries. `P` is a tag from <tt-metalium/info.hpp>, e.g. info::l1_alignment, and
     // `P::return_type` is the type of the property. Only the properties listed below the class are supported.
 
     // Returns the property of the device at `coord`. Every property is implemented for this form; the two forms

@@ -7,8 +7,8 @@
 #include <cstdint>
 #include <string>
 
-#include <tt-metalium/device_info.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/info.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
