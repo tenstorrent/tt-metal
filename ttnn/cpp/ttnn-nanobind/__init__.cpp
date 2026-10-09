@@ -30,6 +30,7 @@
 #include "ttnn-nanobind/operations/copy.hpp"
 #include "ttnn-nanobind/operations/core.hpp"
 #include "ttnn-nanobind/operations/trace.hpp"
+#include "ttnn-nanobind/jit_telemetry.hpp"
 #include "ttnn-nanobind/profiler.hpp"
 #include "ttnn-nanobind/program_descriptors.hpp"
 #include "ttnn-nanobind/tensor_accessor_args.hpp"
@@ -266,6 +267,7 @@ NB_MODULE(_ttnn, mod) {
         mod.def_submodule("layer_completion", "Pipelined-prefill layer-completion ring/router/consumer");
     auto m_mesh_socket = mod.def_submodule("mesh_socket", "ttnn mesh socket");
     auto m_profiler = mod.def_submodule("profiler", "Submodule defining the profiler");
+    auto m_jit_telemetry = mod.def_submodule("jit_telemetry", "JIT build telemetry");
     auto m_reports = mod.def_submodule("reports", "ttnn reports");
     auto m_operations = mod.def_submodule("operations", "ttnn Operations");
     auto m_fabric = mod.def_submodule("fabric", "Fabric instantiation APIs");
@@ -339,6 +341,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::counter_channel::py_module(m_counter_channel);
     ttnn::mesh_socket::py_module(m_mesh_socket);
     ttnn::profiler::py_module(m_profiler);
+    ttnn::jit_telemetry::py_module(m_jit_telemetry);
     ttnn::reports::py_module(m_reports);
     ttnn::tensor_accessor_args::py_module(m_tensor_accessor_args);
 

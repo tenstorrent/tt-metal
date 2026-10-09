@@ -63,6 +63,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/global_circular_buffer.hpp
     api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/inspector_config.hpp
+    api/tt-metalium/experimental/jit_telemetry.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_api.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp
