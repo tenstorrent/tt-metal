@@ -821,7 +821,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // instead of MOVB2D.  Fall back to the software-broadcast path for the affected
     // broadcast types on Blackhole when FP32 dest accumulation is active.
     if (use_llk_bcast && fp32_dest_acc_en) {
-        tt::ARCH arch = tt::tt_metal::hal::get_arch();
+        tt::ARCH arch = a.device()->arch();
         if (arch == tt::ARCH::BLACKHOLE) {
             auto sbt = operation_attributes.subtile_broadcast_type;
             bool uses_movb2d =
