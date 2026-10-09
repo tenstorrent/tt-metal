@@ -88,31 +88,29 @@ inline void _topk_large_indices_move_segment_result_() {
 }  // namespace ckernel::sfpu
 #endif
 
-#ifdef TRISC_PACK
-// The unfused accumulator (Dst tiles 0 to 3) to or from L1 through the pack thread's RISC Dst window, raw words.
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
+// The unfused accumulator (Dst tiles 0 to 3) to or from L1 through the pack thread's RISC Dst window, raw words. T2's
+// vector loads and stores move 128 bytes each (Zve32x, which the toolchain's -march leaves out, so the asm enables it).
 template <bool to_l1>
 inline void _topk_large_indices_move_accumulator_(const uint32_t l1_addr) {
     ckernel::configure_dest_access<ckernel::ThreadId::PackThreadId>(DataFormat::UInt32, false);
     ckernel::tensix_sync();
-    volatile uint32_t* dst = reinterpret_cast<volatile uint32_t*>(RISCV_DEST_START_ADDR);
-    volatile uint32_t* l1 = reinterpret_cast<volatile uint32_t*>(l1_addr);
-    volatile uint32_t* from = to_l1 ? dst : l1;
-    volatile uint32_t* to = to_l1 ? l1 : dst;
-    for (uint32_t i = 0; i < 4096; i += 8) {
-        const uint32_t w0 = from[i], w1 = from[i + 1], w2 = from[i + 2], w3 = from[i + 3];
-        const uint32_t w4 = from[i + 4], w5 = from[i + 5], w6 = from[i + 6], w7 = from[i + 7];
-        to[i] = w0;
-        to[i + 1] = w1;
-        to[i + 2] = w2;
-        to[i + 3] = w3;
-        to[i + 4] = w4;
-        to[i + 5] = w5;
-        to[i + 6] = w6;
-        to[i + 7] = w7;
+    const uint32_t dst = RISCV_DEST_START_ADDR;
+    const uint32_t from = to_l1 ? dst : l1_addr;
+    const uint32_t to = to_l1 ? l1_addr : dst;
+    asm volatile(".option push\n.option arch, +zve32x\nvsetvli zero, %0, e32, m8, ta, ma\n.option pop" : : "r"(32));
+    for (uint32_t i = 0; i < 4096 * 4; i += 256) {
+        asm volatile(
+            ".option push\n.option arch, +zve32x\n"
+            "vle32.v v8, (%0)\nvle32.v v16, (%1)\nvse32.v v8, (%2)\nvse32.v v16, (%3)\n"
+            ".option pop"
+            :
+            : "r"(from + i), "r"(from + i + 128), "r"(to + i), "r"(to + i + 128)
+            : "memory");
     }
     if constexpr (!to_l1) {
         // A used load of the last stored word returns once the stores have landed.
-        const uint32_t last = dst[4095];
+        const uint32_t last = reinterpret_cast<volatile uint32_t*>(dst)[4095];
         asm volatile("and x0, x0, %0" : : "r"(last) : "memory");
     }
 }
@@ -368,7 +366,7 @@ FORCE_INLINE void reduce_split_segmented_row(
     constexpr uint32_t segment_slot = 2 * tiles_per_sequence;
     constexpr uint32_t chunk_slot = segment_slot + tiles_per_sequence;
     // A shorter last segment runs on one thread: the accumulator's two copies cost more than its split saves.
-    constexpr uint32_t min_split_later_chunks = 18;
+    constexpr uint32_t min_split_later_chunks = 8;
     const uint32_t input_cb = input.get_cb_id();
     const uint32_t num_segments = (num_chunks + segment_capacity - 1) / segment_capacity;
     const uint32_t acc_addr = get_tile_address(acc_cb, 0);
