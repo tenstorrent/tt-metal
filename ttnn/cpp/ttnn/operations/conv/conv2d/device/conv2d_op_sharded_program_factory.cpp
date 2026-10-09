@@ -354,7 +354,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             act_block_h_ntiles,
             input_channels_padded,
             filter_w,
-            tt::tt_metal::hal::get_arch(),
+            device->arch(),
             a.dtype(),
             parallelization_config.per_core_out_matrix_width_ntile * block_config.act_block_w_ntiles,
             tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(b.dtype())),
