@@ -268,7 +268,7 @@ bool row_major_legs_fit(
     const MemoryConfig& output_mem_config,
     uint64_t committed,
     bool final_output_allocated,
-    LegFits&& fits) {
+    const LegFits& fits) {
     const auto& shape = input.logical_shape();
     const CodegenLegPlan plan = plan_codegen_legs(input, repeat_dims, output_mem_config);
     tt::tt_metal::TensorSpec leg_in = input.tensor_spec();
