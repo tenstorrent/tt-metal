@@ -21,7 +21,10 @@
 #include <vector>
 
 #include <core_coord.hpp>
+#include <tt-metalium/device_types.hpp>
 #include <tt-metalium/hal_types.hpp>
+
+struct metal_SocDescriptor;
 
 namespace tt::tt_metal {
 
@@ -30,6 +33,14 @@ class IDevice;
 namespace distributed {
 class MeshDevice;
 }  // namespace distributed
+
+// The logical DRAM core of DRAM view `bank_id` whose physical NoC coord the SoC descriptor does not
+// already claim as a worker_endpoint or eth_endpoint -- i.e. one safe for a DRISC kernel to occupy.
+// Resolved against `soc_desc`'s harvested DRAM topology; `device_id` only names the device in errors.
+// Throws if no free subchannel exists, or TT_FATALs if bank_id is out of range. Depends only on the SoC
+// descriptor, so device init can name this core in the firmware's tensor_prefetcher_signal_noc_xy table before
+// any MeshDevice exists.
+CoreCoord pick_unused_dram_logical_core(const metal_SocDescriptor& soc_desc, uint32_t bank_id, ChipId device_id);
 
 // How many DRISC sender cores drive one DRAM bank. TwoPerBank splits a bank's receivers across
 // both of its senders; OnePerBank is what a shard feeding more than one receiver requires.
