@@ -63,6 +63,7 @@
 
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/float8.hpp>
 
 using namespace tt::tt_metal;
 
