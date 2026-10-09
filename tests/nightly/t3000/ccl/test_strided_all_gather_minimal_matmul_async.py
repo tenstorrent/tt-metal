@@ -741,6 +741,7 @@ def test_strided_all_gather_minimal_matmul_async_swiglu(
 # iteration's outputs are checked against its own golden. The variants cover every address role the override
 # re-applies: the AG input read by the matmul (read_local), bias, ternary inputs, per-chunk outputs, and the
 # per-worker aggregator semaphores (Auto uses the aggregators at the default core grid offset, Off does not).
+# Linear covers the end devices, which have one fabric mux fewer than the middle ones.
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
@@ -778,9 +779,10 @@ def test_strided_all_gather_minimal_matmul_async_swiglu(
     "device_params, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring"],
+    ids=["fabric_ring", "fabric_linear"],
 )
 def test_strided_all_gather_minimal_matmul_async_program_cache(
     mesh_device,

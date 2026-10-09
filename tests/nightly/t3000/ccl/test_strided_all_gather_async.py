@@ -319,7 +319,8 @@ def test_strided_all_gather_async(
 
 
 # Cache-hit coverage: iterations 2..N reuse the cached program with new tensor and semaphore addresses, and each
-# iteration's output is checked against its own golden.
+# iteration's output is checked against its own golden. Linear covers the end devices, which have one fabric mux
+# fewer than the middle ones, so the per-device kernel count differs after the worker kernels.
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
@@ -344,9 +345,10 @@ def test_strided_all_gather_async(
     "device_params, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring"],
+    ids=["fabric_ring", "fabric_linear"],
 )
 def test_strided_all_gather_async_program_cache(
     mesh_device,
