@@ -29,3 +29,18 @@ Same scripts as t301 (t301/run301.sh, env.yaml on blx01 /var/tmp/fasth3/t301), k
   Script t305/run305.sh = run301.sh + df/du caps (lint), outputs in t305/out_pr. Same builds/JIT caches.
 - Next: when 242 ends, quote its gen #2 table (3rd PERFORMANCE box in t305/out_pr/run.log), compare. If 242 drops too:
   second drop of the PR config on blx01 -> skip and report with t301 data only.
+
+## Run 3 (2026-10-09 08:48 UTC wake)
+- Job 242 (PR df9e5ecaac6) completed exit 0, gen #2 Total 7.83 s (Enc 0.26, S1 2.83, Up 0.14, S2 3.20, VAE 0.92,
+  Audio 0.47). INVALID: all 32 chips "AICLK failed to settle ... observed 900, clamped by max-arbiter index 10 at 900 MHz"
+  (expected 1350). Main job 214 (02:35 UTC) and t301 jobs 210/213 had 0 such warnings. Not a drop (no rerun counted).
+- The clamp is box state: every device-opening broker job on blx01 since job 230 (03:59 UTC) shows it, incl. ltx-host
+  live-service jobs 231-243. Started after the 02:51 power cycle (jobs 221-229 clean). We never reset; not ours to fix.
+- Code reading: pipeline_ltx_distilled.py sets last_timings (line ~856) BEFORE export_video_audio(_yuv), so the two
+  export commits (5565232f12c AAC overlap, df9e5ecaac6 x264 ultrafast) are invisible in the standard test's table.
+  The mel-VAE trace (05401286709) is dead here (~2 ms, see run 1). Those three were most of the expected ~-0.4 s.
+- Valid data now: main 6.41 (210) / 6.19 (214); PR 6.24 (213). Excluding Encoder (0.19-0.47 s noise): main 5.96/6.00,
+  PR 5.77 -> -0.19..-0.23 s; Stage 2 2.55/2.54 -> 2.40 (-0.15), Stage 1 2.11/2.14 -> 2.08 (-0.03..-0.06).
+- Next: probe tt-project/t305/clkprobe.sh (exit 0 = newest device job on blx01 ran unclamped, or deadline
+  2026-10-10 02:00 UTC). On pass: lint, then resubmit PR arm (bash /var/tmp/fasth3/t305/run305.sh pr, -w t305,
+  -e t301/env.yaml, -t 570), wait, quote its table. If still clamped at deadline: report with t301 PR sample only.
