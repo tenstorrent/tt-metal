@@ -7,6 +7,7 @@
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 
 #include <mutex>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::operations::unary {
 
