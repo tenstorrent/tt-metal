@@ -211,14 +211,10 @@ inline void perform_float_average() {
     TTI_SFPMUL(p_sfpu::LREG0, AVG_RECIP_REG, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
 }
 
-// Dest addresses of the four column SUM/AVG groups.
 constexpr std::uint32_t COL_SUM_UPPER_FACE_ADDRS[NUM_FACES] = {0, 0, 16, 16};    // Face 0, 0, 1, 1
 constexpr std::uint32_t COL_SUM_LOWER_FACE_ADDRS[NUM_FACES] = {32, 32, 48, 48};  // Face 2, 2, 3, 3
 constexpr std::uint32_t COL_SUM_COLUMN_OFFSETS[NUM_FACES] = {0, 2, 0, 2};        // even, odd, even, odd
 
-/**
- * @brief Load one 4-row group of a face into LREG, masking the high bits of a UInt16 datum in a 32-bit dest.
- */
 template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, std::uint32_t LREG, std::uint32_t ADDR>
 inline void col_sum_load() {
     TTI_SFPLOAD(LREG, INSTRUCTION_MODE, ADDR_MOD_7, ADDR);
@@ -227,9 +223,6 @@ inline void col_sum_load() {
     }
 }
 
-/**
- * @brief One add of the column half-reduce: DST = DST + SRC (SFPIADD for integer modes, SFPADD otherwise).
- */
 template <bool is_integer_mode, std::uint32_t DST, std::uint32_t SRC>
 inline void half_reduce_add() {
     if constexpr (is_integer_mode) {
@@ -239,10 +232,7 @@ inline void half_reduce_add() {
     }
 }
 
-/**
- * @brief One column group of perform_reduce_col_sum_avg. The lower face is already in LREG4-7; the upper face is
- *        loaded here and the next group's lower face between the dependent adds of the half tree.
- */
+// Entered with this group's lower face already in LREG4-7.
 template <
     PoolType pool_type,
     InstrModLoadStore INSTRUCTION_MODE,
@@ -281,8 +271,8 @@ inline void perform_reduce_col_sum_avg_group() {
     // Step 3: transpose the four partial sums for the final reduction.
     TTI_SFPTRANSP(0, 0, 0, 0);
 
-    // Step 4: Final tree-reduce across LREG0-3 only (LREG4-7 no longer needed), issued inline so that the next
-    // group's lower-face loads can sit between the dependent adds; LREG0[0] = total column sum.
+    // Step 4: tree-reduce LREG0-3 inline, with the next group's lower-face loads between the dependent adds (an add
+    // result read by the next instruction stalls it a cycle); LREG0[0] = total column sum.
     half_reduce_add<is_integer_mode, p_sfpu::LREG2, p_sfpu::LREG3>();
     if constexpr (HAS_NEXT) {
         col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4, NEXT_LOWER>();
@@ -319,8 +309,7 @@ template <
     bool pack_low16,
     bool is_signed_int>
 inline void perform_reduce_col_sum_avg() {
-    // Reduce across registers, add the faces, transpose, half-reduce LREG0-3; the next group's lower-face loads sit
-    // between the half tree's dependent adds (a multiply-add result read next stalls a cycle), every push a TTI_ immediate.
+    // The group is a template parameter, so every load, add and store is an immediate (TTI_) push.
     constexpr std::uint32_t LOWER0 = COL_SUM_LOWER_FACE_ADDRS[0] + COL_SUM_COLUMN_OFFSETS[0];
     col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4, LOWER0>();
     col_sum_load<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG5, LOWER0 + ROWS_PER_LOAD>();
@@ -337,11 +326,11 @@ inline void perform_reduce_col_sum_avg() {
 // Horizontal (cross-column) reduction of the two 4-row accumulators
 // ============================================================================
 // The 8 SFPU column slices exchange data only through SFPSHFT2 (SUBVEC_SHFLROR1), which rotates VC right by
-// one lane within each 8-lane sub-vector and writes VD; VD may differ from VC. horizontal_reduce (the float sum,
-// whose pairing is kept) folds the per-column partials in LREG0 / LREG4 into the full 8-column result, replicated
-// in every column, with a 3-stage butterfly (rotate by 4, 2, 1; fold after each stage) that uses LREG1 / LREG5 as
-// rotate registers. horizontal_reduce_merged (integer sum, MAX, MIN) shares the last two stages between the two
-// accumulators and leaves the result in column 0 only, the column every store and cross-tile pass reads.
+// one lane within each 8-lane sub-vector and writes VD; VD may differ from VC. horizontal_reduce folds
+// the per-column partials in LREG0 / LREG4 into the full 8-column result, replicated in every column, with a
+// 3-stage butterfly (rotate by 4, 2, 1; fold after each stage) that uses LREG1 / LREG5 as rotate registers.
+// The first rotate of each stage reads the accumulator directly, so it is never copied first, and the result
+// lands in every column, so no trailing "move to column 0" is needed before the store.
 //
 // The two pairs are interleaved instruction by instruction. On Blackhole an SFPSHFT2 or SFPSWAP auto-stalls
 // the next cycle (only SFPNOP issues), so this hides no latency, but it keeps every consumer two
@@ -439,10 +428,6 @@ inline void load_odd_lane_mask() {
     TTI_SFPSHFT(30, p_sfpu::LTILEID, MASK, 5 /* ARG_IMM | ARG_IMM_USE_VC */);
 }
 
-/**
- * @brief Moves the odd lanes of SRC into DST. Writes the odd-lane mask to MASK first unless mask_ready; leaves every
- *        lane enabled.
- */
 template <std::uint32_t SRC, std::uint32_t DST, std::uint32_t MASK, bool mask_ready>
 inline void merge_odd_lanes() {
     if constexpr (!mask_ready) {
@@ -508,9 +493,8 @@ inline void horizontal_reduce_merged() {
  * 4. Use horizontal_reduce_merged to fold the 8 SFPU columns; column 0 then holds the row max
  * 5. Store the per-row max, reading column 0
  *
- * On the LOADMACRO path the four compare-and-swaps with a freshly loaded register run inside SFPLOADMACRO sequences
- * 0 to 3 (SFPLOADMACRO loads LREG0-3 only); a scheduled SFPSWAP holds the simple sub-unit for two cycles. The group's
- * results (LREG7, LREG4) are stored by the next group: LREG4 before its reload, LREG7 in an SFPNOP slot.
+ * On the LOADMACRO path the four swaps with a freshly loaded register run in SFPLOADMACRO sequences 0 to 3, and each
+ * group's results (LREG7, LREG4) are stored by the next group: LREG4 before its reload, LREG7 in an SFPNOP slot.
  *
  * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B, or INT32 for sign-magnitude int max)
  * @param tile_row_offset Base row offset for this tile in the dest register
@@ -1680,10 +1664,10 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
 // The sign-magnitude paths above (convert_int_representation_inplace / SFPCAST
 // INT_SIGN_MAGN_TO_INT32_2S_COMP) collapse INT32_MIN (0x80000000) to sign-magnitude "-0" (magnitude 0),
 // so it ranks as 0 and is dropped by SFPSWAP. These functions keep the raw two's-complement bits (load
-// plain INT32) and correct the ordering in software: the row cross-tile combine with the both-negative re-swap in
-// _emit_int32_signed_cswap_ (as the Wormhole fix, PR #49085), the per-tile row and the column paths with an order
-// map on every operand. Correct over the full Int32 range, INT32_MIN included. The sign-magnitude functions
-// above are kept for SUM/AVG (which need two's-complement for SFPIADD) and for UInt16/UInt32.
+// plain INT32) and correct ordering in software, with an order map per operand in the per-tile paths and the
+// both-negative re-swap in _emit_int32_signed_cswap_. Correct over the full Int32 range, INT32_MIN
+// included. The sign-magnitude functions above are kept for SUM/AVG (which need two's-complement for
+// SFPIADD) and for UInt16/UInt32.
 
 /**
  * @brief Two's-complement signed compare-and-swap of a register pair, matching SFPSWAP(VEC_MIN_MAX)
