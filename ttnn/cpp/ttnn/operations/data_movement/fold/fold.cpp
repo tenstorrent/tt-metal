@@ -441,6 +441,7 @@ Tensor fold(
 
     const Tensor& input_tensor = input_tensor_;
     TT_ASSERT(input_tensor.logical_shape().rank() == 4, "Fold op only supports 4D tensors");
+    TT_FATAL(stride_h > 0 && stride_w > 0, "Fold: stride_h and stride_w must be greater than 0");
 
     // use_transpose_as_fold takes a legacy composite path that bypasses prim::fold, so collapse_output cannot be
     // honoured there.
