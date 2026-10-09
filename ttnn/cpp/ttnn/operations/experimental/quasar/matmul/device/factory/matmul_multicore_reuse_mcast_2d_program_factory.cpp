@@ -52,7 +52,7 @@ namespace reuse_mcast_optimized_helpers {
 // [[maybe_unused]] suppresses -Wunused-function pending removal in a follow-up.
 [[maybe_unused]] static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     const tt::tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -1552,7 +1552,7 @@ ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory:
 create_program_mcast_in0_in1(
     tt::tt_metal::Program& program,
     const tt::tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -3287,7 +3287,7 @@ m2::KernelSpec make_compute_kernel(
 ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     const ttnn::Tensor& a,
     const tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,

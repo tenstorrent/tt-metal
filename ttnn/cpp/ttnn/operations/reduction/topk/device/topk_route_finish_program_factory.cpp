@@ -34,6 +34,7 @@
 // at the composite call site in topk.cpp).
 
 #include "topk_route_finish_device_operation.hpp"
+#include "topk_utils.hpp"
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
@@ -95,7 +96,7 @@ FinishWorkSplit compute_work_split(const Tensor& input, const Tensor& indices) {
     split.k_rounded = indices.logical_shape()[-1];
     split.k_tiles = tt::div_up(split.k_rounded, TILE_WIDTH);
     split.total_units = split.total_tile_rows * split.k_tiles * 2;
-    split.index_is_u32 = padded[-1] > std::numeric_limits<uint16_t>::max();
+    split.index_is_u32 = ttnn::prim::padded_width_needs_uint32_indices(padded[-1]);
     return split;
 }
 

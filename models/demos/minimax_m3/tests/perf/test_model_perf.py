@@ -36,6 +36,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.minimax_m3.tt.moe import shared_overlap
 
 _THIS = "models/demos/minimax_m3/tests/perf/test_model_perf.py"
 
@@ -197,6 +198,7 @@ def test_model_fwd():
             f"  prefill throughput: {total_tokens / wall:,.0f} tokens/s"
         )
     finally:
+        shared_overlap.release_all()
         ttnn.close_mesh_device(mesh)
 
 
