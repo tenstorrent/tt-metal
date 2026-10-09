@@ -25,16 +25,19 @@ parts because a Metal 2.0 TensorParameter relaxation requires it to be exactly e
 and cannot relax any component of it.
 
 For sharded tensors, the cache key uses the squeezed shard shape in pages and the resolved
-core list from the BufferDistributionSpec, which is passed to TensorAccessor compile-time
-args. Since neither of these can be determined from the shard spec, the tensor and shard
-shapes are squeezed together and for GRID_2D the bank list is trimmed from the unsqueezed
-shape. This gives different geometries for the same shard spec but with different shapes.
+core list from each TensorSpec's BufferDistributionSpec (compute_buffer_sharding_args). The
+tensor bindings bake that geometry into TensorAccessor compile-time args, and the relaxed
+TensorParameter match compares it exactly. Since neither of these can be determined from the
+shard spec, the tensor and shard shapes are squeezed together and for GRID_2D the bank list is
+trimmed from the unsqueezed shape. This gives different geometries for the same shard spec but
+with different shapes.
 
-On a program-cache HIT the descriptor is NOT rebuilt; override_runtime_arguments()
-re-derives ALL per-dispatch state for the current tensors from the same shared
-per-core builder create_descriptor() uses — every per-core work-split arg (tile
-counts, start ids), packed scalars, buffer-address rt-arg slots, AND every
-tensor-backed circular-buffer base address (by CBIndex: c_0=input, c_2=output).
+On a program-cache HIT the program is NOT rebuilt; override_runtime_arguments()
+returns ALL per-dispatch state for the current tensors, built by the same run-args
+builder create_program_artifacts() uses — every per-core work-split arg (tile counts,
+start ids) and packed scalars, plus both tensor arguments. The tensor arguments carry
+the reader/writer TensorAccessor base addresses and shape, and the base addresses of
+the sharded path's borrowed input/output dataflow buffers.
 
 For TILE layout, volume is NOT hashed, so differently-shaped calls share one
 cache entry and override_runtime_arguments re-applies the new shape's work split
@@ -119,6 +122,53 @@ def test_unary_cache_reuse_different_volumes(device):
 
     torch_ref2, tt_out2 = run_unary_op(device, ttnn.relu, [1, 1, 64, 64], dtype=ttnn.float32)
     assert_equal(torch_ref2, tt_out2)
+
+    assert device.cache_entries_counter.total == 1
+
+
+@pytest.mark.parametrize(
+    "first_shape, second_shape",
+    [
+        ([1, 1, 64, 128], [64, 128]),  # rank 4 -> 2, same volume
+        ([2, 3, 32, 64], [4, 32, 96]),  # rank 4 -> 3, different volume and width
+        ([96, 64], [1, 2, 2, 64, 32]),  # rank 2 -> 5
+    ],
+)
+def test_unary_cache_reuse_different_logical_ranks(device, first_shape, second_shape):
+    """TILE layout: inputs of different rank share one cache entry. The hit must be accepted
+    (relax_logical_rank) and must re-derive the work split and tensor arguments for the second tensor."""
+    device.cache_entries_counter.reset()
+
+    for shape in (first_shape, second_shape):
+        torch_ref, tt_out = run_unary_op(device, ttnn.relu, shape)
+        assert_equal(torch_ref, tt_out)
+
+    assert device.cache_entries_counter.total == 1
+
+
+def test_unary_cache_reuse_different_logical_ranks_sharded_accessor_path(device):
+    """Sharded inputs with different ranks (interleaved output) share the same shard geometry: the cached
+    program is reused while the reader's shape follows each dispatch's buffer."""
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 2 or grid.y < 2:
+        pytest.skip("Device grid too small for a 2x2 shard grid")
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            [32, 64],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    device.cache_entries_counter.reset()
+    torch.manual_seed(0)
+    for shape in ([1, 1, 64, 128], [64, 128]):
+        torch_a = torch.rand(shape, dtype=torch.bfloat16) - 0.5
+        tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+        with device.cache_entries_counter.measure():
+            tt_out = ttnn.relu(tt_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        assert_equal(torch.relu(torch_a), ttnn.to_torch(tt_out))
 
     assert device.cache_entries_counter.total == 1
 
@@ -338,8 +388,9 @@ def test_unary_sharded_cache_correctness_different_grids(device):
 def test_unary_sharded_mixed_inplace_outofplace(device, first_inplace):
     """REGRESSION (the exact SDXL failure): sharded unary reused across a MIX of in-place
     (output_tensor aliases the input) and out-of-place calls sharing ONE cache entry (same shape/
-    config). For sharded ops the input/output addresses ride on tensor-backed CB base addresses,
-    re-patched only by resolved_bindings.cbs — get_dynamic returns rt-args and cannot touch CBs.
+    config). Under the legacy descriptor path, sharded input/output addresses rode on tensor-backed
+    CB base addresses, re-patched only by resolved_bindings.cbs — get_dynamic returned rt-args and
+    could not touch CBs. (They are now borrowed DFBs refreshed from the override's tensor arguments.)
     Combined with first-occurrence alias resolution, a program built under one aliasing pattern and
     reused under another mis-resolves the output CB to the wrong slot with nothing to correct it →
     PCC ~0 (SDXL in-place silu). With the parity check built in, this ALSO trips the framework's
@@ -429,9 +480,9 @@ def test_unary_cache_mixed_inplace_outofplace_interleaved(device, first_inplace)
     single cache entry (TILE volume excluded from the hash). The legacy resolve_bindings maps an
     aliased buffer to its FIRST occurrence, so a program built under one aliasing pattern and reused
     under another would patch the writer's output address from the wrong tensor slot.
-    override_runtime_arguments re-derives every rt-arg address (reader[0]=input, writer[0]=output) for
-    the actual current tensors, so it MUST survive both orders — proving the rt-arg axis is re-applied,
-    not just that a cache hit occurred."""
+    override_runtime_arguments re-supplies both tensor arguments (reader tensor::src=input, writer
+    tensor::dst=output) for the actual current tensors, so it MUST survive both orders — proving the
+    address axis is re-applied, not just that a cache hit occurred."""
     device.cache_entries_counter.reset()
     shape = [1, 1, 32, 64]
     keep_alive = []  # hold refs so successive calls see fresh (different) buffer addresses
@@ -457,8 +508,8 @@ def test_unary_cache_mixed_inplace_outofplace_interleaved(device, first_inplace)
 def test_unary_inplace_cache_hit_interleaved_readdresses(device):
     """MIGRATION GUARD (stale buffer address on hit, interleaved): repeated in-place relu at the SAME
     shape/config but with freshly-allocated operands kept alive, so each cache HIT sees a DIFFERENT
-    buffer address. override_runtime_arguments must re-apply the reader/writer buffer-address rt-arg
-    slots on every hit (no rebuild) or the result reads/writes a stale address."""
+    buffer address. override_runtime_arguments must re-supply the reader/writer tensor arguments on
+    every hit (no rebuild) or the result reads/writes a stale address."""
     device.cache_entries_counter.reset()
     shape = [1, 1, 64, 64]
     keep_alive = []  # hold refs so each iteration's tensors get fresh (different) addresses
