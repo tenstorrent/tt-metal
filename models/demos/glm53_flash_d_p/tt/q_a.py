@@ -16,6 +16,7 @@ import torch
 import ttnn
 from models.demos.glm53_flash_d_p.reference.weights import PREFIX
 from models.demos.glm53_flash_d_p.tt.common import attn_fidelity, hifi4_config, mm_config, replicate
+from models.demos.glm53_flash_d_p.tt.mm_configs import linear_config
 from models.demos.glm53_flash_d_p.tt.rms_norm import TtRMSNorm
 
 
@@ -30,7 +31,14 @@ class TtQA:
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x: replicated [1, 1, S, H] TILE bf16 (attn_norm output). Returns replicated [1, 1, S, q_lora_rank] bf16."""
         mc = ttnn.DRAM_MEMORY_CONFIG
-        p = ttnn.linear(x, self.w, dtype=ttnn.float32, compute_kernel_config=mm_config(self.cfg), memory_config=mc)
+        p = ttnn.linear(
+            x,
+            self.w,
+            dtype=ttnn.float32,
+            program_config=linear_config(x, self.w, ttnn.float32),
+            compute_kernel_config=mm_config(self.cfg),
+            memory_config=mc,
+        )
         y = self.norm(p)
         ttnn.deallocate(p)
         out = ttnn.typecast(y, ttnn.bfloat16, memory_config=mc)
