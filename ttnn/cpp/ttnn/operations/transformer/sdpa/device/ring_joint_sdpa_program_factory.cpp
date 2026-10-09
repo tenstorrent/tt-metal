@@ -1956,8 +1956,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         if (!has_sliding_window) {
             defines["SDPA_RING_ZONES"] = "1";
         }
-        defines["SDPA_RING_DF_ZONES"] = "1";
-        defines["SDPA_RING_STEP_ZONES"] = "1";
+        // "c": compute zones only, small enough for the 8192-chunk program's kernel-config buffer.
+        if (std::string(z) != "c") {
+            defines["SDPA_RING_DF_ZONES"] = "1";
+            defines["SDPA_RING_STEP_ZONES"] = "1";
+        }
     }
     if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
         TT_FATAL(use_streaming_compute, "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
+import os
 
 from torch import nn
 
@@ -25,6 +26,8 @@ def _block_shard_geometry(rows, width):
     # Up to 512 rows, 12 columns with 2-row blocks measured 2.5x faster (256 rows: 25 -> 10 us). At 1024 rows
     # 12 columns was slower in the model, so taller slabs keep 8 columns with 4-row blocks.
     grid_x, min_block_h = (12, 2) if rows <= 512 else (8, 4)
+    if rows <= 512 and os.environ.get("G4X_NORM_MIN_BH"):  # LOCAL EXPERIMENT: shorter blocks, more core rows
+        min_block_h = int(os.environ["G4X_NORM_MIN_BH"])
     if rows % tile or width % tile or (width // tile) % grid_x:
         return None
     rows_t, block_w = rows // tile, width // tile // grid_x

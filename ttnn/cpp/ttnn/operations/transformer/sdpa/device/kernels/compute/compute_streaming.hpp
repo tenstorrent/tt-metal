@@ -434,13 +434,16 @@ void blocked_matmul_and_pack(
     uint32_t matmul_stride,
     bool skip_pack_configure = false) {
     {
-        MaybeDeviceZoneScopedN((SDPA_RING_ZONES != 0), "MM-ACQ");
+        MaybeDeviceZoneScopedN((SDPA_RING_ZONES != 0 && SDPA_RING_STEP_ZONES != 0), "MM-ACQ");
         tile_regs_acquire();
     }
     uint32_t dst_index = 0;
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
-    MaybeDeviceZoneScopedN((SDPA_RING_ZONES != 0), "MM-LOOP");
+    // LOCAL EXPERIMENT (G4X_RJ_ZONES / G4X_SDPA_ZONES): one zone per instantiation, Q@K^T (transpose) vs S@V.
+    MaybeDeviceZoneScopedN((SDPA_RING_ZONES != 0) && transpose, "MM-QK");
+    {  // the zone macro declares fixed names, so the second zone needs its own scope
+    MaybeDeviceZoneScopedN((SDPA_RING_ZONES != 0) && !transpose, "MM-SV");
 #if SDPA_MM_MOP  // LOCAL EXPERIMENT: the regular MOP matmul instead of the no-MOP replay
     matmul_block_init(in0_cb, in1_cb, transpose, subblock_w, subblock_h, matmul_stride);
     for (uint32_t inner = 0; inner < inner_dim; ++inner) {
@@ -465,6 +468,7 @@ void blocked_matmul_and_pack(
     pack_contiguous_rows_nocfg(
         out_cb, row_subblock_idx * subblock_h, subblock_h, out_num_cols, out_col_offset, subblock_w);
     tile_regs_release();
+    }
 }
 
 /**
@@ -3006,7 +3010,7 @@ void sdpa_ring_v2(
 
             MaybeDeviceZoneScopedN((SDPA_RING_STEP_ZONES != 0), "STEP");
             sdpa_inner_loop_step<
-                (SDPA_RING_ZONES != 0),  // profiling_enabled (LOCAL EXPERIMENT: G4X_RJ_ZONES)
+                (SDPA_RING_ZONES != 0 && SDPA_RING_STEP_ZONES != 0),  // profiling_enabled (LOCAL: G4X_RJ_ZONES; off for =c)
                 Sq_chunk_t,
                 Sk_chunk_t,
                 Skt,

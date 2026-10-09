@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "rotary_embedding_llama_multi_core_program_factory.hpp"
 #include "rotary_embedding_llama_metal2_common.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -94,7 +95,10 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
 
     // When the (batch, sequence tile) split leaves most cores idle, they split the heads too. Every head-split core
     // re-reads the same cos/sin rows, so the split is only worth it when it multiplies the busy cores several times.
-    constexpr uint32_t kMinIdleRatioForHeadSplit = 4;
+    uint32_t kMinIdleRatioForHeadSplit = 4;
+    if (const char* e = std::getenv("G4X_ROPE_HEADSPLIT_MIN"); e != nullptr) {  // LOCAL EXPERIMENT
+        kMinIdleRatioForHeadSplit = std::max(1, std::atoi(e));
+    }
     const uint32_t idle_ratio = num_cores / (batch_parallel_factor * seq_parallel_factor);
     const uint32_t head_parallel_factor = idle_ratio >= kMinIdleRatioForHeadSplit ? std::min(n_heads, idle_ratio) : 1;
     const uint32_t heads_per_core = (n_heads + head_parallel_factor - 1) / head_parallel_factor;

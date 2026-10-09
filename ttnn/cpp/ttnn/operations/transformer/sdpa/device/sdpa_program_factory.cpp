@@ -15,6 +15,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <bit>
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <string>
@@ -736,6 +737,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (std::getenv("G4X_SDPA_ZONES") != nullptr) {  // LOCAL EXPERIMENT: compute-kernel matmul zones (MM-ACQ, MM-LOOP)
+        defines_map["SDPA_RING_ZONES"] = "1";
+        if (math_fidelity == MathFidelity::LoFi) {  // as in the ring factory: every TRISC must see the LoFi config
+            defines_map["SDPA_COMPUTE_LOFI"] = "1";
+        }
+    }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
