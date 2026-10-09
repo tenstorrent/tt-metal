@@ -158,8 +158,10 @@ def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dt
     assert device.cache_entries_counter.total == 1
 
 
+# Unset, the cap is 16: the 2x2 grid still gives each of the two KV heads two cores.
+@pytest.mark.parametrize("max_cores_per_head_batch", [2, None], ids=["max_cores_2", "max_cores_unset"])
 @pytest.mark.parametrize("num_chunks", [1, 2, 3], ids=["inactive-core", "one-per-core", "multiple-per-core"])
-def test_sdpa_decode_non_causal_chunk_distribution(device, num_chunks):
+def test_sdpa_decode_non_causal_chunk_distribution(device, num_chunks, max_cores_per_head_batch):
     """Exercise both sides of the single-local-chunk specialization with two cores per KV head."""
     torch.manual_seed(1234)
     heads, kv_heads, head_dim, chunk_size = 8, 2, 64, 32
@@ -176,7 +178,7 @@ def test_sdpa_decode_non_causal_chunk_distribution(device, num_chunks):
             compute_with_storage_grid_size=(2, 2),
             q_chunk_size=32,
             k_chunk_size=chunk_size,
-            max_cores_per_head_batch=2,
+            max_cores_per_head_batch=max_cores_per_head_batch,
             exp_approx_mode=False,
         ),
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
