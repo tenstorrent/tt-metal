@@ -8,7 +8,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/experimental/quasar/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -321,19 +320,24 @@ void overwrite_compute_kernel_name_and_defines(
 // Returns true on the (arch, broadcast, dtype) tuple that hangs the LLK
 // `unary_bcast` path on Blackhole: COL bcast + BFLOAT16 input + fp32_dest_acc_en.
 bool hits_bh_col_bcast_bf16_to_fp32_hang(
-    SubtileBroadcastType subtile_broadcast_type, DataType a_dtype, DataType b_dtype, bool fp32_dest_acc_en) {
+    tt::ARCH arch,
+    SubtileBroadcastType subtile_broadcast_type,
+    DataType a_dtype,
+    DataType b_dtype,
+    bool fp32_dest_acc_en) {
     const bool is_col_bcast =
         subtile_broadcast_type == SubtileBroadcastType::COL_A || subtile_broadcast_type == SubtileBroadcastType::COL_B;
     const bool has_bf16_input = a_dtype == DataType::BFLOAT16 || b_dtype == DataType::BFLOAT16;
-    return tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && is_col_bcast && fp32_dest_acc_en && has_bf16_input;
+    return arch == tt::ARCH::BLACKHOLE && is_col_bcast && fp32_dest_acc_en && has_bf16_input;
 }
 
 bool is_llk_bcast(
+    const tt::ARCH arch,
     const SubtileBroadcastType subtile_broadcast_type,
     const DataType a_dtype,
     const DataType b_dtype,
     const bool fp32_dest_acc_en) {
-    if (hits_bh_col_bcast_bf16_to_fp32_hang(subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en)) {
+    if (hits_bh_col_bcast_bf16_to_fp32_hang(arch, subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en)) {
         return false;
     }
 
@@ -352,7 +356,6 @@ bool is_llk_bcast(
         }
         if (all_match(DataType::FLOAT32) || all_match(DataType::INT32) || all_match(DataType::UINT32) ||
             all_match(DataType::UINT16)) {
-            tt::ARCH arch = tt::tt_metal::hal::get_arch();
             if (arch == tt::ARCH::WORMHOLE_B0) {
                 return true;
             }
@@ -773,9 +776,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
+    const tt::ARCH arch = a.device()->arch();
     bool use_llk_bcast =
         !inputs_row_major && CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(
-                                 operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en);
+                                 arch, operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en);
 
     // The B2D broadcast path for BFP formats introduces rounding that EXP/EXP2
     // amplifies beyond acceptable tolerance.
@@ -821,7 +825,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // instead of MOVB2D.  Fall back to the software-broadcast path for the affected
     // broadcast types on Blackhole when FP32 dest accumulation is active.
     if (use_llk_bcast && fp32_dest_acc_en) {
-        tt::ARCH arch = a.device()->arch();
         if (arch == tt::ARCH::BLACKHOLE) {
             auto sbt = operation_attributes.subtile_broadcast_type;
             bool uses_movb2d =
