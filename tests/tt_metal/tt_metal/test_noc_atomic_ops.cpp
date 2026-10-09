@@ -34,6 +34,8 @@ protected:
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_atomic_ops_probe.cpp";
     uint32_t l1_unreserved_base{0};
     bool is_quasar{false};
+    // NOC API v1 has no noc_fast_atomic_cas4 (semaphore_dm_impl.h gates its CAS lock on it too).
+    bool has_noc_cas4{false};
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
     uint32_t num_dms_{0};
     std::vector<uint32_t> result;
@@ -47,6 +49,7 @@ protected:
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
         l1_unreserved_base = mesh_device_->allocator()->get_base_allocator_addr(HalMemType::L1);
         is_quasar = arch_ == tt::ARCH::QUASAR;
+        has_noc_cas4 = is_quasar && MetalContext::instance().rtoptions().get_quasar_noc_api_version() >= 2;
         if (is_quasar) {
             num_dms_ = std::min(num_dms_, 6u);
         }
@@ -156,6 +159,9 @@ TEST_F(NocAtomicOpsFixture, TestAtomicCas) {
 TEST_F(NocAtomicOpsFixture, TestAtomicCasReturnsPreOpValue) {
     if (!is_quasar) {
         GTEST_SKIP() << "noc_fast_atomic_cas4 (RoCC builtin emit) is Quasar-only";
+    }
+    if (!has_noc_cas4) {
+        GTEST_SKIP() << "noc_fast_atomic_cas4 is not in Quasar NOC API v1 (TT_METAL_QUASAR_NOC_API_VERSION=1)";
     }
     constexpr uint32_t WORD2_OFF = 16u;
     constexpr uint32_t REPORT_OFF = 128u;
