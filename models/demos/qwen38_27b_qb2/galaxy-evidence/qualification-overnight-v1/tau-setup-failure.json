@@ -1,0 +1,199 @@
+{
+  "state": "completed",
+  "selected": 12,
+  "attempted": 12,
+  "passed": 0,
+  "accuracy": 0.0,
+  "all_selected_denominator": 12,
+  "all_tasks_attempted": true,
+  "not_a_matched_published_reference": true,
+  "manual_review_pending": true,
+  "trials": [
+    {
+      "task_id": "task_032",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 1,
+        "timed_out": false,
+        "elapsed_seconds": 2.7677253601141274
+      },
+      "calls": 0,
+      "truncated_calls": 0,
+      "tool_calls": 0,
+      "malformed_tool_calls": 0,
+      "call_errors": 0
+    },
+    {
+      "task_id": "task_050",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 1,
+        "timed_out": false,
+        "elapsed_seconds": 2.766784196253866
+      },
+      "calls": 0,
+      "truncated_calls": 0,
+      "tool_calls": 0,
+      "malformed_tool_calls": 0,
+      "call_errors": 0
+    },
+    {
+      "task_id": "task_019",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 1,
+        "timed_out": false,
+        "elapsed_seconds": 2.7692607543431222
+      },
+      "calls": 0,
+      "truncated_calls": 0,
+      "tool_calls": 0,
+      "malformed_tool_calls": 0,
+      "call_errors": 0
+    },
+    {
+      "task_id": "task_016",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 1,
+        "timed_out": false,
+        "elapsed_seconds": 2.817197267897427
+      },
+      "calls": 0,
+      "truncated_calls": 0,
+      "tool_calls": 0,
+      "malformed_tool_calls": 0,
+      "call_errors": 0
+    },
+    {
+      "task_id": "task_057",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 1,
+        "timed_out": false,
+        "elapsed_seconds": 2.717146357987076
+      },
+      "calls": 0,
+      "truncated_calls": 0,
+      "tool_calls": 0,
+      "malformed_tool_calls": 0,
+      "call_errors": 0
+    },
+    {
+      "task_id": "task_047",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 1,
+        "timed_out": false,
+        "elapsed_seconds": 2.7678683372214437
+      },
+      "calls": 0,
+      "truncated_calls": 0,
+      "tool_calls": 0,
+      "malformed_tool_calls": 0,
+      "call_errors": 0
+    },
+    {
+      "task_id": "task_060",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 1,
+        "timed_out": false,
+        "elapsed_seconds": 2.7158351433463395
+      },
+      "calls": 0,
+      "truncated_calls": 0,
+      "tool_calls": 0,
+      "malformed_tool_calls": 0,
+      "call_errors": 0
+    },
+    {
+      "task_id": "task_026",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 1,
+        "timed_out": false,
+        "elapsed_seconds": 2.716629665810615
+      },
+      "calls": 0,
+      "truncated_calls": 0,
+      "tool_calls": 0,
+      "malformed_tool_calls": 0,
+      "call_errors": 0
+    },
+    {
+      "task_id": "task_051",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 1,
+        "timed_out": false,
+        "elapsed_seconds": 2.616202674806118
+      },
+      "calls": 0,
+      "truncated_calls": 0,
+      "tool_calls": 0,
+      "malformed_tool_calls": 0,
+      "call_errors": 0
+    },
+    {
+      "task_id": "task_102",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 1,
+        "timed_out": false,
+        "elapsed_seconds": 2.6662250561639667
+      },
+      "calls": 0,
+      "truncated_calls": 0,
+      "tool_calls": 0,
+      "malformed_tool_calls": 0,
+      "call_errors": 0
+    },
+    {
+      "task_id": "task_066",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 1,
+        "timed_out": false,
+        "elapsed_seconds": 2.7158345910720527
+      },
+      "calls": 0,
+      "truncated_calls": 0,
+      "tool_calls": 0,
+      "malformed_tool_calls": 0,
+      "call_errors": 0
+    },
+    {
+      "task_id": "task_097",
+      "attempted": true,
+      "passed": false,
+      "process": {
+        "returncode": 1,
+        "timed_out": false,
+        "elapsed_seconds": 2.6660876171663404
+      },
+      "calls": 0,
+      "truncated_calls": 0,
+      "tool_calls": 0,
+      "malformed_tool_calls": 0,
+      "call_errors": 0
+    }
+  ],
+  "calls": 0,
+  "truncated_calls": 0,
+  "tool_calls": 0,
+  "malformed_tool_calls": 0,
+  "call_errors": 0,
+  "elapsed_seconds": 5.438658952713013
+}

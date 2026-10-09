@@ -1,0 +1,42 @@
+{
+  "created_at": "2026-10-08T17:34:32.825873+00:00",
+  "source": "/home/ttuser/qwen38-artifacts-20261007/dram-delivery-source-v2",
+  "source_sha256": {
+    "models/demos/qwen38_27b_qb2/demo/run_long_context_capacity.py": "4592ccecf223b6a452d74875cbb170e142d758c9d696841dfd1a8ea105cd5d44"
+  },
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-dram-delivery-v2-20261008",
+    "--property=RuntimeMaxSec=12h",
+    "--property=TimeoutStopSec=180",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=64G",
+    "--property=CPUQuota=800%",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/dram-delivery-v2.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/dram-delivery-v2.log",
+    "--working-directory=/home/ttuser/qwen38-artifacts-20261007/dram-delivery-source-v2",
+    "--setenv=PATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin:/usr/local/bin:/usr/bin:/bin",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/dram-delivery-source-v2:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tools",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "--setenv=OMP_NUM_THREADS=8",
+    "--setenv=TT_METAL_INSPECTOR_RPC=0",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "models.demos.qwen38_27b_qb2.demo.run_dram_delivery_probe",
+    "--task",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "--source",
+    "/home/ttuser/qwen38-artifacts-20261007/dram-delivery-source-v2",
+    "--weights",
+    "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "--results",
+    "/home/ttuser/qwen38-artifacts-20261007/dram-delivery-v2",
+    "--after-unit",
+    "qwen38-shared-qk-gpqa-v1-20261008.service"
+  ],
+  "reason": "v1 stopped before hardware work: transient-unit PATH omitted /usr/local/bin/tt-smi",
+  "hardware_lock": "/tmp/tt-device.lock",
+  "cpu_validation": "controller runs before hardware",
+  "promoted_to_model": false
+}

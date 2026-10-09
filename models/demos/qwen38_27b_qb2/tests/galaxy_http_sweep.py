@@ -39,14 +39,18 @@ def summarize_http(samples):
     )
 
 
-async def run_http_sweep(base_url, directory, *, deployment):
+async def run_http_sweep(base_url, directory, *, deployment, priority_only=False):
     from transformers import AutoTokenizer
 
     directory = Path(directory)
     if directory.exists():
         raise FileExistsError("Use a fresh directory for the Galaxy HTTP sweep")
     directory.mkdir(parents=True)
-    report = make_plan(8)
+    report = (
+        make_plan(8, batches=(4, 8, 16), input_lengths=(32768, 16384, 131072, 262016))
+        if priority_only
+        else make_plan(8)
+    )
     pool_tokens = int(OPTIMIZATION_ENV["QWEN_VLLM_KV_POOL_TOKENS"])
     for cell in report["cells"]:
         if cell["pool_tokens_per_replica"] > pool_tokens:
@@ -62,8 +66,9 @@ async def run_http_sweep(base_url, directory, *, deployment):
             f"Capacity-guard cells exceed the configured {pool_tokens:,}-token per-replica KV pool and are untested. "
             "Per-replica batch is nominal; the framework balances the actual global request burst."
         ),
+        http_connection_policy="Fresh connections per request; no retries or connection-pool reuse",
         methodology=(
-            "Eight independent TP4 vLLM engines; actual HTTP bursts at total concurrency 8/16/32/64/128. "
+            f"Eight independent TP4 vLLM engines; actual HTTP bursts at total concurrency {[8*b for b in report['batches']]}. "
             "Fresh full prefills, no prefix reuse; fixed 128-token outputs through EOS; one warmup burst "
             "then three measured bursts per shape. Per-user speed is the median client rate from first "
             "visible token until stream finish. Aggregate throughput includes queueing, prefill, decode "
@@ -80,7 +85,9 @@ async def run_http_sweep(base_url, directory, *, deployment):
     base = tokenizer.encode(passage, add_special_tokens=False)
     active_cell = None
     try:
-        limits = httpx.Limits(max_connections=128, max_keepalive_connections=128)
+        # Avoid stale pooled-connection races between long, synchronized bursts.
+        # This changes client transport only; failed requests are never retried.
+        limits = httpx.Limits(max_connections=128, max_keepalive_connections=0)
         async with httpx.AsyncClient(base_url=base_url, timeout=3600, limits=limits) as client:
             for cell in report["cells"]:
                 if cell["status"] == "capacity_guard":

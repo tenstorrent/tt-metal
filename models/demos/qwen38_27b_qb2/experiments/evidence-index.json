@@ -1,21 +1,21 @@
 {
-  "generated_at": "2026-10-08T16:44:28.631654+00:00",
+  "generated_at": "2026-10-09T03:33:41.540665+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 49109,
-      "sha256": "5533109d1e32070d23a977112e6521e3141a30bc6c101eb31f58de8db2684f2b"
+      "bytes": 52435,
+      "sha256": "be991f9257c1667a7ad70457906d53674de221b5fa447e326ab6d93fec3ccb87"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
-      "bytes": 5152,
-      "sha256": "8a7067aabbe377d9bd6fa88450be57affb02f1cf86e73fe7d3f0ad66aa1e453e"
+      "bytes": 5311,
+      "sha256": "1adb26e2587f2223ed812def21f49e882e7d3fb2e551b57299ad85a4ac44df97"
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 19811,
-      "sha256": "9ced0c41321e44b0dac0a319235ca655238167bf241f0ad3ec6c5a6bdb471eea"
+      "bytes": 20751,
+      "sha256": "d591021dadb92bc85f585bd7eed721051bc9cae3eec2b7e8538151ca0b006660"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -919,6 +919,36 @@
       }
     },
     {
+      "path": "galaxy-evidence/delivery-pass-v2/README.md",
+      "bytes": 1318,
+      "sha256": "c9ee45fe1b83d0f5802025c83b91992581dc7b65d20aee15625a6e10208c3f2e"
+    },
+    {
+      "path": "galaxy-evidence/delivery-pass-v2/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "89f350988e2c73b1df67b6b004a35b5e6f52646e32eecb258076f5fb87737aa1"
+    },
+    {
+      "path": "galaxy-evidence/delivery-pass-v2/launch.json",
+      "bytes": 2123,
+      "sha256": "2c0b4fd010346828b2e3d963cd33dcb5e2ce62dc86158b3fd48eca6ad2ee02ee"
+    },
+    {
+      "path": "galaxy-evidence/delivery-pass-v2/probe.json",
+      "bytes": 27663,
+      "sha256": "1ac19d3870e0b8fe8bd8de08852feb789e4a049f5510e032ed122436e7fb6ed8"
+    },
+    {
+      "path": "galaxy-evidence/delivery-pass-v2/queue.json",
+      "bytes": 21857,
+      "sha256": "cddf785919467913a5e1a14f24551f30a7e306306c07385e7764f3bc1548eb9d"
+    },
+    {
+      "path": "galaxy-evidence/delivery-pass-v2/unit.xml.gz",
+      "bytes": 6697,
+      "sha256": "146c5df7fbb09c304f1eb72e4a3400b922432ab15dc3b99232e83b4e3ac8d2b8"
+    },
+    {
       "path": "galaxy-evidence/dram-delivery-launch-v1/README.md",
       "bytes": 1935,
       "sha256": "c4b058589b70c2987407f550342e2729ed6c0c4df3610e7821c904b53824a152"
@@ -1027,6 +1057,36 @@
       "path": "galaxy-evidence/fabric-v1-failed.txt",
       "bytes": 26493,
       "sha256": "7f397274ee52a161b36ec113cd247fd373261aded30f8d6af1c3c632618a1d95"
+    },
+    {
+      "path": "galaxy-evidence/full-trace-attempt-v2/README.md",
+      "bytes": 1114,
+      "sha256": "96f9440aa1144c1979723ba9934421d8e35067736938135892a8e0caa5a52066"
+    },
+    {
+      "path": "galaxy-evidence/full-trace-attempt-v2/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "a4647aef3d2106d9799fbc073228a0b3931056a1ffea152aeb8d5815ac743a83"
+    },
+    {
+      "path": "galaxy-evidence/full-trace-attempt-v2/launch.json",
+      "bytes": 2098,
+      "sha256": "55cf5975d5df461147f73fc4c49f621f120b76c0ebe3adbd00ae7bfef2529d3e"
+    },
+    {
+      "path": "galaxy-evidence/full-trace-attempt-v2/profile.json",
+      "bytes": 27781,
+      "sha256": "5f7862b76ad4e3bba996279faca51450574c5ded86c66850b8740ceeb182bfa3"
+    },
+    {
+      "path": "galaxy-evidence/full-trace-attempt-v2/queue.json",
+      "bytes": 22231,
+      "sha256": "dfe707e1661dc1471910b4710c58c22b36cc2a1ae161a38cf3c1529f9ec0194a"
+    },
+    {
+      "path": "galaxy-evidence/full-trace-attempt-v2/unit.xml.gz",
+      "bytes": 7029,
+      "sha256": "ca0f3305ddf5c13d7b622196352945705c00c1e5a90d22beaebb3beae16ffd19"
     },
     {
       "path": "galaxy-evidence/galaxy-prompt-tests.xml",
@@ -2975,6 +3035,91 @@
       "scope": "Do not publish stage timings from this incomplete capture"
     },
     {
+      "path": "galaxy-evidence/qualification-overnight-v1/deployment-after-stop.json",
+      "bytes": 24050,
+      "sha256": "e77ee6c5a485b0eebac994ca037de7b9ab68786aef0c40ec93d96f30d9f355f7"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v1/gpqa-responses-64k.jsonl",
+      "bytes": 78240,
+      "sha256": "7b0c7751f134a3532122b22567d1f84d9081c072188ca6a899bbc16fc102aa75"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v1/gpqa-summary-64k.json",
+      "bytes": 2071,
+      "sha256": "5c9177eee633373e180f9801cdacd38ec1629040e2a0e33762b4bdcf86eac500"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v1/http-sweep.json.gz",
+      "bytes": 54532,
+      "sha256": "604e43ebc8a8adee171e8bf95e5586602b8391d628a7c196ed2cdd93660a9b61"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v1/launch.json",
+      "bytes": 3667,
+      "sha256": "47ab1cb3293d5b4a6ffec0592ecb648fec3e8e1b76db40b0a533162d8d041d7f"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v1/queue-after-stop.json",
+      "bytes": 22294,
+      "sha256": "c96d0c63e5ce0492dbae66572688501456e72d680df1219d883888fc679ae2bb"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v1/tau-dependencies.txt",
+      "bytes": 2222,
+      "sha256": "ad9c524f5acf005ab47c01dc9e75a9673205edc35e7539c029c85723c372c6a9"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v1/tau-setup-failure.json",
+      "bytes": 4504,
+      "sha256": "bbe9e2f3d44df553e307b96ba945935d8019b5edec387489ff62b746ff5b97aa"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v1/tau-setup-v1.json",
+      "bytes": 261,
+      "sha256": "0eb6769ada9c258e2537123045fbd01b2ef98d501971a1233424cfd2572792f6"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v1/tau-setup-v2.json",
+      "bytes": 295,
+      "sha256": "e9541dab7fb57c54be5b5df74a5e2cc6e99bfa92a561406742caa33c28d56cb4"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v1/tau-setup-v3.json",
+      "bytes": 53,
+      "sha256": "c1a6f2392f1bde76e1f5b64b9cf1c75562e07cfab001940635edb3d793265995"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v1/tau-task-error.log",
+      "bytes": 4565,
+      "sha256": "e38748d1d4070c77d136082624f15ffa33061beec0126912c8ded0a140dc592e"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v1/unit.xml.gz",
+      "bytes": 7233,
+      "sha256": "ce7538e3446025d371e7be827575004cada030d7826cb3fe9f4f0498d7d75dda"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v2/README.md",
+      "bytes": 5962,
+      "sha256": "11e89df9337f7df204d1614f289ab16dd64620d2b459afc3376b2a3309fe019e"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v2/launch.json",
+      "bytes": 3691,
+      "sha256": "6f59301827328be4a708a3179cf2bdb8980aa461ac5c86d114c5cd514e455ae1"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v2/queue-snapshot.json",
+      "bytes": 20775,
+      "sha256": "b5a297a9523f6d8575c692a0559698a50c654fe53add0025498a5f30d9b461e5"
+    },
+    {
+      "path": "galaxy-evidence/qualification-overnight-v2/unit.xml.gz",
+      "bytes": 7241,
+      "sha256": "83cb65befaacaa068fa880d19106f845dcc2fad112033b82e8de485549d8fce4"
+    },
+    {
       "path": "galaxy-evidence/replica-timing-host.xml",
       "bytes": 2455,
       "sha256": "288c177b8fc0096c4375bf37ed3fb3586f4464a8367152a97953f3efde623128",
@@ -3990,6 +4135,26 @@
       "path": "galaxy-evidence/shared-qk-g0-pass-v1/hardware.xml.gz",
       "bytes": 312,
       "sha256": "a086e53121fa18539fe8c66667cabf4d24b3283fcbb84374d0bd9478b2898e29"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-gpqa-32k-v1/api.json",
+      "bytes": 38764,
+      "sha256": "24084a5f6391d0942908f7eaf35f0b72993c503a0aa2763fcba70e48d82fed0b"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-gpqa-32k-v1/deployment.json",
+      "bytes": 18343,
+      "sha256": "651448bea15161c72a86773dec71819f6131682abb01fd67dc3f2b60c7a0b1f4"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-gpqa-32k-v1/responses.jsonl",
+      "bytes": 78284,
+      "sha256": "d4acdbfbf9714a557ce6b77e1a5cab9ed6c8f786e2ba499db6539dda1d9c4b05"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-gpqa-32k-v1/summary.json",
+      "bytes": 2071,
+      "sha256": "d0f0bce8d2223e80cf4bc5c4d2b8e3a49c53eb039f5323369332e1f9cd8b4d95"
     },
     {
       "path": "galaxy-evidence/storage-recovery-20261007/checkpoint-local-copy.json",

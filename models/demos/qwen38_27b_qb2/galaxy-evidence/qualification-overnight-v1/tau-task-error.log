@@ -1,0 +1,74 @@
+2026-10-08 19:15:14.916 | WARNING  | tau2.utils.utils:<module>:14 - No .env file found
+2026-10-08 19:15:14.916 | INFO     | tau2.utils.utils:<module>:22 - Using data directory from environment: /home/ttuser/qwen38-artifacts-20261007/tau-environment-v1/tau2/data
+2026-10-08 19:15:15.290 | WARNING  | tau2.voice.utils.utils:<module>:22 - No continuous noise files found in the directory /home/ttuser/qwen38-artifacts-20261007/tau-environment-v1/tau2/data/voice/background_noise_audio_pcm_mono_verified/continuous
+2026-10-08 19:15:15.290 | WARNING  | tau2.voice.utils.utils:<module>:31 - No burst noise files found in the directory /home/ttuser/qwen38-artifacts-20261007/tau-environment-v1/tau2/data/voice/background_noise_audio_pcm_mono_verified/bursts
+2026-10-08 19:15:16.655 | INFO     | tau2.utils.llm_utils:<module>:102 - LiteLLM: Cache is disabled
+2026-10-08 19:15:16.860 | DEBUG    | tau2.registry:<module>:282 - Registering default components...
+2026-10-08 19:15:16.860 | DEBUG    | tau2.registry:<module>:344 - Default components registered successfully. Registry info: {
+  "domains": [
+    "mock",
+    "airline",
+    "retail",
+    "telecom",
+    "telecom-workflow",
+    "banking_knowledge"
+  ],
+  "agents": [
+    "llm_agent",
+    "llm_agent_gt",
+    "llm_agent_solo",
+    "discrete_time_audio_native_agent"
+  ],
+  "users": [
+    "user_simulator",
+    "dummy_user",
+    "voice_streaming_user_simulator"
+  ],
+  "task_sets": [
+    "mock",
+    "airline",
+    "retail",
+    "telecom_full",
+    "telecom_small",
+    "telecom",
+    "telecom-workflow",
+    "banking_knowledge"
+  ]
+}
+╭────────────────────────── Simulation Configuration ──────────────────────────╮
+│ Domain: banking_knowledge  Task Set: Default  Tasks: task_032                │
+│ Trials: 1  Max Steps: 60  Max Errors: 10                                     │
+│                                                                              │
+│ Agent: llm_agent → openai/Qwen/Qwen3.8-27B                                   │
+│ User:  user_simulator → openai/Qwen/Qwen3.8-27B                              │
+│                                                                              │
+│ Save:                                                                        │
+│ /home/ttuser/qwen38-artifacts-20261007/overnight-v1/candidate/evaluation/tau │
+│ /task_032/official  Concurrency: 1  Verbose: True                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+2026-10-08 19:15:16.881 | WARNING  | tau2.runner.batch:run_tasks:515 - Each trial will modify the seed for the agent
+
+2026-10-08 19:15:16.881 | WARNING  | tau2.runner.batch:run_tasks:517 - Each trial will modify the seed for the user
+
+🔄 Loading documents...
+✅ Loaded 698 documents
+Traceback (most recent call last):
+  File "/home/ttuser/qwen38-artifacts-20261007/overnight-source-v1/models/demos/qwen38_27b_qb2/tests/tau_benchmark.py", line 332, in <module>
+    trial(arguments) if arguments.task_id else run(arguments)
+    ^^^^^^^^^^^^^^^^
+  File "/home/ttuser/qwen38-artifacts-20261007/overnight-source-v1/models/demos/qwen38_27b_qb2/tests/tau_benchmark.py", line 135, in trial
+    result = run_domain(cfg)
+             ^^^^^^^^^^^^^^^
+  File "/home/ttuser/qwen38-artifacts-20261007/tau-environment-v1/tau2/src/tau2/runner/batch.py", line 883, in run_domain
+    simulation_results = run_tasks(
+                         ^^^^^^^^^^
+  File "/home/ttuser/qwen38-artifacts-20261007/tau-environment-v1/tau2/src/tau2/runner/batch.py", line 562, in run_tasks
+    info = get_info(
+           ^^^^^^^^^
+  File "/home/ttuser/qwen38-artifacts-20261007/tau-environment-v1/tau2/src/tau2/runner/helpers.py", line 147, in get_info
+    global_user_sim_guidelines = get_global_user_sim_guidelines()
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/qwen38-artifacts-20261007/tau-environment-v1/tau2/src/tau2/user/user_simulator.py", line 71, in get_global_user_sim_guidelines
+    with open(GLOBAL_USER_SIM_GUIDELINES_PATH, "r") as fp:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/ttuser/qwen38-artifacts-20261007/tau-environment-v1/tau2/data/tau2/user_simulator/simulation_guidelines.md'

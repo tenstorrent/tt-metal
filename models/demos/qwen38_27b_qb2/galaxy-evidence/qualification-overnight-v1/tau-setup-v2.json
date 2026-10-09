@@ -1,0 +1,5 @@
+{
+  "state": "failed",
+  "error": "CalledProcessError(1, ['/home/ttuser/qwen38-artifacts-20261007/tau-environment-v1/venv/bin/python', '-c', 'from tau2.run import run_domain; from tau2.data_model.simulation import TextRunConfig; print(\"TAU_TEXT_IMPORT_OK\")'])",
+  "time": 1791482404.2327142
+}

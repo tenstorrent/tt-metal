@@ -30,11 +30,19 @@ def run_capture(command, *, cwd, env, root, timeout=7200):
             raise subprocess.CalledProcessError(process.returncode, command)
     finally:
         if process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                # The process can finish between poll and signal; retain the
+                # original capture/budget failure instead of masking it.
+                pass
             try:
                 process.wait(timeout=180)
             except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 process.wait(timeout=30)
 
 

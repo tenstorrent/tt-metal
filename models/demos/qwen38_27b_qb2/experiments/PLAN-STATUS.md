@@ -1,4 +1,18 @@
-# Qwen plan gates: observed status, Oct 8 2026 UTC
+# Qwen plan gates: observed status, Oct 9 2026 UTC
+
+Latest qualification supersedes older running snapshots below: optimized full
+GPQA is **142/198 (71.72%) at 32K output**, then **163/198 (82.32%) at 64K**.
+The unchanged 89.2% gate requires 177 correct. Truncations fell from 42 to 15;
+this is a budget comparison, not a proven kernel fix. The initial Tau3 sample
+made zero model calls because shared simulator data was missing. Five HTTP
+cells completed before a read error stopped the queue. A corrected persistent
+native-recurrence control is running. Release image/Helm qualification remains
+open. [Receipts and launch](../galaxy-evidence/qualification-overnight-v2/README.md).
+
+The delivery diagnostic passes correctness but reaches only **245-249 GB/s/chip**
+including receiver work, versus 499-508 for read-only. It does not justify
+attention integration as a speedup yet. Full 64-layer profiling exceeded the
+artifact-size bound and dropped profiler markers; P0 remains incomplete.
 
 Current user priorities: **32K ISL first, 16K second; 128K/256K remain active
 secondary optimization targets**. Report gains and losses across all four.

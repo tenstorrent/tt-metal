@@ -1,0 +1,921 @@
+{
+  "state": "completed",
+  "passed": true,
+  "cleanup_completed": true,
+  "promoted_to_model": false,
+  "scope": "Eight bank readers plus eight remote consumers per chip; not production attention or KV paging",
+  "timed_integrity_scope": "First/last word of every packet plus ordered markers, all four ranks",
+  "source_sha256": {
+    "test_dram_delivery_probe.py": "5ace2f97c5f9f4439aa49ebb9e225ea605cf3cac53276ccf4b37c4480867cb95",
+    "dram_delivery_probe.py": "80f7a5e31662474674d6aa15d025878ca2737f8a2f306e41db24f412bd558059",
+    "dram_read_probe.py": "0d8e03cbe18b1f70d3de023622263313474e891acf88a01904dfa29b722df645",
+    "test_dram_read_probe.py": "7c9fba61eeb227cad0ab4059a6b6c111b12d1707ff786399a687e42464ae2a2d",
+    "dram_delivery_probe_consumer.cpp": "59e253021e26069d80ebe7074293e623b861e5fdff7777d44612f54abc3d2e54",
+    "dram_delivery_probe_sender.cpp": "c40989afe9111927418d3154a1d757fb431dd8159749cb29adf38a078f901cce",
+    "dram_read_probe_reader.cpp": "ddd7913289d724a4c45f07980f299a4f403729a1142c4c1acf8258a2595843ab",
+    "dram_read_probe_writer.cpp": "0df5575b2530009e16ae66bb65bffe8e287f0f94d38c9443e11f5903e379edaf"
+  },
+  "validation": [
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4,
+        "consumer_delay": 0,
+        "consumer_placement": "near"
+      },
+      "checks": [
+        {
+          "pages": 8,
+          "delay": 0,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 8,
+          "delay": 4096,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 2056,
+          "delay": 0,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 2056,
+          "delay": 4096,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        }
+      ],
+      "full_bytes_equal_all_four_ranks": true
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4,
+        "consumer_delay": 0,
+        "consumer_placement": "center"
+      },
+      "checks": [
+        {
+          "pages": 8,
+          "delay": 0,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 8,
+          "delay": 4096,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 2056,
+          "delay": 0,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 2056,
+          "delay": 4096,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        }
+      ],
+      "full_bytes_equal_all_four_ranks": true
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4,
+        "consumer_delay": 0,
+        "consumer_placement": "opposite"
+      },
+      "checks": [
+        {
+          "pages": 8,
+          "delay": 0,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 8,
+          "delay": 4096,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 2056,
+          "delay": 0,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 2056,
+          "delay": 4096,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        }
+      ],
+      "full_bytes_equal_all_four_ranks": true
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 1,
+        "consumer_delay": 0,
+        "consumer_placement": "near"
+      },
+      "checks": [
+        {
+          "pages": 8,
+          "delay": 0,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 8,
+          "delay": 4096,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 2056,
+          "delay": 0,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 2056,
+          "delay": 4096,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        }
+      ],
+      "full_bytes_equal_all_four_ranks": true
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 2,
+        "consumer_delay": 0,
+        "consumer_placement": "near"
+      },
+      "checks": [
+        {
+          "pages": 8,
+          "delay": 0,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 8,
+          "delay": 4096,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 2056,
+          "delay": 0,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 2056,
+          "delay": 4096,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        }
+      ],
+      "full_bytes_equal_all_four_ranks": true
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 4,
+        "consumer_delay": 0,
+        "consumer_placement": "near"
+      },
+      "checks": [
+        {
+          "pages": 8,
+          "delay": 0,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 8,
+          "delay": 4096,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 2056,
+          "delay": 0,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        },
+        {
+          "pages": 2056,
+          "delay": 4096,
+          "trace_replays": 3,
+          "all_four_ranks_bytes_equal": true
+        }
+      ],
+      "full_bytes_equal_all_four_ranks": true
+    }
+  ],
+  "cases": [
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4
+      },
+      "remote_delivery": false,
+      "pages": 262144,
+      "traced_call_us": [
+        571.0372468456626,
+        571.2936632335186,
+        572.2811445593834,
+        571.2911486625671,
+        571.2640937417746
+      ],
+      "median_traced_call_us": 571.2911486625671,
+      "unique_read_bytes_per_chip": 285212672,
+      "useful_read_gb_s_per_chip": 499.2422386863563,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "44bfcd782669f420bc8dcc578f8ddded4e6c6696bc7e76b93e34437f69808608",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4,
+        "consumer_delay": 0,
+        "consumer_placement": "near"
+      },
+      "remote_delivery": true,
+      "pages": 262144,
+      "traced_call_us": [
+        1557.5542580336332,
+        1558.797643519938,
+        1557.1401454508305,
+        1558.2783613353968,
+        1555.7134989649057
+      ],
+      "median_traced_call_us": 1557.5542580336332,
+      "unique_read_bytes_per_chip": 285212672,
+      "useful_read_gb_s_per_chip": 183.1157216699935,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "44bfcd782669f420bc8dcc578f8ddded4e6c6696bc7e76b93e34437f69808608",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4,
+        "consumer_delay": 0,
+        "consumer_placement": "center"
+      },
+      "remote_delivery": true,
+      "pages": 262144,
+      "traced_call_us": [
+        1868.7934847548604,
+        1868.7429139390588,
+        1868.719351477921,
+        1868.1089393794537,
+        1868.757396005094
+      ],
+      "median_traced_call_us": 1868.7429139390588,
+      "unique_read_bytes_per_chip": 285212672,
+      "useful_read_gb_s_per_chip": 152.62274434465147,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "44bfcd782669f420bc8dcc578f8ddded4e6c6696bc7e76b93e34437f69808608",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4,
+        "consumer_delay": 0,
+        "consumer_placement": "opposite"
+      },
+      "remote_delivery": true,
+      "pages": 262144,
+      "traced_call_us": [
+        1546.8125697225332,
+        1547.6147644221783,
+        1547.0138052478433,
+        1546.7458870261908,
+        1547.041884623468
+      ],
+      "median_traced_call_us": 1547.0138052478433,
+      "unique_read_bytes_per_chip": 285212672,
+      "useful_read_gb_s_per_chip": 184.36336575180516,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "44bfcd782669f420bc8dcc578f8ddded4e6c6696bc7e76b93e34437f69808608",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 1,
+        "consumer_delay": 0,
+        "consumer_placement": "near"
+      },
+      "remote_delivery": true,
+      "pages": 262144,
+      "traced_call_us": [
+        3056.120895780623,
+        3056.1884632334113,
+        3055.8639904484153,
+        3055.9115344658494,
+        3056.9365946576
+      ],
+      "median_traced_call_us": 3056.120895780623,
+      "unique_read_bytes_per_chip": 285212672,
+      "useful_read_gb_s_per_chip": 93.32506197440475,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "44bfcd782669f420bc8dcc578f8ddded4e6c6696bc7e76b93e34437f69808608",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 2,
+        "consumer_delay": 0,
+        "consumer_placement": "near"
+      },
+      "remote_delivery": true,
+      "pages": 262144,
+      "traced_call_us": [
+        1628.4899087622762,
+        1634.512492455542,
+        1626.8804902210832,
+        1626.2721037492156,
+        1628.4758923575282
+      ],
+      "median_traced_call_us": 1628.4758923575282,
+      "unique_read_bytes_per_chip": 285212672,
+      "useful_read_gb_s_per_chip": 175.1408622863311,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "44bfcd782669f420bc8dcc578f8ddded4e6c6696bc7e76b93e34437f69808608",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 4,
+        "consumer_delay": 0,
+        "consumer_placement": "near"
+      },
+      "remote_delivery": true,
+      "pages": 262144,
+      "traced_call_us": [
+        1163.7757997959852,
+        1163.7877905741334,
+        1164.798904210329,
+        1163.7236922979355,
+        1162.2565099969506
+      ],
+      "median_traced_call_us": 1163.7757997959852,
+      "unique_read_bytes_per_chip": 285212672,
+      "useful_read_gb_s_per_chip": 245.07527313250455,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "71ccb1c526d533ef76d38ee4fb32609055432e2e210a2ef4c92dc055c129ee88",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4
+      },
+      "remote_delivery": false,
+      "pages": 262144,
+      "traced_call_us": [
+        571.3171558454633,
+        571.2966900318861,
+        571.2561076506972,
+        571.5304985642433,
+        571.4333616197109
+      ],
+      "median_traced_call_us": 571.3171558454633,
+      "unique_read_bytes_per_chip": 285212672,
+      "useful_read_gb_s_per_chip": 499.21951245788904,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "44bfcd782669f420bc8dcc578f8ddded4e6c6696bc7e76b93e34437f69808608",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4
+      },
+      "remote_delivery": false,
+      "pages": 524288,
+      "traced_call_us": [
+        1128.9621936157346,
+        1129.2571667581797,
+        1129.5185424387455,
+        1129.4749565422535,
+        1129.9221543595195
+      ],
+      "median_traced_call_us": 1129.4749565422535,
+      "unique_read_bytes_per_chip": 570425344,
+      "useful_read_gb_s_per_chip": 505.03584935277,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "62546d1379dac23c0dd3a607c7c635b446be0f1a381bf598f5c6f3eeaa81d668",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4,
+        "consumer_delay": 0,
+        "consumer_placement": "near"
+      },
+      "remote_delivery": true,
+      "pages": 524288,
+      "traced_call_us": [
+        3087.3745679855347,
+        3087.746654637158,
+        3087.8723599016666,
+        3087.8819059580564,
+        3086.866857483983
+      ],
+      "median_traced_call_us": 3087.746654637158,
+      "unique_read_bytes_per_chip": 570425344,
+      "useful_read_gb_s_per_chip": 184.7383894476378,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "62546d1379dac23c0dd3a607c7c635b446be0f1a381bf598f5c6f3eeaa81d668",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4,
+        "consumer_delay": 0,
+        "consumer_placement": "center"
+      },
+      "remote_delivery": true,
+      "pages": 524288,
+      "traced_call_us": [
+        3718.7434965744615,
+        3719.170647673309,
+        3719.2096933722496,
+        3719.270322471857,
+        3719.0054077655077
+      ],
+      "median_traced_call_us": 3719.170647673309,
+      "unique_read_bytes_per_chip": 570425344,
+      "useful_read_gb_s_per_chip": 153.3743401521129,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "62546d1379dac23c0dd3a607c7c635b446be0f1a381bf598f5c6f3eeaa81d668",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4,
+        "consumer_delay": 0,
+        "consumer_placement": "opposite"
+      },
+      "remote_delivery": true,
+      "pages": 524288,
+      "traced_call_us": [
+        3070.5160927027464,
+        3070.6443125382066,
+        3070.541634224355,
+        3072.3603907972574,
+        3072.2221825271845
+      ],
+      "median_traced_call_us": 3070.6443125382066,
+      "unique_read_bytes_per_chip": 570425344,
+      "useful_read_gb_s_per_chip": 185.76731328692517,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "62546d1379dac23c0dd3a607c7c635b446be0f1a381bf598f5c6f3eeaa81d668",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 1,
+        "consumer_delay": 0,
+        "consumer_placement": "near"
+      },
+      "remote_delivery": true,
+      "pages": 524288,
+      "traced_call_us": [
+        6089.972099289298,
+        6090.733758173883,
+        6089.8714466020465,
+        6090.393755584955,
+        6090.001109987497
+      ],
+      "median_traced_call_us": 6090.001109987497,
+      "unique_read_bytes_per_chip": 570425344,
+      "useful_read_gb_s_per_chip": 93.66588506273212,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "62546d1379dac23c0dd3a607c7c635b446be0f1a381bf598f5c6f3eeaa81d668",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 2,
+        "consumer_delay": 0,
+        "consumer_placement": "near"
+      },
+      "remote_delivery": true,
+      "pages": 524288,
+      "traced_call_us": [
+        3234.363649971783,
+        3231.3676550984383,
+        3231.455245986581,
+        3235.3366492316127,
+        3233.2524890080094
+      ],
+      "median_traced_call_us": 3233.2524890080094,
+      "unique_read_bytes_per_chip": 570425344,
+      "useful_read_gb_s_per_chip": 176.424620699824,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "62546d1379dac23c0dd3a607c7c635b446be0f1a381bf598f5c6f3eeaa81d668",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 4,
+        "consumer_delay": 0,
+        "consumer_placement": "near"
+      },
+      "remote_delivery": true,
+      "pages": 524288,
+      "traced_call_us": [
+        2304.8748495057225,
+        2304.5463487505913,
+        2304.144250229001,
+        2305.023046210408,
+        2303.3279925584793
+      ],
+      "median_traced_call_us": 2304.5463487505913,
+      "unique_read_bytes_per_chip": 570425344,
+      "useful_read_gb_s_per_chip": 247.52174947978625,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "026a9a9c8c98cb64e4ecd65eed1f6fd08aa0231009142ef9d42589bb77e205bf",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4
+      },
+      "remote_delivery": false,
+      "pages": 524288,
+      "traced_call_us": [
+        1128.7684086710215,
+        1129.3698335066438,
+        1129.3778661638498,
+        1129.5080417767167,
+        1129.5180534943938
+      ],
+      "median_traced_call_us": 1129.3778661638498,
+      "unique_read_bytes_per_chip": 570425344,
+      "useful_read_gb_s_per_chip": 505.0792662845075,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "62546d1379dac23c0dd3a607c7c635b446be0f1a381bf598f5c6f3eeaa81d668",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4
+      },
+      "remote_delivery": false,
+      "pages": 1048576,
+      "traced_call_us": [
+        2246.0269508883357,
+        2245.058980770409,
+        2246.2933557108045,
+        2246.2768480181694,
+        2246.3153349235654
+      ],
+      "median_traced_call_us": 2246.2768480181694,
+      "unique_read_bytes_per_chip": 1140850688,
+      "useful_read_gb_s_per_chip": 507.88516518190636,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "867112593f48c74442512332cb3b99c0817452ebf835380f936e2c97de548996",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4,
+        "consumer_delay": 0,
+        "consumer_placement": "near"
+      },
+      "remote_delivery": true,
+      "pages": 1048576,
+      "traced_call_us": [
+        6149.535090662539,
+        6150.147481821477,
+        6151.737412437797,
+        6149.7960006818175,
+        6151.3022519648075
+      ],
+      "median_traced_call_us": 6150.147481821477,
+      "unique_read_bytes_per_chip": 1140850688,
+      "useful_read_gb_s_per_chip": 185.49972848165203,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "867112593f48c74442512332cb3b99c0817452ebf835380f936e2c97de548996",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4,
+        "consumer_delay": 0,
+        "consumer_placement": "center"
+      },
+      "remote_delivery": true,
+      "pages": 1048576,
+      "traced_call_us": [
+        7421.89243901521,
+        7420.670613646507,
+        7420.922489836812,
+        7421.940541826189,
+        7422.260497696698
+      ],
+      "median_traced_call_us": 7421.89243901521,
+      "unique_read_bytes_per_chip": 1140850688,
+      "useful_read_gb_s_per_chip": 153.71425783575168,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "867112593f48c74442512332cb3b99c0817452ebf835380f936e2c97de548996",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4,
+        "consumer_delay": 0,
+        "consumer_placement": "opposite"
+      },
+      "remote_delivery": true,
+      "pages": 1048576,
+      "traced_call_us": [
+        6118.28884575516,
+        6118.362443521619,
+        6120.516755618155,
+        6120.729050599039,
+        6118.739047087729
+      ],
+      "median_traced_call_us": 6118.739047087729,
+      "unique_read_bytes_per_chip": 1140850688,
+      "useful_read_gb_s_per_chip": 186.45192730404128,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "867112593f48c74442512332cb3b99c0817452ebf835380f936e2c97de548996",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 1,
+        "consumer_delay": 0,
+        "consumer_placement": "near"
+      },
+      "remote_delivery": true,
+      "pages": 1048576,
+      "traced_call_us": [
+        12155.843246728182,
+        12156.149256043136,
+        12156.119709834456,
+        12156.173307448626,
+        12155.552813783288
+      ],
+      "median_traced_call_us": 12156.119709834456,
+      "unique_read_bytes_per_chip": 1140850688,
+      "useful_read_gb_s_per_chip": 93.84990566332094,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "867112593f48c74442512332cb3b99c0817452ebf835380f936e2c97de548996",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 2,
+        "consumer_delay": 0,
+        "consumer_placement": "near"
+      },
+      "remote_delivery": true,
+      "pages": 1048576,
+      "traced_call_us": [
+        6445.565866306424,
+        6450.033583678305,
+        6449.157232418656,
+        6443.156185559928,
+        6444.510747678578
+      ],
+      "median_traced_call_us": 6445.565866306424,
+      "unique_read_bytes_per_chip": 1140850688,
+      "useful_read_gb_s_per_chip": 176.99775499365964,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "867112593f48c74442512332cb3b99c0817452ebf835380f936e2c97de548996",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 15,
+        "depth": 4,
+        "consumer_delay": 0,
+        "consumer_placement": "near"
+      },
+      "remote_delivery": true,
+      "pages": 1048576,
+      "traced_call_us": [
+        4585.617734119296,
+        4583.196109160781,
+        4586.120997555554,
+        4585.08946467191,
+        4585.20210813731
+      ],
+      "median_traced_call_us": 4585.20210813731,
+      "unique_read_bytes_per_chip": 1140850688,
+      "useful_read_gb_s_per_chip": 248.81142883000607,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "a693272677d60fb3ce3081cbcc4496439d13df3f32ede4db58e6d1e527d06fbd",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    },
+    {
+      "variant": {
+        "mode": "bank_bulk",
+        "placement": "pinned",
+        "packet_pages": 8,
+        "depth": 4
+      },
+      "remote_delivery": false,
+      "pages": 1048576,
+      "traced_call_us": [
+        2245.7294864580035,
+        2246.351446956396,
+        2245.6859005615115,
+        2246.103552170098,
+        2246.2988505139947
+      ],
+      "median_traced_call_us": 2246.103552170098,
+      "unique_read_bytes_per_chip": 1140850688,
+      "useful_read_gb_s_per_chip": 507.9243505481991,
+      "packet_markers_passed_all_four_ranks": true,
+      "marker_sha256": "867112593f48c74442512332cb3b99c0817452ebf835380f936e2c97de548996",
+      "includes_dispatch_and_consumer_work": true,
+      "includes_attention_math": false,
+      "model_speedup_claim": false
+    }
+  ],
+  "comparisons": [
+    {
+      "pages": 262144,
+      "control_drift": 4.552351801190291e-05,
+      "timing_comparison_qualified": true,
+      "raw_control_gb_s": 499.23087557212267,
+      "best_delivery_gb_s": 245.07527313250455,
+      "model_promotion": false
+    },
+    {
+      "pages": 524288,
+      "control_drift": 8.59606296194082e-05,
+      "timing_comparison_qualified": true,
+      "raw_control_gb_s": 505.05755781863877,
+      "best_delivery_gb_s": 247.52174947978625,
+      "model_promotion": false
+    },
+    {
+      "pages": 1048576,
+      "control_drift": 7.714803641611923e-05,
+      "timing_comparison_qualified": true,
+      "raw_control_gb_s": 507.9047578650527,
+      "best_delivery_gb_s": 248.81142883000607,
+      "model_promotion": false
+    }
+  ],
+  "updated_at": "2026-10-08T17:36:02Z",
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ],
+  "active_variant": {
+    "mode": "bank_bulk",
+    "placement": "pinned",
+    "packet_pages": 8,
+    "depth": 4
+  },
+  "active_pages": 1048576,
+  "remote_delivery": false
+}

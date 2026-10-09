@@ -98,6 +98,21 @@ def run(args):
         for name, digest in hashes.items():
             if hashlib.sha256((args.source / name).read_bytes()).hexdigest() != digest:
                 raise RuntimeError(f"Frozen serving source changed: {name}")
+        if args.tau_source is not None:
+            # CPU dependency setup is separate from device ownership. Fail before
+            # model loading if the actual upstream text runner cannot import.
+            tau_env = dict(env, TAU2_DATA_DIR=str(args.tau_source / "data"))
+            tau_env["LD_LIBRARY_PATH"] = (
+                str(args.tau_source.parent / "portaudio/root/usr/lib/x86_64-linux-gnu")
+                + ":"
+                + env.get("LD_LIBRARY_PATH", "")
+            )
+            subprocess.run(
+                [str(args.tau_python), "-c", "from tau2.run import run_domain; print('TAU_IMPORT_OK')"],
+                env=tau_env,
+                check=True,
+                timeout=120,
+            )
         command = [
             "/bin/bash",
             str(model / "demo/run_galaxy_serving.sh"),
@@ -108,7 +123,13 @@ def run(args):
             "--exit-after-eval",
             "--port",
             str(args.port),
+            "--gpqa-max-tokens",
+            str(args.gpqa_max_tokens),
         ]
+        if args.retain_raw_responses:
+            command.append("--retain-raw-responses")
+        if args.tau_source is not None:
+            command.extend(["--tau-source", str(args.tau_source), "--tau-python", str(args.tau_python)])
         status.update(state="serving_and_evaluation_or_waiting_for_lock", command=command, qualified_groups=groups)
         save(status_path, status)
         run_capture(command, cwd=args.source, env=env, root=args.results, timeout=21600)
@@ -124,6 +145,7 @@ def run(args):
             state="completed",
             passed=report["passed"],
             gpqa=gpqa,
+            tau=report.get("tau"),
             resident_endpoint=False,
             owned_processes_stopped=True,
             hardware_reset_required=Path("/tmp/tt-device.dirty").exists(),
@@ -141,4 +163,8 @@ if __name__ == "__main__":
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--after-unit", required=True)
     parser.add_argument("--port", type=int, default=8078)
+    parser.add_argument("--gpqa-max-tokens", type=int, default=32768)
+    parser.add_argument("--retain-raw-responses", action="store_true")
+    parser.add_argument("--tau-source", type=Path)
+    parser.add_argument("--tau-python", type=Path)
     run(parser.parse_args())

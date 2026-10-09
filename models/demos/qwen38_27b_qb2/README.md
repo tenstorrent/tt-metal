@@ -11,6 +11,15 @@ The bring-up and queue descriptions below are historical snapshots; consult the
 logbook and current service state before treating a deployment as live or a
 candidate as qualified.
 
+**Oct 9, 2026 UTC release status:** not qualified. Optimized full GPQA scored
+142/198 at 32K output and 163/198 at 64K, below the unchanged 177/198 gate.
+The first Tau3 pilot failed before inference because a sparse checkout omitted
+shared user-simulator guidelines. Five physical Galaxy HTTP cells completed,
+then a read error stopped the first queue. The corrected native-recurrence
+control is persistent and loading; no later score is implied.
+See the [current qualification report](galaxy-evidence/qualification-overnight-v2/README.md).
+The release image and tested Qwen Helm deployment remain unfinished.
+
 ## Experimental Galaxy bring-up
 
 **2026-10-07 07:32 UTC:** the eight-replica concurrency gate passes on

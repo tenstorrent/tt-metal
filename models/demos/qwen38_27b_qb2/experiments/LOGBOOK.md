@@ -587,3 +587,49 @@ notes: [shared-qk-and-bandwidth-v1](../galaxy-evidence/shared-qk-and-bandwidth-v
 
 [Delivery launch](../galaxy-evidence/dram-delivery-launch-v1/README.md),
 [G0 pass](../galaxy-evidence/shared-qk-g0-pass-v1/README.md).
+
+## Oct 8 evening / Oct 9 recovery: full qualification and release gates
+
+- Full optimized GPQA at 32K finished 17:29:40 UTC: 142/198 (71.72%), 42
+  truncations; below unchanged 89.2% gate. API checks passed. Compare historical
+  native 171/198 with caution: multiple model changes separate those sources.
+- 17:34: PATH repaired in isolated delivery/profile controllers; existing
+  /usr/local/bin/tt-smi was missing from transient-unit PATH. No install needed.
+- 17:36: delivery hardware pass. Read-only 499-508 GB/s/chip becomes 245-249
+  including remote delivery/receiver work. Correctness success is not a model
+  speedup. Extended placement/packet/ring/backpressure sweep prepared.
+- 17:45: full 64-layer 32K/B32 test passed output repeatability, but profiler
+  dropped markers and export hit the 1-GiB file cap. Full P0 remains incomplete;
+  remaining profiling cases did not run. Preserve the failed capture. Fixed the
+  helper's exit/signal race so it does not mask the primary capture error.
+- SSH temporarily timed out to both hosts; no restart was inferred from that.
+  Access recovered after the user requested retry. Existing jobs stayed owned
+  by their persistent services. All new staging occurred after live validation.
+- Tau3 setup uses pinned upstream source/lock and removable host-local venv.
+  Root files were initially missing due to non-cone sparse checkout; repaired.
+  Audio support is imported by the text runner; PortAudio/JACK/ALSA packages
+  were extracted locally, not installed in the OS. Missing libasound2 was fixed.
+- 18:05:34: overnight v1 launched. CPU 375 +40 subtests passed. Full GPQA at
+  64K ran 18:17:36-19:15:12: **163/198 (82.32%)**, 15 truncations, 57m35s.
+  Raw responses stay private on host for diagnosis; only hashes/scores published.
+- Tau3 v1 failed all twelve processes before inference: sparse checkout lacked
+  global user-simulation guidelines. This is no valid model score, not 0%
+  demonstrated task accuracy. Restored data and added actual metadata preflight
+  plus a null-score regression test for zero-call setup failures.
+- Five HTTP cells completed before ReadError at 16K/128 clients. Native control
+  and extended delivery were not run. The supervisor stopped its owned workers;
+  server logs show subsequent SIGTERM, not a demonstrated prior device crash.
+  A fresh-connection policy is a diagnostic change, not a proven root-cause fix.
+- 03:28:38 Oct 9: resumed remaining control stages in a new immutable snapshot,
+  qwen38-overnight-v2-20261009.service. CPU **376 +40 subtests** and actual Tau3
+  metadata preflight passed; PID 917206 was verified live and loading native
+  model layers after successful reset. G0 -> full 64K GPQA -> corrected Tau3 ->
+  matching HTTP sweep -> 54 delivery variants are persistent and bounded.
+  No already completed candidate score is relabeled or replaced.
+- Release remains unqualified: GPQA below 177/198, no valid agentic score,
+  incomplete serving sweep, and no pinned release image/tested Qwen Helm chart.
+  Further kernel fusions and profiler repair are not in the unattended queue.
+
+[Current queue and methodology](../galaxy-evidence/qualification-overnight-v2/README.md),
+[delivery results](../galaxy-evidence/delivery-pass-v2/README.md),
+[failed full profile](../galaxy-evidence/full-trace-attempt-v2/README.md).

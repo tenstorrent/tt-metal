@@ -78,7 +78,10 @@ def environment(task, source, weights):
     ):
         env.pop(key, None)
     env.update(
-        PATH=f"{task}/python_env/bin:" + env.get("PATH", "/usr/bin:/bin"),
+        # Transient systemd units may inherit only /usr/bin:/bin. The allocated
+        # host's tt-smi reset CLI lives in /usr/local/bin; keep recovery usable
+        # after an intentionally stopped serving job leaves the dirty marker.
+        PATH=f"{task}/python_env/bin:" + env.get("PATH", "/usr/bin:/bin") + ":/usr/local/bin",
         TT_METAL_HOME=str(task / "metal"),
         PYTHONPATH=f"{source}:{task}/metal:{task}/metal/tools",
         LD_LIBRARY_PATH=f"{task}/metal-install/lib:{task}/metal-build/lib",

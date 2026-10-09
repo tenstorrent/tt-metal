@@ -1,0 +1,5 @@
+{
+  "state": "failed",
+  "error": "CalledProcessError(2, ['uv', 'sync', '--python', '3.12', '--frozen', '--extra', 'knowledge', '--extra', 'voice', '--project', '/home/ttuser/qwen38-artifacts-20261007/tau-environment-v1/tau2'])",
+  "time": 1791482225.2115517
+}

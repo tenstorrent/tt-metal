@@ -23,7 +23,7 @@ if [[ -n "${QWEN_WAIT_FOR_UNIT:-}" ]]; then
         exit 3
     fi
 fi
-export PATH="$QWEN_TASK_ROOT/serving_env/bin:$PATH"
+export PATH="$QWEN_TASK_ROOT/serving_env/bin:$PATH:/usr/local/bin"
 export TT_METAL_HOME="$QWEN_TASK_ROOT/metal"
 export PYTHONPATH="$QWEN_MODEL_SOURCE:$TT_METAL_HOME:$TT_METAL_HOME/tools"
 export LD_LIBRARY_PATH="$QWEN_TASK_ROOT/metal-install/lib:$QWEN_TASK_ROOT/metal-build/lib:${LD_LIBRARY_PATH:-}"

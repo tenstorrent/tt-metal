@@ -157,6 +157,7 @@ async def run_gpqa(
     concurrency=GPQA_CONCURRENCY,
     max_tokens=GPQA_TOKENS,
     threshold=GPQA_THRESHOLD,
+    retain_raw_responses=False,
 ):
     validate_gpqa_settings(count=count, concurrency=concurrency, max_tokens=max_tokens, threshold=threshold)
     if sorted(case["id"] for case in cases) != list(range(count)):
@@ -189,6 +190,14 @@ async def run_gpqa(
         async def generate(case, payload):
             async with semaphore:
                 response = await complete(client, payload, chat=True)
+            if retain_raw_responses:
+                # Private diagnostic artifacts, never included in public score receipts.
+                raw_dir = output_dir / "private-responses"
+                raw_dir.mkdir(mode=0o700, exist_ok=True)
+                raw_path = raw_dir / f"{case['id']:03d}.json"
+                descriptor = os.open(raw_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(descriptor, "w") as raw_log:
+                    json.dump(response, raw_log)
             score = task.process_results(case["doc"], [response["text"]])["exact_match"]
             row = {
                 "id": case["id"],
@@ -350,9 +359,9 @@ async def main(args):
         "total_server_capacity": total_capacity,
         "checkpoint_revision": MODEL_REVISION,
         "dataset_revision": DATASET_REVISION,
-        "dataset_source": {"transport": "validated_local_csv", **local_dataset}
-        if local_dataset
-        else {"transport": "hub"},
+        "dataset_source": (
+            {"transport": "validated_local_csv", **local_dataset} if local_dataset else {"transport": "hub"}
+        ),
         "harness_revision": HARNESS_REVISION,
         "selection": f"first {gpqa['count']} Diamond rows, choice shuffle seed 42",
         "scope": (
@@ -392,7 +401,14 @@ async def main(args):
     limits = httpx.Limits(max_connections=max(16, total_capacity), max_keepalive_connections=total_capacity)
     async with httpx.AsyncClient(base_url=args.base_url, timeout=7200, limits=limits) as client:
         if args.mode != "performance":
-            summary["gpqa_result"] = await run_gpqa(client, args.output_dir, task, cases, **gpqa)
+            summary["gpqa_result"] = await run_gpqa(
+                client,
+                args.output_dir,
+                task,
+                cases,
+                **gpqa,
+                retain_raw_responses=getattr(args, "retain_raw_responses", False),
+            )
             (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         if args.mode != "gpqa":
             summary["performance_results"] = await run_performance(
@@ -441,6 +457,9 @@ if __name__ == "__main__":
     parser.add_argument("--gpqa-max-tokens", type=int, default=GPQA_TOKENS)
     parser.add_argument("--gpqa-threshold", type=float, default=GPQA_THRESHOLD)
     parser.add_argument("--gpqa-csv", type=Path, help="Existing authorized CSV cache; must match the pinned Hub blob")
+    parser.add_argument(
+        "--retain-raw-responses", action="store_true", help="Retain private model text for diagnostic review"
+    )
     args = parser.parse_args()
     if args.server_capacity * args.data_parallel_size < args.gpqa_concurrency and args.mode != "performance":
         parser.error("GPQA concurrency must not exceed --server-capacity times --data-parallel-size")

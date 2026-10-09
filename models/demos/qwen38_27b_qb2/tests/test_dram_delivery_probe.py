@@ -137,6 +137,23 @@ def test_dram_delivery_probe():
         report["device_ids"] = list(mesh.get_device_ids())
         assert len(report["device_ids"]) == 4
         variants = delivery.variants()
+        if os.getenv("QWEN_DRAM_DELIVERY_EXTENDED") == "1":
+            # Reuse the already verified mover while sweeping ring size, packet
+            # aggregation and deliberate receiver backpressure together.
+            variants = [
+                dict(
+                    mode="bank_bulk",
+                    placement="pinned",
+                    consumer_placement=placement,
+                    packet_pages=pages,
+                    depth=depth,
+                    consumer_delay=delay,
+                )
+                for placement in ("near", "center", "opposite")
+                for pages in (4, 8, 15)
+                for depth in (2, 4, 8)
+                for delay in (0, 4096)
+            ]
         for variant in variants:
             report.update(state="byte_validation", active_variant=variant)
             save(path, report)

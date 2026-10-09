@@ -186,7 +186,7 @@ def main(args):
             "--gpqa-concurrency",
             "128",
             "--gpqa-max-tokens",
-            "32768",
+            str(args.gpqa_max_tokens),
             "--gpqa-threshold",
             "0.892",
             "--gpqa-csv",
@@ -194,6 +194,8 @@ def main(args):
             "--output-dir",
             str(output / "gpqa"),
         ]
+        if args.retain_raw_responses:
+            eval_command.append("--retain-raw-responses")
         report["evaluation_command"] = eval_command
         write_receipt(receipt, report)
         with (output / "evaluator.log").open("w") as log:
@@ -215,10 +217,76 @@ def main(args):
         report["gpqa"] = json.loads(summary_path.read_text())["gpqa_result"]
         if report["gpqa"]["completed_samples"] != 198 or not report["gpqa"]["full_dataset"]:
             raise RuntimeError("GPQA result does not cover all 198 questions")
+        if args.tau_source is not None:
+            report["state"] = "tau_pilot"
+            command = [
+                str(args.tau_python),
+                str(source / "tests/tau_benchmark.py"),
+                "--source",
+                str(args.tau_source),
+                "--output",
+                str(output / "tau"),
+                "--base-url",
+                report["endpoint"],
+            ]
+            report["tau_command"] = command
+            write_receipt(receipt, report)
+            tau_environment = dict(environment)
+            tau_environment["LD_LIBRARY_PATH"] = (
+                str(args.tau_source.parent / "portaudio/root/usr/lib/x86_64-linux-gnu")
+                + ":"
+                + environment.get("LD_LIBRARY_PATH", "")
+            )
+            with (output / "tau.log").open("w") as log:
+                evaluator = subprocess.Popen(
+                    command, env=tau_environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True
+                )
+                deadline = time.monotonic() + 2820
+                while evaluator.poll() is None:
+                    if server.poll() is not None:
+                        raise RuntimeError("Serving process exited during Tau3")
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Bounded Tau3 pilot deadline exceeded")
+                    time.sleep(5)
+            report["tau_exit_code"] = evaluator.returncode
+            evaluator = None
+            tau_summary = output / "tau/summary.json"
+            if tau_summary.exists():
+                report["tau"] = json.loads(tau_summary.read_text())
+            else:
+                report["tau"] = {"state": "failed", "error": "No terminal summary"}
+            # Preserve unsuccessful pilot outcomes separately from the GPQA gate.
+            write_receipt(receipt, report)
+        if args.sweep_before_exit:
+            report["state"] = "http_sweep"
+            write_receipt(receipt, report)
+            try:
+                asyncio.run(
+                    asyncio.wait_for(
+                        run_http_sweep(
+                            report["endpoint"], output / "http-sweep", deployment=str(receipt), priority_only=True
+                        ),
+                        timeout=5400,
+                    )
+                )
+                report["http_sweep_passed"] = True
+            except (httpx.HTTPError, TimeoutError) as error:
+                report["http_sweep_passed"] = False
+                report["http_sweep_error"] = type(error).__name__
+                # Keep the failed measurement; never retry a scored burst. A
+                # live health check plus owned-worker shutdown lets the next
+                # independent control reset and start from a clean process.
+                if server.poll() is not None:
+                    raise
+                with httpx.Client(timeout=5) as client:
+                    client.get(report["endpoint"] + "/health").raise_for_status()
+                report["healthy_after_sweep_failure"] = True
         if args.exit_after_eval:
             report.update(
                 state="evaluation_completed",
-                passed=report["gpqa"]["passed"] and report["evaluation_exit_code"] == 0,
+                passed=report["gpqa"]["passed"]
+                and report["evaluation_exit_code"] == 0
+                and report.get("http_sweep_passed", True),
                 resident_endpoint=False,
             )
             print(f"GALAXY_EVALUATION_FINISHED passed={report['passed']}", flush=True)
@@ -260,9 +328,21 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--readiness-timeout", type=int, default=5400)
     parser.add_argument("--evaluation-timeout", type=int, default=14400)
+    parser.add_argument("--gpqa-max-tokens", type=int, default=32768)
+    parser.add_argument("--retain-raw-responses", action="store_true")
+    parser.add_argument(
+        "--sweep-before-exit",
+        action="store_true",
+        help="Run the priority-context physical Galaxy sweep before bounded shutdown",
+    )
+    parser.add_argument("--tau-source", type=Path, help="Pinned Tau3 source; run the bounded pilot after full GPQA")
+    parser.add_argument("--tau-python", type=Path, help="Isolated interpreter containing the pinned Tau3 package")
     parser.add_argument(
         "--exit-after-eval",
         action="store_true",
         help="Stop owned workers after full GPQA; omit HTTP sweep and resident serving",
     )
-    main(parser.parse_args())
+    arguments = parser.parse_args()
+    if (arguments.tau_source is None) != (arguments.tau_python is None):
+        parser.error("--tau-source and --tau-python must be provided together")
+    main(arguments)
