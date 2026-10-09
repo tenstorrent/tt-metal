@@ -24,8 +24,9 @@ uint32_t ChunkedSlidingHaloLayout::hop_rows(uint32_t hop) const {
     return chunked_sliding_halo_hop_rows(halo_tile_rows, q_local_tile_rows, hop);
 }
 
-uint32_t ChunkedSlidingHaloLayout::dest_row(uint32_t source_device, uint32_t hop) const {
-    return chunked_sliding_halo_block_dest_row(halo_tile_rows, q_local_tile_rows, ring_size, source_device, hop);
+uint32_t ChunkedSlidingHaloLayout::dest_row(uint32_t source_device, uint32_t hop, uint32_t slot) const {
+    return slot * halo_tile_rows +
+           chunked_sliding_halo_block_dest_row(halo_tile_rows, q_local_tile_rows, ring_size, source_device, hop);
 }
 
 bool ChunkedSlidingHaloLayout::source_keyed() const {
@@ -37,7 +38,7 @@ std::vector<ChunkedSlidingHaloExchange> plan_chunked_sliding_halo_exchanges(
     const uint32_t ring_size = layout.ring_size;
     const uint32_t remote_hops = layout.remote_hop_count();
     std::vector<ChunkedSlidingHaloExchange> exchanges;
-    if (!allow_multicast || !layout.source_keyed()) {
+    if (!allow_multicast || !layout.source_keyed() || layout.halo_slot_count > 1) {
         for (uint32_t hop = 1; hop <= remote_hops; ++hop) {
             const bool send_backward = linear_topology && source_device + hop >= ring_size;
             exchanges.push_back(ChunkedSlidingHaloExchange{
@@ -76,6 +77,7 @@ ChunkedSlidingHaloLayout build_chunked_sliding_halo_layout(
     uint32_t tile_height,
     uint32_t ring_size,
     uint32_t logical_k_tile_rows,
+    uint32_t halo_buffer_tile_rows,
     uint32_t circular_kv_slab_count,
     std::optional<uint32_t> q_start_tile) {
     ChunkedSlidingHaloLayout layout;
@@ -93,6 +95,9 @@ ChunkedSlidingHaloLayout build_chunked_sliding_halo_layout(
 
     layout.q_start_tile = q_start_tile.value_or(logical_k_tile_rows - q_group_tile_rows);
     layout.halo_tile_rows = chunked_sliding_halo_tile_rows(sliding_window_tokens, tile_height, k_chunk_tile_rows);
+    if (layout.halo_tile_rows > 0) {
+        layout.halo_slot_count = halo_buffer_tile_rows / layout.halo_tile_rows;
+    }
     return layout;
 }
 

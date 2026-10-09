@@ -43,6 +43,7 @@ class TransformerBlock(Module):
         attention_k_chunk_size: int = 512,
         attention_q_chunk_size: int = 128,
         is_fsdp: bool = False,
+        attention_exp_approx_mode: bool = False,
     ) -> None:
         super().__init__()
 
@@ -118,6 +119,7 @@ class TransformerBlock(Module):
             k_chunk_size=attention_k_chunk_size,
             q_chunk_size=attention_q_chunk_size,
             is_fsdp=is_fsdp,
+            exp_approx_mode=attention_exp_approx_mode,
         )
 
         self.norm2 = DistributedLayerNorm(

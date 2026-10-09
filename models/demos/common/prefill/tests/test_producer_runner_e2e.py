@@ -434,7 +434,11 @@ def _running_runner(tag: str, sc: dict, **extra):
     env = _scenario_env(
         sc,
         PREFILL_MOCK_MIGRATION="1",
-        PREFILL_LAYER_ACK_D2H=sc.get("env", {}).get("PREFILL_LAYER_ACK_D2H", "1"),
+        # The scenario's own setting wins; otherwise the caller's environment, so a model whose runtime
+        # reports layer completion through the host callback only can run a shared scenario.
+        PREFILL_LAYER_ACK_D2H=sc.get("env", {}).get(
+            "PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "1")
+        ),
         **extra,
     )
     ready_timeout_s = int(sc.get("ready_timeout_s", _READY_TIMEOUT_S))

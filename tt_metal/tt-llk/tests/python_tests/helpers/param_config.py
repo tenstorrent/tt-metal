@@ -11,7 +11,6 @@ import pytest
 from helpers.tile_shape import construct_tile_shape
 from typing_extensions import deprecated
 
-from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .constraints import (
     _quasar_effective_sfpu_format,
     _quasar_fpu_source_format,
@@ -20,7 +19,7 @@ from .constraints import (
     is_valid_quasar_packer_conversion,
     is_valid_quasar_unpack_to_dest,
 )
-from .data_format_inference import is_format_combination_outlier
+from .data_format_inference import effective_dest_acc
 from .format_config import (
     DataFormat,
     FormatConfig,
@@ -1052,20 +1051,14 @@ def get_num_blocks_and_num_tiles_in_block(
     num_rows_tensor, num_cols_tensor = input_dimensions
     num_rows_tile, num_cols_tile = tile_dimensions
 
-    is_outlier = (
-        is_format_combination_outlier(
-            formats.input_format, formats.output_format, dest_acc
-        )
-        and get_chip_architecture() != ChipArchitecture.QUASAR
-    )
+    # The Dest the kernel will actually run with: TestConfig promotes an outlier
+    # combination to a 32-bit Dest, which halves the tile capacity just as a requested
+    # dest_acc=Yes does.
+    dest_acc = effective_dest_acc(formats.input_format, formats.output_format, dest_acc)
 
     capacity_divisor = (
         2
-        if (
-            dest_acc == DestAccumulation.Yes
-            or formats.input_format.is_32_bit()
-            or is_outlier
-        )
+        if (dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit())
         else 1
     )
     max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
