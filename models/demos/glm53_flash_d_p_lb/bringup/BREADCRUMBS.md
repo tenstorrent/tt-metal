@@ -329,3 +329,14 @@ profiler signposts; generated/glm53_flash_d_p_lb/moe_routing.json):
 - Fit: ms = 0.90 + 0.138 us x padded rows (rms 0.04 ms; corr with rows 0.969, with active experts 0.14). 0.9 ms ~ reading
   all ~510 MB of bfp4 weights at peak DRAM (1.0 ms); the per-row part ~364 TFLOP/s (60% of LoFi). Weight streaming and
   compute look additive, not overlapped: overlapping them would be worth ~0.6 ms per layer (~25 ms per chunk).
+
+## TODO: real-time-profiler-based per-op breakdown
+
+- Needed: a per-op breakdown (testing/op_report.py) driven by the program real-time profiler instead of the device
+  profiler's per-op syncs (23 min for 3 layers today; the whole model times out). Verified (tests/test_realtime_probe.py):
+  active on the 2x4 LoudBox, no TT_METAL_DEVICE_PROFILER needed, records (chip, runtime_id, start, end, freq GHz, cores)
+  via ttnn.device.RegisterProgramRealtimeProfilerCallback; a ttnn call's programs carry the device-op ids
+  ttnn._ttnn.get_device_operation_id() returns before the call (i0 <= id < i1), so attribution needs no sync.
+- To do: profiler mode that records the id range per call (no sync) and joins the callback's records; op_report fed
+  from it for all 45 layers in one normal-speed pass. Check first against the device profiler on one layer; unsynced
+  collectives include wait time on early chips (use the slowest chip's span or a synced CCL-only pass).
