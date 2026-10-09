@@ -101,6 +101,50 @@ def generate_bfloat16_bits_in_range(low, high, dtype=torch.bfloat16, ftz=True):
     return padded.reshape(rows, cols)
 
 
+def generate_float32_bits(include_spl_values=False):
+    """
+    Generate every bfloat16 bit pattern, stored as float32.
+
+    A float32 accuracy sweep cannot enumerate all 2^32 encodings. Its input
+    domain is the bfloat16 lattice: the 65,536 bfloat16 values, promoted to
+    float32 without rounding. Each value is an exact float32 whose lower 16
+    mantissa bits are zero (the bfloat16 encoding shifted left by 16).
+
+    Subnormals are flushed to zero. Float32 and bfloat16 share the exponent
+    range, and the hardware flushes both. When include_spl_values is False,
+    +/-0, +/-infinity, and NaN are replaced by +0 as well.
+
+    Args:
+        include_spl_values (bool, optional): If True, keep -0, +/-inf, and NaN.
+            If False, replace them with +0. Defaults to False.
+
+    Returns:
+        torch.Tensor: Shape (256, 256), dtype float32.
+    """
+    return generate_bfloat16_bits(dtype=torch.float32, include_spl_values=include_spl_values)
+
+
+def generate_float32_bits_in_range(low, high, ftz=True):
+    """
+    Bfloat16 values inside [low, high], stored as float32.
+
+    Same value set as generate_bfloat16_bits_in_range: every bfloat16 encoding
+    that falls in range, promoted to float32 and padded to a tile-aligned
+    (N, 32) shape. N is the smallest multiple of 32 that fits the filtered
+    values; padding repeats the first in-range value.
+
+    Args:
+        low (float): Lower bound of the range (inclusive).
+        high (float): Upper bound of the range (inclusive).
+        ftz (bool, optional): If True, flush subnormal values to zero before
+            filtering. Defaults to True.
+
+    Returns:
+        torch.Tensor: Shape (N, 32), dtype float32.
+    """
+    return generate_bfloat16_bits_in_range(low, high, dtype=torch.float32, ftz=ftz)
+
+
 # Mantissa codes for the binary-op sweep grid (7-bit):
 #   0000000 = exact power of 2 (1.0 × 2^e)  — includes 0.5 = 2^{-1}, 1.0 = 2^0, …
 #   0000001 = next value after the power of 2
