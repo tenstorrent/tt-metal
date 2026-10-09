@@ -10,6 +10,7 @@ int<->int and all block-float (Bfp8_b / Bfp4_b) conversions. Same-dtype pairs
 and the ``int32<->uint32`` pair (not a kernel pair) are excluded.
 """
 
+import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import (
@@ -168,6 +169,10 @@ def test_eltwise_unary_typecast(
     #  * float / block-float input: whole numbers so int conversions are exact and
     #    bf16 is lossless; small range when a block-float is involved so the
     #    shared-exponent quantization is (near-)exact per 16-elem block.
+    #
+    # Non-negative Int32 has the same bits in sign-magnitude and two's complement,
+    # so this sweep cannot catch a wrong Int32 encoding. Negatives are covered by
+    # test_eltwise_unary_typecast_int32_negative, which packs two's complement.
     bfp_involved = _is_block_float(formats.input_format) or _is_block_float(
         formats.output_format
     )
@@ -178,7 +183,14 @@ def test_eltwise_unary_typecast(
     else:
         spec_A = _whole_number_float_spec(16 if bfp_involved else 201)
 
-    _run_typecast(formats, dest_acc, approx_mode, input_dimensions, spec_A)
+    _run_typecast(
+        formats,
+        dest_acc,
+        approx_mode,
+        input_dimensions,
+        spec_A,
+        twos_complement=formats.input_format == DataFormat.Int32,
+    )
 
 
 @parametrize(
@@ -235,6 +247,7 @@ def _run_typecast(
     spec_A: StimuliSpec,
     *,
     max_ulp: int | None = None,
+    twos_complement: bool = False,
 ):
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -300,6 +313,7 @@ def _run_typecast(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            twos_complement=twos_complement,
         ),
         dest_acc=dest_acc,
         unpack_to_dest=unpack_to_dest,
@@ -339,3 +353,92 @@ def _run_typecast(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format, max_ulp=max_ulp
     ), "Assert against golden failed"
+
+
+# Int32 extremes. -2**31 is representable in two's complement and not in sign-magnitude.
+_INT32_MIN = -(2**31)
+_INT32_MAX = 2**31 - 1
+
+
+def _int32_negative_spec(formats: InputOutputFormat) -> StimuliSpec:
+    """Int32 stimuli with negatives and signed boundaries.
+
+    Block-float outputs stay inside [-15, 15], matching the positive sweep: a wider
+    range is not exact after the packer's shared-exponent quantization. UInt16 clamps,
+    and a 65535 result packs as 0xFFFF, which Blackhole NOC readback treats as a
+    timeout, so that pair stays at or below 65534. Every other output takes the full
+    signed range, including the values where sign-magnitude and two's complement differ.
+    """
+    if _is_block_float(formats.output_format):
+        return StimuliSpec.uniform(-15, 15)
+
+    if formats.output_format == DataFormat.UInt16:
+        random_low, random_high = -255, 255
+        boundaries = [_INT32_MIN, -65536, -256, -1, 0, 1, 255, 256, 65534]
+    else:
+        random_low, random_high = -512, 512
+        boundaries = [
+            _INT32_MIN,
+            -_INT32_MAX,
+            -65536,
+            -256,
+            -255,
+            -128,
+            -1,
+            0,
+            1,
+            127,
+            128,
+            255,
+            256,
+            65535,
+            65536,
+            _INT32_MAX,
+        ]
+
+    def distribution(size, dtype, generator):
+        values = torch.randint(
+            random_low,
+            random_high + 1,
+            (size,),
+            dtype=torch.int64,
+            generator=generator,
+        )
+        values[: len(boundaries)] = torch.tensor(boundaries, dtype=torch.int64)
+        return values.to(dtype)
+
+    return StimuliSpec(distribution=distribution, seed=56808)
+
+
+@parametrize(
+    formats=[pair for pair in TYPECAST_PAIRS if pair.input_format == DataFormat.Int32],
+    dest_acc=_production_dest_acc,
+    approx_mode=[ApproximationMode.No],
+    input_dimensions=[[32, 32]],
+)
+def test_eltwise_unary_typecast_int32_negative(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    approx_mode: ApproximationMode,
+    input_dimensions: list[int],
+):
+    """Negative Int32 typecast stimuli, packed as two's complement.
+
+    pack_int32 defaults to sign-magnitude. The Int32 typecast kernels load Dest with a
+    bit-preserving INT32 load and consume two's complement (SFPABS in its integer mode,
+    and a low-byte wrap for UInt8). Non-negative stimuli hide that, because both
+    encodings agree there. See #56808.
+    """
+    if get_chip_architecture() == ChipArchitecture.QUASAR:
+        # Quasar still consumes sign-magnitude for most integer typecasts; its own
+        # suite selects the encoding per pair.
+        pytest.skip("Quasar Int32 typecast encoding is covered by its own suite")
+
+    _run_typecast(
+        formats,
+        dest_acc,
+        approx_mode,
+        input_dimensions,
+        _int32_negative_spec(formats),
+        twos_complement=True,
+    )
