@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <vector>
 #include <map>
+#include <optional>
 #include <ostream>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -14,6 +15,7 @@
 #include <tt_stl/reflection.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include "tt_metal/fabric/axis_route_topology.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
@@ -354,14 +356,29 @@ std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines(cons
         // 2D routing: inject route buffer size
         defines["FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE"] = std::to_string(routing_2d_buffer_size_);
 
-        // Worker connection-manager capacity is a compile-time upper bound. Compile every local kernel
-        // for the express-capable superset when any locally bound mesh uses express routing; exact mesh
-        // shape remains per-device runtime metadata in routing_l1_info_t.
+        // Express routing is a compile-time choice on the device (FabricExpressConfig): worker
+        // connection-manager capacity, and which axis a Z-facing router decodes. When any locally bound
+        // mesh uses express routing, compile every local kernel for it and name the axis the chords run
+        // along (0 = N/S, 1 = E/W). One define serves the whole configuration, so the local meshes must
+        // agree; exact mesh shape remains per-device runtime metadata in routing_l1_info_t.
+        std::optional<int> express_axis;
         for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
-            if (control_plane.express_routing_enabled(mesh_id)) {
-                defines["FABRIC_EXPRESS_ENABLED"] = "1";
-                break;
+            if (!control_plane.express_routing_enabled(mesh_id)) {
+                continue;
             }
+            const auto* express_rings = control_plane.ring_for_direction(mesh_id, RoutingDirection::Z);
+            TT_FATAL(express_rings != nullptr, "Mesh {} reports express routing but has no express rings", *mesh_id);
+            TT_FATAL(
+                !express_axis.has_value() || *express_axis == express_rings->axis_dim,
+                "FABRIC_EXPRESS_AXIS is configuration-wide: mesh {} runs express links along axis {} but another "
+                "locally bound mesh uses axis {}",
+                *mesh_id,
+                express_rings->axis_dim,
+                express_axis.value_or(-1));
+            express_axis = express_rings->axis_dim;
+        }
+        if (express_axis.has_value()) {
+            defines["FABRIC_EXPRESS_AXIS"] = std::to_string(*express_axis);
         }
     } else {
         // 1D routing: inject extension words

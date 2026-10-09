@@ -184,13 +184,13 @@ TEST(Routing2DCodec, LocalDeliverOnlyYByteDoesNotFallThroughToX) {
     route_buffer[kY + kLocalX] = Codec::ACTION_EAST;      // a stale X action that must NOT be taken
 
     EXPECT_EQ(
-        Codec::decode_action<eth_chan_directions::NORTH>(route_buffer.data(), kLocalY, kLocalX, kY),
+        (Codec::decode_action<eth_chan_directions::NORTH, false>(route_buffer.data(), kLocalY, kLocalX, kY)),
         Codec::ACTION_LOCAL_DELIVER);
     EXPECT_EQ(
-        Codec::decode_action<eth_chan_directions::SOUTH>(route_buffer.data(), kLocalY, kLocalX, kY),
+        (Codec::decode_action<eth_chan_directions::SOUTH, false>(route_buffer.data(), kLocalY, kLocalX, kY)),
         Codec::ACTION_LOCAL_DELIVER);
     EXPECT_EQ(
-        Codec::decode_action<eth_chan_directions::Z>(route_buffer.data(), kLocalY, kLocalX, kY),
+        (Codec::decode_action<eth_chan_directions::Z, false>(route_buffer.data(), kLocalY, kLocalX, kY)),
         Codec::ACTION_LOCAL_DELIVER);
 }
 
@@ -203,9 +203,11 @@ TEST(Routing2DCodec, EastWestFacingRoutersReadTheXMapOnly) {
     route_buffer[kY + kLocalX] = Codec::ACTION_EAST;
 
     EXPECT_EQ(
-        Codec::decode_action<eth_chan_directions::EAST>(route_buffer.data(), kLocalY, kLocalX, kY), Codec::ACTION_EAST);
+        (Codec::decode_action<eth_chan_directions::EAST, false>(route_buffer.data(), kLocalY, kLocalX, kY)),
+        Codec::ACTION_EAST);
     EXPECT_EQ(
-        Codec::decode_action<eth_chan_directions::WEST>(route_buffer.data(), kLocalY, kLocalX, kY), Codec::ACTION_EAST);
+        (Codec::decode_action<eth_chan_directions::WEST, false>(route_buffer.data(), kLocalY, kLocalX, kY)),
+        Codec::ACTION_EAST);
 }
 
 // An intermesh landing rebuilds the map and restarts the Y leg, so the E/W shortcut above would
@@ -223,10 +225,11 @@ TEST(Routing2DCodec, IntermeshLandingDecodesYFirstOnEveryFacing) {
 
     // The facing-keyed decode disagrees precisely on E/W, which is what the landing must avoid.
     EXPECT_EQ(
-        Codec::decode_action<eth_chan_directions::NORTH>(route_buffer.data(), kLocalY, kLocalX, kY),
+        (Codec::decode_action<eth_chan_directions::NORTH, false>(route_buffer.data(), kLocalY, kLocalX, kY)),
         Codec::ACTION_NORTH);
     EXPECT_EQ(
-        Codec::decode_action<eth_chan_directions::EAST>(route_buffer.data(), kLocalY, kLocalX, kY), Codec::ACTION_EAST);
+        (Codec::decode_action<eth_chan_directions::EAST, false>(route_buffer.data(), kLocalY, kLocalX, kY)),
+        Codec::ACTION_EAST);
 
     // Y leg spent: Y-first agrees with every facing again.
     route_buffer[kLocalY] = 0;
@@ -242,14 +245,51 @@ TEST(Routing2DCodec, NorthSouthFacingRoutersPreferYThenFallThroughToX) {
         rb[kLocalY] = Codec::ACTION_SOUTH;
         rb[kY + kLocalX] = Codec::ACTION_EAST;
         EXPECT_EQ(
-            Codec::decode_action<eth_chan_directions::NORTH>(rb.data(), kLocalY, kLocalX, kY), Codec::ACTION_SOUTH);
+            (Codec::decode_action<eth_chan_directions::NORTH, false>(rb.data(), kLocalY, kLocalX, kY)),
+            Codec::ACTION_SOUTH);
     }
     {  // row reached (Y byte zero) -> fall through to X
         std::array<std::uint8_t, kY + kX> rb = {};
         rb[kY + kLocalX] = Codec::ACTION_EAST;
         EXPECT_EQ(
-            Codec::decode_action<eth_chan_directions::NORTH>(rb.data(), kLocalY, kLocalX, kY), Codec::ACTION_EAST);
+            (Codec::decode_action<eth_chan_directions::NORTH, false>(rb.data(), kLocalY, kLocalX, kY)),
+            Codec::ACTION_EAST);
     }
+}
+
+// On an X-express mesh the chords run along E/W, so a Z-facing router must read its own X byte the
+// way E/W-facing routers do. Y-first is wrong there: for multicast the Y byte of every target row is
+// nonzero by design (LOCAL_DELIVER plus the root column's teeth plus the spine continuation), so the
+// landing would act on the row's spine byte instead of its own column's. The bytes below are the ones
+// McastReverseTreeTest.XAxisChordAtRootIsCopiedToTargetRows encodes for root (0,2), 2 hops S, 8 hops
+// E, as seen by the chord landing at (1,5).
+TEST(Routing2DCodec, ZFacingRouterOnXExpressReadsTheXMapOnly) {
+    constexpr uint32_t kY = 4, kX = 32;
+    std::array<std::uint8_t, kY + kX> route_buffer = {};
+    constexpr uint32_t kLocalY = 1, kLocalX = 5;
+
+    // Row 1: deliver, continue the spine S, and launch the root column's teeth E and Z.
+    const std::uint8_t row_byte =
+        Codec::ACTION_LOCAL_DELIVER | Codec::ACTION_SOUTH | Codec::ACTION_EAST | Codec::ACTION_Z;
+    // Column 5: deliver, W to the leaf column 4, E onward to column 6.
+    const std::uint8_t column_byte = Codec::ACTION_LOCAL_DELIVER | Codec::ACTION_WEST | Codec::ACTION_EAST;
+    route_buffer[kLocalY] = row_byte;
+    route_buffer[kY + kLocalX] = column_byte;
+
+    // X-express: the landing acts on its column.
+    EXPECT_EQ(
+        (Codec::decode_action<eth_chan_directions::Z, true>(route_buffer.data(), kLocalY, kLocalX, kY)), column_byte);
+    // Y-first on the same bytes is the misroute this parameter exists to prevent: W is lost, so column
+    // 4 is never delivered, and S starts a second spine down column 5.
+    EXPECT_EQ(
+        (Codec::decode_action<eth_chan_directions::Z, false>(route_buffer.data(), kLocalY, kLocalX, kY)), row_byte);
+
+    // The parameter is Z-only: N/S-facing routers keep Y-first, E/W-facing routers keep X-only.
+    EXPECT_EQ(
+        (Codec::decode_action<eth_chan_directions::NORTH, true>(route_buffer.data(), kLocalY, kLocalX, kY)), row_byte);
+    EXPECT_EQ(
+        (Codec::decode_action<eth_chan_directions::EAST, false>(route_buffer.data(), kLocalY, kLocalX, kY)),
+        column_byte);
 }
 
 // A zeroed route buffer means "no action anywhere" and decodes to 0 for every router facing.
@@ -257,8 +297,8 @@ TEST(Routing2DCodec, ZeroedRouteBufferDecodesToNothing) {
     constexpr uint32_t kY = 4, kX = 4;
     std::array<std::uint8_t, kY + kX> route_buffer = {};
 
-    EXPECT_EQ(Codec::decode_action<eth_chan_directions::NORTH>(route_buffer.data(), 2, 1, kY), 0);
-    EXPECT_EQ(Codec::decode_action<eth_chan_directions::EAST>(route_buffer.data(), 2, 1, kY), 0);
+    EXPECT_EQ((Codec::decode_action<eth_chan_directions::NORTH, false>(route_buffer.data(), 2, 1, kY)), 0);
+    EXPECT_EQ((Codec::decode_action<eth_chan_directions::EAST, false>(route_buffer.data(), 2, 1, kY)), 0);
 }
 
 }  // namespace tt::tt_fabric::routing_2d_codec_tests
