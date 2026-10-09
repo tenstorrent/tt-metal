@@ -270,7 +270,12 @@ class DSV41Decoder:
             )
             self.last_logits_t = logits
         if self.device_loop:
-            nxt = self.head.sample_global(logits, self.mesh_config, self.ccl)
+            if (
+                getattr(self, "samp", None) is not None
+            ):  # temperature / top-k / top-p draw inside the trace (tt/device_sampler.py); greedy rows = exact argmax
+                nxt = self.samp.forward(logits, self.samp.params)
+            else:
+                nxt = self.head.sample_global(logits, self.mesh_config, self.ccl)
             ttnn.copy(nxt, self.tok_dev)  # feed the sampled token to the next replay ...
             ttnn.copy(ttnn.add(self.pos_dev, 1), self.pos_dev)  # ... and advance the position
         elif self.mesh_config is not None:

@@ -243,6 +243,7 @@ class Model:
         self.dec.cand_k = self.cand_k
         if self.cand_k:
             self.dec.alloc_invT(self.U)
+        self.dec.samp = self.samp = self._make_sampler(self.U)
         self.prefill_model = GenPrefillModel(
             mesh_device, pls, embedding, self.head, dev_engram, self.host_rows, self.Up
         )
@@ -1434,7 +1435,24 @@ class Model:
         devs = ttnn.get_device_tensors(ttnn.from_device(self.dec.tok_dev))
         return torch.cat([ttnn.to_torch(devs[r * self.cols]).reshape(-1) for r in range(self.rows)]).long()
 
-    def decode_forward(self, tokens, current_pos, enable_trace=True, reload_inputs=True, invT=None):
+    def _make_sampler(self, users_per_row):
+        """In-trace sampler (DSV41_INTRACE_SAMPLE=1): the decode trace draws the next token itself (tt/device_sampler.py); params uploaded by ``decode_forward(samp=...)``."""
+        if os.environ.get("DSV41_INTRACE_SAMPLE", "0") != "1":
+            return None
+        from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import DSV41DeviceSampler
+
+        smp = DSV41DeviceSampler(
+            self.md,
+            self.mc,
+            self.ccl,
+            users_per_row,
+            J=int(os.environ.get("DSV41_SAMP_J", "16")),
+            levels=int(os.environ.get("DSV41_SAMP_LEVELS", "3")),
+        )
+        smp.alloc_params()
+        return smp
+
+    def decode_forward(self, tokens, current_pos, enable_trace=True, reload_inputs=True, invT=None, samp=None):
         """One decode step of every user. tokens [B] = the token fed at position current_pos [B] (per user). Returns the next greedy tokens [B].
         ``reload_inputs=False`` (steady state): the device already holds the fed-back token / position (device loop); only the Engram rows of
         ``tokens`` are uploaded."""
@@ -1454,6 +1472,8 @@ class Model:
         t2 = time.perf_counter()
         if invT is not None and self.cand_k:
             self.dec.set_invT(invT)
+        if samp is not None and self.samp is not None:
+            self.samp.set_params(*samp)
         if enable_trace:
             from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import check_trace_allocations
 
@@ -1610,12 +1630,14 @@ class Model:
         out[f"full B={self.B}"] = (time.perf_counter() - t0) / n * 1e3
         return out
 
-    def decode_forward_bucket(self, Ub, tokens, current_pos, phys, enable_trace=True, invT=None):
+    def decode_forward_bucket(self, Ub, tokens, current_pos, phys, enable_trace=True, invT=None, samp=None):
         """One decode step at ``Ub`` users per mesh row (``Ub`` = U: the full model). tokens / current_pos [4 Ub] in bucket row order, ``phys`` [4 Ub] the model user of every row
         (``r * U + u``, u < Ub). -> next greedy tokens [4 Ub]."""
         if Ub == self.U:
-            return self.decode_forward(tokens, current_pos, enable_trace=enable_trace, reload_inputs=True, invT=invT)
-        return self.buckets[Ub].step(tokens, current_pos, phys, enable_trace=enable_trace, invT=invT)
+            return self.decode_forward(
+                tokens, current_pos, enable_trace=enable_trace, reload_inputs=True, invT=invT, samp=samp
+            )
+        return self.buckets[Ub].step(tokens, current_pos, phys, enable_trace=enable_trace, invT=invT, samp=samp)
 
     def read_candidates(self, Ub=None):
         """(values, global ids [B', cols * cand_k], partition sums [B', cols]) of the last decode step of the full model (``Ub`` None / U) or of a bucket."""

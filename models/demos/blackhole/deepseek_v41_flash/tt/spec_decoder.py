@@ -239,7 +239,7 @@ class SpecDecoder(SpecVerifier):
     def _hidden(self, taps, x, xs):
         return ttnn.typecast(
             ttnn.concat(
-                taps or [(self._tap(x) if x is not None else ttnn.concat([self._tap(c) for c in xs], dim=2))] * 3, dim=3
+                taps or [self._tap(x) if x is not None else ttnn.concat([self._tap(c) for c in xs], dim=2)] * 3, dim=3
             ),
             ttnn.bfloat16,
         )  # [1,1,T,15360]; partial-layer debug runs have no tap layers
@@ -303,7 +303,12 @@ class SpecDecoder(SpecVerifier):
                     self._dbg(f"layer {lid}", x)
             self._dbg_done = True
             logits = self.head.forward(x, pre)
-        a = self.head.sample_global(logits, self.mesh_config, self.ccl)  # [T,1] uint32 RM: argmax of every row
+        if (
+            getattr(self, "samp", None) is not None
+        ):  # in-trace sampling: every block row draws its own token (tt/device_sampler.py); greedy rows = exact argmax
+            a = self.samp.forward(logits, self.samp.params)
+        else:
+            a = self.head.sample_global(logits, self.mesh_config, self.ccl)  # [T,1] uint32 RM: argmax of every row
         # top-2 logits of every row (per column shard, all-gathered): near-tie evidence for exactness analysis, read only on request
         t2 = ttnn.topk(logits, k=2, dim=-1, largest=True, sorted=True)[0]  # [1,1,T,2] fp32 per column shard
         self.top2 = self.mesh_config.allgather(t2, self.ccl, axis=1, dim=3)  # [1,1,T,2*cols]
