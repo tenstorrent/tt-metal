@@ -156,8 +156,8 @@ def test_sdpa_recipe_legacy_arguments(device, variant):
 
 
 # Precision routing (no `precision`): FP32 dest runs ACCURATE at op-chosen blocking (dense causal with BFP8 Q/K/V and
-# a custom scale; an attn_mask call passing Q2048; an attn_mask call whose 500 keys run as one K chunk at the caller's
-# Q384; chunked prefill from a start tensor), non-ring joint runs STANDARD (ACCURATE with FP32 dest) at its chunks.
+# a custom scale; an attn_mask call passing Q2048; an attn_mask call whose 500 keys fit one K chunk; chunked prefill
+# from a start tensor), non-ring joint runs STANDARD (ACCURATE with FP32 dest), also at op-chosen blocking.
 @pytest.mark.parametrize(
     "case",
     [
