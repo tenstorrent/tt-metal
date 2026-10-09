@@ -31,7 +31,7 @@ inline void rand_init(std::uint32_t seed) {
     if (seed == 0xFFFFFFFF) {
         seed = 0xFFFFFFFE;
     }
-    init_prng_seed(seed);
+    init_prng_seed_sfpu(seed);
 }
 
 inline void make_lane_salt() {
