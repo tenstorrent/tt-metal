@@ -449,7 +449,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
         {
             contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
         }
-        if constexpr (((BType == BroadcastType::NONE) && (!acc_to_dest)) || binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB || unpack_to_dest)
+        if constexpr (_llk_unpack_A_address_on_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>())
         {
             cfg[(context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
         }
