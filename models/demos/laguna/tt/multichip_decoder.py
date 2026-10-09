@@ -901,7 +901,7 @@ class MultichipDecoder(OptimizedDecoder):
         # local-only dispatch (no fabric) on row-major input splits tokens across this many cores (ttnn dispatch
         # LOCAL_TOKEN_SPLIT); the tile-input path keeps dc_links senders
         self._dispatch_rm = os.environ.get("TT_LAGUNA_DISPATCH_RM", "1") == "1"
-        d_cores = int(os.environ.get("TT_LAGUNA_DISPATCH_CORES", "32")) if self._dispatch_rm else dc_links
+        d_cores = int(os.environ.get("TT_LAGUNA_DISPATCH_CORES", "64")) if self._dispatch_rm else dc_links
         bucket_modules = {}
         for seq_len in sorted(TOKEN_DISPATCH_BUCKETS):
             # Worst case: every one of T*K routes is local, plus at most 31

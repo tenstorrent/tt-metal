@@ -1085,6 +1085,25 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         /*cb_id=*/tt::CBIndex::c_7,
         "metadata_temp_buffer");
 
+    // LOCAL_TOKEN_SPLIT parallel prefix (no fabric): c_10 holds this core's per-expert route histogram (page 0)
+    // and a staging page for an earlier core's (page 1); one semaphore counts the earlier cores that published.
+    uint32_t hist_sem_id = 0;
+    if (!use_fabric) {
+        const uint32_t hist_page = tt::round_up(operation_attributes.num_routed_experts * 4, l1_alignment);
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = 2 * hist_page,
+            .core_ranges = sender_core_grid,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_10),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = hist_page,
+            }}},
+        });
+        hist_sem_id = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = hist_sem_id, .core_type = tt::CoreType::WORKER, .core_ranges = sender_core_grid, .initial_value = 0});
+    }
+
     std::vector<ttnn::MeshCoordinate> neighbors;
     std::array<bool, 4> directions = {false, false, false, false};
     if (use_fabric) {
@@ -1322,6 +1341,16 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         // Writer-only: exit semaphore address (separate from init_semaphore to avoid
         // init/exit reuse race; mirrors the combine fix).
         writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
+
+        if (!use_fabric) {
+            // LOCAL_TOKEN_SPLIT: histogram semaphore id, then every dispatch core's NoC (x, y) in core order
+            reader_runtime_args.push_back(hist_sem_id);
+            for (const auto& c : sender_cores) {
+                const auto noc = mesh_device->worker_core_from_logical_core(c);
+                reader_runtime_args.push_back(static_cast<uint32_t>(noc.x));
+                reader_runtime_args.push_back(static_cast<uint32_t>(noc.y));
+            }
+        }
 
         if (use_fabric) {
             // Dispatch-axis neighbors (each a distinct fabric direction) as fabric nodes.

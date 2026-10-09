@@ -208,23 +208,35 @@ void kernel_main() {
     uint32_t core_sel = dispatch_core_idx;
 #ifdef LOCAL_TOKEN_SPLIT
     // No fabric (every route is local): split the TOKENS across the dispatch cores instead, so each token row is
-    // read by one core and any core count works. A core takes every expert of its token range; it first replays
-    // the earlier tokens' routes to advance each expert's destination counter exactly as the token-ordered loop
-    // below would have (a counter advances for every route whose expert the table maps somewhere).
+    // read by one core and any core count works. A core takes every expert of its token range. Its destination
+    // counters must start where the token-ordered loop would have left them, i.e. advanced by every earlier
+    // token's routes (a counter advances for every route whose expert the table maps somewhere). Parallel prefix:
+    // each core histograms its OWN range into cb_hist page 0, increments the semaphore of every later core, waits
+    // for all earlier cores and adds their histograms.
     {
+        constexpr uint32_t cb_hist = tt::CBIndex::c_10;
+        constexpr uint32_t banks = NUM_DRAM_BANKS;
+        const uint32_t hist_sem_id = get_arg_val<uint32_t>(rt_args++);
         const uint32_t n_tok = token_end_idx - token_start_idx;
         const uint32_t per = (n_tok + num_dispatch_cores - 1) / num_dispatch_cores;
         uint32_t my_start = token_start_idx + dispatch_core_idx * per;
         my_start = my_start < token_end_idx ? my_start : token_end_idx;
         const uint32_t my_end = (my_start + per < token_end_idx) ? my_start + per : token_end_idx;
-        // The replay is bound by issuing small index reads. DRAM-interleaved pages p, p + NUM_DRAM_BANKS, ... sit back
-        // to back in one bank, so a pass over the input-row scratch reads them as NUM_DRAM_BANKS contiguous runs.
-        constexpr uint32_t banks = NUM_DRAM_BANKS;
+
+        const uint32_t hist_l1 = get_write_ptr(cb_hist);
+        const uint32_t hist_page = get_tile_size(cb_hist);
+        volatile tt_l1_ptr uint32_t* hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hist_l1);
+        volatile tt_l1_ptr uint32_t* other = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hist_l1 + hist_page);
+        for (uint32_t e = 0; e < n_routed_experts; ++e) {
+            hist[e] = 0;
+        }
+        // DRAM-interleaved index pages p, p + banks, ... sit back to back in one bank: read a pass of the input-row
+        // scratch as one contiguous run per bank
         const uint32_t pg = aligned_indices_page_size;
         const uint32_t prefix_batch = (read_batch_size * aligned_input_page_size / pg) / banks * banks;
         const uint32_t per_bank = prefix_batch / banks;
-        for (uint32_t b = token_start_idx; b < my_start; b += prefix_batch) {
-            const uint32_t cnt = (b + prefix_batch < my_start) ? prefix_batch : my_start - b;
+        for (uint32_t b = my_start; b < my_end; b += prefix_batch) {
+            const uint32_t cnt = (b + prefix_batch < my_end) ? prefix_batch : my_end - b;
 #ifdef INDICES_DRAM_INTERLEAVED
             for (uint32_t r = 0; r < banks && r < cnt; r++) {
                 const uint32_t n = (cnt - r + banks - 1) / banks;
@@ -236,14 +248,34 @@ void kernel_main() {
             }
 #endif
             noc_async_read_barrier();
+            invalidate_l1_cache();
             for (uint32_t t = 0; t < cnt; t++) {
                 tt_l1_ptr uint16_t* idx =
                     reinterpret_cast<tt_l1_ptr uint16_t*>(input_base + (t % banks * per_bank + t / banks) * pg);
                 for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
                     if (expert_dispatch_table[idx[k]] != -1) {
-                        offsets[idx[k]]++;
+                        hist[idx[k]]++;
                     }
                 }
+            }
+        }
+        asm volatile("fence" ::: "memory");
+        const uint32_t sem_addr = get_semaphore(hist_sem_id);
+        for (uint32_t j = dispatch_core_idx + 1; j < num_dispatch_cores; ++j) {
+            const uint32_t x = get_arg_val<uint32_t>(rt_args + 2 * j), y = get_arg_val<uint32_t>(rt_args + 2 * j + 1);
+            noc_semaphore_inc(get_noc_addr(x, y, sem_addr), 1);
+        }
+        noc_async_atomic_barrier();
+        volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+        noc_semaphore_wait(sem, dispatch_core_idx);
+        noc_semaphore_set(sem, 0);
+        for (uint32_t j = 0; j < dispatch_core_idx; ++j) {
+            const uint32_t x = get_arg_val<uint32_t>(rt_args + 2 * j), y = get_arg_val<uint32_t>(rt_args + 2 * j + 1);
+            noc_async_read(get_noc_addr(x, y, hist_l1), hist_l1 + hist_page, n_routed_experts * 4);
+            noc_async_read_barrier();
+            invalidate_l1_cache();
+            for (uint32_t e = 0; e < n_routed_experts; ++e) {
+                offsets[e] += other[e];
             }
         }
         token_start_idx = my_start;
