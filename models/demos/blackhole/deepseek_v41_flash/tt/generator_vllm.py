@@ -1300,6 +1300,7 @@ class DeepseekV41ForCausalLM:
     ):
         from vllm_tt_plugin.spec_decode import VerifyOutput
 
+        t_enter = time.perf_counter()
         if spec_mode != "argmax_ids":
             raise ValueError(f"DSV4.1 verifies in argmax_ids mode only, got {spec_mode!r}")
         if slot_remap is not None:
@@ -1370,9 +1371,12 @@ class DeepseekV41ForCausalLM:
                 self.spec_stats["rows_verified"] = self.spec_stats.get("rows_verified", 0) + 1
         self.spec_stats["rounds"] += 1
         self.spec_stats["rows"] += len(rows)
-        st = self.__dict__.setdefault("_sstat", {"n": 0, "t": 0.0, "g": 0.0, "last": None})
+        st = self.__dict__.setdefault(
+            "_sstat", {"n": 0, "t": 0.0, "g": 0.0, "last": None, "pre": 0.0, "post": 0.0, "prop": 0.0}
+        )
         st["n"] += 1
         st["t"] += t1 - t0
+        st["pre"] += t0 - t_enter
         if st["last"] is not None and t0 - st["last"] < 2.0:
             st["g"] += t0 - st["last"]
         st["last"] = t1
@@ -1380,12 +1384,13 @@ class DeepseekV41ForCausalLM:
         if every > 0 and st["n"] % every == 0:
             ss = self.spec_stats
             logger.info(
-                f"DSV4.1 spec stats over {st['n']} rounds: round {1e3 * st['t'] / st['n']:.1f} ms, between rounds {1e3 * st['g'] / st['n']:.1f} ms, "
+                f"DSV4.1 spec stats over {st['n']} rounds: round {1e3 * st['t'] / st['n']:.1f} ms, between rounds {1e3 * st['g'] / st['n']:.1f} ms (adapter: verify pre {1e3 * st['pre'] / st['n']:.2f} + post {1e3 * st['post'] / st['n']:.2f}, propose {1e3 * st['prop'] / st['n']:.2f} ms per round), "
                 f"{ss['accepted'] / max(ss['rows'], 1):.2f} accepted drafts per row-round, {ss.get('acc_verified', 0) / max(ss.get('rows_verified', 0), 1):.3f} per VERIFIED row-round ({ss.get('rows_verified', 0)} of {ss['rows']} row-rounds; the others are the forced single-token first round of a request) (k={K}; cumulative since start; rounds per bucket {dict(self.spec_bucket_calls)}; sampled rows {ss.get('sampled_rows', 0)}, sampler draws {sum(r_.sample_stats['rows'] for r_ in [self.spec] + list(self.spec_buckets.values()))} / full-row fallbacks {sum(r_.sample_stats['fallback'] for r_ in [self.spec] + list(self.spec_buckets.values()))})"
             )
-            st.update(n=0, t=0.0, g=0.0)
+            st.update(n=0, t=0.0, g=0.0, pre=0.0, post=0.0, prop=0.0)
         out = VS.scatter_rows(a.to(torch.int32), [(i, r, pos) for i, p, pos, r in rows], W)
         self.spec_bucket_calls[Ub] = self.spec_bucket_calls.get(Ub, 0) + 1
+        st["post"] += time.perf_counter() - t1
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=out.reshape(W, n))
 
     def _seed_items(self, extra):
@@ -1412,6 +1417,7 @@ class DeepseekV41ForCausalLM:
         the captured verify trace), so its first decode step is a real verify, not a forced single-token round."""
         from vllm_tt_plugin.spec_decode import DraftOutput
 
+        t_prop = time.perf_counter()
         K = self.spec.k
         W = int(committed_tokens.shape[0])
         ids = torch.zeros(W, int(num_drafts), dtype=torch.int32)
@@ -1444,6 +1450,9 @@ class DeepseekV41ForCausalLM:
         for i, p in offer:
             ids[i, :K] = self.spec_drafts[p]
             nv[i] = min(K, int(num_drafts))
+        self.__dict__.setdefault(
+            "_sstat", {"n": 0, "t": 0.0, "g": 0.0, "last": None, "pre": 0.0, "post": 0.0, "prop": 0.0}
+        )["prop"] += (time.perf_counter() - t_prop)
         return DraftOutput(draft_token_ids=ids, num_valid=nv)
 
     def warmup_model_decode(self, *args, **kwargs):
