@@ -92,11 +92,7 @@ def _cells():
         and not (in_fmt == DataFormat.Float32 and dest == DestAccumulation.No)
         # Blackhole cannot run a Float16 SFPU input through a 16-bit Dest (the
         # functional tests skip it too); what comes back is not the kernel's.
-        and not (
-            _arch_is_blackhole()
-            and DataFormat.Float16 in (in_fmt, out_fmt)
-            and dest == DestAccumulation.No
-        )
+        and not (_arch_is_blackhole() and DataFormat.Float16 in (in_fmt, out_fmt) and dest == DestAccumulation.No)
     ]
 
 
@@ -164,9 +160,7 @@ def _run(mathop, formats, approx_mode, dest_acc, src_A, tile_cnt, dimensions):
             tile_count_res=tile_cnt,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=(
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        unpack_to_dest=(formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes),
     )
     result = configuration.run().result
     return golden, torch.tensor(result, dtype=format_dict[formats.output_format])
@@ -176,12 +170,7 @@ def _run(mathop, formats, approx_mode, dest_acc, src_A, tile_cnt, dimensions):
 @pytest.mark.parametrize("kind", ["sweep", "specials"])
 @pytest.mark.parametrize(
     "in_fmt, out_fmt, approx_mode, dest_acc",
-    [
-        pytest.param(
-            *c, id=f"{c[0].name}-{c[1].name}-approx:{c[2].name}-dest_acc:{c[3].name}"
-        )
-        for c in _cells()
-    ],
+    [pytest.param(*c, id=f"{c[0].name}-{c[1].name}-approx:{c[2].name}-dest_acc:{c[3].name}") for c in _cells()],
 )
 @pytest.mark.parametrize("op_name", OPS or ["none"])
 def test_sfpu_report_accuracy(op_name, in_fmt, out_fmt, approx_mode, dest_acc, kind):
@@ -203,9 +192,7 @@ def test_sfpu_report_accuracy(op_name, in_fmt, out_fmt, approx_mode, dest_acc, k
         src, classes = special_values(in_fmt)
         tile_cnt, dims = 1, SPECIALS_DIMENSIONS
     try:
-        golden, result = _run(
-            mathop, formats, approx_mode, dest_acc, src, tile_cnt, dims
-        )
+        golden, result = _run(mathop, formats, approx_mode, dest_acc, src, tile_cnt, dims)
     except OverflowError as exc:
         pytest.skip(f"golden cannot be computed: {exc}")
     name = f"{mathop.name}__{in_fmt.name}-{out_fmt.name}__{approx_mode.name}__{dest_acc.name}__{kind}.pt"
@@ -270,10 +257,7 @@ BINARY_FORMATS = {
     "SfpuAtan2": [F16B, F32],
     "SfpuIsclose": [F16B, F32],
     "SfpuLogsigmoid": [F16B, F32],
-    **{
-        op: _FLOAT_FULL + [I32]
-        for op in ("SfpuElwLt", "SfpuElwGt", "SfpuElwLe", "SfpuElwGe")
-    },
+    **{op: _FLOAT_FULL + [I32] for op in ("SfpuElwLt", "SfpuElwGt", "SfpuElwLe", "SfpuElwGe")},
     **{
         op: [I32]
         for op in (
@@ -337,9 +321,7 @@ def _binary_cells():
             if ONLY_FORMATS and fmt.name not in ONLY_FORMATS:
                 continue
             for dest in (
-                (DestAccumulation.No, DestAccumulation.Yes)
-                if not fmt.is_integer()
-                else (DestAccumulation.Yes,)
+                (DestAccumulation.No, DestAccumulation.Yes) if not fmt.is_integer() else (DestAccumulation.Yes,)
             ):
                 if fmt.is_32_bit() and dest == DestAccumulation.No:
                     continue
@@ -423,14 +405,10 @@ def _binary_run(op_name, fmt, dest_acc, kind, monkeypatch):
         a = torch.linspace(-60.0, 60.0, pairs * n, dtype=torch.float64)
         kwargs["src_A_override"] = _interleave(a, derived(a))
     elif op_name == "SfpuAtan2":
-        kwargs["spec_A"] = StimuliSpec(
-            distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0
-        )
+        kwargs["spec_A"] = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     elif mathop in fb._INT_BINARY_STIMULI:
         low, high = fb._INT_BINARY_STIMULI[mathop]
-        kwargs["spec_A"] = StimuliSpec(
-            distribution=DistributionKind.UNIFORM, low=low, high=high
-        )
+        kwargs["spec_A"] = StimuliSpec(distribution=DistributionKind.UNIFORM, low=low, high=high)
     if op_name == "SfpuRsubInt32":
         kwargs["twos_complement"] = True
 
@@ -441,9 +419,7 @@ def _binary_run(op_name, fmt, dest_acc, kind, monkeypatch):
         src = src.repeat(captured["result"].numel() // src.numel())
     n = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
     # Tile 2k holds in0 and the result, tile 2k+1 holds in1.
-    pairs = lambda t: t.flatten()[: (t.numel() // (2 * n)) * 2 * n].reshape(
-        -1, 2, n
-    )  # noqa: E731
+    pairs = lambda t: t.flatten()[: (t.numel() // (2 * n)) * 2 * n].reshape(-1, 2, n)  # noqa: E731
     s, g, r = (
         pairs(src),
         pairs(torch.as_tensor(captured["golden"])),
@@ -452,16 +428,11 @@ def _binary_run(op_name, fmt, dest_acc, kind, monkeypatch):
     return s[:, 0].flatten(), s[:, 1].flatten(), g[:, 0].flatten(), r[:, 0].flatten()
 
 
-@pytest.mark.skipif(
-    not DUMP_DIR or not BINARY_OPS, reason="run by the LLK SFPU report only"
-)
+@pytest.mark.skipif(not DUMP_DIR or not BINARY_OPS, reason="run by the LLK SFPU report only")
 @pytest.mark.parametrize("kind", ["random", "specials"])
 @pytest.mark.parametrize(
     "op_name, fmt, dest_acc",
-    [
-        pytest.param(*c, id=f"{c[0]}-{c[1].name}-dest_acc:{c[2].name}")
-        for c in _binary_cells()
-    ],
+    [pytest.param(*c, id=f"{c[0]}-{c[1].name}-dest_acc:{c[2].name}") for c in _binary_cells()],
 )
 def test_sfpu_report_accuracy_binary(op_name, fmt, dest_acc, kind, monkeypatch):
     if op_name == "none":

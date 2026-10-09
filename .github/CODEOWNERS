@@ -28,6 +28,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/instructions/ttnn-core.instructions.md @tenstorrent/metalium-developers-ttnn-core @aliaksei-sala
 .github/instructions/ttnn-ops.instructions.md @tenstorrent/metalium-developers-ops-leads
 .github/instructions/ttnn.instructions.md @tenstorrent/metalium-developers-ttnn-core
+.github/llk_sfpu_report/ @nstamatovicTT
 .github/scripts/utils/cluster_recover.py @sott0n @changh95
 .github/scripts/utils/run-reset-isolation-test.sh @sott0n @changh95
 .github/time_budget.yaml @roseli-TT @tdowdallTT @dpopovTT
@@ -40,6 +41,8 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 tests/pipeline_reorg/galaxy_multi_user_isolation_tests.yaml @sott0n @changh95
 .github/workflows/galaxy-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
+.github/workflows/llk-sfpu-report.yaml @nstamatovicTT @tenstorrent/metalium-developers-infra
+.github/workflows/llk-sfpu-test-command.yaml @nstamatovicTT @tenstorrent/metalium-developers-infra
 .github/workflows/models-t1*.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra
 .github/workflows/models-t2*.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra
 .github/workflows/models-t3*.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra
@@ -57,6 +60,7 @@ tests/pipeline_reorg/galaxy_multi_user_isolation_tests.yaml @sott0n @changh95
 .github/workflows/vllm-model-tests.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
 tests/pipeline_reorg/galaxy_profiler_tests.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @roseli-TT @dpopovTT
 tests/pipeline_reorg/single_card_profiler_tests.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @roseli-TT @dpopovTT
+tests/pipeline_reorg/llk_sfpu_report_tests.yaml @nstamatovicTT
 tests/pipeline_reorg/t3k_profiler_tests.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @roseli-TT @dpopovTT
 
 /infra/ @tenstorrent/metalium-developers-infra

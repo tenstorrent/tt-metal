@@ -11,20 +11,21 @@ Comment on the PR (write access required, same as `/test`):
 
 ```
 /llk-sfpu-test                      # auto: ops whose machine code changed, Wormhole + Blackhole
-/llk-sfpu-test tanh exp             # exactly these ops
-/llk-sfpu-test --arch bh            # one architecture
+/llk-sfpu-test tanh exp             # exactly these ops (MathOperation names, any case)
+/llk-sfpu-test --arch bh            # one architecture: wh, bh or all
 /llk-sfpu-test --base main          # current main vs main + this PR's kernel diff
 ```
 
-Three workflows take it from there:
+Two workflows take it from there:
 
 | workflow | does |
 |---|---|
-| `llk-sfpu-test.md` (gh-aw) | reads the request, the PR and its bounty issue; dispatches `llk-sfpu-report` on main; posts a "running" note |
-| `llk-sfpu-report.yaml` | plans (pins the head SHA, finds the merge-base), measures one leg per arch, renders `report.md`; never comments |
-| `llk-sfpu-summary.md` (gh-aw) | on completion, posts the report with a short AI summary on top, hiding older reports |
+| `llk-sfpu-test-command.yaml` | checks write access, parses the command, pins the PR head, dispatches `llk-sfpu-report` on main, posts a "measuring" note |
+| `llk-sfpu-report.yaml` | plans (merge-base, SKUs), measures one leg per arch, renders `report.md`, posts it on the PR and hides the earlier report and the note |
 
-`llk-sfpu-report` can also be dispatched by hand from the Actions tab.
+`llk-sfpu-report` can also be dispatched by hand from the Actions tab; it posts on the
+PR only with `post_comment`, and always leaves the report in the run summary and the
+`llk-sfpu-report` artifact.
 
 ## End-to-end flow
 
@@ -32,21 +33,17 @@ Three workflows take it from there:
 reviewer: "/llk-sfpu-test tanh --arch bh"
    │
    ▼
-llk-sfpu-test.md (gh-aw, issue_comment, write access only)            ubuntu runners
+llk-sfpu-test-command.yaml (issue_comment, write access only)          ubuntu-slim
    1. 👀 on the comment
-   2. pre-agent: PR metadata, changed files, diff, the bounty issue(s) it closes,
-      the valid MathOperation names; PR number + head SHA written as facts outside
-      the agent sandbox
-   3. agent (claude-sonnet-5): turns the request into inputs -- ops (empty = auto),
-      arch, base -- and extracts the bounty issue's targets and the PR's claims
-   4. post-step: rewrites the dispatch from the facts (PR number, head SHA, ref main),
-      validates ops/arch/base, fails closed
-   5. safe outputs: dispatch llk-sfpu-report on main; one "running" comment
+   2. the commenter's repository permission must be admin, maintain or write
+   3. parse the first line: op names, --arch, --base (fixed shapes, fails closed)
+   4. pin the PR head SHA; dispatch llk-sfpu-report on main with post_comment
+   5. "measuring" note on the PR, 🚀 on the comment
    │
    ▼
 llk-sfpu-report.yaml (workflow_dispatch on main)
-   plan              ubuntu-slim   pins the head SHA; merge-base from the compare API;
-                                   notes if the PR moved since; picks the SKUs
+   plan              ubuntu-slim   merge-base from the compare API; notes if the PR
+                                   moved since the command; picks the SKUs
    build-images      LLK CI image
    load-test-matrix  tests/pipeline_reorg/llk_sfpu_report_tests.yaml (one leg per arch)
    measure (per arch) N150 / P150b, LLK container, read-only token, no secrets
@@ -59,43 +56,33 @@ llk-sfpu-report.yaml (workflow_dispatch on main)
         accuracy  test_sfpu_report_accuracy.py on both sides; host-side ULP / exact
                   comparison, special-input diff
         -> summary-<arch>.json, report-<arch>.md
-   collect           ubuntu-slim   renders one report.md for all archs; meta.json
-                                   (PR, SHA, run, agent context); artifact llk-sfpu-report
-   │  (workflow_run: completed)
-   ▼
-llk-sfpu-summary.md (gh-aw)
-   1. pre-agent: downloads the artifact; the PR number comes from meta.json
-   2. agent: 3-6 sentences -- perf and accuracy verdicts, against the bounty targets
-   3. post-step: the comment is the rendered report, with the agent's text placed in
-      a labelled box at the marker; the agent never carries the tables
-   4. safe outputs: one comment on the PR; hides older reports and the "running" note
+   collect           ubuntu-slim   renders one report.md for all archs; artifact
+                                   llk-sfpu-report; with post_comment, hides the earlier
+                                   report and the note, and posts the new report
 ```
 
 What runs where, and with what: only the `measure` legs touch hardware; they run
 main's host code and compile the PR's device C++, with `contents: read`, no secrets
-and no persisted credentials. The two agents see PR text only as data and can only
-emit a dispatch (the first) or a comment (the second), both rewritten by
-deterministic post-steps.
+and no persisted credentials. The jobs that comment (the command, and `collect`) run
+no PR code. No AI model reads the PR: the command is parsed by fixed rules, and the
+report is posted as rendered.
 
 Who can start a run: only people with write access. The command checks the
-commenter's repository permission before its agent starts; dispatching
-`llk-sfpu-report` by hand needs write access; and the summary posts only for a
-dispatched report run, started by someone with write access or by `/llk-sfpu-test`
-itself (`github-actions[bot]`). A fork PR's own workflow runs are `pull_request`
-events, so they cannot make the summary post.
+commenter's repository permission before it dispatches, and dispatching
+`llk-sfpu-report` by hand needs write access.
 
 ## Locally
 
 On a machine with a Wormhole or Blackhole card, from the tt-llk test venv
-(`tests/setup_external_testing_env.sh`):
+(`tt_metal/tt-llk/tests/setup_external_testing_env.sh`), at the root of a tt-metal
+checkout:
 
 ```bash
-cd tt_metal/tt-llk
 git fetch origin refs/pull/54080/head:refs/remotes/pr/54080
-python3 sfpu_report/cli.py --arch wormhole --head pr/54080 run            # auto-detect
-python3 sfpu_report/cli.py --arch wormhole --head pr/54080 run --ops Tanh # given ops
-python3 sfpu_report/cli.py --arch wormhole --head pr/54080 detect         # which ops changed
-python3 sfpu_report/report.py /tmp/llk-sfpu-report/summary-*.json         # render
+python3 .github/llk_sfpu_report/cli.py --arch wormhole --head pr/54080 run            # auto-detect
+python3 .github/llk_sfpu_report/cli.py --arch wormhole --head pr/54080 run --ops Tanh # given ops
+python3 .github/llk_sfpu_report/cli.py --arch wormhole --head pr/54080 detect         # which ops changed
+python3 .github/llk_sfpu_report/report.py /tmp/llk-sfpu-report/summary-*.json         # render
 ```
 
 `--base <ref>` sets the baseline (default: the merge-base with `origin/main`), `--work`
@@ -148,9 +135,11 @@ Binary rows are per operand tile, the unit the binary perf tests have used since
 result tile. The binary float family also sweeps the Dest broadcast; those variants
 get their own rows, labelled like `SfpuElwadd (bcast Row)`.
 
-**Accuracy.** `tests/python_tests/test_sfpu_report_accuracy.py` runs each op over every
+**Accuracy.** `test_sfpu_report_accuracy.py` runs each op over every
 finite input of bf16 and fp16 (fp32: every 65,536th value) and over a tile of special
 values (NaN, ±inf, ±0, subnormals, the format's extremes), and saves the raw results.
+It lives here, next to the tool; each run copies it into `tt_metal/tt-llk/tests/python_tests/`,
+because the harness's `conftest.py` applies only to files there, and removes it after.
 `accuracy.py` compares the two sides lane by lane with the nightly ULP sweep's helpers
 (`helpers/ulp.py`, `helpers/ulp_sweep.py`): max/mean ULP, lanes that got worse or
 better, non-finite disagreements, and edge-case classes. No budget is involved: both
@@ -180,7 +169,12 @@ attribute to a covered op is listed under the report's notes.
 `TT_METAL_DISABLE_SFPLOADMACRO=1`); perf is skipped, since ttsim cycles are not
 silicon's. ttsim does not model every format the report measures (Int32 and fp32
 binary SFPU inputs abort it), so a simulator run is a check of the tool, not of a PR.
-The hardware-free tests are `tests/python_tests/test_sfpu_report_hw_free.py`.
+The hardware-free tests are `test_sfpu_report_hw_free.py`. Run them from the repository
+root without the root `conftest.py`, which needs the full ttnn environment:
+
+```bash
+python3 -m pytest --noconftest -o addopts= .github/llk_sfpu_report/test_sfpu_report_hw_free.py
+```
 
 ## Testing on GitHub
 
@@ -191,10 +185,9 @@ The hardware-free tests are `tests/python_tests/test_sfpu_report_hw_free.py`.
    `gh workflow run llk-bit-exact.yaml --ref nstamatovic/llk-sfpu-test-ci -f pr_number=<N>`.
    The report is in the run's Summary tab and in the `llk-sfpu-report` artifact.
    That commit never goes into the real PR.
-2. **The two gh-aw workflows only run from main** (`issue_comment` and `workflow_run`
-   use the default branch's file). Test them after merge on a real PR.
+2. **The command only runs from main** (`issue_comment` uses the default branch's
+   file). Test it after merge on a real PR.
 3. **Repo plumbing:** `owner_id` in `tests/pipeline_reorg/llk_sfpu_report_tests.yaml`
-   (a Slack ID), the `llk.on_demand` budget in `.github/time_budget.yaml`, lock files
-   compiled with gh-aw v0.89.21 (`gh aw compile`), a version main already uses.
+   (a Slack ID) and the `llk.on_demand` budget in `.github/time_budget.yaml`.
 4. **Sign-offs:** infra for the on-demand budget and runner use; security for
    running fork device code from a comment.

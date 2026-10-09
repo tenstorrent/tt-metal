@@ -10,7 +10,7 @@
   budget_type: on_demand
   cmd: |
     set -euo pipefail
-    ./sfpu_report/ci_run.sh wormhole
+    ./.github/llk_sfpu_report/ci_run.sh wormhole
   skus:
     wh_n150_civ2:
       timeout: 60
@@ -22,7 +22,7 @@
   budget_type: on_demand
   cmd: |
     set -euo pipefail
-    ./sfpu_report/ci_run.sh blackhole
+    ./.github/llk_sfpu_report/ci_run.sh blackhole
   skus:
     bh_p150b_civ2:
       timeout: 60

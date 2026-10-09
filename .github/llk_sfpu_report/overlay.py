@@ -87,11 +87,7 @@ class Plan:
 def make_plan(repo, head, base=None, main_ref="origin/main"):
     repo = Path(repo).resolve()
     head_sha = git(repo, "rev-parse", f"{head}^{{commit}}")
-    base_sha = (
-        git(repo, "rev-parse", f"{base}^{{commit}}")
-        if base
-        else git(repo, "merge-base", main_ref, head_sha)
-    )
+    base_sha = git(repo, "rev-parse", f"{base}^{{commit}}") if base else git(repo, "merge-base", main_ref, head_sha)
     changed = git(repo, "diff", "--name-only", base_sha, head_sha).splitlines()
     return Plan(
         repo=repo,

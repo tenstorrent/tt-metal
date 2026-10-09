@@ -80,9 +80,7 @@ def perf_section(summaries):
         for family, by_schedule in s["perf"].items():
             for row in by_schedule.get("loadmacro", []):
                 i, _, o = row["formats"].partition("->")
-                rows.append(
-                    ((s["arch"], row["op"], i, o, row["approx"], row["dest_acc"]), row)
-                )
+                rows.append(((s["arch"], row["op"], i, o, row["approx"], row["dest_acc"]), row))
     header = lines[-2:]
     lines = lines[:-2]
     moved, rest = [], []
@@ -117,8 +115,7 @@ def _perf_regressed(row):
 
 def _perf_moved(row):
     return any(
-        row.get(rt, {}).get("regression") or row.get(rt, {}).get("improvement")
-        for rt in ("MATH_ISOLATE", "L1_TO_L1")
+        row.get(rt, {}).get("regression") or row.get(rt, {}).get("improvement") for rt in ("MATH_ISOLATE", "L1_TO_L1")
     )
 
 
@@ -144,10 +141,7 @@ def _loadmacro_note(summaries):
     rows = []
     for s in summaries:
         for family, by_schedule in s["perf"].items():
-            on = {
-                (r["op"], r["formats"], r["dest_acc"], r["approx"]): r
-                for r in by_schedule.get("loadmacro", [])
-            }
+            on = {(r["op"], r["formats"], r["dest_acc"], r["approx"]): r for r in by_schedule.get("loadmacro", [])}
             for r in by_schedule.get("no-loadmacro", []):
                 k = (r["op"], r["formats"], r["dest_acc"], r["approx"])
                 if (
@@ -188,9 +182,7 @@ def _merge_approx(rows, cells):
     grouped = {}
     for key, payload in rows:
         arch, op, i, o, approx, dest = key
-        grouped.setdefault((arch, op, i, o, dest, cells(payload)), []).append(
-            (approx, payload)
-        )
+        grouped.setdefault((arch, op, i, o, dest, cells(payload)), []).append((approx, payload))
     out = []
     for (arch, op, i, o, dest, shown), items in grouped.items():
         approx = "/".join(sorted({a for a, _ in items}, reverse=True))
@@ -246,11 +238,7 @@ def _acc_notable(rec):
     if b.get("metric") == "exact":
         return h["wrong"] != b["wrong"]
     moved = (rec["worse"] + rec["better"]) / max(h["lanes"], 1)
-    return (
-        h["max"] != b["max"]
-        or h["nonfinite"] != b["nonfinite"]
-        or moved >= NOTABLE_LANE_SHARE
-    )
+    return h["max"] != b["max"] or h["nonfinite"] != b["nonfinite"] or moved >= NOTABLE_LANE_SHARE
 
 
 def _acc_cells(rec):
@@ -289,10 +277,7 @@ def _exact_cells(rec):
 
 
 def _table(rows, header, cells):
-    return header + [
-        _row_prefix(k) + "| " + " | ".join(c) + " |"
-        for k, _, c in _merge_approx(rows, cells)
-    ]
+    return header + [_row_prefix(k) + "| " + " | ".join(c) + " |" for k, _, c in _merge_approx(rows, cells)]
 
 
 def accuracy_section(summaries):
@@ -334,15 +319,9 @@ def accuracy_section(summaries):
     ]
     shown_ulp = [r for r in groups[("ulp", False)] if _acc_notable(r[1])]
     shown_exact = [r for r in groups[("exact", False)] if _acc_notable(r[1])]
-    folded_ulp = groups[("ulp", True)] + [
-        r for r in groups[("ulp", False)] if not _acc_notable(r[1])
-    ]
-    folded_exact = groups[("exact", True)] + [
-        r for r in groups[("exact", False)] if not _acc_notable(r[1])
-    ]
-    regressed_first = lambda rows: sorted(
-        rows, key=lambda r: not _acc_regressed(r[1])
-    )  # noqa: E731
+    folded_ulp = groups[("ulp", True)] + [r for r in groups[("ulp", False)] if not _acc_notable(r[1])]
+    folded_exact = groups[("exact", True)] + [r for r in groups[("exact", False)] if not _acc_notable(r[1])]
+    regressed_first = lambda rows: sorted(rows, key=lambda r: not _acc_regressed(r[1]))  # noqa: E731
     if shown_ulp:
         lines += _table(regressed_first(shown_ulp), ulp_head, _acc_cells)
     if shown_exact:
@@ -353,9 +332,7 @@ def accuracy_section(summaries):
             *_table(regressed_first(shown_exact), exact_head, _exact_cells),
         ]
     if not shown_ulp and not shown_exact:
-        lines.append(
-            "No accuracy change worth a row: max error and lane counts are unchanged."
-        )
+        lines.append("No accuracy change worth a row: max error and lane counts are unchanged.")
     folded = len(folded_ulp) + len(folded_exact)
     if folded:
         lines += [
@@ -448,14 +425,12 @@ def edge_section(summaries):
     if nan_lost:
         lines += [
             "",
-            "⚠️ NaN input no longer returns NaN: "
-            + "; ".join(f"`{w}`" for w in nan_lost[:10]),
+            "⚠️ NaN input no longer returns NaN: " + "; ".join(f"`{w}`" for w in nan_lost[:10]),
         ]
     if nan_gained:
         lines += [
             "",
-            "NaN input now returns NaN (it did not before): "
-            + "; ".join(f"`{w}`" for w in nan_gained[:10]),
+            "NaN input now returns NaN (it did not before): " + "; ".join(f"`{w}`" for w in nan_gained[:10]),
         ]
     return lines + [""]
 
@@ -464,10 +439,7 @@ def cross_arch_section(summaries):
     """Whether Wormhole and Blackhole return the same bits on the head side."""
     if len(summaries) < 2:
         return []
-    by_arch = {
-        s["arch"]: {tuple(r["key"]): r.get("head_digest") for r in s["accuracy"]}
-        for s in summaries
-    }
+    by_arch = {s["arch"]: {tuple(r["key"]): r.get("head_digest") for r in s["accuracy"]} for s in summaries}
     wh, bh = by_arch.get("wormhole", {}), by_arch.get("blackhole", {})
     common = [k for k in wh if k in bh and wh[k] and bh[k]]
     differ = [k for k in common if wh[k] != bh[k]]
@@ -477,10 +449,7 @@ def cross_arch_section(summaries):
         f"Wormhole and Blackhole return bit-identical results on all {len(common)} swept variants."
         if not differ
         else f"Wormhole and Blackhole differ on {len(differ)} of {len(common)} swept variants: "
-        + ", ".join(
-            f"`{k[0]} {_fmt_pair(k[1] + '->' + k[2])} dest_acc={k[4]} approx={k[3]}`"
-            for k in differ[:8]
-        )
+        + ", ".join(f"`{k[0]} {_fmt_pair(k[1] + '->' + k[2])} dest_acc={k[4]} approx={k[3]}`" for k in differ[:8])
     )
     return ["### Wormhole vs Blackhole", "", text, ""]
 
@@ -507,32 +476,22 @@ def findings(summaries):
 
     for s in summaries:
         for family, by_schedule in s["perf"].items():
-            default = {
-                (r["op"], r["formats"], r["dest_acc"], r["approx"]): r
-                for r in by_schedule.get("loadmacro", [])
-            }
+            default = {(r["op"], r["formats"], r["dest_acc"], r["approx"]): r for r in by_schedule.get("loadmacro", [])}
             for schedule, rows in by_schedule.items():
                 for row in rows:
                     if not _perf_regressed(row):
                         continue
-                    twin = default.get(
-                        (row["op"], row["formats"], row["dest_acc"], row["approx"])
-                    )
+                    twin = default.get((row["op"], row["formats"], row["dest_acc"], row["approx"]))
                     if (
                         schedule != "loadmacro"
                         and twin is not None
-                        and (
-                            _perf_regressed(twin)
-                            or twin.get("text_head") == row.get("text_head")
-                        )
+                        and (_perf_regressed(twin) or twin.get("text_head") == row.get("text_head"))
                     ):
                         continue  # the same code, or already listed for the default build
                     m, l1 = row.get("MATH_ISOLATE", {}), row.get("L1_TO_L1", {})
                     label, cell = ("math", m) if m.get("regression") else ("L1→L1", l1)
                     sched = "" if schedule == "loadmacro" else ", SFPLOADMACRO disabled"
-                    where = (
-                        f"{_fmt_pair(row['formats'])} dest_acc={row['dest_acc']}{sched}"
-                    )
+                    where = f"{_fmt_pair(row['formats'])} dest_acc={row['dest_acc']}{sched}"
                     what = (
                         f"{label} {_num(cell['base'])} → {_num(cell['head'])} cycles/tile "
                         f"({_speedup(cell['base'], cell['head']).strip('*')})"
@@ -562,9 +521,7 @@ def findings(summaries):
                 add("accuracy", s["arch"], op, i, where, what, approx)
             sp = rec.get("specials")
             if sp:
-                severe = [
-                    c for c in sp["changed"] if _kind(c["old"]) != _kind(c["new"])
-                ]
+                severe = [c for c in sp["changed"] if _kind(c["old"]) != _kind(c["new"])]
                 if severe:
                     c = severe[0]
                     what = f"`f{_val(c['input']) if isinstance(c['input'], (list, tuple)) else '(' + _val(c['input']) + ')'}`: `{_val(c['old'])}` → `{_val(c['new'])}`"
@@ -583,9 +540,7 @@ def findings(summaries):
                     )
     out = []
     order = {"perf": 0, "accuracy": 1, "edge": 2}
-    for (kind, arch, op, rest, what), e in sorted(
-        grouped.items(), key=lambda kv: (order[kv[0][0]], kv[0][1:])
-    ):
+    for (kind, arch, op, rest, what), e in sorted(grouped.items(), key=lambda kv: (order[kv[0][0]], kv[0][1:])):
         approx = "/".join(sorted(e["approx"], reverse=True))
         out.append(
             {
@@ -641,9 +596,7 @@ def header(summaries):
         f"**Ops measured:** {', '.join(f'`{o}`' for o in ops['measured']) or 'none'} ({ops['why']}).",
     ]
     if ops.get("not_covered"):
-        lines.append(
-            f"**Changed but not measured:** {', '.join(f'`{o}`' for o in ops['not_covered'])}."
-        )
+        lines.append(f"**Changed but not measured:** {', '.join(f'`{o}`' for o in ops['not_covered'])}.")
     lines += [""]
     return lines
 
@@ -681,10 +634,9 @@ def footer(summaries):
         "```bash",
         f"git fetch origin {tool} {fetch} {base}",
         f"git checkout --detach {tool}",
-        "cd tt_metal/tt-llk",
     ]
     for x in summaries:
-        cli = f"python3 sfpu_report/cli.py --arch {x['arch']} --head {head} --base {base}{mode} run"
+        cli = f"python3 .github/llk_sfpu_report/cli.py --arch {x['arch']} --head {head} --base {base}{mode} run"
         lines += [
             "",
             f"# the whole report, {_ARCH[x['arch']]}",
@@ -697,10 +649,7 @@ def footer(summaries):
             fmts += [m for m in f["fmt"].split(",") if m not in fmts]
         if per_op:
             lines.append(f"# only what regressed, {_ARCH[x['arch']]}")
-            lines += [
-                f"{cli} --ops {op} --formats {','.join(fmts)} --check"
-                for op, fmts in list(per_op.items())[:10]
-            ]
+            lines += [f"{cli} --ops {op} --formats {','.join(fmts)} --check" for op, fmts in list(per_op.items())[:10]]
     lines += [
         "```",
         "",
@@ -751,9 +700,7 @@ def _fit(text):
             continue
         out.append(line)
         size += len(line) + 1
-    out.append(
-        "\n_Some table rows were cut to fit a comment; the artifact has all of them._"
-    )
+    out.append("\n_Some table rows were cut to fit a comment; the artifact has all of them._")
     return "\n".join(out)
 
 

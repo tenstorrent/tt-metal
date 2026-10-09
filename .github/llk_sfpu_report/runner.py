@@ -17,7 +17,10 @@ from pathlib import Path
 
 from overlay import LLK_RELPATH
 
-TOOL_LLK = Path(__file__).resolve().parents[1]
+#: The tool lives in ``.github/llk_sfpu_report/`` of the tool checkout; the harness it
+#: drives is that checkout's tt-llk.
+TOOL_ROOT = Path(__file__).resolve().parents[2]
+TOOL_LLK = TOOL_ROOT / LLK_RELPATH
 
 #: Run on ttsim ($TT_METAL_SIMULATOR) instead of a device: tool development only.
 SIMULATOR = False
@@ -89,9 +92,7 @@ def pytest(side, arch, args, *, env=None, log=None, check=True):
             stderr=subprocess.STDOUT,
         )
     if check and proc.returncode not in (0, 5):  # 5: nothing collected
-        raise RuntimeError(
-            f"pytest failed on the {side.name} side (exit {proc.returncode}); see {log}"
-        )
+        raise RuntimeError(f"pytest failed on the {side.name} side (exit {proc.returncode}); see {log}")
     return proc.returncode
 
 
