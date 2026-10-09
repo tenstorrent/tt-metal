@@ -12,8 +12,7 @@ import torch
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc, run_for_blackhole
-from models.demos.blackhole.qwen36.tests.test_factory import parametrize_mesh_tp
-from models.demos.pplx_decider_v1_27b.tests.common import ids_sha256, load_example_state
+from models.demos.pplx_decider_v1_27b.tests.common import ids_sha256, load_example_state, parametrize_mesh_traced
 from models.demos.pplx_decider_v1_27b.tt.decision import decision_probabilities
 from models.demos.pplx_decider_v1_27b.tt.model import PplxDecider
 
@@ -49,7 +48,7 @@ def _compare(tt_logits, ref, temperature):
 @run_for_blackhole()
 @pytest.mark.timeout(1800)
 @pytest.mark.skipif(not REFERENCE_PATH.exists(), reason=f"{REFERENCE_PATH} is missing; run generate_reference.py")
-@parametrize_mesh_tp()
+@parametrize_mesh_traced()
 def test_pplx_decider_matches_reference(mesh_device):
     references = {e["name"]: e for e in json.loads(REFERENCE_PATH.read_text())["examples"]}
     examples = json.loads(EXAMPLES_PATH.read_text())
@@ -69,15 +68,33 @@ def test_pplx_decider_matches_reference(mesh_device):
         prompts.append((example["name"], input_ids, ref))
 
     rows, failures = [], []
-    for path, run in (("chunked", decider.readout_logits), ("oracle", lambda ids: _oracle_logits(decider, ids))):
-        for name, input_ids, ref in prompts:
-            start = time.perf_counter()
-            tt_logits = run(input_ids)
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            pcc, prob_diff, top1_ok = _compare(tt_logits, ref, temperature)
-            rows.append((name, path, len(input_ids), top1_ok, pcc, prob_diff, elapsed_ms))
-            if not (top1_ok and pcc >= PCC_THRESHOLD and prob_diff < PROB_MAX_DIFF):
-                failures.append(f"{name} [{path}]: top1_ok={top1_ok} pcc={pcc} prob_diff={prob_diff}")
+
+    def run_paths(paths):
+        for path, run in paths:
+            for name, input_ids, ref in prompts:
+                start = time.perf_counter()
+                tt_logits = run(input_ids)
+                elapsed_ms = (time.perf_counter() - start) * 1000
+                pcc, prob_diff, top1_ok = _compare(tt_logits, ref, temperature)
+                rows.append((name, path, len(input_ids), top1_ok, pcc, prob_diff, elapsed_ms))
+                if not (top1_ok and pcc >= PCC_THRESHOLD and prob_diff < PROB_MAX_DIFF):
+                    failures.append(f"{name} [{path}]: top1_ok={top1_ok} pcc={pcc} prob_diff={prob_diff}")
+
+    run_paths((("chunked", decider.readout_logits), ("oracle", lambda ids: _oracle_logits(decider, ids))))
+
+    first_ids = prompts[0][1]
+    first = decider.readout_logits(first_ids)
+    second = decider.readout_logits(first_ids)
+    chunked_repeat_ok = torch.equal(first, second)
+
+    decider.capture_prefill_trace()
+    run_paths((("traced", decider.readout_logits),))
+
+    # long_license spans one traced chunk plus an eager tail.
+    long_ids = next(ids for name, ids, _ in prompts if name == "long_license")
+    first = decider.readout_logits(long_ids)
+    second = decider.readout_logits(long_ids)
+    traced_repeat_ok = torch.equal(first, second)
 
     logger.info(f"{'example':<14} {'path':<8} {'T':>6} {'top1':>6} {'PCC':>8} {'prob diff':>10} {'ms':>9}")
     for name, path, num_tokens, top1_ok, pcc, prob_diff, elapsed_ms in rows:
@@ -85,8 +102,5 @@ def test_pplx_decider_matches_reference(mesh_device):
             f"{name:<14} {path:<8} {num_tokens:>6} {top1_ok!s:>6} {pcc:>8.5f} {prob_diff:>10.5f} {elapsed_ms:>9.1f}"
         )
     assert not failures, "; ".join(failures)
-
-    first_ids = prompts[0][1]
-    first = decider.readout_logits(first_ids)
-    second = decider.readout_logits(first_ids)
-    assert torch.equal(first, second), f"{prompts[0][0]}: repeated chunked prefill is not bit-identical"
+    assert chunked_repeat_ok, f"{prompts[0][0]}: repeated chunked prefill is not bit-identical"
+    assert traced_repeat_ok, "long_license: repeated traced prefill is not bit-identical"

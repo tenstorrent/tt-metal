@@ -12,6 +12,8 @@ from models.demos.pplx_decider_v1_27b.tt.decision import answer, decision_probab
 from models.demos.pplx_decider_v1_27b.tt.model_config import PplxDeciderModelArgs
 
 KV_BLOCK_SIZE = 64
+# The mesh must be opened with at least this trace region for capture_prefill_trace.
+TRACE_REGION_SIZE = 1024 * 1024 * 1024
 
 
 class PplxDecider:
@@ -38,6 +40,10 @@ class PplxDecider:
         model = Qwen36Model(mesh_device, args, state_dict, tensor_cache_path=args.weight_cache_path())
         del state_dict
         return cls(mesh_device, args, model, max_seq_len)
+
+    def capture_prefill_trace(self):
+        """Trace full 2048-token chunks and precompile all masked buckets; prompts under 2048 tokens and the tail run eagerly."""
+        self.model.capture_prefill_trace_chunked(self.mesh_device, self._page_table)
 
     def input_ids(self, state, question):
         return render_input_ids(self.tokenizer, state, question, self.decision_config.codes)

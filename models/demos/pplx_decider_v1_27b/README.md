@@ -64,6 +64,12 @@ Device accuracy test (TT vs CPU reference):
 pytest models/demos/pplx_decider_v1_27b/tests/test_model.py
 ```
 
+Batch-1 latency sweep, eager vs traced (512 to 4096 tokens):
+
+```bash
+pytest models/demos/pplx_decider_v1_27b/tests/test_perf.py
+```
+
 CPU tests:
 
 ```bash
@@ -88,6 +94,7 @@ python models/demos/pplx_decider_v1_27b/tests/generate_reference.py \
 from models.demos.pplx_decider_v1_27b.tt.model import PplxDecider
 
 decider = PplxDecider.from_pretrained(mesh_device)  # mesh_device: 1x4 mesh
+decider.capture_prefill_trace()  # optional; speeds up prompts of 2048 tokens or more
 question = {
     "type": "choice",
     "instructions": "Which team should handle this request?",
@@ -99,6 +106,8 @@ question = {
 }
 result = decider.predict("My Stripe integration keeps failing.", question)
 ```
+
+- Open the mesh with `trace_region_size` >= `TRACE_REGION_SIZE` (1 GiB) before capturing the trace.
 
 Returned dict for `choice`:
 
@@ -118,16 +127,17 @@ Returned dict for `choice`:
 
 Accuracy vs the fp32 CPU reference (`tests/test_model.py`, 1x4 Blackhole, bfp8 weights):
 
-| Example | Tokens | Top-1 match | PCC (chunked / oracle) | Max prob diff (chunked / oracle) |
+| Example | Tokens | Top-1 match | PCC (chunked / oracle / traced) | Max prob diff (chunked / oracle / traced) |
 | --- | --- | --- | --- | --- |
-| choice | 110 | yes | 0.99875 / 0.99844 | 0.0004 / 0.0017 |
-| noul | 95 | yes | 0.99929 / 0.99921 | 0.0009 / 0.0017 |
-| score | 101 | yes | 0.99900 / 0.99881 | 0.0082 / 0.0057 |
-| long_license | 2437 | yes | 0.99843 / 0.99817 | 0.0008 / 0.0011 |
+| choice | 110 | yes | 0.99875 / 0.99844 / 0.99875 | 0.0004 / 0.0017 / 0.0004 |
+| noul | 95 | yes | 0.99929 / 0.99921 / 0.99929 | 0.0009 / 0.0017 / 0.0009 |
+| score | 101 | yes | 0.99900 / 0.99881 / 0.99900 | 0.0082 / 0.0057 / 0.0082 |
+| long_license | 2437 | yes | 0.99843 / 0.99817 / 0.99860 | 0.0008 / 0.0011 / 0.0012 |
 
 - Chunked: `prefill_traced_chunked`, the path `PplxDecider` uses.
 - Oracle: `prefill_tp`, a single stateless prefill.
 - The same input twice gives bit-identical logits.
+- Traced: `prefill_traced_chunked` after `capture_prefill_trace()`.
 
 Performance (1x4 Blackhole, batch 1):
 
@@ -135,15 +145,27 @@ Performance (1x4 Blackhole, batch 1):
 | --- | --- |
 | Model load, warm tensor cache | ~11 s |
 | Model load, cold (builds ~31 GB cache) | ~3 min |
-| Decision latency, ~100 tokens, warm | ~171 ms |
-| Decision latency, 2437 tokens, first call | ~656 ms |
+
+Batch-1 decision latency (ms, p50, warm, 1x4 Blackhole):
+
+| Tokens | Eager | Traced |
+| --- | --- | --- |
+| 512 | 155 | 157 |
+| 1024 | 189 | 186 |
+| 2048 | 288 | 252 |
+| 3072 | 480 | 435 |
+| 4096 | 579 | 504 |
+
+- Below about 1k tokens the eager path is bound by host dispatch (~155 ms floor).
+- 512 and 1024 tokens run the masked bucket eagerly, so traced equals eager.
+- Trace capture also compiles every masked bucket, so the first call at a new bucket size does not pay a compile (up to ~17 s).
 
 ## Limitations
 
 - Text only; vision weights are not loaded.
 - Batch 1.
 - Prefill only; no decode or sampling.
-- Eager prefill; no trace capture.
+- Trace covers full 2048-token chunks only; shorter prompts and the tail run eagerly.
 - Max 8192 tokens.
 - The full-vocab synthetic lm_head costs ~635 MB DRAM per device.
 - Logits are bf16 on device.
