@@ -1320,27 +1320,33 @@ class DeepseekV41ForCausalLM:
         base = torch.zeros(B, dtype=torch.long)
         force = torch.zeros(B)  # idle users: commit nothing beyond the (dummy) first token
         rows = []
+        sp_l = start_pos.reshape(W, -1)[:, 0].tolist()
+        nv_l = num_valid_drafts.reshape(-1).tolist()
+        tok0 = tokens[:, 0].tolist()
         for i in range(W):
-            pos = int(start_pos[i, 0])
+            pos = sp_l[i]
             if pos < 0:
                 continue
-            p = self.slots.physical(i)
+            p = self.slots.phys[i]
             if p not in self.slots.live:
                 raise RuntimeError(f"verify of logical slot {i} (user {p}) that was never prefilled")
-            nv = int(num_valid_drafts[i])
+            nv = int(nv_l[i])
             if nv not in (0, K):
                 raise ValueError(
                     f"row {i}: {nv} valid drafts of {K}: the device round verifies all K or forces 0 accepted"
                 )
-            r = p if row_of is None else row_of[p]
-            X[r] = tokens[i].long().clamp(min=0)
-            base[r] = pos
-            force[r] = -1.0 if nv > 0 else 0.0
-            rows.append((i, p, pos, r))
-        need_ = {p: int(tokens[i, 0]) for i, p, pos, _ in rows if bool(self.spec_ok[p]) and not bool(self.spec_has[p])}
+            rows.append((i, p, pos, p if row_of is None else row_of[p], nv))
+        if rows:
+            ii, rr = torch.tensor([x[0] for x in rows]), torch.tensor([x[3] for x in rows])
+            X[rr] = tokens[ii].long().clamp(min=0)
+            base[rr] = torch.tensor([x[2] for x in rows])
+            force[rr] = torch.tensor([-1.0 if x[4] > 0 else 0.0 for x in rows])
+        rows = [x[:4] for x in rows]
+        ok_l, has_l = self.spec_ok.tolist(), self.spec_has.tolist()
+        need_ = {p: int(tok0[i]) for i, p, pos, _ in rows if ok_l[p] and not has_l[p]}
         if need_:
             self._spec_seed_active(
-                [(p, pos, int(tokens[i, 0])) for i, p, pos, _ in rows], need_, draft=False
+                [(p, pos, int(tok0[i])) for i, p, pos, _ in rows], need_, draft=False
             )  # (safety net: propose_draft_tokens seeds before a request's first verify; the round below drafts, so from the taps only the ring rows are written)
         srows = {}
         sp = sampling_params
@@ -1358,17 +1364,25 @@ class DeepseekV41ForCausalLM:
         t1 = time.perf_counter()
         self.timing["decode"] = t1 - t0
         self._calls["decode"] += 1
-        for i, p, pos, r in rows:
-            m = int(mm[r])
-            for j in range(m + 1):  # fed to the model: the committed token and the accepted drafts
-                self.book.note_fed(p, pos + j, int(X[r, j]))
-            self.spec_drafts[p] = d[r, :K].to(torch.int32)
-            self.spec_last[p] = int(a[r, m])
-            self.spec_has[p] = bool(self.spec_ok[p])
-            self.spec_stats["accepted"] += m
-            if float(force[r]) < 0:  # a verified row (not the forced single-token first round of a request)
-                self.spec_stats["acc_verified"] = self.spec_stats.get("acc_verified", 0) + m
-                self.spec_stats["rows_verified"] = self.spec_stats.get("rows_verified", 0) + 1
+        if rows:
+            pp, rr = torch.tensor([x[1] for x in rows]), torch.tensor([x[3] for x in rows])
+            pos_t, m_t = torch.tensor([x[2] for x in rows]), mm[rr].long()
+            if int((pos_t + m_t).max()) >= self.book.tok.shape[1]:
+                raise ValueError(
+                    f"position {int((pos_t + m_t).max())} exceeds the history capacity {self.book.tok.shape[1]}"
+                )
+            for j in range(n):  # fed to the model: the committed token and the accepted drafts
+                sel = m_t >= j
+                if bool(sel.any()):
+                    self.book.tok[pp[sel], pos_t[sel] + j] = X[rr[sel], j].to(torch.int32)
+            self.book.n[pp] = pos_t + m_t + 1
+            self.spec_drafts[pp] = d[rr, :K].to(torch.int32)
+            self.spec_last[pp] = a[rr, m_t]
+            self.spec_has[pp] = self.spec_ok[pp]
+            self.spec_stats["accepted"] += int(m_t.sum())
+            ver = force[rr] < 0  # a verified row (not the forced single-token first round of a request)
+            self.spec_stats["acc_verified"] = self.spec_stats.get("acc_verified", 0) + int(m_t[ver].sum())
+            self.spec_stats["rows_verified"] = self.spec_stats.get("rows_verified", 0) + int(ver.sum())
         self.spec_stats["rounds"] += 1
         self.spec_stats["rows"] += len(rows)
         st = self.__dict__.setdefault(
@@ -1388,7 +1402,9 @@ class DeepseekV41ForCausalLM:
                 f"{ss['accepted'] / max(ss['rows'], 1):.2f} accepted drafts per row-round, {ss.get('acc_verified', 0) / max(ss.get('rows_verified', 0), 1):.3f} per VERIFIED row-round ({ss.get('rows_verified', 0)} of {ss['rows']} row-rounds; the others are the forced single-token first round of a request) (k={K}; cumulative since start; rounds per bucket {dict(self.spec_bucket_calls)}; sampled rows {ss.get('sampled_rows', 0)}, sampler draws {sum(r_.sample_stats['rows'] for r_ in [self.spec] + list(self.spec_buckets.values()))} / full-row fallbacks {sum(r_.sample_stats['fallback'] for r_ in [self.spec] + list(self.spec_buckets.values()))})"
             )
             st.update(n=0, t=0.0, g=0.0, pre=0.0, post=0.0, prop=0.0)
-        out = VS.scatter_rows(a.to(torch.int32), [(i, r, pos) for i, p, pos, r in rows], W)
+        out = torch.zeros(W, n, dtype=torch.int32)
+        if rows:
+            out[torch.tensor([x[0] for x in rows])] = a.to(torch.int32)[rr]
         self.spec_bucket_calls[Ub] = self.spec_bucket_calls.get(Ub, 0) + 1
         st["post"] += time.perf_counter() - t1
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=out.reshape(W, n))
@@ -1423,33 +1439,41 @@ class DeepseekV41ForCausalLM:
         ids = torch.zeros(W, int(num_drafts), dtype=torch.int32)
         nv = torch.zeros(W, dtype=torch.int32)
         offer, need = [], {}
+        cpos, ctok, cnt = committed_positions[:, 0].tolist(), committed_tokens.tolist(), accepted_counts.tolist()
+        ok_l, has_l, last_l, n_l = (
+            self.spec_ok.tolist(),
+            self.spec_has.tolist(),
+            self.spec_last.tolist(),
+            self.book.n.tolist(),
+        )
         for i in range(W):
-            if int(committed_positions[i, 0]) < 0:
+            if cpos[i] < 0:
                 continue
-            p = self.slots.physical(i)
+            p = self.slots.phys[i]
             if p not in self.slots.live:
                 continue
-            last = int(committed_tokens[i, int(accepted_counts[i]) - 1])
+            last = int(ctok[i][int(cnt[i]) - 1])
             if last < 0:
                 continue
-            if not bool(self.spec_ok[p]):
+            if not ok_l[p]:
                 self.spec_last[p] = last  # (kept for a later reseed of the other rows)
                 continue
-            if bool(self.spec_has[p]) and last == int(self.spec_last[p]):
+            if has_l[p] and last == int(last_l[p]):
                 offer.append((i, p))
                 continue
-            if bool(self.spec_has[p]):
+            if has_l[p]:
                 logger.warning(
-                    f"DSV4.1 spec: row {i} (user {p}) committed token {last} != the drafter's {int(self.spec_last[p])}: reseeding"
+                    f"DSV4.1 spec: row {i} (user {p}) committed token {last} != the drafter's {int(last_l[p])}: reseeding"
                 )
-            if int(self.book.n[p]) > 0:
+            if int(n_l[p]) > 0:
                 need[p] = last
                 offer.append((i, p))
         if need:
             self._spec_seed_active(self._seed_items(need), need)
-        for i, p in offer:
-            ids[i, :K] = self.spec_drafts[p]
-            nv[i] = min(K, int(num_drafts))
+        if offer:
+            oi, op = torch.tensor([x[0] for x in offer]), torch.tensor([x[1] for x in offer])
+            ids[oi, :K] = self.spec_drafts[op]
+            nv[oi] = min(K, int(num_drafts))
         self.__dict__.setdefault(
             "_sstat", {"n": 0, "t": 0.0, "g": 0.0, "last": None, "pre": 0.0, "post": 0.0, "prop": 0.0}
         )["prop"] += (time.perf_counter() - t_prop)
