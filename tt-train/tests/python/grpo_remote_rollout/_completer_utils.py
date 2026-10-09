@@ -21,7 +21,7 @@ from ttml.trainers.grpo_trainer.remote_rollout.llama_ttt_presets import (
     bf16_attn_bfp8_mlp_optimizations,
     llama_stop_and_pad,
 )
-from ttml.trainers.grpo_trainer.remote_rollout.ttt_generation_worker import TttGenerationWorker
+from ttml.trainers.grpo_trainer.remote_rollout.ttt_rollout_sampler import TTTRolloutSampler
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_1dev.yaml"
@@ -70,7 +70,7 @@ def close_device() -> None:
 
 
 class _TttCompleter:
-    """Adapter over :class:`TttGenerationWorker` that forwards its attributes
+    """Adapter over :class:`TTTRolloutSampler` that forwards its attributes
     and adds a lazily-loaded ``.tokenizer`` so dummy-weight tests stay
     HF-auth-free (only tests that touch ``.tokenizer`` pay for the download)."""
 
@@ -103,7 +103,7 @@ def build_completer(
     model_source: str = MODEL_ID,
     instruct: bool = True,
 ):
-    """Build a :class:`TttGenerationWorker` wrapped in :class:`_TttCompleter`.
+    """Build a :class:`TTTRolloutSampler` wrapped in :class:`_TttCompleter`.
 
     Heavy when ``dummy_weights=False`` (loads real HF weights); call from a
     module-scoped fixture so the cost is paid once per file.
@@ -115,7 +115,7 @@ def build_completer(
     else:
         stop_token_ids, pad_token_id = llama_stop_and_pad(model_source)
 
-    worker = TttGenerationWorker(
+    worker = TTTRolloutSampler(
         mesh_device=mesh_device,
         model_source=model_source,
         max_batch_size=max_batch_size,
@@ -124,6 +124,8 @@ def build_completer(
         optimizations=bf16_attn_bfp8_mlp_optimizations,
         stop_token_ids=stop_token_ids,
         pad_token_id=pad_token_id,
+        completions_per_prompt=1,
+        max_completion_length=max_seq_len // 2,
         temperature=0.0,
         top_k=0,
         top_p=1.0,
@@ -208,4 +210,4 @@ def generate_one(completer, prompt_ids, *, max_new_tokens: int):
     Sampling params (temperature/top_k/top_p/seed) are baked into the worker at
     construction; per-call overrides are not supported.
     """
-    return completer.generate([prompt_ids], max_new_tokens=max_new_tokens)[0]
+    return completer.generate_tokens([prompt_ids], max_new_tokens=max_new_tokens)[0]
