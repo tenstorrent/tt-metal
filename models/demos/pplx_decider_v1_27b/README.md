@@ -20,6 +20,19 @@ reads. A BFP4 MLP (C1/C2) agrees on 25/25 rows but fails the per-row logit-PCC b
 BFP4 with LoFi would be 17 % faster at the 2048 bucket and would free 8 GiB of DRAM. Details:
 [`doc/datatype_sweep/README.md`](doc/datatype_sweep/README.md).
 
+Stage 12A (vision tower, text model unchanged): the Qwen3.5 ViT runs on the same p150a in BF16. It
+covers the patch embed, the learned position embedding, 27 blocks and the 2x2 merger, and outputs
+5120-wide image features. Results on 8 golden images (256-1024 patches), measured against the HF
+BF16 golden:
+
+- Teacher forced, every module and every block has PCC >= 0.999976 (bar 0.995).
+- The whole tower, fed only the pixels, has PCC >= 0.998654 (bar 0.99).
+- Padded keys are masked. An image of 936 patches in the 1024 bucket scores 0.999758.
+
+The tower takes 15.5-28.6 ms per image. Its weights take 0.964 GiB of DRAM, which leaves 3.57 GiB
+free next to the full text model. Splicing the features into the text and the 3D mRoPE are stage
+12B. Details: [`doc/vision/README.md`](doc/vision/README.md).
+
 Stage 1 (functional layers): every module and both decoder-layer kinds match the HF reference with
 real weights (PCC >= 0.995) at the prefill buckets 128, 1024, 2048, 4096 and 8192. The app pads a
 prompt on the right to the next bucket. The classifier reads the last real token. Details are in
@@ -40,6 +53,7 @@ Layers are 3-8 % faster at S >= 1024, and S=128 is about 12 % slower. Details ar
 | path | content |
 |---|---|
 | `tt/` | TTNN modules: `embedding.py`, `norm.py`, `rope.py`, `attention.py` (gated full attention), `gated_deltanet.py`, `mlp.py`, `decoder.py` (both layer kinds), `readout.py`, `head.py` (final norm -> readout -> mask -> / T -> softmax), `model.py` (the full model, weight cache, bucket padding); `weight_adapter.py` (HF -> TT weight transforms), `optimizations.py` (the one place for dtypes and op configs), `model_config.py`. |
+| `tt/vision/` | Vision tower (stage 12A): `config.py` (vision args, patch buckets), `weights.py` (`visual.*` -> TT weights, strict keys, head-dim / intermediate padding), `inputs.py` (host pos-embed and rotary tables, as HF), `patch_embed.py`, `layernorm.py`, `attention.py` (masked windowed SDPA), `mlp.py`, `block.py`, `merger.py`, `tower.py` (`PplxVisionTower`: `prepare_inputs` + device-only `forward`). |
 | `demo/` | `decider.py` (`TTDecider.predict(state, question)`, the app's `Decider.predict`), `demo.py` (the snapshot `inference.py` example). |
 | `reference/hf_reference.py` | Layer-streamed HF golden generator. Builds one HF module at a time from the snapshot; never loads the 54 GB model. |
 | `reference/decision_prompts.py`, `reference/hf_decision_golden.py`, `reference/hf_demo_reference.py` | The 25-row decision prompt set, its layer-streamed HF bf16 golden, and HF answers for the demo rows. |
@@ -47,6 +61,8 @@ Layers are 3-8 % faster at S >= 1024, and S=128 is about 12 % slower. Details ar
 | `tests/perf/test_model_perf.py` | Full-model latency per bucket (burst and sustained), trace replay, profiler target. |
 | `tests/pcc/` | Real-weight PCC tests per module and per layer kind, the chunked-prefill contract test and the runtime fallback audit. |
 | `tests/perf/test_prefill_perf.py` | Warmed prefill latency per layer kind and module; device-profiler capture target. |
+| `tests/vision/` | Vision tower vs the HF BF16 golden: host tables and adapter (CPU), per-module and per-block PCC (teacher forced), tower end to end, key mask, GELU variant, fallback audit, determinism, latency, DRAM next to the text model. |
+| `doc/vision/` | Stage-12A README and work log (PCC table, perf, DRAM). |
 | `tests/probe/test_context_probe.py` | Context probe beyond the app limit (S=16384) with DRAM numbers. |
 | `doc/context_contract.json` | Context contract (HF-advertised, app limit, tested). |
 | `doc/functional_decoder/` | Stage-1 README, work log and `perf/` (tt-perf-report tables and CSVs). |
@@ -131,6 +147,14 @@ pytest models/demos/pplx_decider_v1_27b/tests/perf/test_model_perf.py -q -s -k "
 pytest models/demos/pplx_decider_v1_27b/tests/pcc -q                     # all cases, about 11 minutes
 pytest models/demos/pplx_decider_v1_27b/tests/pcc/test_decoder_layer.py -q -k "L3 and S4096"
 python models/demos/pplx_decider_v1_27b/tests/pcc_report.py               # PCC table from the log
+```
+
+## Run the vision tower tests
+
+```bash
+pytest models/demos/pplx_decider_v1_27b/tests/vision -q -k "not test_dram_with_text_model"  # about 20 s
+pytest models/demos/pplx_decider_v1_27b/tests/vision/test_vision_perf.py -q -s -k test_dram_with_text_model
+python models/demos/pplx_decider_v1_27b/tests/vision/vision_pcc_report.py                  # PCC table from the log
 ```
 
 ## Run the perf measurements
