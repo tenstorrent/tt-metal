@@ -1400,13 +1400,14 @@
       export BLAZE_DFLASH_SEED_REF=/mnt/models/blaze/openai/gpt-oss-120b/cache/dflash/seed_1016.pt
       export PREFILL_DFLASH_HANDOFF_OUT=/tmp/gptoss_dflash_true_prefill_1k.pt
       export GPT_OSS_WEIGHTS_FROM_CACHE=1
-      export EXPERT_DTYPE=bf8
+      # bf4 experts match the P/D DFlash producer and the handoff the Blaze consumer gate was proven on.
+      export EXPERT_DTYPE=bf4
       export PREFILL_TOPOLOGY=linear
       export PREFILL_TPS_ITERS=3
       export GPT_OSS_KV_PCC_MIN=0.85
-      # Measured 0.939 aggregate reduced-hidden PCC vs the independent HF seed (bf8 experts, linear).
+      # Measured 0.896 aggregate reduced-hidden PCC vs the independent HF seed (bf4 experts, linear).
       # This floor catches a broken tap/FC path; drafter K/V PCC >= 0.999 is gated by the Blaze consumer.
-      export GPT_OSS_DFLASH_PCC_MIN=0.92
+      export GPT_OSS_DFLASH_PCC_MIN=0.88
       timeout -k 2m 25m mpirun --pernode --tag-output bash -lc '
         python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_dflash.py
       '
