@@ -367,3 +367,170 @@ def test_cp_gather_reorder_entry_exit(mesh_device, seq_len):
         ttnn.deallocate(t)
     ccl.close()
     assert not bad, "\n".join(bad)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Slices 3 / 4: one real layer (layer 0 of a 1-layer model), today's path vs layout B on the same inputs
+# ---------------------------------------------------------------------------------------------------------------
+def _pcc(a, b):
+    a = a.flatten().double()
+    b = b.flatten().double()
+    a = a - a.mean()
+    b = b - b.mean()
+    return float((a @ b) / (a.norm() * b.norm()))
+
+
+def _one_layer_model(mesh_device, seq_len):
+    from models.demos.llama3_70b_galaxy.demo.text_qwen_demo import create_tt_qwen_model
+    from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
+
+    model_args, model, page_table, kv = create_tt_qwen_model(
+        mesh_device,
+        instruct=True,
+        max_batch_size=1,
+        optimizations=LlamaOptimizations.performance,
+        max_seq_len=seq_len,
+        num_layers=1,
+        dummy_weights=False,
+        page_params={"page_block_size": 64, "page_max_num_blocks": 4096},
+        dtype=ttnn.bfloat8_b,
+        use_paged_kv_cache=True,
+    )
+    nb = seq_len // 64
+    pt_host = torch.full((COLS, nb), -1, dtype=torch.int32)  # user 0: column 0 fills, the others skip (-1)
+    pt_host[0] = page_table[0, :nb]
+    pt = ttnn.from_torch(
+        pt_host,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=(ROWS, COLS)),
+    )
+    return model, pt, page_table[0, :nb].long()
+
+
+def _natural_quarters(mesh_device, t, seq_len):
+    """Row 0's 4 devices of a natural [1, 1, S, 1280]-per-column tensor -> [S, 5120] fp32."""
+    devs = ttnn.get_device_tensors(t)[:COLS]
+    return torch.cat([ttnn.to_torch(d).float().reshape(seq_len, -1) for d in devs], dim=-1)
+
+
+def _read_cache(cache, blocks, seq_len):
+    """Column 0's cache (user 0) per row -> [ROWS, S, 128] fp32."""
+    devs = ttnn.get_device_tensors(cache)
+    return torch.stack([ttnn.to_torch(devs[r * COLS]).float()[blocks].reshape(seq_len, -1) for r in range(ROWS)])
+
+
+def _x_natural(mesh_device, xh, dtype):
+    return ttnn.from_torch(
+        xh,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=(ROWS, COLS)),
+    )
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", FABRIC_PARAMS, indirect=True)
+@pytest.mark.parametrize("seq_len", [40960])
+def test_cp_attention_layer(mesh_device, seq_len, reset_seeds):
+    """Slice 3: cp.attention_prefill vs today's forward_prefill (seq_parallel) on the same bf8 norm output (B through
+    entry / exit, natural order). Against an fp32 host reference of the same quantized inputs and weights: B's output
+    (128 query positions) and K / V caches are at least as close as today's."""
+    model, pt, blocks = _one_layer_model(mesh_device, seq_len)
+    layer, ccl = model.layers[0], model.tt_ccl
+    attn = layer.attention
+    rot = model.get_or_create_prefill_rot_mats()
+    torch.manual_seed(5)
+    xh = _q_host(torch.randn(1, 1, seq_len, cp.HIDDEN), ttnn.bfloat8_b).to(torch.bfloat16)
+
+    # today
+    out_t = attn.forward_prefill(_x_natural(mesh_device, xh, ttnn.bfloat8_b), rot, 0, page_table=pt, seq_parallel=True)
+    nat_t = ccl.ring_all_gather_seq(out_t, ttnn.DRAM_MEMORY_CONFIG, "FF2")
+    ttnn.synchronize_device(mesh_device)
+    y_t = _natural_quarters(mesh_device, nat_t, seq_len)
+    k_t = _read_cache(attn.layer_past[0], blocks, seq_len)
+    v_t = _read_cache(attn.layer_past[1], blocks, seq_len)
+    for t in (out_t, nat_t):
+        ttnn.deallocate(t)
+
+    # B
+    ctx = cp.get_context(ccl, mesh_device, seq_len)
+    w = cp.gather_layer_weights(ccl, attn, layer.feed_forward, keys=("wqkv", "wo"))
+    x_nat = _x_natural(mesh_device, xh, ttnn.bfloat8_b)
+    xl = cp.entry(ctx, ccl, x_nat)
+    ttnn.deallocate(x_nat)
+    out_b = cp.attention_prefill(ctx, ccl, attn, xl, rot, w, 0, pt, None)
+    nat_b = cp.exit_natural(ctx, ccl, out_b)
+    ttnn.synchronize_device(mesh_device)
+    y_b = _natural_quarters(mesh_device, nat_b, seq_len)
+    k_b = _read_cache(attn.layer_past[0], blocks, seq_len)
+    v_b = _read_cache(attn.layer_past[1], blocks, seq_len)
+    wqkv = [
+        ttnn.to_torch(ttnn.get_device_tensors(w["wqkv"])[r * COLS]).float().reshape(cp.HIDDEN, -1) for r in range(ROWS)
+    ]
+    wo = torch.cat(
+        [ttnn.to_torch(ttnn.get_device_tensors(w["wo"])[r * COLS]).float().reshape(-1, cp.HIDDEN) for r in range(ROWS)]
+    )  # [8192, 5120], heads in row order
+    cp.free_weights(w)
+
+    # fp32 host reference of K (k_norm + RoPE) and V from the same bf8 input and weights
+    x32 = xh.float().reshape(seq_len, cp.HIDDEN)
+    g = ttnn.to_torch(ttnn.get_device_tensors(attn.k_norm.weight)[0]).float().reshape(-1)
+    cos = ttnn.to_torch(ttnn.get_device_tensors(rot[0])[0]).float().reshape(-1, 128)[:seq_len]
+    sin = ttnn.to_torch(ttnn.get_device_tensors(rot[1])[0]).float().reshape(-1, 128)[:seq_len]
+    tm = ttnn.to_torch(ttnn.get_device_tensors(attn.transformation_mats["prefill"])[0]).float().reshape(32, 32)
+    tfull = torch.block_diag(*[tm] * 4)
+    k_ref, v_ref = [], []
+    for r in range(ROWS):
+        kp = x32 @ wqkv[r][:, 1024:1152]
+        kn = kp * torch.rsqrt(kp.pow(2).mean(-1, keepdim=True) + attn.k_norm.eps) * g
+        k_ref.append(kn * cos + (kn @ tfull) * sin)
+        v_ref.append(x32 @ wqkv[r][:, 1152:1280])
+    k_ref, v_ref = torch.stack(k_ref), torch.stack(v_ref)
+
+    # fp32 host reference of the attention block output on 128 query positions (16 per ring slice)
+    sl = seq_len // 8
+    gen = torch.Generator().manual_seed(9)
+    pos = torch.cat([s * sl + torch.randint(0, sl, (16,), generator=gen) for s in range(8)])
+    gq = ttnn.to_torch(ttnn.get_device_tensors(attn.q_norm.weight)[0]).float().reshape(-1)
+    heads = []
+    for r in range(ROWS):
+        qp = (x32[pos] @ wqkv[r][:, :1024]).reshape(-1, 8, 128)
+        qn = qp * torch.rsqrt(qp.pow(2).mean(-1, keepdim=True) + attn.q_norm.eps) * gq
+        q = qn * cos[pos][:, None] + (qn @ tfull) * sin[pos][:, None]  # [P, 8, 128]
+        sc = torch.einsum("phd,kd->phk", q, k_ref[r]) * attn.scale
+        sc = sc.masked_fill(torch.arange(seq_len)[None, None, :] > pos[:, None, None], float("-inf"))
+        heads.append(torch.einsum("phk,kd->phd", torch.softmax(sc, -1), v_ref[r]).reshape(len(pos), -1))
+    y_ref = torch.cat(heads, dim=1) @ wo
+    blk = [
+        float((y_b[i : i + 1280] - y_t[i : i + 1280]).norm() / y_t[i : i + 1280].norm())
+        for i in range(0, seq_len, 1280)
+    ]
+    logger.info("CP_S3 per-1280-block rel L2 B vs today: " + " ".join("%.4f" % v for v in blk))
+
+    out_pcc = _pcc(y_b, y_t)
+    res = dict(
+        out_pcc_b_vs_today=out_pcc,
+        k_pcc_today=_pcc(k_t, k_ref),
+        k_pcc_b=_pcc(k_b, k_ref),
+        v_pcc_today=_pcc(v_t, v_ref),
+        v_pcc_b=_pcc(v_b, v_ref),
+        out_rel_l2=float((y_b - y_t).norm() / y_t.norm()),
+        ref_pcc_today=_pcc(y_t[pos], y_ref),
+        ref_pcc_b=_pcc(y_b[pos], y_ref),
+        ref_rel_l2_today=float((y_t[pos] - y_ref).norm() / y_ref.norm()),
+        ref_rel_l2_b=float((y_b[pos] - y_ref).norm() / y_ref.norm()),
+    )
+    logger.info("CP_S3 " + " ".join(f"{k}={v:.7f}" for k, v in res.items()))
+    ccl.close()
+    # job146/147: today's own output is only pcc 0.99733 (rel L2 7.5%) against the fp32 reference on these random
+    # inputs, so the design's B-vs-today >= 0.9999 bound sits below today's noise. The check is instead: B is at
+    # least as close to the fp32 reference as today (output on 128 positions, K and V caches on all positions),
+    # and B vs today stays at that noise level (a layout bug collapses it).
+    assert res["ref_pcc_b"] >= res["ref_pcc_today"] and res["ref_rel_l2_b"] <= res["ref_rel_l2_today"], res
+    assert res["k_pcc_b"] >= res["k_pcc_today"] and res["v_pcc_b"] >= res["v_pcc_today"], res
+    assert out_pcc >= 0.995, res
