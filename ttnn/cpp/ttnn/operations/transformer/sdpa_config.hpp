@@ -18,7 +18,9 @@ struct SDPAProgramConfig {
     std::size_t q_chunk_size;
     std::size_t k_chunk_size;
     std::optional<bool> exp_approx_mode;
-    uint32_t max_cores_per_head_batch = 16;
+    // Decode only: up to this many cores share one batch/head's K/V (unset: 16). Prefill SDPA uses the whole grid
+    // and rejects it.
+    std::optional<uint32_t> max_cores_per_head_batch;
     // Ring joint chunked prefill only: up to this many cores may share one (head, Q chunk) unit along K when the
     // units leave the grid idle. 1 disables the split.
     uint32_t max_k_splits = 1;
