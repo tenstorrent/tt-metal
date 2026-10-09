@@ -113,6 +113,27 @@ void wait_for_cq_on_tensor_prefetcher(
     std::optional<uint8_t> cq_id = std::nullopt,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt);
 
+// L1 address of op signal `signal_id` (0 <= signal_id < kTensorPrefetcherNumSignals), the same on every
+// device: a device kernel raises the signal by passing it to experimental::tensor_prefetcher_signal.
+// signal_tensor_prefetcher is an op that does only that.
+uint32_t get_tensor_prefetcher_signal_address(tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t signal_id);
+
+// Queue a wait on op signal `signal_id`: every prefetch request queued after it waits until each device has
+// received the signal that pairs with it (waits and signals on one id pair up in order). With
+// `capture_into_trace` the wait follows the same capture rule as queue_tensor_prefetcher_request, and each
+// replay waits for one further signal.
+void queue_tensor_prefetcher_wait_for_signal(
+    tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t signal_id, bool capture_into_trace = false);
+
+// Raise op signal `signal_id` on every device of the mesh, once, from a single worker core. It runs on the
+// current command queue after the work already enqueued there, so whatever that work wrote is in place
+// before the prefetcher passes the wait this signal releases. Traceable: a captured signal is raised on
+// every replay. `core` is the logical worker core that issues the increments.
+void signal_tensor_prefetcher(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    uint32_t signal_id,
+    const tt::tt_metal::CoreCoord& core = tt::tt_metal::CoreCoord{0, 0});
+
 void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device);
 
 }  // namespace ttnn::operations::experimental
