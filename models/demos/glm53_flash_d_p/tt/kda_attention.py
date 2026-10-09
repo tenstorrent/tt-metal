@@ -43,6 +43,18 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.glm53_flash_d_p.tt.common import attn_fidelity
 
 SP_AXIS, TP_AXIS = 0, 1
+
+
+def kda_fidelity():
+    """GLM_KDA_FIDELITY, default the attention fidelity (GLM_ATTN_FIDELITY). At HiFi2 the KDA attention output is
+    ~3.4% low on every row (L0 component test rel L2 0.0345, norm ratio 0.96..0.98; HiFi4 0.0071, 0.990..0.998)."""
+    if os.environ.get("GLM_KDA_FIDELITY"):
+        return getattr(ttnn.MathFidelity, os.environ["GLM_KDA_FIDELITY"])
+    return attn_fidelity()
+
+
+KDA_OUT_RS = os.environ.get("GLM_KDA_OUT_RS", "fabric")
+KDA_LINKS = int(os.environ.get("GLM_MOE_LINKS", "2"))
 PRECISE_DECAY = os.environ.get("GLM_KDA_DECAY", "precise") == "precise"  # "kernel": prepare's own k_dec_t
 START_ALIGN = 64
 END_ALIGN = 32
@@ -156,7 +168,7 @@ class _GlmKDA(ttKDA):
     def __init__(self, *args, decay_scale32, decay_bias32, program_config, **kwargs):
         super().__init__(*args, program_config=program_config, **kwargs)
         self.decay_scale32, self.decay_bias32 = decay_scale32, decay_bias32
-        fid = attn_fidelity()
+        fid = kda_fidelity()
         if fid != ttnn.MathFidelity.HiFi4:  # ttKDA hard-codes HiFi4 for its projections and KDA ops
             arch = self.device.arch()
             self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -176,6 +188,23 @@ class _GlmKDA(ttKDA):
                 value_dim=self.config.head_v_dim,
                 compute_config=self.kda_compute_config,
             )
+
+    row_partial = False  # set per call by TtKdaAttention: skip the TP reduction, return o_proj's bf16 partial
+
+    def _project_output(self, output):
+        """ttKDA's o_proj + reduce-scatter on the hidden dim, or (row_partial) o_proj only: [1, S/sp, H] partial sums
+        over the TP group in bf16, reduced over rows by the caller (fabric_reduce_scatter)."""
+        if not self.row_partial:
+            return super()._project_output(output)
+        o = ttnn.linear(
+            output,
+            self.weights.output_projection,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self.output_projection_program_config,
+            compute_kernel_config=self.output_projection_compute_config,
+        )
+        return o
 
     def _compute_gates(self, *, beta, decay_rank):
         beta32 = ttnn.sigmoid(
@@ -281,12 +310,12 @@ class TtKdaAttention(LightweightModule):
             recurrence=KDARecurrenceProgramConfig(
                 local_scan_strategy="grouped",
                 summary_group_chunks=chunks // groups,
-                affine_prefix_math_fidelity=attn_fidelity(),
-                scan_math_fidelity=attn_fidelity(),
+                affine_prefix_math_fidelity=kda_fidelity(),
+                scan_math_fidelity=kda_fidelity(),
             ),
             tp_ccl_topology=ttnn.Topology.Linear,
             gated_rms_output_dtype=ttnn.float32,
-            output_projection_math_fidelity=attn_fidelity(),
+            output_projection_math_fidelity=kda_fidelity(),
         )
 
     def _kda(self, s: int) -> ttKDA:
@@ -330,6 +359,10 @@ class TtKdaAttention(LightweightModule):
             j = end // END_ALIGN
             actual_end = ttnn.slice(self.ends, (j, 0), (j + 1, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         state = self.zero_state if start == 0 else self.state
+        # split: o_proj partials reduce-scattered over rows on axis 1 by MiMo's fabric_reduce_scatter (bf16), straight
+        # to the chip's quarter (GLM_KDA_OUT_RS=fabric, default); "ttnn": ttKDA's fp32 reduce-scatter on the hidden
+        # dim + all_gather (hidden) + mesh_partition
+        kda.row_partial = split and KDA_OUT_RS == "fabric"
         out, new = kda.forward(h, state, actual_start=actual_start, actual_end=actual_end)
         ttnn.deallocate(actual_start)
         if actual_end is not None:
@@ -339,6 +372,11 @@ class TtKdaAttention(LightweightModule):
         ttnn.copy(new.convolution, self.state.convolution)
         ttnn.deallocate(new.recurrent)
         ttnn.deallocate(new.convolution)
+        if kda.row_partial:  # out [1, S/2, H] bf16 partial -> the chip's [1, 1, S/4, H] quarter of the sum
+            o4 = ttnn.reshape(out, (1, 1, s // self.sp, self.hidden))
+            y = ttnn.bringup.fabric_reduce_scatter(o4, cluster_axis=TP_AXIS, num_links=KDA_LINKS)
+            ttnn.deallocate(out)
+            return y
         # out [1, S/2, H/2]: rows of this SP rank, hidden reduce-scattered over TP.
         o4 = ttnn.reshape(out, (1, 1, s // self.sp, self.hidden // self.tp))
         g1 = ttnn.all_gather(o4, dim=-1, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
