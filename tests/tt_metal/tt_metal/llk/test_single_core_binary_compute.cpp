@@ -664,9 +664,10 @@ class LLKMeshDeviceFixtureSlowDispatchOnlyFidelity : public LLKMeshDeviceFixture
                                                      public testing::WithParamInterface<MathFidelity> {
 protected:
     void SetUp() override {
-        // Every test here multiplies Float16_b, which Quasar's first fidelity phase covers in full.
+        // Every test here uses Float16_b operands: Quasar's first fidelity phase covers a Float16_b multiply in full,
+        // and add and subtract take no extra phases, so the other fidelities add nothing.
         if (detail::detect_arch() == ARCH::QUASAR && GetParam() != MathFidelity::LoFi) {
-            GTEST_SKIP() << "Quasar multiplies Float16_b in full at LoFi";
+            GTEST_SKIP() << "Quasar computes Float16_b add, sub and mul in full at LoFi";
         }
         LLKMeshDeviceFixtureSlowDispatchOnly::SetUp();
     }
