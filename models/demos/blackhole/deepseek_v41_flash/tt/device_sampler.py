@@ -220,3 +220,25 @@ class DSV41DeviceSampler:
         tok = ttnn.add(ttnn.multiply(greedy, tok_greedy), ttnn.multiply(ttnn.subtract(1.0, greedy), tok_s))
         self._mark("draw_rest")
         return ttnn.reshape(ttnn.to_layout(ttnn.typecast(tok, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [T, 1])
+
+
+def sampling_rows(temperature, top_k, top_p, gens, B):
+    """Host side of one step: per-row (invT, top_k, top_p, u, greedy) [B] for ``DSV41DeviceSampler.set_params``. ``temperature`` / ``top_k`` / ``top_p``: a scalar or a list (padded with the
+    last value / greedy); ``gens``: a list of per-row ``torch.Generator`` (a seeded request keeps its own stream) or one generator shared by all rows. Greedy rows: temperature 0 or top_k 1.
+    """
+
+    def vec(x, default):
+        x = list(x) if isinstance(x, (list, tuple)) else [x]
+        x = [default if v is None else v for v in x]
+        return (x + [x[-1] if x else default] * B)[:B]
+
+    t = torch.tensor(vec(temperature, 0.0), dtype=torch.float32)
+    k = torch.tensor(vec(top_k, 0), dtype=torch.float32)
+    p = torch.tensor(vec(top_p, 1.0), dtype=torch.float32)
+    greedy = ((t <= 0) | (k == 1)).float()
+    invT = torch.where(t > 0, 1.0 / t.clamp(min=1e-6), torch.ones(B))
+    if isinstance(gens, (list, tuple)):
+        u = torch.stack([torch.rand((), generator=gens[i % len(gens)]) for i in range(B)])
+    else:
+        u = torch.rand(B, generator=gens)
+    return invT, k, p, u.clamp(max=1 - 1e-7), greedy

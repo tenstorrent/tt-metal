@@ -129,6 +129,7 @@ class DecodeBucket:
         self.dec.cand_k = getattr(m, "cand_k", 0)
         if self.dec.cand_k:
             self.dec.alloc_invT(self.U)
+        self.dec.samp = self.samp = m._make_sampler(self.U)
         self.engram_ids = m.engram_ids
         self.engram_kin = m.engram_kin
         log(f"decode bucket U'={self.U} (batch {self.B}) objects built in {time.time() - t0:.1f} s")
@@ -287,7 +288,7 @@ class DecodeBucket:
             self.trace_id = None
 
     # ---- one step -----------------------------------------------------------------------------------------------------------------------
-    def step(self, tokens, pos, phys, reload_inputs=True, enable_trace=True, invT=None):
+    def step(self, tokens, pos, phys, reload_inputs=True, enable_trace=True, invT=None, samp=None):
         """One decode step of the bucket's users. tokens / pos [B'] in bucket row order, ``phys`` [B'] the model user of every row. -> next greedy tokens [B'] (long)."""
         m = self.m
         t0 = time.perf_counter()
@@ -309,6 +310,8 @@ class DecodeBucket:
         t2 = time.perf_counter()
         if invT is not None and self.dec.cand_k:
             self.dec.set_invT(invT)
+        if samp is not None and self.samp is not None:
+            self.samp.set_params(*samp)
         if enable_trace:
             check_trace_allocations(m.md, self.trace_id, f"decode bucket B'={self.B}")
             ttnn.execute_trace(m.md, self.trace_id, cq_id=0, blocking=False)
