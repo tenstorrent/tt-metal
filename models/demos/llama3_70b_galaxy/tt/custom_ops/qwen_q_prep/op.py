@@ -49,7 +49,9 @@ SEM_CREDIT, SEM_READY = 0, 1
 DEFAULT_HANDOFF_DEPTH = 2  # CB_NORMED slots (tile rows) per R core
 
 _DESCRIPTOR_CACHE: dict = {}
-_DESCRIPTOR_CACHE_MAX = 256
+# Keys carry buffer addresses (gamma differs per layer), so one sequence length needs ~2 entries per layer
+# (Q and K) = ~128 for 64 layers. 2048 holds every prefill bucket without the clear() below thrashing.
+_DESCRIPTOR_CACHE_MAX = 2048
 
 
 def _tile_bytes(dtype) -> int:
