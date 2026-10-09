@@ -40,17 +40,15 @@ from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
-from models.demos.glm53_flash_d_p.tt.common import attn_fidelity
 
 SP_AXIS, TP_AXIS = 0, 1
 
 
 def kda_fidelity():
-    """GLM_KDA_FIDELITY, default the attention fidelity (GLM_ATTN_FIDELITY). At HiFi2 the KDA attention output is
-    ~3.4% low on every row (L0 component test rel L2 0.0345, norm ratio 0.96..0.98; HiFi4 0.0071, 0.990..0.998)."""
-    if os.environ.get("GLM_KDA_FIDELITY"):
-        return getattr(ttnn.MathFidelity, os.environ["GLM_KDA_FIDELITY"])
-    return attn_fidelity()
+    """GLM_KDA_FIDELITY, default HiFi4 (not the attention fidelity). At HiFi2 the KDA attention output is ~3.4% low on
+    every row (L0 component test rel L2 0.0345, norm ratio 0.960..0.979; HiFi4 0.0071, 0.990..0.998). Full model:
+    s4096 KV PCC mean kv_latent 0.98405 -> 0.98509, index_key 0.99491 -> 0.99546; 56k prefill 8.47 -> 8.62 s."""
+    return getattr(ttnn.MathFidelity, os.environ.get("GLM_KDA_FIDELITY", "HiFi4"))
 
 
 KDA_OUT_RS = os.environ.get("GLM_KDA_OUT_RS", "fabric")
