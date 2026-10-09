@@ -14,41 +14,28 @@
 namespace ckernel {
 namespace sfpu {
 
-/// Math policy for ADD: a + b. Shared by the Dest and SrcS paths via @ref calculate_binary_operands;
-/// any rounding is the output operand's store policy.
+/// Float ADD math policy, shared by Dest and SrcS.
 struct AddFloatMath {
     sfpi_inline static sfpi::vFloat apply(sfpi::vFloat a, sfpi::vFloat b) { return a + b; }
 };
 
-/// Math policy for Int32 ADD: a + b on the integer adder. Dest holds Int32 as 2's complement
-/// (UNP_DEST / Int32 L1) or sign-magnitude (copy_tile Int8 + fp32_dest_acc FPU); with
-/// SIGN_MAGNITUDE_FORMAT the operands are cast to 2's complement around the add.
+/// Int32 ADD math policy. SIGN_MAGNITUDE_FORMAT casts sign-magnitude Dest values to 2's complement around the add.
 template <bool SIGN_MAGNITUDE_FORMAT>
 struct AddIntMath {
     sfpi_inline static sfpi::vInt apply(sfpi::vInt a, sfpi::vInt b) {
         if constexpr (SIGN_MAGNITUDE_FORMAT) {
-            a = sfpi::impl_::smag_to_int(sfpi::as<sfpi::vSMag>(a));
-            b = sfpi::impl_::smag_to_int(sfpi::as<sfpi::vSMag>(b));
+            a = sfpi::convert<sfpi::vInt>(sfpi::as<sfpi::vSMag>(a));
+            b = sfpi::convert<sfpi::vInt>(sfpi::as<sfpi::vSMag>(b));
         }
         sfpi::vInt sum = a + b;
         if constexpr (SIGN_MAGNITUDE_FORMAT) {
-            sum = sfpi::as<sfpi::vInt>(sfpi::impl_::int_to_smag(sum));
+            sum = sfpi::as<sfpi::vInt>(sfpi::convert<sfpi::vSMag>(sum));
         }
         return sum;
     }
 };
 
-/**
- * @brief Int32 ADD over Dest tiles: dest[out] = dest[in0] + dest[in1], one face per call.
- *
- * Loads and stores use the explicit I32 layout: implied formats with unpack-to-Dest are broken
- * for integers on Quasar (TEN-4674).
- *
- * @tparam ITERATIONS: Number of SFPU passes (each covers 2 rows).
- * @tparam FMT: Dest format, values = <Int32>.
- * @tparam SIGN_MAGNITUDE_FORMAT: See @ref AddIntMath.
- * @tparam TILE_SHAPE: Destination tile shape used to calculate operand offsets.
- */
+/// Int32 ADD over Dest. Explicit I32 layout because implied integer formats are broken on Quasar (TEN-4674).
 template <
     [[maybe_unused]] bool APPROXIMATION_MODE,
     int ITERATIONS = SFPU_ITERATIONS,

@@ -15,12 +15,7 @@
 namespace ckernel {
 namespace sfpu {
 
-/**
- * @brief WHERE on independently located floating-point operands: output = condition ? true_input : false_input.
- *
- * Advances explicit indices only; the caller owns setup and synchronization. Each input range must
- * coincide with the output or be disjoint.
- */
+/// output = condition != 0 ? true_input : false_input.
 template <int ITERATIONS, typename Condition, typename TrueInput, typename FalseInput, typename Output>
 sfpi_inline void calculate_where_operands(
     const Condition& condition, const TrueInput& true_input, const FalseInput& false_input, const Output& output) {

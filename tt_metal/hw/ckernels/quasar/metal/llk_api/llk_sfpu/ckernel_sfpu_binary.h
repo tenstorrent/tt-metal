@@ -106,15 +106,7 @@ inline void calculate_sfpu_binary(
     }
 }
 
-/**
- * @brief SrcS ADD op type (init() / run(), see @ref SfpuSrcsBinaryOp): in0 + in1 over one slice per call.
- *
- * Sfpi only: ADD has no SFPLOADMACRO version, so requesting LoadMacro fails to compile.
- *
- * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
- *         source formats must match.
- * @tparam ISSUE: Issue mechanism, values = <Sfpi>.
- */
+/// SrcS float ADD op type, Sfpi only.
 template <sfpi::DataLayout LAYOUT, SfpuIssue ISSUE = SfpuIssue::Sfpi>
 using AddSrcs = SrcsBinary<AddFloatMath, LAYOUT, resolve_sfpu_issue<ISSUE, false /*HAS_LOADMACRO*/>()>;
 

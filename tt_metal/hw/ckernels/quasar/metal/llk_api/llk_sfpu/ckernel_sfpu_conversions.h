@@ -68,9 +68,7 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
     return sfpi::as<sfpi::vFloat>(bits);
 }
 
-/**
- * @brief Dest store policy that applies @ref float32_to_bf16_rne before SFPSTORE when ROUND_TO_BF16.
- */
+/// Dest store policy: bf16 RNE before SFPSTORE when ROUND_TO_BF16.
 template <bool ROUND_TO_BF16>
 struct DestBf16RneFormat : SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat> {
     template <SfpuReg REG>

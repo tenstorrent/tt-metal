@@ -9,29 +9,14 @@
 namespace ckernel::sfpu
 {
 
-/**
- * @brief How an SFPU op's instructions are issued, independent of the register file it runs on.
- *
- * Selects the issue mechanism, never the math: for the same math policy every value must give
- * bit-identical results. A sequence that computes something different is a different math
- * policy, not a new value here.
- */
+/// How an SFPU op is issued. Every value must give bit-identical results for the same math policy.
 enum class SfpuIssue : std::uint8_t
 {
     Sfpi,      // SFPI-compiled loads, ops and stores
     LoadMacro, // SFPLOADMACRO sequences replayed from the replay buffer
 };
 
-/**
- * @brief Resolve a requested issue mechanism against the op and the build.
- *
- * Builds without SFPLOADMACRO (DISABLE_SFPLOADMACRO, e.g. ttsim) fall back to Sfpi; that is the
- * only fallback. Requesting LoadMacro for an op or math policy that has no LoadMacro version
- * fails to compile in every build, so ttsim and hardware builds accept the same requests.
- *
- * @tparam REQUESTED: Issue mechanism asked for, values = <Sfpi/LoadMacro>
- * @tparam HAS_LOADMACRO: Whether the op has a LoadMacro version for the selected math policy.
- */
+/// Falls back to Sfpi under DISABLE_SFPLOADMACRO (ttsim). LoadMacro without a LoadMacro version fails to compile.
 template <SfpuIssue REQUESTED, bool HAS_LOADMACRO>
 constexpr SfpuIssue resolve_sfpu_issue()
 {

@@ -298,12 +298,7 @@ struct ExpFp32Accurate {
 template <bool APPROXIMATION_MODE, bool FP32_RESULT>
 using ExpAlgo = std::conditional_t<(!FP32_RESULT || APPROXIMATION_MODE), ExpHwLut, ExpFp32Accurate>;
 
-// Calculates EXP over a Dest span (one face by default). Quasar exposes two implementations:
-//   - approximate exp via the HW nonlinear lookup table (sfpi::approx_exp), and
-//   - full-precision fp32 exp (_sfpu_exp_fp32_accurate_, ported from Blackhole).
-// The LUT is ~1 ULP once the result lands in a bf16 Dest, so the accurate path is only worth
-// running for a 32-bit Dest in non-approximate mode; every bf16 case (and any explicit approx
-// request) uses the LUT. EN_32BIT_DEST (is_fp32_dest_acc_en) selects the accurate path.
+// Dest EXP. The fp32 accurate path runs only for a 32-bit Dest without APPROXIMATION_MODE; else the HW LUT.
 template <
     bool APPROXIMATION_MODE,
     bool EN_32BIT_DEST,
@@ -338,17 +333,14 @@ void exp_init() {
 
 #ifndef DISABLE_SFPLOADMACRO
 
-// Replay slot 0 holds one LOADMACRO per iteration.
+// The replay holds one LOADMACRO per iteration.
+constexpr std::uint32_t EXP_LOADMACRO_REPLAY_SLOT = 0;
 inline constexpr std::uint32_t _exp_loadmacro_replay_len_(const int num_sfpu_iterations) {
     return static_cast<std::uint32_t>(num_sfpu_iterations);
 }
 
-// Program the exp LOADMACRO sequence and record one macro per iteration into replay slot 0.
-// Each macro is self-contained: LREG <- LD[addr]; STG <- EXP[LREG]; ST[addr + STORE_OFFSET] <- STG.
-// The final macro sets the `done` bit to reset the SrcS dvalids, so callers must not clear them.
-// load_sfpmem / store_sfpmem are sfpmem format codes resolved by the caller via _sfpu_sfpmem_type_
-// (Float16 needs explicit FP16A; DEFAULT never resolves to it).
-// STORE_OFFSET must be a compile-time constant so the store is captured via the immediate field.
+// Record one self-contained macro per pass (load, EXP, store at +STORE_OFFSET) into EXP_LOADMACRO_REPLAY_SLOT.
+// The last macro's done bit resets the SrcS dvalids, so callers must not clear them.
 template <std::uint32_t STORE_OFFSET>
 inline void _exp_init_loadmacro_(
     const std::uint32_t load_base_addr,
@@ -357,32 +349,28 @@ inline void _exp_init_loadmacro_(
     const std::uint32_t store_sfpmem) {
     LLK_ASSERT(num_sfpu_iterations <= 4, "Replay cycles LREG0-3 (d & 3); >4 in-flight macros would reuse a live LREG");
 
-    // LOADMACRO CONTROL: DEFAULT_STORE_INSMOD = store_sfpmem. With
-    // STORE_INHERITS_INSMOD=0 this register, not the captured SFPSTORE, sets the store format.
+    // The store format comes from MACRO_CTRL, not from the captured SFPSTORE.
     TT_SFPCONFIG(store_sfpmem, p_sfpconfig::MACRO_CTRL, 0x1);
     TTI_SFPNOP(0, 0, 0);  // SFPCONFIG hazard: no instr may issue the cycle after SFPCONFIG
 
     // Instr reg 4: STG <- EXP[LREG]  (captured via the MACRO_CAPTURE backdoor, not executed)
     TTI_SFPNONLINEAR(p_sfpu::LREG0 /* VC */, p_sfpu::MACRO_CAPTURE_INSTR4 /* VD */, p_sfpnonlinear::EXP_MODE);
 
-    // Instr reg 6: ST[load_addr + STORE_OFFSET] <- STG (the capture index also selects the staging register as store
-    // source)
+    // Instr reg 6: ST[addr + STORE_OFFSET] <- STG
     TT_SFPSTORE(p_sfpu::MACRO_CAPTURE_INSTR6, store_sfpmem, ADDR_MOD_0, 0b0, STORE_OFFSET);
 
-    // Sequence register 0:
-    //   SIMPLE = 0x44 -> instr 4 (EXP) with USE_STAGING (result to STG)
-    //   STORE  = 0xCE -> STORE slot enabled, STORE_ADDR_OFFSET set, instr 6 (store from STG)
+    // Sequence 0: SIMPLE runs instr 4 into STG, STORE runs instr 6 from STG.
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0244);  // [MAD | SIMPLE]
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0xCE02);  // [STORE | ROUND]
     TTI_SFPCONFIG(0x0000, p_sfpconfig::MACRO_SEQ0, 0x0);
     TTI_SFPNOP(0, 0, 0);  // SFPCONFIG hazard: no instr may issue the cycle after SFPCONFIG
 
     load_replay_buf(
-        0,
+        EXP_LOADMACRO_REPLAY_SLOT,
         _exp_loadmacro_replay_len_(num_sfpu_iterations),
-        false,
-        0,
-        0,
+        false /*execute_while_loading*/,
+        0 /*set_mutex*/,
+        0 /*last*/,
         [load_base_addr, num_sfpu_iterations, load_sfpmem] {
             for (int d = 0; d < num_sfpu_iterations; d++) {
                 const std::uint32_t done = (d == num_sfpu_iterations - 1);
@@ -392,22 +380,8 @@ inline void _exp_init_loadmacro_(
         });
 }
 
-// Op-word that executes the LOADMACRO replay recorded by `_exp_init_loadmacro_`.
-// Replay slot 0 and length stay private to this header; use with MOP / programmed paths.
-inline std::uint32_t _exp_loadmacro_op_(const int num_sfpu_iterations) {
-    return TT_OP_REPLAY(0, _exp_loadmacro_replay_len_(num_sfpu_iterations), 0, 0, 0, 0);
-}
-
-/**
- * @brief SrcS EXP through SFPLOADMACRO: one self-contained macro per SFPU pass, replayed per slice.
- *
- * Only the HW lookup table fits in a macro, so this exists for @ref ExpHwLut alone. It issues the
- * same SFPNONLINEAR EXP as ExpHwLut::apply, so results match the Sfpi version bit for bit.
- *
- * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>.
- * @note Owns replay slot 0 and LOADMACRO sequence 0; rerun init() after any other op programs
- *       either.
- */
+/// SrcS EXP via SFPLOADMACRO, ExpHwLut only (bit-identical to Sfpi). Owns EXP_LOADMACRO_REPLAY_SLOT and macro sequence
+/// 0.
 template <sfpi::DataLayout LAYOUT>
 struct SrcsUnary<ExpHwLut, LAYOUT, SfpuIssue::LoadMacro>
     : SfpuSrcsUnaryOp<SrcsUnary<ExpHwLut, LAYOUT, SfpuIssue::LoadMacro>> {
@@ -428,7 +402,15 @@ struct SrcsUnary<ExpHwLut, LAYOUT, SfpuIssue::LoadMacro>
             Layout::sfpmem);
     }
 
-    static void calculate() { TTI_REPLAY(0, _exp_loadmacro_replay_len_(Layout::ops), 0, 0, 0, 0); }
+    static void calculate() {
+        TTI_REPLAY(
+            EXP_LOADMACRO_REPLAY_SLOT,
+            _exp_loadmacro_replay_len_(Layout::ops),
+            0 /*last*/,
+            0 /*set_mutex*/,
+            0 /*execute_while_loading*/,
+            0 /*load_mode*/);
+    }
 };
 
 #endif
@@ -436,15 +418,7 @@ struct SrcsUnary<ExpHwLut, LAYOUT, SfpuIssue::LoadMacro>
 template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT>
 using ExpSrcsAlgo = ExpAlgo<APPROXIMATION_MODE, LAYOUT == sfpi::DataLayout::F32>;
 
-/**
- * @brief SrcS EXP op type (init() / run(), see @ref SfpuSrcsUnaryOp): math per @ref ExpAlgo, issue per ISSUE.
- *
- * @tparam APPROXIMATION_MODE: Forwarded to @ref ExpAlgo; only F32 with false runs the accurate path.
- * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
- *         source formats must match.
- * @tparam ISSUE: Issue mechanism, values = <Sfpi/LoadMacro>. LoadMacro needs the lookup-table path
- *         (APPROXIMATION_MODE or a 16-bit layout) and falls back to Sfpi without SFPLOADMACRO.
- */
+/// SrcS EXP op type. LoadMacro needs the LUT path (APPROXIMATION_MODE or a 16-bit layout).
 template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT, SfpuIssue ISSUE = SfpuIssue::Sfpi>
 using ExpSrcs = SrcsUnary<
     ExpSrcsAlgo<APPROXIMATION_MODE, LAYOUT>,

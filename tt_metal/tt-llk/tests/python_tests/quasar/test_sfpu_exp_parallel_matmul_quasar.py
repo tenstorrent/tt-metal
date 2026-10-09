@@ -67,6 +67,8 @@ DIMENSION_PROFILES = (
     ([32, 32], [32, 32], [32, 32]),
     ([32, 256], [64, 64], [64, 128]),
 )
+# Perf uses the multi-tile profile; one tile is too short to time.
+PERF_DIMENSION_PROFILE = DIMENSION_PROFILES[1]
 
 
 # ttsim has no SFPLOADMACRO, so under --disable-sfploadmacro only the SFPI implementation is built.
@@ -102,7 +104,9 @@ def generate_parallel_matmul_exp_combinations(
             if is_perf
             else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
         )
-        dimension_profiles = (DIMENSION_PROFILES[1],) if is_perf else DIMENSION_PROFILES
+        dimension_profiles = (
+            (PERF_DIMENSION_PROFILE,) if is_perf else DIMENSION_PROFILES
+        )
         for dest_sync in dest_sync_modes:
             for implied_math_format in implied_math_modes:
                 for (
@@ -133,8 +137,8 @@ def generate_parallel_matmul_exp_combinations(
     return combinations
 
 
-# Regular run: SFPI implementation only. The SFPLOADMACRO implementation runs in the nightly
-# function below, so a nightly session covers both.
+# Regular run: SFPI only. The SFPLOADMACRO variant is nightly-marked; no repo CI job runs it on
+# Quasar yet (ttsim has no SFPLOADMACRO), so it runs only in manual hardware/emulator sessions.
 PARALLEL_MATMUL_EXP_COMBINATIONS = generate_parallel_matmul_exp_combinations(
     SFPU_UNARY_FORMATS, impls=(SfpuIssue.Sfpi,)
 )

@@ -186,8 +186,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS ADD requires matching unpack destination and pack source formats");
         // FormatConfig has no unpack_T_* fields, so T is unpacked with S's format. Callers must keep
         // stimuli_T_format == stimuli_S_format or T will be read with the wrong format.
-        // The op type depends on the SrcS layout, known only at runtime: each phase dispatches once
-        // and uses the same type for init and the tile loop.
+        // The SrcS layout is known only at runtime, so init and the tile loop each dispatch once.
         dispatch_sfpu_srcs_format(
             srcs_format,
             [&](auto layout)
@@ -196,9 +195,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     L1_ADDRESS(buffer_S[0]),
                     L1_ADDRESS(buffer_T[0]),
                     static_cast<DataFormat>(formats.unpack_S_src),
-                    static_cast<DataFormat>(formats.unpack_S_dst),
                     L1_ADDRESS(buffer_Res[0]),
-                    static_cast<DataFormat>(formats.pack_S_src),
                     static_cast<DataFormat>(formats.pack_S_dst),
                     IMPLIED_MATH_FORMAT);
             });
@@ -214,7 +211,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                     {
-                        AddSrcs<decltype(layout)::layout>::run(num_tiles, srcs_format);
+                        AddSrcs<decltype(layout)::layout>::run(num_tiles);
                     }
                 });
         }

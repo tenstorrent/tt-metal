@@ -66,6 +66,7 @@ def test_perf_eltwise_binary_sfpu_int_quasar(
         dest_acc,
         mathop,
         _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
+        sign_magnitude=False,
         approx_mode=approx_mode,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )

@@ -55,8 +55,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const DataFormat srcs_format = static_cast<DataFormat>(formats.unpack_S_dst);
     LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS square requires matching unpack destination and pack source formats");
-    // The op type depends on the SrcS layout, known only at runtime: dispatch once for init and once
-    // for the tile loop, using the same type for both.
+    // The SrcS layout is known only at runtime; one dispatch picks the op type for init and run.
     dispatch_sfpu_srcs_format(
         srcs_format,
         [&](auto layout)
@@ -65,12 +64,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             Op::init(
                 L1_ADDRESS(buffer_A[0]),
                 static_cast<DataFormat>(formats.unpack_S_src),
-                srcs_format,
                 L1_ADDRESS(buffer_Res[0]),
-                static_cast<DataFormat>(formats.pack_S_src),
                 static_cast<DataFormat>(formats.pack_S_dst),
                 IMPLIED_MATH_FORMAT);
-            Op::run(TILE_CNT, srcs_format);
+            Op::run(TILE_CNT);
         });
 
     wait_sfpu_idle();

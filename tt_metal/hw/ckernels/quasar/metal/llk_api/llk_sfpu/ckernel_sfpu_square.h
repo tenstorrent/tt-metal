@@ -14,7 +14,7 @@
 namespace ckernel {
 namespace sfpu {
 
-/// Math policy for square: x * x. Shared by the Dest and SrcS paths via @ref calculate_unary_operands.
+/// Square math policy, shared by Dest and SrcS.
 struct SquareMath {
     sfpi_inline static sfpi::vFloat apply(sfpi::vFloat x) { return x * x; }
 };
@@ -35,12 +35,7 @@ inline void init_square() {
         .set(ADDR_MOD_6);
 }
 
-/**
- * @brief Square a Dest span in place: dest = x * x (one face with default ITERATIONS).
- *
- * @tparam ITERATIONS: Number of SFPU passes (each covers 2 rows).
- * @note Call @ref init_square before this to program the address mode it depends on.
- */
+/// Square a Dest span in place. Call init_square first.
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_square() {
     using Input = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>>;
@@ -51,15 +46,7 @@ inline void calculate_square() {
     }
 }
 
-/**
- * @brief SrcS square op type (init() / run(), see @ref SfpuSrcsUnaryOp): x * x over one slice per call.
- *
- * Sfpi only: square has no SFPLOADMACRO version, so requesting LoadMacro fails to compile.
- *
- * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
- *         source formats must match.
- * @tparam ISSUE: Issue mechanism, values = <Sfpi>.
- */
+/// SrcS square op type, Sfpi only.
 template <sfpi::DataLayout LAYOUT, SfpuIssue ISSUE = SfpuIssue::Sfpi>
 using SquareSrcs = SrcsUnary<SquareMath, LAYOUT, resolve_sfpu_issue<ISSUE, false /*HAS_LOADMACRO*/>()>;
 

@@ -28,23 +28,14 @@ sfpi_inline auto sfpu_operand_access(int index)
     }
     else
     {
-        // SFPI's SrcS builtins select the register file (SFP_SRCSREG_BASE is 0); never add
-        // SFPU_SRCS_BASE_ADDR here.
+        // SFPI selects the SrcS register file itself; do not add SFPU_SRCS_BASE_ADDR.
         return srcs_reg[index];
     }
 }
 
 } // namespace detail
 
-/**
- * @brief Load/store policy using SFPI's layout and vector-type conversions.
- *
- * LAYOUT is the register-file representation, VALUE the vector type it converts to (e.g. F16b
- * with vFloat). SFPI enforces the legal pairs.
- *
- * @tparam STORE_ADDR_MODE: NOINC (default) or a Dest ADDR_MOD_* that advances the cursor; the
- *         caller programs that mode. SrcS stores must use NOINC.
- */
+/// Load/store policy: register LAYOUT <-> VALUE vector type. SrcS stores must use NOINC.
 template <sfpi::DataLayout LAYOUT, typename VALUE, int STORE_ADDR_MODE = sfpi::SFPSTORE_ADDR_MODE_NOINC>
 struct SfpiFormat
 {
@@ -65,14 +56,7 @@ struct SfpiFormat
     }
 };
 
-/**
- * @brief One SFPU input or output operand: register file, format policy and base offset.
- *
- * Indices are SFPI steps (one step = SFP_ROWS rows), not tile indices or raw addresses. Dest is
- * relative to the current cursor; SrcS to UnpackSrcS's base. An operand never advances the Dest
- * cursor (unless FORMAT's store mode does) and never completes SrcS slices; the caller owns
- * traversal and synchronization.
- */
+/// One SFPU operand: register file, format and base offset. Indices are SFPI steps (SFP_ROWS rows each).
 template <SfpuReg REG, typename FORMAT>
 class SfpuOperand
 {
@@ -99,16 +83,7 @@ private:
     int base_offset_;
 };
 
-/**
- * @brief Apply a unary math policy over ITERATIONS SFPI steps: output[d] = MATH::apply(input[d]).
- *
- * The one load -> math -> store loop shared by every register file: Dest and SrcS callers differ
- * only in the operands they pass. Advances explicit indices only; the caller owns traversal and
- * synchronization. Input/output ranges must coincide or be disjoint.
- *
- * @tparam MATH: Math policy with static apply(value) -> value, e.g. ExpHwLut.
- * @tparam ITERATIONS: Number of SFPI steps.
- */
+/// output[d] = MATH::apply(input[d]) for d < ITERATIONS; shared by Dest and SrcS.
 template <typename MATH, int ITERATIONS, typename Input, typename Output>
 sfpi_inline void calculate_unary_operands(const Input& input, const Output& output)
 {
@@ -123,15 +98,7 @@ sfpi_inline void calculate_unary_operands(const Input& input, const Output& outp
     }
 }
 
-/**
- * @brief Apply a binary math policy over ITERATIONS SFPI steps: output[d] = MATH::apply(input0[d], input1[d]).
- *
- * Binary counterpart of @ref calculate_unary_operands; any rounding is the output operand's store
- * policy. Each input range must coincide with the output or be disjoint.
- *
- * @tparam MATH: Math policy with static apply(a, b) -> value, e.g. AddFloatMath.
- * @tparam ITERATIONS: Number of SFPI steps.
- */
+/// output[d] = MATH::apply(input0[d], input1[d]) for d < ITERATIONS; shared by Dest and SrcS.
 template <typename MATH, int ITERATIONS, typename Input0, typename Input1, typename Output>
 sfpi_inline void calculate_binary_operands(const Input0& input0, const Input1& input1, const Output& output)
 {
