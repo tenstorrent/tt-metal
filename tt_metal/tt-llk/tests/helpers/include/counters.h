@@ -567,6 +567,12 @@ constexpr bool is_measured_thread(PerfRunType run_type)
 #endif
 }
 
+// A peer of the pack thread in PACK_ISOLATE, at its TILE_LOOP zone: holds its epilogue until pack is done (profiler.h).
+constexpr bool holds_quiet(PerfRunType run_type, bool tile_loop)
+{
+    return tile_loop && run_type == PerfRunType::PACK_ISOLATE && !is_measured_thread(run_type);
+}
+
 // The idle peer that reads the last zone of a single thread run type after run_kernel: pack, or unpack when pack is
 // the measured thread. Math and sfpu never read, and span run types read inside their exit rendezvous.
 constexpr bool is_reader_thread(PerfRunType run_type)
@@ -639,6 +645,12 @@ struct perf_counter_scoped
                 }
                 arm_all_counters();
             });
+#if defined(LLK_DBG_BARRIER)
+        if constexpr (holds_quiet(RUN_TYPE, LOOP_PAD)) // after the entry release: the level the pack thread flips when done
+        {
+            llk_profiler::quiet_seen = llk_barrier::detail::settled(ckernel::semaphore_read(llk_barrier::RELEASE_SEM));
+        }
+#endif
         ckernel::fence_compiler();
     }
 
@@ -696,7 +708,7 @@ inline void read_last_zone()
 #if defined(LLK_PROFILER)
 #define START_PERF_MEASURE(zone_name) \
     MEASURE_PERF_COUNTERS(zone_name)  \
-    ZONE_SCOPED(zone_name)
+    ZONE_SCOPED_Q(zone_name, llk_perf::holds_quiet(PERF_RUN_TYPE, LLK_IS_TILE_LOOP_(zone_name)))
 #else
 #define START_PERF_MEASURE(zone_name) MEASURE_PERF_COUNTERS(zone_name)
 #endif
