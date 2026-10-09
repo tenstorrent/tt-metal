@@ -2,12 +2,24 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import re
 from pathlib import Path
 from shutil import copyfile
 
 from tracy import *
 from tracy.perf_counter_multipass import plan_perf_counter_capture, run_perf_counter_passes
 from tracy.serve_wasm import launch_server_subprocess, point_embed_at_trace
+
+
+def _perf_counter_mask_from_env():
+    """TT_METAL_PROFILE_PERF_COUNTERS as the runtime reads it, with sscanf("%u") into a uint32_t."""
+    match = re.match(r"\s*([+-]?)(\d+)", os.environ.get("TT_METAL_PROFILE_PERF_COUNTERS", ""), re.ASCII)
+    if match is None:
+        return 0
+    sign, digits = match.groups()
+    # strtoul saturates a magnitude above 2**64 - 1 and wraps a negative value
+    value = 2**64 - 1 if int(digits) >= 2**64 else int(sign + digits)
+    return value % 2**32
 
 
 def main():
@@ -295,10 +307,7 @@ def main():
         )
 
     # The C++ post-processor writes no counter columns, so a counter mask from the environment needs the legacy one too.
-    try:
-        counters_from_env = int(os.environ.get("TT_METAL_PROFILE_PERF_COUNTERS", "0")) != 0
-    except ValueError:
-        counters_from_env = False
+    counters_from_env = _perf_counter_mask_from_env() != 0
 
     if not (
         options.no_runtime_analysis
