@@ -19,6 +19,10 @@ bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     if (not t.memory_config().is_sharded()) {
         return false;
     }
+    // An ND-sharded tensor has no 2D shard spec, so it cannot take the native L1 sharding path.
+    if (not get_shard_spec(t).has_value()) {
+        return true;
+    }
     const auto& shape = t.padded_shape();
     const auto& shard = get_shard_spec(t)->shape;
     const auto rank = shape.rank();
