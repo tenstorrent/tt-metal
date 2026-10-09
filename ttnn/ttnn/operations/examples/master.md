@@ -87,6 +87,18 @@ role. The example shrinks the NoC transaction size only to *create* that bottlen
 effect (up to ~1.7×, Wormhole B0; see [`report.md`](split_reader/report.md)) — transaction size is
 the knob, not the point.
 
+## ⭐⭐ T2 — [`bank_stagger`](bank_stagger/README.md)
+**Concept:** DRAM bank contention — rotate each core's **issue order** so the grid's requests at any
+moment land on different banks instead of all on one.
+**Situation:** every core walks its data in the same order and the data lines up on the banks — e.g.
+a **width-sharded DRAM source** with one shard per bank, where each column block is one bank (measured);
+also width blocking of an interleaved source, height blocking on Blackhole, and writes into
+width-sharded or bank-aligned outputs (see the README).
+**Measured win (Blackhole, 110 cores):** starting each core at block `core % n_w` is **1.32×** at
+256 B reads and 1.16× at 1024 B with 8 blocks per core; the saving grows with the work (24–41 µs).
+**Gist:** start each core's walk at a different index and wrap. `stagger_blocks` is a compile-time
+switch, so flip it per call to check whether it pays on your shape.
+
 ## ⭐⭐ T2 — [`matmul_output_subblock`](matmul_output_subblock/README.md)
 **Concept:** matmul output-subblock shape → SRC-register operand reuse (via the `matmul_block` helper).
 **Situation:** you wrote a tiled matmul that produces **one output tile per block-matmul** (a `1×1` subblock), so every output tile re-loads both its A and B operand into the SRC registers; you wonder whether a bigger output subblock is worth it.
