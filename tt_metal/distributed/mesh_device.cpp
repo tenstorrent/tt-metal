@@ -1250,16 +1250,9 @@ void MeshDeviceImpl::release_command_list_builder() {
     command_list_builder_active_ = false;
 }
 
-void MeshDeviceImpl::register_command_list() {
-    auto lock = lock_api();
-    ++num_command_lists_;
-}
+void MeshDeviceImpl::register_command_list() { ++num_command_lists_; }
 
-void MeshDeviceImpl::unregister_command_list() {
-    auto lock = lock_api();
-    TT_ASSERT(num_command_lists_ > 0);
-    --num_command_lists_;
-}
+void MeshDeviceImpl::unregister_command_list() noexcept { --num_command_lists_; }
 
 SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
     std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) {
@@ -1600,25 +1593,20 @@ MeshTraceId MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id) {
 }
 
 void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
+    TracyTTMetalBeginMeshTrace(this->get_device_ids(), *trace_id);
+    TT_FATAL(
+        !this->mesh_command_queues_[cq_id]->trace_id().has_value(),
+        "CQ {} is already being used for tracing tid {}",
+        (uint32_t)cq_id,
+        *trace_id);
+
     std::shared_ptr<MeshTraceDescriptor> trace_desc;
     {
         // Held from the check through trace creation so a CommandListBuilder cannot be created in between.
-        // Released before record_begin, which takes the API lock itself.
         auto lock = lock_api();
         TT_FATAL(
             !command_list_builder_active_ && num_command_lists_ == 0,
             "Cannot begin trace capture while a CommandListBuilder or CommandList exists on the MeshDevice");
-        TracyTTMetalBeginMeshTrace(this->get_device_ids(), *trace_id);
-        TT_FATAL(
-            !this->mesh_command_queues_[cq_id]->trace_id().has_value(),
-            "CQ {} is already being used for tracing tid {}",
-            (uint32_t)cq_id,
-            *trace_id);
-        // Start tracking DRAM high water mark if trace_region_size is 0 (dynamic allocation mode)
-        auto trace_region_size = this->allocator_impl()->get_config().trace_region_size;
-        if (trace_region_size == 0) {
-            this->allocator_impl()->begin_dram_high_water_mark_tracking();
-        }
 
         // Create an empty trace buffer here. This will get initialized in end_trace
         auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
@@ -1629,6 +1617,12 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
             this->mesh_id_,
             active_sub_device_manager->id());
         trace_desc = active_sub_device_manager->create_trace(trace_id)->desc;
+    }
+
+    // Start tracking DRAM high water mark if trace_region_size is 0 (dynamic allocation mode)
+    auto trace_region_size = this->allocator_impl()->get_config().trace_region_size;
+    if (trace_region_size == 0) {
+        this->allocator_impl()->begin_dram_high_water_mark_tracking();
     }
     this->mesh_command_queues_[cq_id]->record_begin(trace_id, trace_desc);
 }
