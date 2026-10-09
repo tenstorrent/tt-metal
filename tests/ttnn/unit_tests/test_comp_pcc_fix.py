@@ -108,6 +108,15 @@ class TestCompPccLowPrecisionConstantTensor:
                 torch.tensor([0.6362], dtype=torch.float16),
                 id="fp16_single_1ulp",
             ),
+            # The common ttnn pairing: a float32 torch golden against a bfloat16 device result.
+            # 3.7 has no exact bfloat16 form; 3.703125 is its correctly rounded value.
+            pytest.param(
+                torch.full((1, 1, 32, 32), 3.7),
+                torch.full((1, 1, 32, 32), 3.703125).bfloat16(),
+                id="fp32_golden_bf16_result_constant",
+            ),
+            pytest.param(torch.tensor([-0.6363]), _bf16(-0.6328125), id="fp32_golden_bf16_result_single"),
+            pytest.param(_bf16(-0.63671875), torch.tensor([-0.6328125]), id="bf16_golden_fp32_result_single"),
         ],
     )
     def test_few_ulp_constant_result_passes(self, golden, calculated):
@@ -122,6 +131,13 @@ class TestCompPccLowPrecisionConstantTensor:
             pytest.param(_bf16(0.5), _bf16(0.55), id="ten_percent_off"),
             pytest.param(_bf16(0.001), _bf16(0.02), id="small_magnitude_wrong"),
             pytest.param(_bf16(0.0), _bf16(0.01), id="golden_zero_result_small"),
+            pytest.param(torch.tensor([0.5]), _bf16(0.55), id="fp32_golden_bf16_result_ten_percent_off"),
+            pytest.param(torch.tensor([0.001]), _bf16(0.02), id="fp32_golden_bf16_result_small_magnitude_wrong"),
+            pytest.param(
+                torch.full((1, 1, 32, 32), 3.7),
+                torch.full((1, 1, 32, 32), -3.703125).bfloat16(),
+                id="fp32_golden_bf16_result_wrong_sign",
+            ),
         ],
     )
     def test_wrong_constant_result_fails(self, golden, calculated):

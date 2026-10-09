@@ -487,19 +487,24 @@ def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     golden = torch.Tensor(golden)
     calculated = torch.Tensor(calculated)
 
-    if golden.dtype != calculated.dtype:
-        calculated = calculated.type(golden.dtype)
-
     # PCC is undefined for a constant tensor -- every single-element tensor included -- so the
     # two checks below fall back to allclose. The default rtol is float32-grade; a 16-bit float
     # carries eps = 2^-7 (bfloat16) or 2^-10 (float16), so a result one ULP from the golden fails
-    # it and is reported as PCC 0.0. Widen only the RELATIVE tolerance to a few ULP of that dtype,
-    # never below what the caller asked for. atol stays the caller's: an epsilon is a relative
-    # precision, and an absolute floor of that size would accept wrong small-magnitude results.
-    # FP8 and integer dtypes keep the caller's tolerances unchanged.
+    # it and is reported as PCC 0.0. Widen only the RELATIVE tolerance to a few ULP of the coarser
+    # 16-bit float on EITHER side -- most callers pass a float32 torch golden against a bfloat16
+    # device result, and the cast below would otherwise hide the 16-bit side -- never below what
+    # the caller asked for. atol stays the caller's: an epsilon is a relative precision, and an
+    # absolute floor of that size would accept wrong small-magnitude results. FP8 and integer
+    # dtypes keep the caller's tolerances unchanged.
     fallback_rtol = rtol
-    if golden.dtype in (torch.bfloat16, torch.float16):
-        fallback_rtol = max(rtol, 4 * torch.finfo(golden.dtype).eps)
+    sixteen_bit_eps = [
+        torch.finfo(dtype).eps for dtype in (golden.dtype, calculated.dtype) if dtype in (torch.bfloat16, torch.float16)
+    ]
+    if sixteen_bit_eps:
+        fallback_rtol = max(rtol, 4 * max(sixteen_bit_eps))
+
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
 
     if torch.all(torch.isnan(golden)) and torch.all(torch.isnan(calculated)):
         logger.warning("Both tensors are 'nan'")
