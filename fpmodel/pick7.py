@@ -11,6 +11,12 @@ from data import KEY, CAND
 
 src, arch, out = sys.argv[1:4]
 p = json.load(open(sys.argv[4] if len(sys.argv) > 4 else f"fitted_v7_{arch}.json"))
+# frozen constants define the version: terms whose constants the file lacks (added later) are switched off
+for name, (_, _, term) in M.CONSTANTS.items():
+    if term and name not in p:
+        M.OFF.add(term)
+if M.OFF:
+    print("terms off (no constants in the file):", sorted(M.OFF))
 e = pd.read_csv(src, low_memory=False).drop_duplicates(KEY, keep="last")
 e = e[e.origin.isin(CAND) & (e.status == "ok")].reset_index(drop=True)
 e["arch_"] = arch

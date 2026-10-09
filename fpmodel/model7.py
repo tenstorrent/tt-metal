@@ -29,8 +29,12 @@ TERMS = {
     "write": "output block write (BRISC, serialised with the in1 reader)",
     "epilogue": "bias add and SFPU activation per output tile",
     "issue": "each page read costs the reader core a fixed issue time (per-core floor on a K block's read)",
+    "pad": "K not a multiple of 32: the in0 reader zero-fills each row tile of the last K block (barrier + RISC-V loop)",
 }
-EXPERIMENTAL = {}
+EXPERIMENTAL = {
+    "linkmc": "multicast traffic has its own link efficiency (link_eff then describes read traffic)",
+    "linkbank": "link loads from only the DRAM banks each K step touches (bank camping concentrates link traffic)",
+}
 OFF = set(filter(None, os.environ.get("ABLATE", "").split(",")))
 EXTRA = set(filter(None, os.environ.get("EXTRA", "").split(",")))  # experimental terms switched on
 on = lambda t: (t in EXTRA) if t in EXPERIMENTAL else (t not in OFF)
@@ -63,6 +67,8 @@ CONSTANTS = {
     "lat_write": (65.0, "cycles: one subblock of output page writes + barrier", "write"),
     "sfpu_tile": (2000.0, "cycles per output tile of SFPU activation", "epilogue"),
     "issue": (100.0, "cycles per page read issued by one reader core", "issue"),
+    "pad_elem": (5.0, "cycles per element the in0 reader zero-fills in a partial K tile", "pad"),
+    "link_eff_mc": (0.6, "achievable fraction of a NoC link's rate for multicast traffic", "linkmc"),
 }
 # measured on the device, held fixed in the fit: name -> ({arch: value}, source). Measured on WH only so far; BH
 # values are fitted until measured there (a WH measurement is not a BH constant).
@@ -87,8 +93,8 @@ def pin(fit_module, arch):
 
 
 PARAMS = {k: v[0] for k, v in CONSTANTS.items() if v[2] is None or on(v[2])}
-LO = {"dram_eff": 0.2, "noc_eff": 0.1, "l1_frac": 0.05, "link_eff": 0.05, "bank_frac": 0.02}
-HI = {"dram_eff": 1.0, "noc_eff": 1.0, "l1_frac": 3.0, "link_eff": 1.0, "bank_frac": 1.0}
+LO = {"dram_eff": 0.2, "noc_eff": 0.1, "l1_frac": 0.05, "link_eff": 0.05, "bank_frac": 0.02, "link_eff_mc": 0.05}
+HI = {"dram_eff": 1.0, "noc_eff": 1.0, "l1_frac": 3.0, "link_eff": 1.0, "bank_frac": 1.0, "link_eff_mc": 1.0}
 
 
 def geometry(d):
@@ -144,10 +150,14 @@ def geometry(d):
     g["src_a"], g["src_b"] = src(d.a_mem.to_numpy()), src(d.b_mem.to_numpy())
     g["dst_o"] = src(d.out_mem.to_numpy())
     g["arch"] = d.arch_.to_numpy()
+    kr = d.K.to_numpy(float) % 32
+    g["kpad"] = np.where(kr > 0, 32 * (32 - kr), 0.0)  # elements zero-filled per partial last-K tile of in0
     if "link_bytes" in d:
         g["link"] = d.link_bytes.to_numpy(float)
     if "bank_a" in d:
         g["bk_a"], g["bk_b"] = d.bank_a.to_numpy(float), d.bank_b.to_numpy(float)
+    if "link_mcast" in d:
+        g["link_mc"] = d.link_mcast.to_numpy(float)
     return g
 
 
@@ -156,7 +166,14 @@ def annotate(d):
     if on("link"):
         import nocload
 
-        d["link_bytes"] = nocload.link_bytes(geometry(d), d)
+        if on("linkbank"):
+            import bankload
+
+            d["link_bytes"] = nocload.link_bytes_banked(geometry(d), d, bankload.patterns(geometry(d), d))
+        else:
+            d["link_bytes"] = nocload.link_bytes(geometry(d), d)
+        if on("linkmc"):
+            d["link_mcast"] = nocload.link_bytes(geometry(d), d, part="mcast")
     if on("bank"):
         import bankload
 
@@ -207,6 +224,8 @@ def predict(g, p, parts=False):
     read = np.maximum(np.maximum(step0, step1), chip)
     if on("link"):
         read = np.maximum(read, g["link"] / (s["noc_Bpc"] * p["link_eff"]))
+        if on("linkmc"):  # the most multicast-loaded link at the multicast efficiency
+            read = np.maximum(read, g["link_mc"] / (s["noc_Bpc"] * p["link_eff_mc"]))
 
     # ---- compute per K block: per subblock max(math, pack) across the TRISCs, plus fixed costs ----
     math = kb * sbh * sbw * 16.0 * g["ph"]
@@ -236,6 +255,11 @@ def predict(g, p, parts=False):
     piped = read + (nK - 1) * np.maximum(read, comp) + comp  # double-buffered K loop
     serial = nK * (read + comp)
     block = np.where(g["dbuf"], piped, serial) + epi + write
+    pad = 0.0
+    if on("pad"):  # last K block: per in0 row tile, a read barrier then the zero fill, serial on the in0 reader
+        lat0 = np.select([g["src_a"] == 0, g["src_a"] == 1], [p["lat_dram"], p["lat_l1"]], 0.0)
+        pad = np.where(g["kpad"] > 0, obh * (lat0 + g["kpad"] * p["pad_elem"]), 0.0)
+        block = block + pad
     core = g["nob"] * block
 
     # MultiCore: one output tile at a time, every input tile read with its own barrier
@@ -244,7 +268,8 @@ def predict(g, p, parts=False):
     tb2 = g["tb_a"] + g["tb_b"]  # one in0 tile and one in1 tile per K step, each read with its own barrier
     mc_read = np.maximum(g["Kt"] * (2 * p["tile_rt"] + tb2 / noc), g["Kt"] * tb2 * g["cores"] / dram)
     mc_tile = np.maximum(mc_read, g["Kt"] * 16.0 * g["ph"])
-    core = np.where(mc, tiles_pc * (mc_tile + p.get("lat_write", 0.0)), core)
+    mc_pad = np.where(g["kpad"] > 0, g["kpad"] * p["pad_elem"], 0.0) if on("pad") else 0.0
+    core = np.where(mc, tiles_pc * (mc_tile + mc_pad + p.get("lat_write", 0.0)), core)
 
     t = p["launch_us"] * 1e3 + core / clk * 1e9
     if parts:

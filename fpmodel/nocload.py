@@ -43,7 +43,9 @@ ARCH = {
     "bh": dict(
         X=17,
         Y=12,
-        cols=[1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16],
+        # bh-30 p150b (tt_umd SocDescriptor): Tensix columns 7 and 10 harvested; the 11x10 worker grid takes the first 11 of
+        # the 12 remaining columns (the last one goes to dispatch)
+        cols=[1, 2, 3, 4, 5, 6, 11, 12, 13, 14, 15],
         rows=list(range(2, 12)),
         chan=[
             [(0, 0), (0, 1), (0, 11)],
@@ -82,6 +84,8 @@ def _route(L, a, noc, s, t, b):
 
 def _mcast(L, a, noc, s, x0, x1, y0, y1, b):
     """multicast over the physical rectangle [x0..x1] x [y0..y1]: to the near corner, then one row, then down each column"""
+    if isinstance(_ONLY, int):
+        return
     X, Y = a["X"], a["Y"]
     if noc == 0:
         _route(L, a, 0, s, (x0, y0), b)
@@ -111,11 +115,23 @@ def _phys(a, i, j):
     return a["cols"][i], a["rows"][j]
 
 
+_ONLY = None  # None: every flow; "nodram": all but the DRAM reads; int b: only the DRAM reads from bank b, weight 1
+
+
 def _read(L, a, noc, reader, src):
     """one byte read by `reader`, spread evenly over the interleaved banks"""
     if src == 0:
-        for ch, e0, e1 in a["banks"]:
+        if _ONLY == "nodram":
+            return
+        for b, (ch, e0, e1) in enumerate(a["banks"]):
+            if isinstance(_ONLY, int):
+                if b == _ONLY:
+                    _route(L, a, noc, a["chan"][ch][e0 if noc == 0 else e1], reader, 1.0)
+                continue
             _route(L, a, noc, a["chan"][ch][e0 if noc == 0 else e1], reader, 1.0 / len(a["banks"]))
+        return
+    if isinstance(_ONLY, int):
+        return
     elif src == 1:
         gx, gy = a["grid"]
         for i in range(gx):
@@ -161,15 +177,32 @@ def unit_loads(arch, fam, R, C, P, cores, gx, gy, src_a, src_b):
     return U0.reshape(-1), U1.reshape(-1)
 
 
-def link_bytes(g, d):
-    """max link bytes per K step for each row (0 for multicore / sharded-only)."""
+def link_bytes(g, d, part="all"):
+    """max link bytes per K step for each row (0 for multicore / sharded-only). part: "all" (reads + multicasts), "read"
+    (only the memory reads) or "mcast" (only the multicast traffic)."""
+    global _mcast, _read
+    keep = _mcast, _read
+    if part == "read":
+        _mcast = lambda *a, **k: None
+    elif part == "mcast":
+        _read = lambda *a, **k: None
+    try:
+        return _link_bytes(g, d, part)
+    finally:
+        _mcast, _read = keep
+
+
+def _link_bytes(g, d, part):
     out = np.zeros(len(d))
     gx = d.grid_x.fillna(1).to_numpy(int)
     gy = d.grid_y.fillna(1).to_numpy(int)
-    R2, C2 = np.ceil(g["Mt"] / d.per_core_M.to_numpy(float)), np.ceil(g["Nt"] / d.per_core_N.to_numpy(float))
+    fuse = d.fuse_batch.fillna(0).to_numpy() == 1
+    Mrows = np.where(fuse, g["B"] * g["Mt"], g["Mt"])  # a fused batch stacks its rows
+    R2 = np.nan_to_num(np.ceil(Mrows / d.per_core_M.to_numpy(float)))
+    C2 = np.nan_to_num(np.ceil(g["Nt"] / d.per_core_N.to_numpy(float)))
     keys = np.array(
         [
-            f"{g['arch'][i]}|{g['fam'][i]}|{int(g['rd0'][i])}|{int(g['rd1'][i])}|{int(g['cores'][i])}|{gx[i]}|{gy[i]}|{g['src_a'][i]}|{g['src_b'][i]}"
+            f"{part}|{g['arch'][i]}|{g['fam'][i]}|{int(g['rd0'][i])}|{int(g['rd1'][i])}|{int(g['cores'][i])}|{gx[i]}|{gy[i]}|{g['src_a'][i]}|{g['src_b'][i]}|{int(R2[i])}|{int(C2[i])}"
             for i in range(len(d))
         ]
     )
@@ -193,4 +226,66 @@ def link_bytes(g, d):
         if not nz.any():
             continue
         out[m] = (np.outer(b0[m], U0[nz]) + np.outer(b1[m], U1[nz])).max(axis=1)
+    return out
+
+
+def link_bytes_banked(g, d, pats):
+    """max link bytes per K step, averaged over the K steps, with each step's DRAM reads coming only from the banks that
+    step touches (bankload.patterns): bank camping concentrates the traffic on those banks' links."""
+    global _ONLY
+    out = np.zeros(len(d))
+    gx = d.grid_x.fillna(1).to_numpy(int)
+    gy = d.grid_y.fillna(1).to_numpy(int)
+    fuse = d.fuse_batch.fillna(0).to_numpy() == 1
+    Mrows = np.where(fuse, g["B"] * g["Mt"], g["Mt"])
+    R2 = np.nan_to_num(np.ceil(Mrows / d.per_core_M.to_numpy(float)))
+    C2 = np.nan_to_num(np.ceil(g["Nt"] / d.per_core_N.to_numpy(float)))
+    b0 = g["obh"] * g["kb"] * g["tb_a"]
+    b1 = g["kb"] * g["obw"] * g["tb_b"]
+    keys = [
+        f"{g['arch'][i]}|{g['fam'][i]}|{int(g['rd0'][i])}|{int(g['rd1'][i])}|{int(g['cores'][i])}|{gx[i]}|{gy[i]}|{g['src_a'][i]}|{g['src_b'][i]}|{int(R2[i])}|{int(C2[i])}"
+        for i in range(len(d))
+    ]
+    parts = {}
+
+    def decomp(i, k):
+        if k in parts:
+            return parts[k]
+        global _ONLY
+        arch, fam = g["arch"][i], g["fam"][i]
+        cores = int(g["cores"][i])
+        R, C = (int(R2[i]), int(C2[i])) if fam == "2d" else (0, 0)
+        args = (arch, fam, R, C, cores, cores, int(gx[i]), int(gy[i]), int(g["src_a"][i]), int(g["src_b"][i]))
+        try:
+            _ONLY = "nodram"
+            o0, o1 = unit_loads(*args)
+            nb = len(ARCH[arch]["banks"])
+            B0, B1 = [], []
+            for b in range(nb):
+                _ONLY = b
+                u0, u1 = unit_loads(*args)
+                B0.append(u0)
+                B1.append(u1)
+        finally:
+            _ONLY = None
+        parts[k] = (o0, o1, np.array(B0), np.array(B1))
+        return parts[k]
+
+    groups = {}
+    for i in range(len(d)):
+        if g["fam"][i] == "multicore":
+            continue
+        groups.setdefault((keys[i],) + pats[i], []).append(i)
+    for gk, idx in groups.items():
+        k, A0, sa, Bs0, sb, nb = gk
+        o0, o1, B0, B1 = decomp(idx[0], k)
+        idx = np.array(idx)
+        acc = np.zeros(len(idx))
+        for j in range(nb):  # the bank sets rotate with the K step; nb steps cover every rotation
+            ua = o0 + B0[[(x + j * sa) % nb for x in A0]].mean(axis=0)
+            ub = o1 + B1[[(x + j * sb) % nb for x in Bs0]].mean(axis=0)
+            nz = (ua > 0) | (ub > 0)
+            if nz.any():
+                acc += (np.outer(b0[idx], ua[nz]) + np.outer(b1[idx], ub[nz])).max(axis=1)
+        out[idx] = acc / nb
     return out

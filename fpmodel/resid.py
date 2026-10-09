@@ -55,78 +55,79 @@ def regimes(x, g, parts):
     )
 
 
-parts_all = []
-# training sets, out of fold
-d = M.annotate(load(list(SETS)))
-d["pred"] = np.load("pred_cv_m7_full.npy")
-d = d[d.origin.isin(CAND) | (d.origin == "legacy")]
-d["source"] = "CV " + d["set"]
-d["key"] = d.problem_id
-for a in ("wh", "bh"):
-    x = d[d.arch_ == a]
-    _, pr = M.predict(M.geometry(x), json.load(open(f"fitted_v7_{a}.json")), parts=True)
-    parts_all.append((x, M.geometry(x), pr))
-# swept device sets, frozen constants
-for path, name in SWEPT:
-    if not os.path.exists(path):
-        continue
-    s = pd.read_csv(path, low_memory=False)
-    s = s[(s.status == "ok") & s.origin.isin(list(CAND) + ["legacy"])].drop_duplicates(["case", "config"], keep="last")
-    s = s.reset_index(drop=True).assign(arch_="wh", source=name, key=lambda z: z.case)
-    s = M.annotate(s)
-    p = json.load(open("fitted_v7_wh.json"))
-    s["pred"], pr = M.predict(M.geometry(s), p, parts=True)
-    parts_all.append((s, M.geometry(s), pr))
-rows = []
-for x, g, pr in parts_all:
-    pr = {k: (np.asarray(v) * np.ones(len(x))) for k, v in pr.items()}
-    r = regimes(x, g, pr)
-    r["source"] = x.source.to_numpy()
-    r["key"] = x.key.astype(str).to_numpy()
-    r["err"] = np.log(x.pred.to_numpy() / x.device_ns.to_numpy())
-    rows.append(r.reset_index(drop=True))
-R = pd.concat(rows, ignore_index=True)
-R["rel"] = R.err - R.groupby(["source", "key"]).err.transform("median")
-DIMS = [c for c in R.columns if c not in ("source", "key", "err", "rel")]
+if __name__ == "__main__":
+    parts_all = []
+    # training sets, out of fold
+    d = M.annotate(load(list(SETS)))
+    d["pred"] = np.load("pred_cv_m7_full.npy")
+    d = d[d.origin.isin(CAND) | (d.origin == "legacy")]
+    d["source"] = "CV " + d["set"]
+    d["key"] = d.problem_id
+    for a in ("wh", "bh"):
+        x = d[d.arch_ == a]
+        _, pr = M.predict(M.geometry(x), json.load(open(f"fitted_v7_{a}.json")), parts=True)
+        parts_all.append((x, M.geometry(x), pr))
+    # swept device sets, frozen constants
+    for path, name in SWEPT:
+        if not os.path.exists(path):
+            continue
+        s = pd.read_csv(path, low_memory=False)
+        s = s[(s.status == "ok") & s.origin.isin(list(CAND) + ["legacy"])].drop_duplicates(
+            ["case", "config"], keep="last"
+        )
+        s = s.reset_index(drop=True).assign(arch_="wh", source=name, key=lambda z: z.case)
+        s = M.annotate(s)
+        p = json.load(open("fitted_v7_wh.json"))
+        s["pred"], pr = M.predict(M.geometry(s), p, parts=True)
+        parts_all.append((s, M.geometry(s), pr))
+    rows = []
+    for x, g, pr in parts_all:
+        pr = {k: (np.asarray(v) * np.ones(len(x))) for k, v in pr.items()}
+        r = regimes(x, g, pr)
+        r["source"] = x.source.to_numpy()
+        r["key"] = x.key.astype(str).to_numpy()
+        r["err"] = np.log(x.pred.to_numpy() / x.device_ns.to_numpy())
+        rows.append(r.reset_index(drop=True))
+    R = pd.concat(rows, ignore_index=True)
+    R["rel"] = R.err - R.groupby(["source", "key"]).err.transform("median")
+    DIMS = [c for c in R.columns if c not in ("source", "key", "err", "rel")]
 
+    def cell(g):
+        return dict(
+            n=int(len(g)),
+            problems=int(g.key.nunique()),
+            err=round(float(g.err.median()), 3),
+            rel=round(float(g.rel.median()), 3),
+            abs_rel=round(float(g.rel.abs().median()), 3),
+        )
 
-def cell(g):
-    return dict(
-        n=int(len(g)),
-        problems=int(g.key.nunique()),
-        err=round(float(g.err.median()), 3),
-        rel=round(float(g.rel.median()), 3),
-        abs_rel=round(float(g.rel.abs().median()), 3),
-    )
+    out = dict(n=int(len(R)), sources=R.source.value_counts().to_dict(), dims={}, pairs={}, overall={})
+    for src, g in R.groupby("source"):
+        out["overall"][src] = cell(g)
+    for dim in DIMS:
+        out["dims"][dim] = {str(k): cell(g) for k, g in R.groupby(dim) if len(g) >= MIN_N}
+    PAIRS = [
+        ("family", "cores"),
+        ("family", "in0"),
+        ("family", "nK"),
+        ("in0", "tiles_per_step"),
+        ("family", "Mt"),
+        ("bound", "family"),
+    ]
+    for a, b in PAIRS:
+        out["pairs"][f"{a}|{b}"] = {f"{k[0]}|{k[1]}": cell(g) for k, g in R.groupby([a, b]) if len(g) >= MIN_N}
+    json.dump(out, open(sys.argv[1], "w"), indent=1)
 
-
-out = dict(n=int(len(R)), sources=R.source.value_counts().to_dict(), dims={}, pairs={}, overall={})
-for src, g in R.groupby("source"):
-    out["overall"][src] = cell(g)
-for dim in DIMS:
-    out["dims"][dim] = {str(k): cell(g) for k, g in R.groupby(dim) if len(g) >= MIN_N}
-PAIRS = [
-    ("family", "cores"),
-    ("family", "in0"),
-    ("family", "nK"),
-    ("in0", "tiles_per_step"),
-    ("family", "Mt"),
-    ("bound", "family"),
-]
-for a, b in PAIRS:
-    out["pairs"][f"{a}|{b}"] = {f"{k[0]}|{k[1]}": cell(g) for k, g in R.groupby([a, b]) if len(g) >= MIN_N}
-json.dump(out, open(sys.argv[1], "w"), indent=1)
-
-print("rows", len(R), out["sources"])
-print("overall (median err, median rel, median |rel|):")
-for k, v in out["overall"].items():
-    print(f"  {k:22s} n={v['n']:6d}  err {v['err']:+.3f}  rel {v['rel']:+.3f}  |rel| {v['abs_rel']:.3f}")
-flat = [(f"{dim}={k}", v) for dim, cells in out["dims"].items() for k, v in cells.items()]
-flat += [(f"{p}={k}", v) for p, cells in out["pairs"].items() for k, v in cells.items()]
-print(
-    "\nlargest systematic within-problem errors (rel < 0: predicted too fast vs the problem's other configs -> over-picked):"
-)
-for name, v in sorted(flat, key=lambda t: -abs(t[1]["rel"]))[:30]:
+    print("rows", len(R), out["sources"])
+    print("overall (median err, median rel, median |rel|):")
+    for k, v in out["overall"].items():
+        print(f"  {k:22s} n={v['n']:6d}  err {v['err']:+.3f}  rel {v['rel']:+.3f}  |rel| {v['abs_rel']:.3f}")
+    flat = [(f"{dim}={k}", v) for dim, cells in out["dims"].items() for k, v in cells.items()]
+    flat += [(f"{p}={k}", v) for p, cells in out["pairs"].items() for k, v in cells.items()]
     print(
-        f"  {name:42s} n={v['n']:6d} probs={v['problems']:4d}  rel {v['rel']:+.3f}  err {v['err']:+.3f}  |rel| {v['abs_rel']:.3f}"
+        "\nlargest systematic within-problem errors (rel < 0: predicted too fast vs the problem's other configs -> over-picked):"
     )
+    for name, v in sorted(flat, key=lambda t: -abs(t[1]["rel"]))[:30]:
+        print(
+            f"  {name:42s} n={v['n']:6d} probs={v['problems']:4d}  rel {v['rel']:+.3f}  err {v['err']:+.3f}  |rel| {v['abs_rel']:.3f}"
+        )
