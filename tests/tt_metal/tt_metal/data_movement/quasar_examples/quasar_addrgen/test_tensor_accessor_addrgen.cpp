@@ -1816,12 +1816,13 @@ uint32_t short_run_sw(const std::string& layout, uint32_t threads, bool all) {
 }
 
 std::string param_name(const Param& p) {
-    return fmt::format(
-        "{}_{}P{}C_{}",
-        p.layout,
-        p.producers,
-        p.consumers,
-        p.all_consumer ? "All" : (p.shards ? "StridedShards" : "Strided"));
+    std::string_view pattern = "Strided";
+    if (p.all_consumer) {
+        pattern = "All";
+    } else if (p.shards) {
+        pattern = "StridedShards";
+    }
+    return fmt::format("{}_{}P{}C_{}", p.layout, p.producers, p.consumers, pattern);
 }
 
 void PrintTo(const Param& p, std::ostream* os) { *os << param_name(p); }
@@ -2338,7 +2339,7 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<loop_probe::Config>& info) { return info.param.name; });
 
 // Transfer-address microbenchmark (ta_perf_reader.cpp): the same kernel built with the address-generator path and
-// with the software path (TT_TA_ADDRGEN_DISABLE), timed with rdcycle over page-id orders taken from ttnn kernels.
+// with the software path (TT_TA_ADDRGEN_DISABLE), timed with rdcycle over page-id orders taken from op kernels.
 // Reports cycles per transfer; no timing pass/fail. Manual run only (not in the regression yaml): see the
 // emulator notes on keeping each process under the 3-minute session.
 namespace perf {
