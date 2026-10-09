@@ -148,30 +148,110 @@ inline constexpr bool is_leaf_v = std::is_same_v<F, const char*> || std::is_inte
 template <class V>
 using field_t = std::remove_cv_t<std::remove_reference_t<V>>;
 
-// Rejects anything the walker would mishandle, with a message that names the rule; true when T is usable.
+// ---- Rules for a metadata type, as plain predicates ---------------------------------------------------------------
+// Each answers one rule and is true when it holds; check_type / check_site_type turn them into readable compile
+// errors, and tests call them directly. Rules that need the fields (all but is_simple_aggregate) assume the type is a
+// simple aggregate and descend into nested structs; when an earlier rule already fails they answer true, so a bad
+// type reports only the rule it breaks.
+
 template <class T>
-constexpr bool check_type() {
-    static_assert(
-        std::is_class_v<T> && std::is_aggregate_v<T>,
-        "a debug event metadata type must be a simple aggregate: a struct with public data members only");
-    constexpr size_t n = count_fields<T>();
-    static_assert(n == count_braced_fields<T>(), "a debug event metadata type cannot have C array members");
-    static_assert(n >= 1 && n <= kMaxFields, "a debug event metadata type needs 1..kMaxFields fields");
-    if constexpr (n == count_braced_fields<T>() && n >= 1 && n <= kMaxFields) {
+inline constexpr bool is_simple_aggregate_v = std::is_class_v<T> && std::is_aggregate_v<T>;
+
+// No C array members, at any depth.
+template <class T>
+constexpr bool has_no_arrays() {
+    if constexpr (!is_simple_aggregate_v<T>) {
+        return true;
+    } else {
+        if (count_fields<T>() != count_braced_fields<T>()) {
+            return false;
+        }
+        bool ok = true;
         T probe{};
-        for_each_field(probe, [](auto& v) {
+        for_each_field(probe, [&](auto& v) {
+            if constexpr (is_simple_aggregate_v<field_t<decltype(v)>>) {
+                ok = ok && has_no_arrays<field_t<decltype(v)>>();
+            }
+        });
+        return ok;
+    }
+}
+
+// 1..kMaxFields direct fields, in this struct and every nested one.
+template <class T>
+constexpr bool field_count_ok() {
+    if constexpr (!is_simple_aggregate_v<T>) {
+        return true;
+    } else {
+        constexpr size_t n = count_braced_fields<T>();  // the true count even with arrays
+        if (n < 1 || n > kMaxFields) {
+            return false;
+        }
+        bool ok = true;
+        T probe{};
+        for_each_field(probe, [&](auto& v) {
+            if constexpr (is_simple_aggregate_v<field_t<decltype(v)>>) {
+                ok = ok && field_count_ok<field_t<decltype(v)>>();
+            }
+        });
+        return ok;
+    }
+}
+
+// No const members, at any depth.
+template <class T>
+constexpr bool has_no_const_members() {
+    bool ok = true;
+    if constexpr (is_simple_aggregate_v<T>) {
+        T probe{};
+        for_each_field(probe, [&](auto& v) {
             using V = std::remove_reference_t<decltype(v)>;
-            using F = field_t<V>;
-            static_assert(!std::is_const_v<V>, "a debug event metadata type cannot have const members");
-            static_assert(
-                is_leaf_v<F> || std::is_class_v<F>,
-                "a metadata field must be a string literal (const char*), an integer, an enum, a bool or a nested "
-                "struct");
-            if constexpr (std::is_class_v<F>) {
-                static_assert(check_type<F>());
+            ok = ok && !std::is_const_v<V>;
+            if constexpr (is_simple_aggregate_v<field_t<V>>) {
+                ok = ok && has_no_const_members<field_t<V>>();
             }
         });
     }
+    return ok;
+}
+
+// Every field is a const char*, an integer, an enum, a bool or a nested simple aggregate, at any depth.
+template <class T>
+constexpr bool fields_supported() {
+    bool ok = true;
+    if constexpr (is_simple_aggregate_v<T>) {
+        T probe{};
+        for_each_field(probe, [&](auto& v) {
+            using F = field_t<decltype(v)>;
+            if constexpr (is_simple_aggregate_v<F>) {
+                ok = ok && fields_supported<F>();
+            } else {
+                ok = ok && is_leaf_v<F>;
+            }
+        });
+    }
+    return ok;
+}
+
+template <class T>
+constexpr bool is_valid_meta_type() {
+    return is_simple_aggregate_v<T> && has_no_arrays<T>() && field_count_ok<T>() && has_no_const_members<T>() &&
+           fields_supported<T>();
+}
+
+// One readable compile error for each rule T breaks; true when T is usable.
+template <class T>
+constexpr bool check_type() {
+    static_assert(
+        is_simple_aggregate_v<T>,
+        "a debug event metadata type must be a simple aggregate: a struct with public data members only");
+    static_assert(has_no_arrays<T>(), "a debug event metadata type cannot have C array members");
+    static_assert(field_count_ok<T>(), "a debug event metadata type and each struct in it need 1..kMaxFields fields");
+    static_assert(has_no_const_members<T>(), "a debug event metadata type cannot have const members");
+    static_assert(
+        fields_supported<T>(),
+        "a metadata field must be a string literal (const char*), an integer, an enum, a bool or a nested struct "
+        "with public data members only");
     return true;
 }
 
@@ -263,6 +343,12 @@ constexpr bool first_field_is_name() {
         first = false;
     });
     return is_name;
+}
+
+// A site's metadata type: a valid metadata type, matched by name on the host, whose first field is the name.
+template <class T>
+constexpr bool is_valid_site_type() {
+    return is_valid_meta_type<T>() && has_portable_name<T>() && first_field_is_name<T>();
 }
 
 // Everything a site's metadata type must satisfy, beyond check_type's per-struct rules.
@@ -395,6 +481,13 @@ constexpr const char* site_name(const T& meta) {
     return name;
 }
 
+// The site's name -- its metadata's first field -- is set and non-empty.
+template <class T>
+constexpr bool site_name_ok(const T& meta) {
+    const char* name = site_name(meta);
+    return name != nullptr && *name != 0;
+}
+
 // A .long pointing at a fresh copy of S in .tt_zone_str (the section is "MS", so the linker keeps one copy). A null
 // pointer is stored as "".
 constexpr void put_string_ref(AsmText& a, const char* s) {
@@ -413,8 +506,7 @@ struct SignatureText {
 // one handle and one record, copies with different values (template instantiations) each get their own.
 template <class T>
 constexpr AsmText emit_site(const T& meta, const char* site_label, const char* file, uint32_t line) {
-    const char* name = site_name(meta);
-    if (name == nullptr || *name == 0) {
+    if (!site_name_ok(meta)) {
         debug_event_site_name_must_be_a_non_empty_string_literal();
     }
     const uint64_t hash = meta_hash(meta);
