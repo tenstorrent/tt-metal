@@ -39,11 +39,11 @@ inline void _llk_math_hw_cleanup_poison_addr_mods_()
 }
 
 /**
- * @brief Quiesces all TRISCs and restores math cfg banks to canonical Float16_b formats.
+ * @brief Quiesces all TRISCs and restores math cfg bank 0 to canonical Float16_b formats.
  * @tparam Dst Kernel DST_SYNC_MODE (compile-time; not modified by cleanup).
  * @tparam is_fp32_dest_acc_en Kernel DST_ACCUM_MODE (re-asserted, not changed).
- * @note On return both cfg banks use Float16_b formats, the global Blackhole dest remap is
- *       enabled, and bank 0 is selected.
+ * @note On return cfg bank 0 uses Float16_b formats and is selected, and the global Blackhole
+ *       dest remap is enabled.
  * @note On return dest half-sync is on section 0, MOP CFG is NOP-poisoned, and ADDR_MOD_0..7
  *       are zero.
  */
@@ -56,11 +56,6 @@ inline void _llk_math_hw_cleanup_canonical_()
 
     hw_cleanup::select_cfg_state(0);
     _llk_math_hw_cleanup_configure_current_bank_<is_fp32_dest_acc_en>();
-
-    hw_cleanup::select_cfg_state(1);
-    _llk_math_hw_cleanup_configure_current_bank_<is_fp32_dest_acc_en>();
-
-    hw_cleanup::select_cfg_state(0);
 
     _llk_math_reconfig_remap_(true);
 
