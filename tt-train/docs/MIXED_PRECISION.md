@@ -86,9 +86,9 @@ file.
   fp32 tensor gets the exact values, a bf16 tensor the values rounded with `ml_dtypes`. `ttml.checkpointing` (which
   loads parameters and optimizer state into the live tensors), the safetensors loaders, the SFT trainer's default
   checkpoint loader and `LinearLayer.__setstate__` use it.
-- The Python `SocketManager` sends the bf16 view, as the C++ ends do. `recv()` writes a bf16 tensor in place through
-  `get_value_for_update()`; any other tensor receives into a bf16 buffer that `assign()` installs, so it keeps the
-  dtype it is stored in.
+- Transfers through `SocketManager` carry the bf16 view, from C++ and from Python. `RemoteOptimizer` and the Python
+  `SocketManager.recv()` write a bf16 tensor in place through `get_value_for_update()`; any other tensor receives
+  into a bf16 buffer that `assign()` installs, so it keeps the dtype it is stored in.
 - C++ checkpoints are written as stored (`get_value(NATIVE)`), and `read_autograd_tensor` loads parameters and
   optimizer state through `assign()`. A checkpoint from an fp32 run resumes into a bf16 model as bf16, and the other
   way round, and the AdamW moments follow the parameters, as the fused kernel requires.

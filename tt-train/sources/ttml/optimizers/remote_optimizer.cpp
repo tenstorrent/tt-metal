@@ -80,10 +80,16 @@ void RemoteOptimizer::send_gradients() {
 void RemoteOptimizer::receive_weights() {
     auto& socket_manager = autograd::ctx().get_socket_manager();
     for (auto& [name, tensor_ptr] : m_sorted_parameters) {
-        // The weights are received straight into the parameter's buffer, in the dtype it is stored in. That covers
-        // frozen fp32 and non-float tensors too, which the bf16 check skips.
-        auto param = tensor_ptr->get_value_for_update();
-        (void)socket_manager.recv(param.tensor(), m_distributed_ctx, m_aggregator_rank);
+        // The aggregator sends the bf16 view. A bf16 parameter receives it in place. A frozen tensor stored in another
+        // dtype, which the bf16 check skips, receives it into a buffer of its own that assign() installs.
+        if (tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE).dtype() == ttnn::DataType::BFLOAT16) {
+            auto param = tensor_ptr->get_value_for_update();
+            (void)socket_manager.recv(param.tensor(), m_distributed_ctx, m_aggregator_rank);
+        } else {
+            auto weights =
+                socket_manager.recv(ttnn::empty_like(tensor_ptr->get_value()), m_distributed_ctx, m_aggregator_rank);
+            tensor_ptr->assign(weights);
+        }
     }
 }
 
