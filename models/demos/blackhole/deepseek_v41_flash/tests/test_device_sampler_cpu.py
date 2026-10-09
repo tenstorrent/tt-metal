@@ -11,7 +11,11 @@ another token of the same distribution (token identity with the sorted draw is n
 import pytest
 import torch
 
-from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import emulate_draw, emulate_keep_weights
+from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import (
+    emulate_draw,
+    emulate_keep_weights,
+    emulate_topk_weights,
+)
 
 V = 1600
 J, LEVELS, LEVELS_K = 16, 3, 4  # the production sampler: tt/dsv41_model.Model._make_sampler
@@ -93,3 +97,16 @@ def test_a_flat_vocabulary_row_keeps_exactly_top_k_tokens_with_the_extra_count_l
             wrong3 += int((emulate_keep_weights(row, 0.6, k, 1.0, J, LEVELS, 3) > 0).sum()) != k
             wrong4 += int((emulate_keep_weights(row, 0.6, k, 1.0, J, LEVELS, LEVELS_K) > 0).sum()) != k
     assert wrong4 == 0 and wrong3 >= 1, (wrong3, wrong4)
+
+
+@pytest.mark.parametrize("scale", [0.3, 3.0, 12.0])
+@pytest.mark.parametrize("cfg", [(1.0, 20, 1.0), (0.6, 20, 0.95), (1.0, 32, 0.9), (1.3, 5, 0.95), (1.0, 2, 1.0)])
+def test_topk_path_keeps_exactly_the_exact_support_and_law(scale, cfg):
+    """The candidate path (``forward_topk``) has no resolution band: kept set and law are the exact ones (random fp32 logits: no ties)."""
+    torch.manual_seed(5)
+    full = torch.randn(8 * 400) * scale
+    T, tk, tp = cfg
+    w = emulate_topk_weights(full, T, tk, tp, kcand=32, cols=8)
+    ex = exact_probs(full, T, tk, tp)
+    assert torch.equal(w > 0, ex > 0) or float(((w > 0) ^ (ex > 0)).sum()) == 0, (cfg, scale)
+    assert float((w.double() / w.double().sum() - ex).abs().max()) < 1e-6

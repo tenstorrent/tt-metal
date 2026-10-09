@@ -214,10 +214,10 @@ class SpecDecoder(SpecVerifier):
         self.logits = logits  # (kept alive: the input of the sampler trace)
         return logits
 
-    def forward_sampler(self):
+    def forward_sampler(self, fast=False):
         """Trace S of the sampled round: every block row draws its own token over the logits of trace A (tt/device_sampler.py, per-row parameters uploaded before the round; greedy rows = exact argmax)
         into ``a_in``, the ids of the accept rule of trace B."""
-        ttnn.copy(self.samp.forward(self.logits, self.samp.params), self.a_in)
+        ttnn.copy(self.samp.run(self.logits, self.samp.params, fast), self.a_in)
 
     def forward_tail(self):
         """Trace B of the split round: accept (rule of ``forward``) over the host-chosen ids ``a_in``, commit, drafter. Same ``pack`` as ``forward``."""

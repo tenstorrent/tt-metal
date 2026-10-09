@@ -732,7 +732,8 @@ class Model:
         self.dec.restore_states(snaps)
         del snaps
         if self.samp is not None:  # compile pass of the sampler (it writes the token buffer: set again below)
-            self.dec.forward_sampler(self.last_logits)
+            self.dec.forward_sampler(self.last_logits, False)
+            self.dec.forward_sampler(self.last_logits, True)
             ttnn.synchronize_device(self.md)
         self._set_loop_state(zeros, torch.as_tensor(lens).long())
         self._warm = True
@@ -1493,11 +1494,11 @@ class Model:
             check_trace_allocations(self.md, self.trace_id, f"decode B={self.B}")
             ttnn.execute_trace(self.md, self.trace_id, cq_id=0, blocking=False)
             if sampled:  # the sampled tokens replace the greedy ones the step wrote (same buffer)
-                ttnn.execute_trace(self.md, self.samp_trace, cq_id=0, blocking=False)
+                self.samp_trace.replay()
         else:
             self.last_logits = self.dec.forward()
             if sampled:
-                self.dec.forward_sampler(self.last_logits)
+                self.dec.forward_sampler(self.last_logits, self.samp.fast)
         out = self._read_tokens()  # blocking read: waits for the step
         t3 = time.perf_counter()
         self.timing["decode_host_prep"] = t1 - t0
@@ -1522,9 +1523,10 @@ class Model:
         ttnn.synchronize_device(self.md)
         self.dec.restore_states(snaps)
         if self.samp is not None:  # the sampler's own trace over the logits of the step trace
-            self.samp_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
-            self.dec.forward_sampler(self.last_logits)
-            ttnn.end_trace_capture(self.md, self.samp_trace, cq_id=0)
+            from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import SamplerTraces
+
+            self.samp_trace = SamplerTraces(self.samp)
+            self.samp_trace.capture(lambda fast: self.dec.forward_sampler(self.last_logits, fast))
             ttnn.synchronize_device(self.md)
 
     def read_logits(self):
@@ -1537,7 +1539,7 @@ class Model:
             ttnn.release_trace(self.md, self.trace_id)
             self.trace_id = None
         if getattr(self, "samp_trace", None) is not None:
-            ttnn.release_trace(self.md, self.samp_trace)
+            self.samp_trace.release()
             self.samp_trace = None
         for b in getattr(self, "buckets", {}).values():
             b.release_trace()
