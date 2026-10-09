@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <numeric>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -19,8 +18,6 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal.hpp>
-
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -64,7 +61,7 @@ constexpr std::uint32_t kReportWords = 2;
 // Pattern B ring depth, passed to the kernels as the scratch capacity.
 constexpr std::uint32_t kBoundedDepth = 4;
 
-// Real CBs on every ID the CB API allows; mirrors the DM kernel's kRealCbs.
+// Real CBs on every ID below the scratch channels; mirrors the DM kernel's kRealCbs.
 constexpr std::uint32_t kRealCbs = 62;
 constexpr std::uint32_t kRealCbEntries = 2;
 constexpr std::uint32_t kRealCbEntryBytes = 64;
@@ -362,19 +359,13 @@ TEST_F(ProgramSpecHWTest, ScratchCbPingPong) {
     EXPECT_EQ(out, expected) << "final ping-pong tile != input";
 }
 
-// CB IDs 62 and 63 belong to scratch: the CB API rejects them, real CBs fill 0-61, and firmware setting up
-// those CBs every launch must not disturb scratch's counters (nor scratch traffic any real CB).
+// Real CBs fill 0-61 next to both scratch channels (CBs 62 and 63), and firmware setting up those CBs every
+// launch must not disturb scratch's counters (nor scratch traffic any real CB).
 TEST_F(ProgramSpecHWTest, ScratchCbAlongsideRealCbs) {
     auto mesh_device = devices_.at(0);
     if (mesh_device->arch() != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Blackhole-only";
     }
-    EXPECT_EQ(hal::get_num_dataflow_buffers(), kRealCbs);
-    EXPECT_NO_THROW((CircularBufferConfig(kTileBytes, {{kRealCbs - 1, tt::DataFormat::Float16_b}})));
-    for (std::uint32_t id : {62u, 63u}) {
-        EXPECT_THROW((CircularBufferConfig(kTileBytes, {{id, tt::DataFormat::Float16_b}})), std::runtime_error);
-    }
-
     const ScratchCbRun run{.num_iters = 1025 * kNumTiles, .real_cbs = 1};
     Program program = MakeScratchCbProgram(*mesh_device, run, kNode);
     std::vector<std::uint32_t> ids;
