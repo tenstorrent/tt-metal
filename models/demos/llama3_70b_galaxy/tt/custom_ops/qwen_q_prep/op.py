@@ -199,7 +199,7 @@ def _build_program(device, plan, pairs, col, q, cos, sin, trans_mat, gamma, eps,
         ttnn.SemaphoreDescriptor(id=SEM_READY, core_ranges=all_set, initial_value=0),
     ]
 
-    s0, s1 = column_slices(col, plan.cols)
+    s0, s1 = column_slices(col if plan.cols > 1 else 0, plan.cols)
     walk = [plan.sl_t, s0 * plan.sl_t, s1 * plan.sl_t, plan.ht, plan.n_heads]
     n_reader_rt, n_compute_rt, n_writer_rt = [], [], []
     r_reader_rt, r_compute_rt, r_writer_rt = [], [], []
@@ -300,15 +300,20 @@ def qwen_q_prep(
     eps: float,
     grid: tuple[int, int] | None = None,
     handoff_depth: int = DEFAULT_HANDOFF_DEPTH,
+    all_rows: bool = False,
 ) -> ttnn.Tensor:
     """typecast -> q_norm -> RoPE -> typecast on this column's two ring slices of q, in place.
+
+    all_rows=True processes every position on every device instead (the K path: ring SDPA reads all of K),
+    as two "slices" of S/2 rows; gamma / eps are then k_norm's.
 
     Returns ``q``. See the module docstring for the tensor contract. Raises ValueError on any
     shape, dtype or layout mismatch; there is no fallback to the stock ops.
     """
     device = q.device()
     mesh_rows, cols = list(device.shape)
-    n_heads, seq_len = _validate(q, cos, sin, trans_mat, gamma, cols)
+    plan_cols = 1 if all_rows else cols
+    n_heads, seq_len = _validate(q, cos, sin, trans_mat, gamma, plan_cols)
     if handoff_depth < 1:
         raise ValueError(f"handoff_depth must be >= 1, got {handoff_depth}")
     if grid is None:
@@ -317,11 +322,12 @@ def qwen_q_prep(
     pairs = pair_cores(*grid)
     if not pairs:
         raise ValueError(f"grid {grid} has no core pairs")
-    plan = QPrepPlan(n_heads=n_heads, seq_len=seq_len, cols=cols, num_pairs=len(pairs))
+    plan = QPrepPlan(n_heads=n_heads, seq_len=seq_len, cols=plan_cols, num_pairs=len(pairs))
 
     key = (
         tuple(device.shape),
         grid,
+        all_rows,
         handoff_depth,
         n_heads,
         seq_len,

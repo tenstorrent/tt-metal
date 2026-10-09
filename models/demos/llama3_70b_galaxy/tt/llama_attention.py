@@ -1158,6 +1158,31 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(q_local_8b)
         return q_pre_bf8
 
+    def _k_prep_stock(self, k_heads_1KSD_pre_rot, rot_mats):
+        """Prefill K prep with stock ops: typecast to bf16 (if needed), k_norm (if qk_norm), RoPE, typecast to bf8.
+        Every path that does not take qwen_q_prep(all_rows=True) runs this; test_qwen_k_prep_op.py uses it as the
+        reference for the op."""
+        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+            k_heads_1KSD_pre_rot_bf8 = k_heads_1KSD_pre_rot
+            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
+            ttnn.deallocate(k_heads_1KSD_pre_rot_bf8)
+
+        if self.qk_norm:
+            k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
+
+        k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
+            k_heads_1KSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            is_decode_mode=False,
+        )
+        ttnn.deallocate(k_heads_1KSD_pre_rot)
+
+        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(k_heads_1KSD)
+        return k_heads_1KSD_8b
+
     def forward_prefill(
         self,
         x_11SH,
@@ -1297,23 +1322,23 @@ class TtLlamaAttention(LightweightModule):
             )
             ttnn.deallocate(q_heads_1QSD_pre_rot)
 
-        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
-            k_heads_1KSD_pre_rot_bf8 = k_heads_1KSD_pre_rot
-            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
-            ttnn.deallocate(k_heads_1KSD_pre_rot_bf8)
-
-        if self.qk_norm:
-            k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
-
-        # k_heads_1KSD = k_heads_1KSD_pre_rot
-        k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
-            k_heads_1KSD_pre_rot,
-            rot_mats[0],
-            rot_mats[1],
-            self.transformation_mats["prefill"],
-            is_decode_mode=False,
+        # Same long-prefill path: K prep (typecast, k_norm, RoPE, typecast) as one qwen_q_prep program over all
+        # positions, in place on the bf8 K heads (bit-identical to _k_prep_stock, test_qwen_k_prep_op.py).
+        use_fused_k_prep = (
+            use_local_q_prep and self.qk_norm and k_heads_1KSD_pre_rot.dtype == ttnn.bfloat8_b and seq_len % 64 == 0
         )
-        ttnn.deallocate(k_heads_1KSD_pre_rot)
+        if use_fused_k_prep:
+            k_heads_1KSD_8b = qwen_q_prep(
+                k_heads_1KSD_pre_rot,
+                rot_mats[0],
+                rot_mats[1],
+                self.transformation_mats["prefill"],
+                self.k_norm.weight,
+                eps=self.k_norm.eps,
+                all_rows=True,
+            )
+        else:
+            k_heads_1KSD_8b = self._k_prep_stock(k_heads_1KSD_pre_rot, rot_mats)
 
         # Fill KV-Cache
         if kv_cache:
@@ -1321,14 +1346,14 @@ class TtLlamaAttention(LightweightModule):
         else:
             keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
-        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(k_heads_1KSD)
-
         k_fill = k_heads_1KSD_8b
 
-        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
-
-        ttnn.deallocate(v_heads_1VSD)
+        if use_fused_k_prep and v_heads_1VSD.dtype == ttnn.bfloat8_b:
+            # bf8 -> bf8 typecast is the identity (test_qwen_k_prep_op.py); use V as is.
+            v_heads_1VSD_8b = v_heads_1VSD
+        else:
+            v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(v_heads_1VSD)
 
         v_fill = v_heads_1VSD_8b
 
