@@ -120,6 +120,7 @@ struct RecipeBlockingProblem {
     // all heads' Q chunks are dealt over the whole grid. Windowed segments (unknown on the host) cost every K chunk.
     bool key_range = false;
     bool causal = false;
+    bool paged = false;  // a paged K/V cache (chunked prefill)
     uint32_t sliding_window = 0;
     uint32_t q_offset = 0;
     // Dense/joint program features that grow the kernel images (recipe_program_fits): an attention sink, and K or
