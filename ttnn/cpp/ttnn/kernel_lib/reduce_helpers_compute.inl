@@ -367,13 +367,35 @@ ALWI void reduce(
 
     constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>();
 
+    const uint32_t accum_dfb_id = [&]() -> uint32_t {
+        if constexpr (enable_accumulation) { return accumulate.config.cb_accumulator; }
+        else { return 0; }
+    }();
+#ifdef ARCH_QUASAR
+    // Quasar: ~DataflowBuffer() drains on UNPACK / PACK (spins until the buffer's tile counter reads
+    // empty). These handles are scoped to this call, but the scaler tile stays resident for the
+    // caller's whole kernel, NoWaitNoPop leaves the input for the caller to pop, and without
+    // accumulation accum_dfb aliases buffer 0. A draining handle here would therefore deadlock, so
+    // hold the handles in a union whose destructor does not run.
+    union NoDrainDfb {
+        DataflowBuffer dfb;
+        explicit NoDrainDfb(uint32_t id) : dfb(static_cast<uint16_t>(id)) {}
+        ~NoDrainDfb() {}
+    };
+    NoDrainDfb input_dfb_holder(input_dfb_id);
+    NoDrainDfb scaler_dfb_holder(scaler_dfb_id);
+    NoDrainDfb output_dfb_holder(output_dfb_id);
+    NoDrainDfb accum_dfb_holder(accum_dfb_id);
+    DataflowBuffer& input_dfb = input_dfb_holder.dfb;
+    DataflowBuffer& scaler_dfb = scaler_dfb_holder.dfb;
+    DataflowBuffer& output_dfb = output_dfb_holder.dfb;
+    DataflowBuffer& accum_dfb = accum_dfb_holder.dfb;
+#else
     DataflowBuffer input_dfb(input_dfb_id);
     DataflowBuffer scaler_dfb(scaler_dfb_id);
     DataflowBuffer output_dfb(output_dfb_id);
-    DataflowBuffer accum_dfb([&]() -> uint32_t {
-        if constexpr (enable_accumulation) { return accumulate.config.cb_accumulator; }
-        else { return 0; }
-    }());
+    DataflowBuffer accum_dfb(accum_dfb_id);
+#endif
 
     // Apply reconfig based on mode
     constexpr bool swap_operands = reduce_swaps_operands<reduce_type, reduce_dim, is_sfpu>();

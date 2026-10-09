@@ -2415,31 +2415,52 @@ constexpr bool pushes_at_end() {
 // All CB lifecycle operations terminate in one of these four emitters. `Enabled` is a
 // compile-time policy fact, so disabled actions disappear without a runtime sentinel check;
 // the emitted function identity is independent of both the element type and the chain pack.
+//
+// Quasar: ~DataflowBuffer() drains the buffer (a TRISC spins until the tile counter it owns is
+// empty). A temporary handle therefore deadlocks mid-chain: a reserve/push on an output whose
+// consumer only pops later, or a wait on an input this same thread pops right after. The handle
+// below lives in a union so its destructor never runs; the DFB state itself is global
+// (g_dfb_interface), so a short-lived handle loses nothing. WH/BH keep the plain temporary.
+#ifdef ARCH_QUASAR
+union ScopedDfbHandle {
+    DataflowBuffer dfb;
+    ALWI explicit ScopedDfbHandle(uint32_t cb) : dfb(cb) {}
+    ALWI ~ScopedDfbHandle() {}  // deliberately does not run ~DataflowBuffer()
+};
+#define CKL_DFB_CALL(cb, call)       \
+    do {                             \
+        ScopedDfbHandle _h(cb);      \
+        _h.dfb.call;                 \
+    } while (0)
+#else
+#define CKL_DFB_CALL(cb, call) DataflowBuffer(cb).call
+#endif
+
 template <bool Enabled>
 ALWI void emit_wait(uint32_t cb, uint32_t count) {
     if constexpr (Enabled) {
-        DataflowBuffer(cb).wait_front(count);
+        CKL_DFB_CALL(cb, wait_front(count));
     }
 }
 
 template <bool Enabled>
 ALWI void emit_pop(uint32_t cb, uint32_t count) {
     if constexpr (Enabled) {
-        DataflowBuffer(cb).pop_front(count);
+        CKL_DFB_CALL(cb, pop_front(count));
     }
 }
 
 template <bool Enabled>
 ALWI void emit_reserve(uint32_t cb, uint32_t count) {
     if constexpr (Enabled) {
-        DataflowBuffer(cb).reserve_back(count);
+        CKL_DFB_CALL(cb, reserve_back(count));
     }
 }
 
 template <bool Enabled>
 ALWI void emit_push(uint32_t cb, uint32_t count) {
     if constexpr (Enabled) {
-        DataflowBuffer(cb).push_back(count);
+        CKL_DFB_CALL(cb, push_back(count));
     }
 }
 

@@ -38,6 +38,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     unsqueeze/unsqueeze.hpp
     upsample/upsample.hpp
     typecast/typecast.hpp
+    layer_norm/layernorm.hpp
     padded_slice/padded_slice.hpp
     slice_write/slice_write.hpp
     op_slicing/op_slicing.hpp
@@ -234,6 +235,13 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     to_device/to_device.cpp
     # typecast (copy of operations/copy/typecast; device op + 3 CB program factories; no nanobind,
     # called only internally by quasar pad's BFLOAT8_B path. DFB/metal2 kernel port is a follow-up.)
+    # layer_norm (clone of operations/normalization/layernorm; Metal 2.0 interleaved + sharded factories)
+    layer_norm/device/layernorm_common.cpp
+    layer_norm/device/layernorm_device_operation.cpp
+    layer_norm/device/layernorm_op_multi_core.cpp
+    layer_norm/device/layernorm_op_multi_core_sharded.cpp
+    layer_norm/device/sharded_layernorm_factory_helpers.cpp
+    layer_norm/layernorm.cpp
     typecast/typecast.cpp
     typecast/device/typecast_device_op.cpp
     typecast/device/typecast_program_factory.cpp
@@ -284,6 +292,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     unsqueeze/unsqueeze_nanobind.cpp
     upsample/upsample_nanobind.cpp
     typecast/typecast_nanobind.cpp
+    layer_norm/layer_norm_nanobind.cpp
     sharded_to_interleaved/sharded_to_interleaved_nanobind.cpp
     interleaved_to_sharded/interleaved_to_sharded_nanobind.cpp
     # transformer (nested ttnn.experimental.quasar.transformer submodule)

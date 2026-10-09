@@ -27,7 +27,7 @@ Grids are Wormhole 8x8; Quasar has 8x4. The per-op tests remap them by default (
 | `scaled_dot_product_attention` | 140 | 4 | yes (configs untested) | `tests/ops/test_scaled_dot_product_attention.py` |
 | `slice` | 4 | 4 | yes (configs untested) | `tests/ops/test_slice.py` |
 | `unsqueeze` | 4 | 4 | **missing** | `tests/ops/test_unsqueeze.py` |
-| `layer_norm` | 210 | 3 | **missing** | `tests/ops/test_layer_norm.py` |
+| `layer_norm` | 210 | 3 | yes (3/3 cases pass on craq-sim; see `ttnn/cpp/ttnn/operations/experimental/quasar/layer_norm/README.md`) | `tests/ops/test_layer_norm.py` |
 | `mul_` | 73 | 3 | yes (configs untested) | `tests/ops/test_mul_.py` |
 | `reshape` | 3 | 3 | yes (configs untested) | `tests/ops/test_reshape.py` |
 | `cos` | 2 | 2 | **missing** | `tests/ops/test_cos.py` |

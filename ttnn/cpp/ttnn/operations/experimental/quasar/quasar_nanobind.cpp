@@ -32,6 +32,7 @@
 #include "ttnn/operations/experimental/quasar/padded_slice/padded_slice_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/slice_write/slice_write_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/typecast/typecast_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/layer_norm/layer_norm_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/sharded_to_interleaved/sharded_to_interleaved_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/interleaved_to_sharded/interleaved_to_sharded_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/transformer/transformer_nanobind.hpp"
@@ -105,6 +106,9 @@ void bind_quasar(nb::module_& mod) {
 
     // typecast (dtype conversion).
     detail::bind_typecast(m_quasar);
+
+    // layer_norm (normalization; SDXL UNet transformer blocks).
+    detail::bind_layer_norm(m_quasar);
 
     // sharded_to_interleaved / interleaved_to_sharded (standalone; to_memory_config also dispatches to these).
     detail::bind_sharded_to_interleaved(m_quasar);
