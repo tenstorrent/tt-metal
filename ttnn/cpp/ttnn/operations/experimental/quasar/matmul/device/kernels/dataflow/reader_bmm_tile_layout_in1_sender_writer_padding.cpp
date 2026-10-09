@@ -675,4 +675,11 @@ void kernel_main() {
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
     noc.async_write_barrier();
+
+#ifdef IN1_DRAM_WIDTH_SHARDED
+    // Restore NCRISC read_cmd_buf NOC_CTRL VC to firmware default; CUSTOM_VC programmed above persists per-core.
+    AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+    noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+        dram_bank, in1_single_tile_size_bytes, {.bank_id = 0, .addr = in1_tensor_addr}, NocOptVals{.vc = 1});
+#endif
 }
