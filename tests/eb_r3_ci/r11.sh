@@ -31,6 +31,8 @@ case $1 in
              ab f4x2 - EB_R3_NO_PRE_SECTIONS=1 "test_mul_tg or mul_bfp8"
            done ;;
   f1b)     for i in 1 2 3; do ab f1b - EB_R3_NO_BLOCK=1 "llama8b_decode"; done ;;
+  qb2)      for i in 1 2 3; do ab qb2 - EB_R3_NO_BLOCK=1 "test_qb2_add"; done ;;
+  csa2)     for i in 1 2; do ab csa_dr $O/off_csa_dr.txt - "test_csa_compressor_single_device" models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_csa_compressor.py; done ;;
   lnint2)  for i in 1 2 3; do
              ab lnint_h $O/off_lnint_h.txt - "(sdxl_transformer and d1) or (llama8b_prefill and accuracy)"
              ab lnint_b $O/off_lnint_b.txt - "(sdxl_transformer and d1) or (llama8b_prefill and accuracy)"

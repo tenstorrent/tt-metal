@@ -420,3 +420,36 @@ def test_bcast_sec_act(device, kind, case):
         return
     for *_, d in diffs:
         d.report(f"(every pattern against {B.size} b values, {time.time() - t0:.1f} s)")
+
+
+# QuietBox 2 decode residual adds on one chip (test_eb_r11.test_qb2_add): width-sharded bf16 add, 6, 4 and 2 tiles per core,
+# Gemma-4 31B's with MUL_UNARY_SFPU after; every bf16 pattern in a against 64 b values of the special and normal set.
+QB2 = {"gemma_post": 5376, "gemma_add": 5376, "llama_qb2": 1024, "qwen_qb2": 5120}
+
+
+@pytest.mark.parametrize("cfg", list(QB2))
+def test_qb2(device, cfg):
+    from test_eb_r11 import _qb2_mc
+
+    t0 = time.time()
+    mc = _qb2_mc(device, cfg)
+    shape = (1, 1, 32, QB2[cfg])
+    per = int(np.prod(shape))
+    B = b16_small(64)
+    nb = B.size
+    i = np.tile(np.arange(65536), nb)
+    j = np.repeat(np.arange(nb), 65536)
+    a_all, b_all = PATS[i], B[(i + j) % nb]
+    total = a_all.size
+    ncalls = -(-total // per)
+    acts = [ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, 0.6875)] if cfg == "gemma_post" else None
+    diffs = make_diffs(f"qb2_{cfg}", None)
+    for c in range(ncalls):
+        idx = (np.arange(per) + c * per) % total
+        ta = ttnn.from_torch(bf16_from_bits(a_all[idx]).reshape(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+        tb = ttnn.from_torch(bf16_from_bits(b_all[idx]).reshape(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+        run_chunk(device, diffs, lambda: out_bits(_op("add", ta, tb, "bf16", mc, acts)), f32_of_bf16(a_all[idx]), f32_of_bf16(b_all[idx]), min(per, total - c * per))
+        ttnn.deallocate(ta)
+        ttnn.deallocate(tb)
+    for *_, d in diffs:
+        d.report(f"({ncalls} calls, every pattern against {nb} b values, {time.time() - t0:.1f} s)")

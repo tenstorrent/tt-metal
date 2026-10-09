@@ -486,3 +486,54 @@ def test_softmax_cfg(device, cfg):
     x = _dev(torch.randn(shape), "bf16", device)
     for _ in range(4):
         ttnn.deallocate(ttnn.softmax(x, dim=-1, numeric_stable=stable, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+
+
+# ---------------------------------------------------------------- QuietBox 2 decode residual adds, one chip (sixth review)
+
+
+def _qb2_mc(device, cfg):
+    if cfg.startswith("gemma"):
+        # gemma4_31b_qb2/tt/decoder.py _mem(5376, 28): width shards of 32x192 on a 7x4 grid
+        return ttnn.create_sharded_memory_config(
+            (32, 192),
+            ttnn.CoreGrid(x=7, y=4),
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+    if cfg == "llama_qb2":
+        # llama31_8b_qb2/tt/decoder.py _width_memcfg(1024, 8): 32x128 on the first 8 cores, row-wise
+        grid = device.compute_with_storage_grid_size()
+        crs = ttnn.num_cores_to_corerangeset(8, grid, True)
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(crs, [32, 128], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+    # qwen38_27b_qb2/tt/decoder.py _residual_memory, residual_cores 80: 32x64 on a 10x8 grid
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 7))})
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(crs, [32, 64], ttnn.ShardOrientation.ROW_MAJOR)
+    )
+
+
+QB2_WIDTH = {"gemma_post": 5376, "gemma_add": 5376, "llama_qb2": 1024, "qwen_qb2": 5120}
+
+
+@pytest.mark.parametrize("cfg", list(QB2_WIDTH))
+def test_qb2_add(device, cfg):
+    # gemma_post: decoder.py:676-681 (MUL_UNARY_SFPU by the layer scalar after the add); gemma_add: decoder.py:668;
+    # llama_qb2: llama31_8b_qb2 decoder.py:578-582, 597-601; qwen_qb2: qwen38_27b_qb2 decoder.py:548-550, 588-590
+    mc = _qb2_mc(device, cfg)
+    torch.manual_seed(1)
+    mk = lambda: ttnn.from_torch(
+        torch.rand(1, 1, 32, QB2_WIDTH[cfg]) - 0.5, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc
+    )
+    a, b = mk(), mk()
+    kw = dict(memory_config=mc, dtype=ttnn.bfloat16)
+    if cfg == "gemma_post":
+        kw["activations"] = [ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, 0.6875)]
+    for _ in range(8):
+        ttnn.deallocate(ttnn.add(a, b, **kw))
+    ttnn.deallocate(a)
+    ttnn.deallocate(b)
