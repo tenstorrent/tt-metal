@@ -424,16 +424,16 @@ def test_bcast_sec_act(device, kind, case):
 
 # QuietBox 2 decode residual adds on one chip (test_eb_r11.test_qb2_add): width-sharded bf16 add, 6, 4 and 2 tiles per core,
 # Gemma-4 31B's with MUL_UNARY_SFPU after; every bf16 pattern in a against 64 b values of the special and normal set.
-QB2 = {"gemma_post": 5376, "gemma_add": 5376, "llama_qb2": 1024, "qwen_qb2": 5120}
+QB2 = {"gemma_post": 5376, "gemma_add": 5376, "llama_qb2": 1024, "qwen_qb2": 5120, "dp_post": 5376, "dp_add": 5376}
 
 
 @pytest.mark.parametrize("cfg", list(QB2))
 def test_qb2(device, cfg):
-    from test_eb_r11 import _qb2_mc
+    from test_eb_r11 import QB2_ROWS, _qb2_mc
 
     t0 = time.time()
     mc = _qb2_mc(device, cfg)
-    shape = (1, 1, 32, QB2[cfg])
+    shape = (1, 1, QB2_ROWS.get(cfg, 32), QB2[cfg])
     per = int(np.prod(shape))
     B = b16_small(64)
     nb = B.size
@@ -442,7 +442,7 @@ def test_qb2(device, cfg):
     a_all, b_all = PATS[i], B[(i + j) % nb]
     total = a_all.size
     ncalls = -(-total // per)
-    acts = [ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, 0.6875)] if cfg == "gemma_post" else None
+    acts = [ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, 0.6875)] if cfg in ("gemma_post", "dp_post") else None
     diffs = make_diffs(f"qb2_{cfg}", None)
     for c in range(ncalls):
         idx = (np.arange(per) + c * per) % total

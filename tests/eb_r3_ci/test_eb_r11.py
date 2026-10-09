@@ -492,6 +492,16 @@ def test_softmax_cfg(device, cfg):
 
 
 def _qb2_mc(device, cfg):
+    if cfg.startswith("dp_"):
+        # gemma4_d_p/tt/rms_norm.py _block_sharded_memory_config: chunk 8192 on 8x4, 256 rows of 5376 per chip, block
+        # shards of 64x448 on 12x4 cores (28 tiles per core)
+        return ttnn.create_sharded_memory_config(
+            shape=(64, 448),
+            core_grid=ttnn.CoreGrid(x=12, y=4),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
     if cfg.startswith("gemma"):
         # gemma4_31b_qb2/tt/decoder.py _mem(5376, 28): width shards of 32x192 on a 7x4 grid
         return ttnn.create_sharded_memory_config(
@@ -517,21 +527,27 @@ def _qb2_mc(device, cfg):
     )
 
 
-QB2_WIDTH = {"gemma_post": 5376, "gemma_add": 5376, "llama_qb2": 1024, "qwen_qb2": 5120}
+QB2_WIDTH = {"gemma_post": 5376, "gemma_add": 5376, "llama_qb2": 1024, "qwen_qb2": 5120, "dp_post": 5376, "dp_add": 5376}
+QB2_ROWS = {"dp_post": 256, "dp_add": 256}
 
 
 @pytest.mark.parametrize("cfg", list(QB2_WIDTH))
 def test_qb2_add(device, cfg):
     # gemma_post: decoder.py:676-681 (MUL_UNARY_SFPU by the layer scalar after the add); gemma_add: decoder.py:668;
-    # llama_qb2: llama31_8b_qb2 decoder.py:578-582, 597-601; qwen_qb2: qwen38_27b_qb2 decoder.py:548-550, 588-590
+    # llama_qb2: llama31_8b_qb2 decoder.py:578-582, 597-601; qwen_qb2: qwen38_27b_qb2 decoder.py:548-550, 588-590;
+    # dp_post / dp_add: gemma4_d_p tt/layer.py:152-157 (MUL_UNARY_SFPU after) and :139, prefill chunk 8192 on 8x4
     mc = _qb2_mc(device, cfg)
     torch.manual_seed(1)
     mk = lambda: ttnn.from_torch(
-        torch.rand(1, 1, 32, QB2_WIDTH[cfg]) - 0.5, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc
+        torch.rand(1, 1, QB2_ROWS.get(cfg, 32), QB2_WIDTH[cfg]) - 0.5,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=mc,
     )
     a, b = mk(), mk()
     kw = dict(memory_config=mc, dtype=ttnn.bfloat16)
-    if cfg == "gemma_post":
+    if cfg in ("gemma_post", "dp_post"):
         kw["activations"] = [ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, 0.6875)]
     for _ in range(8):
         ttnn.deallocate(ttnn.add(a, b, **kw))
